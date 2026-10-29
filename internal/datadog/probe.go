@@ -73,9 +73,8 @@ func Probe(httpClient *http.Client) setup.Probe {
 
 		ctx, cancel := context.WithTimeout(ctx, setup.VerifyBudget)
 		defer cancel()
-		p := probeRun{ctx: ctx, creds: creds}
 
-		if v, failed := p.stage("the API key", func(ctx context.Context) error {
+		if v, failed := stage(ctx, creds, "the API key", func(ctx context.Context) error {
 			return client.ValidateAPIKey(ctx, creds.APIKey)
 		}, func(reason string) string {
 			return "Datadog refused the API key" + because(reason)
@@ -84,7 +83,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 		}
 
 		var org Org
-		if v, failed := p.stage("the application key", func(ctx context.Context) error {
+		if v, failed := stage(ctx, creds, "the application key", func(ctx context.Context) error {
 			var err error
 			org, err = client.VerifyCredentials(ctx, creds)
 			return err
@@ -109,7 +108,7 @@ func Probe(httpClient *http.Client) setup.Probe {
 				return client.CanReadWebhook(ctx, creds, webhook)
 			}},
 		} {
-			if v, failed := p.stage(read.stage, read.call, func(reason string) string {
+			if v, failed := stage(ctx, creds, read.stage, read.call, func(reason string) string {
 				sentence := "Both keys are valid, but the application key lacks a " +
 					"permission Crewlet needs: " + read.needs
 				if reason != "" {
@@ -135,24 +134,20 @@ func Probe(httpClient *http.Client) setup.Probe {
 // seconds, so this is slack for a slow region rather than a wait.
 const probeCallTimeout = 5 * time.Second
 
-// probeRun is one staged check: the deadline every stage shares, and the
-// keys every refusal's reason is held against.
-type probeRun struct {
-	ctx   context.Context
-	creds Credentials
-}
-
-// stage makes one call and answers the verdict that ends the check, when it
-// failed. refused writes the sentence for a refusal from Datadog's reason,
-// which is "" when Datadog gave none fit to repeat.
+// stage makes one call under ctx, the deadline every stage of the check
+// shares, and answers the verdict that ends the check, when it failed.
+// refused writes the sentence for a refusal from Datadog's reason, which is
+// "" when Datadog gave none fit to repeat; the reason is held against both
+// of creds' keys.
 //
 // ONLY A REFUSAL IS THE STAGE'S OWN SENTENCE. Running out of time says which
 // stage did, and everything else (a 5xx, a 429, a dead connection, an answer
 // that is not Datadog's API) is [setup.Judge]'s, the rule every probe shares.
-func (p probeRun) stage(
-	name string, call func(context.Context) error, refused func(reason string) string,
+func stage(
+	ctx context.Context, creds Credentials, name string,
+	call func(context.Context) error, refused func(reason string) string,
 ) (setup.Verdict, bool) {
-	ctx, cancel := context.WithTimeout(p.ctx, probeCallTimeout)
+	ctx, cancel := context.WithTimeout(ctx, probeCallTimeout)
 	defer cancel()
 	err := call(ctx)
 	if err == nil {
@@ -173,7 +168,7 @@ func (p probeRun) stage(
 	if verdict.Outcome != setup.VerifyRefused {
 		return verdict, true
 	}
-	return setup.Refused(refused(setup.Sayable(reason, p.creds.APIKey, p.creds.AppKey)) + "."), true
+	return setup.Refused(refused(setup.Sayable(reason, creds.APIKey, creds.AppKey)) + "."), true
 }
 
 // because is ": " and Datadog's reason, or nothing when it gave none fit

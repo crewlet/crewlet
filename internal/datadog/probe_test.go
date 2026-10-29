@@ -99,7 +99,7 @@ type fakeDatadog struct {
 func (f *fakeDatadog) serve(path string, override http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
-		f.seen = append(f.seen, r.Clone(context.Background()))
+		f.seen = append(f.seen, r.Clone(r.Context()))
 		f.mu.Unlock()
 		if r.URL.Path == path && override != nil {
 			override(w, r)
@@ -116,11 +116,18 @@ func (f *fakeDatadog) requests() []*http.Request {
 }
 
 // checkAgainst runs the one Datadog check against a fake region whose path
-// answers with override, and every other route as a working pair.
+// answers with override, and every other route as a working pair, under a
+// deadline of within when it is not zero.
 func checkAgainst(
-	t *testing.T, ctx context.Context, path string, override http.HandlerFunc,
+	t *testing.T, within time.Duration, path string, override http.HandlerFunc,
 ) (setup.Verdict, *fakeDatadog) {
 	t.Helper()
+	ctx := t.Context()
+	if within > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, within)
+		defer cancel()
+	}
 	fake := &fakeDatadog{}
 	srv := httptest.NewServer(fake.serve(path, override))
 	t.Cleanup(srv.Close)
@@ -147,7 +154,7 @@ func refuseWith(reason string) http.HandlerFunc {
 // able to read, and claims nothing more.
 func TestADatadogCheckNamesTheOrganization(t *testing.T) {
 	t.Parallel()
-	got, _ := checkAgainst(t, t.Context(), "", nil)
+	got, _ := checkAgainst(t, 0, "", nil)
 	want := "Works. Both keys are valid for the FairSplit organization in datadoghq.eu, " +
 		"and can read users, roles and webhooks."
 	if got.Outcome != setup.VerifyWorks || got.Detail != want {
@@ -174,7 +181,7 @@ func TestADatadogRefusalNamesWhatFailed(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got, _ := checkAgainst(t, t.Context(), c.path, forbidden)
+			got, _ := checkAgainst(t, 0, c.path, forbidden)
 			if got.Outcome != setup.VerifyRefused || got.Detail != c.want {
 				t.Errorf("answered %+v, want refused %q", got, c.want)
 			}
@@ -207,7 +214,7 @@ func TestADatadogRefusalKeepsItsReasonFitToShow(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got, _ := checkAgainst(t, t.Context(), c.path, c.refuse)
+			got, _ := checkAgainst(t, 0, c.path, c.refuse)
 			if got.Outcome != setup.VerifyRefused || got.Detail != c.want {
 				t.Errorf("answered %+v, want refused %q", got, c.want)
 			}
@@ -219,7 +226,7 @@ func TestADatadogRefusalKeepsItsReasonFitToShow(t *testing.T) {
 // it, so a new organization is not a missing permission.
 func TestADatadogCheckAllowsAnAbsentWebhook(t *testing.T) {
 	t.Parallel()
-	got, _ := checkAgainst(t, t.Context(), webhookPath, func(w http.ResponseWriter, _ *http.Request) {
+	got, _ := checkAgainst(t, 0, webhookPath, func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 	if got.Outcome != setup.VerifyWorks {
@@ -233,7 +240,7 @@ func TestADatadogOutageAtAnyStageIsUnreachable(t *testing.T) {
 	for _, path := range []string{validatePath, orgPath, usersPath, rolesPath, webhookPath} {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()
-			got, _ := checkAgainst(t, t.Context(), path, func(w http.ResponseWriter, _ *http.Request) {
+			got, _ := checkAgainst(t, 0, path, func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusBadGateway)
 			})
 			want := "Datadog answered 502 Bad Gateway, so it could not say whether this " +
@@ -250,9 +257,7 @@ func TestADatadogOutageAtAnyStageIsUnreachable(t *testing.T) {
 // first.
 func TestADatadogStageOutOfTimeSaysWhich(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-	defer cancel()
-	got, _ := checkAgainst(t, ctx, orgPath, func(_ http.ResponseWriter, r *http.Request) {
+	got, _ := checkAgainst(t, 200*time.Millisecond, orgPath, func(_ http.ResponseWriter, r *http.Request) {
 		// Held until the check gives up and drops the connection.
 		<-r.Context().Done()
 	})
@@ -267,7 +272,7 @@ func TestADatadogStageOutOfTimeSaysWhich(t *testing.T) {
 // own stage carries no application key.
 func TestADatadogCheckOnlyReadsAndKeepsTheKeysInHeaders(t *testing.T) {
 	t.Parallel()
-	_, fake := checkAgainst(t, t.Context(), "", nil)
+	_, fake := checkAgainst(t, 0, "", nil)
 	reqs := fake.requests()
 	var paths []string
 	for _, r := range reqs {
@@ -291,7 +296,7 @@ func TestADatadogCheckOnlyReadsAndKeepsTheKeysInHeaders(t *testing.T) {
 // A REFUSAL STOPS THE CHECK: nothing after the stage that failed is asked.
 func TestADatadogRefusalStopsTheCheck(t *testing.T) {
 	t.Parallel()
-	_, fake := checkAgainst(t, t.Context(), validatePath, forbidden)
+	_, fake := checkAgainst(t, 0, validatePath, forbidden)
 	if n := len(fake.requests()); n != 1 {
 		t.Errorf("Datadog was asked %d times after refusing the API key, want once", n)
 	}
