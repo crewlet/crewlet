@@ -70,15 +70,17 @@
 // what each git node advertises (Maintainers), and a node that cannot read it
 // does nothing that pass rather than guess (Maintainers is three-valued); a
 // node no listing of the git nodes carries maintains
-// nothing — a booting one until its host beats — so both loops wait for this
-// node to be listed before their first pass ([Compactor.awaitListed]). TWO
+// nothing — a booting one until its host beats — so every loop waits for this
+// node to be listed before its first pass ([Compactor.awaitListed]). THREE
 // LOOPS, because a publication of a large repository takes minutes and a hot
 // repository gains packs at up to three hundred a minute: behind a publication
 // in one loop, it would reach code.MaxPacksPerRepo and refuse pushes — and the
 // same holds for the repository being published, whose merges therefore run
-// beside its publication rather than wait for it. They share the node's
-// maintenance slots and memory through the cache's admissions, which bound
-// them. Each runs ONE BUILD AT A TIME and a pass
+// beside its publication rather than wait for it. An expunge's builds walk the
+// whole history from every tip, so a purge in either other loop would hold
+// back that loop's work on every other repository as long. They share the
+// node's maintenance slots and memory through the cache's admissions, which
+// bound them. Each runs ONE BUILD AT A TIME and a pass
 // works through every due repository it maintains in its listing's order
 // until the next tick would begin; a publication that did not land holds its
 // repository back by the duty cycle from when its build began

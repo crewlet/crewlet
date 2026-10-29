@@ -117,7 +117,7 @@ func TestACompactorThatCannotReadThePlacementCompactsNothing(t *testing.T) {
 	cand := x.candidate()
 	if want := x.node().Cache().PublishCharge(cand.LiveObjects); len(asked) == 0 || asked[0] != want {
 		t.Errorf("the pass asked who maintains the repository by the charges %v, want the publication's %d, "+
-			"which both loops are placed by", asked, want)
+			"which every loop is placed by", asked, want)
 	}
 }
 
@@ -186,7 +186,7 @@ func (k *kindsRead) read(kind code.ReadKind) int {
 // compact.ListedRecheck, and read no listing until it is — a booting node is
 // listed only once its host beats, and a pass before that would find every
 // repository placed elsewhere or nowhere, and log a placement it could read.
-// Listed, both loops pass at once.
+// Listed, every loop passes at once.
 //
 // Mutation: pass at Start without asking, and the loops list while this node
 // is unlisted.
@@ -198,17 +198,19 @@ func TestTheLoopsPassOnceThisNodeIsListed(t *testing.T) {
 	c, _, _ := x.compactorOf(func(o *compact.Options) { o.Estate, o.Maintainers = seam, gate })
 	c.Start()
 
-	// FOUR ASKS UNLISTED: a recheck waited out by each loop, or by one of
-	// them twice — whichever, none may have read a listing.
-	await(t, "the loops to ask whether this node is listed four times", func() bool { return gate.asks() >= 4 })
-	for _, kind := range []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue} {
+	// SIX ASKS UNLISTED: each of the three loops' first, and a recheck
+	// waited out by each loop, or by one of them twice — whichever, none may
+	// have read a listing.
+	await(t, "the loops to ask whether this node is listed six times", func() bool { return gate.asks() >= 6 })
+	for _, kind := range []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue, code.ReadExpungeDue} {
 		if n := seam.read(kind); n != 0 {
 			t.Errorf("the loops read %d %s listings with this node unlisted, want none", n, kind)
 		}
 	}
 	gate.list()
-	await(t, "both loops to list once this node is listed", func() bool {
-		return seam.read(code.ReadCompactionDue) > 0 && seam.read(code.ReadPublicationDue) > 0
+	await(t, "every loop to list once this node is listed", func() bool {
+		return seam.read(code.ReadCompactionDue) > 0 && seam.read(code.ReadPublicationDue) > 0 &&
+			seam.read(code.ReadExpungeDue) > 0
 	})
 }
 

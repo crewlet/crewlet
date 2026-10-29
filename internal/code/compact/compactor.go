@@ -51,17 +51,20 @@ type Estate interface {
 // maintains, or an error where that listing cannot be read, on which the
 // compactor does none of a maintainer's work rather than guess. Each loop's
 // pass asks it once, for every listed repository it must judge
-// ([Compactor.Poll], [Compactor.PublishPass]). The router satisfies it.
+// ([Compactor.Poll], [Compactor.PublishPass], [Compactor.ExpungePass]). The
+// router satisfies it.
 //
-// BOTH LOOPS ASK BY THE PUBLICATION'S CHARGE (cache.Cache.PublishCharge), so a
-// repository's compactions and its publications — the two writers of its
-// packs — run on ONE node, where a compaction never merges a pack a
-// publication in flight planned over ([Compactor.claimCompaction]).
+// EVERY LOOP ASKS BY THE PUBLICATION'S CHARGE (cache.Cache.PublishCharge), so
+// a repository's compactions, its publications and its expunges — the three
+// writers of its packs — run on ONE node, where a compaction never merges a
+// pack a publication in flight planned over ([Compactor.claimCompaction]) and
+// an expunge rewrites the repository with neither building beside it
+// ([Compactor.claimExpunge]).
 //
 // Listed is whether this node is among the git nodes the placement lists —
 // the only nodes a maintainer is chosen from (internal/estate's
-// Router.Listed), three-valued as MaintainerOf is: what both loops wait on
-// before their first pass ([Compactor.Start]).
+// Router.Listed), three-valued as MaintainerOf is: what every loop waits on
+// before its first pass ([Compactor.Start]).
 type Maintainers interface {
 	MaintainerOf(charges map[string]int64) (map[string]bool, error)
 	Listed() (bool, error)

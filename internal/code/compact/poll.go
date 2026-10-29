@@ -41,7 +41,7 @@ import (
 //     would begin: skipped when a plan of it was found not due at its version
 //     and cap ([memo]), when it is held back for a full store, or when this
 //     node is not its MAINTAINER for the publication's charge — the charge
-//     both loops are placed by, so one node writes all of a repository's
+//     every loop is placed by, so one node writes all of a repository's
 //     packs; and COMPACTED otherwise, one at a time. A placement this node
 //     cannot read compacts nothing that pass — a compactor that cannot tell
 //     does none of a maintainer's work rather than guess — logged once a pass.
@@ -110,9 +110,9 @@ func (c *Compactor) Poll(ctx context.Context) (PollReport, error) {
 
 // placedBy is the charge a repository of liveObjects live objects is asked
 // who maintains it by: its publication's (cache.Cache.PublishCharge), the
-// charge of its dominant work — one question for both loops, so its
-// compactions and its publications, the two writers of its packs, are
-// placed on one node.
+// charge of its dominant work — one question for every loop, so its
+// compactions, its publications and its expunges, the three writers of its
+// packs, are placed on one node.
 func (c *Compactor) placedBy(liveObjects int64) int64 {
 	return c.o.Cache.PublishCharge(liveObjects)
 }
@@ -265,7 +265,7 @@ func (c *Compactor) isHeld(l loop, repoID string) bool {
 // let through once [collect.CollectInterval] has passed since the loop's last
 // refusal, the soonest the collector, the one thing in the engine that frees
 // room in such a bucket, can have made any; its upload stored, every hold of
-// both loops is released ([Compactor.stored]). So a full provider's bucket
+// every loop is released ([Compactor.stored]). So a full provider's bucket
 // costs a node one build a loop an hour, never one a repository a poll. A
 // failed read of the room holds every repository back for the pass. On either
 // store, a repository's own hold in a loop goes once that loop's own upload of
@@ -335,12 +335,12 @@ func (c *Compactor) holdFull(l loop, repoID string, estimate int64) {
 // make usual, every later build of it, however small, was skipped at every
 // pass, until its pushes were refused compaction_behind; and the stale
 // estimate was charged against the room every other held repository is
-// released by. The other loop's hold of it stays: its estimate is another
+// released by. Another loop's hold of it stays: its estimate is another
 // build's.
 //
 // THE REST, by what the store says of its room. On a provider's bucket, which
 // says nothing of it, a write it takes is the one way this node learns the
-// room came back, so every repository either loop holds back for it is
+// room came back, so every repository any loop holds back for it is
 // released. On a store that holds a reservation the room is read every pass
 // instead ([Compactor.releaseHeld]) — one build's uploads taken say nothing of
 // a larger one's — and no other hold is released here.
