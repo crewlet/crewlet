@@ -3553,7 +3553,7 @@ recorded from that activation on.
 | A clone or a fetch whose answer carried a pack | yes, `via: git` | one read, and the bytes of the answer the reader was sent |
 | A fetch's negotiation round that ended with no pack, an `ls-refs`, the advertisement | no | — |
 | A fetch the node ended before its answer did — a deadline, a stop | no | — |
-| A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in`, and a change's [revision reads](#a-revisions-facts): its facts, where its anchored lines are, an interdiff — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
+| A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in`, a path's [history](#a-paths-history) and a file's blame, a [merge preview](#a-merge-preview), and a change's [revision reads](#a-revisions-facts): its facts, where its anchored lines are, an interdiff — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
 | Its row — a listing, its detail, its push history, what a ref points at | no | — |
 
 So the count is of reads that sent the repository's contents, which is what

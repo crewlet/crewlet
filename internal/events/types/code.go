@@ -135,10 +135,10 @@ type CodeFetched struct {
 	Seat string `json:"seat,omitempty"`
 
 	// Via is how it was read; Kind, for a server-side read, is which read
-	// (code.GitReadKind: tree, blob, diff, compare, landed_in, and a change's
-	// revision_facts, reanchor and interdiff; or merge_preview, a comparison's
-	// merge of two commits, internal/code/home's PreviewReadKind), and empty
-	// for a fetch.
+	// (code.GitReadKind: tree, blob, diff, compare, landed_in, log and blame,
+	// and a change's revision_facts, reanchor and interdiff; or merge_preview,
+	// a comparison's merge of two commits, internal/code/home's
+	// PreviewReadKind), and empty for a fetch.
 	Via  CodeFetchedVia `json:"via"`
 	Kind string         `json:"kind,omitempty"`
 
