@@ -905,7 +905,7 @@ func deferQuery(w http.ResponseWriter, r *http.Request) (deferred, ok bool) {
 //
 // REFUSED, NEVER IGNORED. `?source=` once chose the word a row recorded, and a
 // client still sending it would otherwise be told its write landed while the
-// row says something else — a client that judged its own rows by that word
+// row says something else: a client that judged its own rows by that word
 // would read every one as overwritten and write it again, for ever, with
 // nothing failing. So any parameter is a 400 before the body is read, and the
 // answer says what the route reads instead.

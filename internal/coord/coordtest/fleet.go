@@ -2211,6 +2211,30 @@ var secretCases = []fleetCase{{
 		}
 	},
 }, {
+	// A CREATE'S OPERATION KEY IS KEPT, AND A PLAIN WRITE CLEARS IT. The key
+	// is how the same create retried finishes what it sealed (fleetsecrets
+	// Store.Reclaim); a store that dropped it would refuse every retry, and
+	// one that kept it across a plain write would let a stale retry re-seal
+	// over a value somebody else wrote.
+	name: "a create's operation key round-trips and a plain write clears it",
+	fn: func(h *fleetHarness) {
+		created, err := h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "GATEWAY_KEY", Value: "v1:first", KeyID: "key-1",
+			UpdatedAt: h.now(), OpID: "op-1",
+		})
+		if err != nil || !created {
+			h.t.Fatalf("the keyed create = (%v, %v)", created, err)
+		}
+		rec, _ := h.secret("GATEWAY_KEY")
+		if rec.OpID != "op-1" {
+			h.t.Fatalf("the create's operation key reads back as %q", rec.OpID)
+		}
+		h.putSecret("GATEWAY_KEY", "v1:rotated", "key-1")
+		if rec, _ = h.secret("GATEWAY_KEY"); rec.OpID != "" {
+			h.t.Fatalf("a plain write left the operation key %q", rec.OpID)
+		}
+	},
+}, {
 	// A VERSION IS READ, AND EVERY WRITE MOVES IT. What a conditional write
 	// is conditioned on has to be on what a read hands back, and a write
 	// that left it where it was would let a caller holding the old one win

@@ -191,9 +191,19 @@ type Secrets interface {
 	Set(ctx context.Context, name, value string, by secrets.Author, source secrets.Source,
 		now time.Time) error
 	// Create seals a value only where none is stored, in one step of the
-	// store's, and reports whether it did: a create-only write's seal.
+	// store's, stamping the create's operation key, and reports whether it
+	// did: a create-only write's seal.
 	Create(ctx context.Context, name, value string, by secrets.Author, source secrets.Source,
-		now time.Time) (bool, error)
+		now time.Time, opID string) (bool, error)
+	// OpOf is the operation key of the create that sealed name, when the
+	// engine sealed it, and whether a row is stored at all; it never opens
+	// the value.
+	OpOf(ctx context.Context, name string) (string, time.Time, bool, error)
+	// Reclaim re-seals name with value only while its row is still the one
+	// the create keyed opID sealed, at or after notBefore by the engine's
+	// clock, reporting whether it wrote.
+	Reclaim(ctx context.Context, name, value string, by secrets.Author, source secrets.Source,
+		now time.Time, opID string, notBefore time.Time) (bool, error)
 }
 
 // Leases is the fleet's lease table, for this node's own report: which

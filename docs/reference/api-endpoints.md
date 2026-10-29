@@ -2505,6 +2505,16 @@ provider the catalogue does not list.
    decided again at the seal, in one step of the store's: a name another write
    stored while this one was tested is the same `412`, with `sealed` naming
    what this write stored before it, and nothing is re-activated.
+   **A create is keyed** by its operation key: the `Idempotency-Key` header,
+   or one minted for it, scoped by the caller as on every keyed route. Each
+   row it seals carries the key. A create that stopped part way (a `500` with
+   `sealed`, or a `412` on a later name) answers `op_id`. The same request sent
+   again under that key re-seals the names its key sealed, within a day of
+   their seal by the engine's own clock (never the time the key carries, which
+   its caller writes), with the values it sends now, and creates the rest. Any other create naming them
+   is `412`, whatever value it sends: the store is never read for a value, so
+   no answer says whether a guess equals what is stored. The key is in no
+   other answer, listing, log or audit row.
 4. When the write will re-activate the company, `config.write` is asked before
    anything is tested or sealed.
 5. The candidate values are handed to the model's own CLI, in an isolated home,

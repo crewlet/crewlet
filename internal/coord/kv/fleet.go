@@ -2029,6 +2029,7 @@ type secretRecord struct {
 	UpdatedByKind string    `json:"updated_by_kind,omitempty"`
 	OperatorID    string    `json:"operator_id,omitempty"`
 	Source        string    `json:"source,omitempty"`
+	OpID          string    `json:"op_id,omitempty"`
 }
 
 // Secret reads one sealed value.
@@ -2115,7 +2116,7 @@ func encodeSecret(rec coord.SecretRecord) ([]byte, error) {
 		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
 		UpdatedAt: rec.UpdatedAt.UTC(), UpdatedBy: rec.UpdatedBy,
 		UpdatedByKind: rec.UpdatedByKind, OperatorID: rec.OperatorID,
-		Source: rec.Source,
+		Source: rec.Source, OpID: rec.OpID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("coord/kv: encode the secret: %w", err)
@@ -2203,7 +2204,7 @@ func decodeSecret(raw []byte) (coord.SecretRecord, bool) {
 		Name: rec.Name, Value: rec.Value, KeyID: rec.KeyID,
 		UpdatedAt: rec.UpdatedAt, UpdatedBy: rec.UpdatedBy,
 		UpdatedByKind: rec.UpdatedByKind, OperatorID: rec.OperatorID,
-		Source: rec.Source,
+		Source: rec.Source, OpID: rec.OpID,
 	}, true
 }
 

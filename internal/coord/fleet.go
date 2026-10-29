@@ -1315,6 +1315,13 @@ type SecretRecord struct {
 	OperatorID    string
 	Source        string
 
+	// OpID is the operation key of the create-only write that sealed the
+	// row (internal/api/opkey, scoped by its principal), so the same
+	// request retried can finish what it sealed without the store being
+	// read for a value. Empty for every other write, which clears it.
+	// NEVER ANSWERED: no route, listing, log or audit carries it.
+	OpID string
+
 	// Version is the store's own revision of the row, set on every read
 	// and ignored on every write: what [Secrets.UpdateSecret] is
 	// conditioned on. Store-wide rather than

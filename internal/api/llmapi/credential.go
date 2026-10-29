@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // CredentialBudget is the longest a candidate credential's test may take:
@@ -168,8 +170,16 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 				"hint":   "send the values this model reads, each the kind its slot takes"})
 		return
 	}
+	// A CREATE IS KEYED by its operation key (internal/api/opkey), the
+	// caller's Idempotency-Key or one minted here, scoped by the principal:
+	// stamped on each row it seals, it is how the same request retried
+	// finishes what an attempt that stopped part way sealed.
+	var opID string
 	if create {
-		if !s.refuseStored(w, r, names) {
+		if opID, ok = opkey.Key(w, r, s.now()); !ok {
+			return
+		}
+		if !s.refuseStored(w, r, names, opID) {
 			return
 		}
 	}
@@ -240,10 +250,18 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 			// over by a write that asked for a new one.
 			var created bool
 			created, sealErr = s.secrets.Create(ctx, name, req.Values[name], author,
-				secrets.SourceModels, s.now())
+				secrets.SourceModels, s.now(), opID)
+			if sealErr == nil && !created && s.retryable(opID) {
+				// THIS REQUEST'S OWN ROW, from an earlier attempt of it:
+				// re-sealed with the value sent now, never read, so the
+				// end state is this request's and nothing is learnt of
+				// what was stored.
+				created, sealErr = s.secrets.Reclaim(ctx, name, req.Values[name], author,
+					secrets.SourceModels, s.now(), opID, s.now().Add(-CreateRetryWindow))
+			}
 			if sealErr == nil && !created {
 				httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeAlreadyExists,
-					httpjson.Detail{"names": []string{name}, "sealed": sealed,
+					httpjson.Detail{"names": []string{name}, "sealed": sealed, "op_id": opID,
 						"detail": name + " was stored by another write while this one was tested. " +
 							sealedSentence(sealed),
 						"hint": "If-None-Match: * asked for new secrets: choose another name, or " +
@@ -258,10 +276,18 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 			// way: what is stored now, and that nothing was re-activated.
 			log.ErrorContext(ctx, "llm_request_failed", "what", "seal the credential",
 				"model", key, "sealed", sealed, "error", sealErr)
-			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeInternalError,
-				httpjson.Detail{"sealed": sealed,
-					"detail": "The store refused a value part way. " + sealedSentence(sealed),
-					"hint":   "send the same values again: the running company still reads the ones it read"})
+			refusal := httpjson.Detail{"sealed": sealed,
+				"detail": "The store refused a value part way. " + sealedSentence(sealed),
+				"hint":   "send the same values again: the running company still reads the ones it read"}
+			if create {
+				// THE CALLER'S OWN KEY, the one thing a retry needs to
+				// finish what this attempt sealed.
+				refusal["op_id"] = opID
+				refusal["hint"] = "send the same request again with " + opkey.Header + ": " +
+					"op_id, which finishes the names this attempt sealed; the running " +
+					"company still reads the ones it read"
+			}
+			httpjson.FailWithFields(w, http.StatusInternalServerError, httpjson.CodeInternalError, refusal)
 			return
 		}
 		sealed = append(sealed, name)
@@ -452,15 +478,25 @@ func slotVar(src config.CredentialSource) string {
 
 // refuseStored refuses a create-only write naming a secret already stored,
 // and reports whether none is.
-func (s *Service) refuseStored(w http.ResponseWriter, r *http.Request, names []string) bool {
+//
+// A NAME THIS REQUEST SEALED IS NOT ANOTHER'S. A create of several names
+// seals them one at a time, so an attempt that stopped part way (a seal that
+// failed, a name another write took) leaves the names before it stored. The
+// same request retried, under the same operation key, finds its key on those
+// rows and passes them; the seal re-seals them ([Secrets.Reclaim]). Decided
+// by the KEY and never by the value: a create that compared values would
+// answer whether a guess equals a write-only secret.
+func (s *Service) refuseStored(w http.ResponseWriter, r *http.Request, names []string,
+	opID string) bool {
+
 	var held []string
 	for _, name := range names {
-		_, found, err := s.secrets.Describe(r.Context(), name)
+		op, sealed, found, err := s.secrets.OpOf(r.Context(), name)
 		if err != nil {
 			s.fail(w, "read the secret store", err)
 			return false
 		}
-		if found {
+		if found && (op != opID || !s.retryable(opID) || sealed.Before(s.now().Add(-CreateRetryWindow))) {
 			held = append(held, name)
 		}
 	}
@@ -468,10 +504,37 @@ func (s *Service) refuseStored(w http.ResponseWriter, r *http.Request, names []s
 		return true
 	}
 	httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeAlreadyExists,
-		httpjson.Detail{"names": held,
+		httpjson.Detail{"names": held, "op_id": opID,
 			"hint": "If-None-Match: * asked for new secrets, and these are stored: another model " +
 				"may read them. Choose other names, or rotate them without If-None-Match"})
 	return false
+}
+
+// CreateRetryWindow is how long a create's operation key finishes what it
+// sealed: a day, the span a client retrying a request that lost its answer
+// works in, and short enough that a key found in an old log names nothing.
+//
+// MEASURED FROM THE SEAL, BY THE ENGINE'S CLOCK: a row is its key's to finish
+// only while it was sealed within the window ([Secrets.OpOf], the notBefore
+// [Secrets.Reclaim] is handed). The key's own instant cannot be the measure:
+// a caller mints its key, and a UUIDv7 carries whatever time the caller wrote
+// into it, so a key dated a year ahead would stamp rows its retry could take
+// for a day a year later. [Service.retryable] narrows it further, never
+// widens it.
+const CreateRetryWindow = 24 * time.Hour
+
+// retryable reports whether opID was minted within [CreateRetryWindow] of
+// now, and no more than a minute ahead of it: defence in depth beside the
+// seal's time, which alone decides. A key outside it, honest but skewed or
+// dated to game the window, finishes nothing; the create is refused 412 as
+// one under another key is, and a fresh key creates the rest.
+func (s *Service) retryable(opID string) bool {
+	minted, ok := statelog.OpMintedAt(opID)
+	if !ok {
+		return false
+	}
+	age := s.now().Sub(minted)
+	return age >= -time.Minute && age <= CreateRetryWindow
 }
 
 // entriesReading is every entry of company that reads one of names, in the
