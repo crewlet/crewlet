@@ -127,15 +127,7 @@ func openBucket(ctx context.Context, js jetstream.JetStream,
 	// for that term and a [jsprovision.ReAsk] — sixteen seconds a bucket,
 	// on a boot that opens every coordination bucket in a row — where a
 	// read's term costs it two.
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, jsprovision.LookupBudget)
-	var bucket jetstream.KeyValue
-	err := jsprovision.Read(lookupCtx,
-		func(ctx context.Context) error {
-			var e error
-			bucket, e = js.KeyValue(ctx, cfg.Bucket)
-			return e
-		}, nil)
-	cancelLookup()
+	bucket, err := jsprovision.LookupBucket(ctx, js, cfg.Bucket)
 	switch {
 	case err == nil:
 		stop()
