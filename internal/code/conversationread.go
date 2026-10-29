@@ -19,7 +19,7 @@ import (
 // change's conversation a `change` read pages ([ReadQuery.Part]) — its
 // reviewers, its comments, its reviews and its findings — each served inside
 // the one transaction [Reader.Read] hands it, from the rows the records on the
-// change's own subject wrote (replicated 0070 and 0071), and held to the grant
+// change's own subject wrote (replicated 0072 and 0073), and held to the grant
 // on the change's repository as every read of a change is (changeread.go).
 //
 // # Who a change waits on
@@ -552,7 +552,7 @@ func (r *Reader) changeFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 // planner.go says — held by plan_test.go to the seek each is written for.
 const (
 	// reviewerAsksKey is code_reviewers_reviewer_idx, (reviewer, state,
-	// change_id) (replicated 0070): a reviewer's asks by whether they stand,
+	// change_id) (replicated 0072): a reviewer's asks by whether they stand,
 	// newest change first.
 	reviewerAsksKey = "code_reviewers_reviewer_idx"
 	// reviewersKey is code_reviewers' PRIMARY KEY index, (change_id,

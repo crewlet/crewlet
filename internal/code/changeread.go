@@ -30,7 +30,7 @@ import (
 // chosen by its filters in this order ([walkOf]):
 //
 //   - a reviewer, or a need of a review: code_reviewers_reviewer_idx
-//     (replicated 0070), the changes whose ask of that reviewer stands —
+//     (replicated 0072), the changes whose ask of that reviewer stands —
 //     the set a reviewer is asked to work through, newest change first
 //     (conversationread.go);
 //   - a work item named: code_changes_work_idx (recreated in its order by

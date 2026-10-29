@@ -3,7 +3,7 @@
 -- A review judges one revision of a change: a verdict — approve, request
 -- changes or comment — a summary, and the FINDINGS it raises, each a thing it
 -- says about lines of the change, with how much it weighs. It is written by ONE
--- record on the change's own subject (0070), the review and all its findings
+-- record on the change's own subject (0072), the review and all its findings
 -- together, by the repository's committing data node; an answer to findings is
 -- a record of its own there too. A review is a code-domain object and never a
 -- decision of the tracker's: what a merge will count is its verdict and its
@@ -15,7 +15,7 @@
 -- many it raised, turn_id and model the turn and the model that reviewed, and
 -- position and at its record's packed position and broker instant.
 -- summary_bytes is its summary's width, which a purge part's cut reads off the
--- rows it deletes. THE SUMMARY IS DECLARED LAST, as a comment's body is (0070).
+-- rows it deletes. THE SUMMARY IS DECLARED LAST, as a comment's body is (0072).
 --
 -- code_findings is one row a finding, NARROW: where it points — the path, the
 -- side of the revision's diff, its lines, the commit and the blob they were
