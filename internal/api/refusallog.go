@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 )
 
@@ -68,10 +69,8 @@ func isWrite(method string) bool {
 	return false
 }
 
-// requestIDHeader names the request: the caller's or a proxy's where it sent
-// one in the shape this accepts, a UUID minted here where not, and answered
-// back, so a refusal the caller reports can be found in the log by it.
-const requestIDHeader = "X-Request-Id"
+// requestIDHeader names the request: see [httpjson.RequestIDHeader].
+const requestIDHeader = httpjson.RequestIDHeader
 
 func (m refusalMux) logRefusals(pattern string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

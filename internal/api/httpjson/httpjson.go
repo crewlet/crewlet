@@ -1759,6 +1759,14 @@ const EngineHeader = "X-Crewlet-Engine"
 // EngineHeaderValue is [EngineHeader]'s one value.
 const EngineHeaderValue = "1"
 
+// RequestIDHeader is the header a write's request id travels in, both ways:
+// the API reads a caller's (or a proxy's) and answers one back on every
+// write, the caller's where it is one token and a minted UUID where not, so a
+// refusal a caller reports can be found in the engine's log by it. Here, with
+// [EngineHeader], so the API that answers it and the CORS policy that lets a
+// browser read it name one header.
+const RequestIDHeader = "X-Request-Id"
+
 // Marked reports whether an answer's headers carry the engine's mark
 // ([EngineHeader]): the one test a client applies before it reads an answer
 // as the engine's, whatever its body says.

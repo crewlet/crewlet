@@ -31,10 +31,6 @@ import (
 // dashboard doing a fetch a second pays one preflight per six hundred.
 const CORSMaxAge = 10 * time.Minute
 
-// requestIDHeader is the header a write's request id travels in, both ways:
-// the API's refusal log reads a caller's and answers one back.
-const requestIDHeader = "X-Request-Id"
-
 // corsMethods and corsHeaders are what a permitted origin may send.
 //
 // A CLOSED SET rather than an echo of what the browser asked for. Reflecting
@@ -54,7 +50,7 @@ var (
 	// the refusal log answers back and files a refused write under.
 	corsHeaders = []string{
 		"Authorization", "Content-Type",
-		"If-Match", "If-None-Match", opkey.Header, "X-Summary", requestIDHeader,
+		"If-Match", "If-None-Match", opkey.Header, "X-Summary", httpjson.RequestIDHeader,
 	}
 	// corsExposed is every header a cross-origin client reads that a browser
 	// hides by default (only a short safelist is readable cross-origin): the
@@ -62,7 +58,7 @@ var (
 	// of the engine, the entity tag a config write sends back as If-Match,
 	// the wait a 429 or a 503 says to keep, and the request id a refused
 	// write is found in the log by.
-	corsExposed = []string{httpjson.EngineHeader, "ETag", "Retry-After", requestIDHeader}
+	corsExposed = []string{httpjson.EngineHeader, "ETag", "Retry-After", httpjson.RequestIDHeader}
 )
 
 // CORS is the set of browser origins this API answers cross-origin.
