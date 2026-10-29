@@ -203,7 +203,10 @@ func Register(reg *tools.Registry, deps Deps) ([]string, error) {
 		}, deps.Diary != nil},
 		{&reflectAndPersist{diary: deps.Diary}, deps.Diary != nil},
 		{&markOnboarded{onboarding: deps.Onboarding}, deps.Onboarding != nil},
-		{&runSandbox{launcher: deps.Sandbox}, deps.Sandbox != nil},
+		// `repos` WHERE THE CODE TOOLS ARE: a run is given a repository of
+		// the company's own code host only where this node serves it, which
+		// is exactly where the code tools are registered.
+		{&runSandbox{launcher: deps.Sandbox, repos: deps.Code.serves()}, deps.Sandbox != nil},
 		{&loadToolSkill{skills: deps.ToolSkills, events: deps.Events}, deps.ToolSkills != nil},
 		{&searchKnowledge{search: deps.Knowledge, events: deps.Events}, deps.Knowledge != nil},
 		{&listWorkItems{deps: deps.Work}, deps.Work.Reader != nil},

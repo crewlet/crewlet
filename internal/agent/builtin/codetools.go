@@ -625,33 +625,51 @@ func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
 // name's row in the names' order — its oid, its whole name and where it last
 // moved, which a read by object id is then floored at ([resolvedRev.at]) — and
 // the checkpoint they were read at; a name no live ref holds refuses the call
-// in the code host's own sentence, every such name named. THE ONE
-// code.RefQuery in this package: code_resolve's `ref` calls it directly, and
-// [CodeDeps.resolveRevs] for every revision of a call that is not an id — and
-// so the one a call's caller and ceiling are stamped on for a resolve.
+// in the code host's own sentence, every such name named. Its read is THE ONE
+// code.RefQuery in this package ([CodeDeps.refsOf]): code_resolve's `ref`
+// calls it directly, [CodeDeps.resolveRevs] for every revision of a call that
+// is not an id, and a coding run's launch every ref it resolves
+// ([CodeDeps.ResolveRunRepos]) — and so the one place a call's caller and
+// ceiling are stamped on a resolve.
 func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo code.RepoRef, names ...string) ([]code.ResolvedRef, statelog.Position, *tools.Result) {
 
-	answer, err := d.Code.ResolveRef(ctx, code.RefQuery{Repo: repo.Name, Refs: names, Fresh: seatRead,
-		Asker: c.asker, CeilingSeat: c.ceiling})
-	if err != nil {
-		r := d.failed(ctx, turn, tool, c.asker, repo, err)
-		return nil, statelog.Position{}, &r
-	}
-	if r := d.sameRepo(turn, tool, c.asker, repo, answer.Repo); r != nil {
-		return nil, statelog.Position{}, r
-	}
-	if len(answer.Refs) != len(names) {
-		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered %d of the %d refs asked of %s",
-			len(answer.Refs), len(names), repo.Name), fmt.Sprintf("%s could not read repository %q: %s.", tool,
-			repo.Name, faultSaid))
-		return nil, statelog.Position{}, &r
+	answer, refusal := d.refsOf(ctx, turn, tool, c, repo, names...)
+	if refusal != nil {
+		return nil, statelog.Position{}, refusal
 	}
 	if err := answer.Err(); err != nil {
 		r := codeFailure(ctx, tool, repo.Name, err)
 		return nil, statelog.Position{}, &r
 	}
 	return answer.Refs, answer.Position, nil
+}
+
+// refsOf is [CodeDeps.resolveRef]'s read, ANSWERING a name no live ref holds
+// beside the rest ([code.ResolvedRef.Missing]) rather than refusing the call:
+// for the one caller to which a missing ref is an answer — a coding run's
+// launch, whose own branch may not exist yet ([CodeDeps.ResolveRunRepos]).
+// The repository the answer names is the one the turn resolved, or the call is
+// refused ([CodeDeps.sameRepo]).
+func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
+	repo code.RepoRef, names ...string) (code.RefAnswer, *tools.Result) {
+
+	answer, err := d.Code.ResolveRef(ctx, code.RefQuery{Repo: repo.Name, Refs: names, Fresh: seatRead,
+		Asker: c.asker, CeilingSeat: c.ceiling})
+	if err != nil {
+		r := d.failed(ctx, turn, tool, c.asker, repo, err)
+		return code.RefAnswer{}, &r
+	}
+	if r := d.sameRepo(turn, tool, c.asker, repo, answer.Repo); r != nil {
+		return code.RefAnswer{}, r
+	}
+	if len(answer.Refs) != len(names) {
+		r := faulted(ctx, tool, fmt.Errorf("builtin: the code host answered %d of the %d refs asked of %s",
+			len(answer.Refs), len(names), repo.Name), fmt.Sprintf("%s could not read repository %q: %s.", tool,
+			repo.Name, faultSaid))
+		return code.RefAnswer{}, &r
+	}
+	return answer, nil
 }
 
 // headRev is the revision a call names its repository's default branch by.

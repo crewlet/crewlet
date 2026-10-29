@@ -2,6 +2,7 @@ package codetest
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -85,6 +86,71 @@ func anEndedRunIsRefused(t *testing.T, newFleet NewFleet) {
 	_, stderr, err := box.Git().Try(t, "", nil, "ls-remote", c.BoxURL(0))
 	if err == nil || !strings.Contains(stderr, "has ended") || !strings.Contains(stderr, "403") {
 		t.Errorf("an ended run's box was answered %v:\n%s\nwant 403 naming the ended run", err, stderr)
+	}
+	assertConverged(t, c.Fleet)
+}
+
+// F51: a box's push is recorded by its RUN, whatever its commits' trailers say
+// (M3-decisions U25 a): the code host refuses nothing because of a trailer and
+// stamps every push row from the run's row alone. A box of run R1 pushes a
+// commit whose trailers name another seat, another live run R2 and another
+// work item; a commit with no trailer; and a commit whose message claims R2
+// a hundred times. All land, every row names R1's seat, launch, coding agent
+// and work item, and R2's pushes are none.
+//
+// Mutation: stamp run_id from the newest commit's Crewlet-Run trailer → the
+// forged and the many rows name R2, red.
+func aBoxPushIsRecordedByItsRunWhateverItsTrailersSay(t *testing.T, newFleet NewFleet) {
+	c := newCase(t, newFleet, Shape{}, Settings())
+	p := NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+
+	launched := c.Rows()
+	r1, box := c.LaunchBox(FixtureAlice, code.AccessWrite)
+	r2, _ := c.LaunchBox(FixtureLead, code.AccessWrite)
+	clone := box.Clone(c.BoxURL(0))
+	branch := code.SeatNamespace(FixtureAlice) + "work"
+	messages := []string{
+		"a box's change\n\nCrewlet-Seat: " + FixtureLead + "\nCrewlet-Run: " + r2.LaunchID +
+			"\nCrewlet-Work-Item: jira OPS-9\n",
+		"a box's change with no trailer",
+		"a box's change claiming another run\n\n" + strings.Repeat("Crewlet-Run: "+r2.LaunchID+"\n", 100),
+	}
+	for i, message := range messages {
+		box.Commit(clone, map[string]string{fmt.Sprintf("src/%d.txt", i): "the box's work\n"}, message)
+		if res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:"+branch); res.Err != nil {
+			t.Fatalf("the box's push %d: %s", i, res)
+		}
+	}
+
+	var boxes []code.PushRow
+	for _, row := range pushRows(t, c) {
+		if row.Run.RunID != "" {
+			boxes = append(boxes, row)
+		}
+	}
+	if len(boxes) != len(messages) {
+		t.Fatalf("%d box pushes have rows, want %d", len(boxes), len(messages))
+	}
+	for _, row := range boxes {
+		if row.ActorSeat != FixtureAlice || row.Run.RunID != r1.LaunchID || row.Run.CodingAgent != "claude-code" ||
+			row.Run.WorkBackend != "native" || row.Run.WorkKey != "ENG-1" {
+			t.Errorf("push %s is recorded as seat %q, run %q by %q, work %s %s; want run %s's: seat %s, "+
+				"claude-code, native ENG-1", row.PushID, row.ActorSeat, row.Run.RunID, row.Run.CodingAgent,
+				row.Run.WorkBackend, row.Run.WorkKey, r1.LaunchID, FixtureAlice)
+		}
+	}
+	answer, err := c.Fleet.Nodes()[0].Read(c.Ctx, code.ReadQuery{Kind: code.ReadRunPushes, Limit: 200,
+		RunPushes: &code.RunPushesQuery{Run: r2.LaunchID, Repos: []string{launched.Repo.ID}, After: launched.Position},
+		Fresh:     Linearizable})
+	if err != nil {
+		t.Fatalf("read run %s's pushes: %v", r2.LaunchID, err)
+	}
+	if len(answer.Pushes) != 0 {
+		t.Errorf("run %s, which pushed nothing, is read as %d pushes its trailers were named in", r2.LaunchID,
+			len(answer.Pushes))
 	}
 	assertConverged(t, c.Fleet)
 }

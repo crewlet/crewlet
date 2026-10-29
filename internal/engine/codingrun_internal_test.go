@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -114,7 +115,7 @@ roles:
 		e, jobs := codeWorkRig(t, c)
 		seat := seatNamed(t, c, "Writer")
 		_, err := (&launcher{engine: e}).Launch(t.Context(),
-			&turnctx.Turn{RunID: "t1", Seat: seat}, "fix the failing test")
+			&turnctx.Turn{RunID: "t1", Seat: seat}, builtin.SandboxRequest{Brief: "fix the failing test"})
 		started := len(jobs[codingagent.ClaudeCodeName].Started()) + len(jobs[codingagent.OpenCodeName].Started())
 		var modelErr *SandboxModelError
 		if !tc.refused {

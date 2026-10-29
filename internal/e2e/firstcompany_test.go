@@ -87,7 +87,7 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	if e.Company() != nil {
 		t.Fatal("the premise: this node has no company")
 	}
-	app, srv := serveAPI(t, e, &boot, nil)
+	app, srv := serveAPI(t, e, &boot, nil, nil)
 	n := &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
 
 	operator := newBrowser(t)

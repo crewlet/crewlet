@@ -281,7 +281,8 @@ func (c *Company) ValidateRunnable() error {
 // reads ([Company.validateSandboxGates]), a setup step writing a file a box
 // it reaches refuses ([Company.validateSetupFileHomes]), a coding run's
 // `optional_keys` entry leaving nothing out ([Company.validateRunOptionalKeys]),
-// the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
+// a variable the engine sets in a coding run itself written into one of its
+// envs ([Company.validateReservedSandboxEnv]), the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
 // seats declaring one email, and a reference that is shaped like neither a
@@ -301,7 +302,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 		c.validateAvatars(),
 		c.validateLLMCredentials(), c.validateLLMModels(),
 		c.validateSandboxCodingAgents(), c.validateSandboxGates(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateFileRules(),
+		c.validateRunOptionalKeys(), c.validateReservedSandboxEnv(), c.validateFileRules(),
 		c.Code.validateAdmission(field("code")))
 }
 

@@ -191,7 +191,7 @@ func TestAStatelessNodeInAMaintenanceModeServesAFileAndTakesNone(t *testing.T) {
 	}
 	ring := fleetRing(t)
 	data, dataBoot := bootDataMember(t, cfg, model, nil, ring)
-	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil, nil)
 	waitFor(t, "the data node to serve its estate", hydrated(t, data.engine))
 
 	// A FILE THE FLEET HOLDS, uploaded through the data node's own byte

@@ -1577,8 +1577,9 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 
 // codeWarnings is what is valid about the company's code and still worth
 // knowing, against its own chart: every seat's code access tier that grants
-// nothing ([Company.roleCodeWarnings]), and, where the engine hosts code,
-// every declared repository that
+// nothing ([Company.roleCodeWarnings]); where the engine hosts code, every
+// cell that places a seat's box in `direct` ([Company.directBoxWarnings]);
+// and every declared repository that
 //
 //   - is `visibility: unit` and owned by a unit with no lead — effective, so
 //     inherited counts — which only persons and the unit's own members read:
@@ -1606,6 +1607,7 @@ func (c *Company) codeWarnings() []Warning {
 	if !c.Code.Native {
 		return out
 	}
+	out = append(out, c.directBoxWarnings()...)
 	o, _ := c.organization()
 	units := o.Index()
 	for i, r := range c.Code.Repos {
@@ -1632,6 +1634,70 @@ func (c *Company) codeWarnings() []Warning {
 			"%s's default branch %s is unprotected: a person can force-push or delete it, and no merge "+
 				"gate holds what merges into it (add {branch: %s} to its protect list, with merge_by, "+
 				"approvals, human_paths or checks to gate its merges)", r.Name, branch, branch)))
+	}
+	return out
+}
+
+// directBoxWarnings is one warning for every place a company hosting code puts
+// a seat's box in the `direct` cell: at the seat's `sandbox.run_in`, at the
+// `run_in` of the providers.llm entry an agent-mode executor's box is placed
+// by (once an entry), or once at `providers.sandbox.default_run_in` for every
+// box that inherits it — each box as [Company.SeatBoxes] places it, the walk
+// the engine's launches are held to.
+//
+// WHAT IT SAYS IS WHAT THE CELL IS: a `direct` box runs as the engine's own
+// user, so it reads every repository a git node's cache holds and, on ANY
+// node, the Tier A keyring every run token's key is derived from — so it can
+// mint the token of any live coding run and push as that run's seat. Neither
+// a repository's `visibility: unit` nor a run's grants bind it. Said whatever
+// the repositories' visibility, because the impersonation half holds on a
+// company whose every repository is `company`.
+//
+// A WARNING, NOT A REFUSAL (M3-decisions U1 a): refusing a `direct` run given
+// repositories on a git node would close none of those reads — the cache and
+// the keyring are files of the engine's user with or without repositories,
+// and the keyring is on every node — while it took every single-node
+// deployment, whose node holds every role, its `direct` cell. The boundary is
+// the cell, which docs/concepts/code-sandbox.md's security model states.
+//
+// NOT FOR THE DOUBLE (`fake: true`), which answers every cell and runs nothing.
+func (c *Company) directBoxWarnings() []Warning {
+	catalogue := c.Providers.Sandbox
+	if !catalogue.Enabled() || catalogue.Fake {
+		return nil
+	}
+	const reads = "a `direct` box runs as the engine's own user: it can read every repository cached on a " +
+		"git node and, on any node, the Tier A keyring that signs run tokens — so it can mint the token of " +
+		"ANY live coding run and push as that run's seat, and a repository's `visibility: unit` and a " +
+		"run's grants do not bind "
+	const remedy = "; run it in `container` or `e2b` to hold it to them"
+	var out []Warning
+	inherited := false
+	entries := map[string]bool{}
+	for box := range c.SeatBoxes() {
+		if box.Cell != PlacementDirect {
+			continue
+		}
+		switch {
+		case box.Executor != "" && c.Providers.LLM[box.Executor].RunIn == "",
+			box.Executor == "" && (box.Seat.Sandbox == nil || box.Seat.Sandbox.RunIn == ""):
+			inherited = true
+		case box.Executor != "":
+			if entries[box.Executor] {
+				continue
+			}
+			entries[box.Executor] = true
+			out = append(out, advisory(at(entryPath(box.Executor), "run_in"),
+				reads+"the agent-mode runs of the seats this entry places"+remedy))
+		default:
+			w := advisory(at(box.At, "sandbox.run_in"), reads+"this seat's coding runs"+remedy)
+			w.Seat = box.Seat.IdentityKey()
+			out = append(out, w)
+		}
+	}
+	if inherited {
+		out = append(out, advisory(field("providers.sandbox.default_run_in"),
+			reads+"the coding runs of the seats that take this default"+remedy))
 	}
 	return out
 }

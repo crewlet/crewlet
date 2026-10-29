@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -31,10 +32,10 @@ import (
 // goroutine. A fleet member is built on a goroutine of its own and may have to
 // be torn down before the test ends, so it calls [wireAPI] directly.
 func serveAPI(
-	t *testing.T, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	t *testing.T, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options), listener net.Listener,
 ) (*api.App, *httptest.Server) {
 	t.Helper()
-	app, srv, stops, err := wireAPI(t.Context(), e, boot, amend)
+	app, srv, stops, err := wireAPI(t.Context(), e, boot, amend, listener)
 	// REGISTERED BEFORE THE ERROR IS RAISED, so a wiring that failed halfway
 	// still stops the half that came up.
 	t.Cleanup(func() { stopInReverse(stops) })
@@ -106,8 +107,14 @@ func serveAPI(
 // the adapter `crewlet run` hands the API — asked per request, because the
 // code host is built with the native runtime, which a company applied after
 // boot brings up after this wiring ran.
+//
+// SERVED ON listener where the case bound one, and on a fresh loopback port
+// where it is nil: a node that hands its OWN address to what it starts — a
+// coding box's CREWLET_BOX_GIT_URL, read once at boot — must know that address
+// before engine.New runs, which is before this wiring can bind anything.
 func wireAPI(
 	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, amend func(*api.Options),
+	listener net.Listener,
 ) (*api.App, *httptest.Server, []func(), error) {
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
@@ -363,7 +370,14 @@ func wireAPI(
 		return fail("seed the live projection", err)
 	}
 
-	srv := httptest.NewServer(app)
+	srv := httptest.NewUnstartedServer(app)
+	if listener != nil {
+		// The loopback listener NewUnstartedServer bound is released for the
+		// case's own, which httptest documents as the way to serve on one.
+		_ = srv.Listener.Close()
+		srv.Listener = listener
+	}
+	srv.Start()
 	stops = append(stops, srv.Close)
 
 	// AND THE RECONCILE LOOP, as `crewlet run` starts it once the node is

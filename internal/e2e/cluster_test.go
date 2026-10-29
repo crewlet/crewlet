@@ -553,7 +553,7 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// AT THE PRODUCTION TICK, not the single-node cases' 25 ms — see
 	// [tickInterval] for what that costs a fleet.
 	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, //nolint:contextcheck // see above
-		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval })
+		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval }, nil)
 	stops.api = apiStops
 	if err != nil {
 		return fail(fmt.Errorf("api: %w", err))

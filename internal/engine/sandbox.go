@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/auxspend"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -322,6 +323,16 @@ type runEnv struct {
 // names one of its own. Precedence, later winning: identity, then the setup
 // steps' contributions, then the seat's own env — so an operator's explicit
 // value always beats a step's default.
+//
+// BUT FOR THE ENGINE'S OWN CODE HOST (ADR-0063): a run given repositories on
+// it is given ACCESS TO THAT SURFACE — the run's own credential and the box's
+// git configuration ([Engine.boxGitEnv]), as an agent-mode run is given the
+// tool bridge's endpoint — a credential the box acts AS, scoped to the run and
+// dying with it. Added to the LAUNCH's environment once the store has named
+// the job, never here: this environment is the spec's, and the credential
+// names the launch. Every OTHER host's credential is still the operator's to
+// declare, and config refuses the engine's own names in any env it writes
+// (config.ReservedSandboxEnv).
 //
 // RESOLVED EXACTLY ONCE, here, at launch — not at load. These values are
 // where an operator declares a code-host token, and Tier B stores its
@@ -1327,13 +1338,22 @@ func (e *Engine) failSuspension(ctx context.Context, rt *sandboxRuntime, turnID,
 // launcher is the run_sandbox tool's seam into the sandbox layer.
 //
 // It exists to assemble a launch from things only the engine holds — the
-// seat's config block, the run environment, the box spec — so the tool itself
+// seat's config block, the run environment, the box spec, the code host's
+// base and the keyring a box's credential is minted from — so the tool itself
 // stays a thin adapter that reads a brief and reports a suspension.
-type launcher struct{ engine *Engine }
+type launcher struct {
+	engine *Engine
+	// code is the code tools' seams on this node, as the epoch's tools were
+	// equipped with them (CodeToolDeps): what a call's repositories are
+	// resolved through, exactly as a code tool resolves its own. The zero
+	// value serves none — a company that hosts no code — and a launch
+	// naming repositories is then refused.
+	code builtin.CodeDeps
+}
 
 var _ builtin.SandboxLauncher = (*launcher)(nil)
 
-func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (sandbox.LaunchResult, error) {
+func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, req builtin.SandboxRequest) (sandbox.LaunchResult, error) {
 	e := l.engine
 	rt := e.sandbox.Load()
 	if rt == nil {
@@ -1434,6 +1454,30 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		return sandbox.LaunchResult{}, err
 	}
 
+	// THE REPOSITORIES ON THE COMPANY'S OWN CODE HOST, LAST OF THE LAUNCH'S
+	// CHECKS: resolved after every local refusal, because the resolution
+	// reads at the seat's level and takes the turn's holds, which a launch
+	// refused here would have taken for nothing — and before the holds are
+	// sealed below, so a hold it takes is in the set the row opens with.
+	repos, err := l.resolveRunRepos(ctx, t, req.Repos)
+	if err != nil {
+		return sandbox.LaunchResult{}, err
+	}
+	var runEnv func(launchID string) (map[string]string, error)
+	codeFloor := ""
+	if len(repos.repos) > 0 {
+		spec.Repos, codeFloor = repos.repos, repos.floor.String()
+		// THE RUN'S GIT, minted for the launch the store is about to name
+		// (ADR-0063): its credential names that launch, so a job a relaunch
+		// supersedes is refused at the code host whatever its token's
+		// expiry; and its environment is the launch's own, over the run
+		// environment just assembled, never the spec's or the row's.
+		base, item := l.engine.boxGitURL, t.WorkItem
+		runEnv = func(launchID string) (map[string]string, error) {
+			return l.engine.boxGitEnv(seat, base, host.BoxRunRef{TurnID: t.RunID, LaunchID: launchID}, item, env)
+		}
+	}
+
 	// THE TURN'S CODE HOLDS GO ON THE ROW THE LAUNCH OPENS, and the set is
 	// SEALED from the moment it is read until that row exists, so no hold is
 	// taken in between that neither the set this read nor the row would carry
@@ -1441,7 +1485,7 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 	holds := launchHolds(t.Holding(), pending, t.RunID)
 	res, err := rt.coordinator.Launch(ctx, manager, sandbox.LaunchRequest{
 		Turn:  sandboxTurnRef(ctx, t, seat.Name),
-		Brief: brief,
+		Brief: req.Brief,
 		Wider: t.Task,
 		Task:  t.Task,
 		// HOW TO ASK A PERSON, with the names the chart gives this seat —
@@ -1455,6 +1499,9 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, brief string) (s
 		ReuseBox:   reuse,
 		CodeHolds:  holds.ids,
 		Opened:     holds.opened,
+		Clone:      repos.clone,
+		CodeFloor:  codeFloor,
+		RunEnv:     runEnv,
 	})
 	holds.settle(err)
 	return res, err

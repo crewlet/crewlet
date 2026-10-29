@@ -215,10 +215,11 @@ type LaunchRequest struct {
 
 	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
 	// that is minted for the job itself, such as its access to the engine's
-	// own code host. Asked ONCE, AFTER the store has minted the launch id the
-	// job's credentials name and before any box exists, because a credential
-	// minted before the store names the job could only name a job the row
-	// does not hold. Its variables win over every other source of the run
+	// own code host (ADR-0063). Asked ONCE, AFTER the store has minted the
+	// launch id the job's credentials name and before any box exists,
+	// because a credential minted before the store names the job could only
+	// name a job the row does not hold. Its variables win over every other
+	// source of the run
 	// environment for the names they set, and an error abandons the launch
 	// like every failure past the row. Nil adds nothing.
 	RunEnv func(launchID string) (map[string]string, error)

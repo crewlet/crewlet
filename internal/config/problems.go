@@ -1066,6 +1066,30 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 				"takes store.objects.backend: s3"))
 	}
 
+	// A CONTAINER BOX CAN REACH THE FLEET'S BROKER, which authenticates no
+	// client yet (until the broker's own authentication, unit m3-after1,
+	// M3-decisions U4): a `container` coding box joins the network
+	// `providers.sandbox.local.network` names, or the runtime's default
+	// bridge, and either reaches the host it runs on — so on a fleet a
+	// member's route, leaf and client ports on a member's own host, and the
+	// members' leaf listeners from a leaf's, where main's split topology runs
+	// its seats. A box that reached them could publish as any principal the
+	// estate trusts. Nothing here can tell a network firewalled from them, so
+	// the advisory names the setting rather than reading it.
+	// Said wherever this node is in a fleet ([Bootstrap.clustered]), on every
+	// node alike: a member that runs no box is still a broker a box on another
+	// host can reach. Never for `e2b`, whose box is on the vendor's network,
+	// nor `direct`, which [Company.directBoxWarnings] already says reads the
+	// keyring itself; never for the double, which runs nothing.
+	if company.Code.Native && boot.clustered() && company.runsContainerBoxes() {
+		out = append(out, advisory(field("stream"),
+			"a `container` coding box reaches the fleet's broker unless its network forbids it — a "+
+				"member's route, leaf and client ports on the member's own host, and the members' leaf "+
+				"listeners from a leaf's — and that broker authenticates no client: give coding boxes a "+
+				"network that cannot reach the broker's ports (providers.sandbox.local.network, firewalled "+
+				"from them), or run them in `e2b`"))
+	}
+
 	// A REPOSITORY LARGER THAN THE CACHE. A git node caches a repository
 	// whole, and one past its budget is served and evicted as soon as its
 	// last reader lets go — so every fetch of it is a cold sync, one GET a
@@ -1087,6 +1111,21 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 	}
 
 	return out
+}
+
+// runsContainerBoxes reports whether any seat's box runs in the `container`
+// cell, as [Company.SeatBoxes] places it — never under the double, which
+// answers every cell and runs nothing.
+func (c *Company) runsContainerBoxes() bool {
+	if c.Providers.Sandbox == nil || c.Providers.Sandbox.Fake {
+		return false
+	}
+	for box := range c.SeatBoxes() {
+		if box.Cell == PlacementContainer {
+			return true
+		}
+	}
+	return false
 }
 
 // writerWarnings are the company_writers settings that are valid and almost

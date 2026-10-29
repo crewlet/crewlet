@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
@@ -68,7 +69,7 @@ func TestARunSandboxLaunchIsRefusedUntilItsEnvironmentResolves(t *testing.T) {
 	seat := c.Org.AgentSeatByHandle("swe")
 
 	_, err := (&launcher{engine: e}).Launch(t.Context(),
-		&turnctx.Turn{RunID: "t1", Seat: seat}, "fix the failing test")
+		&turnctx.Turn{RunID: "t1", Seat: seat}, builtin.SandboxRequest{Brief: "fix the failing test"})
 	if err == nil {
 		t.Fatal("a run whose code-host token is unset was launched")
 	}
@@ -96,7 +97,7 @@ func TestARunSandboxLaunchIsRefusedUntilItsEnvironmentResolves(t *testing.T) {
 	e.installSecrets(map[string]string{"SWE_GITLAB_TOKEN": "glpat-swe"})
 	e.secretsMu.Unlock()
 	if _, err := (&launcher{engine: e}).Launch(t.Context(),
-		&turnctx.Turn{RunID: "t2", Seat: seat}, "fix the failing test"); err != nil {
+		&turnctx.Turn{RunID: "t2", Seat: seat}, builtin.SandboxRequest{Brief: "fix the failing test"}); err != nil {
 		t.Fatalf("the run was refused once its token was sealed: %v", err)
 	}
 	started := jobs[codingagent.ClaudeCodeName].Started()
@@ -265,7 +266,7 @@ func TestARunStartedWithoutTheSeatsEmailSaysSo(t *testing.T) {
 	seat.Email = "${SWE_EMAIL_NOBODY_SETS}"
 
 	if _, err := (&launcher{engine: e}).Launch(t.Context(),
-		&turnctx.Turn{RunID: "t1", Seat: seat}, "fix the failing test"); err != nil {
+		&turnctx.Turn{RunID: "t1", Seat: seat}, builtin.SandboxRequest{Brief: "fix the failing test"}); err != nil {
 		t.Fatalf("a run whose only missing value is the seat's email was refused: %v", err)
 	}
 	started := jobs[codingagent.ClaudeCodeName].Started()

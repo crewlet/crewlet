@@ -362,7 +362,7 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv, stops, err := wireAPI(t.Context(), e, &boot, nil)
+	app, srv, stops, err := wireAPI(t.Context(), e, &boot, nil, nil)
 	apiStops = stops
 	if err != nil {
 		t.Fatalf("api: %v", err)

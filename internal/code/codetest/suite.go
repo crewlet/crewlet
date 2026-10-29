@@ -121,6 +121,7 @@ func cases() []suiteCase {
 		{"F45_ABoxReadsItsOwnPushThroughAnotherNode", aBoxReadsItsOwnPushThroughAnotherNode},
 		{"F46_ABoxPushesOnTopOfWhatAnotherNodeShowedIt", aBoxPushesOnTopOfWhatAnotherNodeShowedIt},
 		{"F47_ABoxNeverSeesABranchGoBack", aBoxNeverSeesABranchGoBack},
+		{"F51_ABoxPushIsRecordedByItsRunWhateverItsTrailersSay", aBoxPushIsRecordedByItsRunWhateverItsTrailersSay},
 		{"R4_ARestartSweepsScratch", aRestartSweepsScratch},
 		{"R6_APurgedRepositoryLeavesNothing", aPurgedRepositoryLeavesNothing},
 		{"R7_AnEvictedNodesPushesAreRefused", anEvictedNodesPushesAreRefused},

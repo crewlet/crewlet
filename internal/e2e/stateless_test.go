@@ -82,7 +82,7 @@ func startStatelessPairWith(t *testing.T, amend func(doc string) string,
 	// whose every request is refused.
 	ring := fleetRing(t)
 	data, dataBoot := bootDataMember(t, cfg, model, env, ring)
-	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil)
+	data.app, data.server = serveAPI(t, data.engine, dataBoot, nil, nil)
 
 	agentDir := t.TempDir()
 	agentBoot := statelessBootstrap(agentDir, dataBoot, ring)

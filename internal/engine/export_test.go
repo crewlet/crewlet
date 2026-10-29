@@ -22,6 +22,11 @@ import (
 // outside the package that drives an engine through its public surface.
 func Reflects(e *Engine) bool { return e.reflector.Load() != nil }
 
+// BoxGitURLOf is the code host's base e hands every box it gives repositories
+// (CREWLET_BOX_GIT_URL as its boot read it), for a case outside the package
+// that holds what a boot keeps of the variable.
+func BoxGitURLOf(e *Engine) string { return e.boxGitURL }
+
 // GitReadForTest is a read of a repository by object id through e's own estate
 // router — the repository's home git node first, this node at its place — for
 // a test outside the package that drives the git walk through a running engine.

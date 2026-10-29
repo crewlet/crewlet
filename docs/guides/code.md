@@ -403,14 +403,24 @@ nineteen [code tools](tools-and-mcp.md#the-companys-code) and reads the
 repositories with nine of them, on the server — a file's lines, a directory,
 what changed between two commits, how two commits relate, whether a fix
 reached a branch and which push put it there, a path's history and who last
-changed each line of a file — with no clone and no token. A seat holds no git
-credential in this release: it changes the repositories through the other
+changed each line of a file — with no clone and no token. A seat itself holds
+no git credential: it changes the repositories through the other
 ten — a small change committed to a branch, a commit reverted or picked, a
 branch created or deleted, each built on the server and landed as one push in
 its name ([Engine-built commits](../concepts/code-host.md#engine-built-commits)),
 and a scratch repository of its own made for an experiment
 ([Repositories made by tools](../concepts/code-host.md#repositories-made-by-tools))
 — each held to the grant below.
+
+A seat whose role has a [sandbox](../concepts/code-sandbox.md) also works in a
+clone: it names the repositories in `run_sandbox`'s `repos`, and the engine
+clones each into the coding box — on the seat's own branch for the work item
+by default — and hands that run a credential of its own, which pushes only
+what the run was given and its seat may push, and ends with the run
+([Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)).
+Every node that runs seats needs `CREWLET_BOX_GIT_URL` for it, the address a
+box reaches the git nodes' `/box/git/` at
+([Deployment](deployment.md#exposing-webhooks-without-the-admin-api)).
 
 What each seat may read is its grant, from the chart: its
 [`role.code.access`](../getting-started/configuration.md#role-fields-summary) caps it, and a

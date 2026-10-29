@@ -567,6 +567,23 @@ another's.
 > what makes this shape safe, and no configuration substitutes for one. A
 > deployment that needs the brokers themselves mutually authenticated runs
 > `stream.type: nats` against a NATS cluster it secures itself.
+>
+> **A `container` coding box is inside that trusted network unless you put it
+> outside.** A [container box](../concepts/code-sandbox.md#local-sandboxes)
+> joins the Docker network `providers.sandbox.local.network` names (the
+> runtime's default bridge when unset), and either reaches the host it runs on:
+> on a member's host, the route and client ports; on a leaf's, the members'
+> leaf listeners wherever the leaf can reach them. In a company that hosts code
+> such a box runs what a seat's coding agent wrote, from a brief anybody who
+> woke the turn may have shaped, and a box that reached the broker could
+> publish as any principal the estate trusts. Give coding boxes a network of
+> their own that cannot reach the broker's ports — a host firewall rule
+> dropping that network's traffic to them, leaving it the egress the box needs
+> (its LLM vendor, the code host's `CREWLET_BOX_GIT_URL`, the bridge and the
+> receiver) — or run them in `e2b`. `crewlet validate` and every node warn, at
+> `stream`, wherever a company that hosts code runs a `container` box and the
+> node is in a fleet. A `direct` box is outside every network rule: it runs as
+> the engine's own user ([Code Sandbox → Security model](../concepts/code-sandbox.md#security-model)).
 
 ### An external NATS server
 
@@ -1105,6 +1122,15 @@ sandboxes. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and
 a node whose roles name `git`, so on a fleet the balancer in front of the
 public listener routes it to the git nodes, as it routes a person's `/git/` on
 `api.port` (see [Code Host → Coding boxes](../concepts/code-host.md#coding-boxes)).
+`CREWLET_BOX_GIT_URL` is that route as a box reaches it — the public address
+with `/box/git` on the end, naming a git node or the balancer over them, since
+any git node serves any box — and every node that runs seats sets it when the
+company hosts code: it is what a launch hands its box as the base of every
+clone, and a node without it refuses a `run_sandbox` call naming repositories
+(`sandbox_git_url_unset`) rather than give a box a repository it cannot reach.
+A run's git token rides each of those requests as git's Basic password, so the
+URL is `https://` wherever it leaves the box's own host (see
+[Code Sandbox → Security model](../concepts/code-sandbox.md#security-model)).
 
 **Why the probes are not.** `/health` describes the node — its version, its
 seats, its posture — for whoever runs it, and an orchestrator or a load balancer
@@ -1235,7 +1261,7 @@ gesture; only the timing differs.
 - **`ingress`** serves the REST API — receives webhooks (Slack, GitLab, Jira, GitHub, Confluence) and publishes them to the event queue
 - **`workers`** runs the company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties) — the scheduler tick, the maintenance sweep, the sandbox waiter, the integration reconcile, the learning passes, the state logs' trim, the embedding duty, the object store's collector and the identity sweep
 
-They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/llm-backends.md#agent-mode), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role.
+They are one command, and they build the **same** application: every node learns the company from the active config revision and the live picture from the broadcast event stream. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` at whichever node is externally reachable: an `ingress` one, which serves the `/otlp/{token}/v1/{signal}` receiver. Its tokens are per-run and signed, so the node that mints and the node that verifies need no shared memory: signing uses the Tier A keyring, which every node already holds — the SAME keyring on each, or every token one process mints is forged as far as the other is concerned. Rotating that keyring costs nothing in flight: a token names the key that signed it, so a run holding one keeps working until the key is dropped — the runbook is in [Secret store](../concepts/secret-store.md). `CREWLET_MCP_BRIDGE_URL`, if any seat runs in [agent mode](../concepts/llm-backends.md#agent-mode), is the opposite: a bridge session lives in the process that opened it, so each `seats` node sets it to **its own** address and serves `/mcp/{token}` itself, on its own `-api-port`, even without the `ingress` role. `CREWLET_BOX_GIT_URL`, if the company hosts code, is the receiver's case again: each `seats` node sets it to the git nodes' public `/box/git` — any of them, or the balancer over them — because a run's git token is signed with the same keyring and admitted by the run's row, which every git node reads.
 
 Point liveness probes at `/health` (stays `200` through a drain) and load-balancer readiness at `/ready` (`503` while draining or before the first config revision applies, with the cause in its `reason` field), and give the boot a startup probe on `/health`, which answers `503` until the node has recovered what it holds and `200` from then on, while the rest of the boot runs and `/ready` stays `503`. Every node answers both, whatever its roles — see [Probes](#probes) for what `/ready` means on a node that takes no traffic and how long the startup probe has to wait. A draining node keeps its listener until the drain completes, so both probes answer throughout, and it refuses any request that would start new work with `503` and a `Retry-After`; see [During a drain](../reference/api-endpoints.md#during-a-drain). A node with nothing in flight drains in milliseconds, which is also the whole of an `ingress` node's drain unless it is serving git (a git request already running is finished first; a new one is refused). So give such a pod a `preStop` sleep of a few seconds if you need its load balancer to have stopped sending it requests before the listener goes: Kubernetes takes a terminating pod out of its Service's endpoints as the hook begins, and sends the SIGTERM that starts the drain only once the hook has ended, so the sleep is the time that change has to reach every proxy in front of the pod. (A balancer that probes `/ready` itself sees the `503` only once the drain has begun, and acts on it after its own period and threshold.) For git the same window is the one the drain waits through: a git client sent to the pod once its drain has begun is refused at its first request and retries against a peer rather than being cut part way, but the upload `POST` of a fetch begun on a peer is served there, and waited for, for as long as such requests still arrive. The engine will not sleep on its own: a delay long enough to matter would eat the `terminationGracePeriodSeconds` the drain itself has to finish inside, and only the deployment knows how much of that grace its longest turn needs.
 

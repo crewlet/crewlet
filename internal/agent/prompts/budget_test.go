@@ -77,8 +77,11 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // renders, measures ~72 after it was cut to the one choice no tool's
 // description can carry, and took the prompt from ~875 to ~947.
 //
-// Measured at ~947, so this leaves ~6%: enough that a sentence can be added,
-// tight enough that a section cannot. The plain contract alone — no tracker,
+// Measured at ~947, so this left ~6%: enough that a sentence could be added,
+// tight enough that a section could not. The sentence it was left for came:
+// `code_history` says a repository `run_sandbox` clones is blobless, where the
+// seat holds the sandbox beside the code tools (~36), so it measures ~983 and
+// ~3% is left — the next sentence needs a decision here, as a section did. The plain contract alone — no tracker,
 // no workers, no sandbox, no code — measures ~508 of it.
 //
 // IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct

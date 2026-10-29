@@ -324,7 +324,11 @@ type RoleSandbox struct {
 
 	// Env is injected into this seat's sandbox run. External service
 	// tokens are DECLARED here — the engine names no tool-specific
-	// variable of its own, and only LLM credentials derive automatically.
+	// variable of its own, and only LLM credentials derive automatically —
+	// but for the engine's own code host: a run given repositories on it is
+	// handed its run's git credential and git configuration by the engine
+	// (ADR-0063), whose variables ([ReservedSandboxEnv]) no value here may
+	// set.
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"Env for this seat's sandbox run; declare external tokens here."`
 
 	// OptionalKeys names the keys of Env whose value may resolve to nothing,

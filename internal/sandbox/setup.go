@@ -47,7 +47,9 @@ const DefaultSetupTimeout = 10 * time.Minute
 // The one exception is the engine's OWN code host, whose repositories a run
 // is granted rather than told about: the steps that give a box those are the
 // engine's ([GitVersionStep], [CloneRecipe]), carried apart from the
-// operator's ([LaunchRequest.Clone]) and applied after them.
+// operator's ([LaunchRequest.Clone]) and applied after them, and so is the
+// git access they clone with — the run's credential and the box's git
+// configuration ([BoxGit], ADR-0063), in the launch's own environment.
 type SetupStep struct {
 	// Name is a short identifier, used in logs and setup-failure errors.
 	Name string `yaml:"name" json:"name"`

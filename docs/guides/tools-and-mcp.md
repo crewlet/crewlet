@@ -20,7 +20,7 @@ The engine registers these into each epoch's tool registry with the origin `buil
 | `a2a_ask` | Ask one AI colleague one question over the private A2A channel (see [Turn Engine § Colleague-surface tools](../concepts/turn-engine.md#colleague-surface-tools)) |
 | `search_knowledge` | Re-run the shared-knowledge search mid-turn, once the agent knows what the task actually needs. `mode` picks the ranking — `hybrid` by default, `keyword` or `semantic` (see [Search](search.md#three-modes-and-what-an-answer-says-it-served)) — and an answer ranked other than it was asked says so in a sentence: a `semantic` search with nothing to rank by meaning runs nothing, and says that tells the seat nothing about whether a page exists. Registered wherever the company has a knowledge backend at all |
 | `load_tool_skill` | Load the full body of a [Tool Skill](../concepts/tool-skills.md) by key |
-| `run_sandbox` | Hand a code task to a coding agent in a [sandbox](../concepts/code-sandbox.md) |
+| `run_sandbox` | Hand a code task to a coding agent in a [sandbox](../concepts/code-sandbox.md). Where this node serves the company's code host it also takes `repos`: the repositories to clone into the box, each granted to the run for the seat and for whoever woke the turn (see [Repositories on this company's code host](../concepts/code-sandbox.md#repositories-on-this-companys-code-host)) |
 
 `delegate`, the tool that hands work to short-lived [workers](../concepts/turn-engine.md#workers), is not registered here: it is built per turn for the executor, because it carries that turn's grant.
 

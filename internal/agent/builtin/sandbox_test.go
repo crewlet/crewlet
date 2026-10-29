@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -19,15 +20,17 @@ import (
 type launchSpy struct {
 	turns  []string
 	briefs []string
+	repos  [][]builtin.RepoRequest
 	err    error
 }
 
-func (s *launchSpy) Launch(_ context.Context, turn *turnctx.Turn, brief string) (sandbox.LaunchResult, error) {
+func (s *launchSpy) Launch(_ context.Context, turn *turnctx.Turn, req builtin.SandboxRequest) (sandbox.LaunchResult, error) {
 	if s.err != nil {
 		return sandbox.LaunchResult{}, s.err
 	}
 	s.turns = append(s.turns, turn.RunID)
-	s.briefs = append(s.briefs, brief)
+	s.briefs = append(s.briefs, req.Brief)
+	s.repos = append(s.repos, req.Repos)
 	return sandbox.LaunchResult{SandboxID: "box-1", CommandID: "cmd-1", CodingAgent: "claude-code"}, nil
 }
 
@@ -149,6 +152,154 @@ func TestAnEmptyBriefIsRefusedWithoutLaunching(t *testing.T) {
 	}
 	if len(spy.briefs) != 0 {
 		t.Fatal("an empty brief still started a box")
+	}
+}
+
+// reposSurface is an Execute surface offering run_sandbox where the company's
+// code host is served, so `repos` is offered beside the brief.
+func reposSurface(t *testing.T, launcher builtin.SandboxLauncher) (*tools.Surface, tools.Entry) {
+	t.Helper()
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Sandbox: launcher, Code: codeDeps(newCodeHost())})); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	entry, ok := reg.Snapshot().Lookup(builtin.RunSandboxTool)
+	if !ok {
+		t.Fatal("run_sandbox is not in the registry")
+	}
+	surface := tools.NewSurface("execute", reg.Snapshot(), []string{builtin.RunSandboxTool})
+	return surface.ForTurn(turnFor(t, "agent-ceo")), entry
+}
+
+// RUN_SANDBOX TAKES REPOS where the company's code host is served: the schema
+// offers `repos` — at most eight, each `repo` required, `access` read or
+// write, a cone of at most 64 directories — and a valid call reaches the
+// launcher as one request naming them in order; every malformed item is
+// refused before the launcher is asked, naming the item and the field, and
+// so are a ninth repository and one repository named twice. Where the code
+// host is not served, the schema offers no `repos` and a call naming some is
+// refused saying why.
+//
+// STRICT, because what a repository is given is a grant: a key misspelt and
+// dropped would hand the run a default it never asked for.
+//
+// Mutations: read `repos` with the tolerant readers (an unknown key dropped)
+// → the unknown-key row reaches the launcher, red; drop the bound → the nine
+// row reaches it, red.
+func TestRunSandboxTakesRepos(t *testing.T) {
+	t.Parallel()
+	spy := &launchSpy{}
+	surface, entry := reposSurface(t, spy)
+	schema, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+	repos, _ := schema["repos"].(map[string]any)
+	if repos == nil || repos["maxItems"] != sandbox.MaxRunRepos {
+		t.Fatalf("the schema's repos is %v, want a list of at most %d", schema["repos"], sandbox.MaxRunRepos)
+	}
+	if !strings.Contains(entry.Tool.Description(), "Name this company's repositories in `repos`") {
+		t.Errorf("the description does not say to name repositories in `repos`: %q", entry.Tool.Description())
+	}
+
+	call := func(args map[string]any) tools.Result {
+		t.Helper()
+		res, err := surface.Execute(t.Context(), llm.ToolCall{ID: "c1", Name: builtin.RunSandboxTool, Arguments: args})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+		return tools.Result{Output: res.Output, Failed: res.Failed}
+	}
+	valid := call(map[string]any{"brief": "fix it", "repos": []any{
+		map[string]any{"repo": "site", "branch": "fix/a", "access": "write", "paths": []any{"src", "docs"}},
+		map[string]any{"repo": "api", "base": "v1"},
+	}})
+	if valid.Failed {
+		t.Fatalf("a valid call was refused: %q", valid.Output)
+	}
+	want := []builtin.RepoRequest{
+		{Repo: "site", Branch: "fix/a", Access: "write", Paths: []string{"src", "docs"}},
+		{Repo: "api", Base: "v1"},
+	}
+	if len(spy.repos) != 1 || !slices.EqualFunc(spy.repos[0], want, func(a, b builtin.RepoRequest) bool {
+		return a.Repo == b.Repo && a.Base == b.Base && a.Branch == b.Branch && a.Access == b.Access &&
+			slices.Equal(a.Paths, b.Paths)
+	}) {
+		t.Fatalf("the launcher was asked %+v, want %+v", spy.repos, want)
+	}
+
+	nine := make([]any, sandbox.MaxRunRepos+1)
+	for i := range nine {
+		nine[i] = map[string]any{"repo": "r" + strings.Repeat("x", i+1)}
+	}
+	cone := make([]any, sandbox.MaxConePaths+1)
+	for i := range cone {
+		cone[i] = "d"
+	}
+	for _, c := range []struct {
+		name  string
+		repos any
+		says  string
+	}{
+		{"not a list", "site", "must be a list of objects"},
+		{"an item that is not an object", []any{"site"}, "repos[0] is not an object"},
+		{"an unknown key", []any{map[string]any{"repo": "site", "acess": "write"}}, `repos[0] holds "acess"`},
+		{"no repo", []any{map[string]any{"branch": "x"}}, "repos[0] needs `repo`"},
+		{"an access outside its two", []any{map[string]any{"repo": "site", "access": "admin"}},
+			`repos[0].access is "admin"`},
+		{"paths that are not a list", []any{map[string]any{"repo": "site", "paths": "src"}},
+			"repos[0].paths must be a list"},
+		{"a cone past its bound", []any{map[string]any{"repo": "site", "paths": cone}},
+			"a cone names at most 64"},
+		{"nine repositories", nine, "one run is given at most 8"},
+		{"one repository twice", []any{map[string]any{"repo": "site"}, map[string]any{"repo": "site"}},
+			"site is named twice"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := call(map[string]any{"brief": "fix it", "repos": c.repos})
+			if !got.Failed || !strings.Contains(got.Output, c.says) {
+				t.Errorf("answered %q, want a refusal saying %q", got.Output, c.says)
+			}
+		})
+	}
+	if len(spy.repos) != 1 {
+		t.Errorf("the launcher was asked %d times, want once: a malformed call reached it", len(spy.repos))
+	}
+
+	// NO CODE HOST, NO `repos`.
+	plain := &launchSpy{}
+	reg := tools.NewRegistry()
+	if _, err := builtin.Register(reg, gated(builtin.Deps{Sandbox: plain})); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	bare, _ := reg.Snapshot().Lookup(builtin.RunSandboxTool)
+	if props, _ := bare.Tool.Parameters()["properties"].(map[string]any); props["repos"] != nil {
+		t.Errorf("a company whose code host is not served is offered repos: %v", props["repos"])
+	}
+	res, err := sandboxSurface(t, plain).Execute(t.Context(), llm.ToolCall{ID: "c1", Name: builtin.RunSandboxTool,
+		Arguments: map[string]any{"brief": "fix it", "repos": []any{map[string]any{"repo": "site"}}}})
+	if err != nil || !res.Failed || !strings.Contains(res.Output, `takes no argument "repos"`) {
+		t.Errorf("a call naming repos where none is offered answered %v %q", err, res.Output)
+	}
+	if len(plain.briefs) != 0 {
+		t.Errorf("a call naming repos where none is offered was launched: %v", plain.briefs)
+	}
+}
+
+// A LAUNCH REFUSED WITH A COMPOSED RESULT IS ANSWERED AS IT IS: a repository
+// the seat may not be given is refused in the code host's own words and
+// class, never as a sandbox that could not be started.
+func TestARefusedLaunchIsAnsweredAsComposed(t *testing.T) {
+	t.Parallel()
+	composed := tools.Result{Output: "run_sandbox: there is no repository \"gone\"", Failed: true,
+		Cause: tools.RefusalNotFound}
+	surface, _ := reposSurface(t, &launchSpy{err: fmt.Errorf("engine: %w",
+		&builtin.RefusedLaunch{Result: composed})})
+	res, err := surface.Execute(t.Context(), llm.ToolCall{ID: "c1", Name: builtin.RunSandboxTool,
+		Arguments: map[string]any{"brief": "fix it", "repos": []any{map[string]any{"repo": "gone"}}}})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Output != composed.Output || res.Suspend {
+		t.Errorf("answered %q (suspend %v), want the composed refusal %q", res.Output, res.Suspend,
+			composed.Output)
 	}
 }
 

@@ -27,6 +27,11 @@ type BoxURLs struct {
 	Receiver BoxURL
 	// Bridge is the agent-mode tool bridge's base ([mcpbridge.BaseURLVar]).
 	Bridge BoxURL
+	// Git is the code host's base a coding box clones and pushes through
+	// ([sandbox.BoxGitURLVar]): a git node's public listener and /box/git,
+	// or a balancer over every git node's — any git node admits a box, by
+	// its run's row (ADR-0063). Unset, no run is given a repository.
+	Git BoxURL
 }
 
 // ReadBoxURLs reads every engine address a box dials back to the engine from
@@ -47,11 +52,12 @@ func ReadBoxURLs(getenv func(string) string) BoxURLs {
 	return BoxURLs{
 		Receiver: read(sandbox.OtelReceiverURLVar),
 		Bridge:   read(mcpbridge.BaseURLVar),
+		Git:      read(sandbox.BoxGitURLVar),
 	}
 }
 
 // All is every box URL, in the order [New] reads them.
-func (u BoxURLs) All() []BoxURL { return []BoxURL{u.Receiver, u.Bridge} }
+func (u BoxURLs) All() []BoxURL { return []BoxURL{u.Receiver, u.Bridge, u.Git} }
 
 // Refusal joins every refusal among them, in [BoxURLs.All]'s order; nil when
 // the boot takes every one.

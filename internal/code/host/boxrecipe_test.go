@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/code/gitproc/gittest"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
@@ -29,17 +30,21 @@ func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
 // repository, the steps a coding box is given its repositories by — the
 // version check, the coding clone and the check's single-commit checkout —
 // run as a box runs them, `sh -c` in the box's working directory, under git
-// (the box's git: the pin, or the client floor's 2.40.4) with the box's
-// environment: CREWLET_GIT_URL the host's git base, and a credential helper
-// answering its challenge.
+// (the box's git: the pin, or the client floor's 2.40.4) with EXACTLY the
+// environment the engine gives a box (sandbox.BoxGit, ADR-0063): its run's
+// credential on /box/git/, answered by the engine's credential helper, the
+// code host's base as CREWLET_GIT_URL, the seat's commit identity, and the
+// commit hook's values — over a git environment of the box's own whose
+// global credential helper answers as a PERSON, which the engine's reset must
+// keep from ever answering the code host.
 //
 //   - The version step passes.
 //   - The coding clone leaves HEAD on the run's branch at its base, the cone's
 //     files checked out — directories git's cone mode would read as patterns
 //     among them — and not one blob outside the cone in the object store,
-//     the commit-trailer hook in place; a commit made there under a run's
-//     trailer variables pushes, and the commit the host holds carries the
-//     run's three trailers.
+//     the commit-trailer hook in place; a commit made there pushes as the
+//     run, lands a push row naming the run, and the commit the host holds
+//     carries the seat's identity and the run's three trailers.
 //   - A base no ref reaches any more (a deleted branch's commit) is fetched
 //     by id.
 //   - The single-commit checkout leaves HEAD detached at the commit, one
@@ -48,7 +53,9 @@ func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
 // Mutations: drop the hook command from the coding recipe — the pushed commit
 // carries no trailer, red; check the coding clone out at what its clone's
 // HEAD names rather than its base — the deleted branch's base case, red; drop
-// --skip-checks — the cone naming [odd] and !bang is refused, red.
+// --skip-checks — the cone naming [odd] and !bang is refused, red; drop the
+// engine's reset of the helper list — the person's helper answers the box
+// route and every request is refused, red.
 func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	t.Helper()
 	ctx := t.Context()
@@ -71,11 +78,19 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	if err != nil {
 		t.Fatalf("the repository's rows: %v", err)
 	}
-	box := boxEnv(person.Git().Environ(), git, base)
+	const branch = "seats/" + codetest.FixtureAlice + "/ENG-7"
+	run := f.Runs().Launch(codetest.FixtureAlice, rows.Position, host.BoxGrant{RepoID: rows.Repo.ID,
+		Name: codetest.RepoName, Access: code.AccessWrite, Branch: "refs/heads/" + branch})
+	trailers, err := sandbox.TrailerEnv(codetest.FixtureAlice, run.LaunchID,
+		&types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	box := boxEnv(t, person.Git().Environ(), git, sandbox.BoxGit{Base: f.Nodes()[0].URL() + "/box/git",
+		User: host.BoxUser, Token: f.Runs().Token(run), Name: "Alice", Email: "alice@seats.invalid"}, trailers)
 
 	runStep(t, t.TempDir(), box, sandbox.GitVersionStep())
 
-	const branch = "seats/swe/ENG-7"
 	repo := sandbox.RunRepo{
 		Repo: codetest.RepoName, RepoID: rows.Repo.ID, Base: tip, Branch: branch,
 		Access: sandbox.RepoWrite, Paths: []string{"src", "[odd]", "!bang"},
@@ -106,34 +121,35 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		t.Errorf("the coding clone's hook is not mode 0755: %v %v", info, err)
 	}
 
-	// A COMMIT MADE IN THE BOX, under its run, pushes and carries the run's
+	// A COMMIT MADE IN THE BOX, under its run, pushes AS THE RUN — the
+	// engine's helper answering /box/git/ with the run's token — lands a push
+	// row naming the run, and carries the seat's identity and the run's
 	// trailers on the host.
-	const launch = "0190d8f0-1111-7000-8000-000000000001"
-	trailers, err := sandbox.TrailerEnv("swe", launch,
-		&types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var vars []string
-	for _, name := range slices.Sorted(maps.Keys(trailers)) {
-		vars = append(vars, name+"="+trailers[name])
-	}
-	inRun := client.Env(vars...)
 	if err := os.WriteFile(filepath.Join(clone, "src", "a.txt"), []byte("a, changed in the box\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	inRun.Run(t, clone, "commit", "-q", "-a", "-m", "a box's change")
-	pushed := strings.TrimSpace(client.Run(t, clone, "rev-parse", "HEAD"))
-	if _, stderr, err := inRun.Try(t, clone, nil, "push", "-q", "origin", branch); err != nil {
-		t.Fatalf("git push from the coding clone: %v\n%s", err, stderr)
-	}
+	runGit(t, clone, box, git, "commit", "-q", "-a", "-m", "a box's change")
+	pushed := strings.TrimSpace(runGit(t, clone, box, git, "rev-parse", "HEAD"))
+	runGit(t, clone, box, git, "push", "-q", "origin", branch)
 	if got := person.LsRemote(url, 2)["refs/heads/"+branch]; got != pushed {
 		t.Fatalf("the host's %s is %s, want the box's commit %s", branch, got, pushed)
 	}
+	if !slices.ContainsFunc(pushRowsOf(t, f), func(row code.PushRow) bool {
+		return row.Run.RunID == run.LaunchID && slices.ContainsFunc(row.Commands, func(c code.Command) bool {
+			return c.Ref == "refs/heads/"+branch && c.New == pushed
+		})
+	}) {
+		t.Errorf("no push row names run %s's push of %s", run.LaunchID, branch)
+	}
 	client.Run(t, work, "fetch", "-q", url, "refs/heads/"+branch)
+	if got := strings.TrimSpace(client.Run(t, work, "log", "-1", "--format=%an <%ae> / %cn <%ce>",
+		"FETCH_HEAD")); got != "Alice <alice@seats.invalid> / Alice <alice@seats.invalid>" {
+		t.Errorf("the box's commit is %q, want the seat's identity as its author and committer", got)
+	}
 	got := strings.Split(strings.TrimSpace(client.Run(t, work, "log", "-1",
 		"--format=%(trailers:only,unfold)", "FETCH_HEAD")), "\n")
-	want := []string{"Crewlet-Seat: swe", "Crewlet-Run: " + launch, "Crewlet-Work-Item: native ENG-7"}
+	want := []string{"Crewlet-Seat: " + codetest.FixtureAlice, "Crewlet-Run: " + run.LaunchID,
+		"Crewlet-Work-Item: native ENG-7"}
 	if !slices.Equal(got, want) {
 		t.Errorf("the pushed commit carries %q, want %q", got, want)
 	}
@@ -147,7 +163,7 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		t.Fatalf("git push :gone: %s", res)
 	}
 	orphan := repo
-	orphan.Base, orphan.Branch = gone, "seats/swe/run-0123456789ab"
+	orphan.Base, orphan.Branch = gone, "seats/"+codetest.FixtureAlice+"/run-0123456789ab"
 	again, err := sandbox.CloneRecipe(orphan, sandbox.CloneCoding)
 	if err != nil {
 		t.Fatal(err)
@@ -183,12 +199,62 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	}
 }
 
-// boxEnv is a box's environment over the client environment env: git's
-// directory first on PATH, and the host's git base as CREWLET_GIT_URL.
-func boxEnv(env []string, git, base string) []string {
-	out := slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, "PATH=") })
-	return append(out, "PATH="+filepath.Dir(git)+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"CREWLET_GIT_URL="+base)
+// boxEnv is a box's environment over the client environment env, as the
+// engine's launch makes it: git's directory first on PATH, and over env — its
+// own git configuration kept — the engine's box git environment (g) and the
+// commit hook's values.
+func boxEnv(t *testing.T, env []string, git string, g sandbox.BoxGit, hook map[string]string) []string {
+	t.Helper()
+	run := map[string]string{}
+	for _, kv := range env {
+		name, value, _ := strings.Cut(kv, "=")
+		run[name] = value
+	}
+	engine, err := g.Env(run)
+	if err != nil {
+		t.Fatalf("the box's git environment: %v", err)
+	}
+	maps.Copy(run, engine)
+	maps.Copy(run, hook)
+	run["PATH"] = filepath.Dir(git) + string(os.PathListSeparator) + os.Getenv("PATH")
+	out := make([]string, 0, len(run))
+	for _, name := range slices.Sorted(maps.Keys(run)) {
+		out = append(out, name+"="+run[name])
+	}
+	return out
+}
+
+// runGit runs git in dir under the box's environment env, failing t where it
+// exits non-zero, and answers its standard output.
+func runGit(t *testing.T, dir string, env []string, git string, args ...string) string {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), git, args...)
+	cmd.Dir, cmd.Env = dir, env
+	var out, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("git %s in the box: %v\n%s", strings.Join(args, " "), err, stderr.String())
+	}
+	return out.String()
+}
+
+// pushRowsOf is every push row of the fleet's repository, read linearizable.
+func pushRowsOf(t *testing.T, f *codetest.SoloFleet) []code.PushRow {
+	t.Helper()
+	var rows []code.PushRow
+	q := code.ReadQuery{Asker: codetest.Reader, Kind: code.ReadPushes, Repo: codetest.RepoName, Limit: 200,
+		Fresh: codetest.Linearizable}
+	for {
+		a, err := f.Nodes()[0].Read(t.Context(), q)
+		if err != nil {
+			t.Fatalf("read the pushes: %v", err)
+		}
+		rows = append(rows, a.Pushes...)
+		if a.Next == "" {
+			return rows
+		}
+		q.Cursor = a.Next
+	}
 }
 
 // runStep runs step's commands as a box does — each through a shell in the

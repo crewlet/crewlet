@@ -203,7 +203,10 @@ type Spec struct {
 	// Env is the run environment: LLM credentials, the generic agent
 	// identity (CREWLET_AGENT_*), the setup steps' env, and role.sandbox.env
 	// — which is where an operator DECLARES an external token. The engine
-	// never names a tool-specific variable itself. A launch hands the box a
+	// never names a tool-specific variable itself, but for the engine's own
+	// code host, whose access it gives a run that names repositories
+	// ([BoxGit], ADR-0063) — and that through the launch's own environment,
+	// never this field. A launch hands the box a
 	// COPY with what it minted for the job added ([LaunchRequest.RunEnv]):
 	// what the box is made with and every setup step runs with, the run's
 	// telemetry added at the job's start.

@@ -463,6 +463,14 @@ type Engine struct {
 	// keyring. The code host admits boxes by it ([host.Options.Boxes]).
 	boxTokens *host.BoxTokens
 
+	// boxGitURL is the code host's base a coding box clones and pushes
+	// through, as [ReadBoxURLs] read it from this node's environment
+	// ([sandbox.BoxGitURLVar]) — "" where it is unset, and then no run this
+	// node launches is given a repository, refused naming the variable rather
+	// than started with a clone step that dials nowhere. Read once at boot,
+	// like the receiver's and the bridge's, whose refusals the boot shares.
+	boxGitURL string
+
 	// reflector is the learning write side: one dispatcher for the life of
 	// the process, whose org and workers an apply swaps. On the ENGINE
 	// rather than on an epoch because its redelivery ring is process
@@ -1222,7 +1230,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	// and a bridge URL mounted a bridge whose every minted endpoint failed,
 	// so every agent-mode run's tool calls failed and the run was rescued as
 	// incomplete — each silently, inside a box the engine never hears from
-	// again.
+	// again — and a code host's base would hand every run given repositories
+	// a clone that dials nowhere.
 	boxURLs := ReadBoxURLs(getenv(environ))
 	if err = boxURLs.Refusal(); err != nil {
 		return nil, fmt.Errorf("engine: a URL a box dials back to the engine: %w", err)
@@ -1353,6 +1362,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		sandboxSeats:        map[string]bool{},
 		bridge:              bridge,
 		boxTokens:           boxTokens,
+		boxGitURL:           boxURLs.Git.URL,
 		metrics:             opts.Metrics,
 		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,

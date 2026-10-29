@@ -109,6 +109,17 @@ const codeHistorySection = "\n## Reading the company's code" +
 	"server with the `code_*` tools, by commit id — never from a clone, which " +
 	"costs minutes for one file."
 
+// codeHistoryBoxSentence closes [codeHistorySection] where the executor is
+// also offered run_sandbox ([ExecutorInput.OffersSandbox]), which then takes
+// `repos` — the code tools and `repos` are offered together, where this node
+// serves the code host — because a repository a coding run is given is cloned
+// BLOBLESS: a `git log -p` or a `git blame` in the box fetches each file's
+// contents over the network as it walks, so the history question a seat might
+// hand the box is the one the server answers fastest. Said only there: to a
+// seat with no sandbox it is prose about a box it never gets.
+const codeHistoryBoxSentence = " A repository `run_sandbox` clones is blobless — each " +
+	"file's contents fetched as git needs them — so ask history questions here, not in the box."
+
 // KeyCodeWrites is the outline key of the guidance on changing the company's
 // own code.
 const KeyCodeWrites = "code_writes"
@@ -329,7 +340,11 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// of how to answer — on the server, not in a clone — made before the
 	// how-to of any one tool. Gated on every tool its claims rest on.
 	if holdsAll(in.AvailableTools, CodeHistoryTools()) {
-		b.Heading(KeyCodeHistory, codeHistorySection)
+		section := []string{codeHistorySection}
+		if in.OffersSandbox {
+			section = append(section, codeHistoryBoxSentence)
+		}
+		b.Heading(KeyCodeHistory, section...)
 	}
 	// AND HOW TO CHANGE IT, right after: the same choice made for a write.
 	if holdsAll(in.AvailableTools, CodeWriteTools()) {

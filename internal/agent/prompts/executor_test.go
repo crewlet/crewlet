@@ -241,6 +241,31 @@ func TestTheCodeHistoryGuidanceNeedsACodeTool(t *testing.T) {
 	}
 }
 
+// A BOX'S CLONE IS BLOBLESS, AND THE CODE GUIDANCE SAYS SO where the seat
+// holds both halves of the choice it closes: the code tools, and run_sandbox,
+// whose `repos` is offered with them. Inside the code_history section, so the
+// outline keeps it with the rule it qualifies; absent where either is missing
+// — to a seat with no sandbox it is prose about a box it never gets, and with
+// no code tools there is no section for it to close.
+//
+// Mutations: the OffersSandbox gate dropped → the no-sandbox prompt says it,
+// red; the sentence opened as a section of its own, or put in the sandbox
+// section → the code_history slice lacks it, red.
+func TestTheCodeHistoryGuidanceSaysABoxCloneIsBlobless(t *testing.T) {
+	t.Parallel()
+	held := append([]string{"submit_work", "run_sandbox"}, CodeHistoryTools()...)
+	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: held, OffersSandbox: true})
+	section, ok := slice(p, KeyCodeHistory)
+	if !ok {
+		t.Fatalf("no %q section rendered", KeyCodeHistory)
+	}
+	contains(t, section, "`run_sandbox` clones is blobless", "ask history questions here, not in the box")
+
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: held}).Text, "blobless")
+	excludes(t, BuildExecutor(engineer(), ExecutorInput{
+		AvailableTools: []string{"submit_work", "run_sandbox"}, OffersSandbox: true}).Text, "blobless")
+}
+
 // THE CODE WRITES GUIDANCE NEEDS THE CODE WRITES: it is rendered for a seat
 // that holds every write its claims rest on — the code host's writes are
 // registered together — and for no other, so no prompt sends a seat to commit

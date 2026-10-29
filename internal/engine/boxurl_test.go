@@ -23,23 +23,29 @@ import (
 // A BOX URL THAT IS SET AND UNUSABLE REFUSES THE BOOT, naming the variable,
 // before anything is opened.
 //
-// Both URLs a box dials back to the engine were handed on as they were: a
+// The URLs a box dials back to the engine were handed on as they were: a
 // telemetry receiver URL with no scheme minted every run an endpoint its
 // exporter could not use, and a bridge URL with none mounted a bridge whose
 // every minted endpoint failed, so every agent-mode run's tool calls failed —
-// each silently, inside a box the engine never hears from again. And the
-// refusal never repeats the value: its user information is a credential.
+// each silently, inside a box the engine never hears from again; and the code
+// host's base is every run's clone and push. And the refusal never repeats
+// the value: its user information is a credential.
 //
 // THE CONTROL holds the other half of the grammar: plain http to a host that
 // is not loopback — the box's own host, or a name on the network — boots
-// exactly as https does, and every endpoint minted for a run starts with the
-// value as the operator wrote it, its trailing '/' trimmed. The docs
-// (code-sandbox.md, "Security model") promise that a box URL's scheme is the
-// operator's call and say what plain http costs; a refusal added later would
-// break that promise here rather than silently.
+// exactly as https does, and every endpoint minted for a run, and the code
+// host's base a run is handed, starts with the value as the operator wrote
+// it, its trailing '/' trimmed. The docs (code-sandbox.md, "Security model")
+// promise that a box URL's scheme is the operator's call and say what plain
+// http costs; a refusal added later would break that promise here rather than
+// silently.
+//
+// Mutations: read CREWLET_BOX_GIT_URL raw rather than through ParseBoxURL, or
+// outside ReadBoxURLs → its refused rows boot, or the one-list assertion
+// fails, red; refuse a non-loopback http:// at boot → the control, red.
 func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 	t.Parallel()
-	variables := []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar}
+	variables := []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar, sandbox.BoxGitURLVar}
 	// ONE LIST: what this test boots on is what ReadBoxURLs reads, which is
 	// also what `crewlet llm doctor` reports — so a box URL the boot refuses
 	// is never one the doctor passes.
@@ -88,18 +94,24 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 		}
 	}
 
-	for _, tc := range []struct{ name, value string }{
-		{"https", "https://engine.example.com"},
-		{"plain http to a name on the network", "http://engine.example.com"},
-		{"plain http to the box's host, with a path", "http://172.17.0.1:8080/base/"},
+	for _, tc := range []struct{ name, value, git string }{
+		{"https", "https://engine.example.com", "https://git.example.com/box/git"},
+		{"plain http to a name on the network", "http://engine.example.com", "http://git.example.com/box/git"},
+		{"plain http to the box's host, with a path", "http://172.17.0.1:8080/base/",
+			"http://172.17.0.1:8080/box/git/"},
 	} {
 		t.Run("the control: "+tc.name, func(t *testing.T) {
 			t.Parallel()
 			e := newEngine(t, engine.Options{Environment: config.MapSource{
 				sandbox.OtelReceiverURLVar: tc.value,
 				mcpbridge.BaseURLVar:       tc.value,
+				sandbox.BoxGitURLVar:       tc.git,
 			}})
 			want := strings.TrimRight(tc.value, "/")
+			if got, want := engine.BoxGitURLOf(e), strings.TrimRight(tc.git, "/"); got != want {
+				t.Errorf("%s=%s gives boxes the code host at %q, want %q", sandbox.BoxGitURLVar, tc.git,
+					got, want)
+			}
 
 			receiver := e.OtelReceiver()
 			if receiver == nil {

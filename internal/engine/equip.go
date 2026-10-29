@@ -46,6 +46,10 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// was validated, schema'd and documented and read by nobody, so setting
 	// one produced a revision and changed nothing an operator could observe.
 	refinement := c.Config.Learning.SkillRefinement
+	// THE CODE TOOLS' SEAMS, read once for the epoch's builtins — the code
+	// tools below, and run_sandbox's launcher, which resolves a call's
+	// repositories through exactly the seams a code tool reads through.
+	code := CodeToolDeps(e)
 	deps := builtin.Deps{
 		A2A: e.a2aFor(c),
 		// THIS NODE'S CHAIN for the chart's `${VAR}` contacts — what the
@@ -53,7 +57,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 		// never the process environment, which an engine handed an
 		// environment of its own does not read anywhere else.
 		Env:               e.LookupSecret,
-		Sandbox:           e.sandboxLauncher(c),
+		Sandbox:           e.sandboxLauncher(c, code),
 		Knowledge:         knowledgeSearch(e, c),
 		Events:            e.telemetry(),
 		Recall:            e.prefetcher(c),
@@ -113,7 +117,7 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 	// per call, over the router, so a seat on a node without the code log or
 	// the `git` role reads and changes the company's repositories through
 	// the nodes that hold them.
-	deps.Code = CodeToolDeps(e)
+	deps.Code = code
 	// AND THE HEALTH TOOLS, on the same deps the operator catalogue builds
 	// per call: registered for every seat, as everything here is, and
 	// offered only to a seat whose role carries the health grant — the
@@ -168,12 +172,16 @@ func (e *Engine) equip(ctx context.Context, c *Company) error {
 // them (see [sandbox.Coordinator.SetManager]) — and a launcher registered against that
 // runtime would mint new boxes on a catalogue the company no longer
 // configures.
-func (e *Engine) sandboxLauncher(c *Company) builtin.SandboxLauncher {
+//
+// code is the code tools' seams the epoch is equipped with: what a call's
+// repositories on the company's own code host are resolved through, the zero
+// value where this node serves none.
+func (e *Engine) sandboxLauncher(c *Company, code builtin.CodeDeps) builtin.SandboxLauncher {
 	if e.sandbox.Load() == nil || c == nil || c.Config == nil ||
 		c.Config.Providers.Sandbox == nil {
 		return nil
 	}
-	return &launcher{engine: e}
+	return &launcher{engine: e, code: code}
 }
 
 // a2aFor builds the agent-to-agent service for one epoch, or nil.

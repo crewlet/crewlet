@@ -26,8 +26,8 @@ const (
 )
 
 // BoxGitPrefix is where a CODING BOX reaches the code host with its run's
-// credential: HTTP Basic, the user name host.BoxUser (`run`), the run's token
-// as the password.
+// credential (ADR-0063): HTTP Basic, the user name host.BoxUser (`run`), the
+// run's token as the password.
 //
 // A PUBLIC prefix ([publicPrefixes]), unlike [GitPrefix]: a box holds no
 // person's or deployment's credential and is reached from wherever its

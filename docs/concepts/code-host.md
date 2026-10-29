@@ -2965,6 +2965,20 @@ its own (`crewlet.git.v1`), naming the run's turn and its current launch. Any
 node can verify one another node minted, and a keyring rotation in flight
 keeps them working ([Secret store](secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)).
 
+**A run names its repositories, and the engine gives the box the rest.** A
+seat calling `run_sandbox` names the repositories in its `repos`; the launching
+node resolves them into the run's grants at the seat's level — and its
+requester's, in a turn somebody woke — writes them on the run's row before any
+box exists, and hands that launch, in its environment alone, the token and the
+code host's address: the node's `CREWLET_BOX_GIT_URL`, a git node's public
+`/box/git` or a balancer over the git nodes, since any of them serves any box.
+The box's git is configured to present the token for that address only, and
+the engine's own setup steps clone each repository before the coding agent
+starts ([Code Sandbox → Repositories on this company's code
+host](code-sandbox.md#repositories-on-this-companys-code-host)). A node without
+`CREWLET_BOX_GIT_URL` refuses a launch naming repositories rather than give a
+box one it cannot reach.
+
 **The token is a backstop, the run's row the authority.** A token is valid
 seven days (`host.RunTokenTTL`), longer than any job a person would leave
 running, since a coding job has no wall-clock limit and an expiry would fail
@@ -3096,6 +3110,15 @@ A box's fetch of a `visibility: unit` repository is recorded under its seat
 stored — `push_quota` among the reasons — leaves that bundle named by no row,
 and the object collector removes it after its grace: the relay checks no quota
 first.
+
+**A box's commits carry trailers by convention, and the host reads none.** The
+coding clone's commit hook adds the seat, the job and the work item to every
+commit a box makes, as trailers. The box can drop them, change them or write
+any trailer it likes, so nothing on the host reads them: a push is recorded by
+the run its box was admitted as, whatever its commits say, and that record is
+the provenance. A trailer is a note in git for where the record does not reach
+— a mirror of the repository elsewhere, and a commit older than the push
+history ([Code Sandbox → Commit trailers](code-sandbox.md#commit-trailers)).
 
 ---
 

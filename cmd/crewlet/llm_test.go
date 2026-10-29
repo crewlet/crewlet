@@ -308,15 +308,18 @@ func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
 // agent-mode entry and the receiver's never, so a company of text-mode entries
 // — this one — got a clean report and a zero exit beside a value the next boot
 // refuses, and a deploy script gating on doctor passed a node that then ran no
-// seat at all. Both URLs a box dials back to the engine are the NODE's, so the
-// refusal is reported as the node's, ahead of the entries, and never repeats
-// the value.
+// seat at all. Every URL a box dials back to the engine — the receiver's, the
+// bridge's and the code host's — is the NODE's, so the refusal is reported as
+// the node's, ahead of the entries, and never repeats the value.
+//
+// Mutation: the doctor reading the box URLs other than through
+// engine.ReadBoxURLs → the code host's row passes, red.
 //
 // The variables travel in the environment the invocation is HANDED, which is
 // where the doctor reads them, as the engine reads its own.
 func TestTheLLMDoctorRefusesABoxURLTheBootRefuses(t *testing.T) {
 	t.Parallel()
-	for _, variable := range []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar} {
+	for _, variable := range []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar, sandbox.BoxGitURLVar} {
 		t.Run(variable, func(t *testing.T) {
 			t.Parallel()
 			environ := config.MapSource{variable: "https://ops:hunter2@engine.example.com"}

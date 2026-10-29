@@ -194,7 +194,7 @@ func wordsOf(r RunRepo) cloneWords {
 	}
 	return cloneWords{
 		dir:    ShellQuote(r.Repo),
-		url:    `"$CREWLET_GIT_URL"/` + ShellQuote(r.Repo+".git"),
+		url:    `"$` + GitURLVar + `"/` + ShellQuote(r.Repo+".git"),
 		branch: ShellQuote(r.Branch),
 		ref:    ShellQuote("refs/heads/" + r.Branch),
 		base:   ShellQuote(r.Base),

@@ -668,6 +668,54 @@ var needsData = map[placement.NodeRole]string{
 		"replicated estate and act on its own state log",
 }
 
+// otherMembers is how many OTHER broker members this file names, and the
+// list they were counted from.
+//
+// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members this
+// file names. An external cluster's membership is not here and cannot be —
+// `stream.url` is an address, and how many servers answer behind it is the
+// operator's business — so a peer list written against one is refused
+// outright by [Stream.validate] rather than counted into a quorum the engine
+// never sees. Counted anyway, it refused a one-peer external config as a
+// two-node fleet: an error naming a quorum that is not this file's, whose only
+// remedy was to delete a line that was already doing nothing.
+//
+// And counted as the OTHER members the list names, which is what it is for:
+// an entry recognisably this node's own route, or a repeat of one already
+// counted, is not another member ([StreamCluster.members]), and counting it
+// passed a two-node fleet as three and let replicas 3 onto two members.
+// [Bootstrap.Warnings] names every entry discounted here.
+func (b *Bootstrap) otherMembers() (int, clusterMembers) {
+	if b.Stream.Type == StreamNATS {
+		return 0, clusterMembers{}
+	}
+	members := b.Stream.Cluster.members()
+	return len(members.Others), members
+}
+
+// clustered reports whether this node is in a FLEET, as this file says: it
+// names other members, a cluster name or an external broker; it is a leaf; or
+// it is a member that opens a leaf listener.
+//
+// ONE PREDICATE, for every rule that asks "is this node in a fleet"
+// (ADR-0008: two copies of the question are two answers): the topology's
+// refusal of local coordination ([Bootstrap.validateTopology]) and the
+// interim warning that a `container` coding box can reach the fleet's broker
+// ([tierWarnings]).
+//
+// A LEAF IS IN A FLEET by definition — it holds nothing of its own, so the
+// broker it reaches is always somebody else's members. And so is a member
+// that OPENS a leaf listener, even one with no peers: the nodes that join it
+// claim seats and hold presence leases, and a lease kept in this process is
+// one they can never see — each would read the fleet as having no data node
+// and claim every seat for itself.
+func (b *Bootstrap) clustered() bool {
+	peers, _ := b.otherMembers()
+	leaf := b.BrokerKind() == placement.BrokerLeaf
+	servesLeaves := b.BrokerKind() == placement.BrokerMember && b.Stream.Leaf.Port != 0
+	return peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded || leaf || servesLeaves
+}
+
 // validateTopology refuses slot combinations that cannot work.
 //
 // Both halves of a deployment are named in this one file, so the incoherent
@@ -710,37 +758,9 @@ func (b *Bootstrap) validateTopology() error {
 				"`material:` at a ${VAR}")
 	}
 
-	// COUNTED ONLY FOR AN EMBEDDED STREAM, because those are the members
-	// this file names. An external cluster's membership is not here and
-	// cannot be — `stream.url` is an address, and how many servers answer
-	// behind it is the operator's business — so a peer list written against
-	// one is refused outright by [Stream.validate] rather than counted into
-	// a quorum the engine never sees. Counted anyway, it refused a
-	// one-peer external config as a two-node fleet: an error naming a
-	// quorum that is not this file's, whose only remedy was to delete a
-	// line that was already doing nothing.
-	//
-	// And counted as the OTHER members the list names, which is what it is
-	// for: an entry recognisably this node's own route, or a repeat of one
-	// already counted, is not another member ([StreamCluster.members]), and
-	// counting it passed a two-node fleet as three and let replicas 3 onto
-	// two members. [Bootstrap.Warnings] names every entry discounted here.
-	peers := 0
-	var members clusterMembers
-	if b.Stream.Type != StreamNATS {
-		members = b.Stream.Cluster.members()
-		peers = len(members.Others)
-	}
-	// A LEAF IS IN A FLEET by definition — it holds nothing of its own, so
-	// the broker it reaches is always somebody else's members. And so is a
-	// member that OPENS a leaf listener, even one with no peers: the nodes
-	// that join it claim seats and hold presence leases, and a lease kept
-	// in this process is one they can never see — each would read the
-	// fleet as having no data node and claim every seat for itself.
+	peers, members := b.otherMembers()
+	clustered := b.clustered()
 	leaf := b.BrokerKind() == placement.BrokerLeaf
-	servesLeaves := b.BrokerKind() == placement.BrokerMember && b.Stream.Leaf.Port != 0
-	clustered := peers > 0 || b.Stream.Cluster.Name != "" || b.Stream.Type != StreamEmbedded ||
-		leaf || servesLeaves
 
 	// NOT HERE: a broker MEMBER with no store directory. Every member is
 	// refused one — a member of a fleet and a solo member alike — by

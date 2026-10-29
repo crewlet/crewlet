@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -17,10 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/code/codetest"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/codingagent"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // codingConversation is the DM line the coding gate's turn arrives on, and
@@ -118,11 +122,13 @@ roles:
         FAKE_AGENT_PATH: "${FAKE_AGENT_PATH}"
         FAKE_AGENT_ARGV: "${FAKE_AGENT_ARGV}"
         FAKE_AGENT_RELEASE: "${FAKE_AGENT_RELEASE}"
-      # Only the cases that read the argv or hold the agent set these two,
-      # and the stand-in reads both as possibly unset (${VAR:-}). Declared
-      # optional, a case that sets neither runs without them; undeclared,
-      # every such case's run is refused for a value it never needed.
-      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE]
+        FAKE_AGENT_TOKEN: "${FAKE_AGENT_TOKEN}"
+      # Only the cases that read the argv, hold the agent or keep the run's
+      # git token set these three, and the stand-in reads each as possibly
+      # unset (${VAR:-}). Declared optional, a case that sets none runs
+      # without them; undeclared, every such case's run is refused for a
+      # value it never needed.
+      optional_keys: [FAKE_AGENT_ARGV, FAKE_AGENT_RELEASE, FAKE_AGENT_TOKEN]
   - name: Founder
     kind: human
     contact:
@@ -245,6 +251,23 @@ case "${FAKE_AGENT_MODE:-succeed}" in
     printf '%s\n' "$init"
     printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-1"}'
     ;;
+  push)
+    # A RUN THAT CHANGES WHAT IT WAS GIVEN: one commit in the checkout the
+    # engine's clone step made at ./web, where the CLI starts, pushed to the
+    # branch that checkout is on — by git alone, with nothing of this
+    # script's: the credential, the remote and the identity are the launch
+    # environment's. The token is kept OUTSIDE the box (FAKE_AGENT_TOKEN), for
+    # the test to present once the run has ended.
+    if [ -n "${FAKE_AGENT_TOKEN:-}" ]; then
+      printf '%s' "${CREWLET_GIT_TOKEN:-}" > "$FAKE_AGENT_TOKEN"
+    fi
+    cd web || { echo "no checkout of web in $PWD" >&2; exit 65; }
+    printf 'the fix\n' > FIX.md
+    git add FIX.md && git commit -q -m 'Fix the failing test' && git push -q origin HEAD || exit 66
+    printf 'Outcome: succeeded\nPushed the fix.\n' > "$work/findings.md"
+    printf '%s\n' "$init"
+    printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"sess-1"}'
+    ;;
   *)
     # A MODE THIS SCRIPT DOES NOT KNOW SAYS SO. Falling through silently
     # would exit 0 with no envelope, which reaches the engine as a run
@@ -271,11 +294,14 @@ func bootCompany(t *testing.T, doc string, model *scriptedModel, env map[string]
 	t.Helper()
 	dir := t.TempDir()
 	return bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
-		filepath.Join(dir, "stream"), env)
+		filepath.Join(dir, "stream"), env, nil)
 }
 
+// bootCompanyIn is [bootCompany] on the store and stream paths given, its API
+// served on listener where the case bound one (nil for a fresh port: see
+// [wireAPI]).
 func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, streamDir string,
-	env map[string]string) *node {
+	env map[string]string, listener net.Listener) *node {
 	t.Helper()
 	logs.attribute(t)
 	cfg, err := config.ParseCompany([]byte(doc))
@@ -295,6 +321,9 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		// coding jobs that run for minutes; at that cadence a test whose
 		// job finishes in a moment would wait out a real tick to see it.
 		SandboxPollInterval: 100 * time.Millisecond,
+		// THIS TEST BINARY IS THE HOOK a node hosting code execs, as
+		// startNode hands it; a company hosting none never reads it.
+		GitHook: codetest.HookCommand(t),
 	})
 	if err != nil {
 		t.Fatalf("engine.New: %v", err)
@@ -314,17 +343,26 @@ func bootCompanyIn(t *testing.T, doc string, model *scriptedModel, dbPath, strea
 		// parked on a question waits days, and the live projection sweeps
 		// long before that.
 		opts.Sources.Sandbox = sandbox.NewCoordStore(e.Backends().Fleet)
-	})
+	}, listener)
 	return &node{engine: e, app: app, server: srv, model: model}
 }
 
-// newSandboxModel is the scripted model for a coding turn.
+// newSandboxModel is the scripted model for a coding turn whose run_sandbox
+// call names a task on another host in its brief, as every coding case here
+// but the code host's does.
+func newSandboxModel(t *testing.T) *scriptedModel {
+	t.Helper()
+	return newCodingModel(t, map[string]any{"brief": "Clone example.com/acme/api and fix the failing test"})
+}
+
+// newCodingModel is the scripted model for a coding turn whose executor calls
+// run_sandbox with args.
 //
 // The executor calls run_sandbox on its FIRST Execute round and reports on the
 // resumed one, which is what makes the suspend and the re-entry both real:
 // the second Execute request is one the engine only sends after the detached
 // job has finished and its result has been spliced in.
-func newSandboxModel(t *testing.T) *scriptedModel {
+func newCodingModel(t *testing.T, args map[string]any) *scriptedModel {
 	t.Helper()
 	m := &scriptedModel{stateDir: t.TempDir()}
 	m.listen(t, func(w http.ResponseWriter, r *http.Request) {
@@ -356,9 +394,7 @@ func newSandboxModel(t *testing.T) *scriptedModel {
 			})
 		case offered["submit_work"]:
 			m.saw("execute")
-			reply = toolUse("run_sandbox", map[string]any{
-				"brief": "Clone example.com/acme/api and fix the failing test",
-			})
+			reply = toolUse("run_sandbox", args)
 		default:
 			// AN AUXILIARY PASS, not a phase. The prefetch's filters reach
 			// this same model with no tools offered, and counting them
@@ -543,6 +579,154 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 	}
 	if history[0].Decision != "done" {
 		t.Errorf("decision = %q, want the resumed turn's own outcome", history[0].Decision)
+	}
+}
+
+// withBoxRepo is the coding company hosting code, as
+// [TestACodingRunClonesPushesAndIsToldWhatItPushed] runs it: one repository,
+// `web`, the coding seat's own, and the seat's code access full — a role that
+// names none reads only, and a run it launches is given a repository to read.
+func withBoxRepo(doc string) string {
+	doc = strings.Replace(doc, "    llm_sandbox: coder\n",
+		"    llm_sandbox: coder\n    code: {access: full_access}\n", 1)
+	return doc + `code:
+  native: true
+  repos:
+    - name: web
+      owner: {seat: swe}
+`
+}
+
+// A CODING RUN CLONES THE REPOSITORY IT NAMES AND PUSHES AS ITS RUN, end to
+// end through a real engine serving git: the executor names `web` in
+// run_sandbox's `repos`; the launch resolves it into the run's grant and hands
+// the box its token, the code host's address (CREWLET_BOX_GIT_URL, this node's
+// own listener) and its git configuration; the engine's own setup steps clone
+// it; and the stand-in coding CLI commits and pushes with nothing of its own —
+// so the push reaching the code host at all is the proof that the token, the
+// credential helper, the base and the identity agree.
+//
+// Asserted from the code host's own record, never the box's word: the push
+// row names the seat as an agent, received over git, made by THIS run's
+// launch with its coding agent, onto the seat's default branch for a turn on
+// no work item (`seats/swe/run-<the turn id's last 12 hex>`); the commit the
+// row moved the branch to, read back from the code host, carries the run's
+// three trailers; and once the run has ended its token admits nothing.
+// (A `direct` box on the node that serves git: warned, never refused.)
+//
+// Mutations: a launch whose RunEnv sets no trailer variables → the commit
+// carries no trailer, red; boxGitEnv without the credential helper → the
+// clone step fails the launch and no push row is written, red; the run's
+// token minted for another launch → the clone is refused `run_superseded`, red.
+func TestACodingRunClonesPushesAndIsToldWhatItPushed(t *testing.T) {
+	t.Parallel()
+	// THE NODE'S OWN ADDRESS, BOUND BEFORE IT BOOTS: CREWLET_BOX_GIT_URL is
+	// read once at boot, and the box dials it from the same host, so this
+	// listener is both the API's and the box's way to the code host.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("bind the node's listener: %v", err)
+	}
+	stateDir := t.TempDir()
+	binDir := installFakeAgent(t)
+	tokenPath := filepath.Join(stateDir, "git-token")
+	env := fakeAgentEnv(binDir, "push")
+	env["FAKE_AGENT_TOKEN"] = tokenPath
+	base := "http://" + listener.Addr().String() + "/box/git"
+	env[sandbox.BoxGitURLVar] = base
+
+	model := newCodingModel(t, map[string]any{
+		"brief": "Fix the failing test in web",
+		"repos": []any{map[string]any{"repo": "web"}},
+	})
+	doc := withBoxRepo(sandboxCompany(t, model, stateDir))
+	dir := t.TempDir()
+	n := &codingNode{node: bootCompanyIn(t, doc, model, filepath.Join(dir, "crewlet.db"),
+		filepath.Join(dir, "stream"), env, listener), stateDir: stateDir, binDir: binDir}
+	repo := awaitRepo(t, "web", code.RepoStatusActive, n.node)
+	waitFor(t, "the seat to be claimed", func() bool {
+		return slices.Contains(n.engine.Node().Host().Held(), "swe")
+	})
+	n.wakeInDirectThread(t, "swe", "the web test is failing, please fix it", codingConversation, codingThread)
+
+	var run sandbox.PendingRun
+	waitFor(t, "the run to be launched with its grant", func() bool {
+		runs := n.activeRuns(t)
+		if len(runs) != 1 || len(runs[0].Repos) != 1 {
+			return false
+		}
+		run = runs[0]
+		return true
+	}, n.diagnose)
+	if got := run.Repos[0]; got.Repo != "web" || got.RepoID != repo.ID || got.Access != sandbox.RepoWrite {
+		t.Fatalf("the run was given %+v; want web (%s) to write", got, repo.ID)
+	}
+	waitFor(t, "the suspended turn to be resumed", func() bool {
+		return slices.Contains(n.model.seen(), "resumed")
+	}, n.diagnose)
+	waitFor(t, "the run to settle", func() bool { return len(n.activeRuns(t)) == 0 })
+
+	// THE PUSH, AS THE CODE HOST RECORDED IT.
+	seam, ok := engine.OperatorCode(n.engine)
+	if !ok {
+		t.Fatal("the node serves no code operations")
+	}
+	answer, err := seam.Read(t.Context(), code.ReadQuery{Kind: code.ReadRunPushes, Limit: 10,
+		RunPushes: &code.RunPushesQuery{Run: run.LaunchID, Repos: []string{repo.ID}, After: repo.Position},
+		Fresh:     statelog.Freshness{Level: statelog.ReadLinearizable}})
+	if err != nil {
+		t.Fatalf("read the run's pushes: %v", err)
+	}
+	if len(answer.Pushes) != 1 {
+		t.Fatalf("the run is recorded as %d pushes, want its one: %+v", len(answer.Pushes), answer.Pushes)
+	}
+	push := answer.Pushes[0]
+	branch := "refs/heads/seats/swe/run-" + run.TurnID[len(run.TurnID)-12:]
+	switch {
+	case push.Via != code.ViaGit || push.ActorKind != string(code.PrincipalAgent) || push.ActorSeat != "swe":
+		t.Errorf("the push is recorded via %s by %s %q; want via git by the agent swe", push.Via,
+			push.ActorKind, push.ActorSeat)
+	case push.Run.RunID != run.LaunchID || push.Run.CodingAgent != "claude-code":
+		t.Errorf("the push is recorded as run %q by %q; want this launch, %s, by claude-code", push.Run.RunID,
+			push.Run.CodingAgent, run.LaunchID)
+	case len(push.Commands) != 1 || push.Commands[0].Ref != branch || push.Commands[0].Result != code.ResultOK:
+		t.Fatalf("the push moved %+v; want %s created", push.Commands, branch)
+	}
+
+	// THE COMMIT, READ BACK FROM THE CODE HOST, CARRIES THE RUN'S TRAILERS:
+	// each asked as a literal of the pushed commit's whole message.
+	for _, trailer := range []string{"Crewlet-Seat: swe", "Crewlet-Run: " + run.LaunchID,
+		"Crewlet-Work-Item: none"} {
+		got, err := seam.GitRead(t.Context(), code.GitQuery{Kind: code.GitLog, RepoID: repo.ID,
+			Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "swe"},
+			Log:   &code.LogQuery{Rev: push.Commands[0].New, Grep: trailer, Limit: 1}})
+		if err != nil {
+			t.Fatalf("read the pushed commit's history: %v", err)
+		}
+		if got.Log == nil || len(got.Log.Commits) != 1 || got.Log.Commits[0].OID != push.Commands[0].New {
+			t.Errorf("the pushed commit %s does not carry %q", push.Commands[0].New, trailer)
+		}
+	}
+
+	// AND ITS TOKEN ADMITS NOTHING ONCE THE RUN HAS ENDED.
+	token, err := os.ReadFile(tokenPath)
+	if err != nil || len(token) == 0 {
+		t.Fatalf("the coding CLI kept no git token (%v)", err)
+	}
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		base+"/web.git/info/refs?service=git-upload-pack", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SetBasicAuth("run", string(token))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ask with the ended run's token: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "ended") {
+		t.Errorf("an ended run's token is answered %d %q; want 403 saying the run ended", resp.StatusCode, body)
 	}
 }
 
@@ -832,7 +1016,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	model := newSandboxModel(t)
 	doc := sandboxCompany(t, model, stateDir)
 
-	first := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
+	first := bootCompanyIn(t, doc, model, dbPath, streamDir, env, nil)
 	firstNode := &codingNode{node: first, stateDir: stateDir, binDir: binDir}
 	waitFor(t, "the seat to be claimed", func() bool {
 		return slices.Contains(first.engine.Node().Host().Held(), "swe")
@@ -856,7 +1040,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	// whole reason the row exists.
 	first.engine.Stop(context.Background())
 
-	second := bootCompanyIn(t, doc, model, dbPath, streamDir, env)
+	second := bootCompanyIn(t, doc, model, dbPath, streamDir, env, nil)
 	secondNode := &codingNode{node: second, stateDir: stateDir, binDir: binDir}
 	waitFor(t, "the new engine to claim the seat", func() bool {
 		return slices.Contains(second.engine.Node().Host().Held(), "swe")

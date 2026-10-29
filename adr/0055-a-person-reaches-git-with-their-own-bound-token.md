@@ -31,6 +31,7 @@ behind it. The token a person already holds is already how this engine knows who
 
 ## What this does not decide
 
-How a seat's box reaches git (a run token in a key domain of its own, served where a box can reach it),
+How a seat's box reaches git (ADR-0063: its run's token in a key domain of its own, on `/box/git/`, served where a
+box can reach it),
 what a seat may read and push on a repository (derived from the chart: ADR-0058, which leaves this record's rules
 for persons and tokens as they are), and SSH (not planned).

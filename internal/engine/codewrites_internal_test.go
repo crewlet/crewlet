@@ -297,7 +297,7 @@ func suspendRun(t *testing.T) suspendedRun {
 	if got, err := commit.CallForTurn(t.Context(), turn, commitTo(first.Name)); err != nil || got.Failed {
 		t.Fatalf("the executor's write answered %v %q", err, got.Output)
 	}
-	if _, err := (&launcher{engine: e}).Launch(t.Context(), turn, "fix the failing test"); err != nil {
+	if _, err := (&launcher{engine: e}).Launch(t.Context(), turn, builtin.SandboxRequest{Brief: "fix the failing test"}); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
 	frame() // the turn suspends, and its frame returns

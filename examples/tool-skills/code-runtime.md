@@ -17,10 +17,14 @@ bug, or run a script**, call `run_sandbox` with a concrete `brief`.
 
 How to brief it well:
 
-- Name the repository and the concrete change in the `brief`. The coding
-  agent has its own shell and git, plus whatever code-host token your role
-  gives it — it clones, edits, runs tests, pushes a branch, and opens the
-  pull request or merge request **as your own identity**.
+- Name the concrete change in the `brief`. A repository on this company's
+  own code host goes in `repos` instead, where your call offers it: it is
+  cloned for you before the agent starts, on your own branch for the work
+  item unless you name one, and the box pushes with a credential of its own
+  that ends with the run. A repository on another host is named in the
+  brief: the coding agent has its own shell and git, plus whatever code-host
+  token your role gives it — it clones, edits, runs tests, pushes a branch,
+  and opens the pull request or merge request **as your own identity**.
 - The coding agent does not hold your tools: it knows the work item only
   through what your brief tells it. Copy in the facts and the acceptance
   criteria it needs rather than pointing it at the item.

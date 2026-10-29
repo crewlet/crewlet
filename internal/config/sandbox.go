@@ -620,9 +620,13 @@ func (l *LocalSandbox) validate(path Path) error {
 // SandboxSetupStep is one declarative provisioning unit applied to a fresh
 // box.
 //
-// Every provisioning concern — git auth included — goes through this one
-// apply, env-merge and brief pipeline, with no engine special cases. Steps
-// come only from providers.sandbox.setup and role.sandbox.setup.
+// Every provisioning concern — git auth for any other host included — goes
+// through this one apply, env-merge and brief pipeline. Steps come only from
+// providers.sandbox.setup and role.sandbox.setup, but for the one exception:
+// a repository on this company's own code host is a run's GRANT, which the
+// engine clones into the box itself after these steps, with the run's own
+// credential (ADR-0063) — and no step's env may set the variables that
+// credential and its clones read ([ReservedSandboxEnv]).
 type SandboxSetupStep struct {
 	// Name identifies the step in logs and in setup-failure errors.
 	Name string `yaml:"name" json:"name" js:"required" desc:"Short identifier used in logs and failure messages."`
@@ -717,6 +721,73 @@ func (s *SandboxSetupStep) validate(path Path) error {
 	for file := range s.Files {
 		if strings.TrimSpace(file) == "" {
 			p.add(at(path, "files"), ErrMissing, "a file path must not be empty")
+		}
+	}
+	return p.err()
+}
+
+// ReservedSandboxEnv is every variable the ENGINE sets in a coding run's
+// environment itself, and so the names no `role.sandbox.env` or setup step's
+// `env` may carry: the box's access to the engine's own code host — its run's
+// git credential and the base its clones and pushes reach — and the values the
+// coding clone's commit-trailer hook writes. A closed list, which the
+// validator reads here and the engine's test holds to the variables a launch
+// given repositories sets (internal/engine, TestABoxIsConfiguredByEnvironment).
+func ReservedSandboxEnv() []string {
+	return []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL", "CREWLET_GIT_TRAILER_SEAT",
+		"CREWLET_GIT_TRAILER_RUN", "CREWLET_GIT_TRAILER_WORK_ITEM"}
+}
+
+// reservedSandboxEnvReasons is why each of [ReservedSandboxEnv] is the
+// engine's, as a refusal of an operator's value for it says.
+var reservedSandboxEnvReasons = map[string]string{
+	"CREWLET_GIT_TOKEN": "it is the run's own credential on this company's code host, minted for each " +
+		"launch of a run that names repositories, and a value here would break its clones and pushes",
+	"CREWLET_GIT_URL": "it is the base a run that names repositories clones and pushes them from " +
+		"(CREWLET_BOX_GIT_URL on the launching node), and a value here would send its git elsewhere",
+	"CREWLET_GIT_TRAILER_SEAT": "it is the seat the coding clone's commit hook writes into every commit's " +
+		"trailers, and a value here would make a box commit's trailers disagree with its push's record",
+	"CREWLET_GIT_TRAILER_RUN": "it is the launch the coding clone's commit hook writes into every commit's " +
+		"trailers, and a value here would make a box commit's trailers disagree with its push's record",
+	"CREWLET_GIT_TRAILER_WORK_ITEM": "it is the work item the coding clone's commit hook writes into every " +
+		"commit's trailers, and a value here would make a box commit's trailers disagree with its push's " +
+		"record",
+}
+
+// validateReservedSandboxEnv refuses a [ReservedSandboxEnv] name as a key of
+// any env a coding run's environment is assembled from: a seat's
+// `sandbox.env`, a seat's setup steps' `env`, and `providers.sandbox.setup`'s.
+//
+// AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: nothing
+// about running depends on it, since the engine's own value wins over every
+// other source of a run's environment for the names it sets (the launch's
+// environment, sandbox.LaunchRequest.RunEnv) — so a stored revision carrying
+// one runs as it did, a later build may relax the rule, and this build applies
+// whatever its newer peer admitted. What it refuses is a setting that READS as
+// working: one the engine overwrites on every run given repositories, and on
+// every other run a value nothing of the engine's reads.
+func (c *Company) validateReservedSandboxEnv() error {
+	var p problems
+	check := func(path Path, env map[string]string) {
+		for _, name := range ReservedSandboxEnv() {
+			if _, set := env[name]; set {
+				p.add(entry(path, name), ErrConflict, "%s is the engine's: %s. Remove it",
+					name, reservedSandboxEnvReasons[name])
+			}
+		}
+	}
+	steps := func(path Path, list []SandboxSetupStep) {
+		for i := range list {
+			check(at(idx(path, i), "env"), list[i].Env)
+		}
+	}
+	if c.Providers.Sandbox != nil {
+		steps(field("providers.sandbox.setup"), c.Providers.Sandbox.Setup)
+	}
+	for role, path := range c.EachRole() {
+		if gate := role.Sandbox; gate != nil {
+			check(at(path, "sandbox.env"), gate.Env)
+			steps(at(path, "sandbox.setup"), gate.Setup)
 		}
 	}
 	return p.err()
