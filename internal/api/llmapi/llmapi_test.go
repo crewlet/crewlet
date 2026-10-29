@@ -183,6 +183,9 @@ type fakeSecrets struct {
 	rows map[string]stored
 	// refuse is what a seal of each name answers instead of storing it.
 	refuse map[string]error
+	// reclaimAnyAge makes Reclaim re-seal a row whatever its seal time, so a
+	// case pins the route's own window check alone.
+	reclaimAnyAge bool
 }
 
 func (s *fakeSecrets) Describe(_ context.Context, name string) (secrets.Record, bool, error) {
@@ -224,7 +227,7 @@ func (s *fakeSecrets) Reclaim(_ context.Context, name, value string, _ secrets.A
 		return false, err
 	}
 	row, ok := s.rows[name]
-	if !ok || opID == "" || row.op != opID || row.sealed.Before(notBefore) {
+	if !ok || opID == "" || row.op != opID || (!s.reclaimAnyAge && row.sealed.Before(notBefore)) {
 		return false, nil
 	}
 	s.rows[name] = stored{value, source, opID, now}
@@ -1088,5 +1091,32 @@ func TestACreatesRetryWindowRunsFromItsSeal(t *testing.T) {
 				t.Errorf("the stale row was re-sealed: %+v", got)
 			}
 		})
+	}
+}
+
+// THE ROUTE ASKS THE SEAL'S TIME OF ITS OWN, before any re-seal: with a store
+// that would re-seal a row of any age, a retry over rows sealed outside the
+// window is still refused, by the early check, and nothing is written.
+func TestACreatesRetryIsRefusedByTheRouteBeforeTheStore(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.secrets.refuse = map[string]error{"GATEWAY_URL": context.DeadlineExceeded}
+	_, body := createAs(t, r, gatewayCreate, "")
+	key, _ := body["op_id"].(string)
+	r.secrets.refuse = nil
+	r.secrets.mu.Lock()
+	row := r.secrets.rows["GATEWAY_KEY"]
+	row.sealed = clock.Add(-llmapi.CreateRetryWindow - time.Hour)
+	r.secrets.rows["GATEWAY_KEY"] = row
+	r.secrets.reclaimAnyAge = true
+	r.secrets.mu.Unlock()
+
+	code, body := createAs(t, r, gatewayCreate, key)
+	if names, _ := json.Marshal(body["names"]); code != http.StatusPreconditionFailed ||
+		string(names) != `["GATEWAY_KEY"]` {
+		t.Errorf("a retry over a row sealed outside the window = %d %v, want the route's 412 naming it", code, body)
+	}
+	if got := r.secrets.rows["GATEWAY_KEY"]; !got.sealed.Equal(row.sealed) {
+		t.Errorf("the stale row was re-sealed: %+v", got)
 	}
 }
