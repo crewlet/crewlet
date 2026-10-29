@@ -164,6 +164,29 @@ test("each row opens the model's page, and its actions column is named", () => {
   expect(within(row("opus")).getByRole("button", { name: "Actions for opus" })).toBeDefined();
 });
 
+/**
+ * NOTHING IN A ROW IS A CONTROL PRETENDING NOT TO BE. The CLI's mark is an
+ * image the row's link lies over, never raised and never pressed; the names
+ * are raised only so a pointer reaches their tip, and so they are a real link
+ * to the page the row opens, out of the tab order and hidden from assistive
+ * technology, which reach the model once, by the row's link.
+ */
+test("the mark is an inert image, and the names are a real link to the row's page", () => {
+  mount();
+  const opus = row("opus");
+  const mark = within(opus).getByRole("img", { name: "Claude Code" });
+  expect(mark.closest("[data-above-row]")).toBeNull();
+  expect(mark.closest("a, button")).toBeNull();
+  expect(mark.onclick).toBeNull();
+  const names = opus.querySelector(".models-entry-cell__names")!;
+  expect(names.tagName).toBe("A");
+  expect(names.getAttribute("href")).toContain("settings/models/opus");
+  expect(names.getAttribute("tabindex")).toBe("-1");
+  expect(names.getAttribute("aria-hidden")).toBe("true");
+  // NOT A SECOND WAY IN for a screen reader: the row's own link is that.
+  expect(within(opus).getAllByRole("link")).not.toContain(names);
+});
+
 test("a member reads the list without a credential, a cost or an action", () => {
   mount(company({ admin: false }));
   expect(screen.getByText("Read-only")).toBeDefined();

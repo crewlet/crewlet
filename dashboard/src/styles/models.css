@@ -204,11 +204,6 @@
   flex: none;
 }
 
-/* Raised over a linked row, it opens the row's entry, and says so under the pointer. */
-.models-cli-mark--pressable {
-  cursor: pointer;
-}
-
 /* The tooltip's breakdown: one use to a line. */
 .models-uses-breakdown {
   display: flex;
@@ -298,7 +293,9 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  cursor: pointer;
+  /* A link to the row's own page, drawn as the row's text. */
+  color: inherit;
+  text-decoration: none;
 }
 
 .models-clamp {
