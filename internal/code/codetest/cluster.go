@@ -208,6 +208,11 @@ func fleetCases() []fleetCase {
 		{"F47_ABoxNeverSeesABranchGoBack", aBoxNeverSeesABranchGoBackAcrossMembers},
 		{"LY8_ALargeNodePublishesForEveryNode", aLargeNodePublishesForEveryNode},
 		{"LY9_TwoMaintainersLandOnePublication", twoMaintainersLandOnePublication},
+		{"F40_ExpungeVsAPushCheckedBeforeIt", expungeVsAPushCheckedBeforeItOnAFleet},
+		{"F41_ExpungeUnderAPushEvery100ms", expungeUnderAPushEvery100msOnAFleet},
+		// LAST: its retention and collection run a day on, for every
+		// repository the cluster holds.
+		{"F42_ExpungeRetiredPackOutlivesItsLongestRead", expungeRetiredPackOutlivesItsLongestReadOnAFleet},
 	}
 }
 

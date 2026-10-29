@@ -1001,6 +1001,17 @@ func (c *cluster) Propose(ctx context.Context, p code.Proposal) (code.ProposeRes
 	return m.router.Load().Code().Propose(ctx, p)
 }
 
+// Expunge is an expunge proposal asked through the first running member's
+// router — of the repository's committer first, its runner-up after — as a
+// member's compactor asks its begins and commits (codetest.Fleet).
+func (c *cluster) Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	m, err := c.first()
+	if err != nil {
+		return code.ExpungeResult{}, err
+	}
+	return m.router.Load().Code().Expunge(ctx, p)
+}
+
 // ProposeCompactionAgain asks member node's router to decide, again, the last
 // compaction a member's compactor proposed of repoID — under its own
 // compaction id, as a compactor whose answer came back late asks again.

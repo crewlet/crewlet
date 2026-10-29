@@ -3,6 +3,7 @@ package codetest_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,6 +179,66 @@ func TestTheSuiteCatchesARetirementWithNoGrace(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "retired objects inside their grace") {
 			t.Errorf("ARetiredPackOutlivesItsLongestRead over an applier that keeps no retired row = %v, want the "+
 				"objects deleted inside their grace named", err)
+		}
+	})
+}
+
+// droppingDeleted is a data node's applier that LIES about an expunge's
+// commit: the dropping packs it retires leave code_packs_retired at once, as
+// a commit that deleted them rather than retiring them would — so nothing
+// shields their objects from the collector once their uploads' own grace has
+// passed, while a reader that opened one before the commit may still be on
+// it.
+type droppingDeleted struct{ statelog.Applier }
+
+func (a droppingDeleted) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
+	opts statelog.ApplyOptions) (int, error) {
+	rows, err := a.Applier.Apply(ctx, tx, rec, opts)
+	if err != nil {
+		return rows, err
+	}
+	m, err := code.Decode(rec.Payload)
+	if err != nil || m.Op != code.OpExpungeCommit {
+		return rows, err
+	}
+	var commit code.ExpungeCommit
+	if err := json.Unmarshal(m.Mutation, &commit); err != nil {
+		return rows, err
+	}
+	for _, id := range commit.Retire {
+		res, err := tx.ExecContext(ctx, "DELETE FROM code_packs_retired WHERE repo_id = ? AND pack_id = ?",
+			commit.RepoID, id)
+		if err != nil {
+			return rows, err
+		}
+		gone, err := res.RowsAffected()
+		if err != nil {
+			return rows, err
+		}
+		rows += int(gone)
+	}
+	return rows, nil
+}
+
+// A suite whose check passes a liar certifies nothing:
+// ExpungeRetiredPackOutlivesItsLongestRead (F42) must catch a topology whose
+// expunge commit deletes the dropping packs' rows rather than retiring them —
+// the first collection past their uploads' grace deletes what a reader may
+// still be reading — and pass an honest one.
+func TestTheSuiteCatchesAnExpungeThatDeletesWhatItDrops(t *testing.T) {
+	t.Run("honest", func(t *testing.T) {
+		if err := codetest.ExpungeRetiredPackOutlivesItsLongestRead(t, codetest.Solo(codetest.SoloOptions{}, nil)); err != nil {
+			t.Errorf("ExpungeRetiredPackOutlivesItsLongestRead over an honest fleet: %v", err)
+		}
+	})
+	t.Run("liar", func(t *testing.T) {
+		liar := codetest.SoloOptions{WrapApplier: func(a statelog.Applier) statelog.Applier {
+			return droppingDeleted{a}
+		}}
+		err := codetest.ExpungeRetiredPackOutlivesItsLongestRead(t, codetest.Solo(liar, nil))
+		if err == nil || !strings.Contains(err.Error(), "retired objects inside their grace") {
+			t.Errorf("ExpungeRetiredPackOutlivesItsLongestRead over a commit that deletes its dropping packs' rows "+
+				"= %v, want the objects deleted inside their grace named", err)
 		}
 	})
 }

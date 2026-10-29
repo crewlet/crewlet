@@ -65,7 +65,7 @@ type Node interface {
 	Share() *code.GitShare
 	// Compactor is the node's compactor, built as the engine builds a git
 	// node's and never started: a case drives its Compact or its Poll, its
-	// Publish or its PublishPass.
+	// Publish or its PublishPass, its Expunge or its ExpungePass.
 	Compactor() *compact.Compactor
 	// Maintainers is what the node's compactor asks of whether it is a
 	// repository's maintainer (GitOptions.Maintainers): which node a case's
@@ -147,6 +147,12 @@ type Fleet interface {
 	// the packs of a fixture it built and stored itself, a person's git
 	// paying for none of them.
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
+	// Expunge is an expunge proposal asked of the repository's committer
+	// through the data nodes — a person's purge request, as
+	// code_purge_unreachable asks one, or a begin or a commit, as a git
+	// node's compactor proposes them — for a case that asks a purge and
+	// drives the maintainer's passes itself (Node.Compactor).
+	Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
 	// StopGit stops one git node as the engine's graceful stop does, its
 	// cache's directory kept, while the rest of the fleet runs on; StartGit
 	// starts it again over that directory.
@@ -693,6 +699,12 @@ func (f *SoloFleet) State(ctx context.Context, q code.StateQuery) (code.RepoSnap
 // node itself answered as the router answers it (Fleet).
 func (f *SoloFleet) Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error) {
 	return (&soloEstate{data: f.data}).Propose(ctx, p)
+}
+
+// Expunge is an expunge proposal asked of the data node's committer — what
+// every git node's compactor proposes through too (Fleet).
+func (f *SoloFleet) Expunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error) {
+	return f.expunge(ctx, p)
 }
 
 // StopGit stops the git node called node gracefully (Fleet).
