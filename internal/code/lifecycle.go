@@ -42,10 +42,13 @@ import (
 // full_access — and never leaves a project owned by a seat: its own
 // repositories are its scratch repositories, which a cap and an idle expiry
 // bound, and only a person makes a project a seat's. And a protection binds
-// every seat, its unit's lead included: a seat adds a rule or tightens one,
-// and never removes or loosens one, which is a person's ([loosenings]). A
-// node behind the company's configuration decides none of it
-// ([StoreOptions.Current]): every kind reads the chart, a person's included.
+// every seat, its unit's lead included: a seat adds a rule or tightens one —
+// a rule's merge gate field by field ([MergeGate.LoosenedBy]) — and never
+// removes or loosens one, which is a person's ([loosenings]); nor, where a
+// gate makes the path owners gating, takes a glob from one
+// ([gatingOwnersTaken]). A node behind the company's configuration decides
+// none of it ([StoreOptions.Current]): every kind reads the chart, a person's
+// included.
 
 // LifecycleKind is what a lifecycle request asks.
 type LifecycleKind string
@@ -57,8 +60,10 @@ const (
 	// LifecycleRename moves a repository to a new name, the old one
 	// redirecting to it for [RedirectWindow].
 	LifecycleRename LifecycleKind = "rename"
-	// LifecycleSettings changes its description, default branch, visibility
-	// or (a project's) owner.
+	// LifecycleSettings changes its description, default branch, visibility,
+	// or a project's owner or path owners — taking a glob from a path owner,
+	// where a merge gate sets owners_approve, a person's alone
+	// ([gatingOwnersTaken]).
 	LifecycleSettings LifecycleKind = "settings"
 	// LifecycleArchive makes it read-only, and LifecycleUnarchive takes it
 	// back.
@@ -68,9 +73,10 @@ const (
 	LifecycleDelete LifecycleKind = "delete"
 	// LifecycleRestore brings a deleted one back as it was.
 	LifecycleRestore LifecycleKind = "restore"
-	// LifecycleProtect sets or removes the protection of one pattern: a
-	// seat may add a rule or tighten one, and only a person removes or
-	// loosens one ([loosenings]).
+	// LifecycleProtect sets or removes the protection of one pattern, its
+	// merge gate changed as the decide resolves it ([GateChange]): a seat may
+	// add a rule or tighten one, and only a person removes or loosens one
+	// ([loosenings]).
 	LifecycleProtect LifecycleKind = "protect"
 	// LifecycleHold is a live turn's hold on a scratch repository idle
 	// [HoldRecordAfter] or more ([Hold]) — no tool's: the one seam a turn's
@@ -296,13 +302,39 @@ func (c PathOwnersChange) applyTo(owners []PathOwner) []PathOwner {
 	return CanonicalPathOwners(out)
 }
 
-// ProtectChange is one rule for one pattern; a nil Rule removes the pattern's.
+// ProtectChange is one pattern's rule as a protect request changes it, which
+// the decide RESOLVES against the rules its own snapshot holds: a nil Rule
+// removes the pattern's rule.
 type ProtectChange struct {
 	// Pattern is refs/heads/<glob> or refs/tags/<glob> (gitref's grammar).
 	Pattern string `json:"pattern"`
-	// Rule is what the pattern's push is held to; its own Pattern is left
-	// empty or names the same pattern.
+	// Rule is what the pattern's push is held to — allow_force, allow_delete
+	// and direct_push, set whole. Its own Pattern is left empty or names the
+	// same pattern, and its Gate is left nil: the merge gate the rule ends
+	// with is the decide's to resolve, from Gate.
 	Rule *Protection `json:"rule,omitempty"`
+	// Gate changes the rule's merge gate ([GateChange]), resolved against the
+	// gate the pattern's rule carries in the decide's snapshot: nil keeps that
+	// gate as it stands, and a rule the pattern did not have yet takes none.
+	Gate *GateChange `json:"gate,omitempty"`
+}
+
+// rule is the rule c leaves its pattern with, given held — the rules the
+// decide's snapshot read: nil where c removes it, and otherwise c's push
+// controls with the merge gate RESOLVED from the one the pattern's rule in
+// held carries ([GateChange.resolve]).
+func (c ProtectChange) rule(held []Protection) *Protection {
+	if c.Rule == nil {
+		return nil
+	}
+	rule := *c.Rule
+	rule.Pattern = c.Pattern
+	var gate *MergeGate
+	if i := slices.IndexFunc(held, func(p Protection) bool { return p.Pattern == c.Pattern }); i >= 0 {
+		gate = held[i].Gate
+	}
+	rule.Gate = c.Gate.resolve(gate)
+	return &rule
 }
 
 // LifecycleResult is what became of a lifecycle request.
@@ -369,7 +401,8 @@ func RepoIDOf(opID string) (string, bool) {
 // caller may bring ([statelog.CheckCallerOpID]); an actor that is a seat or a
 // bound person, carrying no run; and each field within its rules — a create's
 // settings a tool's, of the kind its name says, a protect request's rule one a
-// record may carry, a hold's turn bounded and its read named.
+// record may carry with no gate of its own and each field its gate change
+// names one too, a hold's turn bounded and its read named.
 func (r LifecycleRequest) Validate() error {
 	if why := r.invalid(); why != "" {
 		return fmt.Errorf("%w: %s", ErrInvalid, why)
@@ -447,18 +480,43 @@ func (r LifecycleRequest) invalid() string {
 		case r.Protect.Rule != nil && r.Protect.Rule.Pattern != "" && r.Protect.Rule.Pattern != r.Protect.Pattern:
 			return fmt.Sprintf("protect.rule.pattern: %q is not the change's pattern %q",
 				r.Protect.Rule.Pattern, r.Protect.Pattern)
+		case r.Protect.Rule != nil && r.Protect.Rule.Gate != nil:
+			// ONE WAY TO SAY A GATE: as a change the decide resolves, never
+			// whole — a whole gate is one its caller could form only from a
+			// read made in another transaction ([GateChange]).
+			return "protect.rule.gate: a request changes the rule's merge gate through protect.gate, which " +
+				"the decide resolves against the gate the repository holds, and carries none whole"
 		}
 		// THE RULE IS HELD HERE TO WHAT A RECORD MAY CARRY, before any
 		// decide: left to the settings a decide forms, a rule no record may
 		// carry was refused naming its index among the repository's stored
 		// rules rather than the field its caller sent, and only once the
 		// request had been judged — a seat that may not protect the
-		// repository was told so of a request no node could decide.
+		// repository was told so of a request no node could decide. So is
+		// each field a gate change names: only the resolved gate's whole
+		// weight waits for the decide, which alone reads what it keeps.
 		if r.Protect.Rule != nil {
 			rule := *r.Protect.Rule
 			rule.Pattern = r.Protect.Pattern
 			if why := rule.invalid(); why != "" {
 				return "protect.rule." + why
+			}
+		}
+		if g := r.Protect.Gate; g != nil {
+			switch {
+			case r.Protect.Rule == nil:
+				return "protect.gate: a request removing the pattern's rule takes its gate with it, and " +
+					"changes none"
+			case strings.HasPrefix(r.Protect.Pattern, "refs/tags/"):
+				return fmt.Sprintf("protect.gate: a tag never moves, so no merge reaches %s and a merge gate "+
+					"has nothing to hold", r.Protect.Pattern)
+			}
+			switch field, why := g.invalid(); {
+			case why == "":
+			case field == "":
+				return "protect.gate: " + why
+			default:
+				return "protect.gate." + field + ": " + why
 			}
 		}
 	case LifecycleDelete:
@@ -570,9 +628,12 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 
 // lifecycleRefusal is whether actor may ask req of a repository — repo as it
 // stands for every kind but a create, and next as the request would leave it
-// (a create's new repository, or a settings change's result; the zero RepoRef
-// where the kind leaves the repository's grant as it is) — reading the chart
-// roster, and the sentence why not. THE ONE JUDGEMENT of who may, every kind's:
+// (a create's new repository, a settings change's result, or a protect
+// request's rules with its change resolved; the zero RepoRef where the kind
+// leaves the repository's grant as it is), owners the repository's path
+// owners as the decide's snapshot read them (nil where the kind reads none) —
+// reading the chart roster, and the sentence why not. THE ONE JUDGEMENT of who
+// may, every kind's:
 //
 //   - a BOUND PERSON maintains every tool-made repository, and creates a
 //     PROJECT for any owner the chart holds — never a scratch repository,
@@ -598,7 +659,12 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 //     requests cannot loosen a rule between them. With maintain alone
 //     deciding, a lead steered by what it read could lift main's protection
 //     and then force it: the protections would bind every seat but the one
-//     with the most reach. Only a person loosens one.
+//     with the most reach. Only a person loosens one — and so only a person
+//     TAKES A GLOB FROM A PATH OWNER where a rule's merge gate sets
+//     owners_approve ([gatingOwnersTaken]): there the path owners are whom a
+//     merge waits for, so a glob taken from one, or an owner taken whole, lets
+//     a merge past the approval it needed, as loosening the gate itself would.
+//     A seat still gives a path owner globs, which only asks a merge for more.
 //
 // A NAME OF THE OTHER KIND'S FORM is refused for every actor, a person's
 // included: renamed to <handle>.<slug>, a project would read as that seat's
@@ -611,7 +677,8 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 // a unit or a seat the chart lacks is nobody to ask. Naming one grants nothing
 // ([PathOwner]), so a seat that maintains the repository may name any the
 // chart holds — the same review it could request by name.
-func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, roster Roster) (bool, string) {
+func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, owners []PathOwner, roster Roster) (bool,
+	string) {
 	actor := req.Actor
 	if req.Kind == LifecycleRename {
 		if why := renameForm(repo, req.Name); why != "" {
@@ -666,12 +733,21 @@ func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, roster Roster) (
 		return true, maintainRefusal(g, string(req.Kind)+" "+repo.Name)
 	}
 	// A PROTECTION BINDS EVERY SEAT: maintain lets a seat add a rule or
-	// tighten one, and loosening one is a person's.
-	if req.Kind == LifecycleProtect {
-		if opens := loosenings(repo.Protections, *req.Protect); len(opens) > 0 {
+	// tighten one, and loosening one is a person's — the gate's path owners
+	// included, where it makes them gating.
+	switch req.Kind {
+	case LifecycleProtect:
+		if opens := loosenings(repo.Protections, next.Protections, req.Protect.Pattern); len(opens) > 0 {
 			return true, fmt.Sprintf("only a person may remove or loosen the protection on %s, and this "+
 				"change %s; a seat, its unit's lead included, may add a rule or tighten one",
 				req.Protect.Pattern, strings.Join(opens, " and "))
+		}
+	case LifecycleSettings:
+		if gating, taken := gatingOwnersTaken(repo.Protections, owners, req.Change.PathOwners); len(taken) > 0 {
+			return true, fmt.Sprintf("only a person may take a glob from a path owner of %s, whose path "+
+				"owners gate its merges where %s owners_approve — a merge waits for an approval eligible "+
+				"for every owned glob it touches — and this change takes path_owners' %s; a seat, its unit's "+
+				"lead included, may give a path owner globs", repo.Name, gating, listed(taken))
 		}
 	}
 	// AS THE CHANGE LEAVES IT TOO: a seat cannot hand a repository to an
@@ -911,7 +987,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 				}
 				return statelog.Decision{}, err
 			}
-			if refused, why := lifecycleRefusal(req, RepoRef{}, made, roster); refused {
+			if refused, why := lifecycleRefusal(req, RepoRef{}, made, nil, roster); refused {
 				d.refuse(LifecycleNotPermitted, "%s", why)
 				return statelog.Decision{}, nil
 			}
@@ -1024,7 +1100,7 @@ func (s *Store) lifecycleRename(ctx context.Context, req LifecycleRequest, roste
 			if refusal := toolRepoRefusal(v.ref, &d); refusal {
 				return statelog.Decision{}, nil
 			}
-			if refused, why := lifecycleRefusal(req, v.ref, RepoRef{}, roster); refused {
+			if refused, why := lifecycleRefusal(req, v.ref, RepoRef{}, nil, roster); refused {
 				d.refuse(LifecycleNotPermitted, "%s", why)
 				return statelog.Decision{}, nil
 			}
@@ -1184,9 +1260,23 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, owners []PathOwner
 				"its seat's own", v.Name)
 			return nil, "", nil
 		}
-		next.Protections = protected(next.Protections, *req.Protect)
+		// RESOLVED AGAINST THE ROWS THIS DECIDE READ: the rule's gate is the
+		// one this snapshot holds for the pattern with the change's fields put
+		// in it, so another request's change to another field meanwhile is
+		// kept, and the loosening judged is the one the record would make.
+		rule := req.Protect.rule(v.Protections)
+		if rule != nil {
+			// ITS WHOLE WEIGHT HERE, naming the field its caller sent: the
+			// request's own validation held each field the change names to
+			// what a record may carry, and only this decide reads what it kept.
+			if why := rule.invalid(); why != "" {
+				return nil, "", fmt.Errorf("%w: protect.%s", ErrInvalid, why)
+			}
+		}
+		next.Protections = protected(next.Protections, req.Protect.Pattern, rule)
+		nextRef.Protections = next.Protections
 	}
-	if refused, why := lifecycleRefusal(req, v, nextRef, roster); refused {
+	if refused, why := lifecycleRefusal(req, v, nextRef, owners, roster); refused {
 		d.refuse(LifecycleNotPermitted, "%s", why)
 		return nil, "", nil
 	}
@@ -1229,7 +1319,7 @@ func decideHold(req LifecycleRequest, v RepoRef, roster Roster, d *lifecycleDeci
 			DeletedAt: v.DeletedAt, ManagedBy: v.ManagedBy}.Detail())
 		return nil, "", nil
 	}
-	if refused, why := lifecycleRefusal(req, v, RepoRef{}, roster); refused {
+	if refused, why := lifecycleRefusal(req, v, RepoRef{}, nil, roster); refused {
 		d.refuse(LifecycleNotPermitted, "%s", why)
 		return nil, "", nil
 	}
@@ -1272,23 +1362,22 @@ func (s *Store) goneOrMissing(ctx context.Context, tx *sql.Tx, id string, d *lif
 	return nil
 }
 
-// protected is rules with change applied: the pattern's rule replaced or
-// removed, sorted by pattern and unique — the canonical order every record
+// protected is rules with pattern's rule replaced by rule, or removed where
+// rule is nil — sorted by pattern and unique, the canonical order every record
 // carries.
-func protected(rules []Protection, change ProtectChange) []Protection {
-	out := slices.DeleteFunc(slices.Clone(rules), func(p Protection) bool { return p.Pattern == change.Pattern })
-	if change.Rule != nil {
-		rule := *change.Rule
-		rule.Pattern = change.Pattern
-		out = append(out, rule)
+func protected(rules []Protection, pattern string, rule *Protection) []Protection {
+	out := slices.DeleteFunc(slices.Clone(rules), func(p Protection) bool { return p.Pattern == pattern })
+	if rule != nil {
+		out = append(out, *rule)
 	}
 	slices.SortFunc(out, func(a, b Protection) int { return strings.Compare(a.Pattern, b.Pattern) })
 	return out
 }
 
-// loosenings is every way change LOOSENS the protection rules hold for its
-// pattern — lets through a push, or a merge, that rule refuses — each as the
-// phrase a refusal names it by; nil where the change loosens nothing.
+// loosenings is every way next — the rules a protect request leaves, its
+// change resolved — LOOSENS the rule rules hold for pattern: lets through a
+// push, or a merge, that rule refuses. Each is the phrase a refusal names it
+// by; nil where the change loosens nothing.
 //
 // A PATTERN NO RULE HOLDS loosens nothing, whatever the change: every rule
 // that matches a ref holds ([ProtectionRefusal]), so a rule added only
@@ -1305,29 +1394,33 @@ func protected(rules []Protection, change ProtectChange) []Protection {
 //     it, whoever asks), so what this guards is a rule the rows hold, which a
 //     seat may tighten to none and never move elsewhere.
 //   - allow_force and allow_delete loosen when they are turned on.
-//   - the merge gate ([MergeGate]) is ONE control here, judged whole: added
-//     where the rule had none, it only holds a merge to more, and removed, it
-//     loosens. ALTERED, it loosens too — FAIL CLOSED, as an unknown
-//     direct_push does: whether an altered gate holds a merge to more or to
-//     less is a judgement of its fields one by one, and none of them is
-//     weighed here, so a seat adds a gate and a person alters or removes one.
-//     Compared by value ([MergeGate.Equal], which reads every field), never by
-//     pointer: two reads of one gate are two pointers, and a request carrying
-//     the rule's gate as it stands alters nothing of it.
+//   - the merge gate ([MergeGate]) loosens REMOVED, and changed it loosens by
+//     each of its fields the change opens ([MergeGate.LoosenedBy], field by
+//     field), so a seat tightens a gate and only a person loosens one. Added
+//     where the rule had none, it only holds a merge to more: a gateless rule
+//     lets anybody who may write merge, with no approval and no check, which
+//     every gate holds a merge to at the least.
 //
 // A field a later milestone adds to [Protection] is a control too, judged
 // here the same way: TestEveryProtectionControlIsJudged holds this function
 // to the struct's own fields and to every pair of direct_push values, so a
 // control or a value nobody judged cannot arrive unseen.
-func loosenings(rules []Protection, change ProtectChange) []string {
-	i := slices.IndexFunc(rules, func(p Protection) bool { return p.Pattern == change.Pattern })
-	switch {
-	case i < 0:
+func loosenings(rules, next []Protection, pattern string) []string {
+	find := func(list []Protection) (Protection, bool) {
+		i := slices.IndexFunc(list, func(p Protection) bool { return p.Pattern == pattern })
+		if i < 0 {
+			return Protection{}, false
+		}
+		return list[i], true
+	}
+	from, held := find(rules)
+	if !held {
 		return nil
-	case change.Rule == nil:
+	}
+	to, kept := find(next)
+	if !kept {
 		return []string{"removes its rule"}
 	}
-	from, to := rules[i], *change.Rule
 	var opens []string
 	if to.DirectPush != from.DirectPush && to.DirectPush != DirectNone {
 		opens = append(opens, fmt.Sprintf("makes direct_push %s where it was %s", to.DirectPush,
@@ -1343,10 +1436,51 @@ func loosenings(rules []Protection, change ProtectChange) []string {
 	case from.Gate == nil:
 	case to.Gate == nil:
 		opens = append(opens, "removes its merge gate")
-	case !from.Gate.Equal(*to.Gate):
-		opens = append(opens, "alters its merge gate (a seat may add a gate, never alter one)")
+	default:
+		opens = append(opens, to.Gate.LoosenedBy(*from.Gate)...)
 	}
 	return opens
+}
+
+// gatingOwnersTaken is, where a rule of rules sets owners_approve on its merge
+// gate — which makes the repository's path owners whom a merge waits for —
+// those rules as a sentence names them and every glob change takes from a
+// path owner held holds it for, "deploy/** from unit eng", in held's order;
+// two empty values where no rule sets it, or the change takes nothing. What it
+// takes is judged by what it DOES to held ([PathOwnersChange.applyTo]), the
+// one resolution the record carries: a glob an owner does not hold is taken
+// as nothing, and an owner left with none is no path owner any more, every
+// glob it held taken.
+func gatingOwnersTaken(rules []Protection, held []PathOwner, change *PathOwnersChange) (string, []string) {
+	if change == nil {
+		return "", nil
+	}
+	var gating []string
+	for _, p := range rules {
+		if p.Gate != nil && p.Gate.OwnersApprove {
+			gating = append(gating, p.Pattern)
+		}
+	}
+	if len(gating) == 0 {
+		return "", nil
+	}
+	after := change.applyTo(held)
+	var taken []string
+	for _, po := range held {
+		i := slices.IndexFunc(after, func(a PathOwner) bool { return a.Owner == po.Owner })
+		for _, glob := range po.Paths {
+			if i < 0 || !slices.Contains(after[i].Paths, glob) {
+				taken = append(taken, glob+" from "+ownerWords(po.Owner))
+			}
+		}
+	}
+	if len(taken) == 0 {
+		return "", nil
+	}
+	if len(gating) == 1 {
+		return "the merge gate of " + gating[0] + " sets", taken
+	}
+	return "the merge gates of " + listed(gating) + " set", taken
 }
 
 // lifecycleAnswer is a lifecycle request's answer from its publish: the

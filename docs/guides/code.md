@@ -267,7 +267,7 @@ status and the node's log keeps the reason. The ones a person meets most:
 | `repository "<name>" not found` | Check the name in `code.repos`. |
 | `this token is not bound to a person` | Push with a token that acts as your seat — your own machine token (`crewlet iam token -login`, or the dashboard's Account page). |
 | `(stale: refs/heads/main is at <id>; fetch first)` | Fetch, integrate, push again. |
-| `(protected_force: …)`, `(protected_delete: …)`, `(protected_direct: …)` | The rule named says what it allows; a change to it is a change to `code.repos`. |
+| `(protected_force: …)`, `(protected_delete: …)`, `(protected_direct: …)` | The rule named says what it allows; a change to it is a change to `code.repos` for a declared repository, and a person's `code_protect_branch` for one a tool made ([Who may change a protection](../concepts/code-host.md#who-may-change-a-protection)). |
 | `(ref_conflict: refs/heads/feature is in the way: …)` | A branch and a directory of branches never share a name (`feature` beside `feature/x`). Delete the one in the way in the same push — `git push origin :feature HEAD:feature/x` — or choose another name; a clone holding the old one fetches with `git fetch --prune`. |
 | `(pending: durable at <position>, …)` | The push is recorded and was not applied on the node that answered within a minute. Run the same `git push` again: if it landed, git says `Everything up-to-date`. |
 | `(unknown: outcome unknown (op …); …)` | The answer was lost — it may or may not have landed. Fetch, then push again. |

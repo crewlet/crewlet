@@ -66,6 +66,30 @@ func lcProtect(actor code.Principal, id, pattern string, rule *code.Protection) 
 	return req
 }
 
+// lcGate sets pattern's rule on the repository id, its merge gate changed by
+// gate.
+func lcGate(actor code.Principal, id, pattern string, rule *code.Protection,
+	gate code.GateChange) code.LifecycleRequest {
+
+	req := lcProtect(actor, id, pattern, rule)
+	req.Protect.Gate = &gate
+	return req
+}
+
+// gateTo is the change that leaves a rule's gate g, whatever it held: every
+// field named.
+func gateTo(g code.MergeGate) code.GateChange {
+	return code.GateChange{MergeBy: ptr(g.MergeBy), Approvals: ptr(g.Approvals),
+		ApprovalsUnless: ptr(g.ApprovalsUnless), HumanPaths: ptr(g.HumanPaths), Checks: ptr(g.Checks),
+		Landing: &code.LandingChange{Policy: ptr(g.Landing.Policy), Depth: ptr(g.Landing.Depth),
+			Batch: ptr(g.Landing.Batch)},
+		OwnersApprove: ptr(g.OwnersApprove), DeleteSource: ptr(g.DeleteSource), AutoRevert: ptr(g.AutoRevert),
+		AgentsEditChecks: ptr(g.AgentsEditChecks)}
+}
+
+// ptr is a pointer to v: a field a change names.
+func ptr[T any](v T) *T { return &v }
+
 // lcHold is a live turn's hold on the repository id, decided at the read seen.
 func lcHold(actor code.Principal, id, turn string, seen statelog.Position) code.LifecycleRequest {
 	req := lcOn(code.LifecycleHold, actor, id)
@@ -398,48 +422,63 @@ func TestAProtectionChangeIsResolvedInsideTheDecide(t *testing.T) {
 
 // A PROTECT REQUEST IS REFUSED A RULE NO RECORD MAY CARRY at its own
 // validation, naming the field its caller sent — a direct_push this build does
-// not know, unset among them, allow_force or a merge gate on a tag, and a gate
-// a record may not carry — for whoever asks and before any decide judges who
-// may: a person, the unit's lead and a member that may not protect the
-// repository are all told the one thing, and nothing is written. A rule a
-// record may carry passes, a branch rule's gate included.
+// not know, unset among them, allow_force on a tag, a rule carrying a gate
+// whole rather than the change the decide resolves, and a gate change no rule
+// could take: on a tag, beside the rule's removal, naming nothing, removing the
+// gate and naming a field, or naming a field a record may not carry — for
+// whoever asks and before any decide judges who may: a person, the unit's lead
+// and a member that may not protect the repository are all told the one
+// thing, and nothing is written. A rule a record may carry passes, a branch
+// rule's gate change included.
 //
-// Mutation: drop the rule's check from the request's validation — the
-// decide's settings refuse it naming protections[0], and the member is
-// answered not_permitted, red.
+// Mutation: drop the gate change's check from the request's validation — the
+// change naming nothing reaches the decide, resolves to the default gate and
+// lands, red.
 func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
 	n.chart = testChart()
 	id := n.made(lcPerson, "ruled", unitOwned("eng"))
 	end := n.end()
-	gate, unknownMerger := aGate(), aGate()
-	unknownMerger.MergeBy = "everyone"
+	gate := aGate()
+	const main, tags = "refs/heads/main", "refs/tags/v*"
 	for _, tc := range []struct {
 		pattern string
-		rule    code.Protection
+		rule    *code.Protection
+		gate    *code.GateChange
 		field   string
 	}{
-		{"refs/heads/main", code.Protection{}, "protect.rule.direct_push"},
-		{"refs/heads/main", code.Protection{DirectPush: "maintainers"}, "protect.rule.direct_push"},
-		{"refs/tags/v*", code.Protection{DirectPush: code.DirectPersons, AllowForce: true}, "protect.rule.allow_force"},
-		{"refs/tags/v*", code.Protection{DirectPush: code.DirectPersons, Gate: &gate}, "protect.rule.gate"},
-		{"refs/heads/main", code.Protection{DirectPush: code.DirectPersons, Gate: &unknownMerger},
-			"protect.rule.gate.merge_by"},
+		{main, &code.Protection{}, nil, "protect.rule.direct_push"},
+		{main, &code.Protection{DirectPush: "maintainers"}, nil, "protect.rule.direct_push"},
+		{tags, &code.Protection{DirectPush: code.DirectPersons, AllowForce: true}, nil, "protect.rule.allow_force"},
+		{main, &code.Protection{DirectPush: code.DirectPersons, Gate: &gate}, nil, "protect.rule.gate"},
+		{tags, persons, &code.GateChange{Checks: ptr([]string{"unit"})}, "protect.gate"},
+		{main, nil, &code.GateChange{Checks: ptr([]string{"unit"})}, "protect.gate"},
+		{main, persons, &code.GateChange{}, "protect.gate"},
+		{main, persons, &code.GateChange{Remove: true, Checks: ptr([]string{"unit"})}, "protect.gate.remove"},
+		{main, persons, &code.GateChange{MergeBy: ptr(code.MergeBy("everyone"))}, "protect.gate.merge_by"},
+		{main, persons, &code.GateChange{ApprovalsUnless: ptr([]code.ChangeClass{code.ChangeClassNoCodeChange})},
+			"protect.gate.approvals_unless[0]"},
+		{main, persons, &code.GateChange{Checks: ptr([]string{"unit", "unit"})}, "protect.gate.checks[1]"},
+		{main, persons, &code.GateChange{Landing: &code.LandingChange{Depth: ptr(code.MaxQueueDepth + 1)}},
+			"protect.gate.landing.depth"},
+		{main, persons, &code.GateChange{Landing: &code.LandingChange{}}, "protect.gate.landing"},
 	} {
 		for _, actor := range []code.Principal{lcPerson, agent("cto"), agent("dev")} {
-			_, err := n.store.Lifecycle(t.Context(), lcProtect(actor, id, tc.pattern, &tc.rule))
+			req := lcProtect(actor, id, tc.pattern, tc.rule)
+			req.Protect.Gate = tc.gate
+			_, err := n.store.Lifecycle(t.Context(), req)
 			if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), tc.field+":") {
-				t.Errorf("%s protecting %s with %+v = %v, want ErrInvalid naming %s", cmp.Or(actor.Seat,
-					actor.OperatorID), tc.pattern, tc.rule, err, tc.field)
+				t.Errorf("%s protecting %s with %+v and the gate change %+v = %v, want ErrInvalid naming %s",
+					cmp.Or(actor.Seat, actor.OperatorID), tc.pattern, tc.rule, tc.gate, err, tc.field)
 			}
 		}
 	}
 	if got := n.end(); got != end {
 		t.Fatalf("the refused rules wrote %d records", got-end)
 	}
-	n.lands(lcProtect(lcPerson, id, "refs/tags/v*", &code.Protection{DirectPush: code.DirectPersons}))
-	n.lands(lcProtect(lcPerson, id, "refs/heads/main", &code.Protection{DirectPush: code.DirectPersons, Gate: &gate}))
+	n.lands(lcProtect(lcPerson, id, tags, persons))
+	n.lands(lcGate(lcPerson, id, main, persons, gateTo(gate)))
 }
 
 // A PROTECTION BINDS EVERY SEAT, ITS UNIT'S LEAD INCLUDED (ADR-0058): a seat
@@ -448,14 +487,15 @@ func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 // control is judged against the rule the repository's rows hold for the
 // pattern, inside the decide: direct_push made to admit more (none → persons),
 // allow_force or allow_delete turned on, the rule's merge gate removed or
-// altered, and the rule removed are each refused not_permitted with the
+// lowered, and the rule removed are each refused not_permitted with the
 // sentence naming what the change opens, and nothing is written; a change that
 // tightens one control and opens another is refused for the one it opens, and
 // only that one is named. A pattern no rule holds loosens nothing, so the lead
 // adds a rule, and removing one nobody holds is answered from the row; a gate
 // added to a rule that had none only holds merges to more, so the lead adds
-// one, and sends it back as it stands beside a tightening. A person's same
-// requests land.
+// one, sends it back as it stands, and tightens direct_push beside it with a
+// request naming no gate field, which keeps the gate. A person's same requests
+// land. (A gate's every field is TestAnAgentCannotLoosenAGate's.)
 //
 // Mutations: drop the protect branch of lifecycleRefusal — the lead's removal
 // lands, red; drop allow_delete's clause from loosenings — the lead turns it
@@ -471,11 +511,8 @@ func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 	rule := func(direct code.DirectPush, force, del bool) *code.Protection {
 		return &code.Protection{DirectPush: direct, AllowForce: force, AllowDelete: del}
 	}
-	gated := func(direct code.DirectPush, gate code.MergeGate) *code.Protection {
-		return &code.Protection{DirectPush: direct, Gate: &gate}
-	}
-	gate, lowered := aGate(), aGate()
-	lowered.MergeBy = code.MergeByWriters
+	gate := aGate()
+	lowered := code.GateChange{MergeBy: ptr(code.MergeByWriters)}
 	id := n.made(lcPerson, "guarded", unitOwned("eng"))
 
 	// ADDED, then TIGHTENED control by control, by the unit's lead at
@@ -489,11 +526,12 @@ func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 		t.Fatalf("added and tightened by the lead, the rules read %+v, want %+v", got.Repo.Protections, want)
 	}
 	n.lands(lcProtect(cto, id, release, rule(code.DirectPersons, true, false)))
-	// A MERGE GATE ADDED where the rule had none, and then sent back as it
-	// stands beside a tightening of direct_push: each lands.
+	// A MERGE GATE ADDED where the rule had none, sent back as it stands, and
+	// kept by a tightening of direct_push that names no gate field: each lands.
 	n.lands(lcProtect(cto, id, stable, rule(code.DirectPersons, false, false)))
-	n.lands(lcProtect(cto, id, stable, gated(code.DirectPersons, gate)))
-	got = n.lands(lcProtect(cto, id, stable, gated(code.DirectNone, gate)))
+	n.lands(lcGate(cto, id, stable, rule(code.DirectPersons, false, false), gateTo(gate)))
+	n.lands(lcGate(cto, id, stable, rule(code.DirectPersons, false, false), gateTo(gate)))
+	got = n.lands(lcProtect(cto, id, stable, rule(code.DirectNone, false, false)))
 	if want := (code.Protection{Pattern: stable, DirectPush: code.DirectNone, Gate: &gate}); !slices.ContainsFunc(
 		got.Repo.Protections, want.Equal) {
 		t.Fatalf("gated and tightened by the lead, the rules read %+v, want %+v among them", got.Repo.Protections,
@@ -506,21 +544,27 @@ func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 	for _, tc := range []struct {
 		pattern string
 		rule    *code.Protection
+		gate    *code.GateChange
 		opens   string
 		// keeps is what the change tightens or leaves, never named.
 		keeps []string
 	}{
-		{main, nil, "removes its rule", nil},
-		{main, rule(code.DirectPersons, false, false), "makes direct_push persons where it was none", nil},
-		{main, rule(code.DirectNone, true, false), "turns allow_force on", nil},
-		{main, rule(code.DirectNone, false, true), "turns allow_delete on", nil},
+		{main, nil, nil, "removes its rule", nil},
+		{main, rule(code.DirectPersons, false, false), nil, "makes direct_push persons where it was none", nil},
+		{main, rule(code.DirectNone, true, false), nil, "turns allow_force on", nil},
+		{main, rule(code.DirectNone, false, true), nil, "turns allow_delete on", nil},
 		// TIGHTENS direct_push and allow_force, and OPENS allow_delete.
-		{release, rule(code.DirectNone, false, true), "turns allow_delete on", []string{"direct_push", "allow_force"}},
-		// THE GATE, removed and altered.
-		{stable, rule(code.DirectNone, false, false), "removes its merge gate", []string{"direct_push"}},
-		{stable, gated(code.DirectNone, lowered), "alters its merge gate", []string{"direct_push"}},
+		{release, rule(code.DirectNone, false, true), nil, "turns allow_delete on",
+			[]string{"direct_push", "allow_force"}},
+		// THE GATE, removed and lowered.
+		{stable, rule(code.DirectNone, false, false), &code.GateChange{Remove: true}, "removes its merge gate",
+			[]string{"direct_push"}},
+		{stable, rule(code.DirectNone, false, false), &lowered, "lowers merge_by from maintainers to writers",
+			[]string{"direct_push"}},
 	} {
-		res := n.life(lcProtect(cto, id, tc.pattern, tc.rule))
+		req := lcProtect(cto, id, tc.pattern, tc.rule)
+		req.Protect.Gate = tc.gate
+		res := n.life(req)
 		switch {
 		case res.Refusal != code.LifecycleNotPermitted:
 			t.Errorf("the lead's change of %s that %s: %+v, want not_permitted", tc.pattern, tc.opens, res)
@@ -552,8 +596,8 @@ func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 	n.lands(lcProtect(lcPerson, id, main, rule(code.DirectPersons, true, false)))
 	n.lands(lcProtect(lcPerson, id, main, rule(code.DirectPersons, true, true)))
 	n.lands(lcProtect(lcPerson, id, release, rule(code.DirectNone, false, true)))
-	n.lands(lcProtect(lcPerson, id, stable, gated(code.DirectNone, lowered)))
-	n.lands(lcProtect(lcPerson, id, stable, rule(code.DirectNone, false, false)))
+	n.lands(lcGate(lcPerson, id, stable, rule(code.DirectNone, false, false), lowered))
+	n.lands(lcGate(lcPerson, id, stable, rule(code.DirectNone, false, false), code.GateChange{Remove: true}))
 	got = n.lands(lcProtect(lcPerson, id, main, nil))
 	if want := []code.Protection{{Pattern: release, DirectPush: code.DirectNone, AllowDelete: true},
 		{Pattern: stable, DirectPush: code.DirectNone}}; !slices.EqualFunc(got.Repo.Protections, want,

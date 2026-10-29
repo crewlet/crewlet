@@ -832,6 +832,15 @@
 // gates at every round, inside the snapshot that holds a reader connection,
 // would buy that decide nothing.
 //
+// A TOOL CHANGES A GATE A FIELD AT A TIME ([GateChange]): a protect request
+// names the fields it replaces, and the lifecycle decide puts them in the gate
+// its own snapshot holds for the pattern, every other field kept — or
+// defaulted, on a rule with none — since a gate whole is one a caller could
+// form only from a read made elsewhere, and two requests changing two fields
+// at once would each undo the other's. A seat's change is weighed field by
+// field ([MergeGate.LoosenedBy]): it raises a field and only a person lowers
+// one.
+//
 // # What this package does not do
 //
 // It runs no git and serves no HTTP. It decides and applies records, commits

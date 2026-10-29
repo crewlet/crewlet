@@ -7,7 +7,9 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -399,6 +401,113 @@ func TestAProtectionWithNoDirectPushIsAPersonsRule(t *testing.T) {
 		len(after) != len(before) {
 		t.Errorf("a direct_push the domain does not know answered %q as %s, with %d requests sent", got.Output,
 			tools.RefusalOf(got), len(after)-len(before))
+	}
+}
+
+// A PROTECTION CHANGES ITS MERGE GATE A FIELD AT A TIME: code_protect_branch
+// sends each gate field a call names as a change the deciding data node
+// resolves against the gate its own rows hold — decoded by the domain's own
+// spelling of a change, so the schema takes every field a change names — no
+// change where the call names no gate field, and the gate's removal where it
+// says remove_gate. A field no change could take — a value the domain does
+// not know, a field the landing lacks, a gate on a tag, remove_gate beside a
+// field or a field beside the rule's removal — is refused invalid with nothing
+// sent. The answer names the rule as it applied, its gate whole, and no other
+// rule of the repository: a repository's rules whole could outgrow one answer.
+//
+// Mutation: send the call's gate fields as a whole gate — every field named,
+// the rest defaulted — and the sent change names more than the call did, red.
+func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
+	t.Parallel()
+	gate := code.MergeGate{MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
+		Checks: []string{"lint", "unit"}, Landing: code.Landing{Policy: code.LandingPreLand, Depth: 2, Batch: 4},
+		DeleteSource: code.DeleteSeats}
+	writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
+		repo := siteDetail().RepoRef
+		repo.Protections = []code.Protection{
+			{Pattern: "refs/heads/main", DirectPush: code.DirectNone, Gate: &gate},
+			{Pattern: "refs/heads/release/*", DirectPush: code.DirectPersons},
+		}
+		return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
+	}}
+	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
+	turn := writerTurn(t)
+	entry, ok := reg.Lookup(builtin.CodeProtectBranchTool)
+	if !ok {
+		t.Fatalf("%s is not registered", builtin.CodeProtectBranchTool)
+	}
+	props, _ := entry.Tool.Parameters()["properties"].(map[string]any)
+	for _, field := range append(code.GateChangeFields(), "remove_gate") {
+		if _, ok := props[field]; !ok {
+			t.Errorf("%s's schema takes no %s", builtin.CodeProtectBranchTool, field)
+		}
+	}
+	sent := func() *code.ProtectChange {
+		t.Helper()
+		_, lifecycles := writer.asked()
+		if len(lifecycles) == 0 {
+			t.Fatal("nothing was sent")
+		}
+		return lifecycles[len(lifecycles)-1].Protect
+	}
+
+	got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, map[string]any{
+		"repo": "site", "pattern": "refs/heads/main", "direct_push": "none", "merge_by": "persons",
+		"checks": []any{"unit", "lint"}, "landing": map[string]any{"depth": 2}, "owners_approve": false,
+	})
+	if got.Failed {
+		t.Fatalf("a protection changing four gate fields answered %q", got.Output)
+	}
+	persons, depth, off := code.MergeByPersons, 2, false
+	want := &code.GateChange{MergeBy: &persons, Checks: &[]string{"unit", "lint"},
+		Landing: &code.LandingChange{Depth: &depth}, OwnersApprove: &off}
+	if change := sent(); change == nil || !reflect.DeepEqual(change.Gate, want) ||
+		change.Rule == nil || change.Rule.DirectPush != code.DirectNone {
+		t.Errorf("a protection changing four gate fields sent %+v, want direct_push none and the change %+v",
+			change, want)
+	}
+	var answer struct {
+		Repository map[string]any   `json:"repository"`
+		Rule       *code.Protection `json:"rule"`
+	}
+	if err := json.Unmarshal([]byte(got.Output), &answer); err != nil {
+		t.Fatalf("the answer %q: %v", got.Output, err)
+	}
+	switch {
+	case answer.Rule == nil || answer.Rule.Pattern != "refs/heads/main" || answer.Rule.Gate == nil ||
+		!answer.Rule.Gate.Equal(gate):
+		t.Errorf("the answer names the rule %+v, want main's as it applied, its gate whole", answer.Rule)
+	case answer.Repository["protections"] != nil || strings.Contains(got.Output, "release/*"):
+		t.Errorf("the answer %q names the repository's other rules", got.Output)
+	}
+
+	// NAMING NO GATE FIELD sends no change; remove_gate sends the removal.
+	if callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, map[string]any{"repo": "site",
+		"pattern": "refs/heads/main", "direct_push": "none"}).Failed || sent().Gate != nil {
+		t.Errorf("a protection naming no gate field sent the gate change %+v, want none", sent().Gate)
+	}
+	if callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, map[string]any{"repo": "site",
+		"pattern": "refs/heads/main", "remove_gate": true}).Failed ||
+		!reflect.DeepEqual(sent().Gate, &code.GateChange{Remove: true}) {
+		t.Errorf("a protection removing its gate sent the gate change %+v, want its removal", sent().Gate)
+	}
+
+	for name, args := range map[string]map[string]any{
+		"an unknown merge_by":              {"merge_by": "everyone"},
+		"a field the landing lacks":        {"landing": map[string]any{"speed": 2}},
+		"a gate on a tag":                  {"pattern": "refs/tags/v*", "checks": []any{"unit"}},
+		"remove_gate beside a field":       {"remove_gate": true, "checks": []any{"unit"}},
+		"a gate beside the rule's removal": {"remove": true, "checks": []any{"unit"}},
+	} {
+		call := map[string]any{"repo": "site", "pattern": "refs/heads/main"}
+		maps.Copy(call, args)
+		_, before := writer.asked()
+		got := callWrite(t, everyGrant(), reg, turn, builtin.CodeProtectBranchTool, call)
+		if _, after := writer.asked(); !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid ||
+			len(after) != len(before) {
+			t.Errorf("%s answered %q as %s, with %d requests sent", name, got.Output, tools.RefusalOf(got),
+				len(after)-len(before))
+		}
 	}
 }
 

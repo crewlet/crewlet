@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/code`
-- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, and the code host fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
+- **Enforced-by:** `internal/code.TestGrantsFollowTheChart`, `internal/code.TestAPersonsGrantAsksNoRoster`, `internal/code.TestRefRuleTable`, `internal/code.TestASeatsNamespaceIsUnderTheSeatsRoot`, `internal/gitref.TestOnlyTheRootAndASeatsNamespaceAreReservedBranches`, `internal/config.TestRoleCodeAccessIsTheOneVocabulary`, `internal/code/host.TestAnUnboundTokenCannotPush`, `internal/code/query.TestAUnitRepositoryRefusesASeatOutsideIt`, `internal/estate.TestANodeBehindTheConfigurationDecidesNoGrant`, `internal/estate.TestEveryOperationThatJudgesAGrantIsDeclared`, `internal/code/query.TestAGitNodeBehindItsConfigurationServesNoSeat`, `internal/code.TestAReadForAnotherSeatIsHeldToBothGrants`, `internal/code.TestAReadMadeForAColleagueIsHeldToTheColleaguesGrant`, `internal/code/query.TestAReadMadeForASeatIsHeldToThatSeatsGrant`, `internal/agent/builtin.TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn`, `internal/agent/builtin.TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo`, `internal/code.TestTheDecideRefusesWhatTheGrantRefuses`, `internal/code.TestASeatOutsideTheUnitFillsAtMostHalfARepository`, `internal/code.TestACommitterBehindTheConfigurationDecidesNoSeatsPush`, `internal/code.TestAnAgentCannotLoosenAProtection`, `internal/code.TestEveryProtectionControlIsJudged`, `internal/code.TestAnAgentCannotLoosenAGate`, `internal/code.TestAnAgentMayTightenAGate`, `internal/code.TestEveryGateFieldIsJudged`, `internal/code.TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove`, and the code host fleet suite's `ARevokedSeatIsRefusedOnceTheLaggingCommitterSheds`
 - **Measured:** nothing a figure decides: the grant is a pure function of the chart and the repository row
 - **Cost-when-tried:** not tried here. The alternative — access rows per repository — was rejected on paper: a list of who may push is a second chart that drifts from the first the day a seat moves units
 - **Tag-status:** unreleased
@@ -39,11 +39,13 @@ A protection binds every seat, a unit's lead included: removing or loosening one
 maintains a repository a tool made may add a protection rule to it or tighten one; a seat's request that removes
 the rule a pattern holds, or opens any control of it — `direct_push` made to admit more (`none` → `persons`),
 `allow_force` or `allow_delete` turned on, its merge gate removed or loosened, and every control a later field of
-the rule adds — is refused `not_permitted` whatever its grant (`code.loosenings`, which weighs a gate whole, so a
-seat adds a gate to a rule that has none and any alteration of one is taken as a loosening), judged against the
-rule the repository's rows hold for the pattern inside the lifecycle decide's one snapshot, so two requests cannot
-loosen a rule between them. A person's request is unaffected, and a repository `code.repos` declares takes no
-tool's request at all.
+the rule adds — is refused `not_permitted` whatever its grant (`code.loosenings`, which weighs a gate field by
+field through `code.MergeGate.LoosenedBy`, so a seat adds a gate to a rule that has none and raises any field of
+one, and only a person lowers one), judged against the rule the repository's rows hold for the pattern inside the
+lifecycle decide's one snapshot, so two requests cannot loosen a rule between them. Where a rule's gate sets
+`owners_approve`, the repository's path owners are whom a merge waits for, so a seat's settings change that takes a
+glob from one, or an owner whole, is a loosening too (`code.gatingOwnersTaken`). A person's request is unaffected,
+and a repository `code.repos` declares takes no tool's request at all.
 
 A seat's read made inside a turn somebody woke is decided AGAIN for whoever woke it — the requester ceiling
 (`authz.DecideWithin`) on a repository's grant. The tool's own row is asked for the requester first, so a turn a

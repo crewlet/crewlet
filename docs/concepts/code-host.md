@@ -207,8 +207,8 @@ unarchives it brings the warning back.
 A declared repository's rules change only with its declaration. Those of a
 repository a tool made change one pattern at a time through a lifecycle
 request, where a seat may add a rule or tighten one and only a person removes
-or loosens one, a rule's [merge gate](#merge-gates) included ([Repositories
-made by tools](#repositories-made-by-tools)).
+or loosens one, a rule's [merge gate](#merge-gates) included, field by field
+([Who may change a protection](#who-may-change-a-protection)).
 
 ### Merge gates
 
@@ -262,6 +262,11 @@ lists near their bounds at once, or with globs JSON spells long (`&`, `<` and
 the least a merge into **any** protected branch needs: a merge is held to the
 stricter of the floor and the `merge_by` of every rule matching its branch, a
 rule with no gate reading as `writers`.
+
+A repository a tool made takes its gates through `code_protect_branch`, a
+field at a time, each field a call leaves out kept as the branch's gate has it
+— or defaulted as above, on a branch whose rule has none — and only a person
+loosens one ([Who may change a protection](#who-may-change-a-protection)).
 
 A gate is **recorded and answered, and nothing merges by it yet**: every read
 of a repository answers each rule's `gate` (`GET /code/repos/{name}`), and a
@@ -325,6 +330,14 @@ owner a change gives globs to must be one the chart holds, while one it only
 removes them from need not be. A repository's detail answers its path owners
 (`GET /code/repos/{name}`), in their one order: by kind, then reference, each
 one's globs sorted.
+
+Where a rule's [merge gate](#merge-gates) sets `owners_approve`, a merge into
+its branches waits for an approval eligible for every owned glob it touches, so
+the path owners are no longer a review's alone: taking a glob from one, or an
+owner whole, lets a merge past an approval it needed, and that is a person's
+([Who may change a protection](#who-may-change-a-protection)). Giving an owner
+globs only asks a merge for more, and a seat that maintains the repository
+still does it.
 
 ### The reconcile and the activation fence
 
@@ -423,21 +436,11 @@ expiry deletes, while a project owned by a seat never expires and counts only
 against the 10 000 every project in the company shares — so only a person
 makes one. **A protection binds every seat, its unit's lead included**: a
 seat that maintains a repository may add a [protection
-rule](#protection-rules) to it or tighten one — `direct_push` from `persons`
-to `none`, `allow_force` or `allow_delete` turned off — and never remove one
-or loosen one, which is a person's. Removing a pattern's rule, letting
-`persons` push where the rule said `none`, or turning `allow_force` or
-`allow_delete` on is refused `not_permitted` to a seat whatever its grant,
-its sentence naming what the change would open; a change that tightens one
-control and opens another is refused for the one it opens. A rule's [merge
-gate](#merge-gates) is weighed whole: a seat may add one to a rule that has
-none, and removing a gate, or altering any of its fields, is a person's — a
-seat's request that sends the rule's gate back as it stands alters nothing of
-it. The change is weighed against the rule the repository holds for that
-pattern when the request is decided, so two requests cannot loosen a rule
-between them. Otherwise a lead steered by what it read could lift `main`'s
-protection and then force it: the protections would bind every seat but the
-one with the most reach. Everything else is refused
+rule](#protection-rules) to it or tighten one, and never remove one or loosen
+one — its [merge gate](#merge-gates) weighed field by field, and its [path
+owners](#path-owners) too where the gate makes them gating — which is a
+person's ([Who may change a protection](#who-may-change-a-protection)).
+Everything else is refused
 `not_permitted`, with the reason, and nothing is written. Every request reads
 the chart, so a node [behind the company's
 configuration](#who-may-read-and-push) decides none of them and the next data
@@ -473,6 +476,59 @@ stays reserved until its window ends, like every other.
 archived repository is read-only, a deleted one takes no push and keeps its
 refs and packs, restorable as it was until its [purge](#deletion-and-purge),
 and a restore through the tools brings it back.
+
+### Who may change a protection
+
+A repository a tool made changes its [protection rules](#protection-rules) one
+pattern at a time, with `code_protect_branch`. A call sets the rule's push
+controls — `direct_push`, `allow_force` and `allow_delete` — whole, each it
+leaves out taking its least (`persons`, off, off), and changes the branch's
+[merge gate](#merge-gates) **a field at a time**: each gate field it names
+replaces that field, every field it leaves out stays as the gate has it — or
+takes its default, on a branch whose rule has no gate yet — and `remove_gate`
+takes the gate away. The deciding data node puts the change in the gate its
+own rows hold, never a gate the caller read elsewhere, so two calls changing
+two fields of one gate at once both keep theirs; and it refuses a gate the
+change leaves weighing past the 8 KiB a gate may. The call answers the rule as
+it now stands, its gate whole.
+
+**A protection binds every seat, its unit's lead included.** A seat whose
+grant maintains the repository may add a rule or tighten one, and never remove
+or loosen one: that is a person's. A change is weighed against the rule the
+repository holds for its pattern when the request is decided, so two requests
+cannot loosen a rule between them, and one that tightens one control and opens
+another is refused for the one it opens, `not_permitted`, its sentence naming
+what it opens. Otherwise a lead steered by what it read could lift `main`'s
+protection and then force it, or lower its gate and then merge past it: the
+protections would bind every seat but the one with the most reach.
+
+| Control | A seat may | Only a person may |
+|---|---|---|
+| The rule | Add one | Remove one |
+| `direct_push` | Make it `none` | Make it `persons` where it was `none` |
+| `allow_force`, `allow_delete` | Turn either off | Turn either on |
+| The merge gate | Add one to a rule with none | Remove one |
+| `merge_by` | Raise it: `writers`, `maintainers`, `persons` | Lower it |
+| `approvals` | Raise it to `one` | Lower it to `none` |
+| `approvals_unless` | Take a class out | Add a class |
+| `human_paths` | Add a glob, or take a class from one's `unless` | Drop a glob — a broader one put in its place included — or add a class to one's `unless` |
+| `checks` | Require one more | Drop one |
+| `landing.policy` | Move it to `pre_land` | Move it to `post_land` |
+| `owners_approve` | Turn it on | Turn it off |
+| `auto_revert`, `agents_edit_checks` | Turn either off | Turn either on |
+| `landing.depth`, `landing.batch`, `delete_source` | Change them either way: how fast a queue lands and what a merge tidies after it, never what a merge is held to | — |
+
+A value the deciding node's build does not know — one a newer build wrote —
+counts as stricter than every value it knows, so a seat moves `merge_by`,
+`approvals` or `landing.policy` neither away from one nor to one, and
+`direct_push` away from one only to `none`, which admits nobody. And since
+`owners_approve` makes the repository's [path
+owners](#path-owners) whom a merge waits for, a seat may not take a glob from
+a path owner, or remove an owner, while any rule's gate sets it: that settings
+change is refused `not_permitted`, naming `path_owners`, what it takes and the
+rule, while giving an owner globs lands. A person's request is weighed by none
+of this, and a repository `code.repos` declares takes no tool's request at
+all.
 
 ### A scratch repository's idle expiry
 

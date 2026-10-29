@@ -357,7 +357,7 @@ catalogue is recorded as any write is.
 | `code_update_repo` | One change a call: the settings (`description`, `default_branch`, `visibility`, a project's `owner`, a project's `path_owners` — globs added to and taken from one owner at a time), `archived` (read-only, and back), or `rename_to` (the old name redirects to the new one for 30 days) |
 | `code_delete_repo` | A repository deleted, restorable until its purge |
 | `code_restore_repo` | A deleted repository brought back as it was, before its purge |
-| `code_protect_branch` | The protection of one `pattern` (`refs/heads/<glob>`, `refs/tags/<glob>`) set — `direct_push` (`persons`, as when it is left out, or `none`), `allow_force`, `allow_delete` — or taken away (`remove`) |
+| `code_protect_branch` | The protection of one `pattern` (`refs/heads/<glob>`, `refs/tags/<glob>`) set — `direct_push` (`persons`, as when it is left out, or `none`), `allow_force` and `allow_delete`, whole — or taken away (`remove`); and a branch's [merge gate](../concepts/code-host.md#merge-gates) changed a field at a time — `merge_by`, `approvals`, `approvals_unless`, `human_paths`, `checks`, `landing`, `owners_approve`, `delete_source`, `auto_revert`, `agents_edit_checks`, each replacing that field and the rest kept — or taken away (`remove_gate`). It answers the rule as it now stands. A seat tightens a protection and only a person loosens one ([Who may change a protection](../concepts/code-host.md#who-may-change-a-protection)) |
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a

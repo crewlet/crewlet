@@ -603,7 +603,9 @@ func (t *codeRepoWrite) Description() string {
 	case CodeRestoreRepoTool:
 		return "Restore a deleted repository as it was."
 	}
-	return "Set the protection of the branches or tags a pattern names, or take it away (`remove`)."
+	return "Set the protection of the branches or tags a pattern names, or take it away (`remove`). A call " +
+		"sets direct_push, allow_force and allow_delete whole; a merge gate field changes that field alone, " +
+		"the rest of the branch's gate kept (`remove_gate` drops it)."
 }
 
 // ownerShape is how an owner argument is spelled, as the read tools answer
@@ -647,9 +649,45 @@ func (t *codeRepoWrite) Parameters() map[string]any {
 		props["allow_force"] = map[string]any{"type": "boolean"}
 		props["allow_delete"] = map[string]any{"type": "boolean"}
 		props["remove"] = map[string]any{"type": "boolean"}
+		gateParams(props)
+		props["remove_gate"] = map[string]any{"type": "boolean"}
 		required = []string{"repo", "pattern"}
 	}
 	return t.deps.ops.param(map[string]any{"type": "object", "properties": props, "required": required})
+}
+
+// gateParams puts a branch rule's merge gate fields in a protect call's
+// schema, each by the name the code host's change spells it
+// ([code.GateChangeFields]), so a call takes exactly the fields a change
+// names, and each says nothing beyond its type and values: what a field does
+// is the code host's to document, and every code tool's schema rides every
+// round of a seat's turn ([codeCatalogueBudget] in the tests).
+func gateParams(props map[string]any) {
+	enum := func(values []string) map[string]any { return map[string]any{"type": "string", "enum": values} }
+	list := func(item map[string]any) map[string]any { return map[string]any{"type": "array", "items": item} }
+	classes := list(enum(spelled(code.PathClasses())))
+	props["merge_by"] = enum(spelled(code.MergeBys()))
+	props["approvals"] = enum(spelled(code.ApprovalCounts()))
+	props["approvals_unless"] = classes
+	props["human_paths"] = list(map[string]any{"type": "object", "properties": map[string]any{
+		"glob": map[string]any{"type": "string"}, "unless": classes}, "required": []string{"glob"}})
+	props["checks"] = list(map[string]any{"type": "string"})
+	props["landing"] = map[string]any{"type": "object", "properties": map[string]any{
+		"policy": enum(spelled(code.LandingPolicies())),
+		"depth":  map[string]any{"type": "integer"}, "batch": map[string]any{"type": "integer"}}}
+	props["delete_source"] = enum(spelled(code.DeleteSources()))
+	for _, flag := range []string{"owners_approve", "auto_revert", "agents_edit_checks"} {
+		props[flag] = map[string]any{"type": "boolean"}
+	}
+}
+
+// spelled is a closed set's values as a schema's enum lists them.
+func spelled[T ~string](values []T) []string {
+	out := make([]string, len(values))
+	for i, v := range values {
+		out[i] = string(v)
+	}
+	return out
 }
 
 func (t *codeRepoWrite) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
@@ -742,12 +780,49 @@ func (t *codeRepoWrite) request(args map[string]any) (code.LifecycleRequest, *to
 		// already means — and a rule carrying none is one no record may
 		// carry, refused by the request's own validation. Like allow_force
 		// and allow_delete left out, it is the rule's least: the call sets
-		// the pattern's whole rule.
+		// the pattern's push controls whole.
 		direct := cmp.Or(strings.TrimSpace(argString(args, "direct_push")), string(code.DirectPersons))
 		change.Rule = &code.Protection{Pattern: pattern, DirectPush: code.DirectPush(direct),
 			AllowForce: argBool(args, "allow_force"), AllowDelete: argBool(args, "allow_delete")}
 	}
+	// THE MERGE GATE AS A CHANGE, never whole, sent beside a removal too, so
+	// the request's own validation refuses the two together rather than this
+	// tool dropping what its caller said.
+	gate, refusal := gateChangeArg(tool, args)
+	if refusal != nil {
+		return code.LifecycleRequest{}, refusal
+	}
+	change.Gate = gate
 	return code.LifecycleRequest{Kind: code.LifecycleProtect, Protect: &change}, nil
+}
+
+// gateChangeArg is the change to a rule's merge gate a protect call's
+// arguments name — nil where they name no gate field and do not remove the
+// gate — or the refusal of a field no change could take. Every field it
+// names is decoded by the code host's own spelling of a change
+// ([code.GateChange], [code.GateChangeFields]), so the call takes exactly the
+// fields a change has, each to REPLACE that field alone: the deciding data
+// node keeps every other field as the rule's gate holds it, since only it
+// reads the gate in the snapshot it decides in — a whole gate this tool formed
+// from a read made elsewhere would undo whatever changed the gate meanwhile.
+func gateChangeArg(tool string, args map[string]any) (*code.GateChange, *tools.Result) {
+	named := map[string]any{}
+	for _, field := range code.GateChangeFields() {
+		if v, ok := args[field]; ok {
+			named[field] = v
+		}
+	}
+	remove := argBool(args, "remove_gate")
+	if len(named) == 0 && !remove {
+		return nil, nil
+	}
+	var change code.GateChange
+	if err := decodeArg(named, &change); err != nil {
+		r := failed(fmt.Sprintf("%s: a merge gate field is not as the schema says: %v.", tool, err))
+		return nil, &r
+	}
+	change.Remove = remove
+	return &change, nil
 }
 
 // createRequest is a create's request from its arguments: a scratch
@@ -872,27 +947,37 @@ func decodeArg(raw any, v any) error {
 	return dec.Decode(v)
 }
 
-// codeRepoState is a repository as a lifecycle answer says it stands.
+// codeRepoState is a repository as a lifecycle answer says it stands — never
+// its protection rules, which no lifecycle answer carries whole: sixty-four
+// rules, each with a merge gate of up to code.MaxGateBytes, are past one tool
+// answer, and an answer refused for its size AFTER its write landed would
+// read as a write that failed. A protect request's answer carries the one
+// rule it set ([codeRepoWriteAnswer.Rule]), and code_get_repo reads them all.
 type codeRepoState struct {
-	Name          string            `json:"name"`
-	Kind          code.RepoKind     `json:"kind"`
-	Status        code.RepoStatus   `json:"status"`
-	Owner         code.Owner        `json:"owner"`
-	Visibility    code.Visibility   `json:"visibility"`
-	DefaultBranch string            `json:"default_branch"`
-	Description   string            `json:"description,omitempty"`
-	Protections   []code.Protection `json:"protections,omitempty"`
+	Name          string          `json:"name"`
+	Kind          code.RepoKind   `json:"kind"`
+	Status        code.RepoStatus `json:"status"`
+	Owner         code.Owner      `json:"owner"`
+	Visibility    code.Visibility `json:"visibility"`
+	DefaultBranch string          `json:"default_branch"`
+	Description   string          `json:"description,omitempty"`
 }
 
 // codeRepoWriteAnswer is a lifecycle tool's answer.
 type codeRepoWriteAnswer struct {
-	Repo          string            `json:"repo"`
-	RenamedTo     string            `json:"renamed_to,omitempty"`
-	RedirectUntil time.Time         `json:"redirect_until,omitzero"`
-	Outcome       statelog.Outcome  `json:"outcome"`
-	Repository    *codeRepoState    `json:"repository,omitempty"`
-	Position      statelog.Position `json:"position,omitzero"`
-	OpID          string            `json:"op_id,omitempty"`
+	Repo          string           `json:"repo"`
+	RenamedTo     string           `json:"renamed_to,omitempty"`
+	RedirectUntil time.Time        `json:"redirect_until,omitzero"`
+	Outcome       statelog.Outcome `json:"outcome"`
+	Repository    *codeRepoState   `json:"repository,omitempty"`
+	// Rule is a protect request's pattern's rule as it applied — its merge
+	// gate as the deciding node RESOLVED it, every field the call left out
+	// as the rule's gate held it — and absent where the rule was removed, or
+	// where the request is pending: the row a pending answer carries is the
+	// one its decide read, before the change.
+	Rule     *code.Protection  `json:"rule,omitempty"`
+	Position statelog.Position `json:"position,omitzero"`
+	OpID     string            `json:"op_id,omitempty"`
 }
 
 // answer is what a lifecycle request came to, as this tool says it.
@@ -926,8 +1011,14 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 		Outcome: res.Outcome, Position: res.Position, OpID: c.actor.Operation}
 	if r := res.Repo; r.ID != "" {
 		out.Repository = &codeRepoState{Name: r.Name, Kind: r.Kind, Status: r.Status, Owner: r.Owner,
-			Visibility: r.Visibility, DefaultBranch: r.DefaultBranch, Description: r.Description,
-			Protections: r.Protections}
+			Visibility: r.Visibility, DefaultBranch: r.DefaultBranch, Description: r.Description}
+	}
+	if req.Kind == code.LifecycleProtect && res.Outcome == statelog.OutcomeApplied {
+		for i, p := range res.Repo.Protections {
+			if p.Pattern == req.Protect.Pattern {
+				out.Rule = &res.Repo.Protections[i]
+			}
+		}
 	}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, t.tool, out, "")
 }

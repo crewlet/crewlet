@@ -2,6 +2,7 @@ package code
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -14,22 +15,26 @@ import (
 // closed set holds: a new field, or a new value, fails this test until it is
 // given a case, and with it its clause in loosenings.
 //
-// THE MERGE GATE is one control, judged whole: removed it opens, added where
-// the rule had none it does not, and ALTERED in any field it opens too — fail
-// closed — while the rule's own gate sent back, another pointer to an equal
-// value, alters nothing.
+// THE MERGE GATE: removed it opens, added where the rule had none it does
+// not, and changed it opens what MergeGate.LoosenedBy names — field by field,
+// each held by TestEveryGateFieldIsJudged — so the rule's own gate sent back,
+// another pointer to an equal value, opens nothing, a gate tightened opens
+// nothing, and one loosened in two fields opens those two alone.
 //
 // Mutations: drop allow_force's clause from loosenings — its case names no
 // opening, red; judge direct_push by a rank (none below persons, a value this
 // build does not know above both) and call only a rise a loosening — the
-// unknown value made persons is none, red; compare the gates by pointer — the
-// gate sent back as it stands is judged altered, red; drop the altered arm —
-// a gate whose merge_by is lowered opens nothing, red.
+// unknown value made persons is none, red; drop the gate's removal arm — the
+// gate removed opens nothing, red; drop the gate's field arm — the gate
+// lowered in two fields opens nothing, red.
 func TestEveryProtectionControlIsJudged(t *testing.T) {
 	t.Parallel()
 	const pattern = "refs/heads/main"
+	// judged is a change of the one rule from to the rule to — removed where
+	// to is nil — as the decide judges it: the rules it read, and the rules
+	// the change leaves.
 	judged := func(from Protection, to *Protection) []string {
-		return loosenings([]Protection{from}, ProtectChange{Pattern: pattern, Rule: to})
+		return loosenings([]Protection{from}, onlyRule(pattern, to), pattern)
 	}
 
 	gate := func() *MergeGate {
@@ -109,24 +114,23 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 		}
 	}
 
-	// THE GATE, ALTERED IN ANY FIELD, opens — fail closed, whichever way the
-	// field moved — and the rule's own gate sent back as it stands, another
-	// pointer to an equal value, alters nothing.
+	// THE GATE, FIELD BY FIELD: the rule's own gate sent back as it stands,
+	// another pointer to an equal value, opens nothing; raised, nothing; and
+	// lowered in two fields, those two alone, as LoosenedBy names them.
 	gated := Protection{Pattern: pattern, DirectPush: DirectPersons, Gate: gate()}
 	if got := judged(gated, &Protection{DirectPush: DirectPersons, Gate: gate()}); len(got) != 0 {
 		t.Errorf("the rule's own gate sent back as it stands is judged %q, want no loosening", got)
 	}
-	for name, alter := range map[string]func(*MergeGate){
-		"lowering merge_by":      func(g *MergeGate) { g.MergeBy = MergeByWriters },
-		"raising merge_by":       func(g *MergeGate) { g.MergeBy = MergeByPersons },
-		"dropping a check":       func(g *MergeGate) { g.Checks = []string{"lint"} },
-		"turning auto_revert on": func(g *MergeGate) { g.AutoRevert = true },
-	} {
-		altered := gate()
-		alter(altered)
-		if got := judged(gated, &Protection{DirectPush: DirectPersons, Gate: altered}); len(got) != 1 {
-			t.Errorf("a gate altered by %s is judged %q, want one loosening", name, got)
-		}
+	raised := gate()
+	raised.MergeBy, raised.Checks = MergeByPersons, []string{"e2e", "lint", "unit"}
+	if got := judged(gated, &Protection{DirectPush: DirectPersons, Gate: raised}); len(got) != 0 {
+		t.Errorf("a gate raised is judged %q, want no loosening", got)
+	}
+	lowered := gate()
+	lowered.MergeBy, lowered.Checks = MergeByWriters, []string{"lint"}
+	got := judged(gated, &Protection{DirectPush: DirectPersons, Gate: lowered})
+	if want := lowered.LoosenedBy(*gate()); len(want) != 2 || !slices.Equal(got, want) {
+		t.Errorf("a gate lowered in merge_by and checks is judged %q, want LoosenedBy's two, %q", got, want)
 	}
 
 	// A RULE REMOVED loosens; a pattern no rule holds loosens nothing, added
@@ -136,8 +140,19 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 	}
 	for _, to := range []*Protection{nil, {DirectPush: DirectPersons, AllowForce: true, AllowDelete: true,
 		Gate: gate()}} {
-		if got := loosenings(nil, ProtectChange{Pattern: pattern, Rule: to}); got != nil {
+		if got := loosenings(nil, onlyRule(pattern, to), pattern); got != nil {
 			t.Errorf("a change of a pattern no rule holds is judged %q, want none", got)
 		}
 	}
+}
+
+// onlyRule is the rules a change of pattern to rule leaves where pattern's was
+// the one rule: rule alone, or none where it is nil.
+func onlyRule(pattern string, rule *Protection) []Protection {
+	if rule == nil {
+		return nil
+	}
+	r := *rule
+	r.Pattern = pattern
+	return []Protection{r}
 }

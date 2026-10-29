@@ -274,12 +274,29 @@ func sortedClasses(classes []ChangeClass) []ChangeClass {
 }
 
 // invalid is where g is no gate a record may carry and why — field a path
-// below the gate, "" for the gate whole — or two empty strings: every enum one
-// this build knows, every list in its one order ([CanonicalGate]) and inside
-// its bound, every glob gitref reads and every check a name, and the whole at
-// most [MaxGateBytes] as a record encodes it — judged last, since a gate
-// refused for a field is refused for what that field says.
+// below the gate, "" for the gate whole — or two empty strings: every field
+// one a record may carry ([MergeGate.fieldsInvalid]), and the whole at most
+// [MaxGateBytes] as a record encodes it — judged last, since a gate refused
+// for a field is refused for what that field says.
 func (g MergeGate) invalid() (field, why string) {
+	if field, why := g.fieldsInvalid(); why != "" {
+		return field, why
+	}
+	if n := g.encodedBytes(); n > MaxGateBytes {
+		return "", fmt.Sprintf("%d bytes as a record carries it, past the %d one gate may weigh: name fewer "+
+			"human paths or checks", n, MaxGateBytes)
+	}
+	return "", ""
+}
+
+// fieldsInvalid is where a field of g is none a record may carry and why, or
+// two empty strings: every enum one this build knows, every list in its one
+// order ([CanonicalGate]) and inside its bound, every glob gitref reads and
+// every check a name. Everything [MergeGate.invalid] judges but the gate's
+// whole weight, which a protect request's own validation cannot judge: what
+// its change keeps of the rule's gate is the decide's to read
+// ([GateChange.invalid]).
+func (g MergeGate) fieldsInvalid() (field, why string) {
 	switch {
 	case !g.MergeBy.Valid():
 		return "merge_by", fmt.Sprintf("%q is not one of %v", g.MergeBy, MergeBys())
@@ -325,10 +342,6 @@ func (g MergeGate) invalid() (field, why string) {
 				"sorted and each named once", name, g.Checks[k-1])
 		}
 	}
-	if n := g.encodedBytes(); n > MaxGateBytes {
-		return "", fmt.Sprintf("%d bytes as a record carries it, past the %d one gate may weigh: name fewer "+
-			"human paths or checks", n, MaxGateBytes)
-	}
 	return "", ""
 }
 
@@ -351,6 +364,326 @@ func classesInvalid(at string, list []ChangeClass) (field, why string) {
 		}
 	}
 	return "", ""
+}
+
+// LoosenedBy is every way g — the gate a protect request leaves a rule with —
+// LOOSENS old, the gate the rule held: lets through a merge old held back, or
+// lets it through on less. Each is the phrase a refusal names it by, which
+// names its field; nil where g holds every merge to all old did. THE ONE
+// JUDGEMENT of a gate's loosening, read by the lifecycle decide
+// ([loosenings]), which leaves a loosening to a person (ADR-0058) — field by
+// field, so a change that tightens one field and opens another loosens by the
+// one it opens:
+//
+//   - merge_by and approvals loosen LOWERED, and landing.policy moved from
+//     pre_land to post_land, where a target's checks hold its newest tip and
+//     never the landing. FAIL CLOSED, as a rule's direct_push is judged: a
+//     value this build does not know ranks above every value it does, so a
+//     move away from one is a lowering, and a move to one is judged a
+//     loosening, since nothing here says what it lets through ([lowered]);
+//   - approvals_unless loosens by each class it adds: one more kind of
+//     change that merges with no approval;
+//   - human_paths loosens by each glob it drops and by each class it adds to
+//     the unless of a glob it keeps. An entry is KEPT only by the same glob
+//     with an unless naming nothing the old one did not: a broader glob put
+//     in a narrower one's place is the narrower one dropped, since whether one
+//     glob matches everything another does is no judgement made here — and one
+//     that erred would make a loosening a seat may make;
+//   - checks loosens by each required check it drops;
+//   - owners_approve loosens turned off, as a merge then waits for no path
+//     owner; auto_revert turned on, as a queue may then revert a landing on its
+//     enqueuer's consent alone; and agents_edit_checks turned on, as a seat's
+//     approval then stands for a change to the checks themselves;
+//   - landing.depth, landing.batch and delete_source are NEUTRAL: how fast a
+//     queue lands and what a merge tidies after it, never what a merge is held
+//     to.
+//
+// A field a later milestone adds to [MergeGate] is judged here or named
+// neutral: TestEveryGateFieldIsJudged holds this method to the struct's own
+// fields by reflection, and to every pair of each ranked field's closed set.
+func (g MergeGate) LoosenedBy(old MergeGate) []string {
+	var opens []string
+	if lowered(MergeBys(), old.MergeBy, g.MergeBy) {
+		opens = append(opens, fmt.Sprintf("lowers merge_by from %s to %s", old.MergeBy, g.MergeBy))
+	}
+	if lowered(ApprovalCounts(), old.Approvals, g.Approvals) {
+		opens = append(opens, fmt.Sprintf("lowers approvals from %s to %s", old.Approvals, g.Approvals))
+	}
+	if added := notIn(g.ApprovalsUnless, old.ApprovalsUnless); len(added) > 0 {
+		opens = append(opens, fmt.Sprintf("adds %s to approvals_unless", listed(added)))
+	}
+	var dropped []string
+	for _, h := range old.HumanPaths {
+		i := slices.IndexFunc(g.HumanPaths, func(kept HumanPath) bool { return kept.Glob == h.Glob })
+		if i < 0 {
+			dropped = append(dropped, h.Glob)
+			continue
+		}
+		if added := notIn(g.HumanPaths[i].Unless, h.Unless); len(added) > 0 {
+			opens = append(opens, fmt.Sprintf("adds %s to the unless of %s in human_paths", listed(added),
+				h.Glob))
+		}
+	}
+	if len(dropped) > 0 {
+		opens = append(opens, fmt.Sprintf("drops %s from human_paths", listed(dropped)))
+	}
+	if dropped := notIn(old.Checks, g.Checks); len(dropped) > 0 {
+		opens = append(opens, fmt.Sprintf("drops %s from checks", listed(dropped)))
+	}
+	if lowered(landingStrictness(), old.Landing.Policy, g.Landing.Policy) {
+		opens = append(opens, fmt.Sprintf("moves landing.policy from %s to %s", old.Landing.Policy,
+			g.Landing.Policy))
+	}
+	if old.OwnersApprove && !g.OwnersApprove {
+		opens = append(opens, "turns owners_approve off")
+	}
+	if g.AutoRevert && !old.AutoRevert {
+		opens = append(opens, "turns auto_revert on")
+	}
+	if g.AgentsEditChecks && !old.AgentsEditChecks {
+		opens = append(opens, "turns agents_edit_checks on")
+	}
+	return opens
+}
+
+// lowered reports whether a ranked field moved from from to to is LOWERED —
+// order is its closed set, the loosest first: to ranks below from, or to is a
+// value this build does not know, which is judged a lowering whatever it
+// replaces. A value from that this build does not know ranks above every value
+// it does, so any move away from one is a lowering: a newer build's value may
+// hold more than any this one knows. FAIL CLOSED both ways.
+func lowered[T comparable](order []T, from, to T) bool {
+	if from == to {
+		return false
+	}
+	rank := func(v T) int {
+		if i := slices.Index(order, v); i >= 0 {
+			return i
+		}
+		return len(order)
+	}
+	return !slices.Contains(order, to) || rank(to) < rank(from)
+}
+
+// landingStrictness is the landing policies, the loosest first — the order a
+// policy is judged lowered in ([MergeGate.LoosenedBy]): post_land lands a
+// change before its checks run, and pre_land lands only a change they passed
+// on. Not [LandingPolicies]' order, which is the default first.
+func landingStrictness() []LandingPolicy { return []LandingPolicy{LandingPostLand, LandingPreLand} }
+
+// notIn is every value of list that of does not hold, in list's order.
+func notIn[T comparable](list, of []T) []T {
+	var out []T
+	for _, v := range list {
+		if !slices.Contains(of, v) {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// listed is values as a sentence names them: "a", "a and b", "a, b and c".
+func listed[T ~string](values []T) string {
+	words := make([]string, len(values))
+	for i, v := range values {
+		words[i] = string(v)
+	}
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
+}
+
+// defaultGate is the gate a rule with none takes where a protect request's
+// change names some of a gate's fields ([GateChange]): every other field its
+// default — writers, none, pre_land at depth 4 and batch 4, seats — each read
+// from the ONE PLACE config applies it ([config.CodeProtection.Gate]), so a
+// gate a tool forms and a gate a declaration forms default alike.
+func defaultGate() MergeGate {
+	landing := config.CodeLanding{}.Resolved()
+	return MergeGate{
+		MergeBy:   MergeBy(config.CodeMergeBy("").Resolved()),
+		Approvals: Approvals(config.CodeApprovals("").Resolved()),
+		Landing: Landing{Policy: LandingPolicy(landing.Policy), Depth: landing.Depth,
+			Batch: landing.Batch},
+		DeleteSource: DeleteSource(config.CodeDeleteSource("").Resolved()),
+	}
+}
+
+// GateChange is a protect request's change to the merge gate of the rule it
+// sets, which the deciding node RESOLVES against the gate that rule carries
+// in the rows its own snapshot read ([ProtectChange]) — never a gate whole,
+// which a caller could form only from a read made in another transaction: two
+// requests changing two fields of one gate at once would each send the
+// other's field as it had read it, and the later record would undo the
+// earlier change — an approval it required, a check it added — unseen. Each
+// field it names REPLACES that field, a list as a list; every field it leaves
+// nil is kept as the rule's gate has it, or takes its default where the rule
+// has none ([defaultGate]), so naming one field forms a gate, as a declaration
+// naming one does. Remove takes the gate away and names no field.
+//
+// A REQUEST IS NO RECORD, so this type takes no versionedFields row: the
+// record a protect request leads to carries the repository's settings whole,
+// and [MergeGate] names the row those take. It crosses the estate's wire to
+// whichever data node decides it, under the code domain's stated condition —
+// no build carrying the domain has run without it, none of the domain being
+// on main — so every node asked it reads it.
+type GateChange struct {
+	// Remove takes the rule's gate away.
+	Remove    bool       `json:"remove,omitempty"`
+	MergeBy   *MergeBy   `json:"merge_by,omitempty"`
+	Approvals *Approvals `json:"approvals,omitempty"`
+	// ApprovalsUnless, HumanPaths and Checks are each the field's whole new
+	// list, in any order — the resolution puts it in the one a record carries
+	// ([CanonicalGate]) — and an empty one names none.
+	ApprovalsUnless *[]ChangeClass `json:"approvals_unless,omitempty"`
+	HumanPaths      *[]HumanPath   `json:"human_paths,omitempty"`
+	Checks          *[]string      `json:"checks,omitempty"`
+	// Landing changes the landing a field at a time.
+	Landing          *LandingChange `json:"landing,omitempty"`
+	OwnersApprove    *bool          `json:"owners_approve,omitempty"`
+	DeleteSource     *DeleteSource  `json:"delete_source,omitempty"`
+	AutoRevert       *bool          `json:"auto_revert,omitempty"`
+	AgentsEditChecks *bool          `json:"agents_edit_checks,omitempty"`
+}
+
+// LandingChange is a gate change's change to the landing: each field it
+// leaves nil is kept.
+type LandingChange struct {
+	Policy *LandingPolicy `json:"policy,omitempty"`
+	Depth  *int           `json:"depth,omitempty"`
+	Batch  *int           `json:"batch,omitempty"`
+}
+
+// gateChangeField is one field a [GateChange] names, by the name a request
+// spells it, and whether a change names it.
+type gateChangeField struct {
+	name string
+	set  bool
+}
+
+// fields is every field c may name besides its removal, in [MergeGate]'s
+// order — THE ONE LIST, read by [GateChangeFields] and by what c names.
+func (c GateChange) fields() []gateChangeField {
+	return []gateChangeField{
+		{"merge_by", c.MergeBy != nil}, {"approvals", c.Approvals != nil},
+		{"approvals_unless", c.ApprovalsUnless != nil}, {"human_paths", c.HumanPaths != nil},
+		{"checks", c.Checks != nil}, {"landing", c.Landing != nil},
+		{"owners_approve", c.OwnersApprove != nil}, {"delete_source", c.DeleteSource != nil},
+		{"auto_revert", c.AutoRevert != nil}, {"agents_edit_checks", c.AgentsEditChecks != nil},
+	}
+}
+
+// GateChangeFields is every field a [GateChange] may name besides its
+// removal, by the name a request spells it — the gate's own — in
+// [MergeGate]'s order: what a tool takes for a rule's gate.
+// TestAGateChangeNamesEveryGateField holds it to both types.
+func GateChangeFields() []string {
+	fields := GateChange{}.fields()
+	out := make([]string, len(fields))
+	for i, f := range fields {
+		out[i] = f.name
+	}
+	return out
+}
+
+// named is every field c names, in [GateChangeFields]' order.
+func (c GateChange) named() []string {
+	var out []string
+	for _, f := range c.fields() {
+		if f.set {
+			out = append(out, f.name)
+		}
+	}
+	return out
+}
+
+// invalid is where c is no change a request may carry and why — field a path
+// below the request's gate, "" for the change whole — or two empty strings: a
+// removal naming no field, or a change naming one at least, a landing's
+// change one of its own at least; and each field it names one a record may
+// carry, judged on the gate it forms on a rule with none ([defaultGate]),
+// since a field refused there is refused whatever gate it changes. The gate's
+// whole weight is left to the decide, which alone reads what the change keeps
+// of the rule's gate.
+func (c GateChange) invalid() (field, why string) {
+	named := c.named()
+	switch {
+	case c.Remove && len(named) > 0:
+		return "remove", fmt.Sprintf("a change removing the gate names none of its fields, and this one "+
+			"names %s", listed(named))
+	case c.Remove:
+		return "", ""
+	case len(named) == 0:
+		return "", "a change of the gate names one of its fields at least, or removes it"
+	case c.Landing != nil && *c.Landing == (LandingChange{}):
+		return "landing", "a change of the landing names its policy, depth or batch at least"
+	}
+	return c.applyTo(defaultGate()).fieldsInvalid()
+}
+
+// applyTo is base with every field c names put in it, in the one form a
+// record carries a gate in ([CanonicalGate]). Remove is its caller's to read.
+func (c GateChange) applyTo(base MergeGate) MergeGate {
+	g := base
+	if c.MergeBy != nil {
+		g.MergeBy = *c.MergeBy
+	}
+	if c.Approvals != nil {
+		g.Approvals = *c.Approvals
+	}
+	if c.ApprovalsUnless != nil {
+		g.ApprovalsUnless = *c.ApprovalsUnless
+	}
+	if c.HumanPaths != nil {
+		g.HumanPaths = *c.HumanPaths
+	}
+	if c.Checks != nil {
+		g.Checks = *c.Checks
+	}
+	if l := c.Landing; l != nil {
+		if l.Policy != nil {
+			g.Landing.Policy = *l.Policy
+		}
+		if l.Depth != nil {
+			g.Landing.Depth = *l.Depth
+		}
+		if l.Batch != nil {
+			g.Landing.Batch = *l.Batch
+		}
+	}
+	if c.OwnersApprove != nil {
+		g.OwnersApprove = *c.OwnersApprove
+	}
+	if c.DeleteSource != nil {
+		g.DeleteSource = *c.DeleteSource
+	}
+	if c.AutoRevert != nil {
+		g.AutoRevert = *c.AutoRevert
+	}
+	if c.AgentsEditChecks != nil {
+		g.AgentsEditChecks = *c.AgentsEditChecks
+	}
+	return CanonicalGate(g)
+}
+
+// resolve is the gate c leaves a rule with that held held — nil for none —
+// RESOLVED as the decide resolves it: held as it stands where c is nil, none
+// where c removes it, and otherwise held with c's fields put in it, or the
+// defaults with them where the rule held none.
+func (c *GateChange) resolve(held *MergeGate) *MergeGate {
+	switch {
+	case c == nil:
+		return held
+	case c.Remove:
+		return nil
+	}
+	base := defaultGate()
+	if held != nil {
+		base = *held
+	}
+	g := c.applyTo(base)
+	return &g
 }
 
 // gateColumn is a rule's gate as code_protections.gate holds it: its JSON —

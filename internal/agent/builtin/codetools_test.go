@@ -1516,7 +1516,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // codeCatalogueBudget is the most bytes the nineteen code tools' definitions
 // may add to a tool catalogue as a CLI's prompt renders it.
 //
-// 24 400: measured at 22 787 (~5 697 tokens), so ~7% headroom — a sentence can
+// 26 800: measured at 24 990 (~6 248 tokens), so ~7% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
 // part adds raises this deliberately, with its measured cost). 10 654 → 9 570
 // when the revision grammar, written into each of the six revision arguments,
@@ -1532,8 +1532,13 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // the writes' 9 732 bytes after each argument was cut to what its name and
 // type do not say (15 120 as first written: an owner's and a path owner's
 // nested schemas spelled out three times over); 22 802 → 22 787 when
-// code_protect_branch's direct_push said what leaving it out sends.
-const codeCatalogueBudget = 24_400
+// code_protect_branch's direct_push said what leaving it out sends. And
+// 24 400 → 26 800 when code_protect_branch took a branch's merge gate — its
+// ten fields and remove_gate — deliberately, with their measured cost: 22 787
+// → 24 990, 2 203 bytes (~551 tokens), each field its type and its values
+// alone (what a field does is the code host's documentation), the call's
+// field-at-a-time rule said once in the tool's description.
+const codeCatalogueBudget = 26_800
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code carries the nineteen definitions on every round of every turn: a CLI's

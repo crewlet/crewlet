@@ -1233,6 +1233,13 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.mu.Unlock()
 	desc, branch, vis := "the app, renamed", "trunk", code.VisibilityUnit
 	owner := code.Owner{Kind: code.OwnerUnit, Ref: "plat"}
+	// A GATE CHANGE OF EVERY FIELD, a list emptied and a flag turned off
+	// among them: an empty list and a false flag are changes, which must
+	// cross as themselves and never as fields left out.
+	mergeBy, approvals, policy, depth := code.MergeByMaintainers, code.ApprovalsOne, code.LandingPostLand, 2
+	classes := []code.ChangeClass{code.ChangeClassCommentOnly}
+	humanPaths := []code.HumanPath{{Glob: "deploy/**", Unless: classes}}
+	noChecks, deleteSource, on, off := []string{}, code.DeleteNone, true, false
 	op := "019a0c2e-0000-7000-8000-0000000000f0.code_test"
 	for name, r := range map[string]code.LifecycleRequest{
 		"a create": {Kind: code.LifecycleCreate, OpID: op, Actor: seat, Name: "dev.app",
@@ -1250,7 +1257,13 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		"a protection": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
 			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", Rule: &code.Protection{
 				Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true,
-				DirectPush: code.DirectPersons}}},
+				DirectPush: code.DirectPersons}, Gate: &code.GateChange{MergeBy: &mergeBy,
+				Approvals: &approvals, ApprovalsUnless: &classes, HumanPaths: &humanPaths, Checks: &noChecks,
+				Landing:       &code.LandingChange{Policy: &policy, Depth: &depth, Batch: &depth},
+				OwnersApprove: &on, DeleteSource: &deleteSource, AutoRevert: &off, AgentsEditChecks: &on}}},
+		"a gate's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
+			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Rule: &code.Protection{
+				DirectPush: code.DirectNone}, Gate: &code.GateChange{Remove: true}}},
 		"a delete": {Kind: code.LifecycleDelete, OpID: op, Actor: seat, RepoID: ref.ID, Reason: "done with it"},
 		"a hold": {Kind: code.LifecycleHold, OpID: op, Actor: seat, RepoID: ref.ID, TurnID: "turn-1",
 			Seen: at},
