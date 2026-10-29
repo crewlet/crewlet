@@ -2470,6 +2470,12 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 				"file by that name could not travel in one", i, rel, BundleManifest)
 			continue
 		}
+		if name == LoginInstallFile {
+			add("credential_paths[%d] %q has the file name %s, which the engine keeps a login's "+
+				"install record under beside the login, so a login file by that name would be "+
+				"read as the record", i, rel, LoginInstallFile)
+			continue
+		}
 		if first, taken := byName[name]; taken {
 			add("credential_paths names %q and %q, which share the file name %s — the "+
 				"shared directory and every bundle keep a login file under its file name, "+

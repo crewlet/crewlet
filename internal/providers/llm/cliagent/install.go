@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
 
 // A LOGIN'S INSTALL RECORD names one login of an entry's credential files: which
@@ -54,7 +56,7 @@ import (
 // in its manifest instead ([bundleManifest]).
 
 // loginInstallFile is the install record's file in the credentials directory.
-const loginInstallFile = ".crewlet-login"
+const loginInstallFile = cliprofile.LoginInstallFile
 
 // LoginInstall is one login's install record: a random id and when the login
 // was installed. The zero value is "no install record": a directory with no login,

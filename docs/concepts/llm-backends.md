@@ -865,7 +865,11 @@ run wrote dates the limit it reported (`limit_reset_events`). Where no event
 names it, the sentence does: its reset (`reset_unit: clock`) and its wording
 (`limit_windows`: "weekly limit" is a week). A limit nothing names is `unknown`.
 The window rides on the refusal (`window`), so what a person is told can say
-"weekly".
+"weekly". The structured path is Claude Code's alone for now: Codex writes no
+rate-limit event on `codex exec --json` (its `rate_limits` are in a run's
+session file only, which a call on this host never writes), so a Codex limit's
+reset comes from its sentence, and its window from the sentence's wording
+("usage limit for" a model is that model's).
 
 A reset named in words is read in one of three shapes, each optionally followed
 by its zone in parentheses: a time of day ("4:30pm", "16:30", "4:31 PM"), its

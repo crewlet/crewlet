@@ -21,6 +21,13 @@ import "strings"
 // read as two.
 const BundleManifest = "crewlet-bundle.json"
 
+// LoginInstallFile is the name the engine keeps a login's install record under
+// in the credential directory, beside the login (internal/providers/llm/cliagent,
+// install.go). The engine's name, as [BundleManifest] is, and refused as a
+// credential path for the same reason: a login file under it would be the
+// record, and the record a login file.
+const LoginInstallFile = ".crewlet-login"
+
 // BundleVarName is the conventional secret name a providers.llm entry's
 // exported credential bundle lives under: CREWLET_LLM_CLI_<KEY>_CREDENTIALS.
 //
