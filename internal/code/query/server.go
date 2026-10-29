@@ -447,19 +447,10 @@ func (r *read) audit(ctx context.Context, a code.GitAnswer) error {
 		return fmt.Errorf("query: measure the answer to a read of repository %s: %w", repo.Name, err)
 	}
 	r.s.o.Fetched(ctx, types.CodeFetched{RepoID: repo.ID, RepoName: repo.Name,
-		PrincipalKind: types.CodeReaderKind(r.q.Asker.Kind), Principal: askerName(r.q.Asker),
+		PrincipalKind: types.CodeReaderKind(r.q.Asker.Kind), Principal: r.q.Asker.Actor(),
 		Seat: r.q.Asker.Seat, Via: types.FetchedViaTool, Kind: string(r.q.Kind), Reads: 1,
 		Bytes: int64(len(encoded))})
 	return nil
-}
-
-// askerName is who an asker is as a read of it is recorded: a seat by its
-// handle, a credential by the name every record gives it.
-func askerName(p code.Principal) string {
-	if p.Kind == code.PrincipalAgent {
-		return p.Seat
-	}
-	return p.OperatorID
 }
 
 // compute is steps 7 and 8: the answer of a read the memo did not answer

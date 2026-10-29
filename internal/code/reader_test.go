@@ -973,7 +973,7 @@ func TestAPushListingIsNewestInLogOrder(t *testing.T) {
 // model its run names.
 //
 // Mutations: write the principal's credential as every row's actor
-// (Principal.rowActor answering OperatorID) — the seat's row names nobody;
+// (Principal.Actor answering OperatorID) — the seat's row names nobody;
 // read a seat's row back without its run (PushRow.principal dropping Run) —
 // the index of pushes names no turn.
 func TestAPushRowNamesWhoMadeItAndHow(t *testing.T) {

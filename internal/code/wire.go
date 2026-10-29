@@ -520,7 +520,7 @@ func introducedOf(row PushRow) IntroducedRow {
 }
 
 // principal is who made the push as its row's actor columns name it — the
-// inverse of the push apply's [Principal.rowActor]: an operator's credential
+// inverse of the push apply's [Principal.Actor]: an operator's credential
 // and the seat it is bound to, or a seat by its handle with the run its push
 // carried.
 func (row PushRow) principal() Principal {

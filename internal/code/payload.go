@@ -867,11 +867,14 @@ func (p Principal) invalid() string {
 	return ""
 }
 
-// rowActor is who a push row names as its actor: the credential an operator
-// acted with — the person's attribution, as every record a write leaves names
-// it (iam.ActorFor), the seat they hold beside it in actor_seat — and a seat's
-// own handle, since a seat acts as itself with no credential.
-func (p Principal) rowActor() string {
+// Actor is who a record names as p's actor: the credential an operator acted
+// with — the person's attribution, as every record a write leaves names it
+// (iam.ActorFor), the seat they hold beside it — and a seat's own handle,
+// since a seat acts as itself with no credential. THE ONE RULE for every
+// record of a principal: a push row's actor, and the reader every read of a
+// `visibility: unit` repository is recorded as, which the usage domain
+// refuses empty.
+func (p Principal) Actor() string {
 	if p.Kind == PrincipalAgent {
 		return p.Seat
 	}

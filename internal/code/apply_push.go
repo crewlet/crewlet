@@ -289,7 +289,7 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		}
 		introduced[i] = strings.Join(e.Introduced, " ")
 	}
-	// WHO PUSHED, AS THE HISTORY NAMES THEM (rowActor): an operator's
+	// WHO PUSHED, AS THE HISTORY NAMES THEM (Principal.Actor): an operator's
 	// credential beside the seat it is bound to, or a seat's own handle as
 	// both — and how the push was built and, for a seat's, the run behind it
 	// (a coding box's naming its run and coding agent too), each written as
@@ -306,7 +306,7 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 				packID, size = e.Pack.PackID, e.Pack.Size
 			}
 			run := e.Principal.Run
-			return []any{e.PushID, p.RepoID, at.packed, at.at(), e.Principal.rowActor(),
+			return []any{e.PushID, p.RepoID, at.packed, at.at(), e.Principal.Actor(),
 				string(e.Principal.Kind), e.Principal.Seat, string(e.Via), run.TurnID, run.WorkBackend,
 				run.WorkKey, run.Model, run.RunID, run.CodingAgent, e.Node, e.Atomic, encoded[i], packID, size,
 				introduced[i], e.IntroducedCount, store.EncodeTime(e.ReceivedAt),
