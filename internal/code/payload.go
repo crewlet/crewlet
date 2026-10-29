@@ -660,6 +660,16 @@ type Hold struct {
 // `clock_skew` alarm watches. Only an older repository can be raced, and for
 // it the record makes the broker decide the race. Held by
 // references.TestAHoldRecordCoversEveryPassInFlight.
+//
+// WHAT IT COSTS IS A RECORD A TURN, not one a repository: a hold moves no
+// clock, so every turn that names a repository idle this long records again,
+// until a push moves its clock or the expiry takes it — at the default seven
+// idle days, the turns of the six days and two hours before it falls due.
+// That window is long because the threshold is idle_days' FLOOR rather than
+// the idle_days in force, which a pass in flight may judge by another epoch's
+// (above). One record is small (TestAHoldRecordCostsTheLogOneSmallRecord),
+// and internal/tracker's codeLogNegligible weighs the turns' records against
+// the code log's day.
 const HoldRecordAfter = 22 * time.Hour
 
 // PushBatch is one or more pushes to one repository, in the order they were

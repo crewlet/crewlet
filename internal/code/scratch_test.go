@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -383,6 +384,71 @@ func TestAHoldRecordMovesNoActivity(t *testing.T) {
 		t.Fatal("a hold on a repository no expiry takes wrote a record")
 	}
 }
+
+// A HOLD RECORD COSTS THE LOG ONE SMALL RECORD — the figure the code log's
+// day weighs a hold's rate by (internal/tracker's codeHoldRecordBytes): a
+// record a turn appends for each idle scratch repository it names, in every
+// turn that names it. What it takes is measured as the day measures a push
+// (BenchmarkPushLogBytes): the log's stream grown by the one record, as the
+// broker counts it against the log's ceiling — its signed frame, its subject
+// and the broker's per-message overhead. Measured as a turn writes it — the
+// turn's run id, which the engine mints as a UUIDv7 and is all a hold's
+// TurnID ever carries, a minted operation id and a short handle — and at the
+// longest the engine writes one: that run id beside an operation id at
+// statelog.MaxCallerOpIDBytes and a seat handle at iam.MaxLogin, at most
+// holdRecordBytes.
+//
+// Mutation: carry the turn id twice in the hold's payload — the longest hold
+// takes past the bound, red.
+func TestAHoldRecordCostsTheLogOneSmallRecord(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	c := testChart()
+	long := strings.Repeat("h", iam.MaxLogin)
+	c.seats[long] = code.RosterSeat{Handle: long, Tier: code.TierFullAccess, Unit: "sales"}
+	n.chart = c
+	id := n.made(agent("dev"), "dev.held", seatOwned("dev"))
+	takes := func(actor code.Principal, opID string) int64 {
+		t.Helper()
+		turn := statelog.NewOpID(time.Now(), "")
+		req := lcHold(actor, id, turn, n.resolved("dev.held").Position)
+		req.OpID = opID
+		before, err := n.log.Stats(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		n.lands(req)
+		after, err := n.log.Stats(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if records := after.Messages - before.Messages; records != 1 {
+			t.Fatalf("the hold appended %d records, want one", records)
+		}
+		grew := int64(after.Bytes - before.Bytes)
+		t.Logf("a hold by a %d-byte handle, its operation id %d bytes and its turn id %d, takes the log %d bytes",
+			len(actor.Seat), len(opID), len(turn), grew)
+		return grew
+	}
+	takes(agent("dev"), statelog.NewOpID(time.Now(), "code_hold"))
+	longest := statelog.NewOpID(time.Now(), "")
+	longest += "." + strings.Repeat("o", statelog.MaxCallerOpIDBytes-len(longest)-1)
+	if got := takes(agent(long), longest); got > holdRecordBytes {
+		t.Errorf("the longest hold the engine writes takes the log %d bytes, over the %d the code log's day "+
+			"weighs a hold at", got, holdRecordBytes)
+	}
+}
+
+// holdRecordBytes is the most one hold record takes the code log as the
+// engine writes one, the figure internal/tracker's codeHoldRecordBytes weighs
+// a hold at. 896 BYTES: the longest measures 865 here, at the harness's clock
+// — an authored instant with no fractional second — and the log's first
+// generation, whose envelope carries none; a running node's instant prints up
+// to ten bytes more and a generation printed whole seventeen
+// (BarrierRecordBytes' measure), so 896 bounds both. A node id or a signing
+// key's id longer than the suite's adds a byte a character, as it does to
+// every record.
+const holdRecordBytes = 896
 
 // A HOLD IS DECIDED AT THE READ IT ORDERS: it is published at the turn's own
 // read of the repository, so a data node behind that read — the router may ask

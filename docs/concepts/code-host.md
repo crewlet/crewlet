@@ -400,7 +400,11 @@ broker orders against the expiry: recorded first, the expiry is refused;
 expired first, the turn's request is refused before it reads anything, and the
 repository can be restored. Under 22 hours no pass in flight can have
 listed it, since `idle_days` is a day at least and two nodes' clocks may
-disagree by two hours. **A hold that cannot be read expires nothing**: a run
+disagree by two hours. Such a record is one a **turn**, not one a repository:
+a hold moves no clock, so a seat that keeps reading an experiment it no longer
+pushes to appends one small record to the code log in every turn that names
+it, from the repository's 22nd idle hour until a push moves its clock or the
+expiry takes it. **A hold that cannot be read expires nothing**: a run
 store that cannot be listed, or a seat holder that does not answer, ends that
 pass's expiry, says so on its `code_retention_pass` line
 (`scratch_expiry_unread`) and logs `code_scratch_expiry_skipped` at warn; the
