@@ -221,11 +221,15 @@ func oid(s string) string {
 	return hex.EncodeToString(sum[:])[:40]
 }
 
-// settingsFor are a declared repository's settings with one rule per pattern.
+// settingsFor are a declared repository's settings with one rule per pattern:
+// a project's, as every declaration is ([KindOf]), and settings
+// [RepoSettings.Validate] takes — so a record a case applies carries what a
+// committer would, and a benchmark that validates its repository's settings
+// before seeding it measures one.
 func settingsFor(description string, patterns ...string) RepoSettings {
 	s := RepoSettings{
-		ManagedBy: ManagedConfig, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Visibility: VisibilityCompany,
-		DefaultBranch: "main", Description: description, ConfigEpoch: 1,
+		Kind: RepoProject, ManagedBy: ManagedConfig, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
+		Visibility: VisibilityCompany, DefaultBranch: "main", Description: description, ConfigEpoch: 1,
 	}
 	for _, p := range patterns {
 		s.Protections = append(s.Protections, Protection{Pattern: p, DirectPush: DirectPersons})
