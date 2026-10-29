@@ -672,7 +672,7 @@ func TestTheCodePagesFitOneAnswer(t *testing.T) {
 		Refs: 1 << 40, LivePacks: 1 << 40, LiveBytes: 1 << 50, LiveObjects: 1 << 40, Position: pos},
 		Head: oid, Pushes: 1 << 40, LastPushAt: stamp}
 	for range config.CodeMaxProtections {
-		repo.Protections = append(repo.Protections, code.Protection{Pattern: ref, AllowForce: true,
+		repo.Protections = append(repo.Protections, code.PushRule{Pattern: ref, AllowForce: true,
 			AllowDelete: true, DirectPush: code.DirectPersons})
 	}
 

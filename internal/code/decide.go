@@ -241,8 +241,8 @@ import (
 // an activation's settings or a tool's protect request, landing between the
 // read and the round or between two rounds. Every other round, the first
 // included, pays the reads alone. The rules a round reads are what a push is
-// judged by and nothing more: a rule's merge gate holds merges, so neither
-// read decodes one ([pushRulesIn]).
+// judged by and nothing more ([PushRule]): a rule's merge gate holds merges,
+// so neither read selects one ([pushRulesIn]).
 
 // verdicts are one batch's protection verdicts, formed before its publish
 // ([verdicts.formBefore]) and kept across the rounds of that one publish
@@ -254,7 +254,7 @@ type verdicts struct {
 	set bool
 	// stored are the rules every verdict below was formed under, as the
 	// snapshot held them, and rules the same parsed.
-	stored []Protection
+	stored []PushRule
 	rules  Protections
 	// of is each command's verdict, by its proposal's place in the batch
 	// and its own in the proposal: a batch is the same proposals in every
@@ -274,13 +274,9 @@ type verdict struct {
 
 // under makes stored the rules the verdicts answer from: the verdicts kept
 // from the batch's earlier rounds when stored are the rules those read, field
-// by field and in order, and none otherwise — compared BY VALUE
-// ([Protection.Equal]), since each round reads its rules again and a rule's
-// gate is a pointer: compared by ==, two reads of one gated rule would be two
-// rules, and every round would form every verdict again. The decide reads no
-// gate ([pushRulesIn]); the comparison holds whichever columns it reads.
-func (v *verdicts) under(stored []Protection) error {
-	if v.set && slices.EqualFunc(v.stored, stored, Protection.Equal) {
+// by field and in order, and none otherwise.
+func (v *verdicts) under(stored []PushRule) error {
+	if v.set && slices.Equal(v.stored, stored) {
 		return nil
 	}
 	rules, err := ParseProtections(stored)
@@ -342,7 +338,7 @@ func (v *verdicts) verdict(push, command int, c Command, by PrincipalKind) (Refu
 func (v *verdicts) formBefore(ctx context.Context, db store.ReplicatedReader, repoID string,
 	batch []Proposal) {
 
-	var stored []Protection
+	var stored []PushRule
 	if err := db.Read(ctx, func(tx *sql.Tx) error {
 		var err error
 		stored, err = pushRulesIn(ctx, tx, repoID)
@@ -1621,7 +1617,7 @@ func statelessDetail(c Command, r Refusal) string {
 // and at most 64 bytes of words, the persons rule's included, which says what
 // the rule takes rather than why a seat's change reaches the ref only through
 // a person: that is the code host's "What git prints" row.
-func ProtectionDetail(rule Protection, r Refusal) string {
+func ProtectionDetail(rule PushRule, r Refusal) string {
 	switch {
 	case r == RefusalProtectedDirect && rule.DirectPush == DirectPersons:
 		// A PUSH BY ANYBODY BUT A PERSON under a rule that takes a

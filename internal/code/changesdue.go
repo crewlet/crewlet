@@ -120,7 +120,7 @@ func (q ReadQuery) validateChangesDue() error {
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
-		{"path_owners", q.PathOwners}, {"expunge_tips", q.ExpungeTips != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a changes_due read lists the repositories a home owes change work in, or "+

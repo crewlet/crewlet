@@ -155,7 +155,7 @@ func aState(id string) stateDoc {
 		Position:      statelog.Position{Stream: topics.CodeLogStream, Generation: 2, Seq: 4711},
 		Repo: code.RepoRef{
 			ID: id, Name: "payments", Status: code.RepoStatusActive, DefaultBranch: "trunk",
-			Protections: []code.Protection{{Pattern: "refs/heads/trunk", DirectPush: code.DirectNone}},
+			Protections: []code.PushRule{{Pattern: "refs/heads/trunk", DirectPush: code.DirectNone}},
 			Refs:        12, LivePacks: 3, LiveBytes: 9000,
 		},
 		RefsDigest:    strings.Repeat("ab", 32),

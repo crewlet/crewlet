@@ -465,7 +465,7 @@ func reservedRef(ref string) bool {
 //
 // The zero Protections holds no rule.
 type Protections struct {
-	rules    []Protection
+	rules    []PushRule
 	patterns []gitref.Pattern
 }
 
@@ -475,7 +475,7 @@ type Protections struct {
 // and [RepoSettings.Validate] before any record carried it, so one that does
 // not parse is an estate that holds what no writer of this build wrote, and a
 // protection read as absent is a protected ref open to every push.
-func ParseProtections(rules []Protection) (Protections, error) {
+func ParseProtections(rules []PushRule) (Protections, error) {
 	out := Protections{rules: rules, patterns: make([]gitref.Pattern, len(rules))}
 	for i, rule := range rules {
 		p, ok := gitref.ParsePattern(rule.Pattern)
@@ -517,7 +517,7 @@ func ParseProtections(rules []Protection) (Protections, error) {
 // c.Ref is a ref: [StatelessRefusal] refuses anything else first, in the
 // decide and in the receiver alike, so the ref is not checked again for every
 // rule — for anything else the answer means nothing (and is never a panic).
-func ProtectionRefusal(c Command, rules Protections, by PrincipalKind) (Refusal, Protection) {
+func ProtectionRefusal(c Command, rules Protections, by PrincipalKind) (Refusal, PushRule) {
 	deletion, force := -1, -1
 	for i, p := range rules.patterns {
 		if !p.Match(c.Ref) {
@@ -540,7 +540,7 @@ func ProtectionRefusal(c Command, rules Protections, by PrincipalKind) (Refusal,
 	case c.Forced && force >= 0:
 		return RefusalProtectedForce, rules.rules[force]
 	}
-	return "", Protection{}
+	return "", PushRule{}
 }
 
 // Atomic is an --atomic push's all-or-nothing rule: when any command is ng,

@@ -17,7 +17,7 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 	base := RepoSettings{
 		ManagedBy: ManagedConfig, Kind: RepoProject, Owner: Owner{Kind: OwnerUnit, Ref: "ENG"},
 		DefaultBranch: "main", Description: "one", Visibility: VisibilityCompany, Search: SearchIndexed,
-		Protections: []Protection{{Pattern: "refs/heads/main", DirectPush: DirectPersons}},
+		Protections: []Protection{{PushRule: PushRule{Pattern: "refs/heads/main", DirectPush: DirectPersons}}},
 		PathOwners:  []PathOwner{{Owner: Owner{Kind: OwnerUnit, Ref: "ENG"}, Paths: []string{"web/**"}}},
 		ConfigEpoch: 1,
 	}
@@ -31,7 +31,7 @@ func TestSettingsEqualReadsEveryFieldButTheActivation(t *testing.T) {
 		"Visibility":    func(s *RepoSettings) { s.Visibility = VisibilityUnit },
 		"Search":        func(s *RepoSettings) { s.Search = SearchGrep },
 		"Protections": func(s *RepoSettings) {
-			s.Protections = []Protection{{Pattern: "refs/heads/main", DirectPush: DirectNone}}
+			s.Protections = []Protection{{PushRule: PushRule{Pattern: "refs/heads/main", DirectPush: DirectNone}}}
 		},
 		// A GLOB ADDED TO THE ONE OWNER, the change a slice comparison of
 		// the owners alone would miss had their globs been compared by

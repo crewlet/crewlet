@@ -284,8 +284,11 @@ func everyStatement(t *testing.T) map[string]statement {
 // than a repository's size bounds. Every other statement reads in the order
 // of the index it seeks.
 var sortingStatements = map[string]string{
-	"protections of": "one listing page's rules, at most MaxReposPerPage of MaxProtectionsPerRepo " +
+	"push rules of": "one listing page's rules, at most MaxReposPerPage of MaxProtectionsPerRepo " +
 		"each: a seek a repository of the page, whose union no one index orders",
+	"protections of": "the rules of the repositories a reconcile's declaration names, at most " +
+		"config.CodeMaxRepos of MaxProtectionsPerRepo each: a seek a repository of the declaration, whose " +
+		"union no one index orders",
 	"due rechecks": "one repository's live changes behind a moved target, at most one a live branch " +
 		"(code_changes_open_idx), so MaxRefsPerRepo bounds them: no index orders a repository's changes by " +
 		"when their merge was recorded without one written by the records of two subjects (changesdue.go)",
@@ -383,6 +386,8 @@ func registeredStatements() map[string]statement {
 		"repo row":            {repoRowSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"protections":         {protectionsSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
 		"push rules":          {pushRulesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
+		"gates":               {gatesSQL, []any{"repo-1"}, []string{protectionKey + " (repo_id=?)"}},
+		"rule":                {ruleSQL, []any{"repo-1", "refs/heads/main"}, []string{protectionKey + " (repo_id=? AND pattern=?)"}},
 		"read back":           {readBackSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo view":           {repoViewSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo grant":          {repoGrantSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
@@ -406,6 +411,7 @@ func registeredStatements() map[string]statement {
 		"pushes below":        {pushesBelowSQL, []any{"repo-1", 100, 100}, []string{"code_pushes_repo_idx (repo_id=? AND position<?)"}},
 		"repos":               {reposSQL, []any{`["active","archived"]`, "", 100}, []string{"code_repos_name_idx (name>?)", refsKey + " (repo_id=? AND ref=?)"}},
 		"protections of":      {protectionsOfSQL, []any{`["repo-1","repo-2"]`}, []string{protectionKey + " (repo_id=?)"}},
+		"push rules of":       {pushRulesOfSQL, []any{`["repo-1","repo-2"]`}, []string{protectionKey + " (repo_id=?)"}},
 		"live ref":            {liveRefSQL, []any{"repo-1", "refs/heads/main"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
 		"refs under":          {refsUnderSQL, []any{"repo-1", "refs/heads/", "refs/heads0", 200}, []string{"INDEX " + liveRefsKey + " (repo_id=? AND ref>? AND ref<?)"}},
 		"lives":               {livesSQL, []any{"", 1000}, []string{"code_repos_name_idx (name>?)"}},

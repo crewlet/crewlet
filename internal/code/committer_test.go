@@ -458,8 +458,8 @@ func lockedRepoOn(t *testing.T, n *node, name string) string {
 // direct push.
 func lockedSettings() code.RepoSettings {
 	s := suiteSettings()
-	s.Protections = append([]code.Protection{{Pattern: "refs/heads/locked", DirectPush: code.DirectNone}},
-		s.Protections...)
+	s.Protections = append([]code.Protection{{PushRule: code.PushRule{Pattern: "refs/heads/locked",
+		DirectPush: code.DirectNone}}}, s.Protections...)
 	return s
 }
 

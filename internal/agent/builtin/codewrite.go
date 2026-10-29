@@ -783,8 +783,8 @@ func (t *codeRepoWrite) request(args map[string]any) (code.LifecycleRequest, *to
 		// and allow_delete left out, it is the rule's least: the call sets
 		// the pattern's push controls whole.
 		direct := cmp.Or(strings.TrimSpace(argString(args, "direct_push")), string(code.DirectPersons))
-		change.Rule = &code.Protection{Pattern: pattern, DirectPush: code.DirectPush(direct),
-			AllowForce: argBool(args, "allow_force"), AllowDelete: argBool(args, "allow_delete")}
+		change.Rule = &code.Protection{PushRule: code.PushRule{Pattern: pattern, DirectPush: code.DirectPush(direct),
+			AllowForce: argBool(args, "allow_force"), AllowDelete: argBool(args, "allow_delete")}}
 	}
 	// THE MERGE GATE AS A CHANGE, never whole, sent beside a removal too, so
 	// the request's own validation refuses the two together rather than this
@@ -1025,11 +1025,10 @@ func (t *codeRepoWrite) answer(ctx context.Context, turn *turnctx.Turn, c codeCa
 			Description: r.Description}
 	}
 	if req.Kind == code.LifecycleProtect && res.Outcome == statelog.OutcomeApplied {
-		for i, p := range res.Repo.Protections {
-			if p.Pattern == req.Protect.Pattern {
-				out.Rule = &res.Repo.Protections[i]
-			}
-		}
+		// THE RULE WHOLE, its gate as the deciding node resolved it: the code
+		// host answers it beside the row, which carries each rule as a push
+		// is held to it and never a gate (code.LifecycleResult.Rule).
+		out.Rule = res.Rule
 	}
 	return newForeignRead(turn, c.asker.Seat).page(ctx, t.tool, out, "")
 }

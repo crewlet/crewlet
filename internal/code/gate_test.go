@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -31,16 +32,19 @@ func aGate() code.MergeGate {
 // gatedSettings are the suite's settings with main's rule carrying gate.
 func gatedSettings(gate code.MergeGate) code.RepoSettings {
 	s := suiteSettings()
-	s.Protections = []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectPersons, Gate: &gate}}
+	s.Protections = []code.Protection{{PushRule: code.PushRule{Pattern: "refs/heads/main",
+		DirectPush: code.DirectPersons}, Gate: &gate}}
 	return s
 }
 
-// gatesOf is every rule of the repository name with its gate, as a person's
-// read of its detail answers them, and as the listing does — failing the case
-// where the two answer different rules.
-func (n *node) gatesOf(name string) []code.Protection {
+// gatesOf is the merge gates of the repository name's rules, as a person's
+// read of its detail that asks for them answers them — failing the case where
+// a gate names no rule the detail's row answers, or the listing answers other
+// rules than the detail.
+func (n *node) gatesOf(name string) []code.RuleGate {
 	n.t.Helper()
-	detail, err := n.reader.Read(n.t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: name})
+	detail, err := n.reader.Read(n.t.Context(), code.ReadQuery{Asker: asker, Kind: code.ReadRepo, Repo: name,
+		Gates: true})
 	if err != nil {
 		n.t.Fatalf("read %s's detail: %v", name, err)
 	}
@@ -49,18 +53,24 @@ func (n *node) gatesOf(name string) []code.Protection {
 		n.t.Fatalf("list the repositories: %v", err)
 	}
 	for _, r := range listing.Repos {
-		if r.Name == name && !slices.EqualFunc(r.Protections, detail.Repo.Protections, code.Protection.Equal) {
+		if r.Name == name && !slices.Equal(r.Protections, detail.Repo.Protections) {
 			n.t.Fatalf("%s is listed with the rules %+v and its detail answers %+v", name, r.Protections,
 				detail.Repo.Protections)
 		}
 	}
-	return detail.Repo.Protections
+	for _, g := range detail.Repo.Gates {
+		if !slices.ContainsFunc(detail.Repo.Protections, func(p code.PushRule) bool { return p.Pattern == g.Pattern }) {
+			n.t.Fatalf("%s's detail answers a gate for %s, which none of its rules %+v is", name, g.Pattern,
+				detail.Repo.Protections)
+		}
+	}
+	return detail.Repo.Gates
 }
 
 // A GATE RIDES ITS SETTINGS RECORD: a create writes a rule's merge gate, a
 // settings change replaces it — a field changed, the gate removed — and a
-// restore carries it back as the declaration names it then; every read of the
-// repository answers it, the detail and the listing alike, and a node that
+// restore carries it back as the declaration names it then; a read of the
+// repository's detail asking for its gates answers it, and a node that
 // applies the same records from zero holds byte-identical rows.
 //
 // Mutation: drop the gate column from insertProtections' write — the created
@@ -72,17 +82,15 @@ func TestAGateRidesItsSettingsRecord(t *testing.T) {
 	id := a.ensure("web", gatedSettings(gate), t1).RepoID
 	want := func(stage string, gate *code.MergeGate) {
 		t.Helper()
-		rules := a.gatesOf("web")
+		gates := a.gatesOf("web")
 		switch {
-		case len(rules) != 1:
-			t.Fatalf("%s: the repository answers %d rules, want main's one", stage, len(rules))
-		case gate == nil && rules[0].Gate != nil:
-			t.Fatalf("%s: main's rule answers the gate %+v, want none", stage, *rules[0].Gate)
+		case gate == nil && len(gates) != 0:
+			t.Fatalf("%s: the repository answers the gates %+v, want none", stage, gates)
 		case gate == nil:
-		case rules[0].Gate == nil:
-			t.Fatalf("%s: main's rule answers no gate, want %+v", stage, *gate)
-		case !rules[0].Gate.Equal(*gate):
-			t.Fatalf("%s: main's rule answers the gate %+v, want %+v", stage, *rules[0].Gate, *gate)
+		case len(gates) != 1 || gates[0].Pattern != "refs/heads/main":
+			t.Fatalf("%s: the repository answers the gates %+v, want main's one", stage, gates)
+		case !gates[0].Gate.Equal(*gate):
+			t.Fatalf("%s: main's rule answers the gate %+v, want %+v", stage, gates[0].Gate, *gate)
 		}
 	}
 	want("created", &gate)
@@ -106,6 +114,173 @@ func TestAGateRidesItsSettingsRecord(t *testing.T) {
 	}
 }
 
+// THE GATES ARE ANSWERED ONLY TO A READ THAT ASKS FOR THEM, and never on a
+// repository's row. Every read answering the row — the resolution of its name
+// every git request is admitted by, a page of the snapshot every git node
+// syncs from and keeps in its state file, a resolution of its refs, a listing,
+// its detail — answers each rule as a push is judged by it, with no gate
+// (code.PushRule, which has none to leave out): a repository's gates are up to
+// half a mebibyte of JSON that none of them reads. A read of its detail that
+// asks for them — one repository's, or a refs listing's first page, which
+// carries the detail — answers every gate beside its rule's pattern; one that
+// does not answers none. Every other kind refuses the ask, naming it: a refs
+// listing's later pages, which carry no detail, among them.
+//
+// Mutations: answer the gates on every detail (Reader.repo's ask dropped) — a
+// resolution answers them, red; drop gates from the checks_due listing's
+// refused fields — its read takes the ask, red.
+func TestOnlyAReadThatAsksIsAnsweredTheGates(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	gate := aGate()
+	s := gatedSettings(gate)
+	s.Protections = append(s.Protections, code.Protection{PushRule: code.PushRule{Pattern: "refs/heads/release/*",
+		DirectPush: code.DirectNone, AllowDelete: true}})
+	id := n.ensure("web", s, t1).RepoID
+	push := []code.PushRule{s.Protections[0].PushRule, s.Protections[1].PushRule}
+
+	resolved, err := n.reader.Resolve(t.Context(), code.ResolveQuery{Name: "web", Fresh: stale})
+	if err != nil || !slices.Equal(resolved.Protections, push) {
+		t.Errorf("the resolution of web = (%+v, %v), want its rules %+v", resolved.Protections, err, push)
+	}
+	page, err := n.reader.Snapshot(t.Context(), code.StateQuery{RepoID: id, Fresh: stale})
+	if err != nil || !slices.Equal(page.Repo.Protections, push) {
+		t.Errorf("a snapshot of web = (%+v, %v), want its rules %+v", page.Repo.Protections, err, push)
+	}
+
+	read := func(q code.ReadQuery) (code.ReadAnswer, error) {
+		q.Asker = asker
+		return n.reader.Read(t.Context(), q)
+	}
+	for _, q := range []code.ReadQuery{{Kind: code.ReadRepo, Repo: "web"}, {Kind: code.ReadRefs, Repo: "web"}} {
+		plain, err := read(q)
+		switch {
+		case err != nil || plain.Repo == nil:
+			t.Fatalf("a %s read of web = (%+v, %v), want its detail", q.Kind, plain.Repo, err)
+		case !slices.Equal(plain.Repo.Protections, push):
+			t.Errorf("a %s read of web answers the rules %+v, want %+v", q.Kind, plain.Repo.Protections, push)
+		case plain.Repo.Gates != nil:
+			t.Errorf("a %s read of web that asks for no gates answers %+v", q.Kind, plain.Repo.Gates)
+		}
+		q.Gates = true
+		asked, err := read(q)
+		switch {
+		case err != nil || asked.Repo == nil:
+			t.Fatalf("a %s read of web asking for its gates = (%+v, %v), want its detail", q.Kind, asked.Repo, err)
+		case len(asked.Repo.Gates) != 1 || asked.Repo.Gates[0].Pattern != "refs/heads/main" ||
+			!asked.Repo.Gates[0].Gate.Equal(gate):
+			t.Errorf("a %s read of web asking for its gates answers %+v, want main's %+v", q.Kind,
+				asked.Repo.Gates, gate)
+		}
+	}
+
+	asks := everyReadAsked(id)
+	for _, kind := range code.ReadKinds() {
+		q, named := asks[kind]
+		switch {
+		case kind == code.ReadRepo:
+			continue
+		case !named:
+			t.Errorf("a %s read is never asked for gates here: name it, so its refusal is held", kind)
+			continue
+		case kind == code.ReadRefs:
+			// A LATER PAGE, which carries no detail.
+			q.Cursor = "refs/heads/main"
+		}
+		q.Kind = kind
+		if _, err := n.reader.Read(t.Context(), q); errors.Is(err, code.ErrInvalid) {
+			t.Errorf("a %s read that asks for no gates = %v, want no field refused", kind, err)
+		}
+		q.Gates = true
+		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) ||
+			!strings.Contains(err.Error(), "gates") {
+			t.Errorf("a %s read asking for gates = %v, want ErrInvalid naming gates", kind, err)
+		}
+	}
+}
+
+// A LIFECYCLE CHANGE KEEPS EVERY GATE IT DOES NOT TOUCH. A tool-made
+// repository's settings change, archive, unarchive and protect request each
+// write its settings WHOLE, formed in the decide from its rules as the
+// snapshot holds them — read whole beside the repository's row, which carries
+// each rule as a push is judged by it and no gate — so a description changed,
+// the repository archived and brought back, or another pattern protected
+// leaves main's gate as it was.
+//
+// Mutation: form the decide's rules from the row's push rules, each with no
+// gate — the first change drops main's gate, red.
+func TestALifecycleChangeKeepsEveryGate(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	id := n.made(lcPerson, "gated", unitOwned("eng"))
+	gate := aGate()
+	n.lands(lcGate(lcPerson, id, "refs/heads/main", persons, gateTo(gate)))
+	described := "the gated one"
+	for _, req := range []code.LifecycleRequest{
+		lcSettings(lcPerson, id, code.RepoChange{Description: &described}),
+		lcOn(code.LifecycleArchive, lcPerson, id),
+		lcOn(code.LifecycleUnarchive, lcPerson, id),
+		lcProtect(lcPerson, id, "refs/heads/release/*", persons),
+	} {
+		n.lands(req)
+		if gates := n.gatesOf("gated"); len(gates) != 1 || gates[0].Pattern != "refs/heads/main" ||
+			!gates[0].Gate.Equal(gate) {
+			t.Fatalf("after a %s, the gates read %+v, want main's %+v", req.Kind, gates, gate)
+		}
+	}
+}
+
+// NO ROW OF A REPOSITORY CARRIES A MERGE GATE, by its type: the row every git
+// request's admission and every resolution of a ref reads (code.RepoRef), each
+// page of the snapshot a git node syncs by and its cache's state file keeps
+// (code.RepoSnapshot), and each rule a push is judged by (code.PushRule) reach
+// no code.MergeGate anywhere — so no read of them decodes, ships or keeps one,
+// and no consumer of them can take a gate nobody read for a rule with none.
+//
+// Mutation: type RepoRef.Protections as []Protection — the row reaches a
+// merge gate, red.
+func TestNoRowOfARepositoryCarriesAMergeGate(t *testing.T) {
+	t.Parallel()
+	gate := reflect.TypeFor[code.MergeGate]()
+	for _, row := range []reflect.Type{reflect.TypeFor[code.RepoRef](), reflect.TypeFor[code.RepoSnapshot](),
+		reflect.TypeFor[code.RefAnswer](), reflect.TypeFor[code.PushRule]()} {
+		if at, found := reachesType(row, gate, map[reflect.Type]bool{}); found {
+			t.Errorf("%s reaches a merge gate at %s%s", row, row.Name(), at)
+		}
+	}
+}
+
+// reachesType is where a value of type from holds a value of type target —
+// the path of fields to it — and whether it does at all, through pointers,
+// slices, arrays, maps and struct fields, each type walked once.
+func reachesType(from, target reflect.Type, seen map[reflect.Type]bool) (string, bool) {
+	if from == target {
+		return "", true
+	}
+	if seen[from] {
+		return "", false
+	}
+	seen[from] = true
+	switch from.Kind() {
+	case reflect.Pointer, reflect.Slice, reflect.Array:
+		return reachesType(from.Elem(), target, seen)
+	case reflect.Map:
+		if at, found := reachesType(from.Key(), target, seen); found {
+			return at, true
+		}
+		return reachesType(from.Elem(), target, seen)
+	case reflect.Struct:
+		for i := range from.NumField() {
+			f := from.Field(i)
+			if at, found := reachesType(f.Type, target, seen); found {
+				return "." + f.Name + at, true
+			}
+		}
+	}
+	return "", false
+}
+
 // A TAG RULE TAKES NO GATE: a tag never moves, so no merge reaches one, and a
 // gate on a tag rule is refused at the rule's gate — while the same gate on a
 // branch rule beside it is recorded.
@@ -114,8 +289,8 @@ func TestATagRuleTakesNoGate(t *testing.T) {
 	gate := aGate()
 	s := suiteSettings()
 	s.Protections = []code.Protection{
-		{Pattern: "refs/heads/main", DirectPush: code.DirectPersons, Gate: &gate},
-		{Pattern: "refs/tags/v*", DirectPush: code.DirectPersons},
+		{PushRule: code.PushRule{Pattern: "refs/heads/main", DirectPush: code.DirectPersons}, Gate: &gate},
+		{PushRule: code.PushRule{Pattern: "refs/tags/v*", DirectPush: code.DirectPersons}},
 	}
 	if err := s.Validate(); err != nil {
 		t.Fatalf("a gate on a branch rule beside a tag rule is refused: %v", err)

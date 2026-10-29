@@ -64,16 +64,25 @@ func gateLoosenings() []aLoosening {
 	}
 }
 
-// gateOf is pattern's rule's gate among rules, failing the case where the
-// pattern has no rule; nil for a rule with none.
-func gateOf(t *testing.T, rules []code.Protection, pattern string) *code.MergeGate {
+// gateOf is the gate of pattern's rule as a protect request's answer names it
+// whole (code.LifecycleResult.Rule), failing the case where the answer names
+// no rule for the pattern; nil for a rule with none.
+func gateOf(t *testing.T, res code.LifecycleResult, pattern string) *code.MergeGate {
 	t.Helper()
-	for _, p := range rules {
-		if p.Pattern == pattern {
-			return p.Gate
+	if res.Rule == nil || res.Rule.Pattern != pattern {
+		t.Fatalf("the answer names the rule %+v, want %s's", res.Rule, pattern)
+	}
+	return res.Rule.Gate
+}
+
+// gateAmong is pattern's gate among gates — a repository's detail asked for
+// them (code.RepoDetail.Gates) — and nil where none names the pattern.
+func gateAmong(gates []code.RuleGate, pattern string) *code.MergeGate {
+	for i, g := range gates {
+		if g.Pattern == pattern {
+			return &gates[i].Gate
 		}
 	}
-	t.Fatalf("the rules %+v hold none for %s", rules, pattern)
 	return nil
 }
 
@@ -118,10 +127,10 @@ func TestAGateChangeIsResolvedInsideTheDecide(t *testing.T) {
 		id := n.made(lcPerson, fmt.Sprintf("resolved-%d", i), unitOwned("eng"))
 		n.lands(lcGate(agent("cto"), id, main, persons, order[0]))
 		got := n.lands(lcGate(lcPerson, id, main, persons, order[1]))
-		sameGate(t, fmt.Sprintf("after %+v then %+v", order[0], order[1]), gateOf(t, got.Repo.Protections, main),
-			&want)
-		got = n.lands(lcProtect(lcPerson, id, main, &code.Protection{DirectPush: code.DirectNone}))
-		sameGate(t, "after a request naming no gate field", gateOf(t, got.Repo.Protections, main), &want)
+		sameGate(t, fmt.Sprintf("after %+v then %+v", order[0], order[1]), gateOf(t, got, main), &want)
+		got = n.lands(lcProtect(lcPerson, id, main,
+			&code.Protection{PushRule: code.PushRule{DirectPush: code.DirectNone}}))
+		sameGate(t, "after a request naming no gate field", gateOf(t, got, main), &want)
 	}
 
 	// PAST WHAT A RECORD MAY CARRY with what the change keeps: a gate of
@@ -199,7 +208,7 @@ func TestAnAgentCannotLoosenAGate(t *testing.T) {
 	if got := n.end(); got != end {
 		t.Fatalf("the lead's refused loosenings wrote %d records", got-end)
 	}
-	sameGate(t, "after the lead's refused loosenings", gateOf(t, n.gatesOf("gated"), main), &tight)
+	sameGate(t, "after the lead's refused loosenings", gateAmong(n.gatesOf("gated"), main), &tight)
 }
 
 // AN AGENT MAY TIGHTEN A GATE: the unit's lead adds a gate to a rule that had
@@ -232,7 +241,7 @@ func TestAnAgentMayTightenAGate(t *testing.T) {
 	// the lead names.
 	n.lands(lcProtect(cto, id, release, persons))
 	got := n.lands(lcGate(cto, id, release, persons, code.GateChange{Checks: ptr([]string{"unit"})}))
-	sameGate(t, "a gate the lead added", gateOf(t, got.Repo.Protections, release), &code.MergeGate{
+	sameGate(t, "a gate the lead added", gateOf(t, got, release), &code.MergeGate{
 		MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, Checks: []string{"unit"},
 		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats})
 
@@ -258,8 +267,8 @@ func TestAnAgentMayTightenAGate(t *testing.T) {
 			t.Fatalf("the lead's change %+v: %+v, want it recorded and applied", change, res)
 		}
 	}
-	got = n.lands(lcProtect(cto, id, main, &code.Protection{DirectPush: code.DirectNone}))
-	sameGate(t, "tightened by the lead", gateOf(t, got.Repo.Protections, main), &code.MergeGate{
+	got = n.lands(lcProtect(cto, id, main, &code.Protection{PushRule: code.PushRule{DirectPush: code.DirectNone}}))
+	sameGate(t, "tightened by the lead", gateOf(t, got, main), &code.MergeGate{
 		MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne,
 		ApprovalsUnless: []code.ChangeClass{code.ChangeClassCommentOnly},
 		HumanPaths: []code.HumanPath{{Glob: ".crewlet/**"},
@@ -294,14 +303,14 @@ func TestAPersonMayLoosenAGate(t *testing.T) {
 		}
 	}
 	both := []code.ChangeClass{code.ChangeClassCommentOnly, code.ChangeClassWhitespaceOnly}
-	sameGate(t, "loosened by a person", gateOf(t, n.gatesOf("loosened"), main), &code.MergeGate{
+	sameGate(t, "loosened by a person", gateAmong(n.gatesOf("loosened"), main), &code.MergeGate{
 		MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, ApprovalsUnless: both,
 		HumanPaths: []code.HumanPath{{Glob: "deploy/**", Unless: both}}, Checks: []string{"lint"},
 		Landing: code.Landing{Policy: code.LandingPostLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats,
 		AutoRevert: true, AgentsEditChecks: true,
 	})
 	got := n.lands(lcGate(lcPerson, id, main, persons, removal))
-	sameGate(t, "removed by a person", gateOf(t, got.Repo.Protections, main), nil)
+	sameGate(t, "removed by a person", gateOf(t, got, main), nil)
 }
 
 // AN AGENT CANNOT REMOVE A PATH OWNER UNDER owners_approve: where a rule's
@@ -374,5 +383,57 @@ func TestAnAgentCannotRemoveAPathOwnerUnderOwnersApprove(t *testing.T) {
 		if got := n.ownersOf(name); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s's path owners are %+v, want %+v", name, got, want)
 		}
+	}
+}
+
+// A PROTECT REQUEST'S ANSWER NAMES ITS RULE WHOLE: the repository's row never
+// carries a merge gate (code.RepoRef.Protections are code.PushRules), so the
+// answer names the protected pattern's rule beside it, its gate as the
+// deciding node resolved it (code.LifecycleResult.Rule) — read back with the
+// row where the request's record applied, read back where a repeat of the
+// operation collapsed onto the record before it, and as the decide held it
+// where the request needed no record. A rule the request removed, and every
+// other kind's answer, names none.
+//
+// Mutations: read the row back without the pattern's rule — the applied
+// answer names no rule, red; answer a request that needed no record with no
+// rule — the repeated gate names none, red.
+func TestAProtectAnswerNamesItsRuleWhole(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	const main = "refs/heads/main"
+	id := n.made(lcPerson, "answered", unitOwned("eng"))
+	gate := tightGate()
+	whole := func(stage string, res code.LifecycleResult, direct code.DirectPush) {
+		t.Helper()
+		sameGate(t, stage, gateOf(t, res, main), &gate)
+		if res.Rule.DirectPush != direct {
+			t.Fatalf("%s: the answer's rule pushes %s, want %s", stage, res.Rule.DirectPush, direct)
+		}
+	}
+
+	set := lcGate(lcPerson, id, main, persons, gateTo(gate))
+	whole("applied", n.lands(set), code.DirectPersons)
+	if again := n.life(set); again.Outcome != statelog.OutcomeApplied || again.Refusal != "" {
+		t.Fatalf("the same operation again: %+v, want it applied", again)
+	} else {
+		whole("repeated", again, code.DirectPersons)
+	}
+	same := n.life(lcGate(lcPerson, id, main, persons, gateTo(gate)))
+	if same.Outcome != statelog.OutcomeApplied || !same.Position.IsZero() {
+		t.Fatalf("the gate sent again as it stands: %+v, want it answered from the row", same)
+	}
+	whole("needing no record", same, code.DirectPersons)
+	tightened := n.lands(lcProtect(lcPerson, id, main,
+		&code.Protection{PushRule: code.PushRule{DirectPush: code.DirectNone}}))
+	whole("a field it names", tightened, code.DirectNone)
+
+	if removed := n.lands(lcProtect(lcPerson, id, main, nil)); removed.Rule != nil {
+		t.Errorf("the rule's removal answers the rule %+v, want none", *removed.Rule)
+	}
+	described := "answered, and described"
+	if changed := n.lands(lcSettings(lcPerson, id, code.RepoChange{Description: &described})); changed.Rule != nil {
+		t.Errorf("a settings change answers the rule %+v, want none", *changed.Rule)
 	}
 }

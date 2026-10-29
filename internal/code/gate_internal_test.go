@@ -10,7 +10,7 @@ import (
 // gate, a release glob's without.
 func gatedRules() []Protection {
 	return []Protection{
-		{Pattern: "refs/heads/main", DirectPush: DirectPersons, Gate: &MergeGate{
+		{PushRule: PushRule{Pattern: "refs/heads/main", DirectPush: DirectPersons}, Gate: &MergeGate{
 			MergeBy: MergeByMaintainers, Approvals: ApprovalsOne,
 			ApprovalsUnless: []ChangeClass{ChangeClassCommentOnly},
 			HumanPaths:      []HumanPath{{Glob: ".crewlet/**", Unless: []ChangeClass{ChangeClassWhitespaceOnly}}},
@@ -18,19 +18,19 @@ func gatedRules() []Protection {
 			Landing:         Landing{Policy: LandingPreLand, Depth: 4, Batch: 4},
 			OwnersApprove:   true, DeleteSource: DeleteSeats, AutoRevert: true, AgentsEditChecks: true,
 		}},
-		{Pattern: "refs/heads/release/*", DirectPush: DirectNone},
+		{PushRule: PushRule{Pattern: "refs/heads/release/*", DirectPush: DirectNone}},
 	}
 }
 
 // AN UNCHANGED GATE COMPARES EQUAL, however many times it is read. A gate is
 // a pointer, so two decodes of one record's settings are two gates in memory,
-// and every comparison that decides whether something changed — the
-// reconcile's settings comparison and the decide's verdicts — compares them by
-// value: by ==, a gated repository's unchanged declaration would be written
-// again at every activation, and every round of a batch would form its
-// verdicts again. And the comparison reads EVERY field of a gate, held to the
-// type by reflection, so a field it skipped would be a change of that field
-// every activation drops.
+// and every comparison that decides whether settings changed — the
+// reconcile's and a lifecycle request's — compares them by value: by ==, a
+// gated repository's unchanged declaration would be written again at every
+// activation. (The push decide reads no gate at all, its rules
+// [PushRule]s compared by ==.) And the comparison reads EVERY field of a gate,
+// held to the type by reflection, so a field it skipped would be a change of
+// that field every activation drops.
 //
 // Mutation: compare the rules with slices.Equal in RepoSettings.equal — two
 // decodes of one record's settings compare unequal, red; drop Checks from
@@ -57,21 +57,6 @@ func TestAnUnchangedGateComparesEqual(t *testing.T) {
 	}
 	if !one.equal(two) {
 		t.Error("two decodes of one record's settings compare unequal: every activation would write them again")
-	}
-
-	// THE VERDICTS of a batch's earlier rounds are kept across a round that
-	// reads the same rules again.
-	var v verdicts
-	if err := v.under(one.Protections); err != nil {
-		t.Fatal(err)
-	}
-	formed := verdict{refusal: RefusalProtectedDirect}
-	v.of[[2]int{0, 0}] = formed
-	if err := v.under(two.Protections); err != nil {
-		t.Fatal(err)
-	}
-	if got, kept := v.of[[2]int{0, 0}]; !kept || got != formed {
-		t.Error("a round reading the same gated rules again dropped the verdicts the earlier rounds formed")
 	}
 
 	// EVERY FIELD OF A GATE TELLS TWO GATES APART.

@@ -1818,15 +1818,12 @@ func applyDelta(inc *incarnation, snap snapshot) {
 // is checked at.
 // The redirect too, though a round reads its row by the repository's id, which
 // no old name answers: the state is the row as it was read, whole, rather
-// than the fields a round happens to see move today. The rules BY VALUE
-// ([code.Protection.Equal]): every round reads its row afresh, and a rule's
-// merge gate is a pointer, so compared by == every gated repository's row
-// would read as changed and every round would write its state again.
+// than the fields a round happens to see move today.
 func sameRepo(a, b code.RepoRef) bool {
 	return a.ID == b.ID && a.Name == b.Name && a.Status == b.Status && a.ManagedBy == b.ManagedBy &&
 		a.Kind == b.Kind && a.Owner == b.Owner && a.Visibility == b.Visibility && a.Search == b.Search &&
 		a.DefaultBranch == b.DefaultBranch && a.Description == b.Description &&
-		slices.EqualFunc(a.Protections, b.Protections, code.Protection.Equal) && a.DeletedAt.Equal(b.DeletedAt) &&
+		slices.Equal(a.Protections, b.Protections) && a.DeletedAt.Equal(b.DeletedAt) &&
 		a.LastActivityAt.Equal(b.LastActivityAt) && a.Refs == b.Refs && a.LivePacks == b.LivePacks &&
 		a.LiveBytes == b.LiveBytes && a.LiveObjects == b.LiveObjects && a.DropEpoch == b.DropEpoch &&
 		a.Redirect == b.Redirect && a.RedirectUntil.Equal(b.RedirectUntil)

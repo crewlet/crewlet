@@ -662,7 +662,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		ID: "019a0c2e-0000-7000-8000-0000000000a1", Name: "app", Status: code.RepoStatusActive,
 		ManagedBy: code.ManagedTools, Kind: code.RepoProject, Owner: code.Owner{Kind: code.OwnerUnit, Ref: "eng"},
 		DefaultBranch: "main", Description: "the app", Search: code.SearchGrep,
-		Protections:    []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectNone}},
+		Protections:    []code.PushRule{{Pattern: "refs/heads/main", DirectPush: code.DirectNone}},
 		LastActivityAt: created.Add(-time.Hour), Refs: 3, LivePacks: 2, LiveBytes: 9_000, LiveObjects: 1_200,
 		DropEpoch: 3, Redirect: "app-2", RedirectUntil: created.Add(24 * time.Hour), Position: at,
 	}
@@ -719,6 +719,13 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				PushesPerSeatDay: 40},
 			PathOwners: []code.PathOwner{{Owner: code.Owner{Kind: code.OwnerUnit, Ref: "plat"},
 				Paths: []string{"deploy/**", "web/**"}}},
+			Gates: []code.RuleGate{{Pattern: "refs/heads/main", Gate: code.MergeGate{
+				MergeBy: code.MergeByMaintainers, Approvals: code.ApprovalsOne,
+				HumanPaths: []code.HumanPath{{Glob: "deploy/**", Unless: []code.ChangeClass{
+					code.ChangeClassCommentOnly}}},
+				Checks:  []string{"lint", "unit"},
+				Landing: code.Landing{Policy: code.LandingPostLand, Depth: 2, Batch: 3}, OwnersApprove: true,
+				DeleteSource: code.DeleteNone, AutoRevert: true, AgentsEditChecks: true}}},
 		}, Refs: []code.RefRow{{Ref: "refs/heads/main", OID: "6666666666666666666666666666666666666666",
 			Position: at}}, Introduced: []code.IntroducedRow{introduced},
 			Due: []code.CompactionCandidate{{ID: ref.ID, Name: "app", LivePacks: 40, LiveObjects: 4_000,
@@ -1057,10 +1064,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, CeilingSeat: "lead", Kind: code.ReadRefs,
 			Repo: "app", Prefix: "refs/heads/seats/dev/", Cursor: "refs/heads/seats/dev/a", Limit: 7,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
-		// ONE REPOSITORY WITH ITS PATH OWNERS: the ask dropped on the wire
-		// would answer the detail without them.
+		// ONE REPOSITORY WITH ITS PATH OWNERS AND ITS RULES' GATES: either
+		// ask dropped on the wire would answer the detail without them.
 		{Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-founder", Seat: "founder"},
-			Kind: code.ReadRepo, Repo: "app", PathOwners: true,
+			Kind: code.ReadRepo, Repo: "app", PathOwners: true, Gates: true,
 			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
 		{Kind: code.ReadIntroduced, Introduced: &code.IntroducedQuery{RepoID: ref.ID, After: at,
 			Through: statelog.Position{Stream: codeStream, Generation: 2, Seq: 90}}, Cursor: "1000041/push-1",
@@ -1238,12 +1245,17 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	d.err = nil
 	d.mu.Unlock()
 
-	// A LIFECYCLE REQUEST of every kind's fields, and its answer whole: a
-	// create's whole settings, a settings CHANGE and a protection's — the
-	// changes the deciding node resolves — a delete's reason, and a hold's
-	// turn and the read it is decided at.
+	// A LIFECYCLE REQUEST of every kind's fields, and its answer whole — a
+	// protect request's rule among it, its gate whole beside the row, which
+	// carries none: a create's whole settings, a settings CHANGE and a
+	// protection's — the changes the deciding node resolves — a delete's
+	// reason, and a hold's turn and the read it is decided at.
 	d.mu.Lock()
 	d.lifecycle = code.LifecycleResult{Outcome: statelog.OutcomePending, Repo: ref,
+		Rule: &code.Protection{PushRule: ref.Protections[0], Gate: &code.MergeGate{
+			MergeBy: code.MergeByPersons, Approvals: code.ApprovalsOne, Checks: []string{"lint"},
+			Landing:      code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4},
+			DeleteSource: code.DeleteSeats, OwnersApprove: true}},
 		Refusal: code.LifecycleStale, Detail: "another rename of the repository landed first", Position: at}
 	d.mu.Unlock()
 	desc, branch, vis, search := "the app, renamed", "trunk", code.VisibilityUnit, code.SearchIndexed
@@ -1271,14 +1283,14 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				}}},
 		"a protection": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
 			Protect: &code.ProtectChange{Pattern: "refs/heads/release/*", Rule: &code.Protection{
-				Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true,
-				DirectPush: code.DirectPersons}, Gate: &code.GateChange{MergeBy: &mergeBy,
+				PushRule: code.PushRule{Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true,
+					DirectPush: code.DirectPersons}}, Gate: &code.GateChange{MergeBy: &mergeBy,
 				Approvals: &approvals, ApprovalsUnless: &classes, HumanPaths: &humanPaths, Checks: &noChecks,
 				Landing:       &code.LandingChange{Policy: &policy, Depth: &depth, Batch: &depth},
 				OwnersApprove: &on, DeleteSource: &deleteSource, AutoRevert: &off, AgentsEditChecks: &on}}},
 		"a gate's removal": {Kind: code.LifecycleProtect, OpID: op, Actor: seat, RepoID: ref.ID,
 			Protect: &code.ProtectChange{Pattern: "refs/heads/main", Rule: &code.Protection{
-				DirectPush: code.DirectNone}, Gate: &code.GateChange{Remove: true}}},
+				PushRule: code.PushRule{DirectPush: code.DirectNone}}, Gate: &code.GateChange{Remove: true}}},
 		"a delete": {Kind: code.LifecycleDelete, OpID: op, Actor: seat, RepoID: ref.ID, Reason: "done with it"},
 		"a hold": {Kind: code.LifecycleHold, OpID: op, Actor: seat, RepoID: ref.ID, TurnID: "turn-1",
 			Seen: at},

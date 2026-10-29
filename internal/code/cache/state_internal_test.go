@@ -44,53 +44,20 @@ func TestARoundComparesEveryFieldOfARepositorysRow(t *testing.T) {
 	}
 }
 
-// TWO READS OF ONE GATED ROW ARE ONE ROW. Every round reads its repository's
-// row afresh, and a rule's merge gate is a pointer, so two reads of a rule
-// carrying one are two pointers: compared by ==, a gated repository's row
-// would read as changed at every round, and every round would write its state
-// again. Two decodes of one row compare the same, and the same row with one
-// field of a gate changed does not.
+// THE WIDEST STATE THIS CACHE WRITES FITS ITS READ FOUR TIMES OVER: a
+// repository whose every rule is at the domain's bounds — a 255-byte pattern,
+// every byte of it one JSON spells as six — and whose description, default
+// branch and owner are spelled the same way, beside every bounded list of a
+// state at its bound. A state past maxStateBytes is refused as unreadable,
+// and its repository would start cold at every boot. And what a state weighs
+// is written and made durable at every round that changes anything — every
+// push, on every git node — which is why the row it keeps carries each rule
+// as a push is judged by it (code.PushRule) and never a rule's merge gate,
+// which at its bound on every rule would make the state five times as wide.
 //
-// Mutation: compare the rules with slices.Equal in sameRepo — the two reads
-// are found different, red.
-func TestTwoReadsOfOneGatedRowAreTheSame(t *testing.T) {
-	t.Parallel()
-	row := code.RepoRef{ID: "repo-1", Name: "web", Protections: []code.Protection{{
-		Pattern: "refs/heads/main", DirectPush: code.DirectPersons, Gate: &code.MergeGate{
-			MergeBy: code.MergeByMaintainers, Approvals: code.ApprovalsOne, Checks: []string{"unit"},
-			Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats,
-		},
-	}}}
-	raw, err := json.Marshal(row)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var one, two code.RepoRef
-	if err := json.Unmarshal(raw, &one); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(raw, &two); err != nil {
-		t.Fatal(err)
-	}
-	if !sameRepo(one, two) {
-		t.Error("two reads of one gated repository's row are found different: every round would write its state")
-	}
-	two.Protections[0].Gate.Checks = []string{"lint", "unit"}
-	if sameRepo(one, two) {
-		t.Error("two rows whose gates require different checks are found the same")
-	}
-}
-
-// THE WIDEST STATE THIS CACHE WRITES FITS ITS READ, with half of it again to
-// spare: a repository whose every rule is at the domain's bounds — a 255-byte
-// pattern and a merge gate of code.MaxGateBytes, every byte of the pattern one
-// JSON spells as six — and whose description is spelled the same way, beside
-// every bounded list of a state at its bound. A state past maxStateBytes is
-// refused as unreadable, and its repository would start cold at every boot.
-//
-// The gates are counted at their bound rather than built: each one a record
-// may carry is at most MaxGateBytes of JSON, so the widest state is the state
-// with none plus a gate member of that width a rule.
+// Mutation: count a merge gate of code.MaxGateBytes beside every rule of the
+// row — the width the row's rules carried with their gates — and the state is
+// past a quarter of maxStateBytes, red.
 func TestTheWidestStateFitsItsRead(t *testing.T) {
 	t.Parallel()
 	wide := func(n int) string { return strings.Repeat("&", n) }
@@ -106,7 +73,7 @@ func TestTheWidestStateFitsItsRead(t *testing.T) {
 	}
 	for i := range code.MaxProtectionsPerRepo {
 		head := fmt.Sprintf("refs/heads/%02d", i)
-		row.Protections = append(row.Protections, code.Protection{Pattern: head + wide(gitref.MaxRefNameBytes-len(head)),
+		row.Protections = append(row.Protections, code.PushRule{Pattern: head + wide(gitref.MaxRefNameBytes-len(head)),
 			AllowForce: true, AllowDelete: true, DirectPush: code.DirectPersons})
 	}
 	layers := make([]string, code.MaxPublishedLayers)
@@ -145,10 +112,10 @@ func TestTheWidestStateFitsItsRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	widest := len(raw) + code.MaxProtectionsPerRepo*(len(`,"gate":`)+code.MaxGateBytes)
-	if widest+widest/2 > maxStateBytes {
-		t.Errorf("the widest state is %d bytes: maxStateBytes (%d) is less than half again of it, and a state "+
-			"past it is unreadable", widest, maxStateBytes)
+	t.Logf("the widest state is %d bytes, of a maxStateBytes of %d", len(raw), maxStateBytes)
+	if 4*len(raw) > maxStateBytes {
+		t.Errorf("the widest state is %d bytes, past a quarter of maxStateBytes (%d): a state every push "+
+			"rewrites on every git node has outgrown what it is bounded for", len(raw), maxStateBytes)
 	}
 }
 
@@ -232,7 +199,7 @@ func BenchmarkReadState(b *testing.B) {
 		Position:      statelog.Position{Stream: topics.CodeLogStream, Generation: 2, Seq: 4711},
 		Repo: code.RepoRef{
 			ID: id, Name: "payments", Status: code.RepoStatusActive, DefaultBranch: "trunk",
-			Protections: []code.Protection{{Pattern: "refs/heads/trunk", DirectPush: code.DirectNone}},
+			Protections: []code.PushRule{{Pattern: "refs/heads/trunk", DirectPush: code.DirectNone}},
 			Refs:        12, LivePacks: 100, LiveBytes: 9000,
 		},
 		RefsDigest: strings.Repeat("ab", 32),

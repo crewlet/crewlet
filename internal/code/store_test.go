@@ -182,19 +182,21 @@ func TestEveryDeclaredSettingsChangeWritesOneRecord(t *testing.T) {
 		s.Protections = ps
 		return s
 	}
-	main := code.Protection{Pattern: "refs/heads/main", DirectPush: code.DirectPersons}
-	release := code.Protection{Pattern: "refs/heads/release/*", DirectPush: code.DirectNone}
+	main := code.Protection{PushRule: code.PushRule{Pattern: "refs/heads/main", DirectPush: code.DirectPersons}}
+	release := code.Protection{PushRule: code.PushRule{Pattern: "refs/heads/release/*", DirectPush: code.DirectNone}}
+	// with is main's rule with change made to its push rule.
+	with := func(change func(*code.PushRule)) code.Protection {
+		p := main
+		change(&p.PushRule)
+		return p
+	}
 	for name, changed := range map[string]code.RepoSettings{
-		"a rule added":   rules(main, release),
-		"a rule removed": rules(),
-		"allow_force flipped": rules(code.Protection{Pattern: main.Pattern, AllowForce: true,
-			DirectPush: main.DirectPush}),
-		"allow_delete flipped": rules(code.Protection{Pattern: main.Pattern, AllowDelete: true,
-			DirectPush: main.DirectPush}),
-		"direct_push changed": rules(code.Protection{Pattern: main.Pattern,
-			DirectPush: code.DirectNone}),
-		"a rule's pattern changed": rules(code.Protection{Pattern: "refs/heads/trunk",
-			DirectPush: main.DirectPush}),
+		"a rule added":             rules(main, release),
+		"a rule removed":           rules(),
+		"allow_force flipped":      rules(with(func(p *code.PushRule) { p.AllowForce = true })),
+		"allow_delete flipped":     rules(with(func(p *code.PushRule) { p.AllowDelete = true })),
+		"direct_push changed":      rules(with(func(p *code.PushRule) { p.DirectPush = code.DirectNone })),
+		"a rule's pattern changed": rules(with(func(p *code.PushRule) { p.Pattern = "refs/heads/trunk" })),
 		"the owner's kind changed": func() code.RepoSettings {
 			s := suiteSettings()
 			s.Owner.Kind = code.OwnerSeat

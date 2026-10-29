@@ -144,12 +144,13 @@ func TestRepoSettingsRefuseWhatADeclarationCannotMean(t *testing.T) {
 		"a pattern no ref matches": func(s *code.RepoSettings) { s.Protections[0].Pattern = "heads/main" },
 		"an unknown direct push":   func(s *code.RepoSettings) { s.Protections[0].DirectPush = "bots" },
 		"a tag allowed to move": func(s *code.RepoSettings) {
-			s.Protections = []code.Protection{{Pattern: "refs/tags/*", AllowForce: true, DirectPush: code.DirectPersons}}
+			s.Protections = []code.Protection{{PushRule: code.PushRule{Pattern: "refs/tags/*", AllowForce: true,
+				DirectPush: code.DirectPersons}}}
 		},
 		"rules out of order": func(s *code.RepoSettings) {
 			s.Protections = []code.Protection{
-				{Pattern: "refs/heads/z", DirectPush: code.DirectPersons},
-				{Pattern: "refs/heads/a", DirectPush: code.DirectPersons},
+				{PushRule: code.PushRule{Pattern: "refs/heads/z", DirectPush: code.DirectPersons}},
+				{PushRule: code.PushRule{Pattern: "refs/heads/a", DirectPush: code.DirectPersons}},
 			}
 		},
 		"a rule twice": func(s *code.RepoSettings) {
@@ -158,8 +159,8 @@ func TestRepoSettingsRefuseWhatADeclarationCannotMean(t *testing.T) {
 		"too many rules": func(s *code.RepoSettings) {
 			s.Protections = nil
 			for i := range code.MaxProtectionsPerRepo + 1 {
-				s.Protections = append(s.Protections, code.Protection{
-					Pattern: "refs/heads/r" + strings.Repeat("x", i), DirectPush: code.DirectPersons})
+				s.Protections = append(s.Protections, code.Protection{PushRule: code.PushRule{
+					Pattern: "refs/heads/r" + strings.Repeat("x", i), DirectPush: code.DirectPersons}})
 			}
 		},
 	} {

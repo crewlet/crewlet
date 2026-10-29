@@ -498,12 +498,16 @@ func TestAProtectionChangesItsGateAFieldAtATime(t *testing.T) {
 		Checks: []string{"lint", "unit"}, Landing: code.Landing{Policy: code.LandingPreLand, Depth: 2, Batch: 4},
 		DeleteSource: code.DeleteSeats}
 	writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
+		// THE ROW AS THE CODE HOST ANSWERS IT, each rule as a push is held to
+		// it, and the protected pattern's rule whole beside it.
 		repo := siteDetail().RepoRef
-		repo.Protections = []code.Protection{
-			{Pattern: "refs/heads/main", DirectPush: code.DirectNone, Gate: &gate},
+		repo.Protections = []code.PushRule{
+			{Pattern: "refs/heads/main", DirectPush: code.DirectNone},
 			{Pattern: "refs/heads/release/*", DirectPush: code.DirectPersons},
 		}
-		return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
+		rule := code.Protection{PushRule: repo.Protections[0], Gate: &gate}
+		return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Rule: &rule,
+			Position: codeAt(14)}, nil
 	}}
 	reg := codeRegistry(t, writeDeps(newCodeHost(), writer))
 	turn := writerTurn(t)

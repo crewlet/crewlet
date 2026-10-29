@@ -46,22 +46,26 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 
 	// EACH CONTROL, opened alone and closed back: one loosening, then none.
 	cases := map[string]struct{ strict, open Protection }{
-		"DirectPush": {Protection{Pattern: pattern, DirectPush: DirectNone},
-			Protection{Pattern: pattern, DirectPush: DirectPersons}},
-		"AllowForce": {Protection{Pattern: pattern, DirectPush: DirectPersons},
-			Protection{Pattern: pattern, DirectPush: DirectPersons, AllowForce: true}},
-		"AllowDelete": {Protection{Pattern: pattern, DirectPush: DirectPersons},
-			Protection{Pattern: pattern, DirectPush: DirectPersons, AllowDelete: true}},
-		"Gate": {Protection{Pattern: pattern, DirectPush: DirectPersons, Gate: gate()},
-			Protection{Pattern: pattern, DirectPush: DirectPersons}},
+		"DirectPush": {Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectNone}},
+			Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}}},
+		"AllowForce": {Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}},
+			Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons, AllowForce: true}}},
+		"AllowDelete": {Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}},
+			Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons, AllowDelete: true}}},
+		"Gate": {Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}, Gate: gate()},
+			Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}}},
 	}
+	// EVERY FIELD A RULE HOLDS, its push rule's included: the embedded
+	// PushRule's own fields are the rule's, and a control added to either is
+	// one more field here.
 	ignored := map[string]bool{"Pattern": true}
-	fields := reflect.TypeFor[Protection]()
-	for i := range fields.NumField() {
-		name := fields.Field(i).Name
-		if _, ok := cases[name]; !ok && !ignored[name] {
+	for _, field := range reflect.VisibleFields(reflect.TypeFor[Protection]()) {
+		if field.Anonymous {
+			continue
+		}
+		if _, ok := cases[field.Name]; !ok && !ignored[field.Name] {
 			t.Errorf("Protection.%s has no case here — give it one, and loosenings a clause judging it, or "+
-				"every unit's lead may loosen it", name)
+				"every unit's lead may loosen it", field.Name)
 		}
 	}
 	for name, c := range cases {
@@ -90,7 +94,8 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 					"loosenings with it", from, to)
 				continue
 			}
-			got := judged(Protection{Pattern: pattern, DirectPush: from}, &Protection{DirectPush: to})
+			got := judged(Protection{PushRule: PushRule{Pattern: pattern, DirectPush: from}},
+				&Protection{PushRule: PushRule{DirectPush: to}})
 			if (len(got) > 0) != want {
 				t.Errorf("direct_push %s → %s is judged %q, want a loosening: %v", from, to, got, want)
 			}
@@ -108,7 +113,8 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 		{unknown, DirectPersons, true},
 		{unknown, DirectNone, false},
 	} {
-		got := judged(Protection{Pattern: pattern, DirectPush: tc.from}, &Protection{DirectPush: tc.to})
+		got := judged(Protection{PushRule: PushRule{Pattern: pattern, DirectPush: tc.from}},
+			&Protection{PushRule: PushRule{DirectPush: tc.to}})
 		if (len(got) > 0) != tc.loosens {
 			t.Errorf("direct_push %s → %s is judged %q, want a loosening: %v", tc.from, tc.to, got, tc.loosens)
 		}
@@ -117,18 +123,18 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 	// THE GATE, FIELD BY FIELD: the rule's own gate sent back as it stands,
 	// another pointer to an equal value, opens nothing; raised, nothing; and
 	// lowered in two fields, those two alone, as LoosenedBy names them.
-	gated := Protection{Pattern: pattern, DirectPush: DirectPersons, Gate: gate()}
-	if got := judged(gated, &Protection{DirectPush: DirectPersons, Gate: gate()}); len(got) != 0 {
+	gated := Protection{PushRule: PushRule{Pattern: pattern, DirectPush: DirectPersons}, Gate: gate()}
+	if got := judged(gated, &Protection{PushRule: PushRule{DirectPush: DirectPersons}, Gate: gate()}); len(got) != 0 {
 		t.Errorf("the rule's own gate sent back as it stands is judged %q, want no loosening", got)
 	}
 	raised := gate()
 	raised.MergeBy, raised.Checks = MergeByPersons, []string{"e2e", "lint", "unit"}
-	if got := judged(gated, &Protection{DirectPush: DirectPersons, Gate: raised}); len(got) != 0 {
+	if got := judged(gated, &Protection{PushRule: PushRule{DirectPush: DirectPersons}, Gate: raised}); len(got) != 0 {
 		t.Errorf("a gate raised is judged %q, want no loosening", got)
 	}
 	lowered := gate()
 	lowered.MergeBy, lowered.Checks = MergeByWriters, []string{"lint"}
-	got := judged(gated, &Protection{DirectPush: DirectPersons, Gate: lowered})
+	got := judged(gated, &Protection{PushRule: PushRule{DirectPush: DirectPersons}, Gate: lowered})
 	if want := lowered.LoosenedBy(*gate()); len(want) != 2 || !slices.Equal(got, want) {
 		t.Errorf("a gate lowered in merge_by and checks is judged %q, want LoosenedBy's two, %q", got, want)
 	}
@@ -138,8 +144,8 @@ func TestEveryProtectionControlIsJudged(t *testing.T) {
 	if got := judged(cases["DirectPush"].strict, nil); len(got) != 1 {
 		t.Errorf("a removed rule is judged %q, want one loosening", got)
 	}
-	for _, to := range []*Protection{nil, {DirectPush: DirectPersons, AllowForce: true, AllowDelete: true,
-		Gate: gate()}} {
+	for _, to := range []*Protection{nil, {PushRule: PushRule{DirectPush: DirectPersons, AllowForce: true,
+		AllowDelete: true}, Gate: gate()}} {
 		if got := loosenings(nil, onlyRule(pattern, to), pattern); got != nil {
 			t.Errorf("a change of a pattern no rule holds is judged %q, want none", got)
 		}

@@ -1495,28 +1495,25 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 }
 
 // A REPOSITORY WHOSE RULES ARE PAST ONE ANSWER NAMES WHERE THEY ARE READ:
-// sixty-four rules, each with a merge gate, outweigh one tool answer, so such
-// a repository is listed whole on no page and its detail leaves no room for a
-// branch — and the refusal says where its rules are read instead: a declared
-// repository's in the company's configuration, and those of one a tool made,
-// which no configuration holds, in its detail over the API. Its detail alone
-// past one answer is refused so whether it has branches or none, since no
-// branch prefix narrows what its rules weigh.
+// sixty-four rules whose patterns are at gitref's longest, each byte one JSON
+// writes as six, outweigh one tool answer as a push is held to them — with no
+// merge gate, which no listing row carries — so such a repository is listed
+// whole on no page and its detail leaves no room for a branch; and the
+// refusal says where its rules are read instead: a declared repository's in
+// the company's configuration, and those of one a tool made, which no
+// configuration holds, in its detail over the API. Its detail alone past one
+// answer is refused so whether it has branches or none, since no branch
+// prefix narrows what its rules weigh.
 //
 // Mutation: name the company's configuration whatever made the repository —
 // the tool-made repository's refusals name code.repos, red.
 func TestARepositoryWhoseRulesArePastOneAnswerNamesWhereTheyAreRead(t *testing.T) {
 	t.Parallel()
-	rules := make([]code.Protection, 20)
+	rules := make([]code.PushRule, code.MaxProtectionsPerRepo)
 	for i := range rules {
-		paths := make([]code.HumanPath, code.MaxHumanPaths)
-		for k := range paths {
-			paths[k] = code.HumanPath{Glob: fmt.Sprintf("%02d/%s", k, strings.Repeat("a", 120))}
-		}
-		rules[i] = code.Protection{Pattern: fmt.Sprintf("refs/heads/r%02d", i), DirectPush: code.DirectPersons,
-			Gate: &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsNone, HumanPaths: paths,
-				Landing:      code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4},
-				DeleteSource: code.DeleteSeats}}
+		head := fmt.Sprintf("refs/heads/%02d", i)
+		rules[i] = code.PushRule{Pattern: head + strings.Repeat("&", gitref.MaxRefNameBytes-len(head)),
+			DirectPush: code.DirectPersons}
 	}
 	for _, tc := range []struct {
 		managed     code.ManagedBy

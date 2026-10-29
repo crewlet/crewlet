@@ -36,8 +36,8 @@ func decideEstate(t *testing.T) *estate {
 	e := openApplyEstate(t)
 	settings := settingsFor("")
 	settings.Protections = []Protection{
-		{Pattern: "refs/heads/locked", DirectPush: DirectNone},
-		{Pattern: "refs/heads/main", DirectPush: DirectPersons},
+		{PushRule: PushRule{Pattern: "refs/heads/locked", DirectPush: DirectNone}},
+		{PushRule: PushRule{Pattern: "refs/heads/main", DirectPush: DirectPersons}},
 	}
 	e.apply(rec(t, NameSubject("web"), OpCreate,
 		Scope{NamePath(NameToken("web")), RepoPath(decideRepo)},

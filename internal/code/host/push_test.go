@@ -894,8 +894,8 @@ func TestAHandBuiltPushIsJudgedAsReceivePackReadsIt(t *testing.T) {
 	l := &logs{}
 	path, calls := gittest.Recording(t)
 	settings := codetest.Settings()
-	settings.Protections = append([]code.Protection{{Pattern: "refs/heads/frozen", DirectPush: code.DirectNone}},
-		settings.Protections...)
+	settings.Protections = append([]code.Protection{{PushRule: code.PushRule{Pattern: "refs/heads/frozen",
+		DirectPush: code.DirectNone}}}, settings.Protections...)
 	c := newCase(t, codetest.SoloOptions{GitPath: path, Logger: l.logger()}, settings)
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
@@ -1171,7 +1171,7 @@ func TestAKeepaliveFlowsWhileAPushWaits(t *testing.T) {
 func TestAnAtomicPushIsNeverAnsweredMixed(t *testing.T) {
 	settings := codetest.Settings()
 	settings.Protections = append(settings.Protections,
-		code.Protection{Pattern: "refs/heads/release/*", DirectPush: code.DirectNone})
+		code.Protection{PushRule: code.PushRule{Pattern: "refs/heads/release/*", DirectPush: code.DirectNone}})
 	e := &recording{}
 	c := newCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}}, settings)
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -1217,7 +1217,8 @@ func TestAnAtomicPushIsNeverAnsweredMixed(t *testing.T) {
 // forced — every other update of the push lands.
 func TestEveryForcedUpdateOfAWidePushIsFound(t *testing.T) {
 	settings := codetest.Settings()
-	settings.Protections = []code.Protection{{Pattern: "refs/heads/**", DirectPush: code.DirectPersons}}
+	settings.Protections = []code.Protection{{PushRule: code.PushRule{Pattern: "refs/heads/**",
+		DirectPush: code.DirectPersons}}}
 	c := newCase(t, codetest.SoloOptions{MaxProcesses: 4}, settings)
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
 	work := p.Init()
@@ -1434,8 +1435,8 @@ func TestAPushWhoseBodyFailedIsToldSo(t *testing.T) {
 func TestALongProtectedRefIsRefusedAlone(t *testing.T) {
 	frozen := "refs/heads/frozen/" + strings.Repeat("x", code.MaxRefNameBytes-len("refs/heads/frozen/"))
 	settings := codetest.Settings()
-	settings.Protections = append([]code.Protection{{Pattern: frozen, DirectPush: code.DirectNone}},
-		settings.Protections...)
+	settings.Protections = append([]code.Protection{{PushRule: code.PushRule{Pattern: frozen,
+		DirectPush: code.DirectNone}}}, settings.Protections...)
 	var l logs
 	c := newCase(t, codetest.SoloOptions{Logger: l.logger()}, settings)
 	p := codetest.NewPerson(t, c.Fleet, "ceo")
@@ -1463,12 +1464,12 @@ func TestALongProtectedRefIsRefusedAlone(t *testing.T) {
 // maximal push under the most rules a repository may carry asked them all
 // twice.
 func TestTheHookAsksTheProtectionsOnlyWhatForcedChanges(t *testing.T) {
-	var rules []code.Protection
+	var rules []code.PushRule
 	for i := range code.MaxProtectionsPerRepo - 1 {
-		rules = append(rules, code.Protection{Pattern: fmt.Sprintf("refs/heads/r%02d/**", i),
+		rules = append(rules, code.PushRule{Pattern: fmt.Sprintf("refs/heads/r%02d/**", i),
 			DirectPush: code.DirectPersons})
 	}
-	rules = append(rules, code.Protection{Pattern: "refs/heads/z*", DirectPush: code.DirectPersons})
+	rules = append(rules, code.PushRule{Pattern: "refs/heads/z*", DirectPush: code.DirectPersons})
 	var cmds, judged []code.Command
 	for i := range code.MaxCommandsPerPush {
 		c := code.Command{Ref: fmt.Sprintf("refs/heads/z%04d", i), Old: oidN(i), New: oidN(i + code.MaxCommandsPerPush)}

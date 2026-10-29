@@ -257,7 +257,12 @@ func namedIn(ctx context.Context, tx *sql.Tx, name string, cp statelog.Position)
 	return v, true, nil
 }
 
-// repoViewIn reads one repository and its rules in tx, at the checkpoint cp.
+// repoViewIn reads one repository and its rules as a push is judged by them
+// ([pushRulesIn]: no gate) in tx, at the checkpoint cp — the row every git
+// request's admission ([Reader.Resolve]), every page of a git node's sync
+// ([Reader.Snapshot]), every resolution of a ref and of a repository's detail,
+// and the lifecycle decides read. A decide that rewrites the rules reads them
+// whole beside it ([protectionsIn]), as it reads the path owners.
 func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position) (repoView, bool, error) {
 	var (
 		v                                                 repoView
@@ -282,7 +287,7 @@ func repoViewIn(ctx context.Context, tx *sql.Tx, id string, cp statelog.Position
 	if deleted.Valid {
 		v.ref.DeletedAt = store.DecodeTime(deleted.Int64)
 	}
-	if v.ref.Protections, err = protectionsIn(ctx, tx, id); err != nil {
+	if v.ref.Protections, err = pushRulesIn(ctx, tx, id); err != nil {
 		return repoView{}, false, err
 	}
 	v.ref.Position = cp
@@ -1565,6 +1570,9 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: push: only a push history is narrowed to one push", ErrInvalid)
 	case q.PathOwners && q.Kind != ReadRepo:
 		return fmt.Errorf("%w: path_owners: only a read of one repository answers its path owners", ErrInvalid)
+	case q.Gates && q.Kind != ReadRepo && (q.Kind != ReadRefs || q.Cursor != ""):
+		return fmt.Errorf("%w: gates: only a read answering one repository's detail — a read of one "+
+			"repository, or a refs listing's first page — answers its rules' merge gates", ErrInvalid)
 	case q.Push != "" && !ValidPushID(q.Push):
 		return fmt.Errorf("%w: push: %q is not a push's id, a UUIDv7 in its canonical lowercase spelling",
 			ErrInvalid, q.Push)
@@ -1657,6 +1665,8 @@ func (q ReadQuery) validateIntroduced() error {
 		return refused("push", "an introduced read names its pushes by its range alone")
 	case q.PathOwners:
 		return refused("path_owners", "only a read of one repository answers its path owners")
+	case q.Gates:
+		return refused("gates", "only a read answering one repository's detail answers its rules' merge gates")
 	case q.MinPacks != 0:
 		return refused("min_packs", "only a compaction_due read names a floor of live packs")
 	case q.Change != 0:
@@ -1755,7 +1765,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -1800,7 +1810,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1836,7 +1846,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1868,7 +1878,7 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
@@ -1911,7 +1921,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners},
+		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+
@@ -2065,7 +2075,10 @@ func (r *Reader) repos(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	return nil
 }
 
-// protectionsOf fills a page of repositories' rules in ONE statement.
+// protectionsOf fills a page of repositories' rules in ONE statement, each as
+// a push is judged by it ([PushRule]): a listing answers no merge gate, which
+// one repository's detail answers a read that asks ([ReadQuery.Gates]) — so a
+// page decodes none, and its rows weigh what it sends of them.
 func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSummary) error {
 	if len(ids) == 0 {
 		return nil
@@ -2074,7 +2087,7 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 	if err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, protectionsOfSQL, list)
+	rows, err := tx.QueryContext(ctx, pushRulesOfSQL, list)
 	if err != nil {
 		return fmt.Errorf("code: read the listing's protections: %w", err)
 	}
@@ -2084,15 +2097,12 @@ func protectionsOf(ctx context.Context, tx *sql.Tx, ids []string, repos []RepoSu
 		at[s.ID] = i
 	}
 	for rows.Next() {
-		var id, direct, gate string
-		var p Protection
-		if err := rows.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
+		var id, direct string
+		var p PushRule
+		if err := rows.Scan(&id, &p.Pattern, &p.AllowForce, &p.AllowDelete, &direct); err != nil {
 			return fmt.Errorf("code: read the listing's protections: %w", err)
 		}
 		p.DirectPush = DirectPush(direct)
-		if p.Gate, err = gateFrom(gate); err != nil {
-			return fmt.Errorf("code: read repository %s's rule %s: %w", id, p.Pattern, err)
-		}
 		i := at[id]
 		repos[i].Protections = append(repos[i].Protections, p)
 	}
@@ -2141,6 +2151,14 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	// quarter of a mebibyte of JSON each of them would carry and drop.
 	if q.PathOwners {
 		if out.Repo.PathOwners, err = pathOwnersIn(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	// AND THE GATES ONLY TO A READ THAT ASKS ([ReadQuery.Gates]), for the
+	// path owners' reason: read in the same transaction as the rules the row
+	// carries, so every gate names a rule of the row.
+	if q.Gates {
+		if out.Repo.Gates, err = gatesIn(ctx, tx, id); err != nil {
 			return err
 		}
 	}
@@ -3377,7 +3395,10 @@ const (
 			ON h.repo_id = r.id AND h.ref = 'refs/heads/' || r.default_branch AND h.target != ''
 		WHERE r.status IN (SELECT value FROM json_each(?)) AND r.name > ?
 		ORDER BY r.name LIMIT ?`
-	protectionsOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push, gate
+	// pushRulesOfSQL is a listing page's rules as a push is judged by them,
+	// in one statement ([protectionsOf]) — pushRulesSQL for every repository
+	// the page keeps, never selecting the gate.
+	pushRulesOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push
 		FROM code_protections WHERE repo_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))
 		ORDER BY repo_id, pattern`
 	// repoGrantSQL is what a grant reads of one repository's row, and its

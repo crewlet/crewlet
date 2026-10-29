@@ -859,12 +859,24 @@
 // TWO RULES ARE COMPARED BY VALUE ([Protection.Equal]), never by ==: a gate is
 // a pointer, and two reads of one rule are two pointers. Compared by ==, every
 // reconcile of an unchanged declaration would write a settings record for each
-// gated repository ([RepoSettings.equal]), and every sync round of a git node
-// would write its state again (the cache's sameRepo). A push is judged by its
-// rules' flags and direct push and never by a gate, so the push decide reads
-// its rules without the column ([pushRulesIn]): decoding up to sixty-four
-// gates at every round, inside the snapshot that holds a reader connection,
-// would buy that decide nothing.
+// gated repository ([RepoSettings.equal]).
+//
+// NO ROW OF A REPOSITORY CARRIES A GATE. A push is judged by its rules' flags
+// and direct push and never by a gate, and a repository's row ([RepoRef]) is
+// what the admission of every git request reads ([Reader.Resolve]), every page
+// of a git node's sync carries ([Reader.Snapshot]) and its cache's state file
+// keeps, rewritten and made durable at every round that changes anything — on
+// every push, on every git node. So the row's rules are each rule as a push is
+// judged by it ([PushRule]), read without the gate's column ([pushRulesIn]),
+// as the push decide's are and a listing's: at their bound a repository's
+// gates are half a mebibyte of JSON, which each of those would decode, ship
+// and write to disk for nothing. TYPED APART, rather than a Protection whose
+// gate a read left nil, so no consumer can take a gate nobody read for a rule
+// that has none. A read that presents the gates asks one repository's detail
+// for them ([ReadQuery.Gates], [RepoDetail.Gates]) — the API's question of a
+// repository, code_get_repo — and a decide that rewrites the settings reads
+// the rules whole beside the row, as it reads the path owners
+// ([protectionsIn]): the lifecycle decides and the reconcile.
 //
 // A TOOL CHANGES A GATE A FIELD AT A TIME ([GateChange]): a protect request
 // names the fields it replaces, and the lifecycle decide puts them in the gate
@@ -873,7 +885,12 @@
 // form only from a read made elsewhere, and two requests changing two fields
 // at once would each undo the other's. A seat's change is weighed field by
 // field ([MergeGate.LoosenedBy]): it raises a field and only a person lowers
-// one.
+// one. The decide judges and resolves against the rules it reads whole beside
+// the row, which alone carry a gate, and the request's answer names the
+// pattern's rule whole beside the row ([LifecycleResult.Rule]) — read back by
+// the table's key with it ([ruleIn]), or as the decide held it where the
+// request needed no record — so its caller learns what the gate became
+// without reading the repository's every rule.
 //
 // # A repository names how it is searched
 //

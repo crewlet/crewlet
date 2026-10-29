@@ -87,7 +87,7 @@ func TestTheStatelessRulesRefuseInOrder(t *testing.T) {
 func TestEveryMatchingProtectionHolds(t *testing.T) {
 	t.Parallel()
 	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
-	rules := []code.Protection{
+	rules := []code.PushRule{
 		{Pattern: "refs/heads/main", AllowForce: true, AllowDelete: true, DirectPush: code.DirectPersons},
 		{Pattern: "refs/heads/**", DirectPush: code.DirectPersons},
 		{Pattern: "refs/heads/release/*", AllowForce: true, AllowDelete: true, DirectPush: code.DirectNone},
@@ -159,7 +159,7 @@ func TestAProtectionVerdictAllocatesNothing(t *testing.T) {
 	// THE LAST RULE MATCHES every ref of the shape, so the deletion's walk
 	// asks every costly rule before it and carries the one that refuses to
 	// its end.
-	refusing := append(costliest[:len(costliest)-1:len(costliest)-1], code.Protection{
+	refusing := append(costliest[:len(costliest)-1:len(costliest)-1], code.PushRule{
 		Pattern: "refs/heads/" + code.WidestComponent + "/**", DirectPush: code.DirectPersons,
 	})
 	ref := code.WidestRef(0, 0)
@@ -169,7 +169,7 @@ func TestAProtectionVerdictAllocatesNothing(t *testing.T) {
 	deletion := code.Command{Ref: ref, Old: strings.Repeat("b", 40), New: code.ZeroOID}
 	for _, tc := range []struct {
 		what  string
-		rules []code.Protection
+		rules []code.PushRule
 		want  code.Refusal
 	}{
 		{"no rule matching", costliest, ""},
@@ -190,7 +190,7 @@ func TestAProtectionVerdictAllocatesNothing(t *testing.T) {
 }
 
 // parsed is rules as ProtectionRefusal asks them.
-func parsed(t *testing.T, rules ...code.Protection) code.Protections {
+func parsed(t *testing.T, rules ...code.PushRule) code.Protections {
 	t.Helper()
 	ps, err := code.ParseProtections(rules)
 	if err != nil {
@@ -221,7 +221,7 @@ func TestAParsedProtectionMatchesWhatMatchPatternMatches(t *testing.T) {
 	}
 	matched := 0
 	for _, pattern := range patterns {
-		rules := parsed(t, code.Protection{Pattern: pattern, DirectPush: code.DirectNone})
+		rules := parsed(t, code.PushRule{Pattern: pattern, DirectPush: code.DirectNone})
 		for _, ref := range refs {
 			want := gitref.MatchPattern(pattern, ref)
 			r, _ := code.ProtectionRefusal(code.Command{Ref: ref, Old: code.ZeroOID,
@@ -250,7 +250,7 @@ func TestAParsedProtectionMatchesWhatMatchPatternMatches(t *testing.T) {
 func TestAProtectionThatIsNotAPatternIsRefused(t *testing.T) {
 	t.Parallel()
 	for _, pattern := range []string{"refs/heads/*.lock", "refs/notes/x", "refs/heads/a**b", ""} {
-		_, err := code.ParseProtections([]code.Protection{
+		_, err := code.ParseProtections([]code.PushRule{
 			{Pattern: "refs/heads/main", DirectPush: code.DirectNone},
 			{Pattern: pattern, DirectPush: code.DirectNone},
 		})
@@ -259,7 +259,7 @@ func TestAProtectionThatIsNotAPatternIsRefused(t *testing.T) {
 		}
 	}
 	if got, rule := code.ProtectionRefusal(code.Command{Ref: "refs/heads/main", Old: code.ZeroOID,
-		New: strings.Repeat("b", 40)}, code.Protections{}, code.PrincipalAgent); got != "" || rule != (code.Protection{}) {
+		New: strings.Repeat("b", 40)}, code.Protections{}, code.PrincipalAgent); got != "" || rule != (code.PushRule{}) {
 		t.Errorf("no rules refused %q by %+v", got, rule)
 	}
 }
@@ -404,8 +404,8 @@ func TestEveryReceiverSentenceFitsAProposal(t *testing.T) {
 		t.Fatalf("the longest ref (%v) and pattern (%v) must be ones the grammar takes",
 			gitref.ValidRef(ref), gitref.ValidPattern(pattern))
 	}
-	rule := code.Protection{Pattern: pattern, DirectPush: code.DirectNone}
-	persons := code.Protection{Pattern: pattern, DirectPush: code.DirectPersons}
+	rule := code.PushRule{Pattern: pattern, DirectPush: code.DirectNone}
+	persons := code.PushRule{Pattern: pattern, DirectPush: code.DirectPersons}
 	for _, tc := range []struct {
 		what   string
 		reason code.Refusal

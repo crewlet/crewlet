@@ -91,9 +91,9 @@ func BenchmarkDecideABatch(b *testing.B) {
 	const typical = "0190f3c4-0000-7000-8000-00000000be01"
 	var team []Protection
 	for i := range MaxProtectionsPerRepo {
-		team = append(team, Protection{
+		team = append(team, Protection{PushRule: PushRule{
 			Pattern: fmt.Sprintf("refs/heads/team%02d/release/**", i), DirectPush: DirectNone,
-		})
+		}})
 	}
 	repository(typical, team)
 
@@ -104,7 +104,7 @@ func BenchmarkDecideABatch(b *testing.B) {
 	// THE MATCHING RULE SORTS LAST ('a' after '*'), so the sentence's walk
 	// meets every costly rule before it, as the decision's walk did.
 	refusing := append(slices.Clone(costliest[:MaxProtectionsPerRepo-1]),
-		Protection{Pattern: "refs/heads/" + widestComponent + "/**", DirectPush: DirectNone})
+		Protection{PushRule: PushRule{Pattern: "refs/heads/" + widestComponent + "/**", DirectPush: DirectNone}})
 	repository(worstRefused, refusing)
 
 	var maximal, group []Proposal
@@ -333,10 +333,10 @@ func costliestRules(n int) []Protection {
 	glob := "*" + strings.Repeat("a*", len(widestComponent))
 	out := make([]Protection, n)
 	for i := range n {
-		out[i] = Protection{
+		out[i] = Protection{PushRule: PushRule{
 			Pattern:    "refs/heads/**/" + strings.Repeat(glob+"/", 3) + glob + last[i:i+1] + "*/**",
 			DirectPush: DirectPersons,
-		}
+		}}
 	}
 	slices.SortFunc(out, func(a, b Protection) int { return strings.Compare(a.Pattern, b.Pattern) })
 	return out

@@ -446,21 +446,54 @@ func pathOwnersInvalid(owners []PathOwner) string {
 	return ""
 }
 
-// Protection is one rule over the refs a pattern matches: what a push to one
-// of them may do, and — on a branch rule — what a merge into one needs.
+// PushRule is a protection rule as a PUSH is judged by it: the refs its
+// pattern matches and what it lets a push to one of them do — and never the
+// rule's merge gate, which holds the merges a change makes and nothing a push
+// does. It is the rule as every read of a repository's row answers it
+// ([RepoRef.Protections]): the admission of every git request, every page of
+// a git node's sync, the cache's state file, the push decide's rounds and a
+// listing of repositories, none of which reads a gate. Typed apart from
+// [Protection], rather than a Protection whose gate a read left nil, so no
+// consumer can take a gate nobody read for a rule that has none.
 //
-// COMPARED BY [Protection.Equal], never ==: its gate is a pointer.
-type Protection struct {
+// Comparable with ==: it holds no pointer.
+type PushRule struct {
 	// Pattern is refs/heads/<glob> or refs/tags/<glob> (gitref's grammar).
 	Pattern     string     `json:"pattern"`
 	AllowForce  bool       `json:"allow_force,omitempty"`
 	AllowDelete bool       `json:"allow_delete,omitempty"`
 	DirectPush  DirectPush `json:"direct_push"`
+}
+
+// Protection is one rule over the refs a pattern matches WHOLE: what a push to
+// one of them may do ([PushRule], whose fields it carries as its own, so a
+// record spells a rule as one object), and — on a branch rule — what a merge
+// into one needs. What a repository's settings carry, and what reads that
+// present a rule's gate or rewrite the settings read: one repository's detail
+// asked for its gates ([ReadQuery.Gates], answered as [RuleGate]s), the
+// lifecycle decides and the reconcile.
+//
+// COMPARED BY [Protection.Equal], never ==: its gate is a pointer.
+type Protection struct {
+	PushRule
 	// Gate is the rule's merge gate ([MergeGate]), nil for a rule with none
 	// — and always nil on a tag rule: a tag never moves, so no merge reaches
-	// one. A push decides nothing by it: a push is held to the fields above,
+	// one. A push decides nothing by it: a push is held to its [PushRule],
 	// and the merge gate holds the merges a change makes.
 	Gate *MergeGate `json:"gate,omitempty"`
+}
+
+// pushRules is the push half of each of rules, in their order — the rules a
+// [RepoRef] answers — and nil for none.
+func pushRules(rules []Protection) []PushRule {
+	if rules == nil {
+		return nil
+	}
+	out := make([]PushRule, len(rules))
+	for i, p := range rules {
+		out[i] = p.PushRule
+	}
+	return out
 }
 
 // invalid is why p is no rule a record may carry, or "", naming the field: a

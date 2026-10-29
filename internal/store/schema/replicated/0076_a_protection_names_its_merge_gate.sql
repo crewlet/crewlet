@@ -16,10 +16,13 @@
 -- (code.MergeGate), so a row holds what the record said and never a reader's
 -- default. The JSON is the record's own encoding of it, in the one order every
 -- node forms (code.CanonicalGate), at most code.MaxGateBytes (8 KiB): a
--- repository's sixty-four rules hold at most 512 KiB of gates, read whole
--- with its rules by every read of the repository and replaced whole by every
--- record that carries its settings. A push's decide reads its rules without
--- this column (code.pushRulesSQL): no push rule reads a gate.
+-- repository's sixty-four rules hold at most 512 KiB of gates, read whole by
+-- a read of the repository's detail that asks for them (code.gatesSQL), by
+-- the decides that rewrite its settings and by the reconcile, and replaced
+-- whole by every record that carries its settings. Every read of the
+-- repository's ROW — a push's decide, a git request's admission, a git
+-- node's sync, a listing — reads its rules without this column
+-- (code.pushRulesSQL, code.pushRulesOfSQL): no push rule reads a gate.
 --
 -- THE DEFAULT IS '' — no gate — because SQLite requires one for a NOT NULL
 -- column added to a table: every rule written before this migration has none,

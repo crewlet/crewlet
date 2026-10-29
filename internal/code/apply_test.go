@@ -233,7 +233,7 @@ func settingsFor(description string, patterns ...string) RepoSettings {
 		ConfigEpoch: 1,
 	}
 	for _, p := range patterns {
-		s.Protections = append(s.Protections, Protection{Pattern: p, DirectPush: DirectPersons})
+		s.Protections = append(s.Protections, Protection{PushRule: PushRule{Pattern: p, DirectPush: DirectPersons}})
 	}
 	return s
 }

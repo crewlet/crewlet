@@ -57,7 +57,7 @@ func suiteSettings() code.RepoSettings {
 		Owner:      code.Owner{Kind: code.OwnerUnit, Ref: "ENG"},
 		Visibility: code.VisibilityCompany, Search: code.SearchIndexed, DefaultBranch: "main",
 		Protections: []code.Protection{
-			{Pattern: "refs/heads/main", DirectPush: code.DirectPersons},
+			{PushRule: code.PushRule{Pattern: "refs/heads/main", DirectPush: code.DirectPersons}},
 		},
 	}
 }

@@ -283,6 +283,35 @@ func TestAPathOwnerGrantsNothing(t *testing.T) {
 	}
 }
 
+// everyReadAsked is each kind of read this build reads, as it is read of the
+// repository id named web — a principal's with its asker, the engine's own
+// with none, and whatever else the kind requires — so that without an ask no
+// field of it is refused: what a case holding an ask only some kinds answer
+// (the path owners, the merge gates) puts to every kind, so a kind added
+// later and missing here fails the case that walks code.ReadKinds.
+func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
+	launch := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}
+	return map[code.ReadKind]code.ReadQuery{
+		code.ReadRepos:   {Asker: asker},
+		code.ReadRepo:    {Asker: asker, Repo: "web"},
+		code.ReadPushes:  {Asker: asker, Repo: "web"},
+		code.ReadRefs:    {Asker: asker, Repo: "web"},
+		code.ReadChanges: {Asker: asker, Repo: "web"},
+		code.ReadChange:  {Asker: asker, Repo: "web", Change: 1},
+		code.ReadChecks:  {Asker: asker, Repo: "web"},
+		code.ReadCheck: {Asker: asker, Repo: "web",
+			Checks: &code.CheckQuery{OID: strings.Repeat("6", 40), Name: "unit", Attempt: 1}},
+		code.ReadIntroduced:     {Introduced: &code.IntroducedQuery{RepoID: id}},
+		code.ReadRunPushes:      {RunPushes: &code.RunPushesQuery{Run: runA, Repos: []string{id}, After: launch}},
+		code.ReadCompactionDue:  {MinPacks: 1},
+		code.ReadPublicationDue: {},
+		code.ReadExpungeDue:     {},
+		code.ReadExpungeTips:    {ExpungeTips: &code.ExpungeTipsQuery{RepoID: id, Since: t1}},
+		code.ReadChangesDue:     {ChangesDue: &code.ChangesDueQuery{RecheckBefore: t1}},
+		code.ReadChecksDue:      {},
+	}
+}
+
 // THE PATH OWNERS ARE ANSWERED ONLY TO A READ THAT ASKS FOR THEM. A read of
 // one repository that does not — every resolution of a repository, a tool's
 // once a turn among them — and a refs listing's first page answer its detail
@@ -323,28 +352,7 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 		t.Errorf("a read of web that asks for its path owners = (%+v, %v), want %+v", asked.Repo, err,
 			s.PathOwners)
 	}
-	// Each kind as it is read — a principal's with its asker, the engine's
-	// own with none, and whatever else the kind requires — so that without
-	// the ask no field of it is refused, and with it the ask is.
-	launch := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}
-	asks := map[code.ReadKind]code.ReadQuery{
-		code.ReadRepos:   {Asker: asker},
-		code.ReadPushes:  {Asker: asker, Repo: "web"},
-		code.ReadRefs:    {Asker: asker, Repo: "web"},
-		code.ReadChanges: {Asker: asker, Repo: "web"},
-		code.ReadChange:  {Asker: asker, Repo: "web", Change: 1},
-		code.ReadChecks:  {Asker: asker, Repo: "web"},
-		code.ReadCheck: {Asker: asker, Repo: "web",
-			Checks: &code.CheckQuery{OID: strings.Repeat("6", 40), Name: "unit", Attempt: 1}},
-		code.ReadIntroduced:     {Introduced: &code.IntroducedQuery{RepoID: id}},
-		code.ReadRunPushes:      {RunPushes: &code.RunPushesQuery{Run: runA, Repos: []string{id}, After: launch}},
-		code.ReadCompactionDue:  {MinPacks: 1},
-		code.ReadPublicationDue: {},
-		code.ReadExpungeDue:     {},
-		code.ReadExpungeTips:    {ExpungeTips: &code.ExpungeTipsQuery{RepoID: id, Since: t1}},
-		code.ReadChangesDue:     {ChangesDue: &code.ChangesDueQuery{RecheckBefore: t1}},
-		code.ReadChecksDue:      {},
-	}
+	asks := everyReadAsked(id)
 	for _, kind := range code.ReadKinds() {
 		q, named := asks[kind]
 		switch {
@@ -375,9 +383,11 @@ func TestOnlyAReadThatAsksIsAnsweredThePathOwners(t *testing.T) {
 // at its longest and its merge gate at MaxGateBytes, the description and the
 // default branch at theirs — each byte one JSON spells longest (`&`, six
 // bytes) — and as many path owners' globs at gitref's bound, spelled the same
-// way, as Validate admits beside them. And the detail that answers them must
-// fit the room a full page of refs beside it leaves in the estate's reply,
-// which a refs listing's first page carries both in ([code.MaxPageBytes]).
+// way, as Validate admits beside them. And the detail that answers them — the
+// row's rules, the path owners and every rule's gate, as a read asking for
+// both answers them — must fit the room a full page of refs beside it leaves
+// in the estate's reply, which a refs listing's first page carries both in
+// ([code.MaxPageBytes]).
 //
 // Mutation: drop the path owners' byte bound from their validation — every
 // glob at its widest is admitted, and each record is twice MaxRecordBytes, red.
@@ -391,8 +401,10 @@ func TestTheLargestSettingsFitTheirRecordAndTheDetail(t *testing.T) {
 	gate := widestGate(t)
 	for i := range code.MaxProtectionsPerRepo {
 		head := fmt.Sprintf("refs/heads/%02d", i)
-		s.Protections = append(s.Protections, code.Protection{Pattern: head + wide(gitref.MaxRefNameBytes-len(head)),
-			AllowForce: true, AllowDelete: true, DirectPush: code.DirectPersons, Gate: &gate})
+		s.Protections = append(s.Protections, code.Protection{PushRule: code.PushRule{
+			Pattern: head + wide(gitref.MaxRefNameBytes-len(head)), AllowForce: true, AllowDelete: true,
+			DirectPush: code.DirectPersons,
+		}, Gate: &gate})
 	}
 	// THE PATH OWNERS: the first n of every owner's every glob at gitref's
 	// bound, owner by owner — each named by a reference of 64 bytes, a unit's
@@ -488,8 +500,22 @@ func TestTheLargestSettingsFitTheirRecordAndTheDetail(t *testing.T) {
 			len(record), admitted, len(owners), len(without)+member+code.MaxPathOwnersBytes, code.MaxRecordBytes)
 	}
 
+	// THE DETAIL AS A READ ASKING FOR BOTH ANSWERS IT: the row's rules as a
+	// push is judged by them, the path owners, and every rule's gate beside
+	// its pattern.
+	var (
+		rules []code.PushRule
+		gates []code.RuleGate
+	)
+	for _, p := range s.Protections {
+		rules = append(rules, p.PushRule)
+		if p.Gate != nil {
+			gates = append(gates, code.RuleGate{Pattern: p.Pattern, Gate: *p.Gate})
+		}
+	}
 	detail, err := json.Marshal(code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: code.RepoRef{
-		ID: id, Name: name, Description: s.Description, Protections: s.Protections}}, PathOwners: s.PathOwners})
+		ID: id, Name: name, Description: s.Description, Protections: rules}}, PathOwners: s.PathOwners,
+		Gates: gates})
 	if err != nil {
 		t.Fatal(err)
 	}

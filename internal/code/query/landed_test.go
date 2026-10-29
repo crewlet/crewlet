@@ -32,7 +32,8 @@ func landedQ(repo, commit, target, tip string, at statelog.Position, home bool) 
 // case that rewrites main declares.
 func forceable() code.RepoSettings {
 	s := codetest.Settings()
-	s.Protections = []code.Protection{{Pattern: "refs/heads/main", DirectPush: code.DirectPersons, AllowForce: true}}
+	s.Protections = []code.Protection{{PushRule: code.PushRule{Pattern: "refs/heads/main",
+		DirectPush: code.DirectPersons, AllowForce: true}}}
 	return s
 }
 

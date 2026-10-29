@@ -30,8 +30,8 @@ func TestAReconcileInFlightFitsOneApplyTransaction(t *testing.T) {
 		s.ConfigEpoch = epoch
 		s.Protections = nil
 		for i := range MaxProtectionsPerRepo {
-			s.Protections = append(s.Protections, Protection{
-				Pattern: fmt.Sprintf("refs/heads/%s/%02d", tag, i), DirectPush: DirectPersons})
+			s.Protections = append(s.Protections, Protection{PushRule: PushRule{
+				Pattern: fmt.Sprintf("refs/heads/%s/%02d", tag, i), DirectPush: DirectPersons}})
 		}
 		for i := range MaxPathOwners {
 			s.PathOwners = append(s.PathOwners, PathOwner{

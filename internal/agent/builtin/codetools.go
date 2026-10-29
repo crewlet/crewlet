@@ -1011,7 +1011,8 @@ func (t *codeListRepos) Name() string { return CodeListReposTool }
 func (t *codeListRepos) Description() string {
 	return "List the company's repositories you can read, by name: each one's owner, visibility, " +
 		"default branch and the commit it points at, your access, its last push and its protection " +
-		"rules, a page at a time — pass `next` back as `cursor` until no `next` comes back. A " +
+		"rules, without their merge gates (" + CodeGetRepoTool + " reads those), a page at a time — " +
+		"pass `next` back as `cursor` until no `next` comes back. A " +
 		"repository you may not read — or, in a turn a colleague woke, one they may not — is not " +
 		"listed, so a page can hold fewer than `limit`, or none, and still name a `next`."
 }
@@ -1045,18 +1046,20 @@ func (t *codeListRepos) Call(ctx context.Context, args map[string]any) (tools.Re
 // by and decides about — never the counts and ids that are the code host's own
 // bookkeeping.
 type codeRepoRow struct {
-	Name          string            `json:"name"`
-	Description   string            `json:"description,omitempty"`
-	Status        code.RepoStatus   `json:"status"`
-	Owner         code.Owner        `json:"owner"`
-	Visibility    code.Visibility   `json:"visibility"`
-	Search        code.SearchMode   `json:"search"`
-	Access        string            `json:"access"`
-	DefaultBranch string            `json:"default_branch"`
-	Head          string            `json:"head,omitempty"`
-	Pushes        int64             `json:"pushes"`
-	LastPushAt    time.Time         `json:"last_push_at,omitzero"`
-	Protections   []code.Protection `json:"protections,omitempty"`
+	Name          string          `json:"name"`
+	Description   string          `json:"description,omitempty"`
+	Status        code.RepoStatus `json:"status"`
+	Owner         code.Owner      `json:"owner"`
+	Visibility    code.Visibility `json:"visibility"`
+	Search        code.SearchMode `json:"search"`
+	Access        string          `json:"access"`
+	DefaultBranch string          `json:"default_branch"`
+	Head          string          `json:"head,omitempty"`
+	Pushes        int64           `json:"pushes"`
+	LastPushAt    time.Time       `json:"last_push_at,omitzero"`
+	// Protections are its rules as a push is held to them, as its row
+	// answers them: never a rule's merge gate, which code_get_repo answers.
+	Protections []code.PushRule `json:"protections,omitempty"`
 }
 
 func repoRowOf(s code.RepoSummary) codeRepoRow {
@@ -1150,7 +1153,8 @@ var _ tools.SeatCallable = (*codeGetRepo)(nil)
 func (t *codeGetRepo) Name() string { return CodeGetRepoTool }
 
 func (t *codeGetRepo) Description() string {
-	return fmt.Sprintf("One repository in detail — its protection rules, its size, how many branches "+
+	return fmt.Sprintf("One repository in detail — its protection rules, each with the merge gate it "+
+		"holds a merge to, its size, how many branches "+
 		"and tags it has, your access, its last push and, asked by a person or a token, the URL to "+
 		"clone it from (a seat reads a repository through these tools) — and a page of its branches "+
 		"with the commit each points at, %d a page: `branches_prefix` narrows them to a namespace "+
@@ -1202,12 +1206,36 @@ type codeBranch struct {
 
 // codeRepoAnswer is code_get_repo's answer.
 type codeRepoAnswer struct {
-	Repo         string            `json:"repo"`
-	Detail       *codeRepoDetail   `json:"detail,omitempty"`
-	CloneURL     string            `json:"clone_url,omitempty"`
+	Repo     string          `json:"repo"`
+	Detail   *codeRepoDetail `json:"detail,omitempty"`
+	CloneURL string          `json:"clone_url,omitempty"`
+	// Protections are its rules WHOLE, each with the merge gate it holds a
+	// merge to: what its detail's row answers of each rule beside the gates
+	// the read asked for (code.ReadQuery.Gates), on the detail's page alone.
+	Protections  []code.Protection `json:"protections,omitempty"`
 	Branches     []codeBranch      `json:"branches"`
 	BranchesNext string            `json:"branches_next,omitempty"`
 	Position     statelog.Position `json:"position"`
+}
+
+// wholeRules is a repository's rules with their merge gates: the rules its
+// row answers, each given the gate its detail answered for its pattern —
+// gates read beside the rules, in one transaction, so every gate names a rule
+// of the row ([code.RepoDetail.Gates]). Only for a detail read that asked for
+// the gates: on one that did not, every rule would read as ungated.
+func wholeRules(rules []code.PushRule, gates []code.RuleGate) []code.Protection {
+	gateOf := make(map[string]code.MergeGate, len(gates))
+	for _, g := range gates {
+		gateOf[g.Pattern] = g.Gate
+	}
+	out := make([]code.Protection, len(rules))
+	for i, r := range rules {
+		out[i].PushRule = r
+		if g, ok := gateOf[r.Pattern]; ok {
+			out[i].Gate = &g
+		}
+	}
+	return out
 }
 
 // branchRoot is where a branch's ref begins.
@@ -1237,8 +1265,11 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// call naming it that page IS the resolution: one linearizable read, not
 	// a read of kind repo and then the page. A later page carries none, and a
 	// turn whose first word of a repository is one resolves it by its own.
+	// The detail's page asks for its rules' merge gates, which this tool
+	// answers and no other resolution reads.
 	var first *code.ReadQuery
 	if q.Cursor == "" {
+		q.Gates = true
 		first = &q
 	}
 	repo, resolved, refusal := t.deps.repoRead(ctx, turn, t.Name(), c, name, first)
@@ -1262,6 +1293,10 @@ func (t *codeGetRepo) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		out.Detail = &codeRepoDetail{codeRepoRow: repoRowOf(d.RepoSummary), ManagedBy: d.ManagedBy,
 			Refs: d.Refs, Branches: d.Branches, Tags: d.Tags, LivePacks: d.LivePacks,
 			LiveBytes: d.LiveBytes, CreatedAt: d.CreatedAt, DeletedAt: d.DeletedAt}
+		// THE RULES ONCE, WHOLE: beside the detail rather than in its row,
+		// which would answer each rule's push half a second time.
+		out.Detail.Protections = nil
+		out.Protections = wholeRules(d.Protections, d.Gates)
 		if c.asker.Kind == code.PrincipalOperator && t.deps.CloneURL != nil {
 			out.CloneURL = t.deps.CloneURL(repo.Name)
 		}

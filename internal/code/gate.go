@@ -207,16 +207,28 @@ type Landing struct {
 	Batch  int           `json:"batch"`
 }
 
-// Equal reports two rules the same, field by field and their gates BY VALUE.
+// RuleGate is one branch rule's merge gate, named by the rule's pattern: how
+// one repository's detail answers its rules' gates to a read that asks for
+// them ([ReadQuery.Gates], [RepoDetail.Gates]), beside the rules as a push is
+// judged by them, which the repository's row answers ([RepoRef.Protections]).
+// Never on that row: every git request's admission, every page of a git node's
+// sync and the cache's state file read it, and no gate changes a thing about
+// any of them.
+type RuleGate struct {
+	Pattern string    `json:"pattern"`
+	Gate    MergeGate `json:"gate"`
+}
+
+// Equal reports two rules the same: their push rules, and their gates BY
+// VALUE.
 //
 // NEVER slices.Equal OVER RULES: a gate is a pointer, and two reads of one
 // rule are two pointers, so a comparison of rules by == finds every gated
 // rule changed — every reconcile of an unchanged declaration would write a
-// settings record for it, and every sync round of a git node would write its
-// repository's state again.
+// settings record for it, and a lifecycle request that changes nothing would
+// write one too. The push half compares by ==: a [PushRule] holds no pointer.
 func (p Protection) Equal(o Protection) bool {
-	if p.Pattern != o.Pattern || p.AllowForce != o.AllowForce || p.AllowDelete != o.AllowDelete ||
-		p.DirectPush != o.DirectPush {
+	if p.PushRule != o.PushRule {
 		return false
 	}
 	if p.Gate == nil || o.Gate == nil {
@@ -705,9 +717,19 @@ func gateFrom(column string) (*MergeGate, error) {
 	if column == "" {
 		return nil, nil
 	}
-	var g MergeGate
-	if err := json.Unmarshal([]byte(column), &g); err != nil {
-		return nil, fmt.Errorf("code: decode a merge gate: %w", err)
+	g, err := decodeGate(column)
+	if err != nil {
+		return nil, err
 	}
 	return &g, nil
+}
+
+// decodeGate is the gate a code_protections.gate column holds where it holds
+// one: an empty column is no gate's JSON, and refused as such.
+func decodeGate(column string) (MergeGate, error) {
+	var g MergeGate
+	if err := json.Unmarshal([]byte(column), &g); err != nil {
+		return MergeGate{}, fmt.Errorf("code: decode a merge gate: %w", err)
+	}
+	return g, nil
 }

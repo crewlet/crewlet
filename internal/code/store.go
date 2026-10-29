@@ -1210,30 +1210,13 @@ func pathOwnersIn(ctx context.Context, tx *sql.Tx, id string) ([]PathOwner, erro
 	return out, nil
 }
 
-// protectionsIn reads a repository's rules, each with its merge gate, sorted by
-// pattern — the order a declaration's settings carry them in.
+// protectionsIn reads a repository's rules WHOLE, each with its merge gate,
+// sorted by pattern — the order a declaration's settings carry them in: what
+// a decide that rewrites the settings, or judges a change to a rule, reads
+// ([repoIn], the lifecycle decides). No read of the repository's row does
+// ([pushRulesIn]).
 func protectionsIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, error) {
-	return rulesIn(ctx, tx, protectionsSQL, id, true)
-}
-
-// pushRulesIn reads a repository's rules as a PUSH is judged by them: each
-// pattern and what it lets a push do, and NO GATE, which no push rule reads —
-// a push is held to its rule's flags and its direct push, and a merge gate
-// holds the merges a change makes. The push decide reads its rules in every
-// round's snapshot, on the reader connection that snapshot holds, and that is
-// why it reads only what it decides by: a repository's gates are up to
-// [MaxProtectionsPerRepo] of [MaxGateBytes] of JSON each, decoded for nothing
-// at every round while every other replicated read on the node waits for the
-// connection — the cost [verdicts.formBefore] keeps out of the snapshot.
-func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]Protection, error) {
-	return rulesIn(ctx, tx, pushRulesSQL, id, false)
-}
-
-// rulesIn reads a repository's rules by query — [protectionsSQL] with the
-// gates, which gated says it carries, or [pushRulesSQL] without — sorted by
-// pattern.
-func rulesIn(ctx context.Context, tx *sql.Tx, query, id string, gated bool) ([]Protection, error) {
-	rows, err := tx.QueryContext(ctx, query, id)
+	rows, err := tx.QueryContext(ctx, protectionsSQL, id)
 	if err != nil {
 		return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
 	}
@@ -1242,11 +1225,7 @@ func rulesIn(ctx context.Context, tx *sql.Tx, query, id string, gated bool) ([]P
 	for rows.Next() {
 		var p Protection
 		var direct, gate string
-		dest := []any{&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct}
-		if gated {
-			dest = append(dest, &gate)
-		}
-		if err := rows.Scan(dest...); err != nil {
+		if err := rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct, &gate); err != nil {
 			return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
 		}
 		p.DirectPush = DirectPush(direct)
@@ -1264,11 +1243,106 @@ func rulesIn(ctx context.Context, tx *sql.Tx, query, id string, gated bool) ([]P
 	return out, nil
 }
 
+// ruleIn reads pattern's rule of the repository id WHOLE, its merge gate
+// included — what a protect request's answer names ([LifecycleResult.Rule]) —
+// and nil where the repository holds no rule for it: one row by the table's
+// key, never the repository's every rule with its gate.
+func ruleIn(ctx context.Context, tx *sql.Tx, id, pattern string) (*Protection, error) {
+	var (
+		p            Protection
+		direct, gate string
+	)
+	err := tx.QueryRowContext(ctx, ruleSQL, id, pattern).Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete,
+		&direct, &gate)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("code: read %s's rule %s: %w", id, pattern, err)
+	}
+	p.DirectPush = DirectPush(direct)
+	if p.Gate, err = gateFrom(gate); err != nil {
+		return nil, fmt.Errorf("code: read %s's rule %s: %w", id, pattern, err)
+	}
+	return &p, nil
+}
+
+// pushRulesIn reads a repository's rules as a PUSH is judged by them
+// ([PushRule]): each pattern and what it lets a push do, and NO GATE, whose
+// column it never selects — a push is held to its rule's flags and its direct
+// push, and a merge gate holds the merges a change makes. The rules of every
+// read of a repository's row ([repoViewIn]) and of every round of the push
+// decide, which reads them in the snapshot that holds a reader connection —
+// so none reads what it decides nothing by: a repository's gates are up to
+// [MaxProtectionsPerRepo] of [MaxGateBytes] of JSON each, which every git
+// request's admission and every page of a git node's sync would decode, ship
+// and keep for nothing, and every round would decode while every other
+// replicated read on the node waited for the connection — the cost
+// [verdicts.formBefore] keeps out of the snapshot.
+func pushRulesIn(ctx context.Context, tx *sql.Tx, id string) ([]PushRule, error) {
+	rows, err := tx.QueryContext(ctx, pushRulesSQL, id)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []PushRule
+	for rows.Next() {
+		var p PushRule
+		var direct string
+		if err := rows.Scan(&p.Pattern, &p.AllowForce, &p.AllowDelete, &direct); err != nil {
+			return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+		}
+		p.DirectPush = DirectPush(direct)
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("code: read %s's protections: %w", id, err)
+	}
+	// THE STATEMENT ORDERS BY PATTERN, and this states it again as a
+	// property the comparison relies on rather than a property of a plan.
+	slices.SortFunc(out, func(a, b PushRule) int { return strings.Compare(a.Pattern, b.Pattern) })
+	return out, nil
+}
+
+// gatesIn reads the merge gates of a repository's rules that carry one, each
+// named by its rule's pattern, in pattern order — what one repository's detail
+// answers a read that asks for them ([ReadQuery.Gates]) — and nil where no
+// rule carries one.
+func gatesIn(ctx context.Context, tx *sql.Tx, id string) ([]RuleGate, error) {
+	rows, err := tx.QueryContext(ctx, gatesSQL, id)
+	if err != nil {
+		return nil, fmt.Errorf("code: read %s's merge gates: %w", id, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var out []RuleGate
+	for rows.Next() {
+		var r RuleGate
+		var column string
+		if err := rows.Scan(&r.Pattern, &column); err != nil {
+			return nil, fmt.Errorf("code: read %s's merge gates: %w", id, err)
+		}
+		// NEVER AN EMPTY COLUMN, which the statement leaves out: one here is
+		// refused as the gate it does not decode to, never read as none.
+		if r.Gate, err = decodeGate(column); err != nil {
+			return nil, fmt.Errorf("code: read %s's rule %s: %w", id, r.Pattern, err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("code: read %s's merge gates: %w", id, err)
+	}
+	// THE STATEMENT ORDERS BY PATTERN, stated again as a property its reader
+	// relies on — a gate is found beside its rule by walking both in order.
+	slices.SortFunc(out, func(a, b RuleGate) int { return strings.Compare(a.Pattern, b.Pattern) })
+	return out, nil
+}
+
 // The lifecycle decides' statements. claimsSQL and reposRowsSQL are
 // [Store.unchanged]'s batch forms of claimSQL and repoRowSQL, each driven from
-// its JSON list (planner.go); the batch's rules are the listing's own
-// statement, protectionsOfSQL, and its path owners pathOwnersOfSQL, the batch
-// form of pathOwnersSQL.
+// its JSON list (planner.go); the batch's rules are protectionsOfSQL, the
+// batch form of protectionsSQL — the listing's pushRulesOfSQL with each rule's
+// gate, which the comparison with a declaration reads — and its path owners
+// pathOwnersOfSQL, the batch form of pathOwnersSQL.
 const (
 	claimSQL  = `SELECT repo_id FROM code_names WHERE token = ?`
 	claimsSQL = `SELECT token, repo_id FROM code_names
@@ -1281,10 +1355,22 @@ const (
 		WHERE id = ?`
 	protectionsSQL = `SELECT pattern, allow_force, allow_delete, direct_push, gate FROM code_protections
 		WHERE repo_id = ? ORDER BY pattern`
-	// pushRulesSQL is protectionsSQL without the gate, the push decide's
-	// ([pushRulesIn]).
+	// pushRulesSQL is protectionsSQL without the gate: the rules of a
+	// repository's row and of the push decide ([pushRulesIn]).
 	pushRulesSQL = `SELECT pattern, allow_force, allow_delete, direct_push FROM code_protections
 		WHERE repo_id = ? ORDER BY pattern`
+	// ruleSQL is protectionsSQL for one pattern, by the table's key
+	// ([ruleIn]): a protect request's answer.
+	ruleSQL = `SELECT pattern, allow_force, allow_delete, direct_push, gate FROM code_protections
+		WHERE repo_id = ? AND pattern = ?`
+	// gatesSQL is the gates of a repository's rules that carry one, by
+	// pattern ([gatesIn]): one repository's detail asked for them.
+	gatesSQL = `SELECT pattern, gate FROM code_protections WHERE repo_id = ? AND gate != '' ORDER BY pattern`
+	// protectionsOfSQL is protectionsSQL for every repository a JSON list
+	// names, in one statement ([reposIn]).
+	protectionsOfSQL = `SELECT repo_id, pattern, allow_force, allow_delete, direct_push, gate
+		FROM code_protections WHERE repo_id IN (SELECT CAST(value AS TEXT) FROM json_each(?))
+		ORDER BY repo_id, pattern`
 	pathOwnersSQL = `SELECT owner_kind, owner, paths FROM code_path_owners
 		WHERE repo_id = ? ORDER BY owner_kind, owner`
 	pathOwnersOfSQL = `SELECT repo_id, owner_kind, owner, paths FROM code_path_owners

@@ -99,7 +99,7 @@ func lcHold(actor code.Principal, id, turn string, seen statelog.Position) code.
 
 // persons is a direct push a person alone may make: the rule a protection
 // change in these cases sets.
-var persons = &code.Protection{DirectPush: code.DirectPersons}
+var persons = &code.Protection{PushRule: code.PushRule{DirectPush: code.DirectPersons}}
 
 // life asks req of n's lifecycle store, failing the case on an error.
 func (n *node) life(req code.LifecycleRequest) code.LifecycleResult {
@@ -449,9 +449,11 @@ func TestAProtectRequestIsRefusedARuleNoRecordMayCarry(t *testing.T) {
 		field   string
 	}{
 		{main, &code.Protection{}, nil, "protect.rule.direct_push"},
-		{main, &code.Protection{DirectPush: "maintainers"}, nil, "protect.rule.direct_push"},
-		{tags, &code.Protection{DirectPush: code.DirectPersons, AllowForce: true}, nil, "protect.rule.allow_force"},
-		{main, &code.Protection{DirectPush: code.DirectPersons, Gate: &gate}, nil, "protect.rule.gate"},
+		{main, &code.Protection{PushRule: code.PushRule{DirectPush: "maintainers"}}, nil, "protect.rule.direct_push"},
+		{tags, &code.Protection{PushRule: code.PushRule{DirectPush: code.DirectPersons, AllowForce: true}}, nil,
+			"protect.rule.allow_force"},
+		{main, &code.Protection{PushRule: code.PushRule{DirectPush: code.DirectPersons}, Gate: &gate}, nil,
+			"protect.rule.gate"},
 		{tags, persons, &code.GateChange{Checks: ptr([]string{"unit"})}, "protect.gate"},
 		{main, nil, &code.GateChange{Checks: ptr([]string{"unit"})}, "protect.gate"},
 		{main, persons, &code.GateChange{}, "protect.gate"},
@@ -509,7 +511,7 @@ func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 	cto := agent("cto")
 	const main, release, stable = "refs/heads/main", "refs/heads/release/*", "refs/heads/stable"
 	rule := func(direct code.DirectPush, force, del bool) *code.Protection {
-		return &code.Protection{DirectPush: direct, AllowForce: force, AllowDelete: del}
+		return &code.Protection{PushRule: code.PushRule{DirectPush: direct, AllowForce: force, AllowDelete: del}}
 	}
 	gate := aGate()
 	lowered := code.GateChange{MergeBy: ptr(code.MergeByWriters)}
@@ -521,8 +523,8 @@ func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 	n.lands(lcProtect(cto, id, main, rule(code.DirectNone, true, true)))
 	n.lands(lcProtect(cto, id, main, rule(code.DirectNone, false, true)))
 	got := n.lands(lcProtect(cto, id, main, rule(code.DirectNone, false, false)))
-	if want := []code.Protection{{Pattern: main, DirectPush: code.DirectNone}}; !slices.EqualFunc(
-		got.Repo.Protections, want, code.Protection.Equal) {
+	if want := []code.PushRule{{Pattern: main, DirectPush: code.DirectNone}}; !slices.Equal(got.Repo.Protections,
+		want) {
 		t.Fatalf("added and tightened by the lead, the rules read %+v, want %+v", got.Repo.Protections, want)
 	}
 	n.lands(lcProtect(cto, id, release, rule(code.DirectPersons, true, false)))
@@ -532,10 +534,13 @@ func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 	n.lands(lcGate(cto, id, stable, rule(code.DirectPersons, false, false), gateTo(gate)))
 	n.lands(lcGate(cto, id, stable, rule(code.DirectPersons, false, false), gateTo(gate)))
 	got = n.lands(lcProtect(cto, id, stable, rule(code.DirectNone, false, false)))
-	if want := (code.Protection{Pattern: stable, DirectPush: code.DirectNone, Gate: &gate}); !slices.ContainsFunc(
-		got.Repo.Protections, want.Equal) {
+	if want := (code.PushRule{Pattern: stable, DirectPush: code.DirectNone}); !slices.Contains(got.Repo.Protections,
+		want) {
 		t.Fatalf("gated and tightened by the lead, the rules read %+v, want %+v among them", got.Repo.Protections,
 			want)
+	}
+	if gates := n.gatesOf("guarded"); len(gates) != 1 || gates[0].Pattern != stable || !gates[0].Gate.Equal(gate) {
+		t.Fatalf("gated and tightened by the lead, the gates read %+v, want stable's %+v", gates, gate)
 	}
 
 	// LOOSENED by the lead: each refused, the sentence naming the pattern and
@@ -599,10 +604,12 @@ func TestAnAgentCannotLoosenAProtection(t *testing.T) {
 	n.lands(lcGate(lcPerson, id, stable, rule(code.DirectNone, false, false), lowered))
 	n.lands(lcGate(lcPerson, id, stable, rule(code.DirectNone, false, false), code.GateChange{Remove: true}))
 	got = n.lands(lcProtect(lcPerson, id, main, nil))
-	if want := []code.Protection{{Pattern: release, DirectPush: code.DirectNone, AllowDelete: true},
-		{Pattern: stable, DirectPush: code.DirectNone}}; !slices.EqualFunc(got.Repo.Protections, want,
-		code.Protection.Equal) {
+	if want := []code.PushRule{{Pattern: release, DirectPush: code.DirectNone, AllowDelete: true},
+		{Pattern: stable, DirectPush: code.DirectNone}}; !slices.Equal(got.Repo.Protections, want) {
 		t.Fatalf("loosened by a person, the rules read %+v, want %+v", got.Repo.Protections, want)
+	}
+	if gates := n.gatesOf("guarded"); len(gates) != 0 {
+		t.Fatalf("loosened by a person, the gates read %+v, want stable's removed", gates)
 	}
 }
 

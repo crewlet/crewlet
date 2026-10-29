@@ -141,7 +141,7 @@ func RequestMemoryInUse(s *Server) int64 { return s.heads.inUse() }
 // ProtectAfterForce is protectAfterForce over rules for a push by a principal
 // of kind by, every command in judged as the receive handler judged it: how
 // many commands it asked.
-func ProtectAfterForce(cmds []code.Command, rules []code.Protection, by code.PrincipalKind,
+func ProtectAfterForce(cmds []code.Command, rules []code.PushRule, by code.PrincipalKind,
 	judged []code.Command) (int, error) {
 	parsed, err := code.ParseProtections(rules)
 	if err != nil {

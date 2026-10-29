@@ -826,10 +826,10 @@ func TestAListingPageCountsItsRules(t *testing.T) {
 	settings.Protections = nil
 	for i := range 10 {
 		head := fmt.Sprintf("refs/heads/%02d-", i)
-		settings.Protections = append(settings.Protections, code.Protection{
+		settings.Protections = append(settings.Protections, code.Protection{PushRule: code.PushRule{
 			Pattern:    head + strings.Repeat("x", code.MaxRefNameBytes-len(head)),
 			DirectPush: code.DirectPersons,
-		})
+		}})
 	}
 	const repos = 12
 	for i := range repos {

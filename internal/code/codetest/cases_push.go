@@ -223,8 +223,8 @@ func aPushOverTheBlobLimitIsRefusedWhole(t *testing.T, newFleet NewFleet) {
 func protectionRulesRefuseByName(t *testing.T, newFleet NewFleet) {
 	settings := Settings()
 	settings.Protections = []code.Protection{
-		{Pattern: "refs/heads/main", DirectPush: code.DirectPersons},
-		{Pattern: "refs/heads/release/*", DirectPush: code.DirectNone},
+		{PushRule: code.PushRule{Pattern: "refs/heads/main", DirectPush: code.DirectPersons}},
+		{PushRule: code.PushRule{Pattern: "refs/heads/release/*", DirectPush: code.DirectNone}},
 	}
 	c := newCase(t, newFleet, Shape{}, settings)
 	p := NewPerson(t, c.Fleet, "ceo")

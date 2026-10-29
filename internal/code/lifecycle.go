@@ -353,6 +353,25 @@ type LifecycleResult struct {
 	// Repo is the repository as read back after the record applied, or as it
 	// stood where the request needed no record or was refused.
 	Repo RepoRef `json:"repo"`
+	// Rule is a protect request's pattern's rule WHOLE, its merge gate
+	// included, where the request applied or needed no record: as read back
+	// beside Repo, or as the decide that needed none held it — so its gate
+	// is the one the deciding node resolved the request's change against.
+	// Nil for every other kind and answer, and where the pattern holds no
+	// rule. Repo never carries a gate ([RepoRef.Protections] are
+	// [PushRule]s), and a caller that asked to change one is answered what it
+	// became without reading the repository's every rule whole.
+	//
+	// AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Gates]': no
+	// build that carries the code domain has run without this field — none
+	// of the domain is on main, so no image and no release serves a
+	// lifecycle request. A build that predated it would answer a protect
+	// request with no rule, which its caller would read as the pattern
+	// holding none; so were a build without it ever to run first, the rule
+	// would move to an answer of its own rather than ride a field such a
+	// build leaves out.
+	Rule *Protection `json:"rule,omitempty"`
 	// Refusal names why the request was refused; empty where it was not.
 	Refusal LifecycleRefusal `json:"refusal,omitempty"`
 	// Detail is the refusal's sentence, or for an outcome unknown what is
@@ -610,15 +629,17 @@ func lifecycleActor(p Principal) Actor {
 }
 
 // settingsOf is a repository's settings as a record carries them, from its
-// row as a read serves it and its path owners, which no [RepoRef] carries —
-// read beside it in the same decide ([pathOwnersIn]), since a record carries
-// the settings WHOLE, and one formed without them would remove every path
-// owner the repository has.
-func settingsOf(r RepoRef, owners []PathOwner) RepoSettings {
+// row as a read serves it, its rules whole and its path owners, neither of
+// which a [RepoRef] carries — each read beside it in the same decide
+// ([protectionsIn], [pathOwnersIn]), since a record carries the settings
+// WHOLE, and one formed from the row's rules alone would remove every merge
+// gate the repository has, and one formed without its path owners every path
+// owner.
+func settingsOf(r RepoRef, rules []Protection, owners []PathOwner) RepoSettings {
 	return RepoSettings{
 		ManagedBy: r.ManagedBy, Kind: r.Kind, Owner: r.Owner, DefaultBranch: r.DefaultBranch,
 		Description: r.Description, Archived: r.Status == RepoStatusArchived, Visibility: r.Visibility,
-		Search: r.Search, Protections: slices.Clone(r.Protections), PathOwners: slices.Clone(owners),
+		Search: r.Search, Protections: slices.Clone(rules), PathOwners: slices.Clone(owners),
 	}
 }
 
@@ -636,13 +657,15 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 }
 
 // lifecycleRefusal is whether actor may ask req of a repository — repo as it
-// stands for every kind but a create, and next as the request would leave it
-// (a create's new repository, a settings change's result, or a protect
-// request's rules with its change resolved; the zero RepoRef where the kind
-// leaves the repository's grant as it is), owners the repository's path
-// owners as the decide's snapshot read them (nil where the kind reads none) —
-// reading the chart roster, and the sentence why not. THE ONE JUDGEMENT of who
-// may, every kind's:
+// stands for every kind but a create, with its rules WHOLE beside it (rules,
+// gates included, which no RepoRef carries), and next as the request would
+// leave it (a create's new repository, or a settings change's result; the zero
+// RepoRef where the kind leaves the repository's grant as it is), with the
+// rules it would leave WHOLE beside it (nextRules: a protect request's with
+// its change resolved), owners the repository's path owners as the decide's
+// snapshot read them — rules, nextRules and owners nil where the kind judges
+// none — reading the chart roster, and the sentence why not. THE ONE
+// JUDGEMENT of who may, every kind's:
 //
 //   - a BOUND PERSON maintains every tool-made repository, and creates a
 //     PROJECT for any owner the chart holds — never a scratch repository,
@@ -663,17 +686,18 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 //     ([seatProjectRefusal]);
 //   - and A PROTECTION BINDS EVERY SEAT, its unit's lead included: whatever
 //     its grant, a seat adds a protection rule or tightens one and never
-//     removes or loosens one ([loosenings]), judged against the rule repo —
-//     the row this decide's snapshot read — holds for the pattern, so two
-//     requests cannot loosen a rule between them. With maintain alone
-//     deciding, a lead steered by what it read could lift main's protection
-//     and then force it: the protections would bind every seat but the one
-//     with the most reach. Only a person loosens one — and so only a person
-//     TAKES A GLOB FROM A PATH OWNER where a rule's merge gate sets
-//     owners_approve ([gatingOwnersTaken]): there the path owners are whom a
-//     merge waits for, so a glob taken from one, or an owner taken whole, lets
-//     a merge past the approval it needed, as loosening the gate itself would.
-//     A seat still gives a path owner globs, which only asks a merge for more.
+//     removes or loosens one ([loosenings]), judged against the rule this
+//     decide's snapshot holds for the pattern — among rules, read in it
+//     whole — so two requests cannot loosen a rule between them. With
+//     maintain alone deciding, a lead steered by what it read could lift
+//     main's protection and then force it: the protections would bind every
+//     seat but the one with the most reach. Only a person loosens one — and
+//     so only a person TAKES A GLOB FROM A PATH OWNER where a rule's merge
+//     gate sets owners_approve ([gatingOwnersTaken]): there the path owners
+//     are whom a merge waits for, so a glob taken from one, or an owner taken
+//     whole, lets a merge past the approval it needed, as loosening the gate
+//     itself would. A seat still gives a path owner globs, which only asks a
+//     merge for more.
 //
 // A NAME OF THE OTHER KIND'S FORM is refused for every actor, a person's
 // included: renamed to <handle>.<slug>, a project would read as that seat's
@@ -686,8 +710,8 @@ func pathOwnersAdded(req LifecycleRequest) []PathOwner {
 // a unit or a seat the chart lacks is nobody to ask. Naming one grants nothing
 // ([PathOwner]), so a seat that maintains the repository may name any the
 // chart holds — the same review it could request by name.
-func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, owners []PathOwner, roster Roster) (bool,
-	string) {
+func lifecycleRefusal(req LifecycleRequest, repo RepoRef, rules []Protection, next RepoRef,
+	nextRules []Protection, owners []PathOwner, roster Roster) (bool, string) {
 	actor := req.Actor
 	if req.Kind == LifecycleRename {
 		if why := renameForm(repo, req.Name); why != "" {
@@ -743,16 +767,17 @@ func lifecycleRefusal(req LifecycleRequest, repo, next RepoRef, owners []PathOwn
 	}
 	// A PROTECTION BINDS EVERY SEAT: maintain lets a seat add a rule or
 	// tighten one, and loosening one is a person's — the gate's path owners
-	// included, where it makes them gating.
+	// included, where it makes them gating. Both judged against the rules
+	// read whole beside the row, since only those carry a gate.
 	switch req.Kind {
 	case LifecycleProtect:
-		if opens := loosenings(repo.Protections, next.Protections, req.Protect.Pattern); len(opens) > 0 {
+		if opens := loosenings(rules, nextRules, req.Protect.Pattern); len(opens) > 0 {
 			return true, fmt.Sprintf("only a person may remove or loosen the protection on %s, and this "+
 				"change %s; a seat, its unit's lead included, may add a rule or tighten one",
 				req.Protect.Pattern, strings.Join(opens, " and "))
 		}
 	case LifecycleSettings:
-		if gating, taken := gatingOwnersTaken(repo.Protections, owners, req.Change.PathOwners); len(taken) > 0 {
+		if gating, taken := gatingOwnersTaken(rules, owners, req.Change.PathOwners); len(taken) > 0 {
 			return true, fmt.Sprintf("only a person may take a glob from a path owner of %s, whose path "+
 				"owners gate its merges where %s owners_approve — a merge waits for an approval eligible "+
 				"for every owned glob it touches — and this change takes path_owners' %s; a seat, its unit's "+
@@ -884,6 +909,11 @@ type lifecycleDecision struct {
 	// row is the repository as the decide read it — or, for a create, as
 	// its record will make it.
 	row RepoRef
+	// rule is a protect request's pattern's rule as the decide resolved it,
+	// whole — what its record carries for the pattern, and, where the
+	// request needs no record, the rule the snapshot holds — nil where the
+	// request leaves the pattern no rule ([LifecycleResult.Rule]).
+	rule *Protection
 }
 
 // refuse records a refusal.
@@ -969,7 +999,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 			made := RepoRef{ID: id, Name: req.Name, Status: settings.status(), ManagedBy: ManagedTools,
 				Kind: settings.Kind, Owner: settings.Owner, Visibility: settings.Visibility,
 				Search: settings.Search, DefaultBranch: settings.DefaultBranch,
-				Description: settings.Description, Protections: settings.Protections, Position: cp.At}
+				Description: settings.Description, Protections: pushRules(settings.Protections), Position: cp.At}
 			holder, redirect, found, err := claimRowIn(ctx, tx, token)
 			switch {
 			case err != nil:
@@ -996,7 +1026,7 @@ func (s *Store) lifecycleCreate(ctx context.Context, req LifecycleRequest, roste
 				}
 				return statelog.Decision{}, err
 			}
-			if refused, why := lifecycleRefusal(req, RepoRef{}, made, nil, roster); refused {
+			if refused, why := lifecycleRefusal(req, RepoRef{}, nil, made, nil, nil, roster); refused {
 				d.refuse(LifecycleNotPermitted, "%s", why)
 				return statelog.Decision{}, nil
 			}
@@ -1109,7 +1139,7 @@ func (s *Store) lifecycleRename(ctx context.Context, req LifecycleRequest, roste
 			if refusal := toolRepoRefusal(v.ref, &d); refusal {
 				return statelog.Decision{}, nil
 			}
-			if refused, why := lifecycleRefusal(req, v.ref, RepoRef{}, nil, roster); refused {
+			if refused, why := lifecycleRefusal(req, v.ref, nil, RepoRef{}, nil, nil, roster); refused {
 				d.refuse(LifecycleNotPermitted, "%s", why)
 				return statelog.Decision{}, nil
 			}
@@ -1178,15 +1208,23 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 				return statelog.Decision{}, s.goneOrMissing(ctx, tx, req.RepoID, &d)
 			}
 			d.row = v.ref
-			// ITS PATH OWNERS, which no RepoRef carries, beside its row: every
-			// kind but a hold writes the settings whole, or decides from them.
-			var owners []PathOwner
+			// ITS RULES WHOLE AND ITS PATH OWNERS, which no RepoRef carries —
+			// its rules' merge gates and who owns which paths — beside its
+			// row: every kind but a hold writes the settings whole, or
+			// decides from them.
+			var (
+				rules  []Protection
+				owners []PathOwner
+			)
 			if req.Kind != LifecycleHold {
+				if rules, err = protectionsIn(ctx, tx, req.RepoID); err != nil {
+					return statelog.Decision{}, err
+				}
 				if owners, err = pathOwnersIn(ctx, tx, req.RepoID); err != nil {
 					return statelog.Decision{}, err
 				}
 			}
-			payload, op, err := s.decideOnRepo(req, v.ref, owners, roster, &d)
+			payload, op, err := s.decideOnRepo(req, v.ref, rules, owners, roster, &d)
 			if err != nil || payload == nil {
 				return statelog.Decision{}, err
 			}
@@ -1205,11 +1243,11 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 }
 
 // decideOnRepo is the decide of a kind on the repository's own subject, from
-// its row v and its path owners: the record's payload and op, or nil where the
-// request is refused (d says why) or writes nothing. An error is the request's
-// own fault.
-func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, owners []PathOwner, roster Roster,
-	d *lifecycleDecision) (any, OpKind, error) {
+// its row v, its rules whole and its path owners: the record's payload and op,
+// or nil where the request is refused (d says why) or writes nothing. An error
+// is the request's own fault.
+func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection, owners []PathOwner,
+	roster Roster, d *lifecycleDecision) (any, OpKind, error) {
 
 	if req.Kind == LifecycleHold {
 		return decideHold(req, v, roster, d)
@@ -1225,7 +1263,7 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, owners []PathOwner
 		toolRepoRefusal(v, d)
 		return nil, "", nil
 	}
-	next := settingsOf(v, owners)
+	next := settingsOf(v, rules, owners)
 	nextRef := v
 	switch req.Kind {
 	case LifecycleSettings:
@@ -1284,10 +1322,12 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, owners []PathOwner
 			return nil, "", nil
 		}
 		// RESOLVED AGAINST THE ROWS THIS DECIDE READ: the rule's gate is the
-		// one this snapshot holds for the pattern with the change's fields put
-		// in it, so another request's change to another field meanwhile is
-		// kept, and the loosening judged is the one the record would make.
-		rule := req.Protect.rule(v.Protections)
+		// one this snapshot holds for the pattern — among the rules read
+		// whole beside the row, which alone carry a gate — with the change's
+		// fields put in it, so another request's change to another field
+		// meanwhile is kept, and the loosening judged is the one the record
+		// would make.
+		rule := req.Protect.rule(rules)
 		if rule != nil {
 			// ITS WHOLE WEIGHT HERE, naming the field its caller sent: the
 			// request's own validation held each field the change names to
@@ -1297,9 +1337,9 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, owners []PathOwner
 			}
 		}
 		next.Protections = protected(next.Protections, req.Protect.Pattern, rule)
-		nextRef.Protections = next.Protections
+		d.rule = rule
 	}
-	if refused, why := lifecycleRefusal(req, v, nextRef, owners, roster); refused {
+	if refused, why := lifecycleRefusal(req, v, rules, nextRef, next.Protections, owners, roster); refused {
 		d.refuse(LifecycleNotPermitted, "%s", why)
 		return nil, "", nil
 	}
@@ -1316,13 +1356,13 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, owners []PathOwner
 			// answer.
 			return nil, "", nil
 		}
-		restored := settingsOf(v, owners)
+		restored := settingsOf(v, rules, owners)
 		return LifecycleRecord{RepoID: v.ID, Settings: &restored}, OpRestore, nil
 	}
 	if err := next.Validate(); err != nil {
 		return nil, "", err
 	}
-	if next.equal(settingsOf(v, owners)) {
+	if next.equal(settingsOf(v, rules, owners)) {
 		// AN IDEMPOTENT NO-OP: the row already says it.
 		return nil, "", nil
 	}
@@ -1342,7 +1382,7 @@ func decideHold(req LifecycleRequest, v RepoRef, roster Roster, d *lifecycleDeci
 			DeletedAt: v.DeletedAt, ManagedBy: v.ManagedBy}.Detail())
 		return nil, "", nil
 	}
-	if refused, why := lifecycleRefusal(req, v, RepoRef{}, nil, roster); refused {
+	if refused, why := lifecycleRefusal(req, v, nil, RepoRef{}, nil, nil, roster); refused {
 		d.refuse(LifecycleNotPermitted, "%s", why)
 		return nil, "", nil
 	}
@@ -1509,26 +1549,36 @@ func gatingOwnersTaken(rules []Protection, held []PathOwner, change *PathOwnersC
 // lifecycleAnswer is a lifecycle request's answer from its publish: the
 // error, a refusal, a no-op answered from the row, or the record's outcome —
 // read back where it applied here, and held by check, which answers a refusal
-// for a record that applied as nothing.
+// for a record that applied as nothing. A protect request's applied answer
+// names its pattern's rule whole beside the row ([LifecycleResult.Rule]):
+// read back with it, or, for a no-op, as the decide held it.
 func (s *Store) lifecycleAnswer(ctx context.Context, req LifecycleRequest, id string, result statelog.Result,
 	err error, d lifecycleDecision, check func(RepoRef) (LifecycleRefusal, string)) (LifecycleResult, error) {
 
 	if err != nil {
 		return s.lifecycleRefused(err, req, id)
 	}
+	// THE PATTERN WHOSE RULE THE ANSWER NAMES, a protect request's alone.
+	var pattern string
+	if req.Kind == LifecycleProtect && req.Protect != nil {
+		pattern = req.Protect.Pattern
+	}
 	switch {
 	case result.Collapsed:
 		// THIS OPERATION ALREADY APPLIED: answered from the row as it
-		// stands now, at the first copy's position.
-		back, err := s.readRepo(ctx, id)
+		// stands now, at the first copy's position — and its rule read back
+		// with it, never the one this call's decide resolved, which nothing
+		// published.
+		back, rule, err := s.readRepo(ctx, id, pattern)
 		if err != nil {
 			return LifecycleResult{}, err
 		}
-		return LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: back, Position: result.Position}, nil
+		return LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: back, Rule: rule,
+			Position: result.Position}, nil
 	case d.refusal != "":
 		return LifecycleResult{Repo: d.row, Refusal: d.refusal, Detail: d.detail}, nil
 	case !d.wrote:
-		return LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: d.row}, nil
+		return LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: d.row, Rule: d.rule}, nil
 	case result.Outcome == statelog.OutcomeUnknown:
 		// AN OUTCOME, NEVER AN ERROR: the record may have landed, and the
 		// same request again — the same operation — is what finds out. As an
@@ -1542,7 +1592,7 @@ func (s *Store) lifecycleAnswer(ctx context.Context, req LifecycleRequest, id st
 		// DURABLE, NOT YET APPLIED HERE: the row is the one the decide read.
 		return LifecycleResult{Outcome: statelog.OutcomePending, Repo: d.row, Position: result.Position}, nil
 	}
-	back, err := s.readRepo(ctx, id)
+	back, rule, err := s.readRepo(ctx, id, pattern)
 	if err != nil {
 		return LifecycleResult{}, err
 	}
@@ -1551,7 +1601,7 @@ func (s *Store) lifecycleAnswer(ctx context.Context, req LifecycleRequest, id st
 			return LifecycleResult{Repo: back, Refusal: refusal, Detail: detail, Position: result.Position}, nil
 		}
 	}
-	return LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: back, Position: result.Position}, nil
+	return LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: back, Rule: rule, Position: result.Position}, nil
 }
 
 // cmpName is how an answer names the repository a request is about.
@@ -1593,9 +1643,14 @@ func cmpOr(a, b string) string {
 }
 
 // readRepo is a repository as this node's rows hold it now, at the checkpoint
-// they were read at.
-func (s *Store) readRepo(ctx context.Context, id string) (RepoRef, error) {
-	var out RepoRef
+// they were read at — and, where pattern is not empty, pattern's rule whole
+// in the same transaction ([ruleIn]), nil where the repository holds none for
+// it: a protect request's answer ([LifecycleResult.Rule]).
+func (s *Store) readRepo(ctx context.Context, id, pattern string) (RepoRef, *Protection, error) {
+	var (
+		out  RepoRef
+		rule *Protection
+	)
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		cp, err := checkpointIn(ctx, tx)
 		if err != nil {
@@ -1609,12 +1664,15 @@ func (s *Store) readRepo(ctx context.Context, id string) (RepoRef, error) {
 			return fmt.Errorf("%w: %s", ErrRepoNotFound, id)
 		}
 		out = v.ref
-		return nil
+		if pattern != "" {
+			rule, err = ruleIn(ctx, tx, id, pattern)
+		}
+		return err
 	})
 	if err != nil {
-		return RepoRef{}, fmt.Errorf("code: read back repository %s: %w", id, err)
+		return RepoRef{}, nil, fmt.Errorf("code: read back repository %s: %w", id, err)
 	}
-	return out, nil
+	return out, rule, nil
 }
 
 // claimRowIn is a name's claim in tx: the repository it names, and when its

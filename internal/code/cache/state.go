@@ -53,18 +53,18 @@ const stateFormat = 2
 const stateName = "crewlet-state.json"
 
 // maxStateBytes bounds the read of a state file. A state at the domain's
-// bounds is about 650 KB, nearly all of it the repository's rules: 64 of them
-// (code.MaxProtectionsPerRepo), each a 255-byte pattern and a merge gate of
-// at most code.MaxGateBytes as JSON writes them — 9.7 KB a rule where every
-// byte of the pattern is one JSON spells as six — beside a 1 KB description
-// spelled the same way, a few hundred bytes of scalars, the derived files' map
-// at a few dozen bytes a declaration, the provenance index's record,
-// MaxProvenanceRuns runs of about 150 bytes each, the memo's, at most
-// maxStateCohorts cohorts of about 30, and the two chains' layer ids. So a
-// mebibyte is over half again anything this cache writes
-// (TestTheWidestStateFitsItsRead), and a file past it is not one this cache
-// wrote, whatever is in it. Smaller, a repository at the bounds would start
-// cold at every boot, its state refused as unreadable.
+// bounds is about 120 KB, nearly all of it the repository row's rules: 64 of
+// them (code.MaxProtectionsPerRepo), each a 255-byte pattern every byte of
+// which is one JSON spells as six, beside a 1 KB description and a default
+// branch spelled the same way, a few hundred bytes of scalars, the derived
+// files' map at a few dozen bytes a declaration, the provenance index's
+// record, MaxProvenanceRuns runs of about 150 bytes each, the memo's, at most
+// maxStateCohorts cohorts of about 30, and the two chains' layer ids — and
+// never a rule's merge gate, which the row does not carry (code.PushRule):
+// with every gate at its bound the state would be five times as wide, and it
+// is rewritten and made durable at every push. So a mebibyte is eight times
+// anything this cache writes (TestTheWidestStateFitsItsRead holds it to four),
+// and a file past it is not one this cache wrote, whatever is in it.
 const maxStateBytes = 1 << 20
 
 // state is the state file.

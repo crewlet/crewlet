@@ -454,8 +454,9 @@ func (r RetiredRow) encodedBytes() int {
 		field("position", positionBytes(r.Position), false)
 }
 
-// encodedBytes is the length of the protection's JSON encoding.
-func (p Protection) encodedBytes() int {
+// encodedBytes is the length of the push rule's JSON encoding: what a
+// repository's row carries of a rule ([RepoRef.Protections]).
+func (p PushRule) encodedBytes() int {
 	n := 2 + field("pattern", stringBytes(p.Pattern), true)
 	if p.AllowForce {
 		n += field("allow_force", trueBytes, false)
@@ -463,11 +464,7 @@ func (p Protection) encodedBytes() int {
 	if p.AllowDelete {
 		n += field("allow_delete", trueBytes, false)
 	}
-	n += field("direct_push", stringBytes(string(p.DirectPush)), false)
-	if p.Gate != nil {
-		n += field("gate", p.Gate.encodedBytes(), false)
-	}
-	return n
+	return n + field("direct_push", stringBytes(string(p.DirectPush)), false)
 }
 
 // encodedBytes is the length of the gate's JSON encoding: what a record

@@ -167,14 +167,16 @@ func TestACodeQuestionHandsTheReaderTheCallersWholeFreshness(t *testing.T) {
 	}
 }
 
-// ONE REPOSITORY'S QUESTION ASKS FOR ITS PATH OWNERS, and no other does: its
-// detail is where an API reader learns who owns which of its paths
-// (code.ReadQuery.PathOwners), and the reader refuses the ask on every other
-// kind of read.
+// ONE REPOSITORY'S QUESTION ASKS FOR ITS PATH OWNERS AND ITS RULES' MERGE
+// GATES, and no other does: its detail is where an API reader learns who owns
+// which of its paths and what a merge into each protected branch needs
+// (code.ReadQuery.PathOwners, code.ReadQuery.Gates) — no listing answers a
+// gate — and the reader refuses either ask on every other kind of read.
 //
-// Mutation: ask every question for path owners — the listing and the history
-// ask a read that refuses it, red.
-func TestOnlyTheRepositoryQuestionAsksForPathOwners(t *testing.T) {
+// Mutations: ask every question for path owners — the listing and the history
+// ask a read that refuses it, red; ask the detail for no gates — it answers
+// none of a gated repository's, red.
+func TestOnlyTheRepositoryQuestionAsksForPathOwnersAndGates(t *testing.T) {
 	t.Parallel()
 	for _, q := range codeQuestions {
 		stub := &stubCode{}
@@ -183,6 +185,9 @@ func TestOnlyTheRepositoryQuestionAsksForPathOwners(t *testing.T) {
 		}
 		if got, want := stub.last().PathOwners, q.kind == code.ReadRepo; got != want {
 			t.Errorf("%s asked the reader for path owners: %t, want %t", q.what, got, want)
+		}
+		if got, want := stub.last().Gates, q.kind == code.ReadRepo; got != want {
+			t.Errorf("%s asked the reader for its rules' merge gates: %t, want %t", q.what, got, want)
 		}
 	}
 }

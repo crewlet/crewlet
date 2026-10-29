@@ -699,10 +699,10 @@ func declaredRepo(o *org.Index, r config.CodeRepo) (code.Declared, error) {
 	}
 	protections := make([]code.Protection, 0, len(r.Protect))
 	for _, rule := range r.Protect {
-		p := code.Protection{
+		p := code.Protection{PushRule: code.PushRule{
 			Pattern: rule.Pattern(), AllowForce: rule.AllowForce, AllowDelete: rule.AllowDelete,
 			DirectPush: code.DirectPush(rule.DirectPush.Resolved()),
-		}
+		}}
 		if g := rule.Gate(); g != nil {
 			gate := code.CanonicalGate(declaredGate(*g))
 			p.Gate = &gate

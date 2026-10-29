@@ -45,11 +45,19 @@ type RepoRef struct {
 	// reads of the repository ([GrantOf]).
 	Visibility Visibility `json:"visibility"`
 	// Search is how code search reads it ([SearchMode]).
-	Search        SearchMode   `json:"search"`
-	DefaultBranch string       `json:"default_branch"`
-	Description   string       `json:"description,omitempty"`
-	Protections   []Protection `json:"protections,omitempty"`
-	DeletedAt     time.Time    `json:"deleted_at,omitzero"`
+	Search        SearchMode `json:"search"`
+	DefaultBranch string     `json:"default_branch"`
+	Description   string     `json:"description,omitempty"`
+	// Protections are its rules AS A PUSH IS JUDGED BY THEM ([PushRule]),
+	// sorted by pattern — never a rule's merge gate. This row is what the
+	// admission of every git request reads, every page of a git node's sync
+	// carries and its cache's state file keeps, and none of them reads a
+	// gate: at the domain's bounds a repository's gates are half a mebibyte
+	// of JSON, which each would decode, ship and write to disk for nothing.
+	// One repository's detail answers them to a read that asks
+	// ([ReadQuery.Gates], [RepoDetail.Gates]).
+	Protections []PushRule `json:"protections,omitempty"`
+	DeletedAt   time.Time  `json:"deleted_at,omitzero"`
 	// LastActivityAt is the broker's instant of the repository's last push,
 	// rename, settings change or restore — its IDLE CLOCK, which a scratch
 	// repository expires by ([Retention]) and a turn's hold decides whether to
@@ -945,6 +953,27 @@ type ReadQuery struct {
 	// and ignores it, answers every detail with the path owners: a heavier
 	// answer, never a wrong one.
 	PathOwners bool `json:"path_owners,omitempty"`
+	// Gates asks a read that answers one repository's DETAIL — a `repo`
+	// read, or a refs listing's first page, which carries it — for the merge
+	// gates of its rules ([RepoDetail.Gates]), and nothing else answers
+	// them: a read that presents a rule's gate sets it — the API's question
+	// of one repository, code_get_repo — and a read that resolves a
+	// repository does not, for the path owners' reason: none of those reads
+	// a gate, and at their bound a repository's gates are half a mebibyte of
+	// JSON on each. Refused on every other read, and on a refs listing's
+	// later pages, which carry no detail.
+	//
+	// AN ESTATE REQUEST'S FIELD, NOT A RECORD'S, so it takes no
+	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
+	// build that carries the code domain has run without this field — none
+	// of the domain is on main, so no image and no release serves a code
+	// read. A build that predated it would decode and ignore it, and answer
+	// a detail with no gates to a read that asked for them, every gated rule
+	// read as ungated; so were a build without it ever to run first, a read
+	// of the gates would move to a kind of its own, which such a build
+	// refuses as a kind it does not know, rather than ride a field it
+	// ignores.
+	Gates bool `json:"gates,omitempty"`
 	// Change is a `change` read's number: the change's on the repository
 	// Repo names, web!42's 42 — REQUIRED there, at least 1, and refused on
 	// every other kind.
@@ -1611,6 +1640,14 @@ type RepoDetail struct {
 	// ([MaxPathOwnersBytes]) the detail still fits the room a page beside it
 	// leaves the estate's reply ([MaxPageBytes]; the limits test holds it).
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
+	// Gates are the merge gates of its rules that carry one, each named by
+	// its rule's pattern and in pattern order ([RuleGate]) — what its row's
+	// rules ([RepoRef.Protections]) never carry — and, as the path owners
+	// are, only to a read that asks ([ReadQuery.Gates]): every resolution of
+	// a repository reads this detail for its row, and at their bound a
+	// repository's gates are half a mebibyte of JSON. A read that asked and
+	// finds none answers none.
+	Gates []RuleGate `json:"gates,omitempty"`
 }
 
 // ChangeRow is a change as its row holds it (code_changes): every column, as

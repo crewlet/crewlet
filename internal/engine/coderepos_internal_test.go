@@ -61,7 +61,7 @@ func repoNamed(t *testing.T, e *Engine, name string) (*code.RepoDetail, error) {
 	t.Helper()
 	answer, err := e.router.Code().Read(t.Context(), code.ReadQuery{
 		Asker: code.Principal{Kind: code.PrincipalOperator, OperatorID: "op-1", Seat: "ceo"}, Kind: code.ReadRepo, Repo: name,
-		PathOwners: true, Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
+		PathOwners: true, Gates: true, Fresh: statelog.Freshness{Level: statelog.ReadLinearizable},
 	})
 	if err != nil {
 		return nil, err
@@ -931,11 +931,17 @@ func TestAnUnchangedGateWritesNothing(t *testing.T) {
 	web := mustRepo(t, node, "web")
 	read := func(stage string) *code.MergeGate {
 		t.Helper()
-		rules := mustRepo(t, node, "web").Protections
-		if len(rules) != 1 || rules[0].Pattern != "refs/heads/main" {
+		repo := mustRepo(t, node, "web")
+		if rules := repo.Protections; len(rules) != 1 || rules[0].Pattern != "refs/heads/main" {
 			t.Fatalf("%s: web's rules are %+v, want main's one", stage, rules)
 		}
-		return rules[0].Gate
+		switch gates := repo.Gates; {
+		case len(gates) == 0:
+			return nil
+		case len(gates) != 1 || gates[0].Pattern != "refs/heads/main":
+			t.Fatalf("%s: web's gates are %+v, want main's at most", stage, gates)
+		}
+		return &repo.Gates[0].Gate
 	}
 	if got, want := read("created"), gateWith("lint", "unit"); got == nil || !got.Equal(*want) {
 		t.Fatalf("web's gate is %+v, want %+v", got, *want)

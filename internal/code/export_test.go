@@ -178,8 +178,8 @@ const LongestDay = longestDay
 
 // CostliestRules is n distinct rules of gitref's costliest shape — the worst
 // asking a rule about a ref can be (decide_bench_test.go), for the cases that
-// pin what that worst allocates.
-func CostliestRules(n int) []Protection { return costliestRules(n) }
+// pin what that worst allocates, as a push is judged by them.
+func CostliestRules(n int) []PushRule { return pushRules(costliestRules(n)) }
 
 // WidestRef is the 255-byte ref BenchmarkDecideABatch's worst arms name for a
 // push's command, the one that costs each of CostliestRules most.

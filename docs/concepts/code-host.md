@@ -284,10 +284,16 @@ field at a time, each field a call leaves out kept as the branch's gate has it
 — or defaulted as above, on a branch whose rule has none — and only a person
 loosens one ([Who may change a protection](#who-may-change-a-protection)).
 
-A gate is **recorded and answered, and nothing merges by it yet**: every read
-of a repository answers each rule's `gate` (`GET /code/repos/{name}`), and a
-push is held to the rule's `allow_force`, `allow_delete` and `direct_push`
-alone, as before ([What it does not do yet](#what-it-does-not-do-yet)).
+A gate is **recorded and answered, and nothing merges by it yet**: a read of
+one repository in detail answers every gated rule's gate beside its pattern
+(`GET /code/repos/{name}`'s `gates`, and `code_get_repo`), and a push is held
+to the rule's `allow_force`, `allow_delete` and `direct_push` alone, as before
+([What it does not do yet](#what-it-does-not-do-yet)). No other read carries
+a gate: a listing of repositories answers each rule as a push is held to it,
+and so does the row every git request, every git node's sync and every push's
+decision reads — at its bounds a repository's gates are half a mebibyte,
+which none of them needs, and a git node rewrites the row it keeps at every
+push.
 `crewlet validate` warns — never fails — about a gate field that would do
 nothing: `owners_approve` on a repository that names no path owners, `landing`
 or `auto_revert` on a rule that requires no checks (only a branch whose merges
