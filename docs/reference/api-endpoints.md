@@ -2492,7 +2492,10 @@ provider the catalogue does not list.
    API key in a token's slot, or the reverse) is refused there too, before any
    call.
 3. `If-None-Match: *` refuses a name already stored: `412 already_exists` with
-   `names`, so a create never overwrites a secret another model reads.
+   `names`, so a create never overwrites a secret another model reads. It is
+   decided again at the seal, in one step of the store's: a name another write
+   stored while this one was tested is the same `412`, with `sealed` naming
+   what this write stored before it, and nothing is re-activated.
 4. When the write will re-activate the company, `config.write` is asked before
    anything is tested or sealed.
 5. The candidate values are handed to the model's own CLI, in an isolated home,

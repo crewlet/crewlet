@@ -125,6 +125,41 @@ func (s *Store) Set(ctx context.Context, name, value string, by secrets.Author,
 	return s.put(ctx, name, value, by, source, now)
 }
 
+// Create is [Store.Set] only where no value is stored under name, reporting
+// whether it wrote: false is another writer's row, and never a failure.
+//
+// ONE STEP OF THE STORE'S, as [Estate.Create] is: a create-only write that
+// read "none stored" and then put its value would seal over a value another
+// writer stored between the two.
+func (s *Store) Create(ctx context.Context, name, value string, by secrets.Author,
+	source secrets.Source, now time.Time) (bool, error) {
+
+	if s == nil || s.cipher == nil {
+		return false, secrets.ErrNoKeyring
+	}
+	if err := operatorName(name); err != nil {
+		return false, err
+	}
+	if err := secrets.CheckName(name); err != nil {
+		return false, err
+	}
+	if err := secrets.CheckSource(source); err != nil {
+		return false, err
+	}
+	if err := secrets.CheckValue(value); err != nil {
+		return false, err
+	}
+	rec, err := s.seal(provenance(name, by, source, now), value)
+	if err != nil {
+		return false, err
+	}
+	created, err := s.fleet.CreateSecret(ctx, rec)
+	if err != nil {
+		return false, fmt.Errorf("fleetsecrets: create %s: %w", displayName(name), err)
+	}
+	return created, nil
+}
+
 // put seals a value under its own name and writes it, once the caller's view
 // has established the name is one it may write.
 func (s *Store) put(ctx context.Context, name, value string, by secrets.Author,

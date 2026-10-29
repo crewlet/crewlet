@@ -183,6 +183,20 @@ func (s *fakeSecrets) Describe(_ context.Context, name string) (secrets.Record, 
 	return secrets.Record{Name: name}, ok, nil
 }
 
+func (s *fakeSecrets) Create(ctx context.Context, name, value string, _ secrets.Author,
+	source secrets.Source, _ time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, held := s.rows[name]; held {
+		return false, nil
+	}
+	s.rows[name] = stored{value, source}
+	return true, nil
+}
+
 func (s *fakeSecrets) Set(ctx context.Context, name, value string, _ secrets.Author,
 	source secrets.Source, _ time.Time) error {
 	if err := ctx.Err(); err != nil {
@@ -804,5 +818,28 @@ func TestALimitedCandidateSaysNoEnd(t *testing.T) {
 	}
 	if until, present := limited["until"]; !present || until != nil {
 		t.Errorf("limited.until = %v, want null", until)
+	}
+}
+
+// A CREATE NEVER SEALS OVER A VALUE STORED WHILE IT WAS TESTED.
+//
+// `If-None-Match: *` is answered early, before the test, and then decided
+// again at the seal in one step of the store's: another writer that stored
+// the name during the test keeps its value, and nothing is re-activated.
+func TestACreateNeverSealsOverAValueStoredDuringItsTest(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	r.engine.onCheck = func() {
+		r.secrets.mu.Lock()
+		r.secrets.rows["ANTHROPIC_API_KEY_SONNET"] = stored{"theirs", secrets.SourceCLI}
+		r.secrets.mu.Unlock()
+	}
+	code, body := r.do(t, http.MethodPut, "/llm/providers/sonnet/credential", sonnetKey,
+		map[string]string{"If-None-Match": "*"})
+	if code != http.StatusPreconditionFailed || body["error"] != "already_exists" {
+		t.Errorf("a create that lost the name = %d %v, want 412 already_exists", code, body)
+	}
+	if got := r.secrets.rows["ANTHROPIC_API_KEY_SONNET"].value; got != "theirs" || len(r.config.reloads) != 0 {
+		t.Errorf("the stored value is %q, reloads %v: the create sealed over it", got, r.config.reloads)
 	}
 }

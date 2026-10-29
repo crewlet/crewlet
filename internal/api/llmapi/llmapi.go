@@ -190,6 +190,10 @@ type Secrets interface {
 	Describe(ctx context.Context, name string) (secrets.Record, bool, error)
 	Set(ctx context.Context, name, value string, by secrets.Author, source secrets.Source,
 		now time.Time) error
+	// Create seals a value only where none is stored, in one step of the
+	// store's, and reports whether it did: a create-only write's seal.
+	Create(ctx context.Context, name, value string, by secrets.Author, source secrets.Source,
+		now time.Time) (bool, error)
 }
 
 // Leases is the fleet's lease table, for this node's own report: which

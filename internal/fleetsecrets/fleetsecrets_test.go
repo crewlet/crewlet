@@ -595,3 +595,30 @@ func TestAValuePastTheSizeEveryStoreKeepsIsRefusedOnTheFleet(t *testing.T) {
 		t.Errorf("the value at the limit read back as %d bytes, %v", len(got), err)
 	}
 }
+
+// A CREATE-ONLY WRITE OF AN OPERATOR'S SECRET NEVER SEALS OVER ONE STORED.
+//
+// A credential sent with `If-None-Match: *` is tested for up to two minutes
+// before it is sealed; a value another writer stored meanwhile is kept, and
+// the create says it lost.
+func TestACreateNeverSealsOverAStoredSecret(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store, _ := fleetStore(t, ring(t, "k1"))
+	mustSet(t, store, "ANTHROPIC_API_KEY", "theirs")
+	if created, err := store.Create(ctx, "ANTHROPIC_API_KEY", "mine", nodeA, secrets.SourceModels,
+		clock); err != nil || created {
+		t.Fatalf("a create over a stored value = (%v, %v), want it refused", created, err)
+	}
+	if got, _ := store.Get(ctx, "ANTHROPIC_API_KEY"); got != "theirs" {
+		t.Errorf("a refused create replaced the value: %q", got)
+	}
+	if created, err := store.Create(ctx, "OPENAI_API_KEY", "mine", nodeA, secrets.SourceModels,
+		clock); err != nil || !created {
+		t.Fatalf("a create of a new name = (%v, %v)", created, err)
+	}
+	if _, err := store.Create(ctx, "iam/blind-index-key", "x", nodeA, secrets.SourceModels,
+		clock); err == nil {
+		t.Error("a create of the engine's own name was not refused")
+	}
+}

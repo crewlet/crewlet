@@ -108,7 +108,9 @@ func limitedOf(sit *coord.ModelSitOut) *Limited {
 //     tested or sealed.
 //  5. The test: the CLI itself, with only these values.
 //  6. With `dry_run=true`, the answer and nothing else.
-//  7. The seal, then the one re-activation, held to `If-Match`.
+//  7. The seal, then the one re-activation, held to `If-Match`. A create
+//     seals each value only where none is stored, in one step of the
+//     store's, so step 3 is the early answer and this the guarantee.
 func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.ModelActed) {
 	ctx := r.Context()
 	key := r.PathValue("key")
@@ -231,8 +233,27 @@ func (s *Service) credential(w http.ResponseWriter, r *http.Request, rec *types.
 	author := secrets.Author{Name: by.Name, Kind: string(by.Kind), OperatorID: by.OperatorID}
 	sealed := make([]string, 0, len(names))
 	for _, name := range names {
-		if sealErr := s.secrets.Set(ctx, name, req.Values[name], author, secrets.SourceModels,
-			s.now()); sealErr != nil {
+		var sealErr error
+		if create {
+			// ONE STEP OF THE STORE'S, not the read above and a write: a
+			// value another writer stored since that read is never sealed
+			// over by a write that asked for a new one.
+			var created bool
+			created, sealErr = s.secrets.Create(ctx, name, req.Values[name], author,
+				secrets.SourceModels, s.now())
+			if sealErr == nil && !created {
+				httpjson.FailWithFields(w, http.StatusPreconditionFailed, httpjson.CodeAlreadyExists,
+					httpjson.Detail{"names": []string{name}, "sealed": sealed,
+						"detail": name + " was stored by another write while this one was tested. " +
+							sealedSentence(sealed),
+						"hint": "If-None-Match: * asked for new secrets: choose another name, or " +
+							"rotate it without If-None-Match"})
+				return
+			}
+		} else {
+			sealErr = s.secrets.Set(ctx, name, req.Values[name], author, secrets.SourceModels, s.now())
+		}
+		if sealErr != nil {
 			// SAID BY NAME, as `PUT /secrets` says a seal that stopped part
 			// way: what is stored now, and that nothing was re-activated.
 			log.ErrorContext(ctx, "llm_request_failed", "what", "seal the credential",
