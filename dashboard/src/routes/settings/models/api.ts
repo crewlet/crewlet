@@ -16,7 +16,7 @@
  */
 
 import { answerOf, outcomeOf, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
-import { isAbort, rest, RestError, type RestResponse } from "~/protocol/rest.ts";
+import { isAbort, pathSegment, rest, RestError, type RestResponse } from "~/protocol/rest.ts";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import {
   MODEL_CHECK_BUDGET_SECONDS,
@@ -49,9 +49,6 @@ export type ModelAnswer<T> =
       /** Every field the refusal carried (`problems`, `check`, `names`, `running`, `references`). */
       body: Record<string, unknown>;
     };
-
-/** A model's route, its key encoded. */
-const key_ = (key: string) => encodeURIComponent(key);
 
 /**
  * One model route's answer as a value: its body, or the engine's refusal.
@@ -112,7 +109,7 @@ export function testCredential(
   signal?: AbortSignal,
 ): Promise<ModelAnswer<CredentialCheck>> {
   return settle(
-    rest.request("PUT", `/llm/providers/${key_(key)}/credential`, {
+    rest.request("PUT", `/llm/providers/${pathSegment(key)}/credential`, {
       body: { values: request.values, ...(request.entity ? { entity: request.entity } : {}) },
       headers: request.createOnly ? { "If-None-Match": "*" } : {},
       query: { dry_run: "true" },
@@ -134,7 +131,7 @@ export function storeCredential(
   signal?: AbortSignal,
 ): Promise<ModelAnswer<CredentialStored>> {
   return settle(
-    rest.request("PUT", `/llm/providers/${key_(key)}/credential`, {
+    rest.request("PUT", `/llm/providers/${pathSegment(key)}/credential`, {
       body: { values: request.values, ...(request.entity ? { entity: request.entity } : {}) },
       headers: { "If-Match": etag, ...(request.createOnly ? { "If-None-Match": "*" } : {}) },
       timeoutMs: waitFor(MODEL_CREDENTIAL_BUDGET_SECONDS),
@@ -150,7 +147,7 @@ export function checkModel(
   signal?: AbortSignal,
 ): Promise<ModelAnswer<CheckAnswer>> {
   return settle(
-    rest.request("POST", `/llm/providers/${key_(key)}/check`, {
+    rest.request("POST", `/llm/providers/${pathSegment(key)}/check`, {
       body: { smoke: options.smoke, ...(options.entity ? { entity: options.entity } : {}) },
       timeoutMs: waitFor(MODEL_CHECK_BUDGET_SECONDS),
       ...(signal ? { signal } : {}),
@@ -168,7 +165,7 @@ export function retryModel(
   signal?: AbortSignal,
 ): Promise<ModelAnswer<RetryAnswer>> {
   return settle(
-    rest.request("POST", `/llm/providers/${key_(key)}/retry`, {
+    rest.request("POST", `/llm/providers/${pathSegment(key)}/retry`, {
       body: { mode },
       timeoutMs: waitFor(MODEL_RETRY_BUDGET_SECONDS),
       ...(signal ? { signal } : {}),
@@ -182,7 +179,7 @@ export function checkHostLogin(
   signal?: AbortSignal,
 ): Promise<ModelAnswer<HostLoginAnswer>> {
   return settle(
-    rest.request("POST", `/llm/providers/${key_(key)}/host-login/check`, {
+    rest.request("POST", `/llm/providers/${pathSegment(key)}/host-login/check`, {
       body: {},
       ...(signal ? { signal } : {}),
     }),
@@ -195,7 +192,7 @@ export function startDeviceSignIn(
   signal?: AbortSignal,
 ): Promise<ModelAnswer<ModelDevice>> {
   return settle(
-    rest.request("POST", `/llm/providers/${key_(key)}/device-sign-in`, {
+    rest.request("POST", `/llm/providers/${pathSegment(key)}/device-sign-in`, {
       body: {},
       ...(signal ? { signal } : {}),
     }),
@@ -208,7 +205,7 @@ export function cancelDeviceSignIn(
   signal?: AbortSignal,
 ): Promise<ModelAnswer<ModelDevice>> {
   return settle(
-    rest.request("DELETE", `/llm/device-sign-ins/${key_(id)}`, {
+    rest.request("DELETE", `/llm/device-sign-ins/${pathSegment(id)}`, {
       ...(signal ? { signal } : {}),
     }),
   );
@@ -259,7 +256,7 @@ export async function removeModel(
   signal: AbortSignal,
 ): Promise<RemovalAnswer> {
   const answer = await answerOf(
-    rest.request("DELETE", `/config/llm-providers/${encodeURIComponent(key)}`, {
+    rest.request("DELETE", `/config/llm-providers/${pathSegment(key)}`, {
       body: { repoint: removal.repoint, assistant_off: removal.assistantOff },
       headers: {
         "If-Match": options.etag,

@@ -291,6 +291,23 @@ function offline(err: unknown): RestError {
  */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * One path segment of a request, from a value the engine named (a model's
+ * key, a sign-in's id): always exactly one segment, or no request at all.
+ *
+ * `encodeURIComponent` escapes `/`, `?` and `#`, which would otherwise reach
+ * another route or start the query. It cannot make `.` or `..` a name: a
+ * segment of dots alone is a step along the path, and the URL standard reads
+ * `%2E%2E` as `..` too, so no escaping sends it as one segment. No name the
+ * engine mints is one (a model's key starts with a letter or a digit), so
+ * such a value is refused here, before anything is sent, rather than sent to
+ * the route above.
+ */
+export function pathSegment(value: string): string {
+  if (/^\.*$/.test(value)) throw new RangeError(`"${value}" cannot be sent as one path segment`);
+  return encodeURIComponent(value);
+}
+
 /** A query-string value. `undefined` leaves the parameter out. */
 export type QueryValue = string | number | boolean | undefined;
 
