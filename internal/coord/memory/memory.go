@@ -265,8 +265,8 @@ func (b *Backend) decide(resource string, opts coord.AcquireOptions) (*coord.Lea
 		// Neither a grant nor a refusal is true yet, so it is the third
 		// answer, as the KV store gives an owner whose sibling claim is
 		// one round trip from committing.
-		return nil, "", nil, fmt.Errorf("%w: a claim of %s by %s is already minting its epoch",
-			coord.ErrUnavailable, resource, opts.Owner)
+		return nil, "", nil, fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight,
+			resource, opts.Owner)
 	}
 
 	// The mixed-version gate. Refuse while any live lease the gate counts

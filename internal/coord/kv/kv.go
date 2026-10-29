@@ -454,6 +454,11 @@ type Store struct {
 	// which is what every gated claim and FleetProtocolFloor judge instead
 	// of listing the fleet's leases.
 	gate *gateView
+
+	// beforeMint, set only by this package's tests, is called as a claim
+	// that won its record is about to advance the counter: how the shared
+	// conformance suite holds a claim mid-mint. Nil in every running store.
+	beforeMint func(ctx context.Context, resource string)
 }
 
 var _ coord.Backend = (*Store)(nil)
@@ -810,6 +815,10 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 	protocol := opts.EffectiveProtocol()
 	key := encodeResource(resource)
 
+	// sibling is whether the last round met this owner's own claim still
+	// minting, which names the answer if every round is spent: each round
+	// that reaches the record sets it before it can go round again.
+	var sibling bool
 	for range casAttempts {
 		snap, err := s.readForClaim(ctx, l, resource)
 		if err != nil {
@@ -845,7 +854,8 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 				return nil, coord.RefusedProtocol, nil
 			}
 		}
-		if held && mine.value.Epoch == claimingEpoch {
+		sibling = held && mine.value.Epoch == claimingEpoch
+		if sibling {
 			// One of THIS owner's own concurrent claims holds the record
 			// and has not committed its token yet. There is no epoch to
 			// keep, and taking it over would fence this owner against
@@ -997,6 +1007,9 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 		// value.Preferred, not opts.Preferred: a claim that names no node
 		// carries forward the hint the lapsed record held, and passing that
 		// through re-pins it on the persistent record if the two ever drift.
+		if s.beforeMint != nil {
+			s.beforeMint(ctx, resource)
+		}
 		epoch, hint, err := s.counter.advance(ctx, resource, value.Preferred)
 		if err != nil {
 			// No token was handed out, and one the counter did take is
@@ -1030,6 +1043,11 @@ func (s *Store) TryAcquire(ctx context.Context, resource string, opts coord.Acqu
 			return nil, "", err
 		}
 		return s.settle(ctx, l, resource, value, opts, protocol, true)
+	}
+	if sibling {
+		// THE LAST ROUND MET THIS OWNER'S OWN CLAIM STILL MINTING: the
+		// unknown arm, named for what it is (see coord.ErrClaimInFlight).
+		return nil, "", fmt.Errorf("%w (%s, by %s)", coord.ErrClaimInFlight, resource, opts.Owner)
 	}
 	return nil, "", contended("TryAcquire", resource)
 }

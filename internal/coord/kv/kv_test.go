@@ -119,6 +119,18 @@ func TestContract(t *testing.T) {
 	})
 }
 
+// TestMintingContract runs the held-mid-mint cases over the KV store, held
+// through its test-only mint hook.
+func TestMintingContract(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	coordtest.RunMinting(t, func(t *testing.T, hold coordtest.MintHold) coord.Backend {
+		s := openStore(t, nc, coordtest.LongTTL)
+		s.beforeMint = hold
+		return s
+	})
+}
+
 // TestSharedContract runs the shared cases over three handles on one
 // single-member broker — the easy case, since every read is answered by the
 // one copy there is. shared_cluster_test.go is the one that means something:
