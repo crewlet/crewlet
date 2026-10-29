@@ -61,9 +61,31 @@ test("Check again replaces the answering node's line and asks the page again", a
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Check again" }));
   });
-  expect(checkHostLogin).toHaveBeenCalledWith("default");
+  expect(checkHostLogin).toHaveBeenCalledWith("default", expect.any(AbortSignal));
   expect(screen.getByText("Signed in on node-2 as ops@example.com")).toBeDefined();
   expect(screen.queryByText("crewlet llm login default")).toBeNull();
   expect(screen.getByText(/One login also signs in the models aux/)).toBeDefined();
   expect(onChecked).toHaveBeenCalled();
+});
+
+test("a check that answers after the card left neither toasts nor asks the page again", async () => {
+  let answer!: (value: unknown) => void;
+  let sent: AbortSignal | null = null;
+  checkHostLogin.mockImplementation((_key: string, signal: AbortSignal) => {
+    sent = signal;
+    return new Promise((resolve) => (answer = resolve));
+  });
+  const onChecked = vi.fn();
+  const view = render(<HostLogin modelKey="default" logins={LOGINS} onChecked={onChecked} />);
+  fireEvent.click(screen.getByRole("button", { name: /Check/ }));
+  view.unmount();
+  expect(sent!.aborted).toBe(true);
+  await act(async () =>
+    answer({
+      kind: "ok",
+      status: 200,
+      value: { ...LOGINS[1]!, detail: null, shares_login_with: [] },
+    }),
+  );
+  expect(onChecked).not.toHaveBeenCalled();
 });

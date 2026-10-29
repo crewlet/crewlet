@@ -32,8 +32,10 @@ import {
 } from "@crewlethq/ui";
 import { useNavigator } from "~/app/router.tsx";
 import { listed, plural } from "~/lib/format.ts";
+import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import { getConfig, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
+import { isAbort } from "~/protocol/rest.ts";
 import { managedSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
 import type { ModelReference, ModelRepoint } from "~/protocol/models.ts";
@@ -226,6 +228,7 @@ export function RemoveDialog({
 }) {
   const toast = useToast();
   const nav = useNavigator();
+  const lifetime = useLifetimeSignal();
   const key = model.key;
   const assistantOn = data.assistant.enabled;
   const [load, setLoad] = useState<Load>({ kind: "loading" });
@@ -306,14 +309,18 @@ export function RemoveDialog({
     setRemoving(true);
     setNotice(null);
     const summary = summaryOf(key, removal, "audit");
-    const answer = await removeModel(
-      key,
-      removal,
-      { etag, summary, dryRun: false },
-      new AbortController().signal,
-    ).catch(() => null);
+    // TIED TO THE DIALOG: a removal that answers after it closed neither
+    // toasts nor moves the page the person has gone on to.
+    const signal = lifetime();
+    let answer: Awaited<ReturnType<typeof removeModel>>;
+    try {
+      answer = await removeModel(key, removal, { etag, summary, dryRun: false }, signal);
+    } catch (err) {
+      if (isAbort(err)) return;
+      throw err;
+    }
+    if (signal.aborted) return;
     setRemoving(false);
-    if (!answer) return;
     if (answer.outcome.kind === "saved") {
       toast.ok(`Removed ${key}.`);
       onDone();

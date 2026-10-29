@@ -28,6 +28,7 @@ import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { useNavigator } from "~/app/router.tsx";
 import { listed } from "~/lib/format.ts";
 import { intentOf, usesForIntent, withCategory, noUses } from "~/lib/modelUses.ts";
+import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import {
   introducedWarnings,
@@ -297,6 +298,7 @@ export function ModelWizard({
   const [discarding, setDiscarding] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const inflight = useRef<AbortController | null>(null);
+  const lifetime = useLifetimeSignal();
 
   const editingArg = original && base ? { base, was: original.uses } : undefined;
   const existing = data.models.map((m) => m.key).filter((k) => k !== editing?.key);
@@ -529,6 +531,9 @@ export function ModelWizard({
 
   async function save() {
     if (!prepared || check.kind !== "ready") return;
+    // TIED TO THE WIZARD: a save the person left mid-way sends nothing more,
+    // and an answer that lands after they left neither toasts nor moves them.
+    const signal = lifetime();
     setSaving(true);
     try {
       let { etag, next } = prepared;
@@ -538,6 +543,7 @@ export function ModelWizard({
           draft.key,
           { values, ...draftEntity, createOnly },
           etag,
+          signal,
         );
         if (stored.kind === "refused") {
           const refusal = credentialRefusal(stored, names);
@@ -554,7 +560,7 @@ export function ModelWizard({
         // tag: the document is read again, and written on only if nothing
         // but that re-activation happened in between.
         if (stored.value.reload) {
-          const read = await getConfig(new AbortController().signal);
+          const read = await getConfig(signal);
           if (
             read.kind !== "document" ||
             JSON.stringify(read.document) !== JSON.stringify(prepared.before)
@@ -574,8 +580,9 @@ export function ModelWizard({
       const outcome = await writeDocument(
         next.doc,
         { etag, summary: summary(), dryRun: false },
-        new AbortController().signal,
+        signal,
       );
+      if (signal.aborted) return;
       if (outcome.kind === "saved") {
         toast.ok(original ? `Saved ${draft.key}.` : `Added ${draft.key}.`);
         data.reload();
@@ -595,8 +602,10 @@ export function ModelWizard({
         setPrepared(null);
         setCheck({ kind: "blocked", message: refusalWords(outcome) });
       }
+    } catch (err) {
+      if (!isAbort(err)) throw err;
     } finally {
-      setSaving(false);
+      if (!signal.aborted) setSaving(false);
     }
   }
 

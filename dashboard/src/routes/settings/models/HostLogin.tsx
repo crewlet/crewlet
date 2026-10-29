@@ -13,6 +13,8 @@
 import { useState } from "react";
 import { Button, Copyable, RelativeTime, StatusDot, Text, useToast } from "@crewlethq/ui";
 import { listed } from "~/lib/format.ts";
+import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
+import { isAbort } from "~/protocol/rest.ts";
 import type { HostLoginAnswer, ModelHostLogin } from "~/protocol/models.ts";
 import { checkHostLogin } from "./api.ts";
 
@@ -48,12 +50,22 @@ export function HostLogin({
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const [checked, setChecked] = useState<HostLoginAnswer | null>(null);
+  const lifetime = useLifetimeSignal();
 
   async function check() {
+    // TIED TO THE CARD: a check that answers after the page moved on neither
+    // toasts nor asks the page again.
+    const signal = lifetime();
     setBusy(true);
-    const answer = await checkHostLogin(modelKey).catch(() => null);
+    let answer: Awaited<ReturnType<typeof checkHostLogin>>;
+    try {
+      answer = await checkHostLogin(modelKey, signal);
+    } catch (err) {
+      if (isAbort(err)) return;
+      throw err;
+    }
+    if (signal.aborted) return;
     setBusy(false);
-    if (!answer) return;
     if (answer.kind === "refused") {
       toast.failed(answer.sentence);
       return;
