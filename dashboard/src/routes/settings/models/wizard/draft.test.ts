@@ -25,6 +25,7 @@ import {
   suggestedVariable,
   type Draft,
 } from "./draft.ts";
+import { droppedWords } from "./steps/Review.tsx";
 
 const draft = (patch: Partial<Draft> = {}): Draft => ({
   ...emptyDraft(),
@@ -172,7 +173,11 @@ describe("the next document", () => {
     const next = nextDocument(doc, draft({ uses, intent: "reviews" }));
     const qa = (next.doc as Record<string, any>).roles[0];
     expect(qa.llm_review).toBe("sonnet-key");
-    expect(next.dropped).toContainEqual({ seat: "qa", job: "review", keys: ["default", "zeta"] });
+    expect(next.dropped).toContainEqual({ seat: "qa", job: "review", keys: ["zeta"] });
+    // ONLY THE FALLBACK IS SAID AS ONE: `default`, which QA reviewed on first, is the change.
+    expect(droppedWords({ seat: "qa", job: "review", keys: ["zeta"] }, () => "QA")).toBe(
+      "QA's reviewing also named zeta as a fallback; this removes it.",
+    );
   });
 });
 

@@ -22,7 +22,7 @@ import { useViewer } from "~/lib/viewer.ts";
 import { SERVICE_NAMES, useBackends, type OrgServices } from "~/lib/services.ts";
 import { asSentence, plural } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, IntegrationTool, ReconcileFinding } from "~/contract/integrations.ts";
 import type { SetupRequirement, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import {
@@ -616,7 +616,8 @@ export function useIntegrations(): Model {
         .filter((s) => setup.byKey.get(s.key)?.can_provision)
         .map((s) => s.key);
       try {
-        for (const kind of kinds) await rest.post(`/setup/integrations/${kind}/check`, {});
+        for (const kind of kinds)
+          await rest.post(`/setup/integrations/${pathSegment(kind)}/check`, {});
         watch();
         return "";
       } catch (err) {

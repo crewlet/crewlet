@@ -38,6 +38,7 @@ import type { HumanSeat } from "~/contract/identity.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -92,7 +93,7 @@ interface Sent {
 function json(status: number, payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 }
 

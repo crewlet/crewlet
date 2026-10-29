@@ -32,6 +32,7 @@
 
 import { confirmStepUp, needSession } from "./signin.ts";
 import type { LogRefusal, QueryRefusal } from "./types.ts";
+import { answeredByEngine, markedByEngine } from "./engineAnswer.ts";
 import { remedyOf, type Remedy } from "./remedy.ts";
 
 /**
@@ -69,8 +70,21 @@ export class RestError extends Error {
    * which also refuses to read a proxy's header as the engine's.
    */
   readonly retryAfterSeconds: number | null;
+  /**
+   * Whether the answer carried the engine's mark ([markedByEngine]): the one
+   * thing in it nothing in front of the engine writes. FALSE UNLESS SAID, so
+   * an error built anywhere that forgot to say reads as not the engine's
+   * (an outcome nobody knows), never as a refusal the engine made; [request]
+   * records what the response said.
+   */
+  readonly marked: boolean;
 
-  constructor(status: number, body: Record<string, unknown>, retryAfter: number | null = null) {
+  constructor(
+    status: number,
+    body: Record<string, unknown>,
+    retryAfter: number | null = null,
+    marked = false,
+  ) {
     const code = typeof body.error === "string" ? body.error : "";
     const detail = typeof body.detail === "string" ? body.detail : "";
     super(detail || code || `HTTP ${status}`);
@@ -82,6 +96,7 @@ export class RestError extends Error {
     this.sentence = typeof body.message === "string" ? body.message : "";
     this.body = body;
     this.retryAfterSeconds = retryAfter;
+    this.marked = marked;
   }
 
   /**
@@ -151,13 +166,11 @@ export class RestError extends Error {
   }
 
   /**
-   * Whether this is NOT the engine's own answer: nothing came back (status
-   * 0), a body that could not be read (`unreadable_body` — a gateway's HTML
-   * page, a 200 cut off part way through), or a status with no engine error
-   * code in it. Every refusal the engine writes is JSON with an `error` code,
-   * its auth guard's included and its router's own `no_route` and
-   * `method_not_allowed` for a route or method it does not serve, so an answer
-   * without one was written by something in front of it.
+   * Whether this is NOT the engine's own answer ([answeredByEngine]): nothing
+   * came back (status 0), an answer without the engine's mark (a gateway's
+   * page or its JSON, whatever the body says), a body that could not be read
+   * (`unreadable_body`, a 200 cut off part way through), or a status with no
+   * engine error code in it.
    *
    * WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
    * the engine wrote means nothing was done; this means nobody here knows. A
@@ -167,7 +180,7 @@ export class RestError extends Error {
    * was dropped with it.
    */
   get unanswered(): boolean {
-    return this.status === 0 || this.code === "" || this.code === "unreadable_body";
+    return !answeredByEngine(this.status, this.code, this.marked);
   }
 }
 
@@ -250,7 +263,12 @@ export async function retryHintOf(response: Response): Promise<number | null> {
   const body = (await response.json().catch(() => null)) as unknown;
   const envelope =
     body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
-  return new RestError(response.status, envelope, retryAfterOf(response)).retryHint;
+  return new RestError(
+    response.status,
+    envelope,
+    retryAfterOf(response),
+    markedByEngine(response.headers),
+  ).retryHint;
 }
 
 /**
@@ -292,21 +310,10 @@ function offline(err: unknown): RestError {
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 /**
- * One path segment of a request, from a value the engine named (a model's
- * key, a sign-in's id): always exactly one segment, or no request at all.
- *
- * `encodeURIComponent` escapes `/`, `?` and `#`, which would otherwise reach
- * another route or start the query. It cannot make `.` or `..` a name: a
- * segment of dots alone is a step along the path, and the URL standard reads
- * `%2E%2E` as `..` too, so no escaping sends it as one segment. No name the
- * engine mints is one (a model's key starts with a letter or a digit), so
- * such a value is refused here, before anything is sent, rather than sent to
- * the route above.
+ * [pathSegment] is the one rule of what a path segment may be, kept beside
+ * the link builder it shares the check with (`lib/segment.ts`).
  */
-export function pathSegment(value: string): string {
-  if (/^\.*$/.test(value)) throw new RangeError(`"${value}" cannot be sent as one path segment`);
-  return encodeURIComponent(value);
-}
+export { pathSegment } from "../lib/segment.ts";
 
 /** A query-string value. `undefined` leaves the parameter out. */
 export type QueryValue = string | number | boolean | undefined;
@@ -370,6 +377,8 @@ export interface RestResponse {
    * the tag back exactly as it was given.
    */
   etag: string | null;
+  /** Whether the answer carried the engine's mark ([markedByEngine]). */
+  marked: boolean;
 }
 
 /** A deadline as a person would say it: seconds under two minutes, else
@@ -630,7 +639,12 @@ async function attempt(
   answeredAt = Date.now();
 
   if (read === "text" && response.ok) {
-    return { status: response.status, body: text, etag: response.headers.get("ETag") };
+    return {
+      status: response.status,
+      body: text,
+      etag: response.headers.get("ETag"),
+      marked: markedByEngine(response.headers),
+    };
   }
 
   let parsed: unknown = null;
@@ -655,6 +669,7 @@ async function attempt(
             : `a ${response.status} came back without the engine's JSON, so something in front of it answered`,
         },
         response.ok ? null : retryAfterOf(response),
+        markedByEngine(response.headers),
       );
     }
   }
@@ -664,11 +679,21 @@ async function attempt(
   // still current.
   if (!response.ok && response.status !== 304) {
     const body = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
-    const refusal = new RestError(response.status, body, retryAfterOf(response));
+    const refusal = new RestError(
+      response.status,
+      body,
+      retryAfterOf(response),
+      markedByEngine(response.headers),
+    );
     noteSession(refusal);
     throw refusal;
   }
-  return { status: response.status, body: parsed, etag: response.headers.get("ETag") };
+  return {
+    status: response.status,
+    body: parsed,
+    etag: response.headers.get("ETag"),
+    marked: markedByEngine(response.headers),
+  };
 }
 
 /** The body alone, for the callers that need nothing else. */
@@ -742,7 +767,12 @@ async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
       } catch {
         body = { error: "unreadable_body" };
       }
-      const refusal = new RestError(response.status, body, retryAfterOf(response));
+      const refusal = new RestError(
+        response.status,
+        body,
+        retryAfterOf(response),
+        markedByEngine(response.headers),
+      );
       noteSession(refusal);
       throw refusal;
     }
@@ -845,6 +875,7 @@ async function stream(
       response.ok ? 502 : response.status,
       body,
       retryAfterOf(response),
+      markedByEngine(response.headers),
     );
     noteSession(refusal);
     throw refusal;

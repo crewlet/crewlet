@@ -49,7 +49,7 @@
 // RELATIVE, not through `~`: protocol/ is also built alone as protocol.js,
 // where the alias does not exist.
 import { ASSISTANT_PROTOCOL_VERSION } from "../contract/assistant.ts";
-import { isAbort, rest, RestError } from "./rest.ts";
+import { isAbort, pathSegment, rest, RestError } from "./rest.ts";
 import {
   ASSISTANT_STALL_MS,
   assistantEventId,
@@ -96,7 +96,7 @@ export async function call<R extends AssistantRoute>(
   // as a literal so the dev server's proxy gate can read where it goes.
   const tail = template
     .slice(ASSISTANT_PREFIX.length)
-    .replace("{id}", encodeURIComponent(options.id ?? ""));
+    .replace("{id}", () => pathSegment(options.id ?? ""));
   const { body: answer } = await rest.request(method, `/assistant/${tail}`, {
     // A FILE IS SENT AS ITS OWN BYTES, typed as the browser typed it; the
     // engine sniffs the bytes and refuses a type it does not take.
@@ -166,7 +166,10 @@ export async function conversationFile(
   if (!UUID.test(ref.conversation_id) || !UUID.test(ref.file_id)) {
     throw new RestError(0, { error: "invalid_body", detail: "the file reference is not one" });
   }
-  return rest.blob(`/assistant/conversations/${ref.conversation_id}/files/${ref.file_id}`, signal);
+  return rest.blob(
+    `/assistant/conversations/${pathSegment(ref.conversation_id)}/files/${pathSegment(ref.file_id)}`,
+    signal,
+  );
 }
 
 /** Where a turn stream stands, as the drawer says it. */

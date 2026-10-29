@@ -16,16 +16,20 @@
  * a seat job, so Everything leaves it alone and it is a choice of its own,
  * company-wide, with no seats to pick.
  *
- * NOTHING IS A SURPRISE: each choice says what it would replace before it is
- * chosen, on a line of its own (design QA Minor 9), and a category with a
- * deadline says quietly when the model is not a fast one.
+ * AN EDIT KEEPS ITS SEATS. Choosing what a model does, in an edit, starts from
+ * the seats it serves now, never every seat: an edit made for its sign-in
+ * moved two seats off the model they ran on when a choice reset its seats to
+ * all of them. Adding a seat takes the reader's own chip or switch, and
+ * Review lists every seat that changes model before anything is written
+ * ([seatChangesOf]). A category with a deadline says quietly when the model is
+ * not a fast one.
  */
 
 import { useMemo } from "react";
 import {
   Button,
   Callout,
-  Checkbox,
+  CheckGrid,
   ChoiceList,
   Disclosure,
   FilterChip,
@@ -33,6 +37,7 @@ import {
   Switch,
   Text,
   Tooltip,
+  type CheckGridState,
   type ChoiceListOption,
 } from "@crewlethq/ui";
 import { listed } from "~/lib/format.ts";
@@ -47,10 +52,11 @@ import {
   type Intent,
   type JobCategory,
   type SeatJob,
+  type Uses,
 } from "~/lib/modelUses.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { ModelsData } from "../../data.ts";
-import { JobGlyph, JobName } from "../../JobGlyph.tsx";
+import { JobGlyph } from "../../JobGlyph.tsx";
 import { seatName } from "../../places.ts";
 import {
   ASSISTANT_USE,
@@ -71,6 +77,13 @@ const CHOICES: readonly Exclude<Intent, "custom">[] = [
   "none",
 ];
 
+/** A seat's category in the per-seat grid: every job in it ticks the box, some of them half-tick it. */
+const GRID_STATE: Record<ReturnType<typeof categoryState>, CheckGridState> = {
+  all: "checked",
+  some: "mixed",
+  none: "unchecked",
+};
+
 type Patch = Partial<Pick<Draft, "uses" | "intent" | "webDenied">>;
 
 /** The model each seat runs a job on now, by handle, as the engine reports it. */
@@ -81,27 +94,55 @@ function currentFor(data: Pick<ModelsData, "models">, job: SeatJob): Map<string,
 }
 
 /**
- * "default for 3 seats and sonnet for 1": what choosing `seats` for every job
- * in `jobs` replaces. A seat counts once under each model it moves off,
- * whichever of the jobs named it.
+ * Every seat that changes model when `key`'s uses go from `was` to `next`, by
+ * its name: a seat's category added to `key` says the model it runs on today
+ * and that it moves to `key`; one taken off says it no longer runs on `key`.
+ * The Assistant too. What Review lists before a write, so no move is a
+ * surprise. Each line is a change from today; an edit that moves nothing has
+ * none.
  */
-export function replaces(
-  data: Pick<ModelsData, "models">,
-  jobs: readonly SeatJob[],
-  seats: readonly string[],
+export function seatChangesOf(
+  data: Pick<ModelsData, "models" | "seats" | "assistant">,
   key: string,
-): string {
-  const off = new Map<string, Set<string>>();
-  for (const job of jobs) {
-    const now = currentFor(data, job);
-    for (const seat of seats) {
-      const was = now.get(seat);
-      if (was && was !== key) off.set(was, (off.get(was) ?? new Set()).add(seat));
+  was: Uses,
+  next: Uses,
+): string[] {
+  const name = key || "this model";
+  const lines: string[] = [];
+  for (const s of data.seats) {
+    for (const category of CATEGORY_ORDER) {
+      const jobs = CATEGORY_JOBS[category];
+      const added = jobs.filter(
+        (j) => next.jobs[j].includes(s.handle) && !was.jobs[j].includes(s.handle),
+      );
+      const removed = jobs.filter(
+        (j) => was.jobs[j].includes(s.handle) && !next.jobs[j].includes(s.handle),
+      );
+      const what = `${s.name || s.handle}, ${CATEGORY_WORDS[category].label.toLowerCase()}`;
+      if (added.length > 0) {
+        const today = [
+          ...new Set(
+            added.flatMap((j) => {
+              const now = currentFor(data, j).get(s.handle);
+              return now && now !== key ? [now] : [];
+            }),
+          ),
+        ];
+        lines.push(`${what}: ${today.length > 0 ? listed(today) : "no model"} → ${name}`);
+      }
+      if (removed.length > 0) lines.push(`${what}: no longer on ${name}`);
     }
   }
-  return listed(
-    [...off].map(([model, s]) => `${model} for ${s.size} ${s.size === 1 ? "seat" : "seats"}`),
-  );
+  if (next.assistant && !was.assistant) {
+    const today = data.assistant.enabled ? data.assistant.key : null;
+    lines.push(`The Dashboard Assistant: ${today && today !== key ? today : "no model"} → ${name}`);
+  }
+  return lines;
+}
+
+/** Every seat a model's uses name, for any job. */
+function servedBy(uses: Uses): string[] {
+  return [...new Set(SEAT_JOBS.flatMap((j) => uses.jobs[j]))].sort();
 }
 
 const jobsOf = (intent: Exclude<Intent, "custom">): readonly SeatJob[] =>
@@ -145,8 +186,6 @@ export function summaryOf(data: Pick<ModelsData, "models" | "seats" | "assistant
   if (draft.intent === "all") {
     const seats = draft.uses.jobs.executor;
     lines.push(`${who(seats)} will use ${key} for everything.`);
-    const replaced = replaces(data, SEAT_JOBS, seats, draft.key);
-    if (replaced) lines.push(`That replaces ${replaced}.`);
   } else {
     const groups = new Map<string, JobCategory[]>();
     for (const c of CATEGORY_ORDER) {
@@ -160,32 +199,19 @@ export function summaryOf(data: Pick<ModelsData, "models" | "seats" | "assistant
       lines.push(
         `${who(seats)} will ${listed(categories.map((c) => CATEGORY_WORDS[c].verb))} with ${key}.`,
       );
-      const replaced = replaces(
-        data,
-        categories.flatMap((c) => CATEGORY_JOBS[c]),
-        seats,
-        draft.key,
-      );
-      if (replaced) lines.push(`That replaces ${replaced}.`);
     }
   }
-  const was = data.assistant.enabled ? data.assistant.key : null;
-  if (draft.uses.assistant) {
-    lines.push(
-      `The Dashboard Assistant will answer with ${key}${was && was !== draft.key ? `, replacing ${was}` : ""}.`,
-    );
-  }
+  if (draft.uses.assistant) lines.push(`The Dashboard Assistant will answer with ${key}.`);
   if (lines.length === 0)
     return [`No seat uses ${key} yet. Every seat stays on the model it has now.`];
   return lines;
 }
 
-/** A choice's detail: what it does, and on a line of its own what it replaces and its note. */
-function Detail({ hint, replaced, note }: { hint: string; replaced?: string; note?: string }) {
+/** A choice's detail: what it does, and its note on a line of its own. */
+function Detail({ hint, note }: { hint: string; note?: string }) {
   return (
     <span className="models-choice-detail">
       <span>{hint.replace(/\.$/, "")}</span>
-      {replaced ? <span>Replaces {replaced}</span> : null}
       {note ? (
         <Text as="span" variant="caption" tone="tertiary">
           {note}
@@ -198,11 +224,14 @@ function Detail({ hint, replaced, note }: { hint: string; replaced?: string; not
 export function UseItFor({
   draft,
   data,
+  served,
   error,
   onChange,
 }: {
   draft: Draft;
   data: Pick<ModelsData, "models" | "seats" | "assistant">;
+  /** In an edit, what the model is used for today: a choice starts from its seats. Null when adding. */
+  served: Uses | null;
   /** The engine's refusal of a seat or the assistant this write names, in words. */
   error?: string | undefined;
   onChange: (patch: Patch) => void;
@@ -255,12 +284,7 @@ export function UseItFor({
         ),
         media: <JobGlyph job="assistant" />,
         ...(holdsAssistant ? { tag: "In use" } : {}),
-        detail: (
-          <Detail
-            hint={`${ASSISTANT_USE.hint} Company-wide, with no seats.`}
-            {...(was && was !== draft.key ? { replaced: was } : {})}
-          />
-        ),
+        detail: <Detail hint={`${ASSISTANT_USE.hint} Company-wide, with no seats.`} />,
         ...(draft.intent === "assistant" && !draft.webDenied ? { panel: webRule } : {}),
         ...(!assistantOn
           ? {
@@ -271,7 +295,6 @@ export function UseItFor({
       };
     }
     if (intent === "all") {
-      const replaced = replaces(data, SEAT_JOBS, sensibleSeats(data, "all"), draft.key);
       return {
         value: intent,
         label: (
@@ -280,7 +303,7 @@ export function UseItFor({
           </Tooltip>
         ),
         media: <JobGlyph job="everything" />,
-        detail: <Detail hint={EVERYTHING.hint} {...(replaced ? { replaced } : {})} />,
+        detail: <Detail hint={EVERYTHING.hint} />,
         // EVERYTHING IS NOT THE ASSISTANT (design QA Minor 28): a model that
         // allows web tools is said, so the reader does not expect it there.
         ...(draft.intent === "all" && !draft.webDenied && assistantOn
@@ -296,12 +319,6 @@ export function UseItFor({
       };
     }
     const category: JobCategory = intent;
-    const replaced = replaces(
-      data,
-      CATEGORY_JOBS[category],
-      sensibleSeats(data, intent),
-      draft.key,
-    );
     const note = FAST_NOTE[category];
     return {
       value: intent,
@@ -313,13 +330,9 @@ export function UseItFor({
       media: <JobGlyph job={category} />,
       // UNDER EVERYTHING each category says it is included, so the one choice reads as all three.
       ...(draft.intent === "all" ? { tag: "Included" } : {}),
-      detail: (
-        <Detail
-          hint={CATEGORY_WORDS[category].hint}
-          {...(replaced ? { replaced } : {})}
-          {...(note && slow ? { note } : {})}
-        />
-      ),
+      // A LINE BELOW EVERYTHING, as above Not yet: the categories are its parts.
+      ...(category === CATEGORY_ORDER[0] ? { separated: true } : {}),
+      detail: <Detail hint={CATEGORY_WORDS[category].hint} {...(note && slow ? { note } : {})} />,
       ...(category === "coding" && !executor ? { disabled: true, disabledReason: noCoding } : {}),
     };
   });
@@ -330,7 +343,8 @@ export function UseItFor({
       intent,
       uses: usesForIntent(
         intent,
-        sensibleSeats(data, intent),
+        // AN EDIT KEEPS THE SEATS IT SERVES; only an add starts from a sensible set.
+        served ? servedBy(served) : sensibleSeats(data, intent),
         intent === "assistant" || holdsAssistant,
       ),
     });
@@ -407,49 +421,25 @@ export function UseItFor({
       ) : null}
 
       <Disclosure title="Customise per seat" defaultOpen={draft.intent === "custom"}>
-        <div
-          className="models-who__grid"
-          style={{ ["--models-who-columns" as string]: CATEGORY_ORDER.length }}
-        >
-          <span />
-          {CATEGORY_ORDER.map((c) => (
-            <Text
-              key={c}
-              as="span"
-              variant="caption"
-              tone="secondary"
-              className="models-who__phase"
-            >
-              <JobName job={c} />
-            </Text>
-          ))}
-          {data.seats.map((s) => (
-            <div key={s.handle} className="models-who__row">
-              <span className="models-who__chip">
-                <SeatAvatar name={s.name} kind={s.kind} avatar={s.avatar} size="xs" decorative />
-                {s.name}
-              </span>
-              {CATEGORY_ORDER.map((c) => {
-                const state = categoryState(draft.uses, s.handle, c);
-                const blocked = c === "coding" && !executor;
-                return (
-                  <Checkbox
-                    key={c}
-                    size="sm"
-                    hideLabel
-                    label={`${s.name}: ${CATEGORY_WORDS[c].label} on ${draft.key || "this model"}`}
-                    checked={state === "all"}
-                    // ONE JOB OF A CATEGORY, written by hand, reads as part of it; a press sets both.
-                    indeterminate={state === "some"}
-                    disabled={blocked && state === "none"}
-                    title={blocked ? noCoding : undefined}
-                    onCheckedChange={(next) => setSeatCategory(s.handle, c, next)}
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </div>
+        <CheckGrid
+          label={`Jobs per seat on ${draft.key || "this model"}`}
+          rows={data.seats.map((s) => ({
+            value: s.handle,
+            label: s.name,
+            media: (
+              <SeatAvatar name={s.name} kind={s.kind} avatar={s.avatar} size="xs" decorative />
+            ),
+          }))}
+          columns={CATEGORY_ORDER.map((c) => ({
+            value: c,
+            label: CATEGORY_WORDS[c].label,
+            media: <JobGlyph job={c} size="sm" />,
+            ...(c === "coding" && !executor ? { disabledReason: noCoding } : {}),
+          }))}
+          // ONE JOB OF A CATEGORY, written by hand, reads as part of it; a press sets both.
+          stateOf={(seat, c) => GRID_STATE[categoryState(draft.uses, seat, c as JobCategory)]}
+          onChange={(seat, c, on) => setSeatCategory(seat, c as JobCategory, on)}
+        />
         {assistantOn ? (
           <Switch
             label="Also answer in the Dashboard Assistant"
@@ -472,11 +462,6 @@ export function UseItFor({
               onChange({ uses, intent });
             }}
           />
-        ) : null}
-        {!executor ? (
-          <Text as="p" variant="caption" tone="secondary">
-            {product(draft.agent)} serves every job but coding, so the Coding column is off.
-          </Text>
         ) : null}
       </Disclosure>
     </div>

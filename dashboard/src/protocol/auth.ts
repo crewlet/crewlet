@@ -15,7 +15,7 @@
 
 import type { EngineHealth } from "../contract/health.ts";
 import type { ResetView } from "../contract/identity.ts";
-import { rest } from "./rest.ts";
+import { pathSegment, rest } from "./rest.ts";
 import type {
   AuthConfig,
   InvitationView,
@@ -76,7 +76,7 @@ export const auth = {
   /** Render an invitation without spending it. */
   viewInvite: async (id: string, secret: string): Promise<InvitationView> =>
     (
-      await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, {
+      await rest.request("GET", `/auth/invite/${pathSegment(id)}`, {
         headers: { [INVITE_SECRET_HEADER]: secret },
       })
     ).body as InvitationView,
@@ -85,13 +85,12 @@ export const auth = {
   redeemInvite: async (
     id: string,
     body: { secret: string; login: string; name: string; password: string },
-  ): Promise<SignedIn> =>
-    (await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body)) as SignedIn,
+  ): Promise<SignedIn> => (await rest.post(`/auth/invite/${pathSegment(id)}`, body)) as SignedIn,
 
   /** Say whose password a reset link sets, without spending it. */
   viewReset: async (id: string, secret: string): Promise<ResetView> =>
     (
-      await rest.request("GET", `/auth/reset/${encodeURIComponent(id)}`, {
+      await rest.request("GET", `/auth/reset/${pathSegment(id)}`, {
         headers: { [RESET_SECRET_HEADER]: secret },
       })
     ).body as ResetView,
@@ -104,7 +103,7 @@ export const auth = {
     id: string,
     body: { secret: string; password: string },
   ): Promise<PasswordSet> =>
-    (await rest.post(`/auth/reset/${encodeURIComponent(id)}`, body)) as PasswordSet,
+    (await rest.post(`/auth/reset/${pathSegment(id)}`, body)) as PasswordSet,
 
   /**
    * Enrolment's first leg: a seed, and nothing stored. A person who never
@@ -164,7 +163,7 @@ export const auth = {
    * without ending this browser's.
    */
   logoutOne: async (lineage: string): Promise<void> => {
-    await rest.post(`/auth/logout/${encodeURIComponent(lineage)}`, {});
+    await rest.post(`/auth/logout/${pathSegment(lineage)}`, {});
   },
 
   /**

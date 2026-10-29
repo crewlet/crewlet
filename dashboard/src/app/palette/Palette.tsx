@@ -92,7 +92,7 @@ import {
   UsersGlyph,
   ZapGlyph,
 } from "@crewlethq/icons/glyphs";
-import { useNavigator, useRoute } from "../router.tsx";
+import { buildHash, useNavigator, useRoute } from "../router.tsx";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import { useAssistantControl } from "../assistant/control.ts";
 import { capsOf, keyRow, matchesRow } from "../keymap.ts";
@@ -1519,7 +1519,7 @@ function AnswerLead({
                 <a
                   key={`${s.kind}-${s.ref}`}
                   className="palette-source"
-                  href={s.kind === "task" ? `#/worklet/${encodeURIComponent(s.ref)}` : undefined}
+                  href={s.kind === "task" ? buildHash(["worklet", s.ref]) : undefined}
                   onClick={(e) => {
                     e.preventDefault();
                     if (s.kind === "task") nav.to(["worklet", s.ref]);

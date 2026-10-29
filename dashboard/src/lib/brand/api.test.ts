@@ -7,13 +7,14 @@
 import { afterEach, expect, test, vi } from "vitest";
 import type { BrandDocument } from "~/protocol/index.ts";
 import { newBrandSaveKeys, saveBrand, type BrandSave } from "./api.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 afterEach(() => vi.unstubAllGlobals());
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 }
 

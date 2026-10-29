@@ -2,8 +2,10 @@
  * Removing a model draws every place that names it from the engine's own
  * refusal, says each place in words (a seat by its name and a job by its
  * category's words, never a handle or a path outside the list of changes),
- * checks each choice as it is made, and removes against the revision it read
- * with an audit summary.
+ * checks each choice as it is made, names where each place goes before the
+ * removal is confirmed, and removes against the entry's own tag with an audit
+ * summary. An engine that answered with an error is never said not to have
+ * answered.
  */
 
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -15,8 +17,12 @@ import { RemoveDialog } from "./RemoveDialog.tsx";
 
 const removeModel = vi.hoisted(() => vi.fn());
 vi.mock("../api.ts", () => ({ removeModel }));
+// THE DOCUMENT'S TAG IS NOT THE ENTRY'S: a removal sent the document's and was
+// refused 412 for every model. Both are answered here, apart, so a case
+// reads which one the dialog sent.
 vi.mock("~/protocol/configWrite.ts", () => ({
   getConfig: () => Promise.resolve({ kind: "document", document: {}, etag: '"rev-1"' }),
+  getEntity: () => Promise.resolve({ kind: "entity", entity: {}, etag: '"llm-providers-sonnet"' }),
 }));
 
 const REFS: ModelReference[] = [
@@ -108,7 +114,7 @@ test("every choice is checked by a dry run as it is made, and summarised in word
     ],
     assistantOff: false,
   });
-  expect(checked[2]).toMatchObject({ etag: '"rev-1"', dryRun: true });
+  expect(checked[2]).toMatchObject({ etag: '"llm-providers-sonnet"', dryRun: true });
   expect(
     screen.getByText("Removes the model sonnet, moves 2 uses to big, and moves 1 use to default."),
   ).toBeDefined();
@@ -152,7 +158,7 @@ test("the removal waits for the typed name, then states the revision it read and
   });
   const sent = removeModel.mock.calls.at(-1)!;
   expect(sent[2]).toEqual({
-    etag: '"rev-1"',
+    etag: '"llm-providers-sonnet"',
     dryRun: false,
     summary: "Remove the model sonnet, move 2 uses to big, and move 1 use to default",
   });
@@ -185,3 +191,81 @@ test("a removal that has started finishes after the dialog closed, and moves not
   expect(onDone).not.toHaveBeenCalled();
   expect(window.location.hash).toBe("#/somewhere-else");
 });
+
+test("every request of a removal carries the entry's own tag, never the document's", async () => {
+  open(true);
+  await screen.findByRole("list", { name: "Where sonnet is named" });
+  await settle();
+  expect(removeModel.mock.calls.length).toBeGreaterThan(0);
+  for (const call of removeModel.mock.calls) expect(call[2].etag).toBe('"llm-providers-sonnet"');
+});
+
+test("before it is confirmed, the removal says where each seat and job goes, by name", async () => {
+  open(true);
+  await screen.findByRole("list", { name: "Where sonnet is named" });
+  await settle();
+  const moves = await screen.findByRole("list", { name: "Where each moves" });
+  const lines = within(moves)
+    .getAllByRole("listitem")
+    .map((li) => li.textContent);
+  expect(lines.length).toBe(REFS.length);
+  for (const line of lines) expect(line).toMatch(/^.+: (sonnet → \S+|turned off)/);
+  expect(lines.join(" ")).toContain("Backend Engineer");
+  expect(lines.join(" ")).not.toMatch(/backend-engineer|roles\./);
+});
+
+/**
+ * "DID NOT ANSWER" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED: the owner's
+ * removal said it while the engine's log showed the engine answering. A
+ * gateway's page is not the engine's answer either; a 5xx the engine wrote is.
+ */
+const UNSETTLED = [
+  [0, false, "the engine did not answer within 30 seconds", "The engine did not answer."],
+  [504, false, "a 504 came back without the engine's JSON", "The engine did not answer."],
+  [500, true, "store: disk full", "The engine failed: store: disk full."],
+  // A PROXY'S 403 OR 413, as the classifier reads one without the engine's mark.
+  [403, false, "blocked by policy", "The engine did not answer."],
+  [413, false, "blocked by policy", "The engine did not answer."],
+] as const;
+
+test.each(UNSETTLED)(
+  "a check answered with status %i (by the engine: %s) says what happened, and that nothing was removed",
+  async (status, answered, detail, said) => {
+    removeModel.mockReset();
+    removeModel.mockResolvedValue({
+      outcome: { kind: "unsettled", answered, status, detail },
+      references: [],
+    });
+    const words = new RegExp(`^${said.replace(/[.()]/g, "\\$&")} Nothing was removed\\.$`);
+    open(true);
+    const title = await screen.findByText("The removal could not be prepared");
+    expect(
+      title.closest(".crewlet-callout")?.textContent?.replace(title.textContent ?? "", ""),
+    ).toMatch(words);
+  },
+);
+
+test.each(UNSETTLED)(
+  "a removal answered with status %i (by the engine: %s) says what happened, and that it may have landed",
+  async (status, answered, detail, said) => {
+    open(true);
+    await screen.findByRole("list", { name: "Where sonnet is named" });
+    await settle();
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "sonnet" } });
+    removeModel.mockResolvedValueOnce({
+      outcome: { kind: "unsettled", answered, status, detail },
+      references: [],
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Remove model" }));
+    });
+    // NOT TITLED "Not removed": it may have been.
+    expect(screen.queryByText("Not removed")).toBeNull();
+    const title = await screen.findByText("Not known whether it was removed");
+    expect(
+      title.closest(".crewlet-callout")?.textContent?.replace(title.textContent ?? "", ""),
+    ).toBe(
+      `${said} sonnet may or may not have been removed. Close this and look at the list before trying again.`,
+    );
+  },
+);

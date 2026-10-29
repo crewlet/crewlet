@@ -10,6 +10,7 @@
  */
 
 import { version as KIT_VERSION } from "@crewlethq/artifact-kit/package.json";
+import { pathSegment } from "~/lib/segment.ts";
 import type { ArtifactCapability } from "~/protocol/index.ts";
 
 /** One file of the page: its text where it is text, its bytes where it is a picture or a font. */
@@ -82,7 +83,7 @@ export const KIT_RELEASE = KIT_VERSION;
  * theme and passes the publish checks as it stands.
  */
 export function skeleton(): string {
-  const kit = `/_crewlet/kit/${KIT_RELEASE}`;
+  const kit = `/_crewlet/kit/${pathSegment(KIT_RELEASE)}`;
   return `<!doctype html>
 <html lang="en">
   <head>

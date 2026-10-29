@@ -49,7 +49,7 @@ func newFakeActNode(t *testing.T) *fakeActNode {
 			"tool": n.tool, "outcome": n.answer["outcome"], "position": nil, "receipt": n.answer,
 		})
 	})
-	n.server = httptest.NewServer(mux)
+	n.server = httptest.NewServer(asEngine(mux))
 	t.Cleanup(n.server.Close)
 	return n
 }

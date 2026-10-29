@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, test } from "vitest";
+import { classifyConfigRefusal } from "~/protocol/configAnswer.ts";
 import { readCeiling } from "./budget.ts";
 import { CONFIG_WRITE_REASONS } from "./useWriteAccess.ts";
 import {
@@ -144,11 +145,39 @@ describe("what the engine's answer means", () => {
         scope,
       ).reload,
     ).toBe(true);
-    expect(refusalWords({ kind: "unreachable", detail: "" }, scope)).toEqual({
+    expect(
+      refusalWords({ kind: "unsettled", answered: false, detail: "", status: 0 }, scope),
+    ).toEqual({
       message:
-        "The engine did not answer, so the change may or may not have landed. Reload before trying again.",
+        "The engine did not answer. The change may or may not have landed. Reload before trying again.",
       reload: true,
     });
+    // AN ENGINE THAT ANSWERED AND FAILED is said as one, with its own words.
+    expect(
+      refusalWords(
+        { kind: "unsettled", answered: true, detail: "the store could not commit", status: 500 },
+        scope,
+      ),
+    ).toEqual({
+      message:
+        "The engine failed: the store could not commit. The change may or may not have landed. Reload before trying again.",
+      reload: true,
+    });
+    // A PROXY'S 403 OR 413 IS NO REFUSAL OF THE ENGINE'S, however it is
+    // spelled: unmarked, it says nothing about the change, and never asks for
+    // a grant.
+    for (const status of [403, 413]) {
+      const read = classifyConfigRefusal({
+        status,
+        body: { error: "unauthorized", detail: "blocked by policy" },
+        fromEngine: false,
+      });
+      expect(refusalWords(read, scope)).toEqual({
+        message:
+          "The engine did not answer. The change may or may not have landed. Reload before trying again.",
+        reload: true,
+      });
+    }
     // A REFUSAL ON AUTHORITY names the grant, never a token this browser
     // does not hold.
     expect(refusalWords({ kind: "guarded", code: "unauthorized" }, scope)).toEqual({

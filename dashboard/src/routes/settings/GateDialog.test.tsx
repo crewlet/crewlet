@@ -17,6 +17,7 @@ import { GATE_REQUEST_TIMEOUT_MS } from "~/contract/gate.ts";
 import type { RetentionGateResult } from "~/protocol/index.ts";
 import { finishable, GateDialog, GateOutcome } from "./GateDialog.tsx";
 import type { GateGesture } from "./GateDialog.tsx";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 interface Golden {
   answers: Record<string, RetentionGateResult>;
@@ -50,7 +51,7 @@ function engine(...replies: { status: number; body: unknown }[]): Sent[] {
       const reply = replies[Math.min(sent.length - 1, replies.length - 1)]!;
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );
@@ -366,7 +367,11 @@ test("a gateway's answer or a cut-off one keeps the op id and offers to finish i
         status: 504,
         headers: { "Content-Type": "text/html" },
       }),
-    () => new Response(JSON.stringify({ message: "upstream closed" }), { status: 502 }),
+    () =>
+      new Response(JSON.stringify({ message: "upstream closed" }), {
+        headers: ENGINE_HEADERS,
+        status: 502,
+      }),
     () =>
       new Response('{"node":"node-4","op_id":"01a0c4', {
         status: 200,
@@ -383,7 +388,7 @@ test("a gateway's answer or a cut-off one keeps the op id and offers to finish i
           ? reply()
           : new Response(JSON.stringify(answer("applied")), {
               status: 200,
-              headers: { "Content-Type": "application/json" },
+              headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
             });
       }),
     );

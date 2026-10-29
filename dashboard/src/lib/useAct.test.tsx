@@ -19,6 +19,7 @@ import { useClient, useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { WriteButton } from "~/components/WriteButton.tsx";
 import { session } from "~/protocol/session.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 // NO ORG: the company's services are not known, so every write is the
 // engine's to decide, as on a node that has not sent its chart yet.
@@ -109,7 +110,7 @@ function engine(answer: () => Response) {
 const json = (payload: unknown, status: number) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 
 /** A screen that reads a tracker question and pins a view. */

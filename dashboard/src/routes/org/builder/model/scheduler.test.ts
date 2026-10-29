@@ -6,7 +6,7 @@
  * What these protect: a check sends exactly the write a save would, without a
  * summary; only the answer for the current generation is used; a superseded
  * request is aborted and its late answer dropped; a burst of changes sends one
- * check; an unreachable engine is retried with growing delays that changes do
+ * check; an unchecked draft is retried with growing delays that changes do
  * not shortcut; a conflict, a refused token and a read-only process stop
  * checking until a reset; and saving is refused, held or allowed per status.
  */
@@ -24,6 +24,7 @@ import {
   classifyCheck,
   isCurrentAnswer,
   saveRules,
+  uncheckedSentence,
   transition,
   type CheckState,
   type SettledCheck,
@@ -105,7 +106,11 @@ describe("classifyCheck", () => {
   test("a dry run on the draft's base is clean, carrying its warnings and derivation", () => {
     expect(
       classifyCheck(
-        { status: 200, body: { valid: true, base_revision_id: "r1", warnings: null, derived } },
+        {
+          status: 200,
+          body: { valid: true, base_revision_id: "r1", warnings: null, derived },
+          fromEngine: true,
+        },
         "edit",
         "r1",
         null,
@@ -116,7 +121,7 @@ describe("classifyCheck", () => {
   test("a dry run that validated against another base is a conflict", () => {
     expect(
       classifyCheck(
-        { status: 200, body: { valid: true, base_revision_id: "r2" } },
+        { status: 200, body: { valid: true, base_revision_id: "r2" }, fromEngine: true },
         "edit",
         "r1",
         null,
@@ -128,7 +133,7 @@ describe("classifyCheck", () => {
     });
     expect(
       classifyCheck(
-        { status: 200, body: { valid: true, base_revision_id: "r2" } },
+        { status: 200, body: { valid: true, base_revision_id: "r2" }, fromEngine: true },
         "create",
         null,
         null,
@@ -139,7 +144,7 @@ describe("classifyCheck", () => {
     });
     expect(
       classifyCheck(
-        { status: 200, body: { valid: true, base_revision_id: "" } },
+        { status: 200, body: { valid: true, base_revision_id: "" }, fromEngine: true },
         "create",
         null,
         null,
@@ -149,42 +154,72 @@ describe("classifyCheck", () => {
     });
   });
 
-  test("refusals map to the states that halt, and failures to unreachable", () => {
+  test("refusals map to the states that halt, and failures to unchecked, each said apart by why", () => {
     const cases: [HttpAnswer, unknown][] = [
       [
-        { status: 401, body: { error: "unauthorized" } },
+        { status: 401, body: { error: "unauthorized" }, fromEngine: true },
         { status: "guarded", code: "unauthorized" },
       ],
       [
-        { status: 403, body: {} },
-        { status: "guarded", code: "" },
+        { status: 403, body: {}, fromEngine: true },
+        { status: "unchecked", why: "unanswered", answerStatus: 403, detail: "" },
       ],
       [
-        { status: 503, body: { error: "draining", detail: "restarting" } },
-        { status: "unreachable", detail: "restarting" },
+        // A PROXY'S 403 in the engine's shape, without the engine's mark: no grant of anybody's.
+        { status: 403, body: { error: "unauthorized" }, fromEngine: false },
+        { status: "unchecked", why: "unanswered", answerStatus: 403, detail: "unauthorized" },
       ],
       [
-        { status: 503, body: { error: "starting", detail: "recovering" } },
-        { status: "unreachable", detail: "recovering" },
+        { status: 413, body: { error: "body_too_large" }, fromEngine: false },
+        { status: "unchecked", why: "unanswered", answerStatus: 413, detail: "body_too_large" },
       ],
       [
-        { status: 0, body: { error: "unreachable" } },
-        { status: "unreachable", detail: "unreachable" },
+        { status: 503, body: { error: "draining", detail: "restarting" }, fromEngine: true },
+        { status: "unchecked", why: "draining", answerStatus: 503, detail: "restarting" },
       ],
       [
-        { status: 502, body: { error: "unreadable_body" } },
-        { status: "unreachable", detail: "unreadable_body" },
+        { status: 503, body: { error: "starting", detail: "recovering" }, fromEngine: true },
+        { status: "unchecked", why: "starting", answerStatus: 503, detail: "recovering" },
       ],
       [
-        { status: 409, body: { error: "revision_advanced", current_revision_id: "r9" } },
+        { status: 0, body: { error: "unreachable" }, fromEngine: false },
+        { status: "unchecked", why: "unanswered", answerStatus: 0, detail: "unreachable" },
+      ],
+      [
+        { status: 502, body: { error: "unreadable_body" }, fromEngine: true },
+        { status: "unchecked", why: "unanswered", answerStatus: 502, detail: "unreadable_body" },
+      ],
+      [
+        {
+          status: 500,
+          body: { error: "internal", detail: "the store could not commit" },
+          fromEngine: true,
+        },
+        {
+          status: "unchecked",
+          why: "failed",
+          answerStatus: 500,
+          detail: "the store could not commit",
+        },
+      ],
+      [
+        {
+          status: 409,
+          body: { error: "revision_advanced", current_revision_id: "r9" },
+          fromEngine: true,
+        },
         { status: "conflict", reason: "revision_advanced", currentRevisionId: "r9" },
       ],
       [
-        { status: 412, body: { error: "already_configured", current_revision_id: "r3" } },
+        {
+          status: 412,
+          body: { error: "already_configured", current_revision_id: "r3" },
+          fromEngine: true,
+        },
         { status: "conflict", reason: "already_configured", currentRevisionId: "r3" },
       ],
       [
-        { status: 409, body: { error: "no_active_revision" } },
+        { status: 409, body: { error: "no_active_revision" }, fromEngine: true },
         { status: "conflict", reason: "no_active_revision", currentRevisionId: null },
       ],
     ];
@@ -205,6 +240,7 @@ describe("classifyCheck", () => {
         grants: ["admin"],
         refused: [{ kind: "document", id: "", place: "", why: "unchanged", reason: "no_grant" }],
       },
+      fromEngine: true,
     };
     expect(classifyCheck(answer, "edit", "r1", null)).toEqual({
       status: "guarded",
@@ -225,6 +261,7 @@ describe("classifyCheck", () => {
     const answer: HttpAnswer = {
       status: 403,
       body: { error: "config_managed", managed_by: ["gitops"] },
+      fromEngine: true,
     };
     for (const scope of [null, "engineering"]) {
       expect(classifyCheck(answer, "edit", "r1", scope), String(scope)).toEqual({
@@ -252,6 +289,7 @@ describe("classifyCheck", () => {
             problems: [problem],
             derived,
           },
+          fromEngine: true,
         },
         "edit",
         "r1",
@@ -266,7 +304,11 @@ describe("classifyCheck", () => {
     });
     expect(
       classifyCheck(
-        { status: 413, body: { error: "body_too_large", detail: "the body is over the limit" } },
+        {
+          status: 413,
+          body: { error: "body_too_large", detail: "the body is over the limit" },
+          fromEngine: true,
+        },
         "edit",
         "r1",
         null,
@@ -355,7 +397,7 @@ describe("transition", () => {
     expect(settled.effects).toEqual([]);
   });
 
-  test("an unreachable engine is retried with doubling delays up to the cap, and changes ride the retry", () => {
+  test("an unchecked draft is retried with doubling delays up to the cap, and changes ride the retry", () => {
     let state: CheckState = loaded.state;
     let now = T0;
     const delays: number[] = [];
@@ -363,14 +405,14 @@ describe("transition", () => {
       const settled = transition(state, {
         type: "settled",
         request: state.inFlight!.request,
-        status: "unreachable",
+        status: "unchecked",
         now,
       });
       const wake = settled.effects.find((e) => e.type === "wake");
       if (wake?.type !== "wake") throw new Error("no retry scheduled");
       delays.push(wake.at - now);
       state = settled.state;
-      expect(state.status).toBe("unreachable");
+      expect(state.status).toBe("unchecked");
 
       const changed = transition(state, {
         type: "changed",
@@ -379,7 +421,7 @@ describe("transition", () => {
       });
       expect(changed.effects).toEqual([]);
       expect(changed.state.dueAt).toBe(wake.at);
-      expect(changed.state.status).toBe("unreachable");
+      expect(changed.state.status).toBe("unchecked");
       state = changed.state;
 
       now = wake.at;
@@ -427,7 +469,7 @@ describe("saveRules", () => {
       waiting: false,
       reason: null,
     });
-    expect(saveRules("unreachable", true)).toEqual({
+    expect(saveRules("unchecked", true)).toEqual({
       review: true,
       save: true,
       waiting: false,
@@ -546,7 +588,7 @@ describe("CheckRunner", () => {
     const { clock, transport, settled, change, reset } = harness();
     reset();
     expect(transport.pending).toHaveLength(1);
-    transport.pending[0]!.resolve({ status: 200, body: { valid: true } });
+    transport.pending[0]!.resolve({ status: 200, body: { valid: true }, fromEngine: true });
     await flush();
     expect(settled.map((s) => s.generation)).toEqual([1]);
 
@@ -568,7 +610,7 @@ describe("CheckRunner", () => {
     const first = transport.pending[0]!;
     change();
     expect(first.signal.aborted).toBe(true);
-    first.resolve({ status: 200, body: { valid: true } });
+    first.resolve({ status: 200, body: { valid: true }, fromEngine: true });
     await flush();
     expect(settled).toEqual([]);
     clock.advance(CHECK_DEBOUNCE_MS);
@@ -578,6 +620,7 @@ describe("CheckRunner", () => {
         error: "validation_error",
         problems: [{ path: "name", segments: ["name"], kind: "missing", message: "name" }],
       },
+      fromEngine: true,
     });
     await flush();
     expect(settled).toHaveLength(1);
@@ -585,12 +628,12 @@ describe("CheckRunner", () => {
     expect(settled[0]!.sent.document).toEqual({ name: "generation 2" });
   });
 
-  test("an unreachable engine is retried after the backoff, not at the next change", async () => {
+  test("an engine that did not answer is retried after the backoff, not at the next change", async () => {
     const { clock, transport, runner, change, reset } = harness();
     reset();
-    transport.pending[0]!.resolve({ status: 0, body: { error: "unreachable" } });
+    transport.pending[0]!.resolve({ status: 0, body: { error: "unreachable" }, fromEngine: false });
     await flush();
-    expect(runner.state.status).toBe("unreachable");
+    expect(runner.state.status).toBe("unchecked");
     change();
     clock.advance(CHECK_BACKOFF_BASE_MS - 1);
     expect(transport.pending).toHaveLength(1);
@@ -605,8 +648,8 @@ describe("CheckRunner", () => {
     const first = transport.pending[0]!;
     runner.reset(1);
     expect(first.signal.aborted).toBe(true);
-    first.resolve({ status: 401, body: { error: "unauthorized" } });
-    transport.pending[1]!.resolve({ status: 200, body: { valid: true } });
+    first.resolve({ status: 401, body: { error: "unauthorized" }, fromEngine: true });
+    transport.pending[1]!.resolve({ status: 200, body: { valid: true }, fromEngine: true });
     await flush();
     expect(settled.map((s) => s.outcome.status)).toEqual(["clean"]);
   });
@@ -617,7 +660,7 @@ describe("CheckRunner", () => {
     transport.pending[0]!.reject(new Error("socket hang up"));
     await flush();
     expect(settled[0]).toMatchObject({
-      outcome: { status: "unreachable", detail: "socket hang up" },
+      outcome: { status: "unchecked", why: "unanswered", detail: "socket hang up" },
     });
     clock.advance(CHECK_BACKOFF_BASE_MS);
     expect(transport.pending).toHaveLength(2);
@@ -625,3 +668,19 @@ describe("CheckRunner", () => {
     expect(transport.pending[1]!.signal.aborted).toBe(true);
   });
 });
+
+// WHAT A SAVE'S SETTLING READ SAYS when it could not read: "did not answer"
+// only where the engine's answer never arrived.
+test.each([
+  ["unanswered", 0, "Failed to fetch", "The engine did not answer."],
+  ["unanswered", 504, "a 504 came back without the engine's JSON", "The engine did not answer."],
+  ["failed", 500, "store: disk full", "The engine failed: store: disk full."],
+  ["failed", 500, "", "The engine failed with status 500."],
+  ["draining", 503, "shutting down", "This node is draining."],
+  ["starting", 503, "recovering", "This node is still starting."],
+] as const)(
+  "an unchecked answer (%s, %i) is said as one sentence",
+  (why, answerStatus, detail, said) => {
+    expect(uncheckedSentence({ status: "unchecked", why, answerStatus, detail })).toBe(said);
+  },
+);

@@ -44,15 +44,32 @@ const PLACE_WORDS: Record<
   },
 };
 
-/** Why a place cannot start a run on any node: the first node's own sentence and its fix. */
+/**
+ * A place the company has not set up, in plain words: what it needs, never
+ * the configuration's own sentence ("providers.sandbox declares no e2b
+ * cell"), which says the same thing to someone who already knows the schema.
+ */
+const NOT_SET_UP: Record<RunnerCellName, string> = {
+  direct: "Running on this engine's host isn't set up for this company.",
+  container:
+    "Containers aren't set up for this company. Add them under providers.sandbox to use them.",
+  e2b: "E2B isn't set up for this company. Add it under providers.sandbox to use it.",
+};
+
+/**
+ * Why a place cannot start a run on any node. A place the company never set
+ * up says so plainly; one it set up that a node cannot use says that node's
+ * own sentence and its fix, which name what to repair.
+ */
 function unready(answer: RunnersAnswer, place: RunnerCellName): string {
+  if (!answer.cells[place].declared) return NOT_SET_UP[place];
   for (const node of answer.nodes) {
     const cell = node[place];
     if (cell && cell.state !== "ready") {
       return [cell.detail.replace(/\.$/, ""), cell.fix].filter(Boolean).join(". ");
     }
   }
-  return answer.cells[place].declared ? "Not ready on any node." : "Not set up for this company.";
+  return "Not ready on any node.";
 }
 
 /** A place's readiness across the fleet, as a fact. */
@@ -128,6 +145,8 @@ export function WhereItRuns({
     <div className="models-stack">
       <ChoiceCards
         label="Where coding runs happen"
+        minCardWidth="sm"
+        density="compact"
         options={options}
         value={chosen}
         onChange={(v) => onChange(v === answer.default_run_in ? "" : (v as RunnerCellName))}

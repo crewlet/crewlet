@@ -35,7 +35,11 @@
  * conflict it is.
  */
 
-import { classifyConfigRefusal, type ConfigRefusal } from "~/protocol/configAnswer.ts";
+import {
+  classifyConfigRefusal,
+  type ConfigRefusal,
+  type ConfigUnsettled,
+} from "~/protocol/configAnswer.ts";
 import { answerOf } from "~/protocol/configWrite.ts";
 import type { CharterMoved } from "~/contract/config.ts";
 import { rest } from "~/protocol/rest.ts";
@@ -101,8 +105,11 @@ export type SaveOutcome =
   | { readonly kind: "none" }
   /** The engine refused the read or the write. */
   | { readonly kind: "refused"; readonly refusal: ConfigRefusal }
-  /** A write that got no answer, settled by a read that still shows the base: nothing landed. */
-  | { readonly kind: "lost" }
+  /**
+   * A write whose outcome was unsettled (`refusal`, the last such answer),
+   * settled by a read that still shows the base: nothing landed.
+   */
+  | { readonly kind: "lost"; readonly refusal: ConfigUnsettled }
   /** The charter kept moving under every attempt. */
   | { readonly kind: "busy" };
 
@@ -192,16 +199,16 @@ export async function savePart(
   const read = await transport.read(signal);
   if (read.kind !== "charter") return read;
   let now: TaggedCharter = read;
-  let unanswered = false;
+  let unsettled: ConfigUnsettled | null = null;
   for (let attempt = 0; attempt < SAVE_ATTEMPTS; attempt++) {
     const stored = partOf(now.charter, part);
     if (samePart(stored, draft)) {
-      return unanswered
+      return unsettled
         ? { kind: "saved", activated: null, summary: summaryOf(part, base, draft) }
         : { kind: "unchanged" };
     }
     if (!samePart(stored, base)) return { kind: "conflict", theirs: stored };
-    if (unanswered) return { kind: "lost" };
+    if (unsettled) return { kind: "lost", refusal: unsettled };
 
     const summary = summaryOf(part, stored, draft);
     const next = withPart(now.charter, part, draft);
@@ -221,12 +228,12 @@ export async function savePart(
         return outcome;
       case "refused": {
         if (outcome.refusal.kind === "conflict") return { kind: "busy" };
-        if (outcome.refusal.kind !== "unreachable") return outcome;
+        if (outcome.refusal.kind !== "unsettled") return outcome;
         // SETTLED BY A READ rather than reported as a guess.
         const settle = await transport.read(signal);
         if (settle.kind !== "charter") return settle;
         now = settle;
-        unanswered = true;
+        unsettled = outcome.refusal;
         attempt--;
         continue;
       }

@@ -9,13 +9,14 @@
  * matters most — whether a write that got no answer may have landed — is the
  * one that is easiest to get wrong and hardest to notice wrong.
  *
- * PURE, AND IMPORTING NOTHING BUT TYPES, so the builder's model (which may not
- * reach the network, a clock or a global — `model/boundary.test.ts`) can
- * classify through it rather than keeping a second copy of the rule. The
- * network half is `configWrite.ts`.
+ * PURE, IMPORTING NOTHING BUT TYPES AND `engineAnswer.ts` (itself importing
+ * nothing), so the builder's model (which may not reach the network, a clock
+ * or a global, `model/boundary.test.ts`) can classify through it rather than
+ * keeping a second copy of the rule. The network half is `configWrite.ts`.
  */
 
 import type { SeatHeldHolder } from "../contract/config.ts";
+import { answeredByEngine } from "./engineAnswer.ts";
 import type { ConfigProblem, ConfigWarning, Derived } from "./types.ts";
 
 /** What the engine answered: its status, its parsed body and its entity tag.
@@ -24,6 +25,14 @@ export interface ConfigAnswer {
   readonly status: number;
   readonly body: unknown;
   readonly etag?: string | null;
+  /**
+   * Whether the answer carried the engine's mark ([markedByEngine]): false
+   * for one something in front of the engine wrote, whatever its body says.
+   * REQUIRED, so no answer is built without saying whose it is: `answerOf`
+   * records what the response said, and a fixture says `true` for the engine
+   * it plays.
+   */
+  readonly fromEngine: boolean;
 }
 
 /** Why the engine holds a revision the write was not built on. */
@@ -73,13 +82,7 @@ export type ConfigRefusal =
    * about to serve, so the same write sent again in a moment is right.
    */
   | { readonly kind: "starting"; readonly detail: string }
-  /**
-   * Never answered, or answered with a 5xx that is neither of those: a
-   * gateway that gave up, an engine that failed after storing the revision.
-   * For a WRITE this is "it may have landed" — settle it before believing
-   * either way.
-   */
-  | { readonly kind: "unreachable"; readonly detail: string }
+  | ConfigUnsettled
   /** The document or the request was refused: every other status. */
   | {
       readonly kind: "problems";
@@ -89,6 +92,46 @@ export type ConfigRefusal =
       readonly code: string;
       readonly hint: string;
     };
+
+/**
+ * An answer that does not say whether a write landed: never answered, or a
+ * 5xx that is neither of the certain two. For a WRITE this is "it may have
+ * landed", so settle it before believing either way; for a check, ask again
+ * later. Both causes share that, and differ only in what a screen SAYS, which
+ * is [unsettledSentence].
+ */
+export interface ConfigUnsettled {
+  readonly kind: "unsettled";
+  /**
+   * Whether the ENGINE answered ([answeredByEngine]). False where nothing did
+   * (a dropped connection, the client's own deadline) or something in front
+   * of it did (a gateway's 504 page, a proxy's 403 or 413), whatever the
+   * status: its answer never reached this screen. True where it answered a
+   * 5xx of its own, which is an engine that FAILED, possibly after it stored
+   * the revision.
+   */
+  readonly answered: boolean;
+  /** The status that came back; 0 where nothing did. */
+  readonly status: number;
+  /** The engine's own sentence where it answered, else what the transport knows. */
+  readonly detail: string;
+}
+
+/**
+ * What an unsettled answer was, as the one sentence every screen opens with,
+ * before its own word on what may have happened and what to do.
+ *
+ * "DID NOT ANSWER" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED. A 5xx the
+ * engine wrote was read as "the engine did not answer" while its log showed
+ * it answering, which sent the reader to their network for an engine that had
+ * failed and said why.
+ */
+export function unsettledSentence(refusal: ConfigUnsettled): string {
+  if (!refusal.answered) return "The engine did not answer.";
+  const detail = refusal.detail.trim();
+  if (detail === "") return `The engine failed with status ${refusal.status}.`;
+  return `The engine failed: ${/[.!?]$/.test(detail) ? detail : `${detail}.`}`;
+}
 
 /**
  * Why a managed company document cannot be changed from here, naming who
@@ -128,6 +171,20 @@ const text = (value: unknown): string => (typeof value === "string" ? value : ""
 export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   const body = isRecord(answer.body) ? answer.body : {};
   const code = text(body.error);
+  // NOT THE ENGINE'S ANSWER, FIRST, whatever its status: nothing came back,
+  // or something in front of the engine answered (a gateway's 504, a proxy's
+  // 403 or 413, its HTML or its JSON). It says nothing about what the engine
+  // did, so it is no refusal of the engine's to read by status: read as one,
+  // a proxy's 403 asked a person for a grant and its 413 for a smaller draft,
+  // for a write that may have landed.
+  if (!answeredByEngine(answer.status, code, answer.fromEngine)) {
+    return {
+      kind: "unsettled",
+      answered: false,
+      status: answer.status,
+      detail: text(body.detail) || code,
+    };
+  }
   // A MANAGED DOCUMENT'S REFUSAL IS NOT ABOUT THE CREDENTIAL, which the
   // engine accepted: it is about where the company is written (ADR-0030), so
   // it is its own answer rather than a grant to ask for. FIRST, because it is
@@ -196,7 +253,8 @@ export function classifyConfigRefusal(answer: ConfigAnswer): ConfigRefusal {
   // might have landed, for a write nothing ever read.
   if (answer.status === 503 && code === "draining") return { kind: "draining", detail };
   if (answer.status === 503 && code === "starting") return { kind: "starting", detail };
-  if (answer.status === 0 || answer.status >= 500) return { kind: "unreachable", detail };
+  if (answer.status >= 500)
+    return { kind: "unsettled", answered: true, status: answer.status, detail };
   // Every other refusal is about the document or the request that carried it:
   // a validation error, a patch the engine could not apply, a body too large.
   const problems = Array.isArray(body.problems) ? (body.problems as ConfigProblem[]) : [];

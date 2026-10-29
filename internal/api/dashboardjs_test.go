@@ -1362,8 +1362,18 @@ const (
 	// 0.76.1, kept it within 4759 KiB. The secret dialogs reading whether the
 	// company switched to a write (`reload`), and saying so when it did not
 	// rather than closing on the 200 (#457), took it to 4760.1 KiB. 4761 KiB,
-	// which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 665<<10
+	// which still refuses a doubled baseline. The models round (the Datadog
+	// keys tested together, each failure named at its own key; one reading of
+	// a /config failure by whether the engine answered, its sentence shared
+	// by every screen that writes the company; and the Models fixes from the
+	// owner's review: a removal on its entry's own tag, Review's list of who
+	// changes model, an edit keeping its seats; an answer read as the
+	// engine's only where it carries the engine's mark; every path segment
+	// through one rule; rgb channels and trailing slashes read in linear
+	// time; and uilet 0.77.0, its compact cards and CheckGrid in place of the
+	// seat grid) took it to 4773.5 KiB. 4774 KiB, which still refuses a
+	// doubled baseline.
+	treeBudget = 4<<20 + 678<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -2818,3 +2818,191 @@ test("a requirement's check note is part of its help", () => {
   const help = screen.getByText(/Paste the key\./);
   expect(help.textContent).toContain(note);
 });
+
+/**
+ * Two keys the app checks together, the way the engine declares Datadog's:
+ * the application key carries the one check, made with the region and the
+ * API key, and the API key has no test of its own.
+ */
+const together: SetupToolState = {
+  ...tool,
+  requirements: [
+    req({
+      field: "site",
+      label: "Datadog region",
+      kind: "choice",
+      default: "datadoghq.com",
+      choices: [
+        { value: "datadoghq.com", label: "datadoghq.com" },
+        { value: "datadoghq.eu", label: "datadoghq.eu" },
+      ],
+      config_path: "integrations.datadog.provisioning.site",
+    }),
+    req({
+      field: "api_key",
+      label: "API key",
+      kind: "secret",
+      connect: true,
+      check_note: "It is tested together with the application key.",
+      config_path: "integrations.datadog.provisioning.api_key",
+    }),
+    req({
+      field: "app_key",
+      label: "Application key",
+      kind: "secret",
+      checkable: true,
+      check_with: ["site", "api_key"],
+      connect: true,
+      config_path: "integrations.datadog.provisioning.app_key",
+    }),
+  ],
+};
+
+function renderTogether() {
+  render(
+    <SetupForm
+      sections={[{ name: "Datadog", tool: together }]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+}
+
+/** The sentence a disabled control is described by, or "" when it has none. */
+function reasonOf(button: HTMLElement): string {
+  return (button.getAttribute("aria-describedby") ?? "")
+    .split(/\s+/)
+    .map((id) => document.getElementById(id)?.textContent ?? "")
+    .join(" ")
+    .trim();
+}
+
+// ONE TEST FOR KEYS CHECKED TOGETHER, after the last of them, and none beside
+// the API key. Mutation: draw a control per checkable field and ignore
+// check_with, and the control is named "Test key" and this goes red.
+test("keys checked together share one test, placed after the application key", () => {
+  stubCheck({ outcome: "works", detail: "unused" });
+  renderTogether();
+  const buttons = screen.getAllByRole("button", { name: /^Test key/ });
+  expect(buttons.map((b) => b.textContent)).toEqual(["Test keys"]);
+  const appKey = screen.getByLabelText("Application key");
+  expect(
+    appKey.compareDocumentPosition(buttons[0]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+// ENABLED ONLY WHEN THE CHECK CAN BE MADE, and saying why not until then.
+// Mutation: gate the control on the application key's box alone and it is
+// enabled with only that key typed.
+test("the shared test waits for both keys and says which are missing", () => {
+  stubCheck({ outcome: "works", detail: "unused" });
+  renderTogether();
+  const button = () => screen.getByRole("button", { name: "Test keys" });
+
+  expect(button().getAttribute("aria-disabled")).toBe("true");
+  expect(reasonOf(button())).toBe("Fill in API key and Application key to test the keys together");
+
+  fireEvent.change(screen.getByLabelText("Application key"), { target: { value: "fake-app" } });
+  expect(button().getAttribute("aria-disabled")).toBe("true");
+  expect(reasonOf(button())).toBe("Fill in API key to test the keys together");
+
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "fake-api" } });
+  expect(button().getAttribute("aria-disabled")).not.toBe("true");
+  expect(reasonOf(button())).toBe("");
+});
+
+// ONE CLICK, ONE CHECK OF BOTH KEYS, ONE RESULT. Mutation: send only the
+// application key and the body loses the API key.
+test("the shared test checks both keys in one request and shows one result", async () => {
+  const { checks } = stubCheck({
+    outcome: "works",
+    detail:
+      "Works. Both keys are valid for the Acme organization in datadoghq.com, and can read users, roles and webhooks.",
+  });
+  renderTogether();
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "fake-api" } });
+  fireEvent.change(screen.getByLabelText("Application key"), { target: { value: "fake-app" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test keys" }));
+
+  await screen.findByText(/^Works\. Both keys are valid/);
+  expect(checks).toEqual([
+    {
+      path: "/setup/integrations/datadog/verify",
+      body: {
+        field: "app_key",
+        value: "fake-app",
+        values: { site: "datadoghq.com", api_key: "fake-api" },
+      },
+    },
+  ]);
+  expect(document.querySelectorAll(".int-key-check .crewlet-status")).toHaveLength(1);
+});
+
+// A FAILURE NAMES THE KEY THAT FAILED, in the engine's words and the danger
+// tone. Mutation: drop the shared control and there is nothing to press.
+test("a failed shared test names the failing key", async () => {
+  const detail = "The API key is valid, but Datadog refused the application key: Forbidden.";
+  stubCheck({ outcome: "refused", detail });
+  renderTogether();
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "fake-api" } });
+  fireEvent.change(screen.getByLabelText("Application key"), { target: { value: "fake-bad" } });
+  fireEvent.click(screen.getByRole("button", { name: "Test keys" }));
+
+  const verdict = await screen.findByText(detail);
+  expect(
+    verdict.closest(".crewlet-status")?.querySelector(".crewlet-status-dot--danger"),
+  ).toBeTruthy();
+});
+
+// A RESULT ABOUT BOTH KEYS IS STALE WHEN EITHER CHANGES, the API key's box
+// included, though the result is drawn under the application key. Mutation:
+// clear only the edited field's own result and the API key edit leaves it.
+test("editing either key clears the shared result", async () => {
+  const detail = "Datadog refused the API key: Forbidden.";
+  stubCheck({ outcome: "refused", detail });
+  renderTogether();
+  const api = screen.getByLabelText("API key");
+  const app = screen.getByLabelText("Application key");
+  fireEvent.change(api, { target: { value: "fake-api" } });
+  fireEvent.change(app, { target: { value: "fake-app" } });
+
+  fireEvent.click(screen.getByRole("button", { name: "Test keys" }));
+  await screen.findByText(detail);
+  fireEvent.change(api, { target: { value: "fake-api-2" } });
+  expect(screen.queryByText(detail)).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "Test keys" }));
+  await screen.findByText(detail);
+  fireEvent.change(app, { target: { value: "fake-app-2" } });
+  expect(screen.queryByText(detail)).toBeNull();
+});
+
+// A HELD KEY STAYS WHEN ITS BOX IS LEFT EMPTY, said under the test control
+// until something is typed. Mutation: drop the caption's condition on the
+// box being empty and it stays beside a typed key.
+test("an empty box over a held key says the stored key stays", () => {
+  stubCheck({ outcome: "works", detail: "unused" });
+  render(
+    <SetupForm
+      sections={[
+        {
+          name: "Datadog",
+          tool: {
+            ...together,
+            requirements: together.requirements.map((r) =>
+              r.field === "app_key" ? { ...r, present: true } : r,
+            ),
+          },
+        },
+      ]}
+      title="Datadog"
+      onClose={() => {}}
+      onDone={() => {}}
+    />,
+  );
+  const caption = "A key is stored. Leave this empty to keep it.";
+  expect(screen.getByText(caption)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Application key"), { target: { value: "fake-app" } });
+  expect(screen.queryByText(caption)).toBeNull();
+});

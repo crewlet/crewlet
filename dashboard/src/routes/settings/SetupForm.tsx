@@ -52,8 +52,9 @@ import {
 } from "@crewlethq/ui";
 import { CopyGlyph, FileTextGlyph, LinkGlyph } from "@crewlethq/icons/glyphs";
 import { marked, paths, Problems, withProblems } from "~/ui/Problems.tsx";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { isWholeReference } from "~/lib/references.ts";
+import { listed } from "~/lib/format.ts";
 import { useSecretNames } from "~/lib/useSecretNames.ts";
 import type {
   SetupRequirement,
@@ -64,6 +65,7 @@ import type {
 import { href } from "~/app/router.tsx";
 import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { SETUP_ASSISTANT_HELP, setupDraftFields } from "./setupDraft.ts";
+import { linkSegment } from "~/lib/segment.ts";
 
 /** What the engine answers a submission with. */
 interface Submitted {
@@ -141,8 +143,10 @@ export function vendorLink(
     // the engine currently reads for it. WHAT IS TYPED WINS otherwise, so
     // the link follows the box as somebody fills it in.
     const value = isWholeReference(typed) ? (read?.(field) ?? "").trim() : typed;
-    if (value === "") return "";
-    resolved = resolved.replace(`{${field}}`, encodeURIComponent(value));
+    // A VALUE THAT CANNOT BE ONE SEGMENT (dots alone) links nowhere, as an empty one does.
+    const segment = linkSegment(value);
+    if (segment === null) return "";
+    resolved = resolved.replace(`{${field}}`, segment);
   }
   return resolved;
 }
@@ -808,10 +812,13 @@ export function SetupForm({
         // one request per agent, so a banner reporting the third one's
         // refusal over ten closed blocks names nothing a reader can act on.
         refused.current = section;
-        const answer = (await rest.post(`/setup/integrations/${section.tool.key}/inputs`, {
-          ...body,
-          ...(section.seat ? { seat: section.seat } : {}),
-        })) as Submitted;
+        const answer = (await rest.post(
+          `/setup/integrations/${pathSegment(section.tool.key)}/inputs`,
+          {
+            ...body,
+            ...(section.seat ? { seat: section.seat } : {}),
+          },
+        )) as Submitted;
         rotated = rotated || answer.reloaded === true;
       }
       refused.current = undefined;
@@ -1221,12 +1228,14 @@ export function SetupForm({
             value={values[key] ?? ""}
             onChange={(v) => {
               setValues((c) => ({ ...c, [key]: v }));
-              // A VERDICT IS ABOUT THE VALUE IT CHECKED: typing over it
-              // makes it a verdict about something no longer in the box.
+              // A VERDICT IS ABOUT THE VALUES IT CHECKED: typing over one
+              // makes it a verdict about something no longer in the box,
+              // whether this field's own or a check this field is part of.
+              const stale = [key, ...checksMadeWith(section, r.field)];
               setVerdicts((was) => {
-                if (!(key in was)) return was;
+                if (!stale.some((k) => k in was)) return was;
                 const next = { ...was };
-                delete next[key];
+                for (const k of stale) delete next[k];
                 return next;
               });
             }}
@@ -1326,12 +1335,49 @@ export function SetupForm({
           <KeyCheck
             verdict={verdicts[key]}
             onTest={() => void check(section, r)}
-            empty={(values[key] ?? "").trim() === ""}
-            held={r.present}
+            keeps={r.present === true && (values[key] ?? "").trim() === ""}
+            together={r.check_with !== undefined && r.check_with.length > 0}
+            missing={missingFor(section, r)}
           />
         )}
       </div>
     );
+  }
+
+  /**
+   * The keys of the checks in this section made with `field` beside the
+   * credential they are about (see `check_with`), whose verdict a change to
+   * `field` makes stale.
+   */
+  function checksMadeWith(section: SetupSection, field: string): string[] {
+    return (ownBy.get(sectionKey(section)) ?? [])
+      .filter((other) => other.checkable && other.check_with?.includes(field))
+      .map((other) => valueKey(section, other));
+  }
+
+  /**
+   * The labels of the fields a check of `r` still needs, in form order: the
+   * credential itself and every field it is checked with.
+   *
+   * A CREDENTIAL COUNTS ONLY WHEN TYPED, because the test is of the box,
+   * never the store: a key held in the sealed store is not on screen, so a
+   * result about it would read as one about a box that is empty. Any other
+   * field (Datadog's region) counts when it holds a value OR has a default,
+   * because the form shows that default as the field's answer and the
+   * engine checks against exactly that value when the box is blank, so the
+   * person can see what the test will use.
+   */
+  function missingFor(section: SetupSection, r: SetupRequirement): string[] {
+    const own = ownBy.get(sectionKey(section)) ?? [];
+    const needed = new Set([r.field, ...(r.check_with ?? [])]);
+    return own
+      .filter((other) => needed.has(other.field))
+      .filter((other) => {
+        const typed = (values[valueKey(section, other)] ?? "").trim();
+        if (typed !== "") return false;
+        return other.kind === "secret" || defaultOf(section, other.field).trim() === "";
+      })
+      .map((other) => other.label);
   }
 
   /**
@@ -1352,12 +1398,15 @@ export function SetupForm({
     }
     setVerdicts((was) => ({ ...was, [key]: "checking" }));
     try {
-      const answer = (await rest.post(`/setup/integrations/${section.tool.key}/verify`, {
-        field: r.field,
-        value,
-        ...(section.seat ? { seat: section.seat } : {}),
-        ...(Object.keys(typed).length > 0 ? { values: typed } : {}),
-      })) as SetupVerdict;
+      const answer = (await rest.post(
+        `/setup/integrations/${pathSegment(section.tool.key)}/verify`,
+        {
+          field: r.field,
+          value,
+          ...(section.seat ? { seat: section.seat } : {}),
+          ...(Object.keys(typed).length > 0 ? { values: typed } : {}),
+        },
+      )) as SetupVerdict;
       setVerdicts((was) => ({ ...was, [key]: answer }));
     } catch (err) {
       // THE CHECK DID NOT RUN, which is not the app refusing the key: a
@@ -1388,36 +1437,49 @@ const VERDICT_TONE = {
  * A credential's Test control and what the app said about the value in the box.
  *
  * A TEST OF THE BOX, NEVER OF THE STORE: an empty box over a held key has
- * nothing to send, so the control waits for a value, and says the held one
- * stays when nothing is typed.
+ * nothing to send, so the control waits for a value (`missing`), and says the
+ * held one stays when nothing is typed (`keeps`).
+ *
+ * ONE CONTROL FOR KEYS CHECKED TOGETHER (`together`): it waits for every
+ * field the check is made with (`missing` names those still empty), and the
+ * one result it shows is about all of them, in the engine's words, which name
+ * the key that failed.
  */
 function KeyCheck({
   verdict,
   onTest,
-  empty,
-  held,
+  keeps,
+  together,
+  missing,
 }: {
   verdict: SetupVerdict | "checking" | undefined;
   onTest: () => void;
-  empty: boolean;
-  held: boolean;
+  keeps: boolean;
+  together: boolean;
+  missing: string[];
 }) {
+  const blocked =
+    missing.length === 0
+      ? undefined
+      : together
+        ? `Fill in ${listed(missing)} to test the keys together`
+        : "Type or paste a key to test it";
   return (
     <div className="int-key-check">
       <Button
         size="small"
         variant="secondary"
-        disabledReason={empty ? "Type or paste a key to test it" : undefined}
+        disabledReason={blocked}
         disabled={verdict === "checking"}
         onClick={() => {
-          if (!empty) onTest();
+          if (blocked === undefined) onTest();
         }}
       >
-        {verdict === "checking" ? "Testing" : "Test key"}
+        {verdict === "checking" ? "Testing" : together ? "Test keys" : "Test key"}
       </Button>
       {verdict !== undefined && verdict !== "checking" ? (
         <StatusDot tone={VERDICT_TONE[verdict.outcome] ?? "neutral"}>{verdict.detail}</StatusDot>
-      ) : empty && held ? (
+      ) : keeps ? (
         <span className="t-caption">A key is stored. Leave this empty to keep it.</span>
       ) : null}
     </div>

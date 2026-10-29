@@ -13,6 +13,10 @@ export default defineConfig({
     globals: false,
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     setupFiles: ["./src/test/setup.ts"],
+    // ONE PROCESS PER WORKER (Vitest's default, pinned): the cost cases time a
+    // pass by its process's CPU (`src/test/growth.ts`), which in the `threads`
+    // pool would count every test file sharing the process.
+    pool: "forks",
     // A HANG DETECTOR, sized in `src/test/bounds.ts` with the wait's bound it
     // has to stay above, because a case's duration is CPU work over the share
     // of a CPU its worker gets on a machine the gate shares.

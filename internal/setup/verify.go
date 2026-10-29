@@ -226,7 +226,7 @@ func Judge(f Failure, secret string) Verdict {
 			"%s did not answer within %s. Nothing was stored.",
 			app, statelog.Spoken(VerifyBudget))}
 	case f.Refused || errors.Is(integration.Reject(f.Err, f.Status), integration.ErrCredentialRejected):
-		if reason := sayable(f.Reason, secret); reason != "" {
+		if reason := Sayable(f.Reason, secret); reason != "" {
 			return Verdict{Outcome: VerifyRefused, Detail: fmt.Sprintf(
 				"%s refused it: %s.", app, strings.TrimRight(reason, "."))}
 		}
@@ -287,14 +287,23 @@ func ReasonIn(detail string, keys ...string) string {
 	return ""
 }
 
-// sayable is a vendor reason fit to repeat, or "".
-func sayable(reason, secret string) string {
+// Sayable is a vendor's reason fit to repeat in a verdict, or "": its
+// whitespace collapsed, and left out whole when it is longer than a reason
+// reads or carries any of the credentials that were checked.
+//
+// EXPORTED FOR A PROBE THAT WRITES ITS OWN REFUSAL SENTENCE, one checking
+// several credentials in stages that has to say which of them was refused,
+// so the reason it repeats is held to the same rule [Judge] holds its own
+// to, over every credential the check carried rather than one.
+func Sayable(reason string, secrets ...string) string {
 	reason = strings.Join(strings.Fields(reason), " ")
-	switch {
-	case reason == "",
-		utf8.RuneCountInString(reason) > maxReasonRunes,
-		secret != "" && strings.Contains(reason, strings.TrimSpace(secret)):
+	if reason == "" || utf8.RuneCountInString(reason) > maxReasonRunes {
 		return ""
+	}
+	for _, secret := range secrets {
+		if secret = strings.TrimSpace(secret); secret != "" && strings.Contains(reason, secret) {
+			return ""
+		}
 	}
 	return reason
 }

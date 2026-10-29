@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 )
 
@@ -40,7 +42,23 @@ var (
 		http.MethodGet, http.MethodHead, http.MethodPost,
 		http.MethodPut, http.MethodPatch, http.MethodDelete,
 	}
-	corsHeaders = []string{"Authorization", "Content-Type"}
+	// corsHeaders is every request header a write the API takes reads,
+	// beyond the credential and the body's type: the entity tag a write
+	// names as its base (If-Match) or that refuses an existing document
+	// (If-None-Match), the operation key a retry repeats ([opkey.Header]),
+	// the summary a config revision is recorded under, and the request id
+	// the refusal log answers back and files a refused write under.
+	corsHeaders = []string{
+		"Authorization", "Content-Type",
+		"If-Match", "If-None-Match", opkey.Header, "X-Summary", httpjson.RequestIDHeader,
+	}
+	// corsExposed is every header a cross-origin client reads that a browser
+	// hides by default (only a short safelist is readable cross-origin): the
+	// engine's mark, without which every answer reads as something in front
+	// of the engine, the entity tag a config write sends back as If-Match,
+	// the wait a 429 or a 503 says to keep, and the request id a refused
+	// write is found in the log by.
+	corsExposed = []string{httpjson.EngineHeader, "ETag", "Retry-After", httpjson.RequestIDHeader}
 )
 
 // CORS is the set of browser origins this API answers cross-origin.
@@ -122,6 +140,7 @@ func (c *CORS) Middleware(next http.Handler) http.Handler {
 		// the one value it matches the response against.
 		if canonical := Origin(origin); canonical != "" && slices.Contains(c.allowed, canonical) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Expose-Headers", strings.Join(corsExposed, ", "))
 			if preflight {
 				w.Header().Set("Access-Control-Allow-Methods",
 					strings.Join(corsMethods, ", "))

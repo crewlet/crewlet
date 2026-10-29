@@ -24,7 +24,7 @@
 import { useState } from "react";
 import { Button, Callout, Checkbox, InlineCode, Modal } from "@crewlethq/ui";
 import { CheckGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { reloadFailure } from "./secretReload.ts";
 
 export function RemoveSecretDialog({
@@ -58,7 +58,7 @@ export function RemoveSecretDialog({
     setBusy(true);
     setError(null);
     try {
-      const answer = await rest.del("/secrets/" + encodeURIComponent(name));
+      const answer = await rest.del("/secrets/" + pathSegment(name));
       onDone();
       const failure = reloadFailure(answer);
       if (failure) {

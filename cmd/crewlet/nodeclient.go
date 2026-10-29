@@ -242,7 +242,7 @@ func (c *nodeClient) send(ctx context.Context, method, path string,
 	// operator their purge had failed, and the ordinary next move was to
 	// run it again.
 	if resp.StatusCode/100 != 2 {
-		if engineCode(body) == "" {
+		if engineCode(resp.Header, body) == "" {
 			return notTheNode(path, resp.StatusCode, resp.Header.Get("Content-Type"), body)
 		}
 		return nodeError(resp.StatusCode, body, c.token != "")
@@ -262,17 +262,18 @@ func (c *nodeClient) send(ctx context.Context, method, path string,
 	return nil
 }
 
-// engineCode is the refusal code a non-200 body carries, or "" where it carries
-// none — which no refusal the engine writes does: every one is JSON with an
-// `error` code, the guard's 401 included, and so are its router's own
-// `no_route` and `method_not_allowed` for a route or a method the node does
-// not serve ([httpjson.Mux]) — a route this node does not serve is a refusal,
-// not a gateway.
-func engineCode(body []byte) string {
+// engineCode is the refusal code a non-200 answer carries where the engine
+// wrote it, or "" where it did not. Every refusal the engine writes carries
+// its mark ([httpjson.Marked]) and is JSON with an `error` code, the guard's
+// 401 included, and so are its router's own `no_route` and
+// `method_not_allowed` for a route or a method the node does not serve
+// ([httpjson.Mux]): a route this node does not serve is a refusal, not a
+// gateway. An answer without the mark is a gateway's, whatever its body says.
+func engineCode(h http.Header, body []byte) string {
 	var payload struct {
 		Error string `json:"error"`
 	}
-	if json.Unmarshal(body, &payload) != nil {
+	if json.Unmarshal(ownBody(h, body), &payload) != nil {
 		return ""
 	}
 	return payload.Error

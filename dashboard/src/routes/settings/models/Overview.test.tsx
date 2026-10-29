@@ -27,6 +27,7 @@ import {
   signIn,
 } from "~/routes/settings/models/fixtures.ts";
 import type { ModelsData } from "./data.ts";
+import { sheetRules } from "~/test/sheets.ts";
 import { Overview } from "./Overview.tsx";
 
 /**
@@ -82,7 +83,7 @@ function mount(data: ModelsData = company()) {
 const row = (key: string) =>
   screen
     .getAllByRole("row")
-    .find((r) => r.querySelector(".models-entry-cell__names .mono")?.textContent === key)!;
+    .find((r) => r.querySelector(".models-entry-cell .mono")?.textContent === key)!;
 
 /** A stat tile's whole text, by its label. */
 const tile = (label: string) =>
@@ -178,13 +179,33 @@ test("the mark is an inert image, and the names are a real link to the row's pag
   expect(mark.closest("[data-above-row]")).toBeNull();
   expect(mark.closest("a, button")).toBeNull();
   expect(mark.onclick).toBeNull();
-  const names = opus.querySelector(".models-entry-cell__names")!;
+  const names = opus.querySelector(".models-entry-cell .models-row-reveal")!;
   expect(names.tagName).toBe("A");
   expect(names.getAttribute("href")).toContain("settings/models/opus");
   expect(names.getAttribute("tabindex")).toBe("-1");
   expect(names.getAttribute("aria-hidden")).toBe("true");
   // NOT A SECOND WAY IN for a screen reader: the row's own link is that.
   expect(within(opus).getAllByRole("link")).not.toContain(names);
+});
+
+/**
+ * A ROW READS AS ONE: its CLI's mark centred against the two lines beside it,
+ * and the secret a model signs in with set exactly as its model id is (the
+ * same type, tone and one-line clamp), each under its label at the same
+ * spacing, because both pairs are one rule (`.models-pair`).
+ */
+test("the mark is centred, and the secret's name is set and spaced as the model id is", () => {
+  mount();
+  const rule = (selector: string) =>
+    sheetRules().find((r) => r.file === "models.css" && r.selector === selector)?.body ?? "";
+  expect(rule(".models-entry-cell")).toMatch(/align-items: center;/);
+  expect(rule(".models-pair")).not.toMatch(/gap:/);
+  const cells = within(row("default")).getAllByRole("cell");
+  const id = within(cells[0]!).getByText("claude-sonnet-5", { exact: false });
+  const secret = within(cells[2]!).getByText("ANTHROPIC_API_KEY");
+  expect([...secret.classList].sort()).toEqual([...id.classList].sort());
+  expect(secret.parentElement?.className).toBe("models-pair");
+  expect(id.parentElement?.className).toBe("models-pair");
 });
 
 test("a member reads the list without a credential, a cost or an action", () => {

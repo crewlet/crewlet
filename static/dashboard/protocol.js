@@ -666,6 +666,58 @@ function confirmStepUp() {
 	return confirming;
 }
 //#endregion
+//#region src/contract/engine.ts
+/**
+* The header every answer the engine's API writes carries, and its one value
+* (`httpjson.EngineHeader`, set around everything a socket serves). An answer
+* without it was written by something in front of the engine (a proxy, a
+* gateway, a cache), whatever its body says, and says nothing about what the
+* engine did. Held to the engine's own by `internal/api`'s
+* `TestTheDashboardKnowsTheEnginesOwnAnswers`.
+*/
+var ENGINE_HEADER = "X-Crewlet-Engine";
+//#endregion
+//#region src/protocol/engineAnswer.ts
+/**
+* Whether an answer is the ENGINE'S OWN, the one rule every reader of a
+* failed request shares.
+*
+* An answer is the engine's only when all of these hold:
+*
+*  - something came back: status 0 is a request never fully answered (a
+*    dropped connection, the client's own deadline);
+*  - it carries the engine's mark, [ENGINE_HEADER], which the engine sets on
+*    every answer its API writes and no proxy sets. The error envelope alone
+*    could be forged by anything in front of the engine: a gateway answering
+*    JSON with an `error` field read as the engine refusing;
+*  - it carries an error code, and the code is not `unreadable_body`, which
+*    `rest.ts` gives a body that was not the engine's JSON (a 200 cut off part
+*    way through).
+*
+* WHY IT MATTERS: an answer the engine wrote says what it did, and one it did
+* not write says nothing about it. A 504 from a proxy that gave up waiting is
+* an engine that may still have written, and a gateway's 403 or 413 is no
+* refusal of the engine's; read as the engine's, a screen blamed the engine
+* for an answer it never sent, or told a person their write was refused when
+* nobody knows.
+*
+* PURE, IMPORTING NOTHING BUT THE CONTRACT, so `rest.ts` ([RestError.unanswered])
+* and the configuration classifier (`configAnswer.ts`, which the org
+* builder's pure model reads) share this one copy.
+*/
+/** Whether a response's headers carry the engine's mark: `get` is `Headers.get`. */
+function markedByEngine(headers) {
+	return headers.get(ENGINE_HEADER) === "1";
+}
+/**
+* Whether an answer of `status`, carrying the error code `code`, was written
+* by the engine; `marked` is whether it carried the engine's mark
+* ([markedByEngine]).
+*/
+function answeredByEngine(status, code, marked) {
+	return status !== 0 && marked && code !== "" && code !== "unreadable_body";
+}
+//#endregion
 //#region src/contract/remedies.ts
 /**
 * The configurable limits a refusal names as where to change it, as the engine
@@ -707,6 +759,51 @@ function remedyOf(raw) {
 		setting: known,
 		seat: handle
 	};
+}
+//#endregion
+//#region src/lib/segment.ts
+/**
+* What one segment of a URL path may be: the ONE rule, for the requests this
+* dashboard sends and the links it draws.
+*
+* `encodeURIComponent` escapes `/`, `?` and `#`, which would otherwise reach
+* another route or start the query. It cannot make `.` or `..` a name: a
+* segment of dots alone is a step along the path, and the URL standard reads
+* `%2E%2E` as `..` too, so no escaping sends it as one segment. Such a value
+* names no segment at all, and is refused here:
+*
+*  - [linkSegment] answers null for it, so a link built from text somebody
+*    wrote (an agent's comment, a page title) is drawn as text rather than as
+*    an address that goes to the route above;
+*  - [pathSegment] throws for it, so a request is refused before anything is
+*    sent rather than sent to the route above. It is [linkSegment] and a
+*    throw, so the two can never disagree on what is safe.
+*
+* PURE AND IMPORTING NOTHING, so the transport (`protocol/rest.ts`, which
+* re-exports [pathSegment]), the org builder's pure model and the artifact
+* runtime (built alone) all read this one copy. The only module that calls
+* `encodeURIComponent` itself; a gate holds every other to it
+* (`protocol/rest.test.ts`).
+*
+* NOT FOR THE DASHBOARD'S OWN ROUTES: a fragment is never resolved as a path,
+* so `#/worklet/..` is the route for an item named `..`, and the router
+* escapes its segments with [fragmentSegment].
+*/
+/** One path segment of a link, or null for a value that cannot be one (empty, or dots alone). */
+function linkSegment(value) {
+	if (/^\.*$/.test(value)) return null;
+	return encodeURIComponent(value);
+}
+/**
+* One path segment of a request, from a value the engine named (a model's
+* key, a seat's handle): always exactly one segment, or no request at all.
+* No name the engine mints is empty or dots alone, so such a value is a
+* defect upstream, and refused before anything is sent.
+*/
+function pathSegment(value) {
+	const segment = linkSegment(value);
+	if (segment === null) throw new RangeError(`"${value}" cannot be sent as one path segment`);
+	return segment;
 }
 //#endregion
 //#region src/protocol/rest.ts
@@ -776,7 +873,15 @@ var RestError = class extends Error {
 	* which also refuses to read a proxy's header as the engine's.
 	*/
 	retryAfterSeconds;
-	constructor(status, body, retryAfter = null) {
+	/**
+	* Whether the answer carried the engine's mark ([markedByEngine]): the one
+	* thing in it nothing in front of the engine writes. FALSE UNLESS SAID, so
+	* an error built anywhere that forgot to say reads as not the engine's
+	* (an outcome nobody knows), never as a refusal the engine made; [request]
+	* records what the response said.
+	*/
+	marked;
+	constructor(status, body, retryAfter = null, marked = false) {
 		const code = typeof body.error === "string" ? body.error : "";
 		const detail = typeof body.detail === "string" ? body.detail : "";
 		super(detail || code || `HTTP ${status}`);
@@ -788,6 +893,7 @@ var RestError = class extends Error {
 		this.sentence = typeof body.message === "string" ? body.message : "";
 		this.body = body;
 		this.retryAfterSeconds = retryAfter;
+		this.marked = marked;
 	}
 	/**
 	* Whether the engine refused on AUTHORITY rather than on the request.
@@ -848,13 +954,11 @@ var RestError = class extends Error {
 		return this.status === 503 && !this.unanswered ? this.retryAfterSeconds ?? 0 : null;
 	}
 	/**
-	* Whether this is NOT the engine's own answer: nothing came back (status
-	* 0), a body that could not be read (`unreadable_body` — a gateway's HTML
-	* page, a 200 cut off part way through), or a status with no engine error
-	* code in it. Every refusal the engine writes is JSON with an `error` code,
-	* its auth guard's included and its router's own `no_route` and
-	* `method_not_allowed` for a route or method it does not serve, so an answer
-	* without one was written by something in front of it.
+	* Whether this is NOT the engine's own answer ([answeredByEngine]): nothing
+	* came back (status 0), an answer without the engine's mark (a gateway's
+	* page or its JSON, whatever the body says), a body that could not be read
+	* (`unreadable_body`, a 200 cut off part way through), or a status with no
+	* engine error code in it.
 	*
 	* WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
 	* the engine wrote means nothing was done; this means nobody here knows. A
@@ -864,7 +968,7 @@ var RestError = class extends Error {
 	* was dropped with it.
 	*/
 	get unanswered() {
-		return this.status === 0 || this.code === "" || this.code === "unreadable_body";
+		return !answeredByEngine(this.status, this.code, this.marked);
 	}
 };
 /**
@@ -936,7 +1040,7 @@ function retryAfterOf(response) {
 async function retryHintOf(response) {
 	const body = await response.json().catch(() => null);
 	const envelope = body !== null && typeof body === "object" ? body : {};
-	return new RestError(response.status, envelope, retryAfterOf(response)).retryHint;
+	return new RestError(response.status, envelope, retryAfterOf(response), markedByEngine(response.headers)).retryHint;
 }
 /**
 * A refusal that never reached the engine: DNS, a dropped connection, a proxy
@@ -974,22 +1078,6 @@ function offline(err) {
 * finish it with.
 */
 var REQUEST_TIMEOUT_MS = 3e4;
-/**
-* One path segment of a request, from a value the engine named (a model's
-* key, a sign-in's id): always exactly one segment, or no request at all.
-*
-* `encodeURIComponent` escapes `/`, `?` and `#`, which would otherwise reach
-* another route or start the query. It cannot make `.` or `..` a name: a
-* segment of dots alone is a step along the path, and the URL standard reads
-* `%2E%2E` as `..` too, so no escaping sends it as one segment. No name the
-* engine mints is one (a model's key starts with a letter or a digit), so
-* such a value is refused here, before anything is sent, rather than sent to
-* the route above.
-*/
-function pathSegment(value) {
-	if (/^\.*$/.test(value)) throw new RangeError(`"${value}" cannot be sent as one path segment`);
-	return encodeURIComponent(value);
-}
 /** A deadline as a person would say it: seconds under two minutes, else
 *  minutes. */
 function waitWords(ms) {
@@ -1175,7 +1263,8 @@ async function attempt(method, path, options) {
 	if (read === "text" && response.ok) return {
 		status: response.status,
 		body: text,
-		etag: response.headers.get("ETag")
+		etag: response.headers.get("ETag"),
+		marked: markedByEngine(response.headers)
 	};
 	let parsed = null;
 	if (text !== "") try {
@@ -1184,18 +1273,19 @@ async function attempt(method, path, options) {
 		throw new RestError(response.ok ? 502 : response.status, {
 			error: "unreadable_body",
 			detail: response.ok ? "the answer was cut short, or is not the engine's JSON" : `a ${response.status} came back without the engine's JSON, so something in front of it answered`
-		}, response.ok ? null : retryAfterOf(response));
+		}, response.ok ? null : retryAfterOf(response), markedByEngine(response.headers));
 	}
 	if (!response.ok && response.status !== 304) {
 		const body = parsed && typeof parsed === "object" ? parsed : {};
-		const refusal = new RestError(response.status, body, retryAfterOf(response));
+		const refusal = new RestError(response.status, body, retryAfterOf(response), markedByEngine(response.headers));
 		noteSession(refusal);
 		throw refusal;
 	}
 	return {
 		status: response.status,
 		body: parsed,
-		etag: response.headers.get("ETag")
+		etag: response.headers.get("ETag"),
+		marked: markedByEngine(response.headers)
 	};
 }
 /** The body alone, for the callers that need nothing else. */
@@ -1262,7 +1352,7 @@ async function blob(path, signal) {
 			} catch {
 				body = { error: "unreadable_body" };
 			}
-			const refusal = new RestError(response.status, body, retryAfterOf(response));
+			const refusal = new RestError(response.status, body, retryAfterOf(response), markedByEngine(response.headers));
 			noteSession(refusal);
 			throw refusal;
 		}
@@ -1345,7 +1435,7 @@ async function stream(path, options = {}) {
 		} finally {
 			release();
 		}
-		const refusal = new RestError(response.ok ? 502 : response.status, body, retryAfterOf(response));
+		const refusal = new RestError(response.ok ? 502 : response.status, body, retryAfterOf(response), markedByEngine(response.headers));
 		noteSession(refusal);
 		throw refusal;
 	}
@@ -1512,16 +1602,16 @@ var auth = {
 	*/
 	exchangeToken: async (token) => await rest.post("/auth/token", {}, { Authorization: `Bearer ${token}` }),
 	/** Render an invitation without spending it. */
-	viewInvite: async (id, secret) => (await rest.request("GET", `/auth/invite/${encodeURIComponent(id)}`, { headers: { [INVITE_SECRET_HEADER]: secret } })).body,
+	viewInvite: async (id, secret) => (await rest.request("GET", `/auth/invite/${pathSegment(id)}`, { headers: { [INVITE_SECRET_HEADER]: secret } })).body,
 	/** Redeem an invitation, which creates the person and signs them in. */
-	redeemInvite: async (id, body) => await rest.post(`/auth/invite/${encodeURIComponent(id)}`, body),
+	redeemInvite: async (id, body) => await rest.post(`/auth/invite/${pathSegment(id)}`, body),
 	/** Say whose password a reset link sets, without spending it. */
-	viewReset: async (id, secret) => (await rest.request("GET", `/auth/reset/${encodeURIComponent(id)}`, { headers: { [RESET_SECRET_HEADER]: secret } })).body,
+	viewReset: async (id, secret) => (await rest.request("GET", `/auth/reset/${pathSegment(id)}`, { headers: { [RESET_SECRET_HEADER]: secret } })).body,
 	/**
 	* Set a new password from a reset link, once. It ends every session the
 	* person held and signs nobody in: the person signs in next.
 	*/
-	spendReset: async (id, body) => await rest.post(`/auth/reset/${encodeURIComponent(id)}`, body),
+	spendReset: async (id, body) => await rest.post(`/auth/reset/${pathSegment(id)}`, body),
 	/**
 	* Enrolment's first leg: a seed, and nothing stored. A person who never
 	* completes the second leg has enrolled nothing.
@@ -1567,7 +1657,7 @@ var auth = {
 	* without ending this browser's.
 	*/
 	logoutOne: async (lineage) => {
-		await rest.post(`/auth/logout/${encodeURIComponent(lineage)}`, {});
+		await rest.post(`/auth/logout/${pathSegment(lineage)}`, {});
 	},
 	/**
 	* End every session the caller holds, on every device, by moving their
@@ -3481,7 +3571,7 @@ async function act(tool, args, options = {}) {
 	});
 	let body;
 	try {
-		({body} = await rest.request("POST", `/operator/act/${encodeURIComponent(tool)}`, {
+		({body} = await rest.request("POST", `/operator/act/${pathSegment(tool)}`, {
 			body: { args },
 			contentType: "application/json",
 			headers: { "Idempotency-Key": opId },
