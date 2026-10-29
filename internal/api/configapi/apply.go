@@ -288,6 +288,10 @@ type draft struct {
 	// judges, and the author the revision records — one value for both, so
 	// the party a write was admitted as is the party it is stored under.
 	by iam.Actor
+	// warnings derives warnings the write itself carries beside the
+	// document's own ([Company.Warnings]): a removal's resolution moves.
+	// Nil for none.
+	warnings func(next, prior *config.Company) []config.Warning
 	// republishes is a write that re-publishes the active document's
 	// stored bytes unchanged ([Service.Reload]). It changes nothing about
 	// the company, so a managed document does not refuse it: see
@@ -319,6 +323,9 @@ type prepared struct {
 	by iam.Actor
 	// source is the draft's, resolved: what the revision records.
 	source string
+	// company is the proposed document, decoded: what [Service.CheckEntity]
+	// hands a caller testing a draft entry.
+	company *config.Company
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -410,8 +417,13 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if err := s.checkHeldSeats(ctx, b.prior, company); err != nil {
 		return nil, err
 	}
+	warnings := company.Warnings()
+	if d.warnings != nil {
+		warnings = append(warnings, d.warnings(company, b.prior)...)
+	}
 	p := &prepared{
-		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
+		company:  company,
+		document: document, warnings: warnings, derived: derived, by: d.by,
 		source: cmp.Or(d.source, revisionSource), pointed: cur.pointed,
 		held: heldWarnings(b.prior),
 	}
