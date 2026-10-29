@@ -14,11 +14,23 @@ import { DEVICE_POLL_MS, DeviceDialog } from "./DeviceDialog.tsx";
 const api = vi.hoisted(() => ({ startDeviceSignIn: vi.fn(), cancelDeviceSignIn: vi.fn() }));
 vi.mock("../api.ts", () => api);
 
-const polled = vi.hoisted(() => ({ data: null as unknown, calls: [] as unknown[][] }));
+const polled = vi.hoisted(() => ({
+  data: null as unknown,
+  error: null as string | null,
+  detail: undefined as string | undefined,
+  calls: [] as unknown[][],
+}));
 vi.mock("~/lib/useQuery.ts", () => ({
   useQuery: (...args: unknown[]) => {
     polled.calls.push(args);
-    return { data: polled.data, loading: false, error: null, refusal: null, refetch: () => {} };
+    return {
+      data: polled.data,
+      loading: false,
+      error: polled.error,
+      detail: polled.detail,
+      refusal: null,
+      refetch: () => {},
+    };
   },
 }));
 
@@ -27,6 +39,8 @@ afterEach(() => {
   api.startDeviceSignIn.mockReset();
   api.cancelDeviceSignIn.mockReset();
   polled.data = null;
+  polled.error = null;
+  polled.detail = undefined;
   polled.calls = [];
 });
 
@@ -116,6 +130,99 @@ test("Cancel sign-in cancels the running session", async () => {
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
   });
-  expect(api.cancelDeviceSignIn).toHaveBeenCalledWith("dev-1");
+  expect(api.cancelDeviceSignIn).toHaveBeenCalledWith("dev-1", expect.any(AbortSignal));
   expect(onClose).toHaveBeenCalled();
+});
+
+/** A deferred answer: the promise, and the hand that settles it. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+test("a cancel that answers after the dialog closed acts for nothing", async () => {
+  api.startDeviceSignIn.mockResolvedValue({ kind: "ok", status: 201, value: SESSION });
+  const answer = deferred<unknown>();
+  let sent: AbortSignal | null = null;
+  api.cancelDeviceSignIn.mockImplementation((_id: string, signal: AbortSignal) => {
+    sent = signal;
+    return answer.promise;
+  });
+  const { onClose, onDone, view } = open();
+  await screen.findByText("QXJM-7KPD");
+  fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+  view.unmount();
+  expect(sent!.aborted).toBe(true);
+  await act(async () => answer.resolve({ kind: "ok", status: 200, value: SESSION }));
+  expect(onDone).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+test("a refused cancel says so in its own words, and the sign-in stays on screen", async () => {
+  api.startDeviceSignIn.mockResolvedValue({ kind: "ok", status: 201, value: SESSION });
+  api.cancelDeviceSignIn.mockResolvedValue({
+    kind: "refused",
+    status: 409,
+    code: "conflict",
+    sentence: "The sign-in already ended.",
+    detail: "",
+    hint: "",
+    body: {},
+  });
+  const { onClose } = open();
+  await screen.findByText("QXJM-7KPD");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Cancel sign-in" }));
+  });
+  expect(screen.getByText("The sign-in could not be cancelled")).toBeDefined();
+  expect(screen.queryByText("The sign-in could not start")).toBeNull();
+  expect(screen.getByText("QXJM-7KPD")).toBeDefined();
+  expect(onClose).not.toHaveBeenCalled();
+});
+
+test("a start that failed offers Start again, which asks again", async () => {
+  api.startDeviceSignIn.mockResolvedValueOnce({
+    kind: "refused",
+    status: 502,
+    code: "device_sign_in_failed",
+    sentence: "Codex did not print a device code.",
+    detail: "",
+    hint: "",
+    body: {},
+  });
+  api.startDeviceSignIn.mockResolvedValueOnce({ kind: "ok", status: 201, value: SESSION });
+  open();
+  expect(await screen.findByText("The sign-in could not start")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Start again" }));
+  expect(await screen.findByText("QXJM-7KPD")).toBeDefined();
+  expect(api.startDeviceSignIn).toHaveBeenCalledTimes(2);
+});
+
+test("a session the engine no longer answers for is said, never left waiting, and can start again", async () => {
+  api.startDeviceSignIn.mockResolvedValue({ kind: "ok", status: 201, value: SESSION });
+  const { view, model, onDone } = open();
+  await screen.findByText("QXJM-7KPD");
+  polled.error = "not_found";
+  polled.detail = "No device sign-in dev-1.";
+  view.rerender(<DeviceDialog model={model} onClose={() => {}} onDone={onDone} />);
+  expect(screen.getByText("This sign-in can no longer be followed")).toBeDefined();
+  expect(screen.getByText(/No device sign-in dev-1\./)).toBeDefined();
+  expect(screen.queryByText("Waiting for you to approve the code")).toBeNull();
+  polled.error = null;
+  polled.detail = undefined;
+  fireEvent.click(screen.getByRole("button", { name: "Start again" }));
+  await waitFor(() => expect(api.startDeviceSignIn).toHaveBeenCalledTimes(2));
+});
+
+test("only an https address is offered to open", async () => {
+  api.startDeviceSignIn.mockResolvedValue({
+    kind: "ok",
+    status: 201,
+    value: { ...SESSION, url: "http://auth.openai.com/codex/device" },
+  });
+  open();
+  await screen.findByText("QXJM-7KPD");
+  expect(screen.queryByRole("link")).toBeNull();
+  expect(screen.getByText(/not a secure \(https\) address/)).toBeDefined();
 });
