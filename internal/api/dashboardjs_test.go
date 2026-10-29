@@ -1362,7 +1362,9 @@ const (
 	// 0.76.1, kept it within 4759 KiB. The secret dialogs reading whether the
 	// company switched to a write (`reload`), and saying so when it did not
 	// rather than closing on the 200 (#457), took it to 4760.1 KiB. 4761 KiB,
-	// which still refuses a doubled baseline.
+	// which still refuses a doubled baseline. The models round (the Datadog
+	// keys tested together, each failure named at its own key) took it to
+	// 4760.6 KiB, within 4761 KiB.
 	treeBudget = 4<<20 + 665<<10
 )
 
