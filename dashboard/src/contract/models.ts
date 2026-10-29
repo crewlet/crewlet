@@ -72,3 +72,83 @@ export const DEFAULT_CLI_TIMEOUT_SECONDS = 600;
 
 /** How many CLI processes an entry runs at once when `max_concurrent` is unset. */
 export const DEFAULT_CLI_MAX_CONCURRENT = 4;
+
+/**
+ * ONE reading of a model's condition, decided by the engine
+ * (`queries.ModelHealth`) so the list, the model's page and the By job view
+ * cannot each decide it differently. Held against `queries.ModelHealths` by
+ * `internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms`.
+ */
+export type ModelHealth =
+  "sitting_out" | "no_sign_in" | "rejected" | "expiring" | "untested" | "ready";
+
+/**
+ * The five model alarms (statelog) `llm_entries` carries. Held against the
+ * engine's own five by the same gate, so an alarm the engine raises is never
+ * one the page has no words for.
+ */
+export type ModelAlarmKind =
+  | "llm_credential_expiring"
+  | "llm_credential_expires_soon"
+  | "llm_sign_in_refused"
+  | "llm_limit"
+  | "llm_limit_waiting";
+
+/**
+ * Where a device sign-in is (`coord.DeviceSignInStatus`). Held against
+ * `coord.DeviceSignInStatuses` by the health gate, so the sign-in panel has
+ * words for every state it follows a session through.
+ */
+export type ModelDeviceStatus =
+  "starting" | "pending" | "cancel_requested" | "approved" | "failed" | "expired" | "cancelled";
+
+/**
+ * How a model's CLI signs in as one node resolves it (`cliagent.SignInRoute`).
+ * Held against `cliagent.SignInRoutes` by
+ * `internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns`.
+ */
+export type ModelSignInRoute =
+  "token" | "credentials" | "api-key" | "env" | "inherit-env" | "environment" | "none";
+
+/**
+ * Which window of a vendor's limit a model sits out (`llm.LimitWindow`): a
+ * session or a weekly window holds every model on the plan, a model window
+ * holds the one model. Held against `llm.LimitWindows` by the sign-in gate.
+ */
+export type ModelLimitWindow = "session" | "weekly" | "model" | "unknown";
+
+/**
+ * One line of a model's test (`cliagent.CheckName`), in the doctor's order.
+ * Held against the doctor's own order by the sign-in gate.
+ */
+export type ModelCheckName =
+  "binary" | "version" | "sign-in" | "usage" | "smoke" | "shell" | "web" | "executor";
+
+/**
+ * The work a written reference points at a model (`config.ProviderJob`): a
+ * seat's executor or one of its satellites, or the assistant's chat or deep
+ * work. Held against `config.ProviderJobs` by
+ * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`.
+ */
+export type ModelJob =
+  "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant" | "deep_work";
+
+/**
+ * The seat field each seat job is written in, as the page writes it: the
+ * executor in `llm`, each satellite flat beside it. Held by the same gate to
+ * the fields `config.Company.ProviderReferences` reports for each job, so a
+ * write from the page lands in the field the engine resolves.
+ */
+export const SEAT_JOB_FIELDS = {
+  executor: "llm",
+  review: "llm_review",
+  subagent: "llm_subagent",
+  auxiliary: "llm_auxiliary",
+  judge: "llm_judge",
+} as const;
+
+/**
+ * Where a model's coding runs happen (`config.Placement`). Held against
+ * `config.Placements` by the entry gate.
+ */
+export type RunnerCellName = "direct" | "container" | "e2b";

@@ -146,6 +146,15 @@ var contract = []Entry{
 	{"DEFAULT_CLI_TIMEOUT_SECONDS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"CLI_PRODUCTS", ReadLiteral, "internal/config.TestEveryBuiltInCLIHasAProductName"},
+	{"ModelJob", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"RunnerCellName", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"SEAT_JOB_FIELDS", ReadLiteral, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"ModelHealth", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms"},
+	{"ModelAlarmKind", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms"},
+	{"ModelDeviceStatus", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms"},
+	{"ModelSignInRoute", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
+	{"ModelLimitWindow", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
+	{"ModelCheckName", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
 
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
