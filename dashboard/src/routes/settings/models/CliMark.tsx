@@ -12,12 +12,9 @@
  * NAMED, the mark stands in for the CLI's name: an entry's row line says the
  * model alone, so the mark carries the CLI as its accessible name. Beside a
  * CLI's written name it stays decoration. With `tooltip` it also shows the
- * name on hover. Inside a linked table row the row's link lies over its
- * cells, so a mark that shows a tooltip there is raised above the link
- * (`onPress`, the grid's `data-above-row`) and opens the row's entry itself:
- * raised and inert, it would be a spot in the row that opened nothing. The
- * keyboard still reaches the entry through the row's own link, whose name
- * starts with the mark's.
+ * name on hover, where nothing lies over it. NEVER A CONTROL: it is an image,
+ * and inside a linked table row the row's link lies over it and takes the
+ * press, which is what a press there means.
  */
 
 import { Tooltip } from "@crewlethq/ui";
@@ -44,14 +41,11 @@ export function CliMark({
   size = MARK_SIZE,
   named = false,
   tooltip = false,
-  onPress,
 }: {
   agent: string;
   size?: number;
   named?: boolean;
   tooltip?: boolean;
-  /** Raises the mark above a linked row, and does what the row does. */
-  onPress?: (() => void) | undefined;
 }) {
   const vendor = MARKS[agent];
   const mark = vendor ? (
@@ -62,13 +56,7 @@ export function CliMark({
   if (!named) return mark;
   const name = product(agent);
   const labelled = (
-    <span
-      role="img"
-      aria-label={name}
-      className={onPress ? "models-cli-mark models-cli-mark--pressable" : "models-cli-mark"}
-      data-above-row={onPress ? "" : undefined}
-      onClick={onPress}
-    >
+    <span role="img" aria-label={name} className="models-cli-mark">
       {mark}
     </span>
   );

@@ -33,7 +33,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
-import { href, useNavigator } from "~/app/router.tsx";
+import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, listed, plural } from "~/lib/format.ts";
 import { CATEGORY_JOBS, CATEGORY_ORDER, SEAT_JOBS, everythingSeats } from "~/lib/modelUses.ts";
@@ -43,7 +43,7 @@ import { CliMark, MARK_SIZE } from "./CliMark.tsx";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
-import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING } from "./words.ts";
+import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, product } from "./words.ts";
 
 /** One use of a model in Used by: the job, its words, and the seats on it. */
 interface UseLine {
@@ -145,26 +145,41 @@ function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => s
   );
 }
 
-/** The model's name and the model it runs, each one line, whole on hover (QA M15). */
-function ModelCell({ model, onOpen }: { model: ModelView; onOpen: () => void }) {
+/**
+ * The model's name and the model it runs, each one line, whole on hover (QA
+ * M15), with its CLI's mark.
+ *
+ * THE ROW'S LINK LIES OVER EVERY CELL, so a tip a pointer can reach is on an
+ * element raised above it, and a raised element takes the press. The names
+ * are therefore a link of their own, to the page the row opens: a press, a
+ * middle click and a copied address all do what the row does. It is out of
+ * the tab order and hidden from assistive technology, which reach the model
+ * once, by the row's link. The mark is not raised and does nothing of its own:
+ * the row's link takes the press, and the tip names the CLI.
+ */
+function ModelCell({ model }: { model: ModelView }) {
   return (
     <span className="models-entry-cell">
-      <CliMark agent={model.agent} size={MARK_SIZE} named tooltip onPress={onOpen} />
+      <CliMark agent={model.agent} size={MARK_SIZE} named />
       <Tooltip
         content={
           <span className="mono">
-            {model.key} · {model.model}
+            {product(model.agent)} · {model.key} · {model.model}
           </span>
         }
         placement="top"
       >
-        {/* Raised over the row's link so the pointer reaches the tip; a press still opens the model. */}
-        <span className="models-entry-cell__names" data-above-row="" onClick={onOpen}>
+        <a
+          className="models-entry-cell__names"
+          href={href(["settings", "models", model.key])}
+          tabIndex={-1}
+          aria-hidden="true"
+        >
           <span className="mono models-clamp">{model.key}</span>
           <Text as="span" variant="caption" tone="secondary" className="mono models-clamp">
             {model.model}
           </Text>
-        </span>
+        </a>
       </Tooltip>
     </span>
   );
@@ -188,7 +203,6 @@ function SignInCell({ model }: { model: ModelView }) {
 }
 
 export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
-  const nav = useNavigator();
   const now = useNow();
   const { models, admin } = data;
   const names = new Map(data.seats.map((s: Seat) => [s.handle, s.name || s.handle]));
@@ -208,7 +222,6 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
     { tokens: 0, calls: 0 },
   );
   const add = () => onFlow("add");
-  const open = (key: string) => nav.to(["settings", "models", key]);
 
   return (
     <div className="models-page">
@@ -322,7 +335,7 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
                 // A key and a model id on one line each, clamped (QA M15).
                 floor: "12rem",
                 sortValue: (m) => m.key,
-                cell: (m) => <ModelCell model={m} onOpen={() => open(m.key)} />,
+                cell: (m) => <ModelCell model={m} />,
               },
               {
                 key: "status",
