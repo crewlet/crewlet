@@ -956,7 +956,10 @@ func writeRefusalError(refusal, detail string) error {
 //     began, a log or a store that refused, a push applied nowhere — is
 //     UNAVAILABLE, the same call again being the same write;
 //   - and what no engine write can be answered — an --atomic push, a tag moved,
-//     a push of more changes than a record holds — is the engine's own fault.
+//     a push of more changes than a record holds, a commit claiming the
+//     engine's committer (forged_committer, which only a coding box's pack is
+//     read for: an engine write's commits are the engine's by right) — is the
+//     engine's own fault.
 func pushClass(r code.Refusal) (tools.Refusal, bool) {
 	switch r {
 	case code.RefusalNotPermitted, code.RefusalProtectedForce, code.RefusalProtectedDelete,

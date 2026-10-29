@@ -459,15 +459,16 @@ func TestTheWriteToolsFollowARename(t *testing.T) {
 // to make another way invalid, a head that moved stale, a repository gone not
 // found, what waiting clears unavailable. Every code the code host answers a
 // push with is classified, so one added later fails here until it is — the
-// five no engine write can be answered (an --atomic push, a tag moved, more
-// changes than a record holds, and the two outcomes) excepted.
+// six no engine write can be answered (an --atomic push, a tag moved, more
+// changes than a record holds, a commit claiming the engine's committer, which
+// only a coding box's pack is read for, and the two outcomes) excepted.
 //
 // Mutation: drop push_quota from pushClass → it is answered the engine's own
 // fault, red.
 func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 	t.Parallel()
 	unreachable := []code.Refusal{code.RefusalAtomic, code.RefusalTagMoved, code.RefusalTooManyChanges,
-		code.RefusalUnknown, code.RefusalPending}
+		code.RefusalForgedCommitter, code.RefusalUnknown, code.RefusalPending}
 	want := map[code.Refusal]tools.Refusal{
 		code.RefusalStale: tools.RefusalStaleVersion, code.RefusalPushQuota: tools.RefusalForbidden,
 		code.RefusalRepoArchived: tools.RefusalForbidden, code.RefusalReservedRef: tools.RefusalInvalid,
