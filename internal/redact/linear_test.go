@@ -243,36 +243,50 @@ func linesOf(group string, size, lineBytes int) string {
 }
 
 // How many reads of each text one measurement takes, in turn, keeping the
-// fastest of each, and how many measurements a comparison may take before it
-// fails.
+// fastest of each, after one read of each to warm up; how many measurements a
+// comparison may take before it fails; and the least a long read may cost for
+// a comparison to judge it at all.
 const (
 	interleavedReads = 5
 	measureRounds    = 3
+	judgeFloor       = 5 * time.Millisecond
 )
 
 // withinFactor reports whether reading long costs at most factor times what
 // reading short does, with the two costs of the last measurement taken.
 //
 // EACH MEASUREMENT IS THE FASTEST OF [interleavedReads] READS OF EACH, taken
-// in turn, so a runner busy for a moment slows both or neither. AND A
-// COMPARISON THAT FAILS IS MEASURED AGAIN, up to [measureRounds] times, and
-// fails only if every measurement does. A burst of load from the other
-// packages beside this one under the race detector can outlast every read of
-// one measurement (the live view's 32 KiB read 264ms against 4ms in CI, with
-// nothing quadratic in it), but it does not recur on every measurement; the
-// regressions these tests guard cost six to eighty times the factor on every
-// one, so a real regression still fails.
+// in turn after one warm-up read of each, so a runner busy for a moment slows
+// both or neither. AND A COMPARISON THAT FAILS IS MEASURED AGAIN, up to
+// [measureRounds] times, and fails only if every measurement does. A burst of
+// load from the other packages beside this one under the race detector can
+// outlast every read of one measurement (the live view's 32 KiB read 264ms
+// against 4ms in CI, with nothing quadratic in it), but it does not recur on
+// every measurement; the regressions these tests guard cost six to eighty
+// times the factor on every one, so a real regression still fails.
+//
+// THE RE-MEASURE ONLY EVER TURNS A FAILURE INTO A PASS, so the separation a
+// comparison judges has to hold against the noisiest round, not the average:
+// see [TestWithinFactorFailsWhatEveryMeasurementSays]. And a long read under
+// [judgeFloor] fails as too small to judge: a read that costs nothing passes
+// any factor against another that costs nothing, which is a test asserting
+// nothing.
 func withinFactor(read func(string), short, long string, factor int) (bool, time.Duration, time.Duration) {
 	timed := func(text string) time.Duration {
 		start := time.Now()
 		read(text)
 		return time.Since(start)
 	}
+	timed(short)
+	timed(long)
 	var shortCost, longCost time.Duration
 	for range measureRounds {
 		shortCost, longCost = time.Duration(1<<62), time.Duration(1<<62)
 		for range interleavedReads {
 			shortCost, longCost = min(shortCost, timed(short)), min(longCost, timed(long))
+		}
+		if longCost < judgeFloor {
+			return false, shortCost, longCost
 		}
 		if longCost <= time.Duration(factor)*shortCost {
 			return true, shortCost, longCost
@@ -281,30 +295,62 @@ func withinFactor(read func(string), short, long string, factor int) (bool, time
 	return false, shortCost, longCost
 }
 
-// THE COMPARISON STILL FAILS A STEADY REGRESSION, measured again or not: a
-// read whose cost grows with the square of its text costs sixty-four times as
-// much for eight times the bytes on every measurement, and a linear one eight.
-// Mutation: report a pass after any round, or never measure again, and one of
-// the two cases here fails.
+// THE COMPARISON STILL FAILS A STEADY REGRESSION, measured again or not, and
+// passes a linear cost, with room on both sides for a noisy runner.
 //
-// EVERY READ SLEEPS WELL ABOVE THE TIMER'S SLACK. A sleep is a floor, never a
-// duration: on a loaded runner under the race detector a 320µs sleep measured
-// 1.09ms, which put the square case's short read at three times its cost and
-// let a 21ms long read pass a factor of 24 it should have failed by 2.7 times.
-// At this unit the square case's short read is 2ms, so even 2ms of slack on
-// every short read leaves the long one past the factor; the linear case's
-// short read is 25ms, which no slack moves eight times.
+// SIXTEEN TIMES THE BYTES, judged at sixty-four times: a read whose cost grows
+// with the square of its text costs 256 times as much, a linear one sixteen,
+// and sixty-four is their geometric middle, four times from each. It was
+// eight times the bytes judged at twenty-four, sixty-four against eight, which
+// left a quadratic cost room by only 2.67 times: in CI under the race
+// detector its 2ms short read measured 5.73ms on the fastest of five reads,
+// 2.87 times, and the quadratic cost passed. A failed comparison is measured
+// again and passes on any round that passes, so the margin has to hold on the
+// noisiest round: the square case is checked again here with every short read
+// three times its cost, and still fails.
+//
+// A READ TOO CHEAP TO JUDGE FAILS ([judgeFloor]), whatever its ratio.
+//
+// EVERY READ SPINS, well above the timer's slack. A spin is a floor, never a
+// duration: on a loaded runner a 2ms spin can be preempted as it ends and
+// measure several. At this unit the square case's short read is 2ms against a
+// long read of 512ms, and the linear case's short read 25ms against 400ms.
+//
+// Mutation: drop the floor, report a pass after any round, or judge the old
+// eight times the bytes at twenty-four, and a case here fails.
 func TestWithinFactorFailsWhatEveryMeasurementSays(t *testing.T) {
 	t.Parallel()
-	const unit = 125 * time.Microsecond
-	small, large := strings.Repeat("x", 4), strings.Repeat("x", 32)
+	const (
+		unit   = 125 * time.Microsecond
+		scale  = 16
+		factor = 64
+	)
+	small, large := strings.Repeat("x", 4), strings.Repeat("x", 4*scale)
 	square := func(text string) { spin(time.Duration(len(text)*len(text)) * unit) }
-	if ok, s, l := withinFactor(square, small, large, 3*8); ok {
+	if ok, s, l := withinFactor(square, small, large, factor); ok {
 		t.Errorf("a square cost passed: %v against %v", l, s)
 	}
+	// EVERY SHORT READ SLOWED THREE TIMES, the noisiest a round has been
+	// measured and more: a quadratic cost still fails.
+	noisy := func(text string) {
+		cost := time.Duration(len(text)*len(text)) * unit
+		if text == small {
+			cost *= 3
+		}
+		spin(cost)
+	}
+	if ok, s, l := withinFactor(noisy, small, large, factor); ok {
+		t.Errorf("a square cost with every short read three times as slow passed: %v against %v", l, s)
+	}
 	linear := func(text string) { spin(time.Duration(len(text)) * 50 * unit) }
-	if ok, s, l := withinFactor(linear, small, large, 3*8); !ok {
+	if ok, s, l := withinFactor(linear, small, large, factor); !ok {
 		t.Errorf("a linear cost failed: %v against %v", l, s)
+	}
+	// A READ TOO CHEAP TO JUDGE, linear at a microsecond a byte: its ratio
+	// passes any factor this side of sixteen, and the floor fails it.
+	cheap := func(text string) { spin(time.Duration(len(text)) * time.Microsecond) }
+	if ok, s, l := withinFactor(cheap, small, large, factor); ok {
+		t.Errorf("a read too cheap to judge passed: %v against %v", l, s)
 	}
 }
 
