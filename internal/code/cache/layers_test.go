@@ -1528,6 +1528,86 @@ func TestAFailingTipIsDroppedAndWrittenAgain(t *testing.T) {
 	readsThroughTheBitmap(t, s.Dir)
 }
 
+// A PACK LEAVING IN PLACE TAKES THE NODE'S TIP. A copy no reader holds — a
+// boot's, at its first round in a new process — converges IN PLACE: its
+// strays leave through the one removal (dropFor), where a running copy's
+// leave by the swap (chainOf). A tip written over a tail of two packs, the log
+// then recreated or restored to before the second: the restart's round keeps
+// the tip its record names, since the copy holds every layer the tip was
+// written over and its file is sound, and then finds the second pack named by
+// no row — a pack removed with no retirement, which may take commits the tip
+// names (tipGoes), though it cuts no layer. So the copy records no tip, its
+// commit-graph-chain lists the installed layers alone, the tip's file is gone,
+// git verifies the commit-graph the copy keeps, and the maintainer writes the
+// tip again at once, over the one pack the tail has left.
+//
+// Mutation: drop dropFor's tip clause (a change that keeps every layer moves
+// nothing of the chain) — the restarted copy keeps the tip, its chain file
+// lists it, and git's verify cannot read a commit it names.
+func TestAPackLeavingInPlaceTakesTheTip(t *testing.T) {
+	t.Parallel()
+	for _, how := range []string{"recreated", "restored"} {
+		t.Run(how, func(t *testing.T) {
+			t.Parallel()
+			w := newSyncWorld(t, onMemory)
+			clk := newClock()
+			repo := w.repo(t, 1)
+			p := w.pushN(t, repo, 3)
+			chain := w.buildChain(t, p[:2])
+			w.log.publish(repo, chain, nil)
+			earlier := w.log.state()
+			_, second := w.push(t, repo, "refs/heads/main", nil)
+			c := w.open(t, clk.on)
+			dir := w.sync(t, c, repo).Dir
+			if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+				t.Fatalf("the maintainer ran %v, want the repository's tip", ran)
+			}
+			tip, info := tipOf(t, dir, chain)
+			if info.Commits != 2 {
+				t.Fatalf("the tip holds %d commits, want the tail's 2", info.Commits)
+			}
+			tipFile := filepath.Join(dir, "objects", "info", "commit-graphs", "graph-"+tip+".graph")
+
+			if how == "recreated" {
+				w.log.recreate(earlier)
+			} else {
+				w.log.restore(earlier)
+			}
+			c = w.reopen(t, c, clk.on)
+			s := w.sync(t, c, repo)
+			if s.Dir != dir {
+				t.Fatalf("the restart's first round answered %s, want the copy at %s converged in place", s.Dir, dir)
+			}
+			if got, want := packFiles(t, s.Dir), bundleNames(p[0].row, p[1].row, p[2].row); !slices.Equal(got,
+				want) {
+				t.Fatalf("the copy holds %v, want the packs the %s log names, %v: the tail's second pack %s gone",
+					got, how, want, second.GitChecksum)
+			}
+			if got, wanted := cache.Tip(c, repo); got != "" || !wanted {
+				t.Errorf("after a pack of its tail left the copy records tip %q, wanted %t: want none, wanted", got,
+					wanted)
+			}
+			if _, lines := chainFiles(t, s.Dir); !slices.Equal(lines, graphIDs(chain)) {
+				t.Errorf("after a pack of its tail left commit-graph-chain lists %v, want the installed layers "+
+					"alone %v", lines, graphIDs(chain))
+			}
+			if exists(tipFile) {
+				t.Errorf("the tip %s is still in the copy after a pack it was written over left", tip)
+			}
+			if out, err := runGit(t, w.pool, s.Dir, "", "commit-graph", "verify"); err != nil {
+				t.Errorf("git cannot verify the copy's commit-graph after a pack of its tail left: %v\n%s", err, out)
+			}
+			if ran := cache.MaintainerPass(c); !slices.Equal(ran, []string{repo}) {
+				t.Fatalf("after a pack of its tail left the maintainer ran %v, want the tip again at once", ran)
+			}
+			if _, info := tipOf(t, s.Dir, chain); info.Commits != 1 {
+				t.Errorf("the tip written again holds %d commits, want the one pack the tail has left's, 1",
+					info.Commits)
+			}
+		})
+	}
+}
+
 // A SCRUB ACROSS THE TIP'S WRITE GIVES THE CHAIN FILE NO VERDICT (chainVerdict):
 // a scrub holds commit-graph-chain to what the copy's record names of it, read
 // before its first hash, while the maintainer's tip run rewrites that file IN
