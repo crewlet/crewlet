@@ -21,7 +21,7 @@
  * moved two seats off the model they ran on when a choice reset its seats to
  * all of them. Adding a seat takes the reader's own chip or switch, and
  * Review lists every seat that changes model before anything is written
- * ([useChanges]). A category with a deadline says quietly when the model is
+ * ([seatChangesOf]). A category with a deadline says quietly when the model is
  * not a fast one.
  */
 
@@ -93,7 +93,7 @@ function currentFor(data: Pick<ModelsData, "models">, job: SeatJob): Map<string,
  * surprise. Each line is a change from today; an edit that moves nothing has
  * none.
  */
-export function useChanges(
+export function seatChangesOf(
   data: Pick<ModelsData, "models" | "seats" | "assistant">,
   key: string,
   was: Uses,

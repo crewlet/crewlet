@@ -30,7 +30,7 @@ import {
 import type { ModelsData } from "../../data.ts";
 import { CATEGORY_WORDS, FAST_NOTE } from "../../words.ts";
 import { emptyDraft, type Draft } from "../draft.ts";
-import { UseItFor, useChanges } from "./UseItFor.tsx";
+import { UseItFor, seatChangesOf } from "./UseItFor.tsx";
 
 const data = modelsData({
   entries: [
@@ -157,13 +157,13 @@ test("a line separates Everything from the categories, as one separates Not yet"
 test("the changes list names each seat that moves, where from and where to, and nothing else", () => {
   const today = usesOf(split.models.find((m) => m.key === "default")!.entry.used_by);
   // NOTHING MOVED, nothing listed.
-  expect(useChanges(split, "default", today, today)).toEqual([]);
+  expect(seatChangesOf(split, "default", today, today)).toEqual([]);
   // The PM's coding added, QA's routines taken off.
   const next: Uses = { ...today, jobs: { ...today.jobs } };
   next.jobs.executor = [...today.jobs.executor, "pm"].sort();
   for (const job of CATEGORY_JOBS.routines)
     next.jobs[job] = today.jobs[job].filter((h) => h !== "qa");
-  expect(useChanges(split, "default", today, next)).toEqual([
+  expect(seatChangesOf(split, "default", today, next)).toEqual([
     "Quality Lead, routines and evaluations: no longer on default",
     "Product Manager, coding: default-host → default",
   ]);
