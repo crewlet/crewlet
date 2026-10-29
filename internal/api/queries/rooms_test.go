@@ -126,6 +126,14 @@ func everySeam(t *testing.T) queries.Sources {
 		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
 		// Bootstrap on every node that serves the API.
 		SignIn: &queries.SignInPolicy{},
+		// THE MODEL QUESTIONS, each its own seam: what this node resolved
+		// for each model, the fleet's device sign-ins, and the catalogue a
+		// model step suggests from. Every engine that serves the API wires
+		// all three, and Settings › Models reads each. The fakes are
+		// models_test.go's, empty: this sweep is about which names exist.
+		Models:        fakeModels{},
+		DeviceSignIns: fakeDevices{},
+		Catalogue:     fakeCatalogue{},
 	}
 }
 
