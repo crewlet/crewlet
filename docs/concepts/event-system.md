@@ -728,7 +728,11 @@ sequenceDiagram
   directly and scatters the same question over the broker's ephemeral
   request/reply — no stream, no consumer, no stored record, because a read of
   the event log that wrote an event would grow the log every time somebody
-  looked at it. The roster is the fleet's live node leases.
+  looked at it. The roster is the fleet's live node leases, and the read
+  ends once every node on it has answered, by name, or at the budget —
+  never at a count of replies: a draining node gives its lease back first
+  and answers until it stops, and its answer is kept, but it never stands
+  in for a node the roster names.
 - **Every answer says who answered.** `coverage` is
   `{nodes: [{id, answered, error}], complete}` on every one of these answers.
   `complete` is true only when every live node answered; a node that did not

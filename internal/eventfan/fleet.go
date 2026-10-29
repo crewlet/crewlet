@@ -204,8 +204,15 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 	}
 	fan := f.Queue != nil && (rosterErr != nil || len(peers) > 0)
 
+	// heard is one reply as the scatter read it: whose it is, its part, and
+	// — when it is not an answer — why ([decodeReply]).
+	type heard struct {
+		node string
+		part T
+		why  string
+	}
 	type scattered struct {
-		replies [][]byte
+		replies []heard
 		err     error
 	}
 	var replies chan scattered
@@ -222,22 +229,36 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 		if err != nil {
 			return zero, fmt.Errorf("eventfan: encode a %s request: %w", q, err)
 		}
-		// WANT EVERY PEER WHEN THE ROSTER IS KNOWN, so the read returns
-		// the moment the last one answers rather than at the budget. An
-		// unknown roster waits the budget out: nobody can say how many
-		// answers are coming.
-		want := len(peers)
-		if rosterErr != nil {
-			want = 0
+		// WAIT FOR EVERY PEER THE ROSTER NAMES, BY NAME, so the read
+		// returns the moment the last of them answers rather than at the
+		// budget — and never at a COUNT of replies. Every node serves
+		// ([Serve]), a node the roster does not hold among them: one
+		// draining, which gives its presence back first and serves until
+		// it stops, and one that joined since the roster was read. A
+		// scatter's replies carry no sender, so a read that ended at as
+		// many replies as the roster has peers ended on such a node's
+		// answer before a named peer's, which the coverage then called
+		// silent for the whole budget and the merge went without. Each
+		// reply is read as it arrives, and names its node. An unknown
+		// roster waits the budget out: nobody can say who is coming.
+		unheard := map[string]bool{}
+		for _, node := range peers {
+			unheard[node] = true
 		}
 		replies = make(chan scattered, 1)
 		go func() {
 			deadline, done := context.WithTimeout(ctx, budget)
 			defer done()
+			var got []heard
 			// THIS ERR IS THE GOROUTINE'S OWN — the local read below
 			// writes the outer one while this is in flight.
 			//nolint:govet // shadow: deliberate; see the line above.
-			got, err := f.Queue.Ask(deadline, Subject, req, want)
+			err := f.Queue.AskEach(deadline, Subject, req, func(raw []byte) bool {
+				node, part, why := decodeReply[T](raw, version)
+				got = append(got, heard{node: node, part: part, why: why})
+				delete(unheard, node)
+				return rosterErr != nil || len(unheard) > 0
+			})
 			replies <- scattered{got, err}
 		}()
 	}
@@ -264,20 +285,19 @@ func gather[T any](ctx context.Context, f *Fleet, q Question, params any, ids []
 					"asked: " + got.err.Error()}
 			}
 		}
-		for _, raw := range got.replies {
-			node, part, why := decodeReply[T](raw, version)
-			if node == "" || node == f.Self {
+		for _, r := range got.replies {
+			if r.node == "" || r.node == f.Self {
 				// AN UNREADABLE REPLY IS A MISSING ONE, and one
 				// that names nobody cannot even say whose it was:
 				// its sender stays counted as not answering.
 				continue
 			}
-			if why != "" {
-				nodes[node] = NodeCoverage{ID: node, Error: why}
+			if r.why != "" {
+				nodes[r.node] = NodeCoverage{ID: r.node, Error: r.why}
 				continue
 			}
-			nodes[node] = NodeCoverage{ID: node, Answered: true}
-			out.peers = append(out.peers, peer[T]{node: node, part: part})
+			nodes[r.node] = NodeCoverage{ID: r.node, Answered: true}
+			out.peers = append(out.peers, peer[T]{node: r.node, part: r.part})
 		}
 	}
 	out.coverage.Complete = rosterErr == nil

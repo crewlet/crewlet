@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,6 +218,108 @@ func TestASilentNodeIsNamed(t *testing.T) {
 	if got := len(listing.Rows); got != 2 {
 		t.Errorf("%d rows, want both answering nodes' rows", got)
 	}
+}
+
+// A NODE THE ROSTER DOES NOT HOLD NEVER ENDS THE READ BEFORE A PEER IT NAMES.
+// Every node serves the history questions, whatever its roles, so one the
+// roster does not hold answers too — a draining node, which gives its presence
+// back first and serves until it stops — and a scatter's replies carry no
+// sender: a read that ended at as many replies as the roster has peers ended
+// on such a node's answer before a named peer's, called that peer silent for
+// its whole budget and merged without its rows. Here node-d, draining, answers
+// first, and node-b answers only once node-d's reply has reached the read: the
+// read still waits for node-b, complete, with every node's row — node-d's
+// believed beside them.
+//
+// Mutation: end the scatter at as many replies as the roster has peers —
+// node-d's answer fills it, node-b is named silent and its row is missing, red.
+func TestANodeOutsideTheRosterNeverEndsTheReadBeforeAPeer(t *testing.T) {
+	t.Parallel()
+	broker := memory.NewBroker()
+	gate := make(chan struct{})
+	a := newNode(t, broker, "node-a")
+	b := newNodeOn(t, broker, "node-b", func(q queue.EventQueue) queue.EventQueue {
+		return answersAfter{EventQueue: q, gate: gate}
+	})
+	d := newNode(t, broker, "node-d")
+	at := time.Now().UTC().Add(-time.Minute)
+	for i, n := range []node{a, b, d} {
+		appendTo(t, n, store.EventRecord{ID: "on-" + n.id, Type: "x", Category: "task",
+			Time: at.Add(time.Duration(i) * time.Second)})
+	}
+
+	fan := fanFrom(a, "node-a", "node-b")
+	fan.Queue = opensOn{EventQueue: a.q, node: "node-d", gate: gate, once: &sync.Once{}}
+	fan.Budget = 30 * time.Second
+	listing, coverage, err := fan.List(t.Context(), store.ListQuery{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !coverage.Complete || len(coverage.Missing()) != 0 {
+		t.Fatalf("coverage %+v, want complete: node-b answered, after node-d", coverage)
+	}
+	var ids []string
+	for _, row := range listing.Rows {
+		ids = append(ids, row.ID)
+	}
+	slices.Sort(ids)
+	if want := []string{"on-node-a", "on-node-b", "on-node-d"}; !slices.Equal(ids, want) {
+		t.Fatalf("rows %v, want %v: node-b's merged, and node-d's believed", ids, want)
+	}
+}
+
+// newNodeOn is newNode with its answerer served through wrap's queue.
+func newNodeOn(t *testing.T, b *memory.Broker, id string, wrap func(queue.EventQueue) queue.EventQueue) node {
+	t.Helper()
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), id+".db"), store.Options{})
+	t.Cleanup(func() { _ = db.Close() })
+	n := node{id: id, q: client(t, b), log: db.Events()}
+	stop, err := eventfan.Serve(t.Context(), wrap(n.q), id, n.log)
+	if err != nil {
+		t.Fatalf("serve %s: %v", id, err)
+	}
+	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
+	return n
+}
+
+// answersAfter is a queue whose answerers answer only once gate is closed.
+type answersAfter struct {
+	queue.EventQueue
+	gate <-chan struct{}
+}
+
+func (g answersAfter) Serve(ctx context.Context, subject string, answers int,
+	h queue.AnswerFunc) (queue.Unsubscribe, error) {
+	return g.EventQueue.Serve(ctx, subject, answers, func(ctx context.Context, raw []byte) ([]byte, error) {
+		select {
+		case <-g.gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return h(ctx, raw)
+	})
+}
+
+// opensOn is a queue whose asks close gate once node's reply has reached the
+// asker.
+type opensOn struct {
+	queue.EventQueue
+	node string
+	gate chan struct{}
+	once *sync.Once
+}
+
+func (o opensOn) AskEach(ctx context.Context, subject string, request []byte, each func([]byte) bool) error {
+	return o.EventQueue.AskEach(ctx, subject, request, func(raw []byte) bool {
+		more := each(raw)
+		var r struct {
+			Node string `json:"node"`
+		}
+		if json.Unmarshal(raw, &r) == nil && r.Node == o.node {
+			o.once.Do(func() { close(o.gate) })
+		}
+		return more
+	})
 }
 
 // AN UNREADABLE REPLY COUNTS AS MISSING — named when it names itself, and
