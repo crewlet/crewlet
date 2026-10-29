@@ -975,7 +975,7 @@ func claimedReads() map[string]statement {
 		"code_repos_expunge_due_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_expunge_due_idx
 			WHERE status IN ('active', 'archived') AND expunged_at <= ? ORDER BY expunged_at, id LIMIT ?`,
 			[]any{2, MaxSnapshotItems}, []string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
-		// THE CHECKS' INDEXES THEIR LATER READERS SEEK (replicated 0074): a
+		// THE CHECKS' INDEXES THEIR LATER READERS SEEK (replicated 0075): a
 		// runner's claim walk, oldest queued first from where its last page
 		// ended, the queued state repeated as the index is partial on it; the
 		// home's sweep of a repository's running checks by runner, the running
