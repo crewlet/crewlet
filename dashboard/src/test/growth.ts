@@ -15,19 +15,38 @@
  * middle, 181: more than five times of headroom on each side. Sixteen times,
  * with a bound of 64, was not enough under a full parallel suite.
  *
- * EQUAL EXPOSURE. Noise only ever adds time, and it lands on a sample in
- * proportion to how long the sample runs. So each size is calibrated on its
- * own to about [SAMPLE_MS] a sample, the two compared as TIME PER CALL, and
- * each size's time is the fastest of several samples, interleaved, after a
- * warm-up. Timing both sizes with the same number of calls made a large
+ * THE PROCESS'S CPU TIME, NOT THE WALL CLOCK. Under a full parallel suite
+ * every core is oversubscribed, and the wall clock counts the time this worker
+ * waits for a core: a measuring window can hold no unloaded moment at all, so
+ * a size's fastest sample was the CPU share it happened to get. Timed by the
+ * wall, one linear case read anywhere from 9 to 80 beside a full suite, and
+ * one run of twenty read 138; timed by CPU, the same case read 24 to 39.
+ * `process.cpuUsage()` counts only the time the process runs, and still counts
+ * everything the pass does, the regular expression engine and the garbage
+ * collector included, so a quadratic pass reads as quadratic as ever.
+ *
+ * EQUAL EXPOSURE. What noise is left only ever adds time, and lands on a
+ * sample in proportion to how long it runs. So each size is calibrated on its
+ * own to about [SAMPLE_MS] of CPU a sample, the two compared as TIME PER CALL,
+ * and each size's time is the fastest of several samples, interleaved, after
+ * a warm-up. Timing both sizes with the same number of calls made a large
  * sample thirty-two times longer than a small one, and so thirty-two times as
- * likely to be preempted: the noise fell on the numerator.
+ * likely to be disturbed: the noise fell on the numerator.
+ *
+ * ONE PROCESS PER WORKER, OR NOTHING. The process's CPU counts every thread
+ * in it, so in a worker thread (Vitest's `threads` pool) it would count the
+ * other test files running beside this one. The suite runs in the `forks`
+ * pool, pinned in `vitest.config.ts`, and [growth] refuses to time anything
+ * off a process's main thread rather than answer with a number that is
+ * partly somebody else's.
  *
  * WHAT IT CATCHES IS EVERYTHING THE PASS DOES: its loops, the built-ins they
  * call and what a regular expression does inside one match alike, since the
  * clock sees all of it. Not a suite itself, and never imported by anything
  * that ships.
  */
+
+import { isMainThread } from "node:worker_threads";
 
 /** How many times larger the second run is. */
 const GROWTH = 32;
@@ -38,17 +57,23 @@ export const LINEAR_BOUND = Math.round(Math.sqrt(GROWTH * GROWTH * GROWTH));
 /** How many samples each size takes, the fastest of which is its time. */
 const SAMPLES = 7;
 
-/** How long one sample of either size runs, so both sizes are exposed to noise alike. */
+/** How much CPU one sample of either size takes, so both sizes are exposed to noise alike. */
 const SAMPLE_MS = 20;
 
-/** Milliseconds `calls` calls of `run` take. */
-function time(run: () => void, calls: number): number {
-  const start = performance.now();
-  for (let i = 0; i < calls; i++) run();
-  return performance.now() - start;
+/** The CPU this process has used, user and system, in milliseconds. */
+function cpuMs(): number {
+  const { user, system } = process.cpuUsage();
+  return (user + system) / 1000;
 }
 
-/** How many calls of `run` take about [SAMPLE_MS]: at least one. */
+/** Milliseconds of CPU `calls` calls of `run` take. */
+function time(run: () => void, calls: number): number {
+  const start = cpuMs();
+  for (let i = 0; i < calls; i++) run();
+  return cpuMs() - start;
+}
+
+/** How many calls of `run` take about [SAMPLE_MS] of CPU: at least one. */
 function calibrate(run: () => void): number {
   let calls = 1;
   for (;;) {
@@ -65,6 +90,12 @@ function calibrate(run: () => void): number {
  * where `make` builds the input once and returns the pass over it.
  */
 export function growth(make: (n: number) => () => void, n: number): number {
+  if (!isMainThread) {
+    throw new Error(
+      "growth times a pass by its process's CPU, which a worker thread shares with every " +
+        "other test file in it: run this suite in Vitest's forks pool (vitest.config.ts)",
+    );
+  }
   const small = make(n);
   const large = make(GROWTH * n);
   small();
