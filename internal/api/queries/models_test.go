@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -436,5 +437,53 @@ func TestTheModelQuestionsTakeTheirGrants(t *testing.T) {
 	}
 	if !r.PostureOf("llm_entries").IsEverybody() {
 		t.Error("llm_entries is not everybody's")
+	}
+}
+
+// THE MODELS ANSWER CARRIES NO MONEY, at any depth.
+//
+// The dashboard renders tokens and never a price (dashboard-design rule 19),
+// and the Models screen is this answer's one reader: a `cost_usd` here is a
+// figure the screen may not show, and a partial one, since one backend quotes
+// a price and the rest do not. Usage is calls and tokens.
+func TestTheModelsAnswerCarriesNoMoney(t *testing.T) {
+	t.Parallel()
+	s := modelSources(t, coordmemory.New())
+	r := queries.NewRegistry()
+	queries.Register(r, s)
+	admin := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "ops",
+		Kind: iam.KindPerson, Stage: iam.StageActive, Grants: iam.AllGrants,
+		ReauthAt: time.Now().Add(time.Hour)})
+	data, err := r.Answer(admin, "llm_entries", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(data)
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(path string, v any)
+	walk = func(path string, v any) {
+		switch node := v.(type) {
+		case map[string]any:
+			for key, child := range node {
+				lower := strings.ToLower(key)
+				for _, money := range []string{"cost", "usd", "price", "priced", "spend", "dollar"} {
+					if strings.Contains(lower, money) {
+						t.Errorf("the models answer carries a money field at %s.%s", path, key)
+					}
+				}
+				walk(path+"."+key, child)
+			}
+		case []any:
+			for i, child := range node {
+				walk(fmt.Sprintf("%s[%d]", path, i), child)
+			}
+		}
+	}
+	walk("$", tree)
+	if !strings.Contains(string(raw), `"total_tokens"`) {
+		t.Errorf("the answer lost its token usage: %s", raw)
 	}
 }
