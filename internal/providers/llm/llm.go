@@ -468,14 +468,13 @@ const (
 	LimitUnknown LimitWindow = "unknown"
 )
 
-// Valid reports whether w is one of the four windows.
-func (w LimitWindow) Valid() bool {
-	switch w {
-	case LimitSession, LimitWeekly, LimitModel, LimitUnknown:
-		return true
-	}
-	return false
-}
+// LimitWindows is the closed set, in the order a person reads them: what
+// [LimitWindow.Valid] admits, and what a reader that draws a window (the
+// Models screen) is held to.
+var LimitWindows = []LimitWindow{LimitSession, LimitWeekly, LimitModel, LimitUnknown}
+
+// Valid reports whether w is one of [LimitWindows].
+func (w LimitWindow) Valid() bool { return slices.Contains(LimitWindows, w) }
 
 // LimitedUntil reports whether err is a rate limit, and when the entry that
 // refused it is tried again and when its vendor said the limit lifts (either
