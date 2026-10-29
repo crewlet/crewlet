@@ -149,13 +149,24 @@ func codeLogOp(day []codeLogTerm, op code.OpKind) codeLogTerm {
 	return sum
 }
 
+// codeHoldRecordBytes is the most one hold record takes the code log as the
+// engine writes one — a turn's run id, an operation id at
+// statelog.MaxCallerOpIDBytes and a seat handle at iam.MaxLogin — measured as
+// the day measures a push, by the log's growth: internal/code's
+// TestAHoldRecordCostsTheLogOneSmallRecord measures 865 bytes and holds a hold
+// at most this (its holdRecordBytes, which says what the rest covers). The
+// hold's reason in codeLogNegligible weighs the turns' holds by it.
+const codeHoldRecordBytes = 896
+
 // codeLogNegligible is every op of the code domain whose records the code
 // log's day leaves out, and why: each is appended at the rate a person edits
 // the company's document or runs a command, at the rate the company makes,
 // renames and retires repositories (each manager's rate argued in
 // codeLogManagers), or as the trim and the code-retention duty sweep what the
 // log no longer needs — a few records a day beside 3 000 pushes and the tens
-// of thousands of reads around them.
+// of thousands of reads around them — or, a live turn's hold, at a rate the
+// reference company's day has none of, argued with the figures
+// TestTheHoldsReasonWeighsEveryTurnsHoldAgainstTheDay holds.
 var codeLogNegligible = map[code.OpKind]string{
 	code.OpCreate: "a repository is created when an activation of the company's document " +
 		"declares it, or a person's or a seat's tool makes one: once a repository",
@@ -171,8 +182,21 @@ var codeLogNegligible = map[code.OpKind]string{
 	code.OpReleaseName: "the code-retention duty's release of a renamed repository's old name " +
 		"once its redirect ends (code.RedirectWindow, a month): once a rename",
 	code.OpHold: "a live turn's hold on a scratch repository idle code.HoldRecordAfter (22 h) " +
-		"or more, recorded once a turn and repository: a seat taking up an experiment left a " +
-		"day or more before",
+		"or more, which is no deliberate act but a turn's: one record for each TURN that names " +
+		"such a repository, at its first touch of it — and since neither a read nor a hold moves " +
+		"the idle clock, a seat re-reading an idle experiment records one in every turn that " +
+		"names it, on every day from the repository's 22nd idle hour until a push moves its clock " +
+		"or code.scratch.idle_days (7 unless set) expires it: at most a seat's turns a day times " +
+		"the idle scratch repositories each names. The reference company's day makes no scratch " +
+		"repository — its 3 000 pushes a day go to repositories it already has (codeLogManagers' " +
+		"tools) — so it records none. That is the whole case for leaving it out, and what rides on " +
+		"it is not small: were each of its 3 000 turns a day to name one, at the most a hold record " +
+		"takes as the engine writes one (896 bytes, codeHoldRecordBytes), they would append 2.69 " +
+		"MB a day, 37 % of the day's least of 7.3 MB — a company whose seats work so reads it in " +
+		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
+		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
+		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
+		"says of a seat's scratch creates",
 	code.OpPurgePart: "a deleted repository's rows go in bounded parts once it is past its " +
 		"retention: once a repository",
 	code.OpPurge:    "a deleted repository's last part: once a repository",
@@ -1356,6 +1380,42 @@ func TestTheCodeLogsDayPricesEveryRecordItTakes(t *testing.T) {
 	for kind := range codeLogKinds {
 		if !kind.Valid() {
 			t.Errorf("codeLogKinds names %q, which is no kind of object the code domain declares", kind)
+		}
+	}
+}
+
+// THE HOLD'S REASON WEIGHS EVERY TURN'S HOLD AGAINST THE DAY. A hold record is
+// no deliberate act but a turn's — one for each turn that names a scratch
+// repository idle code.HoldRecordAfter or more, recurring in every turn while
+// neither a read nor a hold moves the idle clock — so codeLogNegligible keeps
+// it out of the day only on a stated bound: what the reference company's
+// 3 000 turns a day would append, each naming one such repository, at the most
+// a hold record takes as the engine writes one (codeHoldRecordBytes), beside
+// the day's least. This holds the figures the reason prints to that
+// arithmetic, so a restated frame or day re-opens the judgement rather than
+// leaving a figure nothing computes.
+//
+// Mutation: change codeHoldRecordBytes, referenceTurnsADay or a term of the
+// day — the reason no longer prints what they make, red.
+func TestTheHoldsReasonWeighsEveryTurnsHoldAgainstTheDay(t *testing.T) {
+	t.Parallel()
+	var least float64
+	for _, term := range codeLogDay() {
+		least += term.least
+	}
+	holds := referenceTurnsADay * codeHoldRecordBytes
+	reason := strings.Join(strings.Fields(codeLogNegligible[code.OpHold]), " ")
+	for _, want := range []string{
+		fmt.Sprintf("were each of its %s turns a day to name one", spaced(referenceTurnsADay)),
+		fmt.Sprintf("(%s bytes, codeHoldRecordBytes)", spaced(codeHoldRecordBytes)),
+		fmt.Sprintf("append %.2f MB a day, %.0f %% of the day's least of %.1f MB", holds/1e6,
+			100*holds/least, least/1e6),
+	} {
+		if !strings.Contains(reason, want) {
+			t.Errorf("codeLogNegligible's reason for %q records does not say %q, which is what the "+
+				"reference company's turns, a hold record's measured frame and the code log's day make "+
+				"it: restate the figures, and judge again whether the hold stays out of the day",
+				code.OpHold, want)
 		}
 	}
 }
