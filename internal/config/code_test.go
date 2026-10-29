@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"cmp"
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/gitref"
 )
 
 // THE CODE HOST'S RULES, each refused at the line an operator wrote.
@@ -681,6 +683,70 @@ func TestPathOwnersAreBounded(t *testing.T) {
 	if len(problems) != 1 || problems[0].Path != "code.repos[0].path_owners" || problems[0].Kind != "out_of_range" ||
 		!strings.Contains(problems[0].Message, "65") || !strings.Contains(problems[0].Message, "64") {
 		t.Fatalf("problems = %+v, want the one at code.repos[0].path_owners naming 65 and 64", problems)
+	}
+}
+
+// A REPOSITORY'S PATH OWNERS WEIGH AT MOST CodeMaxPathOwnersBytes AS THE CODE
+// LOG RECORDS THEM, refused past it at its path_owners as one problem naming
+// what they weigh and the bound — weighed as recorded, each unit by its KEY
+// whatever the document named it by, so a figure taken from the document's
+// spelling names another weight — and accepted under it. Each owner here owns
+// every glob it may at gitref's bound, each byte one JSON spells as six, and
+// is named by a name longer than its key.
+//
+// Mutation: weigh a unit by the name the document gave it — the figure the
+// refusal names is not the recorded one, red.
+func TestPathOwnersAreBoundedByWhatTheyWeigh(t *testing.T) {
+	t.Parallel()
+	type recordedOwner struct {
+		Kind string `json:"kind"`
+		Ref  string `json:"ref"`
+	}
+	type recorded struct {
+		Owner recordedOwner `json:"owner"`
+		Paths []string      `json:"paths"`
+	}
+	globs := make([]string, config.CodeMaxPathOwnerPaths)
+	quoted := make([]string, len(globs))
+	for i := range globs {
+		globs[i] = fmt.Sprintf("%02d", i) + strings.Repeat("&", gitref.MaxPathGlobBytes-2)
+		quoted[i] = strconv.Quote(globs[i])
+	}
+	doc := func(owners int) (string, int) {
+		var units, list strings.Builder
+		var want []recorded
+		for i := range owners {
+			fmt.Fprintf(&units, "  - name: The Team Numbered %d\n    id: t%d\n", i, i)
+			fmt.Fprintf(&list, "        - {paths: [%s], unit: The Team Numbered %d}\n", strings.Join(quoted, ", "), i)
+			want = append(want, recorded{Owner: recordedOwner{Kind: "unit", Ref: fmt.Sprintf("t%d", i)}, Paths: globs})
+		}
+		weight, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return "name: Acme\nroles:\n  - name: CEO\n    handle: ceo\nunits:\n" + units.String() +
+			"code:\n  native: true\n  repos:\n    - name: web\n      owner: {seat: ceo}\n      path_owners:\n" +
+			list.String(), len(weight)
+	}
+	under, weighs := doc(1)
+	for owners := 2; weighs <= config.CodeMaxPathOwnersBytes; owners++ {
+		next, w := doc(owners)
+		if w > config.CodeMaxPathOwnersBytes {
+			break
+		}
+		under, weighs = next, w
+	}
+	if _, err := config.ParseCompany([]byte(under)); err != nil {
+		t.Fatalf("path owners weighing %d bytes are refused: %v", weighs, err)
+	}
+	over, w := doc(config.CodeMaxPathOwners)
+	_, err := config.ParseCompany([]byte(over))
+	problems := config.Problems(err)
+	if len(problems) != 1 || problems[0].Path != "code.repos[0].path_owners" || problems[0].Kind != "out_of_range" ||
+		!strings.Contains(problems[0].Message, fmt.Sprintf("%d bytes", w)) ||
+		!strings.Contains(problems[0].Message, strconv.Itoa(config.CodeMaxPathOwnersBytes)) {
+		t.Fatalf("problems = %+v, want the one at code.repos[0].path_owners naming %d bytes and %d", problems, w,
+			config.CodeMaxPathOwnersBytes)
 	}
 }
 

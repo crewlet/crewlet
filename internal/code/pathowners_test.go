@@ -7,6 +7,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -280,34 +281,27 @@ func TestAPathOwnerGrantsNothing(t *testing.T) {
 	}
 }
 
-// THE LARGEST SETTINGS FIT WHERE THEY TRAVEL. Every path glob of every owner
-// at gitref's bound, each byte one JSON spells longest (`&`, six bytes), beside
-// every protection rule's pattern and the description spelled the same way,
-// and every rule's merge gate at MaxGateBytes, is the widest a repository's
-// settings can be — and they must fit the code log's record whole, since a
-// create, a settings change and a restore each carry them: a declaration past
-// it would be refused at every activation. And the detail that answers them
-// must fit the room a full page of refs beside it leaves in the estate's
-// reply, which a refs listing's first page carries both in
-// ([code.MaxPageBytes]).
+// THE LARGEST SETTINGS FIT WHERE THEY TRAVEL. A create, a settings change and
+// a restore each carry a repository's settings whole, and every record this
+// build forms is held to MaxRecordBytes — an eighth of the node's appends in
+// flight on the code log, so eight are out at once and a committer serving
+// many repositories is never serialised behind one record this large. So the
+// widest settings Validate admits must fit it: every protection rule's pattern
+// at its longest and its merge gate at MaxGateBytes, the description and the
+// default branch at theirs — each byte one JSON spells longest (`&`, six
+// bytes) — and as many path owners' globs at gitref's bound, spelled the same
+// way, as Validate admits beside them. And the detail that answers them must
+// fit the room a full page of refs beside it leaves in the estate's reply,
+// which a refs listing's first page carries both in ([code.MaxPageBytes]).
+//
+// Mutation: drop the path owners' byte bound from their validation — every
+// glob at its widest is admitted, and each record is twice MaxRecordBytes, red.
 func TestTheLargestSettingsFitTheirRecordAndTheDetail(t *testing.T) {
 	t.Parallel()
 	wide := func(n int) string { return strings.Repeat("&", n) }
-	var owners []code.PathOwner
-	for i := range code.MaxPathOwners {
-		ref := fmt.Sprintf("%064d", i) // a unit's key and a seat's handle are at most 64 bytes
-		var paths []string
-		for k := range code.MaxPathOwnerPaths {
-			p := fmt.Sprintf("%02d", k) + wide(gitref.MaxPathGlobBytes-2)
-			if _, err := gitref.ParsePathGlob(p); err != nil {
-				t.Fatalf("the widest glob %q is no glob: %v", p, err)
-			}
-			paths = append(paths, p)
-		}
-		owners = append(owners, pathOwner(code.OwnerUnit, ref, paths...))
-	}
 	s := suiteSettings()
 	s.Description = wide(code.MaxDescriptionBytes)
+	s.DefaultBranch = "b" + wide(gitref.MaxBranchBytes-1)
 	s.Protections = nil
 	gate := widestGate(t)
 	for i := range code.MaxProtectionsPerRepo {
@@ -315,41 +309,98 @@ func TestTheLargestSettingsFitTheirRecordAndTheDetail(t *testing.T) {
 		s.Protections = append(s.Protections, code.Protection{Pattern: head + wide(gitref.MaxRefNameBytes-len(head)),
 			AllowForce: true, AllowDelete: true, DirectPush: code.DirectPersons, Gate: &gate})
 	}
-	s.PathOwners = code.CanonicalPathOwners(owners)
+	// THE PATH OWNERS: the first n of every owner's every glob at gitref's
+	// bound, owner by owner — each named by a reference of 64 bytes, a unit's
+	// key and a seat's handle at their longest — and n the most Validate
+	// admits beside the rules above.
+	ownersOf := func(n int) []code.PathOwner {
+		var owners []code.PathOwner
+		for first := 0; first < n; first += code.MaxPathOwnerPaths {
+			var paths []string
+			for g := first; g < min(n, first+code.MaxPathOwnerPaths); g++ {
+				paths = append(paths, fmt.Sprintf("%02d", g-first)+wide(gitref.MaxPathGlobBytes-2))
+			}
+			ref := fmt.Sprintf("%064d", first/code.MaxPathOwnerPaths)
+			owners = append(owners, pathOwner(code.OwnerUnit, ref, paths...))
+		}
+		return owners
+	}
+	every := code.MaxPathOwners * code.MaxPathOwnerPaths
+	admitted := sort.Search(every+1, func(n int) bool {
+		with := s
+		with.PathOwners = ownersOf(n)
+		return with.Validate() != nil
+	}) - 1
+	if admitted < 1 {
+		t.Fatalf("the widest rules leave no room for one path glob: %v", s.Validate())
+	}
+	s.PathOwners = ownersOf(admitted)
 	if err := s.Validate(); err != nil {
 		t.Fatalf("the widest settings are refused: %v", err)
 	}
 
 	const id = "0190f3c4-0000-7000-8000-000000000001"
 	name := strings.Repeat("a", gitref.MaxRepoNameBytes)
+	bare := s
+	bare.PathOwners = nil
+	owners, err := json.Marshal(s.PathOwners)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		record  string
 		subject code.Subject
 		op      code.OpKind
-		payload any
+		payload func(code.RepoSettings) any
 	}{
-		{"a create", code.NameSubject(name), code.OpCreate, code.CreateRepo{RepoID: id, Name: name, Settings: s}},
-		{"a settings change", code.RepoSubject(id), code.OpSettings, code.SettingsRecord{RepoID: id, Settings: s}},
-		{"a restore", code.RepoSubject(id), code.OpRestore, code.LifecycleRecord{RepoID: id, ConfigEpoch: 1,
-			Settings: &s}},
+		{"a create", code.NameSubject(name), code.OpCreate, func(s code.RepoSettings) any {
+			return code.CreateRepo{RepoID: id, Name: name, Settings: s}
+		}},
+		{"a settings change", code.RepoSubject(id), code.OpSettings, func(s code.RepoSettings) any {
+			return code.SettingsRecord{RepoID: id, Settings: s}
+		}},
+		{"a restore", code.RepoSubject(id), code.OpRestore, func(s code.RepoSettings) any {
+			return code.LifecycleRecord{RepoID: id, ConfigEpoch: 1, Settings: &s}
+		}},
 	} {
-		body, err := json.Marshal(tc.payload)
-		if err != nil {
-			t.Fatal(err)
+		recordOf := func(s code.RepoSettings) []byte {
+			body, err := json.Marshal(tc.payload(s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := code.Encode(code.MutationRecord{
+				RecordEnvelope: code.RecordEnvelope{OpID: statelog.NewOpID(time.Now(), "code.widest"),
+					Subject: tc.subject, Op: tc.op, CreatedAt: harnessAt,
+					Scope: code.Scope{code.NamePath(code.NameToken(name)), code.RepoPath(id)}},
+				Mutation: body, Actor: "node-a", ActorKind: code.ActorConfig,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return record
 		}
-		record, err := code.Encode(code.MutationRecord{
-			RecordEnvelope: code.RecordEnvelope{OpID: statelog.NewOpID(time.Now(), "code.widest"),
-				Subject: tc.subject, Op: tc.op, CreatedAt: harnessAt,
-				Scope: code.Scope{code.NamePath(code.NameToken(name)), code.RepoPath(id)}},
-			Mutation: body, Actor: "node-a", ActorKind: code.ActorConfig,
-		})
-		if err != nil {
-			t.Fatal(err)
+		record, without := recordOf(s), recordOf(bare)
+		if len(record) > code.MaxRecordBytes {
+			t.Errorf("%s of the widest settings — %d path globs at gitref's bound — is %d bytes, past the %d "+
+				"a record this build forms may weigh (MaxRecordBytes)", tc.record, admitted, len(record),
+				code.MaxRecordBytes)
 		}
-		if len(record) > code.CodeLogMaxRecordBytes {
-			t.Errorf("%s of the widest settings is %d bytes, past the %d one record of the code log may hold",
-				tc.record, len(record), code.CodeLogMaxRecordBytes)
+		// AND EXACTLY, whatever owners Validate admits: the path owners add
+		// their member to the record and nothing else — their JSON verbatim
+		// (the premise) — and weigh at most MaxPathOwnersBytes.
+		member := len(`,"path_owners":`)
+		if grew := len(record) - len(without); grew != member+len(owners) {
+			t.Fatalf("%s: the path owners grow the record by %d bytes, want their member and their JSON, %d",
+				tc.record, grew, member+len(owners))
 		}
+		if worst := len(without) + member + code.MaxPathOwnersBytes; worst > code.MaxRecordBytes {
+			t.Errorf("%s of the widest settings with path owners at MaxPathOwnersBytes (%d) is %d bytes, past "+
+				"the %d a record this build forms may weigh (MaxRecordBytes)", tc.record, code.MaxPathOwnersBytes,
+				worst, code.MaxRecordBytes)
+		}
+		t.Logf("%s of the widest settings is %d bytes without path owners and %d with %d globs at gitref's "+
+			"bound (%d bytes of them); at MaxPathOwnersBytes %d of MaxRecordBytes %d", tc.record, len(without),
+			len(record), admitted, len(owners), len(without)+member+code.MaxPathOwnersBytes, code.MaxRecordBytes)
 	}
 
 	detail, err := json.Marshal(code.RepoDetail{RepoSummary: code.RepoSummary{RepoRef: code.RepoRef{
@@ -425,6 +476,15 @@ func TestPathOwnersAreHeldToTheirOneForm(t *testing.T) {
 		"owners past their bound": {with(many(code.MaxPathOwners+1, func(i int) code.PathOwner {
 			return unit(fmt.Sprintf("u%02d", i), "x/**")
 		})...), fmt.Sprintf("past the cap of %d", code.MaxPathOwners)},
+		// EVERY COUNT AT ITS BOUND, every glob at gitref's and spelled long:
+		// past what a record carries beside the widest rules.
+		"owners past their bytes": {with(many(code.MaxPathOwners, func(i int) code.PathOwner {
+			wide := make([]string, code.MaxPathOwnerPaths)
+			for k := range wide {
+				wide[k] = fmt.Sprintf("%02d", k) + strings.Repeat("&", gitref.MaxPathGlobBytes-2)
+			}
+			return unit(fmt.Sprintf("u%02d", i), wide...)
+		})...), fmt.Sprintf("past the %d a repository's path owners may weigh", code.MaxPathOwnersBytes)},
 		"a scratch repository's": {scratch, "takes no path owners"},
 	} {
 		err := tc.settings.Validate()

@@ -237,7 +237,11 @@ const (
 	// counted with what a stored record carries beside its payload, so eight
 	// maximal code records are out at once on one node and a committer
 	// serving many repositories is never serialised behind one large record.
-	// 1 044 480 bytes.
+	// 1 044 480 bytes. A create, a settings change and a restore, which carry
+	// a repository's settings whole, are held to it by the settings' own
+	// bounds — the path owners' in bytes among them, which the counts alone
+	// would let past it (TestTheLargestSettingsFitTheirRecordAndTheDetail
+	// holds the sum).
 	MaxRecordBytes = (CodeLogMaxRecordBytes+appendOverheadBytes)/8 - appendOverheadBytes
 
 	// appendOverheadBytes is what the log's reserve counts one append at
@@ -342,6 +346,13 @@ const (
 	// MaxPathOwnerPaths is config.CodeMaxPathOwnerPaths: the globs one path
 	// owner names, packed into its one row.
 	MaxPathOwnerPaths = config.CodeMaxPathOwnerPaths
+
+	// MaxPathOwnersBytes is config.CodeMaxPathOwnersBytes: what a
+	// repository's path owners may weigh as a record carries them, their JSON
+	// — the bound that holds every create, settings change and restore to
+	// MaxRecordBytes beside the widest rules, which the counts above alone do
+	// not (TestTheLargestSettingsFitTheirRecordAndTheDetail holds the sum).
+	MaxPathOwnersBytes = config.CodeMaxPathOwnersBytes
 
 	// MaxSnapshotItems is the most rows one snapshot or listing page
 	// carries: about 1–2 MB of JSON for typical refs and about 4 MB at

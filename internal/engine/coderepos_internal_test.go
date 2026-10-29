@@ -597,6 +597,53 @@ func TestADeclaredGateWeighsWhatTheDomainRecords(t *testing.T) {
 	}
 }
 
+// DECLARED PATH OWNERS WEIGH WHAT THE DOMAIN RECORDS: config refuses path
+// owners past CodeMaxPathOwnersBytes by the length of their recorded form's
+// JSON (config.CodeRepo.PathOwnersBytes), and the code domain refuses them past
+// MaxPathOwnersBytes by the length of the record's — so the two lengths must be
+// one, or `crewlet validate` passes path owners every node's reconcile refuses,
+// or refuses ones the domain would record. Held over a unit named by its name,
+// whose shorter key the record carries instead, a seat, and globs spelled long
+// and out of their canonical order, which changes no length; and both sides
+// judge the same bound.
+//
+// Mutation: weigh a unit by the name the document gave it (config's
+// recordedOwner) — the two lengths part, red.
+func TestDeclaredPathOwnersWeighWhatTheDomainRecords(t *testing.T) {
+	t.Parallel()
+	c, err := NewCompany(parseCompany(t, codeReposDoc(webRepo(""), "  - name: The Platform Team\n    id: plat\n")))
+	if err != nil {
+		t.Fatalf("build the epoch: %v", err)
+	}
+	if config.CodeMaxPathOwnersBytes != code.MaxPathOwnersBytes {
+		t.Fatalf("config bounds path owners at %d bytes and the domain at %d", config.CodeMaxPathOwnersBytes,
+			code.MaxPathOwnersBytes)
+	}
+	repo := c.Config.Code.Repos[0]
+	repo.PathOwners = []config.CodePathOwner{
+		{Paths: []string{"z&<>/**", "a/été/**", "web/**"}, Unit: "The Platform Team"},
+		{Paths: []string{"Makefile"}, Seat: "swe"},
+	}
+	declared, err := declaredRepo(c.Org.Index(), repo)
+	if err != nil {
+		t.Fatalf("declare web: %v", err)
+	}
+	if err := declared.Validate(); err != nil {
+		t.Fatalf("the declared path owners are not ones the domain records: %v", err)
+	}
+	if key := declared.Settings.PathOwners[1].Owner.Ref; key != "plat" {
+		t.Fatalf("the premise: the unit The Platform Team is recorded by its key plat, and here as %q", key)
+	}
+	recorded, err := json.Marshal(declared.Settings.PathOwners)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := repo.PathOwnersBytes(c.Org.Index()); !ok || got != len(recorded) {
+		t.Errorf("config weighs the path owners at %d bytes (resolved %t) and the domain records %d: %s", got, ok,
+			len(recorded), recorded)
+	}
+}
+
 // A DECLARATION IS RECORDED IN ONE CANONICAL FORM, whichever order its rules
 // were written in — every node deciding it forms one record — and an owner the
 // chart does not resolve is named rather than recorded empty.

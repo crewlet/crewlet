@@ -365,7 +365,9 @@ func CanonicalPathOwners(owners []PathOwner) []PathOwner {
 // pathOwnersInvalid is why owners are no repository's path owners in the form
 // a record carries them, or "": at most [MaxPathOwners], each a unit or a seat
 // naming itself, with 1 to [MaxPathOwnerPaths] globs gitref reads, sorted and
-// each once, and the owners sorted and each once ([comparePathOwners]).
+// each once, and the owners sorted and each once ([comparePathOwners]) — and
+// the whole at most [MaxPathOwnersBytes] as a record encodes it, judged last,
+// since owners refused for what one says are refused for that.
 func pathOwnersInvalid(owners []PathOwner) string {
 	if len(owners) > MaxPathOwners {
 		return fmt.Sprintf("path_owners: %d owners, past the cap of %d", len(owners), MaxPathOwners)
@@ -395,6 +397,10 @@ func pathOwnersInvalid(owners []PathOwner) string {
 					"each named once", at, k, glob, po.Paths[k-1])
 			}
 		}
+	}
+	if n := pathOwnersBytes(owners); n > MaxPathOwnersBytes {
+		return fmt.Sprintf("path_owners: %d bytes as a record carries them, past the %d a repository's path "+
+			"owners may weigh: own a directory with dir/** rather than each of its files", n, MaxPathOwnersBytes)
 	}
 	return ""
 }

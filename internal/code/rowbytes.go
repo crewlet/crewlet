@@ -503,6 +503,25 @@ func (g MergeGate) encodedBytes() int {
 	return n
 }
 
+// pathOwnersBytes is the length of a list of path owners' JSON encoding: what
+// a record carries of a repository's path owners, and what
+// [MaxPathOwnersBytes] bounds.
+func pathOwnersBytes(owners []PathOwner) int {
+	if owners == nil {
+		return len("null")
+	}
+	n := 2 + max(len(owners)-1, 0)
+	for _, po := range owners {
+		paths := len("null")
+		if po.Paths != nil {
+			paths = stringsBytes(po.Paths)
+		}
+		n += 2 + field("owner", 2+field("kind", stringBytes(string(po.Owner.Kind)), true)+
+			field("ref", stringBytes(po.Owner.Ref), false), true) + field("paths", paths, false)
+	}
+	return n
+}
+
 // classesBytes is the length of a list of change classes.
 func classesBytes(classes []ChangeClass) int {
 	n := 2

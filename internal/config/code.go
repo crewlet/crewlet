@@ -69,8 +69,27 @@ const (
 	// part of a tree is a handful of directories, each one glob (dir/**), and
 	// thirty-two is past what one team owns of one repository. With
 	// [CodeMaxPathOwners] it bounds what a change's paths are matched against
-	// — 2 048 globs — and the bytes the repository's settings carry.
+	// — 2 048 globs.
 	CodeMaxPathOwnerPaths = 32
+
+	// CodeMaxPathOwnersBytes is the most a repository's path owners may weigh
+	// as the code log records them: their JSON, each owner by what the chart
+	// resolves it to, a unit by its key. TWO HUNDRED AND FIFTY-SIX KIBIBYTES,
+	// because every create, settings change and restore carries them whole,
+	// and every record the code domain forms is held to its MaxRecordBytes —
+	// an eighth of the node's appends in flight on the code log, 1 044 480
+	// bytes — beside the rest of the settings at their widest: sixty-four
+	// rules with their merge gates, the description and the default branch
+	// make such a record 631 780 bytes, so path owners at this bound make it
+	// 893 939, some 150 KB to spare for whatever a later field adds
+	// (internal/code's TestTheLargestSettingsFitTheirRecordAndTheDetail holds
+	// the sum). The counts alone would not: 2 048 globs at gitref's 128 bytes,
+	// each byte JSON spells as six (`&`, `<` and `>`), weigh 1 565 505 bytes,
+	// and made such a record 2 197 300. Generous for any ownership a person
+	// writes — 2 048 globs of a hundred plain bytes each are about 214 KB — so
+	// what it refuses is the counts at their bounds with long globs, or globs
+	// JSON spells long.
+	CodeMaxPathOwnersBytes = 256 << 10
 
 	// CodeMaxHumanPaths is the most HUMAN PATHS one protection rule's merge
 	// gate names: the parts of a repository's tree a change touching which
@@ -91,14 +110,15 @@ const (
 	// code log records it: its canonical JSON. EIGHT KIBIBYTES, because a
 	// repository carries up to [CodeMaxProtections] rules and every create,
 	// settings change and restore carries them whole: sixty-four gates at the
-	// bound are 512 KiB of the settings, beside path owners at theirs (about
-	// 1.6 MB), under the one record of the code log they must fit — and of the
-	// repository row every read, sync and cache state carries. Each count alone
-	// stays under it — thirty-two human paths of gitref's widest ordinary
-	// globs (128 bytes) with both classes in `unless` are about 6 KB, and
-	// thirty-two checks at their longest names about 2 KB — so what it refuses
-	// is a gate at both counts' bounds at once, or one whose globs JSON spells
-	// long (`&`, `<` and `>` are six bytes each).
+	// bound are 512 KiB of the settings, beside path owners at theirs
+	// ([CodeMaxPathOwnersBytes]), under the one record the code domain forms
+	// (its MaxRecordBytes, about 1 MB) — and of the repository row every read,
+	// sync and cache state carries. Each count alone stays under it —
+	// thirty-two human paths of gitref's widest ordinary globs (128 bytes)
+	// with both classes in `unless` are about 6 KB, and thirty-two checks at
+	// their longest names about 2 KB — so what it refuses is a gate at both
+	// counts' bounds at once, or one whose globs JSON spells long (`&`, `<`
+	// and `>` are six bytes each).
 	CodeMaxGateBytes = 8 << 10
 
 	// CodeMaxQueueDepth is the most candidates a gated target's speculative
@@ -474,7 +494,7 @@ type CodeRepo struct {
 	// PathOwners are who owns which of the repository's paths: whom a change
 	// touching them asks for a review. They GRANT NOTHING — who may read and
 	// push is the chart's and the tier's, whatever a path owner names.
-	PathOwners []CodePathOwner `yaml:"path_owners,omitempty" json:"path_owners,omitempty" desc:"Who owns which of the repository's paths, at most 64 owners: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before."`
+	PathOwners []CodePathOwner `yaml:"path_owners,omitempty" json:"path_owners,omitempty" desc:"Who owns which of the repository's paths, at most 64 owners and 256 KiB as the code log records them: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before."`
 }
 
 // CodePathOwner is one owner of a repository's paths: exactly one of a unit or
@@ -1164,7 +1184,10 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 // [CodeMaxPathOwners], each naming exactly one of a unit or a seat the chart
 // resolves, and 1 to [CodeMaxPathOwnerPaths] globs in gitref's path grammar,
 // each once — and each OWNER once, by what the chart resolves it to, so a unit
-// named once by its key and once by its name is one owner named twice.
+// named once by its key and once by its name is one owner named twice — and
+// the whole at most [CodeMaxPathOwnersBytes] as the code log records it,
+// judged last and only of a list nothing else is refused in, since an entry
+// refused for what it says is refused for that.
 //
 // RUNNABLE, as an owner's rules are: the reconcile records a unit by the key
 // the chart resolves, so one it cannot resolve has no key to record, and the
@@ -1172,32 +1195,106 @@ func (r CodeRepo) validate(path Path, owners *codeOwners) error {
 // read and an owner listed twice — the one form a record carries, which a
 // declaration listing an owner twice is not.
 func validatePathOwners(p *problems, path Path, list []CodePathOwner, owners *codeOwners) {
+	before := len(*p)
 	if len(list) > CodeMaxPathOwners {
 		p.add(path, ErrOutOfRange,
 			"%d path owners, past the %d one repository may name: list a team rather than each of its "+
 				"seats — a unit's owner is its effective lead", len(list), CodeMaxPathOwners)
 	}
-	first := make(map[string]int, len(list))
+	first := make(map[codeRecordedOwner]int, len(list))
 	for k, po := range list {
 		entry := idx(path, k)
-		key, resolved := po.validate(p, entry, owners)
+		who, resolved := po.validate(p, entry, owners)
 		if !resolved {
 			continue
 		}
-		if was, dup := first[key]; dup {
+		if was, dup := first[who]; dup {
 			p.add(entry, ErrConflict,
-				"%s owns paths at path_owners[%d] already: one owner is one entry, so list "+
-					"everything it owns in that one", key, was)
+				"%s %s owns paths at path_owners[%d] already: one owner is one entry, so list "+
+					"everything it owns in that one", who.Kind, who.Ref, was)
 			continue
 		}
-		first[key] = k
+		first[who] = k
+	}
+	if len(*p) > before {
+		return
+	}
+	if n, _ := codePathOwnersBytes(owners.index, list); n > CodeMaxPathOwnersBytes {
+		p.add(path, ErrOutOfRange,
+			"the path owners are %d bytes as the code log records them, past the %d one repository's path "+
+				"owners may weigh, since every record of its settings carries them whole: own a directory "+
+				"with dir/** rather than each of its files — a glob's &, < and > are six bytes each",
+			n, CodeMaxPathOwnersBytes)
 	}
 }
 
+// PathOwnersBytes is what the repository's path owners weigh as the code log
+// records them — the length of their JSON, each owner by what the chart index
+// o resolves it to — which [CodeMaxPathOwnersBytes] bounds; false where an
+// owner does not resolve, and so has no recorded form to weigh.
+func (r CodeRepo) PathOwnersBytes(o *org.Index) (int, bool) {
+	return codePathOwnersBytes(o, r.PathOwners)
+}
+
+// codePathOwnersBytes is [CodeRepo.PathOwnersBytes] over list.
+//
+// IN THE SHAPE THE CODE DOMAIN RECORDS THEM ([codeRecordedPathOwner]), so its
+// figure is the record's: the engine's
+// TestDeclaredPathOwnersWeighWhatTheDomainRecords holds the two, or `crewlet
+// validate` passes path owners every node's reconcile refuses, or refuses ones
+// the domain would record.
+func codePathOwnersBytes(o *org.Index, list []CodePathOwner) (int, bool) {
+	recorded := make([]codeRecordedPathOwner, len(list))
+	for i, po := range list {
+		who, ok := po.recordedOwner(o)
+		if !ok {
+			return 0, false
+		}
+		recorded[i] = codeRecordedPathOwner{Owner: who, Paths: po.Paths}
+	}
+	// IT CANNOT FAIL: strings and lists of them are every value it holds, and
+	// json.Marshal encodes each of them.
+	b, _ := json.Marshal(recorded)
+	return len(b), true
+}
+
+// codeRecordedPathOwner is a path owner in the shape the code domain records
+// it: code.PathOwner's keys, the owner by what the chart resolves it to, and
+// its globs as the document lists them, whose canonical order the record
+// sorts them into changes no length.
+type codeRecordedPathOwner struct {
+	Owner codeRecordedOwner `json:"owner"`
+	Paths []string          `json:"paths"`
+}
+
+// codeRecordedOwner is a path owner's owner as the code domain records it,
+// code.Owner's keys: a unit by its key, a seat by its handle.
+type codeRecordedOwner struct {
+	Kind string `json:"kind"`
+	Ref  string `json:"ref"`
+}
+
+// recordedOwner is who the entry names as the code domain records it, resolved
+// on the chart index o as the reconcile resolves it — a unit by its key,
+// whichever spelling the entry used, or a seat by its handle — and false for
+// an entry naming neither or both, or an owner o does not hold.
+func (po CodePathOwner) recordedOwner(o *org.Index) (codeRecordedOwner, bool) {
+	switch unit, seat := strings.TrimSpace(po.Unit), strings.TrimSpace(po.Seat); {
+	case unit != "" && seat == "":
+		if u := o.UnitByRef(unit); u != nil {
+			return codeRecordedOwner{Kind: "unit", Ref: u.Key()}, true
+		}
+	case seat != "" && unit == "":
+		if o.SeatByHandle(seat) != nil {
+			return codeRecordedOwner{Kind: "seat", Ref: seat}, true
+		}
+	}
+	return codeRecordedOwner{}, false
+}
+
 // validate holds one path owner at path into p, and answers who it resolves
-// to — "unit <key>" or "seat <handle>", as the chart names the owner whatever
-// spelling the entry used — where it resolves at all.
-func (po CodePathOwner) validate(p *problems, path Path, owners *codeOwners) (string, bool) {
+// to ([CodePathOwner.recordedOwner]) where it resolves at all.
+func (po CodePathOwner) validate(p *problems, path Path, owners *codeOwners) (codeRecordedOwner, bool) {
 	paths := at(path, "paths")
 	switch n := len(po.Paths); {
 	case n == 0:
@@ -1226,24 +1323,20 @@ func (po CodePathOwner) validate(p *problems, path Path, owners *codeOwners) (st
 			"a path owner is a unit or a seat: set unit to a unit's id or name, or seat to a seat's handle")
 	case unit != "" && seat != "":
 		p.add(path, ErrConflict, "a path owner is one unit or one seat: set unit or seat, not both")
-	case unit != "":
-		u := owners.index.UnitByRef(unit)
-		if u == nil {
+	default:
+		if who, ok := po.recordedOwner(owners.index); ok {
+			return who, true
+		}
+		if unit != "" {
 			p.add(at(path, "unit"), ErrUnknownValue,
 				"%q is no unit of this company's chart, by id or by name; the units are: %s",
 				unit, owners.units())
-			return "", false
-		}
-		return "unit " + u.Key(), true
-	default:
-		if owners.index.SeatByHandle(seat) == nil {
+		} else {
 			p.add(at(path, "seat"), ErrUnknownValue,
 				"%q is no seat's handle in this company; the seats are: %s", seat, owners.seats())
-			return "", false
 		}
-		return "seat " + seat, true
 	}
-	return "", false
+	return codeRecordedOwner{}, false
 }
 
 // codeOwners is the document's chart as code.repos' owners are resolved

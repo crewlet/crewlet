@@ -147,7 +147,8 @@ code:
   gate](#merge-gates).
 - **`path_owners`** — at most 64 owners, each exactly one of `unit` or `seat`
   resolved as `owner` is, owning 1 to 32 globs of the repository's paths, each
-  glob once and each owner in one entry ([Path owners](#path-owners)).
+  glob once and each owner in one entry, and at most 256 KiB in all as the code
+  log records them ([Path owners](#path-owners)).
 
 At most 10 000 repositories one document — a typo guard two orders of
 magnitude past a large company's, not a limit anybody is expected to meet. It
@@ -306,8 +307,14 @@ than read as themselves.
 A repository names at most **64** owners, each owning at most **32** globs —
 sixty-four teams or seats on one repository, and a handful of directories
 each — and an owner is named once: everything one owner owns is one entry, a
-unit named by its name and by its key being one owner. A scratch repository
-takes none; it is its seat's own. Path owners are part of the settings, carried
+unit named by its name and by its key being one owner. The whole weighs at most
+**256 KiB** as the code log records it, each owner by its key or handle:
+every create, settings change and restore of the repository carries its path
+owners whole, and a record is at most about a mebibyte beside the widest
+[protection rules](#protection-rules) and their gates. Only the counts near
+their bounds with long globs reach it — 2 048 globs of a hundred plain
+characters are about 214 KB — or globs whose `&`, `<` and `>` JSON writes as
+six bytes each. A scratch repository takes none; it is its seat's own. Path owners are part of the settings, carried
 whole by the records that carry them and settled at an activation like every
 other field ([What each change does at its activation](#what-each-change-does-at-its-activation)).
 For a repository a tool made, a settings change adds globs to an owner and

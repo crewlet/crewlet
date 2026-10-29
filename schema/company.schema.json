@@ -552,7 +552,7 @@
           "$ref": "#/$defs/CodeOwner"
         },
         "path_owners": {
-          "description": "Who owns which of the repository's paths, at most 64 owners: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before.",
+          "description": "Who owns which of the repository's paths, at most 64 owners and 256 KiB as the code log records them: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before.",
           "items": {
             "$ref": "#/$defs/CodePathOwner"
           },

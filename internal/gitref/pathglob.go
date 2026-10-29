@@ -12,18 +12,16 @@ import (
 // PAST ANY GLOB A PERSON WRITES for a part of a tree: what one owns below a
 // directory is the directory's **, however deep the tree runs beneath it, so a
 // glob is a few components — services/payments/**/*_test.go is thirty bytes —
-// and one past a hundred is a list of files written as one path.
+// and one past a hundred is a list of files written as one path. A glob's
+// parts read into a pattern's byte offsets, which hold it.
 //
-// AND WHAT KEEPS A REPOSITORY'S SETTINGS SMALL WHERE THEY TRAVEL: a
-// repository names up to 2 048 globs (internal/code's MaxPathOwners owners of
-// MaxPathOwnerPaths each), and JSON may spell each byte of a glob as six (`<`,
-// `>` and `&` are a path's like any other's), so at this bound the widest
-// settings carry about 1.6 MB of globs — a fifth of the code log's record, and
-// under half the room a repository's detail has beside a full page of its refs
-// in one reply of the estate (internal/code's tests hold both). At a ref's 255
-// they would be 3.2 MB, three quarters of that room, leaving the reply's
-// envelope and whatever a later answer carries beside the detail next to
-// nothing. A glob's parts read into a pattern's byte offsets, which hold it.
+// IT IS A GLOB'S BOUND, NOT A LIST'S: a repository names up to 2 048 globs
+// (internal/code's MaxPathOwners owners of MaxPathOwnerPaths each), and JSON
+// may spell each byte of a glob as six (`<`, `>` and `&` are a path's like any
+// other's), so at this bound alone they would weigh about 1.6 MB — past the
+// one record of the code domain every change of a repository's settings
+// carries them in. What a repository's path owners weigh is bounded as a whole,
+// as the record carries them (config's CodeMaxPathOwnersBytes).
 const MaxPathGlobBytes = 128
 
 // MaxPathGlobComponents is the most components a path glob holding a '*' may
