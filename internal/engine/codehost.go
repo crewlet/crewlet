@@ -376,13 +376,13 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: start the code host: %w", err)
 	}
 
-	// 9. THE COMPACTOR, a repository's MAINTAINER's two loops — the merge of
-	// its packs (ADR-0060) and the publication of its layers (ADR-0061) —
-	// over the cache and the store the host uses, listing and proposing
-	// through the router's code seam — whose Compact raises this node's
-	// floors past what it landed — and asking the router itself who
-	// maintains each repository. BUILT here, after the host whose cache it
-	// builds in, and STARTED only with the native half's duties
+	// 9. THE COMPACTOR, a repository's MAINTAINER's three loops — the merge of
+	// its packs (ADR-0060), the publication of its layers (ADR-0061) and the
+	// expunge a person's purge asks for — over the cache and the store the host
+	// uses, listing and proposing through the router's code seam — whose
+	// Compact raises this node's floors past what it landed — and asking the
+	// router itself who maintains each repository. BUILT here, after the host
+	// whose cache it builds in, and STARTED only with the native half's duties
 	// ([Engine.startNativeDuties]), once the runtime this half joins is
 	// published and only where the node's mode publishes: its loops pass at
 	// once once this node is listed, and everything a pass reads goes
@@ -529,11 +529,12 @@ func (g gitHalf) MergePreview(ctx context.Context, q code.MergePreviewQuery) (co
 // they serve from — which the host stops with itself, and which the engine
 // holds only to READ, for what no request asks (the alarm reading's code half,
 // [Engine.codeReading]) — the budget it sized that cache to, the compactor
-// that merges the packs of the repositories this node maintains and publishes
-// their layers, and the home's change work, each built and NOT started (the
-// native half's duties start the compactor's two loops and the home's, past
-// the runtime's publication and the mode's gate: [Engine.startNativeDuties]),
-// and what withdraws the host's status answerer ([Engine.serveCodeStatus]).
+// that merges the packs of the repositories this node maintains, publishes
+// their layers and expunges what a person's purge drops, and the home's change
+// work, each built and NOT started (the native half's duties start the
+// compactor's three loops and the home's, past the runtime's publication and
+// the mode's gate: [Engine.startNativeDuties]), and what withdraws the host's
+// status answerer ([Engine.serveCodeStatus]).
 type codeHostParts struct {
 	host           *host.Server
 	reads          *query.Server

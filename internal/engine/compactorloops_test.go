@@ -37,9 +37,9 @@ func (l *listings) listed(k code.ReadKind) bool {
 }
 
 // compactorLoops is how many goroutines of the process are inside a
-// compactor's loop — the one frame both of its loops run in, so the count is
-// of the loops running, whatever else an engine's boot and stop start and end
-// around them.
+// compactor's loop — the one frame all three of its loops run in, so the count
+// is of the loops running, whatever else an engine's boot and stop start and
+// end around them.
 func compactorLoops() int {
 	buf := make([]byte, 1<<20)
 	for {
@@ -51,24 +51,24 @@ func compactorLoops() int {
 	}
 }
 
-// THE ENGINE STARTS AND STOPS BOTH OF A GIT NODE'S MAINTENANCE LOOPS: a git
-// node's compactor runs its COMPACTION loop and its PUBLICATION loop, each on a
-// goroutine of its own; neither lists anything while the node is built and not
-// started — no listing of the git nodes carries a node whose host has not
-// beaten, so it maintains nothing — and each lists at once through the
-// router's code seam, `compaction_due` and `publication_due`, once the started
-// node is listed; and the engine's stop ends both, so no goroutine of either
-// outlives the node.
+// THE ENGINE STARTS AND STOPS EVERY ONE OF A GIT NODE'S MAINTENANCE LOOPS: a
+// git node's compactor runs its COMPACTION loop, its PUBLICATION loop and its
+// EXPUNGE loop, each on a goroutine of its own; none lists anything while the
+// node is built and not started — no listing of the git nodes carries a node
+// whose host has not beaten, so it maintains nothing — and each lists at once
+// through the router's code seam, `compaction_due`, `publication_due` and
+// `expunge_due`, once the started node is listed; and the engine's stop ends
+// all three, so no goroutine of any outlives the node.
 //
 // NOT PARALLEL, and read off the goroutines' own stacks rather than a settled
 // count: a paused parallel test has started no engine, so the loops counted
-// are this node's alone, and the loop's frame is the one both share.
+// are this node's alone, and the loop's frame is the one all three share.
 //
 // Mutations: start the publication loop on a lifetime of its own rather than
 // the compactor's, and a loop outlives the stop; start the compaction loop
-// alone, and the running node lists no publication; pass at once without
-// waiting to be listed, and the node lists before it is started.
-func TestTheEngineStartsAndStopsBothCompactionLoops(t *testing.T) {
+// alone, and the running node lists no publication and no expunge; pass at
+// once without waiting to be listed, and the node lists before it is started.
+func TestTheEngineStartsAndStopsEveryMaintenanceLoop(t *testing.T) {
 	b := gitNodeBootstrap(t, nil)
 	engine.RequireNodeGit(t, b, parsedCompany(t, gitCompany))
 	before := compactorLoops()
@@ -91,11 +91,11 @@ func TestTheEngineStartsAndStopsBothCompactionLoops(t *testing.T) {
 		}
 	})
 
-	// BUILT, NOT STARTED: both loops run, and for two of their rechecks
-	// neither lists.
-	waitFor(t, "both of the compactor's loops to run", func() bool { return compactorLoops()-before == 2 })
+	// BUILT, NOT STARTED: all three loops run, and for two of their
+	// rechecks none lists.
+	waitFor(t, "the compactor's three loops to run", func() bool { return compactorLoops()-before == 3 })
 	time.Sleep(2 * codecompact.ListedRecheck)
-	for _, kind := range []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue} {
+	for _, kind := range []code.ReadKind{code.ReadCompactionDue, code.ReadPublicationDue, code.ReadExpungeDue} {
 		if seam.listed(kind) {
 			t.Errorf("a git node built and not started read the %s listing, want its loops waiting to be "+
 				"listed among the git nodes", kind)
@@ -105,12 +105,13 @@ func TestTheEngineStartsAndStopsBothCompactionLoops(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitFor(t, "both of the compactor's loops to list once", func() bool {
-		return seam.listed(code.ReadCompactionDue) && seam.listed(code.ReadPublicationDue)
+	waitFor(t, "each of the compactor's loops to list once", func() bool {
+		return seam.listed(code.ReadCompactionDue) && seam.listed(code.ReadPublicationDue) &&
+			seam.listed(code.ReadExpungeDue)
 	})
-	if got := compactorLoops() - before; got != 2 {
-		t.Errorf("a running git node runs %d of its compactor's loops, want 2: the compaction and the "+
-			"publication", got)
+	if got := compactorLoops() - before; got != 3 {
+		t.Errorf("a running git node runs %d of its compactor's loops, want 3: the compaction, the "+
+			"publication and the expunge", got)
 	}
 
 	e.Stop(context.WithoutCancel(t.Context()))

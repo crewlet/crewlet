@@ -810,10 +810,10 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// its name and its packs are held for ever.
 	e.startCodeRetention(ctx, n)
 	// AND THE COMPACTOR, where the half serves git ([Engine.buildCodeHost]
-	// built it unstarted): both its loops, the compaction's and the
-	// publication's, started HERE for the two reasons both callers reach
-	// this past: the runtime it reads through is PUBLISHED — each loop's
-	// first pass runs at once this node is listed among the git nodes, and
+	// built it unstarted): its three loops, the compaction's, the publication's
+	// and the expunge's, started HERE for the two reasons both callers reach
+	// this past: the runtime it reads through is PUBLISHED — each loop's first
+	// pass runs at once this node is listed among the git nodes, and
 	// this node's own copy answers its due listings from the published
 	// runtime, so a pass started before found its listing unserved — and the
 	// node's mode PUBLISHES: a compaction stores its outputs, and a
