@@ -2154,7 +2154,9 @@ identity (a seat's handle and the job the field points at a model, or the
 assistant's chat or deep work), never by a list index. `config.write` (admin,
 a recent proof); `?dry_run=true` checks it and stores nothing, `If-Match` takes
 the entry's own `ETag` from its `GET` (optional, as on the entity `PUT`), and
-`X-Summary` is required unless it is a dry run.
+a summary is required unless it is a dry run: the `X-Summary` header or a
+`_summary` key in the body, the header winning when both are sent, as on every
+config write.
 
 ```json
 {
@@ -2170,9 +2172,11 @@ the entry's own `ETag` from its `GET` (optional, as on the entity `PUT`), and
 
 - `job` is `executor`, `review`, `subagent`, `auxiliary` or `judge`. A seat
   that writes one job twice (`llm_review` and `llm.review`) has both fields
-  answered by its one `repoint`.
+  answered by its one `repoint`. Each `at` is answered once: a body naming one
+  twice is `400 invalid_body`, naming both rows.
 - **`to: <key>`** replaces the entry in that field's chain where it stood,
-  each key once. **`to: null`** removes it; a chain left empty clears the field,
+  each key once; `to` naming the entry being removed is refused at the field
+  (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field,
   so the job resolves as an unset one does. `{"assistant": "deep_work"}` with
   `null` removes the `assistant.deep_work` block.
 - The entry leaves `providers.llm` and `providers.llm_order`.
@@ -2188,7 +2192,8 @@ answers nothing, is `422 validation_error` with one problem per reference
 (`kind: "conflict"`, its `segments` the written field, its `seat`, and a message
 such as "qa's reviewing work still names codex-review: repoint it or leave it
 unset in the same write") and `references`, every written reference as
-`{at, segments, chain}`. A dry run with an empty body is how a page draws the
+`{at, segments, chain}`. A `repoint` that answers nothing is located at its own
+row, `segments: ["repoint", i, "at"]` (`kind: "unknown_value"`). A dry run with an empty body is how a page draws the
 list.
 
 **A move nobody wrote is a warning.** A seat's job that names no model runs on
@@ -2198,11 +2203,14 @@ Each such move is a warning of kind `resolution_moved` with the seat (`seat`),
 the job (`ref`), the model it ran on (`from`), the one it will (`to`) and a
 sentence ("pm's memory and summaries will run on aux"), in the dry run and in the
 write's answer. Resolution is the engine's own, so the warning says exactly
-where the work lands.
+where the work lands. A job the seat names no model for but whose executor
+names one runs on that executor's chain, and moves with the executor's
+`repoint`, so it is not warned about. Removing the company's last model leaves
+`to` empty, and the sentence says the job will have no model to run on.
 
 Answers: a dry run `200 {valid, base_revision_id, warnings, derived}`, a write
 `201 {revision_id, epoch, warnings, derived}`. Refusals: `404 no_such_entity`,
-`409 revision_advanced`, `409 config_managed` (a managed document),
+`409 revision_advanced`, `403 config_managed` (a managed document),
 `412 version_moved` (the entry changed since its `ETag`), `422 validation_error`
 and `400 summary_required`.
 
@@ -2478,7 +2486,7 @@ provider the catalogue does not list.
    that changes how it signs in, validated by splicing it into a copy of the
    active document as the entity route's dry run does (`422 validation_error`
    with problems under `providers.llm.<key>`). `404 not_found` for an absent key
-   with no `entity`; `409 config_managed` for a draft on a managed document.
+   with no `entity`; `403 config_managed` for a draft on a managed document.
 2. Every name must be a variable the entry reads (`422 validation_error` at
    `["values", NAME]`), and a value of the wrong kind by its vendor's prefix (an
    API key in a token's slot, or the reverse) is refused there too, before any
