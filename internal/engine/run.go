@@ -316,6 +316,14 @@ type Engine struct {
 	// ([modelRetries]).
 	retries modelRetries
 
+	// signIns is the device sign-ins this node runs, and the watch that
+	// hears their cancels ([deviceSignIns]).
+	signIns deviceSignIns
+
+	// testNode is the node id an engine built with no node answers for
+	// itself: a case standing up several engines on one coordination store.
+	testNode string
+
 	// applying serialises [Engine.Apply] against [Engine.Drain], and stopped,
 	// which it guards, is what refuses an apply once a drain has begun. See
 	// [Engine.Apply].
@@ -2025,6 +2033,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.startHostLogins(ctx)
 	// THE RETRIES PEOPLE ASKED FOR, applied as every node hears them.
 	e.startModelRetries(ctx)
+	e.startDeviceSignIns(ctx)
 	// LAST, because its fleet-singleton duty is claimed under the node's
 	// own incarnation.
 	if err := e.startSandboxWaiter(ctx); err != nil {
@@ -2661,6 +2670,9 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopRunnerProbe()
 	e.stopHostLogins()
 	e.stopModelRetries()
+	// A SESSION THIS NODE RUNS ENDS AS FAILED, its record saying why, so
+	// the person starts again on a node that is up.
+	e.stopDeviceSignIns()
 	// AFTER THE DRAIN AND AFTER EVERY LOOP, which is what the admission
 	// says: the key means "this process may be publishing", so withdrawing
 	// it while a seat was still finishing a turn would tell a coordinator

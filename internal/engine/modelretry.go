@@ -315,10 +315,10 @@ func (e *Engine) liveModelRows(ctx context.Context) (map[string][]coord.ModelSta
 	return out, nil
 }
 
-// selfNode is this node's id, empty for an engine with no node (a test's).
+// selfNode is this node's id: its node's, or the one a test names.
 func (e *Engine) selfNode() string {
 	if e.node == nil {
-		return ""
+		return e.testNode
 	}
 	return e.node.ID()
 }
