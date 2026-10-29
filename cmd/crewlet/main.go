@@ -37,6 +37,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -255,7 +256,8 @@ func usage(w io.Writer) {
 Usage:
   crewlet run [flags]         Run the engine (API, agents and workers by default)
                               -roles data|ingress|seats|workers narrows what this node does
-  crewlet validate [flags]    Check both config tiers without starting anything
+  crewlet validate [flags]    Check both config tiers, or one document — a repository's
+                              .crewlet/checks.yaml among them — without starting anything
   crewlet schema [tier]       Print a tier's JSON Schema (company by default)
   crewlet migrate [config]    Apply pending schema migrations (-check reports only)
   crewlet budgets show        Show the durable token counters: each scope's day,
@@ -520,7 +522,8 @@ func nameTheNeighbour(path string, err error) error {
 		err, neighbour, defaultBootstrapPath, neighbour)
 }
 
-// Tier is which config document a validation is about.
+// Tier is which document a validation is about: one of the two config tiers,
+// or a repository's checks file.
 //
 // A NAMED TYPE with a closed set, because the value decides which validator
 // runs and an unrecognised one must be a refusal rather than a silent fall
@@ -535,10 +538,15 @@ const (
 	TierCompany Tier = "company"
 	// TierBootstrap is Tier A: this node's broker, store and API.
 	TierBootstrap Tier = "bootstrap"
+	// TierChecks is a repository's `.crewlet/checks.yaml` (code.ParseChecks):
+	// no config at all, but a document its author checks the same way before
+	// pushing it, so a check's typo is found on a laptop rather than by the
+	// first change it should have run on.
+	TierChecks Tier = "checks"
 )
 
 // tiers is the closed set, for the flag's error and for validation.
-var tiers = []Tier{TierAuto, TierCompany, TierBootstrap}
+var tiers = []Tier{TierAuto, TierCompany, TierBootstrap, TierChecks}
 
 func (t Tier) Valid() bool {
 	return slices.Contains(tiers, t)
@@ -561,6 +569,13 @@ func (t Tier) Valid() bool {
 // scored nothing on either side and was reported undecidable — the commonest
 // authoring shape, and the one a `crewlet validate -json` fix loop is most
 // often pointed at.
+//
+// A CHECKS FILE is told by `checks:` beside no key either config tier owns:
+// neither tier has a `checks` key (TestTheTierVocabulariesShareNoKey holds
+// it), so a document that carries one and nothing of either tier is a
+// repository's checks file whatever else it carries — a typo'd key beside
+// `checks:` is then refused by the checks file's own strict reading, at its
+// line, rather than reported as a document no tier could be told from.
 //
 // An UNDECIDABLE document is an error naming -tier, never a guess. Guessing
 // wrong reports every field of the file as invalid, and an operator reading
@@ -586,18 +601,25 @@ func detectTier(raw []byte) (Tier, error) {
 			bootstrap++
 		}
 	}
+	_, checks := doc[checksFileKey]
 	switch {
 	case company > bootstrap:
 		return TierCompany, nil
 	case bootstrap > company:
 		return TierBootstrap, nil
+	case company == 0 && checks:
+		return TierChecks, nil
 	default:
 		return "", fmt.Errorf(
 			"cannot tell which tier this document is: it carries %d key(s) "+
 				"only a company has and %d only a bootstrap has. Name it with "+
-				"-tier company or -tier bootstrap", company, bootstrap)
+				"-tier company, -tier bootstrap or -tier checks", company, bootstrap)
 	}
 }
+
+// checksFileKey is the one key a repository's checks file holds, which no
+// config tier has.
+const checksFileKey = "checks"
 
 // validation is what one `crewlet validate` run found.
 //
@@ -652,7 +674,8 @@ func validateConfigs(args []string, stdout, stderr io.Writer) error {
 	fs.SetOutput(stderr)
 	cfg := addConfigFlags(fs)
 	tier := fs.String("tier", string(TierAuto),
-		"which document a positional file is: auto, company or bootstrap")
+		"which document a positional file is: auto, company, bootstrap or checks (a repository's "+
+			code.ChecksFilePath+")")
 	asJSON := fs.Bool("json", false,
 		"emit {valid, tier, file, problems, warnings, summary} instead of prose")
 	if err := fs.Parse(args); err != nil {
@@ -666,7 +689,7 @@ func validateConfigs(args []string, stdout, stderr io.Writer) error {
 	file, given := onePositional(fs, file)
 	if given > 1 {
 		fmt.Fprintln(stderr,
-			"usage: crewlet validate [<file.yaml>] [-tier auto|company|bootstrap] [-json]\n"+
+			"usage: crewlet validate [<file.yaml>] [-tier auto|company|bootstrap|checks] [-json]\n"+
 				"   or: crewlet validate [-config <tier-a.yaml>] [-company <tier-b.yaml>] [-json]")
 		return errors.New("name at most one document")
 	}
@@ -702,6 +725,25 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 			return report(stdout, res, asJSON)
 		}
 		res.Tier = detected
+	}
+
+	if res.Tier == TierChecks {
+		// A REPOSITORY'S CHECKS FILE, read as the home git node reads it
+		// from the target branch it governs — one parser, so a file that
+		// passes here is one the code host runs, and every fault is
+		// located at its field and its line as a config's is.
+		checks, checksErr := code.ParseChecks(raw)
+		if checksErr != nil {
+			res.Problems = config.Problems(checksErr)
+			return report(stdout, res, asJSON)
+		}
+		names := make([]string, len(checks.Checks))
+		for i, c := range checks.Checks {
+			names[i] = c.Name
+		}
+		res.Valid = true
+		res.Summary = map[string]any{"checks": len(names), "names": names}
+		return report(stdout, res, asJSON)
 	}
 
 	if res.Tier == TierBootstrap {
@@ -956,6 +998,15 @@ func warningKind(kind string) string {
 
 // summaryLine is the one prose line a successful validation prints.
 func summaryLine(res validation) string {
+	if names, ok := res.Summary["names"].([]string); ok && res.Tier == TierChecks {
+		switch len(names) {
+		case 0:
+			return fmt.Sprintf("%s: no checks", res.File)
+		case 1:
+			return fmt.Sprintf("%s: 1 check (%s)", res.File, names[0])
+		}
+		return fmt.Sprintf("%s: %d checks (%s)", res.File, len(names), strings.Join(names, ", "))
+	}
 	if name, ok := res.Summary["company"].(string); ok {
 		line := fmt.Sprintf("%s: %d agent seats, %d LLM providers",
 			name, res.Summary["seats"], res.Summary["llm_providers"])

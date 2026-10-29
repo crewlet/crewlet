@@ -314,7 +314,7 @@ type RunRepo struct {
 // (gitref.ValidRepoName), a canonical repository id, a base that is "" or a
 // whole commit id, a branch name git and the code host both take
 // (gitref.ValidBranch), a valid access, and at most [MaxConePaths] cone paths,
-// each a clean directory inside the repository (conePathProblem says what
+// each a clean directory inside the repository ([ConePathProblem] says what
 // that holds a path to).
 //
 // ONE GRAMMAR for every reader: the launch that resolves a run's repositories
@@ -339,14 +339,14 @@ func (r RunRepo) Validate() error {
 			MaxConePaths, len(r.Paths))
 	}
 	for i, p := range r.Paths {
-		if why := conePathProblem(p); why != "" {
+		if why := ConePathProblem(p); why != "" {
 			return fmt.Errorf("sandbox: repository %s: paths[%d] %q %s", r.Repo, i, p, why)
 		}
 	}
 	return nil
 }
 
-// conePathProblem is why p cannot be a directory of a repository's cone — ""
+// ConePathProblem is why p cannot be a directory of a repository's cone — ""
 // when it can be one. A cone path is relative to the repository's root and
 // already clean: no leading or trailing slash and no empty, "." or ".."
 // component, so one directory has one spelling and none reaches outside the
@@ -357,7 +357,14 @@ func (r RunRepo) Validate() error {
 // no space at either end, which git trims from a cone's directory before it
 // writes one (sparse-checkout's strbuf_trim), so " src" would check out src;
 // and at most [MaxConePathBytes].
-func conePathProblem(p string) string {
+//
+// EXPORTED FOR THE ONE OTHER PLACE A CONE IS WRITTEN: a repository's
+// .crewlet/checks.yaml names the cone its check's box checks out
+// (internal/code's ParseChecks), and that cone becomes a box's clone step as a
+// run's does, so a file is held to the rule the step is written under rather
+// than to a second reading of it — one the box would refuse at setup, after
+// the check had taken its box.
+func ConePathProblem(p string) string {
 	switch {
 	case p == "":
 		return "is empty"

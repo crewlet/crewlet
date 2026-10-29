@@ -10,7 +10,7 @@ subcommand below is served by it.
 | Command | Description |
 |---------|-------------|
 | `crewlet run [config.yaml]` | Read Tier A bootstrap (positional, or `-config`; default `./crewlet.yaml`), connect to DB, run engine; falls into unconfigured state if no active revision |
-| `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
+| `crewlet validate [file.yaml]` | Validate a Tier A or Tier B YAML, or a repository's `.crewlet/checks.yaml`, and print a summary (`-json` for located, classified problems and warnings); with no positional it checks both tiers via `-config` and `-company` |
 | `crewlet migrate [config.yaml]` | Apply pending schema migrations (Tier A file, default `./crewlet.yaml`). Every process migrates on open, so this is a way to do it *without* starting one — `-check` reports pending work and exits non-zero without applying it |
 | `crewlet budgets show [config]` | Print each scope's day, ISO week and month on the company clock — spend, ceiling (`unlimited` where none), the engine's `STATE` (`ok`, `near`, `refusing`), when the window turns over and `LAST REFUSED` — read from a running node, because the counters are the fleet's and not this file's. Any token reads it — budgets are everybody's overview. There is no reset: a window's allowance comes back when the window turns over |
 | `crewlet backup -dir PATH [config]` | Copy a running node's store files **and** its stream estate into one verified directory on the *engine's* host — the only way to copy either, since the store is locked to that process and the embedded broker binds no socket. The token takes `admin`. See [Backups & Restore](../guides/backup.md) |
@@ -734,12 +734,13 @@ The store is shared, so this is run **once for the fleet**, not once per node. A
 ## `crewlet validate`
 
 ```
-crewlet validate [<file.yaml>] [-tier auto|company|bootstrap] [-json]
+crewlet validate [<file.yaml>] [-tier auto|company|bootstrap|checks] [-json]
 crewlet validate [-config <tier-a.yaml>] [-company <tier-b.yaml>] [-json]
 ```
 
-Validates a config and prints a summary, reaching nothing: no broker, no
-store, no provider is dialled.
+Validates a config — or a repository's [checks
+file](../concepts/code-host.md#the-checks-file) — and prints a summary,
+reaching nothing: no broker, no store, no provider is dialled.
 
 **Two forms, because it has two jobs.** Name **one file** and it validates
 that document. Name **neither** and it validates both tiers together, from
@@ -769,20 +770,30 @@ hold their work until a provider is added (see
 
 | Flag | Description |
 |------|-------------|
-| `-tier` | Which tier a positional file is. `auto` (default) reads the document's **keys**, not its filename. The two tiers share no top-level key, so `name`/`roles`/`units`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A. A document that carries neither, or an equal count of both, is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
+| `-tier` | Which document a positional file is: `company`, `bootstrap` or `checks`. `auto` (default) reads the document's **keys**, not its filename. The two tiers share no top-level key, so `name`/`roles`/`units`/`providers` mean Tier B and `node`/`stream`/`store`/`coordination` mean Tier A; a document carrying `checks:` and no key of either tier is a repository's checks file — whatever else it carries, so a typo'd key beside `checks:` is refused at its own line by the checks file's reading. A document that carries none of them, or an equal count of both tiers', is **refused naming this flag** rather than guessed at: guessing wrong reports every field of the file as invalid, and an operator reading that cannot tell it from a genuinely broken document. |
 | `-json` | Emit a machine-readable result on stdout instead of prose. |
 | `-config` / `-company` | The two-tier form. Ignored when a positional file is given. |
 
-A Tier A document's prose summary names what it resolved to:
+A Tier A document's prose summary names what it resolved to, and a checks
+file's names its checks:
 
 ```
 crewlet.yaml: stream "nats", coordination "embedded-kv", store "…", roles [seats]
+.crewlet/checks.yaml: 2 checks (unit, lint)
 ```
+
+A **checks file** is read by the one parser the code host reads it with,
+strictly: every key it does not know, every key written twice, a value of the
+wrong shape and every value past its bound is a problem located at its field
+and line, as a config document's is ([The checks
+file](../concepts/code-host.md#the-checks-file)). It reaches nothing a
+repository holds: a check's secrets are named, never resolved.
 
 With `-json`, the payload is `{"valid": bool, "tier": str, "file": str,
 "problems": [...], "warnings": [...], "summary": {...}}`. `summary` is what the
 document resolved to: a Tier B file's `company`, `seats` and `llm_providers`;
-a Tier A file's `stream`, `coordination`, `store` and `roles`; and for the
+a Tier A file's `stream`, `coordination`, `store` and `roles`; a checks file's
+`checks`, how many it defines, and `names`, theirs in its order; and for the
 two-tier form the company's three beside `stream` and `coordination`. Each
 problem is located and classified, so an editor,
 CI job, or [AI authoring loop](../getting-started/ai-authoring.md) can fix

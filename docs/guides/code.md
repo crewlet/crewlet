@@ -326,6 +326,75 @@ together or not at all. More options shape it:
 Whoever may push the branch may open a change from it: the push's own update
 is the check ([A change a push opens](../concepts/code-host.md#a-change-a-push-opens)).
 
+## Adding checks
+
+A repository's checks — the builds, tests and linters a change is measured
+by — live in the repository itself, in `.crewlet/checks.yaml` at the root of
+its tree:
+
+```yaml
+checks:
+  - name: unit
+    run: make test
+    timeout_seconds: 900
+    report:
+      junit: out/junit.xml
+  - name: lint
+    run: make lint
+    timeout_seconds: 300
+    paths: ["**/*.go", .golangci.yml]
+  - name: web
+    run: npm ci && npm test
+    timeout_seconds: 1200
+    checkout: [web]
+    env: [NPM_TOKEN]
+```
+
+Three keys are required — a `name`, the command to `run`, and its
+`timeout_seconds` — and the rest narrow it: `paths` runs a check only for a
+change touching one of its globs, `report` names the JUnit or SARIF file it
+writes, `run_in` picks a container on a git node or a remote `e2b` box,
+`checkout` checks out a cone of directories (or `none`), and `env` names the
+company's check secrets it is given. Every key, its bound and why is in [The
+checks file](../concepts/code-host.md#the-checks-file).
+
+1. **Write the file, and check it before you push it.** It is read strictly,
+   as a config document is — an unknown key, a key written twice, a number
+   where text belongs (`name: 1.10` is a number: quote it) are refused — and
+   `crewlet validate` reads it exactly as the code host does, with no node,
+   no network and no credential:
+
+   ```bash
+   crewlet validate .crewlet/checks.yaml
+   # .crewlet/checks.yaml: 3 checks (unit, lint, web)
+   ```
+
+   A broken file names every fault at once, each at its field and line;
+   `-json` gives them as a fix loop reads them:
+
+   ```bash
+   crewlet validate .crewlet/checks.yaml -json
+   ```
+
+   ```json
+   { "valid": false, "tier": "checks", "file": ".crewlet/checks.yaml",
+     "problems": [ { "path": "checks[0].timeout_seconds", "kind": "out_of_range", "line": 4,
+       "message": "checks[0].timeout_seconds: value out of range: 99999 seconds: a check runs for 1 to 21600 seconds (code.CheckTimeoutCeiling, six hours) (line 4)" } ],
+     "warnings": [] }
+   ```
+
+2. **Never `run_in: direct`.** A check runs a change's own code; `direct` would
+   run it as the engine's own user on the engine host, so the file refuses it,
+   as it refuses `self`.
+
+3. **Land it on the branch it governs.** A change's checks are the ones its
+   *target* branch defines, never its own: a change that edits `checks.yaml` is
+   checked by the file it edits, and its edit governs the changes after it
+   lands.
+
+Nothing runs a check yet in this release: the file is defined and validated
+([What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)).
+
 ## What your seats read
 
 Nothing to set up: once the company hosts code, every seat holds the seven

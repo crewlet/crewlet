@@ -60,8 +60,12 @@ This is the product's current shape, not a configuration choice:
   no live turn holds ([Repositories made by tools](#repositories-made-by-tools));
   the tools that ask it arrive with seats' code writes, so today every
   repository is one `code.repos` declares.
-- **Only a push opens a change, only its home asks for its review, and there
-  are no checks.** A push opens a [change](#changes) from its options
+- **No check runs yet.** A repository defines its checks in
+  `.crewlet/checks.yaml`, and `crewlet validate` reads that file as the code
+  host does ([Checks](#checks)); nothing queues, runs or gates on one in this
+  release.
+- **Only a push opens a change, and only its home asks for its review.** A
+  push opens a [change](#changes) from its options
   ([A change a push opens](#a-change-a-push-opens)); a repository's committer
   decides a change's opening, its edits and its close, a push to a change's
   branches writes its revisions, merges it or closes it, the repository's home
@@ -1301,6 +1305,85 @@ sentence:
 `crewlet.code.conversation.writes` counts every write of a conversation a
 node's change writer was asked to decide, by its write and what became of it
 (the [metrics reference](../reference/metrics.md)).
+
+---
+
+## Checks
+
+A repository defines its **checks** — the builds, tests and linters a change
+is measured by — in one file at the root of its tree, `.crewlet/checks.yaml`.
+A check is a measurement of a commit, so it is defined beside the code it
+measures and moves with it: a new test target lands in the change that adds
+the tests. But a change is never judged by a definition it brought. The file
+that governs a change's checks is the one its **target** branch holds, so a
+change that edits `checks.yaml` is checked by the file it edits, never by its
+own edit.
+
+Which checks a protected branch **requires** is not the file's to say either:
+that is its protection rule's, so a file can never mark its own checks
+optional. And where a check may run, how long a company lets one run and
+which secrets exist to be handed to one are the company's configuration's:
+the file names, the company decides.
+
+### The checks file
+
+```yaml
+checks:
+  - name: unit                 # required
+    run: make test             # required
+    timeout_seconds: 600       # required
+    paths: ["**/*.go", go.mod] # run only for a change touching one of these
+    report:
+      junit: out/junit.xml
+      sarif: out/lint.sarif
+    run_in: container          # or e2b
+    checkout: [cmd, internal]  # a cone, or none
+    env: [NPM_TOKEN]
+  - name: api-shape
+    run: ./scripts/api-shape.sh
+    timeout_seconds: 120
+    checkout: none
+```
+
+The file is a mapping holding `checks:` and nothing else — `checks: []`
+defines none — and each check is a mapping of these keys and no other:
+
+| Key | Required | What it says |
+|---|---|---|
+| `name` | yes | The check's name: a lower-case letter or digit, then up to 63 lower-case letters, digits, dots, underscores and hyphens — once in the file. It is the check's key in every row and on the token its box fetches with, so `unit` and `Unit` are never two checks |
+| `run` | yes | The command, handed to `sh -c` whole: a line, or a script a block scalar (`run: \|`) spells over several. At most 4 KiB — a longer script belongs in the repository, where it is reviewed as code |
+| `timeout_seconds` | yes | How long it may run: a whole number, 1 to 21 600 — six hours, GitHub Actions' per-job ceiling, so no job moved from a pipeline has to be cut. A company holds its checks to its own ceiling at or under that |
+| `paths` | no | At most 32 path globs, in the grammar [path owners](#path-owners) use — `*` within a component, `**` for whole components, relative to the repository's root — of which a change must touch one for the check to run on it. None runs it on every change |
+| `report` | no | `junit` and `sarif`: the files the check writes its results to, each a path inside its checkout, read once the command ends. With neither, a check is judged by its exit code alone |
+| `run_in` | no | `container` — a container on a git node — or `e2b`, a remote box; unset is the company's choice. **`direct` and `self` are refused by name**: a check runs a change's own code, which `direct` would run as the engine's own user on the engine host, reading what the engine reads, and `self` is a seat's own executor box, which no check has |
+| `checkout` | no | What of the tree the check's box checks out: all of it (unset), a **cone** — at most 64 directories, git's sparse checkout, each a clean directory inside the repository — or `none`, for a check that reads what it needs by object id through the API instead of a clone |
+| `env` | no | At most 32 variable names, each the key of an entry in the company's check secrets: the secrets this check is given. A check is given none it does not name |
+
+**It is read strictly**, as a config document is, because a check that quietly
+does something other than what its file says is worse than one that is
+refused: a typo'd `timout_seconds:` ignored would run the check under no
+timeout its author believes it has, and a typo'd `paths:` ignored would run it
+on every change instead of the few it meant. So the file is refused for:
+
+- a key it does not know, or one written twice — YAML keeps the last of two
+  and a person reading the file the first;
+- a value of the wrong shape: a number or a boolean where text belongs, which
+  YAML reads without a word (`name: 1.10` is the number 1.1; quote it), a
+  fraction where a whole number of seconds belongs, a word where a list
+  belongs;
+- an alias or a merge key (`<<`), which spell a check somewhere other than
+  where it stands;
+- more than one YAML document, more than 64 checks, or more than 64 KiB;
+- every value outside its bound above.
+
+Every fault is reported, not the first, each at its field and its line, in the
+shape a config document's are: `crewlet validate .crewlet/checks.yaml` reads
+the file as the code host does, told apart from either config tier by its lone
+`checks:` ([`crewlet validate`](../reference/cli.md#crewlet-validate)):
+
+```
+.crewlet/checks.yaml: 2 checks (unit, api-shape)
+```
 
 ---
 

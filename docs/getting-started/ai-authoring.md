@@ -339,6 +339,11 @@ the flag** rather than guessed at: guessing wrong reports every field of the
 file as invalid, and a fix loop reading that has no way to tell it from a
 genuinely broken document. Force it with `-tier company` / `-tier bootstrap`.
 
+The same loop checks a repository's `.crewlet/checks.yaml` — told apart by its
+lone `checks:`, or forced with `-tier checks` — with every problem located at
+its field and line in the same payload ([The checks
+file](../concepts/code-host.md#the-checks-file)).
+
 ---
 
 ## Editor autocomplete
