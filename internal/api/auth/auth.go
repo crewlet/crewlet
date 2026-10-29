@@ -67,12 +67,14 @@
 // and a node's identity 503 are the same sentences the API's envelope carries,
 // in one line.
 //
-// A CODING BOX is git's other client, and the code host's third edge a box
+// A BOX is git's other client, and the code host's third edge a coding box
 // reaches beside /mcp/ and /otlp/: /box/git/ ([BoxGitPrefix]), public and
-// exempt from the guard like them, admitted by its run's own token — a Basic
-// password this guard never reads — and classified by the same [GitAccess].
-// Neither transport takes the other's credential: a person's token is no run
-// token, and a run token is no person's.
+// exempt from the guard like them, admitted by the box's own token — a coding
+// run's or a check's, a Basic password this guard never reads — and
+// classified by the same [GitAccess]. A check's box reads its commit by object
+// id under /box/code/ ([BoxCodePrefix]), public and exempt on the same terms.
+// Neither transport takes the other's credential: a person's token is no box
+// token, and a box's token is no person's.
 //
 // # And two gates beside it
 //
@@ -114,9 +116,11 @@ var log = logging.Get("api.auth")
 //     credential. Both are reached from INSIDE a sandbox, which is the one
 //     place the API's own token must never go — it reads the whole company,
 //     and the box is running generated code. See internal/runtoken.
-//   - /box/git/: a coding box's git, for the same reason, with its run's
-//     signed token as a Basic password rather than in the path, because git
-//     presents a credential no other way ([BoxGitPrefix]).
+//   - /box/git/: a box's git, for the same reason, with its run's or its
+//     check's signed token as a Basic password rather than in the path,
+//     because git presents a credential no other way ([BoxGitPrefix]); and
+//     /box/code/, a check's box's reads of its commit, with the same
+//     credential its git presents ([BoxCodePrefix]).
 //   - the dashboard shell and its assets: the page that prompts for the token
 //     cannot itself require one. It ships no data — every byte it renders comes
 //     from an authenticated fetch.
@@ -168,10 +172,11 @@ var unguardedPrefixes = slices.Concat(publicPrefixes, []string{
 // publicPrefixes are the routes OUTSIDE PARTIES call: a vendor delivering a
 // webhook or returning a browser from its app flow, and a sandbox box exporting
 // telemetry, calling its seat's tools or — a coding box — fetching and pushing
-// its run's repositories. None of them holds a person's or a deployment's
+// its run's repositories, or — a check's box — fetching and reading the one
+// commit its check measures. None of them holds a person's or a deployment's
 // credential, each authenticates by its own (a provider signature, a per-run
-// signed token), and they are the only routes a deployment has to publish
-// beyond the people who run it.
+// or per-check signed token), and they are the only routes a deployment has
+// to publish beyond the people who run it.
 //
 // ONE LIST DECIDES THREE THINGS, and that is why it is one list: what the
 // dedicated public listener (Tier A api.public) serves and api.port then
@@ -185,7 +190,7 @@ var unguardedPrefixes = slices.Concat(publicPrefixes, []string{
 // copy: [unguardedPrefixes] is derived from it once, at init, so a slice
 // anybody could append to would move the partition without moving the
 // exemptions, and the guarantee above would stop holding with nothing failing.
-var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, BoxGitPrefix}
+var publicPrefixes = []string{WebhookPrefix, OTLPPrefix, mcpbridge.PathPrefix, BoxGitPrefix, BoxCodePrefix}
 
 // PublicPrefixes is a copy of the prefixes of the routes outside parties call.
 // See [publicPrefixes].
@@ -554,12 +559,13 @@ const SocketPath = "/ws/stream"
 // would be a session on the whole API. The bearer header wins when both are
 // present.
 //
-// NOT ON A CODING BOX'S ([BoxGitPrefix]), though [GitAccess] classifies its
-// requests as git: a box's Basic password is its RUN'S token, which the code
-// host's box admission reads and verifies, and the rule above is a rule about
-// persons. Read here it would be one more credential this guard looked at —
-// marking the request anonymous on an unguarded route ([Guard.Middleware])
-// for nothing — and a run token is no credential of this guard's at all.
+// NOT ON A BOX'S ([BoxGitPrefix], [BoxCodePrefix]), though [GitAccess]
+// classifies a box's git requests as git: a box's Basic password is its RUN'S
+// or its CHECK'S token, which the code host's box admission reads and
+// verifies, and the rule above is a rule about persons. Read here it would be
+// one more credential this guard looked at — marking the request anonymous on
+// an unguarded route ([Guard.Middleware]) for nothing — and a box's token is
+// no credential of this guard's at all.
 func (g *Guard) Credential(r *http.Request) string {
 	header := r.Header.Get("Authorization")
 	const scheme = "bearer "

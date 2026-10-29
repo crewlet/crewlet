@@ -29,13 +29,19 @@ type Estate interface {
 	RepoState(ctx context.Context, q code.StateQuery) (code.RepoSnapshot, error)
 	Propose(ctx context.Context, p code.Proposal) (code.ProposeResult, error)
 	PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.PushOutcome, error)
+	// Read is a read of the code host's rows by its kind: a check's box's
+	// admission reads the attempt its token names (code.ReadCheckBox,
+	// checkadmit.go).
+	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 }
 
-// Boxes is what admits a coding box (boxadmit.go): the tokens it verifies and
-// the run rows its grants come from.
+// Boxes is what admits a box (boxadmit.go): a coding run's tokens and the run
+// rows its grants come from, and a check's tokens — whose box is admitted by
+// its attempt's row, which the Estate reads (checkadmit.go).
 type Boxes struct {
 	Tokens *BoxTokens
 	Runs   Runs
+	Checks *CheckTokens
 }
 
 // Runs is the coding runs' rows as a box's admission reads them — the sandbox
@@ -229,10 +235,11 @@ type Options struct {
 	// admits no coding box from the chart the fleet replaced
 	// (code.UnreadyBehindConfig). nil is current.
 	Current func() bool
-	// Boxes admits a coding box to /box/git/: the run tokens it verifies and
-	// the run rows its grants and floor are read from. Both halves required,
-	// as every field the host needs: a git node serves boxes whatever its
-	// company runs, since a box's run may have been launched by any node.
+	// Boxes admits a box to /box/git/: the run tokens a coding box presents
+	// and the run rows its grants and floor are read from, and the check
+	// tokens a check's box presents. Every part required, as every field the
+	// host needs: a git node serves boxes whatever its company runs, since a
+	// box's run may have been launched, and a check's box made, by any node.
 	Boxes Boxes
 	// NodeID is this node, which a proposal names as the one that received
 	// the push.
@@ -331,6 +338,7 @@ func New(o Options) (*Server, error) {
 	need(o.Share == nil, "Share")
 	need(o.Boxes.Tokens == nil, "Boxes.Tokens")
 	need(o.Boxes.Runs == nil, "Boxes.Runs")
+	need(o.Boxes.Checks == nil, "Boxes.Checks")
 	need(strings.TrimSpace(o.NodeID) == "", "NodeID")
 	need(o.Timing.PendingGrace <= 0, "Timing.PendingGrace")
 	need(o.Timing.PendingFirst <= 0, "Timing.PendingFirst")

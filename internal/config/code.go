@@ -464,9 +464,12 @@ func validDomainName(s string) bool {
 //
 // LOWERCASE AND NO SPACE because a name is matched exactly wherever it is
 // read and is typed on command lines: two spellings of one name would be two
-// checks, and a name with a space one a shell splits. And nothing a URL
-// escapes or a `~`, since a name rides a route unescaped and the token a
-// check's box fetches with joins its parts by a `~` no name holds.
+// checks, and a name with a space one a shell splits. And nothing any URL
+// encoder escapes — a `~` among them, which some (Java's URLEncoder) write
+// `%7E` — since a name rides a route as it is spelled. The token a check's box
+// fetches with carries its name base64url-encoded (internal/code/host's
+// CheckTokens), so no character a name holds is ever the token's: a `.`,
+// which this rule admits, is the token's own separator.
 func ValidCodeCheckName(name string) bool {
 	if name == "" || len(name) > CodeMaxCheckNameBytes {
 		return false

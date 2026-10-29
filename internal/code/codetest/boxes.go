@@ -44,6 +44,18 @@ func NewBoxTokens(t testing.TB) *host.BoxTokens {
 	return tokens
 }
 
+// NewCheckTokens is a check's box's token signer over the fleet's keyring, as
+// each git node builds its own over the keyring every node is configured
+// with: a check token one mints, every node of the fleet verifies.
+func NewCheckTokens(t testing.TB) *host.CheckTokens {
+	t.Helper()
+	tokens, err := host.NewCheckTokens(boxKeyring, nil)
+	if err != nil {
+		t.Fatalf("codetest: check tokens over the fleet's keyring: %v", err)
+	}
+	return tokens
+}
+
 // FixtureRuns is the fleet's coding runs' rows, in memory: the [host.Runs]
 // every git node of a fleet admits a box by. A case launches a run on it
 // (Launch), ends, relaunches or removes it, stops its seat, and makes the
@@ -269,6 +281,17 @@ const BoxUser = host.BoxUser
 func NewBox(t testing.TB, f Fleet, ref host.BoxRunRef) *Person {
 	t.Helper()
 	return clientWith(t, f.ClientGit(), BoxUser, f.Runs().Token(ref))
+}
+
+// CheckUser is the Basic user name a check's box presents (host.CheckUser).
+const CheckUser = host.CheckUser
+
+// NewCheckBox is a check's box's git presenting token, its check's: a client
+// whose credential helper answers a node's challenge as host.CheckUser, on
+// the git the fleet's persons run (Fleet.ClientGit).
+func NewCheckBox(t testing.TB, f Fleet, token string) *Person {
+	t.Helper()
+	return clientWith(t, f.ClientGit(), CheckUser, token)
 }
 
 // BoxURL is repo's URL under /box/git/ through n.

@@ -1095,7 +1095,8 @@ api:
 | `/webhooks/*` — every vendor delivery, the Slack OAuth landing, the GitHub App return | `api.public` only |
 | `/otlp/{token}/v1/{signal}` — sandbox telemetry | `api.public` only |
 | `/mcp/{token}` — the agent-mode tool bridge | `api.public` only |
-| `/box/git/*` — a coding box's git, on a node whose roles name `git` | `api.public` only |
+| `/box/git/*` — a box's git, a coding box's or a check's, on a node whose roles name `git` | `api.public` only |
+| `/box/code/*` — a check's box's reads of its commit, on a node whose roles name `git` | `api.public` only |
 | everything else: `/health`, `/ready`, `/dashboard` and its assets, the sign-in routes under `/auth`, every REST read, `/ws/stream`, `/config`, `/secrets`, `/setup`, `/iam/*`, `/operator/*`, `/backup`, `/fleet/*`, `/work/*` | `api.port` only |
 
 `api.port` answers a public route with `404 no_route` and a hint naming
@@ -1106,22 +1107,27 @@ a path nothing serves: the same `404`, the same generic hint, nothing that says
 an admin port exists behind it. It requires no credential and decides
 before the guard runs, so `/config` there is that same `404` whatever
 credential is sent. The split
-is the engine's own, from one list (the `/webhooks/`, `/otlp/`, `/mcp/` and
-`/box/git/` prefixes, the routes that authenticate by a provider signature or a
-signed per-run token rather than by a person's or a token's credential), so
-there is no allow-list to keep in step with the routes a release adds.
+is the engine's own, from one list (the `/webhooks/`, `/otlp/`, `/mcp/`,
+`/box/git/` and `/box/code/` prefixes, the routes that authenticate by a
+provider signature or a signed per-run or per-check token rather than by a
+person's or a token's credential), so there is no allow-list to keep in step
+with the routes a release adds.
 
 **Why the sandbox endpoints are public.** A remote sandbox (E2B's cloud) runs
 on somebody else's network and reaches only what you publish; it calls
 `/otlp/{token}` and `/mcp/{token}` with the signed per-run token in the path,
-and a coding box reaches the code host's `/box/git/*` with its run's token as
-git's Basic password, never holding a credential of anybody's. Leaving them on
-`api.port` would force that port public for every company running remote
-sandboxes. Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and
-`CREWLET_MCP_BRIDGE_URL` at the public address. `/box/git/*` is mounted only on
-a node whose roles name `git`, so on a fleet the balancer in front of the
-public listener routes it to the git nodes, as it routes a person's `/git/` on
-`api.port` (see [Code Host → Coding boxes](../concepts/code-host.md#coding-boxes)).
+and a box reaches the code host's `/box/git/*` — a coding box with its run's
+token as git's Basic password, a check's box with its check's — never holding
+a credential of anybody's; a check's box reads the one commit its check
+measures at `/box/code/*` with the same credential. Leaving them on `api.port`
+would force that port public for every company running remote sandboxes.
+Point `CREWLET_SANDBOX_OTEL_RECEIVER_URL` and `CREWLET_MCP_BRIDGE_URL` at the
+public address. **`/box/git/*` and `/box/code/*` are mounted only on a node
+whose roles name `git`**, so on a fleet the balancer in front of the public
+listener routes both prefixes to the git nodes, as it routes a person's
+`/git/` on `api.port` (see [Code Host → Coding boxes](../concepts/code-host.md#coding-boxes)
+and [Check boxes](../concepts/code-host.md#check-boxes)); a node without the
+role answers them the mux's `404`.
 `CREWLET_BOX_GIT_URL` is that route as a box reaches it — the public address
 with `/box/git` on the end, naming a git node or the balancer over them, since
 any git node serves any box — and every node that runs seats sets it when the

@@ -191,18 +191,25 @@ func TestACompanyWithoutNativeCodeBuildsNoHost(t *testing.T) {
 }
 
 // A GIT NODE VERIFIES A BOX'S TOKEN, ITS CODE HOST BUILT OR NOT: the box
-// tokens are built at New over the fleet's keyring, whatever the company runs,
-// so a node whose box routes find no code host to serve them — which tells a
-// box why only once its token verifies (api.CodeSurface.VerifyBox) —
-// verifies a token another node of the fleet minted exactly as a node serving
-// the code host does, and refuses one another keyring signed.
+// tokens — a coding run's and a check's — are built at New over the fleet's
+// keyring, whatever the company runs, so a node whose box routes find no code
+// host to serve them — which tells a box why only once its token verifies
+// (api.CodeSurface.VerifyBox) — verifies a token another node of the fleet
+// minted exactly as a node serving the code host does, and refuses one another
+// keyring signed.
 //
-// Mutation: build the box tokens with the code host rather than at New — the
-// node serving none holds none, red.
+// Mutation: build the box tokens, or the check tokens, with the code host
+// rather than at New — the node serving none holds none, red.
 func TestAGitNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 	t.Parallel()
 	ref := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
 	stranger, err := host.NewBoxTokens(runtoken.OneKey("k", "another fleet's key"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := host.CheckRunRef{Repo: "web", Attempt: code.CheckKey{RepoID: uuid.NewString(),
+		OID: strings.Repeat("ab", 20), Name: "unit", Attempt: 1}}
+	strangerChecks, err := host.NewCheckTokens(runtoken.OneKey("k", "another fleet's key"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +244,21 @@ func TestAGitNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 			}
 			if _, signed := tokens.Verify(stranger.Mint(ref)); signed {
 				t.Error("a token another keyring signed verifies")
+			}
+			checks := e.CheckTokens()
+			if checks == nil {
+				t.Fatal("the node holds no check tokens")
+			}
+			peerChecks, err := host.NewCheckTokens(b.Secrets.TokenMaterial(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, signed := checks.Verify(peerChecks.Mint(check, time.Minute)); !signed || got != check {
+				t.Errorf("a check token the fleet's keyring signed verifies as %+v, %t; want %+v", got, signed,
+					check)
+			}
+			if _, signed := checks.Verify(strangerChecks.Mint(check, time.Minute)); signed {
+				t.Error("a check token another keyring signed verifies")
 			}
 		})
 	}

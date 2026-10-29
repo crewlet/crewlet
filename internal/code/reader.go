@@ -1476,6 +1476,12 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// repository's checks writer from its own snapshot.
 		query = q.checksQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.dueCheckWork(ctx, tx, q, &out) }
+	case ReadCheckBox:
+		// A POINT READ of the repository's checks, as a `check` read is: a
+		// box is never admitted by an attempt read around a record this node
+		// deferred on them.
+		query = q.checksQuery(fresh)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.checkBox(ctx, tx, q, &out) }
 	case ReadExpungeTips:
 		// A POINT READ OF THE REPOSITORY, as an `introduced` read is: a
 		// record this node deferred on the repository may carry a drop the
@@ -1531,6 +1537,8 @@ func (q ReadQuery) validate() error {
 		return q.validateChecksDue()
 	case ReadExpungeTips:
 		return q.validateExpungeTips()
+	case ReadCheckBox:
+		return q.validateCheckBox()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1555,6 +1563,8 @@ func (q ReadQuery) validate() error {
 	case q.Checks != nil && q.Kind != ReadChecks && q.Kind != ReadCheck:
 		return fmt.Errorf("%w: checks: only a checks or a check read names a change's, a commit's or an "+
 			"attempt's checks", ErrInvalid)
+	case q.CheckBox != nil:
+		return fmt.Errorf("%w: check_box: only a check_box read names an attempt by its key", ErrInvalid)
 	case q.ExpungeTips != nil:
 		return fmt.Errorf("%w: expunge_tips: only an expunge_tips read names a repository's ref drops", ErrInvalid)
 	case q.MinPacks != 0:
@@ -1687,6 +1697,8 @@ func (q ReadQuery) validateIntroduced() error {
 	case q.Checks != nil:
 		return refused("checks", "only a checks or a check read names a change's, a commit's or an attempt's "+
 			"checks")
+	case q.CheckBox != nil:
+		return refused("check_box", "only a check_box read names an attempt by its key")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
 	case q.Reviewer != "":
@@ -1765,7 +1777,8 @@ func (q ReadQuery) validateRunPushes() error {
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -1810,7 +1823,8 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1846,7 +1860,8 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1878,7 +1893,8 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
@@ -1921,7 +1937,8 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
-		{"checks_due", q.ChecksDue != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+

@@ -176,6 +176,9 @@ type GitOptions struct {
 	// one of the node's own over it (NewBoxTokens), as every node builds its
 	// own.
 	BoxTokens *host.BoxTokens
+	// CheckTokens verifies a check's box's token, over the fleet's keyring;
+	// nil is one of the node's own over it (NewCheckTokens).
+	CheckTokens *host.CheckTokens
 	// Audit is handed every push record the host publishes; nil keeps none.
 	Audit func(context.Context, types.OperatorActed)
 	// Fetched is handed every read of a `visibility: unit` repository the
@@ -330,6 +333,9 @@ func StartGitNode(t testing.TB, o GitOptions) *GitNode {
 	if o.BoxTokens == nil {
 		o.BoxTokens = NewBoxTokens(t)
 	}
+	if o.CheckTokens == nil {
+		o.CheckTokens = NewCheckTokens(t)
+	}
 	if o.Runs == nil {
 		o.Runs = NewFixtureRuns(o.BoxTokens)
 	}
@@ -400,7 +406,7 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		Audit: audit, Fetched: fetched, Limits: limits,
 		DeletedRetention: func() time.Duration { return deletedRetention },
 		Roster:           roster, Signer: signer, Share: n.share, Current: g.o.Current,
-		Boxes:  host.Boxes{Tokens: g.o.BoxTokens, Runs: g.o.Runs},
+		Boxes:  host.Boxes{Tokens: g.o.BoxTokens, Runs: g.o.Runs, Checks: g.o.CheckTokens},
 		NodeID: n.id, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
 	}); err != nil {
 		t.Fatalf("codetest: build %s's host: %v", n.id, err)

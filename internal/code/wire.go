@@ -826,6 +826,15 @@ const (
 	// the tip whose checks file defines what the home dispatches. The
 	// engine's own read, as `changes_due` is.
 	ReadChecksDue ReadKind = "checks_due"
+	// ReadCheckBox is the ONE attempt a check's box's token names, by its key
+	// ([ReadQuery.CheckBox]): its row as the rows hold it, in the answer's
+	// Checks — one row, or none. THE ENGINE'S OWN, as `checks_due` is: the
+	// box's admission to its repository (internal/code/host) reads it on
+	// every request, and a box is no principal — the row it reads is its
+	// authority — so it names no asker and is held to no grant. A kind of its
+	// own rather than a `check` read naming none, so that a principal's read
+	// that forgot its asker is refused rather than answered ungated.
+	ReadCheckBox ReadKind = "check_box"
 )
 
 // ReadKinds is the closed set.
@@ -835,12 +844,13 @@ const (
 // fields only a newer kind reads ride a request that build refuses whole, and
 // take no versionedFields row: `changes` and `change` are the only kinds that
 // read [ReadQuery.Change], State, Owner and Work, `run_pushes` the only one
-// that reads [ReadQuery.RunPushes], and `expunge_tips` the only one that reads
-// [ReadQuery.ExpungeTips].
+// that reads [ReadQuery.RunPushes], `expunge_tips` the only one that reads
+// [ReadQuery.ExpungeTips], and `check_box` the only one that reads
+// [ReadQuery.CheckBox].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadChangesDue,
-		ReadChecks, ReadCheck, ReadChecksDue}
+		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox}
 }
 
 // Valid reports a kind this build knows.
@@ -1046,6 +1056,13 @@ type ReadQuery struct {
 	// predates the kinds refuses the read as a kind it does not know.
 	Checks    *CheckQuery     `json:"checks,omitempty"`
 	ChecksDue *ChecksDueQuery `json:"checks_due,omitempty"`
+	// CheckBox is the attempt a `check_box` read is of, by its KEY — its
+	// repository by id, as the token that names it does: REQUIRED for that
+	// kind, refused on every other. An estate request's field and no
+	// record's, so it takes no versionedFields row: a node of a build that
+	// predates the kind refuses the read as a kind it does not know
+	// (ErrInvalid) — the box refused, never admitted by a row read as none.
+	CheckBox *CheckKey `json:"check_box,omitempty"`
 	// ExpungeTips is an `expunge_tips` read's repository and instant:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -1109,8 +1126,9 @@ type ReadAnswer struct {
 	DueChanges []ChangeDue `json:"due_changes,omitempty"`
 	Rechecks   []ChangeDue `json:"rechecks,omitempty"`
 	PathOwners []PathOwner `json:"path_owners,omitempty"`
-	// Checks is a page of a `checks` read, and Check a `check` read's one
-	// attempt whole.
+	// Checks is a page of a `checks` read — and a `check_box` read's one
+	// attempt as its row stands, or none where the rows hold no such attempt
+	// — and Check a `check` read's one attempt whole.
 	Checks []CheckRow   `json:"checks,omitempty"`
 	Check  *CheckDetail `json:"check,omitempty"`
 	// Tips is a page of an `expunge_tips` read: object ids, each once on the
@@ -2130,6 +2148,13 @@ func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
 // are ([ReadQuery]'s `compaction_due`), and for the same reason.
 func (k GitReadKind) EnginesOwn() bool { return k == GitRevisionFacts }
 
+// EnginesOwn reports a read THE ENGINE makes on its own account: one of a kind
+// only it reads ([GitReadKind.EnginesOwn]), or one it makes FOR A CHECK
+// ([GitQuery.Check]). Such a read names no asker and no seat it reads for, is
+// held to no grant and is recorded as nobody's read — the git node's one test
+// of all three.
+func (q GitQuery) EnginesOwn() bool { return q.Kind.EnginesOwn() || q.Check != nil }
+
 // GitQuery is one read of a repository by object id: exactly the sub-query of
 // its Kind is set.
 type GitQuery struct {
@@ -2140,9 +2165,25 @@ type GitQuery struct {
 	// and held to the repository's read grant by the git node that answers,
 	// from its own epoch's chart ([GrantOf]): a seat by its relation to the
 	// repository, a person or a token by ADR-0055's rules, which read no
-	// chart. Never trusted for anything but the grant. REFUSED on a kind the
-	// engine alone reads ([GitReadKind.EnginesOwn]), which names none.
+	// chart. Never trusted for anything but the grant. REFUSED on a read the
+	// engine makes on its own account ([GitQuery.EnginesOwn]), which names
+	// none.
 	Asker Principal `json:"asker"`
+	// Check is the attempt of a check a read is made FOR: a check's box
+	// reading its commit through the API (/box/code/), admitted by the
+	// attempt's row and its token (internal/code/host's AdmitCheck). THE
+	// ENGINE'S OWN READ on the check's behalf ([GitQuery.EnginesOwn]): a
+	// check's box is no principal and the attempt's row is its authority, so
+	// it names no asker, is held to no grant and is recorded as nobody's read
+	// — the check's row is its record. And it reads THE CHECK'S COMMIT ALONE:
+	// a tree or a file at it, or a diff whose head is it — the one commit the
+	// box's token admits it to — which the git node holds it to as it
+	// validates it, whatever its asker set; a diff's base is the attempt's
+	// row's, which the admission sets. An estate request's field and no
+	// record's, so it takes no versionedFields row: a git node of a build that
+	// predates it reads such a read as one naming no asker, and refuses it
+	// (ErrInvalid) — the box's read refused, never served as another's.
+	Check *CheckKey `json:"check,omitempty"`
 	// CeilingSeat is the seat the asking seat's turn is acting for, whose
 	// grant the git node judges beside the asker's, from the same chart and
 	// the row its copy holds, as [ReadQuery.CeilingSeat] says.
@@ -2513,10 +2554,11 @@ func WirePath(p string) (text, b64 string) {
 // not canonical, an asker no principal is, a sub-query other than its kind's
 // or none, a revision [ValidRev] refuses, a path [GitPath] refuses — or none
 // where a blame names its file — a line range that runs backwards or past a
-// blame's MaxBlameLines, a diff naming both a file and paths, and a log whose
-// literal, limit or date no log takes. A cursor longer than any a git node
-// issues is [ErrBadCursor]; whether a shorter one is the kind's own is the
-// git node's to judge.
+// blame's MaxBlameLines, a diff naming both a file and paths, a log whose
+// literal, limit or date no log takes, and a read made for a check that names
+// an asker or reads anything but its check's commit. A cursor longer than any
+// a git node issues is [ErrBadCursor]; whether a shorter one is the kind's own
+// is the git node's to judge.
 func (q GitQuery) Validate() error {
 	if !q.Kind.Valid() {
 		return fmt.Errorf("%w: kind: %q is not one of %v", ErrInvalid, q.Kind, GitReadKinds())
@@ -2526,9 +2568,17 @@ func (q GitQuery) Validate() error {
 	}
 	// WHO ASKS IS NAMED, or nothing is read: the answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
-	// named — but for a kind the engine alone reads, which names nobody, an
-	// asker there being judged for a read it never made.
+	// named — but for a read the engine makes on its own account, which names
+	// nobody, an asker there being judged for a read it never made.
 	switch {
+	case q.Check != nil:
+		if q.Asker != (Principal{}) || q.CeilingSeat != "" {
+			return fmt.Errorf("%w: asker: a read made for a check is the engine's own, on the check's "+
+				"behalf — a check's box is no principal — which no principal makes", ErrInvalid)
+		}
+		if err := q.Check.validateAs("check."); err != nil {
+			return err
+		}
 	case q.Kind.EnginesOwn():
 		if q.Asker != (Principal{}) || q.CeilingSeat != "" {
 			return fmt.Errorf("%w: asker: a %s read is the engine's own — its repository's home git node's — "+
@@ -2564,6 +2614,11 @@ func (q GitQuery) Validate() error {
 			return fmt.Errorf("%w: %s: a %s read carries no %s query", ErrInvalid, s.kind, q.Kind, s.kind)
 		}
 	}
+	if q.Check != nil {
+		if err := q.atItsCheck(); err != nil {
+			return err
+		}
+	}
 	switch q.Kind {
 	case GitTree:
 		return q.Tree.validate()
@@ -2585,6 +2640,31 @@ func (q GitQuery) Validate() error {
 		return q.Blame.validate()
 	}
 	return q.Compare.validate()
+}
+
+// atItsCheck refuses a read made for a check ([GitQuery.Check]) that reads
+// anything but the check's commit — a tree or a file at it, or a diff whose
+// head is it, by its whole id as the attempt's row names it: the one commit a
+// check's box's token admits it to, which the git node holds the read to
+// whatever the node that asked it built.
+func (q GitQuery) atItsCheck() error {
+	var field, rev string
+	switch q.Kind {
+	case GitTree:
+		field, rev = "tree.rev", q.Tree.Rev
+	case GitBlob:
+		field, rev = "blob.rev", q.Blob.Rev
+	case GitDiff:
+		field, rev = "diff.head", q.Diff.Head
+	default:
+		return fmt.Errorf("%w: kind: a read made for a check is a tree, a file or a diff of its commit, "+
+			"never a %s read", ErrInvalid, q.Kind)
+	}
+	if rev != q.Check.OID {
+		return fmt.Errorf("%w: %s: %q is not the check's commit %s: a read made for a check reads that "+
+			"commit alone", ErrInvalid, field, rev, q.Check.OID)
+	}
+	return nil
 }
 
 // ceilingInvalid is why a read may not carry seat as its ceiling beside asker

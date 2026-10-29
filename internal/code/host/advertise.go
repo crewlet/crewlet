@@ -18,8 +18,10 @@ import (
 )
 
 // GET /git/{repo}/info/refs — THE ADVERTISEMENT every git exchange opens with:
-// a fetch's refs from upload-pack, or a push's from receive-pack. A coding
-// box's (/box/git/) is the same answer, admitted by admitBox.
+// a fetch's refs from upload-pack, or a push's from receive-pack. A box's
+// (/box/git/) is the same answer, admitted by admitBox — a check's box's
+// always protocol v2's capability advertisement, which names no ref, its
+// admission refusing it any other (admitCheck).
 //
 // EVERY ANSWER THAT NAMES A REF IS READ AT THE REQUEST'S REFS LEVEL
 // (admission.refs): a person's v0 advertisement and push advertisement are

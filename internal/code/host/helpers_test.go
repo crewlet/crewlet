@@ -144,6 +144,12 @@ func (e *recording) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code.
 	return e.Estate.PushOutcome(ctx, q)
 }
 
+// Read records a read of the rows under "read:<kind>", at its level.
+func (e *recording) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	e.note("read:"+string(q.Kind), q.Fresh.Level)
+	return e.Estate.Read(ctx, q)
+}
+
 // logs is a logger a case reads back.
 type logs struct {
 	mu  sync.Mutex

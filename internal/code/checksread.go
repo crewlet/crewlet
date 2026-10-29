@@ -19,7 +19,7 @@ import (
 )
 
 // A REPOSITORY'S CHECKS, READ: what became of each attempt of each check of
-// each commit, as its row on the code log holds it — three kinds of read.
+// each commit, as its row on the code log holds it — four kinds of read.
 //
 //   - `checks` ([ReadChecks]) lists attempts, held to the asker's grant: one
 //     repository's, newest ended first and every attempt not yet ended after
@@ -35,6 +35,10 @@ import (
 //     failed run kept.
 //   - `checks_due` ([ReadChecksDue]) is the home's: the live changes whose head
 //     commit no attempt of any check has been queued at (dueCheckWork's doc).
+//   - `check_box` ([ReadCheckBox]) is a check's box's admission's: the one
+//     attempt its token names, by its key (code_checks' own), as its row
+//     stands — the engine's own read, held to no grant, since the box is no
+//     principal and the row is what admits it.
 //
 // EVERY LISTING IS A KEYSET over its index's own order, its cursor the last
 // row's place in it, so a page resumes exactly where the one before ended
@@ -123,17 +127,21 @@ func checksResolver(name string) statelog.Resolver {
 	}
 }
 
-// checksQuery is the framework read a `checks`, `check` or `checks_due` read
-// resolves to. A listing is a SET READ — of the repository it names, of the
-// domain for the window — so an attempt a deferred record holds back is
-// listed as its row stands; a `check` read is a POINT READ, which a record
-// this node deferred on the repository's checks refuses, as a change's detail
-// is refused, rather than answer an attempt around it; and the home's listing
-// is a set read of the domain, or of the one repository's rows and checks.
+// checksQuery is the framework read a `checks`, `check`, `checks_due` or
+// `check_box` read resolves to. A listing is a SET READ — of the repository it
+// names, of the domain for the window — so an attempt a deferred record holds
+// back is listed as its row stands; a `check` read is a POINT READ, which a
+// record this node deferred on the repository's checks refuses, as a change's
+// detail is refused, rather than answer an attempt around it, and so is a
+// `check_box` read, of the checks of the repository its key names by id; and
+// the home's listing is a set read of the domain, or of the one repository's
+// rows and checks.
 func (q ReadQuery) checksQuery(fresh statelog.Freshness) statelog.Query {
 	switch q.Kind {
 	case ReadCheck:
 		return fresh.Resolved(checksResolver(q.Repo), false)
+	case ReadCheckBox:
+		return fresh.Query(statelog.ScopeSet{Paths: []string{ChecksPath(q.CheckBox.RepoID)}}, false)
 	case ReadChecksDue:
 		if q.ChecksDue == nil {
 			return fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
@@ -219,7 +227,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
-		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
 	} {
 		if f.set {
@@ -228,6 +236,59 @@ func (q ReadQuery) validateChecksDue() error {
 				"nothing else")
 		}
 	}
+	return nil
+}
+
+// validateCheckBox is [ReadQuery.validate] for a `check_box` read: the
+// engine's own — a check's box's admission — so it names NO asker and no seat
+// it reads for, since the box is no principal and judged as one it would be
+// refused as one nobody named; its attempt by its key, whole, as the box's
+// token names it; and nothing else a read names, since it reads one row.
+func (q ReadQuery) validateCheckBox() error {
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	switch {
+	case q.Asker != (Principal{}):
+		return refused("asker", "a check_box read is the engine's own — a check's box's admission — which no "+
+			"principal makes")
+	case q.CeilingSeat != "":
+		return refused("ceiling_seat", "a check_box read is the engine's own, which no seat makes for another")
+	case q.CheckBox == nil:
+		return refused("check_box", "a check_box read names the attempt it reads by its key")
+	}
+	if err := q.CheckBox.validateAs("check_box."); err != nil {
+		return err
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
+		{"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil}, {"min_packs", q.MinPacks != 0},
+		{"limit", q.Limit != 0}, {"cursor", q.Cursor != ""}, {"brief", q.Brief}, {"push", q.Push != ""},
+		{"change", q.Change != 0}, {"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
+		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
+	} {
+		if f.set {
+			return refused(f.field, "a check_box read reads the one attempt its key names, whole, and names "+
+				"nothing else")
+		}
+	}
+	return nil
+}
+
+// checkBox serves a `check_box` read: the attempt its key names as its row
+// stands, the answer's one check — or none, where the rows hold no such
+// attempt: an answer the box's admission reads again through the barrier
+// before it refuses (internal/code/host's checkAdmitted), since a copy behind
+// the log may not have applied the attempt's queue yet.
+func (r *Reader) checkBox(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	row, found, err := checkRowIn(ctx, tx, *q.CheckBox)
+	if err != nil || !found {
+		return err
+	}
+	out.Checks = []CheckRow{row}
 	return nil
 }
 

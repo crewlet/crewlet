@@ -2228,7 +2228,8 @@ or because a client must reach it to obtain a credential at all.
 | `/health`, `/ready` | Probes. An orchestrator holds no token, and a liveness check that answers 401 is a liveness check that fails. Exact paths, never prefixes — a `/health-admin` added later must not inherit this. |
 | `/webhooks/…` | Every one verifies a provider signature over the body before doing anything, which is a stronger check than a shared bearer. Includes the Slack OAuth landing page, which a browser reaches mid-install with no token in hand. |
 | `/otlp/…`, `/mcp/…` | The per-run signed token **in the path** is the credential. Both are reached from *inside a sandbox*, which is the one place the API's own token must never go: it reads the whole company, and the box is running generated code. |
-| `/box/git/…` | A coding box's git, from inside a sandbox for the same reason: the per-run signed token is the credential, as git's **Basic password**, the one way git presents one. The guard never reads it — the code host admits the box by its run's row ([Code Host → Coding boxes](code-host.md#coding-boxes)) — and neither this route nor a person's `/git/` takes the other's credential. |
+| `/box/git/…` | A box's git, from inside a sandbox for the same reason: a coding box's per-run signed token, or a check's box's per-check one, is the credential, as git's **Basic password**, the one way git presents one. The guard never reads it — the code host admits the box by its run's row, or its check's attempt's ([Code Host → Coding boxes](code-host.md#coding-boxes), [Check boxes](code-host.md#check-boxes)) — and neither this route nor a person's `/git/` takes the other's credential. |
+| `/box/code/…` | A check's box's reads of the commit its check measures, with the credential its git presents, admitted by the code host the same way. |
 | `/`, `/dashboard`, `/favicon.ico`, `/static/…` | The page that prompts for a credential cannot itself require one. It ships no data — every byte it renders comes from an authenticated fetch. |
 | `/auth/config`, `/auth/login`, `/auth/invite/…`, `/auth/reset/…` | A login cannot require a login: these are how somebody **obtains** a credential, and an invitation's link and a password reset link are each the credential. Exact paths plus the two prefixes, never `/auth/` — the same surface ends every session a person holds and enrols second factors. What stands in for the guard is the sign-in throttle and the origin check below, which they are not exempt from. |
 | `/auth/logout` | Signing out of **this** session clears the cookie whatever the node can read — guarded, a node that could not read its identity estate answered it `503` before it ran, and a person left a shared machine still signed in. It verifies every bearer the browser holds itself and ends only a session its rows hold, and the origin check still judges it. Signing out everywhere and ending a named session stay guarded, because they act on a caller the guard resolved. |
@@ -2317,10 +2318,11 @@ an IPv6 zone, which no browser can address.
 Reads are never refused for their origin — refusing one would break every
 cross-origin dashboard the CORS allowance exists to serve, to prevent a request
 that alters nothing. The **server-to-server edges** are not refused either —
-`/webhooks/…`, `/otlp/…`, `/mcp/…` and `/box/git/…`: a vendor's webhook
-delivery is a POST from a server carrying no `Origin` and verifying a signature
-of its own, a sandbox box presents the signed token in its path or as git's
-Basic password, and refusing either would take every integration off the air.
+`/webhooks/…`, `/otlp/…`, `/mcp/…`, `/box/git/…` and `/box/code/…`: a
+vendor's webhook delivery is a POST from a server carrying no `Origin` and
+verifying a signature of its own, a sandbox box presents the signed token in
+its path or as git's Basic password, and refusing either would take every
+integration off the air.
 
 **The sign-in routes are judged, although no credential guards them.** A login
 cannot require a login, so `POST /auth/login`, `/auth/invite/{id}` and

@@ -1735,7 +1735,110 @@ grant on the repository as every other read of it is:
   last of its output, the failures its ending named and its kept log;
 - **`checks_due`**: the engine's own, which no person or seat may make — the
   live changes whose head commit no attempt of any check has been queued at,
-  which the repository's home polls for the heads whose checks it dispatches.
+  which the repository's home polls for the heads whose checks it dispatches;
+- **`check_box`**: the engine's own too — the one attempt a check's box's
+  token names, by its key, as its row stands, which the box's admission reads
+  on every request ([Check boxes](#check-boxes)). A person's or a seat's read
+  naming an attempt's key is refused, so no read that forgot whom it asks for
+  is answered held to no grant.
+
+### Check boxes
+
+A check runs in a **box** of its own — a container on a git node, or a remote
+box — which reaches the code host as a [coding box](#coding-boxes) does, at
+`/box/git/<name>.git` on a node whose roles name `git` (on the public listener
+where one is set), with a credential of its own and nobody's else: git's Basic
+user name `check` and, as the password, a token naming **one attempt** of one
+check of one commit and the name of the repository its box was given, signed
+under the fleet's keyring in the coding boxes' key domain (`crewlet.git.v1`). A
+run's token and a check's are told apart by what each names, and each is
+valid under its own user name alone: a check's token presented as `run`, or a
+run's as `check`, is refused as no token.
+
+**The attempt's row is the authority, the token its backstop.** A token is
+valid for its check's timeout and ten minutes more, the box's setup
+(`code.CheckBoxGrace`, a box's setup step's own budget); what admits the box
+is its attempt's row, read on every request, so an attempt that has ended
+admits its box to nothing more from the moment its row says so, whatever its
+token's expiry.
+
+**A check's box fetches one commit, and does nothing else.** It fetches over
+git's protocol v2, which every git a box runs speaks by default, and is shown
+**no ref**: its advertisement is v2's, which names none, and an `ls-refs` — a
+`git ls-remote` — is answered empty. It fetches its commit by id, which
+protocol v2 serves of any object the repository holds:
+
+```sh
+git init --quiet check
+git -C check remote add origin https://hooks.example.com/box/git/web.git
+git -C check fetch --quiet --depth=1 --filter=blob:none origin <commit>
+git -C check checkout --quiet --detach <commit>
+```
+
+— the code host its remote and so its promisor, which the checkout fetches
+the files it needs from, every request admitted again by the attempt's row.
+
+A push is refused, and so is a request in protocol v0, which fetches only what
+a ref names.
+
+**The admission**, in this order, each refusal in the one line git prints:
+
+| Step | Refused | Answer |
+|---|---|---|
+| The credential | none presented (git's first request never carries one), a user name other than `run` and `check`, a token this fleet did not sign for the user name presenting it | `401`, a challenge whose sentence names the box's token, never an API token |
+| A fetch | a push | `403 read_only` |
+| | a request in protocol v0 | `403 protocol_v0` |
+| The name given | a repository other than the one the token names | `403 not_granted` — before anything of the code log is read, so a box guessing names costs the log nothing |
+| The attempt | its row cannot be read | `503` with `Retry-After` |
+| | the rows hold no such attempt — read again through the code log's barrier first, since a copy behind the log may not hold its queue yet | `403 check_unknown` |
+| | the attempt has ended | `403 check_ended`, decided on whatever copy shows it: a check's state only rises, so an ending is for good, and a box still asking past its attempt's end costs the log no barrier |
+| The repository | not found, deleted or purging — decided through the barrier, as a coding box's is; a name a rename left redirecting is served for the repository it redirects to | as a person's |
+| | a name now held by another repository than the attempt's | `403 not_granted` |
+
+**Every read is at the check's session**: the position its attempt was queued
+at, which its commit's push precedes, so the copy serving the box holds its
+commit and no read of it pays a barrier. **Its transfers are a run's**, in the
+class that holds at most half the [transfer lane](#fair-share), keyed by its
+**repository** (`check:<id>`), so the checks one push fans out — a check for
+every name its file defines — take one turn of the class between them where a
+coding run takes one; its spool is every box's one credential, `runs`. And
+**it acts as nobody**: a check's box runs its repository's own checks file, so
+its fetch of a `visibility: unit` repository is no principal's read — its
+attempt's row, naming its commit and who queued it, is its record ([Who read
+it](#who-read-it)). A refusal is logged as a coding box's is
+(`code_box_challenged`, `code_box_refused`, `code_box_unavailable`), naming the
+attempt and the repository, never the token.
+
+**Reading a commit without a clone.** A check whose file says `checkout: none`
+reads what it needs of its commit by object id at `/box/code/<name>/…`, with
+the credential its git presents, admitted as its git is:
+
+| Route | Reads |
+|---|---|
+| `GET /box/code/<name>/tree` | A directory's listing: `path` (or `path_b64`, a path's bytes in base64 where they are no UTF-8), `recursive`, `cursor` |
+| `GET /box/code/<name>/blob` | A file's lines: `path` (or `path_b64`), `start_line`, `end_line`, `cursor` |
+| `GET /box/code/<name>/diff` | The diff from the base its attempt was queued with to its commit: its stat, narrowed by `paths` (repeated), or one file's patch, `file` (or `file_b64`); `renames`; `cursor` |
+
+```sh
+curl -fsS -u "check:<its token>" "https://hooks.example.com/box/code/web/blob?path=go.mod"
+```
+
+**Only that commit.** No read takes a revision — a tree and a file are read at
+the attempt's commit, a diff from the attempt's base to it — and a parameter
+no read takes is refused `400 bad_params`, never ignored: a box that asked for
+`rev=` and was answered its own commit would read the wrong code with nothing
+saying so. The read is asked of the repository's home git node as a
+[server-side read](#server-side-reads) the engine makes for the check, held to
+no grant, recorded as nobody's read, and held by the git node to that commit
+again. Its answer is the read's page — a tree's listing, a file's lines, a
+diff's stat or one file's patch — with the repository's name, the commit, the
+base a diff was read from and the next page's cursor, and none of the push
+provenance a seat's read carries; a refusal of the read itself is the API's
+envelope (`404 not_found` for a path the commit does not hold, `400
+bad_params` naming the parameter, `503 unavailable`), while the admission's are
+the one line its git is answered in. Where a node serves none of the code host
+now, a check's box is told why only once its token verifies, on both prefixes,
+as a [coding box](#coding-boxes) is.
 
 ### How long a check is kept
 
@@ -3032,7 +3135,7 @@ run row.
 
 | Step | Refused | Answer |
 |---|---|---|
-| The credential | none presented (git's first request never carries one), a user name other than `run`, a token this fleet did not sign — forged, expired, or under a key this node's `secrets.keys` does not hold | `401`, a challenge whose sentence names the run's token, never an API token |
+| The credential | none presented (git's first request never carries one), a user name other than `run` — or `check`, which a [check's box](#check-boxes) presents and is admitted by its own steps — a token this fleet did not sign for the user name presenting it — forged, expired, under a key this node's `secrets.keys` does not hold, or a check's token presented as `run` | `401`, a challenge whose sentence names the box's token, never an API token |
 | The run | its row cannot be read | `503` with `Retry-After`: the credential was good, and nothing about it is known to be wrong |
 | | no such run, a launch the row has replaced, a run whose job has left its box | `403` |
 | The run's grant, by the name it was given | a repository the run was not given | `403 not_granted` — before anything of the code log is read, so a box guessing names costs the log nothing |
@@ -3772,6 +3875,7 @@ recorded from that activation on.
 | A fetch the node ended before its answer did — a deadline, a stop | no | — |
 | A server-side read that answered — a tree, a file's lines, a diff, a comparison, `landed_in`, a path's [history](#a-paths-history) and a file's blame, a [merge preview](#a-merge-preview), and a change's [revision reads](#a-revisions-facts): its facts, where its anchored lines are, an interdiff — a page from the [memo](#the-memo) included | yes, `via: tool` | one read, and the bytes of the answer |
 | Its row — a listing, its detail, its push history, what a ref points at | no | — |
+| A [check's box](#check-boxes)'s fetch, or its read of its commit through `/box/code/` | no | — a check's box runs the repository's own checks file and acts as nobody; its attempt's row, naming the commit and who queued it, is its record |
 
 So the count is of reads that sent the repository's contents, which is what
 an audit asks: a stateless fetch that negotiates over several rounds is one

@@ -20,13 +20,24 @@ const (
 	PatternReceivePack = "POST /git/{repo}" + ReceivePackSuffix
 )
 
-// A CODING BOX'S THREE ROUTES: the same three entry points under
-// auth.BoxGitPrefix, behind the box's admission (boxadmit.go) rather than a
-// person's.
+// A BOX'S THREE ROUTES: the same three entry points under auth.BoxGitPrefix,
+// behind the box's admission (boxadmit.go) rather than a person's — a coding
+// run's box, or a check's, which fetches alone.
 const (
 	PatternBoxInfoRefs    = "GET /box/git/{repo}/info/refs"
 	PatternBoxUploadPack  = "POST /box/git/{repo}" + UploadPackSuffix
 	PatternBoxReceivePack = "POST /box/git/{repo}" + ReceivePackSuffix
+)
+
+// A CHECK'S BOX'S THREE READS of its commit by object id — its tree, a file of
+// it, its diff — under auth.BoxCodePrefix: the API's routes, whose handlers
+// admit the box by AdmitCheck, which reads the repository from the same
+// wildcard ({repo}, PathRepo), so a route reads its repository from the path
+// it was mounted at.
+const (
+	PatternBoxCodeTree = "GET /box/code/{repo}/tree"
+	PatternBoxCodeBlob = "GET /box/code/{repo}/blob"
+	PatternBoxCodeDiff = "GET /box/code/{repo}/diff"
 )
 
 // What a client that speaks the protocol itself, rather than through git,
@@ -46,7 +57,8 @@ const (
 )
 
 // admitter is how an entry point admits its request: admit for a person's,
-// admitBox for a coding box's. Everything after it reads the admission alone.
+// admitBox for a box's — a coding run's or a check's. Everything after it
+// reads the admission alone.
 type admitter func(ctx context.Context, w http.ResponseWriter, r *http.Request, op auth.GitOp) (admission, bool)
 
 // InfoRefs answers a repository's advertisement, a fetch's or a push's.
@@ -58,13 +70,13 @@ func (s *Server) UploadPack() http.Handler { return s.route(s.uploadPack, s.admi
 // ReceivePack answers a push's RPC.
 func (s *Server) ReceivePack() http.Handler { return s.route(s.receivePack, s.admit) }
 
-// BoxInfoRefs answers a coding box's advertisement, a fetch's or a push's.
+// BoxInfoRefs answers a box's advertisement, a fetch's or a push's.
 func (s *Server) BoxInfoRefs() http.Handler { return s.route(s.infoRefs, s.admitBox) }
 
-// BoxUploadPack answers a coding box's fetch RPC.
+// BoxUploadPack answers a box's fetch RPC.
 func (s *Server) BoxUploadPack() http.Handler { return s.route(s.uploadPack, s.admitBox) }
 
-// BoxReceivePack answers a coding box's push RPC.
+// BoxReceivePack answers a coding box's push RPC: a check's box pushes nothing.
 func (s *Server) BoxReceivePack() http.Handler { return s.route(s.receivePack, s.admitBox) }
 
 // route is entry, admitting its requests with admit.

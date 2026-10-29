@@ -1349,7 +1349,8 @@ api:
                         #   sign-in throttle's key for every login
   public:               # optional — a second listener for the routes outside
     port: 8443          #   parties call: /webhooks/*, /otlp/{token}, /mcp/{token},
-                        #   and a git node's /box/git/* (a coding box's git).
+                        #   and a git node's /box/git/* and /box/code/* (a box's
+                        #   git, and a check's box's reads of its commit).
                         #   Once set they are served ONLY here (404 on api.port),
                         #   and everything else — the dashboard, the REST API,
                         #   the sign-in routes, /config, /secrets, the probes —
@@ -1509,8 +1510,9 @@ TLS-terminating proxy and cannot read any of that off the request it receives.
 **`api.public` splits the routes outside parties call onto a socket of their
 own.** With `api.public.port` set, the vendor webhooks and app landings
 (`/webhooks/*`) and the sandbox endpoints (`/otlp/{token}`, `/mcp/{token}`, and
-on a git node a coding box's git, `/box/git/*`) are served on that listener and
-nowhere else, and every other route — the
+on a git node a box's git, `/box/git/*`, and a check's box's reads of its
+commit, `/box/code/*`) are served on that listener and nowhere else, and every
+other route — the
 dashboard, the REST API, the sign-in routes under `/auth`, `/config`,
 `/secrets`, `/setup`, `/iam`, `/operator`, the live socket and the `/health` and
 `/ready` probes — only on `api.port`. `api.port` answers a public route with a

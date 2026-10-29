@@ -1143,13 +1143,13 @@ func TestABoxFetchOfAUnitRepositoryIsRecorded(t *testing.T) {
 // only the box's admission names a box path and only its credential step
 // (ChallengeBox, which the API's route for a node serving no code host runs
 // too) reads git's Basic credential, only the admission's accessors read a
-// box's run, and only the person's admission reads the guard's resolution
-// (iam.From) — so a box is never admitted by a person's credential, nor a
-// person by a run's, and no step after admission branches on the transport
-// but through the admission.
+// box's run or a check's attempt, and only the person's admission reads the
+// guard's resolution (iam.From) — so a box is never admitted by a person's
+// credential, nor a person by a box's, and no step after admission branches
+// on the transport, or on whose box it is, but through the admission.
 //
 // Mutations: a strings.HasPrefix(r.URL.Path, "/box/") in fetch.go — red; an
-// iam.From in admitBox — red.
+// iam.From in admitBox — red; an adm.check.State read in fetch.go — red.
 func TestNothingAfterAdmissionAsksWhichAdmitterRan(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -1191,8 +1191,8 @@ func TestNothingAfterAdmissionAsksWhichAdmitterRan(t *testing.T) {
 					case n.Sel.Name == "From" && isIdent(n.X, "iam") && who != "admit":
 						t.Errorf("%s: %s reads the guard's resolution (iam.From)", fset.Position(n.Pos()), who)
 					}
-					if inner, ok := n.X.(*ast.SelectorExpr); ok && inner.Sel.Name == "box" &&
-						!slices.Contains(accessors, who) {
+					if inner, ok := n.X.(*ast.SelectorExpr); ok && (inner.Sel.Name == "box" ||
+						inner.Sel.Name == "check") && !slices.Contains(accessors, who) {
 						t.Errorf("%s: %s reads a box's %s past the admission's accessors", fset.Position(n.Pos()),
 							who, n.Sel.Name)
 					}

@@ -921,6 +921,10 @@ func (e *soloEstate) PushOutcome(ctx context.Context, q code.OutcomeQuery) (code
 	return e.data.Served().PushOutcome(ctx, q)
 }
 
+func (e *soloEstate) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	return e.data.Served().Read(ctx, q)
+}
+
 // soloUnserved is the router's ErrUnserved for the one data node a solo
 // fleet has: a walk that ran nothing, in which nobody went silent.
 type soloUnserved struct{ err error }

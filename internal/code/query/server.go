@@ -229,9 +229,10 @@ func New(o Options) (*Server, error) {
 //     asker's turn is acting for (code.GitQuery.CeilingSeat), that seat's
 //     grant from the same row and chart, one it could not make itself
 //     code.ErrAboveCeiling (code.JudgeRead, the data node's judgment too). A
-//     read of a kind the ENGINE alone reads (code.GitReadKind.EnginesOwn: a
-//     revision's facts, its repository's home's) names no asker and is held
-//     to no grant.
+//     read the ENGINE makes on its own account (code.GitQuery.EnginesOwn: a
+//     revision's facts, its repository's home's, or a read made for a check,
+//     whose box the attempt's row admitted and which Validate holds to the
+//     check's commit) names no asker and is held to no grant.
 //  6. A PAGE ALREADY CUT is answered from the copy's memo (memo.go) — of
 //     every kind but a landed-in read, a revision's facts and a
 //     re-anchoring (memoizable): for a read naming whole ids, as soon as its
@@ -282,7 +283,8 @@ func New(o Options) (*Server, error) {
 //     read would name only the first asker of a page. A read of a
 //     `visibility: company` repository records nothing, since every seat
 //     reads it by declaration, and neither does a refused one, nor the
-//     engine's own, which nobody made.
+//     engine's own, which nobody made — a check's read among them, whose
+//     attempt's row is its record.
 //
 // ctx ENDS WHEN THE ANSWER IS DUE (code.AnswerBy): every wait above — the
 // sync, the unit of the share, the read lane's queue before each process, and
@@ -441,7 +443,7 @@ func (s *Server) serve(ctx context.Context, q code.GitQuery) (code.GitAnswer, er
 // waits on the broker.
 func (r *read) audit(ctx context.Context, a code.GitAnswer) error {
 	repo := r.synced.Repo
-	if repo.Visibility != code.VisibilityUnit || r.q.Kind.EnginesOwn() {
+	if repo.Visibility != code.VisibilityUnit || r.q.EnginesOwn() {
 		return nil
 	}
 	encoded, err := json.Marshal(a)
@@ -696,9 +698,11 @@ func (r *read) grant() error {
 			ManagedBy: repo.ManagedBy}
 		return fmt.Errorf("%w: %s", code.ErrRepoNotFound, gone.Detail())
 	}
-	if r.q.Kind.EnginesOwn() {
-		// THE ENGINE'S OWN READ, which names no asker: there is no grant to
-		// judge, and judged as nobody it would be refused as nobody.
+	if r.q.EnginesOwn() {
+		// THE ENGINE'S OWN READ, which names no asker — a revision's facts, or
+		// a read made for a check, whose attempt's row admitted its box: there
+		// is no grant to judge, and judged as nobody it would be refused as
+		// nobody.
 		return nil
 	}
 	_, err := code.JudgeRead(r.q.Asker, r.q.CeilingSeat, repo, r.roster)

@@ -3,6 +3,7 @@ package api
 import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
@@ -81,11 +82,26 @@ func (c engineCode) RepoReaders() (builtin.ReadersDeps, error) {
 	return builtin.ReadersDeps{}, why
 }
 
-// VerifyBox is whether token is a coding box's run token this fleet signed,
-// by the engine's own box tokens ([engine.Engine.BoxTokens]): built at New on
-// every node over the keyring Tier A requires there, so it answers on a node
-// whose code host is not built — the one place it is asked.
-func (c engineCode) VerifyBox(token string) bool {
-	_, signed := c.e.BoxTokens().Verify(token)
-	return signed
+// GitReads is the code domain's reads by object id through this node's estate
+// router — the repository's home git node first — on CodeReads' terms
+// ([engine.OperatorCode]): where this node's running runtime serves no code
+// host, why, asked again after the reason for GitRoutes' reason.
+func (c engineCode) GitReads() (GitReader, error) {
+	if seam, ok := engine.OperatorCode(c.e); ok {
+		return seam, nil
+	}
+	why := c.e.CodeUnserved()
+	if seam, ok := engine.OperatorCode(c.e); ok {
+		return seam, nil
+	}
+	return nil, why
+}
+
+// VerifyBox is whether token is the credential user presents on a box route,
+// signed by this fleet (host.VerifyBox), by the engine's own box and check
+// tokens ([engine.Engine.BoxTokens], [engine.Engine.CheckTokens]): built at
+// New on every node over the keyring Tier A requires there, so it answers on
+// a node whose code host is not built — the one place it is asked.
+func (c engineCode) VerifyBox(user, token string) bool {
+	return host.VerifyBox(c.e.BoxTokens(), c.e.CheckTokens(), user, token)
 }

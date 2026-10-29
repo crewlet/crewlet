@@ -471,6 +471,10 @@ func (e memberEstate) PushOutcome(ctx context.Context, q code.OutcomeQuery) (cod
 	return e.m.router.Load().Code().PushOutcome(ctx, q)
 }
 
+func (e memberEstate) Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
+	return e.m.read(ctx, q)
+}
+
 // memberCopy is the member's own copy of the estate as its router and its
 // serving half ask it: the code half its data node serves (code.Served, the
 // adapter the engine hands the router), its applier's wait, whether the copy

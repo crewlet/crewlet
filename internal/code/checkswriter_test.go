@@ -435,6 +435,68 @@ func TestChecksDueRefusesAnAsker(t *testing.T) {
 	}
 }
 
+// A CHECK'S BOX'S READ OF ITS ATTEMPT IS THE ENGINE'S OWN: a check_box read
+// names no asker and no seat it reads for — a check's box is no principal,
+// and judged as one it would be refused as one nobody named — and its attempt
+// by its key whole, nothing else; it answers the attempt's row, held to no
+// grant (the attempt's repository is `visibility: unit` and the read names
+// nobody it admits), and none for an attempt the rows do not hold, which the
+// box's admission reads again through the barrier before it refuses. A
+// principal's read naming the key is refused, so one that forgot its asker is
+// never answered ungated.
+//
+// Mutations: let the read take an asker — a person's is answered, red; answer
+// an attempt not held as an error — the admission's re-read never happens,
+// red.
+func TestACheckBoxReadIsTheEnginesOwn(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	unit := suiteSettings()
+	unit.Visibility = code.VisibilityUnit
+	repo := n.ensure("web", unit, t1).RepoID
+	key := checkOn(repo, 1)
+	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	for name, q := range map[string]code.ReadQuery{
+		"a person's":      {Kind: code.ReadCheckBox, Asker: ada, CheckBox: &key, Fresh: fresh},
+		"a seat's":        {Kind: code.ReadCheckBox, Asker: dev, CheckBox: &key, Fresh: fresh},
+		"one for a seat":  {Kind: code.ReadCheckBox, CeilingSeat: "cto", CheckBox: &key, Fresh: fresh},
+		"one naming none": {Kind: code.ReadCheckBox, Fresh: fresh},
+		"one naming a repository": {Kind: code.ReadCheckBox, CheckBox: &key, Repo: "web",
+			Fresh: fresh},
+		"a principal's naming a key": {Kind: code.ReadCheck, Asker: ada, Repo: "web", CheckBox: &key,
+			Checks: &code.CheckQuery{OID: key.OID, Name: key.Name, Attempt: 1}, Fresh: fresh},
+	} {
+		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) {
+			t.Errorf("%s check_box read answered %v, want code.ErrInvalid", name, err)
+		}
+	}
+	bad := key
+	bad.OID = "not-a-commit"
+	if _, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadCheckBox, CheckBox: &bad,
+		Fresh: fresh}); !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), "check_box.oid") {
+		t.Errorf("a check_box read of a key naming no commit answered %v, want code.ErrInvalid naming "+
+			"check_box.oid", err)
+	}
+	read := func() []code.CheckRow {
+		t.Helper()
+		a, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadCheckBox, CheckBox: &key, Fresh: fresh})
+		if err != nil {
+			t.Fatalf("the check_box read: %v", err)
+		}
+		return a.Checks
+	}
+	if got := read(); len(got) != 0 {
+		t.Fatalf("an attempt never queued was read as %+v, want none", got)
+	}
+	w, _, _, _ := checksWriterOn(t, n)
+	res, err := w.Publish(t.Context(), queueing(key, code.QueueDispatch))
+	requireChecked(t, "the dispatch", res, err)
+	got := read()
+	if len(got) != 1 || got[0].CheckKey != key || got[0].State != code.CheckStateQueued || got[0].Queued.IsZero() {
+		t.Fatalf("a queued attempt was read as %+v, want its row, queued at its record", got)
+	}
+}
+
 // A REPOSITORY'S CHECKS ARE READ BY EVERY SHAPE: a commit's attempts, a
 // change's, the repository's newest ended first and the window's — each a
 // keyset that resumes where its page ended — and one attempt whole, with the

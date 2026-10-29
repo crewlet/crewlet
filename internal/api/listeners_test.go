@@ -33,8 +33,9 @@ import (
 
 // publicRoutes are the routes outside parties call, one of each family: a
 // vendor delivery, both vendor app landings, the sandbox telemetry edge, the
-// sandbox tool bridge and a coding box's three git routes. Each is mounted on
-// [listenerApp], so reaching its handler is any answer but the mux's own 404.
+// sandbox tool bridge, a box's three git routes and a check's box's three
+// reads of its commit. Each is mounted on [listenerApp], so reaching its
+// handler is any answer but the mux's own 404.
 var publicRoutes = []struct{ method, path string }{
 	{http.MethodPost, "/webhooks/github"},
 	{http.MethodPost, "/webhooks/slack/ceo"},
@@ -45,6 +46,9 @@ var publicRoutes = []struct{ method, path string }{
 	{http.MethodGet, auth.BoxGitPrefix + "web.git/info/refs?service=git-upload-pack"},
 	{http.MethodPost, auth.BoxGitPrefix + "web.git/git-upload-pack"},
 	{http.MethodPost, auth.BoxGitPrefix + "web.git/git-receive-pack"},
+	{http.MethodGet, auth.BoxCodePrefix + "web/tree"},
+	{http.MethodGet, auth.BoxCodePrefix + "web/blob?path=go.mod"},
+	{http.MethodGet, auth.BoxCodePrefix + "web/diff"},
 }
 
 // adminRoutes are the routes that stay on api.port: the probes, the dashboard
@@ -149,6 +153,9 @@ var publishedRoutes = []string{
 	host.PatternBoxInfoRefs,
 	host.PatternBoxUploadPack,
 	host.PatternBoxReceivePack,
+	host.PatternBoxCodeTree,
+	host.PatternBoxCodeBlob,
+	host.PatternBoxCodeDiff,
 }
 
 // wildcard is one segment of a mux pattern that matches more than itself.

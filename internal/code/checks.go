@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // A REPOSITORY'S CHECKS ARE ROWS ON A SUBJECT OF THEIR OWN: checks.<repo>.
@@ -126,6 +127,18 @@ const CheckHistory = 30 * 24 * time.Hour
 // head checked on every push, say — keeps its history by itself and is never
 // listed, and one checked less often is swept at most once a day.
 const CheckSweepGrace = 24 * time.Hour
+
+// CheckBoxGrace is how long a check's box, and the token it fetches with
+// (internal/code/host's CheckTokens), outlive the check's own timeout:
+// sandbox.DefaultSetupTimeout, ten minutes — the budget one setup command of
+// a box is given, since a box is set up (its tools, its clone) before its
+// check's command starts and the timeout runs only from there. A token valid
+// for the timeout alone expired under a check that spent its setup cloning and
+// then ran the whole of its timeout, failing its last fetch; one valid much
+// longer outlives every box it was minted for. The token is the BACKSTOP and
+// the attempt's row the authority: a box whose attempt has ended is refused at
+// once, whatever its token's expiry.
+const CheckBoxGrace = sandbox.DefaultSetupTimeout
 
 // The record's bounds. Each is the payload's own, refused by its Validate
 // before a writer forms a record, so the largest record a check takes fits
@@ -469,17 +482,27 @@ type CheckKey struct {
 	Attempt int `json:"attempt"`
 }
 
-// validate refuses a key no record names.
-func (k CheckKey) validate() error {
+// Validate refuses a key no attempt is named by ([ErrInvalid], naming the
+// field): a repository id that is not a UUID in its canonical spelling, a
+// commit that is not one's whole id, a name no check takes, an attempt
+// outside 1 to [MaxCheckAttempts]. EXPORTED for the one key read off the
+// wire outside a record: the one a check's box's token names
+// (internal/code/host's CheckTokens), held to the rule every record's key is.
+func (k CheckKey) Validate() error { return k.validateAs("") }
+
+// validateAs is [CheckKey.Validate] with each field named under prefix — a
+// key inside a request names its fields where the request carries it
+// (`check_box.oid`).
+func (k CheckKey) validateAs(prefix string) error {
 	switch {
 	case !canonicalUUID(k.RepoID):
-		return checkField("repo_id", "%q is not a UUID in its canonical lowercase spelling", k.RepoID)
+		return checkField(prefix+"repo_id", "%q is not a UUID in its canonical lowercase spelling", k.RepoID)
 	case !gitref.ValidOID(k.OID) || k.OID == ZeroOID:
-		return checkField("oid", "%q is not a commit's whole id", k.OID)
+		return checkField(prefix+"oid", "%q is not a commit's whole id", k.OID)
 	case !config.ValidCodeCheckName(k.Name):
-		return checkField("name", "%q is not a check name", k.Name)
+		return checkField(prefix+"name", "%q is not a check name", k.Name)
 	case k.Attempt < 1 || k.Attempt > MaxCheckAttempts:
-		return checkField("attempt", "%d is not an attempt: 1 to %d (code.MaxCheckAttempts)", k.Attempt,
+		return checkField(prefix+"attempt", "%d is not an attempt: 1 to %d (code.MaxCheckAttempts)", k.Attempt,
 			MaxCheckAttempts)
 	}
 	return nil
@@ -533,7 +556,7 @@ type CheckQueued struct {
 // Validate refuses a queued attempt no writer forms ([ErrInvalid], naming the
 // field).
 func (q CheckQueued) Validate() error {
-	if err := q.CheckKey.validate(); err != nil {
+	if err := q.CheckKey.Validate(); err != nil {
 		return err
 	}
 	switch {
@@ -608,7 +631,7 @@ type CheckStarted struct {
 
 // Validate refuses a claim no writer forms.
 func (s CheckStarted) Validate() error {
-	if err := s.CheckKey.validate(); err != nil {
+	if err := s.CheckKey.Validate(); err != nil {
 		return err
 	}
 	switch {
@@ -683,7 +706,7 @@ type CheckFinished struct {
 
 // Validate refuses an ending no writer forms.
 func (f CheckFinished) Validate() error {
-	if err := f.CheckKey.validate(); err != nil {
+	if err := f.CheckKey.Validate(); err != nil {
 		return err
 	}
 	switch {

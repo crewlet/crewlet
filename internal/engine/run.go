@@ -462,6 +462,10 @@ type Engine struct {
 	// its box dials verifies, so each derives its key from the fleet's
 	// keyring. The code host admits boxes by it ([host.Options.Boxes]).
 	boxTokens *host.BoxTokens
+	// checkTokens mints and verifies a check's box's credential, built on
+	// EVERY node for boxTokens' reason: the runner that claims a check
+	// mints, and whichever git node its box dials verifies.
+	checkTokens *host.CheckTokens
 
 	// boxGitURL is the code host's base a coding box clones and pushes
 	// through, as [ReadBoxURLs] read it from this node's environment
@@ -1266,6 +1270,15 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: box tokens: %w", err)
 	}
+	// AND A CHECK'S BOX'S, in the same domain and for the same reason: the
+	// git node whose runner claims a check mints it and whichever git node
+	// the check's box dials verifies it — and every node verifies it, its
+	// code host built or not, since a box route on a node serving none tells
+	// a box why only once its token verifies (api.CodeSurface.VerifyBox).
+	checkTokens, err := host.NewCheckTokens(tokenMaterial(opts.Bootstrap), nil)
+	if err != nil {
+		return nil, fmt.Errorf("engine: check tokens: %w", err)
+	}
 
 	// THE MODE AND THE INCARNATION, resolved once. An unset mode is
 	// normal, which is what every caller that does not know about
@@ -1363,6 +1376,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 		bridge:              bridge,
 		boxTokens:           boxTokens,
 		boxGitURL:           boxURLs.Git.URL,
+		checkTokens:         checkTokens,
 		metrics:             opts.Metrics,
 		objectives:          newObjectives(opts.Metrics),
 		mode:                mode,
@@ -3402,6 +3416,13 @@ func (e *Engine) Bridge() *mcpbridge.Bridge { return e.bridge }
 // where no code host is built, since a box route on a node serving none tells
 // a box why only once its token verifies (api.CodeSurface.VerifyBox).
 func (e *Engine) BoxTokens() *host.BoxTokens { return e.boxTokens }
+
+// CheckTokens is this node's check's-box credential — what a check's box's
+// token is minted and verified by, over the fleet's keyring under
+// host.BoxKeyDomain — built at New on every node whatever its roles, so never
+// nil, and exposed for [Engine.BoxTokens]' reason: the API this process serves
+// verifies a check's box's token where no code host is built.
+func (e *Engine) CheckTokens() *host.CheckTokens { return e.checkTokens }
 
 // tokenMaterial is the Tier A keyring the per-run token issuers derive from,
 // nil-safe for an engine built without one.

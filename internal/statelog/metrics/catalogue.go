@@ -1846,7 +1846,8 @@ func Catalogue() []Instrument {
 				"directory binds to a human seat nobody else holds; " +
 				"`machine`: a credential acting as nobody, a Tier A token or a " +
 				"service account's machine token bound to no seat; `run`: a " +
-				"coding box's git, with its run's credential on `/box/git/`). " +
+				"box's git on `/box/git/` — a coding box's, with its run's " +
+				"credential, or a check's box's, with its check's). " +
 				"When every slot is held a released one goes to the class " +
 				"furthest below its weighted share of what the lane spent " +
 				"lately (person 4 : machine 2 : run 1), so `machine` climbing " +

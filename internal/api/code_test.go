@@ -33,30 +33,40 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // fixedCode is a code surface answering what it holds for good: a git host,
-// the code domain's reads and who read a unit's repository — each absent where
-// it holds nil, for the reason why (the company hosts no code where why is
-// nil) — and the box tokens a coding box's run token verifies by, none where
-// it holds nil.
+// the code domain's reads, its reads by object id and who read a unit's
+// repository — each absent where it holds nil, for the reason why (the company
+// hosts no code where why is nil) — and the tokens a coding box's run token
+// and a check's box's token verify by, none where it holds nil.
 type fixedCode struct {
-	git     api.GitRoutes
-	reads   queries.CodeReads
-	readers builtin.ReadersDeps
-	why     error
-	boxes   *host.BoxTokens
+	git      api.GitRoutes
+	reads    queries.CodeReads
+	gitReads api.GitReader
+	readers  builtin.ReadersDeps
+	why      error
+	boxes    *host.BoxTokens
+	checks   *host.CheckTokens
 }
 
-// VerifyBox is whether boxes signed token: nothing is, where it holds none.
-func (f fixedCode) VerifyBox(token string) bool {
-	if f.boxes == nil {
+// VerifyBox is whether boxes or checks signed token for user, by the code
+// host's own rule: nothing is, where it holds neither.
+func (f fixedCode) VerifyBox(user, token string) bool {
+	if f.boxes == nil || f.checks == nil {
 		return false
 	}
-	_, signed := f.boxes.Verify(token)
-	return signed
+	return host.VerifyBox(f.boxes, f.checks, user, token)
+}
+
+func (f fixedCode) GitReads() (api.GitReader, error) {
+	if f.gitReads == nil {
+		return nil, f.unserved()
+	}
+	return f.gitReads, nil
 }
 
 func (f fixedCode) unserved() error {
@@ -115,12 +125,33 @@ func (s *switchedCode) RepoReaders() (builtin.ReadersDeps, error) {
 	return s.fixedCode.RepoReaders()
 }
 
+func (s *switchedCode) GitReads() (api.GitReader, error) {
+	if !s.present.Load() {
+		return nil, engine.ErrCodeNotHosted
+	}
+	return s.fixedCode.GitReads()
+}
+
 // fakeGitRoutes is a git host whose handlers answer `served <what>`, whose
 // start of a verify answers what start does — a running verification of the
-// name where it is nil — and whose verifications are what kept holds.
+// name where it is nil — whose verifications are what kept holds, and whose
+// check admission admits every request as admitted holds it — or, holding
+// none, answers it `served admit-check`, as the code host answers one it
+// refuses.
 type fakeGitRoutes struct {
-	start func(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
-	kept  map[uuid.UUID]host.Verification
+	start    func(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
+	kept     map[uuid.UUID]host.Verification
+	admitted *host.CheckAdmitted
+}
+
+func (f fakeGitRoutes) AdmitCheck(_ context.Context, w http.ResponseWriter, r *http.Request) (host.CheckAdmitted,
+	bool) {
+
+	if f.admitted == nil {
+		served("admit-check").ServeHTTP(w, r)
+		return host.CheckAdmitted{}, false
+	}
+	return *f.admitted, true
 }
 
 // served is a handler writing 200 and what it stands for.
@@ -308,6 +339,7 @@ func TestGitRoutesAreMountedOnlyOnAGitNode(t *testing.T) {
 			for _, box := range boxRequests {
 				requests = append(requests, struct{ method, path string }{box.method, box.path})
 			}
+			requests = append(requests, boxCodeRequests...)
 			for _, req := range requests {
 				rec := ask(t, a, req.method, req.path, true)
 				if mounted := !absent(t, rec); mounted != tc.git {
@@ -638,14 +670,8 @@ func TestANodeServingNoCodeHostSaysWhy(t *testing.T) {
 func TestAnUnservedBoxRouteAnswersOnlyASignedToken(t *testing.T) {
 	t.Parallel()
 	keyring := runtoken.OneKey("k", "this fleet's key")
-	boxes, err := host.NewBoxTokens(keyring, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	otherFleet, err := host.NewBoxTokens(runtoken.OneKey("k", "another fleet's key"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	boxes, checks := boxTokensOf(t, keyring)
+	otherFleet, _ := boxTokensOf(t, runtoken.OneKey("k", "another fleet's key"))
 	bridge, err := runtoken.New(runtoken.Options{Domain: mcpbridge.KeyDomain, Material: keyring})
 	if err != nil {
 		t.Fatal(err)
@@ -662,70 +688,321 @@ func TestAnUnservedBoxRouteAnswersOnlyASignedToken(t *testing.T) {
 		{"the tool bridge's token, over this keyring", basic(host.BoxUser,
 			bridge.Mint(run.LaunchID+"~"+run.TurnID, time.Hour))},
 	}
-	verify := func(token string) bool {
-		_, ok := boxes.Verify(token)
-		return ok
-	}
-	request := func(method, path, authorization string) *http.Request {
-		r := httptest.NewRequest(method, path, nil)
-		if authorization != "" {
-			r.Header.Set("Authorization", authorization)
-		}
-		return r
-	}
-	// answer is what a client is shown: its status and the three headers a
-	// git route's answer can carry, then its words.
-	answer := func(rec *httptest.ResponseRecorder) string {
-		return fmt.Sprintf("%d [%s] [%s] [%s] %q", rec.Code, rec.Header().Get("Content-Type"),
-			rec.Header().Get("WWW-Authenticate"), rec.Header().Get("Retry-After"), rec.Body.String())
-	}
-	for _, reason := range []struct {
-		name string
-		why  error
-	}{
-		{"not hosted", engine.ErrCodeNotHosted},
-		{"applying", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplying)},
-		{"apply failed", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplyFailed)},
-		{"unknown", fmt.Errorf("%w (epoch 4)", engine.ErrCodeUnknown)},
-		{"needs restart", engine.ErrCodeNeedsRestart},
-		{"unexplained", errors.New("a seam that says something else")},
-	} {
+	verify := func(user, token string) bool { return host.VerifyBox(boxes, checks, user, token) }
+	for _, reason := range unservedReasons {
 		t.Run(reason.name, func(t *testing.T) {
 			t.Parallel()
-			a := codeApp(t, nil, fixedCode{why: reason.why, boxes: boxes})
+			a := codeApp(t, nil, fixedCode{why: reason.why, boxes: boxes, checks: checks})
 			// WHAT A PERSON IS TOLD, which a signed box is told too.
-			told := answer(ask(t, a, http.MethodGet, "/git/web.git/info/refs?service=git-upload-pack", true))
+			told := gitAnswer(ask(t, a, http.MethodGet, "/git/web.git/info/refs?service=git-upload-pack", true))
 			for _, req := range boxRequests {
 				for _, row := range unsigned {
 					// THE ADMISSION'S OWN CHALLENGE of the same request.
 					want := httptest.NewRecorder()
-					if !host.ChallengeBox(want, request(req.method, req.path, row.authorization), verify,
+					if !host.ChallengeBox(want, boxRequest(req.method, req.path, row.authorization), verify,
 						slog.New(slog.DiscardHandler)) {
 						t.Fatalf("%s: the box admission admits it, so it is no unsigned request", row.name)
 					}
 					rec := httptest.NewRecorder()
-					a.ServeHTTP(rec, request(req.method, req.path, row.authorization))
-					switch got := answer(rec); {
+					a.ServeHTTP(rec, boxRequest(req.method, req.path, row.authorization))
+					switch got := gitAnswer(rec); {
 					case rec.Code != http.StatusUnauthorized ||
 						rec.Header().Get("WWW-Authenticate") != `Basic realm="crewlet", charset="UTF-8"`:
 						t.Errorf("%s %s with %s answered %s, want git's 401 challenge", req.method, req.path,
 							row.name, got)
-					case got != answer(want):
+					case got != gitAnswer(want):
 						t.Errorf("%s %s with %s answered\n  %s\nwhere the box admission answers\n  %s",
-							req.method, req.path, row.name, got, answer(want))
+							req.method, req.path, row.name, got, gitAnswer(want))
 					case strings.Contains(rec.Body.String(), "API token"):
 						t.Errorf("%s %s with %s was challenged in a person's words: %s", req.method, req.path,
 							row.name, got)
 					}
 				}
 				rec := httptest.NewRecorder()
-				a.ServeHTTP(rec, request(req.method, req.path, signed))
-				if got := answer(rec); got != told {
+				a.ServeHTTP(rec, boxRequest(req.method, req.path, signed))
+				if got := gitAnswer(rec); got != told {
 					t.Errorf("%s %s with a signed token answered\n  %s\nwhere a person is told\n  %s",
 						req.method, req.path, got, told)
 				}
 			}
 		})
+	}
+}
+
+// unservedReasons is every reason a node serves none of the code host now, as
+// the engine names it — and one the seam does not explain.
+var unservedReasons = []struct {
+	name string
+	why  error
+}{
+	{"not hosted", engine.ErrCodeNotHosted},
+	{"applying", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplying)},
+	{"apply failed", fmt.Errorf("%w (epoch 4)", engine.ErrCodeApplyFailed)},
+	{"unknown", fmt.Errorf("%w (epoch 4)", engine.ErrCodeUnknown)},
+	{"needs restart", engine.ErrCodeNeedsRestart},
+	{"unexplained", errors.New("a seam that says something else")},
+}
+
+// boxTokensOf is a coding box's token signer and a check's box's, both over
+// keyring.
+func boxTokensOf(t *testing.T, keyring runtoken.Material) (*host.BoxTokens, *host.CheckTokens) {
+	t.Helper()
+	boxes, err := host.NewBoxTokens(keyring, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checks, err := host.NewCheckTokens(keyring, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return boxes, checks
+}
+
+// boxRequest is a box's request of path, carrying authorization where it is
+// set.
+func boxRequest(method, path, authorization string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	if authorization != "" {
+		r.Header.Set("Authorization", authorization)
+	}
+	return r
+}
+
+// gitAnswer is what a client of a git route is shown: its status and the
+// three headers a git route's answer can carry, then its words.
+func gitAnswer(rec *httptest.ResponseRecorder) string {
+	return fmt.Sprintf("%d [%s] [%s] [%s] %q", rec.Code, rec.Header().Get("Content-Type"),
+		rec.Header().Get("WWW-Authenticate"), rec.Header().Get("Retry-After"), rec.Body.String())
+}
+
+// boxCodeRequests is one request of each of a check's box's reads, and what
+// fakeGitRoutes answers it where its admission holds none.
+var boxCodeRequests = []struct{ method, path string }{
+	{http.MethodGet, "/box/code/web/tree"},
+	{http.MethodGet, "/box/code/web/blob?path=go.mod"},
+	{http.MethodGet, "/box/code/web/diff"},
+}
+
+// aCheckRef is one attempt of a check, as its box is given repository web.
+func aCheckRef() host.CheckRunRef {
+	return host.CheckRunRef{Repo: "web", Attempt: code.CheckKey{RepoID: uuid.NewString(),
+		OID: strings.Repeat("ab", 20), Name: "lint.go", Attempt: 2}}
+}
+
+// AN UNSERVED BOX ROUTE ANSWERS A CHECK'S TOKEN AS IT ANSWERS A RUN'S. A node
+// serving none of the code host now tells a check's box its reason — on its
+// git (/box/git/) and on its reads of its commit (/box/code/) alike — only once
+// the request presents a check's token this fleet signed, as `check`, and then
+// in exactly the words a person is told on /git/. A check's token presented as
+// a coding run's (`run`), a run's presented as a check's, and a check's token
+// another fleet signed are each answered the code host's own challenge, in the
+// bytes the box admission's credential step answers — so the reason reaches
+// nobody holding no credential this fleet signed for that user name.
+//
+// Mutations: CodeSurface.VerifyBox judging a check's token by the run tokens
+// alone (no check token verifies) — the signed rows answer the challenge,
+// red; VerifyBox accepting either token under either user name (no user in
+// the rule) — the crossed rows are told the reason, red; boxCodeRoute
+// answering the reason before the credential — red.
+func TestAnUnservedBoxRouteAnswersACheckToken(t *testing.T) {
+	t.Parallel()
+	keyring := runtoken.OneKey("k", "this fleet's key")
+	boxes, checks := boxTokensOf(t, keyring)
+	_, otherFleet := boxTokensOf(t, runtoken.OneKey("k", "another fleet's key"))
+	verify := func(user, token string) bool { return host.VerifyBox(boxes, checks, user, token) }
+	ref := aCheckRef()
+	run := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
+	basic := func(user, password string) string { return "Basic " + basicAuth(user, password) }
+	signed := basic(host.CheckUser, checks.Mint(ref, time.Minute))
+	unsigned := []struct{ name, authorization string }{
+		{"a check's token as a run's", basic(host.BoxUser, checks.Mint(ref, time.Minute))},
+		{"a run's token as a check's", basic(host.CheckUser, boxes.Mint(run))},
+		{"another fleet's check token", basic(host.CheckUser, otherFleet.Mint(ref, time.Minute))},
+		{"no credential", ""},
+	}
+	var requests []struct{ method, path string }
+	for _, req := range boxRequests {
+		requests = append(requests, struct{ method, path string }{req.method, req.path})
+	}
+	requests = append(requests, boxCodeRequests...)
+	for _, reason := range unservedReasons {
+		t.Run(reason.name, func(t *testing.T) {
+			t.Parallel()
+			a := codeApp(t, nil, fixedCode{why: reason.why, boxes: boxes, checks: checks})
+			told := gitAnswer(ask(t, a, http.MethodGet, "/git/web.git/info/refs?service=git-upload-pack", true))
+			for _, req := range requests {
+				for _, row := range unsigned {
+					want := httptest.NewRecorder()
+					if !host.ChallengeBox(want, boxRequest(req.method, req.path, row.authorization), verify,
+						slog.New(slog.DiscardHandler)) {
+						t.Fatalf("%s: the box admission admits it, so it is no unsigned request", row.name)
+					}
+					rec := httptest.NewRecorder()
+					a.ServeHTTP(rec, boxRequest(req.method, req.path, row.authorization))
+					if got := gitAnswer(rec); rec.Code != http.StatusUnauthorized || got != gitAnswer(want) {
+						t.Errorf("%s %s with %s answered\n  %s\nwhere the box admission answers\n  %s",
+							req.method, req.path, row.name, got, gitAnswer(want))
+					}
+				}
+				rec := httptest.NewRecorder()
+				a.ServeHTTP(rec, boxRequest(req.method, req.path, signed))
+				if got := gitAnswer(rec); got != told {
+					t.Errorf("%s %s with a signed check token answered\n  %s\nwhere a person is told\n  %s",
+						req.method, req.path, got, told)
+				}
+			}
+		})
+	}
+}
+
+// fakeGitReads records every read by object id it is asked, and answers each
+// with a page naming what it read.
+type fakeGitReads struct {
+	mu    sync.Mutex
+	asked []code.GitQuery
+}
+
+func (f *fakeGitReads) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	f.mu.Lock()
+	f.asked = append(f.asked, q)
+	f.mu.Unlock()
+	a := code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID, Next: "n",
+		PushedBy: map[string]code.PushedBy{q.Check.OID: {}}}
+	switch q.Kind {
+	case code.GitTree:
+		a.Tree = &code.TreeAnswer{}
+	case code.GitBlob:
+		a.Blob = &code.BlobAnswer{}
+	case code.GitDiff:
+		a.Diff = &code.DiffAnswer{}
+	}
+	return a, nil
+}
+
+func (f *fakeGitReads) queries() []code.GitQuery {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.asked)
+}
+
+// A CHECK'S API READS ONLY ITS COMMIT. Each of a check's box's three reads,
+// once admitted, is asked of the code domain's git reads AT THE ATTEMPT'S
+// COMMIT — a tree and a file at it, a diff from the attempt's base to it — as
+// a read made for the check: no asker, the attempt named, at the check's
+// session. A revision the request names (`rev`, `base`, `head`, a blob's own
+// id) is refused before anything is read, as is a parameter no read takes
+// and one named twice, and the answer carries the commit's content alone —
+// none of the push provenance a seat's read carries. And the git node holds
+// a read made for a check to its commit itself (code.GitQuery.Validate), so a
+// node that built one at another commit is refused there too.
+//
+// Mutations: boxCodeQuery reading a `rev` parameter into the tree read — the
+// row naming another commit is read, red; dropping the query's Check (a read
+// as nobody, held to nothing) — red; boxCodeAnswer carrying PushedBy — red;
+// atItsCheck accepting any revision — the last half red.
+func TestTheCheckAPIReadsOnlyItsSha(t *testing.T) {
+	t.Parallel()
+	ref := aCheckRef()
+	base := strings.Repeat("cd", 20)
+	session := statelog.FloorAt(statelog.ReadSession,
+		statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 9})
+	admitted := host.CheckAdmitted{Attempt: code.CheckRow{CheckKey: ref.Attempt, State: code.CheckStateRunning,
+		Base: base}, Repo: code.RepoRef{ID: ref.Attempt.RepoID, Name: "web"}, Fresh: session}
+	reads := &fakeGitReads{}
+	a := codeApp(t, nil, fixedCode{git: fakeGitRoutes{admitted: &admitted}, reads: &fakeCodeReads{},
+		gitReads: reads})
+	other := strings.Repeat("ef", 20)
+	for _, refused := range []string{
+		"/box/code/web/tree?rev=" + other,
+		"/box/code/web/blob?path=go.mod&rev=" + other,
+		"/box/code/web/diff?base=" + other,
+		"/box/code/web/diff?head=" + other,
+		"/box/code/web/blob?path=go.mod&path=README.md",
+		"/box/code/web/tree?start_line=2",
+		"/box/code/web/blob?start_line=two",
+	} {
+		rec := ask(t, a, http.MethodGet, refused, false)
+		if got, _ := errorBody(t, rec); rec.Code != http.StatusBadRequest || got != string(httpjson.CodeBadParams) {
+			t.Errorf("GET %s answered %d %q, want 400 bad_params", refused, rec.Code, rec.Body.String())
+		}
+	}
+	if asked := reads.queries(); len(asked) != 0 {
+		t.Fatalf("refused requests asked the git reads %+v", asked)
+	}
+	for _, read := range []struct {
+		path string
+		kind code.GitReadKind
+		rev  func(code.GitQuery) string
+	}{
+		{"/box/code/web/tree?path=cmd&recursive=true", code.GitTree,
+			func(q code.GitQuery) string { return q.Tree.Rev }},
+		{"/box/code/web/blob?path=go.mod&start_line=2&end_line=9", code.GitBlob,
+			func(q code.GitQuery) string { return q.Blob.Rev }},
+		{"/box/code/web/diff?paths=cmd&paths=go.mod&renames=true", code.GitDiff,
+			func(q code.GitQuery) string { return q.Diff.Head }},
+	} {
+		before := len(reads.queries())
+		rec := ask(t, a, http.MethodGet, read.path, false)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s answered %d %q", read.path, rec.Code, rec.Body.String())
+		}
+		asked := reads.queries()
+		if len(asked) != before+1 {
+			t.Fatalf("GET %s asked the git reads %d times", read.path, len(asked)-before)
+		}
+		q := asked[before]
+		switch {
+		case q.Kind != read.kind || read.rev(q) != ref.Attempt.OID || q.RepoID != ref.Attempt.RepoID:
+			t.Errorf("GET %s asked %+v, want a %s read of %s at %s", read.path, q, read.kind,
+				ref.Attempt.RepoID, ref.Attempt.OID)
+		case q.Check == nil || *q.Check != ref.Attempt || q.Asker != (code.Principal{}) || q.CeilingSeat != "":
+			t.Errorf("GET %s asked as %+v for %+v, want the engine's own read made for %+v", read.path,
+				q.Asker, q.Check, ref.Attempt)
+		case !reflect.DeepEqual(q.Fresh, session):
+			t.Errorf("GET %s read at %+v, want the check's session %+v", read.path, q.Fresh, session)
+		case q.Kind == code.GitDiff &&
+			(q.Diff.Base != base || !slices.Equal(q.Diff.Paths, []string{"cmd", "go.mod"})):
+			t.Errorf("GET %s asked the diff %+v, want from the attempt's base %s over its paths", read.path,
+				q.Diff, base)
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body["commit"] != ref.Attempt.OID || body["repo"] != "web" || body["next"] != "n" {
+			t.Errorf("GET %s answered %v, want the repository, the commit and the next page", read.path, body)
+		}
+		if _, carried := body["pushed_by"]; carried {
+			t.Errorf("GET %s answered the push provenance a seat's read carries: %v", read.path, body)
+		}
+	}
+
+	// THE GIT NODE'S OWN HOLD: a read made for the check at any other commit
+	// is refused as it is validated, whoever built it.
+	at := func(rev string) []code.GitQuery {
+		check := ref.Attempt
+		return []code.GitQuery{
+			{Kind: code.GitTree, RepoID: check.RepoID, Check: &check, Tree: &code.TreeQuery{Rev: rev}},
+			{Kind: code.GitBlob, RepoID: check.RepoID, Check: &check,
+				Blob: &code.BlobQuery{Rev: rev, Path: "go.mod"}},
+			{Kind: code.GitDiff, RepoID: check.RepoID, Check: &check,
+				Diff: &code.DiffQuery{Base: base, Head: rev}},
+		}
+	}
+	for _, q := range at(other) {
+		if err := q.Validate(); !errors.Is(err, code.ErrInvalid) {
+			t.Errorf("a %s read made for the check at another commit validated: %v", q.Kind, err)
+		}
+	}
+	for _, q := range at(ref.Attempt.OID) {
+		if err := q.Validate(); err != nil {
+			t.Errorf("a %s read made for the check at its commit was refused: %v", q.Kind, err)
+		}
+	}
+	asked := at(ref.Attempt.OID)[0]
+	asked.Asker = code.Principal{Kind: code.PrincipalOperator, OperatorID: "token:ops", Seat: "ceo"}
+	if err := asked.Validate(); !errors.Is(err, code.ErrInvalid) {
+		t.Errorf("a read made for the check naming an asker validated: %v", err)
 	}
 }
 

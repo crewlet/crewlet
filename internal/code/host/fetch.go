@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/paced"
@@ -28,8 +29,9 @@ import (
 // a rare barrier the box's floor cannot spare. An `ls-refs` names refs and is
 // read at the request's refs level, as every answer naming a ref is
 // (admission.refs): linearizable for a person, the run's session for a box,
-// whose floor it raises before its first byte (raiseFloor); a fetch names
-// none, since the host offers no want-ref (cache.ServeConfig).
+// whose floor it raises before its first byte (raiseFloor) — and a check's
+// box's is answered empty, the box shown no ref (noRefs); a fetch names none,
+// since the host offers no want-ref (cache.ServeConfig).
 func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitter) {
 	start := s.now()
 	if r.Header.Get("Content-Type") != UploadPackRequestType {
@@ -70,6 +72,10 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 	n, err := parseNegotiation(body.reader(), body.length(), v2)
 	if err != nil {
 		s.syncFailed(w, r, adm.name, err)
+		return
+	}
+	if n.namesRefs() && adm.noRefs {
+		s.noRefs(w, r, adm, start)
 		return
 	}
 	fresh := statelog.Freshness{Level: statelog.ReadStale}
@@ -195,15 +201,29 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 // many rounds it took. An `ls-refs`, an advertisement and a fetch the node
 // ended before its answer was whole are none — they did not send the
 // repository, or not all of it — and neither is any read of a `visibility:
-// company` repository, which every seat reads by declaration.
+// company` repository, which every seat reads by declaration. NOR A CHECK'S
+// BOX'S FETCH, which acts as nobody (admission.principal): the engine running
+// its repository's own checks file, whose attempt's row is its record.
 func (s *Server) fetched(ctx context.Context, adm admission, out *sink) {
-	if adm.repo.Visibility != code.VisibilityUnit || !out.PackSent() {
+	p := adm.principal()
+	if adm.repo.Visibility != code.VisibilityUnit || !out.PackSent() || p == (code.Principal{}) {
 		return
 	}
-	p := adm.principal()
 	s.o.Fetched(ctx, types.CodeFetched{RepoID: adm.repo.ID, RepoName: adm.name,
 		PrincipalKind: types.CodeReaderKind(p.Kind), Principal: p.Actor(), Seat: p.Seat,
 		Via: types.FetchedViaGit, Reads: 1, Bytes: out.Sent()})
+}
+
+// noRefs answers an `ls-refs` of a request shown no ref (admission.noRefs: a
+// check's box's) with the listing upload-pack writes of a repository holding
+// none — its flush alone — having synced nothing and run nothing: there is no
+// ref the request may be shown, and the box fetches its one commit by id.
+func (s *Server) noRefs(w http.ResponseWriter, r *http.Request, adm admission, start time.Time) {
+	out := newSink(w, "application/x-git-upload-pack-result", s.now)
+	defer out.End()
+	w.Header().Set("Cache-Control", "no-cache")
+	_, err := out.Write([]byte(flushPkt))
+	s.finishFetch(w, r, adm.name, commandLsRefs, cache.SyncNone, start, out, err)
 }
 
 // gitsAnswer reports whether a fetch's last run ended in an answer of git's

@@ -356,13 +356,15 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// (boxTokens), and by its run's row on the fleet's coordination store,
 	// which every node reads whichever node launched the run (boxRuns) — its
 	// push refused while a person's pause has stopped its seat (stoppedBy).
+	// A CHECK'S BOX by its check's token (checkTokens) and its attempt's row,
+	// which the host reads through the router's code seam like every row.
 	h, err := host.New(host.Options{
 		Cache: c, Git: pool, Estate: seam, Objects: objects,
 		Audit: e.auditGit, Fetched: e.recordCodeRead,
 		Limits: e.codeLimits, DeletedRetention: e.codeDeletedRetention,
 		Roster: e.codeRoster, Signer: codeSigner{e: e}, Share: share, Current: e.admits,
-		Boxes: host.Boxes{Tokens: e.boxTokens, Runs: boxRuns{pending: sandbox.NewCoordStore(e.backends.Fleet),
-			stopped: e.stoppedBy, log: log}},
+		Boxes: host.Boxes{Tokens: e.boxTokens, Checks: e.checkTokens,
+			Runs: boxRuns{pending: sandbox.NewCoordStore(e.backends.Fleet), stopped: e.stoppedBy, log: log}},
 		NodeID: nodeID, Timing: host.Production, Metrics: e.metrics,
 	})
 	if err != nil {

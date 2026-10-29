@@ -19,11 +19,12 @@ import (
 
 // ADMISSION: who is asking, as whom, and of which repository — every git
 // request's first step. A PERSON is admitted by admit, here; a CODING BOX by
-// admitBox (boxadmit.go). Nothing after admission asks which of the two ran
-// but through the admission's own fields and its five accessors — principal,
-// share, refs, boxFloor and engineCommitter — and a box's nil check where its
-// pushes raise the run's floor and are left out of the operator audit
-// (TestNothingAfterAdmissionAsksWhichAdmitterRan).
+// admitBox (boxadmit.go), and a CHECK'S BOX by admitBox too, its token telling
+// it to admitCheck (checkadmit.go). Nothing after admission asks which of the
+// three ran but through the admission's own fields and its five accessors —
+// principal, share, refs, boxFloor and engineCommitter — and a box's nil check
+// where its pushes raise the run's floor and are left out of the operator
+// audit (TestNothingAfterAdmissionAsksWhichAdmitterRan).
 
 // admission is a request admitted to a repository.
 type admission struct {
@@ -45,15 +46,25 @@ type admission struct {
 	// linearizable reports that repo was read through the barrier.
 	linearizable bool
 	// box is the coding run a /box/git/ request was admitted for; nil for a
-	// person's.
+	// person's and a check's.
 	box *BoxRun
+	// check is the attempt a check's box was admitted for, as its row stood
+	// at admission; nil for a person's request and a coding box's.
+	check *code.CheckRow
+	// noRefs is a request shown NO REF — a check's box's: its advertisement
+	// is protocol v2's, which names none, and its `ls-refs` is answered empty
+	// (fetch.go), since it fetches its one commit by id.
+	noRefs bool
 	// grant is the principal's standing as admission judged it — a person's
 	// GrantOf(…, nil), a box's the seat's from the chart held to the run's
-	// (code.Grant.Within). Every later judgement of the request reads it,
-	// never a GrantOf of its own (refusedAtAdvertisement, receivePack).
+	// (code.Grant.Within), and a check's box's none: it acts as nobody,
+	// admitted by its attempt's row to fetch, and a fetch past its admission
+	// judges no grant. Every later judgement of the request reads it, never a
+	// GrantOf of its own (refusedAtAdvertisement, receivePack).
 	grant code.Grant
 	// fresh is what a read of this request's REFS syncs at ([admission.refs]):
-	// LINEARIZABLE for a person, the run's SESSION at its floor for a box.
+	// LINEARIZABLE for a person, the run's SESSION at its floor for a box, and
+	// a check's box's at the position its attempt was queued at.
 	fresh statelog.Freshness
 	// spool is the credential the request's memory and spool are charged to
 	// (spool.go's per-credential share): [personSpool] of a person's or a
@@ -230,7 +241,17 @@ func admitted(name string, p iam.Principal) admission {
 // one copied raw would have every push the box makes refused as an invalid
 // proposal, the run stopped by a label it never chose. Its two ids are the
 // engine's own and never fitted: a run's pushes are found by them whole.
+//
+// A CHECK'S BOX ACTS AS NOBODY — the zero principal: the engine running its
+// repository's own checks file, which no seat or person asked of the host. So
+// its fetch is no principal's read of a `visibility: unit` repository
+// (fetched): the attempt's row, naming the change and who queued it, is its
+// record. It pushes nothing (admitCheck), so no proposal or session ever
+// carries it — and one that did would be refused as naming nobody.
 func (a admission) principal() code.Principal {
+	if a.check != nil {
+		return code.Principal{}
+	}
 	if a.box != nil {
 		run := a.box.Provenance
 		run.WorkBackend, run.WorkKey = code.FitProvenance(run.WorkBackend), code.FitProvenance(run.WorkKey)
@@ -245,7 +266,9 @@ func (a admission) principal() code.Principal {
 // sites that name a ref: LINEARIZABLE for a person, through the code log's
 // barrier, and the run's SESSION at its floor for a box, which pays no
 // barrier because its floor already holds everything it was shown
-// (boxadmit.go, "A box reads at its run's floor").
+// (boxadmit.go, "A box reads at its run's floor"). A check's box is shown no
+// ref (admission.noRefs), so what it syncs at is its check's session, which
+// holds the commit it fetches.
 func (a admission) refs() statelog.Freshness { return a.fresh }
 
 // boxFloor is the run a box's ref answers raise the floor of and the floor
@@ -288,9 +311,16 @@ func (a admission) engineCommitter(s Signer) (string, error) {
 // gives each runner its own turn, as the fetch spool keys a request by the
 // credential too. A CODING BOX is a RUN, keyed by its launch: its class holds
 // at most half the lane (gitproc.ShareClass.Cap), so a person's push or clone
-// is never queued behind generated code's client-paced clones.
+// is never queued behind generated code's client-paced clones. A CHECK'S BOX
+// is a run too — a repository's own checks file is code nobody vouches for as
+// much as a seat's — keyed by its REPOSITORY (`check:<id>`), never its
+// attempt: a push fans out a check per name its file defines, and keyed per
+// attempt one repository's dozen checks took a dozen turns of the class where
+// a coding run takes one.
 func (a admission) share() gitproc.Share {
 	switch {
+	case a.check != nil:
+		return gitproc.Share{Class: gitproc.ShareRun, Principal: "check:" + a.check.RepoID}
 	case a.box != nil:
 		return gitproc.Share{Class: gitproc.ShareRun, Principal: a.box.Ref.LaunchID}
 	case a.seat != "":

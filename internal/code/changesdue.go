@@ -119,7 +119,7 @@ func (q ReadQuery) validateChangesDue() error {
 		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
 		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
-		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
+		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
 	} {
 		if f.set {

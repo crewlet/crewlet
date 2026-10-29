@@ -340,6 +340,29 @@
 // on in one cat-file (forged), and a push may bring back maxEngineCommits of
 // them, a longer history in parts.
 //
+// # A check's box is admitted by its attempt's row
+//
+// A box running one ATTEMPT of one check of one commit reaches the same
+// routes with its CHECK'S credential: the Basic user name CheckUser and a
+// token (CheckTokens, in BoxKeyDomain beside a run's and told from one by its
+// subject) naming the attempt's key and the repository's name its box was
+// given, valid for the check's timeout and code.CheckBoxGrace — a backstop,
+// the attempt's ROW the authority (checkadmit.go). It FETCHES, over protocol
+// v2, and nothing else; its URL's name is matched to the token's before the
+// code log is read, so a box probing names costs the log nothing; the row is
+// read stale, and through the barrier only where the stale copy holds no such
+// attempt, an ENDED row refused at once however stale (a check's state only
+// rises, so an ending is for good); and every read is at the CHECK'S SESSION,
+// the position its attempt was queued at, which its commit's push precedes. It
+// is shown NO REF — its advertisement v2's, its `ls-refs` answered empty — and
+// fetches its commit by id, which protocol v2 serves of any object present.
+// It acts as NOBODY, so its fetch of a `visibility: unit` repository is
+// recorded by its attempt's row and never as a principal's read, and it is
+// charged as a run keyed by its repository (`check:<id>`). The API's
+// /box/code/, a check's box's reads of its commit by object id, admits the
+// same way (AdmitCheck) and asks the code domain's git reads as the engine's
+// own, held to that commit (code.GitQuery.Check).
+//
 // # Every transfer is charged to the credential that asked for it
 //
 // The same admission says whose TRANSFER every git process of the request is

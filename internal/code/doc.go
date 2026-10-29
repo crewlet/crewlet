@@ -273,6 +273,16 @@
 // repository's purge writes nothing, and the purge's parts take its checks
 // after its changes, in the same rows-and-bytes budget.
 //
+// A CHECK'S BOX IS ADMITTED BY ITS ATTEMPT'S ROW (internal/code/host), which
+// its admission reads by the attempt's key on every request ([ReadCheckBox]):
+// the engine's own read, refusing an asker and every other field, since the
+// box is no principal — a kind of its own so a principal's `check` read that
+// forgot its asker is refused rather than answered held to no grant. Its reads
+// of its commit by object id are the engine's own too ([GitQuery.Check],
+// [GitQuery.EnginesOwn]), held by [GitQuery.Validate] to that commit. Its
+// token outlives the check's timeout by [CheckBoxGrace], a backstop the row
+// overrides the moment the attempt ends.
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a

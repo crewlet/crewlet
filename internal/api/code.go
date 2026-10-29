@@ -41,15 +41,19 @@ import (
 // route, and on no other, that token may arrive as a Basic credential's
 // password, because a git client presents one no other way.
 //
-// /box/git/ is: a coding box's routes, the code host's third prefix, are
-// published beside the box's other two edges and admitted by the run, never
-// by an operator token. The same three handlers serve them behind the code
-// host's box admission, which reads the run's token from git's Basic password
-// and the run's row on every request ([auth.BoxGitPrefix]); mounted on the
-// route table itself, like /mcp/ and /otlp/, never through the
-// [authz.Router] the person's routes take, since a box's request reaches the
-// handler anonymous to the guard and a router would refuse it before its
-// admission ran.
+// /box/git/ is: a box's routes, the code host's third prefix, are published
+// beside a coding box's other two edges and admitted by the box's own token,
+// never by an operator token. The same three handlers serve them behind the
+// code host's box admission, which reads a coding run's token — or a check's —
+// from git's Basic password and the run's row, or the check's attempt's, on
+// every request ([auth.BoxGitPrefix]); mounted on the route table itself, like
+// /mcp/ and /otlp/, never through the [authz.Router] the person's routes take,
+// since a box's request reaches the handler anonymous to the guard and a
+// router would refuse it before its admission ran. So is /box/code/, a
+// check's box's reads of the commit its check measures by object id
+// ([auth.BoxCodePrefix], boxcode.go): admitted by the code host's check
+// admission, then answered from the code domain's git reads as the engine's
+// own, held to that commit.
 //
 // THE CODE HOST'S ROWS ARE QUESTIONS, not routes of this file: `code_repos`,
 // `code_repo` and `code_pushes`, registered in internal/api/queries and served
@@ -84,8 +88,10 @@ import (
 // deployment's state.
 
 // GitRoutes is the code host as the API mounts it; *host.Server satisfies it.
-// The Box handlers are the same three entry points behind a coding box's
-// admission rather than a person's.
+// The Box handlers are the same three entry points behind a box's admission
+// rather than a person's; AdmitCheck is that admission for a check's box's
+// reads under /box/code/ (boxcode.go), which answers a request it refuses
+// itself.
 type GitRoutes interface {
 	InfoRefs() http.Handler
 	UploadPack() http.Handler
@@ -93,6 +99,7 @@ type GitRoutes interface {
 	BoxInfoRefs() http.Handler
 	BoxUploadPack() http.Handler
 	BoxReceivePack() http.Handler
+	AdmitCheck(ctx context.Context, w http.ResponseWriter, r *http.Request) (host.CheckAdmitted, bool)
 	StartVerify(ctx context.Context, name string, repair bool, floor statelog.Position) (host.Verification, error)
 	Verification(name string, id uuid.UUID) (host.Verification, bool)
 	AwaitVerification(ctx context.Context, name string, id uuid.UUID) (host.Verification, bool)
@@ -123,13 +130,26 @@ type CodeSurface interface {
 	// none, on CodeReads' terms: the readers stand with the code reads.
 	RepoReaders() (builtin.ReadersDeps, error)
 
-	// VerifyBox is whether token is a coding box's run token this fleet
-	// signed: the engine's own box tokens (host.BoxTokens.Verify), over the
-	// keyring Tier A derives on EVERY node whatever the company runs — so it
-	// answers where GitRoutes finds no code host, which is the one place it
-	// is asked: a box route there tells a box why only once its token
-	// verifies ([App.boxGitRoute]).
-	VerifyBox(token string) bool
+	// GitReads is the code domain's reads of a repository by object id,
+	// routed to its home git node (estate.CodeSeam's GitRead) — what a
+	// check's box's reads of its commit are answered from (boxcode.go) — or
+	// why this node serves none, on CodeReads' terms.
+	GitReads() (GitReader, error)
+
+	// VerifyBox is whether token is the credential user presents on a box
+	// route, signed by this fleet — a coding run's token under host.BoxUser,
+	// a check's under host.CheckUser (host.VerifyBox) — by the engine's own
+	// tokens over the keyring Tier A derives on EVERY node whatever the
+	// company runs: so it answers where GitRoutes finds no code host, which
+	// is the one place it is asked — a box route there tells a box why only
+	// once its token verifies ([App.boxGitRoute]).
+	VerifyBox(user, token string) bool
+}
+
+// GitReader is the code domain's reads of a repository by object id, as a
+// check's box's reads of its commit ask them; estate.CodeSeam satisfies it.
+type GitReader interface {
+	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 }
 
 // codeQuestions is the code surface as the code questions find it on every
@@ -305,20 +325,22 @@ func servesGit(b *config.Bootstrap) bool {
 // A GIT ROUTE'S REFUSAL IS IN GIT'S FORM ([gitRefusal]): git prints one line
 // of text and nothing of the JSON envelope a REST route answers.
 //
-// A CODING BOX'S THREE ROUTES are mounted on the route table ITSELF, beside
-// the person's, as /mcp/ and /otlp/ are — never through a router. A router
-// decides every route it mounts on the request's iam principal
-// ([authz.ContextGuard]), and a box's request reaches the handler anonymous:
-// the guard never resolves a run's token, which is no credential of its, so
-// behind a router every box request would be refused before the code host's
-// box admission — the run's token, its row and the seat's grant, read on every
-// request — ever ran. They are served through [App.boxGitRoute], resolved per
-// request as the person's are, so a node whose code host is not serving tells
-// a box why in the same words it tells a person — but only once the box's
-// request presents a run token this fleet signed, since the route is public
-// and the reason is the deployment's state; and mounted where the person's
-// are, on a node whose roles name git. The table keeps their patterns, so the
-// listener walk publishes them ([auth.BoxGitPrefix] is public).
+// A BOX'S THREE ROUTES are mounted on the route table ITSELF, beside the
+// person's, as /mcp/ and /otlp/ are — never through a router. A router decides
+// every route it mounts on the request's iam principal ([authz.ContextGuard]),
+// and a box's request reaches the handler anonymous: the guard never resolves
+// a box's token, which is no credential of its, so behind a router every box
+// request would be refused before the code host's box admission — the box's
+// token and its run's row or its check's, read on every request — ever ran.
+// They are served through [App.boxGitRoute], resolved per request as the
+// person's are, so a node whose code host is not serving tells a box why in
+// the same words it tells a person — but only once the box's request presents
+// a token this fleet signed, since the route is public and the reason is the
+// deployment's state; and mounted where the person's are, on a node whose
+// roles name git. A CHECK'S BOX'S THREE READS ([auth.BoxCodePrefix]) are
+// mounted the same way, on the same terms ([App.boxCodeRoute]). The table
+// keeps their patterns, so the listener walk publishes them (both prefixes
+// are public).
 //
 // The git patterns are the host's own constants, so the path a handler reads
 // its repository from is the path it was mounted at, and this file spells no
@@ -342,6 +364,9 @@ func (a *App) mountCode(mux authz.Mux) error {
 	mux.Handle(host.PatternBoxInfoRefs, a.boxGitRoute(GitRoutes.BoxInfoRefs))
 	mux.Handle(host.PatternBoxUploadPack, a.boxGitRoute(GitRoutes.BoxUploadPack))
 	mux.Handle(host.PatternBoxReceivePack, a.boxGitRoute(GitRoutes.BoxReceivePack))
+	mux.Handle(host.PatternBoxCodeTree, a.boxCodeRoute(code.GitTree))
+	mux.Handle(host.PatternBoxCodeBlob, a.boxCodeRoute(code.GitBlob))
+	mux.Handle(host.PatternBoxCodeDiff, a.boxCodeRoute(code.GitDiff))
 	// A WRITE TO THE DRAIN GATE, refused while draining like every POST: a
 	// check is new work on the node, a repair a write into its copy. Only
 	// where git is served: it checks THIS node's cache, which a node without
@@ -389,11 +414,11 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 	})
 }
 
-// boxGitRoute is [App.gitRoute] for a coding box's route, which tells WHY this
-// node serves no code host now only to a request presenting a run token this
-// fleet signed ([CodeSurface.VerifyBox]), and answers any other the code
-// host's own challenge — the box admission's credential step,
-// [host.ChallengeBox].
+// boxGitRoute is [App.gitRoute] for a box's route, which tells WHY this node
+// serves no code host now only to a request presenting a token this fleet
+// signed — a coding run's, or a check's ([CodeSurface.VerifyBox]) — and
+// answers any other the code host's own challenge — the box admission's
+// credential step, [host.ChallengeBox].
 //
 // # Why a box's route, and only a box's, waits on the token
 //
@@ -403,10 +428,10 @@ func (a *App) gitRoute(pick func(GitRoutes) http.Handler) http.Handler {
 // the company hosts code (404), that this node is applying the configuration
 // the fleet activated, that its apply failed, that it could not read that
 // configuration, that its runtime is owed a restart (503), or that the seam
-// broke its contract (500). A box holding its run's token is told exactly
-// what a person is, since what it says is the box's to act on: retry, or ask
-// another node. A person's routes keep their answers: the guard stands in
-// front of them, so nobody reaches a reason there without a credential.
+// broke its contract (500). A box holding its token is told exactly what a
+// person is, since what it says is the box's to act on: retry, or ask another
+// node. A person's routes keep their answers: the guard stands in front of
+// them, so nobody reaches a reason there without a credential.
 //
 // THE SAME CHALLENGE THE ADMISSION ANSWERS, by the one step both run, so a box
 // whose credential helper has not answered yet — git's first request carries

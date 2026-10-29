@@ -150,19 +150,32 @@ func TestBasicIsAPersonsCredentialOnly(t *testing.T) {
 	}
 }
 
-// THE BOX PREFIX IS PUBLIC AND UNGUARDED: a coding box holds no person's
-// credential and is reached from wherever its sandbox runs, so /box/git/ is
-// served on the public listener beside the box's other two edges and exempt
-// from the guard, its run's token the credential and the code host's box
-// admission the check — while a person's /git/ is neither.
+// THE BOX PREFIXES ARE PUBLIC AND UNGUARDED: a box holds no person's
+// credential and is reached from wherever its sandbox runs, so /box/git/ — a
+// box's git — and /box/code/ — a check's box's reads of its commit — are
+// served on the public listener beside a coding box's other two edges and
+// exempt from the guard, the box's token the credential and the code host's
+// box admission the check — while a person's /git/ is neither. /box/code/ is
+// no git route, and its Basic credential is no credential of the guard's.
 func TestTheBoxPrefixIsPublicAndUnguarded(t *testing.T) {
 	t.Parallel()
-	path := auth.BoxGitPrefix + "web.git/info/refs"
-	if !auth.Public(path) || !auth.Unguarded(path) {
-		t.Errorf("%s: public %v, unguarded %v, want both", path, auth.Public(path), auth.Unguarded(path))
+	for _, prefix := range []string{auth.BoxGitPrefix, auth.BoxCodePrefix} {
+		path := prefix + "web/tree"
+		if !auth.Public(path) || !auth.Unguarded(path) {
+			t.Errorf("%s: public %v, unguarded %v, want both", path, auth.Public(path), auth.Unguarded(path))
+		}
+		if !slices.Contains(auth.PublicPrefixes(), prefix) {
+			t.Errorf("the public prefixes %v do not list %s", auth.PublicPrefixes(), prefix)
+		}
 	}
-	if !slices.Contains(auth.PublicPrefixes(), auth.BoxGitPrefix) {
-		t.Errorf("the public prefixes %v do not list %s", auth.PublicPrefixes(), auth.BoxGitPrefix)
+	read := httptest.NewRequest(http.MethodGet, auth.BoxCodePrefix+"web/tree", nil)
+	read.Header.Set("Authorization", basic("check", "x"))
+	if op := auth.GitAccess(read); op != auth.GitNone {
+		t.Errorf("a check's box's read of its commit is classified %q, want no git request", op)
+	}
+	g := guard(t, withTokens(config.APIToken{ID: "founder", Token: "secret"}))
+	if got := g.Credential(read); got != "" {
+		t.Errorf("a check's box's read presents %q to the guard, want nothing", got)
 	}
 	person := auth.GitPrefix + "web.git/info/refs"
 	if auth.Public(person) || auth.Unguarded(person) {

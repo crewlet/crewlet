@@ -25,20 +25,33 @@ const (
 	CodePrefix = "/code/"
 )
 
-// BoxGitPrefix is where a CODING BOX reaches the code host with its run's
-// credential (ADR-0063): HTTP Basic, the user name host.BoxUser (`run`), the
-// run's token as the password.
+// BoxGitPrefix is where a BOX reaches the code host's git with its own
+// credential: HTTP Basic, the user name host.BoxUser (`run`) with a coding
+// run's token as the password (ADR-0063), or host.CheckUser (`check`) with a
+// check's.
 //
 // A PUBLIC prefix ([publicPrefixes]), unlike [GitPrefix]: a box holds no
 // person's or deployment's credential and is reached from wherever its
 // sandbox runs, so it is served on api.public when one is set — beside /mcp/
-// and /otlp/, the box's other two edges — and EXEMPT from the guard, the run's
-// token being the credential and the code host's box admission the check. It
-// does not begin with [GitPrefix], so no reader of where a PERSON'S git starts
-// takes a box's request for one: neither transport admits the other's
-// credential. [GitAccess] classifies a request under either prefix alike — one
-// classifier, every doubt a push.
+// and /otlp/, a coding box's other two edges — and EXEMPT from the guard, the
+// box's token being the credential and the code host's box admission the
+// check. It does not begin with [GitPrefix], so no reader of where a PERSON'S
+// git starts takes a box's request for one: neither transport admits the
+// other's credential. [GitAccess] classifies a request under either prefix
+// alike — one classifier, every doubt a push.
 const BoxGitPrefix = "/box/git/"
+
+// BoxCodePrefix is where a CHECK'S BOX reads the one commit its check
+// measures by object id — its tree, a file of it, its diff — through the API
+// rather than a clone (a check whose checks file says `checkout: none`), with
+// the credential it fetches with: HTTP Basic, host.CheckUser and its check's
+// token.
+//
+// PUBLIC AND UNGUARDED for [BoxGitPrefix]'s reasons, its admission the code
+// host's (host.Server.AdmitCheck), so it is served where the code host is: on
+// a node whose roles name git. It is no git route: [GitAccess] answers
+// [GitNone] for it, and a drain serves its reads as it serves every read.
+const BoxCodePrefix = "/box/code/"
 
 // GitRepoPath is the path a person's git reaches one repository at, below the
 // listener's base: [GitPrefix], the name, then `.git`. THE ONE SPELLING, for

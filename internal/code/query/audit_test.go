@@ -1,6 +1,8 @@
 package query_test
 
 import (
+	"errors"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code"
@@ -87,5 +89,49 @@ func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 	mustRead(t, s, factsQ(repo, head, head))
 	if after := rec.all(); len(after) != len(want) {
 		t.Errorf("the engine's own read of a visibility: unit repository was recorded: %+v", after[len(want):])
+	}
+}
+
+// A READ MADE FOR A CHECK IS THE ENGINE'S OWN: a check's box's read of its
+// commit through the API names no asker — the box is no principal, and the
+// attempt's row that admitted it is its authority — so the git node judges no
+// grant on the `visibility: unit` repository it reads, which a seat outside
+// the owning unit is refused, and records it as nobody's read; and it reads
+// the attempt's commit alone, a read at another commit refused as it is
+// validated, having read nothing.
+//
+// Mutations: judge a read made for a check by its asker's grant (the kind's
+// rule alone in the server's grant step) — refused as nobody, red; record it
+// as a read — red; hold no read made for a check to its commit — the later
+// commit's tree is answered, red.
+func TestAReadMadeForACheckIsTheEnginesOwn(t *testing.T) {
+	t.Parallel()
+	settings := codetest.Settings()
+	settings.Visibility = code.VisibilityUnit
+	x := newFixture(t, codetest.SoloOptions{}, settings)
+	head := x.commit(map[string]string{"f": "1\n"}, "one")
+	later := x.commit(map[string]string{"f": "2\n"}, "two")
+	repo := x.repo(codetest.RepoName)
+	rec := &fetches{}
+	s := x.server(0, query.Options{Roster: company, Fetched: rec.record})
+	attempt := code.CheckKey{RepoID: repo, OID: head, Name: "unit", Attempt: 1}
+	forCheck := func(rev string) code.GitQuery {
+		return code.GitQuery{Kind: code.GitTree, RepoID: repo, Home: true, Check: &attempt,
+			Tree: &code.TreeQuery{Rev: rev}}
+	}
+	outside := treeQ(repo, code.TreeQuery{Rev: head})
+	outside.Asker = seat("sales-rep")
+	if _, err := s.Read(t.Context(), outside); !errors.Is(err, code.ErrNotPermitted) {
+		t.Fatalf("the premise: a seat outside the owning unit read the repository: %v", err)
+	}
+	a := mustRead(t, s, forCheck(head))
+	if a.Tree == nil || !slices.ContainsFunc(a.Tree.Entries, func(e code.TreeEntry) bool { return e.Path == "f" }) {
+		t.Fatalf("a read made for the check answered %+v, want its commit's tree", a.Tree)
+	}
+	if got := rec.all(); len(got) != 0 {
+		t.Errorf("a read made for a check was recorded as somebody's: %+v", got)
+	}
+	if _, err := s.Read(t.Context(), forCheck(later)); !errors.Is(err, code.ErrInvalid) {
+		t.Errorf("a read made for the check at another commit answered %v, want code.ErrInvalid", err)
 	}
 }
