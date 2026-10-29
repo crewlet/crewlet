@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { classifyConfigRefusal, introducedWarnings } from "./configAnswer.ts";
+import { classifyConfigRefusal, introducedWarnings, unsettledSentence } from "./configAnswer.ts";
 import {
   configTransport,
   createEntity,
@@ -255,8 +255,29 @@ describe("one reading of a /config refusal", () => {
       { kind: "draining", detail: "shutting down" },
     ],
     [503, { error: "starting", detail: "recovering" }, { kind: "starting", detail: "recovering" }],
-    [502, {}, { kind: "unreachable", detail: "" }],
-    [0, { error: "unreachable", detail: "offline" }, { kind: "unreachable", detail: "offline" }],
+    // NOT THE ENGINE'S ANSWER: no engine code, or a body that was not its JSON.
+    [502, {}, { kind: "unsettled", answered: false, status: 502, detail: "" }],
+    [
+      504,
+      { error: "unreadable_body", detail: "a 504 came back without the engine's JSON" },
+      {
+        kind: "unsettled",
+        answered: false,
+        status: 504,
+        detail: "a 504 came back without the engine's JSON",
+      },
+    ],
+    [
+      0,
+      { error: "unreachable", detail: "offline" },
+      { kind: "unsettled", answered: false, status: 0, detail: "offline" },
+    ],
+    // THE ENGINE'S OWN 5xx: it answered, and failed.
+    [
+      500,
+      { error: "internal", detail: "the store could not commit" },
+      { kind: "unsettled", answered: true, status: 500, detail: "the store could not commit" },
+    ],
   ])("status %i %j reads as %j", (status, body, want) => {
     expect(classifyConfigRefusal({ status, body })).toEqual(want);
   });
@@ -273,8 +294,45 @@ describe("one reading of a /config refusal", () => {
       "starting",
     );
     expect(classifyConfigRefusal({ status: 503, body: { error: "unavailable" } }).kind).toBe(
-      "unreachable",
+      "unsettled",
     );
+  });
+
+  // "DID NOT ANSWER" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED. The owner
+  // removing a model saw "the engine did not answer" while the engine's log
+  // showed it answering; every screen opens with this one sentence.
+  test.each([
+    [
+      { status: 0, body: { error: "unreachable", detail: "Failed to fetch" } },
+      "The engine did not answer.",
+    ],
+    [
+      {
+        status: 0,
+        body: { error: "unreachable", detail: "the engine did not answer within 30 seconds" },
+      },
+      "The engine did not answer.",
+    ],
+    [
+      {
+        status: 504,
+        body: { error: "unreadable_body", detail: "a 504 came back without the engine's JSON" },
+      },
+      "The engine did not answer.",
+    ],
+    [
+      { status: 500, body: { error: "internal", detail: "the store could not commit" } },
+      "The engine failed: the store could not commit.",
+    ],
+    [
+      { status: 503, body: { error: "unavailable", detail: "The fleet pointer is unreadable." } },
+      "The engine failed: The fleet pointer is unreadable.",
+    ],
+    [{ status: 500, body: { error: "internal" } }, "The engine failed: internal."],
+  ])("%j is said as %j", (answer, sentence) => {
+    const refusal = classifyConfigRefusal(answer);
+    if (refusal.kind !== "unsettled") throw new Error(`classified as ${refusal.kind}`);
+    expect(unsettledSentence(refusal)).toBe(sentence);
   });
 
   // A 409 THAT NO NEWER REVISION CLEARS. A write taking a human seat out of

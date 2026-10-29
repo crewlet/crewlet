@@ -323,7 +323,12 @@ describe("structure", () => {
     });
     // A seat of the saved company keeps its handle when the last check could
     // not describe the draft at all.
-    const unreachable = answered(checked, { status: "unreachable", detail: "offline" });
+    const unreachable = answered(checked, {
+      status: "unchecked",
+      why: "unanswered",
+      answerStatus: 0,
+      detail: "offline",
+    });
     expect(seatOf(unreachable, seatKey("sre")).handle).toBe("sre");
   });
 

@@ -61,7 +61,7 @@ import { classifyConfigRefusal } from "~/protocol/configAnswer.ts";
 import { isRecord, jsonEqual } from "./json.ts";
 import type { KeySource } from "./keys.ts";
 import { fromDocument, toDocument } from "./document.ts";
-import { classifyCheck, type CheckOutcome } from "./scheduler.ts";
+import { classifyCheck, uncheckedSentence, type CheckOutcome } from "./scheduler.ts";
 import {
   checkRequest,
   revisionOfEtag,
@@ -169,7 +169,7 @@ export function classifySave(
       : typeof body.error === "string"
         ? body.error
         : "";
-  if (refusal.kind === "unreachable") {
+  if (refusal.kind === "unsettled") {
     return { kind: "unknown", currentRevisionId: null, detail };
   }
   if (afterUnknown && refusal.kind === "conflict") {
@@ -384,8 +384,8 @@ export async function readyToUpdate(
   return {
     kind: "unknown",
     detail:
-      checked.status === "unreachable"
-        ? checked.detail || "The engine could not be reached."
+      checked.status === "unchecked"
+        ? uncheckedSentence(checked)
         : "The engine did not describe the organization.",
   };
 }

@@ -6,7 +6,7 @@
  * What these protect: a check sends exactly the write a save would, without a
  * summary; only the answer for the current generation is used; a superseded
  * request is aborted and its late answer dropped; a burst of changes sends one
- * check; an unreachable engine is retried with growing delays that changes do
+ * check; an unchecked draft is retried with growing delays that changes do
  * not shortcut; a conflict, a refused token and a read-only process stop
  * checking until a reset; and saving is refused, held or allowed per status.
  */
@@ -24,6 +24,7 @@ import {
   classifyCheck,
   isCurrentAnswer,
   saveRules,
+  uncheckedSentence,
   transition,
   type CheckState,
   type SettledCheck,
@@ -149,7 +150,7 @@ describe("classifyCheck", () => {
     });
   });
 
-  test("refusals map to the states that halt, and failures to unreachable", () => {
+  test("refusals map to the states that halt, and failures to unchecked, each said apart by why", () => {
     const cases: [HttpAnswer, unknown][] = [
       [
         { status: 401, body: { error: "unauthorized" } },
@@ -161,19 +162,28 @@ describe("classifyCheck", () => {
       ],
       [
         { status: 503, body: { error: "draining", detail: "restarting" } },
-        { status: "unreachable", detail: "restarting" },
+        { status: "unchecked", why: "draining", answerStatus: 503, detail: "restarting" },
       ],
       [
         { status: 503, body: { error: "starting", detail: "recovering" } },
-        { status: "unreachable", detail: "recovering" },
+        { status: "unchecked", why: "starting", answerStatus: 503, detail: "recovering" },
       ],
       [
         { status: 0, body: { error: "unreachable" } },
-        { status: "unreachable", detail: "unreachable" },
+        { status: "unchecked", why: "unanswered", answerStatus: 0, detail: "unreachable" },
       ],
       [
         { status: 502, body: { error: "unreadable_body" } },
-        { status: "unreachable", detail: "unreadable_body" },
+        { status: "unchecked", why: "unanswered", answerStatus: 502, detail: "unreadable_body" },
+      ],
+      [
+        { status: 500, body: { error: "internal", detail: "the store could not commit" } },
+        {
+          status: "unchecked",
+          why: "failed",
+          answerStatus: 500,
+          detail: "the store could not commit",
+        },
       ],
       [
         { status: 409, body: { error: "revision_advanced", current_revision_id: "r9" } },
@@ -355,7 +365,7 @@ describe("transition", () => {
     expect(settled.effects).toEqual([]);
   });
 
-  test("an unreachable engine is retried with doubling delays up to the cap, and changes ride the retry", () => {
+  test("an unchecked draft is retried with doubling delays up to the cap, and changes ride the retry", () => {
     let state: CheckState = loaded.state;
     let now = T0;
     const delays: number[] = [];
@@ -363,14 +373,14 @@ describe("transition", () => {
       const settled = transition(state, {
         type: "settled",
         request: state.inFlight!.request,
-        status: "unreachable",
+        status: "unchecked",
         now,
       });
       const wake = settled.effects.find((e) => e.type === "wake");
       if (wake?.type !== "wake") throw new Error("no retry scheduled");
       delays.push(wake.at - now);
       state = settled.state;
-      expect(state.status).toBe("unreachable");
+      expect(state.status).toBe("unchecked");
 
       const changed = transition(state, {
         type: "changed",
@@ -379,7 +389,7 @@ describe("transition", () => {
       });
       expect(changed.effects).toEqual([]);
       expect(changed.state.dueAt).toBe(wake.at);
-      expect(changed.state.status).toBe("unreachable");
+      expect(changed.state.status).toBe("unchecked");
       state = changed.state;
 
       now = wake.at;
@@ -427,7 +437,7 @@ describe("saveRules", () => {
       waiting: false,
       reason: null,
     });
-    expect(saveRules("unreachable", true)).toEqual({
+    expect(saveRules("unchecked", true)).toEqual({
       review: true,
       save: true,
       waiting: false,
@@ -585,12 +595,12 @@ describe("CheckRunner", () => {
     expect(settled[0]!.sent.document).toEqual({ name: "generation 2" });
   });
 
-  test("an unreachable engine is retried after the backoff, not at the next change", async () => {
+  test("an engine that did not answer is retried after the backoff, not at the next change", async () => {
     const { clock, transport, runner, change, reset } = harness();
     reset();
     transport.pending[0]!.resolve({ status: 0, body: { error: "unreachable" } });
     await flush();
-    expect(runner.state.status).toBe("unreachable");
+    expect(runner.state.status).toBe("unchecked");
     change();
     clock.advance(CHECK_BACKOFF_BASE_MS - 1);
     expect(transport.pending).toHaveLength(1);
@@ -617,7 +627,7 @@ describe("CheckRunner", () => {
     transport.pending[0]!.reject(new Error("socket hang up"));
     await flush();
     expect(settled[0]).toMatchObject({
-      outcome: { status: "unreachable", detail: "socket hang up" },
+      outcome: { status: "unchecked", why: "unanswered", detail: "socket hang up" },
     });
     clock.advance(CHECK_BACKOFF_BASE_MS);
     expect(transport.pending).toHaveLength(2);
@@ -625,3 +635,19 @@ describe("CheckRunner", () => {
     expect(transport.pending[1]!.signal.aborted).toBe(true);
   });
 });
+
+// WHAT A SAVE'S SETTLING READ SAYS when it could not read: "did not answer"
+// only where the engine's answer never arrived.
+test.each([
+  ["unanswered", 0, "Failed to fetch", "The engine did not answer."],
+  ["unanswered", 504, "a 504 came back without the engine's JSON", "The engine did not answer."],
+  ["failed", 500, "store: disk full", "The engine failed: store: disk full."],
+  ["failed", 500, "", "The engine failed with status 500."],
+  ["draining", 503, "shutting down", "This node is draining."],
+  ["starting", 503, "recovering", "This node is still starting."],
+] as const)(
+  "an unchecked answer (%s, %i) is said as one sentence",
+  (why, answerStatus, detail, said) => {
+    expect(uncheckedSentence({ status: "unchecked", why, answerStatus, detail })).toBe(said);
+  },
+);

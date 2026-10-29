@@ -32,6 +32,7 @@
 
 import { confirmStepUp, needSession } from "./signin.ts";
 import type { LogRefusal, QueryRefusal } from "./types.ts";
+import { answeredByEngine } from "./engineAnswer.ts";
 import { remedyOf, type Remedy } from "./remedy.ts";
 
 /**
@@ -151,13 +152,10 @@ export class RestError extends Error {
   }
 
   /**
-   * Whether this is NOT the engine's own answer: nothing came back (status
-   * 0), a body that could not be read (`unreadable_body` — a gateway's HTML
-   * page, a 200 cut off part way through), or a status with no engine error
-   * code in it. Every refusal the engine writes is JSON with an `error` code,
-   * its auth guard's included and its router's own `no_route` and
-   * `method_not_allowed` for a route or method it does not serve, so an answer
-   * without one was written by something in front of it.
+   * Whether this is NOT the engine's own answer ([answeredByEngine]): nothing
+   * came back (status 0), a body that could not be read (`unreadable_body`, a
+   * gateway's HTML page or a 200 cut off part way through), or a status with
+   * no engine error code in it.
    *
    * WHAT A WRITE'S CALLER NEEDS BEFORE IT READS A REFUSAL AS ONE. A refusal
    * the engine wrote means nothing was done; this means nobody here knows. A
@@ -167,7 +165,7 @@ export class RestError extends Error {
    * was dropped with it.
    */
   get unanswered(): boolean {
-    return this.status === 0 || this.code === "" || this.code === "unreadable_body";
+    return !answeredByEngine(this.status, this.code);
   }
 }
 

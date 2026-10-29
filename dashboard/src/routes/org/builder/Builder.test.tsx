@@ -703,6 +703,39 @@ describe("the selection in the URL", () => {
     );
   });
 
+  // "COULD NOT REACH" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED. Every one
+  // of these leaves the draft unchecked and saving allowed; the toolbar says
+  // which happened, and a drain or an engine that failed is not a network.
+  test.each([
+    [
+      "a gateway's page",
+      () => new Response("<html>502</html>", { status: 502 }),
+      "Could not reach the engine to check",
+    ],
+    [
+      "the engine's own 500",
+      () => json({ error: "internal", detail: "store: disk full" }, 500),
+      "The engine failed to check",
+    ],
+    [
+      "a draining node",
+      () => json({ error: "draining", detail: "shutting down" }, 503),
+      "Not checked: this node is draining",
+    ],
+    [
+      "a starting node",
+      () => json({ error: "starting", detail: "recovering" }, 503),
+      "Not checked: this node is starting",
+    ],
+  ])("a check met by %s is labelled as what happened", async (_, fail, label) => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    engine.script = (r) => (r.query.get("dry_run") === "true" ? fail() : null);
+    fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
+    await screen.findByText(label);
+  });
+
   // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
   // at once, and a link built from that handle opened a seat the engine does
   // not have; its reports, like any seat's, can still be edited.
@@ -713,7 +746,7 @@ describe("the selection in the URL", () => {
     // First with no answer about the new seat, so no handle is known for it.
     engine.script = (r) => (r.query.get("dry_run") === "true" ? json({ error: "bad" }, 502) : null);
     fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
-    await screen.findByText("Could not reach the engine to check");
+    await screen.findByText("The engine failed to check");
     fireEvent.click(screen.getByRole("button", { name: "Select Analyst" }));
     const actionsFor = async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Actions for Analyst, selected" }));
