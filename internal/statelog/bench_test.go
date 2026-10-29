@@ -180,7 +180,7 @@ func BenchmarkApplierDrain(b *testing.B) {
 			b.StartTimer()
 			node.start()
 			ctx, cancel := context.WithTimeout(b.Context(), 5*time.Minute)
-			err := node.runner.WaitCommitted(ctx, last)
+			err := node.runner.WaitReached(ctx, last)
 			cancel()
 			b.StopTimer()
 			drained += time.Since(began)

@@ -467,8 +467,8 @@ type memberCopy struct{ m *member }
 func (c memberCopy) For(context.Context, string) (estate.Backend, bool) {
 	d := c.m.data
 	return estate.Backend{
-		Code:      d.Served(),
-		Committed: d.WaitApplied,
+		Code:    d.Served(),
+		Reached: d.WaitApplied,
 		Answers: func(ctx context.Context) bool {
 			h, err := d.Health(ctx)
 			if err != nil {

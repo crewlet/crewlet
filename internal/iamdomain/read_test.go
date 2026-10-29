@@ -411,7 +411,7 @@ func TestAReaderWaitsForTheBearersPositionOnItsOwnLog(t *testing.T) {
 	var asked []statelog.Position
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
 		DB: rig.db.Reader(), Log: log,
-		Committed: func() statelog.Position { return statelog.Position{} },
+		Reached: func() statelog.Position { return statelog.Position{} },
 		Await: func(_ context.Context, p statelog.Position) error {
 			asked = append(asked, p)
 			return nil

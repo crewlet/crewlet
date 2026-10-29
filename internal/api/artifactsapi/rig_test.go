@@ -415,13 +415,13 @@ type appliedLog struct {
 	waiting chan statelog.Position
 }
 
-func (l *appliedLog) Committed() statelog.Position {
+func (l *appliedLog) Reached() statelog.Position {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.at
 }
 
-func (l *appliedLog) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (l *appliedLog) WaitReached(ctx context.Context, p statelog.Position) error {
 	announced := false
 	for {
 		l.mu.Lock()
@@ -446,7 +446,7 @@ func (l *appliedLog) WaitCommitted(ctx context.Context, p statelog.Position) err
 }
 
 func (l *appliedLog) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
-	return l.WaitCommitted(ctx, p)
+	return l.WaitReached(ctx, p)
 }
 
 // advance applies the log through p.

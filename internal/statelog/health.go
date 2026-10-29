@@ -203,9 +203,13 @@ const ApplyRetryBudget = StallGrace / 2
 // shapes, and why every barrier compares the first against a read index taken
 // from the same generation.
 type Health struct {
-	// Position is (stream, generation, seq) committed in THIS node's own
-	// transaction — not a consumer's acknowledgement floor, which moves
-	// for reasons that have nothing to do with what this node holds.
+	// Position is (stream, generation, seq) THIS node's rows are current
+	// through: its reached position ([Runner.Reached]), every record at or
+	// below it committed in this node's own transaction or a barrier that
+	// writes no row — not a consumer's acknowledgement floor, which moves
+	// for reasons that have nothing to do with what this node holds, and
+	// not the committed checkpoint, which a stalled fsync holds back over
+	// rows that are already whole.
 	Position Position
 
 	// AppliedThrough is the prefix whose DERIVED CONSEQUENCES this node

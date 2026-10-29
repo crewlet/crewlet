@@ -168,10 +168,10 @@ var classified = map[string]struct {
 	"estate.Backend.ArtifactData": {seamNone, "the datastore's reader and writer, built over " +
 		"artifactdata.ReaderOptions and artifactdata.WriterDeps; a write's authority is stamped " +
 		"on the asking side"},
-	"estate.Backend.Committed": {seamNone, "the applier's position"},
-	"estate.Backend.Answers":   {seamNone, "the copy's distance from its log"},
-	"estate.Backend.Admits":    {seamNone, "the copy's establishment, for a seat's admission"},
-	"estate.Backend.Current":   {seamGate, "whether this node serves the company's configuration"},
+	"estate.Backend.Reached": {seamNone, "the applier's position"},
+	"estate.Backend.Answers": {seamNone, "the copy's distance from its log"},
+	"estate.Backend.Admits":  {seamNone, "the copy's establishment, for a seat's admission"},
+	"estate.Backend.Current": {seamGate, "whether this node serves the company's configuration"},
 	"estate.Backend.verifiers": {seamNone, "the keys a machine token's narrowed answer is MAC'd " +
 		"under, derived from the node's Tier A keyring, never from the company's configuration"},
 	"estate.Backend.pageBytes": {seamNone, "how much of a paged read one answer carries"},
@@ -303,11 +303,11 @@ var classified = map[string]struct {
 		"settings and chart: a write a stale reading admits is one that, sent a moment " +
 		"before the revision, would have landed anyway"},
 
-	"iamdomain.ReaderOptions.DB":        {seamNone, "the replicated rows an identity read answers from"},
-	"iamdomain.ReaderOptions.Log":       {seamNone, "the identity log's read authority"},
-	"iamdomain.ReaderOptions.Committed": {seamNone, "the applier's position"},
-	"iamdomain.ReaderOptions.Lag":       {seamNone, "the applier's distance from its log"},
-	"iamdomain.ReaderOptions.Await":     {seamNone, "the applier's wait for a position"},
+	"iamdomain.ReaderOptions.DB":      {seamNone, "the replicated rows an identity read answers from"},
+	"iamdomain.ReaderOptions.Log":     {seamNone, "the identity log's read authority"},
+	"iamdomain.ReaderOptions.Reached": {seamNone, "the applier's position"},
+	"iamdomain.ReaderOptions.Lag":     {seamNone, "the applier's distance from its log"},
+	"iamdomain.ReaderOptions.Await":   {seamNone, "the applier's wait for a position"},
 
 	"artifactsdomain.ReaderOptions.DB":  {seamNone, "the replicated rows an artifact read answers from"},
 	"artifactsdomain.ReaderOptions.Log": {seamNone, "the artifacts log's read authority"},

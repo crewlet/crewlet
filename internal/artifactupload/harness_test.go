@@ -676,11 +676,15 @@ func (w *waiter) Committed() statelog.Position {
 	return w.at
 }
 
+// Reached is Committed: this rig moves its position when it applies a record,
+// in one step, so it reaches nothing its commit has not.
+func (w *waiter) Reached() statelog.Position { return w.Committed() }
+
 func (w *waiter) StreamIdentity() error                         { return nil }
 func (w *waiter) Truncated() error                              { return nil }
 func (w *waiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
-func (w *waiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *waiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
@@ -701,7 +705,7 @@ func (w *waiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
 }
 
 func (w *waiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statelog.Position) error {
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // ---- the CDN and the bucket ---------------------------------------------- //

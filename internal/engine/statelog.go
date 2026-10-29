@@ -2334,23 +2334,34 @@ func (s *stateLog) observe(ctx context.Context, running *runningLog) (statelog.H
 }
 
 // observeWith is [stateLog.observe] with the log's ends from endsOf — read now,
-// or served from memory to a read ([servedEnds]) — handed the checkpoint this
+// or served from memory to a read ([servedEnds]) — handed the position this
 // health describes.
 //
-// # A held end and a checkpoint that has moved past it
+// # The position is the one a reader waits for
 //
-// Ends served from memory were read before this checkpoint, which may since
-// have applied records past them — records that are ON the log, since the
-// applier reads them from it. So where the checkpoint the ends were read
-// beside was not past them, the end is at least this checkpoint, and a node
-// that applied past a second-old end is not reported ahead of its log. Where
-// it WAS past them, the node was ahead of its log when they were read, and
-// stays so: a checkpoint past the end is a refusal no later apply could have
-// cleared. Read now, the two checkpoints are one and the rule changes nothing.
+// THE RUNNER'S REACHED POSITION ([statelog.Runner.Reached]), never its
+// committed checkpoint: a read is served from the rows that position is
+// current through, and a barrier this node has reached and not yet
+// checkpointed — its fsync stalled — changes none of them. Read off the
+// checkpoint, the lag a bounded read is held to, and the position a read is
+// stamped with, counted those barriers as missing rows. What is durable — the
+// position the heartbeat publishes, the write fence's — stays the checkpoint
+// ([stateLog.publishPositions]).
+//
+// # A held end and a position that has moved past it
+//
+// Ends served from memory were read before this position, which may since
+// have moved past them — over records that are ON the log, since the applier
+// reads them from it. So where the position the ends were read beside was not
+// past them, the end is at least this position, and a node that applied past
+// a second-old end is not reported ahead of its log. Where it WAS past them,
+// the node was ahead of its log when they were read, and stays so: a position
+// past the end is a refusal no later apply could have cleared. Read now, the
+// two positions are one and the rule changes nothing.
 func (s *stateLog) observeWith(ctx context.Context, running *runningLog,
 	endsOf func(context.Context, statelog.Position) (streamEnds, error)) (statelog.Health, error) {
 	now := time.Now()
-	at := running.runner.Committed()
+	at := running.runner.Reached()
 	health := statelog.Health{Position: at, AppliedThrough: at.Seq}
 	// THE APPLIER'S OWN STOP, FIRST. A halted applier's rows are frozen at
 	// the record that stopped it, so every later record's consequences are
@@ -2477,10 +2488,13 @@ func floored(health statelog.Health, domain string, floors publishedFloors) (sta
 	// the truth, so trusting it downward is how a node below the real
 	// floor keeps serving.
 	health.Floor = statelog.Floor{State: statelog.FloorOK, ReadAt: floors.at}
-	// BELOW MEANS THE NEXT RECORD THIS NODE NEEDS MAY BE GONE: the one at
-	// checkpoint+1. A checkpoint one below the higher of the floor and the
-	// first surviving sequence has applied everything that was, or may yet
-	// be, removed.
+	// BELOW MEANS THE NEXT RECORD THIS NODE NEEDS MAY BE GONE: the one after
+	// the position this health describes, the one its rows are current
+	// through ([stateLog.observeWith]). A position one below the higher of
+	// the floor and the first surviving sequence has applied everything that
+	// was, or may yet be, removed. (What the heartbeat asks of the same
+	// predicate is the committed checkpoint, which is where a restart
+	// resumes: [stateLog.publishPositions].)
 	//
 	// And WHICH below is asked of `first` alone, because the floor is
 	// written before the purge it licenses and a purge can fail after it,

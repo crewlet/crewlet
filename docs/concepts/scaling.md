@@ -627,18 +627,23 @@ flowchart TD
   node has heard the refusal yet, so every asker sends a repository's pushes
   to the same node.
   So is one that refuses a *read* for a reason about itself — its applier did
-  not commit, in time, what precedes the barrier a linearizable read appended
-  (`behind`), it stalled, it holds a record it cannot decode, it was evicted,
-  or it lost its broker or its quorum: the next data node is asked, and the
-  refusal is the answer only where none does better. The three refusals that
-  hold for every node alike — the log is full (`log_full`), the broker refused
-  to store the barrier on the log every node appends to (`broker_refused`: a
-  sealed stream, a store with no resources left), the fleet is in a capacity
-  window (`maintenance`) — are answered at once, from the first node that
-  gives them. Asking the next node costs a question and nothing more: it is
-  handed what the read already paid for — the barrier the first node appended,
-  the position it waited its whole read budget for — so a walk past every data
-  node appends one barrier and waits one read budget, however many there are.
+  not *reach*, in time, the record before the barrier a linearizable read
+  appended (`behind`), where reaching a position is committing every record up
+  to it that writes a row and decoding every barrier among them, whichever node
+  appended it: a barrier's own commit writes no row, so no read waits for it,
+  and what a node is behind on is a row it has not committed or a record it
+  has not been handed yet. Or it stalled, it holds a record it cannot decode,
+  it was evicted, or it lost its broker or its quorum: the next data node is
+  asked, and the refusal is the answer only where none does better. The three
+  refusals that hold for every node alike — the log is full (`log_full`), the
+  broker refused to store the barrier on the log every node appends to
+  (`broker_refused`: a sealed stream, a store with no resources left), the
+  fleet is in a capacity window (`maintenance`) — are answered at once, from
+  the first node that gives them. Asking the next node costs a question and
+  nothing more: it is handed what the read already paid for — the barrier the
+  first node appended, the position it waited its whole read budget for — so a
+  walk past every data node appends one barrier and waits one read budget,
+  however many there are.
   What may be repeated once
   a node *may* have run a write is the operation's own rule: a tracker write
   moves on under the same operation id, a knowledge-base write that went

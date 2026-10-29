@@ -35,8 +35,10 @@ type Directory interface {
 
 // Identity is one read's answer.
 type Identity struct {
-	// Applied is how far this node's iam applier has committed, packed.
-	// It is what a bearer's start position is compared against.
+	// Applied is how far this node's iam applier has reached
+	// ([statelog.Runner.Reached]: every record through it that writes a row
+	// committed), packed. It is what a bearer's start position is compared
+	// against.
 	Applied uint64
 
 	// Lag is how far behind the log this node is, as a duration. The

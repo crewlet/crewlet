@@ -24,8 +24,12 @@ import (
 //     position of a barrier it appended, which the broker committed. A
 //     linearizable read handed one on its own log WAITS FOR THE RECORDS
 //     BEFORE IT AND APPENDS NOTHING — every node derives the same position to
-//     wait for from it ([waitsThrough]). That is equally linearizable: the
-//     read index takes only a barrier that started after its reader arrived
+//     wait for from it ([waitsThrough]), and waits on its own reached
+//     position ([Runner.Reached]), so the barrier the FIRST node appended is
+//     one more barrier every other node passes the moment it decodes it,
+//     never one whose commit it waits for: every data node applies every
+//     node's barriers. That is equally linearizable: the read index takes
+//     only a barrier that started after its reader arrived
 //     ([ReadIndex.Read]), and that reader is this same request, reaching a
 //     node after it began — so every write acknowledged before the request
 //     began is below the barrier, whichever node's applier the request is

@@ -106,6 +106,26 @@ const (
 	// alarm fires at a QUARTER of it, because a barrier is one term of a
 	// read and a barrier already spending the whole budget is a read that
 	// has been failing for some time.
+	//
+	// WHAT A READ SPENDS IT ON is its barrier's append and this node
+	// committing every record before that barrier that writes a row —
+	// never a barrier's own checkpoint, its own or any other's
+	// ([Runner.Reached]). Waiting for those, on a disk whose fsyncs
+	// stalled 2.1–9.3 s, refused reads at this bound with every row they
+	// needed already on the node: 30 of 33 refused code-log reads sat in
+	// their own barrier's checkpoint-only commit. Now three reads back to
+	// back behind a checkpoint held at its commit for the whole case are
+	// served in 2.0–2.4 ms each under the race detector
+	// (TestNoReadWaitsOnACommitThatWritesNoRow), and a whole read alone
+	// takes 1.4 / 5.3 ms at p50 / p99 (BenchmarkArbitratedWrite, solo,
+	// 2,000 reads), both on two laptop E-cores.
+	//
+	// TWO SECONDS STAYS, and a refusal here is the answer rather than a
+	// bound to grow: what can still spend it is a commit that writes a
+	// row, and a device stall has no length to size against — covering the
+	// stalls above would have taken at least 9.3 s — while in a fleet the
+	// bound is also how long a walk waits on one data node before the
+	// estate router asks the next.
 	ReadBudget = 2 * time.Second
 
 	// PrefetchScanBudget is what the knowledge scan a turn's prefetch runs

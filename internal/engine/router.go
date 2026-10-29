@@ -562,7 +562,7 @@ func (l *localEstate) refresh(ctx context.Context, c *core, done chan struct{}) 
 func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	b := estate.Backend{
 		Usage: usage.Reader{Estate: e.usageEstate()}, Current: e.admits,
-		Committed: e.WaitCommitted,
+		Reached: e.WaitReached,
 		Admits: func(ctx context.Context) bool {
 			ok, refusal := c.log.Established(ctx, true)
 			if !ok && refusal != "" {

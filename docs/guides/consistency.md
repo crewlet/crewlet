@@ -235,14 +235,26 @@ could ask that board to include.
 It is a **barrier append**, not a field check.
 
 The reader publishes one record onto the domain's `barrier` subject and waits
-until its own node has committed every record before it. The acknowledgement
-is what carries the proof: at `replicas: 3` a `PubAck` means a majority of the
-raft group has the record durably, so any position at or below it is one the
-whole group agrees on. At `replicas: 1` there is no group and the
-acknowledgement proves only that the one member has it — which is exactly as
-strong as that deployment is. The barrier itself is never waited for: it
-writes no row on any node, so its own commit changes nothing the read reads,
-and waiting for it put a checkpoint's fsync in front of every read.
+until its own node holds every record before it that writes a row. The
+acknowledgement is what carries the proof: at `replicas: 3` a `PubAck` means a
+majority of the raft group has the record durably, so any position at or below
+it is one the whole group agrees on. At `replicas: 1` there is no group and
+the acknowledgement proves only that the one member has it — which is exactly
+as strong as that deployment is.
+
+**No barrier's commit is waited for** — not the read's own, and not that of
+any barrier before it, another read's or another node's. A barrier writes no
+row on any node, so its commit is a checkpoint and an fsync that change nothing
+a read reads: the node counts it as held the moment its applier decodes it,
+and commits it beside the apply loop, never in its way. On a disk whose fsyncs
+stall for seconds, waiting for those commits refused reads `behind` at the
+read budget with every row they needed already on the node. What a read still
+waits for is a commit that writes a row — a write before its barrier — and a
+`behind` names that position. The position an answer reports is the one its
+rows are current through, which may be a barrier this node has not yet
+checkpointed; its durable checkpoint — where a restart resumes, and what it
+tells the rest of the fleet — moves only by a commit, so a restart is handed
+those barriers again.
 
 The barrier is a real record with a real cost, and every `linearizable` read
 waits for one to come back — but concurrent reads on one node **share** them.
@@ -253,26 +265,28 @@ waits that one out and joins the next, which serves every read that arrived in
 the meantime. So a lone read costs one append, and a read on a busy node waits
 for at most two and appends none of its own.
 
-Measured by `make bench` on one four-vCPU machine holding all three members,
-with `stream.sync: always`. The whole-read rows were measured while a read
-still waited for its own barrier's commit, so they bound today's from above:
+Measured by `make bench`'s read arms, 2,000 reads an arm, on two cores of a
+laptop shared with other work (E-cores of an Intel Core Ultra 7 265U) holding
+all three members, with `stream.sync: always`; where the three-replica column
+gives a range, its ends are the stream's leader and a follower:
 
 | | solo | three replicas |
 |---|---|---|
-| the barrier append alone (median) | 0.6 ms (0.2 ms with the fsync declined) | 3.5–3.9 ms (0.9–1.3 ms declined) |
-| one reader: the whole read, median / p99 | 1.7–1.8 / 4.3–4.6 ms | 4.8–5.5 / 10–12.5 ms |
-| one reader: reads a second | 535–555 | 171–197 |
-| sixteen readers at once: barriers appended per read | 0.22 | 0.14–0.20 |
-| sixteen readers at once: reads a second, together | 4,600–4,700 | 1,120–1,610 |
-| sixteen readers at once: the whole read, median / p99 | 3.3 / 8.3–8.5 ms | 9.6–12.5 / 19–31 ms |
+| the barrier append alone (median) | 0.96 ms (0.21 ms with the fsync declined) | 8.4–11.9 ms (2.4–2.6 ms declined) |
+| one reader: the whole read, median / p99 | 1.4 / 5.3 ms | 6.2–10.0 / 63–71 ms |
+| one reader: reads a second | 595 | 64–96 |
+| sixteen readers at once: barriers appended per read | 0.12 | 0.12 |
+| sixteen readers at once: reads a second, together | 5,500 | 490–1,560 |
+| sixteen readers at once: the whole read, median / p99 | 2.8 / 6.3 ms | 9.8–21.9 / 22–83 ms |
 
-Sixteen readers calling back to back get at most about eight reads out of a
-barrier rather than sixteen, because the readers one barrier served call again
-while the next is already in flight and wait for the one after it: measured,
-each barrier alone served eight, and whole reads — whose waits for the applier
-spread the readers out — four to seven. Treat all of it as a floor rather than
-a budget: real members add a network hop between them and do not share one
-machine.
+What a whole read adds to its barrier is the moment the node decodes it, not
+the commit of its checkpoint, so the two rows sit about half a millisecond
+apart solo. Sixteen readers calling back to back get at most about eight reads
+out of a barrier rather than sixteen, because the readers one barrier served
+call again while the next is already in flight and wait for the one after it:
+measured, each barrier served about eight and a half, whole reads included.
+Treat all of it as a floor rather than a budget: real members add a network
+hop between them and do not share one machine, let alone two cores of it.
 
 The reason it is an append and not a `STREAM.INFO` field is that a field read
 can be served by a member that has been partitioned away from its own group:
@@ -308,7 +322,7 @@ rather than downgraded. Each code names a different thing to do.
 
 | Code | What happened | What to do |
 |---|---|---|
-| `behind` | This node has not reached the position the read needs — including a node below the published trim floor whose missing records the log still holds, which it is replaying. | Wait — the answer carries a retry hint derived from this node's measured drain. It clears on its own. |
+| `behind` | This node has not reached the position the read needs: it has not committed every record up to it that writes a row — a barrier is held from the moment it is decoded, its own commit never waited for — including a node below the published trim floor whose missing records the log still holds, which it is replaying. | Wait — the answer carries a retry hint derived from this node's measured drain. It clears on its own. |
 | `too_stale` | This node's lag is past what the read said it would accept. | Ask a node that is less behind, or accept more staleness. It carries no retry hint: a lag bound is the caller's own choice, and a node past it may stay there. |
 | `stalled` | This node's applied prefix has stopped moving — its applier halted, or has been retrying a failure it cannot get past for longer than the retry budget. | Its rows are frozen, so a short answer would be wrong rather than old. Check the applier — `crewlet retention status` names the domain, its position and the error it is retrying. A retried failure clears on its own the moment an attempt succeeds. A `consistent_prefix` read, which makes no statement about age, is still answered by a stalled node at or above the published trim floor — a frozen prefix is still a coherent one — and refused by one below it. |
 | `no_quorum` | The barrier did not commit in time: the broker answered and a majority did not agree within the barrier's own five seconds — or, on a read another node asked for, within what that node's attempt left, less a second for the answer to reach it. | Retry after the hint (4 s, the broker's own minimum election timeout). If it persists, a member is down or partitioned. |
@@ -339,10 +353,12 @@ Asking costs a question per node and nothing more, because the refusal says
 what the read already paid for and the router hands it to every node it asks
 next: a `linearizable` read waits for the records before the barrier the
 first node appended rather than appending one of its own — as linearizable,
-since that barrier was appended after the read began — a position one node
-waited its whole read budget for is not waited for again (served if the node
-holds it, `behind` at once if not), and a log whose barrier ran its whole five
-seconds without committing gets no second one (`no_quorum` at once). So a
+since that barrier was appended after the read began, and no dearer, since
+every node holds another node's barrier the moment it decodes it — a position
+one node waited its whole read budget for is not waited for again (served if
+the node holds it, `behind` at once if not), and a log whose barrier ran its
+whole five seconds without committing gets no second one (`no_quorum` at
+once). So a
 fleet that one burst put behind together refuses a read after one barrier and
 one read budget, rather than a barrier and two seconds per data node.
 Three are about **the whole fleet** — `log_full`, since every node appends its

@@ -265,13 +265,18 @@ func checkTrimmed(d Domain, spec StreamSpec, floor Position, writer string, body
 
 // Committer is this node's own applier of one log, as the anchor sweep paces
 // itself on it — the log's [Runner] in the engine.
+//
+// ITS REACHED POSITION, never its committed checkpoint, is what the sweep
+// waits on ([Runner.Reached]): a trimmed record writes rows, so it is reached
+// only once committed, and the barriers at the log's end write none, so their
+// checkpoint holds back no anchor the sweep counts.
 type Committer interface {
-	// Committed is this node's committed position on the log.
-	Committed() Position
+	// Reached is the position this node's rows of the log are current
+	// through.
+	Reached() Position
 
-	// WaitCommitted blocks until this node's applier has committed
-	// through p.
-	WaitCommitted(ctx context.Context, p Position) error
+	// WaitReached blocks until this node's applier has reached p.
+	WaitReached(ctx context.Context, p Position) error
 }
 
 // SweepDeps is what the trim needs to remove one log's anchors below a floor.
@@ -423,7 +428,7 @@ func PlanSweep(ctx context.Context, d SweepDeps, below Position) (SweepPlan, err
 		return SweepPlan{}, fmt.Errorf("statelog: read the ends of %s before sweeping "+
 			"its anchors: %w", d.Spec.Name, err)
 	}
-	if err = d.waitCommitted(ctx, below.At(ends.Last)); err != nil {
+	if err = d.waitReached(ctx, below.At(ends.Last)); err != nil {
 		return SweepPlan{}, fmt.Errorf("statelog: this node's copy of %s has not "+
 			"applied the log's end, %d, so its anchors are not counted — counted, "+
 			"they would include anchors the records already on the log remove: %w",
@@ -538,7 +543,7 @@ func (p SweepPlan) Sweep(ctx context.Context, budget time.Duration) (Swept, erro
 		if err != nil {
 			return Swept{Records: i}, frameworkAppendError(TrimmedKind, p.subject, err)
 		}
-		if err = d.waitCommitted(ctx, p.below.At(seq)); err != nil {
+		if err = d.waitReached(ctx, p.below.At(seq)); err != nil {
 			if errors.Is(err, errSweepBudgetSpent) {
 				return Swept{Records: i + 1, Remain: i+1 < p.records || p.capped}, nil
 			}
@@ -556,23 +561,22 @@ func spent(ctx context.Context) bool {
 	return errors.Is(context.Cause(ctx), errSweepBudgetSpent)
 }
 
-// waitCommitted waits, for at most [DefaultResolveBudget] and never past ctx —
+// waitReached waits, for at most [DefaultResolveBudget] and never past ctx —
 // the caller's bound for a plan, the budget's for a sweep — for this node's
-// applier to commit through p: see [PlanSweep] and [SweepPlan.Sweep], its two
-// callers.
+// applier to reach p: see [PlanSweep] and [SweepPlan.Sweep], its two callers.
 //
 // THE CAUSE IS KEPT on the error, because the two bounds mean different
 // things: the budget running out is the sweep's designed stop, and this wait's
 // own bound passing is an applier that could not reach what was appended.
-func (d SweepDeps) waitCommitted(ctx context.Context, p Position) error {
+func (d SweepDeps) waitReached(ctx context.Context, p Position) error {
 	ctx, cancel := context.WithTimeout(ctx, DefaultResolveBudget)
 	defer cancel()
-	if err := d.Runner.WaitCommitted(ctx, p); err != nil {
+	if err := d.Runner.WaitReached(ctx, p); err != nil {
 		if cause := context.Cause(ctx); cause != nil && !errors.Is(err, cause) {
 			err = fmt.Errorf("%w: %w", err, cause)
 		}
 		return fmt.Errorf("its applier, at %s, did not reach %s: %w",
-			d.Runner.Committed(), p, err)
+			d.Runner.Reached(), p, err)
 	}
 	return nil
 }

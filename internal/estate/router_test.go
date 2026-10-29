@@ -402,7 +402,7 @@ func (f *fakeNode) backend() Backend {
 			f.mu.Unlock()
 			return reportingWriter{fakeNode: f, log: a.Provenance.Written}
 		},
-		Committed: func(ctx context.Context, at statelog.Position) error {
+		Reached: func(ctx context.Context, at statelog.Position) error {
 			f.mu.Lock()
 			f.floors = append(f.floors, at)
 			behind, abandoned, release := f.behind, f.abandoned, f.release

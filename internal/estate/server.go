@@ -341,7 +341,7 @@ func ready(ctx context.Context, self string, spec *opSpec, b Backend, floors []s
 			return reason, why, nil
 		}
 	}
-	if spec.floorStream == "" || b.Committed == nil {
+	if spec.floorStream == "" || b.Reached == nil {
 		return "", "", nil
 	}
 	for _, floor := range floors {
@@ -441,7 +441,7 @@ func waitFloor(ctx context.Context, b Backend, floor statelog.Position, waited b
 	}
 	bounded, cancel, bound := statelog.WaitWithin(ctx, budget)
 	defer cancel()
-	err := b.Committed(bounded, floor)
+	err := b.Reached(bounded, floor)
 	switch {
 	case err == nil:
 		return bound, false, nil

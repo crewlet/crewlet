@@ -14,16 +14,17 @@ import (
 //
 // Every read a domain's read authority serves asks that domain's health first,
 // and again after any read that waited ([statelog.ReaderDeps.Health]). Most of
-// a health is this node's own and costs nothing to read: its checkpoint, its
-// applier's stop and fault, what it holds deferred, its eviction row, whether
-// its stream is the one its rows are keyed to. TWO TERMS ARE NOT: the fleet's
-// published trim floors are a leader read of each registered domain's key in a
-// coordination bucket, and the log's two ends are a stream-info request to
-// that stream's leader, made on a handle whose mutex serialises every caller.
-// Read on every read, they put the company's whole read rate on the
-// coordination stream's leader, N nodes over, and queued every read of a
-// domain on one node behind one stream-info round trip at a time — while the
-// stale level promised a read that "takes no broker call at all".
+// a health is this node's own and costs nothing to read: its reached
+// position, its applier's stop and fault, what it holds deferred, its eviction
+// row, whether its stream is the one its rows are keyed to. TWO TERMS ARE NOT:
+// the fleet's published trim floors are a leader read of each registered
+// domain's key in a coordination bucket, and the log's two ends are a
+// stream-info request to that stream's leader, made on a handle whose mutex
+// serialises every caller. Read on every read, they put the company's whole
+// read rate on the coordination stream's leader, N nodes over, and queued
+// every read of a domain on one node behind one stream-info round trip at a
+// time — while the stale level promised a read that "takes no broker call at
+// all".
 //
 // So a read is served both from memory ([memo]): the last value read, refreshed
 // OFF the read's path, ONE read at a time, once it is older than
@@ -46,7 +47,7 @@ import (
 // floors only rise within a generation and a stale log end is lower than the
 // truth, so a read may be served a second longer by a node that just fell
 // behind the published floor, or report a second's records less lag — never a
-// hole, which the stream's own first record decides, and never a checkpoint
+// hole, which the stream's own first record decides, and never a position
 // past the end that was not one (see [observeWith]). A value nobody could
 // refresh AGES, and each term ages at a bound of its own:
 //
@@ -226,16 +227,20 @@ func (m *memo[T]) refresh(ctx context.Context, read func(context.Context) (T, er
 	}
 }
 
-// streamEnds is one read of a log's two ends, and the checkpoint this node
-// held just BEFORE it — so the ends are at least as recent as that checkpoint.
+// streamEnds is one read of a log's two ends, and the position this node's rows
+// were current through just BEFORE it — so the ends are at least as recent as
+// that position.
 type streamEnds struct {
 	first, last uint64
 	before      statelog.Position
 }
 
-// readEnds reads running's log's two ends, noting the checkpoint first.
+// readEnds reads running's log's two ends, noting this node's position first:
+// its REACHED position, the one the health it is read for describes
+// ([stateLog.observeWith]) — every record through it is on the log, so ends
+// read after it are at or past it.
 func readEnds(ctx context.Context, running *runningLog) (streamEnds, error) {
-	before := running.runner.Committed()
+	before := running.runner.Reached()
 	first, last, err := running.log.Bounds(ctx)
 	if err != nil {
 		return streamEnds{}, err

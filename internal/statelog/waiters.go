@@ -19,8 +19,8 @@ var ErrWaitAbandoned = errors.New("statelog: the applier stopped while this " +
 	"caller was waiting on it")
 
 // waiters is the set of callers blocked on this node's applier reaching a
-// position, ordered BY POSITION so a commit wakes exactly the ones it
-// satisfied.
+// position, ordered BY POSITION so a move of the reached position wakes
+// exactly the ones it satisfied.
 //
 // # Why a heap and a channel each, rather than a condition variable
 //
@@ -31,16 +31,18 @@ var ErrWaitAbandoned = errors.New("statelog: the applier stopped while this " +
 //
 // It stops being free at the rate this framework creates: every write waits
 // for its own record and every linearizable read for the record before its
-// barrier, a busy node holds many such callers at once, and the applier yields
-// its batch the moment one of them waits on a record it holds — so the
-// position moves many times a second, and every move then woke EVERY waiter to
-// re-test a target most of them have not reached. The goroutine per wait is
-// the other half — a goroutine whose only job is to watch somebody else's
-// deadline is the shape this engine's concurrency rule exists to refuse.
+// barrier, a busy node holds many such callers at once, the applier yields its
+// batch the moment one of them waits on a row it holds, and the position they
+// wait for moves on every barrier the loop DECODES as well as on every commit
+// ([Runner.Reached]) — so it moves many times a second, and every move then
+// woke EVERY waiter to re-test a target most of them have not reached. The
+// goroutine per wait is the other half — a goroutine whose only job is to
+// watch somebody else's deadline is the shape this engine's concurrency rule
+// exists to refuse.
 //
 // A min-heap keyed on the target inverts it: the applier pops while the
-// minimum is at or below its checkpoint and closes those channels, so a waiter
-// is woken EXACTLY ONCE, by the commit that satisfied it, and a commit that
+// minimum is at or below its reached position and closes those channels, so a
+// waiter is woken EXACTLY ONCE, by the move that satisfied it, and a move that
 // satisfies nobody touches nothing. The heap's length is also the one number
 // an operator wants — how many callers are waiting on this applier — which a
 // condition variable's registry could not report.
@@ -55,7 +57,7 @@ type waiter struct {
 	// target is the position this caller is waiting for.
 	target Position
 
-	// done is closed by the commit that reaches target. A channel rather
+	// done is closed by the move that reaches target. A channel rather
 	// than a flag because the caller selects on it against its own
 	// context, which is what makes a wait cancellable without a goroutine.
 	done chan struct{}
@@ -107,17 +109,22 @@ func (w *waiters) drop(item *waiter) {
 	item.index = -1
 }
 
-// release wakes every waiter at or below checkpoint.
+// release wakes every waiter at or below reached, the applier's reached
+// position ([Runner.Reached]) as it now stands.
 //
-// Called AFTER the transaction commits, never inside it: the store may re-run
-// a transaction's body, so a wake from inside one can announce a position that
-// was then rolled back.
-func (w *waiters) release(checkpoint Position) {
+// FOR A RECORD THAT WRITES A ROW, AFTER ITS TRANSACTION COMMITS, never inside
+// it: the store may re-run a transaction's body, so a wake from inside one can
+// announce a position that was then rolled back. A BARRIER IS DIFFERENT, and
+// is released the moment it is decoded, before any transaction
+// ([Runner.reach]): it writes no row, so there is nothing a re-run body could
+// roll back, and its own commit is a checkpoint and an fsync that change
+// nothing its waiters read.
+func (w *waiters) release(reached Position) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for w.items.Len() > 0 {
 		top := w.items[0]
-		if checkpoint.Packed() < top.target.Packed() {
+		if reached.Packed() < top.target.Packed() {
 			return
 		}
 		heap.Pop(&w.items)
@@ -202,9 +209,9 @@ func (w *waiters) awaitPosition(ctx context.Context, target Position, reached fu
 	}
 	done, abandoned, cancel := w.wait(target)
 	defer cancel()
-	// RE-CHECK AFTER REGISTERING. A commit landing between the check above
+	// RE-CHECK AFTER REGISTERING. A move landing between the check above
 	// and the registration would otherwise never wake this waiter: it
-	// released a heap that did not yet contain it, and no later commit is
+	// released a heap that did not yet contain it, and no later move is
 	// obliged to reach the same position.
 	if reached().Packed() >= target.Packed() {
 		return nil

@@ -1208,7 +1208,7 @@ func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 		}
 	}
 	for i, n := range c.nodes {
-		if err := n.engine.WaitCommitted(t.Context(), last); err != nil {
+		if err := n.engine.WaitReached(t.Context(), last); err != nil {
 			t.Fatalf("member %d never applied the corpus: %v", i, err)
 		}
 		searcher := n.engine.NativeSearcher()
@@ -1355,7 +1355,7 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	// this node has not applied yet is not an acknowledged one, and the
 	// arm below is about what a PEER can see of a write that HAS been —
 	// so the wait belongs here rather than around the reads.
-	if err := c.nodes[0].engine.WaitCommitted(t.Context(), written.Position); err != nil {
+	if err := c.nodes[0].engine.WaitReached(t.Context(), written.Position); err != nil {
 		t.Fatalf("member 0 never applied its own create: %v", err)
 	}
 
@@ -1407,7 +1407,7 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	// from whatever each node happened to hold would be exactly the
 	// half-adopted domain this arm exists to catch.
 	for i, n := range c.nodes {
-		if err := n.engine.WaitCommitted(t.Context(), page.Outcome.Position); err != nil {
+		if err := n.engine.WaitReached(t.Context(), page.Outcome.Position); err != nil {
 			t.Fatalf("member %d never applied the page: %v", i, err)
 		}
 		got, err := n.engine.Pages().Get(t.Context(), page.Page.ID,
@@ -1501,7 +1501,7 @@ func (c *cluster) digestsAtOneEnd(t *testing.T) []map[string]string {
 		for i, n := range c.nodes {
 			for _, end := range ends {
 				ctx, cancel := context.WithTimeout(t.Context(), waitBudget)
-				err := n.engine.WaitCommitted(ctx, end)
+				err := n.engine.WaitReached(ctx, end)
 				cancel()
 				if err != nil {
 					t.Fatalf("member %d never applied %s to its end %s: %v",

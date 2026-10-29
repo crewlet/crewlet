@@ -42,12 +42,15 @@ const (
 	// records before committing.
 	//
 	// It is what turns a stream of single records into batches, and it is
-	// given up the instant somebody is waiting for a record the batch
-	// already holds: a linearizable read appends a barrier and then waits
-	// for the record before it, and a write for its own record, so
-	// lingering on a batch that already contains that record makes the
-	// caller pay the whole linger — a hundred times the append it is
-	// waiting on, and on an idle company EVERY record is a partial batch.
+	// given up the instant somebody is waiting for a ROW the batch already
+	// holds: a write waits for its own record, and a linearizable read for
+	// the record before its barrier, so lingering on a batch that already
+	// contains that record makes the caller pay the whole linger — a
+	// hundred times the append it is waiting on, and on an idle company
+	// EVERY record is a partial batch. A caller waiting on a BARRIER with
+	// no row before it left to commit pays none of it: the batch reaches
+	// such a barrier, and releases whoever waits on it, the moment it is
+	// admitted ([Runner.Reached]).
 	ApplyLinger = 250 * time.Millisecond
 
 	// FetchMessages and FetchBytes bound one pull from the broker, and one

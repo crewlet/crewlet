@@ -530,26 +530,37 @@
 //     one subject; sixteen subjects, 520–570 a second. With the fsync
 //     declined the chain took 4.1–5.1 ms, 183–228 a second.
 //   - A LINEARIZABLE READ is a barrier append — 0.57–0.59 ms solo,
-//     3.5–3.9 ms at three replicas — and then this node's applier committing
-//     every record before the barrier, never the barrier itself, which writes
-//     no row on any node. Measured while a read still waited for its own
-//     barrier's commit, and so an upper bound on today's: the whole wait
-//     1.7–1.8 / 4.3–4.6 ms solo and 4.8–5.5 / 10–12.5 ms at three, 535–555
-//     reads a second from one reader solo and 171–197 at three.
-//   - SIXTEEN READERS AT ONCE on one node SHARE their barriers
-//     ([ReadIndex.Read]): 0.12 appends a read for the barrier alone, and
-//     0.14–0.23 for whole reads, whose waits for the applier spread their
-//     arrivals. A read may use only a barrier that started after it arrived,
-//     so readers calling back to back divide into two halves, each served by
-//     every other barrier — about eight a barrier. The node served
-//     4,600–4,700 linearizable reads a second solo and 1,120–1,610 at three
-//     replicas — eight times one reader's solo and six to eight at three —
-//     each read waiting at most two barriers: 3.3 / 8.3–8.5 ms solo and
-//     9.6–12.5 / 19–31 ms at three.
+//     3.5–3.9 ms at three replicas — and then this node REACHING the record
+//     before the barrier ([Runner.Reached]): every record before it that
+//     writes a row committed, and every barrier decoded, never a barrier's
+//     own commit, which writes no row on any node.
 //
-// The ranges are two runs on a VM shared with other work, where one run can
-// land a third away from another: compare two trees on one idle machine with
-// benchstat rather than against these.
+// The read rows below are a second machine's, so compare them with each other
+// rather than with the figures above: re-measured once the read stopped
+// waiting for any barrier's commit, on two E-cores of a laptop's Intel Core
+// Ultra 7 265U shared with other work, Go 1.27.2, nats-server v2.15.1, tursogo
+// v0.8.3, 2026-10-29, 2,000 reads an arm (`-benchtime 2000x`), one run:
+//
+//   - ONE READER: the barrier alone 0.96 / 3.6 ms solo (0.21 ms with the
+//     fsync declined) and 8.4–11.9 / 42–62 ms at three replicas, from the
+//     leader and from a follower; the whole read 1.4 / 5.3 ms solo, 595 a
+//     second, and 6.2–10.0 / 63–71 ms at three, 64–96 a second. What the
+//     whole read adds to its barrier is the decode that reaches it, not the
+//     commit of its checkpoint.
+//   - SIXTEEN READERS AT ONCE on one node SHARE their barriers
+//     ([ReadIndex.Read]): 0.12 appends a read, for the barrier alone and for
+//     whole reads alike, since a whole read's wait no longer spreads the
+//     readers' arrivals over a commit. A read may use only a barrier that
+//     started after it arrived, so readers calling back to back divide into
+//     two halves, each served by every other barrier — about eight a
+//     barrier. The node served 5,500 linearizable reads a second solo and
+//     490–1,560 at three replicas, each read waiting at most two barriers:
+//     2.8 / 6.3 ms solo and 9.8–21.9 / 22–83 ms at three.
+//
+// The write ranges are two runs on a VM shared with other work, where one run
+// can land a third away from another, and the read figures one run on a laptop
+// the same: compare two trees on one idle machine with benchstat rather than
+// against these.
 //
 // BenchmarkApplierDrain prices the apply lane every domain on a node shares:
 // it drained a burst of one-row records at about 5,900 a second — each

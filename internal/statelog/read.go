@@ -410,7 +410,9 @@ type Answer struct {
 	// one asked for or a refusal.
 	Level ReadLevel
 
-	// Position is the checkpoint the answer was read at.
+	// Position is the position the answer's rows are current through: this
+	// node's reached position when it read them ([Runner.Reached]) — every
+	// record at or below it committed, or a barrier that writes no row.
 	Position Position
 
 	// Lag is how far behind the log this answer is, and nil when the
@@ -614,14 +616,17 @@ func NewReader(d ReaderDeps) (*Reader, error) {
 //     below the checkpoint while a barrier is appended above it, so the wait
 //     could not terminate.
 //  3. The freshness target, by level. Only linearizable appends.
-//  4. The WAIT, on this node's own checkpoint, holding no connection and no
-//     transaction. A linearizable read waits for every record BEFORE its
-//     barrier ([waitsThrough]) and never for the barrier itself: a barrier
-//     writes no row on any node ([FrameworkScope]), so its own commit is a
-//     checkpoint and an fsync that change nothing the read reads. EVERY
-//     linearizable read takes this step, its predecessor the zero position
-//     included, because the step is also where its answer is stamped and its
-//     staleness bound checked against a health read after the wait.
+//  4. The WAIT, on this node's REACHED POSITION ([Runner.Reached]), holding no
+//     connection and no transaction. A linearizable read waits for every
+//     record BEFORE its barrier ([waitsThrough]) — for each that writes a row
+//     to commit, and for each barrier among them to be decoded — and never for
+//     a barrier's commit, its own or any other's: a barrier writes no row on
+//     any node ([FrameworkScope]), so its commit is a checkpoint and an fsync
+//     that change nothing the read reads, and the applier reaches it the
+//     moment it decodes it. EVERY linearizable read takes this step, its
+//     predecessor the zero position included, because the step is also where
+//     its answer is stamped and its staleness bound checked against a health
+//     read after the wait.
 //  5. ONE read transaction, whose FIRST statement is the coverage probe
 //     again — a deferred record landing between the two is the same hole
 //     through another door — and then the answer.
@@ -759,7 +764,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 			budget = 0
 		}
 		waitCtx, cancel, bound := WaitWithin(ctx, budget)
-		err := r.waiter.WaitCommitted(waitCtx, target)
+		err := r.waiter.WaitReached(waitCtx, target)
 		cancel()
 		if err != nil {
 			if ctx.Err() != nil {
@@ -774,7 +779,7 @@ func (r *Reader) Read(ctx context.Context, q Query, fn func(*sql.Tx) error) (Ans
 			return r.refusePaid(h, q, RefuseBehind,
 				r.behindDetail(target, index, spent, bound, waited), started, paid)
 		}
-		answer.Position = r.waiter.Committed()
+		answer.Position = r.waiter.Reached()
 
 		// THE HEALTH IS RE-READ, and the bound is enforced again
 		// against it.
@@ -945,12 +950,16 @@ func (r *Reader) behindDetail(target, index Position, spent Spent, bound WaitBou
 	} else if waited {
 		what += ","
 	}
+	// "REACHED", the word [Runner.Reached] defines: every record through the
+	// position that writes a row committed, and every barrier decoded — so a
+	// `behind` here is a row this node has not committed, or a record it has
+	// not been handed yet, and never a barrier's checkpoint.
 	if waited {
-		return fmt.Sprintf("this node has not committed %s which a node asked for "+
+		return fmt.Sprintf("this node has not reached %s which a node asked for "+
 			"this read before it already waited a whole bound for — so it waited "+
 			"for nothing", what)
 	}
-	return fmt.Sprintf("this node has not committed %s within %s", what, bound)
+	return fmt.Sprintf("this node has not reached %s within %s", what, bound)
 }
 
 // waitsThrough is the position a linearizable read resting on the read index
@@ -965,6 +974,13 @@ func (r *Reader) behindDetail(target, index Position, spent Spent, bound WaitBou
 // reads. Waiting for it put that fsync in front of every linearizable read, and
 // on a disk whose fsyncs stall for seconds it held reads for the whole of
 // [ReadBudget] behind a commit that wrote no row.
+//
+// WAITED FOR ON THE REACHED POSITION ([Runner.Reached]), which is what makes
+// the same true of every barrier BELOW this one: a record before it that is
+// itself a barrier — another read's, or another node's — is reached the moment
+// this node decodes it, and its commit is waited for no more than this one's.
+// What the read waits for is every record before its barrier that writes a
+// row.
 //
 // ONE DERIVATION for both of a read's indexes — its own barrier, and the one a
 // node asked before it established ([Spent.Index]) — so every node a walk asks
@@ -1009,7 +1025,7 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health,
 		// reached whatever the log holds — so this node establishes its
 		// own.
 		if at, held := spent.IndexOn(r.stream); held &&
-			at.Generation >= r.waiter.Committed().Generation {
+			at.Generation >= r.waiter.Reached().Generation {
 			return furthest(waitsThrough(at), floor), at, true, nil
 		}
 		if !r.mode.Publishes() {
@@ -1088,13 +1104,13 @@ func (r *Reader) target(ctx context.Context, q Query, floor Position, h Health,
 			return Position{}, Position{}, false, refusal
 		}
 		// THE FLOOR CANNOT BE PAST THE BARRIER'S PREDECESSOR on the stream
-		// the barrier was appended to — a position a write returned was
-		// acknowledged before this append was, so it is BELOW the barrier —
-		// and on the honest path this is the record before the barrier. On
-		// the other path the floor names a sequence this stream has not
-		// reached, and waiting for it is what turns a pasted position into
-		// a `behind` refusal the caller can read rather than an answer
-		// served from before it.
+		// the barrier was appended to — a position a write returned, or an
+		// earlier read was answered at, was on the log before this append
+		// was, so it is BELOW the barrier — and on the honest path this is
+		// the record before the barrier. On the other path the floor names a
+		// sequence this stream has not reached, and waiting for it is what
+		// turns a pasted position into a `behind` refusal the caller can
+		// read rather than an answer served from before it.
 		return furthest(waitsThrough(at), floor), at, true, nil
 
 	case ReadSession:

@@ -247,10 +247,10 @@ var errNoApplier = errors.New("statelogtest: nothing applies what this suite app
 // suiteWaiter is a node whose rows stand at one position, on the live stream.
 type suiteWaiter struct{ at statelog.Position }
 
-func (w suiteWaiter) Committed() statelog.Position                         { return w.at }
-func (suiteWaiter) WaitCommitted(context.Context, statelog.Position) error { return nil }
-func (suiteWaiter) StreamIdentity() error                                  { return nil }
-func (suiteWaiter) Truncated() error                                       { return nil }
+func (w suiteWaiter) Reached() statelog.Position                         { return w.at }
+func (suiteWaiter) WaitReached(context.Context, statelog.Position) error { return nil }
+func (suiteWaiter) StreamIdentity() error                                { return nil }
+func (suiteWaiter) Truncated() error                                     { return nil }
 
 // Voided voids nothing: no reanchor places a rule on the suite's log.
 func (suiteWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }

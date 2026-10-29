@@ -2038,7 +2038,7 @@ func nan() float64 { var zero float64; return zero / zero }
 // domain nothing waits on.
 type embedWaiter struct{}
 
-func (embedWaiter) Committed() statelog.Position { return statelog.Position{} }
+func (embedWaiter) Reached() statelog.Position { return statelog.Position{} }
 
 // Voided voids nothing: no reanchor places a rule on this harness's log.
 func (embedWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
@@ -2047,7 +2047,7 @@ func (embedWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", f
 // log.
 func (embedWaiter) StreamIdentity() error { return nil }
 func (embedWaiter) Truncated() error      { return nil }
-func (embedWaiter) WaitCommitted(context.Context, statelog.Position) error {
+func (embedWaiter) WaitReached(context.Context, statelog.Position) error {
 	return nil
 }
 func (embedWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {

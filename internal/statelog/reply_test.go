@@ -48,9 +48,9 @@ func heard(t *testing.T, what string, deadline time.Time) {
 // and waits until it is told to stop.
 type unreachedWaiter struct{ at statelog.Position }
 
-func (w unreachedWaiter) Committed() statelog.Position { return w.at }
+func (w unreachedWaiter) Reached() statelog.Position { return w.at }
 
-func (w unreachedWaiter) WaitCommitted(ctx context.Context, _ statelog.Position) error {
+func (w unreachedWaiter) WaitReached(ctx context.Context, _ statelog.Position) error {
 	<-ctx.Done()
 	return ctx.Err()
 }

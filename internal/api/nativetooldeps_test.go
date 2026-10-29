@@ -167,7 +167,7 @@ func TestAPersonsPageWritesAreHandedEverySeamASeatsAre(t *testing.T) {
 // a peer's copy and went on answering a PERSON from the one it had stopped
 // serving: a board, an inbox or a purge read off rows the node itself would
 // not vouch for. And a read after a person's own write waited on this node's
-// applier ([engine.Engine.WaitCommitted]) rather than the router's session
+// applier ([engine.Engine.WaitReached]) rather than the router's session
 // floor ([engine.Engine.AwaitEstate]), which is the floor whichever holder
 // answers the next read honours.
 //
@@ -185,7 +185,7 @@ func TestAPersonsSurfacesReachTheEstateThroughTheRouter(t *testing.T) {
 		"Pages":         "engine.OperatorPages",
 		"PagesStore":    "engine.OperatorPageWriter",
 		"WorkSearch":    "engine.WorkSearcher",
-		"WaitCommitted": "Engine.AwaitEstate",
+		"WaitReached":   "Engine.AwaitEstate",
 	}
 	routed := map[string]bool{}
 	for _, name := range []string{"humans.go", "native.go"} {

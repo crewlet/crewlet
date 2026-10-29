@@ -163,9 +163,11 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
 
 // Read returns the read index a linearizable read rests on: the position of a
 // barrier the broker committed after the caller arrived. The read waits for
-// every record BEFORE it and never for the barrier itself ([Reader.Read]): a
-// barrier writes no row on any node, so its own commit is a checkpoint and an
-// fsync that change nothing the read reads.
+// every record BEFORE it that writes a row to commit ([Reader.Read]), and for
+// no barrier's commit — this one's, or that of any barrier before it: a barrier
+// writes no row on any node, so its commit is a checkpoint and an fsync that
+// change nothing the read reads, and this node's applier reaches it the moment
+// it decodes it ([Runner.Reached]).
 //
 // # Single-flighted, and the arrival-time rule is what makes it correct
 //

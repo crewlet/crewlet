@@ -147,7 +147,7 @@ type PeoplePage struct {
 // People answers one page of the directory.
 func (r *Reader) People(ctx context.Context, q PeopleQuery) (PeoplePage, error) {
 	limit := pageLimit(q.Limit)
-	out := PeoplePage{At: r.committed()}
+	out := PeoplePage{At: r.reached()}
 	// ONE MORE THAN ASKED FOR, which is how the cursor is derived without
 	// a second count: the extra row is what says there IS a next page, and
 	// it is dropped rather than returned.
@@ -418,7 +418,7 @@ func (r *Reader) Invitations(ctx context.Context, q InvitationsQuery) (
 	InvitationPage, error) {
 
 	limit := pageLimit(q.Limit)
-	out := InvitationPage{At: r.committed()}
+	out := InvitationPage{At: r.reached()}
 	query := `SELECT ` + invitationColumns + ` FROM iam_invites WHERE id > ?`
 	args := []any{q.After}
 	if !q.All {
@@ -672,7 +672,7 @@ func (r *Reader) History(ctx context.Context, q HistoryQuery) (HistoryPage, erro
 	case limit > MaxHistoryPage:
 		limit = MaxHistoryPage
 	}
-	out := HistoryPage{At: r.committed()}
+	out := HistoryPage{At: r.reached()}
 	query := strings.Builder{}
 	// THE LOGIN OF WHOEVER AN ENTRY IS ABOUT, joined from their row as it
 	// stands: an entry names them by id, and a trail of id prefixes said

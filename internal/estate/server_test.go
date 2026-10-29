@@ -173,9 +173,9 @@ func (committedAppender) LastSeq(context.Context, string) (uint64, bool, error) 
 // laggingWaiter is an applier that never reaches what a read waits for.
 type laggingWaiter struct{ at statelog.Position }
 
-func (w laggingWaiter) Committed() statelog.Position { return w.at }
+func (w laggingWaiter) Reached() statelog.Position { return w.at }
 
-func (w laggingWaiter) WaitCommitted(ctx context.Context, _ statelog.Position) error {
+func (w laggingWaiter) WaitReached(ctx context.Context, _ statelog.Position) error {
 	<-ctx.Done()
 	return ctx.Err()
 }

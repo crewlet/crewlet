@@ -98,7 +98,7 @@ func (b WaitBound) String() string {
 //
 // An instant already past is a wait of NOTHING rather than a refusal of its
 // own: a position already reached is still found at once, because every
-// waiter here looks before it waits ([Runner.WaitCommitted]), and any other
+// waiter here looks before it waits ([Runner.WaitReached]), and any other
 // wait ends at its first step with the answer its budget running out gives.
 func WaitWithin(ctx context.Context, budget time.Duration) (context.Context, context.CancelFunc, WaitBound) {
 	bound := WaitBound{Within: budget}

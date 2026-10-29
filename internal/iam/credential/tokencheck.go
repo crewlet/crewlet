@@ -45,8 +45,9 @@ const (
 // credential read and an owner read would produce a verdict that never
 // existed at any instant.
 type TokenRow struct {
-	// Applied is how far this node's identity applier has committed,
-	// packed — what a token's mint position is compared against.
+	// Applied is how far this node's identity applier has reached — every
+	// record through it that writes a row committed, and every barrier
+	// decoded — packed: what a token's mint position is compared against.
 	Applied uint64
 
 	// Lag is how far behind the log this node is, and Deferred whether it

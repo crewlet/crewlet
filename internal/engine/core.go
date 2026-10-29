@@ -375,7 +375,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
 		DB: sl.estate().Reader(), Log: running.reader,
-		Committed: running.runner.Committed,
+		Reached: running.runner.Reached,
 		// AND THE LAG, which is what makes the session table's
 		// `stalled` row reachable at all: a node past the stall grace
 		// answers 503 to every arm, and with no lag to read it
@@ -385,7 +385,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// has not applied yet takes: a sign-in answers before its
 		// session's start applies, and the request guard waits for the
 		// position the bearer states rather than refusing it.
-		Await: running.runner.WaitCommitted,
+		Await: running.runner.WaitReached,
 	})
 	if err != nil {
 		return fmt.Errorf("engine: iam reader: %w", err)
@@ -756,14 +756,18 @@ func (e *Engine) StateLogStatus(ctx context.Context) []ReplicationStatus {
 	return c.log.Status(ctx)
 }
 
-// WaitCommitted blocks until this node's applier for the log a position names
-// has consumed through it.
+// WaitReached blocks until this node's applier for the log a position names has
+// reached it: committed every record through it that writes a row, and decoded
+// every barrier ([statelog.Runner.WaitReached]).
 //
 // THE READ-YOUR-WRITES PRIMITIVE ON THE LOG, and it takes a POSITION rather
 // than a revision because that is what a write answers with: a bucket write
 // returns a revision on one family, and a log write returns a place on a
 // stream that only compares against the same stream and the same generation.
-func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error {
+// A read answers with one too — the position its rows are current through,
+// which may be a barrier — and a caller that carries it waits for no barrier's
+// commit.
+func (e *Engine) WaitReached(ctx context.Context, at statelog.Position) error {
 	c := e.core.Load()
 	if c == nil || c.log == nil || at.Seq == 0 {
 		return nil
@@ -776,7 +780,7 @@ func (e *Engine) WaitCommitted(ctx context.Context, at statelog.Position) error 
 	if running == nil {
 		return nil
 	}
-	return running.runner.WaitCommitted(ctx, at)
+	return running.runner.WaitReached(ctx, at)
 }
 
 // stateLogOf is the core runtime's state log, or [errNoCoreRuntime].

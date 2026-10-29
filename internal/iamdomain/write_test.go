@@ -661,7 +661,7 @@ func (r *writeRig) reader(t *testing.T) *iamdomain.Reader {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: r.db.Reader(), Log: log, Committed: r.waiter.Committed,
+		DB: r.db.Reader(), Log: log, Reached: r.waiter.Reached,
 	})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)
@@ -712,6 +712,10 @@ func (w *rigWaiter) Committed() statelog.Position {
 	return w.at
 }
 
+// Reached is Committed: this rig moves its position when it applies a record,
+// in one step, so it reaches nothing its commit has not.
+func (w *rigWaiter) Reached() statelog.Position { return w.Committed() }
+
 // StreamIdentity and Truncated are the stream identity the publisher asks
 // before every append: the rig's log is the one its rows came from, always.
 func (w *rigWaiter) StreamIdentity() error { return nil }
@@ -721,7 +725,7 @@ func (w *rigWaiter) Truncated() error      { return nil }
 // generation is ever abandoned or overtaken under it.
 func (w *rigWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "", false }
 
-func (w *rigWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *rigWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
@@ -734,13 +738,13 @@ func (w *rigWaiter) WaitCommitted(ctx context.Context, p statelog.Position) erro
 	}
 }
 
-// WaitApplied is WaitCommitted here, and the harness is why: this rig applies
+// WaitApplied is WaitReached here, and the harness is why: this rig applies
 // every record inline in its own drain, so "committed" and "applied" are one
 // position rather than two.
 func (w *rigWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 	p statelog.Position) error {
 
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // testKeyring is the fleet keyring this rig's node holds: the one key every

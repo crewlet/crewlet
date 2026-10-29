@@ -552,12 +552,16 @@ func (w *testWaiter) Committed() statelog.Position {
 	return w.at
 }
 
+// Reached is Committed: this rig moves its position when it applies a record,
+// in one step, so it reaches nothing its commit has not.
+func (w *testWaiter) Reached() statelog.Position { return w.Committed() }
+
 // StreamIdentity is always the live stream: this harness never rebuilds its
 // log, so every position the waiter holds is a sequence on it.
 func (w *testWaiter) StreamIdentity() error { return nil }
 func (w *testWaiter) Truncated() error      { return nil }
 
-func (w *testWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *testWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	for {
 		if w.Committed().Packed() >= p.Packed() {
 			return nil
@@ -615,7 +619,7 @@ func (w *testWaiter) WaitApplied(ctx context.Context, _ statelog.ScopeSet,
 		}
 		return context.DeadlineExceeded
 	}
-	return w.WaitCommitted(ctx, p)
+	return w.WaitReached(ctx, p)
 }
 
 // A WRITE REACHES THE BROKER, THE APPLIER, AND THE READER.

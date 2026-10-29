@@ -295,9 +295,10 @@ func (n *wiredNode) barrier(ctx context.Context) (statelog.Position, error) {
 }
 
 // read is what a linearizable read waits through before it reads its rows:
-// the barrier, and this node's applier committing every record before it —
-// derived as [statelog.Reader] derives it ([statelog.WaitsThrough]), so a case
-// and a benchmark reading through this measure what a read waits for.
+// the barrier, and this node's applier reaching the record before it —
+// derived as [statelog.Reader] derives it ([statelog.WaitsThrough]) and waited
+// for as it waits ([statelog.Runner.WaitReached]), so a case and a benchmark
+// reading through this measure what a read waits for.
 func (n *wiredNode) read(ctx context.Context) (statelog.Position, error) {
 	ctx, cancel := context.WithTimeout(ctx, wiredOpBudget)
 	defer cancel()
@@ -305,12 +306,13 @@ func (n *wiredNode) read(ctx context.Context) (statelog.Position, error) {
 	if err != nil {
 		return at, err
 	}
-	return at, n.runner.WaitCommitted(ctx, statelog.WaitsThrough(at))
+	return at, n.runner.WaitReached(ctx, statelog.WaitsThrough(at))
 }
 
 // reader is a read authority over n's log that waits through waiter — n's own
 // runner, or a wrapper a case watches it through — on a node that reports
-// itself level and sound, as one serving reads does.
+// itself level and sound, as one serving reads does, at its reached position
+// as the engine's read health does.
 func (n *wiredNode) reader(tb testing.TB, waiter statelog.Waiter) *statelog.Reader {
 	tb.Helper()
 	r, err := statelog.NewReader(statelog.ReaderDeps{
@@ -318,7 +320,7 @@ func (n *wiredNode) reader(tb testing.TB, waiter statelog.Waiter) *statelog.Read
 		DB: n.estate, Index: n.index, Waiter: waiter,
 		Health: func() (statelog.Health, error) {
 			h := healthy()
-			h.Position = n.runner.Committed()
+			h.Position = n.runner.Reached()
 			return h, nil
 		},
 	})
@@ -348,9 +350,9 @@ func newEnteringWaiter(inner statelog.Waiter) *enteringWaiter {
 	return &enteringWaiter{Waiter: inner, entered: make(chan struct{})}
 }
 
-func (w *enteringWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *enteringWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	w.once.Do(func() { close(w.entered) })
-	return w.Waiter.WaitCommitted(ctx, p)
+	return w.Waiter.WaitReached(ctx, p)
 }
 
 // A LINEARIZABLE READ STILL WAITS FOR THE RECORD BEFORE ITS BARRIER — here a

@@ -95,8 +95,12 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 }
 
 // KnowledgeCorpus is where this node's knowledge corpus is applied through —
-// the tracker's, the pages' and the vectors' committed positions, joined — and
+// the tracker's, the pages' and the vectors' reached positions, joined — and
 // false where there is no such place to name.
+//
+// THE POSITIONS ITS ROWS ARE CURRENT THROUGH ([statelog.Runner.Reached]), like
+// every other read of them: a barrier past the committed checkpoint changes
+// no row, so the corpus it names is the one an answer was written from.
 //
 // THREE LOGS, because an answer is written from all three: a page's body, a
 // work item's description, and the vectors that ranked them by meaning. A
@@ -123,7 +127,7 @@ func (e *Engine) KnowledgeCorpus() (string, bool) {
 		if running == nil || running.runner == nil {
 			return "", false
 		}
-		parts = append(parts, running.runner.Committed().String())
+		parts = append(parts, running.runner.Reached().String())
 	}
 	return strings.Join(parts, ","), true
 }

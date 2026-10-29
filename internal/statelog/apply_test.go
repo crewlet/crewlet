@@ -357,8 +357,16 @@ func newApplyHarness(t *testing.T, domain statelog.Domain) *applyHarness {
 func newApplyHarnessWith(t *testing.T, domain statelog.Domain,
 	mutate func(*statelog.RunnerDeps)) *applyHarness {
 	t.Helper()
+	return newApplyHarnessOn(t, domain, store.Options{}, mutate)
+}
+
+// newApplyHarnessOn is [newApplyHarnessWith] over a store opened with opts — a
+// driver a case wraps to hold or fail the node's commits.
+func newApplyHarnessOn(t *testing.T, domain statelog.Domain, opts store.Options,
+	mutate func(*statelog.RunnerDeps)) *applyHarness {
+	t.Helper()
 	dir := t.TempDir()
-	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), store.Options{}, 1)
+	db, estate := storetest.OpenEstate(t, filepath.Join(dir, "node.db"), opts, 1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close the store: %v", err)
@@ -1144,7 +1152,7 @@ func TestAWaiterIsWokenOnceByItsOwnCommit(t *testing.T) {
 
 	target := statelog.Position{Stream: probeStream, Generation: 1, Seq: 3}
 	woken := make(chan error, 1)
-	go func() { woken <- h.runner.WaitCommitted(ctx, target) }()
+	go func() { woken <- h.runner.WaitReached(ctx, target) }()
 
 	for seq := uint64(1); seq <= 4; seq++ {
 		h.fetch.offer(seq, env(seq, "edit", fmt.Sprintf("o%d", seq), fmt.Sprintf("op-%d", seq), 1))
@@ -2467,7 +2475,7 @@ func TestARunnerRunsAgainFromTheCheckpointItNowHolds(t *testing.T) {
 	defer cancel()
 	waited := make(chan error, 1)
 	go func() {
-		waited <- h.runner.WaitCommitted(ctx, statelog.Position{Stream: probeStream, Generation: 1, Seq: 3})
+		waited <- h.runner.WaitReached(ctx, statelog.Position{Stream: probeStream, Generation: 1, Seq: 3})
 	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && h.runner.Waiting() == 0 {

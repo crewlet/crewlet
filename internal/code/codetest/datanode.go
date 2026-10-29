@@ -583,17 +583,19 @@ func (d *DataNode) gesture(t testing.TB, node string,
 	return res.Position
 }
 
-// WaitApplied waits until this node's applier has committed at.
+// WaitApplied waits until this node's applier has reached at
+// ([statelog.Runner.WaitReached]).
 func (d *DataNode) WaitApplied(ctx context.Context, at statelog.Position) error {
 	p := d.proc()
 	if p == nil {
 		return fmt.Errorf("codetest: data node %s is not running", d.o.ID)
 	}
-	return p.runner.WaitCommitted(ctx, at)
+	return p.runner.WaitReached(ctx, at)
 }
 
-// Level waits until this node's applier has applied every record the code
-// log held when it was asked.
+// Level waits until this node's rows hold every record the code log held when
+// it was asked: its applier has reached the log's end
+// ([statelog.Runner.Reached]), as a reader of them waits for it to.
 func (d *DataNode) Level(ctx context.Context) error {
 	p := d.proc()
 	if p == nil {
@@ -603,11 +605,11 @@ func (d *DataNode) Level(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("codetest: %s: the code log's end: %w", d.o.ID, err)
 	}
-	for p.runner.Committed().Seq < last {
+	for p.runner.Reached().Seq < last {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("codetest: %s applied through %d of the log's %d: %w", d.o.ID,
-				p.runner.Committed().Seq, last, ctx.Err())
+			return fmt.Errorf("codetest: %s reached %d of the log's %d: %w", d.o.ID,
+				p.runner.Reached().Seq, last, ctx.Err())
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
@@ -786,10 +788,11 @@ func (p *dataIncarnation) stopApplier() {
 }
 
 // health is the data node's readiness as the engine assembles it: the
-// applier's position, whether it has drained, the log's two ends and its lag,
-// the stream's identity, and a floor a fleet that never trimmed publishes.
+// applier's position — the reached one, as the engine's read health takes it —
+// whether it has drained, the log's two ends and its lag, the stream's
+// identity, and a floor a fleet that never trimmed publishes.
 func (p *dataIncarnation) health(ctx context.Context) (statelog.Health, error) {
-	at := p.runner.Committed()
+	at := p.runner.Reached()
 	h := statelog.Health{Position: at, AppliedThrough: at.Seq, Drained: p.runner.Drained(),
 		Floor: statelog.Floor{State: statelog.FloorOK, ReadAt: time.Now()}}
 	if err := p.runner.Stopped(); err != nil && !errors.Is(err, context.Canceled) {

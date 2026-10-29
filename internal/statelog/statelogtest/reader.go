@@ -89,9 +89,9 @@ type DB interface {
 // localWaiter is already at the position and never blocks.
 type localWaiter struct{ at statelog.Position }
 
-func (w localWaiter) Committed() statelog.Position { return w.at }
+func (w localWaiter) Reached() statelog.Position { return w.at }
 
-func (w localWaiter) WaitCommitted(context.Context, statelog.Position) error { return nil }
+func (w localWaiter) WaitReached(context.Context, statelog.Position) error { return nil }
 
 func (w localWaiter) WaitApplied(context.Context, statelog.ScopeSet, statelog.Position) error {
 	return nil
@@ -120,7 +120,7 @@ func LocalReaderOver(domain statelog.Domain, db DB, waiter statelog.Waiter) (*st
 		DB:     db,
 		Waiter: waiter,
 		Health: func() (statelog.Health, error) {
-			at := waiter.Committed()
+			at := waiter.Reached()
 			behind, first, floor := uint64(0), uint64(1), uint64(0)
 			return statelog.Health{
 				Position: at, AppliedThrough: at.Seq, Drained: true,

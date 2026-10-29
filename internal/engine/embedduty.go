@@ -474,11 +474,17 @@ func (d *embedDuty) tick(ctx context.Context) tickReport {
 // standing is the vector log as the index step must know it
 // ([search.LogStanding]): whether this node has applied all of it.
 //
-// THE END IS READ BEFORE THE CHECKPOINT, which is the only order in which a
-// checkpoint at or past it means this node applied everything the log held
+// THE END IS READ BEFORE THE POSITION, which is the only order in which a
+// position at or past it means this node applied everything the log held
 // when the step began; the other order reads a record that landed between the
 // two as one this node missed. A node holding a deferred record is not
 // current either: its rows are the log's minus that record.
+//
+// THE REACHED POSITION ([statelog.Runner.Reached]), never the committed
+// checkpoint: the question is whether this node's ROWS are the log's state,
+// and a barrier at the log's end whose checkpoint has not committed — its
+// fsync stalled — leaves them exactly as whole. Read off the checkpoint, such
+// a barrier held the index step back a tick as though a record were missing.
 func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 	var out search.LogStanding
 	stats, err := d.log.log.Stats(ctx)
@@ -486,7 +492,7 @@ func (d *embedDuty) standing(ctx context.Context) (search.LogStanding, error) {
 		return out, fmt.Errorf("read the vector log's end: %w", err)
 	}
 	_, deferring := d.log.runner.Deferred()
-	out.Current = d.log.runner.Committed().Seq >= stats.LastSeq && !deferring
+	out.Current = d.log.runner.Reached().Seq >= stats.LastSeq && !deferring
 	return out, nil
 }
 

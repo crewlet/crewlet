@@ -51,9 +51,9 @@ type Reader struct {
 	db  store.ReplicatedReader
 	log *statelog.Reader
 
-	committed func() statelog.Position
-	lag       func() time.Duration
-	await     func(context.Context, statelog.Position) error
+	reached func() statelog.Position
+	lag     func() time.Duration
+	await   func(context.Context, statelog.Position) error
 }
 
 // ReaderOptions is what a reader is built from.
@@ -66,9 +66,16 @@ type ReaderOptions struct {
 	// in the answer is worse than a refusal.
 	Log *statelog.Reader
 
-	// Committed is this node's applied position and Lag how far behind the
-	// log it is. Each is nil-safe and answers the zero value, which is what
-	// a reader with no runner behind it honestly has.
+	// Reached is the position this node's rows are current through — its
+	// applier's reached position ([statelog.Runner.Reached]), every record
+	// at or below it committed or a barrier that writes no row — and Lag how
+	// far behind the log it is. Each is nil-safe and answers the zero value,
+	// which is what a reader with no runner behind it honestly has.
+	//
+	// THE REACHED POSITION, NEVER THE COMMITTED CHECKPOINT, as every read of
+	// the rows takes it: a barrier whose checkpoint has not committed changes
+	// no row here, and a session's start or a token's binding is a record
+	// that writes one, so it is reached only once committed either way.
 	//
 	// WHETHER A RECORD THIS NODE RETAINED IS ABOUT SOMEBODY is not an
 	// option: it is read out of the deferral index inside the snapshot the
@@ -77,15 +84,15 @@ type ReaderOptions struct {
 	// it — carried no scope at all, so no retained record was ever about
 	// anybody and every "this node cannot vouch for this person" answer
 	// the session table and a token's binding turn on was dead.
-	Committed func() statelog.Position
-	Lag       func() time.Duration
+	Reached func() statelog.Position
+	Lag     func() time.Duration
 
-	// Await blocks until this node's applier has committed through a
-	// position — the runner's own wait. NIL ANSWERS AN ERROR rather than
-	// nil, for the other two's reason read the other way round: a reader
-	// with no runner behind it will never reach a position, and a wait
-	// that reported arrival would send a caller to decide on rows that are
-	// not there.
+	// Await blocks until this node's applier has reached a position — the
+	// runner's own wait ([statelog.Runner.WaitReached]). NIL ANSWERS AN
+	// ERROR rather than nil, for the other two's reason read the other way
+	// round: a reader with no runner behind it will never reach a position,
+	// and a wait that reported arrival would send a caller to decide on rows
+	// that are not there.
 	Await func(context.Context, statelog.Position) error
 }
 
@@ -101,9 +108,9 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 			"nobody can tell from a correct refusal")
 	}
 	r := &Reader{db: opts.DB, log: opts.Log,
-		committed: opts.Committed, lag: opts.Lag, await: opts.Await}
-	if r.committed == nil {
-		r.committed = func() statelog.Position { return statelog.Position{} }
+		reached: opts.Reached, lag: opts.Lag, await: opts.Await}
+	if r.reached == nil {
+		r.reached = func() statelog.Position { return statelog.Position{} }
 	}
 	if r.lag == nil {
 		r.lag = func() time.Duration { return 0 }
@@ -112,14 +119,14 @@ func NewReader(opts ReaderOptions) (*Reader, error) {
 }
 
 // At is the position this node's rows were derived through.
-func (r *Reader) At() statelog.Position { return r.committed() }
+func (r *Reader) At() statelog.Position { return r.reached() }
 
 // errNoApplier is a wait asked of a reader with no runner behind it.
 var errNoApplier = errors.New("iamdomain: this reader has no applier to wait " +
 	"on, so no position will ever be reached here")
 
-// AwaitApplied blocks until this node's applier has committed through a packed
-// position, or ctx ends.
+// AwaitApplied blocks until this node's applier has reached a packed position,
+// or ctx ends.
 //
 // PACKED, because that is the form a session bearer carries its start in, and
 // the one caller is the request guard waiting for exactly that position — see
@@ -155,7 +162,7 @@ func (r *Reader) Resolve(ctx context.Context, lineage, person string) (
 	session.Identity, error) {
 
 	out := session.Identity{
-		Applied: uint64(r.committed().Packed()),
+		Applied: uint64(r.reached().Packed()),
 		Lag:     r.lag(),
 	}
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
@@ -403,7 +410,7 @@ func readEpoch(ctx context.Context, tx *sql.Tx, subject string, out *uint64) err
 // peer's, and answering it as "no such token" would tell a pipeline its
 // credential is broken for the length of an upgrade.
 func (r *Reader) MachineToken(ctx context.Context, id string) (credential.TokenRow, error) {
-	out := credential.TokenRow{Applied: uint64(r.committed().Packed())}
+	out := credential.TokenRow{Applied: uint64(r.reached().Packed())}
 	var owner string
 	err := r.withTx(ctx, func(tx *sql.Tx) error {
 		var (

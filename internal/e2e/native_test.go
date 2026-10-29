@@ -116,7 +116,7 @@ func TestAnItemWrittenToTheFleetLandsOnTheBoard(t *testing.T) {
 	// READ THROUGH THIS NODE'S OWN ROWS, not through the log: this is what
 	// a board, a tool and the REST route all use, and it is the copy that
 	// can be behind.
-	if err := n.engine.WaitCommitted(t.Context(), written.Position); err != nil {
+	if err := n.engine.WaitReached(t.Context(), written.Position); err != nil {
 		t.Fatalf("wait for the applier: %v", err)
 	}
 	detail, err := n.engine.Tracker().Task(t.Context(), written.Key,
@@ -176,7 +176,7 @@ func TestAPageBecomesSearchable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create page: %v", err)
 	}
-	if err := n.engine.WaitCommitted(t.Context(), written.Outcome.Position); err != nil {
+	if err := n.engine.WaitReached(t.Context(), written.Outcome.Position); err != nil {
 		t.Fatalf("wait for this node to apply the write: %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestAnOperatorWriteIsStillAnOperatorWriteOnTheBoard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if err := n.engine.WaitCommitted(t.Context(), written.Position); err != nil {
+	if err := n.engine.WaitReached(t.Context(), written.Position); err != nil {
 		t.Fatalf("wait for the applier: %v", err)
 	}
 	detail, err := n.engine.Tracker().Task(t.Context(), written.Key,

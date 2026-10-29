@@ -124,12 +124,12 @@ type applier struct {
 	// stopped applying looks like from the write path.
 	applyErr error
 
-	// frozen stops WaitCommitted advancing, which is what a node that
+	// frozen stops WaitReached advancing, which is what a node that
 	// cannot catch up looks like: every round re-decides against the
 	// same anchor and the round budget is what ends it.
 	frozen bool
 
-	// stalled makes WaitCommitted BLOCK, which is the other half of the
+	// stalled makes WaitReached BLOCK, which is the other half of the
 	// same situation and a different failure: frozen models an applier
 	// that answers instantly and never moves, and this one models an
 	// applier that does not answer at all. Only the second exercises the
@@ -285,7 +285,11 @@ func (a *applier) Committed() statelog.Position {
 	return a.committed
 }
 
-func (a *applier) WaitCommitted(ctx context.Context, p statelog.Position) error {
+// Reached is Committed: this node applies a record and moves its position in
+// one step, so it reaches nothing its commit has not.
+func (a *applier) Reached() statelog.Position { return a.Committed() }
+
+func (a *applier) WaitReached(ctx context.Context, p statelog.Position) error {
 	a.mu.Lock()
 	a.noteBudget(ctx)
 	stalled := a.stalled

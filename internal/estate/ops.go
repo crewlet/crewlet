@@ -278,9 +278,13 @@ type Backend struct {
 	// from boot beside the artifacts estate ([ArtifactDataHalf]).
 	ArtifactData ArtifactDataHalf
 
-	// Committed waits until this node's applier of the floor's log holds a
-	// position — the floor every request carries, the node's own included.
-	Committed func(ctx context.Context, at statelog.Position) error
+	// Reached waits until this node's applier of the floor's log has reached
+	// a position — the floor every request carries, the node's own included:
+	// every record through it that writes a row committed, and every barrier
+	// decoded ([statelog.Runner.WaitReached]). A floor may be a barrier — a
+	// read answers with the position its rows are current through — and a
+	// barrier's own commit is nothing the request reads.
+	Reached func(ctx context.Context, at statelog.Position) error
 
 	// Answers is whether this copy OF THE OPERATION'S DOMAIN may answer a
 	// request now ([statelog.Health.Answers]): serving — drained since its

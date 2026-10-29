@@ -63,9 +63,9 @@ type stubWaiter struct {
 	err    error
 }
 
-func (w *stubWaiter) Committed() statelog.Position { return w.at }
+func (w *stubWaiter) Reached() statelog.Position { return w.at }
 
-func (w *stubWaiter) WaitCommitted(_ context.Context, p statelog.Position) error {
+func (w *stubWaiter) WaitReached(_ context.Context, p statelog.Position) error {
 	w.waited.Add(1)
 	w.last.Store(p.Packed())
 	return w.err
@@ -1615,11 +1615,11 @@ type landingWaiter struct {
 	land func()
 }
 
-func (w *landingWaiter) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (w *landingWaiter) WaitReached(ctx context.Context, p statelog.Position) error {
 	if w.land != nil {
 		w.land()
 	}
-	return w.stubWaiter.WaitCommitted(ctx, p)
+	return w.stubWaiter.WaitReached(ctx, p)
 }
 
 // A DEFERRAL LANDING DURING THE WAIT IS CAUGHT EVEN WHEN NOTHING WAS DEFERRED

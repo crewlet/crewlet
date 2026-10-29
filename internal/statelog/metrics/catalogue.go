@@ -205,7 +205,11 @@ func Catalogue() []Instrument {
 			Shows: "How much of the read budget a barrier or session wait " +
 				"actually spends. A p95 approaching the budget is reads about " +
 				"to start refusing, which is the warning the refusal itself " +
-				"is too late to be.",
+				"is too late to be. What a read waits for is this node " +
+				"reaching the position: every record up to it that writes a " +
+				"row committed, every barrier decoded — never a barrier's " +
+				"own commit, so a disk's stalled fsync shows here only " +
+				"behind a commit that writes a row.",
 		},
 		{
 			Name: StatelogReadRefusals, Kind: KindCounter, Unit: UnitCount,
@@ -263,9 +267,12 @@ func Catalogue() []Instrument {
 			Name: StatelogApplyTxDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"domain", "bound_by"},
 			Shows: "How long one apply transaction holds the store's writer, " +
-				"and which budget ended it. A transaction is what every " +
-				"waiter behind it pays, and rows were only ever a proxy for " +
-				"the duration.",
+				"and which budget ended it. A transaction with rows is what " +
+				"every waiter behind it pays, and rows were only ever a " +
+				"proxy for the duration. A run of nothing but barriers " +
+				"commits beside the apply loop, one transaction at a time " +
+				"carrying every barrier since the last: no reader waits on " +
+				"it, and a transaction with rows waits for it to return.",
 		},
 		{
 			Name: StatelogApplyRecordDuration, Kind: KindHistogram, Unit: UnitMilliseconds,

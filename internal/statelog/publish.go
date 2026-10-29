@@ -81,16 +81,19 @@ func (p Pattern) expects() bool {
 	return p != PatternAdditive && p != PatternSequenced
 }
 
-// Waiter is this node's own applier, as the publisher needs it.
+// Waiter is this node's own applier, as the publisher and the reader need it.
 type Waiter interface {
-	// Committed is this node's committed position on the stream.
-	Committed() Position
+	// Reached is the position this node's rows are current through
+	// ([Runner.Reached]): every record at or below it committed, or a
+	// barrier that writes no row.
+	Reached() Position
 
-	// WaitCommitted blocks until this node's applier has committed
-	// through p. It is what turns a lost race into a retry that can win:
-	// re-deciding without it re-reads the anchor the applier has not yet
-	// advanced, sixteen times, to a refusal.
-	WaitCommitted(ctx context.Context, p Position) error
+	// WaitReached blocks until this node's applier has reached p — every
+	// record through p that writes a row committed, and every barrier
+	// decoded ([Runner.WaitReached]). It is what turns a lost race into a
+	// retry that can win: re-deciding without it re-reads the anchor the
+	// applier has not yet advanced, sixteen times, to a refusal.
+	WaitReached(ctx context.Context, p Position) error
 
 	// WaitApplied blocks until this node holds the derived consequences
 	// of everything up to p for the objects in s.
@@ -2258,7 +2261,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 	if req.Session.IsZero() {
 		return nil
 	}
-	if before, err := p.waiter.Committed().Before(req.Session); err != nil {
+	if before, err := p.waiter.Reached().Before(req.Session); err != nil {
 		return err
 	} else if !before {
 		return nil
@@ -2266,7 +2269,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 	started := time.Now()
 	waitCtx, cancel, bound := WaitWithin(ctx, p.budget(ctx))
 	defer cancel()
-	err := p.waiter.WaitCommitted(waitCtx, req.Session)
+	err := p.waiter.WaitReached(waitCtx, req.Session)
 	p.observeMillis(metrics.StatelogWriteSessionWait, started, metrics.Attrs{
 		"domain": p.domain.Name(),
 	})
@@ -2301,7 +2304,7 @@ func (p *Publisher) waitSession(ctx context.Context, req Request) error {
 func (p *Publisher) waitBehind(ctx context.Context, req Request, at Position) error {
 	waitCtx, cancel, bound := WaitWithin(ctx, p.budget(ctx))
 	defer cancel()
-	if err := p.waiter.WaitCommitted(waitCtx, at); err != nil {
+	if err := p.waiter.WaitReached(waitCtx, at); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

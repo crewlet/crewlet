@@ -352,7 +352,7 @@ func (l *sweepLog) Append(_ context.Context, subject, msgID string, expect *uint
 	if l.failErr != nil && len(l.appends)+1 >= l.failAt {
 		return 0, false, l.failErr
 	}
-	if l.runner != nil && len(l.appends) > 0 && l.runner.Committed().Seq < l.last() {
+	if l.runner != nil && len(l.appends) > 0 && l.runner.Reached().Seq < l.last() {
 		l.early++
 	}
 	l.appends = append(l.appends, sweepAppend{subject, msgID, expect, append([]byte(nil), body...)})
@@ -405,13 +405,13 @@ type sweepRunner struct {
 	late bool
 }
 
-func (r *sweepRunner) Committed() statelog.Position {
+func (r *sweepRunner) Reached() statelog.Position {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return statelog.Position{Stream: probeStream, Generation: 1, Seq: r.committed}
 }
 
-func (r *sweepRunner) WaitCommitted(ctx context.Context, p statelog.Position) error {
+func (r *sweepRunner) WaitReached(ctx context.Context, p statelog.Position) error {
 	r.mu.Lock()
 	budget := time.Duration(-1)
 	deadline, ok := ctx.Deadline()
@@ -732,7 +732,7 @@ func TestASweepAppendsEachRecordOnlyOnceTheOneBeforeHasCommittedHere(t *testing.
 			"committed on this node — a write behind the sweep waits for every "+
 			"record in the run", early)
 	}
-	if got := log.runner.Committed().Seq; got != 10 {
+	if got := log.runner.Reached().Seq; got != 10 {
 		t.Fatalf("the sweep returned with this node committed through %d, want 10 — "+
 			"its last record applied here", got)
 	}
