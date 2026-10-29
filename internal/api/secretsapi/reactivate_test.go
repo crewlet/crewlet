@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/authz"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -315,5 +316,58 @@ func TestADeferredBatchSealsAndReactivatesNothing(t *testing.T) {
 	if code, body := call(t, h, http.MethodGet, "/secrets/GITLAB_TOKEN_SWE?reveal=true", ""); code != http.StatusOK ||
 		decoded(t, body)["value"] != "glpat-1" {
 		t.Errorf("the deferred value = %d %s, want it sealed", code, body)
+	}
+}
+
+// A WRITE OR A REMOVAL THAT RE-ACTIVATES ASKS `config.write` OF ITS OWN.
+//
+// The routes are mounted at `secrets.write`, admin's with a recent proof as
+// `config.write` is, so no caller tells the two apart: a guard that refuses
+// `config.write` alone does. A write or a removal of a name the company reads
+// is refused before anything is sealed or removed; a name nothing reads, and
+// a deferred batch, whose caller re-activates at its own end, never ask it.
+func TestAReactivationAsksConfigWriteBeforeAnythingChanges(t *testing.T) {
+	t.Parallel()
+	c := &company{reads: map[string][]string{"ANTHROPIC_API_KEY": {"providers.llm.default.auth.api_key"}}}
+	fleet := coordmem.NewFleet()
+	opts := secretsapi.Options{Fleet: fleet, Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock }, Config: c,
+		Guard: func(r *http.Request, p authz.Policy) authz.Decision {
+			if p.Action == authz.ActionConfigWrite {
+				return authz.Decision{Allowed: false}
+			}
+			return authz.ContextGuard(authz.NoChart{})(r, p)
+		}}
+	h := mounted(t, opts, iam.AllGrants...)
+	seeded := mounted(t, secretsapi.Options{Fleet: fleet, Cipher: cipherFor(t, "k1"), ActiveKeyID: "k1",
+		Now: func() time.Time { return clock }}, iam.AllGrants...)
+	if code, body := call(t, seeded, http.MethodPut, "/secrets/ANTHROPIC_API_KEY", "sk-old"); code != http.StatusOK {
+		t.Fatalf("seed = %d %s", code, body)
+	}
+	reloads := len(c.summaries())
+
+	if code, body := call(t, h, http.MethodPut, "/secrets/ANTHROPIC_API_KEY", "sk-new"); code != http.StatusForbidden {
+		t.Errorf("a write that re-activates without config.write = %d %s, want 403", code, body)
+	}
+	if code, body := call(t, h, http.MethodPut, "/secrets", `{"values": {"ANTHROPIC_API_KEY": "sk-new"}}`); code != http.StatusForbidden {
+		t.Errorf("a batch that re-activates without config.write = %d %s, want 403", code, body)
+	}
+	if code, body := call(t, h, http.MethodDelete, "/secrets/ANTHROPIC_API_KEY", ""); code != http.StatusForbidden {
+		t.Errorf("a removal that re-activates without config.write = %d %s, want 403", code, body)
+	}
+	if code, body := call(t, seeded, http.MethodGet, "/secrets/ANTHROPIC_API_KEY?reveal=true", ""); code != http.StatusOK ||
+		decoded(t, body)["value"] != "sk-old" {
+		t.Errorf("after the refusals the value is %d %s, want it untouched", code, body)
+	}
+	if got := len(c.summaries()); got != reloads {
+		t.Errorf("a refused write re-activated: %q", c.summaries())
+	}
+
+	if code, body := call(t, h, http.MethodPut, "/secrets/UNREAD_TOKEN", "x"); code != http.StatusOK {
+		t.Errorf("a name nothing reads = %d %s, want it stored without config.write", code, body)
+	}
+	if code, body := call(t, h, http.MethodPut, "/secrets",
+		`{"values": {"ANTHROPIC_API_KEY": "sk-deferred"}, "defer_reload": true}`); code != http.StatusOK {
+		t.Errorf("a deferred batch = %d %s, want it stored without config.write", code, body)
 	}
 }

@@ -254,6 +254,11 @@ type Options struct {
 
 	// Now is injectable so a test can pin a row's timestamp.
 	Now func() time.Time
+
+	// Guard decides each route's policy and every in-handler admission;
+	// nil is the request context's caller with no org chart, which is what
+	// the engine serves. A test refuses one action through it.
+	Guard authz.Guard
 }
 
 // Reactivator is the config surface as a secret write needs it: which paths
@@ -301,6 +306,10 @@ func New(opts Options) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
+	guard := opts.Guard
+	if guard == nil {
+		guard = authz.ContextGuard(authz.NoChart{})
+	}
 	return &Service{
 		store:     fleetsecrets.New(opts.Fleet, opts.Cipher),
 		config:    opts.Config,
@@ -308,7 +317,7 @@ func New(opts Options) (*Service, error) {
 		assistant: opts.Assistant,
 		keyID:     opts.ActiveKeyID,
 		now:       now,
-		guard:     authz.ContextGuard(authz.NoChart{}),
+		guard:     guard,
 	}, nil
 }
 

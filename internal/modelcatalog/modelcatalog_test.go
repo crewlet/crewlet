@@ -183,3 +183,22 @@ func TestAnUnreadableCatalogueKeepsTheLastCopyAndSaysHowOld(t *testing.T) {
 		t.Errorf("reason = %q, want the failure and the copy's age", got.Reason)
 	}
 }
+
+// A CATALOGUE PAST [modelcatalog.MaxBytes] IS REFUSED RATHER THAN READ.
+//
+// The body is a valid catalogue padded one byte past the cap with
+// whitespace, so only the cap tells it apart from one to serve: a node whose
+// egress is pointed somewhere that streams without end holds 16 MiB, not
+// the stream.
+func TestACatalogueOverTheCapIsRefused(t *testing.T) {
+	t.Parallel()
+	body := catalogue + strings.Repeat(" ", modelcatalog.MaxBytes+1-len(catalogue))
+	cat, _ := catalogOver(t, &served{body: body, etag: `"big"`})
+	got, err := cat.Provider(t.Context(), "anthropic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Source != modelcatalog.SourceNone || !strings.Contains(got.Reason, "over 16 MiB") {
+		t.Errorf("a catalogue over the cap = %+v, want it refused naming the cap", got)
+	}
+}
