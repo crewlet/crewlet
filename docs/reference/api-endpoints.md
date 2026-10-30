@@ -3475,8 +3475,8 @@ entry answers instead is what is still outstanding for that agent:
 `step` and `action_url` are the two clicks, described under
 [One agent's own GitHub App](#one-agents-own-github-app). What the seat may do
 at GitHub is its own permissions, read and changed through
-`GET /setup/integrations/github/access` and `PUT` on the same path, and not
-part of this roster.
+`GET /setup/integrations/{kind}/access` (with `github` as the kind) and `PUT`
+on the same path, and not part of this roster.
 
 **`present`** is whether the seat has an app at all, and **`satisfied`** needs
 that app installed *and* its sealed key readable by this node. A `${VAR}`
