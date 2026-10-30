@@ -2927,7 +2927,11 @@ var SESSION_QUERIES = {
 	code: [
 		"code_repos",
 		"code_repo",
-		"code_pushes"
+		"code_pushes",
+		"code_changes",
+		"code_change",
+		"code_change_routing",
+		"code_reviews"
 	]
 };
 //#endregion

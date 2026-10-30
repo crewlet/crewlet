@@ -663,22 +663,10 @@ func plural(n int64, one, many string) string {
 }
 
 // floor is what a read by object id of revs is asked with ([changeRead]'s
-// doc): the furthest of this node's own floor on the repository, the record
-// that moved each revision's head and, where its facts are recorded, the one
-// that moved its target to the tip its base was read from — or none, which
-// reads the copy as it stands.
+// doc): the code domain's one rule ([code.ObjectFloor]) over this node's own
+// floor on the repository.
 func (g changeRead) floor(revs ...code.RevisionRow) statelog.Freshness {
-	at := g.deps.Code.FloorOf(g.repo.ID)
-	for _, r := range revs {
-		at = furthestOnLog(at, r.Position)
-		if r.Facts != nil {
-			at = furthestOnLog(at, r.Facts.TargetPosition)
-		}
-	}
-	if at.IsZero() {
-		return statelog.Freshness{}
-	}
-	return statelog.FloorAt(statelog.ReadSession, at)
+	return code.ObjectFloor(g.deps.Code.FloorOf(g.repo.ID), revs...)
 }
 
 // ---- summary --------------------------------------------------------------- //
@@ -940,18 +928,18 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 			return *refusal, nil
 		}
 	}
-	q := code.GitQuery{RepoID: g.repo.ID, Fresh: g.floor(revs...), Cursor: call.cursor}
-	if call.since == 0 {
-		q.Kind, q.Diff = code.GitDiff, &code.DiffQuery{Base: rev.Facts.BaseOID, Head: rev.Head, File: call.file,
-			FileB64: call.fileB64, Renames: true}
-	} else {
-		from := revs[1]
-		q.Kind, q.Interdiff = code.GitInterdiff, &code.InterdiffQuery{
-			FromBase: from.Facts.BaseOID, FromHead: from.Head, FromTouched: from.Facts.Touched,
-			FromTouchesAll: from.Facts.TouchesAll,
-			ToBase:         rev.Facts.BaseOID, ToHead: rev.Head, ToTouched: rev.Facts.Touched,
-			ToTouchesAll: rev.Facts.TouchesAll, File: call.file, FileB64: call.fileB64}
+	var since *code.RevisionRow
+	if call.since != 0 {
+		since = &revs[1]
 	}
+	q, err := code.RevisionDiff(g.repo.ID, rev, since, call.file, call.fileB64)
+	if err != nil {
+		// UNREACHABLE past recorded's refusals and changeCallArgs' order of
+		// the two revisions, so this node's own fault, never the caller's.
+		return faulted(ctx, g.tool, err, fmt.Sprintf("%s could not read %s's files: %s.", g.tool, g.ref(),
+			faultSaid)), nil
+	}
+	q.Fresh, q.Cursor = g.floor(revs...), call.cursor
 	page, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, q)
 	if refusal != nil {
 		return *refusal, nil
@@ -969,25 +957,26 @@ func (g changeRead) diff(ctx context.Context, call changeCall) (tools.Result, er
 		SinceRevision: call.since, GitAnswer: page}, narrow)
 }
 
-// recorded refuses a revision whose files cannot be read from its facts: none
-// recorded — a live change's home reads them within a minute of the push, and
-// a change merged or closed before it did never has them — or, where based,
-// none of a base to diff its head from: a history that shares no commit with
-// its target, whose change is every file of its head.
+// recorded refuses a revision whose files cannot be read from its facts
+// ([code.RevisionRow.FilesGap]): none recorded — a live change's home reads
+// them within a minute of the push, and a change merged or closed before it
+// did never has them — or, where based, none of a base to diff its head from:
+// a history that shares no commit with its target, whose change is every file
+// of its head.
 func (g changeRead) recorded(d *code.ChangeDetail, r code.RevisionRow, based bool) *tools.Result {
-	switch {
-	case r.Facts == nil && d.State.Live():
+	switch r.FilesGap(d.State, based) {
+	case code.FilesPending:
 		res := refused(tools.RefusalUnavailable, fmt.Sprintf("%s: revision %d of %s has no recorded base yet: "+
 			"the repository's home git node records each revision's facts against its target within a minute "+
 			"of its push. Try again shortly.", g.tool, r.N, g.ref()))
 		return &res
-	case r.Facts == nil:
+	case code.FilesUnrecorded:
 		res := refused(tools.RefusalNotFound, fmt.Sprintf("%s: %s was %s before its home recorded revision %d's "+
 			"base against its target, so it has none to read the revision's files from: read the commits it "+
 			"brought with %s from its head %s, or compare that head with a commit of your choosing with %s.",
 			g.tool, g.ref(), d.State, r.N, CodeLogTool, r.Head, CodeCompareTool))
 		return &res
-	case based && r.Facts.BaseOID == "":
+	case code.FilesUnrelated:
 		res := refused(tools.RefusalNotFound, fmt.Sprintf("%s: revision %d of %s shares no history with %s, so "+
 			"its change is every file of its head: read them with %s at %s.", g.tool, r.N, g.ref(),
 			r.Facts.TargetRef, CodeReadTool, r.Head))
@@ -1034,19 +1023,10 @@ type codeFinding struct {
 	ResolutionNote string            `json:"resolution_note,omitempty"`
 	ResolvedBy     string            `json:"resolved_by,omitempty"`
 	ResolvedCommit string            `json:"resolved_commit,omitempty"`
-	At             *codePlacement    `json:"at,omitempty"`
-}
-
-// codePlacement is where a finding's lines are in the revision an answer is
-// of: moved by the lines changed above them; OUTDATED where its own lines
-// changed — then where they would be had only the lines above moved; GONE
-// where the revision holds no file at its path. A finding on the old side of
-// a revision whose base its home has not recorded yet carries none.
-type codePlacement struct {
-	Start    int  `json:"start,omitempty"`
-	End      int  `json:"end,omitempty"`
-	Outdated bool `json:"outdated,omitempty"`
-	Gone     bool `json:"gone,omitempty"`
+	// At is where its lines are in the revision the answer is of
+	// ([code.FindingPlace]); none for a finding on the old side of a revision
+	// whose base its home has not recorded yet.
+	At *code.FindingPlace `json:"at,omitempty"`
 }
 
 // findings answers a page of the change's findings, each placed in the
@@ -1081,7 +1061,10 @@ func (g changeRead) findings(ctx context.Context, call changeCall) (tools.Result
 			Revision: f.Revision, Path: f.Path, Side: f.Side, LineStart: f.LineStart, LineEnd: f.LineEnd,
 			CommitOID: f.CommitOID, BlobOID: f.BlobOID, Severity: f.Severity, Category: f.Category, Title: f.Title,
 			Body: f.Body, Suggestion: f.Suggestion, State: f.State, ResolutionNote: f.ResolutionNote,
-			ResolvedBy: f.ResolvedBy, ResolvedCommit: f.ResolvedCommit, At: placed[f.ID]}
+			ResolvedBy: f.ResolvedBy, ResolvedCommit: f.ResolvedCommit}
+		if at, ok := placed[f.ID]; ok {
+			rows[i].At = &at
+		}
 	}
 	build := func(k int) (*foreignRead, any) {
 		read := newForeignRead(g.turn, g.c.asker.Seat)
@@ -1115,60 +1098,29 @@ func (g changeRead) findings(ctx context.Context, call changeCall) (tools.Result
 }
 
 // place is where each finding of findings is in revision rev of a change whose
-// head revision is head, by the finding's id: a finding raised on rev where it
-// was raised; one on the old side of a revision whose base shares no history
-// with its target gone, the empty tree holding no file; one on the old side of
-// a revision whose base is not yet recorded nowhere, unplaced; and every other
-// by ONE re-anchoring read, floored at the head revision — the latest any
-// finding was raised on — and at rev's own head and base.
+// head revision is head, by the finding's id: what the rows say without a read
+// ([code.PlaceFindings]), and every other finding by ONE re-anchoring read,
+// floored at the head revision — the latest any finding was raised on — and
+// at rev's own head and base. A finding on the old side of a revision whose
+// base is not yet recorded is in neither, unplaced.
 func (g changeRead) place(ctx context.Context, head, rev code.RevisionRow,
-	findings []code.FindingRow) (map[string]*codePlacement, *tools.Result) {
+	findings []code.FindingRow) (map[string]code.FindingPlace, *tools.Result) {
 
-	out := make(map[string]*codePlacement, len(findings))
-	base := ""
-	if rev.Facts != nil {
-		base = rev.Facts.BaseOID
-	}
-	var anchors []code.LineAnchor
-	for _, f := range findings {
-		switch {
-		case f.Revision == rev.N:
-			out[f.ID] = &codePlacement{Start: f.LineStart, End: f.LineEnd}
-		case f.Side == code.SideOld && rev.Facts == nil:
-		case f.Side == code.SideOld && base == "":
-			out[f.ID] = &codePlacement{Gone: true}
-		default:
-			anchors = append(anchors, code.LineAnchor{ID: f.ID, Path: f.Path, Side: f.Side, BlobOID: f.BlobOID,
-				Start: f.LineStart, End: f.LineEnd})
-		}
-	}
-	if len(anchors) == 0 {
-		return out, nil
+	placed, reanchor := code.PlaceFindings(rev, findings)
+	if reanchor == nil {
+		return placed, nil
 	}
 	answer, refusal := g.deps.gitRead(ctx, g.turn, g.tool, g.c, g.repo, code.GitQuery{Kind: code.GitReanchor,
-		RepoID: g.repo.ID, Fresh: g.floor(head, rev), Reanchor: &code.ReanchorQuery{Base: base, Head: rev.Head,
-			Anchors: anchors}})
+		RepoID: g.repo.ID, Fresh: g.floor(head, rev), Reanchor: reanchor})
 	if refusal != nil {
 		return nil, refusal
 	}
-	if answer.Reanchor == nil || len(answer.Reanchor.Anchors) != len(anchors) {
-		r := faulted(ctx, g.tool, fmt.Errorf("builtin: the code host placed %d of %d anchors of %s",
-			reanchored(answer), len(anchors), g.ref()), fmt.Sprintf("%s could not place %s's findings in revision "+
-			"%d: %s.", g.tool, g.ref(), rev.N, faultSaid))
+	if err := code.PlaceAnchors(placed, reanchor, answer.Reanchor); err != nil {
+		r := faulted(ctx, g.tool, fmt.Errorf("builtin: %s: %w", g.ref(), err), fmt.Sprintf("%s could not place "+
+			"%s's findings in revision %d: %s.", g.tool, g.ref(), rev.N, faultSaid))
 		return nil, &r
 	}
-	for _, a := range answer.Reanchor.Anchors {
-		out[a.ID] = &codePlacement{Start: a.Start, End: a.End, Outdated: a.Outdated, Gone: a.Gone}
-	}
-	return out, nil
-}
-
-// reanchored is how many anchors a re-anchoring answer placed.
-func reanchored(a code.GitAnswer) int {
-	if a.Reanchor == nil {
-		return 0
-	}
-	return len(a.Reanchor.Anchors)
+	return placed, nil
 }
 
 // ---- reviews and comments ------------------------------------------------ //

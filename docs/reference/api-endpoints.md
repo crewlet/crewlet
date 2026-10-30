@@ -4374,10 +4374,14 @@ REST route calls, so the two surfaces cannot diverge:
 | `artifact_data_schema` | `{id}` | `GET /artifacts/{id}/data/schema`. The collections the caller may read, the store's footprint and state digest, and the caller's role |
 | `artifact_data_state` | `{id}` | `GET /artifacts/{id}/data/state`. The caller's own per-viewer state keys |
 | `artifact_data_usage` | `{}` | `GET /artifacts/data/usage` *(needs `admin`)*. The company's datastore footprint against its quota |
-| `code_repos` | `{status, limit, cursor, read_level, …}` | `GET /code/repos`. The repositories the caller may read, a page at a time — see [The code reads](#the-code-reads), which say what the three code questions answer, at which level and with which refusals |
+| `code_repos` | `{status, limit, cursor, read_level, …}` | `GET /code/repos`. The repositories the caller may read, a page at a time — see [The code reads](#the-code-reads), which say what the repository questions answer, at which level and with which refusals |
 | `code_repo` | `{name, read_level, …}` | `GET /code/repos/{name}`. One repository in detail |
 | `code_pushes` | `{name, limit, cursor, brief, push, read_level, …}` | `GET /code/repos/{name}/pushes`. One repository's push history, newest first in log order — in brief with `brief`, or one push of it, whole, with `push` |
 | `code_repo_readers` | `{name, from, to, cursor}` | [`GET /code/repos/{name}/readers`](#get-codereposnamereaders). Who read a `visibility: unit` repository's contents over a range of company days, a page at a time. **An admin's**, decided before anything is read; it takes none of the freshness keys |
+| `code_changes` | `{repo, state, owner, work, reviewer, needs, limit, cursor, read_level, …}` | `GET /code/changes`. A listing of changes — see [A change's questions](#a-changes-questions), which say what the four change questions answer |
+| `code_change` | `{name, change, part, revision, since_revision, file, file_b64, limit, cursor, read_level, …}` | `GET /code/repos/{name}/changes/{n}`. One change, a part at a time: its detail and revisions, a part of its conversation, a revision's files or one file's patch, its findings placed in a revision |
+| `code_change_routing` | `{name, change, limit, cursor, read_level, …}` | `GET /code/repos/{name}/changes/{n}/routing`. Whom the change's records reached, a whole record a page, its `delivery` telling `nobody` from `swept` |
+| `code_reviews` | `{reviewer, limit, cursor, read_level, …}` | `GET /code/reviews`. The reviews one reviewer gave, newest first, each naming its change |
 | `config` | `{}` | `GET /config` *(needs `admin`)* |
 | `config_audit` | `{limit}` | The revision history — no REST twin; `GET /config/revisions` serves the same records *(needs `admin`)* |
 | `config_diff` | `{revision_id}` | [`GET /config/revisions/{id}/diff`](#get-configrevisionsiddiff) — the listing is cut at 500 and `changes_total` is how many there are *(needs `admin`)* |
@@ -7236,8 +7240,9 @@ with the position its record landed at, and a read naming that position as
 its `min_position` at `read_level=session` is answered only once the serving
 node holds it — refused `503 unavailable` (`behind`) where it does not within
 the read's budget, never served from before the write — which is how a screen
-draws the list it just changed (the dashboard's `SESSION_QUERIES` lists the
-three under the code log). A bare `session`, naming no position, is refused
+draws the list it just changed (the dashboard's `SESSION_QUERIES` lists them,
+and [a change's questions](#a-changes-questions), under the code log). A bare
+`session`, naming no position, is refused
 `400 bad_params`: it would wait for nothing. A `min_position` on another log
 is `400 bad_params` too, since no read of the code log can wait on it.
 A client that must not conclude a repository is undeclared from an old copy —
@@ -7279,6 +7284,48 @@ could not read) or `native_backend_needs_restart` — the last three with no
 read. Asked over the socket, the same answer is an `unavailable` frame whose
 `refusal` is that code, with the same `detail` and `retry_after`. Every one of
 them is served through a drain.
+
+### A change's questions
+
+A [change](../concepts/code-host.md#changes) is read through four more
+questions, decided per repository as the rows above are — a change of a
+repository the caller may not read is left out of a listing, and answered
+`403 not_permitted` alone — read at the same freshness keys, and refused in
+the same vocabulary:
+
+| Route | Question | What it answers |
+|---|---|---|
+| `GET /code/changes` | `code_changes` | A listing of changes, newest first, a page at a time (`?limit=` 1–200, unset or `0` is 50, and `?cursor=`). It names at least one of `?repo=` (one repository's, by name), `?state=` (`draft`, `open`, `closed` or `merged`), `?work=` (a work item's, `<backend>:<id>`), `?reviewer=` (the changes asking a seat's review, or a person's by the human seat they hold) or `?needs=` (`review`, `fix`, `me` or `person`: what its changes wait on), and narrows further by `?owner=`. Each change carries its row, its repository by name, its reference (`web!42`), the caller's `access` to its repository and, while it is live, its `readiness` judged in the read. A page counts the changes it **scanned**, so one may hold fewer than its limit and still carry a `next` |
+| `GET /code/repos/{name}/changes/{n}` | `code_change` | One change by its number, `?part=` at a time. With no part, or `revisions`: its detail — its row, description, authors, conversation counters, recorded mergeability and readiness — on the first page beside its revisions, newest first, each with the facts its home recorded; `reviewers`, `comments`, `reviews` and `findings` page that part of its conversation. `files` is a revision's files and `diff` one file's patch (`?file=`, or `?file_b64=` for a path's exact bytes), read from the **base its facts record** — never the target's tip now — or, with `?since_revision=`, what changed between that earlier revision and this one, kept to the paths either touches (`kind` `interdiff`); `?revision=` reads at a revision other than the head. `findings` places each finding in that revision too: `placed`, by the finding's id, is where its lines are now (`start`, `end`), `outdated` where its own lines changed, `gone` where the revision holds no file at its path |
+| `GET /code/repos/{name}/changes/{n}/routing` | `code_change_routing` | Whom the change's records reached: its records that reached anybody, newest first, a whole record a page (`?limit=` 1–200, unset or `0` is 50), each with its `record_id`, position, instant, what it said (`excerpt`) and every `recipients` entry — a seat's handle or the human seat a person holds, `kind` (`agent` or `person`), the one `reason` it heard under, `addressed` where it asks something of them, and `fallback` and `fallback_rank` for a substitute reached because nobody better was. `delivery` says what the answer can say of whom its records reached: `reached` where it lists a record; `nobody` for a change opened since `retained_from`, every notice of which would still be kept; and `swept` for one opened before it, whose notices a sweep was entitled to take. `retained_from` is thirty days back, how long a seat's notice is kept — a person's is kept the company's `inbox.retention_days`, never less — so a record older than it lists only the persons it reached |
+| `GET /code/reviews` | `code_reviews` | The reviews one reviewer gave, newest first across the repositories the caller may read (`?reviewer=`, required: a seat's handle or the human seat a person holds; `?limit=` 1–200, unset or `0` is 50; `?cursor=`), each naming the change it judged — its repository, reference, title and state. A page counts the reviews it **read**, so one may hold fewer than its limit and still carry a `next` |
+
+A part read by object id — `files`, `diff`, and `findings`' placing — reads
+the change's rows first, at the caller's freshness, then every other row it
+needs at `session` floored at that first read's position, and asks the
+repository's home git node at the floor of the records that moved the
+revisions it reads: its answer is never assembled from an older copy than its
+first read saw. A change's question adds these refusals to the code reads':
+
+- `404 not_found` with `"reason": "no_change"` for a number the repository
+  holds no change of, and `"reason": "no_revision"` for a revision the change
+  does not have;
+- `404 not_found` with `"reason": "unrecorded"` for a revision of a change that
+  was merged or closed before its home recorded its facts, so it has no base to
+  read its files from, and `"reason": "unrelated"` for one whose head shares no
+  history with its target — its change is every file of its head;
+- `503 unavailable` for a revision of a live change whose facts its home has
+  not recorded yet, which it does within a minute of the push;
+- `400 bad_params` for a parameter its part does not take: a `revision` to the
+  revisions, a `file` to `files`, a `since_revision` that is not earlier, a
+  `diff` naming no file.
+
+```sh
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "https://crewlet.example.com/code/changes?repo=web&state=open"
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" \
+  "https://crewlet.example.com/code/repos/web/changes/42?part=diff&since_revision=2&file=upload/retry.go"
+```
 
 ### `GET /code/repos/{name}/readers`
 

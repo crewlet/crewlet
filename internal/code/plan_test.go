@@ -906,6 +906,19 @@ func registeredStatements() map[string]statement {
 			[]string{"code_reviews_change_idx (change_id=?)"}},
 		"reviews of a change after": {reviewsOfAfterSQL, []any{"repo-1-change-000001", 3000, 50},
 			[]string{"code_reviews_change_idx (change_id=? AND position>?)"}},
+		// ONE REVIEWER'S REVIEWS newest first (the `reviews` listing), a
+		// range of the reviewer's index walked backward, and WHOM ONE
+		// CHANGE'S RECORDS REACHED (the `change_routing` read), a range of
+		// the change's notices walked backward, each first and after a
+		// cursor.
+		"reviews given": {reviewsGivenSQL, []any{"seat-0", 50},
+			[]string{reviewsGivenKey + " (reviewer=?)"}},
+		"reviews given after": {reviewsGivenAfterSQL, []any{"seat-0", 3000, 50},
+			[]string{reviewsGivenKey + " (reviewer=? AND position<?)"}},
+		"whom a change reached": {changeNoticesSQL, []any{"repo-1-change-000001"},
+			[]string{"code_notifications_change_idx (change_id=?)"}},
+		"whom a change reached after": {changeNoticesAfterSQL, []any{"repo-1-change-000001", 3000},
+			[]string{"code_notifications_change_idx (change_id=? AND log_seq<?)"}},
 		"findings of a change": {findingsOfSQL, []any{"repo-1-change-000001", 50},
 			[]string{findingTextKey + " (change_id=?)", findingKey + " (id=?)"}},
 		"findings of a change after": {findingsOfAfterSQL, []any{"repo-1-change-000001", "finding-1", 50},

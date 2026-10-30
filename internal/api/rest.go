@@ -197,6 +197,14 @@ var namedRoutes = []struct {
 	{method: "GET", pattern: "/code/repos/{name}", what: "code_repo", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/code/repos/{name}/pushes", what: "code_pushes", path: map[string]string{"name": "name"}},
 	{method: "GET", pattern: "/code/repos/{name}/readers", what: "code_repo_readers", path: map[string]string{"name": "name"}},
+	// AND A CHANGE'S ROWS AND ITS ROUTING: the changes, one change a part at
+	// a time, whom its records reached, and one reviewer's reviews — each
+	// decided per repository as the rows are, a change named on its
+	// repository's path by its number.
+	{method: "GET", pattern: "/code/changes", what: "code_changes"},
+	{method: "GET", pattern: "/code/repos/{name}/changes/{n}", what: "code_change", path: map[string]string{"name": "name", "n": "change"}},
+	{method: "GET", pattern: "/code/repos/{name}/changes/{n}/routing", what: "code_change_routing", path: map[string]string{"name": "name", "n": "change"}},
+	{method: "GET", pattern: "/code/reviews", what: "code_reviews"},
 }
 
 // mountReads registers the named read routes.

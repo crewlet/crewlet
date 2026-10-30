@@ -169,7 +169,11 @@
 // deleted one. Both carry each live change's readiness, judged in the read's
 // own transaction (readiness.go); and what waits on a person ([NeedPerson])
 // walks the changes whose stored readiness does, keeping those the read
-// judges still do.
+// judges still do. What a surface reads of a change's CODE — a revision's
+// files from the base its facts record, what changed between two revisions,
+// where each finding is in the revision asked about, and the floor those
+// reads by object id are asked at — is decided once, over those rows
+// (revisionread.go), for every surface that shows it.
 //
 // # A change's conversation is rows on its own subject
 //

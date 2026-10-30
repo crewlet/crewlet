@@ -29,7 +29,13 @@ type stubCode struct {
 	answer   func(code.ReadQuery) (code.ReadAnswer, error)
 	asked    []code.ReadQuery
 	unserved error
-	readers  stubReaders
+	// git answers a read by object id, each recorded in read; an empty
+	// answer of the kind asked where git is nil. floor is this node's own
+	// floor on every repository.
+	git     func(code.GitQuery) (code.GitAnswer, error)
+	read    []code.GitQuery
+	floor   statelog.Position
+	readers stubReaders
 	// sourced counts the asks of the source itself: CodeReads and
 	// RepoReaders.
 	sourced int
@@ -73,6 +79,16 @@ func (s *stubCode) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 	return code.ReadAnswer{Level: q.Fresh.Level}, nil
 }
 
+func (s *stubCode) GitRead(_ context.Context, q code.GitQuery) (code.GitAnswer, error) {
+	s.read = append(s.read, q)
+	if s.git != nil {
+		return s.git(q)
+	}
+	return code.GitAnswer{Kind: q.Kind, RepoID: q.RepoID}, nil
+}
+
+func (s *stubCode) FloorOf(string) statelog.Position { return s.floor }
+
 // last is the newest query asked, the zero query where none was.
 func (s *stubCode) last() code.ReadQuery {
 	if len(s.asked) == 0 {
@@ -91,6 +107,10 @@ var codeQuestions = []struct {
 	{"code_repos", code.ReadRepos, map[string]any{}},
 	{"code_repo", code.ReadRepo, map[string]any{"name": "web"}},
 	{"code_pushes", code.ReadPushes, map[string]any{"name": "web"}},
+	{"code_changes", code.ReadChanges, map[string]any{"repo": "web"}},
+	{"code_change", code.ReadChange, map[string]any{"name": "web", "change": "1"}},
+	{"code_change_routing", code.ReadChangeRouting, map[string]any{"name": "web", "change": "1"}},
+	{"code_reviews", code.ReadReviews, map[string]any{"reviewer": "dev"}},
 }
 
 // A CODE QUESTION HANDS THE READER THE CALLER'S WHOLE FRESHNESS: the level,

@@ -1564,6 +1564,20 @@ var sessionQuestions = []sessionQuestion{
 	{"code_pushes", []string{"code"}, map[string]any{"name": "web"},
 		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
 		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	// AND A CHANGE'S, read back at the code log's floor once a write to it
+	// lands there (codechange.go).
+	{"code_changes", []string{"code"}, map[string]any{"repo": "web"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_change", []string{"code"}, map[string]any{"name": "web", "change": "1"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_change_routing", []string{"code"}, map[string]any{"name": "web", "change": "1"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
+	{"code_reviews", []string{"code"}, map[string]any{"reviewer": "dev"},
+		func(s stubs) statelog.ReadLevel { return s.code.last().Fresh.Level },
+		func(s stubs) []bound { return handedWhole(s.code.last().Fresh) }, nil},
 }
 
 // handed is the bound of a reader of one log, as its stub recorded the two

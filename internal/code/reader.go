@@ -40,6 +40,7 @@ type Reader struct {
 	log    *statelog.Reader
 	limits func() Limits
 	roster func() Roster
+	now    func() time.Time
 
 	// pageRows and pageBytes bound one page: MaxSnapshotItems and
 	// MaxPageBytes, and a test's smaller values (export_test.go).
@@ -66,6 +67,12 @@ type ReaderOptions struct {
 	// only a chart may answer. A person's read asks nothing of it, since no
 	// chart decides a person's standing.
 	Roster func() Roster
+
+	// Now is the serving node's clock, which a change's routing is dated by
+	// ([RoutedPage.RetainedFrom]): whether its notices are still kept is a
+	// question of how old they are NOW, on the node whose sweeps keep them.
+	// Nil reads the wall clock.
+	Now func() time.Time
 }
 
 // NewReader builds the code host's read side.
@@ -74,10 +81,13 @@ func NewReader(o ReaderOptions) (*Reader, error) {
 		return nil, errors.New("code: a reader needs the code log's read authority — " +
 			"without it every read level is a label rather than a guarantee")
 	}
-	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, pageRows: MaxSnapshotItems,
+	r := &Reader{log: o.Log, limits: o.Limits, roster: o.Roster, now: o.Now, pageRows: MaxSnapshotItems,
 		pageBytes: MaxPageBytes}
 	if r.limits == nil {
 		r.limits = DefaultLimits
+	}
+	if r.now == nil {
+		r.now = time.Now
 	}
 	return r, nil
 }
@@ -1428,6 +1438,19 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// deferrals order them.
 		query = fresh.Resolved(resolver(q.Repo), q.Cursor != "" || !q.Part.detailed())
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.change(ctx, tx, q, chart, &out) }
+	case ReadChangeRouting:
+		// A SET READ of the repository whose records write the change, as a
+		// page of a part of its conversation is: every record about a change
+		// names the repository's path in its scope, so the repository's
+		// deferrals order its notices too.
+		query = fresh.Resolved(resolver(q.Repo), true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.changeRouting(ctx, tx, q, chart, &out) }
+	case ReadReviews:
+		// A SET READ OF THE DOMAIN, as a listing of changes across
+		// repositories is: a review a deferred record holds back is listed as
+		// its rows stand.
+		query = fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.reviewsGiven(ctx, tx, q, chart, &out) }
 	case ReadIntroduced:
 		// A POINT READ OF THE REPOSITORY, as a snapshot is: an index built
 		// past a record this node deferred on the repository would miss the
@@ -1615,16 +1638,18 @@ func (q ReadQuery) validate() error {
 			ErrInvalid, q.Push)
 	case q.Push != "" && (q.Cursor != "" || q.Limit != 0 || q.Brief):
 		return fmt.Errorf("%w: push: one push is read whole, never paged, cut or read in brief", ErrInvalid)
-	case q.Change != 0 && q.Kind != ReadChange:
-		return fmt.Errorf("%w: change: only a change read names a change's number", ErrInvalid)
+	case q.Change != 0 && q.Kind != ReadChange && q.Kind != ReadChangeRouting:
+		return fmt.Errorf("%w: change: only a change read and a change's routing name a change's number",
+			ErrInvalid)
 	case q.State != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: state: only a listing of changes is narrowed to a change's state", ErrInvalid)
 	case q.Owner != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: owner: only a listing of changes is narrowed to a change's owner", ErrInvalid)
 	case q.Work != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: work: only a listing of changes is narrowed to a work item", ErrInvalid)
-	case q.Reviewer != "" && q.Kind != ReadChanges:
-		return fmt.Errorf("%w: reviewer: only a listing of changes is narrowed to a reviewer", ErrInvalid)
+	case q.Reviewer != "" && q.Kind != ReadChanges && q.Kind != ReadReviews:
+		return fmt.Errorf("%w: reviewer: only a listing of changes or of a reviewer's reviews names a reviewer",
+			ErrInvalid)
 	case q.Needs != "" && q.Kind != ReadChanges:
 		return fmt.Errorf("%w: needs: only a listing of changes is narrowed to what its changes wait on",
 			ErrInvalid)
@@ -1634,8 +1659,11 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: part: %q is not one of %v", ErrInvalid, q.Part, ChangeParts())
 	}
 	switch {
+	case q.Kind == ReadReviews && q.Repo != "":
+		return fmt.Errorf("%w: repo: a reviewer's reviews are listed across every repository the asker may "+
+			"read, and a change's own reviews are a change read's part", ErrInvalid)
 	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "",
-		q.Kind == ReadQueue && q.Repo == "":
+		q.Kind == ReadQueue && q.Repo == "", q.Kind == ReadReviews:
 	case !ValidName(q.Repo):
 		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
@@ -1652,10 +1680,14 @@ func (q ReadQuery) validate() error {
 		if err := q.validateChanges(); err != nil {
 			return err
 		}
-	case ReadChange:
+	case ReadChange, ReadChangeRouting:
 		if q.Change < 1 {
 			return fmt.Errorf("%w: change: %d is no change's number: a repository numbers its changes "+
 				"from 1", ErrInvalid, q.Change)
+		}
+	case ReadReviews:
+		if err := q.validateReviews(); err != nil {
+			return err
 		}
 	case ReadChecks, ReadCheck:
 		if err := q.validateChecks(); err != nil {
@@ -1668,6 +1700,7 @@ func (q ReadQuery) validate() error {
 	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
 		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage(),
+		ReadChangeRouting: MaxRoutedRecordsPerPage, ReadReviews: MaxReviewsPerPage,
 		ReadChecks: MaxChecksPerPage, ReadQueue: MaxQueueRowsPerPage, ReadLandings: MaxLandingsPerPage}[q.Kind]
 	switch {
 	case q.Limit < 0:
@@ -1712,7 +1745,7 @@ func (q ReadQuery) validateIntroduced() error {
 	case q.MinPacks != 0:
 		return refused("min_packs", "only a compaction_due read names a floor of live packs")
 	case q.Change != 0:
-		return refused("change", "only a change read names a change's number")
+		return refused("change", "only a change read and a change's routing name a change's number")
 	case q.State != "":
 		return refused("state", "only a listing of changes is narrowed to a change's state")
 	case q.Owner != "":
@@ -1734,7 +1767,7 @@ func (q ReadQuery) validateIntroduced() error {
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
 	case q.Reviewer != "":
-		return refused("reviewer", "only a listing of changes is narrowed to a reviewer")
+		return refused("reviewer", "only a listing of changes or of a reviewer's reviews names a reviewer")
 	case q.Needs != "":
 		return refused("needs", "only a listing of changes is narrowed to what its changes wait on")
 	case q.Part != "":

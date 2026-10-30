@@ -683,3 +683,127 @@ const (
 		FROM code_finding_texts AS x CROSS JOIN code_findings AS f
 		WHERE x.change_id = ? AND x.finding_id > ? AND f.id = x.finding_id ORDER BY x.finding_id LIMIT ?`
 )
+
+// reviewsGiven serves a page of ONE REVIEWER'S REVIEWS — the `reviews`
+// listing, what a seat's or a person's "reviews given" reads — newest first,
+// after the review a cursor names, across every change of every repository
+// the asker may read: one range of code_reviews_reviewer_idx (replicated
+// 0086), the changes the page names read by their keys in one statement, and
+// their repositories judged once a page against the grant ([listedReposAmong]),
+// so a review of a change on a repository the asker may not read is left out
+// as a listing of changes leaves the change out. A page READS its limit of
+// reviews, whatever few of them the grant keeps, and resumes after the last
+// it read.
+func (r *Reader) reviewsGiven(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, out *ReadAnswer) error {
+	limit := min(limitOr(q.Limit, defaultReviewLimit), r.pageRows)
+	query, args := reviewsGivenSQL, []any{q.Reviewer}
+	if q.Cursor != "" {
+		position, err := strconv.ParseInt(q.Cursor, 10, 64)
+		if err != nil || position < 1 {
+			return fmt.Errorf("%w: %q is not a review's place on the code log", ErrBadCursor, q.Cursor)
+		}
+		query, args = reviewsGivenAfterSQL, append(args, position)
+	}
+	type given struct {
+		review ReviewRow
+		change string
+	}
+	read := func() ([]given, error) {
+		rows, err := tx.QueryContext(ctx, query, append(args, limit)...)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = rows.Close() }()
+		var scanned []given
+		for rows.Next() {
+			var (
+				g             given
+				kind, verdict string
+				position, at  int64
+			)
+			if err := rows.Scan(&g.review.ID, &g.change, &g.review.Revision, &g.review.Reviewer, &kind,
+				&g.review.OperatorID, &verdict, &g.review.Findings, &g.review.TurnID, &g.review.Model, &position,
+				&at, &g.review.Summary); err != nil {
+				return nil, err
+			}
+			g.review.ReviewerKind, g.review.Verdict = PartyKind(kind), Verdict(verdict)
+			g.review.Position, g.review.At = unpacked(position), store.DecodeTime(at)
+			scanned = append(scanned, g)
+		}
+		return scanned, rows.Err()
+	}
+	scanned, err := read()
+	if err != nil {
+		return fmt.Errorf("code: read the reviews %s gave: %w", q.Reviewer, err)
+	}
+	ids := make([]string, 0, len(scanned))
+	for _, g := range scanned {
+		ids = append(ids, g.change)
+	}
+	changes, err := changesByIDIn(ctx, tx, ids)
+	if err != nil {
+		return err
+	}
+	repoIDs := make([]string, 0, len(changes))
+	for _, c := range changes {
+		repoIDs = append(repoIDs, c.repoID)
+	}
+	repos, err := listedReposAmong(ctx, tx, repoIDs, q.Asker, q.CeilingSeat, chart, "a page of reviews")
+	if err != nil {
+		return err
+	}
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	for _, g := range scanned {
+		c, held := changes[g.change]
+		repo, listed := repos[c.repoID]
+		if !held || !listed {
+			continue
+		}
+		rv := g.review
+		rv.Change = &ChangeName{Repo: repo.ref.Name, Ref: ChangeRef(repo.ref.Name, c.number), Title: c.title,
+			State: c.state}
+		out.Reviews = append(out.Reviews, rv)
+		if pg.add(rv.encodedBytes()) {
+			out.Next = rv.Cursor()
+			return nil
+		}
+	}
+	if len(scanned) == limit {
+		out.Next = scanned[len(scanned)-1].review.Cursor()
+	}
+	return nil
+}
+
+// validateReviews is [ReadQuery.validate] for a `reviews` listing: the
+// reviewer whose reviews it lists, a seat's handle — or the human seat a
+// person holds — REQUIRED, since the listing walks one reviewer's index and
+// no index holds every review the company has.
+func (q ReadQuery) validateReviews() error {
+	switch {
+	case q.Reviewer == "":
+		return fmt.Errorf("%w: reviewer: a listing of reviews lists one reviewer's, by the seat's handle or "+
+			"the human seat a person holds", ErrInvalid)
+	case !org.ValidHandle(q.Reviewer):
+		return fmt.Errorf("%w: reviewer: %q is not a seat's handle: a reviewer is a seat, or the human seat a "+
+			"person holds", ErrInvalid, q.Reviewer)
+	}
+	return nil
+}
+
+// reviewsGivenKey is code_reviews_reviewer_idx, (reviewer, position)
+// (replicated 0086): one reviewer's reviews in the order their records landed
+// — a GUARD as planner.go says, held by plan_test.go to its seek.
+const reviewsGivenKey = "code_reviews_reviewer_idx"
+
+// One reviewer's reviews newest first, a first page and a page below the
+// position a cursor names: one range of reviewsGivenKey walked backward.
+// Registered in plan_test.go.
+const (
+	reviewsGivenSQL = `SELECT id, change_id, revision, reviewer, reviewer_kind, operator_id, verdict, findings,
+			turn_id, model, position, at, summary
+		FROM code_reviews INDEXED BY ` + reviewsGivenKey + ` WHERE reviewer = ? ORDER BY position DESC LIMIT ?`
+	reviewsGivenAfterSQL = `SELECT id, change_id, revision, reviewer, reviewer_kind, operator_id, verdict,
+			findings, turn_id, model, position, at, summary
+		FROM code_reviews INDEXED BY ` + reviewsGivenKey + ` WHERE reviewer = ? AND position < ?
+		ORDER BY position DESC LIMIT ?`
+)

@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE CODE HOST'S ROWS, AS QUESTIONS: `code_repos`, the repositories the asker
@@ -20,6 +21,10 @@ import (
 // and a read of one such repository is refused [NotPermitted] — so each is
 // registered [DecidedBy] the authority table's `code.read`, which admits
 // everybody the guard resolved and decides nothing a repository's grant does.
+//
+// AND A CHANGE'S ROWS AND ITS ROUTING (codechange.go): `code_changes`,
+// `code_change`, `code_change_routing` and `code_reviews`, decided per
+// repository alike.
 //
 // AND WHO READ A UNIT'S REPOSITORY, `code_repo_readers`: the operator tool's
 // one answer (builtin.ReadersOf) — the repository read by name as the asker,
@@ -79,10 +84,16 @@ func RepoNotDeclared(name string) string {
 	return fmt.Sprintf("no repository named %q is declared in code.repos", name)
 }
 
-// CodeReads is the code domain's read, wherever its rows are served;
+// CodeReads is the code domain's read, wherever its rows are served, and a
+// read of a repository's content by object id, asked of its home git node;
 // estate.CodeSeam satisfies it.
 type CodeReads interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
+	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
+	// FloorOf is this node's own floor on a repository — the furthest of
+	// its writes to it — which a read by object id is floored at beside the
+	// records that moved what it reads (code.ObjectFloor).
+	FloorOf(repoID string) statelog.Position
 }
 
 // CodeSource is the code domain's read as THIS NODE has it, asked on every
@@ -167,9 +178,30 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 		Fresh: fresh}
 	// THE REPOSITORY IS THE PATH'S, and only the reads of one take it: a
 	// listing named no repository on its route, and a `name` beside it is
-	// read as nothing, as the route always read it.
-	if kind != code.ReadRepos {
+	// read as nothing, as the route always read it. A listing of changes
+	// names its repository, where it names one, as one of its filters —
+	// beside the state, the owner, the work item, the reviewer and what its
+	// changes wait on, each the reader's to refuse — and a reviewer's
+	// reviews are listed across repositories, by the reviewer they name.
+	switch kind {
+	case code.ReadRepos:
+	case code.ReadChanges:
+		q.Repo, q.State, q.Owner = p.String("repo"), code.ChangeState(p.String("state")), p.String("owner")
+		q.Work, q.Reviewer, q.Needs = p.String("work"), p.String("reviewer"), code.Need(p.String("needs"))
+	case code.ReadReviews:
+		q.Reviewer = p.String("reviewer")
+	default:
 		q.Repo = p.String("name")
+	}
+	// A CHANGE IS THE PATH'S TOO, by its number on the repository — web!42's
+	// 42 — on the reads of one change.
+	if kind == code.ReadChange || kind == code.ReadChangeRouting {
+		n, whole := p.WholeInt("change")
+		if !whole || n < 1 {
+			return code.ReadQuery{}, fmt.Errorf("%w: change %q is not a change's number: a repository numbers "+
+				"its changes from 1", ErrBadParams, p.String("change"))
+		}
+		q.Change = n
 	}
 	// ONE REPOSITORY IN DETAIL ANSWERS WHO OWNS ITS PATHS AND ITS RULES'
 	// MERGE GATES: this question is the read of those
@@ -216,7 +248,8 @@ func codeReadQuery(kind code.ReadKind, asker code.Principal, p Params) (code.Rea
 }
 
 // codeRefusal is a code read's failure in this surface's ONE vocabulary: a
-// repository that is not declared is [NotFound] (`not_declared`), naming it;
+// repository that is not declared is [NotFound] (`not_declared`), naming it,
+// and so is a change it holds no such number of (`no_change`);
 // a repository the asker's grant does not cover is [NotPermitted] with the
 // reader's own sentence; a level, a cursor or a parameter the reader refuses
 // is [ErrBadParams] with the reader's own sentence; and everything else — a
@@ -233,6 +266,9 @@ func codeRefusal(repo string, err error) error {
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
 		return &NotFound{Reason: ReasonNotDeclared, Detail: RepoNotDeclared(repo)}
+	case errors.Is(err, code.ErrChangeNotFound):
+		return &NotFound{Reason: ReasonNoChange, Detail: fmt.Sprintf("repository %q holds no change %s", repo,
+			refusalSentence(err, code.ErrChangeNotFound))}
 	case errors.Is(err, code.ErrNotPermitted):
 		return &NotPermitted{Detail: refusalSentence(err, code.ErrNotPermitted)}
 	case errors.Is(err, code.ErrBadLevel), errors.Is(err, code.ErrBadCursor),
@@ -311,10 +347,16 @@ func (s Sources) codeRepoReaders(ctx context.Context, p Params) (any, error) {
 }
 
 // registerCode registers the code questions over s.Code — see the file's
-// doc for what each answers and why each is decided by the verb it is.
+// doc, and codechange.go's for a change's, for what each answers and why
+// each is decided by the verb it is.
 func registerCode(r *Registry, s Sources) {
 	r.Register("code_repos", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepos, "code_repos"))
 	r.Register("code_repo", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadRepo, "code_repo"))
 	r.Register("code_pushes", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadPushes, "code_pushes"))
 	r.Register("code_repo_readers", DecidedBy(authz.ActionCodeRepoReaders), s.codeRepoReaders)
+	r.Register("code_changes", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadChanges, "code_changes"))
+	r.Register("code_change", DecidedBy(authz.ActionCodeRead), s.codeChange)
+	r.Register("code_change_routing", DecidedBy(authz.ActionCodeRead),
+		s.codeRead(code.ReadChangeRouting, "code_change_routing"))
+	r.Register("code_reviews", DecidedBy(authz.ActionCodeRead), s.codeRead(code.ReadReviews, "code_reviews"))
 }

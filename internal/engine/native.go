@@ -404,6 +404,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		// reports what a push to it is held to now, which is what an
 		// import chunks its pushes by.
 		if n.codeReader, err = code.NewReader(code.ReaderOptions{Log: running.reader, Limits: e.codeLimits,
+			Now:    e.now,
 			Roster: e.codeRoster}); err != nil {
 			return fmt.Errorf("engine: code reader: %w", err)
 		}

@@ -953,7 +953,54 @@ func (r ReviewRow) encodedBytes() int {
 	if r.Model != "" {
 		n += field("model", stringBytes(r.Model), false)
 	}
-	return n + field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
+	n += field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
+	if r.Change != nil {
+		n += field("change", r.Change.encodedBytes(), false)
+	}
+	return n
+}
+
+// encodedBytes is the length of the change name's JSON encoding.
+func (c ChangeName) encodedBytes() int {
+	return 2 + field("repo", stringBytes(c.Repo), true) + field("ref", stringBytes(c.Ref), false) +
+		field("title", stringBytes(c.Title), false) + field("state", stringBytes(string(c.State)), false)
+}
+
+// encodedBytes is the length of the routed record's JSON encoding, its
+// recipients whole.
+func (r RoutedRecord) encodedBytes() int {
+	n := 2 + field("record_id", stringBytes(r.RecordID), true) +
+		field("position", positionBytes(r.Position), false) + field("at", timeBytes(r.At), false)
+	if r.Excerpt != "" {
+		n += field("excerpt", stringBytes(r.Excerpt), false)
+	}
+	list := len("null")
+	if r.Recipients != nil {
+		list = 2
+		for i, c := range r.Recipients {
+			if i > 0 {
+				list++
+			}
+			list += c.encodedBytes()
+		}
+	}
+	return n + field("recipients", list, false)
+}
+
+// encodedBytes is the length of the recipient's JSON encoding.
+func (c RoutedRecipient) encodedBytes() int {
+	n := 2 + field("handle", stringBytes(c.Handle), true) + field("kind", stringBytes(string(c.Kind)), false) +
+		field("reason", stringBytes(string(c.Reason)), false)
+	if c.Addressed {
+		n += field("addressed", trueBytes, false)
+	}
+	if c.Fallback {
+		n += field("fallback", trueBytes, false)
+	}
+	if c.FallbackRank != 0 {
+		n += field("fallback_rank", intBytes(int64(c.FallbackRank)), false)
+	}
+	return n
 }
 
 // encodedBytes is the length of the finding's JSON encoding.

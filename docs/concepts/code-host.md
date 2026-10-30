@@ -4922,6 +4922,14 @@ record.
   the company's `inbox.retention_days`, a seat's 30 days
   ([Retention](../guides/retention.md#old-data-is-not-cold-data)); a seat is
   woken from the record itself, never from its row.
+- **Whom a change reached is read from those rows** (`code_change_routing`,
+  [A change's questions](../reference/api-endpoints.md#a-changes-questions)):
+  its records that reached anybody, newest first, each with every recipient
+  and the reason it heard under. A change that lists nobody is one of two
+  facts, and the answer says which: opened within the last 30 days, every
+  notice it could have written would still be kept, so its records reached
+  **nobody** — each concerned only whoever made it; opened before, its notices
+  may have been **swept**, which is no evidence either way.
 - **Each role is bounded**: at most 32 mentions, 32 reviewers asked, and 64
   of the authors, the participants, a thread's participants or the raisers an
   answer replies to, each read in its key's order — a change whose audience

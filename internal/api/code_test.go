@@ -216,6 +216,15 @@ func (f *fakeCodeReads) Read(_ context.Context, q code.ReadQuery) (code.ReadAnsw
 	return f.answer(q)
 }
 
+// GitRead answers no read by object id: the questions this suite asks read
+// rows, and a part read by object id is the queries suite's.
+func (f *fakeCodeReads) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
+	return code.GitAnswer{}, errors.New("fakeCodeReads: no read by object id is asked here")
+}
+
+// FloorOf is no floor: this node wrote nothing.
+func (f *fakeCodeReads) FloorOf(string) statelog.Position { return statelog.Position{} }
+
 // queries is every query asked so far.
 func (f *fakeCodeReads) queries() []code.ReadQuery {
 	f.mu.Lock()
@@ -441,7 +450,8 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 			// repository reach the reader as the generic form's do.
 			for _, q := range codeQuestions {
 				path := strings.Replace(strings.TrimPrefix(q.route, "GET "), "{name}", "web", 1)
-				for _, at := range []string{path, "/query/" + q.what + "?name=web"} {
+				path = strings.Replace(path, "{n}", "1", 1)
+				for _, at := range []string{path, "/query/" + q.what + "?name=web&change=1"} {
 					before := len(reads.queries())
 					if rec := ask(t, a, http.MethodGet, at, true); rec.Code != http.StatusOK {
 						t.Errorf("GET %s answered %d %q", at, rec.Code, rec.Body.String())
@@ -463,21 +473,28 @@ func TestTheCodeReadsHaveOnePathEach(t *testing.T) {
 }
 
 // codeQuestion is one of the code host's questions: its name, its route, the
-// kind of read it asks, and the repository a request naming "web" on its path
-// reads — none for the listing, whose route names none.
+// kind of read it asks, and the repository a request naming "web" — and change
+// 1 — on its path reads: none for a listing, whose route names none, whatever
+// the generic form names beside it.
 type codeQuestion struct {
 	what, route string
 	kind        code.ReadKind
 	repo        string
 }
 
-// codeQuestions are the four: the three rows, and who read a unit's
-// repository, which reads the repository's row by name before its readers.
+// codeQuestions are the eight: the three rows, who read a unit's repository,
+// which reads the repository's row by name before its readers, and a change's
+// four — the changes, one change (its revisions with its detail, asked of no
+// part), whom its records reached and one reviewer's reviews.
 var codeQuestions = []codeQuestion{
 	{"code_repos", "GET /code/repos", code.ReadRepos, ""},
 	{"code_repo", "GET /code/repos/{name}", code.ReadRepo, "web"},
 	{"code_pushes", "GET /code/repos/{name}/pushes", code.ReadPushes, "web"},
 	{"code_repo_readers", "GET /code/repos/{name}/readers", code.ReadRepo, "web"},
+	{"code_changes", "GET /code/changes", code.ReadChanges, ""},
+	{"code_change", "GET /code/repos/{name}/changes/{n}", code.ReadChange, "web"},
+	{"code_change_routing", "GET /code/repos/{name}/changes/{n}/routing", code.ReadChangeRouting, "web"},
+	{"code_reviews", "GET /code/reviews", code.ReadReviews, ""},
 }
 
 // THE CODE SURFACE IS ASKED ON EVERY REQUEST. The code host is built with the

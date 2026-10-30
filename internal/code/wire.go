@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/routing"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -800,6 +801,18 @@ const (
 	// its row, its description and its authors in detail, and its revisions
 	// newest first, a page at a time — a later page its revisions alone.
 	ReadChange ReadKind = "change"
+	// ReadChangeRouting is WHOM ONE CHANGE'S RECORDS REACHED (routedread.go):
+	// the change by its number on its repository, as a `change` read names
+	// it, and the records about it that reached anybody, newest first, a
+	// page of whole records at a time — each with every recipient its
+	// notices name (code_notifications, by the change) — held to the grant
+	// on its repository as a `change` read is.
+	ReadChangeRouting ReadKind = "change_routing"
+	// ReadReviews is ONE REVIEWER'S REVIEWS (conversationread.go): the
+	// reviews the reviewer [ReadQuery.Reviewer] names gave, newest first, of
+	// every change of the repositories the asker may read, each naming the
+	// change it judged ([ReviewRow.Change]).
+	ReadReviews ReadKind = "reviews"
 	// ReadIntroduced is one repository's pushes in log order, as a git
 	// node's index of which push introduced each commit reads them: the
 	// engine's own read, which no principal makes.
@@ -904,7 +917,9 @@ const (
 // kind it does not know ([ErrInvalid]) — never answers it as another — so the
 // fields only a newer kind reads ride a request that build refuses whole, and
 // take no versionedFields row: `changes` and `change` are the only kinds that
-// read [ReadQuery.Change], State, Owner and Work, `run_pushes` the only one
+// read State, Owner and Work, `change` and `change_routing` the only ones that
+// read [ReadQuery.Change], `changes` and `reviews` the only ones that read
+// [ReadQuery.Reviewer], `run_pushes` the only one
 // that reads [ReadQuery.RunPushes], `expunge_tips` the only one that reads
 // [ReadQuery.ExpungeTips], `check_box` the only one that reads
 // [ReadQuery.CheckBox], `queue`, `landings` and `green` the only ones that
@@ -912,6 +927,7 @@ const (
 // [ReadQuery.QueueDue].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
+		ReadChangeRouting, ReadReviews,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadChangesDue,
 		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadQueue, ReadQueueDue, ReadLandings, ReadGreen}
 }
@@ -1047,9 +1063,9 @@ type ReadQuery struct {
 	// refuses as a kind it does not know, rather than ride a field it
 	// ignores.
 	Gates bool `json:"gates,omitempty"`
-	// Change is a `change` read's number: the change's on the repository
-	// Repo names, web!42's 42 — REQUIRED there, at least 1, and refused on
-	// every other kind.
+	// Change is a `change` read's number, and a `change_routing` read's: the
+	// change's on the repository Repo names, web!42's 42 — REQUIRED there,
+	// at least 1, and refused on every other kind.
 	Change int64 `json:"change,omitempty"`
 	// State, Owner and Work narrow a `changes` listing, each refused on every
 	// other kind: the changes in one state; the changes one principal opened,
@@ -1085,6 +1101,11 @@ type ReadQuery struct {
 	// THE CHANGES KINDS CAME WITH THIS BUILD'S LINE: no build that carries
 	// the code domain has run without these two — none of it is on main —
 	// so no build ignores them and answers the wider listing they narrow.
+	//
+	// Reviewer is also a `reviews` listing's REQUIRED reviewer — whose
+	// reviews it lists, a seat by its handle or a person by the human seat
+	// they hold — which no build that predates the kind reads, since it
+	// refuses the kind whole.
 	Reviewer string `json:"reviewer,omitempty"`
 	Needs    Need   `json:"needs,omitempty"`
 	// Part is the list a `change` read pages beside the change — its
@@ -1151,7 +1172,9 @@ type ReadQuery struct {
 	// 1..1 000 (0 = 200), changes 1..200 (0 = 50) — the rows a page READS,
 	// whatever its filters keep of them — a change's revisions and its
 	// reviewers 1..1 000 (0 = 200), its comments, its reviews and its
-	// findings 1..200 (0 = 50), and the engine's own two reads of pushes in
+	// findings 1..200 (0 = 50), the records of a change's routing 1..200
+	// (0 = 50), a reviewer's reviews 1..200 (0 = 50) — the rows a page READS,
+	// as a listing of changes — and the engine's own two reads of pushes in
 	// log order, introduced and run_pushes, 1..MaxSnapshotItems (0 = the
 	// most) — run_pushes' the pushes of its run's repositories a page READS,
 	// whatever few of them name the run; checks 1..200 (0 = 50), the rows a
@@ -1166,8 +1189,10 @@ type ReadQuery struct {
 // ReadAnswer is a [ReadQuery]'s answer: Changes is a `changes` listing's page;
 // Change a `change` read's detail, on the first page of its revisions alone;
 // Revisions a page of that change's revisions, newest first, on every page of
-// them; and Reviewers, Comments, Reviews and Findings a page of the part of
-// its conversation a `change` read names ([ReadQuery.Part]).
+// them; Reviewers, Comments, Reviews and Findings a page of the part of its
+// conversation a `change` read names ([ReadQuery.Part]) — Reviews a `reviews`
+// listing's page too, each naming its change; and Routed a `change_routing`
+// read's page.
 type ReadAnswer struct {
 	Repos []RepoSummary `json:"repos,omitempty"`
 	Repo  *RepoDetail   `json:"repo,omitempty"`
@@ -1183,6 +1208,7 @@ type ReadAnswer struct {
 	Comments   []CommentRow           `json:"comments,omitempty"`
 	Reviews    []ReviewRow            `json:"reviews,omitempty"`
 	Findings   []FindingRow           `json:"findings,omitempty"`
+	Routed     *RoutedPage            `json:"routed,omitempty"`
 	Introduced []IntroducedRow        `json:"introduced,omitempty"`
 	Due        []CompactionCandidate  `json:"due,omitempty"`
 	Publish    []PublicationCandidate `json:"publish,omitempty"`
@@ -1919,6 +1945,76 @@ type ReviewRow struct {
 	Model        string            `json:"model,omitempty"`
 	Position     statelog.Position `json:"position"`
 	At           time.Time         `json:"at"`
+	// Change is the change it judged, on a `reviews` listing's rows, which
+	// span changes; nil on a `change` read's, which names its change.
+	Change *ChangeName `json:"change,omitempty"`
+}
+
+// ChangeName is a change as a row about it names it where the row is read
+// apart from the change — a review a `reviews` listing found, the change a
+// `change_routing` page is of: its repository by name, its reference
+// (web!42), its title and its state, as the read found its row.
+type ChangeName struct {
+	Repo  string      `json:"repo"`
+	Ref   string      `json:"ref"`
+	Title string      `json:"title"`
+	State ChangeState `json:"state"`
+}
+
+// RoutedPage is a `change_routing` read's page (routedread.go): the change,
+// and a page of the records about it that reached anybody, newest first,
+// each with every recipient it reached — and what the read can say about
+// whom its records reached where it lists none.
+type RoutedPage struct {
+	Change ChangeName `json:"change"`
+	// OpenedAt is the broker instant of the record that opened the change:
+	// the oldest record about it, which its Delivery is dated by.
+	OpenedAt time.Time      `json:"opened_at"`
+	Records  []RoutedRecord `json:"records"`
+	// Delivery is what the read can say about whom the change's records
+	// reached ([routing.DeliveryOf]): `reached` where a record is listed —
+	// and on every later page, since its first listed one — and, where
+	// none is, `nobody` for a change opened since RetainedFrom, every one of
+	// whose notices would still be kept, and `swept` for one opened before
+	// it, whose notices a sweep was entitled to take and the applier never
+	// to write. Every record about a change carries its routing, so its
+	// records always announced: `quiet` and `unknown` are never this read's.
+	Delivery routing.Delivery `json:"delivery"`
+	// RetainedFrom is the instant from which every notice is kept, a seat's
+	// and a person's alike: the read's instant less [SeatNoticeHorizon], the
+	// shorter of the two horizons, since a person's — the company's
+	// inbox.retention_days — is never less than thirty days. A record older
+	// than it lists only the persons it reached: a seat's notice of it went
+	// with the turn detail it named.
+	RetainedFrom time.Time `json:"retained_from"`
+}
+
+// RoutedRecord is one record about a change and whom it reached: its
+// operation id (code_notifications.record_id), where it landed on the code
+// log and its broker instant, what its notices kept of what it says — an
+// open's description, a comment's body, a review's summary, nothing for a
+// record that says nothing of its own — and every recipient its notices name,
+// addressed first, a fallback last, each group by handle.
+type RoutedRecord struct {
+	RecordID   string            `json:"record_id"`
+	Position   statelog.Position `json:"position"`
+	At         time.Time         `json:"at"`
+	Excerpt    string            `json:"excerpt,omitempty"`
+	Recipients []RoutedRecipient `json:"recipients"`
+}
+
+// RoutedRecipient is one handle a record reached: a seat's, or the human seat
+// a person holds ([PartyKind] says which, and so which horizon keeps its
+// notice), the ONE reason it heard under ([Reasons]' precedence), whether that
+// asks something of it, and — for a recipient reached only because nobody
+// better was found — which substitute it was.
+type RoutedRecipient struct {
+	Handle       string    `json:"handle"`
+	Kind         PartyKind `json:"kind"`
+	Reason       Reason    `json:"reason"`
+	Addressed    bool      `json:"addressed,omitempty"`
+	Fallback     bool      `json:"fallback,omitempty"`
+	FallbackRank int       `json:"fallback_rank,omitempty"`
 }
 
 // FindingRow is one finding on a change (code_findings and its text,

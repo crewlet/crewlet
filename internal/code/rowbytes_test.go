@@ -125,6 +125,13 @@ func TestARowsComputedSizeIsItsEncodingsLength(t *testing.T) {
 		var review ReviewRow
 		fill(rng, reflect.ValueOf(&review).Elem())
 		check("review", review, review.encodedBytes())
+		// AND ONE OF A CHANGE READ, which names no change of its own.
+		review.Change = nil
+		check("review of a change read", review, review.encodedBytes())
+
+		var routed RoutedRecord
+		fill(rng, reflect.ValueOf(&routed).Elem())
+		check("routed record", routed, routed.encodedBytes())
 
 		var finding FindingRow
 		fill(rng, reflect.ValueOf(&finding).Elem())

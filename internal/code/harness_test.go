@@ -253,7 +253,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 	if err != nil {
 		t.Fatalf("build the store: %v", err)
 	}
-	reader, err := code.NewReader(code.ReaderOptions{Log: authority,
+	reader, err := code.NewReader(code.ReaderOptions{Log: authority, Now: func() time.Time { return harnessAt },
 		Roster: func() code.Roster { return n.chart }})
 	if err != nil {
 		t.Fatalf("build the reader: %v", err)

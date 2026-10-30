@@ -292,13 +292,15 @@ func TestAPathOwnerGrantsNothing(t *testing.T) {
 func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
 	launch := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}
 	return map[code.ReadKind]code.ReadQuery{
-		code.ReadRepos:   {Asker: asker},
-		code.ReadRepo:    {Asker: asker, Repo: "web"},
-		code.ReadPushes:  {Asker: asker, Repo: "web"},
-		code.ReadRefs:    {Asker: asker, Repo: "web"},
-		code.ReadChanges: {Asker: asker, Repo: "web"},
-		code.ReadChange:  {Asker: asker, Repo: "web", Change: 1},
-		code.ReadChecks:  {Asker: asker, Repo: "web"},
+		code.ReadRepos:         {Asker: asker},
+		code.ReadRepo:          {Asker: asker, Repo: "web"},
+		code.ReadPushes:        {Asker: asker, Repo: "web"},
+		code.ReadRefs:          {Asker: asker, Repo: "web"},
+		code.ReadChanges:       {Asker: asker, Repo: "web"},
+		code.ReadChange:        {Asker: asker, Repo: "web", Change: 1},
+		code.ReadChangeRouting: {Asker: asker, Repo: "web", Change: 1},
+		code.ReadReviews:       {Asker: asker, Reviewer: "founder"},
+		code.ReadChecks:        {Asker: asker, Repo: "web"},
 		code.ReadCheck: {Asker: asker, Repo: "web",
 			Checks: &code.CheckQuery{OID: strings.Repeat("6", 40), Target: "refs/heads/main", Name: "unit",
 				Attempt: 1}},
