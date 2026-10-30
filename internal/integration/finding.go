@@ -456,6 +456,25 @@ type Finding struct {
 	// repository, a channel. Empty when the finding is about the
 	// integration as a whole.
 	Subject string `json:"subject,omitempty"`
+	// Seat marks a finding about one agent's own account that the agent's
+	// access record also carries: a step waiting on a person, a vendor's
+	// refusal of the agent's sync. Subject is the agent's handle.
+	//
+	// THE AGENT'S ROW SAYS IT, NOT THE INTEGRATION'S LIST. The Agents tab
+	// draws each agent's wait or refusal on its own row, from that record,
+	// beside the one control the step takes; listed again above the table it
+	// read as a second card about the same thing, under a generic action.
+	// It still counts toward the integration's phase, so a card in the
+	// directory says somebody is waiting.
+	Seat bool `json:"seat,omitempty"`
+	// Title is the finding's lead: a few words naming it, which a reader
+	// scans before the sentence ("GitHub can't reach this engine").
+	//
+	// A FIELD OF ITS OWN, so a list can set it in bold ahead of [Detail]
+	// without reading the sentence apart in the client. Set on every
+	// advisory, where the integration's notes lead with it; a finding
+	// without one is read by its sentence alone.
+	Title string `json:"title,omitempty"`
 	// Detail is one sentence naming what is outstanding, addressed to the
 	// actor the kind implies. Empty falls back to [FindingKind.sentence].
 	//
@@ -533,6 +552,8 @@ type Finding struct {
 func (f Finding) Same(other Finding) bool {
 	return f.Kind == other.Kind &&
 		f.Subject == other.Subject &&
+		f.Title == other.Title &&
+		f.Seat == other.Seat &&
 		f.Detail == other.Detail &&
 		f.ActionURL == other.ActionURL &&
 		f.Remedy == other.Remedy &&

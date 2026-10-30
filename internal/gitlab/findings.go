@@ -55,12 +55,12 @@ func (r *Result) Findings() []integration.Finding {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingCredentialExpiring,
 			Subject: "integrations.gitlab.provisioning.admin_token",
+			Title:   "Admin token expires soon",
 			Detail: fmt.Sprintf("the group Owner token this integration runs on "+
-				"expires on %s, and from then on no pass can provision or repair "+
+				"expires on %s. From then on no pass can provision or repair "+
 				"an agent", r.CredentialExpires.Format(time.DateOnly)),
-			Remedy: "create a new personal access token with the api scope for " +
-				"a group owner at GitLab and store it as the integration's " +
-				"admin token",
+			Remedy: "Store a new group Owner token with the `api` scope as " +
+				"`integrations.gitlab.provisioning.admin_token`",
 			ExpiresAt: r.CredentialExpires,
 		})
 	}

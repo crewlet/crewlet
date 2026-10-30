@@ -1398,8 +1398,14 @@ const (
 	// rotate and removal dialogs, their readings and copy, and their
 	// stylesheet) took it from 4912.3 KiB to 4947.1 KiB (+34.8 KiB), each
 	// module once, in one chunk the integrations screen and the agent page
-	// share and the first load does not fetch. 4948 KiB.
-	treeBudget = 4<<20 + 852<<10
+	// share and the first load does not fetch. 4948 KiB. The Agents tab's
+	// polish (notes under the agents led by their titles, the review's change
+	// as a line of chips and its steps marked with Crewlet's mark or a
+	// person's, the integration read again when a sync ends) on uilet
+	// 0.81.1 (a DataTable sized to its content, an inline ChangeList, a
+	// counted tab beside its attention dot) took it to 4951.1 KiB, in the same
+	// chunk. 4952 KiB.
+	treeBudget = 4<<20 + 856<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

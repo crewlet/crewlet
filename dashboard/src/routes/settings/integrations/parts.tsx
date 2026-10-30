@@ -1,11 +1,11 @@
 /**
  * The parts a detail pane on Company › Integrations is composed from: the
- * issues with their fixes, the settings an app holds, what to
- * have ready before connecting, and the engine's address at the foot of the
- * directory.
+ * issues with their fixes, the notes on a working integration, the settings an
+ * app holds, what to have ready before connecting, and the engine's address at
+ * the foot of the directory.
  */
 
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useId, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -15,11 +15,14 @@ import {
   List,
   StatusDot,
   Tag,
+  Text,
 } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import { ProductMark } from "@crewlethq/icons/product-mark";
-import { CheckGlyph } from "@crewlethq/icons/glyphs";
-import { relTime } from "~/lib/format.ts";
+import { CheckGlyph, InfoGlyph } from "@crewlethq/icons/glyphs";
+import type { ReconcileFinding } from "~/contract/integrations.ts";
+import { asSentence, relTime } from "~/lib/format.ts";
+import { marked } from "~/ui/Problems.tsx";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
 // THE SCREEN'S OWN SHEET, with every module of the integrations screen (its
 // directory, panes, setup form and disconnect dialog), which all reach it here.
@@ -83,6 +86,49 @@ export function ServiceState({ service }: { service: BuiltInService }) {
 }
 
 /** One issue, with who owes the next move and the control that makes it. */
+/**
+ * The notes on a working integration: what the loop noticed that is worth
+ * reading once (an address the vendor cannot reach, what its events cover),
+ * each its own row, led by its title in bold, then what it means, then what
+ * would change it at a quieter step.
+ *
+ * THE ENGINE LAYS THEM OUT, not this screen: a note's lead, sentence and
+ * remedy arrive as three fields, so nothing here reads one sentence apart. A
+ * config key, a `${VAR}` or a backticked address in one is set as the literal
+ * it is ([marked]).
+ */
+export function Notes({ notes }: { notes: ReconcileFinding[] }) {
+  const heading = useId();
+  if (notes.length === 0) return null;
+  return (
+    <section aria-labelledby={heading} className="int-notes">
+      <h3 id={heading} className="t-label">
+        Notes
+      </h3>
+      <List variant="divided" density="compact">
+        {notes.map((n) => (
+          <List.Item
+            key={`${n.kind}:${n.subject ?? ""}`}
+            leading={<InfoGlyph size="sm" aria-hidden />}
+          >
+            <span className="int-note">
+              <Text>
+                {n.title && <strong>{asSentence(n.title)} </strong>}
+                {marked(asSentence(n.detail || n.kind.replace(/_/g, " ")))}
+              </Text>
+              {n.remedy && (
+                <Text variant="caption" tone="secondary">
+                  {marked(asSentence(n.remedy))}
+                </Text>
+              )}
+            </span>
+          </List.Item>
+        ))}
+      </List>
+    </section>
+  );
+}
+
 export function IssueRow({
   tool,
   issue,

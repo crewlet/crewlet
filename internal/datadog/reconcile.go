@@ -348,6 +348,7 @@ func (r *Result) Findings() []integration.Finding {
 		out = append(out, integration.Finding{
 			Kind:    integration.FindingRegistrationOrphaned,
 			Subject: "datadog service accounts",
+			Title:   "Service accounts with no seat",
 			// "…matching no seat", a PARTICIPLE, so the sentence reads
 			// correctly at one account and at thirty-six. A relative
 			// clause needs "matches" or "match" and would put a second
@@ -355,10 +356,9 @@ func (r *Result) Findings() []integration.Finding {
 			Detail: "Crewlet made " +
 				integration.Count(len(addresses), "enabled service account") +
 				" at this company's own email domain matching no seat it " +
-				"provisions for — a removed seat or a changed handle",
-			Remedy: "Disable or delete the ones you do not want, at Datadog. " +
-				"Nothing here removes them: an account is a colleague there, " +
-				"with history attached.",
+				"provisions for, left by a removed seat or a changed handle",
+			Remedy: "Disable or delete the ones you do not want at Datadog. " +
+				"Crewlet never removes them, since each keeps its history there",
 			Subjects: addresses,
 		})
 	}

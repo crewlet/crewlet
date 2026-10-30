@@ -175,7 +175,7 @@ type action struct {
 
 // actions is the steps one op takes for one seat's lane, in order. PURE: the
 // lane's Options change the words, never which steps there are.
-func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have seataccess.Desired,
+func actions(p product, op seataccess.Op, want, have seataccess.Desired,
 	opts seataccess.Options,
 ) []action {
 	where := "every one of the company's " + p.where
@@ -186,7 +186,7 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have se
 	grant := action{
 		verb:  seataccess.VerbGrant,
 		text:  "Grant it " + p.name + " access",
-		note:  "Product access is one grant, the same for every agent; what it may do is the role below.",
+		note:  "Every agent gets the same product access. The role sets what it may do.",
 		apply: (*session).grant,
 	}
 	roles := action{
@@ -203,20 +203,20 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have se
 	}
 	mint := action{
 		verb:  seataccess.VerbMint,
-		text:  "Mint its API token with the scopes of the products it is on, where its token lacks " + p.name + "'s",
+		text:  "Add " + p.name + "'s scopes to its API token",
 		apply: (*session).mintIfShort,
 	}
 	retire := action{
 		verb:  seataccess.VerbRevoke,
-		text:  "Revoke any earlier token Crewlet minted on it",
+		text:  "Revoke earlier tokens Crewlet minted",
 		apply: (*session).retire,
 	}
 	switch op {
 	case seataccess.OpCreate:
 		return []action{{
 			verb:  seataccess.VerbCreate,
-			text:  "Create an Atlassian service account for " + seat.Label(),
-			note:  "One account serves Jira and Confluence; it is created once.",
+			text:  "Create an Atlassian service account",
+			note:  "One account serves Jira and Confluence.",
 			apply: (*session).create,
 		}, grant, roles, mint, retire}
 	case seataccess.OpEnable:
@@ -243,7 +243,7 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have se
 	case seataccess.OpRotate:
 		return []action{{
 			verb:  seataccess.VerbRotate,
-			text:  "Mint a new API token with the scopes of the products it is on",
+			text:  "Mint a new API token",
 			apply: (*session).mintAlways,
 		}, {
 			verb:  seataccess.VerbRevoke,
@@ -254,27 +254,26 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have se
 		return []action{{
 			verb: seataccess.VerbDisable,
 			text: "Remove its " + p.name + " roles",
-			note: "Atlassian offers no route to remove one product's access from a " +
-				"service account, so the account keeps its " + p.name + " product " +
-				"access and loses its roles and its token's " + p.name + " scopes.",
+			note: "Atlassian cannot take one product from an account, so it keeps " + p.name +
+				" access with no roles and no " + p.name + " scopes.",
 			apply: (*session).disable,
 		}, {
 			verb:  seataccess.VerbMint,
-			text:  "Replace its API token with one without " + p.name + "'s scopes, where it is still on the other product",
+			text:  "Drop " + p.name + "'s scopes from its API token",
 			apply: (*session).narrow,
 		}, retire}
 	case seataccess.OpRevoke:
 		return []action{{
 			verb:  seataccess.VerbRevoke,
-			text:  "Revoke its API token, now that it is on neither Jira nor Confluence",
-			note:  "The account keeps its product access and is kept; remove it to delete it.",
+			text:  "Revoke its API token",
+			note:  "It is on neither Jira nor Confluence. The account is kept until you remove it.",
 			apply: (*session).revokeAll,
 		}}
 	case seataccess.OpRemove:
 		return []action{{
 			verb:  seataccess.VerbRemove,
 			text:  "Delete the service account",
-			note:  "Allowed only when it is off on both Jira and Confluence: one account serves both.",
+			note:  "Only once it is off on both Jira and Confluence, which share the account.",
 			apply: (*session).remove,
 		}}
 	}
@@ -298,7 +297,7 @@ func (Vendor) StepsFor(in seataccess.StepsInput) []seataccess.Step {
 		return nil
 	}
 	op := in.Op
-	drawn := actions(in.Seat, p, op, in.Want, in.Have.Access(), in.Options)
+	drawn := actions(p, op, in.Want, in.Have.Access(), in.Options)
 	out := make([]seataccess.Step, 0, len(drawn))
 	for i, a := range drawn {
 		out = append(out, seataccess.Step{

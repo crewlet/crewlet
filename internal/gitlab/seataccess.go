@@ -135,7 +135,7 @@ type action struct {
 // actions is the steps one op takes for one seat, in order. PURE: it reads
 // only the document's setting, what the vendor showed, and the lane's Options,
 // which change the words and never which steps there are.
-func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
+func actions(op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
 	opts seataccess.Options,
 ) []action {
 	role, where := levelName(want.Level, opts), scopeText(want.Scope)
@@ -146,12 +146,12 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 	}
 	mint := action{
 		verb:  seataccess.VerbMint,
-		text:  "Mint its access token with " + scopesText(want.Level),
+		text:  "Mint an access token with " + scopesText(want.Level),
 		apply: (*session).mint,
 	}
 	retire := action{
 		verb:  seataccess.VerbRevoke,
-		text:  "Revoke any earlier token Crewlet minted on it",
+		text:  "Revoke earlier tokens Crewlet minted",
 		apply: (*session).retire,
 	}
 	switch op {
@@ -161,17 +161,16 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 		// tokens must not outlive the one sealed now.
 		return []action{{
 			verb:  seataccess.VerbCreate,
-			text:  "Create a GitLab service account for " + seat.Label(),
+			text:  "Create a GitLab service account",
 			apply: (*session).create,
 		}, grant, mint, retire}
 	case seataccess.OpEnable:
 		// AT THE DOCUMENT'S ROLE AND SCOPE, as a create is, and with a new
 		// token only where the seat holds none: off revoked it.
 		steps := []action{{
-			verb: seataccess.VerbEnable,
-			text: "Turn its account back on",
-			note: "GitLab unblocks it where Crewlet's token is an instance " +
-				"administrator's; otherwise its memberships are restored.",
+			verb:  seataccess.VerbEnable,
+			text:  "Turn its account back on",
+			note:  "Unblocked with an instance administrator's token, otherwise its memberships are restored.",
 			apply: (*session).enable,
 		}, grant}
 		if have.Credential == nil {
@@ -185,7 +184,7 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 			apply: (*session).converge,
 		}}
 		if !sameScopesDrawn(have.Level, want.Level) {
-			mint.text = "Mint a new access token with " + scopesText(want.Level) + ", which " + role + " allows"
+			mint.text = "Mint a new access token with " + scopesText(want.Level)
 			retire.text = "Revoke its previous token"
 			steps = append(steps, mint, retire)
 		}
@@ -202,28 +201,27 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 		return []action{{
 			verb: seataccess.VerbDisable,
 			text: "Turn its account off",
-			note: "GitLab blocks it where Crewlet's token is an instance " +
-				"administrator's; otherwise its memberships are removed. The " +
-				"account and its history are kept.",
+			note: "Blocked with an instance administrator's token, otherwise its memberships are removed. " +
+				"The account and its history are kept.",
 			apply: (*session).disable,
 		}}
 	case seataccess.OpRevoke:
 		return []action{{
 			verb:  seataccess.VerbRevoke,
-			text:  "Revoke the access tokens Crewlet minted on it",
+			text:  "Revoke the tokens Crewlet minted",
 			apply: (*session).revokeAll,
 		}}
 	case seataccess.OpRemove:
 		return []action{{
 			verb:  seataccess.VerbRemove,
 			text:  "Delete the service account",
-			note:  "GitLab keeps its contributions, attributed to the Ghost User.",
+			note:  "GitLab keeps its contributions under the Ghost User.",
 			apply: (*session).remove,
 		}}
 	case seataccess.OpRotate:
 		return []action{{
 			verb:  seataccess.VerbRotate,
-			text:  "Mint a new access token with " + scopesText(want.Level),
+			text:  "Mint a new access token",
 			apply: (*session).mint,
 		}, {
 			verb:  seataccess.VerbRevoke,
@@ -237,8 +235,7 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 // scopeChange draws a scope move as the memberships it adds and removes.
 func scopeChange(have, want []string, role string) string {
 	if len(want) == 0 {
-		return "Make it a member of the whole group as " + role +
-			", in place of its project memberships"
+		return "Make it a group member as " + role + ", replacing its project memberships"
 	}
 	var added, removed []string
 	for _, p := range want {
@@ -283,7 +280,7 @@ func (Vendor) StepsFor(in seataccess.StepsInput) []seataccess.Step {
 		return nil
 	}
 	op := in.Op
-	drawn := actions(in.Seat, op, in.Want, in.Have, in.Options)
+	drawn := actions(op, in.Want, in.Have, in.Options)
 	out := make([]seataccess.Step, 0, len(drawn))
 	for i, a := range drawn {
 		out = append(out, seataccess.Step{
@@ -537,7 +534,7 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 	}
 	// REDRAWN WITHOUT OPTIONS: they change a step's words, never which step
 	// sits at an index.
-	drawn := actions(in.Seat, in.Step.Op, in.Want, in.Have, seataccess.Options{})
+	drawn := actions(in.Step.Op, in.Want, in.Have, seataccess.Options{})
 	if in.Step.Index < 0 || in.Step.Index >= len(drawn) {
 		return seataccess.StepResult{}, fmt.Errorf("gitlab: %s has no step %d",
 			in.Step.Op, in.Step.Index)

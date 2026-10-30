@@ -15,10 +15,10 @@ func ExternalFinding(kind integration.Kind) integration.Finding {
 	name := KindName(kind)
 	return integration.Finding{
 		Kind: integration.FindingCoveragePartial, Subject: string(kind),
-		Detail: name + " agents' accounts are managed outside Crewlet: each agent's tool " +
-			"uses the credential handed in for it, and Crewlet creates, changes and turns " +
-			"off none of them",
-		Remedy: "To have Crewlet manage them, connect " + name + " with the administrator " +
-			"access that creates agents' accounts there",
+		Title: "Accounts managed outside Crewlet",
+		Detail: "Each agent's tool uses the " + name + " credential handed in for it. " +
+			"Crewlet creates, changes and turns off none of these accounts",
+		Remedy: "To have Crewlet manage them, connect " + name + " with administrator " +
+			"access that creates agents' accounts",
 	}
 }

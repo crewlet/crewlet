@@ -70,10 +70,9 @@ func Scopes() []string { return slices.Clone(BotScopes) }
 
 // Steps implements [seataccess.Vendor]. Pure: no call to Slack.
 func (vendor) Steps(
-	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
+	_ seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
 	_ seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	name := seat.Label()
 	var steps []seataccess.Step
 	add := func(step seataccess.Step) {
 		step.Op, step.Index = op, len(steps)
@@ -81,14 +80,14 @@ func (vendor) Steps(
 	}
 	install := seataccess.Step{
 		Verb: seataccess.VerbApprove, By: seataccess.ByYou,
-		Text: "Approve " + name + "'s app in the workspace",
+		Text: "Approve the app in the workspace",
 		Note: "Installing an app is a person's decision at Slack.",
 	}
 	switch op {
 	case seataccess.OpCreate:
 		add(seataccess.Step{
 			Verb: seataccess.VerbCreate, By: seataccess.ByCrewlet,
-			Text: "Create " + name + "'s Slack app from its manifest",
+			Text: "Create its Slack app from the manifest",
 			Note: "Its bot scopes are " + strings.Join(BotScopes, ", ") + ".",
 		})
 		add(install)
@@ -103,7 +102,7 @@ func (vendor) Steps(
 	case seataccess.OpLevel:
 		add(seataccess.Step{
 			Verb: seataccess.VerbRestore, By: seataccess.ByCrewlet,
-			Text: "Restore " + name + "'s app manifest",
+			Text: "Restore the app's manifest",
 			Note: have.Level,
 		})
 		if driftNeedsReinstall(have.Level) {
@@ -114,7 +113,7 @@ func (vendor) Steps(
 			// issues one at the manifest's scopes.
 			add(seataccess.Step{
 				Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
-				Text: "Revoke " + name + "'s bot token",
+				Text: "Revoke its bot token",
 				Note: "It holds the scopes changed at Slack. The install below issues one with the manifest's.",
 			})
 			add(install)
@@ -122,26 +121,26 @@ func (vendor) Steps(
 	case seataccess.OpDisable:
 		add(seataccess.Step{
 			Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
-			Text: "Revoke " + name + "'s bot token",
+			Text: "Revoke its bot token",
 			Note: "The app is kept. Turning it back on needs a person to approve the install again.",
 		})
 	case seataccess.OpRevoke:
 		add(seataccess.Step{
 			Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
-			Text: "Clear " + name + "'s sealed bot token",
+			Text: "Clear its sealed bot token",
 			Note: "The app and its OAuth client are kept, so a person can install it again.",
 		})
 	case seataccess.OpRotate:
 		add(seataccess.Step{
 			Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
-			Text: "Revoke " + name + "'s bot token",
-			Note: "Slack issues a new bot token only on an install, so the agent is off until it is approved.",
+			Text: "Revoke its bot token",
+			Note: "Slack issues a new token only on an install, so the agent is off until it is approved.",
 		})
 		add(install)
 	case seataccess.OpRemove:
 		add(seataccess.Step{
 			Verb: seataccess.VerbRemove, By: seataccess.ByCrewlet,
-			Text: "Delete " + name + "'s Slack app",
+			Text: "Delete its Slack app",
 		})
 	}
 	return steps

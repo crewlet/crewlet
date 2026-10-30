@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // GitHub's half of per-seat access ([seataccess.Vendor]).
@@ -71,11 +72,14 @@ func PermissionSpecs() []seataccess.PermissionSpec {
 }
 
 // Steps implements [seataccess.Vendor]. Pure: no call to GitHub.
+//
+// A STEP IS A SHORT LABEL, drawn under its agent and beside the change it
+// makes, so it names neither the agent nor the permissions the change line
+// already shows: "Update tokens", not the seat's whole permission set.
 func (vendor) Steps(
-	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
+	_ seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
 	want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	name := seat.Label()
 	var steps []seataccess.Step
 	add := func(step seataccess.Step) {
 		step.Op, step.Index = op, len(steps)
@@ -85,15 +89,13 @@ func (vendor) Steps(
 	case seataccess.OpCreate:
 		add(seataccess.Step{
 			Verb: seataccess.VerbCreate, By: seataccess.ByYou,
-			Text: "Create " + name + "'s GitHub App from the prepared manifest, with " +
-				Permissions(want.Permissions).Describe(),
-			Note: "GitHub offers no API for creating an app, so a person submits the " +
-				"manifest. The engine seals the app's key when GitHub returns it.",
+			Text: "Create its GitHub App",
+			Note: "GitHub has no API for this, so a person submits the prepared manifest.",
 		})
 		add(seataccess.Step{
 			Verb: seataccess.VerbApprove, By: seataccess.ByYou,
 			Text: "Install the app on the organization",
-			Note: "Which repositories it covers is chosen at GitHub during the install.",
+			Note: "The repositories it covers are chosen during the install.",
 		})
 	case seataccess.OpEnable:
 		// ON AT THE DOCUMENT'S SETTING, as a create is: the plan adds no
@@ -105,14 +107,14 @@ func (vendor) Steps(
 			// a suspension it placed itself.
 			add(seataccess.Step{
 				Verb: seataccess.VerbEnable, By: seataccess.ByYou,
-				Text: "Unsuspend " + name + "'s installation at GitHub",
-				Note: "A person suspended it at GitHub, so it is turned back on there, on the installation's settings page.",
+				Text: "Unsuspend the installation at GitHub",
+				Note: "A person suspended it there, so it is lifted there.",
 			})
 		} else {
 			add(seataccess.Step{
 				Verb: seataccess.VerbEnable, By: seataccess.ByCrewlet,
-				Text: "Turn " + name + "'s installation back on",
-				Note: "A suspended installation is unsuspended; one that is not installed waits for a person to install it.",
+				Text: "Turn the installation back on",
+				Note: "An app that was never installed waits for a person to install it.",
 			})
 		}
 		raiseSteps(want, have, add)
@@ -120,15 +122,15 @@ func (vendor) Steps(
 	case seataccess.OpLevel:
 		add(seataccess.Step{
 			Verb: seataccess.VerbRerole, By: seataccess.ByCrewlet,
-			Text: "Set " + name + "'s tokens to " + Permissions(want.Permissions).Describe(),
-			Note: "Applies to the next token; nothing changes at GitHub.",
+			Text: "Update tokens",
+			Note: tokensOnly,
 		})
 		raiseSteps(want, have, add)
 	case seataccess.OpScope:
 		add(seataccess.Step{
 			Verb: seataccess.VerbScope, By: seataccess.ByCrewlet,
-			Text: "Narrow " + name + "'s tokens to " + scopeText(want.Scope),
-			Note: "Applies to the next token; nothing changes at GitHub.",
+			Text: "Limit tokens to " + scopeText(want.Scope),
+			Note: tokensOnly,
 		})
 		scopeWait(want, have, add)
 	case seataccess.OpMint:
@@ -139,14 +141,14 @@ func (vendor) Steps(
 		}
 		add(seataccess.Step{
 			Verb: seataccess.VerbCreate, By: seataccess.ByYou,
-			Text: "Delete " + name + "'s app at GitHub and create it again",
-			Note: "Its private key is not sealed, and GitHub issues a key once, at creation.",
+			Text: "Delete the app at GitHub and create it again",
+			Note: "Its key was never sealed, and GitHub issues a key only once.",
 		})
 	case seataccess.OpDisable:
 		add(seataccess.Step{
 			Verb: seataccess.VerbDisable, By: seataccess.ByCrewlet,
-			Text: "Suspend " + name + "'s installation",
-			Note: "The app, its key and its installation are kept, so turning it back on needs no one.",
+			Text: "Suspend the installation",
+			Note: "The app and its key are kept, so turning it back on needs no one.",
 		})
 	case seataccess.OpRevoke:
 		// NOTHING TO REVOKE. Off suspends the installation, and the app's
@@ -156,40 +158,51 @@ func (vendor) Steps(
 	case seataccess.OpRemove:
 		add(seataccess.Step{
 			Verb: seataccess.VerbRemove, By: seataccess.ByCrewlet,
-			Text: "Uninstall " + name + "'s app",
+			Text: "Uninstall the app",
 		})
 		add(seataccess.Step{
 			Verb: seataccess.VerbRemove, By: seataccess.ByYou,
-			Text: "Delete the app registration at GitHub",
-			Note: "GitHub offers no API for deleting an app. Its sealed key is cleared once GitHub reports it deleted.",
+			Text: "Delete the app at GitHub",
+			Note: "GitHub has no API for this. Its sealed key is cleared once GitHub reports it gone.",
 		})
 	}
 	return steps
 }
 
+// tokensOnly is the note under a step that changes only what this engine asks
+// GitHub for when it mints a seat's token.
+const tokensOnly = "Applies from the next token. Nothing changes at GitHub."
+
 // raiseSteps draws what a raise waits for at GitHub: the app's owner where
 // the registration lacks a permission, then the organization accepting it on
 // the installation, in that order (D5). A narrowing draws nothing: every token
 // is minted at the seat's permissions.
+//
+// THE ACCEPTANCE SAYS "THEM" where it accepts exactly what the step before it
+// added, which is what a reader just read; otherwise it names its own.
 func raiseSteps(want seataccess.Desired, have seataccess.Observed, add func(seataccess.Step)) {
 	wanted := Permissions(want.Permissions)
 	raised := Permissions(have.Permissions).Raises(wanted)
 	if len(raised) == 0 {
 		return
 	}
+	accept := "Accept " + Names(raised) + " on the installation"
 	if beyond := wanted.Short(Permissions(have.Ceiling).Token()); len(beyond) > 0 {
 		// GRANT, NOT APPROVE: the app's owner widens the registration,
 		// which Apply tells from the organization's acceptance by verb.
 		add(seataccess.Step{
 			Verb: seataccess.VerbGrant, By: seataccess.ByYou,
-			Text: "Add " + Names(beyond) + " to the app's permissions",
-			Note: "Only the app's owner can widen an app at GitHub.",
+			Text: "Add " + Names(beyond) + " to the app",
+			Note: "Only the app's owner can widen it.",
 		})
+		if slices.Equal(beyond, raised) {
+			accept = "Accept them on the installation"
+		}
 	}
 	add(seataccess.Step{
 		Verb: seataccess.VerbApprove, By: seataccess.ByYou,
-		Text: "Accept " + Names(raised) + " on the installation",
-		Note: "GitHub asks an organization owner to accept an app's new permissions.",
+		Text: accept,
+		Note: "An organization owner accepts an app's new permissions.",
 	})
 }
 
@@ -199,8 +212,8 @@ func scopeWait(want seataccess.Desired, have seataccess.Observed, add func(seata
 	if missing := uncovered(want.Scope, have.Scope); len(missing) > 0 {
 		add(seataccess.Step{
 			Verb: seataccess.VerbScope, By: seataccess.ByYou,
-			Text: "Add " + strings.Join(missing, ", ") + " to the installation's repositories",
-			Note: "GitHub refuses a token naming a repository the installation does not cover.",
+			Text: "Add " + repoList(missing) + " to the installation",
+			Note: "GitHub refuses a token for a repository the installation does not cover.",
 		})
 	}
 }
@@ -476,8 +489,8 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 		}
 		return seataccess.StepResult{Waiting: &seataccess.Waiting{
 			ActionURL: ManageURL(s.opts.WebBase, s.opts.Org, seat.Slug),
-			Detail: handle + "'s app key is not sealed, and GitHub issues it once: delete " +
-				"the app at GitHub, then create it again from the Agents tab",
+			Detail: "Delete " + seat.Label() + "'s app at GitHub, then create it again: " +
+				"GitHub issues its key only once",
 		}}, nil
 	case seataccess.OpDisable:
 		obs, err := s.observe(ctx, seat, false)
@@ -505,8 +518,7 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 func (s *session) applyCreate(ctx context.Context, in seataccess.ApplyInput, seat SeatApp) (seataccess.StepResult, error) {
 	if seat.AppID == 0 || strings.TrimSpace(seat.Key) == "" {
 		return seataccess.StepResult{Waiting: &seataccess.Waiting{
-			Detail: "Create " + in.Seat.Handle + "'s GitHub App from the Agents tab; " +
-				"GitHub offers no API for it, so a person submits the prepared manifest",
+			Detail: "Create " + in.Seat.Label() + "'s GitHub App",
 		}}, nil
 	}
 	// THE INSTALL IS A PERSON'S CLICK, so its check re-reads GitHub.
@@ -551,8 +563,8 @@ func (s *session) awaitPerson(ctx context.Context, in seataccess.ApplyInput, sea
 		if missing := obs.UncoveredRepositories(seat); len(missing) > 0 {
 			return seataccess.StepResult{Waiting: &seataccess.Waiting{
 				ActionURL: s.installationURL(seat, obs),
-				Detail: "Add " + strings.Join(missing, ", ") + " to " + seat.Handle +
-					"'s installation, or narrow the seat to repositories it covers",
+				Detail: "Add " + repoList(missing) + " to " + seat.Label() +
+					"'s installation, or narrow the agent to repositories it covers",
 			}}, nil
 		}
 		return seataccess.StepResult{}, nil
@@ -597,8 +609,7 @@ func (s *session) applyRemove(ctx context.Context, in seataccess.ApplyInput, sea
 	}
 	return seataccess.StepResult{Waiting: &seataccess.Waiting{
 		ActionURL: ManageURL(s.opts.WebBase, s.opts.Org, seat.Slug),
-		Detail: "Delete " + in.Seat.Handle + "'s app registration at GitHub: " +
-			ManagePath() + ". GitHub offers no API for it",
+		Detail:    "Delete " + in.Seat.Label() + "'s app registration at GitHub",
 	}}, nil
 }
 
@@ -630,8 +641,7 @@ func (s *session) observe(ctx context.Context, seat SeatApp, fresh bool) (SeatOb
 func (s *session) installWait(seat SeatApp) *seataccess.Waiting {
 	return &seataccess.Waiting{
 		ActionURL: InstallURL(s.opts.WebBase, s.opts.Org, seat.Slug),
-		Detail: seat.Handle + "'s app exists and nothing has installed it: install it on " +
-			orgLabel(s.opts.Org),
+		Detail:    "Install " + seat.Label() + "'s app on " + orgLabel(s.opts.Org),
 	}
 }
 
@@ -659,13 +669,12 @@ func (s *session) personSuspended(seat SeatApp, obs SeatObservation) *seataccess
 	by := ""
 	if obs.Installation != nil && obs.Installation.SuspendedBy != nil {
 		if login := strings.TrimSpace(obs.Installation.SuspendedBy.Login); login != "" {
-			by = " by " + login
+			by = ", which " + login + " suspended"
 		}
 	}
 	return &seataccess.Waiting{
 		ActionURL: s.installationURL(seat, obs),
-		Detail: seat.Handle + "'s installation was suspended at GitHub" + by +
-			": unsuspend it on the installation's settings page",
+		Detail:    "Unsuspend " + seat.Label() + "'s installation at GitHub" + by,
 	}
 }
 
@@ -752,7 +761,16 @@ func scopeText(scope []string) string {
 	if len(scope) == 0 {
 		return "every repository the installation covers"
 	}
-	return strings.Join(scope, ", ")
+	return repoList(scope)
+}
+
+// repoList is repositories as a sentence lists them: "acme/api and acme/web".
+func repoList(repos []string) string {
+	said := make([]words.Said, len(repos))
+	for i, repo := range repos {
+		said[i] = words.Said(repo)
+	}
+	return words.And(said)
 }
 
 // uncovered is what want names that have does not.

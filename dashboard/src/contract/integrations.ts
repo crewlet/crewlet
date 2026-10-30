@@ -15,6 +15,20 @@ export interface ReconcileFinding {
   kind: string;
   subject?: string;
   /**
+   * A finding about one agent's own account that the agent's access record
+   * also carries (a step waiting on a person, a refusal of its sync). The
+   * Agents tab draws it on that agent's row, so the integration's list of
+   * issues leaves it out; it still counts toward the integration's phase.
+   */
+  seat?: boolean;
+  /**
+   * The finding's lead, a few words a list sets in bold ahead of `detail`
+   * ("GitHub can't reach this engine"). Every advisory carries one, which is
+   * what the integration's notes lead with; a finding without one is read by
+   * its sentence alone.
+   */
+  title?: string;
+  /**
    * What is wrong, in one sentence — and only that.
    *
    * What to do about it is `remedy` and which things it is about is

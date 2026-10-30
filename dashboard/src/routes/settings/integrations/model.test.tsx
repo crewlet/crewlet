@@ -299,8 +299,10 @@ const issueTool = () =>
 
 // THE PROBLEM, WHAT IT IS ABOUT AND THE REMEDY ARE SEPARATE PARTS, never one
 // paragraph: measured as one line, a problem, a name, an instruction and a
-// disclosure summary ran together at one weight.
-test("an issue lays out its problem, subjects and remedy apart, with its fix", () => {
+// disclosure summary ran together at one weight. A WAIT ON A PERSON OFFERS NO
+// CONTROL HERE: "Create apps" was offered for every GitHub wait and opened the
+// settings form.
+test("an issue lays out its problem, subjects and remedy apart", () => {
   const tool = issueTool();
   const onFix = vi.fn();
   const { container } = render(<IssueRow tool={tool} issue={tool.issues[0]!} onFix={onFix} />);
@@ -314,14 +316,78 @@ test("an issue lays out its problem, subjects and remedy apart, with its fix", (
   ).toEqual(["sre-lead", "cs-lead", "swe", "pm"]);
   expect(screen.getByText("Create one per agent, GitHub offers no API for it.")).toBeTruthy();
   expect(screen.getByText("Waiting on you")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Create apps" }));
-  expect(onFix).toHaveBeenCalledWith("agents");
-  // AND HELD, with its reason, where the form behind it cannot open.
+  expect(screen.queryByRole("button")).toBeNull();
+});
+
+// A KEY THE VENDOR REFUSED IS FIXED HERE, by its one control; AND HELD, with
+// its reason, where the form behind it cannot open.
+test("an issue a control here answers offers it, and holds it where the form cannot open", () => {
+  const tool = deriveTool(
+    entry("gitlab"),
+    inputs({
+      rows: rowsOf({
+        key: "gitlab",
+        configured: true,
+        reconcile: {
+          phase: "unconfigured",
+          actor: "operator",
+          findings: [
+            {
+              kind: "credential_rejected",
+              subject: "integrations.gitlab.provisioning.admin_token",
+              detail: "GitLab refused the admin token",
+              phase: "unconfigured",
+            },
+          ],
+        },
+      }),
+      setup: new Map([["gitlab", listing("gitlab")]]),
+    }),
+  );
+  const onFix = vi.fn();
+  render(<IssueRow tool={tool} issue={tool.issues[0]!} onFix={onFix} />);
+  fireEvent.click(screen.getByRole("button", { name: "Replace key" }));
+  expect(onFix).toHaveBeenCalledWith("rotate");
   cleanup();
   const held = { ...tool, blocked: "Reading the setup state needs Admin." };
   render(<IssueRow tool={held} issue={tool.issues[0]!} onFix={onFix} />);
-  fireEvent.click(screen.getByRole("button", { name: "Create apps" }));
+  fireEvent.click(screen.getByRole("button", { name: "Replace key" }));
   expect(onFix).toHaveBeenCalledTimes(1);
+});
+
+// AN AGENT'S OWN WAIT IS ITS ROW'S: the engine marks it `seat`, so the issue
+// says so for the app's page to leave it there, and it offers no control of
+// its own, whatever the vendor.
+test("an agent's own wait is marked as its row's, with no control of its own", () => {
+  const tool = deriveTool(
+    entry("github"),
+    inputs({
+      rows: rowsOf({
+        key: "github",
+        configured: true,
+        reconcile: {
+          phase: "awaiting_admin",
+          actor: "admin",
+          findings: [
+            {
+              kind: "approval_required",
+              subject: "sre",
+              detail: "GitHub: Add Pull requests to SRE's app permissions",
+              action_url:
+                "https://github.com/organizations/acme/settings/apps/acme-sre/permissions",
+              phase: "awaiting_admin",
+              seat: true,
+            },
+          ],
+        },
+      }),
+      setup: new Map([["github", listing("github")]]),
+    }),
+  );
+  expect(tool.issues).toHaveLength(1);
+  expect(tool.issues[0]!.seat).toBe(true);
+  expect(tool.issues[0]!.fix).toBeUndefined();
+  expect(tool.bucket).toBe("attention");
 });
 
 // A ROW IN A LIST ACROSS APPS SENDS THE READER TO THE APP rather than fixing
@@ -337,7 +403,7 @@ test("an issue listed across apps names its app and links to its page", () => {
   expect(screen.getByRole("link", { name: "Open GitHub" }).getAttribute("href")).toBe(
     "#/company/integrations/github",
   );
-  expect(screen.queryByRole("button", { name: "Create apps" })).toBeNull();
+  expect(screen.queryByRole("button")).toBeNull();
 });
 
 // A LONG LIST EXPANDS IN PLACE: the rest are folded for width rather than

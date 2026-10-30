@@ -292,23 +292,23 @@ func (p Permissions) Short(held map[string]string) []string {
 	return out
 }
 
-// Names is keys in GitHub's names, for a sentence. A key outside the
-// catalogue (metadata, or a permission an installation was widened to) is
-// given as GitHub's key.
+// Names is keys in GitHub's names, as a sentence lists them: "Deployments
+// and Pull requests". A key outside the catalogue (metadata, or a permission
+// an installation was widened to) is given as GitHub's key.
 func Names(keys []string) string {
-	names := make([]string, 0, len(keys))
+	names := make([]words.Said, 0, len(keys))
 	for _, key := range keys {
 		if perm, ok := LookupPermission(key); ok {
-			names = append(names, perm.Name)
+			names = append(names, words.Said(perm.Name))
 			continue
 		}
 		if key == PermissionMetadata {
 			names = append(names, "Metadata")
 			continue
 		}
-		names = append(names, key)
+		names = append(names, words.Said(key))
 	}
-	return strings.Join(names, ", ")
+	return words.And(names)
 }
 
 // TierPermissions is what a seat stored under the retired tiers holds in

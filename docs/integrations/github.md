@@ -674,10 +674,10 @@ reaches the engine perfectly well.
   browser returns to `api.external_url` as usual.
 - **No hook is registered** on the organization or a repository, for the same
   reason.
-- **The card says so and stays ready.** One advisory, on the webhook
-  address's key, reads that no GitHub event reaches this deployment, that the
-  agents still push, open pull requests and review through their apps, and
-  which setting makes events arrive.
+- **The card says so and stays ready.** One note on the webhook address's key,
+  **GitHub can't reach this engine**, says that no GitHub event arrives at the
+  address it names, that the agents still push, open pull requests and review
+  through their apps, and which setting makes events arrive.
 
 What counts as reachable depends on where GitHub runs. github.com reaches only
 the public internet: a loopback, private, link-local or unspecified address, a
@@ -1050,7 +1050,7 @@ The second is that **an agent's own app is a registrar too**. Even a company tha
 
 ### What a company hears about, said out loud
 
-A company whose events arrive through its agents' own apps gets one sentence on a **ready** card: *covering the repositories your agents' apps are installed on. Not covering the rest of `<org>` — supply `integrations.github.token` to add one organization-wide hook.*
+A company whose events arrive through its agents' own apps gets one note on a **ready** card, **Events from your agents' repositories only**: *GitHub sends events for the repositories your agents' apps are installed on, and none for the rest of `<org>`*, with the option beneath it, *to cover every repository, set `integrations.github.token` and Crewlet adds one organization-wide hook.*
 
 It is a `coverage_partial` finding, whose verdict is ready and whose actor is the **operator**: nothing is broken, and widening it is a value in this company's own configuration rather than a grant somebody at GitHub has to make. The two alternatives were both worse. Reported as `ingress_blocked` it read as Action required over agents that were working. Reported as a *note* it reached nobody at all — the engine's pass returns findings and discards notes, so a person would learn the limits of their coverage only by noticing the first repository nobody hears about.
 
