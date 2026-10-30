@@ -191,31 +191,12 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// the command line prints and the findings the reconcile loop reads.
 	pre := checkPreflight(ctx, opts)
 
-	// NO SEAT TO PROVISION IS STILL A COMPANY TO CHECK. Each agent's bot is
-	// the per-seat access sync's now, so the loop hands this pass an empty
-	// plan on every tick, and returning before the preflight would stop
-	// reporting a provisioning token that lost system_admin, or bot
-	// accounts switched off at the instance, for good: the access sync's
-	// writes would fail with a 403 naming an endpoint rather than the
-	// setting an administrator has to change.
-	if opts.Plan == nil || opts.Plan.Empty() {
-		return &Result{
-			Notes:    slices.Concat(notesOf(opts.Plan), pre.notes()),
-			NotAdmin: pre.notAdmin, Disabled: pre.disabled,
-		}, nil
-	}
-
-	// THE NOTES ARE COLLECTED AT THE END, not copied here: the run adds
-	// its own — a channel that does not exist, a bot that joined nothing
-	// — and a snapshot taken now would silently drop every one of them.
-	res := &Result{Joined: map[string][]string{}}
-	minted := map[string]mintedToken{}
-
-	// ONE bot listing per run, shared by the rename check and the
+	// ONE bot listing per run, shared by the rename sweep and the
 	// decommission pass. The display name lives on the BOT record and not
 	// on its user, so without this the comparison has nothing true to read
 	// — and per-seat fetches would be a call each for a value one list
 	// already carries.
+	res := &Result{Joined: map[string][]string{}}
 	managed := map[string]Bot{}
 	if bots, err := opts.Client.Bots(ctx); err != nil {
 		res.Notes = append(res.Notes, fmt.Sprintf(
@@ -224,7 +205,26 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		for _, bot := range bots {
 			managed[strings.ToLower(bot.Username)] = bot
 		}
+		renameBots(ctx, opts, managed, res)
 	}
+
+	// NO SEAT TO PROVISION IS STILL A COMPANY TO CHECK. Each agent's bot is
+	// the per-seat access sync's now, so the loop hands this pass an empty
+	// plan on every tick, and returning before the preflight would stop
+	// reporting a provisioning token that lost system_admin, or bot
+	// accounts switched off at the instance, for good: the access sync's
+	// writes would fail with a 403 naming an endpoint rather than the
+	// setting an administrator has to change.
+	if opts.Plan == nil || opts.Plan.Empty() {
+		res.Notes = slices.Concat(notesOf(opts.Plan), pre.notes(), res.Notes)
+		res.NotAdmin, res.Disabled = pre.notAdmin, pre.disabled
+		return res, nil
+	}
+
+	// THE NOTES ARE COLLECTED AT THE END, not copied here: the run adds
+	// its own — a channel that does not exist, a bot that joined nothing
+	// — and a snapshot taken now would silently drop every one of them.
+	minted := map[string]mintedToken{}
 
 	only := map[string]bool{}
 	for _, handle := range opts.Only {
@@ -306,32 +306,6 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			}
 			user = User{ID: bot.UserID, Username: bot.Username}
 			res.Created = append(res.Created, seat.Handle)
-		} else if want := BotDisplayName(opts.Config.Provisioning, seat.Role); want != "" {
-			// A RENAMED ROLE REACHES THE BOT. Provisioning is a reconcile,
-			// and a create-only display name means the roster in Mattermost
-			// drifts from the org chart it mirrors, with no way back but
-			// editing every bot by hand.
-			//
-			// COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which is what
-			// `known` is for. The bot record is the only thing carrying the
-			// current display name, so a listing that failed does not know
-			// the name is already right — and as a plain map lookup, which
-			// is what this was, a missing entry reads as an EMPTY display
-			// name. An unreachable /bots therefore became a PUT on every
-			// seat on every pass, rewriting names that were already correct,
-			// from the same run whose note says display names are not
-			// checked this time.
-			if current, known := managed[strings.ToLower(username)]; known &&
-				current.DisplayName != want {
-				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				if err := opts.Client.PatchBot(ctx, user.ID, want); err != nil {
-					res.Notes = append(res.Notes, fmt.Sprintf(
-						"%s: could not update the bot's display name to %q: %v",
-						seat.Handle, want, err))
-				} else {
-					res.Renamed = append(res.Renamed, seat.Handle)
-				}
-			}
 		}
 
 		// READ BEFORE JOINING, and the same rule governs the channels
@@ -475,6 +449,40 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// vocabulary or it is reported ready. See [preflight].
 	res.NotAdmin, res.Disabled = pre.notAdmin, pre.disabled
 	return res, nil
+}
+
+// renameBots brings every agent seat's bot display name in line with the
+// company document.
+//
+// A RENAMED ROLE REACHES THE BOT. Provisioning is a reconcile, and a
+// create-only display name means the roster in Mattermost drifts from the org
+// chart it mirrors, with no way back but editing every bot by hand. It sweeps
+// the document's seats rather than the plan's, because each agent's bot is the
+// per-seat access sync's now and the plan this pass is handed names none of
+// them.
+//
+// COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which the caller guarantees
+// by calling this only when one did: the bot record is the only thing carrying
+// the current display name, so a missing entry would otherwise read as an
+// empty name and rewrite every bot on every pass.
+func renameBots(ctx context.Context, opts Options, managed map[string]Bot, res *Result) {
+	for seat := range opts.Org.AllRoles() {
+		if !seat.IsAgent() {
+			continue
+		}
+		want := BotDisplayName(opts.Config.Provisioning, seat.Name)
+		bot, known := managed[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Handle()))]
+		if want == "" || !known || bot.DisplayName == want {
+			continue
+		}
+		if err := opts.Client.PatchBot(ctx, bot.UserID, want); err != nil {
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s: could not update the bot's display name to %q: %v",
+				seat.Handle(), want, err))
+			continue
+		}
+		res.Renamed = append(res.Renamed, seat.Handle())
+	}
 }
 
 // preflight is what this run learned about the instance before its first
