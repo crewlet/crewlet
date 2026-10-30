@@ -496,8 +496,11 @@ func TestDatadogCreateThenMint(t *testing.T) {
 	if got := org.user(created.AccountID).roles; !slices.Equal(got, []string{stdRole}) {
 		t.Errorf("created holding %q, want the seat's role", got)
 	}
+	// THE SYNC RECORDS THE ACCOUNT AS SOON AS THE CREATE RETURNS, and the
+	// mint reaches it through that record.
 	minted, err := apply(t, session, seataccess.ApplyInput{
 		Step: step(t, seataccess.OpCreate, seataccess.VerbMint), Want: want,
+		Record: held(created.AccountID),
 	})
 	if err != nil || len(minted.Minted) != 1 || minted.Minted[0].Field != datadog.AppKeyField ||
 		!strings.HasPrefix(minted.Minted[0].Value, "fake-minted-") {

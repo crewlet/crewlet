@@ -492,9 +492,12 @@ func TestMattermostCreate(t *testing.T) {
 	if err != nil || created.AccountID == "" || created.Account != "@agent-sre" {
 		t.Fatalf("create = %+v, %v", created, err)
 	}
+	// THE SYNC RECORDS THE BOT AS SOON AS THE CREATE RETURNS, and the
+	// create's later steps reach it through that record.
+	rec := heldBot(created.AccountID)
 	for _, verb := range []seataccess.StepVerb{seataccess.VerbGrant, seataccess.VerbScope} {
 		if _, err := mmApply(t, session, seataccess.ApplyInput{
-			Step: mmStep(t, seataccess.OpCreate, verb), Want: want,
+			Step: mmStep(t, seataccess.OpCreate, verb), Want: want, Record: rec,
 		}); err != nil {
 			t.Fatalf("%s: %v", verb, err)
 		}
@@ -507,7 +510,7 @@ func TestMattermostCreate(t *testing.T) {
 		t.Errorf("channels = %q", channels)
 	}
 	minted, err := mmApply(t, session, seataccess.ApplyInput{
-		Step: mmStep(t, seataccess.OpCreate, seataccess.VerbMint), Want: want,
+		Step: mmStep(t, seataccess.OpCreate, seataccess.VerbMint), Want: want, Record: rec,
 	})
 	if err != nil || len(minted.Minted) != 1 || minted.Minted[0].Field != mattermost.BotTokenField ||
 		!strings.HasPrefix(minted.Minted[0].Value, "fake-token-") {
