@@ -305,7 +305,7 @@ integrations:
     typing_status: always                 # always (default) | addressed
     provisioning:              # read by the reconcile loop AND by the CLI
       username_prefix: ""      # e.g. "agent-" if humans share the server
-      channels: [town-square, engineering]   # channels every bot joins
+      channels: [town-square, engineering]   # the channels agents may be given
       display_name_suffix: " (AI)"
 
 mcp_servers:
@@ -360,7 +360,7 @@ which is reported and left untouched.
 | `team` | Team slug agents belong to. Required — channels are team-scoped. |
 | `typing_status` | `always` (default) / `addressed`. See [Working status](#working-status). |
 | `provisioning.username_prefix` | Prepended to each seat's [handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle) to form the bot username. |
-| `provisioning.channels` | Channels every agent bot is added to. |
+| `provisioning.channels` | The company's channels: the list each agent's own `channels` must be within. Empty lets a seat name any channel in the team. |
 | `provisioning.display_name_suffix` | Appended to each bot's display name. |
 
 Per role, under `integrations.mattermost`:
@@ -371,9 +371,99 @@ Per role, under `integrations.mattermost`:
 | `username` | Bot username, or one whole `${VAR}` naming it (resolved where the transport is built, like the token). Defaults to the handle (with the prefix applied). |
 | `channel` | Optional channel name this seat's bot is added to at provisioning, on top of `provisioning.channels`. It aims nothing: the engine's transport posts no message. |
 
+Per role, the seat's access (see [Each agent's access: roles and channels](#each-agents-access-roles-and-channels)):
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Whether the agent has a bot at all. Required in every block; a seat with no block is off, and a new agent seat is off until somebody turns it on. |
+| `roles` | The bot's Mattermost roles, by Mattermost's own names: one of the four sets below. |
+| `channels` | The channels the bot is a member of, each within `provisioning.channels` where that list is set. |
+
 There is deliberately **no `status_phrases`** here: Mattermost's indicator
 wording belongs to the client, so no text the engine supplied would ever be
 rendered. The setting exists only under `integrations.slack`.
+
+## Each agent's access: roles and channels
+
+Each agent seat is turned on or off, and given its access, on the integration's
+**Agents** tab (or the agent's own page, which uses the same control). The tab
+writes one revision of the company document, under the seat's
+`roles[].integrations.mattermost` block:
+
+```yaml
+roles:
+  - handle: sre
+    integrations:
+      mattermost:
+        enabled: true
+        roles: [system_user, system_post_all_public]
+        channels: [town-square, incidents]
+```
+
+**Access is the bot's own Mattermost roles**, offered under the names
+Mattermost's System Console gives them, in its order:
+
+| Shown as | `roles` | What the bot may do |
+|---|---|---|
+| Member | `[system_user]` | Read and post in the channels it has joined. |
+| Member with post:channels | `[system_user, system_post_all_public]` | Also post in every public channel without joining it. |
+| Member with post:all | `[system_user, system_post_all]` | Also post in every channel, private ones included, without joining it. |
+| System Admin | `[system_admin, system_user]` | Every System Admin privilege, including users, teams and settings. |
+
+Any other set is refused when the document is saved. Moving a seat to
+**System Admin** carries a warning in the review and asks for a fresh step-up;
+lowering a seat, or keeping one where it is, never does.
+
+**Scope is channels.** A bot hears only the channels it is a member of, so a
+seat's `channels` is exactly where it can be spoken to. Each must be in
+`provisioning.channels` where the company lists any, so a seat can never reach
+further than the company does. An empty list means the bot is in no managed
+channel and can only be messaged directly.
+
+### What each change does at Mattermost
+
+| You do | Crewlet does at Mattermost |
+|---|---|
+| Turn a seat on | Creates the bot, adds it to the team with its roles and to its channels, then mints its access token and seals it. |
+| Change its roles | Sets the bot's roles (`PUT /api/v4/users/{id}/roles`) to the seat's whole set. |
+| Change its channels | Adds it to the channels the seat gained and removes it from the company's channels the seat no longer names. A channel outside the company's list (one a person invited the bot into) and a direct message are never touched. |
+| Turn it off | Revokes the tokens this engine minted, clears the sealed token, records in the bot's description that this engine turned it off, and deactivates it. Mattermost keeps the bot and everything it posted. |
+| Turn it back on | Reactivates the bot, clears the marker, and mints and seals a new token. No person is needed. |
+| Remove it (only while off) | Nothing at Mattermost: deleting a bot deletes everything it posted, so it stays deactivated and Crewlet stops managing it. Remove is a separate, confirmed action and never follows from editing the document. |
+| Rotate its token | Mints a new token, seals it, then revokes the token it replaced. A token an administrator minted on the bot by hand is never revoked. |
+
+The token is sealed under one name the engine derives for the seat,
+`MATTERMOST_BOT_TOKEN_<HANDLE>` (for example `MATTERMOST_BOT_TOKEN_SRE`). A
+token is minted, and **if it cannot be sealed it is revoked again** at once:
+Mattermost shows a token's value exactly once, so a token that was minted and
+not sealed would be live and held by nobody.
+
+### Every pass reads each bot back
+
+Each pass reads every bot this engine manages, including the bot of a seat
+that has since left the document: its roles, its channels, whether it is
+deactivated and by whom, and whether it still holds a token. A bot is adopted
+by its username only if it is a bot; a person who happens to hold the name is
+never taken for an agent.
+
+- **Roles or channels changed at Mattermost** by somebody else are restored to
+  the seat's and reported as `drift_restored`, with the before and after. The
+  tab offers **Keep the vendor's setting**, which writes Mattermost's value
+  into the document instead.
+- **A bot somebody else deactivated** is never turned back on by a pass, in
+  case it was incident response. The tab offers **Turn back on** or **Keep
+  off**. Only a bot carrying this engine's own marker is ever reactivated
+  without being asked.
+- **A bot deleted at Mattermost** is dropped from the engine's records, and the
+  next pass creates a fresh one if the seat is on.
+- **A seat that leaves the document** is treated as off: its bot is
+  deactivated, kept, and listed on the tab with **Remove**.
+
+A refusal names the step that failed, Mattermost's own reason, what to do
+about it and who does it, with a link to the System Console's users. The step
+is retried on every pass and on **Retry**. The provisioning token must belong
+to a System Admin, and `ServiceSettings.EnableBotAccountCreation` and
+`ServiceSettings.EnableUserAccessTokens` must be on.
 
 ---
 
