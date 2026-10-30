@@ -186,7 +186,13 @@ func NewClient(opts ClientOptions) *Client {
 // shape a mistake can take: a 200, an account, and no access.
 //
 //nolint:gochecknoglobals // an immutable contract, not state
-var Products = []string{"jira-software", "confluence"}
+var Products = []string{GrantJira, GrantConfluence}
+
+// The product keys a grant names, one per lane a seat can be on.
+const (
+	GrantJira       = "jira-software"
+	GrantConfluence = "confluence"
+)
 
 // PermissionRule grants one product's member role on one site.
 type PermissionRule struct {
@@ -196,8 +202,14 @@ type PermissionRule struct {
 
 // GrantsFor is the product access one agent's account needs on a site.
 func GrantsFor(cloudID string) []PermissionRule {
-	out := make([]PermissionRule, 0, len(Products))
-	for _, product := range Products {
+	return GrantsOf(cloudID, Products...)
+}
+
+// GrantsOf is the product access for the named products on a site, one
+// member grant per product.
+func GrantsOf(cloudID string, products ...string) []PermissionRule {
+	out := make([]PermissionRule, 0, len(products))
+	for _, product := range products {
 		out = append(out, PermissionRule{
 			Resource: "ari:cloud:" + product + "::site/" + cloudID,
 			Role:     "ari:cloud:" + product + "::role/product/member",
@@ -331,14 +343,46 @@ func (c *Client) CreateServiceAccount(
 // permissions means resolving the groups they were granted to.
 //
 //nolint:gochecknoglobals // an immutable contract, not state
-var AgentScopes = []string{
+var AgentScopes = ScopesFor(true, true)
+
+// JiraScopes are what a seat on the Jira lane needs: read and write work,
+// and resolve the people it assigns or mentions. What the account may do in
+// a project is bounded by the project's permission scheme and the seat's
+// project role, not by these.
+//
+//nolint:gochecknoglobals // an immutable contract, not state
+var JiraScopes = []string{
 	"read:jira-work",
 	"write:jira-work",
 	"read:jira-user",
+}
+
+// ConfluenceScopes are what a seat on the Confluence lane needs: read and
+// write content, read the spaces it works in, and resolve the people it
+// mentions. What it may do in a space is bounded by its space role or space
+// permissions.
+//
+//nolint:gochecknoglobals // an immutable contract, not state
+var ConfluenceScopes = []string{
 	"read:confluence-content.all",
 	"write:confluence-content",
 	"read:confluence-space.summary",
 	"read:confluence-user",
+}
+
+// ScopesFor is the union of scopes for the lanes a seat is on. One token
+// carries both products, because one Atlassian account is one agent's
+// identity across the site; a lane that is off contributes nothing, so its
+// product refuses the token even while the account keeps its product grant.
+func ScopesFor(jira, confluence bool) []string {
+	var out []string
+	if jira {
+		out = append(out, JiraScopes...)
+	}
+	if confluence {
+		out = append(out, ConfluenceScopes...)
+	}
+	return out
 }
 
 // MintToken issues an API token on one service account.
@@ -346,12 +390,20 @@ var AgentScopes = []string{
 // The label is STAMPED with the mint time. Labels are unique within an
 // account and an account outlives any one token, so a second mint would
 // otherwise collide with the first.
+//
+// Scopes are REQUIRED: a mint with none answers 400 MISSING_SCOPES. An empty
+// set is refused here, before the call, because it means the seat is on no
+// lane and should hold no token at all.
 func (c *Client) MintToken(
-	ctx context.Context, key, accountID, label string, now time.Time,
+	ctx context.Context, key, accountID, label string, scopes []string, now time.Time,
 ) (*MintedToken, error) {
+	if len(scopes) == 0 {
+		return nil, errors.New("atlassian: a token needs at least one scope; " +
+			"a seat on no lane holds no token")
+	}
 	body := map[string]any{
 		"label":  fmt.Sprintf("%s-%d", label, now.Unix()),
-		"scopes": AgentScopes,
+		"scopes": scopes,
 		"expiry": now.Add(TokenLifetime).Format(time.RFC3339),
 	}
 	token := new(MintedToken)
@@ -384,14 +436,43 @@ func (c *Client) MintToken(
 // provisioned ever legitimately has, and which is exactly the state a
 // recreated account is in.
 func (c *Client) CountTokens(ctx context.Context, key, accountID string) (int, error) {
-	var out []struct {
-		ID string `json:"id"`
-	}
-	if err := c.call(ctx, key, http.MethodGet,
-		fmt.Sprintf(apiTokensPath, accountID), nil, &out); err != nil {
+	tokens, err := c.ListTokens(ctx, key, accountID)
+	if err != nil {
 		return 0, err
 	}
-	return len(out), nil
+	return len(tokens), nil
+}
+
+// APIToken is one token an account holds, as Atlassian lists it: never the
+// value, which is shown once at mint.
+// Source: https://developer.atlassian.com/cloud/admin/user-management/rest/api-group-api-tokens/
+type APIToken struct {
+	ID         string `json:"id"`
+	Label      string `json:"label"`
+	CreatedAt  string `json:"createdAt"`
+	LastAccess string `json:"lastAccess"`
+	Expiry     string `json:"expiry"`
+}
+
+// ListTokens reads the API tokens one account holds.
+func (c *Client) ListTokens(ctx context.Context, key, accountID string) ([]APIToken, error) {
+	var out []APIToken
+	if err := c.call(ctx, key, http.MethodGet,
+		fmt.Sprintf(apiTokensPath, url.PathEscape(accountID)), nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RevokeToken deletes one API token. A token already gone is the state asked
+// for, so a 404 is success.
+func (c *Client) RevokeToken(ctx context.Context, key, accountID, tokenID string) error {
+	err := c.call(ctx, key, http.MethodDelete,
+		fmt.Sprintf(apiTokensPath, url.PathEscape(accountID))+"/"+url.PathEscape(tokenID), nil, nil)
+	if Status(err) == http.StatusNotFound {
+		return nil
+	}
+	return err
 }
 
 // DeleteServiceAccount removes an agent's identity.

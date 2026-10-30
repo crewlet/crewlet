@@ -628,11 +628,11 @@ type memberships struct {
 	// over an unchanged group.
 	group []Member
 	// groupLevel indexes that roster by user id, which is the question the
-	// seat loop asks: at what level, if at all, is this account a member.
-	groupLevel map[int]int
+	// seat loop asks: with what access, if at all, is this account a member.
+	groupLevel map[int]Access
 	// projectLevel is the same index per `provisioning.projects` entry.
 	// No roster beside it: nothing decommissions a project membership.
-	projectLevel map[string]map[int]int
+	projectLevel map[string]map[int]Access
 }
 
 // readMemberships lists the group's members and each project's, once.
@@ -649,20 +649,20 @@ func readMemberships(ctx context.Context, c *Client, groupID int, projects []str
 	}
 	have := &memberships{
 		group:        members,
-		groupLevel:   make(map[int]int, len(members)),
-		projectLevel: make(map[string]map[int]int, len(projects)),
+		groupLevel:   make(map[int]Access, len(members)),
+		projectLevel: make(map[string]map[int]Access, len(projects)),
 	}
 	for _, member := range members {
-		have.groupLevel[member.ID] = member.AccessLevel
+		have.groupLevel[member.ID] = member.Access()
 	}
 	for _, project := range projects {
 		members, err := c.ProjectMembers(ctx, project)
 		if err != nil {
 			return nil, fmt.Errorf("gitlab: list %s's members: %w", project, err)
 		}
-		levels := make(map[int]int, len(members))
+		levels := make(map[int]Access, len(members))
 		for _, member := range members {
-			levels[member.ID] = member.AccessLevel
+			levels[member.ID] = member.Access()
 		}
 		have.projectLevel[project] = levels
 	}
@@ -675,13 +675,13 @@ func readMemberships(ctx context.Context, c *Client, groupID int, projects []str
 // another level is moved, present at the right level is left entirely alone.
 // The third is the steady state and it is the one the loop spends its life
 // in.
-func (m *memberships) ensureGroup(ctx context.Context, c *Client, groupID, userID, level int) error {
+func (m *memberships) ensureGroup(ctx context.Context, c *Client, groupID, userID int, level Access) error {
 	switch current, member := m.groupLevel[userID]; {
 	case !member:
 		if err := c.AddGroupMember(ctx, groupID, userID, level); err != nil {
 			return err
 		}
-	case current != level:
+	case !current.Equal(level):
 		if err := c.SetGroupMember(ctx, groupID, userID, level); err != nil {
 			return err
 		}
@@ -696,14 +696,14 @@ func (m *memberships) ensureGroup(ctx context.Context, c *Client, groupID, userI
 }
 
 // ensureProject is the same decision for one project.
-func (m *memberships) ensureProject(ctx context.Context, c *Client, project string, userID, level int) error {
+func (m *memberships) ensureProject(ctx context.Context, c *Client, project string, userID int, level Access) error {
 	levels := m.projectLevel[project]
 	switch current, member := levels[userID]; {
 	case !member:
 		if err := c.AddProjectMember(ctx, project, userID, level); err != nil {
 			return err
 		}
-	case current != level:
+	case !current.Equal(level):
 		if err := c.SetProjectMember(ctx, project, userID, level); err != nil {
 			return err
 		}
@@ -711,7 +711,7 @@ func (m *memberships) ensureProject(ctx context.Context, c *Client, project stri
 		return nil
 	}
 	if levels == nil {
-		levels = map[int]int{}
+		levels = map[int]Access{}
 		m.projectLevel[project] = levels
 	}
 	levels[userID] = level
@@ -1854,22 +1854,16 @@ func webhookTarget(base string) string {
 //
 // RESOLVED BY [PlanFor], which holds the company's settings, so the plan
 // carries the answer and this reads no configuration of its own.
-func accessLevel(p *config.GitLabProvisioning, seat provision.Seat) int {
+func accessLevel(p *config.GitLabProvisioning, seat provision.Seat) Access {
 	level := p.AccessLevel
 	if seat.AccessLevel != "" {
 		level = config.GitLabAccessLevel(seat.AccessLevel)
 	}
 	if level == config.GitLabMaintainer {
-		return gitlabMaintainer
+		return Access{Level: LevelMaintainer}
 	}
-	return gitlabDeveloper
+	return Access{Level: LevelDeveloper}
 }
-
-// GitLab's access levels, which the API takes as integers.
-const (
-	gitlabDeveloper  = 30
-	gitlabMaintainer = 40
-)
 
 // tokenScopes are the scopes minted on a seat's token.
 func tokenScopes(p *config.GitLabProvisioning) []string {

@@ -398,9 +398,9 @@ func (c *Client) GroupByPath(ctx context.Context, path string) (Group, bool, err
 // account the group does not have — see [ensureGroupMember]. The 409 arm
 // below is what remains: two nodes reconciling one surface can both find the
 // membership absent, and the loser must not fail on what the winner did.
-func (c *Client) AddGroupMember(ctx context.Context, groupID, userID, accessLevel int) error {
+func (c *Client) AddGroupMember(ctx context.Context, groupID, userID int, access Access) error {
 	err := c.send(ctx, http.MethodPost, "/groups/"+strconv.Itoa(groupID)+"/members",
-		map[string]int{"user_id": userID, "access_level": accessLevel}, nil)
+		access.addBody(userID), nil)
 	if isConflict(err) {
 		// ALREADY A MEMBER is success. The run is a reconcile, and a
 		// second run must not fail on what the first one did.
@@ -413,10 +413,10 @@ func (c *Client) AddGroupMember(ctx context.Context, groupID, userID, accessLeve
 //
 // The same race guard as [Client.AddGroupMember], reached the same way: only
 // for an account [Client.ProjectMembers] did not report.
-func (c *Client) AddProjectMember(ctx context.Context, project string, userID, accessLevel int) error {
+func (c *Client) AddProjectMember(ctx context.Context, project string, userID int, access Access) error {
 	err := c.send(ctx, http.MethodPost,
 		"/projects/"+url.PathEscape(project)+"/members",
-		map[string]int{"user_id": userID, "access_level": accessLevel}, nil)
+		access.addBody(userID), nil)
 	if isConflict(err) {
 		return nil
 	}
@@ -438,20 +438,20 @@ func (c *Client) AddProjectMember(ctx context.Context, project string, userID, a
 // PUT rather than POST is the route GitLab serves for an edit, and it 404s
 // for a user with no DIRECT membership — which is why the caller decides from
 // the listing rather than trying this first and falling back.
-func (c *Client) SetGroupMember(ctx context.Context, groupID, userID, accessLevel int) error {
+func (c *Client) SetGroupMember(ctx context.Context, groupID, userID int, access Access) error {
 	return c.send(ctx, http.MethodPut,
 		"/groups/"+strconv.Itoa(groupID)+"/members/"+strconv.Itoa(userID),
-		map[string]int{"access_level": accessLevel}, nil)
+		access.editBody(), nil)
 }
 
 // SetProjectMember moves an existing project membership to an access level.
 //
 // The project counterpart of [Client.SetGroupMember], and it carried the same
 // silent drift for the same reason.
-func (c *Client) SetProjectMember(ctx context.Context, project string, userID, accessLevel int) error {
+func (c *Client) SetProjectMember(ctx context.Context, project string, userID int, access Access) error {
 	return c.send(ctx, http.MethodPut,
 		"/projects/"+url.PathEscape(project)+"/members/"+strconv.Itoa(userID),
-		map[string]int{"access_level": accessLevel}, nil)
+		access.editBody(), nil)
 }
 
 // ProjectExists reports whether a project path resolves on this instance.
@@ -718,11 +718,30 @@ func (c *Client) RevokeTokens(ctx context.Context, groupID, userID int) error {
 // every seat on every run for ever.
 type Member struct {
 	User
-	// AccessLevel is GitLab's numeric role — see [gitlabDeveloper] and
-	// [gitlabMaintainer]. Zero means the listing did not say, which no
-	// GitLab version does; it compares unequal to every configured level,
-	// so the safe direction is a write.
+	// AccessLevel is GitLab's numeric role (see [Roles]). Zero means the
+	// listing did not say, which no GitLab version does; it compares unequal
+	// to every configured level, so the safe direction is a write.
 	AccessLevel int `json:"access_level"`
+
+	// MemberRole is the custom role the membership holds on Ultimate, or
+	// nil for a default role. GitLab serves it as an object on the listing;
+	// only its id is compared.
+	MemberRole *MemberRoleRef `json:"member_role"`
+}
+
+// MemberRoleRef is the custom role a membership names.
+type MemberRoleRef struct {
+	ID int `json:"id"`
+}
+
+// Access is what a membership holds: GitLab's default role by level, or a
+// custom role (Ultimate) with the level it is based on.
+func (m Member) Access() Access {
+	access := Access{Level: m.AccessLevel}
+	if m.MemberRole != nil {
+		access.MemberRoleID = m.MemberRole.ID
+	}
+	return access
 }
 
 // GroupMembers lists a group's members.

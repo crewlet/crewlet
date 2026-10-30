@@ -372,7 +372,7 @@ func reconcileSeat(
 	if held && !orphaned(tokens, seat.Handle) {
 		return out
 	}
-	token, err := opts.Client.MintToken(ctx, opts.Key, out.AccountID, seat.Handle, opts.now())
+	token, err := opts.Client.MintToken(ctx, opts.Key, out.AccountID, seat.Handle, AgentScopes, opts.now())
 	if err != nil {
 		out.Err = fmt.Errorf("atlassian: mint a token for %s: %w", seat.Handle, err)
 		return out
