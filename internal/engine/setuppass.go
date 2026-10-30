@@ -60,13 +60,13 @@ import (
 // outbound websocket per seat and verifies no inbound delivery, so its pass
 // creates accounts and registers nothing.
 //
-// Slack stays on the command line. Its apps are created through Slack's
-// app-manifest API, which authenticates with a configuration token Slack
-// issues only by hand and which an organisation may not permit at all, and
-// the record of what was created lives in a local ledger file rather than in
-// the fleet.
+// Slack has a pass for its agents alone. Each agent's app is created through
+// Slack's app-manifest API in the access sync (D11), with the configuration
+// token the company seals, and the install stays a person's click; there is
+// nothing company-wide at Slack for a pass to converge.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
+		&slackPass{engine: e},
 		&githubPass{engine: e},
 		&jiraPass{engine: e},
 		&confluencePass{engine: e},
@@ -75,6 +75,32 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&datadogPass{engine: e},
 		&atlassianPass{engine: e},
 	}
+}
+
+// slackPass runs the access sync for every agent's own Slack app.
+//
+// THE COMPANY HAS NOTHING AT SLACK TO CONVERGE: the Request URL is a field a
+// person types into each app's settings ([integration.IngressOperator]), and
+// every app, token and install is one agent's. So its company-level half
+// answers only whether the company runs Slack at all.
+type slackPass struct{ engine *Engine }
+
+func (*slackPass) Kind() integration.Kind { return integration.KindSlack }
+
+// Needs is nil: the app-configuration token is held in the company document.
+func (*slackPass) Needs() *setup.Requirement { return nil }
+
+// Run is the agents' own access ([Engine.withSeatAccess]).
+func (p *slackPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *slackPass) run(context.Context, setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	if company == nil || company.Config.Integrations.Slack == nil {
+		return nil, integration.ErrNotConfigured
+	}
+	return nil, nil
 }
 
 // atlassianPass creates one Atlassian service account per agent.
@@ -92,7 +118,12 @@ func (*atlassianPass) Kind() integration.Kind { return integration.KindAtlassian
 // every other credential.
 func (*atlassianPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *atlassianPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Atlassian
 	if cfg == nil {
@@ -455,7 +486,12 @@ func (*datadogPass) Kind() integration.Kind { return integration.KindDatadog }
 // every other credential.
 func (*datadogPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *datadogPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Datadog
 	// DISABLED IS NOT CONFIGURED, the same answer gitlab, github and
@@ -640,16 +676,35 @@ type refreshingSink struct {
 	// record it writes; spending it here costs nothing and is the same party.
 	by iam.Actor
 
-	sealed  bool
-	flushed bool
+	// changed is whether a value was sealed or cleared since the last
+	// Flush.
+	//
+	// SINCE THE LAST FLUSH, not since the run began: one pass flushes
+	// twice, once at the end of its vendor's company-level work and once at
+	// the end of its seats' access sync, and a sink that refreshed only on
+	// the first left every credential the second sealed waiting for the
+	// next apply.
+	changed bool
 }
 
 func (s *refreshingSink) Record(ctx context.Context, name, value string) error {
 	if err := s.TokenSink.Record(ctx, name, value); err != nil {
 		return err
 	}
-	s.sealed = true
+	s.changed = true
 	return nil
+}
+
+// Forget implements [provision.TokenSink], and marks the snapshot stale: a
+// value cleared from the store still resolves from the snapshot until it is
+// refreshed, and a seat turned off would go on starting its tool with the
+// credential its off revoked.
+func (s *refreshingSink) Forget(ctx context.Context, names ...string) error {
+	err := s.TokenSink.Forget(ctx, names...)
+	if len(names) > 0 {
+		s.changed = true
+	}
+	return err
 }
 
 func (s *refreshingSink) Flush(ctx context.Context) error {
@@ -657,8 +712,8 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 	// EVEN ON A FAILED FLUSH, because a write-through sink has already
 	// made its values durable: what failed is the completion, and the
 	// credentials are out there either way.
-	if s.sealed && !s.flushed {
-		s.flushed = true
+	if s.changed {
+		s.changed = false
 		// AND THIS NODE'S SEATS ARE ASKED AT ONCE, before the re-activation
 		// below is so much as requested: a child held back for what was just
 		// sealed starts here without waiting on a write that can fail
@@ -950,7 +1005,12 @@ func (*gitlabPass) Kind() integration.Kind { return integration.KindGitLab }
 // [gitlab.AdminCredential] for why it is kept.
 func (*gitlabPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *gitlabPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitLab
 	if cfg == nil || !cfg.Enabled {
@@ -1076,7 +1136,12 @@ func (*mattermostPass) Kind() integration.Kind { return integration.KindMattermo
 // in the company document.
 func (*mattermostPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *mattermostPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Mattermost
 	if cfg == nil || !cfg.Enabled {
@@ -1137,7 +1202,12 @@ func (*githubPass) Kind() integration.Kind { return integration.KindGitHub }
 // third-party app, it writes with the organization token already in the config.
 func (*githubPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *githubPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitHub
 	if cfg == nil || !cfg.Enabled {

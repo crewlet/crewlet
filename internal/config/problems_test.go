@@ -165,6 +165,8 @@ const (
 	agentOnlyOnHuman = "agent-only field set on a human seat"
 	githubAppOnHuman = "a human seat has no GitHub App"
 	avatarOnHuman    = "a human seat is drawn as the person it is"
+
+	seatAccessOnHumanSeat = "a human seat holds no account the engine manages"
 )
 
 // humanSeatKey is one key a seat is authored with, as a human seat would
@@ -209,6 +211,10 @@ var humanSeatKeys = []humanSeatKey{
 	{"mcp_env", "{atlassian: {JIRA_USERNAME: sarah}}", agentOnlyOnHuman},
 	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
 	{"integrations.github", "{tier: read_only}", githubAppOnHuman},
+	{"integrations.datadog", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.gitlab", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.jira", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.confluence", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 
@@ -276,6 +282,7 @@ func TestEveryAgentOnlyKeyIsRefusedOnAHumanSeatWhereItWasWritten(t *testing.T) {
 			problems := config.Problems(parsed(t, humanSeatWith(k)).Validate())
 			got := append(locatedOf(problems, agentOnlyOnHuman), locatedOf(problems, githubAppOnHuman)...)
 			got = append(got, locatedOf(problems, avatarOnHuman)...)
+			got = append(got, locatedOf(problems, seatAccessOnHumanSeat)...)
 			var want []located
 			if k.refusal != "" {
 				want = []located{{"roles[0]." + k.key, "conflict", "sarah", ""}}
