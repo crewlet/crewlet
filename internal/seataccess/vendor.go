@@ -286,7 +286,21 @@ type Options struct {
 	// no project list), where any entry the vendor accepts is within it.
 	Scope     []string `json:"scope,omitempty"`
 	ScopeOpen bool     `json:"scope_open,omitempty"`
+
+	// Rotatable is whether a person can ask for a seat's credential on this
+	// lane to be rotated ([LaneSpec.Rotatable]).
+	Rotatable bool `json:"rotatable,omitempty"`
+
+	// Managed is [ManagedExternal] where the engine does not provision this
+	// lane for the company (D4b): a seat's switch still binds its tool to
+	// the credential handed in, and its access is managed outside Crewlet.
+	// Empty where the engine provisions it.
+	Managed string `json:"managed,omitempty"`
 }
+
+// ManagedExternal is [Options.Managed] for a lane the engine does not
+// provision for the company.
+const ManagedExternal = "external"
 
 // Level returns the level with id, or false.
 func (o Options) Level(id string) (Level, int, bool) {
