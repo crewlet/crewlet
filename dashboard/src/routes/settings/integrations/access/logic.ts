@@ -123,7 +123,25 @@ export function levelName(lane: Lane, id: string | undefined): string {
     const unknown = [...ids].filter((x) => !lane.levels.some((l) => l.id === x));
     return [...known.map((l) => l.name), ...unknown].join(", ");
   }
+  const only = productOnly(lane, id);
+  if (only) return only;
   return lane.levels.find((l) => l.id === id)?.name ?? id ?? "None";
+}
+
+/**
+ * "Product access only" where a seat holds a role lane's product with no
+ * role (the empty level, first-class for Jira and Confluence), or null.
+ */
+export function productOnly(lane: Lane, id: string | undefined): string | null {
+  const words = laneWords(lane.key).productOnly;
+  return words && !lane.multiple && (id ?? "") === "" ? words.name : null;
+}
+
+/** Whether a seat's scope applies: never on a lane managed outside Crewlet, or with product access only. */
+export function scopeApplies(lane: Lane, want: AccessDesired): boolean {
+  return (
+    lane.scope !== undefined && !managedOutside(lane) && productOnly(lane, want.level) === null
+  );
 }
 
 /** A set of levels for a table cell: two names in the vendor's order, then a count. */

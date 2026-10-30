@@ -19,6 +19,7 @@ import {
   confluenceAnswer,
   datadogAnswer,
   githubAnswer,
+  jiraAnswer,
   mattermostAnswer,
   offLane,
   onLane,
@@ -388,4 +389,15 @@ test("an agent turned on in Confluence with no permission is held at the review,
   expect(review.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(review);
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("Jira's product access with no project role is a choice of its own, with no projects to pick", () => {
+  draw(jiraAnswer());
+  expect(screen.getByRole("combobox", { name: "PM's Jira access" }).textContent).toContain(
+    "Product access only",
+  );
+  // THE SCOPE PICKER, whatever role its searchable trigger takes.
+  const picker = (name: string) => document.querySelector(`[aria-label="${name}"]`);
+  expect(picker("PM's Jira projects")).toBeNull();
+  expect(picker("QA's Jira projects")).not.toBeNull();
 });
