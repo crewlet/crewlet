@@ -43,6 +43,11 @@ type SeatInput struct {
 
 	// Ask is what a person asked for on this seat, if anything.
 	Ask Ask
+
+	// Options is what each lane offers now, for naming levels in the steps
+	// ([StepsInput.Options]). Optional: a lane with none is drawn with what
+	// the vendor can name without it.
+	Options map[Lane]Options
 }
 
 // Plan is every step the next sync takes for one seat at the vendor, by lane,
@@ -130,7 +135,14 @@ func walk(
 	if in.Record != nil {
 		cred = in.Record.Credential
 	}
-	if cred == nil {
+	// A CREDENTIAL THE VENDOR PROVES GONE is not one the seat holds,
+	// whatever the ledger recorded sealing: the account's credential is
+	// one per account, so any lane's proof speaks for all of them.
+	gone := false
+	for _, lane := range lanes {
+		gone = gone || in.Have[lane].CredentialGone
+	}
+	if cred == nil && !gone {
 		// A CREDENTIAL SEALED OUTSIDE THE SYNC (a GitHub App's key from the
 		// manifest route, a Slack bot token from the install landing) is the
 		// account's all the same, and is never minted over.
@@ -152,8 +164,11 @@ func walk(
 			// exists, and this lane has not been granted on it yet.
 			have.Exists, have.Enabled, have.DisabledBy = true, false, ""
 		}
-		if have.Exists && have.Credential == nil {
+		if have.Exists && have.Credential == nil && !gone {
 			have.Credential = cred
+		}
+		if gone {
+			have.Credential = nil
 		}
 		var applied *Desired
 		if in.Record != nil {
@@ -187,18 +202,21 @@ func walk(
 				}
 			}
 			enabled := have.Enabled || len(ops) > 0 && ops[0].op == OpEnable
-			if enabled && cred == nil && !minted {
+			if enabled && (cred == nil || gone) && !minted {
 				ops = append(ops, planned{op: OpMint})
 				minted = true
 			}
-			if owned && in.Ask.Rotate && !rotated && have.Enabled && cred != nil {
+			if owned && in.Ask.Rotate && !rotated && have.Enabled && cred != nil && !gone {
 				ops = append(ops, planned{op: OpRotate})
 				rotated = true
 			}
 		}
 		var steps []Step
 		for _, p := range ops {
-			got := v.Steps(in.Seat, lane, p.op, want, have)
+			got := drawSteps(v, StepsInput{
+				Seat: in.Seat, Lane: lane, Op: p.op, Want: want, Have: have,
+				Options: in.Options[lane],
+			})
 			for j := range got {
 				got[j].Op, got[j].Index = p.op, j
 				got[j].Drift = got[j].Drift || p.drift
@@ -214,7 +232,7 @@ func walk(
 			cred = nil
 		}
 		if eff.credential != nil {
-			cred = eff.credential
+			cred, gone = eff.credential, false
 		}
 	}
 	return nil

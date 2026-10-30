@@ -439,8 +439,7 @@ follows the route: the node's `api`, or the command's own `provision` written
 directly. Who ran the command is what the row's author and credential say,
 either way.
 
-`crewlet slack provision -secret-store` and
-`crewlet mattermost provision -secret-store` work identically. Slack's own
+`crewlet slack provision -secret-store` works identically. Slack's own
 app-configuration token pair is the one credential that does **not** go here:
 it is the operator's, not the company's, and it lives in the
 [app ledger](../integrations/slack.md#the-ledger-slack-appsjson) beside the company file.

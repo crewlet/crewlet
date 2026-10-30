@@ -7,9 +7,9 @@ own infrastructure.
 
 > **Prerequisites.** A Mattermost server you administer, and a **team** the
 > agents will live in. Crewlet never creates top-level tenancy — create the
-> server and the team yourself, then let
-> [`crewlet mattermost provision`](#automated-setup-crewlet-mattermost-provision)
-> fill it with agent bots.
+> server and the team yourself, then turn each agent on in the
+> integration's [Agents tab](#each-agents-access-roles-and-channels), which
+> fills it with agent bots.
 >
 > Unlike Slack, the engine does **not** need to be reachable from the chat
 > server: it opens outbound websockets rather than receiving webhooks, so a
@@ -26,11 +26,11 @@ own infrastructure.
 ## Setting it up from the dashboard
 
 Connect Mattermost in Company › Integrations with the instance address, the
-team and a system administrator token. The reconcile loop creates each agent's
-bot account on its next tick, running the same pass
-`crewlet mattermost provision` runs. The administrator token is sealed in the
-fleet's secret store and kept, because disabling those bots again on
-disconnect needs the same authority that created them.
+team and a system administrator token, then turn each agent on in the
+integration's Agents tab. The reconcile loop creates each agent's bot account
+on its next tick. The administrator token is sealed in the fleet's secret
+store and kept, because turning those bots off again needs the same authority
+that created them.
 
 On a first boot the engine claims its seats before that pass has minted their
 tokens, so each agent's `mcp-server-mattermost` is not started yet: it is
@@ -305,7 +305,7 @@ integrations:
     typing_status: always                 # always (default) | addressed
     provisioning:              # read by the reconcile loop AND by the CLI
       username_prefix: ""      # e.g. "agent-" if humans share the server
-      channels: [town-square, engineering]   # channels every bot joins
+      channels: [town-square, engineering]   # the channels agents may be given
       display_name_suffix: " (AI)"
 
 mcp_servers:
@@ -360,7 +360,7 @@ which is reported and left untouched.
 | `team` | Team slug agents belong to. Required — channels are team-scoped. |
 | `typing_status` | `always` (default) / `addressed`. See [Working status](#working-status). |
 | `provisioning.username_prefix` | Prepended to each seat's [handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle) to form the bot username. |
-| `provisioning.channels` | Channels every agent bot is added to. |
+| `provisioning.channels` | The company's channels: the list each agent's own `channels` must be within. Empty lets a seat name any channel in the team. |
 | `provisioning.display_name_suffix` | Appended to each bot's display name. |
 
 Per role, under `integrations.mattermost`:
@@ -371,264 +371,133 @@ Per role, under `integrations.mattermost`:
 | `username` | Bot username, or one whole `${VAR}` naming it (resolved where the transport is built, like the token). Defaults to the handle (with the prefix applied). |
 | `channel` | Optional channel name this seat's bot is added to at provisioning, on top of `provisioning.channels`. It aims nothing: the engine's transport posts no message. |
 
+Per role, the seat's access (see [Each agent's access: roles and channels](#each-agents-access-roles-and-channels)):
+
+| Field | Meaning |
+|---|---|
+| `enabled` | Whether the agent has a bot at all. Required in every block; a seat with no block is off, and a new agent seat is off until somebody turns it on. |
+| `roles` | The bot's Mattermost roles, by Mattermost's own names: one of the four sets below. |
+| `channels` | The channels the bot is a member of, each within `provisioning.channels` where that list is set. |
+
 There is deliberately **no `status_phrases`** here: Mattermost's indicator
 wording belongs to the client, so no text the engine supplied would ever be
 rendered. The setting exists only under `integrations.slack`.
 
+## Each agent's access: roles and channels
+
+Each agent seat is turned on or off, and given its access, on the integration's
+**Agents** tab (or the agent's own page, which uses the same control). The tab
+writes one revision of the company document, under the seat's
+`roles[].integrations.mattermost` block:
+
+```yaml
+roles:
+  - handle: sre
+    integrations:
+      mattermost:
+        enabled: true
+        roles: [system_user, system_post_all_public]
+        channels: [town-square, incidents]
+```
+
+**Access is the bot's own Mattermost roles**, offered under the names
+Mattermost's System Console gives them, in its order:
+
+| Shown as | `roles` | What the bot may do |
+|---|---|---|
+| Member | `[system_user]` | Read and post in the channels it has joined. |
+| Member with post:channels | `[system_user, system_post_all_public]` | Also post in every public channel without joining it. |
+| Member with post:all | `[system_user, system_post_all]` | Also post in every channel, private ones included, without joining it. |
+| System Admin | `[system_admin, system_user]` | Every System Admin privilege, including users, teams and settings. |
+
+Any other set is refused when the document is saved. Moving a seat to
+**System Admin** carries a warning in the review and asks for a fresh step-up;
+lowering a seat, or keeping one where it is, never does.
+
+**Scope is channels.** A bot hears only the channels it is a member of, so a
+seat's `channels` is exactly where it can be spoken to. Each must be in
+`provisioning.channels` where the company lists any, so a seat can never reach
+further than the company does. An empty list means the bot is in no managed
+channel and can only be messaged directly.
+
+### What each change does at Mattermost
+
+| You do | Crewlet does at Mattermost |
+|---|---|
+| Turn a seat on | Creates the bot, adds it to the team with its roles and to its channels, then mints its access token and seals it. |
+| Change its roles | Sets the bot's roles (`PUT /api/v4/users/{id}/roles`) to the seat's whole set. |
+| Change its channels | Adds it to the channels the seat gained and removes it from the company's channels the seat no longer names. Where the company lists channels, one outside that list (a room a person invited the bot into) is never touched; where it lists none, the seat's channels are the whole of what the bot is in. A direct message is never touched. |
+| Turn it off | Revokes the tokens this engine minted, clears the sealed token, records in the bot's description that this engine turned it off, and deactivates it. Mattermost keeps the bot and everything it posted. |
+| Turn it back on | Reactivates the bot, clears the marker, and mints and seals a new token. No person is needed. |
+| Remove it (only while off) | Nothing at Mattermost: deleting a bot deletes everything it posted, so it stays deactivated and Crewlet stops managing it. Remove is a separate, confirmed action and never follows from editing the document. |
+| Rotate its token | Mints a new token, seals it, then revokes the token it replaced. A token an administrator minted on the bot by hand is never revoked. |
+
+The token is sealed under one name the engine derives for the seat,
+`MATTERMOST_BOT_TOKEN_<HANDLE>` (for example `MATTERMOST_BOT_TOKEN_SRE`). A
+token is minted, and **if it cannot be sealed it is revoked again** at once:
+Mattermost shows a token's value exactly once, so a token that was minted and
+not sealed would be live and held by nobody.
+
+### Every pass reads each bot back
+
+Each pass reads every bot this engine manages, including the bot of a seat
+that has since left the document: its roles, its channels, whether it is
+deactivated and by whom, and whether it still holds a token. A bot is adopted
+by its username only if it is a bot; a person who happens to hold the name is
+never taken for an agent.
+
+- **Roles or channels changed at Mattermost** by somebody else are restored to
+  the seat's and reported as `drift_restored`, with the before and after. The
+  tab offers **Keep the vendor's setting**, which writes Mattermost's value
+  into the document instead.
+- **A bot somebody else deactivated** is never turned back on by a pass, in
+  case it was incident response. The tab offers **Turn back on** or **Keep
+  off**. Only a bot carrying this engine's own marker is ever reactivated
+  without being asked.
+- **A bot deleted at Mattermost** is dropped from the engine's records, and the
+  next pass creates a fresh one if the seat is on.
+- **A seat that leaves the document** is treated as off: its bot is
+  deactivated, kept, and listed on the tab with **Remove**.
+
+A refusal names the step that failed, Mattermost's own reason, what to do
+about it and who does it, with a link to the System Console's users. The step
+is retried on every pass and on **Retry**. The provisioning token must belong
+to a System Admin, and `ServiceSettings.EnableBotAccountCreation` and
+`ServiceSettings.EnableUserAccessTokens` must be on.
+
 ---
 
-## Automated Setup: `crewlet mattermost provision`
+## The admin token and the instance's switches
 
-**A preflight runs before the first write.** Three things a config cannot show
-are checked against the live instance: that the provisioning credential really
-holds `system_admin`, and that `ServiceSettings.EnableBotAccountCreation` and
-`ServiceSettings.EnableUserAccessTokens` are on. Each is reported as a note
-naming the setting — without them the run fails on its first bot creation with
-a 403 that names an endpoint rather than the thing an administrator has to
-change. They are notes rather than refusals because the settings are read from
-a config endpoint whose exact key set varies by server version: an absent key
-means "this server did not say", not "it is off".
+The engine provisions each agent's bot as a **system admin**: creating bot
+accounts, minting their access tokens and setting their roles all require
+it. Generate one under **Profile → Security → Personal Access Tokens** on a
+system-admin account, and name it under
+`integrations.mattermost.provisioning.admin_token`. The bots' own tokens are
+what the engine *mints*, so it cannot bootstrap itself from them.
 
+Every pass checks three things a config cannot show against the live
+instance, and reports each on the integration's card naming the setting:
+that the provisioning token really holds `system_admin`, and that
+`ServiceSettings.EnableBotAccountCreation` and
+`ServiceSettings.EnableUserAccessTokens` are on. Without them the first bot
+creation fails with a 403 that names an endpoint rather than the thing an
+administrator has to change. A setting is reported only when the server
+says it is off: the config endpoint's key set varies by server version, so
+an absent key means "this server did not say".
 
-```
-export MATTERMOST_ADMIN_TOKEN="..."      # a system-admin personal access token
-export CREWLET_API_TOKEN="..."           # one of the running node's Tier A tokens carrying admin
-crewlet mattermost provision company.yaml -secret-store
-```
-
-`-secret-store` records each bot's token where every node reads it; one of
-`-secret-store`, `-env-file PATH` and `-print` is required, so a run never
-mints a credential it has nowhere to put. With the engine running, the run
-reads what it needs of the company's values — the instance's `url`, and with
-`-secret-store` (no `-rotate`) each planned bot's token, which decides whether
-that bot keeps it — through the engine, as `CREWLET_API_TOKEN`: one of its
-Tier A tokens carrying `admin`, since that read is the node's break-glass
-reveal and refuses a machine token. With the engine stopped, the run reads the
-fleet's store itself, through this node's own broker or the external one; on a
-member of a cluster whose engine is stopped it is refused before it changes
-anything, naming `-api URL`. See
-[where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values).
-A running engine reads the tokens at its next apply and not before, so a run
-that minted one says what is left on its `Next:` line: for `-secret-store`
-through a running node, nothing, since the run re-activates the revision that
-reads the tokens once, at its end (one that fails is named there instead and
-rolls nothing back; a run that dies first leaves them sealed and inactive until
-the company is next re-activated); with this node's engine stopped,
-re-activating the current revision (`POST /config/reload` to a node that is
-up). Where the block itself is new to the running company, the
-`crewlet config import` that applies it is that apply. A re-run that kept
-every token prints no `Next:` line.
-
-For every Mattermost-enabled agent seat the command:
-
-1. **finds or creates the bot account** at a deterministic username
-   (`{username_prefix}{handle}`, or an explicit `username`) — see
-   [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle);
-2. **re-enables it if this engine's own disconnect disabled it**, and only
-   then — a disabled bot still owns its username, so creating over it fails
-   with a conflict nothing else would explain. The test is the
-   `crewlet:disconnected` marker the teardown writes on the bot's
-   `description`: with it, the bot is enabled and the marker cleared; without
-   it, the bot is **left alone** and the seat reported as `identity_failed`
-   for an administrator to decide about. It used to re-enable anything it
-   found disabled, so switching an agent off in the System Console lasted
-   until the next reconcile tick — the engine overruling an administrator on a
-   timer, with no way for them to make it stick. Clearing the marker is best
-   effort and noted rather than fatal: the bot is already working again, and
-   failing a pass over a cosmetic field would be worse than the stale marker
-   it avoids. Bots disabled before this shipped carry no marker and stay
-   manual;
-3. keeps its **display name** current (`{role name}{display_name_suffix}`) — read from the bot record rather than its user, because the display name lives on the bot and comparing against the user's nickname would report drift on every run;
-4. adds it to the **team** and to every configured **channel** — a bot only
-   receives messages from channels it is a member of, so this is the step
-   that makes the integration work at all. Membership is **read first**, so a
-   bot already in a team or a channel costs no request: this ran
-   unconditionally once, three writes per seat on every pass for ever, each
-   one answered with a duplicate error and discarded;
-5. mints its **personal access token** into the config's own `${VAR}`,
-   write-through (Mattermost returns a token's value exactly once).
-
-There is no app manifest, no local ledger and no OAuth click. Mattermost can
-enumerate its own bots, so reconcile is stateless — delete nothing, re-run
-freely. One seat failing is recorded as a `FAILED` line and the remaining
-agents still provision; the command then exits non-zero, and re-running
-resumes exactly the failed seats.
-
-Before it writes anything, a preflight refuses the run when it cannot
-finish: a credential that is not a system admin, a team that does not exist,
-`ServiceSettings.EnableBotAccountCreation` or
-`ServiceSettings.EnableUserAccessTokens` switched off (both default to
-**false** on a fresh install, and both fail *late* — every bot created and
-joined, then nothing minted). The [Site URL](#the-site-url) is not part of it:
-no bot depends on it, and the address the run reaches the server at says
-nothing about the address people browse. Membership is **read**, never
-inferred from a status code. The second half
-of that sentence used to say Mattermost answers an add for an existing
-member with success, so a 4xx there is a real failure — which was never
-true: it answers `400 "This user is already a team member."` and the code
-swallowed it, which is exactly why nothing noticed the pass was writing on
-every run. The membership lists are now read and compared, so a duplicate
-add is not sent at all.
-
-A configured channel that **does not exist** is the one case that is a note
-rather than a failure. Half a fleet of bots joined and the run stopped is a
-worse state than every bot joined to the channels that do exist and a line
-naming the one that did not — especially since the usual cause is a typo an
-operator fixes in seconds. **Read the notes**: a bot hears nothing from a
-channel it is not in, so a missing channel is silent at run time and visible
-only here.
-
-"Already provisioned" is checked against the server as well as the env file.
-"Already provisioned" is **proven by using the credential**, not inferred.
-The reconcile takes the value the `${VAR}` actually holds and authenticates
-with it: only a token that answers as *this seat's bot* counts. A `${VAR}`
-holding a token that has since been revoked — by `--decommission`, by an
-admin, by a restore from an older `.env` — is re-minted, so the documented
-recovery below actually recovers; so is one that authenticates as a
-different account, which is how a copy-pasted var gets caught.
-
-The weaker test — "the bot has *some* live `crewlet-engine` token" — reads
-as provisioned in exactly the case that matters. A run whose mint reached
-the server but whose response was lost leaves a live token this tool never
-saw; that token would then vouch for the dead value in the env file, on
-every run, forever. A 5xx or a network failure during the check is *not* a
-rejection: the seat is left exactly as it was, with a note, because
-re-minting on "cannot tell" destroys a credential that works.
-
-A seat's own `${VAR}`s are the only ones written. `MATTERMOST_ADMIN_TOKEN`
-is excluded from the scan outright — it is the operator's credential, the
-bootstrap writes it into the same `.env`, and a config that points a seat's
-`mcp_env` credential key at it would otherwise have a bot token silently
-replace a system-admin one.
-
-A mint is **all or nothing for the seat**. When a seat names its token in
-two different `${VAR}`s, a fresh token is written to *both*, and the token
-it supersedes is revoked: a seat split across two credentials is a seat
-where one consumer works and the other does not, with nothing in the report
-to say which, and an unreferenced token left live on a bot account is one
-nothing can ever name again. If a value cannot be persisted everywhere, the
-new token is revoked *and* every `${VAR}` already written is cleared —
-because a var holding a revoked token is indistinguishable, to the engine,
-from a working one, and the seat's socket simply never opens. If it can be
-persisted neither everywhere nor revoked, the report names the token id and
-tells you to revoke it by hand.
-
-That same promise is why a seat is **refused** rather than minted when its
-bot's token list cannot be read at all — a 403 on the admin credential,
-personal access tokens switched off, a proxy rewriting the path. A mint that
-cannot enumerate what is already there cannot revoke what it supersedes, so
-it would leave a live, non-expiring token referenced by no `${VAR}`, carrying
-the same `crewlet-engine` description as the good one, invisible to
-[`doctor`](#checking-an-install-crewlet-mattermost-doctor) and never revisited
-— the next run finds every var populated and returns early. The seat fails
-with the underlying cause, the rest of the fleet still provisions, and the
-seat resumes on a re-run once the read works.
-
-Two deliberate exceptions to that refusal:
-
-- **A bot this run created.** Its token list is empty by construction, so
-  nothing can be stranded, and refusing would abort a first-ever provision
-  over a hazard that cannot exist. The mint proceeds with a note.
-- **A seat whose recorded token already works.** It is proven directly, so
-  the listing was only ever going to report surplus tokens; nothing is
-  minted and nothing can be stranded.
-
-If the mint call itself fails *after* the server created the token — a read
-timeout on the response, a proxy that drops it — the value is live on the
-account and readable by nobody. The reconcile takes an inventory before
-minting precisely so it can identify that token by difference, and revokes
-it; if even that cannot be done, the report says so with the id.
-
-When the list *is* readable and shows more than one live `crewlet-engine`
-token on a fully provisioned seat, the report says so. Nothing revokes them
-automatically — only one is referenced by the config and the provisioner
-cannot tell which of the others some other operator is relying on — but they
-carry the same description as the live one, so this listing is the only thing
-that distinguishes them.
-
-### The admin token
-
-The reconcile authenticates as a **system admin** — creating bot accounts and
-minting their access tokens both require it. Generate one under
-**Profile → Security → Personal Access Tokens** on a system-admin account.
-An admin must first enable personal access tokens in
-**System Console → Integrations → Integration Management**.
-
-The token is an *operator* credential and is never read from the company
-config: pass `-admin-token` or export `MATTERMOST_ADMIN_TOKEN`. The bots' own
-tokens are what this run *mints*, so it cannot bootstrap itself from them.
-
-### Flags
-
-| Flag | Description |
-|------|-------------|
-| `-admin-token TOKEN` | System-admin PAT (default: `$MATTERMOST_ADMIN_TOKEN`). |
-| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials on the server and prints none of them. `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. With `-env-file` or `-print` a real run is refused before it touches the server where the company's store holds a planned bot's token variable: the engine reads the store's value over anything recorded there, so a minted token would never be read. Record with `-secret-store`, or remove the stored value first ([a sink the store outranks](../reference/cli.md#a-sink-the-store-outranks)). |
-| `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. |
-| `-handles a,b` | Provision only these seat handles. It narrows the provisioning loop **only** — a `-handles` run with `-decommission` does not read the seats it skipped as departed. |
-| `-decommission` | Revoke the tokens of, and then disable, managed bot accounts whose seats have left the config. Disable, never delete: a deleted bot takes its posts with it, silently rewriting the history of every channel it spoke in. The token goes because the account does not: a departed colleague whose credential outlived them starts working again the moment the bot is re-enabled. |
-| `-dry-run` | Print the plan; create and modify nothing. It reads no stored value, so it runs on any node, a stopped one included — and so does a run with nothing to provision. |
-| `-config PATH` / `-api URL` | Where a real run reads the company's values (the instance URL, and with `-secret-store` each bot's token it reads back) and where `-secret-store` records: through the running engine holding the store `-config` names (default `./crewlet.yaml`), with one of its Tier A tokens in `CREWLET_API_TOKEN`, or through the node `-api` names; with this node's engine stopped, from the fleet's store itself; with neither a file nor `-api`, from the environment alone. On a member of a cluster whose engine is stopped a real run is refused before it touches the server, `-rotate` included — see [where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values). |
-
-Afterwards, do what the run's `Next:` line says. With `-secret-store` through a
-running node there is nothing left once the run has re-activated the revision
-that reads each token (where that re-activation failed, the line says so and
-names `POST /config/reload`); with this node's engine stopped it is
-`POST /config/reload` to a node that is up — or the `crewlet config import`
-that adds the block, where it is new to the running company — and each seat's
-websocket is rebuilt from its new token at that apply, while a node that has
-not started yet reads the tokens as it starts. With `-env-file` or `-print` it
-is the values into the engine's environment and a restart. A re-run that kept
-every token prints no `Next:` line.
-
-### Why a re-run does not rotate
-
-Mattermost returns an access token's value **once**, so the reconcile cannot
-verify that what it recorded last time still matches. Minting every run
-would be an outage: the engine is running with the *old* value, and rotating
-revokes the credential every bot's websocket is currently authenticated
-with — an operator adding a tenth seat would take the other nine down, from
-a command whose whole promise is that it is safe to re-run.
-
-So a bot is left alone when **both** halves hold: the variable holding its
-token still has a value (answered by the sink the run is writing to, and an
-*unreadable* sink stops the run rather than being read as empty), and the
-account still has a token under this tool's description,
-`crewlet-<handle>`.
-Either alone is wrong — a recorded value whose token was revoked leaves a
-bot 401ing for ever, and a live token nobody wrote down cannot be deployed.
-
-`-rotate` mints for every bot regardless, retiring the previous one *after*
-recording the new: never before, or a failed record leaves the seat with
-nothing. Only this tool's own description is retired — an administrator may
-have minted a token on the bot by hand, and revoking it would break whatever
-is using it, silently.
-
-### When a run cannot finish
-
-Everything it minted is undone. A bot this run **created** is rolled back by
-revoking every token on it, because nothing else has ever minted there; on a
-bot that already **existed**, only the token this run minted is revoked —
-sweeping the account would take an administrator's own token with no way to
-tell that it had. The rollback runs through a detached context, because the
-failure is often the cancellation itself.
+`crewlet mattermost provision` is retired: each agent's bot, roles, channels
+and token are managed from the Agents tab and applied by the reconcile loop.
+The command answers with that and changes nothing.
 
 ### Seats and licensing
 
 Mattermost's unlicensed server enforces a hard **active-user** cap. **Bot
 accounts are excluded from that count**, so an agent fleet of any size does
-not consume it — the provisioner reports the current human headroom in its
-preflight so you can see where you stand:
-
-```
-note: server user limit: 12/250 active human users. Bot accounts are
-      excluded from this count, so agent seats do not consume it.
-```
-
-Worth knowing that the exclusion is an implementation detail of the seat
-query rather than a licensing commitment, and that the cap itself has been
-lowered several times across releases. If your org approaches the human
-limit, that is the number to watch — not the agent count.
+not consume it. The exclusion is an implementation detail of the seat query
+rather than a licensing commitment, and the cap itself has been lowered
+several times across releases. If your org approaches the human limit, that
+is the number to watch, not the agent count.
 
 ---
 
@@ -683,9 +552,8 @@ ok    browser socket   an upgrade carrying Origin http://203.0.113.7:8065 — wh
                        accepted at ws://203.0.113.7:8065/api/v4/websocket
 ok    seat pm          agent-pm authenticates, opens a socket, and is in 3 channel(s)
 FAIL  seat swe         agent-swe authenticates and opens a socket but has joined no
-                       channel, so it will only ever hear direct messages. Name channels
-                       under integrations.mattermost.provisioning or on the seat itself,
-                       and run `crewlet mattermost provision`
+                       channel, so it will only ever hear direct messages. Give the agent
+                       its channels in the Mattermost integration's Agents tab
 ```
 
 ---
@@ -1114,11 +982,9 @@ through the environment (`/proc/<pid>/environ` is owner-only). The env file
 and its temp copy are created `0600` — the mode goes on at creation, never
 by a `chmod` after the token is already on disk.
 
-Provision the agent bots in the same run by pointing it at a company config:
-
-```bash
-COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
-```
+The agents' bots are not the script's: once the engine runs the company,
+turn each agent on in the Mattermost integration's Agents tab, and the engine
+creates its bot and seals its token.
 
 ### First run, end to end
 
@@ -1147,9 +1013,9 @@ them, so each means changing the matching `backend` in the same edit.
 
 Two things the config expects of you, both once:
 
-- **The bot tokens.** Every `${MATTERMOST_TOKEN_*}` in the file is a
-  placeholder the provisioner mints — see [Automated
-  Setup](#automated-setup-crewlet-mattermost-provision). Leave
+- **The bots.** Each agent's bot is created by the engine once the agent is
+  turned on in the Agents tab; see
+  [Each agent's access](#each-agents-access-roles-and-channels). Leave
   `provisioning.username_prefix` unset: the handles already start with
   `agent-`, and a prefix would produce `@agent-agent-ceo`.
 - **A model.** `providers.llm.default` is a
@@ -1170,17 +1036,14 @@ Then, from the repo root:
 #    embedded.
 docker compose --profile mattermost up -d --wait
 
-# 2. Admin account, PAT, team, channels -> .env, then the seven bots and
-#    their tokens into the same file. (Drop COMPANY= to do the bots in a
-#    separate `crewlet mattermost provision` run.)
-COMPANY=examples/nimbus-claude-cli.company.yaml scripts/mattermost-dev-bootstrap.sh
+# 2. Admin account, PAT, team, channels -> .env.
+scripts/mattermost-dev-bootstrap.sh
 
-# 3. Check the plan before it touches the server again, and prove the
-#    whole path before booting. .env carries MATTERMOST_PUBLIC_URL, so the
+# 3. Prove the whole path. .env carries MATTERMOST_PUBLIC_URL, so the
 #    doctor holds the Site URL to the address you browse and sends its
-#    browser probe there
+#    browser probe there. Its seat checks pass once the engine has created
+#    the agents' bots, after step 5 and the Agents tab.
 set -a; . ./.env; set +a
-crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run --print
 crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml
 
 # 4. Authenticate the model — once, on this machine. `-from-host` copies
@@ -1271,11 +1134,12 @@ If a bot stays silent, check in this order:
 0. `crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml` — this is what it
    is for; checks 1 and 2 below are what it automates. It never starts the
    tool server, so check 3 is yours.
-1. `crewlet mattermost provision examples/nimbus-claude-cli.company.yaml --dry-run` —
-   does the seat exist, and is its token minted?
+1. The Mattermost integration's Agents tab: is the agent on, is its bot
+   created, and did the last sync succeed?
 2. The engine log, for one `mattermost_ws_connected` line per seat. A
    `mattermost_ws_auth_rejected` line instead means that seat's token is
-   wrong, revoked, or its bot is disabled — re-run the provisioner.
+   wrong, revoked, or its bot is deactivated; **Rotate** on the Agents tab
+   mints a fresh one.
 3. Whether `uvx mcp-server-mattermost==0.6.1` resolves. A missing MCP server
    is the one failure mode where the agent reasons about a reply and then has
    no tool to send it with, so the logs show a complete turn and the channel
@@ -1293,8 +1157,8 @@ and the paved path needs each:
 
 | Setting | Needed by |
 |---|---|
-| `ServiceSettings.EnableBotAccountCreation` | `crewlet mattermost provision` — creating the bot accounts |
-| `ServiceSettings.EnableUserAccessTokens` | `crewlet mattermost provision` — minting their tokens |
+| `ServiceSettings.EnableBotAccountCreation` | The engine creating the agents' bot accounts |
+| `ServiceSettings.EnableUserAccessTokens` | The engine minting their tokens |
 
 `TeamSettings.EnableOpenServer` is deliberately **not** set. The bootstrap
 creates its admin over the API without it — Mattermost always allows the
@@ -1303,9 +1167,8 @@ signup enabled permanently, since an `MM_*` variable cannot be switched off
 from the System Console.
 
 If you point Crewlet at a Mattermost you host yourself, enable both under
-**System Console → Integrations → Integration Management**;
-`crewlet mattermost provision` refuses to start without them rather than
-half-provisioning the fleet.
+**System Console → Integrations → Integration Management**; the
+integration's card names each one that is off.
 
 Unlike the GitLab loop, **nothing has to reach the engine**. GitLab POSTs
 webhooks into it, so it needs `host.docker.internal` and a reachable

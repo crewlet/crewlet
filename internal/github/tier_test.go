@@ -104,14 +104,14 @@ func TestExcessAndShortfallReadTheInstallationRatherThanTheManifest(t *testing.T
 	}
 	// A review seat on that installation cannot write what it was set up
 	// to write, and GitHub would only say so by refusing its every token.
-	short := github.Shortfall(github.Access{Tier: github.TierReview}, held)
+	short := tierPerms("review", false).Short(held)
 	if !slices.Contains(short, "pull_requests") || !slices.Contains(short, "issues") {
-		t.Errorf("Shortfall = %v, want the writes review needs", short)
+		t.Errorf("Short = %v, want the writes review needs", short)
 	}
 	if slices.Contains(short, "contents") {
 		t.Error("review wants contents=read and the installation has it")
 	}
-	if got := github.Shortfall(github.Access{Tier: github.TierReadOnly}, map[string]string{
+	if got := tierPerms("read_only", false).Short(map[string]string{
 		"metadata": "read", "contents": "read", "issues": "read",
 		"pull_requests": "read", "checks": "read", "actions": "read", "deployments": "read",
 	}); len(got) != 0 {
@@ -173,23 +173,23 @@ func TestEveryTierReadsActionsAndNoneWritesThem(t *testing.T) {
 	}
 }
 
-// AN OPTED-IN SEAT WHOSE INSTALLATION LACKS WORKFLOWS IS SHORT OF IT, which
-// is how an app created before the opt-in is told apart from one that is
+// A SEAT AT WORKFLOWS WHOSE INSTALLATION LACKS IT IS SHORT OF IT, which is
+// how an app registered before the raise is told apart from one that is
 // complete.
-func TestAnOptInTheInstallationDoesNotHoldIsAShortfall(t *testing.T) {
+func TestAWorkflowsGrantTheInstallationDoesNotHoldIsShort(t *testing.T) {
 	t.Parallel()
-	held := github.TierFullAccess.Permissions()
-	access := github.Access{Tier: github.TierFullAccess, Workflows: true}
-	if got := github.Shortfall(access, held); !slices.Equal(got, []string{github.PermissionWorkflows}) {
-		t.Errorf("Shortfall = %v, want workflows alone", got)
+	held := tierPerms("full_access", false).Token()
+	want := tierPerms("full_access", true)
+	if got := want.Short(held); !slices.Equal(got, []string{github.PermissionWorkflows}) {
+		t.Errorf("Short = %v, want workflows alone", got)
 	}
 	held[github.PermissionWorkflows] = "write"
-	if got := github.Shortfall(access, held); len(got) != 0 {
-		t.Errorf("an installation holding the opt-in reports a shortfall: %v", got)
+	if got := want.Short(held); len(got) != 0 {
+		t.Errorf("an installation holding workflows reports a shortfall: %v", got)
 	}
-	// A READ GRANT IS NOT THE WRITE the opt-in asks for.
+	// A READ GRANT IS NOT THE WRITE the seat asks for.
 	held[github.PermissionWorkflows] = "read"
-	if got := github.Shortfall(access, held); !slices.Equal(got, []string{github.PermissionWorkflows}) {
-		t.Errorf("Shortfall over workflows=read = %v, want workflows", got)
+	if got := want.Short(held); !slices.Equal(got, []string{github.PermissionWorkflows}) {
+		t.Errorf("Short over workflows=read = %v, want workflows", got)
 	}
 }

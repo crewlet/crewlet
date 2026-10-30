@@ -950,17 +950,16 @@ units:
 			name: "a jira block naming its instance twice", tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nintegrations:\n  jira: {url: \"https://jira.example.com\", cloud_id: acme-cloud, token: t, webhook_secret: s}\n",
 		},
-		// The per-seat half: an app with BOTH credentials is a working
-		// config, and one with a single half is a validator rule a JSON
-		// Schema cannot express (a required pair inside an optional
-		// object).
+		// The per-seat half: the engine names a seat's Slack credentials
+		// (D4), so a block naming both, one or neither is a working config.
 		{
 			name: "a per-seat Slack app", tier: TierCompany,
 			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
 		},
 		{
-			name: "a per-seat Slack app with half its credentials",
-			tier: TierCompany, validatorOnly: true,
+			// D4: the engine names a seat's Slack credentials, so a block
+			// naming only one, or neither, is a working config.
+			name: "a per-seat Slack app naming one credential", tier: TierCompany,
 			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\"}}}\n",
 		},
 		{

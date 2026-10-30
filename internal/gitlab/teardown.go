@@ -14,107 +14,53 @@ import (
 type TeardownOptions struct {
 	Client *Client
 	Config *config.GitLab
-	// Plan names the seats, the same way [Options] does, so a teardown
-	// removes exactly what a pass created.
-	Plan *provision.Plan
 
-	// RemoveSeats deletes the service accounts this engine created.
+	// Plan, RemoveSeats and Mode are IGNORED. They are kept only so the
+	// engine's current call sites compile until they are retired: removing
+	// an agent's account is per-seat access, through the ledger.
+	Plan        *provision.Plan
 	RemoveSeats bool
-
-	// Mode is where those accounts are OWNED, and it decides which delete
-	// route removes one.
-	//
-	// IT WAS NOT HERE AT ALL, so removeAccounts always sent the GROUP
-	// delete — and [Client.DeleteServiceAccount] reads a 404 as success
-	// ("unknown or already removed; both are the state the caller asked
-	// for"). An instance-owned account therefore reported itself deleted
-	// down a route that had never heard of it, and stayed live with every
-	// credential it held. The reconcile path has had [deleteAccount] for
-	// exactly this, whose own doc names the failure; the teardown never got
-	// it.
-	Mode Mode
+	Mode        Mode
 }
 
-// Teardown removes what this engine created in a GitLab group.
+// Teardown removes the webhooks this engine registered in a GitLab group.
 //
-// TWO KINDS OF THING, and only one comes out unconditionally. The hooks are
-// this engine's own registrations pointing at this deployment, so they go
-// whatever the operator chose; leaving one behind delivers a company's pushes
-// to an engine that no longer has a block to route them.
+// THE HOOKS ONLY. They are this engine's own registrations pointing at this
+// deployment, and leaving one behind delivers a company's pushes to an engine
+// that no longer has a block to route them. The service accounts are per-seat
+// access ([Vendor]): turning a seat off or removing its account goes through
+// the ledger, which reaches every account the engine created, including one
+// whose seat has left the document.
 //
-// The SERVICE ACCOUNTS are the other kind, and they go only when asked. Each
-// is a member of the customer's group with commits, review comments and issue
-// history attached to it, and deleting one because somebody pressed
-// Disconnect would rewrite that history's author. This is the account
-// removal the console's checkbox is asking about.
+// EVERY HOOK IS ATTEMPTED before the first failure is returned, and the
+// errors are joined: one project a token cannot administer must not strand
+// the hooks on all the others.
 //
-// EVERY STEP IS ATTEMPTED before the first failure is returned, and the
-// errors are joined. One project a token cannot administer must not strand
-// the hooks on all the others, and an operator reading a stuck teardown
-// should see everything blocking it rather than one item per retry.
+// SAFE TO REPEAT: a hook already gone is not an error.
 //
-// SAFE TO REPEAT: a hook or an account already gone is not an error, so the
-// pass retried after a partial failure finishes the rest.
+// It removes no account, so the [provision.Removed] it answers is always
+// empty.
 func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, error) {
-	var removed provision.Removed
+	var none provision.Removed
 	if opts.Client == nil {
-		return removed, errors.New("gitlab: no client")
+		return none, errors.New("gitlab: no client")
 	}
 	if opts.Config == nil || opts.Config.Provisioning == nil {
-		return removed, nil
+		return none, nil
 	}
-	p := opts.Config.Provisioning
-	group := strings.TrimSpace(p.Group)
+	group := strings.TrimSpace(opts.Config.Provisioning.Group)
 	if group == "" {
-		return removed, nil
+		return none, nil
 	}
-
-	var failures []error
 	groupID, found, err := groupIDOf(ctx, opts.Client, group)
 	switch {
 	case err != nil:
-		failures = append(failures, fmt.Errorf("gitlab: resolve group %q to remove what it holds: %w",
-			group, err))
+		return none, fmt.Errorf("gitlab: resolve group %q to remove what it holds: %w", group, err)
 	case !found:
-		// THE GROUP DOES NOT RESOLVE, WHICH IS NOT THE SAME AS DELETED —
-		// and this arm used to read it as "the group is gone, so everything
-		// in it went with it", fabricating a full [provision.Removed] for
-		// every planned seat without making one request about any of them.
-		// [Engine.forgetRemoved] then deleted those seats' sealed tokens.
-		//
-		// Three things are wrong with that reading. [Client.GroupByPath]
-		// maps ANY 404 to not-found, and GitLab answers 404 for a group
-		// that was renamed or moved, for a typo in `provisioning.group`,
-		// and for a group the presenting credential cannot SEE — it does
-		// not answer 403 for an unauthorized private resource. And an
-		// account created in [ModeInstance] is a member of nothing and
-		// survives its group being deleted outright, so a missing group
-		// says nothing at all about it.
-		//
-		// SO THE ACCOUNTS ARE STILL ASKED ABOUT, one by one. That costs
-		// nothing extra and answers the question honestly, because
-		// [Client.UserByUsername] is an INSTANCE-level lookup that needs no
-		// group: a seat whose account is genuinely absent is reported
-		// removed on the instance's own authority, and one that is still
-		// there is reported as a FAILURE naming it rather than as a
-		// credential safe to delete.
-		//
-		// The hooks are skipped, and only here: they live at the group and
-		// at its projects, so an address that does not resolve is one this
-		// pass cannot reach either way.
-		if opts.RemoveSeats {
-			gone, errs := removeAccounts(ctx, opts, 0)
-			removed, failures = gone, append(failures, errs...)
-		}
-		return removed, errors.Join(failures...)
-	default:
-		failures = append(failures, removeHooks(ctx, opts, groupID)...)
-		if opts.RemoveSeats {
-			gone, errs := removeAccounts(ctx, opts, groupID)
-			removed, failures = gone, append(failures, errs...)
-		}
+		// The group is gone, and every hook registered on it with it.
+		return none, nil
 	}
-	return removed, errors.Join(failures...)
+	return none, errors.Join(removeHooks(ctx, opts, groupID)...)
 }
 
 // groupIDOf resolves the group, reporting absence separately from failure.
@@ -232,167 +178,5 @@ func sweepable(
 		add(held...)
 	}
 	add(opts.Config.Provisioning.Projects...)
-	return out
-}
-
-// removeAccounts deletes the service account this engine made for each seat.
-//
-// Resolved through [Username], which is the same derivation the pass creates
-// them under, so this removes exactly what it made and cannot reach an
-// account somebody else named. A seat with no account is already in the state
-// a disconnect wants.
-// # What it reports
-//
-// Every planned seat whose account is now absent from the instance, with the
-// variable that seat's token lives in. AN END STATE rather than a delta — see
-// [setup.Teardowner] — so a seat whose account was never there, or was removed
-// by an earlier attempt, counts: its sealed token is dead either way, and a
-// retry that reported only this call's own deletions would let the block drop
-// with the values still resolving.
-func removeAccounts(
-	ctx context.Context, opts TeardownOptions, groupID int,
-) (provision.Removed, []error) {
-	var removed provision.Removed
-	if opts.Plan == nil {
-		return removed, nil
-	}
-	// WHERE THIS COMPANY'S ACCOUNTS LIVE, settled ONCE and before anything
-	// is touched. Both halves of removing an account — revoking its tokens
-	// and deleting it — are addressed through the same owner, and a route
-	// that does not resolve is a refusal naming the field to fix rather
-	// than a fallback to the other owner's: asking /personal_access_tokens
-	// about a group account answers an empty list, which reads as "nothing
-	// to revoke" and is the silent half of the bug this ordering exists to
-	// fix.
-	scope, routeErr := accountRoute(opts, groupID)
-	var failures []error
-	// STRANDED, and named once. The route is a property of the COMPANY
-	// rather than of a seat, so one sentence repeated per seat would be
-	// the same fact N times in a report an operator reads.
-	var stranded []string
-	for _, seat := range opts.Plan.Seats {
-		username := Username(opts.Config.Provisioning, seat.Handle)
-		user, found, err := opts.Client.UserByUsername(ctx, username)
-		if err != nil {
-			failures = append(failures, fmt.Errorf(
-				"gitlab: look up %s to remove it: %w", username, err))
-			continue
-		}
-		if !found {
-			// ALREADY GONE, and its credential with it. Reported whatever
-			// the route says, because "this account does not exist" is an
-			// answer the instance gave and does not depend on how a
-			// surviving one would have been removed.
-			removed.Add(provision.Removal{
-				Handle: seat.Handle, Role: seat.Role, Account: username,
-				Secrets: secretsOf(seat),
-			})
-			continue
-		}
-		if routeErr != nil {
-			// AN ACCOUNT THAT IS THERE AND CANNOT BE ADDRESSED. Nothing is
-			// touched and nothing is reported removed, so its sealed value
-			// stays where it is.
-			stranded = append(stranded, username)
-			continue
-		}
-		// THE TOKENS FIRST, THEN THE ACCOUNT, which is the order datadog's
-		// teardown and mattermost's both argue for: a revoked token on a
-		// live account is an agent that can do nothing, and a live token
-		// on a removed account is a credential that works again the moment
-		// anybody restores it. The first is the safer thing to be
-		// interrupted at.
-		//
-		// IT IS NOT HYPOTHETICAL HERE. GitLab's service-account delete
-		// BLOCKS rather than erases — measured on a live disconnect, which
-		// left `crewlet-sre-lead` state: blocked, out of the group, and
-		// holding one active token — while the engine deleted its own copy
-		// of the value. So the company lost the credential and GitLab kept
-		// a working one, on an account one click restores.
-		if err := opts.Client.RevokeTokens(ctx, scope, user.ID); err != nil {
-			failures = append(failures, fmt.Errorf(
-				"gitlab: revoke %s's tokens before removing it: %w", username, err))
-			// AND THE ACCOUNT STAYS AS IT IS, so the state is one an
-			// operator can see: an account still listed holding a
-			// credential nobody could withdraw, rather than a blocked one
-			// quietly holding a working token. The seat is NOT reported
-			// removed either, so its sealed value stays where it is —
-			// deleting the company's only copy of a live credential is
-			// the one move nothing can undo.
-			continue
-		}
-		// DOWN THE ROUTE THAT OWNS IT. This always sent the group delete,
-		// which answers 404 as success for an instance-owned account — so
-		// the teardown reported every one of them removed while they
-		// stayed live.
-		if err := removeOne(ctx, opts, scope, user.ID); err != nil {
-			failures = append(failures, fmt.Errorf(
-				"gitlab: remove service account %s: %w", username, err))
-			continue
-		}
-		removed.Add(provision.Removal{
-			Handle: seat.Handle, Role: seat.Role, Account: username,
-			Secrets: secretsOf(seat),
-		})
-	}
-	if len(stranded) > 0 {
-		failures = append(failures, fmt.Errorf(
-			"%w — these accounts are still live: %s",
-			routeErr, strings.Join(stranded, ", ")))
-	}
-	return removed, failures
-}
-
-// removeOne deletes one account down the route its owner requires, which is
-// the split [deleteAccount] makes on the reconcile path and for the same
-// reason.
-//
-// A GROUP-OWNED ACCOUNT WITH NO GROUP TO DELETE IT THROUGH IS REFUSED, not
-// sent down the route anyway. The group delete reads a 404 as success
-// ("unknown or already removed; both are the state the caller asked for"), so
-// addressing `/groups/0/service_accounts/N` would answer 404, report the
-// account deleted, and leave it live with every credential it holds — the
-// same trap [TeardownOptions.Mode] exists to close, reached by a different
-// road. It happens when the configured group does not resolve; see the
-// not-found arm of [Teardown], which is the only caller that passes zero.
-// accountRoute is the owner this company's service accounts are addressed
-// through: the group's id in group mode, and 0 for the INSTANCE's own.
-//
-// Zero is a real value here rather than "unset", which is why the group that
-// does not resolve is an ERROR instead: an instance-mode 0 means
-// /personal_access_tokens and /service_accounts, and falling back to it for
-// an account the group owns asks about the wrong thing entirely — a token
-// listing answers empty and a delete answers 404, both of which read as
-// success.
-func accountRoute(opts TeardownOptions, groupID int) (int, error) {
-	if opts.Mode.Or() == ModeInstance {
-		return 0, nil
-	}
-	if groupID == 0 {
-		return 0, fmt.Errorf(
-			"gitlab: %s does not resolve, so these accounts cannot be removed "+
-				"through it — restore the group, correct "+
-				"integrations.gitlab.provisioning.group, or supply a token "+
-				"that can see it",
-			strings.TrimSpace(opts.Config.Provisioning.Group))
-	}
-	return groupID, nil
-}
-
-func removeOne(ctx context.Context, opts TeardownOptions, scope, userID int) error {
-	if opts.Mode.Or() == ModeInstance {
-		return opts.Client.DeleteInstanceServiceAccount(ctx, userID)
-	}
-	return opts.Client.DeleteServiceAccount(ctx, scope, userID)
-}
-
-// secretsOf is the variables one seat's credentials live in.
-func secretsOf(seat provision.Seat) []string {
-	var out []string
-	for _, name := range []string{seat.TokenVar, seat.EmailVar} {
-		if name != "" {
-			out = append(out, name)
-		}
-	}
 	return out
 }
