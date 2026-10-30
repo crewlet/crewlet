@@ -319,9 +319,9 @@ func (r *Receiver) slack(w http.ResponseWriter, req *http.Request) {
 	// and deliberately.
 	//
 	// It is what Slack sends the moment an app's request URL is set, which
-	// during `crewlet slack provision` is before the operator has the
-	// signing secret to put in config at all — so a verified handshake
-	// cannot be completed and the app can never be installed. Answering it
+	// for an app being created is before its signing secret is sealed
+	// anywhere, so a verified handshake cannot be completed and the app can
+	// never be installed. Answering it
 	// is safe because the response is a pure echo of the caller's own
 	// challenge: it persists nothing, publishes nothing, wakes nobody, and
 	// tells an unauthenticated caller only what they already sent.

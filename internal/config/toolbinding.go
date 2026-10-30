@@ -339,6 +339,39 @@ func (c *Company) UnboundSeatServers(kind string) []string {
 	return out
 }
 
+// boundRef is the value a seat's server is handed for one key it reads, or
+// false to leave whatever the seat wrote for that key (D4b).
+//
+//   - ENGINE-HELD (the engine provisions the integration): the name the
+//     engine seals the seat's credential under.
+//   - GITHUB in either mode: the installation token the engine issues at use
+//     from the seat's own app key, which answers that name for that seat.
+//   - EXTERNAL (handed in from outside Crewlet): the seat's own position for
+//     it where the integration has one on the seat's block (a Slack or
+//     Mattermost bot token), and otherwise the value the seat already names
+//     for the server, which the engine does not touch.
+func (c *Company) boundRef(in *RoleIntegrations, handle string, k BoundSeatKey) (string, bool) {
+	if k.Kind == "github" || c.SeatCredentialMode(k.Kind) == SeatCredentialEngine {
+		return "${" + envref.SealedName(k.Kind, k.Field, handle) + "}", true
+	}
+	var external string
+	switch k.Kind {
+	case "slack":
+		if in.Slack != nil {
+			external = in.Slack.BotToken
+		}
+	case "mattermost":
+		if in.Mattermost != nil {
+			external = in.Mattermost.BotToken
+		}
+	}
+	external = strings.TrimSpace(external)
+	if _, whole := envref.Whole(external); whole {
+		return external, true
+	}
+	return "", false
+}
+
 // bindSeatTools adds each agent seat's own credential to its environment for
 // every per-seat server that reads an integration it is on at. It runs after
 // normalization, so the engine's binding wins over a unit's value for the same
@@ -359,10 +392,14 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 		}
 		for i := range c.MCPServers {
 			server := &c.MCPServers[i]
-			var bound []BoundSeatKey
+			// key to value: what the server reads, and what it is handed.
+			bound := map[string]string{}
 			for _, k := range server.SeatBindings() {
-				if role.seatOnAt(k.Kind) {
-					bound = append(bound, k)
+				if !role.seatOnAt(k.Kind) {
+					continue
+				}
+				if ref, ok := c.boundRef(&role.Integrations, seat.Handle(), k); ok {
+					bound[k.Key] = k.Prefix + ref
 				}
 			}
 			if len(bound) == 0 {
@@ -376,15 +413,15 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 			if block == nil {
 				block = map[string]string{}
 			}
-			for _, k := range bound {
+			for key, value := range bound {
 				// ONE KEY, whatever case a unit wrote it in: an http
 				// header is one header in any case ([MCPServer.ValueKey]).
 				for held := range block {
-					if server.ValueKey(held) == server.ValueKey(k.Key) {
+					if server.ValueKey(held) == server.ValueKey(key) {
 						delete(block, held)
 					}
 				}
-				block[k.Key] = k.Prefix + "${" + envref.SealedName(k.Kind, k.Field, seat.Handle()) + "}"
+				block[key] = value
 			}
 			env[server.Name] = block
 			seat.MCPEnv = env

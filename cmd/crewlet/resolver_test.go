@@ -1057,17 +1057,13 @@ func TestANamedNodeIsReadAndTheLocalStoreIsLeftAlone(t *testing.T) {
 	}
 }
 
-// A SLACK RUN WITH NO SEAT TO PROVISION OPENS NO STORE. What it reads of the
-// deployment is Tier A's address alone, and it mints into no name a store
-// could hold, so opening the store — or beside a running engine, asking it —
-// would be a read for a run that uses none. A route it decided says so on the
-// run's first line, whichever store it reached, so no such line is printed;
-// and what a route with the engine stopped leaves — the database lock it asks,
-// and the broker's store directory — is not there.
+// THE RETIRED SLACK PROVISIONING SAYS WHERE ITS WORK WENT, AND OPENS NO STORE.
 //
-// Mutation: decide the route, or ask the store which names it holds, before
-// the empty plan's return, and the route line is printed.
-func TestASlackRunWithNoSeatToProvisionOpensNoStore(t *testing.T) {
+// Each agent's Slack app is created and kept by the reconcile loop now, so the
+// command answers with its retirement before it reads anything: no route is
+// decided, and nothing a store route leaves behind (the database lock, the
+// broker's store directory) is there.
+func TestTheRetiredSlackProvisionSaysWhereItsWorkWent(t *testing.T) {
 	t.Parallel()
 	cfg := bootstrapWithKeyring(t, "k1")
 	boot, err := loadBootstrapForStore(cfg)
@@ -1078,21 +1074,13 @@ func TestASlackRunWithNoSeatToProvisionOpensNoStore(t *testing.T) {
 	if err := os.WriteFile(companyPath, []byte(builderCompany), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	out, errs, err := cliIn(t, noEnviron, "slack", "provision", companyPath, "-print",
-		"-config", cfg, "-ledger", filepath.Join(t.TempDir(), "ledger.json"))
-	if err != nil {
-		t.Fatalf("slack provision of a company with no Slack seat: %v (%s)", err, errs)
-	}
-	for _, line := range []string{"checking which names", "resolving ${VAR}"} {
-		if strings.Contains(out, line) {
-			t.Errorf("slack provision decided a route, though it reads nothing:\n%s", out)
-		}
+	_, _, err = cliIn(t, noEnviron, "slack", "provision", companyPath, "-print", "-config", cfg)
+	if err == nil || !strings.Contains(err.Error(), "is retired") || !strings.Contains(err.Error(), "Agents tab") {
+		t.Fatalf("slack provision answered %v, want its retirement", err)
 	}
 	for _, path := range []string{boot.Store.Path + ".lock", boot.Stream.StoreDir} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("slack provision reached the store (%s), though it resolves "+
-				"nothing: %v", path, err)
+			t.Errorf("the retired command reached the store (%s): %v", path, err)
 		}
 	}
 }
@@ -1188,7 +1176,7 @@ func TestEveryCommandThatReadsTheCompanyTakesAPI(t *testing.T) {
 	for _, command := range [][]string{
 		{"confluence", "import"}, {"confluence", "resync"}, {"confluence", "provision"},
 		{"github", "provision"}, {"jira", "provision"}, {"gitlab", "provision"},
-		{"mattermost", "doctor"}, {"slack", "provision"},
+		{"mattermost", "doctor"},
 		{"llm", "list"},
 	} {
 		var out, errs bytes.Buffer
