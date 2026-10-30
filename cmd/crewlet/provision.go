@@ -746,9 +746,11 @@ var retiredCommands = map[string]map[string]string{
 		"provision": "each agent's Slack app is now created and kept by the reconcile loop " +
 			"with the app configuration token entered on Slack's connect form, and " +
 			"installed with Install on the Slack integration's Agents tab. An app the " +
-			"command made is adopted by its bot token; to let it be installed again, " +
-			"copy its client_id and client_secret from slack-apps.json with `crewlet " +
-			"secrets set SLACK_CLIENT_ID_<HANDLE>` and `SLACK_CLIENT_SECRET_<HANDLE>`",
+			"command made is adopted by its bot token. To let it be installed again, " +
+			"store its OAuth client from slack-apps.json with `crewlet secrets set " +
+			"SLACK_CLIENT_ID_<HANDLE>` and `crewlet secrets set SLACK_CLIENT_SECRET_<HANDLE>`, " +
+			"each value piped on stdin rather than passed with -value, then delete " +
+			"slack-apps.json; the Slack guide's upgrade notes show the commands",
 	},
 	"mattermost": {
 		"provision": "each agent's Mattermost bot, its roles, its channels and its token " +
