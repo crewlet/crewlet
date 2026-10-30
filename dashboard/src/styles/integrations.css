@@ -309,7 +309,7 @@ a.int-feed-what:hover {
 /* The identity column takes the slack, so every badge in the list lands on
    the same right edge however long a name or a path is.
 
-   THE BASIS IS WHAT MAKES THE ROW WRAP. At `flex: 1` — a basis of 0 — the
+   THE BASIS IS WHAT MAKES THE ROW WRAP. At `flex: 1` (a basis of 0) the
    badges never wrapped: flex placement asks whether an item's HYPOTHETICAL
    size fits, a zero basis always does, and `min-width: 0` then let this
    column shrink to about ten pixels rather than push them onto a second line.
@@ -517,7 +517,7 @@ a.int-feed-what:hover {
    the raised rung now (it opens inside a modal, and a modal paints the panel
    one), so naming that same rung here drew the summary in its own parent's
    colour and the block lost its hover affordance entirely. `--color-surface-hover`
-   is a translucent overlay, so it lifts whatever it lands on — which is what
+   is a translucent overlay, so it lifts whatever it lands on, which is what
    every other hover in the product already uses. */
 .int-seat-summary:hover {
   background: var(--color-surface-hover);
@@ -642,8 +642,8 @@ a.int-feed-what:hover {
   flex: 1;
   display: flex;
   flex-direction: column;
-  /* THE GAP IS THE STRUCTURE. Its four slots — what is wrong, which things,
-     what to do, and the rest — used to sit at 2px, which is closer than the
+  /* THE GAP IS THE STRUCTURE. Its four slots (what is wrong, which things,
+     what to do, and the rest) used to sit at 2px, which is closer than the
      line spacing inside any one of them, so a paragraph and the disclosure
      summary beneath it read as one run-on line: `…nothing else can do it.`
      followed immediately by `1 more finding`. */
@@ -741,7 +741,7 @@ details > summary.int-summary::-webkit-details-marker {
 
 /* THE OVERFLOW COUNT EXPANDS IN PLACE. The reason the rest are folded is
    width rather than secrecy, and the long case is a list somebody is working
-   through — so it must not send them somewhere to read it. */
+   through, so it must not send them somewhere to read it. */
 .int-subject-more {
   cursor: pointer;
   font: inherit;

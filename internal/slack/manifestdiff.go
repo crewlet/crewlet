@@ -25,9 +25,13 @@ func (d ManifestDiff) Empty() bool {
 	return len(d.MissingScopes) == 0 && len(d.ExtraScopes) == 0 && len(d.Settings) == 0
 }
 
-// NeedsReinstall reports a restore whose added scopes a bot token carries
-// only after a person installs the app again.
-func (d ManifestDiff) NeedsReinstall() bool { return len(d.MissingScopes) > 0 }
+// NeedsReinstall reports a restore a bot token takes on only through a new
+// install: a bot token keeps the scopes it was installed with, so a scope added
+// at Slack stays on it after the manifest drops it, and one removed there is
+// back on it only once a person installs the app again.
+func (d ManifestDiff) NeedsReinstall() bool {
+	return len(d.MissingScopes) > 0 || len(d.ExtraScopes) > 0
+}
 
 // Describe is the difference as a sentence for a drift event.
 func (d ManifestDiff) Describe() string {
@@ -36,7 +40,7 @@ func (d ManifestDiff) Describe() string {
 		parts = append(parts, missingScopesSaid+strings.Join(d.MissingScopes, ", "))
 	}
 	if len(d.ExtraScopes) > 0 {
-		parts = append(parts, "scopes added at Slack: "+strings.Join(d.ExtraScopes, ", "))
+		parts = append(parts, extraScopesSaid+strings.Join(d.ExtraScopes, ", "))
 	}
 	if len(d.Settings) > 0 {
 		parts = append(parts, "changed at Slack: "+strings.Join(d.Settings, ", "))
@@ -44,15 +48,19 @@ func (d ManifestDiff) Describe() string {
 	return strings.Join(parts, "; ")
 }
 
-// missingScopesSaid opens the part of [ManifestDiff.Describe] that names
-// scopes removed at Slack, which is the one difference a restore cannot
-// finish alone: a bot token carries a scope added back only after a person
-// installs the app again ([driftNeedsReinstall]).
-const missingScopesSaid = "scopes removed at Slack: "
+// missingScopesSaid and extraScopesSaid open the parts of
+// [ManifestDiff.Describe] that name scopes changed at Slack, which are the
+// differences a restore cannot finish alone ([ManifestDiff.NeedsReinstall]).
+const (
+	missingScopesSaid = "scopes removed at Slack: "
+	extraScopesSaid   = "scopes added at Slack: "
+)
 
 // driftNeedsReinstall reports a drift sentence whose restore needs a
 // reinstall, read back from what [ManifestDiff.Describe] wrote.
-func driftNeedsReinstall(said string) bool { return strings.Contains(said, missingScopesSaid) }
+func driftNeedsReinstall(said string) bool {
+	return strings.Contains(said, missingScopesSaid) || strings.Contains(said, extraScopesSaid)
+}
 
 // DiffManifest compares the manifest Slack holds with the one wanted.
 //

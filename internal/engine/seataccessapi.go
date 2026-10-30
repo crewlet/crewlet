@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -67,13 +69,19 @@ type SeatAccessAPI struct {
 	// running is each integration's syncs this node has under way, and when
 	// the first of them began.
 	running map[integration.Kind]syncMark
-	offers  map[string]cachedOffer
 }
 
 // syncMark is how many syncs of one integration run here, since when.
 type syncMark struct {
 	since time.Time
 	n     int
+}
+
+// offerCache is each integration's offer by the revision it was read for
+// ([Engine.seatOffers]): only an offer read whole is kept.
+type offerCache struct {
+	mu    sync.Mutex
+	byKey map[string]cachedOffer
 }
 
 type cachedOffer struct {
@@ -89,7 +97,7 @@ var _ setupapi.Access = (*SeatAccessAPI)(nil)
 func (e *Engine) SeatAccessAPI(fleet func(ctx context.Context) (*config.Company, string, error),
 	rows SecretRows, managed func() bool) *SeatAccessAPI {
 	return &SeatAccessAPI{engine: e, fleet: fleet, rows: rows, managed: managed,
-		running: map[integration.Kind]syncMark{}, offers: map[string]cachedOffer{}}
+		running: map[integration.Kind]syncMark{}}
 }
 
 // UseSlackInstalls hands the adapter what mints a seat's Slack install link
@@ -169,7 +177,13 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 	vendor, registered := seataccess.Lookup(q.Kind)
 	provisioned := q.Company.SeatCredentialMode(string(q.Kind), a.managed()) ==
 		config.SeatCredentialEngine
-	answer.Options = a.options(ctx, q, vendor, registered, provisioned)
+	answer.Options = a.engine.seatOffers(ctx, q.Kind, q.Company, q.Roster, q.Revision,
+		a.managed())
+	// A PLAN IS DRAWN ONLY WHERE THE SYNC TAKES ITS STEPS: a kind the engine
+	// provisions, through a registered vendor, once its migration has
+	// finished. Anywhere else the sync takes none, so a plan would promise
+	// steps that never run and hold the tab at "Next sync" for ever.
+	planned := registered && provisioned && !q.Company.SeatAccessPending(string(q.Kind))
 	offers := map[seataccess.Lane]seataccess.Options{}
 	for _, o := range answer.Options {
 		offers[o.Lane] = o
@@ -188,7 +202,7 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		for _, lane := range lanes {
 			want[lane], _ = seataccess.DesiredOf(seat.Role, lane)
 		}
-		sa, err := a.seatAnswer(q, vendor, registered, seat.SeatRef, want, rec, held, offers)
+		sa, err := a.seatAnswer(q, vendor, planned, seat.SeatRef, want, rec, held, offers)
 		if err != nil {
 			return answer, plan, err
 		}
@@ -210,8 +224,16 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		for lane, d := range edits {
 			next[lane] = d.Normalized()
 		}
+		// A LANE MANAGED OUTSIDE CREWLET HAS NO PLAN and asks no step-up:
+		// the engine grants nothing on it.
+		if !provisioned {
+			continue
+		}
+		// ONE WAITING ON ITS MIGRATION HAS NO STEPS YET, and still asks the
+		// step-up a raise does: the saved setting is the one the sync
+		// applies once the migration finishes, with nobody asked again.
 		steps := map[seataccess.Lane][]seataccess.Step{}
-		if registered {
+		if planned {
 			if steps, err = seataccess.Plan(vendor, seatInput(seat.SeatRef, next, rec, held,
 				offers)); err != nil {
 				return answer, plan, err
@@ -221,7 +243,7 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 			if _, edited := edits[lane]; !edited {
 				continue
 			}
-			stepUp := seataccess.NeedsStepUp(offers[lane], want[lane], next[lane])
+			stepUp := seataccess.AsksStepUp(offers[lane], want[lane], next[lane])
 			plan.StepUp = plan.StepUp || stepUp
 			plan.Plans = append(plan.Plans, seataccess.SeatPlan{Handle: seat.Handle,
 				Lane: lane, Steps: nonNilSteps(steps[lane]), StepUp: stepUp})
@@ -234,8 +256,9 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 			continue
 		}
 		rec := records[handle]
-		sa, err := a.seatAnswer(q, vendor, registered, seataccess.SeatRef{Handle: handle,
-			Name: rec.Name}, map[seataccess.Lane]seataccess.Desired{}, rec, true, offers)
+		sa, err := a.seatAnswer(q, vendor, planned,
+			seataccess.SeatRef{Handle: handle, Name: rec.Name},
+			map[seataccess.Lane]seataccess.Desired{}, rec, true, offers)
 		if err != nil {
 			return answer, plan, err
 		}
@@ -253,16 +276,18 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 	return answer, plan, nil
 }
 
-// seatAnswer is one seat on the tab.
+// seatAnswer is one seat on the tab. planned is a kind whose sync takes steps
+// (provisioned by the engine through a registered vendor, and migrated), the
+// only kind a plan is drawn for.
 func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Vendor,
-	registered bool, ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desired,
+	planned bool, ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desired,
 	rec seataccess.Record, held bool,
 	offers map[seataccess.Lane]seataccess.Options) (seataccess.SeatAnswer, error) {
 
 	sa := seataccess.SeatAnswer{Handle: ref.Handle, Name: ref.Name,
 		Lanes: map[seataccess.Lane]seataccess.LaneAnswer{}}
 	steps := map[seataccess.Lane][]seataccess.Step{}
-	if registered {
+	if planned {
 		var err error
 		if steps, err = seataccess.Plan(vendor, seatInput(ref, want, rec, held, offers)); err != nil {
 			return sa, err
@@ -319,60 +344,114 @@ func seatInput(ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desir
 	return in
 }
 
-// options is what each of the integration's lanes offers now, read live from
-// the vendor where it lists its levels, reused for [optionsTTL], and the static
-// offer where the vendor does not answer. A lane the engine does not provision
-// is marked external, and offers no rotation.
-func (a *SeatAccessAPI) options(ctx context.Context, q setupapi.AccessQuery,
-	vendor seataccess.Vendor, registered, provisioned bool) []seataccess.Options {
+// seatOffers is what each of kind's lanes offers now on company, read live from
+// the vendor and reused for [optionsTTL] per revision: the offer the Agents
+// tab draws its pickers from, and the one every write's raise is judged by
+// ([seataccess.AsksStepUp]). A lane the engine does not provision is marked
+// external, and offers no rotation.
+//
+// FAIL CLOSED, AND NEVER KEPT WHEN IT FAILED. Where the vendor does not
+// answer, a lane that grants by level is marked [seataccess.Options.Unread],
+// so a turn-on or a change of level on it is asked a step-up; and an offer any
+// part of which was not read is not cached, so the next read asks again rather
+// than judging by what failed. An empty revision (a document not yet stored)
+// is read and never cached.
+func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
+	company *config.Company, roster *org.Organization, revision string,
+	managed bool) []seataccess.Options {
 
-	key := string(q.Kind) + "\x00" + q.Revision
-	a.mu.Lock()
-	cached, ok := a.offers[key]
-	a.mu.Unlock()
-	if ok && time.Since(cached.at) < optionsTTL {
-		return cached.options
+	key := string(kind) + "\x00" + revision
+	if revision != "" {
+		e.offers.mu.Lock()
+		cached, ok := e.offers.byKey[key]
+		e.offers.mu.Unlock()
+		if ok && time.Since(cached.at) < optionsTTL {
+			return cached.options
+		}
 	}
-	lanes := seataccess.LanesOf(q.Kind)
-	out := make([]seataccess.Options, 0, len(lanes))
+	vendor, registered := seataccess.Lookup(kind)
+	provisioned := company.SeatCredentialMode(string(kind), managed) ==
+		config.SeatCredentialEngine
+	base := seataccess.UnreadOffers(kind, !provisioned)
+	whole := !provisioned
 	var session seataccess.Session
 	openCtx, cancel := context.WithTimeout(ctx, optionsDeadline)
 	defer cancel()
 	if registered && provisioned {
 		var err error
-		session, err = vendor.Open(openCtx, seataccess.OpenInput{Config: q.Company,
-			Org: q.Roster, Env: a.engine.resolver()})
-		if err != nil && !errors.Is(err, integration.ErrNotConfigured) {
-			log.WarnContext(ctx, "seat_access_offer_unread", "kind", q.Kind, "error", err.Error(),
-				"detail", "the tab offers the vendor's static list until it answers")
+		if session, err = vendor.Open(openCtx, seataccess.OpenInput{Config: company,
+			Org: roster, Env: e.resolver()}); err != nil {
+			session = nil
+			log.WarnContext(ctx, "seat_access_offer_unread", "kind", kind, "error", err.Error(),
+				"detail", "a turn-on or a change of level asks a step-up until the vendor answers")
 		}
+		whole = session != nil
 	}
+	lanes := seataccess.LanesOf(kind)
+	out := make([]seataccess.Options, 0, len(lanes))
 	for _, lane := range lanes {
-		o := seataccess.Options{Lane: lane}
+		o := base[lane]
 		if registered {
 			if spec, ok := vendor.Catalog().Lane(lane); ok {
-				o.Permissions, o.Rotatable = spec.Permissions, spec.Rotatable
+				o.Rotatable = spec.Rotatable
 			}
 		}
 		if session != nil {
 			if live, err := session.Options(openCtx, lane); err == nil {
-				live.Rotatable = o.Rotatable
+				live.Rotatable, live.Unread = o.Rotatable, false
 				o = live
 			} else {
-				log.WarnContext(ctx, "seat_access_offer_unread", "kind", q.Kind,
+				whole = false
+				log.WarnContext(ctx, "seat_access_offer_unread", "kind", kind,
 					"lane", lane, "error", err.Error())
 			}
 		}
 		o.Lane = lane
 		if !provisioned {
-			o.Managed, o.Rotatable = seataccess.ManagedExternal, false
+			o.Managed, o.Rotatable, o.Unread = seataccess.ManagedExternal, false, false
 		}
 		out = append(out, o)
 	}
-	a.mu.Lock()
-	a.offers[key] = cachedOffer{at: time.Now(), options: out}
-	a.mu.Unlock()
+	if whole && revision != "" {
+		e.offers.mu.Lock()
+		if e.offers.byKey == nil {
+			e.offers.byKey = map[string]cachedOffer{}
+		}
+		e.offers.byKey[key] = cachedOffer{at: time.Now(), options: out}
+		e.offers.mu.Unlock()
+	}
 	return out
+}
+
+// SeatAccessRaises is every agent seat's lane a write of the company document
+// from prior to next raises to an administration grant, or could not be told
+// not to ([seataccess.RaisesBetween]): what the config surface asks a person's
+// fresh step-up for (D10). priorRevision is prior's stored revision.
+//
+// JUDGED ON THE CONNECTION THE WRITE LEAVES: the offer read for prior's
+// revision where the write leaves every integration's connection as it was,
+// and one read for next where it changes one, since that is the vendor the
+// next sync grants at. An offer that cannot be read fails closed.
+func (e *Engine) SeatAccessRaises(ctx context.Context, prior *config.Company,
+	priorRevision string, next *config.Company) []seataccess.Raise {
+
+	company, revision := next, ""
+	if prior != nil && reflect.DeepEqual(prior.Integrations, next.Integrations) {
+		company, revision = prior, priorRevision
+	}
+	return seataccess.RaisesBetween(prior, next, func(kind integration.Kind) map[seataccess.Lane]seataccess.Options {
+		roster, err := company.Organization()
+		if err != nil {
+			return seataccess.UnreadOffers(kind,
+				company.SeatCredentialMode(string(kind), e.companyManaged) !=
+					config.SeatCredentialEngine)
+		}
+		out := map[seataccess.Lane]seataccess.Options{}
+		for _, o := range e.seatOffers(ctx, kind, company, roster, revision, e.companyManaged) {
+			out[o.Lane] = o
+		}
+		return out
+	})
 }
 
 // notice is the integration's danger notice: the first of its shared-credential

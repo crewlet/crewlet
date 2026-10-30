@@ -2344,6 +2344,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var managed *configapi.ManagedError
 	var unanswered *configapi.ActivationUnknownError
 	var seal *setup.SealError
+	var entity *configapi.EntityError
 	// THE NAMES SEALED BEFORE THE WRITE FAILED, on every answer to a write
 	// that failed after its first credential was sealed — a lost race, a
 	// document the sealed values leave invalid, an unanswered store, a reload
@@ -2415,6 +2416,18 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeNoActiveRevision, with(httpjson.Detail{
 			"hint": "import a company configuration first",
+		}))
+	case errors.As(err, &entity) && errors.Is(err, configapi.ErrNoSuchEntity):
+		// THE SEAT LEFT THE DOCUMENT between the read the write was judged
+		// on and the write: nothing was written.
+		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNoSuchSeat, with(httpjson.Detail{
+			"detail": entity.Err.Error(),
+			"hint":   "the seat is no longer in the company; read the setup state again",
+		}))
+	case errors.As(err, &entity):
+		// A SEAT EDIT THE DOCUMENT CANNOT HOLD, as the caller sent it.
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidInput, with(httpjson.Detail{
+			"detail": entity.Err.Error(),
 		}))
 	case errors.As(err, &unanswered):
 		// STORED, AND THE ACTIVATION UNANSWERED: the config surface's own

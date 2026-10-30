@@ -4,17 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"net/http"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/accessmigrate"
 	"github.com/crewlet/crewlet/internal/api/configapi"
-	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
-	"github.com/crewlet/crewlet/internal/slack"
 )
 
 // The migration onto per-seat access, wired to this process: the config
@@ -76,7 +72,7 @@ func migrateSeatAccessStep(ctx context.Context, e *engine.Engine, cfg *configapi
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		// NOTHING TO MIGRATE YET: a company imported later is migrated by
 		// the next attempt.
-	case errors.As(err, &raced), errors.Is(err, accessmigrate.ErrPlanMoved):
+	case errors.As(err, &raced):
 		log.InfoContext(ctx, "seat_access_migration_raced", "detail",
 			"the document moved while it was being migrated; the next attempt reads it again")
 	default:
@@ -118,23 +114,4 @@ func (s migrationSecrets) Value(name string) (string, bool) { return s.engine.Lo
 func (s migrationSecrets) Seal(ctx context.Context, name, value string, by secrets.Author,
 	now time.Time) error {
 	return s.store.Set(ctx, name, value, by, secrets.SourceProvision, now)
-}
-
-// slackInstallLink is Slack's install-link mint as the Agents tab's install
-// action takes it: Slack's own refusals given in the access routes' terms, so
-// the route answers each with Slack's reason and remedy.
-func slackInstallLink(installs *slack.Installs) func(context.Context, string, string) (string, error) {
-	return func(ctx context.Context, handle, appID string) (string, error) {
-		url, err := installs.Link(ctx, handle, appID)
-		var refusal *slack.InstallRefusal
-		switch {
-		case errors.As(err, &refusal):
-			return "", &setupapi.AccessRefusal{Status: refusal.Status, Reason: refusal.Reason,
-				Remedy: refusal.Remedy, RetryAfter: refusal.RetryAfter}
-		case errors.Is(err, slack.ErrNoBaseURL):
-			return "", &setupapi.AccessRefusal{Status: http.StatusConflict, Reason: err.Error(),
-				Remedy: "set the address a vendor reaches this deployment on, and restart"}
-		}
-		return url, err
-	}
 }

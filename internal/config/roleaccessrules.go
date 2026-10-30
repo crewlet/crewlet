@@ -151,13 +151,15 @@ func (c *Company) namedContainers() (projects, spaces []string) {
 
 // withinReach refuses every scope entry outside reach, where the company lists
 // a reach at all: an empty list is a connection that does not narrow, so any
-// entry the vendor accepts is within it.
-func withinReach(p *problems, path Path, scope, reach []string, noun, where string) {
+// entry the vendor accepts is within it. Both sides are compared under key,
+// the vendor's spelling of an entry ([JiraProjectKey], [ConfluenceSpaceKey]).
+func withinReach(p *problems, path Path, scope, reach []string, key func(string) string, noun, where string) {
 	if len(reach) == 0 {
 		return
 	}
 	for i, entry := range scope {
-		if !slices.Contains(reach, strings.TrimSpace(entry)) {
+		k := key(entry)
+		if !slices.ContainsFunc(reach, func(r string) bool { return key(r) == k }) {
 			p.add(idx(path, i), ErrConflict,
 				"%q is outside the company's reach: a seat cannot widen it. Add the "+
 					"%s to %s first, or remove it here", entry, noun, where)
@@ -202,7 +204,7 @@ func (c *Company) checkGitLab(p *problems, path Path, b *RoleGitLab) {
 	if gl := c.Integrations.GitLab; gl != nil && gl.Provisioning != nil {
 		reach = gl.Provisioning.Projects
 	}
-	withinReach(p, at(path, "projects"), b.Projects, reach, "project",
+	withinReach(p, at(path, "projects"), b.Projects, reach, strings.TrimSpace, "project",
 		"integrations.gitlab.provisioning.projects")
 }
 
@@ -219,7 +221,7 @@ func (c *Company) checkJira(p *problems, path Path, b *RoleJira, projects []stri
 				"them, as the site's GET /rest/api/3/role lists it. Leave both out "+
 				"for product access only")
 	}
-	withinReach(p, at(path, "projects"), b.Projects, projects, "project",
+	withinReach(p, at(path, "projects"), b.Projects, projects, JiraProjectKey, "project",
 		"a unit's or a root seat's `project`")
 }
 
@@ -251,7 +253,7 @@ func (c *Company) checkConfluence(p *problems, path Path, b *RoleConfluence, spa
 					"create:page)", op)
 		}
 	}
-	withinReach(p, at(path, "spaces"), b.Spaces, spaces, "space",
+	withinReach(p, at(path, "spaces"), b.Spaces, spaces, ConfluenceSpaceKey, "space",
 		"a unit's or a root seat's `space`")
 }
 
@@ -281,7 +283,7 @@ func (c *Company) checkGitHubAccess(p *problems, path Path, b *RoleGitHub) {
 	if gh := c.Integrations.GitHub; gh != nil && gh.Provisioning != nil {
 		reach = gh.Provisioning.Repos
 	}
-	withinReach(p, at(path, "repos"), b.Repos, reach, "repository",
+	withinReach(p, at(path, "repos"), b.Repos, reach, strings.TrimSpace, "repository",
 		"integrations.github.provisioning.repos")
 }
 
@@ -309,7 +311,7 @@ func (c *Company) checkMattermost(p *problems, path Path, b *RoleMattermost) {
 	if mm := c.Integrations.Mattermost; mm != nil && mm.Provisioning != nil {
 		reach = mm.Provisioning.Channels
 	}
-	withinReach(p, at(path, "channels"), b.Channels, reach, "channel",
+	withinReach(p, at(path, "channels"), b.Channels, reach, strings.TrimSpace, "channel",
 		"integrations.mattermost.provisioning.channels")
 }
 

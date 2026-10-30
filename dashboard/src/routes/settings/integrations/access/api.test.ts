@@ -73,3 +73,11 @@ test("a refusal says the vendor's reason, then its remedy", async () => {
   const err = await accessApi.install("slack", "pm", "slack").catch((e: unknown) => e);
   expect(refusalWords(err)).toMatch(/\. Approve the app in Slack's admin settings\.$/);
 });
+
+test("Keep states the revision it read, and the other seat actions state none", async () => {
+  const calls = stub(200, datadogAnswer());
+  await accessApi.act("datadog", "sre", "datadog", "keep", "rev-7");
+  expect(new Headers(calls.at(-1)!.init.headers).get("If-Match")).toBe('"rev-7"');
+  await accessApi.act("datadog", "sre", "datadog", "retry");
+  expect(new Headers(calls.at(-1)!.init.headers).get("If-Match")).toBeNull();
+});

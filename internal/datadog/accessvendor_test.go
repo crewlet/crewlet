@@ -352,9 +352,9 @@ func TestDatadogStepsPerOp(t *testing.T) {
 	vendor, _ := seataccess.Lookup(integration.KindDatadog)
 	for op, want := range map[seataccess.Op][]seataccess.StepVerb{
 		seataccess.OpCreate:  {seataccess.VerbCreate, seataccess.VerbMint},
-		seataccess.OpEnable:  {seataccess.VerbEnable, seataccess.VerbMint},
+		seataccess.OpEnable:  {seataccess.VerbEnable, seataccess.VerbMint, seataccess.VerbRevoke},
 		seataccess.OpLevel:   {seataccess.VerbRerole},
-		seataccess.OpMint:    {seataccess.VerbMint},
+		seataccess.OpMint:    {seataccess.VerbMint, seataccess.VerbRevoke},
 		seataccess.OpDisable: {seataccess.VerbDisable},
 		seataccess.OpRevoke:  {seataccess.VerbRevoke},
 		seataccess.OpRemove:  {seataccess.VerbRemove},
@@ -429,13 +429,19 @@ func TestDatadogObserveReadsEveryAccountBack(t *testing.T) {
 	marked.disabled, marked.title = true, datadog.DisconnectedTitle
 	departed := org.seat("old", roRole)
 	departed.disabled = true
+	// THE LEDGER OVER THE MARKER: it records this account live, so the
+	// marker on it is stale and somebody else disabled it (D3).
+	lapsed := org.seat("ops", roRole)
+	lapsed.disabled, lapsed.title = true, datadog.DisconnectedTitle
 	org.addUser("crewlet-person@agents.crewlet.invalid", true, nil)
 
 	obs, err := org.open(t).Observe(context.Background(), seataccess.ObserveInput{
 		Seats: []seataccess.SeatRef{{Handle: "sre"}, {Handle: "oncall"}, {Handle: "dba"},
-			{Handle: "analyst"}, {Handle: "person"}, {Handle: "fresh"}},
+			{Handle: "analyst"}, {Handle: "ops"}, {Handle: "person"}, {Handle: "fresh"}},
 		Records: map[string]seataccess.Record{
 			"sre": *held(recorded.id),
+			"ops": {Handle: "ops", Account: &seataccess.Account{ID: lapsed.id,
+				State: seataccess.AccountActive}},
 			"old": {Handle: "old", Account: &seataccess.Account{ID: departed.id,
 				State: seataccess.AccountDisabled}},
 		},
@@ -457,6 +463,9 @@ func TestDatadogObserveReadsEveryAccountBack(t *testing.T) {
 	}
 	if got := lane("analyst"); got.DisabledBy != seataccess.DisabledByCrewlet {
 		t.Errorf("analyst = %+v, want this engine's off by its marker", got)
+	}
+	if got := lane("ops"); got.Enabled || got.DisabledBy != seataccess.DisabledByHand {
+		t.Errorf("ops = %+v, want disabled by hand: the ledger records it live", got)
 	}
 	if got := lane("old"); !got.Exists || got.DisabledBy != seataccess.DisabledByCrewlet {
 		t.Errorf("old = %+v, want the departed seat observed, off by this engine", got)
@@ -697,23 +706,74 @@ func TestDatadogRetireRefusesWithoutTheNewKey(t *testing.T) {
 	}
 }
 
-// A MINT FOR A SEAT WITH NOTHING SEALED REPLACES THIS ENGINE'S EARLIER KEYS,
-// whose values nobody holds, and leaves a person's key alone.
-func TestDatadogMintReplacesUnheldKeys(t *testing.T) {
+// A MINT FOR A SEAT WITH NOTHING SEALED CREATES THE NEW KEY BEFORE IT DELETES
+// ANY: the mint deletes nothing, and only the retire after it, once the new
+// key is sealed, deletes this engine's earlier keys. A person's key is left
+// alone throughout.
+func TestDatadogMintCreatesTheNewKeyBeforeRetiringTheOld(t *testing.T) {
 	t.Parallel()
 	org := newAccessOrg()
 	account := org.seat("sre", roRole)
 	stale := org.key(account.id, "crewlet")
 	hand := org.key(account.id, "ops")
-	_, err := apply(t, org.open(t), seataccess.ApplyInput{
-		Step: step(t, seataccess.OpMint, seataccess.VerbMint), Record: held(account.id),
-	})
-	if err != nil {
-		t.Fatalf("mint: %v", err)
+	session := org.open(t)
+	in := seataccess.ApplyInput{Record: held(account.id)}
+
+	in.Step = step(t, seataccess.OpMint, seataccess.VerbMint)
+	minted, err := apply(t, session, in)
+	if err != nil || len(minted.Minted) != 1 {
+		t.Fatalf("mint = %+v, %v", minted, err)
+	}
+	if keys := org.keyIDs(account.id); !slices.Contains(keys, stale) || len(keys) != 3 {
+		t.Errorf("keys after the mint = %q, want the old ones still there beside the new one", keys)
+	}
+	in.Step = step(t, seataccess.OpMint, seataccess.VerbRevoke)
+	in.Prior = []seataccess.StepResult{minted}
+	if _, err := apply(t, session, in); err != nil {
+		t.Fatalf("retire: %v", err)
 	}
 	keys := org.keyIDs(account.id)
-	if slices.Contains(keys, stale) || !slices.Contains(keys, hand) || len(keys) != 2 {
-		t.Errorf("keys = %q", keys)
+	if slices.Contains(keys, stale) || !slices.Contains(keys, hand) ||
+		!slices.Contains(keys, minted.Minted[0].CredentialID) || len(keys) != 2 {
+		t.Errorf("keys after the retire = %q, want the new key and the person's", keys)
+	}
+}
+
+// A DISABLE DATADOG REFUSES TAKES THE MARKER OFF AGAIN, so the account is not
+// left live and marked, where a later disable by somebody else would read as
+// this engine's off and be undone (D3).
+func TestDatadogAFailedDisableTakesTheMarkerOffAgain(t *testing.T) {
+	t.Parallel()
+	org := newAccessOrg()
+	account := org.seat("sre", roRole)
+	org.refuse["DELETE /api/v2/users/"+account.id] = refusal{http.StatusForbidden, "no permission"}
+	_, err := apply(t, org.open(t), seataccess.ApplyInput{
+		Step: step(t, seataccess.OpDisable, seataccess.VerbDisable), Record: held(account.id),
+	})
+	if err == nil {
+		t.Fatal("a refused disable was not reported")
+	}
+	if got := org.user(account.id); got.disabled || got.title != "" {
+		t.Errorf("account = %+v, want live and unmarked", got)
+	}
+}
+
+// A STALE MARKER ON A LIVE ACCOUNT COMES OFF on the next step that leaves the
+// account on, so a disable by somebody else later reads as theirs (D3).
+func TestDatadogAStaleMarkerOnALiveAccountIsCleared(t *testing.T) {
+	t.Parallel()
+	org := newAccessOrg()
+	account := org.seat("sre", roRole)
+	account.title = datadog.DisconnectedTitle
+	_, err := apply(t, org.open(t), seataccess.ApplyInput{
+		Step: step(t, seataccess.OpLevel, seataccess.VerbRerole),
+		Want: seataccess.Desired{Enabled: true, Level: stdRole}, Record: held(account.id),
+	})
+	if err != nil {
+		t.Fatalf("level: %v", err)
+	}
+	if got := org.user(account.id); got.disabled || got.title != "" {
+		t.Errorf("account = %+v, want live with the marker taken off", got)
 	}
 }
 

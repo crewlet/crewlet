@@ -82,19 +82,15 @@ export function levelIds(level: string | undefined): string[] {
 }
 
 /**
- * The level a lane of sets stores for the ids chosen, sorted and
- * space-separated. Every permission needs the one the vendor requires for
- * the rest (Confluence's View), so choosing any adds it.
+ * The level a lane of sets stores for the ids chosen: sorted and
+ * space-separated, and holding the level the engine says every other one
+ * needs (`required_level`, Confluence's View) whenever it holds any.
  */
 export function joinLevels(lane: Lane, ids: string[]): string {
   const set = new Set(ids.filter((id) => id !== ""));
-  const base = REQUIRED_LEVEL[lane.key];
-  if (base && set.size > 0) set.add(base);
+  if (lane.required_level && set.size > 0) set.add(lane.required_level);
   return [...set].sort().join(" ");
 }
-
-/** The level every other level of a lane of sets needs, by lane. */
-const REQUIRED_LEVEL: Partial<Record<AccessLaneKey, string>> = { confluence: "read:space" };
 
 const sameLevel = (lane: Lane, a: string | undefined, b: string | undefined) =>
   lane.multiple
@@ -161,17 +157,25 @@ export function levelSummary(lane: Lane, level: string | undefined): string {
 }
 
 /**
- * Why a seat's draft cannot be saved, or null: product access only together
- * with a project or space list, which needs a role; or, where the vendor has
- * no empty level, a lane of sets turned on with nothing chosen.
+ * Why a seat's draft cannot be saved, or null, as the engine would refuse it:
+ * a set without the level the engine requires of it (Confluence's View);
+ * product access only together with a project or space list, which needs a
+ * role; or, where the vendor has no empty level, a seat turned on with no
+ * role or permission chosen.
  */
 export function refusedLevel(lane: Lane, want: AccessDesired): string | null {
   if (!want.enabled) return null;
+  const ids = levelIds(want.level);
+  const required = lane.multiple ? lane.required_level : undefined;
+  if (required && ids.length > 0 && !ids.includes(required))
+    return `${lane.name} grants nothing else without ${levelName(lane, required)}. Add it to the set.`;
   const noun = laneWords(lane.key).scope?.noun.toLowerCase() ?? "scope";
   if (productOnly(lane, want.level) && (want.scope ?? []).length > 0)
     return `Product access only on ${lane.name} takes no ${noun}. Choose a role, or clear its ${noun}.`;
-  if (lane.multiple && !emptyLevel(lane) && levelIds(want.level).length === 0)
-    return `Choose at least one ${lane.name} permission for every agent that is on.`;
+  if (levelIds(want.level).length === 0 && lane.levels.length > 0 && !emptyLevel(lane))
+    return lane.multiple
+      ? `Choose at least one ${lane.name} permission for every agent that is on.`
+      : `Choose a ${lane.name} role for every agent that is on.`;
   return null;
 }
 
@@ -291,7 +295,11 @@ export function availableActions(
 }
 
 /** The one sentence a seat that is off reads as. */
-export function offSentence(lane: Lane, saved: AccessSeatLane): string {
+export function offSentence(lane: Lane, saved: AccessSeatLane, departed = false): string {
+  if (departed)
+    return saved.observed.exists
+      ? "This agent left the company. Its account is kept, disabled, until you remove it."
+      : "This agent left the company and has no account here.";
   if (managedOutside(lane))
     return "Off. Turning it on gives it its tool with the credential provided outside Crewlet.";
   return saved.observed.exists

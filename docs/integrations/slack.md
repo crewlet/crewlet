@@ -47,8 +47,11 @@ paste its refresh token into **App configuration token** on Slack's connect
 form, under Company › Integrations. The engine seals it as
 `SLACK_APP_CONFIG_TOKEN`, points `integrations.slack.app_config_token` at it,
 and from then on keeps the token pair in that one sealed value, rotating it
-before it expires and saving each new pair before using it, because Slack's
-refresh token works once. The field is always one whole `${VAR}`, never the
+when less than half an hour of its life is left (a pass creating apps at
+Slack's rate of about one a minute needs that long) and saving each new pair
+before using it, because Slack's refresh token works once. A rotation and its
+save finish even when the pass that started them is cancelled, and a token
+Slack refuses as expired early is renewed once and the call retried. The field is always one whole `${VAR}`, never the
 token itself. Without one, the engine does not manage the company's Slack apps,
 and they are set up as described below.
 
@@ -68,8 +71,10 @@ expired or edited is refused, and the page says what to do instead.
 | Remove (only when off) | The engine deletes the app (`apps.manifest.delete`) and clears every value sealed for it once Slack confirms. Where Slack refuses the configuration token, the tab links to the app's page to delete it by hand. |
 
 A scope or setting changed in Slack's console is restored from the engine's
-manifest on the next pass and reported; a scope added back reaches the bot
-token only after a person approves a reinstall. A bot token revoked or an app
+manifest on the next pass and reported. A bot token keeps the scopes it was
+installed with, so where a scope was added or removed at Slack the engine also
+revokes the bot token and a person approves a reinstall, which issues a token
+with exactly the manifest's scopes. A bot token revoked or an app
 uninstalled by somebody at Slack is never reinstalled automatically, in case it
 was incident response: the tab offers **Turn back on** or **Keep off**.
 
@@ -82,26 +87,26 @@ variable.
 
 ### Disconnecting
 
-Disconnect removes `integrations.slack` from the company document, which
-retires the transport: the engine stops talking to Slack and the per-seat
-webhook routes stop turning deliveries into work.
+Disconnect turns every agent off first: the engine revokes each bot token, so
+no agent posts once the disconnect has started. It then removes
+`integrations.slack` from the company document, which retires the transport:
+the engine stops talking to Slack and the per-seat webhook routes stop turning
+deliveries into work.
 
-**Tick *also remove the accounts Crewlet created* and each agent's
-`integrations.slack` block goes too, along with the sealed values it named** —
-`SLACK_BOT_TOKEN_*`, `SLACK_SIGNING_SECRET_*`, whatever the `${VAR}`s are
-called. That is safe here in a way it would not be elsewhere: Slack shows both
-values on the app's own settings page on every visit, so anything deleted can
-be read back by whoever owns the app. Leave it unticked and every credential
-stays where it is.
+**Tick *also remove the accounts Crewlet created*** and the engine deletes each
+agent's app at Slack with the app-configuration token, clears the values
+sealed for it (`SLACK_BOT_TOKEN_<HANDLE>`, `SLACK_SIGNING_SECRET_<HANDLE>`,
+`SLACK_CLIENT_SECRET_<HANDLE>` and `SLACK_CLIENT_ID_<HANDLE>`) once Slack
+confirms the app is gone, and removes each agent's `integrations.slack` block.
+Where an app cannot be deleted that way (no usable configuration token, or
+Slack refused it), the Agents tab links to its page,
+**Settings › Basic Information › Delete App**, and the disconnect stays in
+progress until every app is gone: dropping the integration first would drop
+the only token that confirms the deletion, while an app nobody deleted could
+still be installed again.
 
-**Deleting the apps is yours to do**, either way. Slack's `apps.manifest.delete`
-authenticates with an app-configuration token Slack issues only by hand — the
-same credential this surface exists because you may not have — so the
-disconnect names each agent's app and links to the page it is deleted from:
-**Settings › Basic Information › Delete App**.
-
-Until an app is deleted it can still post as that agent to anyone holding its
-bot token, which is the reason the handover is a list rather than a sentence.
+Leave it unticked and every app and its OAuth client is kept, so turning an
+agent back on after a reconnect is an install a person approves.
 
 ## Configure in YAML
 
