@@ -345,8 +345,9 @@ func recordShared(ctx context.Context, ledger seataccess.Ledger, notices []Notic
 
 // Written is when the fleet's store last wrote a variable's value, and whether
 // it holds one: what tells a shared company credential's finding that it has
-// been replaced since. Never the value.
-type Written func(ctx context.Context, name string) (at time.Time, held bool, err error)
+// been replaced since ([seataccess.SharedCredential.Replaced]). Never the
+// value.
+type Written = seataccess.Written
 
 // SharedFindings are kind's [integration.FindingCredentialShared] findings: one
 // per company credential a seat once kept its own credential in (D12), as the
@@ -387,7 +388,7 @@ func SharedFindings(ctx context.Context, kind integration.Kind,
 		if err != nil {
 			return nil, fmt.Errorf("accessmigrate: when %s was last written: %w", variable, err)
 		}
-		if held && at.After(raised[variable]) {
+		if (&seataccess.SharedCredential{Variable: variable, RaisedAt: raised[variable]}).Replaced(at, held) {
 			continue
 		}
 		vendor := vendorName(kind)

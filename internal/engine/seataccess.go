@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
@@ -93,8 +94,9 @@ type seatSync struct {
 // syncSeatAccess runs the sync for kind and flushes its sink, so what it
 // sealed or cleared reaches this node's snapshot and every seat waiting on it.
 // [integration.ErrNotConfigured] is an integration with no registered vendor,
-// no company document, one whose credentials are handed in from outside
-// Crewlet (D4b), or one the vendor says it does not provision.
+// no company document, one the company does not connect, or one the vendor
+// says it does not provision. One whose credentials are handed in from outside
+// Crewlet (D4b) is one advisory finding ([seataccess.ExternalFinding]).
 func (e *Engine) syncSeatAccess(
 	ctx context.Context, kind integration.Kind, in seatSync,
 ) (seataccess.SyncReport, error) {
@@ -108,14 +110,18 @@ func (e *Engine) syncSeatAccess(
 	}
 	// EXTERNAL MODE IS BOUND, NEVER MANAGED (D4b). Where the engine does not
 	// hold the authority to create an agent's account, its credentials are
-	// handed in from outside Crewlet, and the sync takes no vendor step: no
-	// account is adopted, turned off, removed or rotated, and each seat's tool
-	// reads the credential the seat names ([config.Company.SeatCredentialMode]).
-	// A disconnect still runs, because it acts only on the accounts the
-	// ledger records this engine made.
+	// handed in from outside Crewlet, and the sync opens no session and
+	// writes no ledger record: no account is adopted, turned off, removed or
+	// rotated, and each seat's tool reads the credential the seat names
+	// ([config.Company.SeatCredentialMode]). The pass says so once. A
+	// disconnect still runs, because it acts only on the accounts the ledger
+	// records this engine made.
 	if !in.disconnect && company.Config.SeatCredentialMode(string(kind), e.companyManaged) !=
 		config.SeatCredentialEngine {
-		return seataccess.SyncReport{}, integration.ErrNotConfigured
+		if !company.Config.DeclaresIntegration(string(kind)) {
+			return seataccess.SyncReport{}, integration.ErrNotConfigured
+		}
+		return seataccess.SyncReport{Findings: []integration.Finding{seataccess.ExternalFinding(kind)}}, nil
 	}
 	ledger, err := e.SeatAccessLedger()
 	if err != nil {
@@ -150,6 +156,9 @@ func (e *Engine) syncSeatAccess(
 		// it always has, and reports nothing to wait for.
 		Unmigrated:       !in.disconnect && company.Config.SeatAccessPending(string(kind)),
 		UnmigratedReason: e.seatAccessPendingReason(kind),
+		// THE SHARED CREDENTIAL'S TEST, read off the sealed store the
+		// integration's finding reads ([Engine.SharedCredentialFindings]).
+		Written: writtenBy(fleetsecrets.New(e.backends.Fleet, e.Cipher())),
 	})
 	if in.sink != nil {
 		// FLUSHED WHATEVER THE SYNC CONCLUDED: every value it recorded is

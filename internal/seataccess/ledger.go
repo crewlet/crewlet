@@ -110,6 +110,18 @@ type SharedCredential struct {
 	RaisedAt time.Time `json:"raised_at"`
 }
 
+// Written answers when the sealed store last wrote a variable, and whether it
+// holds one at all. Never the value.
+type Written func(ctx context.Context, name string) (at time.Time, held bool, err error)
+
+// Replaced reports whether the company credential was written after the
+// migration found the seat's value in it: somebody replaced it, so it no
+// longer holds the seat's credential. The one test the shared credential's
+// finding ([accessmigrate.SharedFindings]) and the sync's hold both read.
+func (c *SharedCredential) Replaced(at time.Time, held bool) bool {
+	return held && at.After(c.RaisedAt)
+}
+
 // Held reports a record whose account exists and has not been closed.
 func (r Record) Held() bool {
 	return r.Account != nil && r.Account.State != AccountClosed

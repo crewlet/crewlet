@@ -208,8 +208,9 @@ func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
 }
 
 // AN INTEGRATION WHOSE CREDENTIALS ARE HANDED IN IS NEVER SYNCED AT THE VENDOR
-// (D4b): the engine does not hold the authority there, so no agent's account is
-// adopted, turned off or removed. The same company on a deployment the engine
+// (D4b): the engine does not hold the authority there, so the sync opens no
+// session, writes no ledger record, and says once that the agents' accounts
+// are managed outside Crewlet. The same company on a deployment the engine
 // writes is synced. GitHub on a managed deployment is the case: its apps are
 // made outside Crewlet whatever the block says.
 //
@@ -241,14 +242,24 @@ roles:
 	// ledger, which is how the test tells the two apart without a vendor.
 	managed := &Engine{companyManaged: true}
 	managed.epoch.current.Store(company)
-	if _, err := managed.syncSeatAccess(t.Context(), integration.KindGitHub, seatSync{}); !errors.Is(err, integration.ErrNotConfigured) {
-		t.Fatalf("a managed deployment's GitHub sync = %v, want it not configured", err)
+	report, err := managed.syncSeatAccess(t.Context(), integration.KindGitHub, seatSync{})
+	if err != nil {
+		t.Fatalf("a managed deployment's GitHub sync = %v, want it answered without the vendor", err)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Kind != integration.FindingCoveragePartial ||
+		!strings.Contains(report.Findings[0].Detail, "managed outside Crewlet") || len(report.Records) != 0 {
+		t.Fatalf("report = %+v, want the one managed-outside finding and no record", report)
 	}
 	written := &Engine{}
 	written.epoch.current.Store(company)
 	if _, err := written.syncSeatAccess(t.Context(), integration.KindGitHub, seatSync{}); err == nil ||
 		errors.Is(err, integration.ErrNotConfigured) {
 		t.Fatalf("an engine-written deployment's GitHub sync = %v, want it to reach the ledger", err)
+	}
+	// AN INTEGRATION THE COMPANY DOES NOT CONNECT is not configured, and
+	// says nothing.
+	if _, err := managed.syncSeatAccess(t.Context(), integration.KindDatadog, seatSync{}); !errors.Is(err, integration.ErrNotConfigured) {
+		t.Fatalf("an unconnected integration's sync = %v, want it not configured", err)
 	}
 }
 
