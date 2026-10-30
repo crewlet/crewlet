@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -180,7 +179,7 @@ func AdminToken(cfg *config.Mattermost, env *config.Resolver, override string) s
 }
 
 // Open builds a session from the company's Mattermost block.
-func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
+func (accessVendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
 	if in.Config == nil {
 		return nil, fmt.Errorf("mattermost: %w: no company document", integration.ErrNotConfigured)
 	}
@@ -206,7 +205,26 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 	if err != nil {
 		return nil, err
 	}
-	return &accessSession{client: client, cfg: cfg}, nil
+	// THE TEAM, resolved once per pass, where it opens the session. One the
+	// instance does not have stops every seat at once, so it is ONE refusal
+	// naming the team and the setting, and the sync reads back no seat and
+	// takes no step that needs it, rather than a fault per seat.
+	team, found, err := client.TeamByName(ctx, cfg.Team)
+	if err != nil {
+		return nil, fmt.Errorf("mattermost: resolve team %q: %w", cfg.Team,
+			integration.Reject(err, Status(err)))
+	}
+	if !found {
+		return nil, &seataccess.Refusal{
+			Said: fmt.Sprintf("Mattermost has no team %q, so no agent's bot can be "+
+				"placed: channels are team-scoped", cfg.Team),
+			Remedy: "Create the team at Mattermost, or correct integrations.mattermost.team " +
+				"to its URL name",
+			Actor:     seataccess.ByYou,
+			ActionURL: client.URL() + "/admin_console/user_management/teams",
+		}
+	}
+	return &accessSession{client: client, cfg: cfg, team: team}, nil
 }
 
 // accessSession is one pass's connection to Mattermost.
@@ -214,30 +232,8 @@ type accessSession struct {
 	client *Client
 	cfg    *config.Mattermost
 
-	teamOnce sync.Once
-	team     Team
-	teamErr  error
-}
-
-// teamID resolves the company's team once per session.
-func (s *accessSession) teamID(ctx context.Context) (string, error) {
-	s.teamOnce.Do(func() {
-		team, found, err := s.client.TeamByName(ctx, s.cfg.Team)
-		switch {
-		case err != nil:
-			s.teamErr = fmt.Errorf("mattermost: resolve team %q: %w", s.cfg.Team,
-				integration.Reject(err, Status(err)))
-		case !found:
-			s.teamErr = &seataccess.Refusal{
-				Said:   fmt.Sprintf("Mattermost has no team %q", s.cfg.Team),
-				Remedy: "Name the team the bots belong to on the Mattermost connection",
-				Actor:  seataccess.ByYou,
-			}
-		default:
-			s.team = team
-		}
-	})
-	return s.team.ID, s.teamErr
+	// team is the company's team, resolved when the session opened.
+	team Team
 }
 
 // companyChannels is the company's list a seat's channels must be within.
@@ -281,10 +277,7 @@ func (s *accessSession) Options(_ context.Context, lane seataccess.Lane) (seatac
 func (s *accessSession) Observe(
 	ctx context.Context, in seataccess.ObserveInput,
 ) (seataccess.Observation, error) {
-	teamID, err := s.teamID(ctx)
-	if err != nil {
-		return nil, err
-	}
+	teamID := s.team.ID
 	handles := observedHandles(in)
 	ids, err := s.botIDs(ctx, handles, in.Records)
 	if err != nil {
@@ -418,10 +411,7 @@ func observedHandles(in seataccess.ObserveInput) []string {
 
 // Apply takes one step at Mattermost, chosen by its op and verb.
 func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	teamID, err := s.teamID(ctx)
-	if err != nil {
-		return seataccess.StepResult{}, err
-	}
+	teamID := s.team.ID
 	if in.Step.Op == seataccess.OpCreate && in.Step.Verb == seataccess.VerbCreate {
 		return s.create(ctx, in)
 	}
