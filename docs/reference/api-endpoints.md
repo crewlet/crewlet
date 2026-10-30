@@ -4022,7 +4022,7 @@ curl -X POST https://engine.example.com/setup/integrations/datadog/access/plan \
 {"kind": "datadog", "revision": "01J9...", "step_up": false,
  "plans": [{"handle": "qa", "lane": "datadog", "steps": [
    {"op": "create", "verb": "create", "text": "Create crewlet-qa@agents.crewlet.invalid with Datadog Read Only Role", "by": "crewlet"},
-   {"op": "create", "verb": "mint", "text": "Mint its application key into DATADOG_APP_KEY_QA", "by": "crewlet"}]}]}
+   {"op": "create", "verb": "mint", "text": "Mint an application key, sealed as DATADOG_APP_KEY_QA", "by": "crewlet"}]}]}
 ```
 
 A draft names each seat by handle and each lane by its key, and a seat or lane

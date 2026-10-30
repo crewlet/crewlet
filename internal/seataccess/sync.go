@@ -556,10 +556,13 @@ func (s *syncer) take(
 		if err == nil && res.Waiting != nil {
 			result.Steps = append(result.Steps, StepOutcome{Step: step})
 			result.Outcome = OutcomeWaiting
+			// NO REMEDY: the sentence IS what to do, the action URL is
+			// where, and the tab's own Done is how to say it is done. A
+			// second line saying "take this step, then choose Done" only
+			// restated the two buttons beside it.
 			result.Error = &Failure{
 				Step: step.Verb, Actor: ByYou, ActionURL: firstNonEmpty(res.Waiting.ActionURL, step.ActionURL),
-				Said:   firstNonEmpty(res.Waiting.Detail, step.Text),
-				Remedy: "Take this step at " + LaneName(lane) + ", then choose Done, check again",
+				Said: firstNonEmpty(res.Waiting.Detail, step.Text),
 			}
 			break
 		}

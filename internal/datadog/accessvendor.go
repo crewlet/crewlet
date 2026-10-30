@@ -66,18 +66,17 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 	sink := seataccess.SinkName(integration.KindDatadog, AppKeyField, seat.Handle)
 	mint := seataccess.Step{
 		Op: op, Verb: seataccess.VerbMint, By: seataccess.ByCrewlet,
-		Text: "Mint its application key and seal it as " + sink,
+		Text: "Mint an application key, sealed as " + sink,
 	}
 	retire := seataccess.Step{
 		Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
-		Text: "Delete the application keys the new one replaces",
+		Text: "Delete the keys it replaces",
 	}
 	switch op {
 	case seataccess.OpCreate:
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbCreate, By: seataccess.ByCrewlet,
-			Text: "Create a Datadog service account for " + seat.Label() +
-				", holding the role this seat names",
+			Text: "Create a Datadog service account with its role",
 		}, mint}
 	case seataccess.OpEnable:
 		// BACK ON AT THE DOCUMENT'S ROLE, as a create is, and with a fresh
@@ -85,7 +84,7 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 		// unless an account somebody disabled by hand still holds its own.
 		out := []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbEnable, By: seataccess.ByCrewlet,
-			Text: "Turn its Datadog service account back on, holding the role this seat names",
+			Text: "Turn its service account back on with its role",
 		}}
 		if have.Credential == nil || have.CredentialGone {
 			out = append(out, mint, retire)
@@ -94,7 +93,7 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 	case seataccess.OpLevel:
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbRerole, By: seataccess.ByCrewlet,
-			Text: "Give it the role this seat names and take it out of any other role",
+			Text: "Move it to its new role",
 		}}
 	case seataccess.OpMint:
 		// THE NEW KEY FIRST, sealed before anything is deleted: a key
@@ -104,9 +103,8 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 	case seataccess.OpDisable:
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbDisable, By: seataccess.ByCrewlet,
-			Text: "Disable its Datadog service account",
-			Note: "Datadog keeps the account and everything it authored, so turning it " +
-				"back on needs no person.",
+			Text: "Disable its service account",
+			Note: "Datadog keeps the account and its history, so turning it back on needs no one.",
 		}}
 	case seataccess.OpRevoke:
 		return []seataccess.Step{{
@@ -116,12 +114,11 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 	case seataccess.OpRemove:
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbRemove, By: seataccess.ByCrewlet,
-			Text: "Stop managing its disabled Datadog service account",
-			Note: "Datadog never deletes a user: the account stays disabled, with its " +
-				"history, under the organization's users.",
+			Text: "Stop managing its disabled service account",
+			Note: "Datadog never deletes a user, so the account stays disabled with its history.",
 		}}
 	case seataccess.OpRotate:
-		mint.Text = "Mint a new application key and seal it as " + sink
+		mint.Text = "Mint a new application key, sealed as " + sink
 		return []seataccess.Step{mint, retire}
 	default:
 		// OpScope: Datadog grants by role alone, so there is no scope to
