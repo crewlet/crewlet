@@ -186,7 +186,7 @@ func (i *Installs) Link(ctx context.Context, handle, appID string) (string, erro
 	// fleet never handed out is still refused at the landing.
 	first, err := i.opts.Claims.Claim(ctx, issuedKey(nonce), InstallTTL, i.opts.Now())
 	if err != nil {
-		return "", fmt.Errorf("slack: record the install link: %w", err)
+		return "", registryDown("this engine could not record the install link", err)
 	}
 	if !first {
 		return "", errors.New("slack: a fresh install nonce was already recorded")
@@ -224,12 +224,17 @@ func (i *Installs) Complete(ctx context.Context, state, code string) (string, er
 		Handle: handle, AppID: appID,
 		ClientID: i.sealed(handle, FieldClientID), ClientSecret: i.sealed(handle, FieldClientSecret),
 	}
-	if _, err := CompleteSeatInstall(ctx, i.opts.Admin, sink, i.opts.HTTP, seat, code,
-		i.opts.Base()); err != nil {
+	installed, err := CompleteSeatInstall(ctx, i.opts.Admin, sink, i.opts.HTTP, seat, code,
+		i.opts.Base())
+	if err != nil {
 		return handle, installRefusal(handle, err)
 	}
 	if err := sink.Flush(ctx); err != nil {
-		return handle, fmt.Errorf("slack: finish sealing %s's bot token: %w", handle, err)
+		// NOT SEALED UNTIL FLUSHED, so the token is revoked as an unsealed
+		// one is, under a context the request's end cannot cancel.
+		return handle, errors.Join(
+			fmt.Errorf("slack: finish sealing %s's bot token: %w", handle, err),
+			revokeToken(context.WithoutCancel(ctx), i.opts.HTTP, installed.BotToken))
 	}
 	return handle, nil
 }
@@ -251,19 +256,19 @@ func (i *Installs) spend(ctx context.Context, nonce string) error {
 	now := i.opts.Now()
 	unissued, err := i.opts.Claims.Claim(ctx, issuedKey(nonce), InstallTTL, now)
 	if err != nil {
-		return registryDown(err)
+		return registryDown(unusedUnconfirmed, err)
 	}
 	if unissued {
 		// THIS CLAIM JUST MADE THE RECORD, so the fleet never minted
 		// the link. It is released again so it stands for nothing.
 		if releaseErr := i.opts.Claims.Release(ctx, issuedKey(nonce)); releaseErr != nil {
-			return registryDown(releaseErr)
+			return registryDown(unusedUnconfirmed, releaseErr)
 		}
 		return refusedLink
 	}
 	first, err := i.opts.Claims.Claim(ctx, spentKey(nonce), InstallTTL, now)
 	if err != nil {
-		return registryDown(err)
+		return registryDown(unusedUnconfirmed, err)
 	}
 	if !first {
 		return refusedLink
@@ -271,11 +276,16 @@ func (i *Installs) spend(ctx context.Context, nonce string) error {
 	return nil
 }
 
-// registryDown is a refusal for a claim registry that could not answer.
-func registryDown(err error) error {
+// unusedUnconfirmed is the reason a landing gives when the claim registry
+// could not say whether its link was spent.
+const unusedUnconfirmed = "this engine could not confirm the install link was unused"
+
+// registryDown is a refusal for a claim registry that could not answer: a 503
+// with the time to retry after, at the landing and at the mint alike.
+func registryDown(reason string, err error) error {
 	return errors.Join(&InstallRefusal{
 		Status:     http.StatusServiceUnavailable,
-		Reason:     "this engine could not confirm the install link was unused",
+		Reason:     reason,
 		Remedy:     "Try the install again in a moment; if it keeps failing, check the engine's coordination store",
 		RetryAfter: registryRetry,
 	}, err)

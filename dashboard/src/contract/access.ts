@@ -140,7 +140,8 @@ type AccessVerb =
   | "remove"
   | "rotate"
   | "restore"
-  | "approve";
+  | "approve"
+  | "observe";
 
 /** One thing a sync does at the vendor, or one thing a person must do there. */
 export interface AccessStep {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -313,6 +315,8 @@ func (e *Engine) tearDownSeatAccess(
 		sink: sink, by: by, asks: asks, disconnect: true, webhookBase: e.webhookBase,
 	})
 	switch {
+	case err == nil && remove:
+		return accountsLeft(ctx, ledger, kind)
 	case err == nil:
 		return nil
 	case !errors.Is(err, integration.ErrNotConfigured):
@@ -338,6 +342,34 @@ func (e *Engine) tearDownSeatAccess(
 		}
 		return nil
 	}
+}
+
+// accountsLeft refuses a disconnect that asked for the agents' accounts to be
+// removed while the ledger still holds one: a removal waiting on a person (an
+// app only a person can delete at the vendor, or one no configuration token
+// can delete) or one the vendor refused. Dropping the block then would drop
+// the only connection that reaches those accounts and the sealed credentials
+// that confirm their removal, with the operator told the removal finished.
+// The loop keeps the surface disconnecting and tries again, and the Agents tab
+// names what each removal waits on.
+func accountsLeft(ctx context.Context, ledger seataccess.Ledger, kind integration.Kind) error {
+	records, err := ledger.Records(ctx, kind)
+	if err != nil {
+		return fmt.Errorf("engine: %s teardown: read what is left to remove: %w", kind, err)
+	}
+	var left []string
+	for handle, rec := range records {
+		if rec.Held() {
+			left = append(left, handle)
+		}
+	}
+	if len(left) == 0 {
+		return nil
+	}
+	slices.Sort(left)
+	return fmt.Errorf("engine: %s teardown: %d agent account(s) are not removed yet (%s), "+
+		"so the integration stays connected until each removal finishes; the Agents tab "+
+		"names what each one waits on", kind, len(left), strings.Join(left, ", "))
 }
 
 // seatAccessPlan is the provisioning plan a seat's tool waits on for kind:

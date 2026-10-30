@@ -2,6 +2,8 @@ package seataccess
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -81,6 +83,13 @@ type Session interface {
 	// seat with no account answers Exists false. A seat in Records that the
 	// document no longer has is observed too: it is what lets a pass reach a
 	// seat that left the document.
+	//
+	// ONE SEAT'S READ IS ONE SEAT'S FAULT. A vendor that could read some
+	// seats and not others (one agent's own credential refused, one account
+	// timing out) answers the rest with a [SeatFaults] error naming the
+	// others, and the sync records each as that seat's fault and syncs the
+	// rest. Any other error is the kind's, and a pass whose context is done
+	// answers that.
 	Observe(ctx context.Context, in ObserveInput) (Observation, error)
 
 	// Apply takes one step. A vendor refusal is a [*Refusal]; any other
@@ -102,6 +111,19 @@ type ObserveInput struct {
 
 // Observation is what the vendor holds, by handle then lane.
 type Observation map[string]map[Lane]Observed
+
+// SeatFaults is an [Session.Observe] error naming the seats the vendor could
+// not read, each with why, beside an [Observation] of every other seat.
+type SeatFaults map[string]error
+
+// Error implements error, naming each seat in order.
+func (f SeatFaults) Error() string {
+	parts := make([]string, 0, len(f))
+	for _, h := range slices.Sorted(maps.Keys(f)) {
+		parts = append(parts, h+": "+f[h].Error())
+	}
+	return "seataccess: could not read " + strings.Join(parts, "; ")
+}
 
 // ApplyInput is one step for one seat's lane.
 type ApplyInput struct {

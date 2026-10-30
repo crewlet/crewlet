@@ -153,6 +153,32 @@ roles:
 	}
 }
 
+// A REMOVAL THAT IS STILL WAITING HOLDS THE DISCONNECT: an app only a person
+// can delete, or one the vendor refused to, leaves its account in the ledger,
+// and dropping the block then would drop the only connection that confirms
+// the removal while the operator is told it finished.
+func TestARemovalStillWaitingHoldsTheDisconnect(t *testing.T) {
+	t.Parallel()
+	e, _ := sealingEngine(t, "https://jira.example.com")
+	ledger, err := e.SeatAccessLedger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := accountsLeft(t.Context(), ledger, integration.KindSlack); err != nil {
+		t.Errorf("an empty ledger held the disconnect: %v", err)
+	}
+	if err := ledger.Put(t.Context(), seataccess.Record{
+		Kind: integration.KindSlack, Handle: "swe",
+		Account: &seataccess.Account{ID: "A0SWE", State: seataccess.AccountDisabled},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := accountsLeft(t.Context(), ledger, integration.KindSlack); err == nil ||
+		!strings.Contains(err.Error(), "swe") {
+		t.Errorf("an account still held answered %v, want a refusal naming it", err)
+	}
+}
+
 // THE CREDENTIALS AN ACCOUNT HELD GO WITH THE ACCOUNT.
 //
 // No teardown or decommission path anywhere deleted a secret: a vendor
