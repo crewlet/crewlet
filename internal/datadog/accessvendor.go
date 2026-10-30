@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -26,15 +27,6 @@ import (
 // the service account's application key, under DATADOG_APP_KEY_<HANDLE>.
 const AppKeyField = "APP_KEY"
 
-// ToolServer is the `mcp_servers` entry a seat's Datadog tool is started from,
-// and ToolHeader the header Datadog's MCP server reads the application key
-// from (D15). The organization's API key rides in the server's own headers:
-// it names the organization, not a user, so it is the same for every seat.
-const (
-	ToolServer = "datadog"
-	ToolHeader = "DD_APPLICATION_KEY"
-)
-
 func init() { seataccess.Register(accessVendor{}) }
 
 // accessVendor is Datadog's [seataccess.Vendor].
@@ -42,16 +34,14 @@ type accessVendor struct{}
 
 func (accessVendor) Kind() integration.Kind { return integration.KindDatadog }
 
+// Catalog is Datadog's per-seat offer. The seat's key reaches its tool through
+// the engine's binding table ([config.SeatToolBindings]): Datadog's MCP server
+// reads it as DD_APPLICATION_KEY, beside the organization's API key in the
+// server's own headers.
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindDatadog,
 		Credentials: []string{AppKeyField},
-		Tool: &seataccess.ToolBinding{
-			Server: ToolServer,
-			Keys: []seataccess.BoundKey{
-				{Field: AppKeyField, Header: ToolHeader, Env: ToolHeader},
-			},
-		},
 		Lanes: []seataccess.LaneSpec{{
 			Lane:   seataccess.LaneDatadog,
 			Levels: true, LiveLevels: true,
@@ -100,13 +90,15 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op) []seataccess.Step {
 		return []seataccess.Step{mint}
 	case seataccess.OpDisable:
 		return []seataccess.Step{{
-			Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
-			Text: "Delete its application keys and clear " + sink,
-		}, {
 			Op: op, Verb: seataccess.VerbDisable, By: seataccess.ByCrewlet,
 			Text: "Disable its Datadog service account",
 			Note: "Datadog keeps the account and everything it authored, so turning it " +
 				"back on needs no person.",
+		}}
+	case seataccess.OpRevoke:
+		return []seataccess.Step{{
+			Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
+			Text: "Delete its application keys and clear " + sink,
 		}}
 	case seataccess.OpRemove:
 		return []seataccess.Step{{
@@ -165,10 +157,7 @@ func (accessVendor) open(in seataccess.OpenInput, hc *http.Client) (seataccess.S
 			"key did not both resolve, and Datadog refuses a write carrying only one",
 			integration.ErrNotConfigured)
 	}
-	return &accessSession{
-		client: client, creds: creds, provisioning: cfg.Provisioning,
-		memo: newStepMemo(),
-	}, nil
+	return &accessSession{client: client, creds: creds, provisioning: cfg.Provisioning}, nil
 }
 
 // accessSession is one pass's connection to Datadog.
@@ -176,7 +165,12 @@ type accessSession struct {
 	client       *Client
 	creds        Credentials
 	provisioning *config.DatadogProvisioning
-	memo         *stepMemo
+
+	// minted is the key id this session minted for each seat, by handle.
+	// A rotation's second step needs it: it deletes every other key this
+	// engine minted and never that one, and Datadog gives no other way to
+	// tell them apart. A step that finds none deletes nothing.
+	minted sync.Map
 }
 
 // Options is every role the organization has, managed first in Datadog's own
@@ -319,9 +313,6 @@ func observedOf(account Account, rec seataccess.Record, recorded bool) seatacces
 			out.DisabledBy = seataccess.DisabledByCrewlet
 		}
 	}
-	if len(account.EngineKeys()) > 0 {
-		out.Credential = &seataccess.Credential{}
-	}
 	if recorded && rec.Account != nil {
 		out.CreatedAt = rec.Account.CreatedAt
 	}
@@ -363,16 +354,17 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		})
 	case seataccess.OpDisable:
 		return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
-			if in.Step.Verb == seataccess.VerbRevoke {
-				if err := s.client.RevokeKeys(ctx, s.creds, account); err != nil {
-					return seataccess.StepResult{}, s.refused(in, err)
-				}
-				return seataccess.StepResult{Revoked: []string{AppKeyField}}, nil
-			}
 			if err := s.client.Disable(ctx, s.creds, account); err != nil {
 				return seataccess.StepResult{}, s.refused(in, err)
 			}
 			return seataccess.StepResult{Disabled: true}, nil
+		})
+	case seataccess.OpRevoke:
+		return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
+			if err := s.client.RevokeKeys(ctx, s.creds, account); err != nil {
+				return seataccess.StepResult{}, s.refused(in, err)
+			}
+			return seataccess.StepResult{Revoked: []string{AppKeyField}}, nil
 		})
 	case seataccess.OpRemove:
 		// NOTHING IS DELETED AT DATADOG, which has no hard delete for a
@@ -393,7 +385,9 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			return s.mint(ctx, in, false)
 		}
 		return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
-			_, err := s.client.RetireKeys(ctx, s.creds, account, s.memo.minted(in.Seat.Handle))
+			keep, _ := s.minted.Load(in.Seat.Handle)
+			id, _ := keep.(string)
+			_, err := s.client.RetireKeys(ctx, s.creds, account, id)
 			return seataccess.StepResult{}, s.refused(in, err)
 		})
 	default:
@@ -412,7 +406,6 @@ func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (s
 	if err != nil {
 		return seataccess.StepResult{}, s.refused(in, err)
 	}
-	s.memo.account(in.Seat.Handle, created.ID)
 	return seataccess.StepResult{AccountID: created.ID, Account: email}, nil
 }
 
@@ -473,7 +466,7 @@ func (s *accessSession) mint(
 				revokeErr)
 		}
 		accountID, keyID := account.ID, key.ID
-		s.memo.mint(in.Seat.Handle, keyID)
+		s.minted.Store(in.Seat.Handle, keyID)
 		return seataccess.StepResult{Minted: []seataccess.Minted{{
 			Field: AppKeyField, Value: key.Key,
 			Revoke: func(ctx context.Context) error {
@@ -488,12 +481,18 @@ func (s *accessSession) mint(
 //
 // FRESH, not the observation the pass began with: a step acts on what the
 // account holds now, and an account deleted between the read and the step is
-// a ledger record to close rather than a refusal to report.
+// a ledger record to close rather than a refusal to report. The account is
+// the ledger's, which the sync updates as soon as a create returns, so a
+// create's mint reaches the account the create made; one the pass adopted
+// rather than created is the one it observed.
 func (s *accessSession) withAccount(
 	ctx context.Context, in seataccess.ApplyInput,
 	fn func(Account) (seataccess.StepResult, error),
 ) (seataccess.StepResult, error) {
-	accountID := s.memo.accountOf(in)
+	accountID := in.Have.AccountID
+	if in.Record != nil && in.Record.Held() {
+		accountID = in.Record.Account.ID
+	}
 	if accountID == "" {
 		return seataccess.StepResult{}, fmt.Errorf(
 			"datadog: %s has no account to %s", in.Seat.Handle, in.Step.Verb)

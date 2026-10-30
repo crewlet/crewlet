@@ -333,8 +333,9 @@ func TestTheMattermostCatalog(t *testing.T) {
 	t.Parallel()
 	vendor, _ := seataccess.Lookup(integration.KindMattermost)
 	cat := vendor.Catalog()
-	if !slices.Equal(cat.Credentials, []string{mattermost.BotTokenField}) || cat.Tool != nil {
-		t.Errorf("catalog = %+v", cat)
+	if !slices.Equal(cat.Credentials, []string{mattermost.BotTokenField}) ||
+		seataccess.ToolFor(seataccess.LaneMattermost) != nil {
+		t.Errorf("catalog = %+v, want one token and no tool binding", cat)
 	}
 	lane, ok := cat.Lane(seataccess.LaneMattermost)
 	if !ok || !lane.Levels || lane.LiveLevels || !lane.Scoped || !lane.Rotatable {
@@ -396,7 +397,8 @@ func TestMattermostStepsPerOp(t *testing.T) {
 		seataccess.OpLevel:   {seataccess.VerbRerole},
 		seataccess.OpScope:   {seataccess.VerbScope},
 		seataccess.OpMint:    {seataccess.VerbMint},
-		seataccess.OpDisable: {seataccess.VerbRevoke, seataccess.VerbDisable},
+		seataccess.OpDisable: {seataccess.VerbDisable},
+		seataccess.OpRevoke:  {seataccess.VerbRevoke},
 		seataccess.OpRemove:  {seataccess.VerbRemove},
 		seataccess.OpRotate:  {seataccess.VerbMint, seataccess.VerbRevoke},
 	} {
@@ -455,11 +457,11 @@ func TestMattermostObserve(t *testing.T) {
 	}
 	lane := func(h string) seataccess.Observed { return obs[h][seataccess.LaneMattermost] }
 	if got := lane("sre"); !got.Exists || got.Level != postAll || got.Account != "@agent-sre" ||
-		!slices.Equal(got.Scope, []string{"general"}) || got.Credential == nil {
+		!slices.Equal(got.Scope, []string{"general"}) {
 		t.Errorf("sre = %+v", got)
 	}
 	if got := lane("oncall"); got.AccountID != adopted.id || got.Level != "system_custom system_user" ||
-		!slices.Equal(got.Scope, []string{"incidents"}) || got.Credential != nil {
+		!slices.Equal(got.Scope, []string{"incidents"}) {
 		t.Errorf("oncall = %+v", got)
 	}
 	if got := lane("dba"); got.Enabled || got.DisabledBy != seataccess.DisabledByHand {
@@ -572,9 +574,9 @@ func TestMattermostScope(t *testing.T) {
 	}
 }
 
-// OFF REVOKES THIS ENGINE'S TOKENS AND HANDS THE SYNC THE FIELD TO CLEAR, then
-// marks and deactivates the bot, which Mattermost keeps (D1). Back on
-// reactivates it, clears the marker and mints a fresh token.
+// OFF MARKS AND DEACTIVATES THE BOT, which Mattermost keeps (D1), and the
+// revoke that follows takes this engine's tokens and hands the sync the field
+// to clear. Back on reactivates it, clears the marker and mints a fresh token.
 func TestMattermostOffAndBackOn(t *testing.T) {
 	t.Parallel()
 	chat := newAccessChat(t)
@@ -584,14 +586,6 @@ func TestMattermostOffAndBackOn(t *testing.T) {
 	session := chat.open(t)
 	in := seataccess.ApplyInput{Record: heldBot(bot.id), Want: seataccess.Desired{Level: member}}
 
-	in.Step = mmStep(t, seataccess.OpDisable, seataccess.VerbRevoke)
-	revoked, err := mmApply(t, session, in)
-	if err != nil || !slices.Equal(revoked.Revoked, []string{mattermost.BotTokenField}) {
-		t.Fatalf("revoke = %+v, %v", revoked, err)
-	}
-	if tokens := chat.tokenIDs(bot.id); !slices.Equal(tokens, []string{admins}) {
-		t.Errorf("tokens = %q, want only the administrator's own left", tokens)
-	}
 	in.Step = mmStep(t, seataccess.OpDisable, seataccess.VerbDisable)
 	off, err := mmApply(t, session, in)
 	if err != nil || !off.Disabled {
@@ -599,6 +593,14 @@ func TestMattermostOffAndBackOn(t *testing.T) {
 	}
 	if got := chat.user(bot.id); got.deleteAt == 0 || got.description != mattermost.DisconnectedDescription {
 		t.Errorf("bot = %+v, want deactivated and marked", got)
+	}
+	in.Step = mmStep(t, seataccess.OpRevoke, seataccess.VerbRevoke)
+	revoked, err := mmApply(t, session, in)
+	if err != nil || !slices.Equal(revoked.Revoked, []string{mattermost.BotTokenField}) {
+		t.Fatalf("revoke = %+v, %v", revoked, err)
+	}
+	if tokens := chat.tokenIDs(bot.id); !slices.Equal(tokens, []string{admins}) {
+		t.Errorf("tokens = %q, want only the administrator's own left", tokens)
 	}
 
 	in.Step = mmStep(t, seataccess.OpEnable, seataccess.VerbEnable)
