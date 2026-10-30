@@ -573,7 +573,7 @@ The million-file tree's arm runs only under `CREWLET_BENCH_LARGE`, and was not m
 | the coding recipe | 1.14 s; the box's git 1.03 s of CPU, the node's 0.36 s; 16.7 MB sent | 13.0 s; 12.2 s, 3.7 s; 179 MB |
 | a borrowed copy | 2.59 s; 3.40 s, 3 ms; nothing sent | 47.8 s; 58.1 s, 3 ms; nothing sent |
 
-Copying the borrowed copy costs a box several times the clone it saves the node — 3.7 times at a gigabyte, where borrowing would be worth designing only at under half — so no box borrows; a borrow kept for a run's life, never copied, is what a check box on a git node would measure first. How boxes share a node's transfer slots with people and with CI is the code host's [fair share](code-host.md#fair-share).
+Copying the borrowed copy costs a box several times the clone it saves the node — 3.7 times at a gigabyte, where borrowing would be worth designing only at under half — so no box copies one; a borrow kept for a run's life and never copied, the [borrowed checkout](#check-boxes) a check's box on a git node can be given, is what a check box would measure first. How boxes share a node's transfer slots with people and with CI is the code host's [fair share](code-host.md#fair-share).
 
 ---
 
