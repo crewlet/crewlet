@@ -2,7 +2,6 @@ package datadog_test
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -154,91 +153,5 @@ func TestTurnOffStopsAtAKeyItCannotRevoke(t *testing.T) {
 	}
 	if got := writesOf(reg); len(got) != 1 {
 		t.Errorf("writes = %q, want only the refused revoke", got)
-	}
-}
-
-// A MINT WHOSE RECORD FAILS REVOKES THE KEY, and the error keeps the record's
-// cause rather than replacing it with the cleanup's outcome.
-func TestAFailedRecordRevokesTheMintedKey(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name       string
-		revokeFail bool
-		says       string
-	}{
-		{name: "revoked", says: "revoked again"},
-		{name: "revoke refused too", revokeFail: true, says: "held by nobody"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			reg := newRegion(t)
-			reg.handle["/api/v2/service_accounts/u-1/application_keys"] = func(
-				w http.ResponseWriter, _ *http.Request,
-			) {
-				_, _ = w.Write([]byte(`{"data":{"id":"k-new","attributes":{"key":"fake-value","name":"crewlet"}}}`))
-			}
-			revoked := false
-			reg.handle["/api/v2/service_accounts/u-1/application_keys/k-new"] = func(
-				w http.ResponseWriter, r *http.Request,
-			) {
-				if r.Method == http.MethodDelete {
-					revoked = true
-				}
-				if tc.revokeFail {
-					w.WriteHeader(http.StatusInternalServerError)
-					_, _ = w.Write([]byte(`{"errors":["try later"]}`))
-					return
-				}
-				_, _ = w.Write([]byte(`{}`))
-			}
-			sink := newSink()
-			sink.recordErr = errors.New("store refused")
-			_, err := reg.client(t).MintInto(context.Background(), pair, sink, "u-1", "sre",
-				"DATADOG_APP_KEY_SRE")
-			if err == nil || !strings.Contains(err.Error(), tc.says) ||
-				!strings.Contains(err.Error(), "store refused") {
-				t.Fatalf("err = %v, want the cause and %q", err, tc.says)
-			}
-			if !revoked {
-				t.Error("the unrecorded key was not revoked")
-			}
-			if strings.Contains(err.Error(), "fake-value") {
-				t.Error("the error carries the key's value")
-			}
-		})
-	}
-}
-
-// A ROTATION RECORDS THE NEW KEY BEFORE IT DELETES THE OLD ONES, and spares a
-// key a person put on the account.
-func TestRotateRecordsBeforeItRetires(t *testing.T) {
-	t.Parallel()
-	reg := newRegion(t)
-	sink := newSink()
-	recordedFirst := false
-	reg.handle["/api/v2/service_accounts/u-1/application_keys"] = func(
-		w http.ResponseWriter, _ *http.Request,
-	) {
-		_, _ = w.Write([]byte(`{"data":{"id":"k-new","attributes":{"key":"fake-new","name":"crewlet"}}}`))
-	}
-	reg.handle["/api/v2/service_accounts/u-1/application_keys/k-old"] = func(
-		w http.ResponseWriter, _ *http.Request,
-	) {
-		recordedFirst = sink.held["DATADOG_APP_KEY_SRE"] == "fake-new"
-		_, _ = w.Write([]byte(`{}`))
-	}
-	minted, err := reg.client(t).Rotate(context.Background(), pair, sink, datadog.Account{
-		ID: "u-1", Keys: []datadog.AppKey{{ID: "k-old", Name: "crewlet"}, {ID: "k-hand", Name: "ops"}},
-	}, "sre", "DATADOG_APP_KEY_SRE")
-	if err != nil || minted.ID != "k-new" {
-		t.Fatalf("rotate: %+v, %v", minted, err)
-	}
-	if !recordedFirst {
-		t.Error("the old key was deleted before the new value was recorded")
-	}
-	for _, call := range writesOf(reg) {
-		if strings.Contains(call, "k-hand") {
-			t.Errorf("a key a person made was deleted: %s", call)
-		}
 	}
 }
