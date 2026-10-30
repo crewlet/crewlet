@@ -128,35 +128,24 @@ func (c *Client) TurnOff(ctx context.Context, creds Credentials, account Account
 	return c.Disable(ctx, creds, account)
 }
 
-// RetireKeys deletes the keys this engine minted on an account before its
-// newest one, which is a rotation's second half: the newest key was minted and
-// sealed by the step before, so the ones it replaces hold values nothing reads.
+// RetireKeys deletes the keys this engine minted on an account other than
+// keep, which is a rotation's second half: keep was minted and sealed by the
+// step before, so the keys it replaces hold values nothing reads.
 //
-// IT REFUSES RATHER THAN GUESSES. Two keys minted at one instant, or a key
-// whose creation time Datadog did not say, leave "which is current" unknown,
-// and deleting the wrong one is an outage this engine caused. Keys a person
-// put on the account are not this engine's to retire.
-func (c *Client) RetireKeys(ctx context.Context, creds Credentials, account Account) (int, error) {
+// IT REFUSES RATHER THAN GUESSES. A keep the account does not hold means the
+// key just minted is gone, and deleting the others would leave the seat with
+// nothing; keys a person put on the account are not this engine's to retire.
+func (c *Client) RetireKeys(
+	ctx context.Context, creds Credentials, account Account, keep string,
+) (int, error) {
 	engine := account.EngineKeys()
-	if len(engine) < 2 {
-		return 0, nil
-	}
-	newest := engine[0]
-	for _, key := range engine[1:] {
-		if key.CreatedAt.After(newest.CreatedAt) {
-			newest = key
-		}
-	}
-	for _, key := range engine {
-		if key.ID != newest.ID && (key.CreatedAt.IsZero() || !key.CreatedAt.Before(newest.CreatedAt)) {
-			return 0, errors.New("datadog: cannot tell which application key is the " +
-				"current one (two share a creation time, or Datadog did not say), so " +
-				"none was deleted; delete the older key named crewlet on the account")
-		}
+	if keep == "" || !slices.ContainsFunc(engine, func(key AppKey) bool { return key.ID == keep }) {
+		return 0, errors.New("datadog: the key this rotation minted is not on the account, " +
+			"so no older key was deleted; rotate again")
 	}
 	retired := 0
 	for _, key := range engine {
-		if key.ID == newest.ID {
+		if key.ID == keep {
 			continue
 		}
 		if err := c.DeleteAppKey(ctx, creds, account.ID, key.ID); err != nil {
