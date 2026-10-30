@@ -82,6 +82,8 @@ func catalogue() []events.Payload {
 		AssistantTurnCompleted{},
 		// seat.go
 		SeatPaused{}, SeatResumed{}, AgentTurnStopped{}, AgentTurnSteered{},
+		// seataccess.go
+		SeatAccessDriftRestored{},
 	}
 }
 
@@ -157,6 +159,7 @@ var wireTypes = []string{
 	"sandbox_run_started",
 	"sandbox_run_stopped",
 	"scheduled_task_fired",
+	"seat_access_drift_restored",
 	"seat_paused",
 	"seat_provider_parked",
 	"seat_provider_released",
@@ -388,6 +391,7 @@ var wireTags = map[string][]string{
 	"sandbox_clarification_requested": {"agent_handle", "agent_id", "audience", "conversation_key", "decision", "question", "question_context", "role", "sandbox_id", "turn_id", "work_item", "work_key"},
 	"seat_paused":                     {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "reason", "role", "stop_running"},
 	"seat_resumed":                    {"agent_handle", "agent_id", "operator_id", "paused_at", "paused_by", "paused_by_kind", "resumed_by", "resumed_by_kind", "role"},
+	"seat_access_drift_restored":      {"after", "agent_handle", "before", "integration", "lane", "restored_at"},
 	"agent_turn_stopped":              {"agent_handle", "agent_id", "operator_id", "reason", "role", "stopped_by", "stopped_by_kind", "turn_id", "work_key"},
 	"agent_turn_steered":              {"agent_handle", "agent_id", "boundary", "iteration", "launch_id", "note", "note_id", "operator_id", "outcome", "phase", "role", "round", "sent_at", "steered_by", "steered_by_kind", "turn_id", "work_key"},
 	"sandbox_answer_given":            {"agent_handle", "agent_id", "answer", "answered_by", "answered_by_kind", "choice", "launch_id", "operator_id", "turn_id"},

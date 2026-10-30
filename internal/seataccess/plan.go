@@ -186,9 +186,9 @@ func walk(
 				Seat: in.Seat, Lane: lane, Op: p.op, Want: want, Have: have,
 				Options: in.Options[lane],
 			})
-			for i := range got {
-				got[i].Op, got[i].Index = p.op, i
-				got[i].Drift = got[i].Drift || p.drift
+			for j := range got {
+				got[j].Op, got[j].Index = p.op, j
+				got[j].Drift = got[j].Drift || p.drift
 			}
 			steps = append(steps, got...)
 		}
@@ -215,7 +215,6 @@ type planned struct {
 
 // onAccount is what a lane that is on needs from an account that exists.
 func onAccount(want Desired, have Observed, applied *Desired, ask Ask, lane Lane) []planned {
-	var ops []planned
 	if !have.Enabled {
 		reenable := ask.Reenable && (ask.Lane == "" || ask.Lane == lane)
 		if have.DisabledBy == DisabledByHand && !reenable {
@@ -224,9 +223,12 @@ func onAccount(want Desired, have Observed, applied *Desired, ask Ask, lane Lane
 			// nobody may use: the tab offers Turn back on or Keep off.
 			return nil
 		}
-		ops = append(ops, planned{op: OpEnable})
+		// ENABLE GRANTS THE DOCUMENT'S SETTING, as create does, so nothing
+		// else is planned on the lane in the same sync.
+		return []planned{{op: OpEnable}}
 	}
 	now := have.Access()
+	var ops []planned
 	if !want.SameLevel(now) {
 		ops = append(ops, planned{op: OpLevel, drift: unchanged(applied, want, Desired.SameLevel)})
 	}
