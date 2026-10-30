@@ -937,7 +937,7 @@ func printVendorUsage(w io.Writer, vendor string, commands []vendorCommand) {
 	}
 	retired := retiredCommands[vendor]
 	for _, sub := range slices.Sorted(maps.Keys(retired)) {
-		fmt.Fprintf(w, "\n`crewlet %s %s` is retired: %s\n", vendor, sub, retired[sub])
+		fmt.Fprintf(w, "retired: crewlet %s %s: %s\n", vendor, sub, retired[sub])
 	}
 }
 

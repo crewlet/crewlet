@@ -492,7 +492,7 @@ func TestTheRetiredMattermostProvisionSaysWhereItsWorkWent(t *testing.T) {
 		t.Fatalf("usage: %v", err)
 	}
 	if usage := errs.String(); !strings.Contains(usage, "crewlet mattermost doctor") ||
-		!strings.Contains(usage, "is retired") {
+		!strings.Contains(usage, "retired: crewlet mattermost provision") {
 		t.Errorf("the usage does not list doctor and the retirement:\n%s", usage)
 	}
 }
@@ -688,8 +688,22 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 			t.Errorf("%s: an unknown subcommand returned %v, want an unknown-command error",
 				vendor, err)
 		}
-		// Every subcommand spelled in the usage must be dispatchable.
+		// Every subcommand spelled in the usage must be dispatchable, and
+		// every one it lists as retired must answer with its retirement.
 		for line := range strings.SplitSeq(strings.TrimSpace(usage), "\n") {
+			if rest, retired := strings.CutPrefix(line, "retired: "); retired {
+				fields := strings.Fields(rest)
+				if len(fields) < 3 || retiredCommands[vendor][strings.TrimSuffix(fields[2], ":")] == "" {
+					t.Errorf("%s: usage lists %q as retired, which is not", vendor, line)
+					continue
+				}
+				err := runIntegration(invocation{environ: noEnviron}, vendor,
+					[]string{strings.TrimSuffix(fields[2], ":")}, io.Discard, io.Discard)
+				if err == nil || errors.Is(err, errUnknownSub) || errors.Is(err, flag.ErrHelp) {
+					t.Errorf("%s: retired %q answered %v, want its retirement", vendor, fields[2], err)
+				}
+				continue
+			}
 			// "usage: crewlet <vendor> <sub> …", and the continuation
 			// lines are the same without the lead — so the subcommand is
 			// found relative to "crewlet", not from the start of the line.
