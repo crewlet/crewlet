@@ -126,8 +126,9 @@ const MaxPayloadBytes = 8 << 20
 // answering one node's full complement of turns and a second node's beside it
 // never queues a request behind another. The cap bounds goroutines and
 // buffered payloads rather than throughput — a request past it waits for a
-// slot, it is never dropped. What it costs in memory is sixty-four of the
-// largest answer THAT registration serves, and most answer in a few
+// slot rather than failing, as far as its backend buffers it
+// ([EventQueue.Serve] says how far). What it costs in memory is sixty-four
+// of the largest answer THAT registration serves, and most answer in a few
 // kilobytes (a steer, a sandbox tail, the fleet broker's member exchange).
 // Three can fill an answer up to [MaxPayloadBytes]: the fleet turn-detail
 // scatter (internal/eventfan), the memory read (internal/learning/memread)
@@ -138,7 +139,9 @@ const MaxPayloadBytes = 8 << 20
 // answer that large is a dashboard or a seat reading a whole window and
 // sixty-four of them in flight on one registration is sixty-four such readers
 // at the same instant. Past the cap a request waits for a slot like any
-// other, which is back-pressure on the asker rather than a failure.
+// other, which is back-pressure on the asker rather than a failure: work done
+// now frees its slots in the time its answers take, long before a backend's
+// buffer fills.
 //
 // A REGISTRATION WHOSE ANSWERS WAIT — in a queue of their own, for as long as
 // their askers' attempts, as a push proposal waits behind its repository's
@@ -650,11 +653,24 @@ type EventQueue interface {
 	// was not running — see AnswerFunc.
 	//
 	// ANSWERS RUN CONCURRENTLY, up to answers of them at once, and a
-	// request beyond that waits for a slot rather than being dropped. One
-	// slow answer must never hold the next request behind it: an answerer
-	// serves every asker in the fleet, and a registration that answered
-	// one at a time made each of them wait for the sum of everybody
-	// else's latency.
+	// request beyond that waits for a slot rather than failing, as far as
+	// its backend buffers it (below). One slow answer must never hold the
+	// next request behind it: an answerer serves every asker in the fleet,
+	// and a registration that answered one at a time made each of them wait
+	// for the sum of everybody else's latency.
+	//
+	// A WAITING REQUEST IS HELD IN A BUFFER ITS BACKEND BOUNDS, and dropped
+	// past it. The real backend's NATS client holds a subscription's
+	// pending requests to 64 MiB and 500 000 messages (nats.go's defaults,
+	// which this package leaves as they are) and drops a request past them
+	// as a slow consumer: logged on the serving node, naming no subject,
+	// and heard by its asker as no answer at all, at its deadline. The
+	// in-memory twin holds every one. Work done now drains its slots long
+	// before that bound; a registration whose requests are LARGE and whose
+	// answers hold their slots through long waits does not, so it bounds
+	// its own backlog — it answers a request past what it holds AT ONCE,
+	// in its own words for "not now", and never leaves it to wait where it
+	// can be dropped unheard (internal/estate's engine writes' lane).
 	//
 	// THE BOUND IS THE REGISTRATION'S OWN, and so are its slots: a
 	// request waiting for one waits only behind its own registration's
