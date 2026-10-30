@@ -229,17 +229,20 @@ func (t *runSandbox) CallDetached(ctx context.Context, turn *turnctx.Turn, args 
 var repoKeys = []string{"repo", "base", "branch", "access", "paths"}
 
 // reposArg is the call's `repos`, read STRICTLY — an item that is not an
-// object, a key the schema does not name, an empty `repo`, an `access` outside
-// its two values, a list past its bound, or one repository named twice is
-// refused naming the item and the field, before the launcher is asked — or
-// nil where the call names none. A tool that offers no `repos` (a company
-// whose code host this node does not serve) never reads one: the argument is
-// not in its schema, so every call path refuses it as one the tool does not
-// read before the tool is asked.
+// object, a key the schema does not name, a field that is not the type the
+// schema gives it, an empty `repo`, an `access` outside its two values, a
+// list past its bound, or one repository named twice is refused naming the
+// item and the field, before the launcher is asked — or nil where the call
+// names none. A tool that offers no `repos` (a company whose code host this
+// node does not serve) never reads one: the argument is not in its schema, so
+// every call path refuses it as one the tool does not read before the tool is
+// asked.
 //
 // STRICT, unlike the tolerant readers beside it, because what a repository is
 // given is a GRANT: an `acess: write` misspelt and dropped would hand the run
-// the default access, which may be more than the model meant to ask for.
+// the default access, which may be more than the model meant to ask for — and
+// so would an `"access": ["read"]` read as no access asked, which argString,
+// tolerant of a value of the wrong type by design, answers as "" (repoField).
 func (t *runSandbox) reposArg(args map[string]any) ([]RepoRequest, *tools.Result) {
 	raw, named := args["repos"]
 	if !named || raw == nil {
@@ -269,11 +272,16 @@ func (t *runSandbox) reposArg(args map[string]any) ([]RepoRequest, *tools.Result
 					strings.Join(repoKeys, ", "))
 			}
 		}
-		req := RepoRequest{
-			Repo:   strings.TrimSpace(argString(fields, "repo")),
-			Base:   strings.TrimSpace(argString(fields, "base")),
-			Branch: strings.TrimSpace(argString(fields, "branch")),
-			Access: strings.TrimSpace(argString(fields, "access")),
+		var req RepoRequest
+		for _, f := range []struct {
+			key  string
+			into *string
+		}{{"repo", &req.Repo}, {"base", &req.Base}, {"branch", &req.Branch}, {"access", &req.Access}} {
+			value, ok := repoField(fields, f.key)
+			if !ok {
+				return refuse("repos[%d].%s is not a string: write it as one, or leave it out.", i, f.key)
+			}
+			*f.into = value
 		}
 		switch {
 		case req.Repo == "":
@@ -305,4 +313,22 @@ func (t *runSandbox) reposArg(args map[string]any) ([]RepoRequest, *tools.Result
 		out = append(out, req)
 	}
 	return out, nil
+}
+
+// repoField is one string field of a `repos` item, trimmed — "" where the item
+// leaves it out or sets it null, which the launch reads as the field's default
+// — and false where the item holds it as anything but a string. A list, an
+// object, a number or a bool is REFUSED rather than read as argString reads
+// it: the default of every field is a choice the launch makes on the model's
+// behalf (the most its grant allows, the seat's own branch, the branch's own
+// head), so a value it did send in the wrong shape is a request it made, and
+// is answered as one it must make again, never as one it did not make.
+func repoField(fields map[string]any, key string) (string, bool) {
+	switch v := fields[key].(type) {
+	case nil:
+		return "", true
+	case string:
+		return strings.TrimSpace(v), true
+	}
+	return "", false
 }

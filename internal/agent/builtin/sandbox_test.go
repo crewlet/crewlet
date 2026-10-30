@@ -209,7 +209,8 @@ func TestRunSandboxTakesRepos(t *testing.T) {
 	}
 	valid := call(map[string]any{"brief": "fix it", "repos": []any{
 		map[string]any{"repo": "site", "branch": "fix/a", "access": "write", "paths": []any{"src", "docs"}},
-		map[string]any{"repo": "api", "base": "v1"},
+		// NULL IS UNSET, as an omitted field is.
+		map[string]any{"repo": "api", "base": "v1", "access": nil},
 	}})
 	if valid.Failed {
 		t.Fatalf("a valid call was refused: %q", valid.Output)
@@ -244,6 +245,16 @@ func TestRunSandboxTakesRepos(t *testing.T) {
 		{"no repo", []any{map[string]any{"branch": "x"}}, "repos[0] needs `repo`"},
 		{"an access outside its two", []any{map[string]any{"repo": "site", "access": "admin"}},
 			`repos[0].access is "admin"`},
+		// A FIELD OF THE WRONG TYPE IS A REQUEST, NOT NONE: read as no
+		// access asked, a list would give the run write wherever the seat
+		// may push, and an object branch would put it on the seat's own.
+		{"an access that is a list", []any{map[string]any{"repo": "site", "access": []any{"read"}}},
+			"repos[0].access is not a string"},
+		{"a branch that is an object", []any{map[string]any{"repo": "site",
+			"branch": map[string]any{"name": "fix/a"}}}, "repos[0].branch is not a string"},
+		{"a base that is a number", []any{map[string]any{"repo": "site", "base": float64(1234567)}},
+			"repos[0].base is not a string"},
+		{"a repo that is a bool", []any{map[string]any{"repo": true}}, "repos[0].repo is not a string"},
 		{"paths that are not a list", []any{map[string]any{"repo": "site", "paths": "src"}},
 			"repos[0].paths must be a list"},
 		{"a cone past its bound", []any{map[string]any{"repo": "site", "paths": cone}},
