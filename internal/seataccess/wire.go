@@ -74,10 +74,26 @@ type Answer struct {
 
 	Notice *Notice `json:"notice,omitempty"`
 
+	// ManagedBy is [ManagedByOperator] where the company document is the
+	// operator's to write: the tab is read-only, and a change is made on
+	// the Seat object. Empty where the engine's own surfaces write it.
+	ManagedBy string `json:"managed_by,omitempty"`
+
 	// Options are what each lane offers now, for the pickers.
 	Options []Options `json:"options"`
 
 	Seats []SeatAnswer `json:"seats"`
+}
+
+// ManagedByOperator is [Answer.ManagedBy] for a document the operator
+// renders from its custom resources.
+const ManagedByOperator = "operator"
+
+// InstallLink is the Slack install seat action's answer: a fresh, single-use
+// link a person follows to approve one agent's app. Minted on request and
+// never stored or answered on a read.
+type InstallLink struct {
+	URL string `json:"url"`
 }
 
 // SeatPlan is one seat's lane in a plan answer.
