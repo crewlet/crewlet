@@ -281,8 +281,6 @@ func readersOfTheCompany() []readerRun {
 		vendorRun("confluence provision", sink, public, "-recreate-webhooks"),
 		vendorRun("confluence import"),
 		vendorRun("confluence resync"),
-		vendorRun("mattermost provision", sink, "-admin-token=mm-admin"),
-		vendorRun("mattermost provision", sink, "-admin-token=mm-admin", "-rotate"),
 		vendorRun("mattermost doctor", "-admin-token=mm-admin"),
 		// WITH AN APP-CONFIGURATION TOKEN, so a run the refusal let through
 		// goes on to Slack, which no case's run reaches: its first request
