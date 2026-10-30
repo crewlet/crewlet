@@ -255,7 +255,7 @@ export function readerUnlearned(): boolean {
  */
 export function readerQuery(): string {
   const reader = tabReader?.current() ?? null;
-  return reader === null ? "" : `?${READER_PARAM}=${encodeURIComponent(reader)}`;
+  return reader === null ? "" : `?${new URLSearchParams({ [READER_PARAM]: reader })}`;
 }
 
 /**

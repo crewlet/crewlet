@@ -1227,7 +1227,7 @@ function readerUnlearned() {
 */
 function readerQuery() {
 	const reader = tabReader?.current() ?? null;
-	return reader === null ? "" : `?${READER_PARAM}=${encodeURIComponent(reader)}`;
+	return reader === null ? "" : `?${new URLSearchParams({ [READER_PARAM]: reader })}`;
 }
 /** A request named this tab's reader and the engine said the session is somebody else's. */
 function readerMoved() {
