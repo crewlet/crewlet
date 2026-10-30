@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
@@ -47,6 +48,7 @@ type glUser struct {
 	Username string `json:"username"`
 	Name     string `json:"name"`
 	State    string `json:"state"`
+	Bot      bool   `json:"bot"`
 }
 
 type glToken struct {
@@ -56,6 +58,7 @@ type glToken struct {
 	revoked bool
 	value   string
 	owner   int
+	expires string // GitLab's YYYY-MM-DD, empty for none
 }
 
 type glRefusal struct {
@@ -80,7 +83,7 @@ func newGLSite(t *testing.T) *glSite {
 
 var (
 	reUser         = regexp.MustCompile(`^/users/(\d+)$`)
-	reBlock        = regexp.MustCompile(`^/users/(\d+)/(block|unblock)$`)
+	reBlock        = regexp.MustCompile(`^/users/(\d+)/(block|unblock|activate|unban)$`)
 	reGroupMember  = regexp.MustCompile(`^/groups/9/members/(\d+)$`)
 	reProjMembers  = regexp.MustCompile(`^/projects/([^/]+/[^/]+)/members$`)
 	reProjMember   = regexp.MustCompile(`^/projects/([^/]+/[^/]+)/members/(\d+)$`)
@@ -151,7 +154,8 @@ func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
 		missing()
 	case call == "POST /groups/9/service_accounts" || call == "POST /service_accounts":
 		g.nextID++
-		u := &glUser{ID: g.nextID, Username: str(body["username"]), Name: str(body["name"]), State: "active"}
+		u := &glUser{ID: g.nextID, Username: str(body["username"]), Name: str(body["name"]),
+			State: "active", Bot: true}
 		g.users[u.ID] = u
 		reply(http.StatusCreated, u)
 	case r.Method == http.MethodPost && reBlock.MatchString(path):
@@ -165,7 +169,8 @@ func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
 			missing()
 			return
 		}
-		u.State = map[string]string{"block": "blocked", "unblock": "active"}[m[2]]
+		u.State = map[string]string{"block": "blocked", "unblock": "active",
+			"activate": "active", "unban": "active"}[m[2]]
 		reply(http.StatusCreated, true)
 	case call == "GET /groups/9/members":
 		reply(http.StatusOK, renderMembers(g.users, g.group))
@@ -233,10 +238,14 @@ func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			var out []map[string]any
 			for _, t := range g.tokens[owner] {
-				out = append(out, map[string]any{
+				row := map[string]any{
 					"id": t.id, "name": t.name, "revoked": t.revoked, "active": !t.revoked,
 					"scopes": t.scopes,
-				})
+				}
+				if t.expires != "" {
+					row["expires_at"] = t.expires
+				}
+				out = append(out, row)
 			}
 			reply(http.StatusOK, out)
 			return
@@ -525,7 +534,7 @@ func TestOptionsAreGitLabsRolesPlusLiveCustomRoles(t *testing.T) {
 func TestACreateAdoptsAnExistingAccountAndRetiresItsEarlierTokens(t *testing.T) {
 	t.Parallel()
 	g := newGLSite(t)
-	g.seed(&glUser{ID: 500, Username: "crewlet-sre", State: "active"})
+	g.seed(&glUser{ID: 500, Username: "crewlet-sre", State: "active", Bot: true})
 	g.mu.Lock()
 	g.tokens[500] = []*glToken{{id: 77, name: "crewlet-sre", owner: 500, value: "old", scopes: []string{"api"}}}
 	// GitLab's token ids grow instance-wide, so the one minted next is
@@ -1004,5 +1013,120 @@ func TestAnInstanceOwnedAccountIsWorkedOnThroughTheInstanceRoutes(t *testing.T) 
 		if g.called(call) {
 			t.Errorf("an instance-owned account was sent down the group route %q", call)
 		}
+	}
+}
+
+// A REVOKED OR EXPIRED TOKEN IS GONE, and so is one inside its renewal
+// window: the vendor says so, the ledger's sealed record does not hide it,
+// and the plan mints a replacement for a seat that is on.
+func TestATokenGoneOrDueForRenewalIsMintedAgain(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		token *glToken
+		gone  bool
+	}{
+		{"no token at all", nil, true},
+		{"revoked by hand", &glToken{id: 1, name: "crewlet-sre", revoked: true}, true},
+		{"expiring in a week", &glToken{id: 1, name: "crewlet-sre",
+			expires: time.Now().Add(7 * 24 * time.Hour).Format(time.DateOnly)}, true},
+		{"live for months", &glToken{id: 1, name: "crewlet-sre",
+			expires: time.Now().Add(200 * 24 * time.Hour).Format(time.DateOnly)}, false},
+		{"live with no expiry", &glToken{id: 1, name: "crewlet-sre"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			g := newGLSite(t)
+			g.seed(&glUser{ID: 500, Username: "crewlet-sre", State: "active", Bot: true})
+			if tc.token != nil {
+				tc.token.owner = 500
+				g.mu.Lock()
+				g.tokens[500] = []*glToken{tc.token}
+				g.mu.Unlock()
+			}
+			s := openGL(t, g, nil)
+			rec := &seataccess.Record{
+				Account:    &seataccess.Account{ID: "500", State: seataccess.AccountActive},
+				Credential: &seataccess.Credential{Variable: "GITLAB_TOKEN_SRE"},
+			}
+			have := observeOne(t, s, rec)
+			if have.CredentialGone != tc.gone || (have.Credential == nil) != tc.gone {
+				t.Fatalf("observed gone %v, credential %+v; want gone %v", have.CredentialGone, have.Credential, tc.gone)
+			}
+			plan, err := seataccess.Plan(gitlab.Vendor{}, seataccess.SeatInput{
+				Seat: sre, Record: rec,
+				Want: map[seataccess.Lane]seataccess.Desired{seataccess.LaneGitLab: {Enabled: true, Level: have.Level}},
+				Have: map[seataccess.Lane]seataccess.Observed{seataccess.LaneGitLab: have},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			minted := slices.ContainsFunc(plan[seataccess.LaneGitLab], func(s seataccess.Step) bool {
+				return s.Op == seataccess.OpMint
+			})
+			if minted != tc.gone {
+				t.Fatalf("plan mints %v, want %v: %+v", minted, tc.gone, plan[seataccess.LaneGitLab])
+			}
+		})
+	}
+}
+
+// BACK ON THROUGH THE ROUTE THAT UNDOES THE STATE: a deactivated account is
+// reactivated, a banned one unbanned, and one blocked by LDAP is refused with
+// the remedy, never sent to a route GitLab refuses for it.
+func TestBackOnUndoesTheStateTheAccountIsIn(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ state, route, did string }{
+		{"blocked", "unblock", "Unblocked"},
+		{"deactivated", "activate", "Reactivated"},
+		{"banned", "unban", "Lifted the ban"},
+		{"ldap_blocked", "", ""},
+	} {
+		t.Run(tc.state, func(t *testing.T) {
+			t.Parallel()
+			g := newGLSite(t)
+			g.admin = true
+			g.seed(&glUser{ID: 500, Username: "crewlet-sre", State: tc.state, Bot: true})
+			s := openGL(t, g, nil)
+			rec := &seataccess.Record{Account: &seataccess.Account{ID: "500", State: seataccess.AccountDisabled}}
+			step := gitlab.Vendor{}.Steps(sre, seataccess.LaneGitLab, seataccess.OpEnable,
+				seataccess.Desired{Enabled: true, Level: "30"}, seataccess.Observed{Exists: true})[0]
+			res, err := s.Apply(context.Background(), seataccess.ApplyInput{
+				Seat: sre, Lane: seataccess.LaneGitLab, Step: step, Record: rec,
+				Want: seataccess.Desired{Enabled: true, Level: "30"},
+			})
+			if tc.route == "" {
+				var refusal *seataccess.Refusal
+				if !errors.As(err, &refusal) || !strings.Contains(refusal.Remedy, "directory") {
+					t.Fatalf("ldap_blocked = %v", err)
+				}
+				return
+			}
+			if err != nil || !strings.HasPrefix(res.Did, tc.did) || !g.called("POST /users/500/"+tc.route) {
+				t.Fatalf("Did %q, err %v, calls %v", res.Did, err, g.calls)
+			}
+		})
+	}
+}
+
+// A PERSON HOLDING THE DERIVED USERNAME IS NEVER ADOPTED: the seat reads as
+// having no account, and creating one is refused with the remedy rather than
+// handing a person this agent's access.
+func TestAPersonHoldingTheUsernameIsNotAdopted(t *testing.T) {
+	t.Parallel()
+	g := newGLSite(t)
+	g.seed(&glUser{ID: 600, Username: "crewlet-sre", State: "active", Bot: false})
+	s := openGL(t, g, nil)
+	if have := observeOne(t, s, nil); have.Exists {
+		t.Fatalf("a person's account was observed as the seat's: %+v", have)
+	}
+	err := runOpUntil(t, s, seataccess.OpCreate, seataccess.Desired{Enabled: true, Level: "30"}, 0)
+	var refusal *seataccess.Refusal
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Said, "not a service account") ||
+		!strings.Contains(refusal.Remedy, "username_prefix") {
+		t.Fatalf("err = %v", err)
+	}
+	if g.called("POST /groups/9/service_accounts") {
+		t.Fatal("a second account was created beside the person's")
 	}
 }

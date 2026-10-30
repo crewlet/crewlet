@@ -131,6 +131,17 @@ type ResolveLevel func(lane seataccess.Lane, name string) (id string, ok bool, e
 // leaves nothing to copy into the seats and is a person's to decide.
 var ErrLevelUnknown = errors.New("accessmigrate: the vendor lists no such role")
 
+// levelUnknown is [ErrLevelUnknown] for one role, worded for a person: the
+// access pass reports it as why the integration waits.
+type levelUnknown struct{ vendor, name string }
+
+func (e *levelUnknown) Error() string {
+	return fmt.Sprintf("%s lists no role named %q, the role the company gave its agents", e.vendor,
+		e.name)
+}
+
+func (e *levelUnknown) Is(target error) bool { return target == ErrLevelUnknown }
+
 // Migration is what one company document needs.
 type Migration struct {
 	// Migrated are the integrations this migration writes and marks.
@@ -446,9 +457,11 @@ func (c *companyAccess) datadogRole() (string, error) {
 	id, ok, err := c.resolve(seataccess.LaneDatadog, c.datadogName)
 	switch {
 	case err != nil:
-		return "", fmt.Errorf("accessmigrate: look up the Datadog role %q: %w", c.datadogName, err)
+		// THE REASON IS A PERSON'S TO READ: the access pass reports it
+		// as why the integration waits.
+		return "", fmt.Errorf("the lookup of the Datadog role %q failed: %w", c.datadogName, err)
 	case !ok:
-		return "", fmt.Errorf("%w: Datadog lists no role %q", ErrLevelUnknown, c.datadogName)
+		return "", &levelUnknown{vendor: "Datadog", name: c.datadogName}
 	}
 	c.datadogID = id
 	return id, nil

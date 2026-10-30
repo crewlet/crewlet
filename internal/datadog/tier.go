@@ -2,17 +2,14 @@ package datadog
 
 import "strings"
 
-// What an agent's Datadog account may do, and where the answer comes from.
+// What an agent's Datadog account may do, in Datadog's own terms.
 //
 // A ROLE, NOT A TIER, which is Datadog's own model: permission is granted by
 // putting an account in a role, and an organization's roles are whatever its
-// admins have made. So there is no closed set to offer, and the value on the
-// config block is a role NAME that this engine passes through to the account
-// it creates.
-//
-// The three Datadog ships with are named here anyway, because they are what
-// almost every organization uses: the role picker groups them first, and the
-// administration class is one of them.
+// admins have made. So there is no closed set: each seat's document stores the
+// id of a role the organization has (D7), the Agents tab offers every role
+// Datadog lists under Datadog's exact name, and nothing here grades a role
+// into a cross-vendor word.
 
 // The roles Datadog creates in every organization.
 const (

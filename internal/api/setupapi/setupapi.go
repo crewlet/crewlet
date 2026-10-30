@@ -861,8 +861,10 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 			return datadog.AccountEmail(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(roster, s.resolve, at, "Datadog",
-			s.passes.Serves(kind))
+		// NO ROLE ON THE ROW: each seat names its own Datadog role, by id,
+		// and the integration's Agents tab shows it under Datadog's own
+		// name from the organization's live role list.
+		seats = credentialSeats(roster, s.resolve, at, "Datadog", s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:

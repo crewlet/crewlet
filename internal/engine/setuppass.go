@@ -154,12 +154,12 @@ func (p *atlassianPass) run(ctx context.Context, in setup.PassInput) ([]integrat
 	// this ([Engine.withSeatAccess]); this converges the company's half.
 	res, err := atlassian.Reconcile(ctx, atlassian.Options{
 		Client: atlassian.NewClient(atlassian.ClientOptions{}),
-		OrgID:  org, Key: key, Plan: &provision.Plan{}, Sink: in.Sink,
+		OrgID:  org, Key: key,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
-	findings := res.Findings()
+	var findings []integration.Finding
 	if note := p.recordSite(ctx, company, res.Site, in.Sink != nil); note != "" {
 		findings = append(findings, integration.Finding{
 			Kind: integration.FindingGrantShort, Detail: note,
@@ -485,7 +485,7 @@ func (p *datadogPass) run(ctx context.Context, in setup.PassInput) ([]integratio
 		return nil, fmt.Errorf("engine: datadog pass: %w", err)
 	}
 	res, err := datadog.Reconcile(ctx, datadog.Options{
-		Client: client, Config: cfg, Plan: &provision.Plan{}, Creds: creds, Sink: in.Sink,
+		Client: client, Config: cfg, Creds: creds, ReadOnly: in.Sink == nil,
 		// THE AGENTS' ACCOUNTS, which the orphan advisory spares: the
 		// ledger's, and the address every document seat's would have.
 		Managed: managed,
@@ -518,18 +518,22 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 	// THE WEBHOOK ONLY: every agent's account is turned off, or removed
 	// when asked, by the disconnect's access sync before this runs
 	// ([Engine.tearDownSeatAccess]).
-	return datadog.Teardown(ctx, datadog.TeardownOptions{
-		Client: client, Config: cfg, Plan: &provision.Plan{},
+	err = datadog.Teardown(ctx, datadog.TeardownOptions{
+		Client: client, Config: cfg,
 		Creds: datadog.Credentials{
 			APIKey: strings.TrimSpace(env.Value(cfg.Provisioning.APIKey)),
 			AppKey: strings.TrimSpace(env.Value(cfg.Provisioning.AppKey)),
 		},
 		// WHAT PROVES THE DEFINITION IS THIS DEPLOYMENT'S. A Datadog
 		// webhook is addressed by name, and the teardown refuses to
-		// delete one pointing anywhere but here — the same expression
+		// delete one pointing anywhere but here, the same expression
 		// gitlabPass.Teardown passes for the same reason.
 		WebhookBase: p.engine.webhookBase,
 	})
+	if err != nil {
+		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
+	}
+	return provision.Removed{}, nil
 }
 
 // datadogManaged is every Datadog account the access sync manages, which the
@@ -995,40 +999,15 @@ func (p *gitlabPass) run(ctx context.Context, in setup.PassInput) ([]integration
 	}
 	signingVar, _ := provision.SoleVar(cfg.SigningSecret)
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
-		Client: client, Config: cfg, Plan: &provision.Plan{}, Sink: in.Sink,
+		Client: client, Config: cfg, Sink: in.Sink,
 		WebhookBase:      in.WebhookBase,
 		WebhookBaseKey:   in.WebhookBaseKey,
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
-		// ROTATE ONLY WHEN ASKED, and NEVER DECOMMISSION from here.
-		// Rotating revokes the credential every agent is currently
-		// authenticating with, so an operator adding a tenth seat would
-		// take the other nine down; deleting an account because a seat
-		// left the config cannot be told apart from a company mid-edit.
-		// Both stay deliberate gestures on the command line.
+		// ROTATE ONLY WHEN ASKED: a new signing secret re-points the hook
+		// at a key the running engine does not hold yet.
 		Rotate: in.Recreate.Asked(),
-		// WHERE THE ACCOUNTS ARE OWNED, from the company document. It was
-		// absent, so every pass this engine ran assumed the group route —
-		// and against a company provisioned with `-mode instance` it minted
-		// through a group that does not own the account and was refused.
-		Mode: gitlab.Mode(cfg.Provisioning.ModeOrDefault()),
 	})
-	// A NAME GITLAB HAS NOT RELEASED YET IS WORK IN PROGRESS, not a failure
-	// to read the integration.
-	//
-	// GitLab removes a user asynchronously, so a disconnect followed by a
-	// reconnect inside that window finds no account, creates one, and is
-	// refused with "has already been taken". Reported as an error, the card
-	// read "the last pass could not read this integration", which sends an
-	// operator looking for an outage over a state the next tick clears.
-	if errors.Is(err, gitlab.ErrNameReserved) {
-		return []integration.Finding{{
-			Kind: integration.FindingIdentityMissing,
-			Detail: "GitLab is still releasing the name of an account it is " +
-				"deleting, so this seat's account cannot be created yet: " +
-				"the next pass makes it, usually within a minute",
-		}}, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
 	}
@@ -1066,13 +1045,7 @@ func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 	// asked, by the disconnect's access sync before this runs
 	// ([Engine.tearDownSeatAccess]).
 	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
-		Client: client, Config: cfg, Plan: &provision.Plan{},
-		// AND DOWN THE ROUTE THAT OWNS THEM. The group delete answers 404
-		// as success — "unknown or already removed; both are the state the
-		// caller asked for" — so an instance-owned account sent down it
-		// reported itself deleted and stayed live with every credential it
-		// held.
-		Mode: gitlab.Mode(cfg.Provisioning.ModeOrDefault()),
+		Client: client, Config: cfg,
 	})
 }
 
@@ -1104,12 +1077,12 @@ func (p *mattermostPass) run(ctx context.Context, in setup.PassInput) ([]integra
 	// is the transport's answer rather than this pass's own ask.
 	people := p.engine.Mattermost().PeopleFindings()
 	env := p.engine.resolver()
-	admin := mattermostAdminToken(cfg, env, in.Operator)
+	admin := mattermost.AdminToken(cfg, env, in.Operator)
 	if admin == "" {
 		return append([]integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "no administrator token resolved, and the bots' own tokens " +
-				"are what this pass mints, so it cannot bootstrap itself from them",
+				"are what the access sync mints, so it cannot bootstrap itself from them",
 		}}, people...), nil
 	}
 	// ONLY A COMPANY THAT PROVISIONS ITS BOTS: an administrator token handed
@@ -1127,13 +1100,12 @@ func (p *mattermostPass) run(ctx context.Context, in setup.PassInput) ([]integra
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
 	}
-	// NO WEBHOOK BASE IS PASSED because there is nowhere to pass it: this
-	// third-party app holds an outbound socket per seat and registers nothing. And
-	// no rotation and no decommissioning, for the reasons GitLab's pass
-	// gives: both take working agents down and both stay deliberate
-	// command-line gestures.
+	// THE COMPANY'S HALF: whether the instance will let this engine
+	// provision, and each bot's display name. No webhook base is passed
+	// because there is nowhere to pass it: this third-party app holds an
+	// outbound socket per seat and registers nothing.
 	res, err := mattermost.Reconcile(ctx, mattermost.Options{
-		Client: client, Config: cfg, Org: company.Org, Plan: &provision.Plan{}, Sink: in.Sink,
+		Client: client, Config: cfg, Org: company.Org, ReadOnly: in.Sink == nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
@@ -1290,18 +1262,6 @@ var (
 // with it before the document carries it, and every other run needs no
 // credential in hand at all.
 func gitlabAdminToken(cfg *config.GitLab, env *config.Resolver, override string) string {
-	if v := strings.TrimSpace(override); v != "" {
-		return v
-	}
-	if cfg == nil || cfg.Provisioning == nil {
-		return ""
-	}
-	return strings.TrimSpace(env.Value(cfg.Provisioning.AdminToken))
-}
-
-// mattermostAdminToken resolves the system-administrator credential, in the
-// same order and for the same reason.
-func mattermostAdminToken(cfg *config.Mattermost, env *config.Resolver, override string) string {
 	if v := strings.TrimSpace(override); v != "" {
 		return v
 	}
