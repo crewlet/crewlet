@@ -1178,7 +1178,7 @@ func claimedReads() map[string]statement {
 		// the company's repositories — its partial predicate repeated
 		// verbatim. Nothing in this build reads a repository by its mode.
 		// THE MERGE QUEUE'S INDEXES THEIR LATER READERS SEEK (replicated
-		// 0081): a repository's ended entries past the queue's horizon, the
+		// 0082): a repository's ended entries past the queue's horizon, the
 		// queue_sweep's, its partial predicate repeated verbatim; and a
 		// change's landings, a broken landing's authors' and the change
 		// page's. Nothing in this build ends a queue's history or reads a
