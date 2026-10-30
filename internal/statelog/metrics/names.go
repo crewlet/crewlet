@@ -22,6 +22,7 @@ const (
 	BackupAge                        = "crewlet.backup.age"
 	BackupDuration                   = "crewlet.backup.duration"
 	BackupHolds                      = "crewlet.backup.holds"
+	BrokerPeerRefusals               = "crewlet.broker.peer.refusals"
 	CodeCacheAdoptions               = "crewlet.code.cache.adoptions"
 	CodeCacheBytes                   = "crewlet.code.cache.bytes"
 	CodeCacheChained                 = "crewlet.code.cache.chained"

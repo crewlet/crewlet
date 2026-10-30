@@ -944,10 +944,14 @@ func (s *stateLog) verifierFor(domain statelog.Domain) (*statelog.Verifier, erro
 // own label in, so a record MAC and a token MAC over one key are never the
 // same bytes.
 //
-// THE REFERENCES ARE NOT RESOLVED, for [config.Secrets.TokenMaterial]'s
-// reason: this is read before the secret store whose own key would resolve
-// them is open, and what matters is that two nodes agree rather than that the
-// material is plaintext.
+// THE MATERIAL IS ALREADY RESOLVED, as [config.Secrets.TokenMaterial]'s is:
+// Tier A expands its whole document from the environment before it decodes it
+// (never from the secret store, whose own key this is), so two nodes that
+// spell one key differently — a `${K}` on one, the literal on the other —
+// derive the same record key, because both read the same bytes. (This said the
+// references arrived verbatim, which would have split every record's signature
+// across exactly that fleet.) The embedded broker's credentials derive from
+// the same material, by the same rule (ADR-0064).
 func recordKeyring(boot *config.Bootstrap) statelog.Keyring {
 	if boot == nil {
 		return statelog.Keyring{}

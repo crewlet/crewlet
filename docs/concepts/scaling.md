@@ -673,8 +673,8 @@ flowchart TD
   told the outcome is unknown.
 - **Every request and every answer is signed.** A data node runs a write as
   the actor the request names, so the request is an instruction, and an
-  unsigned one would be an instruction anybody who can reach the broker's port
-  could write. Each request envelope and each reply carries a MAC under the
+  unsigned one would be an instruction anything the broker admits could write:
+  its admission vouches for a connection, never a request. Each request envelope and each reply carries a MAC under the
   fleet keyring every node already holds, in a key domain of its own
   (`estate`), so nothing lifted off the state logs verifies here — the same
   rule every state-log record is held to

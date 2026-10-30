@@ -482,8 +482,11 @@ func open(ctx context.Context, js jetstream.JetStream, cfg Config, timing jsprov
 // none, as does one made by hand or by another tool. The refusal names both
 // gestures that bound it: store.objects.nats_max_bytes, which [Open] applies
 // to such a bucket at boot ([boundBucket]) and which is the only one an
-// embedded broker can take, since nothing outside the engine reaches it; and
-// the broker's own `nats stream update`, since a bucket IS a stream.
+// embedded broker that opens no client listener can take — a solo member's,
+// or one serving only leaves — since nothing outside the engine reaches it;
+// and the broker's own `nats stream update`, since a bucket IS a stream, run
+// against an external cluster or through a clustered member's loopback client
+// listener with the operator key `crewlet fleet broker credential` writes.
 //
 // A bucket holding a DIFFERENT ceiling is kept as it is, as a state log's
 // stream is: the broker granted it once, and the capacity it reserves is the

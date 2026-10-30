@@ -194,14 +194,17 @@ and `stream.store_dir` instead of `stream.leaf` — see
 one to a fleet that already has five.
 
 The `secrets:` block is not optional on a satellite either, although it holds
-no estate, serves no API and signs no session cookie. The company document it
-fetches from its peers is sealed under the fleet keyring and authenticated by
-that seal; every request it sends a data node's estate service is signed
-under it, because the data node runs a write as the actor the request names
-and the broker authenticates nothing; and a seat in agent mode is handed a
-per-run token signed under it. `crewlet validate` refuses a Tier A file
-without it, naming `secrets.keys`; generate a key once with `crewlet secrets
-keygen` and give every node the same material.
+no estate, serves no API and signs no session cookie. Its leaf link is
+admitted only on a key derived from it — a satellite on another keyring is
+refused by every member and fails its boot naming the key it presented. The
+company document it fetches from its peers is sealed under the fleet keyring
+and authenticated by that seal; every request it sends a data node's estate
+service is signed under it, because the data node runs a write as the actor
+the request names and the broker's admission vouches for a connection, never
+a request; and a seat in agent mode is handed a per-run token signed under it.
+`crewlet validate` refuses a Tier A file without it, naming `secrets.keys`;
+generate a key once with `crewlet secrets keygen` and give every node the same
+material.
 
 `${VAR}` references are resolved in `node.labels` and `node.id` like
 anywhere else, so an orchestrator injects both from the environment

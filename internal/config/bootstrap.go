@@ -699,9 +699,10 @@ func (b *Bootstrap) otherMembers() (int, clusterMembers) {
 //
 // ONE PREDICATE, for every rule that asks "is this node in a fleet"
 // (ADR-0008: two copies of the question are two answers): the topology's
-// refusal of local coordination ([Bootstrap.validateTopology]) and the
-// interim warning that a `container` coding box can reach the fleet's broker
-// ([tierWarnings]).
+// refusal of local coordination ([Bootstrap.validateTopology]). The warning
+// about a `container` coding box beside the broker asks a narrower question —
+// is the broker an external cluster this engine cannot see the admission of —
+// and reads the broker's kind instead ([tierWarnings]).
 //
 // A LEAF IS IN A FLEET by definition — it holds nothing of its own, so the
 // broker it reaches is always somebody else's members. And so is a member
@@ -734,8 +735,10 @@ func (b *Bootstrap) validateTopology() error {
 	// is verified with. That left a node serving no API free to leave it
 	// out — and every data node runs every state-log domain, whatever its
 	// other roles (the identity directory included), and every record on
-	// every one of those logs is signed and verified under this keyring
-	// because the broker authenticates nothing. A node WITHOUT data needs it
+	// every one of those logs is signed and verified under this keyring,
+	// because the broker's admission vouches for a connection and never a
+	// record (ADR-0031). An embedded fleet's broker admits only keys derived
+	// from this keyring too (ADR-0064). A node WITHOUT data needs it
 	// just as much: the company document it fetches from the coordination
 	// store is authenticated by its seal, a seats node mints and verifies
 	// the per-run tokens its sandbox runs carry, and every request it sends
@@ -967,6 +970,19 @@ func routeAddress(raw string) (string, bool) {
 		return "", false
 	}
 	return joinRoute(u.Hostname(), port), true
+}
+
+// carriesCredential reports whether a fleet URL — a peer's route or a member's
+// leaf listener — carries a userinfo: `user:pass@`, or a bare `token@`.
+//
+// REFUSED IN A FLEET URL, because a fleet's credentials are DERIVED from
+// secrets.keys, never written (ADR-0064): the engine sets each route's
+// userinfo itself, so one written there is overwritten and is a password
+// sitting in a config file for nothing, and a leaf link presents an nkey,
+// beside which nats-server would also send a URL's userinfo, in clear.
+func carriesCredential(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	return err == nil && u.User != nil
 }
 
 // joinRoute is the one normal form both sides of the comparison are put in.
@@ -1909,11 +1925,16 @@ type StreamCluster struct {
 	Peers []string `yaml:"peers,omitempty" json:"peers,omitempty" desc:"Route URLs of the OTHER members, e.g. nats://node-b.internal:6222. An entry that is this node's own route (cluster.host and port, or cluster.advertise) or a repeat is not counted as a member."`
 
 	// Host is the interface the route listener binds. Empty binds every
-	// one of them, which on a host with a public interface publishes
-	// UNAUTHENTICATED CLUSTER ACCESS: a route port is how a member joins,
-	// and joining is how it reads and writes every stream. Set it to the
+	// one of them.
+	//
+	// The listener admits only a member presenting a route credential
+	// derived from a key of secrets.keys (ADR-0064), and that credential
+	// crosses the network IN CLEAR once per connection — NATS routes carry
+	// a password or a certificate, never a signature — as does every byte
+	// after it: the company's whole event history and every lease. So on a
+	// host with a public interface, empty publishes both. Set it to the
 	// private address the peers reach.
-	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the route listener binds. Empty binds every interface."`
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the route listener binds. Empty binds every interface. The listener admits only members presenting a key derived from secrets.keys; a route's credential and every byte after it cross the network in clear, so bind it to the private network the peers are on."`
 
 	// Advertise is the address peers should dial for this member when it
 	// differs from what the member binds — a mapped container port, a NAT,
@@ -1945,14 +1966,18 @@ type StreamLeaf struct {
 	// Port is the leaf listener a MEMBER opens for the fleet's leaves. Zero
 	// opens none.
 	//
-	// It accepts any connection that reaches it, exactly as the route
-	// port does and for the same reason: the fleet is one trust domain on
-	// a network its operator controls. Put both there and nowhere else.
-	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"A member's leaf listener, where the fleet's leaves join. Accepts any connection that reaches it, like the route port. A member with one is in a fleet, so it needs stream.store_dir."`
+	// It admits only a leaf whose link presents the nkey derived from a key
+	// of secrets.keys and signs this member's nonce with it (ADR-0064): a
+	// challenge, so no secret crosses the network. What crosses it after,
+	// everything the leaf's clients ask of the fleet, crosses in clear, as
+	// the route port's does — so both belong on the network the fleet's
+	// operator controls and nowhere else.
+	Port int `yaml:"port,omitempty" json:"port,omitempty" js:"min=0;max=65535" desc:"A member's leaf listener, where the fleet's leaves join. Admits only a leaf whose key is derived from secrets.keys. A member with one is in a fleet, so it needs stream.store_dir."`
 
 	// Host is the interface the leaf listener binds, empty for every one
-	// of them — the same exposure [StreamCluster.Host] names.
-	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the leaf listener binds. Empty binds every interface."`
+	// of them — the same exposure [StreamCluster.Host] names: a link is
+	// authenticated, never encrypted.
+	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Interface the leaf listener binds. Empty binds every interface. A leaf's link is authenticated, not encrypted, so bind it to the private network the leaves are on."`
 
 	// Advertise is the address leaves should dial for this member when it
 	// differs from what it binds.
@@ -1999,6 +2024,16 @@ func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
 				"a leaf runs no JetStream, so it has no stream store to keep")
 		}
 		for i, raw := range l.URLs {
+			if carriesCredential(raw) {
+				// NAMING NO PART OF IT, for the peers' reason: the sentence
+				// would print the credential.
+				p.add(at(path, fmt.Sprintf("urls[%d]", i)), ErrConflict,
+					"carries a credential, and a fleet's credentials are derived "+
+						"from secrets.keys: remove the user:pass@ — the link presents "+
+						"this node's own key, and a userinfo would be sent beside it "+
+						"in clear")
+				continue
+			}
 			u, err := url.Parse(strings.TrimSpace(raw))
 			if err != nil || u.Host == "" || !slices.Contains(leafSchemes, u.Scheme) {
 				p.add(at(path, fmt.Sprintf("urls[%d]", i)), ErrUnknownValue,
@@ -2171,9 +2206,10 @@ func (s *Stream) validate(path Path) error {
 	// ASKED AS "is anything else set", THROUGH IsZero, rather than as a
 	// list of the fields that matter. Written as a list it named two of
 	// the four and the other two — cluster.host, which is the answer to
-	// this block's own warning about publishing unauthenticated cluster
-	// access, and cluster.advertise, which a NAT'd member cannot cluster
-	// without — went silently unvalidated. IsZero is the one place that
+	// this block's own warning about publishing the route port, and the
+	// traffic it carries in clear, on a public interface, and
+	// cluster.advertise, which a NAT'd member cannot cluster without —
+	// went silently unvalidated. IsZero is the one place that
 	// enumerates this struct, so a field added later is covered by having
 	// been added there.
 	//
@@ -2218,7 +2254,15 @@ func (s *Stream) validate(path Path) error {
 	// refused whole above.
 	if !external {
 		for i, raw := range s.Cluster.Peers {
-			if _, ok := routeAddress(raw); !ok {
+			switch _, ok := routeAddress(raw); {
+			case carriesCredential(raw):
+				// BEFORE THE SHAPE, and naming no part of the entry: a
+				// sentence that quoted it would print the credential.
+				p.add(idx(at(path, "cluster.peers"), i), ErrConflict,
+					"carries a credential, and a fleet's credentials are "+
+						"derived from secrets.keys: remove the user:pass@ — "+
+						"the engine presents this node's own on every route it dials")
+			case !ok:
 				p.add(idx(at(path, "cluster.peers"), i), ErrUnknownValue,
 					"%q is not a member's route URL: want nats://host:port — "+
 						"the embedded server dials each entry's host and port, "+
@@ -2471,9 +2515,11 @@ var secretKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 // refuses a file without one), because far more than the company's
 // credentials rest on it: every state-log record is signed and verified
 // under it, the company document a node fetches from its peers is
-// authenticated by its seal, and a node serving the API signs every session
-// cookie and per-run token with it. There is no default: a key the engine
-// invented would be one no other node holds.
+// authenticated by its seal, a node serving the API signs every session
+// cookie and per-run token with it, and an embedded fleet's broker admits
+// only a route, a leaf link or an operator presenting a credential derived
+// from it (ADR-0064). There is no default: a key the engine invented would be
+// one no other node holds.
 type Secrets struct {
 	// ActiveKeyID names the key that seals new writes. Required, and it
 	// must name one of Keys.
@@ -2481,7 +2527,7 @@ type Secrets struct {
 
 	// Keys is the keyring. More than one entry supports online rotation:
 	// the active key seals, every key decrypts.
-	Keys []SecretKey `yaml:"keys,omitempty" json:"keys,omitempty" desc:"The keyring; several entries support online rotation."`
+	Keys []SecretKey `yaml:"keys,omitempty" json:"keys,omitempty" desc:"The keyring; several entries support online rotation. Required on every node; an embedded fleet's broker credentials are derived from it beside everything else it signs."`
 }
 
 // SecretKey is one key in the keyring.

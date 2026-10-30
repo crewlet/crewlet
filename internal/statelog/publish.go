@@ -647,8 +647,8 @@ type Deps struct {
 	Log Appender
 
 	// Signer signs every record this authority appends. REQUIRED: the
-	// broker has no auth of its own, so an unsigned record on this log is
-	// an instruction anyone who can reach the cluster port may write. See
+	// broker's admission vouches for no record, so an unsigned record on
+	// this log is an instruction anything the broker admits may write. See
 	// [signature.go].
 	Signer *Signer
 

@@ -513,6 +513,23 @@ func Catalogue() []Instrument {
 				"not return to zero is a backup that crashed mid-copy.",
 		},
 
+		// ---- the embedded broker ---------------------------------------
+		{
+			Name: BrokerPeerRefusals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"listener", "presented"},
+			Shows: "A connection to this node's embedded broker refused for its " +
+				"credential, by the listener it reached (`route`, `leaf`, " +
+				"`client`) and what it presented (`none`; `unknown`: a key " +
+				"this node does not hold; `invalid`: a held key whose proof " +
+				"failed). `unknown` rising during a keyring rotation is a " +
+				"node whose keyring differs from this one's; `none` is a " +
+				"process that is not a node of this fleet, or one on an " +
+				"older build. Every refusal is counted; the " +
+				"`broker_peer_refused` line says which key, from where, once " +
+				"a minute a class. No alarm reads it: an operator alarms on " +
+				"any rise.",
+		},
+
 		// ---- the fleet's history ---------------------------------------
 		{
 			Name: HistoryAnswers, Kind: KindCounter, Unit: UnitCount,

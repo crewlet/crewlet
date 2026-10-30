@@ -135,7 +135,13 @@ through that node, and a captured token is stored there — with one of Tier
 A's tokens in `CREWLET_API_TOKEN`.
 See [LLM Backends § Authentication](../concepts/llm-backends.md#authentication).
 
-**One keyring and one `api.external_url` on every node that serves the API.**
+**One keyring on every node.** Every node holds the same `secrets.keys`: its
+records are signed under it, the company document it fetches is sealed under
+it, and an embedded fleet's broker admits a route or a leaf link only on a key
+derived from it — a node on another keyring is refused by every member it dials
+([The broker: members and leaves](#the-broker-members-and-leaves)).
+
+**And one `api.external_url` on every node that serves the API.**
 A browser behind a load balancer signs in on whichever node it reaches and
 presents that cookie to every other. Each node verifies it under the fleet
 keyring and resolves it against its own copy of the identity directory — a
@@ -237,6 +243,16 @@ both ways out: a data node on a leaf, a broker member that holds no data, and
 `ingress` or `workers` on a node without `data`. Every data node holds the
 whole estate as a member of the broker, and a node without data reaches the
 estate through one.
+
+**The broker admits only the fleet's own nodes.** A member's route port and
+leaf listener admit only a route or a leaf link presenting a key derived from
+`secrets.keys` — every key of the node's keyring accepted, the active one
+presented — so a node on another keyring is refused, counted in
+`crewlet.broker.peer.refusals` and named by key in the members'
+`broker_peer_refused` lines; a leaf a member turns away fails its boot naming
+the key it presented. The keyring's rotation runbook moves the broker with no
+step of its own. Nothing is encrypted: keep the fleet's ports on a private
+network ([The fleet's broker admits only its own nodes](deployment.md#the-fleets-broker-admits-only-its-own-nodes)).
 
 **A capacity seal counts every broker.** Changing a log's byte ceiling
 restarts the fleet into a maintenance mode, and the seal that proves no queued

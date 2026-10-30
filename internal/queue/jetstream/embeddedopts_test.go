@@ -27,7 +27,8 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 
 	t.Run("the payload ceiling is the contract's, not the broker's default", func(t *testing.T) {
 		t.Parallel()
-		opts, _, err := embeddedOptions(Config{StoreDir: t.TempDir()}, systemUser{})
+		cfg := Config{StoreDir: t.TempDir()}
+		opts, _, err := embeddedOptions(cfg, authFor(t, cfg))
 		if err != nil {
 			t.Fatalf("embeddedOptions: %v", err)
 		}
@@ -67,7 +68,7 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 			t.Parallel()
 			cfg := tc.cfg
 			cfg.StoreDir = t.TempDir()
-			opts, _, err := embeddedOptions(cfg, systemUser{})
+			opts, _, err := embeddedOptions(cfg, authFor(t, cfg))
 			if err != nil {
 				t.Fatalf("embeddedOptions: %v", err)
 			}
@@ -105,8 +106,9 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 func TestAMembersClientListenerIsLoopbackAndUnadvertised(t *testing.T) {
 	t.Parallel()
 	member := Config{ServerName: "a", ClusterName: "c", ClusterPort: 6222,
-		ClusterURLs: []string{"nats://127.0.0.1:6223"}, StoreDir: t.TempDir()}
-	opts, _, err := embeddedOptions(member, systemUser{})
+		ClusterURLs: []string{"nats://127.0.0.1:6223"}, StoreDir: t.TempDir(),
+		FleetAuth: testFleetAuth()}
+	opts, _, err := embeddedOptions(member, authFor(t, member))
 	if err != nil {
 		t.Fatalf("a clustered member's options: %v", err)
 	}
@@ -120,12 +122,14 @@ func TestAMembersClientListenerIsLoopbackAndUnadvertised(t *testing.T) {
 	}
 
 	for name, cfg := range map[string]Config{
-		"a solo member":                      {StoreDir: t.TempDir()},
-		"a member with only a leaf listener": {ServerName: "a", LeafPort: 7422, StoreDir: t.TempDir()},
-		"a leaf":                             {ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"}},
+		"a solo member": {StoreDir: t.TempDir()},
+		"a member with only a leaf listener": {ServerName: "a", LeafPort: 7422,
+			StoreDir: t.TempDir(), FleetAuth: testFleetAuth()},
+		"a leaf": {ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"},
+			FleetAuth: testFleetAuth()},
 		"a cluster that is named and routes nowhere": {ServerName: "a", ClusterName: "c", StoreDir: t.TempDir()},
 	} {
-		opts, scratch, err := embeddedOptions(cfg, systemUser{})
+		opts, scratch, err := embeddedOptions(cfg, authFor(t, cfg))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -159,57 +163,136 @@ func TestTheClientIsToldTheCeiling(t *testing.T) {
 	}
 }
 
-// ONLY A CLUSTERED MEMBER DECLARES A SYSTEM USER, and it declares a public key
-// and nothing that authenticates as it.
+// EVERY SERVER AUTHENTICATES, AND ONLY A CLUSTERED MEMBER ROUTES — WITH ITS
+// OWN KEY, ON EVERY ROUTE IT DIALS.
 //
-// A solo member has no metadata group to change and keeps the posture it always
-// had; a leaf runs no JetStream. A clustered member declares the system account
-// under its default name — the metadata group's own state is stored under that
-// name — with one nkey user and no password user of its own: the server warns
-// on every start that declares a plaintext password, and the no-auth user that
-// binds every anonymous client to the global account is the server's to add.
-func TestOnlyAClusteredMemberDeclaresASystemUser(t *testing.T) {
+// Every server this package starts — solo, clustered, a member serving leaves,
+// a leaf — hands every client and leaf link to the one authenticator, and sends
+// every connection a nonce to sign (with a custom authenticator the server
+// builds no nkey table and would send none). Only a clustered member has
+// routes for it to decide, declares the system account its membership code
+// reaches — under its default name, which the metadata group's own state is
+// stored under — and presents its route credential both ways a route can
+// carry one: as the cluster block's username, which gossiped routes take, and
+// in every explicit route's URL, which is all a route's CONNECT carries. No
+// server keeps a user list of its own: the authenticator decides, so a list
+// beside it would be a second one nothing reads. And each start mints its own
+// key for this process.
+//
+// Mutations: omit the router authenticator → the member row, red; leave the
+// system key in the server's own nkey list → the user-list row, red; give the
+// explicit routes no credential → the route-URL row, red.
+func TestEveryServerAuthenticatesAndOnlyAClusteredMemberRoutes(t *testing.T) {
 	t.Parallel()
-	system, err := newSystemUser()
-	if err != nil {
-		t.Fatal(err)
-	}
+	member := Config{ServerName: "a", ClusterName: "c", ClusterPort: 6222,
+		ClusterURLs: []string{"nats://127.0.0.1:6223", "nats://127.0.0.1:6224"},
+		StoreDir:    t.TempDir(), FleetAuth: testFleetAuth()}
 	for name, cfg := range map[string]Config{
 		"a solo member": {StoreDir: t.TempDir()},
-		"a leaf":        {ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"}},
+		"a member serving leaves": {ServerName: "a", LeafPort: 7422, StoreDir: t.TempDir(),
+			FleetAuth: testFleetAuth()},
+		"a leaf": {ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"},
+			FleetAuth: testFleetAuth()},
+		"a clustered member": member,
 	} {
-		opts, scratch, err := embeddedOptions(cfg, system)
+		auth := authFor(t, cfg)
+		opts, scratch, err := embeddedOptions(cfg, auth)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
 		removeScratch(scratch)
-		if len(opts.Nkeys) != 0 || len(opts.Users) != 0 || len(opts.Accounts) != 0 ||
-			opts.SystemAccount != "" {
-			t.Errorf("%s declares nkeys %v, users %v, accounts %v, system account %q", name,
-				opts.Nkeys, opts.Users, opts.Accounts, opts.SystemAccount)
+		if opts.CustomClientAuthentication != auth || !opts.AlwaysEnableNonce {
+			t.Errorf("%s: client authenticator %v, nonce %v — every server decides "+
+				"every client and leaf link, and sends each a nonce", name,
+				opts.CustomClientAuthentication, opts.AlwaysEnableNonce)
+		}
+		if len(opts.Nkeys) != 0 || len(opts.Users) != 0 || opts.NoAuthUser != "" {
+			t.Errorf("%s keeps a user list of its own (nkeys %v, users %v, no-auth %q) "+
+				"beside the authenticator", name, opts.Nkeys, opts.Users, opts.NoAuthUser)
+		}
+		clustered := name == "a clustered member"
+		if routes := opts.CustomRouterAuthentication != nil; routes != clustered {
+			t.Errorf("%s: router authenticator installed = %v", name, routes)
+		}
+		if declared := opts.SystemAccount == "$SYS"; declared != clustered {
+			t.Errorf("%s: system account %q, accounts %v", name, opts.SystemAccount,
+				opts.Accounts)
+		}
+		if !clustered {
+			continue
+		}
+		username, password := testFleetAuth().routeUser()
+		if opts.Cluster.Username != username || opts.Cluster.Password != password {
+			t.Errorf("the cluster block presents %q, want the active key's route "+
+				"credential, which every gossiped route takes", opts.Cluster.Username)
+		}
+		if len(opts.Routes) != len(member.ClusterURLs) {
+			t.Fatalf("%d routes from %d peers", len(opts.Routes), len(member.ClusterURLs))
+		}
+		for _, r := range opts.Routes {
+			if r.User == nil {
+				t.Errorf("route %s carries no credential in its URL, which is all "+
+					"its CONNECT presents", r.Host)
+				continue
+			}
+			if got, _ := r.User.Password(); r.User.Username() != username || got != password {
+				t.Errorf("route %s carries user %q, not the active key's route "+
+					"credential", r.Host, r.User.Username())
+			}
 		}
 	}
-	member := Config{ServerName: "a", ClusterName: "c", StoreDir: t.TempDir()}
-	opts, _, err := embeddedOptions(member, system)
+	one, err := newBrokerAuth(member)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.SystemAccount != "$SYS" || len(opts.Nkeys) != 1 || opts.Nkeys[0].Account == nil ||
-		opts.Nkeys[0].Account.Name != "$SYS" || opts.Nkeys[0].Nkey != system.public {
-		t.Fatalf("a clustered member declares system account %q and nkeys %+v, want its "+
-			"one public key on $SYS", opts.SystemAccount, opts.Nkeys)
-	}
-	if len(opts.Users) != 0 || opts.NoAuthUser != "" {
-		t.Errorf("a clustered member declares password users %+v and no-auth user %q: a "+
-			"plaintext password is warned about on every start, and the no-auth user "+
-			"is the server's to add", opts.Users, opts.NoAuthUser)
-	}
-	other, err := newSystemUser()
+	other, err := newBrokerAuth(member)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if other.public == system.public {
+	if one.engine.public == other.engine.public || one.system.public == other.system.public {
 		t.Error("two starts minted one key: each start mints its own")
+	}
+	if solo := authFor(t, Config{}); solo.system.declared() {
+		t.Error("a solo member minted a system account key it never declares")
+	}
+}
+
+// A FLEET LISTENER WITH NO KEYS IS REFUSED BEFORE ANYTHING IS BUILT.
+//
+// Every route and leaf link is authenticated with a key derived from
+// secrets.keys, so a member that opens a route or a leaf listener, names a
+// peer, or dials a leaf link with no keyring would refuse every peer or be
+// refused by every one: a fleet that never forms. A solo member and a cluster
+// that is only named open and dial nothing, and need no key.
+//
+// Mutations: allow a zero FleetAuth → every refused row, red; refuse a named
+// cluster that routes nowhere → its row, red.
+func TestAFleetListenerWithNoKeysIsRefused(t *testing.T) {
+	t.Parallel()
+	for name, cfg := range map[string]Config{
+		"a member with a route port": {ServerName: "a", ClusterName: "c", ClusterPort: 6222,
+			StoreDir: t.TempDir()},
+		"a member naming peers": {ServerName: "a", ClusterName: "c",
+			ClusterURLs: []string{"nats://127.0.0.1:6223"}, StoreDir: t.TempDir()},
+		"a member with a leaf port": {ServerName: "a", LeafPort: 7422, StoreDir: t.TempDir()},
+		"a member on any leaf port": {ServerName: "a", LeafPort: AnyPort, StoreDir: t.TempDir()},
+		"a leaf":                    {ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"}},
+	} {
+		_, scratch, err := embeddedOptions(cfg, authFor(t, cfg))
+		removeScratch(scratch)
+		if !errors.Is(err, ErrNoFleetKeys) {
+			t.Errorf("%s with no keys answered %v, want ErrNoFleetKeys", name, err)
+		}
+	}
+	for name, cfg := range map[string]Config{
+		"a solo member":                {StoreDir: t.TempDir()},
+		"a cluster that is only named": {ServerName: "a", ClusterName: "c", StoreDir: t.TempDir()},
+	} {
+		_, scratch, err := embeddedOptions(cfg, authFor(t, cfg))
+		removeScratch(scratch)
+		if err != nil {
+			t.Errorf("%s with no keys was refused: %v", name, err)
+		}
 	}
 }
 

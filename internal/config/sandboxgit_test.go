@@ -250,18 +250,27 @@ func TestADirectSeatInACompanyThatHostsCodeIsWarned(t *testing.T) {
 	}
 }
 
-// A CONTAINER SEAT ON A CLUSTERED FLEET IS WARNED, while the fleet's broker
-// authenticates nobody (until the broker's authentication lands): on a fleet
-// with peers, on a member serving leaves and on a leaf — main's split topology
-// runs its seats, and so their boxes, on leaves — one warning at `stream`.
-// None on a single node serving no leaves, none where the company hosts no
-// code, none for an `e2b` seat.
+// A CONTAINER SEAT BESIDE AN EXTERNAL BROKER IS WARNED, and beside the
+// embedded one it is not.
 //
-// Mutations: drop the cluster term → the fleet rows pass silently and a
-// single node never warns, red; drop the leaf terms → the member serving
-// leaves and the leaf rows, red.
-func TestAContainerSeatOnAClusteredFleetIsWarned(t *testing.T) {
+// The embedded broker admits only a key derived from secrets.keys (ADR-0064),
+// on a clustered member, a member serving leaves and a leaf alike, so a box
+// that reaches its ports is refused there. An external cluster's admission is
+// its operator's, which nothing in this engine reads, so a node dialling one
+// is warned — one warning at `stream`. None on a single node, none where the
+// company hosts no code, none for an `e2b` seat.
+//
+// Mutations: keep the cluster term → the clustered member warns, red; keep
+// the leaf-listener term → the member serving leaves warns, red; keep the leaf
+// term (read clustered() whole) → the leaf warns, red; drop the external term
+// → the external row passes silently, red.
+func TestAContainerSeatBesideAnExternalBrokerIsWarned(t *testing.T) {
 	t.Parallel()
+	external := func(b *Bootstrap) {
+		b.Coordination = Coordination{Type: CoordinationEmbeddedKV}
+		b.Stream.Type = StreamNATS
+		b.Stream.URL = "nats://nats-1.example.com:4222"
+	}
 	fleet := func(b *Bootstrap) {
 		b.Coordination = Coordination{Type: CoordinationEmbeddedKV}
 		b.Stream.StoreDir = "/var/lib/crewlet/stream"
@@ -285,12 +294,13 @@ func TestAContainerSeatOnAClusteredFleetIsWarned(t *testing.T) {
 		cell   string
 		warns  bool
 	}{
-		{"a clustered fleet", fleet, true, "container", true},
-		{"a member serving leaves", servesLeaves, true, "container", true},
-		{"a leaf", leaf, true, "container", true},
+		{"a node on an external cluster", external, true, "container", true},
+		{"a clustered member", fleet, true, "container", false},
+		{"a member serving leaves", servesLeaves, true, "container", false},
+		{"a leaf", leaf, true, "container", false},
 		{"a single node serving no leaves", func(*Bootstrap) {}, true, "container", false},
-		{"a fleet hosting no code", fleet, false, "container", false},
-		{"an e2b seat on a fleet", fleet, true, "e2b", false},
+		{"an external cluster's node hosting no code", external, false, "container", false},
+		{"an e2b seat beside an external cluster", external, true, "e2b", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -313,8 +323,8 @@ func TestAContainerSeatOnAClusteredFleetIsWarned(t *testing.T) {
 			case tc.warns && len(got) != 1:
 				t.Fatalf("warnings %+v, want one at stream", got)
 			case tc.warns:
-				for _, says := range []string{"`container` coding box", "authenticates no client",
-					"leaf listeners"} {
+				for _, says := range []string{"`container` coding box", "external NATS cluster",
+					"its operator's configuration", "require authorization"} {
 					if !strings.Contains(got[0].Message, says) {
 						t.Errorf("the warning does not say %q: %q", says, got[0].Message)
 					}

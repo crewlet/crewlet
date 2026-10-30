@@ -17,12 +17,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // Cluster is a running embedded NATS cluster.
@@ -583,6 +585,15 @@ func (c *Cluster) RestartMember(t testing.TB, i int) *js.Queue {
 	return q
 }
 
+// RestartMemberWith is [Cluster.RestartMember] with member i's config changed
+// first — another keyring, for a rotation step or a member that holds no key
+// its peers do — and the change kept for every later restart of it.
+func (c *Cluster) RestartMemberWith(t testing.TB, i int, change func(*js.Config)) *js.Queue {
+	t.Helper()
+	change(&c.Configs[i])
+	return c.RestartMember(t, i)
+}
+
 // restartServer is [Cluster.RestartMember]'s server, with no client of it.
 func (c *Cluster) restartServer(t testing.TB, i int) *js.Server {
 	t.Helper()
@@ -614,10 +625,32 @@ func (c *Cluster) restartServer(t testing.TB, i int) *js.Server {
 	return srv
 }
 
+// harnessRing is the keyring every member this harness starts holds when the
+// caller's base gives it none: one key of a literal placeholder material, never
+// one anybody deploys. The cases that need another ring — a rotation, a member
+// on a foreign one — restart a member onto it ([Cluster.RestartMemberWith]).
+var harnessRing = runtoken.OneKey("jetstreamtest", "the jetstreamtest harness's placeholder fleet key material")
+
+// fleetAuth is [harnessRing]'s fleet credentials: what every member presents
+// on its routes and accepts on its route and leaf listeners, and what a leaf a
+// case joins to one of this harness's clusters presents.
+var fleetAuth = sync.OnceValue(func() js.FleetAuth {
+	auth, err := js.FleetAuthFrom(harnessRing)
+	if err != nil {
+		panic(err)
+	}
+	return auth
+})
+
 // memberConfig is member i's config: the caller's base, plus the identity and
-// membership every member of an n-node cluster named cluster needs.
+// membership every member of an n-node cluster named cluster needs — the
+// harness's keyring among them, unless the base brings its own, since every
+// route and leaf link is admitted on a key derived from one.
 func memberConfig(base js.Config, cluster string, i, n, clusterPort int, routes []string) js.Config {
 	cfg := base
+	if cfg.FleetAuth.IsZero() {
+		cfg.FleetAuth = fleetAuth()
+	}
 	cfg.ServerName = fmt.Sprintf("crewlet-test-%d", i)
 	cfg.ClusterName = cluster
 	cfg.ClusterPort = clusterPort

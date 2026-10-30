@@ -124,6 +124,61 @@
 // the library's own standing pull, which the applier's is not, because a
 // watch acknowledges nothing: what that pull keeps standing ahead of its
 // reader holds nothing back from anybody.
+//
+// # Every connection presents a key
+//
+// ADR-0064. Every embedded broker this package starts — a solo member, a
+// clustered member, a member with a leaf listener, a leaf — installs ONE
+// authenticator (brokerAuth, nats-server's embedding hooks
+// CustomClientAuthentication and, on a clustered member,
+// CustomRouterAuthentication), and it admits exactly four kinds of connection:
+//
+//   - a ROUTE presenting the username and password derived from a key of this
+//     node's ring under [RouteKeyDomain];
+//   - a LEAF LINK presenting the nkey derived from a key of the ring under
+//     [LeafKeyDomain], signing the member's nonce;
+//   - an OPERATOR on a clustered member's loopback client listener presenting
+//     the nkey derived under [ClientKeyDomain] and signing its nonce — the nats
+//     tool, for the broker gestures no engine verb performs; bound to the
+//     global account, never the system one;
+//   - an IN-PROCESS client of this process signing with a key minted at each
+//     start that nothing outside the process ever holds: the engine's, bound to
+//     the global account, and the membership code's, bound to the system
+//     account (membership.go).
+//
+// Every other connection is refused, counted ([Server.OnPeerRefused]) and
+// logged once a minute per class (broker_peer_refused); nats-server's own
+// line per refused attempt goes to DEBUG (natsLogger). By topology:
+//
+//	solo member                   no listener; this process alone
+//	member serving leaves only    leaf listener; + leaves presenting a ring key
+//	clustered member              route listener, loopback client listener,
+//	                              optional leaf listener; + routes and leaves
+//	                              presenting a ring key, + an operator on the
+//	                              client listener from this host
+//	leaf                          no listener; one outbound link presenting
+//	                              the active key
+//
+// THE KEYS ARE THE KEYRING'S, derived per key ([FleetAuthFrom]) by the rule
+// every consumer of secrets.keys follows (internal/runtoken), so the keyring's
+// rotation runbook moves the broker with no step of its own: every node accepts
+// every key of its ring and presents the active one.
+//
+// WHY THE EMBEDDING HOOKS AND NOT NATS-SERVER'S OWN BLOCKS. A cluster's
+// authorization block holds one user, a leaf listener's one nkey or a password
+// list, and the client user list cannot refuse anonymity on a member that
+// declares a system account — measured: with the system key in the server's own
+// nkey list an anonymous client still connected, through the no-auth user the
+// server adds to the global account. None of them carries a rotation without a
+// secret on the wire or an anonymous path; the hooks carry both.
+//
+// WHAT IT DOES NOT DO is encrypt. A route's password crosses the fleet network
+// in clear once per connection — a NATS route carries a password or a
+// certificate, never a signature — and every byte after it crosses in clear,
+// as before. So the fleet network stays private, and the state log's records
+// and the fleet's instructions stay signed (ADR-0031): the admission is per
+// connection and only as private as that network, and a record is believed on
+// its own signature, never on the connection it arrived by.
 package jetstream
 
 import (

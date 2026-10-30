@@ -133,3 +133,16 @@ broadcasts is sealed one way under the fleet keyring, in a key domain of its
 own, with a short validity inside the seal, through the same
 `internal/signedask` implementation (which gains a one-way form beside request
 and reply); a frame that does not open shows nobody.
+
+## Amendment: the embedded broker authenticates its connections
+
+The premise this record opens with — the broker has no authentication of its
+own — no longer holds for the embedded broker: since
+[ADR-0064](0064-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)
+it admits only a route, a leaf link or an operator presenting a key derived from
+the same keyring, and a node's own clients in process. The decision stands
+unchanged, and its opening paragraph is kept as the reason it was written. The
+admission is per connection, and only as private as the network a route's
+password crosses in clear once per connection; an external cluster admits whom
+its operator chooses. So a record, an instruction or a presence frame is still
+believed on its own signature or seal, never on the connection it arrived by.

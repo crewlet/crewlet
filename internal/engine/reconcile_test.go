@@ -738,7 +738,7 @@ func TestASealedRevisionNeedsTheKeyItWasSealedUnder(t *testing.T) {
 // A PEER'S REVISION THAT IS NOT SEALED IS NEITHER APPLIED NOR KEPT.
 //
 // The payload a peer converges on is read off the coordination store, and
-// anything that can reach the broker can write that bucket — so the seal under
+// anything the broker admits can write that bucket — so the seal under
 // the fleet's keyring is what says a node of this fleet wrote it. A plaintext
 // body used to be applied by a node holding a keyring exactly as its own
 // would have been: a forged company document, running on every node, with

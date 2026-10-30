@@ -1043,7 +1043,7 @@
           ]
         },
         "keys": {
-          "description": "The keyring; several entries support online rotation.",
+          "description": "The keyring; several entries support online rotation. Required on every node; an embedded fleet's broker credentials are derived from it beside everything else it signs.",
           "items": {
             "$ref": "#/$defs/SecretKey"
           },
@@ -1482,7 +1482,7 @@
           ]
         },
         "host": {
-          "description": "Interface the route listener binds. Empty binds every interface.",
+          "description": "Interface the route listener binds. Empty binds every interface. The listener admits only members presenting a key derived from secrets.keys; a route's credential and every byte after it cross the network in clear, so bind it to the private network the peers are on.",
           "type": [
             "string",
             "number",
@@ -1550,7 +1550,7 @@
           ]
         },
         "host": {
-          "description": "Interface the leaf listener binds. Empty binds every interface.",
+          "description": "Interface the leaf listener binds. Empty binds every interface. A leaf's link is authenticated, not encrypted, so bind it to the private network the leaves are on.",
           "type": [
             "string",
             "number",
@@ -1573,7 +1573,7 @@
               "type": "string"
             }
           ],
-          "description": "A member's leaf listener, where the fleet's leaves join. Accepts any connection that reaches it, like the route port. A member with one is in a fleet, so it needs stream.store_dir."
+          "description": "A member's leaf listener, where the fleet's leaves join. Admits only a leaf whose key is derived from secrets.keys. A member with one is in a fleet, so it needs stream.store_dir."
         },
         "urls": {
           "description": "Leaf listeners of the members this node joins as a LEAF - no JetStream, no replica, no vote - e.g. nats-leaf://member-a.internal:7422. Any one that answers will do. Only a node without the data role may be a leaf, and an embedded node without it must be one.",

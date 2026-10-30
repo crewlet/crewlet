@@ -2,8 +2,12 @@ package jetstream
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
+
+	"github.com/nats-io/nats-server/v2/server"
 
 	"github.com/crewlet/crewlet/internal/logging"
 )
@@ -37,6 +41,20 @@ import (
 // are DEBUG: available when someone is diagnosing a broker, absent when
 // nobody asked for one. Everything that reports something WRONG keeps its
 // severity, which is the half that was actually missing.
+//
+// ONE ERROR LINE IS DEBUG TOO: nats-server's own report of a connection its
+// authenticator refused, `authentication error - User "<name>"` or the bare
+// sentinel, once PER REFUSED ATTEMPT, carrying whatever username the peer sent
+// (server/client.go authViolation, v2.15.1). The authenticator already reports
+// every refusal — counted, and logged as broker_peer_refused once a minute a
+// class with the key it was presented — so this second report of one event
+// would drift from the first, and at ERROR it is an unbounded stream at the
+// rate any peer chooses, of text that peer wrote. Recognised by the sentinel,
+// [server.ErrAuthentication], among its arguments or as the format's tail —
+// never the whole format, which a client's own label precedes. The DIALER'S
+// side of a refusal keeps its level ("Route Error 'Authorization Violation'"):
+// that is this node failing to join, bounded by the route's own back-off, and
+// the operator of this node is the one who needs it.
 //
 // # The broker's OWN debug is a separate question, and [Config.Debug] asks it
 //
@@ -127,9 +145,31 @@ func (l natsLogger) emit(level slog.Level, format string, v ...any) {
 
 func (l natsLogger) Noticef(format string, v ...any) { l.emit(slog.LevelDebug, format, v...) }
 func (l natsLogger) Warnf(format string, v ...any)   { l.emit(slog.LevelWarn, format, v...) }
-func (l natsLogger) Errorf(format string, v ...any)  { l.emit(slog.LevelError, format, v...) }
 func (l natsLogger) Debugf(format string, v ...any)  { l.emit(slog.LevelDebug, format, v...) }
 func (l natsLogger) Tracef(format string, v ...any)  { l.emit(slog.LevelDebug, format, v...) }
+
+// Errorf is an Error line, but for the server's own report of a connection its
+// authenticator refused, which is DEBUG — see the type doc's "Levels".
+func (l natsLogger) Errorf(format string, v ...any) {
+	level := slog.LevelError
+	if refusedAuthentication(format, v) {
+		level = slog.LevelDebug
+	}
+	l.emit(level, format, v...)
+}
+
+// refusedAuthentication reports whether a line is nats-server's report of an
+// authentication it refused: [server.ErrAuthentication] handed in as an
+// argument, or its text closing the format — a client's Errorf prefixes the
+// format with the connection's own label, so the bare form is the TAIL.
+func refusedAuthentication(format string, v []any) bool {
+	for _, arg := range v {
+		if err, ok := arg.(error); ok && errors.Is(err, server.ErrAuthentication) {
+			return true
+		}
+	}
+	return strings.HasSuffix(format, server.ErrAuthentication.Error())
+}
 
 // Fatalf is an Error line and a declaration of the broker's death, and it
 // RETURNS. See the type doc: exiting here would take the engine down from

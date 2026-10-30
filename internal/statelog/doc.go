@@ -169,10 +169,12 @@
 //
 // # Every record is SIGNED, and no domain is handed an unverified byte
 //
-// This is ADR-0031. The broker has no authentication of its own and a record
-// is what the next node APPLIES, so the framework frames and signs on the way
-// to the appender and verifies before any domain decodes. The key is Tier A's
-// keyring (ADR-0011), and a node with no keyring refuses to start.
+// This is ADR-0031. The broker's admission vouches for a connection, never a
+// record — an embedded fleet's route credential crosses its network in clear
+// (ADR-0064), and an external cluster admits whom its operator chooses — and a
+// record is what the next node APPLIES, so the framework frames and signs on
+// the way to the appender and verifies before any domain decodes. The key is
+// Tier A's keyring (ADR-0011), and a node with no keyring refuses to start.
 //
 // The rule is stated for READERS rather than for appliers, and the clause
 // earns its place: the applier is not the only one. The change feed is a

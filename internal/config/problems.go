@@ -1066,28 +1066,34 @@ func tierWarnings(boot *Bootstrap, company *Company, cache CacheBudget) []Warnin
 				"takes store.objects.backend: s3"))
 	}
 
-	// A CONTAINER BOX CAN REACH THE FLEET'S BROKER, which authenticates no
-	// client yet (until the broker's own authentication, unit m3-after1,
-	// M3-decisions U4): a `container` coding box joins the network
-	// `providers.sandbox.local.network` names, or the runtime's default
-	// bridge, and either reaches the host it runs on — so on a fleet a
-	// member's route, leaf and client ports on a member's own host, and the
-	// members' leaf listeners from a leaf's, where main's split topology runs
-	// its seats. A box that reached them could publish as any principal the
-	// estate trusts. Nothing here can tell a network firewalled from them, so
-	// the advisory names the setting rather than reading it.
-	// Said wherever this node is in a fleet ([Bootstrap.clustered]), on every
-	// node alike: a member that runs no box is still a broker a box on another
-	// host can reach. Never for `e2b`, whose box is on the vendor's network,
-	// nor `direct`, which [Company.directBoxWarnings] already says reads the
-	// keyring itself; never for the double, which runs nothing.
-	if company.Code.Native && boot.clustered() && company.runsContainerBoxes() {
+	// A CONTAINER BOX BESIDE AN EXTERNAL BROKER: a `container` coding box
+	// joins the network `providers.sandbox.local.network` names, or the
+	// runtime's default bridge, and either reaches whatever the host it runs
+	// on reaches — the external NATS cluster this node dials among it. Whether
+	// that cluster authenticates its clients is its operator's configuration,
+	// which nothing here reads; one that admits anybody admits a box that
+	// could then publish as any principal the estate trusts.
+	//
+	// THE EMBEDDED BROKER IS NOT WARNED ABOUT, on a member, a member serving
+	// leaves or a leaf: it admits only a route, a leaf link or an operator
+	// presenting a key derived from secrets.keys, and this process's own
+	// clients (ADR-0064), so a box that reaches its ports is refused there. So
+	// this reads the broker's KIND, never [Bootstrap.clustered] — which
+	// [Bootstrap.validateTopology] still needs whole, a leaf and a member
+	// serving leaves included, to refuse local coordination on a fleet. What a
+	// box on a member's host network can still do — read the fleet's plaintext
+	// links — is the deployment guide's to say, not a warning's.
+	// Never for `e2b`, whose box is on the vendor's network, nor `direct`,
+	// which [Company.directBoxWarnings] already says reads the keyring itself;
+	// never for the double, which runs nothing.
+	if company.Code.Native && boot.BrokerKind() == placement.BrokerClient &&
+		company.runsContainerBoxes() {
 		out = append(out, advisory(field("stream"),
-			"a `container` coding box reaches the fleet's broker unless its network forbids it — a "+
-				"member's route, leaf and client ports on the member's own host, and the members' leaf "+
-				"listeners from a leaf's — and that broker authenticates no client: give coding boxes a "+
-				"network that cannot reach the broker's ports (providers.sandbox.local.network, firewalled "+
-				"from them), or run them in `e2b`"))
+			"this node dials an external NATS cluster, and whether that cluster authenticates its "+
+				"clients is its operator's configuration: a `container` coding box on this node's "+
+				"host reaches it unless its network forbids it — require authorization on every "+
+				"server of that cluster (docs/guides/deployment.md), give coding boxes a network that "+
+				"cannot reach it (providers.sandbox.local.network), or run them in `e2b`"))
 	}
 
 	// A REPOSITORY LARGER THAN THE CACHE. A git node caches a repository

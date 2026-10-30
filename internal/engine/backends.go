@@ -435,7 +435,8 @@ func storeOptions(b *config.Bootstrap, c *config.Company) store.Options {
 // built on top of it is identical, and writing that twice is how one copy
 // ends up without a fleet store — which is not a startup error but a panic
 // hours later in whichever subsystem reached for it first. rec is the node's
-// recorder, handed on to the object store ([openObjects]).
+// recorder, handed on to the embedded broker's refusals ([openStream]) and to
+// the object store ([openObjects]).
 func openNATS(ctx context.Context, b *config.Bootstrap, rec *metrics.Recorder) (*Backends, error) {
 	cfg, err := streamConfig(b)
 	if err != nil {
@@ -447,7 +448,7 @@ func openNATS(ctx context.Context, b *config.Bootstrap, rec *metrics.Recorder) (
 	// store is written inline on the publishing node and a reader holding
 	// any one row or frame has only that to find the node whose store holds
 	// the rest — see events.Event.Node.
-	out, conn, err := openStream(ctx, b, cfg, queue.WithNode(nodeID))
+	out, conn, err := openStream(ctx, b, cfg, rec, queue.WithNode(nodeID))
 	if err != nil {
 		return nil, err
 	}
@@ -492,6 +493,18 @@ func streamConfig(b *config.Bootstrap) (jetstream.Config, error) {
 	if err != nil {
 		return jetstream.Config{}, fmt.Errorf("engine: stream: %w", err)
 	}
+	// THE BROKER'S CREDENTIALS ARE THE KEYRING'S, derived per key by the rule
+	// every consumer of secrets.keys follows (ADR-0064): every route, leaf link
+	// and operator connection of an embedded fleet presents one. Derived on
+	// every node, a solo member's too — it opens no fleet listener, so its are
+	// never presented — because which listeners a broker opens is the jetstream
+	// package's to decide from the rest of this config, and one derivation for
+	// every node is one fewer rule about which nodes need one.
+	fleet, err := jetstream.FleetAuthFrom(b.Secrets.TokenMaterial())
+	if err != nil {
+		return jetstream.Config{}, fmt.Errorf("engine: stream: the broker's credentials "+
+			"from secrets.keys: %w", err)
+	}
 	cfg := jetstream.Config{
 		URL:              b.Stream.URL,
 		StoreDir:         b.Stream.StoreDir,
@@ -510,6 +523,7 @@ func streamConfig(b *config.Bootstrap) (jetstream.Config, error) {
 		LeafPort:      b.Stream.Leaf.Port,
 		LeafHost:      b.Stream.Leaf.Host,
 		LeafAdvertise: b.Stream.Leaf.Advertise,
+		FleetAuth:     fleet,
 		ServerName:    nodeID,
 		Replicas:      b.Stream.Replicas,
 		Credentials:   b.Stream.Credentials,
@@ -767,8 +781,12 @@ func derivedObjectsReservation(limit, declared int64) int64 {
 // EVERY QUEUE THIS OPENS CARRIES THE CALLER'S OPTIONS — the node every event
 // it publishes is stamped with ([queue.WithNode]) — on both branches, so an
 // event's origin names this node whichever broker topology it rode.
+//
+// AND THE BROKER IT STARTS COUNTS WHAT IT REFUSES into rec
+// ([countRefusals]): installed the moment the server has started, and handed
+// whatever it refused while it was still starting. Nil counts nothing.
 func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
-	opts ...queue.Option,
+	rec *metrics.Recorder, opts ...queue.Option,
 ) (*Backends, *nats.Conn, error) {
 	// A URL IS A BROKER SOMEBODY ELSE RUNS, and this branch is what makes
 	// `stream.type: nats` mean anything. Without it every path here
@@ -795,6 +813,7 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: stream: %w", err)
 	}
+	server.OnPeerRefused(countRefusals(rec))
 	q, err := server.Client(ctx, opts...)
 	if err != nil {
 		server.Shutdown()
@@ -817,6 +836,29 @@ func openStream(ctx context.Context, b *config.Bootstrap, cfg jetstream.Config,
 	// shares the queue's instead, which is why it leaves this nil.
 	out.conn = conn
 	return out, conn, nil
+}
+
+// countRefusals is the sink a node's embedded broker hands its refusals to:
+// crewlet.broker.peer.refusals, by the listener a refused connection reached
+// and what it presented ([jetstream.Server.OnPeerRefused]). A nil recorder
+// counts nothing.
+//
+// A COUNTER AND A LOG LINE, NEVER THE AUTHENTICATION TRAIL. The trail's rows
+// are the identity estate's doors — a person or a machine proving who it is —
+// and a connection to the fleet's broker is no principal: what it presented is
+// a key of the keyring or nothing, and a refused one has no author a row could
+// name. It also arrives at whatever rate the peer that reaches a port chooses,
+// which a row in every backup must not, for crewlet.auth.attempts.failed's
+// reason. The broker's own broker_peer_refused line, once a minute a class,
+// says which key and from where.
+func countRefusals(rec *metrics.Recorder) func(jetstream.PeerRefusal, uint64) {
+	return func(r jetstream.PeerRefusal, n uint64) {
+		if rec == nil {
+			return
+		}
+		rec.Add(metrics.BrokerPeerRefusals, n, metrics.Attrs{
+			"listener": string(r.Listener), "presented": string(r.Presented)})
+	}
 }
 
 // attachCoordination builds the fleet store and the lease slot on one

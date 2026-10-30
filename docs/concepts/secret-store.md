@@ -192,22 +192,27 @@ crewlet secrets get TOKEN -reveal                # break-glass; logged
 crewlet secrets rekey                            # after a keyring rotation: every row, every person's values
 ```
 
-### The keyring is not optional, and it does three jobs
+### The keyring is not optional, and it does four jobs
 
 A deployment has one keyring, and everything that has to be authenticated
 across a fleet derives from it. It **seals** the company config and the secret
 store's rows — and a sealed company document is an authenticated one, so a
-node refuses one its peers published unsealed. It **signs** the three per-run tokens a sandbox carries — its telemetry's, its tool bridge's and a coding box's git credential. And it
+node refuses one its peers published unsealed. It **signs** the three per-run tokens a sandbox carries — its telemetry's, its tool bridge's and a coding box's git credential. It
 **signs every record on every state log** — the tracker's, the knowledge
-base's, and any domain a later build registers.
+base's, and any domain a later build registers. And it **keys an embedded
+fleet's broker**: a route, a leaf link and the operator's nats tool are
+admitted only on a credential derived from one of its keys
+([The fleet's broker admits only its own nodes](../guides/deployment.md#the-fleets-broker-admits-only-its-own-nodes)).
 
-That third job is why a node with no keyring now refuses to start. The
-embedded broker has no auth of its own; on a fleet it clusters its members over
-a port, and a record on a domain's log is not a message but an *instruction* —
-the next node applies it and derives rows from it. Unsigned, such a record is
-whatever anyone who can reach that port writes. Each of the three derives a
-different key from the same material, each binding its own label in, so a
-record signature and a token signature over one key are never the same bytes.
+That third job is why a node with no keyring refuses to start. A record on a
+domain's log is not a message but an *instruction* — the next node applies it
+and derives rows from it — and the broker's admission vouches for a
+connection, never a record: an embedded fleet's route credential crosses its
+network in clear once per connection, and an external cluster admits whom its
+operator chooses. Unsigned, such a record is whatever anything the broker
+admitted writes. Each job derives a different key from the same material, each
+binding its own label in, so a record signature, a token signature and a broker
+credential over one key are never the same bytes.
 
 A record's frame **names the key that signed it**, and a verifier looks that id
 up. A key it does not hold means "not yet" — the record is retained and applied
@@ -297,6 +302,21 @@ That makes the rotation a runbook with no window in it:
 Nodes may restart in any order at every step, because a key is either on a
 node's ring or it is not, and tokens name which one they need. There is no
 state in which two nodes disagree about a token they both hold the key for.
+
+**The broker follows the same steps, with none of its own.** Every node's
+broker accepts a credential derived from any key of its ring and presents the
+active key's, so within a step every node already holds every key any node
+presents: after step 2 every node accepts both and presents the old, after
+step 3 the restarted nodes present the new to peers that hold it, and by step 5
+every node presents the new one already. Measured member by member on three
+members, the mesh stayed whole and a replicated publish through every member
+succeeded after every restart. Adding and flipping in ONE restart keeps the
+members whole but strands a leaf restarted before any member — it presents a
+key no member holds yet, and fails its boot naming it — which is why the flip
+is a step of its own. A node restarted onto a keyring that shares no key with
+the others is refused by every peer, counted, and named by key in their
+`broker_peer_refused` lines. An operator key written by `crewlet fleet broker
+credential` is admitted until its key is dropped; write it again after step 5.
 
 The value is read from **stdin** by default rather than from `-value`, because an argv value is visible in `ps` output and lands in shell history. Exactly one trailing newline is stripped, so `echo "$TOKEN" | ...` does the right thing — and no more than one, because a secret may legitimately end in whitespace and altering it silently is a failure nobody can see.
 
@@ -499,7 +519,7 @@ the environment and the store every node reads.** Nothing has to be copied to
 it, and there is no first-boot step that reads a peer; a value set on a solo
 node before its first boot is already in the store that boot opens. (What a
 node cannot do is start with no keyring at all: every node needs one — see
-[the three jobs above](#the-keyring-is-not-optional-and-it-does-three-jobs).)
+[the four jobs above](#the-keyring-is-not-optional-and-it-does-four-jobs).)
 
 ### Which one to use
 

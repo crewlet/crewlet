@@ -15,9 +15,10 @@ import (
 // bound to, and a serving node remembers the ids it took. A BROADCAST has no
 // reply and no single receiver (the queue's Broadcast hands it to every node
 // listening), so neither binding applies. What still applies is the reason
-// for signing at all: the broker authenticates nothing, and a frame that names
-// a person causes a display of that person. A forged presence frame would put
-// a colleague in a room they are not in.
+// for signing at all: the broker's admission vouches for a connection and
+// never a frame, and a frame that names a person causes a display of that
+// person. A forged presence frame would put a colleague in a room they are
+// not in.
 //
 // So a one-way frame is sealed with the same frame the state log signs with,
 // in a key domain of its own ([OneWay.Domain], the name it was built with),

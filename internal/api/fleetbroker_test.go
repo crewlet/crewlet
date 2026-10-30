@@ -199,7 +199,7 @@ func TestTheBrokerAnswerFixtureIsTheEnginesOwn(t *testing.T) {
 	t.Parallel()
 	peer := jetstream.PeerIDOf
 	view := engine.BrokerView{
-		Node: "node-a", Kind: "member",
+		Node: "node-a", Kind: "member", Client: "127.0.0.1:41234",
 		Nodes: []engine.BrokerNode{
 			{Node: "node-a", Peer: peer("node-a"), Kind: "member",
 				Roles: []string{"data", "ingress", "seats", "workers"}},

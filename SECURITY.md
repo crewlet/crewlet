@@ -295,30 +295,40 @@ A few things worth knowing when deploying Crewlet:
   alone. The keyring is the root of trust: keep it out of the store's backup
   domain. See
   [Encrypted at rest, and authenticated](docs/concepts/configuration.md#encrypted-at-rest-and-authenticated).
-- **The fleet's broker authenticates nothing itself, so what crosses it as an
-  instruction is signed.** A fleet's embedded members route to each other on
-  `stream.cluster.port`, and a node without `data` reaches them on
-  `stream.leaf.port`. Every state-log record is signed under the Tier A keyring
-  and verified before any node applies it, and so is every request one node
-  asks another to CARRY OUT, and every reply, on each of the three channels
-  that carry one: a node without `data` asking a data node's estate service to
-  write (the data node writes as the actor the request names), any node asking
-  a broker member to remove a voter from the metadata group (the member does it
-  through its own system account, changing the quorum every election runs on),
-  and a person's note to a running turn (the running node offers it as the
-  person it names). Unsigned, each would let anybody who reaches either port
-  write as anybody, change the broker's quorum past every check the operator's
-  route makes, or put words in front of a running agent under anybody's name.
-  Each request is bound to an id and a deadline inside its signature, so one
-  captured off the wire is not carried out twice. A frame under a key the
-  receiver does not hold is not applied, or not run; one that fails under a key
-  it holds is refused and logged. Signing authenticates and does not encrypt:
-  the records, the event stream and the coordination store are readable by
-  anything that reaches those ports, the coordination store's writes are
+- **The fleet's embedded broker admits only its own nodes, encrypts nothing,
+  and what crosses it as an instruction is still signed.** A fleet's embedded
+  members route to each other on `stream.cluster.port`, and a node without
+  `data` reaches them on `stream.leaf.port`. Every connection to an embedded
+  broker presents a key derived from the Tier A keyring — a route its
+  credential, a leaf link and the operator's nats tool an nkey signing the
+  member's challenge, a node's own clients in process — and anything else is
+  refused, counted and logged
+  ([ADR-0064](adr/0064-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)).
+  That admission is per connection, and a route's credential crosses the
+  fleet network in clear once per connection, so it is only as private as that
+  network; an external cluster (`stream.type: nats`) admits whom its own
+  operator chooses. So every state-log record is still signed under the
+  keyring and verified before any node applies it, and so is every request one
+  node asks another to CARRY OUT, and every reply, on each of the three
+  channels that carry one: a node without `data` asking a data node's estate
+  service to write (the data node writes as the actor the request names), any
+  node asking a broker member to remove a voter from the metadata group (the
+  member does it through its own system account, changing the quorum every
+  election runs on), and a person's note to a running turn (the running node
+  offers it as the person it names). Unsigned, each would let anything the
+  broker admitted write as anybody, change the broker's quorum past every check
+  the operator's route makes, or put words in front of a running agent under
+  anybody's name. Each request is bound to an id and a deadline inside its
+  signature, so one captured off the wire is not carried out twice. A frame
+  under a key the receiver does not hold is not applied, or not run; one that
+  fails under a key it holds is refused and logged. Neither the admission nor
+  the signing encrypts: the records, the event stream and the coordination
+  store cross the fleet network in clear, the coordination store's writes are
   guarded by compare-and-set rather than a signature, and the scatters that
   only READ — history, search, a seat's memory, a sandbox's tail — are not
-  signed. Keep both ports on a private network. The decision is
-  [ADR-0031](adr/0031-every-state-log-record-is-signed.md).
+  signed. Keep both ports on a private network, and coding boxes off a
+  member's host network. The decisions are
+  [ADR-0031](adr/0031-every-state-log-record-is-signed.md) and ADR-0064.
 - **Removing a person erases their values from every node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,

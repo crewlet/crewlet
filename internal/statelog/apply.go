@@ -167,7 +167,8 @@ type RunnerDeps struct {
 
 	// Verifier authenticates every record before this domain decodes one.
 	// REQUIRED: a runner built without it would apply whatever reached the
-	// broker, and the broker has no auth of its own. See [signature.go].
+	// broker, and the broker's admission vouches for a connection, never a
+	// record. See [signature.go].
 	Verifier *Verifier
 
 	// Log is the same stream read by position, which is how the applier
@@ -647,9 +648,9 @@ func NewRunner(d RunnerDeps) (*Runner, error) {
 	case d.Verifier == nil:
 		// REFUSED RATHER THAN DEFAULTED TO ACCEPTING EVERYTHING. A
 		// runner with no verifier applies whatever reached the broker,
-		// and the broker has no auth of its own — so the absence of a
-		// keyring must be a boot failure naming what to configure,
-		// never a node that quietly authenticates nothing.
+		// and the broker's admission vouches for no record — so the
+		// absence of a keyring must be a boot failure naming what to
+		// configure, never a node that quietly authenticates nothing.
 		return nil, fmt.Errorf("%w: %s's applier has no verifier, so it would apply "+
 			"any record that reached the broker — Tier A secrets.keys is required "+
 			"wherever a state-log domain runs", ErrUnsigned, d.Domain.Name())
@@ -3029,11 +3030,12 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 	gen, passed := r.cursor.Generation, r.passed != nil
 	r.mu.Unlock()
 	for _, m := range batch {
-		// VERIFIED BEFORE THE DOMAIN SEES IT. The broker has no auth of
-		// its own, so a record's signature is the only thing that says
-		// it came from this fleet, and handing an unauthenticated
-		// payload to a domain's decoder is handing it to the one place
-		// that parses attacker-controlled bytes.
+		// VERIFIED BEFORE THE DOMAIN SEES IT. The broker's admission
+		// vouches for a connection, never a record, so a record's
+		// signature is the only thing that says it came from this fleet,
+		// and handing an unauthenticated payload to a domain's decoder is
+		// handing it to the one place that parses attacker-controlled
+		// bytes.
 		body, verdict := r.verifier.Open(m.Payload)
 		if verdict != Verified {
 			// OUTSIDE THE TRANSACTION, where the refusal is decided:

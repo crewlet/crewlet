@@ -1111,7 +1111,7 @@ func TestAClosedHandlesStandingRequestDoesNotTakeTheNextRecord(t *testing.T) {
 	t.Parallel()
 	q := newQueueWith(t, Config{
 		ServerName: "member", LeafHost: "127.0.0.1", LeafPort: AnyPort,
-		StoreDir: t.TempDir(),
+		StoreDir: t.TempDir(), FleetAuth: testFleetAuth(),
 	})
 	if err := q.EnsureDomainStream(t.Context(), DomainStream{
 		Name: "CREWLET_LATER_LOG", Subjects: []string{"crewlet.later.log.>"},

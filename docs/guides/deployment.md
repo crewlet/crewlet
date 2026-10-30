@@ -24,8 +24,10 @@ nodes lives in the KV instead. See [Running a Fleet](fleet.md) and
 ## The single host
 
 **A keyring is required, on one node and on every node.** Every record on every
-state log is signed under it, because the broker has no auth of its own and a
-record is an instruction the next node applies. `crewlet secrets keygen` mints
+state log is signed under it, because a record is an instruction the next node
+applies and the broker's admission vouches for a connection, never a message
+(ADR-0031). An embedded fleet's broker admits only keys derived from it too
+(ADR-0064). `crewlet secrets keygen` mints
 one and prints the export line; a node without one refuses to start, naming the
 field. Every node of a fleet needs the **same** keyring — one keyed differently
 would refuse every peer's records, and every browser signed in against one
@@ -315,20 +317,23 @@ coordination:
                                        #   broker; nothing else to set
 
 secrets:                               # the SAME keys on every member: each
-  active_key_id: "2026-01"             #   one verifies what the others sign
-  keys:
-    - id: "2026-01"
+  active_key_id: "2026-01"             #   one verifies what the others sign,
+  keys:                                #   and the broker admits only a peer
+    - id: "2026-01"                    #   presenting a key derived from them
       material: "${CREWLET_SECRET_KEY_2026_01}"
 ```
 
 **Bind the route port to the network the peers are on.** `cluster.host` is the
 interface the route listener binds, and leaving it unset binds every
-interface. A route port is how a member JOINS — and a member that joins reads
-and writes every stream and every coordination bucket — so on a host with a
-public interface an unset `host` publishes unauthenticated access to the
-company's whole event history. Set it to the private address, or keep the port
-off the public interface with a firewall; the engine cannot tell which of a
-host's addresses is the private one, so it does not guess.
+interface. The route port admits only a member presenting a credential derived
+from `secrets.keys` ([below](#the-fleets-broker-admits-only-its-own-nodes)),
+but that credential crosses the network in clear once per connection — a NATS
+route carries a password or a certificate, never a signature — and so does
+every byte after it: the company's whole event history and every lease. On a
+host with a public interface an unset `host` publishes both. Set it to the
+private address, or keep the port off the public interface with a firewall; the
+engine cannot tell which of a host's addresses is the private one, so it does
+not guess.
 
 **A cluster block without a name is refused, because it would do nothing.**
 The embedded server takes its route port, its bind interface, its advertise
@@ -551,41 +556,101 @@ reserved only where this node can read them, which is the standalone one. On a
 fleet the room that refused is another member's disk, and no member can read
 another's.
 
-> **The clustered embedded broker has no authentication and no TLS. Run it on
-> a trusted network.**
->
-> A clustered member listens on two ports: a route port on the configured
-> interface, and a client port on loopback that the server picks for itself —
-> NATS opens it before it routes, the engine's own connections never dial it
-> (they are in process), and no client is told where it is. Neither carries a
-> credential or a certificate. `credentials`, `token` and
-> `stream.tls` are **dial-side** options — they configure this process
-> connecting *out* to a URL — and an embedded server has no server-side
-> counterpart in Tier A at all. Anything that can reach those ports can
-> publish onto a seat's inbox, read every event the company produces, and
-> take its leases.
->
-> A private subnet, a security group or a WireGuard mesh between the nodes is
-> what makes this shape safe, and no configuration substitutes for one. A
-> deployment that needs the brokers themselves mutually authenticated runs
-> `stream.type: nats` against a NATS cluster it secures itself.
->
-> **A `container` coding box is inside that trusted network unless you put it
-> outside.** A [container box](../concepts/code-sandbox.md#local-sandboxes)
-> joins the Docker network `providers.sandbox.local.network` names (the
-> runtime's default bridge when unset), and either reaches the host it runs on:
-> on a member's host, the route and client ports; on a leaf's, the members'
-> leaf listeners wherever the leaf can reach them. In a company that hosts code
-> such a box runs what a seat's coding agent wrote, from a brief anybody who
-> woke the turn may have shaped, and a box that reached the broker could
-> publish as any principal the estate trusts. Give coding boxes a network of
-> their own that cannot reach the broker's ports — a host firewall rule
-> dropping that network's traffic to them, leaving it the egress the box needs
-> (its LLM vendor, the code host's `CREWLET_BOX_GIT_URL`, the bridge and the
-> receiver) — or run them in `e2b`. `crewlet validate` and every node warn, at
-> `stream`, wherever a company that hosts code runs a `container` box and the
-> node is in a fleet. A `direct` box is outside every network rule: it runs as
-> the engine's own user ([Code Sandbox → Security model](../concepts/code-sandbox.md#security-model)).
+#### The fleet's broker admits only its own nodes
+
+Every connection to an embedded broker presents a key derived from
+`secrets.keys`, and the broker admits exactly four kinds of connection
+([ADR-0064](../../adr/0064-the-fleets-broker-admits-only-a-key-derived-from-secrets-keys.md)):
+
+- a **route** from another member, presenting the route credential derived
+  from a key of its keyring;
+- a **leaf link** from a node without `data`, presenting the nkey derived from a
+  key of its keyring and signing the member's challenge;
+- an **operator** on a member's own host, on the member's loopback client
+  listener, presenting the operator key `crewlet fleet broker credential`
+  writes ([below](#reaching-an-embedded-fleets-broker-with-the-nats-tool));
+- the node's **own connections**, in process.
+
+Every node accepts every key of its keyring and presents the active one, so the
+keyring's [rotation runbook](../concepts/secret-store.md#rotating-the-keyring-with-nothing-in-flight-lost)
+moves the broker with no step of its own. A clustered member listens on two
+ports: the route port on the configured interface, and a client port on
+loopback that NATS opens before it routes — the engine's own connections never
+dial it (they are in process), and no client is told where it is.
+
+A refused connection is counted in `crewlet.broker.peer.refusals`, by the
+listener it reached and what it presented — `none`, `unknown` (a key this node
+does not hold) or `invalid` (a key it holds, with a proof its material does not
+produce) — and logged as `broker_peer_refused`: a class's first refusal at once,
+then at most once a minute carrying the count since, naming the key presented
+and where it came from. `unknown` while a rotation is under way is a node whose
+keyring differs from this one's; `none` is a process that is not a node of this
+fleet. Every broker logs `broker_keys` when it starts: the key it presents, the
+keys it accepts and the listeners it opened.
+
+**What it does not do is encrypt.** `credentials`, `token` and `stream.tls` are
+**dial-side** options for an external cluster; an embedded broker's links carry
+no TLS. A route's credential crosses the network in clear once per connection —
+a NATS route carries a password or a certificate, never a signature — and every
+byte of the fleet's traffic after it: every event, every lease, every record.
+Neither end of a route or a link authenticates what answers at the address it
+dials either, so a route's credential goes to whatever holds a peer's address.
+A private subnet, a security group or a WireGuard mesh between the nodes is
+still what makes this shape safe, and no configuration substitutes for one;
+what an impostor on that network could forge is bounded by the signature every
+record and every instruction carries
+([ADR-0031](../../adr/0031-every-state-log-record-is-signed.md)).
+
+**A coding box on a member's host network can read that traffic.** A
+[container box](../concepts/code-sandbox.md#local-sandboxes) joins the Docker
+network `providers.sandbox.local.network` names (the runtime's default bridge
+when unset), and from there it reaches the broker's ports like any process
+outside the fleet — and is refused. Given the HOST's network instead
+(`providers.sandbox.local.network: host`, or a `--network host` run argument)
+on a member's host, it shares the member's network namespace: with Docker's
+default capabilities it can read the host's traffic, a route's credential at
+connect time included, and reach the loopback client listener, which admits
+only the operator's key. On a fleet node, keep coding boxes off the host
+network, or run them in `e2b`. A `direct` box is outside every network rule: it
+runs as the engine's own user
+([Code Sandbox → Security model](../concepts/code-sandbox.md#security-model)).
+
+### Reaching an embedded fleet's broker with the nats tool
+
+A few broker gestures have no engine verb — above all resizing every stream and
+bucket before a raised `stream.replicas` lets a node start
+([Replica count](#replica-count)) — and they are made with the
+[`nats` tool](https://github.com/nats-io/natscli) on a member's own host,
+through the member's loopback client listener, with the operator key:
+
+```bash
+# on a clustered member's host, with the token of a principal that holds admin
+export CREWLET_API_TOKEN=...
+crewlet fleet broker credential -o ./operator.nk
+# Wrote the operator key derived from secrets.keys id "2026-01" to ./operator.nk (0600).
+#
+#   nats --server nats://127.0.0.1:41234 --nkey ./operator.nk <command>
+
+nats --server nats://127.0.0.1:41234 --nkey ./operator.nk stream ls
+```
+
+The command derives the key from this host's own Tier A — the seed is written
+to a file created `0600`, never printed, and never over a file that exists —
+and asks this host's node, over `GET /fleet/broker` (which takes `admin`), for
+its client listener: its port is the OS's, chosen at every start, and on
+loopback it is reachable from that host alone. It refuses an answer from any
+other node (a `-url` naming a balancer or a peer), and a node with no client
+listener — a solo member, a member with only a leaf listener, a leaf — says so.
+A member that serves no API (`api.port: 0`) is asked nothing: the invocation is
+printed with the address left for you, and the node's `broker_keys` line names
+it. The key reaches every stream and bucket and never the system account —
+removing a member goes through
+[`crewlet fleet broker remove`](../reference/cli.md#crewlet-fleet-broker) — and
+it grants nothing its holder lacks: whoever reads this node's Tier A holds the
+keyring, which already decrypts the company's document and secrets. It is
+admitted until its key leaves `secrets.keys`; write it again after a rotation
+drops it. A member serves the plain JetStream API beside the fleet's domain, so
+the tool needs no `--js-domain`.
 
 ### An external NATS server
 
@@ -630,6 +695,20 @@ user; `token` is a bearer token, and takes a `${VAR}` reference so the
 secret stays out of the file and out of the config revision history. Set
 whichever the broker asks for; both are dial options, and the engine stores
 neither.
+
+**A `container` coding box beside an external cluster reaches it unless its
+network forbids it.** Whether that cluster authenticates its clients is its own
+operator's configuration, which the engine does not read — unlike the embedded
+broker, which admits only its own nodes
+([above](#the-fleets-broker-admits-only-its-own-nodes)). A
+[container box](../concepts/code-sandbox.md#local-sandboxes) joins the Docker
+network `providers.sandbox.local.network` names and reaches whatever its host
+reaches, and against a cluster that admits anybody it could publish as any
+principal the estate trusts. Require authorization on every server of the
+cluster, give coding boxes a network that cannot reach it, or run them in
+`e2b`. `crewlet validate` and every node warn, at `stream`, wherever a company
+that hosts code runs a `container` box on a node that dials an external
+cluster.
 
 **`stream.tls` is the transport underneath that authentication**, and it is a
 separate question from who you are: a broker configured `tls { verify: true }`
@@ -1517,7 +1596,12 @@ draining, and rolling upgrades. The two things that bite hardest:
 > the fencing epochs and the company's secrets would be on fewer disks than
 > the config claims. Resize the objects deliberately (`nats stream update
 > --replicas=3`, which covers the buckets too — a bucket *is* a stream), or
-> stand the fleet up fresh.
+> stand the fleet up fresh. On an embedded fleet the order is: bring the fleet
+> up at the old count, resize every stream and bucket through one member's
+> client listener with the operator key
+> ([Reaching an embedded fleet's broker with the nats tool](#reaching-an-embedded-fleets-broker-with-the-nats-tool)),
+> then raise `stream.replicas` and restart — a node refuses to start while any
+> object is short, so the resize comes first.
 
 ### What an acknowledged publish has reached
 
@@ -2541,6 +2625,17 @@ unclean shutdown, cluster election trouble — keeps its own severity and
 reaches the log whatever else is configured. Its boot narration ("Starting
 nats-server", the JetStream storage line, "Server is ready") is `debug`: a
 dozen lines describing infrastructure you deliberately did not deploy.
+
+One error line is `debug` too: the broker's own report of a connection it
+refused for its credential (`authentication error - User "…"`), which it
+writes once per attempt, carrying whatever name the peer sent. The engine
+reports every such refusal itself — counted in `crewlet.broker.peer.refusals`,
+and logged as `broker_peer_refused` once a minute a class, naming the key
+([The fleet's broker admits only its own nodes](#the-fleets-broker-admits-only-its-own-nodes))
+— so the broker's copy would be the same event twice, at whatever rate a peer
+chooses. The dialling side keeps its level: a member failing to join a peer
+(`Route Error 'Authorization Violation'`) is this node's own problem, and its
+operator needs it.
 
 Its **own debug output is a separate switch**, `stream.debug`, and it is off
 by default:

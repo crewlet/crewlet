@@ -15,12 +15,15 @@ import (
 //
 // # Why the framework signs and not each domain
 //
-// The embedded broker has no auth of its own. It binds no listener on the
-// default topology, but a fleet clusters those members over a port, and a
+// The broker's admission is no authority over a record. An embedded fleet's
+// broker admits only a connection presenting a key derived from this same
+// keyring (ADR-0064), but it decides per connection, and a route's password
+// crosses the fleet network in clear — so anything that captured one is a
+// member — while an external cluster admits whom its operator chooses. And a
 // record on a domain's log is whatever the next node applies: rows every peer
 // derives identically, a seat's environment, a person's grants. An unsigned
-// record on such a log is not a message, it is an INSTRUCTION anyone who can
-// reach the cluster port may write.
+// record on such a log is not a message, it is an INSTRUCTION anything the
+// broker admitted may write.
 //
 // So a record is framed and signed by the framework, on its way to the
 // appender, and verified by the framework before any domain decodes it. Each

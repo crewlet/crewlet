@@ -818,8 +818,9 @@ func violations(warnings []config.Warning) []violation {
 // re-fetches on its next miss.
 //
 // AUTHENTICATED BEFORE IT IS KEPT. The payload is whatever the coordination
-// bucket holds, and anything that can reach the broker can write it; the seal
-// under the fleet's keyring is what says a node of this fleet wrote it. So it
+// bucket holds, and anything the broker admits can write it — its admission
+// vouches for a connection, never a value (ADR-0064); the seal under the
+// fleet's keyring is what says a node of this fleet wrote it. So it
 // is opened here, at the boundary where a peer's bytes would enter this node's
 // own history, and a body that does not open — unsealed, or sealed under a key
 // this keyring does not hold — is refused before [store.Configs.Adopt] rather

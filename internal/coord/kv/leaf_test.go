@@ -2,6 +2,7 @@ package kv
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -10,7 +11,20 @@ import (
 	"github.com/crewlet/crewlet/internal/coord/coordtest"
 	"github.com/crewlet/crewlet/internal/jsapi"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
+
+// leafFleetAuth is the keyring this package's members serving leaves and the
+// leaves joined to them hold: every leaf link is admitted only on a key its
+// member holds. A literal placeholder, never a key anybody deploys.
+var leafFleetAuth = sync.OnceValue(func() js.FleetAuth {
+	auth, err := js.FleetAuthFrom(runtoken.OneKey("kv-leaf",
+		"the coordination store's leaf cases' placeholder key material"))
+	if err != nil {
+		panic(err)
+	}
+	return auth
+})
 
 // A LEAF'S COORDINATION STORE IS CERTIFIED ON THE SAME SUITES AS A MEMBER'S.
 //
@@ -72,7 +86,8 @@ func leafClient(t *testing.T) jetstream.JetStream {
 func leafClientOf(t testing.TB, port int, name string) jetstream.JetStream {
 	t.Helper()
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: name,
-		LeafURLs: []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}})
+		LeafURLs:  []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)},
+		FleetAuth: leafFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)
 	}
@@ -102,7 +117,8 @@ func leafMember(t testing.TB) int {
 	t.Helper()
 	// A MEMBER THAT SERVES LEAVES PERSISTS, or it is refused.
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		FleetAuth: leafFleetAuth()})
 	if err != nil {
 		t.Fatalf("start a member serving leaves: %v", err)
 	}

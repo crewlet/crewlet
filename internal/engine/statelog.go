@@ -781,8 +781,9 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// THE KEYRING IS REQUIRED WHEREVER A DOMAIN RUNS, and it is checked
 	// here so that the refusal names the configuration rather than
 	// arriving later as one domain's constructor failing. Every record on
-	// every log is signed under it, because the broker has no auth of its
-	// own and a record is whatever the next node applies.
+	// every log is signed under it, because the broker's admission vouches
+	// for a connection, never a record, and a record is whatever the next
+	// node applies.
 	if _, err = statelog.NewSigner(registeredDomains()[0].Name(), recordKeyring(boot)); err != nil {
 		return nil, err
 	}

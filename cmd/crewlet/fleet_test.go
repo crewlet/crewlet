@@ -78,7 +78,9 @@ func newFakeBrokerNode(t *testing.T) *fakeBrokerNode {
 // THE LISTING PUTS WHAT EACH NODE ADVERTISES BESIDE WHAT THE GROUP COUNTS, and
 // says in words what disagrees and what to do: a dead member gets the exact
 // command that stops the group counting it, and a voter with no live node is
-// still a row — the member an operator is looking for.
+// still a row — the member an operator is looking for. And it names the
+// answering member's loopback client listener, whose port the OS chose at the
+// broker's start.
 func TestFleetBrokerListNamesTheDeadMemberAndTheRemedy(t *testing.T) {
 	t.Parallel()
 	node := newFakeBrokerNode(t)
@@ -95,6 +97,9 @@ func TestFleetBrokerListNamesTheDeadMemberAndTheRemedy(t *testing.T) {
 		"DEAD MEMBER node-c",
 		"crewlet fleet broker remove node-c -confirm node-c",
 		"UNKNOWN old-1",
+		// THE ANSWERING NODE'S CLIENT LISTENER, where `crewlet fleet broker
+		// credential` points the nats tool from that node's own host.
+		"node-a's client listener (its own host only): 127.0.0.1:41234",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the listing does not say %q:\n%s", want, out)

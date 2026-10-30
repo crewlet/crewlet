@@ -4,11 +4,13 @@
 //
 // # Why a request is an instruction
 //
-// The fleet's broker authenticates nothing itself (ADR-0031): its embedded
-// members route to each other over a port, a node without data reaches them as
-// a leaf over another, and every anonymous connection is bound to the one
-// account the engine's own subjects live in. So a message on a subject a node
-// SERVES is whatever anybody who can reach either port chose to write. Where
+// The fleet's broker vouches for a CONNECTION, never a message (ADR-0031): an
+// embedded broker admits only a route, a leaf link or an operator presenting a
+// key derived from the keyring (ADR-0064), but a route's password crosses the
+// fleet network in clear once per connection, and an external cluster admits
+// whom its operator chooses — and every connection it admits is bound to the
+// one account the engine's own subjects live in. So a message on a subject a
+// node SERVES is whatever anything the broker admitted chose to write. Where
 // the node only answers a question about itself, that is a forged question and
 // an answer nobody needed. Where the node CARRIES THE REQUEST OUT, the message
 // is an instruction — and an unsigned instruction is exactly what ADR-0031
@@ -22,7 +24,7 @@
 //     the log would carry it signed by the data node that obeyed;
 //   - the FLEET BROKER'S MEMBERSHIP (internal/engine, fleetbroker.go): a member
 //     removes a voter from the broker's metadata group through its own system
-//     account, the one action the design keeps off the shared account — so
+//     account, the one action the design keeps off the global account — so
 //     unsigned, anybody on the broker could change the quorum every election
 //     runs on, past the grant, the step-up and the live-member refusal the
 //     operator's route puts in front of it;

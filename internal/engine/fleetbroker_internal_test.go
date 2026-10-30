@@ -43,7 +43,11 @@ type fakeMember struct {
 	groupOK error
 	removed []string
 	refuse  error
+	// client is the loopback client listener this member names, "" for none.
+	client string
 }
+
+func (f *fakeMember) ClientListener() string { return f.client }
 
 func (f *fakeMember) MetaGroup() (jetstream.MetaGroup, error) {
 	f.mu.Lock()
@@ -83,6 +87,8 @@ type wedgedMember struct{ release chan struct{} }
 func newWedgedMember(t *testing.T) *wedgedMember {
 	return &wedgedMember{release: make(chan struct{})}
 }
+
+func (w *wedgedMember) ClientListener() string { return "" }
 
 func (w *wedgedMember) MetaGroup() (jetstream.MetaGroup, error) {
 	<-w.release
@@ -254,6 +260,40 @@ func TestTheBrokerListingNamesEveryDisagreement(t *testing.T) {
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Fatalf("findings %v, want %v", got, want)
+	}
+}
+
+// THE BROKER VIEW NAMES THE ANSWERING NODE'S OWN CLIENT LISTENER, and nobody
+// else's: it is where an operator on that node's host points the nats tool,
+// reachable from that host alone. A member that opens none — and a node with no
+// broker of its own to ask — names none, rather than an address that is not
+// there.
+//
+// Mutation: omit the field → the member's row, red.
+func TestTheBrokerViewNamesThisNodesClientListener(t *testing.T) {
+	t.Parallel()
+	fleet := newBrokerFleet(t)
+	clustered := fleet.node(t, member("node-a", placement.RoleData),
+		&fakeMember{group: groupOf("node-a"), client: "127.0.0.1:41234"})
+	solo := fleet.node(t, member("node-b", placement.RoleData), &fakeMember{group: groupOf("node-a")})
+	leaf := fleet.node(t, placement.NodeProfile{ID: "leaf-1",
+		Roles: placement.Roles(placement.RoleSeats), Broker: placement.BrokerLeaf}, nil)
+	for _, tc := range []struct {
+		node *Engine
+		want string
+	}{
+		{clustered, "127.0.0.1:41234"},
+		{solo, ""},
+		{leaf, ""},
+	} {
+		view, err := tc.node.FleetBroker().List(t.Context())
+		if err != nil {
+			t.Fatalf("%s: list: %v", tc.node.id, err)
+		}
+		if view.Client != tc.want {
+			t.Errorf("%s's view names client listener %q, want %q", tc.node.id,
+				view.Client, tc.want)
+		}
 	}
 }
 
@@ -561,8 +601,8 @@ func TestTheBrokerFindingKindsAreClosed(t *testing.T) {
 }
 
 // A REMOVAL THE FLEET DID NOT SIGN REMOVES NOTHING. A member removes a voter
-// through its own system account, so a request anybody who can reach the
-// broker could write would change the quorum every election runs on — past
+// through its own system account, so a request anything the broker admitted
+// could write would change the quorum every election runs on — past
 // the grant, the step-up, the confirmation and the live-member refusal, which
 // all run on the asking node. Three ways to try — no signature, a signature
 // under the fleet's key id with somebody else's material, and the fleet's

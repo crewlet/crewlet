@@ -86,11 +86,13 @@ type Config struct {
 	//
 	// Empty binds EVERY interface, which is right for a node with one
 	// address and wrong twice over otherwise. On a multi-homed host it is
-	// a security setting: the route port is unauthenticated cluster
-	// access, and a member that binds it on a public interface is
-	// offering that to anyone who can reach the machine. On a host whose
-	// peers are on a private network it is also the only way to say which
-	// address that is.
+	// a security setting: the route port admits only a member presenting a
+	// route credential of [Config.FleetAuth]'s ring, and that credential
+	// crosses the network in clear once per connection, as does every byte
+	// of the cluster's traffic after it — so a member that binds it on a
+	// public interface offers both to anyone who can reach the machine. On
+	// a host whose peers are on a private network it is also the only way
+	// to say which address that is.
 	//
 	// It says nothing about what peers are TOLD to dial — that is
 	// ClusterAdvertise below, and the two differ precisely when they have
@@ -132,10 +134,11 @@ type Config struct {
 	// listening has nowhere for a stateless node to join. [AnyPort] binds
 	// whichever port the OS hands out, read back with [Server.LeafPort].
 	//
-	// It accepts any connection that reaches it, exactly as the route port
-	// does, and for the same reason: the fleet is one trust domain on a
-	// network its operator controls. Both belong on that network and
-	// nowhere else.
+	// It admits only a leaf whose link presents a leaf nkey of
+	// [Config.FleetAuth]'s ring and signs this member's nonce with it — no
+	// secret crosses the network — and everything the link carries after
+	// crosses it in clear, as the route port's traffic does. Both belong on
+	// the network the fleet's operator controls and nowhere else.
 	LeafPort int
 
 	// LeafHost is the interface the leaf listener binds, empty for all of
@@ -146,6 +149,15 @@ type Config struct {
 	// LeafAdvertise is the address this member tells leaves to reach it
 	// on, when the one it binds is not the one they can route to.
 	LeafAdvertise string
+
+	// FleetAuth is what this broker presents and accepts on its fleet
+	// listeners: credentials derived from Tier A's secrets.keys
+	// ([FleetAuthFrom]). REQUIRED on a member that opens a route or a leaf
+	// listener or names a peer, and on a leaf ([ErrNoFleetKeys]); a solo
+	// member and a cluster that is only named open and dial nothing, and
+	// need none. The embedded branch's alone: an external cluster is
+	// reached with its own operator's Credentials, Token or TLS.
+	FleetAuth FleetAuth
 
 	// ServerName is this member's identity inside the cluster. REQUIRED
 	// when clustering or joining as a leaf, and ignored otherwise.

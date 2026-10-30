@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/queuetest"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // A LEAF'S QUEUE IS CERTIFIED ON THE SAME SUITE AS A MEMBER'S.
@@ -36,6 +38,11 @@ func TestConformanceThroughALeaf(t *testing.T) {
 func openLeafForTest(t *testing.T, cfg Config, opts ...queue.Option) *Queue {
 	t.Helper()
 	cfg = testTimings(cfg)
+	// ONE KEYRING FOR BOTH: the link is admitted only on a key the member
+	// holds.
+	if cfg.FleetAuth.IsZero() {
+		cfg.FleetAuth = testFleetAuth()
+	}
 
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
@@ -78,7 +85,8 @@ func unusedPort(t *testing.T) int {
 // store directory is a node its operator believes is durable.
 func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 	t.Parallel()
-	leaf := Config{ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"}}
+	leaf := Config{ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"},
+		FleetAuth: testFleetAuth()}
 	cases := map[string]func(*Config){
 		"a cluster":       func(c *Config) { c.ClusterName = "fleet" },
 		"a route port":    func(c *Config) { c.ClusterPort = 6222 },
@@ -90,14 +98,14 @@ func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 	for name, mutate := range cases {
 		cfg := leaf
 		mutate(&cfg)
-		if _, _, err := embeddedOptions(cfg, systemUser{}); err == nil {
+		if _, _, err := embeddedOptions(cfg, authFor(t, cfg)); err == nil {
 			t.Errorf("a leaf with %s was accepted", name)
 		}
 	}
 	// THE CONTROL: the leaf itself builds, with JetStream off and no
 	// listener, or the refusals above pass on a function that refuses
 	// every leaf.
-	opts, scratch, err := embeddedOptions(leaf, systemUser{})
+	opts, scratch, err := embeddedOptions(leaf, authFor(t, leaf))
 	if err != nil {
 		t.Fatalf("a plain leaf was refused: %v", err)
 	}
@@ -106,6 +114,18 @@ func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 			"want no JetStream, no listener, nothing on disk and one link",
 			opts.JetStream, opts.DontListen, scratch, len(opts.LeafNode.Remotes))
 	}
+	// AND ITS ONE LINK PRESENTS THE ACTIVE KEY'S LEAF NKEY, never a
+	// credential in a URL.
+	link := opts.LeafNode.Remotes[0]
+	if link.Nkey != testFleetAuth().leafSeed() {
+		t.Error("a leaf's link presents no leaf nkey of its ring")
+	}
+	for _, u := range link.URLs {
+		if u.User != nil {
+			t.Errorf("a leaf's link URL %s carries a userinfo, which is sent beside "+
+				"the nkey in clear", u.Host)
+		}
+	}
 }
 
 // EVERY MEMBER SERVES THE FLEET'S DOMAIN, or a leaf has no JetStream to
@@ -113,13 +133,15 @@ func TestALeafRefusesEveryMemberSetting(t *testing.T) {
 func TestEveryMemberServesTheFleetsDomain(t *testing.T) {
 	t.Parallel()
 	for name, cfg := range map[string]Config{
-		"solo":      {},
-		"clustered": {ClusterName: "fleet", ServerName: "a", ClusterPort: 6222},
+		"solo": {},
+		"clustered": {ClusterName: "fleet", ServerName: "a", ClusterPort: 6222,
+			FleetAuth: testFleetAuth()},
 		// A LEAF LISTENER NEEDS A STORE DIRECTORY: the nodes joining it
 		// keep nothing, so this member keeps everything they do.
-		"with a leaf listener": {ServerName: "a", LeafPort: 7422, StoreDir: t.TempDir()},
+		"with a leaf listener": {ServerName: "a", LeafPort: 7422, StoreDir: t.TempDir(),
+			FleetAuth: testFleetAuth()},
 	} {
-		opts, scratch, err := embeddedOptions(cfg, systemUser{})
+		opts, scratch, err := embeddedOptions(cfg, authFor(t, cfg))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
@@ -138,7 +160,8 @@ func TestEveryMemberServesTheFleetsDomain(t *testing.T) {
 func TestAMemberOnAnyLeafPortSaysWhichItBound(t *testing.T) {
 	t.Parallel()
 	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir()}))
+		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir(),
+		FleetAuth: testFleetAuth()}))
 	if err != nil {
 		t.Fatalf("start a member on any leaf port: %v", err)
 	}
@@ -163,8 +186,9 @@ func TestAMemberOnAnyLeafPortSaysWhichItBound(t *testing.T) {
 		t.Errorf("a member with no leaf listener names leaf port %d", got)
 	}
 
-	if _, _, err := embeddedOptions(Config{ServerName: "member", LeafPort: -2,
-		StoreDir: t.TempDir()}, systemUser{}); err == nil {
+	negative := Config{ServerName: "member", LeafPort: -2, StoreDir: t.TempDir(),
+		FleetAuth: testFleetAuth()}
+	if _, _, err := embeddedOptions(negative, authFor(t, negative)); err == nil {
 		t.Error("a leaf port of -2 was accepted")
 	}
 }
@@ -183,7 +207,8 @@ func TestATakenLeafPortIsNamedAsTheLeafPort(t *testing.T) {
 	port := held.Addr().(*net.TCPAddr).Port
 
 	member, err := StartServer(t.Context(), testTimings(Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir()}))
+		LeafHost: "127.0.0.1", LeafPort: port, StoreDir: t.TempDir(),
+		FleetAuth: testFleetAuth()}))
 	if err == nil {
 		member.Shutdown()
 		t.Fatalf("a member started on leaf port %d, which something else holds", port)
@@ -214,6 +239,7 @@ func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 	cfg := testTimings(Config{
 		ServerName: "edge-1",
 		LeafURLs:   []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", unusedPort(t))},
+		FleetAuth:  testFleetAuth(),
 	})
 	e, err := startEmbedded(t.Context(), cfg)
 	if err != nil {
@@ -228,7 +254,8 @@ func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 		_ = q.Stop(context.WithoutCancel(t.Context()))
 		t.Fatal("a leaf with no member listening opened a queue")
 	}
-	for _, want := range []string{"stream.leaf.urls", "made no link"} {
+	for _, want := range []string{"stream.leaf.urls", "made no link",
+		"secrets.keys id \"jetstream-test\"", "broker_peer_refused"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal does not say %q, so an operator is not told "+
 				"which setting reaches no member:\n%v", want, err)
@@ -243,7 +270,7 @@ func TestALeafWithNoMemberToReachNamesTheLink(t *testing.T) {
 // stopped client is not linked to anything.
 func TestALeafReportsItsLinkGoingDown(t *testing.T) {
 	t.Parallel()
-	cfg := testTimings(Config{})
+	cfg := testTimings(Config{FleetAuth: testFleetAuth()})
 	memberCfg := cfg
 	memberCfg.ServerName = "member"
 	memberCfg.LeafHost = "127.0.0.1"
@@ -301,5 +328,95 @@ func TestAMemberIsLinkedWhileItRuns(t *testing.T) {
 	q := openForTest(t, Config{})
 	if err := q.Link(); err != nil {
 		t.Errorf("a solo member's client reports %v", err)
+	}
+}
+
+// A LEAF LINKS ONLY WITH A KEY ITS MEMBER HOLDS, AND ANY KEY OF ITS RING DOES.
+//
+// A member on {k1, k2} — mid-rotation, k2 active — links a leaf presenting k1
+// and one presenting k2 at once: every node accepts every key of its ring, so
+// a rotation moves the fleet with no step of its own. A leaf on a ring the
+// member holds no key of does not link, and its boot fails naming the key it
+// presented, since from the leaf a member that refused it looks exactly like a
+// member that is not there; the member counts the refusal as `leaf/unknown`.
+//
+// Mutations: accept any leaf nkey → the k9 leaf links, red; verify a leaf
+// against the active key only → the k1 leaf never links, red; count nothing →
+// the member's count, red.
+func TestALeafLinksOnlyWithAKeyItsMemberHolds(t *testing.T) {
+	t.Parallel()
+	k1 := runtoken.KeyMaterial{ID: "k1", Material: "the leaf cases' first placeholder material"}
+	k2 := runtoken.KeyMaterial{ID: "k2", Material: "the leaf cases' second placeholder material"}
+	k9 := runtoken.KeyMaterial{ID: "k9", Material: "another fleet's placeholder material"}
+	ring := func(active string, keys ...runtoken.KeyMaterial) FleetAuth {
+		return fleetAuthOf(t, runtoken.Material{ActiveID: active, Keys: keys})
+	}
+
+	member := startTestServer(t, testTimings(Config{ServerName: "member",
+		LeafHost: "127.0.0.1", LeafPort: AnyPort, StoreDir: t.TempDir(),
+		FleetAuth: ring("k2", k1, k2)}))
+	var mu sync.Mutex
+	refused := map[PeerRefusal]uint64{}
+	member.OnPeerRefused(func(r PeerRefusal, n uint64) {
+		mu.Lock()
+		defer mu.Unlock()
+		refused[r] += n
+	})
+	urls := []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", member.LeafPort())}
+
+	// BOTH KEYS OF THE MEMBER'S RING, AT ONCE: each leaf's client waits for
+	// its link and for the fleet's JetStream across it.
+	for _, leaf := range []struct {
+		name string
+		auth FleetAuth
+	}{
+		{"leaf-k1", ring("k1", k1)},
+		{"leaf-k2", ring("k2", k2)},
+	} {
+		srv := startTestServer(t, testTimings(Config{ServerName: leaf.name,
+			LeafURLs: urls, FleetAuth: leaf.auth}))
+		q, err := srv.Client(t.Context())
+		if err != nil {
+			t.Fatalf("%s, presenting a key the member holds, did not reach the fleet: %v",
+				leaf.name, err)
+		}
+		t.Cleanup(func() { _ = q.Stop(context.WithoutCancel(t.Context())) })
+	}
+
+	// A KEY THE MEMBER DOES NOT HOLD LINKS NOWHERE, and the leaf says which
+	// key it presented.
+	strangerCfg := testTimings(Config{ServerName: "leaf-k9", LeafURLs: urls,
+		FleetAuth: ring("k9", k9)})
+	stranger, err := startEmbedded(t.Context(), strangerCfg)
+	if err != nil {
+		t.Fatalf("start the stranger leaf: %v", err)
+	}
+	t.Cleanup(stranger.shutdown)
+	stranger.ready = readiness{timeout: 2 * time.Second, poll: 20 * time.Millisecond,
+		ask: 200 * time.Millisecond}
+	q, err := newQueueOn(t.Context(), strangerCfg, stranger, false, queue.Resolve())
+	if err == nil {
+		_ = q.Stop(context.WithoutCancel(t.Context()))
+		t.Fatal("a leaf presenting a key its member does not hold reached the fleet")
+	}
+	if !strings.Contains(err.Error(), `secrets.keys id "k9"`) {
+		t.Errorf("the stranger's boot does not name the key it presented:\n%v", err)
+	}
+	if n := stranger.ns.NumLeafNodes(); n != 0 {
+		t.Errorf("the stranger holds %d leaf link(s)", n)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		mu.Lock()
+		n := refused[PeerRefusal{ListenerLeaf, PresentedUnknown}]
+		mu.Unlock()
+		if n > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the member counted %v, want the stranger's leaf/unknown", refused)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

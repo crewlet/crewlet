@@ -43,8 +43,8 @@ func TestBootstrapValidatorRejections(t *testing.T) {
 		//
 		// EVERY FIELD, because the guard first shipped naming two of them:
 		// host and advertise, the two an operator reaches for after
-		// reading this block's own warnings about unauthenticated cluster
-		// access and about NAT, were the two it silently accepted.
+		// reading this block's own warnings about a route port on a public
+		// interface and about NAT, were the two it silently accepted.
 		{
 			"cluster port with no cluster name",
 			"stream:\n  cluster:\n    port: 6222\n",
@@ -368,6 +368,39 @@ func TestAPeerTheServerCannotDialIsRefused(t *testing.T) {
 			err := rejectsBootstrap(t, doc, "stream.cluster.peers[1]")
 			if !strings.Contains(err.Error(), "route URL") {
 				t.Fatalf("the refusal must say what a peer is; got %v", err)
+			}
+		})
+	}
+}
+
+// A FLEET URL CARRIES NO CREDENTIAL. A fleet's broker credentials are derived
+// from secrets.keys (ADR-0064): the engine writes each route's userinfo itself,
+// and a leaf link presents an nkey, beside which a URL's userinfo would be sent
+// in clear. So a userinfo in a peer or a leaf URL — `user:pass@` or a bare
+// `token@` — is refused at that element, by a sentence that quotes none of it.
+//
+// Mutation: drop the rule → every row loads or is refused for its shape alone,
+// red.
+func TestAFleetURLCarriesNoCredential(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ doc, path string }{
+		{"coordination:\n  type: embedded-kv\nstream:\n  cluster:\n    name: acme\n    port: 6222\n" +
+			"    peers: [\"nats://node-c.internal:6222\", \"nats://ops:s3cret@node-b.internal:6222\"," +
+			" \"nats://node-d.internal:6222\"]\n", "stream.cluster.peers[1]"},
+		{"coordination:\n  type: embedded-kv\nstream:\n  cluster:\n    name: acme\n    port: 6222\n" +
+			"    peers: [\"nats://s3cret@node-b.internal:6222\", \"nats://node-c.internal:6222\"]\n",
+			"stream.cluster.peers[0]"},
+		{"node:\n  roles: [seats]\ncoordination:\n  type: embedded-kv\nstream:\n  leaf:\n" +
+			"    urls: [\"nats-leaf://ops:s3cret@member-a.internal:7422\"]\n", "stream.leaf.urls[0]"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			t.Parallel()
+			err := rejectsBootstrap(t, tc.doc, tc.path)
+			if !strings.Contains(err.Error(), "carries a credential") {
+				t.Fatalf("the refusal does not say what is wrong: %v", err)
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Fatalf("the refusal prints the credential it refuses: %v", err)
 			}
 		})
 	}

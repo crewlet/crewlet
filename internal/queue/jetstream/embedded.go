@@ -215,9 +215,11 @@ type embeddedServer struct {
 	// off here, so everything a stream or a bucket needs is across its link
 	// rather than in this process. See [Config.LeafURLs].
 	leaf bool
-	// system is the identity that reaches this member's system account,
-	// declared on a clustered member only — see membership.go.
-	system systemUser
+	// auth decides every connection to this server ([brokerAuth]), and holds
+	// the keys this process's own connections present: the engine's on every
+	// server, and the system account's on a clustered member — see
+	// membership.go.
+	auth *brokerAuth
 	// ready bounds the waits for the fleet to serve this broker; zero is
 	// production. Set by this package's own tests and nothing else — see
 	// [readiness].
@@ -497,10 +499,12 @@ func (s *Server) Shutdown() {
 // through that check — and a wrong SyncAlways surfaces only as acked data
 // missing after a host loses power, which no test can stage.
 //
-// system is the identity a CLUSTERED member declares its system account with
-// (see membership.go), minted by the caller because the key that signs for it
-// cannot be read back out of the options; a solo member and a leaf ignore it.
-func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, error) {
+// auth is the server's authenticator ([brokerAuth]), built by the caller
+// because the keys this process's own connections sign with cannot be read
+// back out of the options: it decides every connection on every server, a
+// clustered member's routes included, and declares the system account a
+// clustered member's membership code reaches (see membership.go).
+func embeddedOptions(cfg Config, auth *brokerAuth) (*server.Options, string, error) {
 	// THE NAME, and only the name: the cluster block below is installed on
 	// it alone, so a port or a peer list without one configures nothing and
 	// this member starts solo. Tier A refuses that shape (it requires
@@ -541,6 +545,17 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 		return nil, "", errors.New("jetstream: a member with a leaf listener " +
 			"needs a store directory — the nodes that join it keep nothing, so " +
 			"this member keeps everything they do")
+	}
+	// EVERY FLEET LISTENER IS AUTHENTICATED, and a broker with no keyring has
+	// nothing to authenticate one with: a route or leaf listener it opened
+	// would refuse every peer, and a route or a link it dialled would be
+	// refused by every one — a fleet that never forms, saying only that
+	// connections were refused. Refused here, before anything is built. A
+	// cluster that is only named, routing nowhere, opens and dials nothing,
+	// and needs no key.
+	if cfg.FleetAuth.IsZero() && (cfg.ClusterPort != 0 || len(cfg.ClusterURLs) > 0 ||
+		cfg.LeafPort != 0 || len(cfg.LeafURLs) > 0) {
+		return nil, "", ErrNoFleetKeys
 	}
 	name := cfg.ServerName
 	if name == "" {
@@ -677,6 +692,19 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 		// reports whichever it is as [BudgetServerStore], which is what
 		// [Queue.StreamBudget] holds a reservation to.
 		JetStreamMaxStore: cfg.StoreMaxBytes,
+
+		// EVERY CONNECTION PRESENTS A KEY, on every server whatever its
+		// topology: the package doc's "Every connection presents a key".
+		// The client authenticator decides clients and leaf links (a leaf
+		// listener with no authorization block of its own hands its links
+		// to it), and the one posture is easier to hold than four.
+		CustomClientAuthentication: auth,
+		// AND EVERY CONNECTION IS SENT A NONCE to sign: with a custom
+		// authenticator the server builds no nkey table, and without one
+		// it offers a client no nonce at all (server/nkey.go
+		// nonceRequired, v2.15.1) — so no nkey a client presents could be
+		// proved. A leaf link is always sent one.
+		AlwaysEnableNonce: true,
 	}
 	if opts.JetStream {
 		// THE FLEET'S ONE DOMAIN, served by every member so a leaf's
@@ -688,7 +716,7 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 		opts.JetStreamDomain = jsapi.Domain
 	}
 	if leaf {
-		remotes, err := leafRemotes(cfg.LeafURLs)
+		remotes, err := leafRemotes(cfg.LeafURLs, cfg.FleetAuth.leafSeed())
 		if err != nil {
 			return nil, "", err
 		}
@@ -747,29 +775,66 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 			// the fleet's listeners for whoever reads it.
 			NoAdvertise: true,
 		}
-		opts.Routes = server.RoutesFromStr(joinURLs(cfg.ClusterURLs))
+		// EVERY ROUTE IS DECIDED BY THE AUTHENTICATOR, which admits a member
+		// presenting a route credential of this node's ring.
+		opts.CustomRouterAuthentication = auth
+		// AND EVERY ROUTE THIS MEMBER DIALS PRESENTS ITS OWN, TWO WAYS, both
+		// measured as necessary: in each explicit route URL's userinfo,
+		// because a route's CONNECT carries only its URL's (server/route.go
+		// sendRouteConnect), and as the cluster block's username and
+		// password, which nats-server gives every route it learns of by
+		// gossip (route.go, an implicit route's URL takes them, v2.15.1) —
+		// with the URLs alone, the route two members learn of from a third
+		// never formed.
+		username, password := cfg.FleetAuth.routeUser()
+		opts.Cluster.Username, opts.Cluster.Password = username, password
+		routes, err := routeURLs(cfg.ClusterURLs, username, password)
+		if err != nil {
+			removeScratch(scratch)
+			return nil, "", err
+		}
+		opts.Routes = routes
 		// AND ITS SYSTEM ACCOUNT, reachable from this process alone — the
 		// only account the metadata group's membership is changed through.
 		// See membership.go.
-		if system.declared() {
-			system.declare(opts)
+		if auth.system.declared() {
+			declareSystemAccount(opts)
 		}
 	}
 	return opts, scratch, nil
 }
 
+// routeURLs parses a member's peers into the routes it dials, each carrying
+// this node's route credential as its userinfo — replacing whatever userinfo
+// an entry carried, which Tier A refuses: a fleet's credentials are derived,
+// never written. A member that routes nowhere (no peers) has none to carry.
+//
+// NAMED BY POSITION in a refusal, never by its text: an entry is a URL, and a
+// URL can carry a password.
+func routeURLs(peers []string, username, password string) ([]*url.URL, error) {
+	routes := make([]*url.URL, 0, len(peers))
+	for i, raw := range peers {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("jetstream: cluster peer %d is not host:port behind "+
+				"a nats:// scheme", i)
+		}
+		u.User = url.UserPassword(username, password)
+		routes = append(routes, u)
+	}
+	return routes, nil
+}
+
 func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
-	// THE SYSTEM ACCOUNT'S KEY, for a clustered member: the one rule
+	// THE AUTHENTICATOR, with this start's own keys: the engine's on every
+	// server, and the system account's for a clustered member — the one rule
 	// [embeddedOptions] reads for `clustered`, which refuses a leaf that
 	// names a cluster before anything declares it.
-	var system systemUser
-	if cfg.ClusterName != "" {
-		var err error
-		if system, err = newSystemUser(); err != nil {
-			return nil, err
-		}
+	auth, err := newBrokerAuth(cfg)
+	if err != nil {
+		return nil, err
 	}
-	opts, scratch, err := embeddedOptions(cfg, system)
+	opts, scratch, err := embeddedOptions(cfg, auth)
 	if err != nil {
 		return nil, err
 	}
@@ -866,6 +931,10 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		leaf:  listenerSpec{port: opts.LeafNode.Port, host: opts.LeafNode.Host},
 	}
 	store, leaf := opts.StoreDir, len(opts.LeafNode.Remotes) > 0
+	routing, servesLeaves := opts.Cluster.Port != 0, opts.LeafNode.Port != 0
+	// THE AUTHENTICATOR'S SERVER, set before Start and read only from the
+	// connections Start lets in, which the go statement below orders after it.
+	auth.ns = ns
 	// START IS JOINED, and every shutdown of this server waits for it: see
 	// [shutdownAndClean] for what a Shutdown that overlaps it leaves behind.
 	started := make(chan struct{})
@@ -906,10 +975,14 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		dirLock.Release()
 		return nil, err
 	}
+	// ONCE A START, the keys this broker presents and accepts and where it
+	// listens: a rotation's progress reads node by node, and an operator finds
+	// a member's client listener here as well as in `crewlet fleet broker list`.
+	auth.logKeys(openListeners(ns, routing, servesLeaves))
 	return &embeddedServer{
 		ns: ns, started: started, death: death,
 		scratch: scratch, dirLock: dirLock, clustered: clustered, leaf: leaf,
-		system: system,
+		auth: auth,
 	}, nil
 }
 
@@ -1309,10 +1382,16 @@ func (e *embeddedServer) awaitLeafReady(ctx context.Context, js jetstream.JetStr
 		}
 	}
 	if e.ns.NumLeafNodes() == 0 {
+		// THE KEY IS NAMED, because a member that refuses it looks, from
+		// here, exactly like a member that is not there: the link is cut
+		// either way, and only the members' broker_peer_refused lines say
+		// which key they turned away.
 		return fmt.Errorf("leaf %q made no link to any member within %s — "+
 			"stream.leaf.urls names no member that is up and listening on its "+
-			"stream.leaf.port, or a firewall is between them",
-			e.ns.Name(), r.timeout)
+			"stream.leaf.port, a firewall is between them, or every member "+
+			"refused this node's key (it presents secrets.keys id %q; see "+
+			"broker_peer_refused on the members)",
+			e.ns.Name(), r.timeout, e.presentedKey())
 	}
 	return fmt.Errorf("leaf %q is linked to the fleet but its JetStream did not "+
 		"answer within %s: %w", e.ns.Name(), r.timeout, last)
@@ -1411,7 +1490,10 @@ func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 		nats.ErrorHandler(clientErrors{log: logging.Get("queue.jetstream")}.reported),
 	}
 	opts = append(opts, watchClose(at, true, "")...)
-	nc, err := nats.Connect("", append(opts, nats.InProcessServer(e.ns))...)
+	// AS THIS PROCESS, with the key it minted at this start: the server's
+	// authenticator admits nothing that presents none, in process or not.
+	opts = append(opts, nats.InProcessServer(e.ns), e.auth.engine.option())
+	nc, err := nats.Connect("", opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1508,35 +1590,41 @@ func removeScratch(dir string) {
 	}
 }
 
-// leafRemotes parses a leaf's URLs into the one remote it dials.
+// presentedKey is the configured id of the key this broker's fleet
+// credentials derive from, for a sentence that has to name it — "none" for a
+// broker given no keyring.
+func (e *embeddedServer) presentedKey() string {
+	if e.auth == nil || e.auth.fleet.IsZero() {
+		return "none"
+	}
+	return e.auth.fleet.activeID
+}
+
+// leafRemotes parses a leaf's URLs into the one remote it dials, presenting
+// seed — the active key's leaf nkey ([FleetAuth]) — on every link it makes.
 //
 // ONE REMOTE WITH EVERY URL rather than one remote per URL, because the fleet
 // is one account on one hub: a remote per member would be N links into the
 // same account, and interest would arrive by every one of them. The server
 // rotates through the URLs of a single remote, which is exactly "any member
 // that answers".
-func leafRemotes(urls []string) ([]*server.RemoteLeafOpts, error) {
+//
+// AN NKEY, and never a credential in the URL, which Tier A refuses: the link's
+// CONNECT signs the member's nonce with the seed (server/leafnode.go, v2.15.1),
+// so what crosses the network is a public key and a signature. A userinfo would
+// be sent beside it, in clear.
+func leafRemotes(urls []string, seed string) ([]*server.RemoteLeafOpts, error) {
 	parsed := make([]*url.URL, 0, len(urls))
-	for _, raw := range urls {
+	for i, raw := range urls {
 		u, err := url.Parse(strings.TrimSpace(raw))
 		if err != nil || u.Host == "" {
-			return nil, fmt.Errorf("jetstream: leaf URL %q is not host:port "+
-				"behind a nats-leaf:// or nats:// scheme", raw)
+			return nil, fmt.Errorf("jetstream: leaf URL %d is not host:port "+
+				"behind a nats-leaf:// or nats:// scheme", i)
 		}
+		u.User = nil
 		parsed = append(parsed, u)
 	}
-	return []*server.RemoteLeafOpts{{URLs: parsed}}, nil
-}
-
-func joinURLs(urls []string) string {
-	out := ""
-	for i, u := range urls {
-		if i > 0 {
-			out += ","
-		}
-		out += u
-	}
-	return out
+	return []*server.RemoteLeafOpts{{URLs: parsed, Nkey: seed}}, nil
 }
 
 // dial opens a NATS connection to an external server with this package's own

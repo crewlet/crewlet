@@ -28,6 +28,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/objstore/objstoretest"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // suite is what the broker's object store promises the suite: messages of
@@ -706,7 +707,8 @@ func TestAReadsHeartbeatOutlastsItsHandAtTheFloor(t *testing.T) {
 func TestAReadAcrossALinkNearTheFloorKeepsItsConsumer(t *testing.T) {
 	t.Parallel()
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}
@@ -1980,6 +1982,7 @@ func leafClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	t.Helper()
 	base.ServerName, base.StoreDir = "member", t.TempDir()
 	base.LeafHost, base.LeafPort = "127.0.0.1", js.AnyPort
+	base.FleetAuth = linkFleetAuth()
 	member, err := js.StartServer(t.Context(), base)
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
@@ -1991,11 +1994,24 @@ func leafClientAt(t testing.TB, base js.Config) jetstream.JetStream {
 	return c
 }
 
+// linkFleetAuth is the keyring this package's members serving leaves and the
+// leaves joined to them hold: a leaf link is admitted only on a key its member
+// holds. A literal placeholder, never a key anybody deploys.
+var linkFleetAuth = sync.OnceValue(func() js.FleetAuth {
+	auth, err := js.FleetAuthFrom(runtoken.OneKey("natsobj-link",
+		"the object store's leaf cases' placeholder key material"))
+	if err != nil {
+		panic(err)
+	}
+	return auth
+})
+
 // startLeaf starts a leaf that dials a member's leaf listener on port.
 func startLeaf(t testing.TB, port int) *js.Server {
 	t.Helper()
 	leaf, err := js.StartServer(t.Context(), js.Config{ServerName: "leaf",
-		LeafURLs: []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)}})
+		LeafURLs:  []string{fmt.Sprintf("nats-leaf://127.0.0.1:%d", port)},
+		FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the leaf: %v", err)
 	}
@@ -2059,7 +2075,8 @@ func TestOpeningOnALeafWaitsOutItsLink(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	member, err := js.StartServer(t.Context(), js.Config{ServerName: "member",
-		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir()})
+		LeafHost: "127.0.0.1", LeafPort: js.AnyPort, StoreDir: t.TempDir(),
+		FleetAuth: linkFleetAuth()})
 	if err != nil {
 		t.Fatalf("start the member: %v", err)
 	}

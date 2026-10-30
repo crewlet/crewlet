@@ -302,7 +302,7 @@ func TestAProbeNamesTheTurnsSeatAndTakesNothing(t *testing.T) {
 
 // ONLY A NOTE THE FLEET SIGNED REACHES A TURN. The running node offers a note
 // as the person it names, on the asking node's decision that they may steer
-// the turn — so a note anybody who can reach the broker could write would put
+// the turn — so a note anything the broker admitted could write would put
 // words in front of a running agent under anybody's name. Three ways to try —
 // no signature, a signature under the fleet's key id with somebody else's
 // material, and the fleet's signature over a note altered after it was made —

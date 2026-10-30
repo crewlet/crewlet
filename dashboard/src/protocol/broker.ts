@@ -76,6 +76,12 @@ export interface BrokerFinding {
 export interface FleetBrokerAnswer {
   node: string;
   kind: BrokerKind | string;
+  /**
+   * The answering node's own loopback client listener, host:port, where an
+   * operator on that node's host reaches its broker with the operator key —
+   * absent where it opens none.
+   */
+  client?: string;
   /** A fleet on an external cluster, whose membership is its operator's. */
   external: boolean;
   nodes: BrokerNode[] | null;

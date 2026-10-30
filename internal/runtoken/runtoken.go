@@ -82,6 +82,13 @@
 // files that nothing compares. The same rule the webhook-secret format follows
 // (internal/whsec): a grammar that more than one caller must agree on has one
 // definition.
+//
+// The per-key derivation is that rule's too beyond tokens: [DeriveKey] and
+// [KeyTag] also yield an embedded fleet's broker credentials — each route's
+// password, each leaf link's and operator's nkey — under domains of their own
+// (internal/queue/jetstream, ADR-0064), so one rotation runbook moves the
+// tokens, the sessions and the broker together, with no step for any one of
+// them.
 package runtoken
 
 import (
@@ -288,10 +295,13 @@ func (s *Signer) sign(key []byte, payload string) string {
 // KeyTag names one key inside one domain, in a form a URL path or a cookie
 // value can carry.
 //
-// EXPORTED FOR THE SECOND CONSUMER. internal/iam/session mints a bearer of its
+// EXPORTED FOR THE OTHER CONSUMERS. internal/iam/session mints a bearer of its
 // own shape under its own domain, and it must tag the key the same way — a
 // second derivation of "which key signed this" would be this package's own
-// one-implementation rule broken by the package that states it.
+// one-implementation rule broken by the package that states it. The embedded
+// broker is the third (internal/queue/jetstream's FleetAuthFrom): a route
+// presents its key's tag as its username, so a refusal can name the key a
+// peer presented without the peer learning any configured id.
 func KeyTag(domain, id string) string {
 	sum := sha256.Sum256([]byte("tag|" + domain + "|" + id))
 	return base64.RawURLEncoding.EncodeToString(sum[:])[:tagLen]

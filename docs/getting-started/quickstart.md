@@ -117,10 +117,12 @@ api:
 
 secrets:                  # REQUIRED. Every record on every state log — the
                           #   tracker's, the knowledge base's — is signed
-                          #   under this keyring, because the broker has no
-                          #   auth of its own and a record is whatever the
-                          #   next node applies. `crewlet secrets keygen`
-                          #   mints one and prints the export line
+                          #   under this keyring, because a record is
+                          #   whatever the next node applies and the broker
+                          #   vouches for a connection, never a record; a
+                          #   fleet's broker admits only keys derived from
+                          #   it. `crewlet secrets keygen` mints one and
+                          #   prints the export line
   active_key_id: "2026-01"
   keys:
     - id: "2026-01"
@@ -761,7 +763,8 @@ stream:
   store_dir: "./acme-data/stream"
   leaf:
     host: 127.0.0.1
-    port: 7422                      # where the agents node joins
+    port: 7422                      # where the agents node joins, admitted
+                                    #   on a key derived from secrets.keys
 coordination:
   type: embedded-kv                 # leases the agents node can see
 ```
@@ -783,8 +786,9 @@ stream:
     urls: ["nats-leaf://127.0.0.1:7422"]
 coordination:
   type: embedded-kv
-# and the same `secrets:` block as crewlet.yaml, if you configured one:
-# this node decrypts the company document and the secret store itself
+# and the same `secrets:` block as crewlet.yaml — required on every node:
+# this node decrypts the company document and the secret store itself, and
+# its leaf link is admitted by a key derived from it
 ```
 
 ```bash

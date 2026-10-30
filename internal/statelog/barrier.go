@@ -128,7 +128,7 @@ func NewReadIndex(d Domain, spec StreamSpec, log Appender, signer *Signer,
 		return nil, err
 	}
 	// A BARRIER IS A RECORD ON THE DOMAIN'S OWN LOG, so it is signed like
-	// any other: an unsigned one would let anyone who can reach the broker
+	// any other: an unsigned one would let anything the broker admits
 	// satisfy a linearizable read's proof of quorum.
 	signed, err := signing(log, signer, d.Name())
 	if err != nil {

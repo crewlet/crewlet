@@ -647,7 +647,8 @@ leaves out. Then:
   The converse holds for a stream deleted and remade outside a restore: one
   created from a configuration that still carries `crewlet.created_at` — the
   configuration `nats stream info --json` printed, passed to `nats stream add
-  --config` — is the same stream to every node, judged only by where it ends
+  --config`, on an embedded fleet through a member's client listener with the
+  [operator key](deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool) — is the same stream to every node, judged only by where it ends
   and what it holds at each node's checkpoint, and re-anchored as the restored
   case (followed from its end) rather than the recreated one. To make a
   deliberate rebuild read as a recreation, remove that metadata key from the

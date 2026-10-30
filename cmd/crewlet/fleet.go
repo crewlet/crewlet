@@ -38,7 +38,8 @@ import (
 // fleetBrokerUsage is the group's usage line.
 const fleetBrokerUsage = "usage: crewlet fleet broker list|remove [<config.yaml>] [-url]\n" +
 	"       crewlet fleet broker remove <node-id> -confirm <node-id> [-force]\n" +
-	"       crewlet fleet broker remove -peer <peer-id> -confirm <peer-id> [-force]"
+	"       crewlet fleet broker remove -peer <peer-id> -confirm <peer-id> [-force]\n" +
+	"       crewlet fleet broker credential [<config.yaml>] -o FILE [-url]"
 
 // runFleet dispatches `crewlet fleet`.
 func runFleet(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -62,6 +63,8 @@ func runFleetBroker(environ config.Source, args []string, stdout, stderr io.Writ
 		return fleetBrokerList(environ, rest, stdout, stderr)
 	case "remove":
 		return fleetBrokerRemove(environ, rest, stdout, stderr)
+	case "credential":
+		return fleetBrokerCredential(environ, rest, stdout, stderr)
 	case "", "help":
 		fmt.Fprintln(stderr, fleetBrokerUsage)
 		return flag.ErrHelp
@@ -78,8 +81,11 @@ func runFleetBroker(environ config.Source, args []string, stdout, stderr io.Writ
 // (internal/api/testdata/fleet_broker_answer.json), so the two cannot drift
 // unnoticed.
 type brokerView struct {
-	Node     string `json:"node"`
-	Kind     string `json:"kind"`
+	Node string `json:"node"`
+	Kind string `json:"kind"`
+	// Client is the answering node's own loopback client listener, empty
+	// where it opens none.
+	Client   string `json:"client"`
 	External bool   `json:"external"`
 	Nodes    []struct {
 		Node string `json:"node"`
@@ -157,6 +163,11 @@ func renderBroker(w io.Writer, v brokerView) error {
 	default:
 		fmt.Fprintf(w, "Metadata group of %s, as %s reports it: %d voters, led by %s.\n",
 			g.Cluster, v.GroupFrom, len(g.Peers), g.Leader)
+	}
+	if v.Client != "" {
+		// THE ANSWERING NODE'S, and reachable from its own host alone:
+		// where `crewlet fleet broker credential` points the nats tool.
+		fmt.Fprintf(w, "%s's client listener (its own host only): %s\n", v.Node, v.Client)
 	}
 	fmt.Fprintln(w)
 

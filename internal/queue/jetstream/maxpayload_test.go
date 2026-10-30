@@ -220,7 +220,8 @@ accounts {
 // and every row does.
 func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testing.T) {
 	t.Parallel()
-	opts, scratch, err := embeddedOptions(Config{}, systemUser{})
+	auth := authFor(t, Config{})
+	opts, scratch, err := embeddedOptions(Config{}, auth)
 	if err != nil {
 		t.Fatalf("broker options: %v", err)
 	}
@@ -230,12 +231,13 @@ func TestAnEmbeddedBrokerWithoutTheCeilingFailsTheBootAndBlamesTheBuild(t *testi
 		removeScratch(scratch)
 		t.Fatalf("configure the broker: %v", err)
 	}
+	auth.ns = ns
 	started := startJoined(ns)
 	t.Cleanup(func() { shutdownAndClean(ns, started, scratch) })
 	if !ns.ReadyForConnections(listenTimeout) {
 		t.Fatalf("the broker was not ready within %v", listenTimeout)
 	}
-	broken := &embeddedServer{ns: ns, started: started}
+	broken := &embeddedServer{ns: ns, started: started, auth: auth}
 
 	for _, opener := range []struct {
 		name string

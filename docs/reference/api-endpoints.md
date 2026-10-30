@@ -7903,6 +7903,12 @@ every live member at once, and `group_from` names the member whose view `group`
 is. A fleet on an external cluster answers `external: true` and lists no group —
 that cluster's membership is its operator's. A group no member could report
 within five seconds is absent with `group_error` saying why, never an empty one.
+`client` is the ANSWERING node's own loopback client listener, `host:port`, as
+`node` and `kind` are its own: where the `nats` tool reaches that member's
+broker from its host with the operator key
+([`crewlet fleet broker credential`](cli.md#crewlet-fleet-broker-credential)).
+It is absent where the node opens none — a solo member, a member with only a
+leaf listener, a leaf, a client of an external cluster.
 
 The group counts each voter by its raft **peer id**, which nats-server derives
 from the server's name — the node id. A member learns another's name only from
@@ -7914,7 +7920,7 @@ is.
 
 ```json
 {
-  "node": "node-a", "kind": "member", "external": false,
+  "node": "node-a", "kind": "member", "client": "127.0.0.1:41234", "external": false,
   "nodes": [
     {"node": "node-a", "peer": "ePFsSWs4", "kind": "member", "roles": ["data", "ingress", "seats", "workers"]},
     {"node": "old-1", "peer": "mTNLbbt3", "kind": "unknown", "roles": ["data", "ingress", "seats", "workers"]},
@@ -7964,10 +7970,11 @@ reads afterwards:
 **What the node asks a member is signed**, the removal and the read of the
 group alike, under the fleet keyring every state-log record is signed under,
 in a key domain of its own — because a member carries a removal out through
-its system account, and the broker authenticates nothing itself, so an unsigned
-request on the member's subject would change the quorum past every check this
-route makes. Each request is bound to an id and a deadline inside its
-signature, so one captured off the wire is not carried out twice, and the
+its system account, and the broker's admission vouches for a connection, never
+a request: anything the broker admitted could send an unsigned request on the
+member's subject and change the quorum past every check this route makes. Each
+request is bound to an id and a deadline inside its signature, so one captured
+off the wire is not carried out twice, and the
 answer is believed only where the fleet signed it for that request. A member
 that does not hold the key a request is signed under runs nothing and says
 so, and the next member is asked; a request the fleet did not sign is refused

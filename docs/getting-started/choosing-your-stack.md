@@ -122,7 +122,10 @@ longer than a reconnect.
 The **store** is never one of these: it stays one file per node, which is why
 everything genuinely shared lives in coordination instead. See
 [Running a Fleet](../guides/fleet.md) and
-[Deployment](../guides/deployment.md) for sizing and broker authentication.
+[Deployment](../guides/deployment.md) for sizing, and
+[Deployment § The fleet's broker admits only its own nodes](../guides/deployment.md#the-fleets-broker-admits-only-its-own-nodes)
+for broker authentication: every route, leaf link and operator connection to an
+embedded fleet's broker presents a key derived from `secrets.keys`.
 
 ---
 

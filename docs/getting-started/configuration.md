@@ -771,10 +771,14 @@ stream:
                                     #   warning, and one that is not dialable
                                     #   is refused
   #   host: 10.0.0.11               #   the interface the route port binds.
-                                    #   Unset binds EVERY interface, and a route
-                                    #   port is unauthenticated cluster access —
-                                    #   set it to the private address the peers
-                                    #   reach
+                                    #   Unset binds EVERY interface. The port
+                                    #   admits only a member presenting a key
+                                    #   derived from `secrets.keys`, but that
+                                    #   credential and every byte after it
+                                    #   cross the network in clear — set it to
+                                    #   the private address the peers reach.
+                                    #   A peer URL carries no `user:pass@`: the
+                                    #   engine presents the derived one itself
   #   advertise: "node-1.internal:6222"
                                     #   what peers should DIAL for this member,
                                     #   when that differs from what it binds — a
@@ -803,7 +807,10 @@ stream:
                                     #   is a member's, reached across this link.
                                     #   A node without `data` must be a leaf
                                     #   and a node with it must not: every data
-                                    #   node holds the whole estate as a member
+                                    #   node holds the whole estate as a member.
+                                    #   The link presents a key derived from
+                                    #   `secrets.keys`, so a URL carries no
+                                    #   `user:pass@`
   #   port: 7422                    #   A MEMBER's listener, where leaves join.
                                     #   A member that opens one is in a fleet
                                     #   even with no peers, so it must persist
@@ -811,11 +818,14 @@ stream:
                                     #   join it keep nothing, so it keeps
                                     #   everything they do) and needs
                                     #   `coordination.type: embedded-kv`
-  #   host: 10.0.0.11               #   the interface the listener binds. Like
-                                    #   the route port it accepts any connection
-                                    #   that reaches it: the fleet is one trust
-                                    #   domain on a network its operator
-                                    #   controls, so bind it there
+  #   host: 10.0.0.11               #   the interface the listener binds. It
+                                    #   admits only a leaf whose link presents
+                                    #   a key derived from `secrets.keys` (no
+                                    #   secret crosses the network), but what
+                                    #   the link carries after crosses it in
+                                    #   clear, as the route port's does: bind
+                                    #   it to the private network the leaves
+                                    #   are on
   #   advertise: "node-1.internal:7422"
                                     #   what leaves should dial for this member,
                                     #   when it differs from what it binds

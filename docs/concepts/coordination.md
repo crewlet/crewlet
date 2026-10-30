@@ -340,7 +340,9 @@ before the switch fails with `no responders`. A rolling upgrade is exactly
 that — the first upgraded node to flip it would take every coordination read
 away from every node still on the previous build. So the guarantee is the
 reader's, which also makes it hold on a bucket an earlier build created,
-without anybody rewriting it. An operator's own tooling (`nats kv get`) still
+without anybody rewriting it. An operator's own tooling (`nats kv get`, through a
+member's loopback client listener on an embedded fleet —
+[Reaching an embedded fleet's broker with the nats tool](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)) still
 reads through any replica.
 
 ### What a leader read does not promise
@@ -477,7 +479,7 @@ That is a constraint rather than a preference. On the default embedded backend a
 
 **There is exactly one bucket this engine still writes to after it exists, and it is `duties`.** Its age is a *ceiling* on the TTLs it can honour rather than a preference — a bucket made by a build with a shorter one reaps a live duty lease early, and the fleet then runs that duty on two nodes at once — so a booting node raises it to the longest duty's TTL and never lowers it. That is the whole exception: every other bucket, every other field, and the replica count of the duty bucket itself are adopted as they are found. An age *above* the ceiling is the healthy adopted state (a peer on a build with a longer one made it), so that bucket reports no mismatch.
 
-**Replication is the one adopted difference a node refuses to run with.** Everything else a running bucket can disagree with is *reported* — the lease TTL above is warned about and then honoured — because every other difference changes how the store behaves, and behaviour is visible. A replica count changes nothing until a node is lost, and then it changes everything: raise `stream.replicas` from 1 to 3 on a fleet that already ran and a rolling restart finds every bucket still there at one replica, adopts it, and goes on holding every lease, every fencing epoch and the company's secrets on a single disk while each node reports itself correctly configured for three. So a node that is short refuses to start, naming both counts. Equal or higher passes, so a single-replica development node against a replicated fleet's buckets still runs. Resizing is the same operator gesture as any other bucket change — a bucket *is* a stream, so `nats stream update --replicas=3` covers it.
+**Replication is the one adopted difference a node refuses to run with.** Everything else a running bucket can disagree with is *reported* — the lease TTL above is warned about and then honoured — because every other difference changes how the store behaves, and behaviour is visible. A replica count changes nothing until a node is lost, and then it changes everything: raise `stream.replicas` from 1 to 3 on a fleet that already ran and a rolling restart finds every bucket still there at one replica, adopts it, and goes on holding every lease, every fencing epoch and the company's secrets on a single disk while each node reports itself correctly configured for three. So a node that is short refuses to start, naming both counts. Equal or higher passes, so a single-replica development node against a replicated fleet's buckets still runs. Resizing is the same operator gesture as any other bucket change — a bucket *is* a stream, so `nats stream update --replicas=3` covers it, made on an embedded fleet through one member's client listener with the operator key, BEFORE `stream.replicas` is raised ([Reaching an embedded fleet's broker with the nats tool](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)).
 
 | Bucket | Age | Sized from |
 |---|---|---|

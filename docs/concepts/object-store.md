@@ -97,7 +97,9 @@ store:
 
 The objects go into a JetStream **object store** bucket, `crewlet_files`, on
 the same broker every log already runs on, in NATS's own object store format —
-so `nats object ls crewlet_files` and `nats object get` read it. It is backed
+so `nats object ls crewlet_files` and `nats object get` read it (on an embedded
+fleet through a member's loopback client listener, with the
+[operator key](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)). It is backed
 by an ordinary stream (`OBJ_crewlet_files`), created at boot at
 **`stream.replicas`** copies — so the company's files survive exactly what its
 logs survive, on the same members:
@@ -271,14 +273,17 @@ store:
   yet. A node configured with another figure says so as
   `natsobj_bucket_ceiling_kept`. Change an existing bucket's reservation with
   `nats stream update OBJ_crewlet_files --max-bytes=<bytes>`, within what the
-  broker can grant.
+  broker can grant — on an embedded fleet through a member's loopback client
+  listener with the [operator key](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool).
 - **A bucket with no ceiling is bounded by the figure you write, or refused.**
   Every bucket an engine built before the reservation created holds none, as
   does one made by hand or by another tool. A node configured with
   `store.objects.nats_max_bytes` gives such a bucket that reservation at boot
   and logs `natsobj_bucket_bounded`; it is the one way to bound the bucket on
-  an embedded broker, which nothing outside the engine reaches. A node whose
-  figure is derived does not start, and names both that setting and the
+  an embedded broker that opens no client listener — a solo member's, or one
+  serving only leaves — which nothing outside the engine reaches (a clustered
+  member admits the operator key on its loopback client listener). A node
+  whose figure is derived does not start, and names both that setting and the
   `nats stream update` that bounds the bucket from outside.
 - **A full bucket refuses the upload**, and what made it says so as a refusal
   of its own naming the room an operator makes — move the files to a bucket,
@@ -660,7 +665,9 @@ passes:
 5. **Give every node the bucket's `store.objects` block and restart it** with
    `crewlet run`. A node still naming the NATS bucket refuses to start.
 6. **Delete the old bucket** once the fleet runs on the new one
-   (`nats stream rm OBJ_crewlet_files`), after your next backup.
+   (`nats stream rm OBJ_crewlet_files` — on an embedded fleet through a
+   member's client listener with the [operator key](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)), after your next
+   backup.
 
 A file the fleet's own store could not give back (missing, or damaged) is
 named by both passes and not copied: no copy can bring it back, and

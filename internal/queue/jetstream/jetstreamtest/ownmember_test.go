@@ -26,8 +26,9 @@ import (
 // tells NO client of any peer.
 //
 // The CONTROL is a client with nats's own defaults dialling member 0's client
-// listener, which is what any process on the host could do: it reads every
-// peer the member advertises, and before this change it read all of them.
+// listener with the operator key — the one client that listener admits, the
+// nats tool on the member's host: it reads every peer the member advertises,
+// and before this change any client there read all of them.
 //
 // Mutations: Cluster.NoAdvertise off → the control discovers the peers, red;
 // dial a clustered member over its client listener again → the in-process row,
@@ -60,7 +61,7 @@ func TestAMembersOwnClientDiscoversNoPeer(t *testing.T) {
 	// waits for every member to be routed to its peers), so the INFO the
 	// control is handed on connecting already carries every peer a member
 	// would advertise; the round trip after it lets any INFO sent since land.
-	control, err := nats.Connect("nats://"+listener, nats.MaxReconnects(-1),
+	control, err := nats.Connect("nats://"+listener, operatorKey(t), nats.MaxReconnects(-1),
 		nats.ReconnectWait(100*time.Millisecond))
 	if err != nil {
 		t.Fatalf("the control connection to member 0's client listener: %v", err)

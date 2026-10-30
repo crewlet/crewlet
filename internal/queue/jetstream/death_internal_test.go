@@ -52,6 +52,7 @@ func TestABrokerThatCannotUseItsStoreRefusesItsBootAtOnce(t *testing.T) {
 			if clustered {
 				cfg.ServerName, cfg.ClusterName = "member-1", "unusable-store"
 				cfg.ClusterHost = "127.0.0.1"
+				cfg.FleetAuth = testFleetAuth()
 			}
 
 			begun := time.Now()

@@ -33,6 +33,7 @@ subcommand below is served by it.
 | `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
+| `crewlet fleet broker credential [config] -o FILE` | Write the operator key a clustered member's broker admits on its loopback client listener — derived from this host's `secrets.keys`, to a file created `0600` and never to the terminal — and print the `nats` invocation that reaches the broker with it, from this host only. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round and refuses every change its coding runs make — their boxes' pushes and their calls of its tools that write — until it is resumed. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
@@ -1665,6 +1666,7 @@ the token's home is the variable, never a file this helper writes.
 crewlet fleet broker list [-json] [<config.yaml>] [-url URL]
 crewlet fleet broker remove <node> -confirm <node> [-force] [<config.yaml>] [-url URL]
 crewlet fleet broker remove -peer <peer> -confirm <peer> [-force] [<config.yaml>] [-url URL]
+crewlet fleet broker credential [<config.yaml>] -o FILE [-url URL]
 ```
 
 The fleet broker's membership. Two records say who its members are: every node
@@ -1672,11 +1674,13 @@ advertises its **broker kind** on its presence lease — derived from its
 `stream` block, never from its roles (see
 [Configuration](../concepts/configuration.md#noderoles)) — and the broker's
 **metadata group**, the raft group that places every stream and consumer,
-counts its voters for itself. Both verbs talk to a running node, and the node
-asks a member where it is not one: only a member holds the group, and a removal
-is answered only on its system account, which nothing outside its process can
-reach. They are clients of the routes in the
-[API reference](api-endpoints.md#the-brokers-membership).
+counts its voters for itself. `list` and `remove` talk to a running node, and
+the node asks a member where it is not one: only a member holds the group, and
+a removal is answered only on its system account, which nothing outside its
+process can reach. They are clients of the routes in the
+[API reference](api-endpoints.md#the-brokers-membership). `credential` is for
+the broker gestures no verb performs, made with the `nats` tool on a member's
+own host.
 
 ### `crewlet fleet broker list`
 
@@ -1703,8 +1707,10 @@ answering member happens to have heard.
 
 A group no member could report is said to be unread, never shown as empty. On a
 fleet whose broker is an external cluster it says so and lists nothing: that
-membership is the cluster's own operator's. `-json` prints the node's answer as
-it came.
+membership is the cluster's own operator's. On a clustered member it also
+prints the answering node's **client listener** — on loopback, reachable from
+that node's own host alone, where `credential`'s key reaches the broker.
+`-json` prints the node's answer as it came.
 
 ### `crewlet fleet broker remove`
 
@@ -1727,9 +1733,9 @@ nobody knows — it may have committed the change first — rather than another
 member proposing it again; `list` reads the group. So does an answer the node
 cannot believe: what it asks a member is signed under the fleet keyring and
 bound to that one request, and so is the member's answer, because the member
-carries a removal out through its system account and the broker authenticates
-nothing. A member that holds no key the request is signed under runs nothing
-and the next member is asked.
+carries a removal out through its system account and the broker's admission
+vouches for a connection, never a request. A member that holds no key the
+request is signed under runs nothing and the next member is asked.
 
 Only the group's leader answers a removal, and a member removed because its
 host died was often that leader — so the removal asks again every second while
@@ -1740,6 +1746,38 @@ refusal says so: bring enough members back for a quorum, then ask again. A
 removal the node did not answer may still have been committed; `list` reads
 the group, and asking again for a member already removed is refused as not a
 member.
+
+### `crewlet fleet broker credential`
+
+Writes the **operator key** an embedded fleet's broker admits on a clustered
+member's loopback client listener, for the `nats` tool: the gestures no engine
+verb performs — above all resizing every stream and bucket before a raised
+`stream.replicas` lets a node start
+([Deployment § Reaching an embedded fleet's broker with the nats tool](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)).
+Run it on the member's own host:
+
+```bash
+crewlet fleet broker credential -o ./operator.nk
+nats --server nats://127.0.0.1:41234 --nkey ./operator.nk stream ls
+```
+
+The key is derived from the active key of THIS host's `secrets.keys` — read
+from its own Tier A, never fetched — and written to `-o FILE`, created `0600`
+and refused where anything is already there; it never reaches the terminal. The
+address is asked of this host's running node (`GET /fleet/broker`, the token in
+`CREWLET_API_TOKEN` taking `admin`): its port is the OS's at every start, and a
+listener on loopback is its own host's, so an answer from another node — a
+`-url` naming a balancer or a peer — is refused and nothing is written. A solo
+member, a member with only a leaf listener and a leaf open no client listener,
+and say so; a node on an external cluster is reached with that cluster's own
+credentials. A member serving no API (`api.port: 0`, no `-url`) is asked
+nothing: the invocation is printed with the address left for you, and the
+node's `broker_keys` line names it.
+
+The key reaches every stream and bucket and never the system account —
+membership changes go through `remove` — and it grants nothing its holder
+lacks: whoever reads the node's Tier A holds the keyring. It is admitted for as
+long as its key is in `secrets.keys`; write it again after a rotation drops it.
 
 ## `crewlet seats`
 

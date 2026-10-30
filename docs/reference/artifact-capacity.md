@@ -629,7 +629,8 @@ it.
    nats` and fill the bucket to 10, 50 and 100 GiB.
 2. Stop one member, remove its store directory, and start it again; time from
    its start until the bucket's stream reports the member current
-   (`nats stream info OBJ_crewlet_files`), and watch the other members' log
+   (`nats stream info OBJ_crewlet_files`, through a member's client listener
+   with the [operator key](../guides/deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)), and watch the other members' log
    append latency while it catches up.
 3. Repeat with 1,000,000 small objects to confirm the memory figure above at
    scale.

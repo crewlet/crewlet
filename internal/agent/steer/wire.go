@@ -29,8 +29,9 @@ import (
 // The running node offers a note to the turn AS THE PERSON IT NAMES, and it
 // does so on the asking node's word: who may steer a turn is decided where
 // the person's request landed, against the seat a probe named, and the
-// running node decides nothing about it. So a note anybody who can reach the
-// fleet's broker could write would put words in front of a running agent
+// running node decides nothing about it. So a note anything the fleet's
+// broker admitted could write — its admission vouches for a connection,
+// never a message (ADR-0064) — would put words in front of a running agent
 // under anybody's name. Every request and every reply is therefore a channel
 // of internal/signedask's ([Channel]), signed under the fleet keyring in
 // domains of its own and bound by an id and a deadline ([Request.Binding])

@@ -156,8 +156,10 @@ domain's feed.
 
 A group name is not the broker's consumer name. The durable consumer is named
 from the group **and** the stream, as `<group>__<stream>__<digest>` — for
-example `crewlet-pages-feed__CREWLET_PAGES_LOG__e5825de86642` — so on an
-external cluster `nats consumer ls <stream>` is what finds it, and a lookup by
+example `crewlet-pages-feed__CREWLET_PAGES_LOG__e5825de86642` — so
+`nats consumer ls <stream>` is what finds it, on an external cluster or
+through an embedded fleet's member with the
+[operator key](deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool), and a lookup by
 the group name alone finds nothing.
 
 A term that **could not be read** blocks, exactly as one that permits nothing
@@ -418,9 +420,12 @@ There are two ways a floor cannot be read, and they read differently:
   remove the key, after which the next trim tick publishes the floor afresh
   from what every node has applied. On an external NATS cluster
   (`stream.type: nats`) that is
-  `nats kv purge crewlet_statelog_positions floor.<domain>`. The embedded
-  broker listens on no socket an outside tool can reach, and no `crewlet`
-  command removes the key. Neither shape is one the engine
+  `nats kv purge crewlet_statelog_positions floor.<domain>`, and so it is on
+  an embedded fleet, through a clustered member's loopback client listener
+  with the [operator key](deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool). A broker that opens no
+  client listener — a solo member's, or one serving only leaves — listens on
+  no socket an outside tool can reach, and no `crewlet` command removes the
+  key. Neither shape is one the engine
   writes — every floor it publishes is validated and filed under its own
   domain's key — so a row like this was written by something other than the
   engine, and it stays until a client of the bucket removes it.
@@ -1418,7 +1423,8 @@ every applier compares at boot against the instant its checkpoint was
 committed under. It is the instant the node whose create made the stream
 stamped into the stream's configuration, as the metadata key
 `crewlet.created_at` (`nats stream info` lists it under the stream's
-metadata) — not the broker's own creation time, which a snapshot restore
+metadata, on an embedded fleet through a member's client listener with the
+[operator key](deployment.md#reaching-an-embedded-fleets-broker-with-the-nats-tool)) — not the broker's own creation time, which a snapshot restore
 resets to the moment of the restore, and which is read only for a stream
 that carries no stamp, one an operator created by hand. A stream restored
 from a snapshot is handed back the configuration it was taken with, stamp
@@ -1449,7 +1455,7 @@ Bringing back the broker's store directory from a disk snapshot — or, for the
 embedded broker, restarting the engine on yesterday's volume — keeps the stream
 it had, creation instant and all, and so does restoring its streams from their
 snapshots (a [`crewlet backup`](backup.md#restoring), or `nats stream
-restore`), which hands each one back the configuration that carries its
+restore` against an external cluster), which hands each one back the configuration that carries its
 instant; so every identity check passes. What differs
 is where the log **ends**: below the checkpoint of a node whose own database is
 newer. Such a node refuses every read and every write of that domain with

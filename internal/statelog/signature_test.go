@@ -9,9 +9,12 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// The broker has no auth of its own, so these are the cases that say what a
-// record's signature is worth: what it proves, what it refuses, and which of
-// the two failures an operator can still recover from.
+// The broker's admission vouches for a connection, never a record — an
+// embedded fleet's routes carry their credential in clear, and an external
+// cluster admits whom its operator chooses (ADR-0031, ADR-0064) — so these are
+// the cases that say what a record's signature is worth: what it proves, what
+// it refuses, and which of the two failures an operator can still recover
+// from.
 
 func ring(active string, keys ...statelog.Key) statelog.Keyring {
 	return statelog.Keyring{ActiveID: active, Keys: keys}

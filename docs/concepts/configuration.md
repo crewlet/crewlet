@@ -1215,13 +1215,17 @@ It has no default — a key the engine invented would be one no other node holds
 — and far more than the company's credentials rest on it:
 
 - every record on every state log is signed and verified under it, because the
-  broker authenticates nothing and every data node applies every log — and
-  every request a node without `data` sends through the estate router, and
-  every answer it gets, is signed under it too;
+  broker's admission vouches for a connection, never a record, and every data
+  node applies every log — and every request a node without `data` sends
+  through the estate router, and every answer it gets, is signed under it too;
 - the company document a node fetches from its peers is authenticated by its
   seal, so a node refuses one that arrives unsealed (see [Secrets](#secrets));
 - on a node serving the API it signs every session cookie and derives the key
-  that verifies each per-run token.
+  that verifies each per-run token;
+- an embedded fleet's broker derives its credentials from it: a route, a leaf
+  link and the operator's nats tool are admitted only on a key derived from a
+  key of this keyring
+  ([The fleet's broker admits only its own nodes](../guides/deployment.md#the-fleets-broker-admits-only-its-own-nodes)).
 
 Each key's `material` must be the base64 of a 32-byte key, which is what
 `crewlet secrets keygen` prints. `crewlet validate` checks it on the value its
@@ -1461,7 +1465,7 @@ curl -X POST "$CREWLET_URL/config/reload" \
 
 **Both re-seals are required.** The company document, the secret store (the engine's own blind-index key included, once anybody has been added) and every person's name, address and second factor in the identity estate are all sealed under this keyring, so a key dropped while any of them is still under it leaves that thing unreadable. A reload stores the active document again under the node's active key; on a stopped node, `crewlet config rekey` does the same offline, and `crewlet config rekey -dry-run` reports whether it would re-encrypt without writing. The document's envelope carries the id of the key that sealed it, so either way it is decrypted under whichever key sealed it and re-encrypted under the active key. `crewlet secrets rekey` moves every person's sealed values only through a running node, whose engine holds the identity estate: run with the node's engine stopped, it reaches the fleet's store itself and re-seals that store's rows — the engine's own keys among them — and says to run it again through a running node for the rest.
 
-On a single node, steps 1 and 2 can be one restart. On a fleet they cannot: a node that flips first signs records, cookies and requests under a key its peers do not hold yet.
+On a single node, steps 1 and 2 can be one restart. On a fleet they cannot: a node that flips first signs records, cookies and requests under a key its peers do not hold yet — and presents a broker credential its peers do not hold yet either, so a leaf restarted onto a flipped keyring before any member links nowhere and fails its boot naming the key. The broker needs no step of its own beyond that order: every node accepts every key of its keyring. An operator key `crewlet fleet broker credential` wrote keeps working until its key is dropped; write it again after step 4.
 
 ### Reads and export
 
