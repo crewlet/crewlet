@@ -65,18 +65,24 @@ diff and its findings has delivered nothing yet, and only a write it makes in
 answer reaches anybody. Each change tool also names, in one table its tests
 hold to the tool list, the access its call needs on the change's repository —
 of its caller, and in a turn a colleague seat woke of that seat too; a read's
-is read, which the node that answers judges both at. Their ten writes —
-`code_commit_files`,
+is read, which the node that answers judges both at, and a write's is the
+least access at which the node that decides it may admit the call — the rest
+is the relation that node judges from its own chart, which no access alone
+names (an open's push of its branch, a change's owner steering it). Their
+thirteen writes — `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
 `code_create_repo`, `code_update_repo`, `code_delete_repo`,
-`code_restore_repo` and `code_protect_branch` — are each `read_only: false`
-with `open_world: true`: a branch or a repository is a surface every colleague
-reads, so `mcp.WritesToSharedSurface` keeps every one from a worker, which
-would write under its parent's grant; each is registered as a delivery to the
-code host, so a turn woken about a repository that moved a branch delivered;
-and each is `idempotent: true`, since every one is held to what its caller
-read — a commit to the head it names, a create to a free name — and the same
-call made again is the same operation. `code_delete_branch` and
+`code_restore_repo`, `code_protect_branch`, and a change's `code_open_change`,
+`code_update_change` and `code_close_change` — are each `read_only: false`
+with `open_world: true`: a branch, a repository or a change is a surface every
+colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
+which would write under its parent's grant; each is registered as a delivery
+to the code host, so a turn woken about a repository that moved a branch or
+opened a change delivered; and each is `idempotent: true`, since every one is
+held to what its caller read — a commit to the head it names, a create to a
+free name, a change's edit and close to the version its caller read, an open
+to the one live change a branch may head — and the same call made again is
+the same operation. `code_delete_branch` and
 `code_delete_repo` are also `destructive: true`: each takes away what somebody
 else made with nothing the same tool keeps to undo it. A seat holding the
 writes is also told, in its executor prompt's `code_writes` section, the one

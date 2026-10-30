@@ -405,8 +405,8 @@ func asUnboundToken() context.Context {
 // ---- one list, two surfaces --------------------------------------------- //
 
 // THE CODE TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
-// built over the same deps, hold the same twenty-one tools — the eleven reads,
-// then the ten writes, every one the authority table names, in the list's own
+// built over the same deps, hold the same code tools — the eleven reads,
+// then the writes, every one the authority table names, in the list's own
 // order — with byte-identical descriptions and schemas but for the one
 // argument the operator surface alone offers, the writes' `op_id`, which no
 // read and no seat's tool offers; because both take [builtin.CodeTools]. A
@@ -491,7 +491,7 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 
 // EVERY CODE READ IS A PROVEN READ, on both surfaces: the registry carries the
 // hint the delivery check reads, and the operator catalogue advertises the one
-// it audits nothing on — every code tool that is not one of the ten writes,
+// it audits nothing on — every code tool that is not one of the writes,
 // on a registry that holds the writes too. Mutation: one code read off
 // codeAnnotations (the default arm's shared write) → red.
 func TestEveryCodeToolIsAProvenRead(t *testing.T) {
@@ -1703,13 +1703,13 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the twenty-one code tools'
+// codeCatalogueBudget is the most bytes the twenty-four code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
 // (CodeWritesWithheld); every other seat carries the reads alone
 // ([codeReadsCatalogueBudget]).
 //
-// 31 300: measured at 29 628 (~7 407 tokens), so ~6% headroom — a sentence can
+// 34 800: measured at 32 899 (~8 225 tokens), so ~6% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
 // part adds raises this deliberately, with its measured cost). 10 654 → 9 570
 // when the revision grammar, written into each of the six revision arguments,
@@ -1739,8 +1739,14 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // bytes (~1 025 tokens) for code_list_changes and code_get_change, the parts
 // named once in the description and each argument cut to what its name and
 // type do not say (326 bytes more as first written: the listing's fields
-// spelled out, and each part in a sentence of its own).
-const codeCatalogueBudget = 31_300
+// spelled out, and each part in a sentence of its own). And 31 300 → 34 800
+// when a change's three lifecycle writes joined the list, deliberately, with
+// their measured cost: 29 628 → 32 899, 3 271 bytes (~818 tokens) for
+// code_open_change, code_update_change and code_close_change, each argument
+// its name and type but where they do not say it — a change named by number
+// or reference, the version a write is held to, the forms a work item takes —
+// and update's one-thing-a-call rule said once, in its description.
+const codeCatalogueBudget = 34_800
 
 // codeReadsCatalogueBudget is the most bytes the eleven code reads'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
@@ -1751,21 +1757,22 @@ const codeCatalogueBudget = 31_300
 // 18 600: measured at 17 575 (~4 394 tokens) when the code writes were first
 // withheld below full_access, so ~6% headroom, the rule [codeCatalogueBudget]
 // states — a code read a later part adds raises this deliberately, with its
-// measured cost, as it raises that. The ten writes are the 12 053 bytes
-// (~3 013 tokens) between the two budgets' figures, carried by a full_access
-// seat alone.
+// measured cost, as it raises that. The ten writes were the 12 053 bytes
+// (~3 013 tokens) between the two budgets' figures then, and a change's three
+// lifecycle writes beside them make the thirteen 15 324 (~3 831 tokens),
+// carried by a full_access seat alone.
 const codeReadsCatalogueBudget = 18_600
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code carries the eleven reads' definitions on every round of every turn, and
-// a seat at full_access the ten writes' beside them: a CLI's catalogue rides in
-// the user text (cliagent.RenderPrompt), so nothing caches them, and each byte
-// is paid again every round. Measured as that catalogue renders them —
-// indented, HTML-escaped, added to a catalogue already holding a tool, so each
-// one's separator and indentation count — the reads alone and all twenty-one,
-// each held to a budget, so a later description edit is a decision rather than
-// drift, as the executor prompt's budgets make a sentence one
-// (internal/agent/prompts budget_test.go).
+// a seat at full_access the thirteen writes' beside them: a CLI's catalogue
+// rides in the user text (cliagent.RenderPrompt), so nothing caches them, and
+// each byte is paid again every round. Measured as that catalogue renders them
+// — indented, HTML-escaped, added to a catalogue already holding a tool, so
+// each one's separator and indentation count — the reads alone and all
+// twenty-four, each held to a budget, so a later description edit is a
+// decision rather than drift, as the executor prompt's budgets make a sentence
+// one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	rendered := func(defs []llm.ToolDef) int {
@@ -1791,7 +1798,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		got, budget int
 	}{
 		{"the eleven code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all twenty-one code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
+		{"all twenty-four code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {
 		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))
@@ -1824,7 +1831,7 @@ func TestTheCodeGuidanceNamesTheCodeTools(t *testing.T) {
 }
 
 // THE PAGES NAME EVERY CODE TOOL THE REGISTRY HOLDS: the tools guide's table of
-// them lists exactly the twenty-one, and the operator reference's account of what
+// them lists exactly the code tools, and the operator reference's account of what
 // `/operator/mcp` serves names each — two hand-kept copies of one list, which is
 // how a page comes to describe a catalogue the engine no longer serves.
 func TestThePagesNameEveryCodeTool(t *testing.T) {

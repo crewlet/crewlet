@@ -128,8 +128,16 @@ func (*writingHost) Lifecycle(context.Context, code.LifecycleRequest) (code.Life
 	return code.LifecycleResult{}, code.ErrNotServing
 }
 
+func (*writingHost) Change(context.Context, code.ChangeProposal) (code.ChangeResult, error) {
+	return code.ChangeResult{}, code.ErrNotServing
+}
+
+func (*writingHost) Converse(context.Context, code.ConversationWrite) (code.ConversationResult, error) {
+	return code.ConversationResult{}, code.ErrNotServing
+}
+
 // THE CODE WRITES ARE SERVED WHERE THE CODE HOST'S WRITES ARE, AND A PERSON MAY
-// PRESS THEM: the catalogue holds the ten writes beside the reads exactly
+// PRESS THEM: the catalogue holds the code writes beside the reads exactly
 // while the call's code half carries the code host's writes, advertises each
 // as the write it is, and the act transport's account of what a person may
 // press (Acts) names every one — admitted for every person, and decided per

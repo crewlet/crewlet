@@ -88,6 +88,17 @@ func (h *codeWriteHost) Lifecycle(_ context.Context, r code.LifecycleRequest) (c
 	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(21)}, nil
 }
 
+// Change and Converse answer a change's writes as decided — no case here
+// writes one: the code writes these cases make are engine writes and
+// lifecycle requests, and the change tools ride the same list.
+func (h *codeWriteHost) Change(context.Context, code.ChangeProposal) (code.ChangeResult, error) {
+	return code.ChangeResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(22)}, nil
+}
+
+func (h *codeWriteHost) Converse(context.Context, code.ConversationWrite) (code.ConversationResult, error) {
+	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(23)}, nil
+}
+
 // asked is the engine writes the host was asked, copied under its lock.
 func (h *codeWriteHost) asked() []code.EngineWrite {
 	h.mu.Lock()

@@ -55,8 +55,17 @@ func CodeToolDeps(e *Engine) builtin.CodeDeps {
 	// wired whether or not a seat writes, since a seat that only reads
 	// still holds what it reads; an operator's call has no turn and holds
 	// nothing whatever is wired here.
-	return builtin.CodeDeps{Code: seam, Writer: seam, Holder: seam, CloneURL: e.cloneURL,
+	deps := builtin.CodeDeps{Code: seam, Writer: seam, Holder: seam, CloneURL: e.cloneURL,
 		Requesters: turnRequesters{engine: e}, Chart: ChartAuthorityOf(e)}
+	// AND THE TRACKER'S READ OF ONE TASK, where the company runs the native
+	// tracker: a change write naming a native work item by its key is
+	// resolved to the item's identity through the very read the work tools
+	// resolve a key with, on this node's router — none elsewhere, where a
+	// key names no item this engine keeps.
+	if halves, ok := e.trackerHalves(); ok {
+		deps.Tasks = halves.reader
+	}
+	return deps
 }
 
 // CodeReaderDeps are `code_repo_readers`' dependencies on this node — who read

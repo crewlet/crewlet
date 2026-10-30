@@ -36,16 +36,20 @@ import (
 var writtenOID = strings.Repeat("d", 40)
 
 // codeWrites is the code host's write half as the write tools see it: every
-// engine write and lifecycle request it is asked, in order, and the answer
-// each is given — a write landed and a request applied unless a case says
-// otherwise. before, set, is called with what each request names before it is
-// answered, so a case can read what the asking turn held then.
+// engine write, lifecycle request and write of a change it is asked, in order,
+// and the answer each is given — a write landed and a request applied unless a
+// case says otherwise. before, set, is called with what each request names
+// before it is answered, so a case can read what the asking turn held then.
 type codeWrites struct {
 	mu         sync.Mutex
 	writes     []code.EngineWrite
 	lifecycles []code.LifecycleRequest
+	changes    []code.ChangeProposal
+	converses  []code.ConversationWrite
 	write      func(w code.EngineWrite) (code.EngineWriteResult, error)
 	life       func(r code.LifecycleRequest) (code.LifecycleResult, error)
+	change     func(p code.ChangeProposal) (code.ChangeResult, error)
+	converse   func(w code.ConversationWrite) (code.ConversationResult, error)
 	before     func(what, repoID string)
 }
 
@@ -95,11 +99,54 @@ func (c *codeWrites) Lifecycle(_ context.Context, r code.LifecycleRequest) (code
 	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Repo: repo, Position: codeAt(14)}, nil
 }
 
+// Change answers a change's lifecycle as applied — an open as change site!7 at
+// version 1, opened under the change id its operation derives; any other write
+// as the change it names, one version past the one it expected — unless a case
+// answers otherwise.
+func (c *codeWrites) Change(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
+	c.mu.Lock()
+	c.changes = append(c.changes, p)
+	answer, before := c.change, c.before
+	c.mu.Unlock()
+	if before != nil {
+		before("change", p.RepoID())
+	}
+	if answer != nil {
+		return answer(p)
+	}
+	return code.ChangeResult{Outcome: statelog.OutcomeApplied, ChangeID: p.ChangeID(), Number: 7,
+		Version: p.ExpectedVersion + 1, Position: codeAt(15)}, nil
+}
+
+// Converse answers a write of a change's conversation as applied, unless a
+// case answers otherwise.
+func (c *codeWrites) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
+	c.mu.Lock()
+	c.converses = append(c.converses, w)
+	answer, before := c.converse, c.before
+	c.mu.Unlock()
+	if before != nil {
+		before("converse", w.RepoID())
+	}
+	if answer != nil {
+		return answer(w)
+	}
+	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeAt(16)}, nil
+}
+
 // asked is what the fake was asked, copied under its lock.
 func (c *codeWrites) asked() ([]code.EngineWrite, []code.LifecycleRequest) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return slices.Clone(c.writes), slices.Clone(c.lifecycles)
+}
+
+// changesAsked is the writes of changes the fake was asked, copied under its
+// lock: their lifecycles, then their conversations.
+func (c *codeWrites) changesAsked() ([]code.ChangeProposal, []code.ConversationWrite) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.changes), slices.Clone(c.converses)
 }
 
 // writeDeps is codeDeps over host, with the code host's writes and the turn's
@@ -231,7 +278,7 @@ func (r tierRoster) Leads(unit string) []string {
 func (tierRoster) Within(unit, ancestor string) bool { return unit == ancestor && unit != "" }
 
 // THE CODE WRITES ARE WITHHELD EXACTLY WHERE NO GRANT ADMITS ONE: a seat is
-// left the ten at every tier that caps it below write and offered them at
+// left the thirteen at every tier that caps it below write and offered them at
 // full_access — held to code.GrantOf both ways at the highest relation the
 // chart can give a seat, on a project its unit owns and leads and on its own
 // scratch repository. A tier they are withheld at pushes to neither and
@@ -258,7 +305,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 	for _, tier := range append(code.Tiers(), "", "admin") {
 		withheld := builtin.CodeWritesWithheld(tier)
 		if len(withheld) != 0 && !slices.Equal(withheld, builtin.CodeWrites()) {
-			t.Errorf("tier %q withholds %v, want all ten writes or none", tier, withheld)
+			t.Errorf("tier %q withholds %v, want all thirteen writes or none", tier, withheld)
 		}
 		for _, repo := range repos {
 			g := code.GrantOf(agent, repo, tierRoster{tier: tier})
@@ -738,9 +785,11 @@ func TestAnUnboundTokenWritesNothing(t *testing.T) {
 		}
 	}
 	reads, _, _ := host.asked()
-	if writes, lifecycles := writer.asked(); len(reads)+len(writes)+len(lifecycles) != 0 {
-		t.Errorf("an unbound token's writes sent %d reads, %d writes and %d requests", len(reads), len(writes),
-			len(lifecycles))
+	writes, lifecycles := writer.asked()
+	changes, converses := writer.changesAsked()
+	if len(reads)+len(writes)+len(lifecycles)+len(changes)+len(converses) != 0 {
+		t.Errorf("an unbound token's writes sent %d reads, %d writes, %d requests and %d writes of changes",
+			len(reads), len(writes), len(lifecycles), len(changes)+len(converses))
 	}
 }
 
@@ -937,6 +986,10 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeDeleteRepoTool:    {"repo": repo},
 		builtin.CodeRestoreRepoTool:   {"repo": repo},
 		builtin.CodeProtectBranchTool: {"repo": repo, "pattern": "refs/heads/main"},
+		builtin.CodeOpenChangeTool: {"repo": repo, "branch": "fix", "title": "Fix the lab",
+			"reviewers": []any{"agent-ceo"}},
+		builtin.CodeUpdateChangeTool: {"repo": repo, "change": 7, "expected_version": 1, "title": "Fix the lab"},
+		builtin.CodeCloseChangeTool:  {"repo": repo, "change": 7, "expected_version": 1},
 	}
 	args, ok := rows[name]
 	return args, ok

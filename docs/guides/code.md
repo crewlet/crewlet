@@ -326,6 +326,20 @@ together or not at all. More options shape it:
 Whoever may push the branch may open a change from it: the push's own update
 is the check ([A change a push opens](../concepts/code-host.md#a-change-a-push-opens)).
 
+**Or with a tool.** A seat — and your own assistant, as you — opens a change
+of a branch already pushed with `code_open_change`, naming the branch, a title
+and, if it is not the default branch, its target. It carries the work item the
+seat's turn is charged to unless the call names another — a native item's key
+(`ENG-42`), any tracker's item as `<backend>:<id>`, or `none` — and asks the
+`reviewers` it names once it is open. `code_update_change` changes one thing
+about a change a call — what it says, whether it is a draft, its target — and
+`code_close_change` closes one or, with `reopen`, opens a closed one again;
+each names the `version` of the change its caller read, and a change that
+moved since is refused `stale_version` rather than changed under them. Who may
+is the [change's rule](../concepts/code-host.md#opening-editing-and-closing-a-change):
+whoever may push its branch opens one, and its owner, a maintainer of the
+repository or any person steers it ([the tools](tools-and-mcp.md#the-companys-code)).
+
 ## Adding checks
 
 A repository's checks — the builds, tests and linters a change is measured
@@ -399,7 +413,7 @@ Nothing runs a check yet in this release: the file is defined and validated
 ## What your seats read
 
 Nothing to set up: once the company hosts code, every seat reads the
-repositories with eleven of the twenty-one [code
+repositories with eleven of the twenty-four [code
 tools](tools-and-mcp.md#the-companys-code), on the server — a file's lines, a directory,
 what changed between two commits, how two commits relate, whether a fix
 reached a branch and which push put it there, a path's history and who last
@@ -407,14 +421,16 @@ changed each line of a file, and a repository's changes: what each one
 changes, its findings placed in the revision it reads and what changed since
 an earlier revision — with no clone and no token. A seat itself holds
 no git credential: a seat whose `role.code.access` is `full_access` changes the
-repositories through the other ten — a small change committed to a branch, a
-commit reverted or picked, a branch created or deleted, each built on the
+repositories through the other thirteen — a small change committed to a branch,
+a commit reverted or picked, a branch created or deleted, each built on the
 server and landed as one push in its name ([Engine-built
-commits](../concepts/code-host.md#engine-built-commits)), and a scratch
-repository of its own made for an experiment ([Repositories made by
-tools](../concepts/code-host.md#repositories-made-by-tools)) — each held to the
-grant below. A `read_only` or `review` seat is not offered those ten at all,
-since its grant would refuse every one of them on every repository.
+commits](../concepts/code-host.md#engine-built-commits)), a scratch repository
+of its own made for an experiment ([Repositories made by
+tools](../concepts/code-host.md#repositories-made-by-tools)), and a change
+opened, edited or closed ([Or with a tool](#open-a-change-from-a-push)) — each
+held to the grant below. A `read_only` or `review` seat is not offered those
+thirteen at all, since its grant would refuse every one of them on every
+repository.
 
 A seat whose role has a [sandbox](../concepts/code-sandbox.md) also works in a
 clone: it names the repositories in `run_sandbox`'s `repos`, and the engine

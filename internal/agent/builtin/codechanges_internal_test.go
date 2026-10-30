@@ -10,22 +10,23 @@ import (
 
 // EVERY CHANGE TOOL NAMES THE ACCESS IT NEEDS: the one table of what each
 // change tool's call needs on the change's repository, of its caller and of
-// the colleague a turn reads for, holds a row for every change tool and for
-// nothing else — so a change tool added without a row, or a row left behind
-// by one removed, fails here rather than serving whoever messaged a seat at
-// an access nobody named. And a READ's row is read: the node that answers a
-// read judges the colleague it is made for at read and nothing else
-// (code.JudgeRead, through the ceiling every question of it carries), so a
-// read naming more would be a need no read holds anybody to.
+// the colleague a turn reads for, holds a row for every change tool — the
+// reads and the writes — and for nothing else, so a change tool added without
+// a row, or a row left behind by one removed, fails here rather than serving
+// whoever messaged a seat at an access nobody named. And a READ's row is
+// read: the node that answers a read judges the colleague it is made for at
+// read and nothing else (code.JudgeRead, through the ceiling every question of
+// it carries), so a read naming more would be a need no read holds anybody to.
 //
-// Mutations: a change tool's row dropped; a row naming a tool that is not
-// one; a read's row raised to review → red.
+// Mutations: a change tool's row dropped — a read's or a write's; a row naming
+// a tool that is not one; a read's row raised to review → red.
 func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 	t.Parallel()
-	if len(ChangeToolNames()) == 0 {
-		t.Fatal("there are no change tools, so this walk certifies nothing")
+	every := slices.Concat(ChangeToolNames(), ChangeWrites())
+	if len(ChangeToolNames()) == 0 || len(ChangeWrites()) == 0 {
+		t.Fatal("there are no change reads or no change writes, so this walk certifies nothing")
 	}
-	for _, name := range ChangeToolNames() {
+	for _, name := range every {
 		need, ok := changeToolNeeds[name]
 		switch {
 		case !ok:
@@ -45,7 +46,7 @@ func TestEveryChangeToolNamesTheAccessItNeeds(t *testing.T) {
 		}
 	}
 	for name := range changeToolNeeds {
-		if !slices.Contains(ChangeToolNames(), name) {
+		if !slices.Contains(every, name) {
 			t.Errorf("changeToolNeeds names %s, which is no change tool", name)
 		}
 	}

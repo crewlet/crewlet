@@ -1126,6 +1126,14 @@ them. Six writes:
   configuration](#a-seats-push), decides none of a seat's writes and hands them
   to the repository's next committer, as it does a seat's push; a person's is
   decided as ever.
+- **A seat and a person's assistant write them through tools** —
+  `code_open_change`, `code_update_change` and `code_close_change`
+  ([The company's code](../guides/tools-and-mcp.md#the-companys-code)) — each
+  one write, named by one operation, so the same call made again is the same
+  write. An open that names reviewers asks them in a second write once the
+  change is open, a step of the open's own operation decided at or past the
+  open's record ([Asking for review](#asking-for-review)): an open asked again
+  asks them again under the same step, which the ledger collapses.
 
 A write that is refused appends nothing, and says why in one sentence:
 

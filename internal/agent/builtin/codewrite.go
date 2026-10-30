@@ -27,8 +27,10 @@ import (
 // builds on the repository's git node and lands as one push (ADR-0062), and
 // five that change a repository (code_create_repo, code_update_repo,
 // code_delete_repo, code_restore_repo, code_protect_branch), each one
-// LIFECYCLE request a data node decides. Every one is in [CodeTools], beside
-// the reads, so a seat's registry and the operator catalogue take one list.
+// LIFECYCLE request a data node decides — and a repository's CHANGES' writes,
+// each decided where the change is (codechangewrite.go). Every one is in
+// [CodeTools], beside the reads, so a seat's registry and the operator
+// catalogue take one list.
 //
 // # Who may is the repository's to say
 //
@@ -96,13 +98,14 @@ const (
 	CodeProtectBranchTool = string(authz.ActionCodeProtectBranch)
 )
 
-// CodeWrites are the ten write tools, in the order a catalogue lists them: the
-// branch's five, then the repository's. Read by [Register]'s delivery switch,
+// CodeWrites are the write tools, in the order a catalogue lists them: the
+// branch's five, then the repository's five, then a repository's changes'
+// ([ChangeWrites], codechangewrite.go). Read by [Register]'s delivery switch,
 // [codeAnnotations] and every test that holds the writes apart from the reads.
 func CodeWrites() []string {
-	return []string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
+	return append([]string{CodeCommitFilesTool, CodeRevertTool, CodeCherryPickTool, CodeCreateBranchTool,
 		CodeDeleteBranchTool, CodeCreateRepoTool, CodeUpdateRepoTool, CodeDeleteRepoTool, CodeRestoreRepoTool,
-		CodeProtectBranchTool}
+		CodeProtectBranchTool}, ChangeWrites()...)
 }
 
 // CodeWritesWithheld is the code writes a seat whose role.code.access reads
@@ -139,16 +142,19 @@ func CodeWritesWithheld(tier code.Tier) []string {
 
 // CodeWriter is the code host's writes as these tools ask them —
 // estate.CodeSeam, declared here by its consumer: an engine write asked of
-// the repository's home git node, and a lifecycle request asked of a data
-// node.
+// the repository's home git node, a lifecycle request asked of a data node,
+// and a write of a change — its lifecycle asked of the repository's
+// committer, its conversation of the change writer beside it.
 type CodeWriter interface {
 	GitWrite(ctx context.Context, w code.EngineWrite) (code.EngineWriteResult, error)
 	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
+	Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
+	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
 }
 
-// codeWriteTools are the ten over deps, in [CodeWrites]' order.
+// codeWriteTools are the writes over deps, in [CodeWrites]' order.
 func codeWriteTools(deps CodeDeps) []tools.Callable {
-	return []tools.Callable{
+	return append([]tools.Callable{
 		&codeBranchWrite{deps: deps, kind: code.WriteCommitFiles},
 		&codeBranchWrite{deps: deps, kind: code.WriteRevert},
 		&codeBranchWrite{deps: deps, kind: code.WriteCherryPick},
@@ -159,7 +165,7 @@ func codeWriteTools(deps CodeDeps) []tools.Callable {
 		&codeRepoWrite{deps: deps, tool: CodeDeleteRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeRestoreRepoTool},
 		&codeRepoWrite{deps: deps, tool: CodeProtectBranchTool},
-	}
+	}, changeWriteTools(deps)...)
 }
 
 // ---- who writes ------------------------------------------------------------ //
@@ -1210,7 +1216,12 @@ func codeWriteFailure(ctx context.Context, tool string, actor Actor, repo string
 		again = "make the same call again"
 	}
 	switch {
-	case errors.Is(err, code.ErrInvalid), errors.Is(err, code.ErrObjectNotFound):
+	case errors.Is(err, code.ErrInvalid), errors.Is(err, code.ErrObjectNotFound),
+		errors.Is(err, code.ErrInvalidProposal):
+		// A PROPOSAL NO NODE WOULD DECIDE is a change write's own: held to
+		// the rule its deciding node holds it to before it is routed, it is
+		// the call's arguments that are wrong — a title past its bound, a
+		// branch no change may name.
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused what it was asked: %s. Change the "+
 			"arguments — the same ones are refused again.", tool, writeWords(err)))
 	case errors.Is(err, code.ErrNotPermitted), errors.Is(err, code.ErrConfigManaged):
@@ -1234,7 +1245,7 @@ func codeWriteFailure(ctx context.Context, tool string, actor Actor, repo string
 // for the caller past the sentinel.
 func writeWords(err error) string {
 	for _, sentinel := range []error{code.ErrInvalid, code.ErrObjectNotFound, code.ErrNotPermitted,
-		code.ErrConfigManaged} {
+		code.ErrConfigManaged, code.ErrInvalidProposal} {
 		if said, ok := RefusalSentence(err, sentinel); ok {
 			return said
 		}

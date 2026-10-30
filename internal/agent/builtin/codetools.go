@@ -197,6 +197,14 @@ type CodeDeps struct {
 	// the company's code and changes none of it. See codewrite.go.
 	Writer CodeWriter
 
+	// Tasks is the engine's own tracker as one task is read, which resolves
+	// the native work item a change write names by its key to the item's
+	// identity ([CodeDeps.workItemArg]): set where the company runs the
+	// native tracker. Nil resolves none, and a call naming a native item's
+	// key is refused, naming the `<backend>:<id>` form every item takes —
+	// never filed under a key nobody resolved.
+	Tasks TaskReader
+
 	// Holder records a turn's hold on a scratch repository it names
 	// ([HoldRepo]), set wherever the tools are offered to seats and
 	// independently of Writer, because a seat that only reads still holds

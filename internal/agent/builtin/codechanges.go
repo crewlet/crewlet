@@ -97,8 +97,8 @@ func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetCh
 // changeToolNeeds is the ACCESS each change tool's call needs on the change's
 // repository — of its caller and, in a turn a colleague seat woke, of that
 // seat too, whom the call reads for (the requester ceiling, [CodeDeps.caller]):
-// ONE TABLE, which TestEveryChangeToolNamesTheAccessItNeeds holds to
-// [ChangeToolNames] both ways.
+// ONE TABLE, which TestEveryChangeToolNamesTheAccessItNeeds holds to the
+// change tools, [ChangeToolNames] and [ChangeWrites], both ways.
 //
 // A READ NEEDS READ, the one access the node that answers it judges both
 // principals at: every question a read makes carries the colleague as its
@@ -106,9 +106,20 @@ func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetCh
 // [code.JudgeRead] serves only what the caller and the colleague may each
 // read. A read tool's need above read would be one no read holds a colleague
 // to, so a read's row is read and nothing else.
+//
+// A WRITE NEEDS THE LEAST ACCESS AT WHICH ITS DECIDE MAY ADMIT IT, and the
+// rest is the RELATION the deciding node judges from its own chart (the
+// change domain's rule D21), which no access alone names: an open needs the
+// push of the branch it proposes — a full_access seat's own namespace on a
+// repository it reads, so read — and a change's lifecycle is steered by its
+// owner, whatever their access, by a principal that maintains the repository
+// or by a person — so read too.
 var changeToolNeeds = map[string]code.Access{
-	CodeListChangesTool: code.AccessRead,
-	CodeGetChangeTool:   code.AccessRead,
+	CodeListChangesTool:  code.AccessRead,
+	CodeGetChangeTool:    code.AccessRead,
+	CodeOpenChangeTool:   code.AccessRead,
+	CodeUpdateChangeTool: code.AccessRead,
+	CodeCloseChangeTool:  code.AccessRead,
 }
 
 // The listing's page. A listed change is its row and its readiness in a line,

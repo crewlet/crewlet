@@ -155,6 +155,14 @@ const (
 	ActionCodeDeleteRepo    Action = "code_delete_repo"
 	ActionCodeRestoreRepo   Action = "code_restore_repo"
 	ActionCodeProtectBranch Action = "code_protect_branch"
+	// AND THE CHANGE WRITES, the same footing: a change opened, edited — its
+	// title, description or work item, a draft's state, its target — closed
+	// or reopened, each one write of the change's lifecycle the repository's
+	// committer decides from its own chart (D21: who may push the source to
+	// open one; the change's owner, a maintainer or a person to steer it).
+	ActionCodeOpenChange   Action = "code_open_change"
+	ActionCodeUpdateChange Action = "code_update_change"
+	ActionCodeCloseChange  Action = "code_close_change"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
@@ -774,6 +782,14 @@ var rules = map[Action]rule{
 	ActionCodeDeleteRepo:    {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeRestoreRepo:   {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeProtectBranch: {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND THE CHANGE WRITES, on the same footing: a change's lifecycle is
+	// decided by the repository's committer from its own chart — who may push
+	// the branch an open proposes, who owns or maintains a change it steers —
+	// and a seat opens and steers its own changes, so neither human-only nor
+	// asking a proof, as a push asks none.
+	ActionCodeOpenChange:   {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeUpdateChange: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeCloseChange:  {class: ClassEverybody, recency: iam.RecencyAny},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

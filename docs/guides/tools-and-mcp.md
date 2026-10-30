@@ -318,9 +318,9 @@ is (copy the directory into your assistant's skills folder).
 
 ### The company's code
 
-Twenty-one more — eleven that read, two of them a repository's changes, and
-ten that change a branch or a repository — registered wherever the company
-hosts its git repositories in the engine (`code.native`; see [Code
+Twenty-four more — eleven that read, two of them a repository's changes, and
+thirteen that change a branch, a repository or a change — registered wherever
+the company hosts its git repositories in the engine (`code.native`; see [Code
 Host](../concepts/code-host.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
 `git` role reaches both through the nodes that do. They are offered on the
@@ -328,21 +328,22 @@ terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same twenty-one, so an operator's own
+and the operator catalogue serves the same twenty-four, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
 person as the human seat they hold. The eleven reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
-them, and the operator catalogue records no call to one. The ten writes each
-deliver to the code host, so a turn woken about work on a repository that
-answered by moving a branch delivered; no worker is ever handed one, since it
+them, and the operator catalogue records no call to one. The thirteen writes
+each deliver to the code host, so a turn woken about work on a repository that
+answered by moving a branch or opening a change delivered; no worker is ever
+handed one, since it
 would write with its parent's grant; and every call to one on the operator
-catalogue is recorded as any write is. A seat is offered the ten only where
+catalogue is recorded as any write is. A seat is offered the thirteen only where
 its `role.code.access` is `full_access`: below it, no repository's grant lets
 the seat change anything ([Who may read and
 push](../concepts/code-host.md#who-may-read-and-push)), so a `read_only` or
 `review` seat — `read_only` is what a seat that sets none runs at — is offered
 the eleven reads alone, and its prompt says nothing about changing code,
-rather than carrying ten tools it would be refused on every repository on
+rather than carrying thirteen tools it would be refused on every repository on
 every round.
 
 | Tool | Description |
@@ -368,6 +369,9 @@ every round.
 | `code_delete_repo` | A repository deleted, restorable until its purge |
 | `code_restore_repo` | A deleted repository brought back as it was, before its purge |
 | `code_protect_branch` | The protection of one `pattern` (`refs/heads/<glob>`, `refs/tags/<glob>`) set — `direct_push` (`persons`, as when it is left out, or `none`), `allow_force` and `allow_delete`, whole — or taken away (`remove`); and a branch's [merge gate](../concepts/code-host.md#merge-gates) changed a field at a time — `merge_by`, `approvals`, `approvals_unless`, `human_paths`, `checks`, `landing`, `owners_approve`, `delete_source`, `auto_revert`, `agents_edit_checks`, each replacing that field and the rest kept — or taken away (`remove_gate`). It answers the rule as it now stands. A seat tightens a protection and only a person loosens one ([Who may change a protection](../concepts/code-host.md#who-may-change-a-protection)) |
+| `code_open_change` | A [change](../concepts/code-host.md#changes) opened: a `branch` proposed into a `target` (the repository's default branch when left out), with a `title`, a `body`, as a `draft` or not, carrying a work item — the turn's own unless `work_item` names another, by a native item's key (`ENG-42`), any tracker's identity (`<backend>:<id>`) or `none` — and, once it is open, asking the `reviewers` it names in a second write; an ask that did not finish leaves the change open and says why (`reviewers_not_asked`). It answers the change's reference (`web!42`) and its `version` |
+| `code_update_change` | One thing about a change a call, held to the `version` the caller read (`expected_version`): what it says — any of `title`, `body` and `work_item` together — or `draft` (a draft, or ready for review), or its `target` |
+| `code_close_change` | A change closed without merging it (`reason`), or with `reopen` a closed one opened again at its branch's head — held to `expected_version` as an update is |
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
