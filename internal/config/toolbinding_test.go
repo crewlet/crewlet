@@ -132,8 +132,11 @@ func TestTheSeatsCredentialIsBoundToEveryServerThatReadsIt(t *testing.T) {
 	headers := remote("tracker", "https://mcp.example.com/")
 	headers.SeatCredentials = []config.SeatCredential{{Kind: "slack", Key: "Authorization", Prefix: "Bearer "}}
 	cfg := &config.Company{
-		Name:       "acme",
-		MCPServers: []config.MCPServer{stdio("chat", "npx", "-y", "slack-mcp-server"), headers},
+		Name: "acme",
+		// THE ENGINE HOLDS SLACK'S CREDENTIALS here (D4b), so the binding is
+		// the name it seals them under.
+		Integrations: config.Integrations{Slack: &config.Slack{}},
+		MCPServers:   []config.MCPServer{stdio("chat", "npx", "-y", "slack-mcp-server"), headers},
 		Roles: []config.Role{
 			{Name: "Engineer", Handle: "swe", MCPEnv: map[string]map[string]string{
 				"chat":    {"SLACK_MCP_XOXB_TOKEN": "${SOMETHING_ELSE}", "SLACK_MCP_ADD_MESSAGE_TOOL": "true"},
@@ -178,5 +181,48 @@ func TestUnboundSeatServersAreTheOnesThatActAsNobody(t *testing.T) {
 		if got := cfg.UnboundSeatServers(kind); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: unbound %v, want %v", kind, got, want)
 		}
+	}
+}
+
+// EXTERNAL CREDENTIALS STAY WHERE THE SEAT NAMES THEM (D4b): a company that
+// does not provision an integration hands its servers the seat's own
+// position (a Mattermost bot token), and a server reading a credential the
+// seat names only in its mcp_env keeps that value; the engine binds no name it
+// never seals.
+func TestAnExternalCredentialIsBoundFromWhereTheSeatNamesIt(t *testing.T) {
+	t.Parallel()
+	on := true
+	cfg := &config.Company{
+		Name: "acme",
+		Integrations: config.Integrations{
+			Mattermost: &config.Mattermost{Enabled: true},
+			Datadog:    &config.Datadog{},
+		},
+		MCPServers: []config.MCPServer{
+			stdio("mm", "mcp-server-mattermost"),
+			remote("dd", "https://mcp.datadoghq.com/v1/mcp"),
+		},
+		Roles: []config.Role{{
+			Name: "SRE", Handle: "sre",
+			MCPEnv: map[string]map[string]string{"dd": {"DD_APPLICATION_KEY": "${SRE_OWN_DD_KEY}"}},
+			Integrations: config.RoleIntegrations{
+				Mattermost: &config.RoleMattermost{Enabled: &on, BotToken: "${SRE_MM_TOKEN}"},
+				Datadog:    &config.RoleDatadog{Enabled: &on},
+			},
+		}},
+	}
+	if mode := cfg.SeatCredentialMode("mattermost"); mode != config.SeatCredentialExternal {
+		t.Fatalf("the fixture's Mattermost is %q, want external", mode)
+	}
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sre := o.AgentSeatByHandle("sre")
+	if got := sre.MCPEnv["mm"]["MATTERMOST_TOKEN"]; got != "${SRE_MM_TOKEN}" {
+		t.Errorf("the Mattermost server reads %q, want the seat's own bot token", got)
+	}
+	if got := sre.MCPEnv["dd"]["DD_APPLICATION_KEY"]; got != "${SRE_OWN_DD_KEY}" {
+		t.Errorf("the Datadog server reads %q, want the seat's own value left alone", got)
 	}
 }

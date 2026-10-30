@@ -181,24 +181,14 @@ func ManifestJSON(roleName, handle, base string) (string, error) {
 	return string(out), nil
 }
 
-// AuthorizeURL is where the operator clicks to install one app.
+// AuthorizeURL is where a person approves one app's install, carrying a
+// state the caller made.
 //
-// The HANDLE rides as `state`, because the landing page has to say which
-// agent an install belongs to — the code Slack returns names nothing, and an
-// operator provisioning seven agents would otherwise be pasting seven
-// indistinguishable codes.
-func AuthorizeURL(clientID, base, handle string) string {
-	return AuthorizeURLWithState(clientID, base, handle)
-}
-
-// AuthorizeURLWithState is [AuthorizeURL] carrying a state the caller made.
-//
-// The reconcile loop's install link carries a SEALED state rather than the
-// bare handle: its landing exchanges the code and seals a bot token into a
-// seat, so the state is what proves the redirect belongs to an install this
-// engine began, for that seat, recently. The CLI's landing only prints a
-// code, which is why the handle is enough there.
-func AuthorizeURLWithState(clientID, base, state string) string {
+// The state is what proves the redirect belongs to an install this engine
+// began, for that seat, recently ([Installs.Link] signs it): the landing
+// exchanges the code and seals a bot token into a seat, so nothing else may
+// ride there.
+func AuthorizeURL(clientID, base, state string) string {
 	params := url.Values{
 		"client_id":    {clientID},
 		"scope":        {strings.Join(BotScopes, ",")},
@@ -206,28 +196,4 @@ func AuthorizeURLWithState(clientID, base, state string) string {
 		"state":        {state},
 	}
 	return "https://slack.com/oauth/v2/authorize?" + params.Encode()
-}
-
-// Fingerprint is a stable digest of a manifest, for skipping an update that
-// would change nothing.
-//
-// The manifest methods are Slack's slowest rate class, and a company of
-// seven agents re-running provisioning issues seven of them back to back —
-// so a re-run that pushes an unchanged manifest spends minutes waiting out
-// 429s to achieve nothing.
-// It RETURNS THE ERROR rather than an empty string. "" is the fingerprint of
-// a hand-adopted app — one an operator created in the console, whose ledger
-// entry carries no recorded hash — so an encode failure that answered ""
-// compared equal to it and the seat was reported KEPT while nothing had been
-// pushed. Unreachable today, since Manifest builds only marshalable types,
-// but the invariant was written nowhere and every call site already returns
-// an error.
-func Fingerprint(manifest map[string]any) (string, error) {
-	// json.Marshal sorts map keys, so the encoding is stable across runs
-	// and across Go versions — which is the whole requirement.
-	encoded, err := json.Marshal(manifest)
-	if err != nil {
-		return "", fmt.Errorf("slack: encode manifest for fingerprint: %w", err)
-	}
-	return digest(encoded), nil
 }

@@ -94,7 +94,7 @@ func InstallLink(seat SeatApp, base, state string) string {
 	if strings.TrimSpace(seat.ClientID) == "" || strings.TrimSpace(base) == "" {
 		return ""
 	}
-	return AuthorizeURLWithState(seat.ClientID, base, state)
+	return AuthorizeURL(seat.ClientID, base, state)
 }
 
 // CompleteSeatInstall exchanges the code a person's install returned and
@@ -175,6 +175,11 @@ type Observed struct {
 	// BotUserID and BotName are who the working token authenticates as.
 	BotUserID string
 	BotName   string
+
+	// AppID is the app the working token belongs to, read from Slack where
+	// the ledger names none: an app made before the loop managed Slack is
+	// found this way and adopted, never created a second time.
+	AppID string
 }
 
 // ObserveSeat reads one seat's app and token back from Slack.
@@ -222,6 +227,12 @@ func ObserveSeat(
 		return out, err
 	}
 	out.TokenWorks, out.BotUserID, out.BotName = true, id.UserID, id.UserName
+	out.AppID = seat.AppID
+	if seat.AppID == "" && id.AppID != "" {
+		// ADOPTED, NOT CREATED: the token works and names its app, so
+		// the app exists whatever the ledger says.
+		out.AppExists, out.AppID = true, id.AppID
+	}
 	return out, nil
 }
 

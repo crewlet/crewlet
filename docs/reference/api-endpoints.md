@@ -421,7 +421,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
-| `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
+| `GET` | `/webhooks/slack-oauth` | OAuth install landing: finishes an install the Agents tab began |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
 | `POST` | `/webhooks/github/{handle}` | The same route addressed to one seat, which is where that seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) delivers |
 | `GET` | `/webhooks/github-app` | Landing page for the per-agent GitHub App flow: converts the one-time creation code, or reports an install (see [below](#get-webhooksgithub-app)) |
@@ -3433,12 +3433,12 @@ renders a form from, so leaving out a seat with no app yet would leave an
 operator no way to give it one. Human seats are excluded, because a person's
 Slack account is not something this engine holds a token for.
 
-**It does not create the apps.** That goes through Slack's app-manifest API,
-which authenticates with a configuration token Slack issues only by hand and
-which an organisation may decline to allow at all, so
-[`crewlet slack provision`](cli.md) remains the automated path where those
-tokens are available. What this surface does is make a hand-created app usable
-without one: it takes the two values Slack shows on the app's own page and
+**Without an app configuration token it does not create the apps.** That goes
+through Slack's app-manifest API, which authenticates with a configuration
+token Slack issues only by hand and which an organisation may decline to allow
+at all. With one (the `app_config_token` field), the reconcile loop creates
+and keeps every agent's app. Without one, this surface makes a hand-created
+app usable: it takes the two values Slack shows on the app's own page and
 seals them.
 
 #### GitHub: the app the engine writes
@@ -9633,7 +9633,7 @@ Receives Slack Events API payloads for a specific agent (identified by handle). 
 
 ### `GET /webhooks/slack-oauth`
 
-The OAuth install landing page for [`crewlet slack provision`](../integrations/slack.md). Every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
+The OAuth install landing every agent's Slack app redirects to. An install begun with **Install** on the Slack integration's Agents tab carries a `state` the engine signed (the seat, its app, a single-use nonce and a 15-minute expiry): the page verifies and spends it, exchanges the `code` for the bot token, refuses a token that belongs to another agent's app, and seals it under the seat's own name. A link used twice, edited or expired is refused with what to do instead, and neither the code nor the token is ever shown. An install made from the app's own settings page carries no state, and the page says where to copy the bot token. A link from the retired `crewlet slack provision` is answered `410` with where installs are made now. Unauthenticated by design, since a browser redirect carries no engine credential. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
 
 ### `/webhooks/github`
 

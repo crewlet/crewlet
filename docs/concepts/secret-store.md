@@ -439,10 +439,9 @@ follows the route: the node's `api`, or the command's own `provision` written
 directly. Who ran the command is what the row's author and credential say,
 either way.
 
-`crewlet slack provision -secret-store` works identically. Slack's own
-app-configuration token pair is the one credential that does **not** go here:
-it is the operator's, not the company's, and it lives in the
-[app ledger](../integrations/slack.md#the-ledger-slack-appsjson) beside the company file.
+Slack's app configuration token goes here too, as one value
+(`SLACK_APP_CONFIG_TOKEN`): its refresh token works once, so the engine seals
+each rotated pair back under that name before it uses it.
 
 Where it pays off most is a credential the third-party app shows **once**. Every third-party app
 here returns a token's value once and never again — so the recorded copy *is*
@@ -574,7 +573,7 @@ node cannot do is start with no keyring at all: every node needs one — see
 The **environment stays the bootstrap path**, and it is a perfectly good place to keep credentials if your platform already does — a Kubernetes `Secret` projected as env, systemd's `EnvironmentFile=`, Compose's `env_file:`. A node whose store is empty resolves everything from the environment and runs normally. What is no longer true is that a fleet *has* to work that way.
 
 > **Provisioner-minted credentials work fleet-wide too.** `crewlet gitlab
-> provision`, `crewlet slack provision` and the rest MINT credentials, and
+> provision` and the rest MINT credentials, and
 > `-secret-store` records them where every node reads them — through a
 > running node's API, or, with the node **stopped**, in the fleet's store
 > itself, through the node's own broker or the external one. So a first
