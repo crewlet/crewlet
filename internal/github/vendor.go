@@ -44,14 +44,6 @@ func (vendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindGitHub,
 		Credentials: []string{FieldAppKey, FieldAppWebhookSecret},
-		// THE TOKEN THE SEAT ACTS WITH, issued at use and never sealed
-		// ([Issuer]); the company's GitHub server reads it as a bearer.
-		Tool: &seataccess.ToolBinding{
-			Server: ToolServer,
-			Keys: []seataccess.BoundKey{{
-				Field: FieldAppToken, Header: "Authorization", Prefix: "Bearer ",
-			}},
-		},
 		Lanes: []seataccess.LaneSpec{{
 			Lane:        seataccess.LaneGitHub,
 			Permissions: PermissionSpecs(),
@@ -65,9 +57,6 @@ func (vendor) Catalog() seataccess.Catalog {
 		}},
 	}
 }
-
-// ToolServer is the `mcp_servers` entry a seat's GitHub token is bound to.
-const ToolServer = "github"
 
 // PermissionSpecs is the catalogue as the access contract carries it.
 func PermissionSpecs() []seataccess.PermissionSpec {
@@ -110,7 +99,8 @@ func (vendor) Steps(
 	case seataccess.OpEnable:
 		add(seataccess.Step{
 			Verb: seataccess.VerbEnable, By: seataccess.ByCrewlet,
-			Text: "Unsuspend " + name + "'s installation",
+			Text: "Turn " + name + "'s installation back on",
+			Note: "A suspended installation is unsuspended; one that is not installed waits for a person to install it.",
 		})
 	case seataccess.OpLevel:
 		levelSteps(want, have, add)
@@ -128,6 +118,11 @@ func (vendor) Steps(
 			})
 		}
 	case seataccess.OpMint:
+		if have.Credential != nil {
+			// SEALED WHEN THE APP WAS CREATED, outside any sync: there
+			// is nothing to mint, and tokens are issued at use.
+			break
+		}
 		add(seataccess.Step{
 			Verb: seataccess.VerbCreate, By: seataccess.ByYou,
 			Text: "Delete " + name + "'s app at GitHub and create it again",
@@ -139,15 +134,20 @@ func (vendor) Steps(
 			Text: "Suspend " + name + "'s installation",
 			Note: "The app, its key and its installation are kept, so turning it back on needs no one.",
 		})
+	case seataccess.OpRevoke:
+		// NOTHING TO REVOKE. Off suspends the installation, and the app's
+		// key is what turns it back on: GitHub issues a key once, so
+		// clearing it would make off a removal. Tokens are issued at use
+		// and refused while the installation is suspended.
 	case seataccess.OpRemove:
 		add(seataccess.Step{
 			Verb: seataccess.VerbRemove, By: seataccess.ByCrewlet,
-			Text: "Uninstall " + name + "'s app and clear its sealed key",
+			Text: "Uninstall " + name + "'s app",
 		})
 		add(seataccess.Step{
 			Verb: seataccess.VerbRemove, By: seataccess.ByYou,
 			Text: "Delete the app registration at GitHub",
-			Note: "GitHub offers no API for deleting an app.",
+			Note: "GitHub offers no API for deleting an app. Its sealed key is cleared once GitHub reports it deleted.",
 		})
 	}
 	return steps
@@ -287,25 +287,35 @@ func (s *session) observed(
 	if seat.AppID != 0 {
 		out.AccountID = strconv.FormatInt(seat.AppID, 10)
 	}
-	if record != nil {
-		out.Credential = record.Credential
-		if record.Account != nil {
-			out.CreatedAt = record.Account.CreatedAt
+	if record != nil && record.Account != nil {
+		out.CreatedAt = record.Account.CreatedAt
+	}
+	// THE KEY IS SEALED BY THE APP'S CREATION, not by a sync, so it is
+	// reported where it resolves: the ledger's record of it is kept where
+	// it has one, for when it was sealed.
+	if strings.TrimSpace(seat.Key) != "" {
+		out.Credential = &seataccess.Credential{
+			Variable: SeatVar(seat.Handle, FieldAppKey),
+			Others:   []string{SeatVar(seat.Handle, FieldAppWebhookSecret)},
+		}
+		if record != nil && record.Credential != nil {
+			out.Credential = record.Credential
 		}
 	}
-	if strings.TrimSpace(seat.Key) == "" {
-		out.Credential = nil
-	} else if out.Credential == nil {
-		out.Credential = &seataccess.Credential{Variable: SeatVar(seat.Handle, FieldAppKey)}
-	}
-	if !obs.AppExists || obs.Installation == nil {
-		// NOT INSTALLED reads as no account, so the plan draws the
-		// create, whose first step is already done and whose second is
-		// the install a person still owes.
+	if !obs.AppExists {
+		// NO APP, or GitHub reports it deleted: the plan draws the create.
 		return out
 	}
+	// THE APP EXISTS, so the account does, installed or not. Reported as
+	// gone, an app somebody merely uninstalled would have its sealed key
+	// cleared with the record, and GitHub issues that key once.
+	out.Exists, out.Ceiling = true, catalogueOnly(obs.Registered)
 	installation := obs.Installation
-	out.Exists = true
+	if installation == nil {
+		// NOT INSTALLED: off, and whose doing the ledger says (the sync reads
+		// it there); back on is an install a person makes.
+		return out
+	}
 	out.Enabled = !installation.Suspended()
 	if !out.Enabled {
 		out.DisabledBy = seataccess.DisabledByHand
@@ -314,7 +324,6 @@ func (s *session) observed(
 		}
 	}
 	out.Permissions = effective(Permissions(want.Permissions), installation.Permissions)
-	out.Ceiling = catalogueOnly(obs.Registered)
 	out.Scope = covered(seat.Repos, obs)
 	return out
 }
@@ -372,14 +381,18 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 		if err != nil {
 			return seataccess.StepResult{}, err
 		}
+		res := s.adopted(seat, in.Record)
 		if obs.Installation == nil {
-			return seataccess.StepResult{Waiting: s.installWait(seat)}, nil
+			res.Waiting = s.installWait(seat)
+			return res, nil
 		}
-		seat.InstallationID = obs.Installation.ID
-		if err := UnsuspendSeat(ctx, s.opts, seat); err != nil {
-			return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbEnable)
+		if obs.Installation.Suspended() {
+			seat.InstallationID = obs.Installation.ID
+			if err := UnsuspendSeat(ctx, s.opts, seat); err != nil {
+				return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbEnable)
+			}
 		}
-		return seataccess.StepResult{}, nil
+		return res, nil
 	case seataccess.OpLevel:
 		return s.applyLevel(ctx, in, seat)
 	case seataccess.OpScope:
@@ -400,6 +413,9 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 		}
 		return seataccess.StepResult{}, nil
 	case seataccess.OpMint:
+		if strings.TrimSpace(seat.Key) != "" {
+			return s.adopted(seat, in.Record), nil
+		}
 		return seataccess.StepResult{Waiting: &seataccess.Waiting{
 			ActionURL: ManageURL(s.opts.WebBase, s.opts.Org, seat.Slug),
 			Detail: handle + "'s app key is not sealed, and GitHub issues it once: delete " +
@@ -475,41 +491,50 @@ func (s *session) applyLevel(ctx context.Context, in seataccess.ApplyInput, seat
 	return seataccess.StepResult{Waiting: &seataccess.Waiting{ActionURL: wait.URL, Detail: wait.Detail}}, nil
 }
 
-// applyRemove uninstalls, then waits for the registration to be deleted.
+// applyRemove uninstalls, then waits for a person to delete the
+// registration, and hands the sealed key back for clearing once GitHub
+// reports it deleted.
+//
+// THE KEY OUTLIVES THE UNINSTALL until then, because it is the only way to
+// ask GitHub whether the registration is gone: cleared first, the wait could
+// never be confirmed, and the tab would ask a person to delete an app nobody
+// could check on. An uninstalled app's key mints nothing.
 func (s *session) applyRemove(ctx context.Context, in seataccess.ApplyInput, seat SeatApp) (seataccess.StepResult, error) {
-	manage := ManageURL(s.opts.WebBase, s.opts.Org, seat.Slug)
+	gone := seataccess.StepResult{Gone: true, Revoked: []string{FieldAppKey, FieldAppWebhookSecret}}
+	if seat.AppID == 0 || strings.TrimSpace(seat.Key) == "" {
+		return gone, nil
+	}
+	obs, err := s.observe(ctx, seat, in.Step.Index > 0)
+	if err != nil {
+		return seataccess.StepResult{}, err
+	}
+	if !obs.AppExists {
+		return gone, nil
+	}
 	if in.Step.Index == 0 {
-		if seat.AppID != 0 && strings.TrimSpace(seat.Key) != "" {
-			obs, err := s.observe(ctx, seat, false)
-			if err != nil {
-				return seataccess.StepResult{}, err
-			}
-			if obs.Installation != nil {
-				seat.InstallationID = obs.Installation.ID
-				if err := UninstallSeat(ctx, s.opts, seat); err != nil {
-					return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbRemove)
-				}
+		if obs.Installation != nil {
+			seat.InstallationID = obs.Installation.ID
+			if err := UninstallSeat(ctx, s.opts, seat); err != nil {
+				return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbRemove)
 			}
 		}
-		return seataccess.StepResult{Revoked: []string{FieldAppKey, FieldAppWebhookSecret}}, nil
-	}
-	if seat.AppID == 0 {
-		return seataccess.StepResult{Gone: true}, nil
-	}
-	// THE KEY IS CLEARED BY NOW, so the registration cannot be asked
-	// after; a person confirms the delete with Done, check again, and the
-	// seat-app reconcile clears the record once GitHub reports the app
-	// gone.
-	if strings.TrimSpace(seat.Key) != "" {
-		if obs, err := s.observe(ctx, seat, true); err == nil && !obs.AppExists {
-			return seataccess.StepResult{Gone: true}, nil
-		}
+		return seataccess.StepResult{}, nil
 	}
 	return seataccess.StepResult{Waiting: &seataccess.Waiting{
-		ActionURL: manage,
+		ActionURL: ManageURL(s.opts.WebBase, s.opts.Org, seat.Slug),
 		Detail: "Delete " + in.Seat.Handle + "'s app registration at GitHub: " +
 			ManagePath() + ". GitHub offers no API for it",
 	}}, nil
+}
+
+// adopted is a step result that records the seat's app in the ledger where
+// it has no account yet: the app was created by a person's manifest, outside
+// any sync.
+func (s *session) adopted(seat SeatApp, record *seataccess.Record) seataccess.StepResult {
+	if seat.AppID == 0 || (record != nil && record.Account != nil && record.Account.State != seataccess.AccountClosed) {
+		return seataccess.StepResult{}
+	}
+	return seataccess.StepResult{AccountID: strconv.FormatInt(seat.AppID, 10), Account: seat.Slug}
 }
 
 // observe answers the cached observation, or reads GitHub when there is none

@@ -35,9 +35,11 @@ func TestSlackCatalog(t *testing.T) {
 	if !slices.Equal(cat.Credentials, []string{"BOT_TOKEN", "SIGNING_SECRET", "CLIENT_SECRET", "CLIENT_ID"}) {
 		t.Errorf("credentials = %v", cat.Credentials)
 	}
-	if cat.Tool == nil || cat.Tool.Server != "slack" || cat.Tool.Keys[0].Field != "BOT_TOKEN" ||
-		cat.Tool.Keys[0].Env != "SLACK_MCP_XOXB_TOKEN" {
-		t.Errorf("tool = %+v", cat.Tool)
+	// ONE TOKEN, TWO READERS: the seat's Slack tool server is handed the
+	// sealed bot token the transport reads (design 12.1).
+	if tool := seataccess.ToolFor(seataccess.LaneSlack); tool == nil || tool.Server != "slack" ||
+		tool.Keys[0].Field != slack.FieldBotToken || tool.Keys[0].Env != slack.ToolTokenEnv {
+		t.Errorf("tool = %+v", tool)
 	}
 	spec, _ := cat.Lane(seataccess.LaneSlack)
 	if spec.Levels || spec.Scoped || !spec.Rotatable || spec.EnabledBy != seataccess.ByYou ||
@@ -65,6 +67,9 @@ func TestSlackStepsPerOp(t *testing.T) {
 		"create then install":   {op: seataccess.OpCreate, out: []drawn{{seataccess.VerbCreate, crewlet}, {seataccess.VerbApprove, you}}},
 		"back on is an install": {op: seataccess.OpEnable, out: []drawn{{seataccess.VerbApprove, you}}},
 		"a lost token is an install": {op: seataccess.OpMint, out: []drawn{{seataccess.VerbApprove, you}}},
+		"a sealed token mints nothing": {op: seataccess.OpMint,
+			have: seataccess.Observed{Credential: &seataccess.Credential{Variable: "SLACK_BOT_TOKEN_SWE"}}},
+		"the credential is cleared once off": {op: seataccess.OpRevoke, out: []drawn{{seataccess.VerbRevoke, crewlet}}},
 		"a scope removed at Slack needs a reinstall": {op: seataccess.OpLevel,
 			have: seataccess.Observed{Level: missing},
 			out:  []drawn{{seataccess.VerbRestore, crewlet}, {seataccess.VerbApprove, you}}},
@@ -305,11 +310,11 @@ func TestTheInstallWaitsUntilTheTokenWorks(t *testing.T) {
 // clearing; only off records the disable.
 func TestOffAndRotateRevokeTheBotToken(t *testing.T) {
 	t.Parallel()
-	for _, op := range []seataccess.Op{seataccess.OpDisable, seataccess.OpRotate} {
+	for _, op := range []seataccess.Op{seataccess.OpDisable, seataccess.OpRevoke, seataccess.OpRotate} {
 		w := newSlackWorld(t).installed()
 		w.ws.replies["auth.revoke"] = `{"ok":true,"revoked":true}`
 		res, err := slackApply(t, w.open(t), op, 0, appRecord(seataccess.AccountActive))
-		if err != nil || !slices.Equal(res.Revoked, []string{"BOT_TOKEN"}) || res.Disabled != (op == seataccess.OpDisable) {
+		if err != nil || !slices.Equal(res.Revoked, []string{"BOT_TOKEN"}) || res.Disabled != (op != seataccess.OpRotate) {
 			t.Errorf("%s: %+v, %v", op, res, err)
 		}
 		if token := lastToken(w.ws); token != "xoxb-swe" {
@@ -392,6 +397,15 @@ func TestSlackObserve(t *testing.T) {
 		if got := observe(t, dead, state); !got.Exists || got.Enabled || got.DisabledBy != want {
 			t.Errorf("ledger %s: %+v", state, got)
 		}
+	}
+
+	// AN APP NOBODY HAS INSTALLED YET is an account that is off, never one
+	// that is gone: gone clears its once-served OAuth client.
+	fresh := newSlackWorld(t).installed()
+	delete(fresh.sealed, "SLACK_BOT_TOKEN_SWE")
+	fresh.exportsItsOwnManifest(t)
+	if got := observe(t, fresh, seataccess.AccountActive); !got.Exists || got.Enabled || got.DisabledBy != "" || got.Credential != nil {
+		t.Errorf("an app not installed: %+v", got)
 	}
 
 	// AN APP SLACK NO LONGER HAS is no account.

@@ -41,9 +41,11 @@ func TestTheConfigPermissionKeysAreGitHubsCatalogue(t *testing.T) {
 	if !slices.Equal(admin, []string{"contents", "workflows"}) || !slices.Equal(writeOnly, []string{"workflows"}) {
 		t.Errorf("administration %v, write only %v", admin, writeOnly)
 	}
-	if cat.Tool == nil || cat.Tool.Server != "github" || cat.Tool.Keys[0].Field != github.FieldAppToken ||
-		cat.Tool.Keys[0].Header != "Authorization" || cat.Tool.Keys[0].Prefix != "Bearer " {
-		t.Errorf("tool binding = %+v", cat.Tool)
+	// THE TOKEN THE SEAT ACTS WITH is the one the issuer answers.
+	tool := seataccess.ToolFor(seataccess.LaneGitHub)
+	if tool == nil || tool.Server != "github" || tool.Keys[0].Field != github.FieldAppToken ||
+		tool.Keys[0].Header != "Authorization" || tool.Keys[0].Prefix != "Bearer " {
+		t.Errorf("tool binding = %+v", tool)
 	}
 	if spec.Rotatable || spec.CreatedBy != seataccess.ByYou || spec.EnabledBy != seataccess.ByCrewlet {
 		t.Errorf("lane = %+v", spec)
@@ -98,6 +100,9 @@ func TestStepsPerOp(t *testing.T) {
 			have: seataccess.Observed{Scope: []string{"acme/backend"}},
 			out:  []drawn{{seataccess.VerbScope, crewlet}, {seataccess.VerbApprove, you}}},
 		"a lost key means a new app": {op: seataccess.OpMint, out: []drawn{{seataccess.VerbCreate, you}}},
+		"a sealed key mints nothing": {op: seataccess.OpMint,
+			have: seataccess.Observed{Credential: &seataccess.Credential{Variable: "GITHUB_APP_KEY_SRE"}}},
+		"off keeps the key": {op: seataccess.OpRevoke},
 		"off suspends":               {op: seataccess.OpDisable, out: []drawn{{seataccess.VerbDisable, crewlet}}},
 		"remove ends with a person": {op: seataccess.OpRemove, out: []drawn{
 			{seataccess.VerbRemove, crewlet}, {seataccess.VerbRemove, you}}},
@@ -413,15 +418,16 @@ func TestCreateWaitsForTheAppAndThenItsInstall(t *testing.T) {
 	}
 }
 
-// REMOVE UNINSTALLS, hands the sealed fields back for clearing, and waits on
-// the registration's deletion, which only a person can make.
+// REMOVE UNINSTALLS, waits on the registration's deletion, which only a
+// person can make, and hands the sealed key back for clearing once GitHub
+// reports the registration gone.
 func TestRemoveUninstallsAndWaitsOnTheRegistration(t *testing.T) {
 	t.Parallel()
 	w := installedSRE(t)
 	w.gh.on("DELETE /app/installations/7", 204, ``)
 	s := w.open(t)
 	res, err := apply(t, s, seataccess.OpRemove, 0, seataccess.Desired{}, nil)
-	if err != nil || !slices.Equal(res.Revoked, []string{github.FieldAppKey, github.FieldAppWebhookSecret}) {
+	if err != nil || len(res.Revoked) != 0 || res.Gone {
 		t.Fatalf("uninstall: %+v, %v", res, err)
 	}
 	if !slices.Contains(w.gh.called(), "DELETE /app/installations/7") {
@@ -433,18 +439,46 @@ func TestRemoveUninstallsAndWaitsOnTheRegistration(t *testing.T) {
 	}
 	w.gh.on("GET /app", 404, `{"message":"Integration not found"}`)
 	res, err = apply(t, s, seataccess.OpRemove, 1, seataccess.Desired{}, nil)
-	if err != nil || !res.Gone {
+	if err != nil || !res.Gone || !slices.Equal(res.Revoked, []string{github.FieldAppKey, github.FieldAppWebhookSecret}) {
 		t.Errorf("a deleted registration: %+v, %v", res, err)
 	}
 }
 
-// A LOST KEY CANNOT BE MINTED AGAIN, so the step waits on a new app.
-func TestALostKeyWaitsOnANewApp(t *testing.T) {
+// AN UNINSTALLED APP IS AN ACCOUNT THAT IS OFF, never one that is gone: gone
+// clears the sealed key, and GitHub issues it once.
+func TestAnUninstalledAppIsOffNotGone(t *testing.T) {
+	t.Parallel()
+	w := installedSRE(t)
+	w.gh.on("GET /app/installations/7", 404, `{"message":"Not Found"}`)
+	w.gh.on("GET /app/installations?per_page=100&page=1", 200, `[]`)
+	obs, err := w.open(t).Observe(t.Context(), seataccess.ObserveInput{Seats: []seataccess.SeatRef{sre}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := obs["sre"][seataccess.LaneGitHub]
+	if !got.Exists || got.Enabled || got.Credential == nil {
+		t.Errorf("an uninstalled app observed %+v", got)
+	}
+	res, err := apply(t, w.open(t), seataccess.OpEnable, 0, seataccess.Desired{Enabled: true}, nil)
+	if err != nil || res.Waiting == nil || !strings.HasSuffix(res.Waiting.ActionURL, "/installations") || res.AccountID != "41" {
+		t.Errorf("back on: %+v, %v", res, err)
+	}
+}
+
+// A LOST KEY CANNOT BE MINTED AGAIN, so the step waits on a new app; a key
+// that resolves is adopted into the ledger.
+func TestMintAdoptsASealedKeyAndWaitsOnALostOne(t *testing.T) {
 	t.Parallel()
 	w := installedSRE(t)
 	res, err := apply(t, w.open(t), seataccess.OpMint, 0, seataccess.Desired{Enabled: true}, nil)
+	if err != nil || res.Waiting != nil || res.AccountID != "41" {
+		t.Errorf("a sealed key: %+v, %v", res, err)
+	}
+	lost := installedSRE(t)
+	lost.env = config.NewResolver(config.MapSource{})
+	res, err = apply(t, lost.open(t), seataccess.OpMint, 0, seataccess.Desired{Enabled: true}, nil)
 	if err != nil || res.Waiting == nil || !strings.HasSuffix(res.Waiting.ActionURL, "/advanced") {
-		t.Errorf("waiting = %+v, %v", res.Waiting, err)
+		t.Errorf("a lost key: %+v, %v", res.Waiting, err)
 	}
 }
 

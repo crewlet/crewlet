@@ -39,12 +39,11 @@ type vendor struct{}
 // not a secret, and nothing else holds it once the app id is the ledger's.
 const FieldClientID = "CLIENT_ID"
 
-// ToolServer is the `mcp_servers` entry a seat's bot token is bound to, and
-// ToolTokenEnv the variable that server reads it from.
-const (
-	ToolServer   = "slack"
-	ToolTokenEnv = "SLACK_MCP_XOXB_TOKEN"
-)
+// ToolTokenEnv is the variable the Slack MCP server this engine documents
+// (docs/integrations/slack.md) reads a seat's bot token from. The binding
+// table that hands it over is the org model's ([seataccess.ToolFor]); this is
+// what that table must say for Slack, and a test holds the two together.
+const ToolTokenEnv = "SLACK_MCP_XOXB_TOKEN"
 
 // Kind implements [seataccess.Vendor].
 func (vendor) Kind() integration.Kind { return integration.KindSlack }
@@ -54,13 +53,6 @@ func (vendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindSlack,
 		Credentials: []string{FieldBotToken, FieldSigningSecret, FieldClientSecret, FieldClientID},
-		// ONE TOKEN, TWO READERS: the transport reads the sealed bot token
-		// directly, and the seat's Slack tool server is handed the same
-		// one, so the two never hold different tokens (design 12.1).
-		Tool: &seataccess.ToolBinding{
-			Server: ToolServer,
-			Keys:   []seataccess.BoundKey{{Field: FieldBotToken, Env: ToolTokenEnv}},
-		},
 		Lanes: []seataccess.LaneSpec{{
 			Lane:      seataccess.LaneSlack,
 			CreatedBy: seataccess.ByCrewlet,
@@ -99,7 +91,13 @@ func (vendor) Steps(
 			Note: "Its bot scopes are " + strings.Join(BotScopes, ", ") + ".",
 		})
 		add(install)
-	case seataccess.OpEnable, seataccess.OpMint:
+	case seataccess.OpEnable:
+		add(install)
+	case seataccess.OpMint:
+		if have.Credential != nil {
+			// SEALED BY THE INSTALL, outside any sync: nothing to mint.
+			break
+		}
 		add(install)
 	case seataccess.OpLevel:
 		add(seataccess.Step{
@@ -115,6 +113,12 @@ func (vendor) Steps(
 			Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
 			Text: "Revoke " + name + "'s bot token",
 			Note: "The app is kept. Turning it back on needs a person to approve the install again.",
+		})
+	case seataccess.OpRevoke:
+		add(seataccess.Step{
+			Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
+			Text: "Clear " + name + "'s sealed bot token",
+			Note: "The app and its OAuth client are kept, so a person can install it again.",
 		})
 	case seataccess.OpRotate:
 		add(seataccess.Step{
@@ -262,28 +266,34 @@ func (s *session) Observe(ctx context.Context, in seataccess.ObserveInput) (seat
 
 // observed is one seat's observation in the contract's terms.
 //
-// THE ACCOUNT IS THERE ONCE AN INSTALL GAVE IT A TOKEN. An app created and
-// never installed has no bot to act as, so it observes as no account and the
-// plan draws the create, whose first step is already done and whose second is
-// the install a person still owes. A token sealed and refused by Slack is an
-// account switched off: by this engine where the ledger says so, by somebody
-// at Slack otherwise (D3).
+// THE ACCOUNT IS THE APP, installed or not: reported as gone, an app somebody
+// merely uninstalled would have its sealed OAuth client cleared with the
+// record, and Slack serves that once. It is ON while its sealed bot token
+// works. A token sealed and refused is an app switched off: by this engine
+// where the ledger says so, by somebody at Slack otherwise (D3). With no
+// token sealed at all, the ledger alone says whose doing that is, which the
+// sync reads there.
 func observed(seat SeatApp, obs Observed, record *seataccess.Record) seataccess.Observed {
 	out := seataccess.Observed{AccountID: seat.AppID, Account: obs.BotName}
 	if record != nil && record.Account != nil {
 		out.CreatedAt = record.Account.CreatedAt
 	}
-	if !obs.AppExists || strings.TrimSpace(seat.BotToken) == "" {
+	if !obs.AppExists {
 		return out
 	}
 	out.Exists, out.Enabled = true, obs.TokenWorks
+	if obs.ManifestRead {
+		out.Level = obs.Diff.Describe()
+	}
+	if strings.TrimSpace(seat.BotToken) == "" {
+		return out
+	}
 	if !out.Enabled {
 		out.DisabledBy = seataccess.DisabledByHand
 		if record != nil && record.Account != nil && record.Account.State == seataccess.AccountDisabled {
 			out.DisabledBy = seataccess.DisabledByCrewlet
 		}
 	}
-	out.Level = obs.Diff.Describe()
 	out.Credential = &seataccess.Credential{
 		Variable: SeatVar(seat.Handle, FieldBotToken),
 		Others:   []string{SeatVar(seat.Handle, FieldSigningSecret)},
@@ -311,13 +321,16 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 			return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbRestore)
 		}
 		return seataccess.StepResult{}, nil
-	case seataccess.OpDisable, seataccess.OpRotate:
+	case seataccess.OpDisable, seataccess.OpRevoke, seataccess.OpRotate:
+		// ONLY THE BOT TOKEN. The OAuth client and the signing secret
+		// stay sealed, because an install a person approves later needs
+		// both, and Slack serves them once.
 		if err := revokeToken(ctx, s.http, seat.BotToken); err != nil {
 			return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbRevoke)
 		}
 		return seataccess.StepResult{
 			Revoked:  []string{FieldBotToken},
-			Disabled: in.Step.Op == seataccess.OpDisable,
+			Disabled: in.Step.Op != seataccess.OpRotate,
 		}, nil
 	case seataccess.OpRemove:
 		return s.applyRemove(ctx, seat)
