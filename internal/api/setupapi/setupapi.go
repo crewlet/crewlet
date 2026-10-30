@@ -410,17 +410,25 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// the connect verb: a rotate seals a credential, and a remove takes an
 	// account away at the vendor.
 	mount("GET /setup/integrations/{kind}/access", authz.ActionSetupRead, s.accessRead)
-	mount("POST /setup/integrations/{kind}/access/plan", authz.ActionSetupRead, s.accessPlan)
+	// THE PLAN IS A READ sent as a POST, so it keeps the read verb and says
+	// it reads.
+	if err := router.Handle("POST /setup/integrations/{kind}/access/plan",
+		authz.Policy{Action: authz.ActionSetupRead, Effect: authz.EffectReads},
+		http.HandlerFunc(s.accessPlan)); err != nil {
+		failures = append(failures, err)
+	}
 	if err := router.Handle("PUT /setup/integrations/{kind}/access", accessSavePolicy(),
 		http.HandlerFunc(s.accessSave)); err != nil {
 		failures = append(failures, err)
 	}
-	mount("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}",
-		authz.ActionSetupConnect, s.accessAct)
+	// A SEAT ACTION ACTS ON THE ACCOUNT ITS PATH NAMES at the vendor (a
+	// rotate, a remove, a restore), so it rewrites.
+	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}",
+		authz.EffectRewrites, s.accessAct)
 	// A SLACK APP'S INSTALL LINK, minted on request and never stored: the one
 	// seat action that answers something other than the tab.
-	mount("POST /setup/integrations/slack/access/seats/{handle}/{lane}/install",
-		authz.ActionSetupConnect, s.accessInstall)
+	post("POST /setup/integrations/slack/access/seats/{handle}/{lane}/install",
+		authz.EffectCreates, s.accessInstall)
 	return errors.Join(failures...)
 }
 

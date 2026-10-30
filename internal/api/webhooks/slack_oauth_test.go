@@ -2,6 +2,7 @@ package webhooks_test
 
 import (
 	"context"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,7 +56,7 @@ func TestTheOAuthLandingSaysWhatWentWrong(t *testing.T) {
 		if res.Code != http.StatusBadRequest {
 			t.Fatalf("%s: got %d, want 400", tc.query, res.Code)
 		}
-		body := res.Body.String()
+		body := html.UnescapeString(res.Body.String())
 		if !strings.Contains(body, tc.says) || !strings.Contains(body, tc.remedy) {
 			t.Errorf("%s: the page does not say %q with the remedy naming %q:\n%s",
 				tc.query, tc.says, tc.remedy, body)

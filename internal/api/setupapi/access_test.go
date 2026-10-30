@@ -241,12 +241,26 @@ func TestASaveIsOneRevisionThenASync(t *testing.T) {
 		t.Errorf("sync = %+v, want datadog on the saved revision, asking nothing", sync)
 	}
 
+	// A HEADER IS A PRECONDITION: the revision its If-Match named is gone,
+	// so the save is refused 412 and writes nothing.
 	stale := s.do(t, http.MethodPut, "/setup/integrations/datadog/access",
 		`{"seats": {"cto": {"datadog": {"enabled": true, "level": "role-std"}}}}`,
 		map[string]string{"If-Match": `"` + base + `"`})
-	if stale.Code != http.StatusConflict ||
+	if stale.Code != http.StatusPreconditionFailed ||
 		decode(t, stale)["error"] != string(httpjson.CodeRevisionAdvanced) {
-		t.Errorf("a save on a revision the fleet left = %d %s", stale.Code, stale.Body)
+		t.Errorf("a save under a stale If-Match = %d %s, want 412", stale.Code, stale.Body)
+	}
+	// A BODY'S REVISION IS THE DOMAIN'S BASE: the same stale revision named
+	// in the body is the domain's 409.
+	body409 := s.do(t, http.MethodPut, "/setup/integrations/datadog/access",
+		`{"revision": "`+base+`", "seats": {"cto": {"datadog": {"enabled": true, "level": "role-std"}}}}`, nil)
+	if body409.Code != http.StatusConflict ||
+		decode(t, body409)["error"] != string(httpjson.CodeRevisionAdvanced) {
+		t.Errorf("a save naming a stale revision in its body = %d %s, want 409",
+			body409.Code, body409.Body)
+	}
+	if s.active(t).ID != after.ID {
+		t.Error("a stale save wrote a revision")
 	}
 }
 

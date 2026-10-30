@@ -69,13 +69,13 @@ func TestTheChatBackendDerivesFromTheVendorPresent(t *testing.T) {
 		// alone would derive Chatlet for it.
 		"a seat's own slack app is a vendor surface with no org block at all": {
 			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n" +
-				"      slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}\n",
+				"      slack: {enabled: true, bot_token: \"${T}\", signing_secret: \"${S}\"}\n",
 			ChatVendor, "the seats' Slack apps",
 		},
 		"a seat's slack app inside a unit counts too": {
 			"name: Acme\nunits:\n  - name: Core\n    channel: core\n    roles:\n" +
 				"      - name: CTO\n        integrations:\n" +
-				"          slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}\n",
+				"          slack: {enabled: true, bot_token: \"${T}\", signing_secret: \"${S}\"}\n",
 			ChatVendor, "the seats' Slack apps",
 		},
 		"a named backend wins over the derivation": {
@@ -182,7 +182,7 @@ func TestTheChatAxisRefusesWhatItCannotResolve(t *testing.T) {
 		// would send an author to a block their document does not have.
 		err = rejects(t, "name: Acme\nchat: {backend: chatlet}\nroles:\n"+
 			"  - name: CEO\n    integrations:\n"+
-			"      slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}\n",
+			"      slack: {enabled: true, bot_token: \"${T}\", signing_secret: \"${S}\"}\n",
 			"chat.backend")
 		if !strings.Contains(err.Error(), "roles[0].integrations.slack") {
 			t.Errorf("refusal = %q, want it to name the seat's own app", err)
