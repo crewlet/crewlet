@@ -2,6 +2,7 @@ package code
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/costlimit"
@@ -66,6 +67,20 @@ var resyncsPerSecond = float64(statelog.LinearizableReadsPerSeatDay) / (24 * tim
 func NewResyncs(now func() time.Time) *costlimit.Limiter {
 	return costlimit.New(costlimit.Rates{PrincipalRate: resyncsPerSecond, PrincipalBurst: ResyncBurst,
 		ScopeRate: resyncsPerSecond, ScopeBurst: ResyncBurst}, now)
+}
+
+// Resyncs is whose re-syncs a CHECK'S BOX draws on — its git's at the code
+// host and its reads at /box/code/ at the git node that answers them — as a
+// [NewResyncs] bucket keys them: the attempt k, on its repository's checks
+// (`check:<repository id>`, the key its transfers share). A check's box runs
+// its repository's checks file, code nobody vouches for as much as a seat's
+// box, and every read it makes is at its check's session, which holds its one
+// commit — so a check that meets its floor short is a file asking for what
+// nobody pushed, and one keyed by its repository holds the dozen checks a
+// push fans out to the one term a coding run gets: nothing a seat's census
+// counts, and nothing a person's clients' term was sized for.
+func (k CheckKey) Resyncs() (scope, principal string) {
+	return "check:" + k.RepoID, k.OID + " " + k.Target + " " + k.Name + " " + strconv.Itoa(k.Attempt)
 }
 
 // NotRejudged is the clause a refusal answered at its floor carries once its

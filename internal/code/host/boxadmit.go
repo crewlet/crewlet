@@ -182,7 +182,7 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 
 	// 2a ITS PLACE IN FLIGHT, before anything is read for it (boxlimit.go).
 	if !s.holdRun(ctx, ref.LaunchID) {
-		b.unavailable("run_busy", runBusySentence)
+		b.unavailable("run_busy", busySentence("this run"))
 		return admission{}, false
 	}
 
@@ -262,7 +262,7 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 	// ANSWERED AT THE RUN'S FLOOR once its re-syncs are spent, saying so.
 	floorNote := ""
 	if spent != nil {
-		floorNote = " " + s.notRejudged(spent)
+		floorNote = " " + s.notRejudged(adm, spent)
 	}
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):

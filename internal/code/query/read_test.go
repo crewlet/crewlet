@@ -556,6 +556,45 @@ func TestASeatPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
 	}
 }
 
+// A READ MADE FOR A CHECK IS ITS ATTEMPT'S TO PAY: a check's box reading, at
+// /box/code/, a commit the git node's copy does not hold looks once at the
+// log's head a read until its attempt's sixteen on the node are spent; then
+// it is answered at the check's session, with no sync at the head, naming
+// the check's re-syncs.
+//
+// Mutation: a read made for a check charged to nobody (resync answering nil
+// for one) — the seventeenth read syncs at the log's head — red.
+func TestACheckPastItsResyncsIsAnsweredAtItsSession(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	counting := &countingCache{Cache: x.f.Nodes()[0].Cache()}
+	s := x.server(0, query.Options{Cache: counting})
+	missing := strings.Repeat("ef", 20)
+	key := code.CheckKey{RepoID: repo, OID: missing, Target: "refs/heads/main", Name: "unit", Attempt: 1}
+	read := func() (bool, error) {
+		t.Helper()
+		counting.take()
+		_, err := s.Read(t.Context(), code.GitQuery{Kind: code.GitTree, RepoID: repo, Check: &key, Home: true,
+			Tree: &code.TreeQuery{Rev: missing}})
+		if !errors.Is(err, code.ErrObjectNotFound) || !strings.Contains(err.Error(), missing) {
+			t.Fatalf("a check's read of %s, which nobody pushed = %v, want ErrObjectNotFound naming it", missing, err)
+		}
+		return slices.Contains(counting.take(), statelog.ReadLinearizable), err
+	}
+	for i := range code.ResyncBurst {
+		if head, _ := read(); !head {
+			t.Fatalf("read %d of the check's %d did not look at the log's head", i+1, code.ResyncBurst)
+		}
+	}
+	if head, err := read(); head || !strings.Contains(err.Error(), "at the position this check was queued at") ||
+		!strings.Contains(err.Error(), "this check's re-syncs are spent until ") {
+		t.Errorf("past its re-syncs the check's read = %v, looking at the head: %v; want it answered at its "+
+			"session, saying so", err, head)
+	}
+}
+
 // gatedObjects is an object store whose reads wait while its gate is shut,
 // counting every read.
 type gatedObjects struct {

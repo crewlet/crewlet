@@ -50,6 +50,19 @@ import (
 // the boxes is granted a slot next, and the spool's one box credential bounds
 // what they hold of the spool together, but neither stops ONE run holding a
 // node's every admission, run-store read and spooled request at once.
+//
+// # A check's box is bounded as a run is
+//
+// A check's box runs its repository's checks file, code nobody vouches for as
+// much as a seat's box: its git's re-syncs — a want its check's session lacks,
+// a request past its bound, the admission's second resolve and its second
+// read of an attempt the stale copy lacks — draw on its ATTEMPT's bucket on
+// its REPOSITORY's checks (code.CheckKey.Resyncs), the same sixteen and the
+// same refill, and past them are answered at its session saying so; and at
+// most MaxRunRequests of the attempt's git requests are in flight on a node.
+// Its reads at /box/code/ pay the same attempt's bucket at the git node that
+// answers them (internal/code/query). Keyed by the repository, the dozen
+// checks one push fans out share one term, as their transfers share one turn.
 
 // MaxRunRequests is how many of one coding run's requests may be in flight on
 // one node at once.
@@ -72,6 +85,12 @@ func (s *Server) boxResync(adm admission) *costlimit.Refusal {
 	if !ok {
 		return nil
 	}
+	return s.drawResync(scope, principal)
+}
+
+// drawResync draws one re-sync from principal's bucket on scope and scope's,
+// counted by outcome (crewlet.code.box.resyncs).
+func (s *Server) drawResync(scope, principal string) *costlimit.Refusal {
 	refused := s.boxResyncs.Take(scope, principal, 1)
 	if s.o.Metrics != nil {
 		outcome := "taken"
@@ -83,17 +102,19 @@ func (s *Server) boxResync(adm admission) *costlimit.Refusal {
 	return refused
 }
 
-// notRejudged is the clause a box's answer at its run's floor carries: the
-// run's re-syncs, or its seat's, spent until when.
-func (s *Server) notRejudged(spent *costlimit.Refusal) string {
-	return code.NotRejudged(spent, "this run's", "this seat's", s.now())
+// notRejudged is the clause a box's answer at its floor carries: its run's
+// re-syncs or its seat's — a check's, or its repository's checks' — spent
+// until when.
+func (s *Server) notRejudged(adm admission, spent *costlimit.Refusal) string {
+	_, _, principal, scope := adm.floorWords()
+	return code.NotRejudged(spent, principal, scope, s.now())
 }
 
-// wantNotAtFloor answers a box's fetch whose want oid its run's floor does not
-// hold, once its run's re-syncs are spent: in upload-pack's own form for a
-// want it cannot serve — `ERR <sentence>`, which git prints as `fatal: remote
-// error: <sentence>` over protocol v0 and v2 alike — having run no git, and
-// logged INFO code_box_resyncs_spent.
+// wantNotAtFloor answers a box's fetch whose want oid its floor does not hold,
+// once its re-syncs are spent: in upload-pack's own form for a want it cannot
+// serve — `ERR <sentence>`, which git prints as `fatal: remote error:
+// <sentence>` over protocol v0 and v2 alike — having run no git, and logged
+// INFO code_box_resyncs_spent.
 func (s *Server) wantNotAtFloor(w http.ResponseWriter, r *http.Request, adm admission, oid string,
 	spent *costlimit.Refusal, command string, start time.Time) {
 
@@ -103,8 +124,9 @@ func (s *Server) wantNotAtFloor(w http.ResponseWriter, r *http.Request, adm admi
 	out := newSink(w, "application/x-git-upload-pack-result", s.now)
 	defer out.End()
 	w.Header().Set("Cache-Control", "no-cache")
-	_, err := out.Write(pktString("ERR " + sentence(fmt.Sprintf("%s is not in %s at the position this run has "+
-		"been shown; it has not been pushed yet, or ask code_resolve %s", oid, adm.name, s.notRejudged(spent))) + "\n"))
+	shown, instead, _, _ := adm.floorWords()
+	_, err := out.Write(pktString("ERR " + sentence(fmt.Sprintf("%s is not in %s at the position %s; %s %s", oid,
+		adm.name, shown, instead, s.notRejudged(adm, spent))) + "\n"))
 	s.finishFetch(w, r, adm.name, command, cache.SyncNone, start, out, err)
 }
 
@@ -138,5 +160,23 @@ func (s *Server) holdRun(ctx context.Context, run string) bool {
 	return true
 }
 
-// runBusySentence is what a box past its requests in flight is told.
-var runBusySentence = fmt.Sprintf("this run has %d requests in flight on this node", MaxRunRequests)
+// How an answer at a check's box's floor names whose re-syncs ran out: its
+// attempt's, or its repository's checks' (code.CheckKey.Resyncs).
+const (
+	checkResyncs  = "this check's"
+	checksResyncs = "its repository's checks'"
+)
+
+// checkHold is the key a check's box's requests in flight are counted under:
+// its attempt on its repository's checks, which no coding run's launch id
+// spells.
+func checkHold(k code.CheckKey) string {
+	scope, principal := k.Resyncs()
+	return scope + " " + principal
+}
+
+// busySentence is what a box past its requests in flight is told: who — "this
+// run", "this check" — holds them.
+func busySentence(who string) string {
+	return fmt.Sprintf("%s has %d requests in flight on this node", who, MaxRunRequests)
+}

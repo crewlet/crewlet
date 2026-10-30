@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -30,7 +31,13 @@ import (
 //     where a check's box is shown no ref (below) — the box's git, 2.40 or
 //     later, speaks v2 by default. On /box/code/, a coding run's token is
 //     refused: the API answers a check's box alone, a coding box reading its
-//     repositories through its clone and its tools.
+//     repositories through its clone and its tools. On its git, then, its
+//     PLACE IN FLIGHT: at most MaxRunRequests of the attempt's requests at
+//     once on this node, past them 503 run_busy, as a coding run's
+//     (boxlimit.go). A /box/code/ read holds none here: AdmitCheck admits it
+//     and returns, and the read runs on the repository's home git node,
+//     whose second look at the log's head draws on the same attempt's
+//     re-syncs there.
 //  4. THE NAME GIVEN — before any read of the code log: the URL's name must
 //     be the one the token names, the name the box was given. A box is
 //     untrusted traffic running a repository's own checks file, and a
@@ -40,7 +47,9 @@ import (
 //  5. THE ATTEMPT — its row ([code.ReadCheckBox]), THE AUTHORITY: read STALE,
 //     and again LINEARIZABLE where the stale copy holds no such attempt — a
 //     copy behind the log may not have applied its queue yet — so no attempt
-//     is called unknown on a stale read. A row that has ENDED is refused at
+//     is called unknown on a stale read while the check's re-syncs last
+//     (code.CheckKey.Resyncs, boxlimit.go; past them it is, saying so). A row
+//     that has ENDED is refused at
 //     once, read however stale: a check's state only rises (the join of its
 //     records), so an ending a copy holds is the attempt's for good, and a
 //     box still running past its attempt's end — the runner lost, the box
@@ -49,14 +58,15 @@ import (
 //     (code.CheckBoxGrace). Unreadable is 503 and never 401.
 //  6. THE REPOSITORY — resolved at the check's session (step 7), and again
 //     LINEARIZABLE where that answer would refuse — not found, gone, or
-//     ANOTHER repository under the name — as a coding box's is: a name a
+//     ANOTHER repository under the name — as a coding box's is, while its
+//     re-syncs last: a name a
 //     rename left redirecting is answered for the repository it redirects to,
 //     under its current name; one now naming another repository than the
 //     attempt's is refused as not given.
 //  7. FRESHNESS — every read of the request at the check's SESSION: the
 //     position its attempt was queued at, which the commit's own push
 //     precedes, so the copy serving the box holds its commit. LINEARIZABLE
-//     for a row naming none.
+//     for a row naming none, a re-sync its bucket pays for.
 //
 // # What the box is shown, and charged as
 //
@@ -149,6 +159,12 @@ func (s *Server) admitCheck(ctx context.Context, w http.ResponseWriter, r *http.
 		b.refuse("protocol_v0", "a check's box fetches over git's protocol v2, which its git speaks by "+
 			"default from 2.26 on: it is shown no ref, and protocol v0 fetches only what a ref names")
 		return admission{}, false
+	case !s.holdRun(ctx, checkHold(ref.Attempt)):
+		// ITS PLACE IN FLIGHT, as a coding run's (boxlimit.go): a check's
+		// file runs code nobody vouches for, and its partial clone's lazy
+		// fetches are its git's own burst.
+		b.unavailable("run_busy", busySentence("this check"))
+		return admission{}, false
 	}
 	return s.checkAdmitted(ctx, b, name, ref)
 }
@@ -165,15 +181,15 @@ func (s *Server) checkAdmitted(ctx context.Context, b boxRefusal, name string, r
 
 	// 5 THE ATTEMPT.
 	key := ref.Attempt
-	row, found, err := s.checkRow(ctx, key)
+	row, found, spent, err := s.checkRow(ctx, key)
 	switch {
 	case err != nil:
 		s.unavailable(b.w, b.r, name, err)
 		return admission{}, false
 	case !found:
 		b.refuse("check_unknown", fmt.Sprintf("attempt %d of check %s of %s is unknown here: its "+
-			"repository's checks were swept or purged with it, or it was never queued", key.Attempt, key.Name,
-			key.OID))
+			"repository's checks were swept or purged with it, or it was never queued%s", key.Attempt, key.Name,
+			key.OID, s.checkNotRejudged(spent)))
 		return admission{}, false
 	case row.State.Ended():
 		b.refuse("check_ended", fmt.Sprintf("attempt %d of check %s of %s has ended (%s): its box keeps no "+
@@ -182,27 +198,38 @@ func (s *Server) checkAdmitted(ctx context.Context, b boxRefusal, name string, r
 	}
 
 	// 7 THE FRESHNESS, which step 6 reads at.
+	// A ROW THAT NAMES NO QUEUED POSITION reads at the log's head, a re-sync
+	// the check's bucket pays for as a floorless run's does (boxlimit.go).
 	adm := admission{name: name, check: &row, spool: boxSpool, fresh: runSession(row.Queued), noRefs: true}
+	if adm.fresh.Level == statelog.ReadLinearizable {
+		if spent = s.boxResync(adm); spent != nil {
+			adm.fresh = statelog.Freshness{Level: statelog.ReadStale}
+		}
+	}
+	adm.linearizable = adm.fresh.Level == statelog.ReadLinearizable
 
-	// 6 THE REPOSITORY, the attempt's.
+	// 6 THE REPOSITORY, the attempt's — judged again at the log's head where
+	// the session's answer would refuse, while the check's re-syncs last.
 	repo, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name, Fresh: adm.fresh})
-	if errors.Is(err, code.ErrRepoNotFound) ||
-		(err == nil && (refuses(repo.Status, auth.GitFetch) || repo.ID != key.RepoID)) {
-		adm.linearizable = true
-		repo, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
-			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+	if !adm.linearizable && spent == nil && (errors.Is(err, code.ErrRepoNotFound) ||
+		(err == nil && (refuses(repo.Status, auth.GitFetch) || repo.ID != key.RepoID))) {
+		if spent = s.boxResync(adm); spent == nil {
+			adm.linearizable = true
+			repo, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
+				Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+		}
 	}
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
-		auth.GitText(b.w, http.StatusNotFound, notFoundSentence(name))
+		auth.GitText(b.w, http.StatusNotFound, notFoundSentence(name)+s.checkNotRejudged(spent))
 		return admission{}, false
 	case err != nil:
 		s.unavailable(b.w, b.r, name, err)
 		return admission{}, false
 	case repo.ID != key.RepoID:
 		b.refuse("not_granted", fmt.Sprintf("%s is no longer the repository this check was queued for "+
-			"(renamed or removed since); its next attempt is given the repository by its current name",
-			strconv.Quote(name)))
+			"(renamed or removed since); its next attempt is given the repository by its current name%s",
+			strconv.Quote(name), s.checkNotRejudged(spent)))
 		return admission{}, false
 	}
 	// ANSWERED UNDER ITS CURRENT NAME, as a coding box's is.
@@ -211,19 +238,40 @@ func (s *Server) checkAdmitted(ctx context.Context, b boxRefusal, name string, r
 }
 
 // checkRow is the attempt key names as its row stands (step 5), read STALE
-// and, where the stale copy holds no such attempt, LINEARIZABLE: found false
-// only once the barrier's copy holds none either. An ending read stale is not
-// read again — the caller refuses it, and an ending is for good.
-func (s *Server) checkRow(ctx context.Context, key code.CheckKey) (code.CheckRow, bool, error) {
+// and, where the stale copy holds no such attempt, LINEARIZABLE while the
+// check's re-syncs last (boxlimit.go): found false only once the barrier's
+// copy holds none either — or, the re-syncs spent, the stale copy's none,
+// answered with the refusal that spent them. A box whose attempt was swept
+// asked in a loop, one barrier a request, until they were bounded. An ending
+// read stale is not read again — the caller refuses it, and an ending is for
+// good.
+func (s *Server) checkRow(ctx context.Context, key code.CheckKey) (code.CheckRow, bool, *costlimit.Refusal,
+	error) {
+
 	for _, level := range []statelog.ReadLevel{statelog.ReadStale, statelog.ReadLinearizable} {
+		if level == statelog.ReadLinearizable {
+			if spent := s.drawResync(key.Resyncs()); spent != nil {
+				return code.CheckRow{}, false, spent, nil
+			}
+		}
 		a, err := s.o.Estate.Read(ctx, code.ReadQuery{Kind: code.ReadCheckBox, CheckBox: &key,
 			Fresh: statelog.Freshness{Level: level}})
 		if err != nil {
-			return code.CheckRow{}, false, err
+			return code.CheckRow{}, false, nil, err
 		}
 		if len(a.Checks) == 1 {
-			return a.Checks[0], true, nil
+			return a.Checks[0], true, nil, nil
 		}
 	}
-	return code.CheckRow{}, false, nil
+	return code.CheckRow{}, false, nil, nil
+}
+
+// checkNotRejudged is the clause a check's box's refusal answered on a copy
+// not read at the log's head carries — its re-syncs spent — or "" where it
+// was read there.
+func (s *Server) checkNotRejudged(spent *costlimit.Refusal) string {
+	if spent == nil {
+		return ""
+	}
+	return " " + code.NotRejudged(spent, checkResyncs, checksResyncs, s.now())
 }

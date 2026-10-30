@@ -78,7 +78,8 @@ type Options struct {
 	// writes draw on the same (host.Options.Resyncs): a SEAT'S read whose
 	// refusal would be judged again at linearizable (step 7) pays its turn's
 	// bucket on its seat, and past it is answered from the copy at the seat's
-	// floor, saying so.
+	// floor, saying so — and so does a read made for a CHECK, its attempt on
+	// its repository's checks (code.CheckKey.Resyncs), keys no seat spells.
 	Resyncs *costlimit.Limiter
 	// Roster is the chart a seat's grant is judged by: the serving node's
 	// CURRENT epoch's, read per read. A nil answer is a node with no chart
@@ -740,7 +741,8 @@ func (r *read) grant() error {
 // node (Options.Resyncs, code.NewResyncs): past it the refusal is answered
 // from the copy at the seat's floor — which holds what the turn has read and
 // this node's own pushes — saying it was not judged again and when the
-// seat's re-syncs come back. A person's and the engine's own are never
+// seat's re-syncs come back. A read made for a check is its attempt's to pay,
+// at the check's session (resync). A person's and the engine's own are never
 // charged.
 func (r *read) objects(ctx context.Context) (found, error) {
 	for {
@@ -768,29 +770,48 @@ func (r *read) objects(ctx context.Context) (found, error) {
 				}
 				continue
 			}
-			note = " " + code.NotRejudged(spent, "this turn's", "this seat's", time.Now())
+			_, _, principal, scope := r.floorWords()
+			note = " " + code.NotRejudged(spent, principal, scope, time.Now())
 		}
 		if err != nil {
 			return found{}, fmt.Errorf("%w%s", err, note)
 		}
 		if note != "" {
-			return found{}, fmt.Errorf("%w: repository %s holds no object %s at the position this turn has "+
-				"read; it has not been pushed yet, or ask code_resolve %s", code.ErrObjectNotFound,
-				r.synced.Repo.Name, absent, note[1:])
+			shown, instead, _, _ := r.floorWords()
+			return found{}, fmt.Errorf("%w: repository %s holds no object %s at the position %s; %s %s",
+				code.ErrObjectNotFound, r.synced.Repo.Name, absent, shown, instead, note[1:])
 		}
 		return found{}, fmt.Errorf("%w: repository %s holds no object %s", code.ErrObjectNotFound,
 			r.synced.Repo.Name, absent)
 	}
 }
 
-// resync draws the read's one second look at the log's head from its seat's
-// bucket on this node, its turn the principal: nil where it is taken, or for
-// a read that is not a seat's.
+// resync draws the read's one second look at the log's head from this node's
+// buckets: a SEAT'S read, its turn on its seat; a read made FOR A CHECK — a
+// check's box's at /box/code/ — its attempt on its repository's checks
+// (code.CheckKey.Resyncs), as the box's git is charged at the code host. Nil
+// where it is taken, or for a read charged to nobody: a person's, and the
+// engine's own on its own account.
 func (r *read) resync() *costlimit.Refusal {
-	if r.q.Asker.Kind != code.PrincipalAgent {
-		return nil
+	switch {
+	case r.q.Check != nil:
+		scope, principal := r.q.Check.Resyncs()
+		return r.s.o.Resyncs.Take(scope, principal, 1)
+	case r.q.Asker.Kind == code.PrincipalAgent:
+		return r.s.o.Resyncs.Take(r.q.Asker.Seat, r.q.Turn, 1)
 	}
-	return r.s.o.Resyncs.Take(r.q.Asker.Seat, r.q.Turn, 1)
+	return nil
+}
+
+// floorWords is how a read answered at its floor names it — what it has read,
+// what it may do instead, and whose bucket ran out, the principal's and the
+// scope's (code.NotRejudged): a seat's turn's, or a check's.
+func (r *read) floorWords() (shown, instead, principal, scope string) {
+	if r.q.Check != nil {
+		return "this check was queued at", "a check's box reads the one commit it checks", "this check's",
+			"its repository's checks'"
+	}
+	return "this turn has read", "it has not been pushed yet, or ask code_resolve", "this turn's", "this seat's"
 }
 
 // answer runs the kind's own git over objs (step 8), memoizing every page it

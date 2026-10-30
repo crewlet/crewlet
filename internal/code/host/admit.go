@@ -21,8 +21,8 @@ import (
 // request's first step. A PERSON is admitted by admit, here; a CODING BOX by
 // admitBox (boxadmit.go), and a CHECK'S BOX by admitBox too, its token telling
 // it to admitCheck (checkadmit.go). Nothing after admission asks which of the
-// three ran but through the admission's own fields and its six accessors —
-// principal, share, refs, boxFloor, resyncKey and engineCommitter — and a box's nil check
+// three ran but through the admission's own fields and its seven accessors —
+// principal, share, refs, boxFloor, resyncKey, floorWords and engineCommitter — and a box's nil check
 // where its pushes raise the run's floor and are left out of the operator
 // audit (TestNothingAfterAdmissionAsksWhichAdmitterRan).
 
@@ -336,14 +336,32 @@ func (a admission) holdRefs(ctx context.Context, runs Runs, cmds []parsedCommand
 
 // resyncKey is whose re-syncs at the log's head the request's linearizable
 // reads draw on (boxlimit.go), as the node's boxes' buckets key them: a
-// CODING BOX's run, by its launch, on its seat — and false for a person's
+// CODING BOX's run, by its launch, on its seat; a CHECK'S BOX's attempt on its
+// repository's checks (code.CheckKey.Resyncs) — its repository's checks file
+// is code nobody vouches for as much as a seat's; and false for a person's
 // request, whose reads of refs are linearizable by right and whose barriers
 // are the census's clients' term.
 func (a admission) resyncKey() (scope, principal string, ok bool) {
-	if a.box == nil {
-		return "", "", false
+	switch {
+	case a.check != nil:
+		scope, principal = a.check.Resyncs()
+		return scope, principal, true
+	case a.box != nil:
+		return a.box.Seat, a.box.Ref.LaunchID, true
 	}
-	return a.box.Seat, a.box.Ref.LaunchID, true
+	return "", "", false
+}
+
+// floorWords is how an answer at a box's floor names it — what it has been
+// shown, what it may do instead, and whose bucket ran out, the principal's
+// and the scope's (code.NotRejudged): a coding run's, or a check's.
+func (a admission) floorWords() (shown, instead, principal, scope string) {
+	if a.check != nil {
+		return "this check was queued at", "a check's box fetches the one commit it checks", checkResyncs,
+			checksResyncs
+	}
+	return "this run has been shown", "it has not been pushed yet, or ask code_resolve", "this run's",
+		"this seat's"
 }
 
 // engineCommitter is the address a commit in this request's pack may be

@@ -2046,9 +2046,11 @@ func Catalogue() []Instrument {
 				"this node — a fetch whose want the node's copy lacked, a " +
 				"request past the bound its admitted row set, a repository " +
 				"its run was given that its run's floor would refuse, a run " +
-				"whose row names no floor — each a barrier on the code log, " +
+				"whose row names no floor — and a check's box's alike, each " +
+				"a barrier on the code log, " +
 				"by `outcome`: `taken`, paid from its run's bucket on its " +
-				"seat (16 at once, one more every 11.5 minutes: the census's " +
+				"seat — a check's attempt's on its repository's checks — " +
+				"(16 at once, one more every 11.5 minutes: the census's " +
 				"125 a seat-day); `spent`, answered at the run's floor " +
 				"instead, the box told what it asked for is not there and " +
 				"when its re-syncs come back. `taken` is the boxes' share of " +
@@ -2059,8 +2061,9 @@ func Catalogue() []Instrument {
 		{
 			Name: CodeBoxInflightRefused, Kind: KindCounter, Unit: UnitCount,
 			Shows: "A coding box's git requests this node answered 503 " +
-				"(`run_busy`) because its run already had 16 in flight here " +
-				"— twice the repositories a run is given. Any is a box " +
+				"(`run_busy`) because its run — or a check's box's attempt " +
+				"— already had 16 in flight here, twice the repositories " +
+				"a run is given. Any is a box " +
 				"sending requests faster than they are served, which its " +
 				"retry absorbs; climbing is one run's loop, which the " +
 				"`code_box_unavailable` line names by its turn and launch.",
