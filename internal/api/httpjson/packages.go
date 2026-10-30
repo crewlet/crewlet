@@ -19,7 +19,7 @@ var goPackages = map[string]bool{
 	"authevents": true, "authz": true, "auxspend": true, "backoff": true,
 	"backup": true, "backuptest": true, "brandformat": true, "builtin": true,
 	"cache": true, "canon": true, "canvasformat": true, "chain": true,
-	"changefeed": true, "edits": true,
+	"changefeed": true, "checkrun": true, "edits": true,
 	"cliagent": true, "clientsource": true,
 	"cliprofile": true, "coalesce": true, "code": true, "codecluster": true, "codefault": true,
 	"codeindex": true, "codetest": true, "codingagent": true, "colleague": true, "collect": true,

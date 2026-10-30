@@ -1648,10 +1648,12 @@ var table = []rule{
 		},
 		remedy: "A queued attempt waits for a git node that runs checks to " +
 			"claim it, so the backlog is no git node claiming — the fleet's git " +
-			"nodes gone, stopped or failing their checks' boxes — or every cell " +
-			"a check may run in busy: a git node's own container cells, as many " +
-			"as its cores allow, and the remote cells, as many at once and for " +
-			"as long a day as the company allows. Read the git nodes' logs and " +
+			"nodes gone, stopped or failing their checks' boxes, or none setting " +
+			"CREWLET_BOX_GIT_URL (`code_checks_not_run`) — or every cell a check " +
+			"may run in busy: a git node's own container cells, `git.max_checks` " +
+			"of them (`crewlet.code.checks.running` pinned there), and the remote " +
+			"cells, as many at once and for as long a day as the company allows. " +
+			"Read the git nodes' logs and " +
 			"`crewlet.code.checks.claims`: claims refused `claimed` are nodes " +
 			"racing for the same attempts, which is no backlog. Against the " +
 			"rate attempts end (`crewlet.code.checks.finished`) the queue's " +

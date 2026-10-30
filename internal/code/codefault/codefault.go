@@ -1,6 +1,6 @@
 // Package codefault is THE NAMED FAULT POINTS of the code host's push, sync,
-// compaction, publication, engine write and expunge paths, and the one seam
-// that reaches them. Production passes a nil [Injector] and every call site is
+// compaction, publication, engine write and expunge paths and of a check's
+// run, and the one seam that reaches them. Production passes a nil [Injector] and every call site is
 // a nil check; the suites pass a [*Script].
 //
 // NAMED rather than ad hoc hooks, because the code host's crash matrices walk
@@ -8,8 +8,8 @@
 // path's ([PushPath]) the receiving node, the compaction's ([CompactPath]),
 // the publication's ([PublishPath]) and the expunge's ([ExpungePath]) the
 // repository's maintainer running one, and an engine write's ([WritePath])
-// the git node building it: a step with no point is a step nobody ever
-// crashed at. So a new step of the receive pipeline, of a compaction, of a
+// the git node building it, and a check's run's ([CheckPath]) the git node
+// running it: a step with no point is a step nobody ever crashed at. So a new step of the receive pipeline, of a compaction, of a
 // publication, of an engine write or of an expunge, that can leave state
 // behind gets a point here, in order, or the matrix does not cover it. The order is written ONCE, in this package, and a call site
 // adds a hit and never edits the list.
@@ -204,6 +204,13 @@ const (
 	// expunge's commit, and its rescue is not yet adopted into the building
 	// node's cache.
 	ExpungeAfterCommit Point = "expunge.after_commit"
+
+	// CheckAfterClaim: a git node's runner holds a queued check — its claim
+	// applied, the row naming it the attempt's runner — and has made no box
+	// (internal/code/checkrun): a runner that dies here leaves a running row
+	// nothing will end but the repository's home, which sweeps a runner gone
+	// from its git order.
+	CheckAfterClaim Point = "check.after_claim"
 )
 
 // pushPath is the receive pipeline's points in the order a push reaches them.
@@ -237,6 +244,10 @@ var writePath = []Point{WriteAfterBuild}
 // expungePath is an expunge's points in the order its maintainer reaches them:
 // its build, its begin applied, its rescue stored, its commit answered.
 var expungePath = []Point{ExpungeAfterBuild, ExpungeAfterBegin, ExpungeAfterRescueUpload, ExpungeAfterCommit}
+
+// checkPath is a check's run's points in the order its runner reaches them:
+// its claim applied, before any box.
+var checkPath = []Point{CheckAfterClaim}
 
 // landingPath is the push path's points the LANDING hits (internal/code/host's
 // land), in its order: an engine write lands as a relayed push does, so a write
@@ -274,18 +285,24 @@ func WritePath() []Point { return slices.Concat(writePath, landingPath) }
 // [PushPath]'s reason: the expunge's crash matrix walks it.
 func ExpungePath() []Point { return slices.Clone(expungePath) }
 
+// CheckPath is a check's run's points in the order its runner reaches them,
+// every one hit by internal/code/checkrun. A fresh copy at every call, for
+// [PushPath]'s reason.
+func CheckPath() []Point { return slices.Clone(checkPath) }
+
 // Points is the closed set: every point, the push path first in pipeline
 // order, then the sync's, the compaction's and the publication's, then the
-// engine write's own, then the expunge's. A fresh copy at every call, so no
-// importer can rewrite what [Point.Valid] accepts.
+// engine write's own, then the expunge's, then a check's run's. A fresh copy
+// at every call, so no importer can rewrite what [Point.Valid] accepts.
 func Points() []Point {
-	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, expungePath)
+	return slices.Concat(pushPath, syncPath, compactPath, publishPath, writePath, expungePath, checkPath)
 }
 
 // Valid reports whether p is one of [Points].
 func (p Point) Valid() bool {
 	return slices.Contains(pushPath, p) || slices.Contains(syncPath, p) || slices.Contains(compactPath, p) ||
-		slices.Contains(publishPath, p) || slices.Contains(writePath, p) || slices.Contains(expungePath, p)
+		slices.Contains(publishPath, p) || slices.Contains(writePath, p) || slices.Contains(expungePath, p) ||
+		slices.Contains(checkPath, p)
 }
 
 // readsOffset reports whether p is hit at an offset ([Action.At]): an upload's

@@ -339,6 +339,13 @@
 // token outlives the check's timeout by [CheckBoxGrace], a backstop the row
 // overrides the moment the attempt ends.
 //
+// A CHECK IS RUN BY A GIT NODE (internal/code/checkrun), which finds what it
+// may claim by a `checks_queued` read ([ReadChecksQueued]: the queued attempts
+// oldest queued first, each with its definition and its repository's name),
+// and a repository's home finds the attempts whose runner is gone by a
+// `checks_running` read ([ReadChecksRunning]) — both the engine's own, each
+// claim and ending they lead to decided again by the checks writer.
+//
 // # Group commit
 //
 // Because every push to a repository contends on its one subject, a

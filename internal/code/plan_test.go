@@ -1038,6 +1038,16 @@ func registeredStatements() map[string]statement {
 				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)",
 				repoKey + " (id=?)"}},
 		"checks backlog": {checksBacklogSQL, []any{1000, BacklogScan + 1}, []string{"code_checks_overdue_idx (overdue_at>? AND overdue_at<?)", repoKey + " (id=?)"}},
+		// A RUNNER'S CLAIM WALK and A HOME'S SWEEP (checksread.go): the
+		// queued attempts oldest queued first after a place, each tested and
+		// named by its repository's key; the repositories holding a running
+		// attempt after an id; and one repository's running attempts.
+		"queued checks": {queuedChecksSQL, []any{0, "", "", "", "", 0, MaxSnapshotItems},
+			[]string{"code_checks_queued_idx (queued_at>=?)", repoKey + " (id=?)"}},
+		"running check repositories": {runningReposSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_checks_running_idx (repo_id>?)"}},
+		"running checks": {runningChecksSQL, []any{"repo-1", MaxSnapshotItems},
+			[]string{"code_checks_running_idx (repo_id=?)"}},
 		"due check heads": {dueCheckChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems,
 			AutoRequeueAttempts},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
@@ -1231,22 +1241,6 @@ func claimedReads() map[string]statement {
 		"code_repos_expunge_due_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_expunge_due_idx
 			WHERE status IN ('active', 'archived') AND expunged_at <= ? ORDER BY expunged_at, id LIMIT ?`,
 			[]any{2, MaxSnapshotItems}, []string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
-		// THE CHECKS' INDEXES THEIR LATER READERS SEEK (replicated 0075, keyed
-		// by the branch a commit is checked for in 0085): the home's sweep of
-		// a repository's running checks by runner, each by its whole key, the
-		// running state repeated as the index is partial on it; and a
-		// runner's claim walk, the queued attempts oldest queued first, the
-		// queued state likewise repeated and the >= what keeps its range
-		// seek. A change's checks are read on code_checks' key by
-		// checksread.go's `checks` listing, and the overdue ones by the
-		// backlog's walk (replicated 0083), both registered above.
-		"code_checks_running_idx": {`SELECT commit_oid, target_ref, name, attempt, runner_node FROM code_checks
-			INDEXED BY code_checks_running_idx WHERE repo_id = ? AND state = 'running'`,
-			[]any{"repo-1"}, []string{"code_checks_running_idx (repo_id=?)"}},
-		"code_checks_queued_idx": {`SELECT repo_id, commit_oid, target_ref, name, attempt FROM code_checks
-			INDEXED BY code_checks_queued_idx WHERE state = 'queued' AND queued_at >= ?
-			ORDER BY queued_at, repo_id, commit_oid, target_ref, name, attempt LIMIT ?`,
-			[]any{0, MaxSnapshotItems}, []string{"code_checks_queued_idx (queued_at>=?)"}},
 		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0079):
 		// the indexed repositories in name order, a keyset page at a time —
 		// the walk of a git node that keeps indexes, and of a search across

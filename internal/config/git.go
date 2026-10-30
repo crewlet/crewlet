@@ -51,6 +51,17 @@ type Git struct {
 	// node's metadata service or its neighbours. The zero value is the
 	// refusal, so a block that never names it keeps the wall.
 	ImportAllowPrivate bool `yaml:"import_allow_private,omitempty" json:"import_allow_private,omitempty" desc:"Let this node's imports and mirrors — pull and push alike, whatever the name says — dial a host that resolves to a loopback, link-local, private or otherwise non-public address, such as a forge on this node's own network. Off, a host any of whose addresses is not on the public internet is refused before git runs. A proxy the process names (HTTPS_PROXY, NO_PROXY) is dialed either way, and resolves the host itself."`
+
+	// MaxChecks is how many of the company's checks this node runs at once
+	// in CONTAINER cells (internal/code/checkrun): a container is a process
+	// tree on this node's own machine — a build, a test suite — so what it
+	// may run beside the node's own work is a fact about the node's cores.
+	// A POINTER, because unset and 0 are two settings: unset is a quarter of
+	// the node's cores and at least one ([Git.MaxChecksFor]), and 0 is none,
+	// a git node that serves the company's repositories and leaves its
+	// container checks to the fleet's other git nodes. A remote (e2b) check
+	// runs on another machine and takes none of these.
+	MaxChecks *int `yaml:"max_checks,omitempty" json:"max_checks,omitempty" js:"min=0;max=1024" desc:"Checks this node runs at once in container cells — each a container on this machine running a repository's build or tests; unset is a quarter of the node's cores (GOMAXPROCS), at least one; 0 is none, leaving the company's container checks to its other git nodes. A remote (e2b) check runs elsewhere and is not counted."`
 }
 
 const (
@@ -69,6 +80,21 @@ const (
 	// GitMaxTransfersCeiling is a TYPO GUARD, never policy: 65 536
 	// transfers at the few hundred MiB each holds is terabytes of memory.
 	GitMaxTransfersCeiling = 65536
+
+	// GitMaxChecksCeiling is a TYPO GUARD, never policy: 1 024 checks at
+	// once is a container a core of a machine past any a node runs on.
+	GitMaxChecksCeiling = 1024
+
+	// GitCoresPerCheck is the cores of the node a container check is given
+	// by an unset git.max_checks: FOUR, so the node runs a quarter of
+	// GOMAXPROCS checks at once ([Git.MaxChecksFor]). A check is a build or a
+	// test suite, which runs as many processes as it is let — `go test
+	// ./...`, `make -j` — so a check a core would put each of them beside a
+	// git process wanting that core; four cores a check leave the node's own
+	// lanes (git.max_processes, a core a slot) the three quarters a busy code
+	// host's reads and maintenance use, and give a parallel build room to be
+	// parallel. A node whose checks are its main work sets the figure itself.
+	GitCoresPerCheck = 4
 
 	// CacheVolumeDedicatedShare is the eighths of a DEDICATED volume's room the
 	// derived cache budget takes: seven. The eighth left free is for what the
@@ -91,7 +117,19 @@ const (
 // and what lets an unset block drop out of a JSON round trip.
 func (g Git) IsZero() bool {
 	return strings.TrimSpace(g.CacheDir) == "" && g.CacheMaxBytes == 0 &&
-		g.MaxProcesses == 0 && g.MaxTransfers == 0 && !g.ImportAllowPrivate
+		g.MaxProcesses == 0 && g.MaxTransfers == 0 && g.MaxChecks == nil && !g.ImportAllowPrivate
+}
+
+// MaxChecksFor is how many checks this node runs at once in container cells
+// on a machine of cores (GOMAXPROCS): git.max_checks as written where it is
+// set — 0 is none — and otherwise one for every [GitCoresPerCheck] cores, AT
+// LEAST ONE, so a two-core node runs one. THE ONE PLACE the default is
+// resolved.
+func (g Git) MaxChecksFor(cores int) int {
+	if g.MaxChecks != nil {
+		return *g.MaxChecks
+	}
+	return max(1, cores/GitCoresPerCheck)
 }
 
 // CacheDirFor is the cache's directory with the default applied and a
@@ -212,6 +250,11 @@ func (g Git) validate(path Path, store Store) error {
 		p.add(at(path, "max_transfers"), ErrOutOfRange,
 			"%d is past %d: each transfer holds a few hundred MiB while it runs, "+
 				"so that many is terabytes of memory", g.MaxTransfers, GitMaxTransfersCeiling)
+	}
+	if n := g.MaxChecks; n != nil && (*n < 0 || *n > GitMaxChecksCeiling) {
+		p.add(at(path, "max_checks"), ErrOutOfRange,
+			"%d is outside 0..%d container checks at once — 0 runs none on this node — or unset for a "+
+				"quarter of the node's cores, at least one", *n, GitMaxChecksCeiling)
 	}
 	if held, what := g.holdsStore(store); held != "" {
 		p.add(at(path, "cache_dir"), ErrConflict,

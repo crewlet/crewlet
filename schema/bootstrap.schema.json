@@ -584,6 +584,23 @@
             "null"
           ]
         },
+        "max_checks": {
+          "anyOf": [
+            {
+              "maximum": 1024,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}$",
+              "type": "string"
+            }
+          ],
+          "description": "Checks this node runs at once in container cells — each a container on this machine running a repository's build or tests; unset is a quarter of the node's cores (GOMAXPROCS), at least one; 0 is none, leaving the company's container checks to its other git nodes. A remote (e2b) check runs elsewhere and is not counted."
+        },
         "max_processes": {
           "anyOf": [
             {

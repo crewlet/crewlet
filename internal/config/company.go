@@ -1341,6 +1341,43 @@ func (c *Company) CheckRunIn() Placement {
 	return ""
 }
 
+// CheckCell is the cell a check runs in whose checks file names named for it
+// ("" for none), and "" with why where it runs in none: a cell named that the
+// company does not allow (code.checks.allow_run_in, else the one cell
+// [Company.CheckRunIn] resolves to), or — naming none — a company that
+// resolves no cell for a check at all.
+//
+// THE ONE RESOLUTION of where a check's box is made, read by the check runner
+// (internal/code/checkrun) at each attempt against the epoch it runs under: a
+// repository's file is read at its target's tip, which no validation of the
+// company's sees, so a file naming a cell the company stopped allowing is
+// answered here, when its check would run, rather than refused anywhere
+// earlier.
+func (c *Company) CheckCell(named Placement) (Placement, string) {
+	if c == nil || !c.Code.Native {
+		return "", "this company hosts no code (code.native is not set), so none of its checks runs"
+	}
+	allowed := c.checkPlacements()
+	if named == "" {
+		if run := c.CheckRunIn(); run != "" {
+			return run, ""
+		}
+		return "", "the check names no run_in, and the company names no cell a check runs in: set " +
+			"code.checks.run_in, or a providers.sandbox.default_run_in of container or e2b"
+	}
+	for _, p := range allowed {
+		if p.cell == named {
+			return named, ""
+		}
+	}
+	cells := make([]Placement, len(allowed))
+	for i, p := range allowed {
+		cells[i] = p.cell
+	}
+	return "", fmt.Sprintf("the check names run_in %s, which the company does not allow a check (it allows "+
+		"%v: code.checks.allow_run_in, else the one cell code.checks.run_in resolves to)", named, cells)
+}
+
 // checkPlacement is one cell a check may run in, with the path of the first
 // thing that named it.
 type checkPlacement struct {

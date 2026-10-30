@@ -851,6 +851,28 @@ func Catalogue() []Instrument {
 				"repository's checks at once.",
 		},
 		{
+			Name: CodeChecksRunning, Kind: KindGauge, Unit: UnitCount,
+			Attributes: []string{"placement"},
+			Shows: "Checks this git node's runner is running now — each an " +
+				"attempt it claimed, from its claim to its ending — by " +
+				"`placement`: `container`, a container on this node, at most " +
+				"`git.max_checks` of them; `e2b`, a remote box. `container` " +
+				"pinned at `git.max_checks` while code_checks_backlog stands is " +
+				"a fleet whose container cells are too few for its checks.",
+		},
+		{
+			Name: CodeChecksDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
+			Attributes: []string{"placement"},
+			Shows: "How long the checks this git node's runner ran took, from " +
+				"the claim to the ending it recorded — the box's making and " +
+				"setup, the command and its results read — by `placement` " +
+				"(`container`, `e2b`). A check's time is its own definition's " +
+				"to bound (`timeout_seconds`, held to " +
+				"`code.checks.max_timeout_seconds`); a p95 climbing on one " +
+				"placement with no change to the checks is that placement's " +
+				"boxes slower to make or to set up.",
+		},
+		{
 			Name: CodeConversationWrites, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"op", "outcome"},
 			Shows: "Writes of a change's conversation this node's change writer " +
@@ -936,7 +958,10 @@ func Catalogue() []Instrument {
 				"the code log or by the minute's backstop pass — by `worker` " +
 				"(`changes`: its live changes' facts and mergeability recorded — " +
 				"a moved target's merges again, at most sixty-four a repository " +
-				"a minute — or a change whose head its target holds landed) and " +
+				"a minute — or a change whose head its target holds landed; " +
+				"`check_runners`: its running checks whose runner left its git " +
+				"order, or ran past its check's timeout and a setup's grace, " +
+				"ended `errored runner_lost`) and " +
 				"`outcome`: `worked`, its due " +
 				"work done; `failed`, a read or a record that decided nothing for " +
 				"a reason of the node's or the log's (`code_home_turn_failed` " +

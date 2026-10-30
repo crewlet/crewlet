@@ -192,7 +192,7 @@ func (q ReadQuery) validateQueueDue() error {
 		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
-		{"expunge_tips", q.ExpungeTips != nil}, {"target", q.Target != ""},
+		{"expunge_tips", q.ExpungeTips != nil}, {"target", q.Target != ""}, {"checks_running", q.ChecksRunning != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a queue_due read lists the repositories holding a live entry, or one "+

@@ -529,6 +529,28 @@ func (r *Router) HomeOf(repoIDs []string) (map[string]bool, error) {
 	return out, nil
 }
 
+// GitOrder is a repository's WHOLE git order: every live git node — this one
+// among them where its git half is built — in the repository's rendezvous
+// order, WITH NO DEMOTION, the home first ([Router.Home] is its first node).
+// The order a repository's own git work is ranked by on every node alike:
+// which git node claims one of its queued checks first, and how long each
+// one after it waits (internal/code/checkrun), and which nodes hold its index
+// (internal/codeindex). A node absent from it is no live git node, as the
+// presence view reads it now — what a check's running row whose runner has
+// left it is judged by.
+//
+// NO DEMOTION, for [Router.Home]'s reason: a slow node keeps its place, so
+// every node computes the same order from the same set. A read of who serves
+// git that fails answers its error, UNKNOWN; a fleet that lists no git node
+// answers [ErrNoGitNode]. A fresh slice at every call.
+func (r *Router) GitOrder(repoID string) ([]string, error) {
+	h, err := r.readHomes()
+	if err != nil {
+		return nil, fmt.Errorf("estate: the git order of repository %s: %w", repoID, err)
+	}
+	return r.keyed(repoID, h.nodes, h.own), nil
+}
+
 // homeReading is one reading of who serves git, as [Router.Home] and
 // [Router.HomeOf] order a repository's git nodes over it: every live git node
 // the placement names, and whether this node's own git half is built — which

@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/checkrun"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
@@ -441,7 +442,20 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: build the home's change work: %w", err)
 	}
 
-	// 11. ITS STATUS, answered for the fleet (codestatus.go) from the moment
+	// 11. THE CHECKS (internal/code/checkrun): this node's runner of the
+	// company's queued checks, and its home's sweep of the checks whose
+	// runner is gone, a worker of the loop just built (codechecks.go). BUILT
+	// here and STARTED with the home's loop, by the native half's duties, for
+	// its reasons; stopped FIRST in the one bounded stop, so each check it runs
+	// records its ending and closes its box while the router and the code host
+	// its boxes clone from still serve.
+	checks, err := e.buildChecks(nodeID, boot, homeLoop, codeLog)
+	if err != nil {
+		h.Stop(context.WithoutCancel(ctx))
+		return codeHostParts{}, fmt.Errorf("engine: build the check runner: %w", err)
+	}
+
+	// 12. ITS STATUS, answered for the fleet (codestatus.go) from the moment
 	// the host serves, and withdrawn before it stops ([native.stopCodeHost]):
 	// under the host's lifetime rather than this call's, as the host runs.
 	withdraw, err := e.serveCodeStatus(context.WithoutCancel(ctx), h)
@@ -452,7 +466,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		return codeHostParts{}, fmt.Errorf("engine: serve the code host's status on %s: %w", topics.CodeStatus, err)
 	}
 	return codeHostParts{host: h, reads: reads, previews: previews, cache: c, size: size, compactor: compactor,
-		home: homeLoop, withdrawStatus: withdraw}, nil
+		home: homeLoop, checks: checks, withdrawStatus: withdraw}, nil
 }
 
 // codeNudges is this node's own code log as the home's change work watches it
@@ -552,6 +566,7 @@ type codeHostParts struct {
 	size           codeCacheSize
 	compactor      *codecompact.Compactor
 	home           *codehome.Loop
+	checks         *checkrun.Runner
 	withdrawStatus queue.Unsubscribe
 }
 
@@ -939,7 +954,11 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // while something of this one still writes in it, and waiting for it again
 // changes nothing.
 //
-// THE HOME'S CHANGE WORK FIRST, inside the same one stop: its turns read facts
+// THE CHECK RUNNER FIRST, inside the same one stop: each check it runs records
+// its ending — `errored runner_lost` where its command had not ended, so its
+// home queues it again on a git node still running — and closes its box, while
+// the router its endings go through and the code host its boxes clone from
+// still serve. THEN THE HOME'S CHANGE WORK: its turns read facts
 // of this node's git reads, merge in scratches over its cache and ask records
 // of the repositories' writers, so it is ended — a facts read cut, a merge's
 // git ended and its scratch removed, a record's ask cancelled, which lands or
@@ -967,12 +986,15 @@ func (e *Engine) stopCodeHost(ctx context.Context) { e.native.Load().stopCodeHos
 // every write after it, cuts the writes in flight — one cut before its
 // landing ran nothing, and is answered not serving, about this node, so its
 // walk asks the next git node the same push — and waits for them.
-// All six share the one budget, and a second caller waits for the first.
+// All seven share the one budget, and a second caller waits for the first.
 func (n *native) stopCodeHost(ctx context.Context) {
 	if n == nil || n.codeHost == nil {
 		return
 	}
 	n.codeHostStop.stop(ctx, func(ctx context.Context) {
+		if n.checkRunner != nil {
+			n.checkRunner.Stop(ctx)
+		}
 		if n.home != nil {
 			n.home.Stop(ctx)
 		}

@@ -407,7 +407,9 @@ checks file](../concepts/code-host.md#the-checks-file).
    checked by the file it edits, and its edit governs the changes after it
    lands.
 
-Nothing runs a check yet in this release: the file is defined and validated
+Every git node runs a queued check in a box of the company's sandbox
+catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)), but
+nothing queues one yet in this release: the file is defined and validated
 ([What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)).
 
 ## What your seats read

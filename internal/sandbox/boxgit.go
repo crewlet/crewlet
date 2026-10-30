@@ -52,7 +52,11 @@ type BoxGit struct {
 	// launch.
 	User, Token string
 	// Name and Email are the seat's commit identity: the one identity rule a
-	// seat's commits take, whether the engine builds them or its box does.
+	// seat's commits take, whether the engine builds them or its box does —
+	// BOTH, or neither: a CHECK'S box (the user `check`) acts as nobody and
+	// commits nothing, so it is given no identity at all, and a commit its
+	// command makes fails for want of one rather than naming somebody who
+	// never wrote it. One without the other is refused.
 	Name, Email string
 }
 
@@ -72,7 +76,8 @@ type BoxGit struct {
 //     the user and the token, read from the PROCESS environment when git asks,
 //     so the token is never written to a file — and `store` and `erase` are
 //     no-ops that succeed, so nothing keeps it and git says nothing of them;
-//  3. user.name and 4. user.email, the seat's identity — a commit the box
+//  3. user.name and 4. user.email, the seat's identity, where the box has
+//     one — a check's box has none — so a commit the box
 //     writes is the seat's as an engine-built one is. A CONVENTION a
 //     cooperating box keeps, never a check: generated code sets
 //     GIT_COMMITTER_* or `-c user.*` as it likes, and the push's row, never
@@ -110,6 +115,9 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 		return nil, fmt.Errorf("sandbox: a box's git user %q is not a plain word", g.User)
 	case g.Token == "":
 		return nil, fmt.Errorf("sandbox: a box's git is given no credential")
+	case (g.Name == "") != (g.Email == ""):
+		return nil, fmt.Errorf("sandbox: a box's git identity is a name and an email together, or none for " +
+			"a box that acts as nobody")
 	}
 	n, err := operatorGitConfig(run)
 	if err != nil {
@@ -120,12 +128,16 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 		{scope, ""},
 		{scope, `!f() { test "$1" = get || return 0; printf 'username=` + g.User + `\npassword=%s\n' "$` +
 			GitTokenVar + `"; }; f`},
-		{"user.name", g.Name},
-		{"user.email", g.Email},
+	}
+	if g.Name != "" {
+		entries = append(entries, struct{ key, value string }{"user.name", g.Name},
+			struct{ key, value string }{"user.email", g.Email})
+	}
+	entries = append(entries, []struct{ key, value string }{
 		{"protocol.version", "2"},
 		{"index.version", "4"},
 		{"core.untrackedCache", "true"},
-	}
+	}...)
 	out := map[string]string{GitTokenVar: g.Token, GitURLVar: g.Base,
 		gitConfigCount: strconv.Itoa(n + len(entries))}
 	for i, e := range entries {

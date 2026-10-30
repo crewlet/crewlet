@@ -60,12 +60,12 @@ This is the product's current shape, not a configuration choice:
   rename, archive, delete, restore and protect repositories through the same
   tools, a seat's own scratch repositories among them
   ([Repositories made by tools](#repositories-made-by-tools)).
-- **No check runs yet.** A repository defines its checks in
+- **Nothing queues a check yet.** A repository defines its checks in
   `.crewlet/checks.yaml`, `crewlet validate` reads that file as the code host
-  does, and the code log has the records a check's attempts take
-  ([Checks](#checks)); nothing queues, runs or gates on one in this release,
-  so no record of one is written but the retention duty's sweep of what a
-  check left past its history.
+  does, the code log has the records a check's attempts take
+  ([Checks](#checks)), and every git node runs whatever attempt is queued
+  ([Who runs a check](#who-runs-a-check)); nothing queues one in this release,
+  and nothing gates on one, so no check runs but one a record queued.
 - **Only a push opens a change, and only its home asks for its review.** A
   push opens a [change](#changes) from its options
   ([A change a push opens](#a-change-a-push-opens)); a repository's committer
@@ -1907,7 +1907,14 @@ grant on the repository as every other read of it is:
   token names, by its key, as its row stands, which the box's admission reads
   on every request ([Check boxes](#check-boxes)). A person's or a seat's read
   naming an attempt's key is refused, so no read that forgot whom it asks for
-  is answered held to no grant.
+  is answered held to no grant;
+- **`checks_queued`**: the engine's own — a git node's [claim
+  walk](#who-runs-a-check): every repository's queued attempts, oldest queued
+  first, each with the definition it was queued under and its repository's
+  name, a page at a time;
+- **`checks_running`**: the engine's own — a repository's home's sweep of a
+  runner that is gone: the repositories holding a running attempt, or one
+  repository's running attempts.
 
 ### Check boxes
 
@@ -2027,6 +2034,81 @@ bad_params` naming the parameter, `503 unavailable`), while the admission's are
 the one line its git is answered in. Where a node serves none of the code host
 now, a check's box is told why only once its token verifies, on both prefixes,
 as a [coding box](#coding-boxes) is.
+
+### Who runs a check
+
+**Every git node runs checks.** Each walks the queued attempts, oldest queued
+first, and ranks each by its repository's **git order** — every live git node
+in the repository's rendezvous order, its [home](#the-home-git-node) first:
+the node at rank *r* claims an attempt only once it has waited *r* × 2 seconds
+since it was queued. So the home claims first, where the repository's warm
+copy is, and the runner-up two seconds later only if the home did not — its
+container cells full, or none — and so on down the order. Every node computes
+the same order from the same set of git nodes; there is no lease and no
+coordinator. A node walks the queue when a check record lands on the code log,
+at most once a second, and every fifteen seconds whatever happens.
+
+**The claim comes before the box.** A runner claims an attempt — a
+`check_started` record naming itself, decided by the repository's checks
+writer ([Who records a check](#who-records-a-check)) — and makes a box only
+where its claim holds: a second claim of an attempt another runner holds is
+refused before it appends, and a runner whose claim the row does not keep
+reads that back and makes nothing. A lost race costs a record, never a box.
+With its box made, the holder names the box on the attempt.
+
+**Container cells are bounded by the node's cores.** A `container` check is a
+container on the git node's own machine, so a node runs at most
+`git.max_checks` of them at once — unset, a quarter of its cores and at least
+one; `0`, none ([Deployment](../guides/deployment.md#running-checks-on-git-nodes)).
+A node with no free container cell claims no container check, and the next node
+of the attempt's order claims it two seconds later. An `e2b` check runs on
+another machine and takes none of them.
+
+**The run.** The box is a [check box](code-sandbox.md#check-boxes): no coding
+agent, no model's sign-in, none of `providers.sandbox.setup`; exactly the
+company's check secrets its file names, what the check is, and the code host's
+base and its check's token, with no commit identity. It is made — its git's
+floor checked and its one commit checked out — within ten minutes of the claim
+(`code.CheckBoxGrace`); then its command runs in its checkout, detached, and
+every fifteen seconds the runner asks whether it still runs, refreshes the
+box's lifetime, and reads the attempt's row:
+
+| What happens | How the attempt ends |
+|---|---|
+| The command exits 0 | `passed`, its summary alone |
+| The command exits non-zero | `failed`, with the last 16 KiB of its output |
+| The command runs past its timeout — the file's `timeout_seconds`, held to `code.checks.max_timeout_seconds`, from the command's start | `failed` `timed_out`, its box closed: the timeout is the check's own, so running past it measured the commit |
+| The box could not be made, or stopped answering for four polls in a row | `errored` `box_failed` |
+| A setup step failed — the git floor, the checkout — or a named secret resolved to nothing | `errored` `setup_failed` |
+| The file names a cell the company does not allow, or a secret it does not declare | `errored` `defs_invalid`, with no box |
+| The row ended meanwhile — its head moved on, a person stopped it, the home swept it | nothing more: its box is closed |
+
+The box is closed on every path. **A check spends no tokens**: no model runs
+in its box, and what it costs is its box's time, which its row records as its
+duration. The runner counts what it holds on `crewlet.code.checks.running` and
+how long each took on `crewlet.code.checks.duration`, by placement
+([metrics](../reference/metrics.md)).
+
+**A runner that is gone.** A runner that dies holding attempts leaves their
+rows running. The repository's **home** sweeps them, at every pass of its
+loop: a running attempt whose runner has **left the repository's git order** —
+a node that left the fleet — or whose claim is older than its check's timeout,
+the ten minutes of setup and a minute more — a node that restarted mid-run and
+so is in the order again holding nothing — is ended `errored` `runner_lost`,
+and its box killed where it is an `e2b` one; a container box on a node that
+left is that node's own container runtime's to reclaim. The home queues such
+an attempt again, so **a dead runner's check runs at most three attempts**. A
+runner that was only slow and ends its attempt after the sweep replaces
+`runner_lost` with its measurement. A runner that **stops** — its node
+draining — ends each attempt it holds `runner_lost` itself, so it is queued
+again at once.
+
+**A node without `CREWLET_BOX_GIT_URL` runs no check**: a check's box clones
+its commit from the code host at that address, and reads it without a clone at
+its `/box/code` sibling — so the address is the public listener with
+`/box/git` on the end. Such a node says so once, as `code_checks_not_run`, and
+leaves the fleet's checks to its other git nodes; a fleet where none runs them
+raises `code_checks_backlog`.
 
 ### How long a check is kept
 

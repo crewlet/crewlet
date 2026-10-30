@@ -267,6 +267,7 @@ git:
   cache_max_bytes: 214748364800   # default: derived at boot, see below
   max_processes: 0                # default: one a core (GOMAXPROCS)
   max_transfers: 0                # default: four a process slot, by memory
+  max_checks: 4                   # default: a quarter of the cores, at least one
   import_allow_private: false     # default: dial only the public internet
 ```
 
@@ -326,6 +327,12 @@ git:
   refused, and [`code_maintenance_refused`](../reference/alarms.md) says so
   until the figure is lowered or unset, or the node is given memory past what
   it keeps, in place or at a boot. A restart alone changes nothing.
+- **`max_checks`** — the company's [checks](code-host.md#who-runs-a-check)
+  this node runs at once in `container` cells, each a container on this machine
+  running a repository's build or tests. Unset is one for every four cores
+  (GOMAXPROCS), at least one; `0` is none, leaving the company's container
+  checks to its other git nodes; at most 1 024. A remote (`e2b`) check runs
+  elsewhere and is not counted ([Deployment](../guides/deployment.md#running-checks-on-git-nodes)).
 - **`import_allow_private`** — lets the git this node runs dial a host on a
   network that is not the public internet: a forge on the node's own network,
   reached at a loopback, link-local, private or unique-local address. It

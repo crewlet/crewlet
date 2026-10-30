@@ -20,7 +20,7 @@ import (
 )
 
 // A REPOSITORY'S CHECKS, READ: what became of each attempt of each check of
-// each commit, as its row on the code log holds it — four kinds of read.
+// each commit, as its row on the code log holds it — six kinds of read.
 //
 //   - `checks` ([ReadChecks]) lists attempts, held to the asker's grant: one
 //     repository's, newest ended first and every attempt not yet ended after
@@ -44,6 +44,13 @@ import (
 //     attempt its token names, by its key (code_checks' own), as its row
 //     stands — the engine's own read, held to no grant, since the box is no
 //     principal and the row is what admits it.
+//   - `checks_queued` ([ReadChecksQueued]) is a git node's claim walk: the
+//     attempts waiting for a runner, oldest queued first, each with its
+//     definition and its repository's name — the engine's own, as
+//     `check_box` is (queuedChecks' doc).
+//   - `checks_running` ([ReadChecksRunning]) is a repository's home's sweep:
+//     the repositories holding a running attempt, or one repository's
+//     running attempts — the engine's own too (runningChecks' doc).
 //
 // EVERY LISTING IS A KEYSET over its index's own order, its cursor the last
 // row's place in it, so a page resumes exactly where the one before ended
@@ -135,21 +142,31 @@ func checksResolver(name string) statelog.Resolver {
 	}
 }
 
-// checksQuery is the framework read a `checks`, `check`, `checks_due` or
-// `check_box` read resolves to. A listing is a SET READ — of the repository it
-// names, of the domain for the window — so an attempt a deferred record holds
-// back is listed as its row stands; a `check` read is a POINT READ, which a
-// record this node deferred on the repository's checks refuses, as a change's
-// detail is refused, rather than answer an attempt around it, and so is a
-// `check_box` read, of the checks of the repository its key names by id; and
-// the home's listing is a set read of the domain, or of the one repository's
-// rows and checks.
+// checksQuery is the framework read a `checks`, `check`, `checks_due`,
+// `check_box`, `checks_queued` or `checks_running` read resolves to. A listing
+// is a SET READ — of the repository it names, of the domain for the window —
+// so an attempt a deferred record holds back is listed as its row stands; a
+// `check` read is a POINT READ, which a record this node deferred on the
+// repository's checks refuses, as a change's detail is refused, rather than
+// answer an attempt around it, and so is a `check_box` read, of the checks of
+// the repository its key names by id; the home's listing is a set read of the
+// domain, or of the one repository's rows and checks; and a claim walk and the
+// home's sweep are set reads too — of the domain, or of the one repository's
+// checks — each claim and each ending they lead to decided again by the
+// repository's checks writer from its own snapshot.
 func (q ReadQuery) checksQuery(fresh statelog.Freshness) statelog.Query {
 	switch q.Kind {
 	case ReadCheck:
 		return fresh.Resolved(checksResolver(q.Repo), false)
 	case ReadCheckBox:
 		return fresh.Query(statelog.ScopeSet{Paths: []string{ChecksPath(q.CheckBox.RepoID)}}, false)
+	case ReadChecksQueued:
+		return fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
+	case ReadChecksRunning:
+		if id := q.ChecksRunning.RepoID; id != "" {
+			return fresh.Query(statelog.ScopeSet{Paths: []string{ChecksPath(id)}}, true)
+		}
+		return fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
 	case ReadChecksDue:
 		if q.ChecksDue == nil || q.ChecksDue.RepoID == "" {
 			return fresh.Query(statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
@@ -251,6 +268,7 @@ func (q ReadQuery) validateChecksDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"checks_running", q.ChecksRunning != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a checks_due read lists the repositories a home owes check work in, or "+
@@ -292,11 +310,212 @@ func (q ReadQuery) validateCheckBox() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates}, {"expunge_tips", q.ExpungeTips != nil},
 		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+		{"checks_running", q.ChecksRunning != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a check_box read reads the one attempt its key names, whole, and names "+
 				"nothing else")
 		}
+	}
+	return nil
+}
+
+// validateChecksQueued is [ReadQuery.validate] for a `checks_queued` read: the
+// engine's own — a runner's claim walk — so it names NO asker and no seat it
+// reads for, for `check_box`'s reason; a page of at most MaxSnapshotItems
+// attempts and the cursor it resumes after; and nothing else a read names,
+// since it lists every repository's queued attempts.
+func (q ReadQuery) validateChecksQueued() error {
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	switch {
+	case q.Asker != (Principal{}):
+		return refused("asker", "a checks_queued read is the engine's own — a runner's claim walk — which no "+
+			"principal makes")
+	case q.CeilingSeat != "":
+		return refused("ceiling_seat", "a checks_queued read is the engine's own, which no seat makes for "+
+			"another")
+	case q.Limit < 0 || q.Limit > MaxSnapshotItems:
+		return refused("limit", fmt.Sprintf("%d is outside 1..%d (code.MaxSnapshotItems), or 0 for the most",
+			q.Limit, MaxSnapshotItems))
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
+		{"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil}, {"min_packs", q.MinPacks != 0},
+		{"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0}, {"state", q.State != ""},
+		{"owner", q.Owner != ""}, {"work", q.Work != ""}, {"reviewer", q.Reviewer != ""},
+		{"needs", q.Needs != ""}, {"part", q.Part != ""}, {"changes_due", q.ChangesDue != nil},
+		{"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
+		{"checks_running", q.ChecksRunning != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"expunge_tips", q.ExpungeTips != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+	} {
+		if f.set {
+			return refused(f.field, "a checks_queued read lists every repository's queued attempts, a page at "+
+				"a time, and names nothing else")
+		}
+	}
+	return nil
+}
+
+// validateChecksRunning is [ReadQuery.validate] for a `checks_running` read:
+// the engine's own — a repository's home's sweep — naming no asker and no
+// seat; its question, REQUIRED, with its one repository, where it names one,
+// by id in its canonical spelling; a cursor only beside none, since a
+// repository's running attempts are read in one page; and nothing else.
+func (q ReadQuery) validateChecksRunning() error {
+	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	switch r := q.ChecksRunning; {
+	case q.Asker != (Principal{}):
+		return refused("asker", "a checks_running read is the engine's own — a home's sweep — which no "+
+			"principal makes")
+	case q.CeilingSeat != "":
+		return refused("ceiling_seat", "a checks_running read is the engine's own, which no seat makes for "+
+			"another")
+	case r == nil:
+		return refused("checks_running", "a checks_running read names its question: the repositories holding "+
+			"a running attempt, or one repository's by its id")
+	case r.RepoID != "" && !canonicalUUID(r.RepoID):
+		return refused("checks_running.repo_id", fmt.Sprintf("%q is not a repository's id in its canonical "+
+			"lowercase spelling", r.RepoID))
+	case r.RepoID != "" && q.Cursor != "":
+		return refused("cursor", "a repository's running attempts are read whole, in one page; only the "+
+			"listing of repositories is paged")
+	}
+	for _, f := range []struct {
+		field string
+		set   bool
+	}{
+		{"repo", q.Repo != ""}, {"status", len(q.Status) > 0}, {"prefix", q.Prefix != ""},
+		{"introduced", q.Introduced != nil}, {"run_pushes", q.RunPushes != nil}, {"min_packs", q.MinPacks != 0},
+		{"limit", q.Limit != 0}, {"brief", q.Brief}, {"push", q.Push != ""}, {"change", q.Change != 0},
+		{"state", q.State != ""}, {"owner", q.Owner != ""}, {"work", q.Work != ""},
+		{"reviewer", q.Reviewer != ""}, {"needs", q.Needs != ""}, {"part", q.Part != ""},
+		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil}, {"checks_due", q.ChecksDue != nil},
+		{"check_box", q.CheckBox != nil}, {"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"expunge_tips", q.ExpungeTips != nil}, {"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
+	} {
+		if f.set {
+			return refused(f.field, "a checks_running read lists the repositories holding a running attempt, or "+
+				"one repository's running attempts by its id, and names nothing else")
+		}
+	}
+	return nil
+}
+
+// queuedChecks serves one page of a `checks_queued` read: the attempts waiting
+// for a runner OLDEST QUEUED FIRST, on code_checks_queued_idx — each with the
+// definition it was queued under and its repository's name, after the cursor
+// (queuedCursor) — of every repository a runner may still claim in, active or
+// archived: a deleted repository refuses every claim (repo_deleted), so its
+// queued attempts wait for its purge and are read and skipped, as the
+// backlog's walk skips them.
+//
+// OLDEST FIRST, because that is the order a fleet's runners take the queue in:
+// every git node walks it from its head, and the one a repository's git order
+// ranks first claims each attempt first, so the attempts waiting longest are
+// the ones claimed first wherever they fall in the order. A page is a limit's
+// rows at most and the page's byte budget — a definition is the widest field,
+// some hundreds of bytes for a usual check — and names where the next resumes.
+func (r *Reader) queuedChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	limit := min(limitOr(q.Limit, r.pageRows), r.pageRows)
+	var (
+		at                       int64
+		repo, oid, target, check string
+		attempt                  int
+	)
+	if q.Cursor != "" {
+		var ok bool
+		if at, repo, oid, target, check, attempt, ok = cutWindowCursor(q.Cursor); !ok {
+			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+		}
+	}
+	rows, err := tx.QueryContext(ctx, queuedChecksSQL, at, repo, oid, target, check, attempt, limit)
+	if err != nil {
+		return fmt.Errorf("code: list the queued checks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	pg := page{maxRows: limit, maxB: r.pageBytes}
+	var last CheckRow
+	for rows.Next() {
+		var (
+			c   RunnableCheck
+			def string
+		)
+		if c.CheckRow, err = scanCheck(rows.Scan, &def, &c.Repo); err != nil {
+			return fmt.Errorf("code: list the queued checks: %w", err)
+		}
+		if def != "" {
+			c.Def = &CheckDef{}
+			if err := json.Unmarshal([]byte(def), c.Def); err != nil {
+				return fmt.Errorf("code: read check %s of %s's definition: %w", c.Name, c.OID, err)
+			}
+		}
+		out.Runnable = append(out.Runnable, c)
+		last = c.CheckRow
+		if pg.add(c.encodedBytes() + stringBytes(c.Repo) + len(def)) {
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("code: list the queued checks: %w", err)
+	}
+	if pg.full() {
+		out.Next = queuedCursor(last)
+	}
+	return nil
+}
+
+// queuedCursor is an attempt's place in the claim walk's order —
+// "<queued_at>/<repo>/<commit>/<target>/<name>/<attempt>", the window's shape
+// with the queue's instant in its ending's place — read back by
+// cutWindowCursor.
+func queuedCursor(row CheckRow) string {
+	return strconv.FormatInt(store.EncodeTime(row.QueuedAt), 10) + "/" + row.RepoID + "/" + row.OID + "/" +
+		targetCursor(row)
+}
+
+// runningChecks serves a `checks_running` read: with no repository, a page of
+// the repositories holding a running attempt, by id after the cursor — the
+// running index's leading column, grouped, so a page is one range of a
+// partial index holding only what runs now; with one, that repository's
+// running attempts, every one in ONE page: they are bounded by the boxes the
+// fleet's runners hold at once — git.max_checks on each git node and the
+// remote cells — far under a page's MaxSnapshotItems, and the home that
+// sweeps them ends what it finds and reads the rest again at its next pass.
+func (r *Reader) runningChecks(ctx context.Context, tx *sql.Tx, q ReadQuery, out *ReadAnswer) error {
+	if id := q.ChecksRunning.RepoID; id != "" {
+		rows, err := tx.QueryContext(ctx, runningChecksSQL, id, r.pageRows)
+		if err != nil {
+			return fmt.Errorf("code: list repository %s's running checks: %w", id, err)
+		}
+		defer func() { _ = rows.Close() }()
+		if out.Checks, err = scanChecks(rows); err != nil {
+			return fmt.Errorf("code: list repository %s's running checks: %w", id, err)
+		}
+		return nil
+	}
+	if q.Cursor != "" && !canonicalUUID(q.Cursor) {
+		return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+	}
+	rows, err := tx.QueryContext(ctx, runningReposSQL, q.Cursor, r.pageRows)
+	if err != nil {
+		return fmt.Errorf("code: list the repositories running checks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("code: list the repositories running checks: %w", err)
+		}
+		out.DueRepos = append(out.DueRepos, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if len(out.DueRepos) == r.pageRows {
+		out.Next = out.DueRepos[len(out.DueRepos)-1]
 	}
 	return nil
 }
@@ -932,6 +1151,32 @@ const (
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = k.repo_id
 				AND r.status IN ('active', 'archived'))
 		ORDER BY k.overdue_at, k.repo_id, k.commit_oid, k.target_ref, k.name, k.attempt LIMIT ?2`
+	// THE CLAIM WALK: the queued attempts oldest queued first after a place,
+	// on code_checks_queued_idx — its partial predicate repeated verbatim,
+	// and the >= beside the keyset's OR what keeps its range seek — each with
+	// its definition and its repository's name, and kept only where its
+	// repository is one a runner may still claim it in, by the repository's
+	// key. A first page is the place before every attempt: an instant of 0,
+	// which no queued attempt has.
+	queuedChecksSQL = `SELECT ` + checkColumns + `, def,
+			(SELECT r.name FROM code_repos AS r WHERE r.id = code_checks.repo_id)
+		FROM code_checks INDEXED BY code_checks_queued_idx
+		WHERE state = 'queued' AND queued_at >= ?1
+			AND (queued_at > ?1 OR repo_id > ?2 OR (repo_id = ?2 AND (commit_oid > ?3
+				OR (commit_oid = ?3 AND (target_ref > ?4 OR (target_ref = ?4 AND (name > ?5
+					OR (name = ?5 AND attempt > ?6))))))))
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = code_checks.repo_id
+				AND r.status IN ('active', 'archived'))
+		ORDER BY queued_at, repo_id, commit_oid, target_ref, name, attempt LIMIT ?7`
+	// THE HOME'S SWEEP: the repositories holding a running attempt after a
+	// place, code_checks_running_idx's leading column grouped — the index
+	// holds only what runs now — and one repository's running attempts by
+	// its key's prefix of the same index, its partial predicate repeated
+	// verbatim.
+	runningReposSQL = `SELECT repo_id FROM code_checks INDEXED BY code_checks_running_idx
+		WHERE state = 'running' AND repo_id > ?1 GROUP BY repo_id ORDER BY repo_id LIMIT ?2`
+	runningChecksSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY code_checks_running_idx
+		WHERE repo_id = ?1 AND state = 'running' LIMIT ?2`
 	// THE HOME'S LISTING, changes_due's two statements with the facts' test
 	// replaced by the checks' work: a head is due while no dispatch of it for
 	// its target names the checks file its target's row holds — one seek of

@@ -891,6 +891,18 @@ const (
 	// own rather than a `check` read naming none, so that a principal's read
 	// that forgot its asker is refused rather than answered ungated.
 	ReadCheckBox ReadKind = "check_box"
+	// ReadChecksQueued is the attempts waiting for a runner, OLDEST QUEUED
+	// FIRST, each with its definition and its repository's name
+	// ([RunnableCheck]): a git node's CLAIM WALK (internal/code/checkrun),
+	// every repository's whose repository a runner may still claim in. The
+	// engine's own, as `check_box` is: no principal makes it, and it is held
+	// to no grant.
+	ReadChecksQueued ReadKind = "checks_queued"
+	// ReadChecksRunning is the attempts runners hold ([ChecksRunningQuery]):
+	// with no repository, the repositories holding a running attempt, by id;
+	// with one, its running attempts ([CheckRow]). The engine's own: what a
+	// repository's HOME sweeps for a runner that is gone.
+	ReadChecksRunning ReadKind = "checks_running"
 	// ReadQueue lists the LIVE entries of merge queues ([QueueRow]), held to
 	// the asker's grant: one repository's in target and queue order — one of
 	// its targets', where [ReadQuery.Target] names one — beside the
@@ -923,14 +935,16 @@ const (
 // [ReadQuery.Reviewer], `run_pushes` the only one
 // that reads [ReadQuery.RunPushes], `expunge_tips` the only one that reads
 // [ReadQuery.ExpungeTips], `check_box` the only one that reads
-// [ReadQuery.CheckBox], `queue`, `landings` and `green` the only ones that
-// read [ReadQuery.Target], and `queue_due` the only one that reads
+// [ReadQuery.CheckBox], `checks_running` the only one that reads
+// [ReadQuery.ChecksRunning], `queue`, `landings` and `green` the only ones
+// that read [ReadQuery.Target], and `queue_due` the only one that reads
 // [ReadQuery.QueueDue].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadChangeRouting, ReadReviews,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadChangesDue,
-		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadQueue, ReadQueueDue, ReadLandings, ReadGreen}
+		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadChecksQueued, ReadChecksRunning, ReadQueue,
+		ReadQueueDue, ReadLandings, ReadGreen}
 }
 
 // Valid reports a kind this build knows.
@@ -1148,6 +1162,13 @@ type ReadQuery struct {
 	// predates the kind refuses the read as a kind it does not know
 	// (ErrInvalid) — the box refused, never admitted by a row read as none.
 	CheckBox *CheckKey `json:"check_box,omitempty"`
+	// ChecksRunning is a `checks_running` read's question, REQUIRED for that
+	// kind and refused on every other: the repositories holding a running
+	// attempt, or one repository's running attempts by its id. An estate
+	// request's field and no record's, so it takes no versionedFields row: a
+	// node of a build that predates the kind refuses the read as a kind it
+	// does not know (ErrInvalid) — the sweep waits, never answered as none.
+	ChecksRunning *ChecksRunningQuery `json:"checks_running,omitempty"`
 	// ExpungeTips is an `expunge_tips` read's repository and instant:
 	// REQUIRED for that kind, refused on every other. An estate request's
 	// field and no record's, so it takes no versionedFields row: a node of a
@@ -1179,7 +1200,9 @@ type ReadQuery struct {
 	// log order, introduced and run_pushes, 1..MaxSnapshotItems (0 = the
 	// most) — run_pushes' the pushes of its run's repositories a page READS,
 	// whatever few of them name the run; checks 1..200 (0 = 50), the rows a
-	// page READS, as a listing of changes; a page of a duty listing —
+	// page READS, as a listing of changes; checks_queued 1..MaxSnapshotItems
+	// (0 = the most), the attempts a runner's claim walk reads a page; a page
+	// of a duty listing —
 	// `compaction_due`, `publication_due`, `expunge_due`, `changes_due`,
 	// `checks_due` — and of an `expunge_tips` read is MaxSnapshotItems and
 	// names none.
@@ -1232,9 +1255,14 @@ type ReadAnswer struct {
 	PathOwners []PathOwner      `json:"path_owners,omitempty"`
 	// Checks is a page of a `checks` read — and a `check_box` read's one
 	// attempt as its row stands, or none where the rows hold no such attempt
-	// — and Check a `check` read's one attempt whole.
+	// — and Check a `check` read's one attempt whole. A `checks_running`
+	// read of one repository answers its running attempts in Checks, and of
+	// none the repositories holding one in DueRepos.
 	Checks []CheckRow   `json:"checks,omitempty"`
 	Check  *CheckDetail `json:"check,omitempty"`
+	// Runnable is a page of a `checks_queued` read: the attempts waiting for
+	// a runner, oldest queued first.
+	Runnable []RunnableCheck `json:"runnable,omitempty"`
 	// Tips is a page of an `expunge_tips` read: object ids, each once on the
 	// page, in the order of the drops that name them — an object a later
 	// page names again is one more drop left, which its reader keeps once.
@@ -1749,6 +1777,24 @@ type ChecksDueQuery struct {
 	// pushed to on every landing is read at the home's pace, never at its
 	// own.
 	RefreshBefore time.Time `json:"refresh_before"`
+}
+
+// ChecksRunningQuery is a `checks_running` read's question: the repository
+// whose running attempts it reads, by id in its canonical spelling, or "" for
+// the repositories holding one — the listing a repository's home pages for
+// the attempts it sweeps.
+type ChecksRunningQuery struct {
+	RepoID string `json:"repo_id,omitempty"`
+}
+
+// RunnableCheck is one attempt a `checks_queued` read lists: its row, the
+// name of its repository — the name its box is given the repository under,
+// its clone's directory and its token's — and the definition it was queued
+// under, which is what its box runs, whatever its target's file says now.
+type RunnableCheck struct {
+	CheckRow
+	Repo string    `json:"repo"`
+	Def  *CheckDef `json:"def,omitempty"`
 }
 
 // CheckTargetDue is a target branch whose checks file its home owes a reading

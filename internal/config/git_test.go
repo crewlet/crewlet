@@ -134,6 +134,8 @@ func TestGitSettingsRefuseNegatives(t *testing.T) {
 		{"git:\n  max_processes: 1025\n", "git.max_processes"},
 		{"git:\n  max_transfers: -1\n", "git.max_transfers"},
 		{"git:\n  max_transfers: 65537\n", "git.max_transfers"},
+		{"git:\n  max_checks: -1\n", "git.max_checks"},
+		{"git:\n  max_checks: 1025\n", "git.max_checks"},
 	} {
 		t.Run(tc.path+"/"+strings.TrimSpace(strings.SplitN(tc.doc, ": ", 2)[1]), func(t *testing.T) {
 			t.Parallel()
@@ -142,9 +144,42 @@ func TestGitSettingsRefuseNegatives(t *testing.T) {
 			}
 		})
 	}
-	ok := "git:\n  cache_max_bytes: 1073741824\n  max_processes: 1024\n  max_transfers: 65536\n"
+	ok := "git:\n  cache_max_bytes: 1073741824\n  max_processes: 1024\n  max_transfers: 65536\n  max_checks: 1024\n"
 	if _, err := ParseRunnableBootstrap([]byte(ok), EnvOnly()); err != nil {
 		t.Fatalf("the bounds themselves are refused: %v", err)
+	}
+}
+
+// A NODE'S CONTAINER CHECKS ARE A QUARTER OF ITS CORES UNLESS IT SAYS: unset
+// git.max_checks is one for every four cores and at least one, a value set is
+// taken as written, and 0 — a setting of its own, never "unset" — runs none.
+//
+// Mutation: read 0 as unset (a plain int), and the node told to run no
+// container check runs its quarter.
+func TestMaxChecksIsAQuarterOfTheCoresUnlessSet(t *testing.T) {
+	t.Parallel()
+	parse := func(t *testing.T, doc string) Git {
+		t.Helper()
+		b, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
+		if err != nil {
+			t.Fatalf("refused: %v", err)
+		}
+		return b.Git
+	}
+	unset := parse(t, "git:\n  max_processes: 2\n")
+	for cores, want := range map[int]int{1: 1, 2: 1, 4: 1, 7: 1, 8: 2, 16: 4, 64: 16} {
+		if got := unset.MaxChecksFor(cores); got != want {
+			t.Errorf("unset on %d cores: %d checks, want %d", cores, got, want)
+		}
+	}
+	if got := parse(t, "git:\n  max_checks: 0\n").MaxChecksFor(64); got != 0 {
+		t.Errorf("max_checks: 0 on 64 cores runs %d container checks, want none", got)
+	}
+	if got := parse(t, "git:\n  max_checks: 3\n").MaxChecksFor(64); got != 3 {
+		t.Errorf("max_checks: 3 runs %d, want 3", got)
+	}
+	if parse(t, "git:\n  max_checks: 0\n").IsZero() {
+		t.Error("a block setting max_checks: 0 reads as one that sets nothing, and drops out of its export")
 	}
 }
 

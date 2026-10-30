@@ -542,6 +542,59 @@ func TestHomeOfJudgesEveryRepositoryAgainstOneReading(t *testing.T) {
 	}
 }
 
+// A REPOSITORY'S GIT ORDER IS EVERY LIVE GIT NODE, ITS HOME FIRST, THE SAME ON
+// EVERY NODE: GitOrder names each git node once — the asking node's own half
+// among them where it is built — with Home its first node, whichever node asks;
+// a node the router remembers silent keeps its place, since a check's claim is
+// ranked by this order on every node alike; and a placement that cannot say who
+// serves git answers unknown, a fleet with none ErrNoGitNode.
+//
+// Mutations: order it with the walk's demotions, and the suspect home falls
+// out of first place, red; answer the order without this node's own half, and
+// git-c is missing from its own order, red.
+func TestAGitOrderIsEveryGitNodeItsHomeFirst(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	holders := []string{"git-a", "git-b", "git-c", "git-d", "git-e"}
+	halves := f.gitNodes(t, holders)
+	f.git.set(func(p *fakePlacement) { p.nodes = []string{"git-a", "git-b", "git-d", "git-e"} })
+	ownHalf := f.gitRouter(t, "git-c", gitHalf{node: halves["git-c"]})
+	for i := range 50 {
+		repo := repoID(i)
+		order, err := ownHalf.GitOrder(repo)
+		if err != nil {
+			t.Fatalf("GitOrder(%s): %v", repo, err)
+		}
+		if got := slices.Sorted(slices.Values(order)); !slices.Equal(got, holders) {
+			t.Fatalf("GitOrder(%s) = %v, want every git node once, git-c's own half among them", repo, order)
+		}
+		home, err := ownHalf.Home(repo)
+		if err != nil || order[0] != home {
+			t.Fatalf("GitOrder(%s) = %v, and its home is (%s, %v)", repo, order, home, err)
+		}
+		order[0] = "scribbled"
+		if again, _ := ownHalf.GitOrder(repo); again[0] != home {
+			t.Fatalf("a caller's edit of one answer reached the next: %v", again)
+		}
+	}
+	repo := repoID(3)
+	before, err := ownHalf.GitOrder(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownHalf.markSuspect(before[0])
+	if after, err := ownHalf.GitOrder(repo); err != nil || !slices.Equal(after, before) {
+		t.Fatalf("GitOrder(%s) once its home went silent = (%v, %v), want %v unchanged", repo, after, err, before)
+	}
+	f.git.set(func(p *fakePlacement) { p.err = errors.New("the presence view answers unknown") })
+	if order, err := ownHalf.GitOrder(repo); err == nil || errors.Is(err, ErrNoGitNode) || order != nil {
+		t.Fatalf("GitOrder with the git placement unknown = (%v, %v), want the placement's error", order, err)
+	}
+	if order, err := newFleet(t).client.GitOrder(repo); !errors.Is(err, ErrNoGitNode) || order != nil {
+		t.Fatalf("GitOrder on a fleet with no git node = (%v, %v), want ErrNoGitNode", order, err)
+	}
+}
+
 // MAINTAINERS ARE JUDGED AGAINST ONE LISTING: MaintainerOf over a thousand
 // repositories, each at its own charge, reads the git listing ONCE and names
 // exactly the repositories Maintainer names this node for — a maintainer's

@@ -700,24 +700,27 @@ func TestTheHomeRecordsTheClassesItsGitRead(t *testing.T) {
 	}
 }
 
-// THE HOME IMPORTS NO QUERY, COMPACT OR HOST, and none of them imports another
-// or the home: internal/code/query, internal/code/compact, internal/code/host
-// and internal/code/home each reach the others' work through the estate's
-// router, so a step is the same whichever node answers it, and no one of them
-// can call another's in process past the router's walk.
-func TestTheHomeImportsNoQueryCompactOrHost(t *testing.T) {
+// THE HOME IMPORTS NO QUERY, COMPACT, HOST OR CHECK RUNNER, and none of them
+// imports another or the home: internal/code/query, internal/code/compact,
+// internal/code/host, internal/code/home and internal/code/checkrun each
+// reach the others' work through the estate's router — the check runner's
+// sweep the home's loop through the loop's own Worker interface — so a step
+// is the same whichever node answers it, and no one of them can call
+// another's in process past the router's walk.
+func TestTheHomeImportsNoQueryCompactHostOrCheckRunner(t *testing.T) {
 	t.Parallel()
 	const module = "github.com/crewlet/crewlet/"
-	four := []string{"internal/code/query", "internal/code/compact", "internal/code/host", "internal/code/home"}
+	five := []string{"internal/code/query", "internal/code/compact", "internal/code/host", "internal/code/home",
+		"internal/code/checkrun"}
 	root := sourcetree.Root(t)
-	for _, pkg := range four {
+	for _, pkg := range five {
 		p, err := build.Default.ImportDir(filepath.Join(root, filepath.FromSlash(pkg)), 0)
 		if err != nil {
 			t.Fatalf("read %s: %v", pkg, err)
 		}
-		for _, other := range four {
+		for _, other := range five {
 			if other != pkg && slices.Contains(p.Imports, module+other) {
-				t.Errorf("%s imports %s: the four reach each other's work through the estate's router", pkg, other)
+				t.Errorf("%s imports %s: the five reach each other's work through the estate's router", pkg, other)
 			}
 		}
 	}

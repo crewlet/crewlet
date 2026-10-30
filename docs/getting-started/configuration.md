@@ -1285,6 +1285,11 @@ store:
                                     #   more than one per 512 MiB of the node's
                                     #   memory — a transfer holds memory for its
                                     #   whole life, so size it to memory
+#   max_checks: 4                   #   the company's checks this node runs at
+                                    #   once in container cells; unset is a
+                                    #   quarter of its cores, at least one; 0
+                                    #   is none. Remote (e2b) checks are not
+                                    #   counted
 #   import_allow_private: false     #   let this node's imports and mirrors
                                     #   (pull and push alike) dial a host on a
                                     #   network that is not the public internet,

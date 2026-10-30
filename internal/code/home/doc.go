@@ -148,8 +148,11 @@
 // are at most [MergeabilityPerPass] a repository a window, each once
 // [MergeabilityRefresh] old.
 //
-// ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host
-// and this package never import each other (home_test.go holds the four):
+// ITS IMPORTS: internal/code/query, internal/code/compact, internal/code/host,
+// internal/code/checkrun and this package never import each other
+// (home_test.go holds the five) — the check runner's sweep of the checks whose
+// runner is gone is a [Worker] the engine registers, satisfying this
+// package's interface without importing it:
 // each reaches the others' work through the estate's router — a facts read
 // through its git walk, a record through its repository's committer — so a
 // home's turn is the same whichever node answers each step of it.

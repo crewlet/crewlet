@@ -129,10 +129,15 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got := codefault.ExpungePath(); !slices.Equal(got, expungePoints) {
 		t.Fatalf("ExpungePath() = %v\nwant the order an expunge reaches them: %v", got, expungePoints)
 	}
+	// A check's run walks CheckPath(): its claim applied, before any box.
+	if got := codefault.CheckPath(); !slices.Equal(got, []codefault.Point{codefault.CheckAfterClaim}) {
+		t.Fatalf("CheckPath() = %v\nwant the claim applied, before any box", got)
+	}
 	if got, wantAll := codefault.Points(), slices.Concat(want, syncPoints, compactPoints, publishPoints,
-		[]codefault.Point{codefault.WriteAfterBuild}, expungePoints); !slices.Equal(got, wantAll) {
+		[]codefault.Point{codefault.WriteAfterBuild}, expungePoints,
+		[]codefault.Point{codefault.CheckAfterClaim}); !slices.Equal(got, wantAll) {
 		t.Fatalf("Points() = %v\nwant the push path, then the sync's, the compaction's and the publication's, "+
-			"then the write's own, then the expunge's: %v",
+			"then the write's own, then the expunge's, then a check's run's: %v",
 			got, wantAll)
 	}
 

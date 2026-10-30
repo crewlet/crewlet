@@ -2050,6 +2050,39 @@ The node that publishes also holds:
   256 MiB of them one publication's — out of what the node keeps back for
   serving and the store, not its background budget.
 
+### Running checks on git nodes
+
+Every git node runs the company's [checks](../concepts/code-host.md#who-runs-a-check):
+each claims the queued attempts its repositories' git order ranks it first
+for, and a box of the company's sandbox catalogue runs each. A `container`
+check is a container on the git node's own machine — a repository's build or
+its tests, beside the code host's git — so **`git.max_checks`** bounds how many
+run there at once:
+
+```yaml
+git:
+  max_checks: 4      # unset: a quarter of the node's cores, at least one; 0: none
+```
+
+- **Unset**, a node runs one container check for every four cores
+  (GOMAXPROCS), and at least one: a check runs as many processes as it is let
+  — `go test ./...`, `make -j` — so four cores a check leave the node's own git
+  lanes (`max_processes`, a core a slot) three quarters of the machine, and a
+  parallel build room to be parallel. A node whose checks are most of its work
+  raises it; a node that should serve git and nothing else sets **`0`**, and
+  the fleet's other git nodes run its repositories' container checks two
+  seconds later, as the next of each repository's order.
+- **An `e2b` check runs on E2B's machines** and takes none of these; what a
+  company lets its remote checks spend is its own configuration's.
+- **A node needs `CREWLET_BOX_GIT_URL`** to run any check — the public
+  listener with `/box/git` on the end, where a check's box clones its commit,
+  and whose `/box/code` sibling a `checkout: none` check reads it at. A node
+  without it says `code_checks_not_run` once and runs none.
+- **`crewlet.code.checks.running{placement="container"}` pinned at
+  `git.max_checks`** while [`code_checks_backlog`](../reference/alarms.md)
+  stands is a fleet whose container cells are too few for its checks: raise
+  `max_checks` where the cores allow it, or add a git node.
+
 ---
 
 ## Observability

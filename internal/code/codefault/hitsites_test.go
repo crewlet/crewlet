@@ -23,10 +23,10 @@ const codefaultPath = "github.com/crewlet/crewlet/internal/code/codefault"
 // hitDirs are the directories the points are hit in: the code host's
 // pipeline, its engine write's build among it, and the suite's wrapping
 // publisher that hits the committer's — a push's — the cache, whose sync hits
-// its own, and the compactor, which hits the compaction's, the publication's
-// and the expunge's.
+// its own, the compactor, which hits the compaction's, the publication's
+// and the expunge's, and the check runner, which hits a check's run's.
 var hitDirs = []string{"internal/code/host", "internal/code/codetest", "internal/code/cache",
-	"internal/code/compact"}
+	"internal/code/compact", "internal/code/checkrun"}
 
 // hitSites counts, over the non-test Go files under each of dirs, every call
 // whose function is a selector named `fault` or `Hit` and whose second argument
@@ -103,7 +103,7 @@ var pointNames = map[string]codefault.Point{
 	"PublishAfterUpload": codefault.PublishAfterUpload, "PublishAfterPropose": codefault.PublishAfterPropose,
 	"WriteAfterBuild": codefault.WriteAfterBuild, "ExpungeAfterBuild": codefault.ExpungeAfterBuild,
 	"ExpungeAfterBegin": codefault.ExpungeAfterBegin, "ExpungeAfterRescueUpload": codefault.ExpungeAfterRescueUpload,
-	"ExpungeAfterCommit": codefault.ExpungeAfterCommit,
+	"ExpungeAfterCommit": codefault.ExpungeAfterCommit, "CheckAfterClaim": codefault.CheckAfterClaim,
 }
 
 // byPoint is counts keyed by identifier, read as points.

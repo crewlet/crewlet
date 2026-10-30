@@ -314,10 +314,12 @@ func everyReadAsked(id string) map[code.ReadKind]code.ReadQuery {
 		code.ReadChecksDue:      {ChecksDue: &code.ChecksDueQuery{RefreshBefore: t1}},
 		code.ReadCheckBox: {CheckBox: &code.CheckKey{RepoID: id, OID: strings.Repeat("6", 40), Target: mainRef, Name: "unit",
 			Attempt: 1}},
-		code.ReadQueue:    {Asker: asker, Repo: "web"},
-		code.ReadQueueDue: {QueueDue: &code.QueueDueQuery{}},
-		code.ReadLandings: {Asker: asker, Repo: "web", Target: "refs/heads/main"},
-		code.ReadGreen:    {Asker: asker, Repo: "web"},
+		code.ReadChecksQueued:  {},
+		code.ReadChecksRunning: {ChecksRunning: &code.ChecksRunningQuery{RepoID: id}},
+		code.ReadQueue:         {Asker: asker, Repo: "web"},
+		code.ReadQueueDue:      {QueueDue: &code.QueueDueQuery{}},
+		code.ReadLandings:      {Asker: asker, Repo: "web", Target: "refs/heads/main"},
+		code.ReadGreen:         {Asker: asker, Repo: "web"},
 	}
 }
 

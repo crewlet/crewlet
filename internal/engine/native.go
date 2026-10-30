@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
+	"github.com/crewlet/crewlet/internal/code/checkrun"
 	codecompact "github.com/crewlet/crewlet/internal/code/compact"
 	codehome "github.com/crewlet/crewlet/internal/code/home"
 	"github.com/crewlet/crewlet/internal/code/host"
@@ -201,6 +202,13 @@ type native struct {
 	// compactor, and nil where they are; stopped first in the code host's one
 	// bounded stop, before the compactor.
 	home *codehome.Loop
+
+	// checkRunner claims and runs the company's queued checks in boxes of
+	// this node's sandbox catalogue (internal/code/checkrun), built with
+	// codeHost and started with home, and nil where they are or where this
+	// node sets no CREWLET_BOX_GIT_URL; stopped FIRST in the code host's one
+	// bounded stop. A concrete type, as the compactor is.
+	checkRunner *checkrun.Runner
 
 	// gitCacheSize is how this node sized gitCache when it built the host —
 	// what [Engine.warnTiers] compares with each applied epoch's repository
@@ -484,7 +492,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			n.codeHost, n.gitReads, n.gitCache, n.gitCacheSize = parts.host, parts.reads, parts.cache,
 				parts.size
 			n.mergePreviews = parts.previews
-			n.compactor, n.home = parts.compactor, parts.home
+			n.compactor, n.home, n.checkRunner = parts.compactor, parts.home, parts.checks
 			n.withdrawCodeStatus = parts.withdrawStatus
 		}
 	}
@@ -833,6 +841,12 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// copy answers, and every turn asks a repository's writers for records.
 	if n.home != nil {
 		n.home.Start()
+	}
+	// AND THE CHECK RUNNER, for the same two reasons: its first walk reads the
+	// queue through the published runtime, and every check it runs asks
+	// records of its repository's checks writer and makes a box.
+	if n.checkRunner != nil {
+		n.checkRunner.Start()
 	}
 }
 

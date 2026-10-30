@@ -265,6 +265,48 @@ func TestACheckCellIsReachedForItsBackend(t *testing.T) {
 	}
 }
 
+// A CHECK RUNS IN THE CELL ITS FILE NAMES ONLY WHERE THE COMPANY ALLOWS IT: a
+// file naming none runs in the company's own cell, a file naming an allowed
+// one runs there, and a file naming one the company does not allow — or a
+// company resolving no cell at all — runs nowhere, with the sentence its
+// ending is recorded with naming what to change.
+//
+// Mutation: answer a named cell as it is, whatever the company allows, and
+// the file naming e2b runs on a company allowing containers alone, red.
+func TestACheckRunsOnlyInACellTheCompanyAllows(t *testing.T) {
+	t.Parallel()
+	both := mustParse(t, checksDoc(cells{local: true, image: true, e2b: true, defaultRunIn: "direct"},
+		"run_in: container", "allow_run_in: [container, e2b]"))
+	containers := mustParse(t, checksDoc(cells{local: true, image: true, e2b: true, defaultRunIn: "direct"},
+		"run_in: container"))
+	none := mustParse(t, checksDoc(cells{local: true, defaultRunIn: "direct"}))
+	for name, tc := range map[string]struct {
+		c     *config.Company
+		named config.Placement
+		want  config.Placement
+		why   string
+	}{
+		"naming none, the company's":    {c: containers, want: config.PlacementContainer},
+		"naming an allowed cell":        {c: both, named: config.PlacementE2B, want: config.PlacementE2B},
+		"naming a cell not allowed":     {c: containers, named: config.PlacementE2B, why: "does not allow"},
+		"a company resolving no cell":   {c: none, why: "names no cell a check runs in"},
+		"naming a cell, no cell at all": {c: none, named: config.PlacementContainer, why: "does not allow"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, why := tc.c.CheckCell(tc.named)
+			if got != tc.want || (tc.why == "") != (why == "") || !strings.Contains(why, tc.why) {
+				t.Errorf("CheckCell(%q) = %q, %q; want %q, a sentence holding %q", tc.named, got, why, tc.want,
+					tc.why)
+			}
+		})
+	}
+	var noCode *config.Company
+	if got, why := noCode.CheckCell(""); got != "" || why == "" {
+		t.Errorf("a company hosting no code runs a check in %q (%q)", got, why)
+	}
+}
+
 // THE SCHEMA ADMITS EXACTLY WHAT THE VALIDATOR DOES for code.checks: its
 // timeout's bounds are the constants validation holds it to, and each cell
 // field's enum is the one list of cells a check runs in.
