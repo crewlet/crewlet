@@ -116,7 +116,9 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 	t.Parallel()
 	chat := ghostServer(t)
 	company := ghostCompany(t, chat.URL)
-	e := &Engine{}
+	// A FLEET STORE, which every engine [New] builds has: the pass reads the
+	// seat access ledger once the Mattermost vendor has opened.
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
 	e.epoch.current.Store(company)
 
 	tr, err := mattermost.NewTransport(mattermost.TransportOptions{
