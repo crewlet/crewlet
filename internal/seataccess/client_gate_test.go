@@ -91,8 +91,9 @@ func wireMembers(typ reflect.Type) map[string]bool {
 }
 
 // THE DASHBOARD KNOWS EXACTLY THE VALUES THE ENGINE SENDS AND TAKES: the lanes,
-// GitHub's access words, the seat actions, the tool states and a step's op and
-// verb. A value the dashboard names that the engine refuses is a control that
+// GitHub's access words, the seat actions, the tool states, a step's op, verb
+// and actor, a sync's outcome, who disabled an account, a credential's source,
+// and who manages a lane or the document. A value the dashboard names that the engine refuses is a control that
 // is always refused; one the engine sends that the dashboard lacks is a row
 // drawn with no words.
 func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
@@ -128,6 +129,18 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 			string(seataccess.VerbDisable), string(seataccess.VerbRevoke), string(seataccess.VerbRemove),
 			string(seataccess.VerbRotate), string(seataccess.VerbRestore), string(seataccess.VerbApprove),
 		), func(v string) bool { return seataccess.StepVerb(v).Valid() }},
+		{"AccessActor", strs(string(seataccess.ByCrewlet), string(seataccess.ByYou)),
+			func(v string) bool { return seataccess.StepActor(v).Valid() }},
+		{"AccessOutcome", strs(
+			string(seataccess.OutcomeOK), string(seataccess.OutcomeFailed),
+			string(seataccess.OutcomeWaiting),
+		), nil},
+		{"AccessDisabledBy", strs(
+			string(seataccess.DisabledByCrewlet), string(seataccess.DisabledByHand),
+		), nil},
+		{"AccessCredentialSource", strs(seataccess.CredentialMinted, seataccess.CredentialExternal), nil},
+		{"AccessManaged", strs(seataccess.ManagedExternal), nil},
+		{"AccessManagedBy", strs(seataccess.ManagedByOperator), nil},
 	} {
 		client, err := clientsource.Union(tree, c.client)
 		if err != nil {

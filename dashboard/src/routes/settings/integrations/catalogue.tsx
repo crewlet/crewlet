@@ -20,7 +20,7 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -79,6 +79,7 @@ import {
   type ReconcileFinding,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
+import type { Model, Tool } from "./model.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
 // five-value union beside the one the design system publishes, which is the
@@ -882,6 +883,29 @@ function postManifest(answer: AppManifest): void {
   document.body.append(form);
   form.submit();
   form.remove();
+}
+
+/**
+ * The gesture a person takes at the vendor for one agent of a tool (GitHub's
+ * create and install), by handle: the one an integration's Agents tab and an
+ * agent's Access tab both draw, or null where the agent has none or the
+ * reader cannot take it.
+ */
+export function seatStepFor(tool: Tool, model: Model): (handle: string) => ReactNode {
+  const rows = new Map(
+    tool.seats.filter((r) => r.seat?.step && r.toolKey).map((r) => [r.handle, r]),
+  );
+  return (handle) => {
+    const row = rows.get(handle);
+    return row?.seat && row.toolKey && !model.guarded ? (
+      <SeatStep
+        app={tool.entry.name}
+        toolKey={row.toolKey}
+        seat={row.seat}
+        managed={model.managed}
+      />
+    ) : null;
+  };
 }
 
 /**

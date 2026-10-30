@@ -25,6 +25,8 @@ export interface LaneWords {
   off: string;
   /** What removing a seat's account does there, said in the remove dialog. */
   remove: string;
+  /** What rotating a seat's credential does there, said before it runs. */
+  rotate: string;
   /**
    * What a seat's scope is: its column heading, a single item, an empty list,
    * and where an empty list is literal, the hint under a seat that is on with
@@ -45,6 +47,8 @@ const GENERIC: LaneWords = {
   turnOn: "Turning it on creates its account with the chosen access and its own credential.",
   off: "Crewlet disables the account and revokes its credential. The account and its history stay.",
   remove: "Crewlet removes the account at the vendor.",
+  rotate:
+    "Crewlet mints a new credential and revokes the old one. Anything still using the old one stops working.",
   tool: "Its tool server, one per agent",
   server: "vendor",
 };
@@ -57,6 +61,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     off: "Crewlet disables the service account and deletes its application key. Its monitors and dashboards keep their author, and turning it back on mints a new key.",
     remove:
       "Datadog never erases a user, so removing keeps the account disabled and stops Crewlet tracking it.",
+    rotate:
+      "Crewlet mints a new application key for the service account and deletes the old one. Anything still using the old key stops working.",
     tool: "Datadog MCP server, one per agent",
     server: "datadog",
   },
@@ -68,6 +74,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     off: "Crewlet suspends the agent's app installation, so every token it holds stops working at once. The app stays registered, so turning it back on needs no person.",
     remove:
       "Crewlet uninstalls the app and clears its key. GitHub has no API to delete an app registration, so a person deletes it there.",
+    rotate: "GitHub issues the app's tokens hourly, so there is nothing to rotate.",
     scope: { noun: "Repositories", singular: "repository", empty: "All installed repositories" },
     tool: "GitHub MCP server, one per agent",
     server: "github",
@@ -79,6 +86,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Turning it on creates a GitLab service account with the chosen role and its own token.",
     off: "Crewlet revokes the service account's tokens. With an instance administrator token it also blocks the account; otherwise it removes the account's memberships. Its commits and comments stay.",
     remove: "Crewlet deletes the account. GitLab keeps its contributions under Ghost User.",
+    rotate:
+      "Crewlet mints a new token for the service account and revokes the old one. Anything still using the old token stops working.",
     scope: { noun: "Projects", singular: "project", empty: "The whole group" },
     tool: "GitLab MCP server, one per agent",
     server: "gitlab",
@@ -91,6 +100,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     off: "Crewlet removes the account from its Jira project roles and narrows its API token to Confluence, or revokes the token when Confluence is also off. Atlassian product access is one grant for every agent and stays, since Atlassian has no documented way to remove it.",
     remove:
       "With both products off, Crewlet deletes the service account. Its issues and comments keep its name.",
+    rotate:
+      "Crewlet mints a new API token for the service account and revokes the old one, for Jira and Confluence alike.",
     scope: { noun: "Projects", singular: "project", empty: "No project" },
     tool: "Crewlet's own Jira tools",
     server: "jira",
@@ -103,6 +114,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     off: "Crewlet removes the account's Confluence space access and narrows its API token to Jira, or revokes the token when Jira is also off. Atlassian product access is one grant for every agent and stays, since Atlassian has no documented way to remove it.",
     remove:
       "With both products off, Crewlet deletes the service account. Its pages keep their author.",
+    rotate:
+      "Crewlet mints a new API token for the service account and revokes the old one, for Jira and Confluence alike.",
     scope: { noun: "Spaces", singular: "space", empty: "No space" },
     tool: "Crewlet's own Confluence tools",
     server: "confluence",
@@ -115,6 +128,8 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     off: "Crewlet revokes the app's bot token, so the agent stops reading and posting. The app stays in your workspace, and turning it back on needs a person to approve the install.",
     remove:
       "Slack has no API to delete an app, so a person deletes it at Slack under Basic Information.",
+    rotate:
+      "Crewlet revokes the app's bot token. The agent stays off Slack until a person approves the install again.",
     tool: "Slack MCP server, one per agent",
     server: "slack",
     install: "Install in Slack",
@@ -126,6 +141,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     off: "Crewlet revokes the bot's tokens and deactivates it. Its posts stay.",
     remove:
       "Mattermost bots are deactivated, never deleted, so their posts keep their author. Removing stops Crewlet tracking it.",
+    rotate: "Crewlet mints a new token for the bot and revokes the old one.",
     scope: {
       noun: "Channels",
       singular: "channel",
