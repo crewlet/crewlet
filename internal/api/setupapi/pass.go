@@ -217,6 +217,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			return
 		}
 		in.Sink = sink
+		in.By = attributionOf(r)
 	}
 
 	// DETACHED FROM THE REQUEST, then guarded, then bounded — in that order.
