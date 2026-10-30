@@ -266,6 +266,12 @@ roles:
   View is granted first and removed last, because Confluence requires it for
   every other permission and removes them all with it.
 
+- **Product access only**, offered first on either kind of site: the account
+  has Confluence and holds no space role or permission of its own, so the
+  site's and each space's permissions alone decide what it sees. Leave
+  `space_role`, `operations` and `spaces` out. Moving a seat to it removes its
+  space roles or permissions; a `spaces` list needs a role or permissions.
+
 Admin, and any custom role or permission set that administers a space, is an
 administration grant: a raise to it carries a warning and asks for a fresh
 step-up. Off removes the seat's space access and replaces its token with one

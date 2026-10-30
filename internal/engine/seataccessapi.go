@@ -207,7 +207,8 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		}
 		steps := map[seataccess.Lane][]seataccess.Step{}
 		if registered {
-			if steps, err = seataccess.Plan(vendor, seatInput(seat.SeatRef, next, rec, held)); err != nil {
+			if steps, err = seataccess.Plan(vendor, seatInput(seat.SeatRef, next, rec, held,
+				offers)); err != nil {
 				return answer, plan, err
 			}
 		}
@@ -258,7 +259,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 	steps := map[seataccess.Lane][]seataccess.Step{}
 	if registered {
 		var err error
-		if steps, err = seataccess.Plan(vendor, seatInput(ref, want, rec, held)); err != nil {
+		if steps, err = seataccess.Plan(vendor, seatInput(ref, want, rec, held, offers)); err != nil {
 			return sa, err
 		}
 	}
@@ -294,11 +295,15 @@ func handedIn(sa *seataccess.SeatAnswer, role *config.Role, kind integration.Kin
 	}
 }
 
-// seatInput is one seat's plan input from its document and its ledger record.
+// seatInput is one seat's plan input from its document and its ledger record,
+// with what each lane offers now, so a step names a live role as the vendor
+// does rather than by its id.
 func seatInput(ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desired,
-	rec seataccess.Record, held bool) seataccess.SeatInput {
+	rec seataccess.Record, held bool,
+	offers map[seataccess.Lane]seataccess.Options) seataccess.SeatInput {
 
-	in := seataccess.SeatInput{Seat: ref, Want: want, Have: map[seataccess.Lane]seataccess.Observed{}}
+	in := seataccess.SeatInput{Seat: ref, Want: want, Have: map[seataccess.Lane]seataccess.Observed{},
+		Options: offers}
 	for lane, lr := range rec.Lanes {
 		in.Have[lane] = lr.Observed
 	}
