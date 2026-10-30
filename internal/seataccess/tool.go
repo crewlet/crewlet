@@ -4,14 +4,15 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 )
 
-// ToolBinding is how a seat's own credential reaches its tool server for one
-// lane (D15). The table is the org model's ([config.SeatToolBindings]), which
-// is where the binding is made, so what a lane reports and what a seat's
-// server is started with cannot disagree.
+// ToolBinding is a recognised server's binding for one integration (D15). The
+// table is the org model's ([config.SeatToolBindings]), which is where a
+// seat's credential is bound, so what a lane reports and what a seat's server
+// is started with cannot disagree.
 type ToolBinding = config.SeatToolBinding
 
-// ToolFor is lane's binding, or nil where the engine's own tools read the
-// credential directly (Jira, Confluence, Mattermost).
+// ToolFor is the conventional server this build recognises for lane's
+// integration, or nil where it recognises none. A company binds any other
+// server by declaring its `seat_credentials`.
 func ToolFor(lane Lane) *ToolBinding {
 	b, ok := config.SeatToolBindingFor(string(lane))
 	if !ok {
@@ -22,18 +23,18 @@ func ToolFor(lane Lane) *ToolBinding {
 
 // ToolStateOf is whether a seat can use its credential through a tool on lane
 // right now, as the access route reports it: off while the seat or its
-// account is off, builtin where the engine's own tools read the credential,
-// no_server where the company declares no per-seat server for it, waiting
-// until the credential is sealed, and live after.
+// account is off; live or waiting where a per-seat server reads the lane's
+// credential (waiting until the credential is sealed); and otherwise builtin
+// for Jira and Confluence, whose credential the engine's own tools read, and
+// no_server for the rest.
 func ToolStateOf(c *config.Company, lane Lane, want Desired, have Observed) ToolState {
 	if !want.Enabled || !have.Exists || !have.Enabled {
 		return ToolOff
 	}
-	b := ToolFor(lane)
-	if b == nil {
-		return ToolBuiltin
-	}
-	if c == nil || c.PerSeatServer(b.Server) == nil {
+	if c == nil || len(c.SeatServersFor(string(lane.Kind()))) == 0 {
+		if lane == LaneJira || lane == LaneConfluence {
+			return ToolBuiltin
+		}
 		return ToolNoServer
 	}
 	if have.Credential == nil && lane != LaneGitHub {
