@@ -3606,9 +3606,10 @@ engine's own wording and never a quote of GitHub's response body, because that
 body carries the app's private key.
 
 **The roster says what is outstanding.** A seat entry in a tool's `seats` array
-carries three more fields where a per-seat app has tiers and clicks: `tier` is
-the seat's access tier, `step` is what is left as a closed set of `create_app`
-and `install_app`, and `action_url` is where a person goes to do it. Two steps
+carries two more fields where a per-seat app has clicks: `step` is what is
+left as a closed set of `create_app` and `install_app`, and `action_url` is
+where a person goes to do it. What the seat may do at GitHub is not on the
+roster; it is the seat's own permissions, on the integration's access route. Two steps
 rather than one, because they are two acts minutes or days apart and an
 operator who has done the first needs to be told the second is left rather than
 shown the same button. `action_url` is **empty for `create_app`**, and that is

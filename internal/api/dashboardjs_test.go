@@ -1381,8 +1381,15 @@ const (
 	// integrations screen and the agent page share and the first load does
 	// not fetch. Its styles and the integrations screen's left the entry
 	// stylesheet for that chunk, so the first load stayed within its budget.
-	// 4808 KiB, which still refuses a doubled baseline.
-	treeBudget = 4<<20 + 712<<10
+	// 4808 KiB, which still refuses a doubled baseline. The access review's
+	// fixes (an account turned off by hand offering its two choices, a wait
+	// said in the sync's own words, a stale save planned again, Keep stating
+	// its revision, each seat action's own pending state and answer, Rotate
+	// confirmed with what it does at the vendor, a blocked install drawn as
+	// a link, and Check now saying the loop's answer) took it from 4807.3 KiB
+	// to 4810.0 KiB (+2.7 KiB). 4811 KiB, which still refuses a doubled
+	// baseline.
+	treeBudget = 4<<20 + 715<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

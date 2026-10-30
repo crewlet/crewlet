@@ -14,7 +14,7 @@
  *   words, so the row stays at one size.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Button,
   Callout,
@@ -34,7 +34,7 @@ import type {
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
-import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
+import { accessApi, isStale, refusalWords, type AccessDraft } from "./api.ts";
 import { lanesOf, levelName, levelsHeading, scopeApplies, scopeWords, type Lane } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
@@ -120,20 +120,27 @@ export function ReviewDialog({
   draft,
   onClose,
   onSaved,
+  onStale,
 }: {
   kind: string;
   name: string;
   data: AccessAnswer;
   draft: AccessDraft;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (answer: AccessAnswer) => void;
+  /** A save refused because somebody saved in between: read again, keeping the draft. */
+  onStale: () => void;
 }) {
   const [plan, setPlan] = useState<AccessPlanAnswer | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // PLANNED AGAIN FOR EVERY REVISION READ, so a review left open across a
+  // colleague's save shows what the next sync does now.
+  const revision = data.revision;
   useEffect(() => {
     let live = true;
+    setPlan(null);
     accessApi.plan(kind, draft).then(
       (p) => {
         if (live) setPlan(p);
@@ -145,7 +152,7 @@ export function ReviewDialog({
     return () => {
       live = false;
     };
-  }, [kind, draft]);
+  }, [kind, draft, revision]);
 
   const lanes = lanesOf(data);
   const changed = data.seats.flatMap((seat) =>
@@ -190,11 +197,11 @@ export function ReviewDialog({
               setSaving(true);
               setError("");
               try {
-                await accessApi.save(kind, draft, data.revision);
-                onSaved();
+                onSaved(await accessApi.save(kind, draft, data.revision));
               } catch (err) {
                 setError(refusalWords(err));
                 setSaving(false);
+                if (isStale(err)) onStale();
               }
             }}
           >
@@ -250,6 +257,54 @@ export function ReviewDialog({
   );
 }
 
+/** A confirmation before one action on one seat's lane, saying what it does at the vendor. */
+function SeatConfirm({
+  title,
+  confirm,
+  danger,
+  onClose,
+  onConfirm,
+  children,
+}: {
+  title: string;
+  confirm: string;
+  danger?: boolean;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+  children: ReactNode;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal
+      open
+      size="md"
+      role="alertdialog"
+      onClose={onClose}
+      title={title}
+      footer={
+        <>
+          <Button size="small" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            size="small"
+            variant={danger ? "danger" : "primary"}
+            loading={busy}
+            onClick={async () => {
+              setBusy(true);
+              await onConfirm();
+            }}
+          >
+            {confirm}
+          </Button>
+        </>
+      }
+    >
+      <div className="agent-access-review">{children}</div>
+    </Modal>
+  );
+}
+
 export function RemoveDialog({
   name,
   seat,
@@ -263,40 +318,43 @@ export function RemoveDialog({
   onClose: () => void;
   onRemove: () => Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
   return (
-    <Modal
-      open
-      size="md"
-      role="alertdialog"
-      onClose={onClose}
+    <SeatConfirm
       title={`Remove ${seat.name}'s ${lane.name} account?`}
-      footer={
-        <>
-          <Button size="small" variant="ghost" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            size="small"
-            variant="danger"
-            loading={busy}
-            onClick={async () => {
-              setBusy(true);
-              await onRemove();
-            }}
-          >
-            Remove account
-          </Button>
-        </>
-      }
+      confirm="Remove account"
+      danger
+      onClose={onClose}
+      onConfirm={onRemove}
     >
-      <div className="agent-access-review">
-        <p>{laneWords(lane.key).remove}</p>
-        <p className="t-caption">
-          Turning {seat.name} on at {name} again later creates a new account with a new credential.
-        </p>
-      </div>
-    </Modal>
+      <p>{laneWords(lane.key).remove}</p>
+      <p className="t-caption">
+        Turning {seat.name} on at {name} again later creates a new account with a new credential.
+      </p>
+    </SeatConfirm>
+  );
+}
+
+/** Rotation, said before it runs: what the vendor does, and what stops working. */
+export function RotateDialog({
+  seat,
+  lane,
+  onClose,
+  onRotate,
+}: {
+  seat: AccessSeat;
+  lane: Lane;
+  onClose: () => void;
+  onRotate: () => Promise<void>;
+}) {
+  return (
+    <SeatConfirm
+      title={`Rotate ${seat.name}'s ${lane.name} credential?`}
+      confirm="Rotate credential"
+      onClose={onClose}
+      onConfirm={onRotate}
+    >
+      <p>{laneWords(lane.key).rotate}</p>
+    </SeatConfirm>
   );
 }
 

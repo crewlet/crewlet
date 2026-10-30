@@ -415,6 +415,8 @@ test("Check now sits beside the tabs on every tab, and asks the loop to look", a
   expect(screen.getByRole("button", { name: "Check now" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Check now" }));
   await waitFor(() => expect(fetched).toContain("POST /setup/integrations/gitlab/check"));
+  // THE LOOP'S ANSWER IS SAID, as the control used to say it.
+  expect((await screen.findByRole("status")).textContent).toBe("Crewlet is looking now.");
 });
 
 // THE ADDRESS APPS DELIVER TO, said once at the foot of the home rather than

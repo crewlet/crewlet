@@ -58,6 +58,9 @@ type chatServer struct {
 
 	bots  map[string]string // username -> user id
 	names map[string]string // user id -> display name
+	// ledger is the bots the access sync's ledger records, by seat handle:
+	// what the engine hands the company's pass as [mattermost.Options.Managed].
+	ledger map[string]string // handle -> user id
 	// descriptions is the bot record's own field, which is where this
 	// engine records that IT disabled a bot. A user carries none, so a
 	// fixture that only served users could not exercise the marker at all.
@@ -378,7 +381,8 @@ func chatClientAs(t *testing.T, srv *chatServer, token string) *mattermost.Clien
 
 func newChatServer() *chatServer {
 	return &chatServer{
-		bots: map[string]string{}, names: map[string]string{}, off: map[string]bool{},
+		bots: map[string]string{}, names: map[string]string{}, ledger: map[string]string{},
+		off:    map[string]bool{},
 		tokens: map[string][]mattermost.Token{}, settings: map[string]string{},
 		teamOf: map[string]bool{}, members: map[string]bool{},
 		channels: map[string]string{"general": "ch-general", "leadership": "ch-lead"},
@@ -702,17 +706,30 @@ func reconcileChatWith(t *testing.T, srv *chatServer, roles []*org.Role,
 	tune func(*mattermost.Options),
 ) (*mattermost.Result, error) {
 	t.Helper()
+	srv.mu.Lock()
+	managed := maps.Clone(srv.ledger)
+	srv.mu.Unlock()
 	opts := mattermost.Options{
 		Client: chatClient(t, srv), Config: enabledChat(),
-		Org: &org.Organization{Name: "Nimbus", Roles: roles},
+		Org: &org.Organization{Name: "Nimbus", Roles: roles}, Managed: managed,
 	}
 	tune(&opts)
 	return mattermost.Reconcile(context.Background(), opts)
 }
 
 // seedBot puts a bot the access sync created on the instance, under a display
-// name, and answers its id.
+// name, records it in the ledger, and answers its id.
 func seedBot(srv *chatServer, handle, displayName string) string {
+	id := seedForeignBot(srv, handle, displayName)
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	srv.ledger[handle] = id
+	return id
+}
+
+// seedForeignBot puts a bot under a seat's username that the ledger does not
+// record: one somebody else made, which is not this engine's to rename.
+func seedForeignBot(srv *chatServer, handle, displayName string) string {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	id := "bot-" + handle
@@ -820,6 +837,30 @@ func TestARenamedRoleUpdatesTheBotsDisplayName(t *testing.T) {
 	}
 	if len(res.Renamed) != 1 {
 		t.Errorf("Renamed = %v, want the rename reported", res.Renamed)
+	}
+}
+
+// A BOT THE LEDGER DOES NOT RECORD KEEPS ITS NAME, even under a seat's
+// username: it is somebody else's, and the company's pass renames only the
+// bots the access sync manages.
+func TestARenamedRoleLeavesABotTheLedgerDoesNotRecordAlone(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	const theirs = "A colleague's bot"
+	id := seedForeignBot(srv, "ceo", theirs)
+	renamed := chatSeat("Chief Executive", "")
+	renamed.DeclaredHandle = "ceo"
+	before := srv.mutations()
+	res, err := reconcileChat(t, srv, []*org.Role{renamed})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	srv.mu.Lock()
+	got := srv.names[id]
+	srv.mu.Unlock()
+	if got != theirs || len(res.Renamed) != 0 || srv.mutations() != before {
+		t.Errorf("display name = %q, Renamed = %v, %d write(s); want the bot left as it is",
+			got, res.Renamed, srv.mutations()-before)
 	}
 }
 

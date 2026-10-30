@@ -22,9 +22,12 @@ type BotAccount struct {
 	Username string
 	// Deactivated is the account's own state at Mattermost.
 	Deactivated bool
-	// DeactivatedHere reports that THIS engine deactivated it: the bot's
-	// description is [DisconnectedDescription]. Only such a bot is ever
-	// turned back on automatically (D3).
+	// Marked reports that the bot's description is [DisconnectedDescription]:
+	// this engine's record that it turned the bot off. Read for who
+	// deactivated a bot the ledger does not record ([seataccess.DisabledByOf])
+	// and, on a live bot, as a stale marker to take off.
+	Marked bool
+	// DeactivatedHere reports a deactivated bot carrying the marker.
 	DeactivatedHere bool
 	// Roles are the system roles it holds, normalized.
 	Roles []string
@@ -54,17 +57,16 @@ func (c *Client) ObserveBot(ctx context.Context, userID, teamID string) (BotAcco
 		ID: user.ID, Username: user.Username, Deactivated: user.DeleteAt != 0,
 		Roles: RolesOf(user), channelIDs: map[string]string{},
 	}
-	if out.Deactivated {
-		// ASKED ONLY OF A DEACTIVATED BOT: the description is a second
-		// request, and the question it answers has no meaning for a bot
-		// that is running.
-		record, recordErr := c.BotRecord(ctx, user.ID)
-		if recordErr != nil {
-			return BotAccount{}, true, fmt.Errorf(
-				"mattermost: read whether this engine deactivated %s: %w", user.Username, recordErr)
-		}
-		out.DeactivatedHere = strings.TrimSpace(record.Description) == DisconnectedDescription
+	// THE MARKER, read of every bot: on a deactivated one it says whether
+	// this engine turned it off, and on a live one it is stale and comes
+	// off before anything else is done to the bot.
+	record, recordErr := c.BotRecord(ctx, user.ID)
+	if recordErr != nil {
+		return BotAccount{}, true, fmt.Errorf(
+			"mattermost: read whether this engine deactivated %s: %w", user.Username, recordErr)
 	}
+	out.Marked = strings.TrimSpace(record.Description) == DisconnectedDescription
+	out.DeactivatedHere = out.Deactivated && out.Marked
 	channels, err := c.Channels(ctx, user.ID, teamID)
 	if err != nil {
 		return BotAccount{}, true, fmt.Errorf(
@@ -192,17 +194,28 @@ func (c *Client) Deactivate(ctx context.Context, bot BotAccount) error {
 		return nil
 	}
 	if err := c.DisableBot(ctx, bot.ID); err != nil {
-		return fmt.Errorf("deactivate the bot: %w", err)
+		// THE MARKER COMES OFF AGAIN, or the bot is left live and marked
+		// as this engine's off: a deactivation by somebody else later would
+		// then read as this engine's and be undone (D3). Detached, because
+		// the failure is often the cancellation itself.
+		disableErr := fmt.Errorf("deactivate the bot: %w", err)
+		if clearErr := c.ClearDisconnected(context.WithoutCancel(ctx), bot.ID); clearErr != nil {
+			return errors.Join(disableErr, fmt.Errorf("take the marker off again: %w", clearErr))
+		}
+		return disableErr
 	}
 	return nil
 }
 
 // TurnOff revokes the tokens this engine minted on a bot, then marks and
-// deactivates it.
+// deactivates it: a remove, which leaves the bot unmanaged and so can leave
+// no token behind.
 //
 // THE TOKENS FIRST: a disabled bot keeps its tokens, so one deactivated with
 // a live token is an agent that works again the moment anybody re-enables
-// it. One rule for a seat turned off, a departed seat and a disconnect.
+// it. A seat turned off takes the other order, as two steps
+// ([seataccess.OpDisable], then [seataccess.OpRevoke]): the bot stays
+// managed, so a revoke that fails is planned again on the next pass.
 func (c *Client) TurnOff(ctx context.Context, bot BotAccount, handle string) error {
 	if _, err := c.RevokeEngineTokens(ctx, bot, handle); err != nil {
 		return err
@@ -210,23 +223,26 @@ func (c *Client) TurnOff(ctx context.Context, bot BotAccount, handle string) err
 	return c.Deactivate(ctx, bot)
 }
 
-// TurnOn reactivates a bot and clears the marker.
+// TurnOn takes the marker off a bot and reactivates it.
 //
-// THE MARKER GOES WITH IT, or a live bot still described as disconnected
-// would read as this engine's off on the next pass.
+// THE MARKER FIRST: a run interrupted between the two leaves a deactivated
+// bot with no marker, which the ledger still records as this engine's off,
+// where the other order would leave a live bot marked as off, whose later
+// deactivation by somebody else would read as this engine's and be undone.
 func (c *Client) TurnOn(ctx context.Context, bot BotAccount) error {
-	if err := c.EnableBot(ctx, bot.ID); err != nil {
-		return fmt.Errorf("reactivate the bot: %w", err)
-	}
 	if err := c.ClearDisconnected(ctx, bot.ID); err != nil {
 		return fmt.Errorf("clear the bot's %q description: %w", DisconnectedDescription, err)
+	}
+	if err := c.EnableBot(ctx, bot.ID); err != nil {
+		return fmt.Errorf("reactivate the bot: %w", err)
 	}
 	return nil
 }
 
 // RetireTokens revokes the tokens this engine minted on a bot other than keep,
-// which is a rotation's second half: keep was minted and sealed by the step
-// before, so the tokens it replaces hold values nothing reads.
+// which is the second half of a mint, an enable that mints and a rotation:
+// keep was minted and sealed by the step before, so the tokens it replaces
+// hold values nothing reads.
 //
 // IT REFUSES RATHER THAN GUESSES. Mattermost lists no creation time for a
 // token, so the one it keeps is named; a keep the bot does not hold means the
@@ -235,8 +251,8 @@ func (c *Client) TurnOn(ctx context.Context, bot BotAccount) error {
 func (c *Client) RetireTokens(ctx context.Context, bot BotAccount, handle, keep string) (int, error) {
 	held := bot.MintedTokens(handle)
 	if keep == "" || !slices.ContainsFunc(held, func(t Token) bool { return t.ID == keep }) {
-		return 0, errors.New("mattermost: the token this rotation minted is not on the bot, " +
-			"so no older token was revoked; rotate again")
+		return 0, errors.New("mattermost: the token the step before minted is not on the bot, " +
+			"so no older token was revoked; rotate the agent's token")
 	}
 	return c.RevokeMinted(ctx, bot.ID, TokenDescription(handle), keep)
 }

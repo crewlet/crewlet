@@ -318,12 +318,12 @@ Usage:
                               on their own scripts or against a candidate model
   crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's coding CLI
                               starts, relaying its stdio to the engine's tools
-  crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
+  crewlet gitlab <cmd>        Register a GitLab group's webhook and its signing secret
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
-  crewlet slack <cmd>         Create, update and install one Slack app per seat
+  crewlet slack <cmd>         Retired: each agent's Slack app is the reconcile loop's
   crewlet confluence <cmd>    Register the inbound hooks; publish markdown and tool skills into spaces
-  crewlet mattermost <cmd>    Reconcile a Mattermost team, and diagnose one
+  crewlet mattermost <cmd>    Diagnose a Mattermost install
   crewlet version             Print the version
   crewlet help                Show this message
 
