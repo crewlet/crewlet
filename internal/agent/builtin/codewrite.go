@@ -105,6 +105,38 @@ func CodeWrites() []string {
 		CodeProtectBranchTool}
 }
 
+// CodeWritesWithheld is the code writes a seat whose role.code.access reads
+// tier is never offered: all ten where the tier caps the seat below write
+// ([code.Tier.Cap]) — read_only, which is also an unset tier, review, and a
+// value no build writes, which caps at nothing — and none at full_access.
+//
+// NO REPOSITORY'S GRANT COULD ADMIT ONE, whatever the chart relates the seat
+// to it by. A seat holds the least of its tier and its relation
+// ([code.GrantOf]), so below write it moves no ref anywhere — a push needs
+// write, or the full_access tier for the seat's own namespace
+// ([code.Grant.MayPush]) — and every lifecycle request a tool sends needs
+// maintain, a scratch repository's create full_access itself. Offered, each is
+// a tool such a seat reaches for and is refused `not_permitted` on every
+// repository, round after round; and each is paid for on every round besides,
+// its definition in a catalogue nothing caches ([codeCatalogueBudget] in the
+// tests) and the executor's guidance on changing code gated on holding them —
+// by most of a company's seats, read_only being the default.
+//
+// THE TIER, NOT THE CHART, because only the tier caps a seat on every
+// repository at once: a relation is one repository's, and a seat that writes
+// one repository and reads the rest is offered the writes for the one. Asked
+// per turn beside the authority table's refusals, over the epoch the turn is
+// pinned to (internal/engine's Company.withheldFrom), so a seat raised to
+// full_access is offered them from its next turn — and NOT on the authority
+// table: a role grant there is one only an administrator sets
+// (authz.SeatGrant), while a unit's lead sets its seats' tier.
+func CodeWritesWithheld(tier code.Tier) []string {
+	if tier.Cap() >= code.AccessWrite {
+		return nil
+	}
+	return CodeWrites()
+}
+
 // CodeWriter is the code host's writes as these tools ask them —
 // estate.CodeSeam, declared here by its consumer: an engine write asked of
 // the repository's home git node, and a lifecycle request asked of a data

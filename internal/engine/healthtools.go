@@ -2,11 +2,13 @@ package engine
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz/orgchart"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/tools"
 )
@@ -32,24 +34,37 @@ func HealthToolDeps(e *Engine) builtin.HealthDeps {
 	}
 	deps := builtin.HealthDeps{Leases: e.backends.Coord, Self: e.id,
 		Now: func() time.Time { return time.Now().UTC() }}
-	if code := CodeToolDeps(e); code.Code != nil {
-		deps.Status, deps.Code = e, code
+	if reads := CodeToolDeps(e); reads.Code != nil {
+		deps.Status, deps.Code = e, reads
 	}
 	return deps
 }
 
 // withheldFrom is the builtins of reg that handle's surfaces must not offer it
-// this turn: those the authority table refuses the seat before any object is
-// named (builtin.Withheld) — a verb whose row names a role grant the seat's
-// role does not carry — decided over THIS EPOCH's chart, the one the turn is
-// pinned to and builds its prompt from, as the seat the turn acts as
+// this turn, sorted: those the authority table refuses the seat before any
+// object is named (builtin.Withheld) — a verb whose row names a role grant the
+// seat's role does not carry — decided over THIS EPOCH's chart, the one the
+// turn is pinned to and builds its prompt from, as the seat the turn acts as
 // (turnctx.SeatPrincipal), so what the turn is offered and what each of its
-// calls is decided as are one principal.
+// calls is decided as are one principal; and the code writes, where the
+// seat's code tier writes no repository at all (builtin.CodeWritesWithheld) —
+// a refusal every repository's grant makes, which the table, admitting
+// everybody to a code write so each repository's grant decides it, cannot
+// make ahead of the calls. The tier is read off the same epoch's role, as the
+// code host's roster reads it (codeRoster).
 func (c *Company) withheldFrom(ctx context.Context, handle string, reg *tools.Registry) []string {
 	role := c.Org.AgentSeatByHandle(handle)
 	if role == nil || reg == nil {
 		return nil
 	}
 	ctx = iam.WithPrincipal(ctx, turnctx.SeatPrincipal(c.Org, role))
-	return builtin.Withheld(ctx, builtin.Decide(orgchart.Of(c.Org)), reg.Snapshot())
+	withheld := builtin.Withheld(ctx, builtin.Decide(orgchart.Of(c.Org)), reg.Snapshot())
+	for _, name := range builtin.CodeWritesWithheld(code.Tier(role.CodeAccess)) {
+		if entry, ok := reg.Lookup(name); ok && entry.Origin == tools.OriginBuiltin &&
+			!slices.Contains(withheld, name) {
+			withheld = append(withheld, name)
+		}
+	}
+	slices.Sort(withheld)
+	return withheld
 }

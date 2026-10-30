@@ -204,6 +204,76 @@ func TestNoWorkerIsGivenACodeWrite(t *testing.T) {
 	}
 }
 
+// tierRoster is a chart of one agent seat, `s`, at tier, leading the one unit
+// `u`: the highest relation the chart can give a seat on a repository — the
+// effective lead of the unit owning it, or the owner of its own scratch
+// repository — so a grant it does not reach is reached by no seat at tier.
+type tierRoster struct{ tier code.Tier }
+
+func (r tierRoster) Seat(handle string) (code.RosterSeat, bool) {
+	return code.RosterSeat{Handle: "s", Tier: r.tier, Unit: "u"}, handle == "s"
+}
+
+func (tierRoster) Lead(unit string) string {
+	if unit == "u" {
+		return "s"
+	}
+	return ""
+}
+
+func (r tierRoster) Leads(unit string) []string {
+	if lead := r.Lead(unit); lead != "" {
+		return []string{lead}
+	}
+	return nil
+}
+
+func (tierRoster) Within(unit, ancestor string) bool { return unit == ancestor && unit != "" }
+
+// THE CODE WRITES ARE WITHHELD EXACTLY WHERE NO GRANT ADMITS ONE: a seat is
+// left the ten at every tier that caps it below write and offered them at
+// full_access — held to code.GrantOf both ways at the highest relation the
+// chart can give a seat, on a project its unit owns and leads and on its own
+// scratch repository. A tier they are withheld at pushes to neither and
+// maintains neither (every lifecycle request a tool sends needs maintain, a
+// scratch repository's create full_access), so its every call of one would be
+// refused; a tier they are offered at does both. The reads are never
+// withheld.
+//
+// Mutations: withhold nothing → read_only's grant pushes nothing and is
+// offered the writes, red; withhold at every tier → full_access's maintains
+// and is left none, red.
+func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
+	t.Parallel()
+	agent := code.Principal{Kind: code.PrincipalAgent, Seat: "s"}
+	repos := []code.RepoRef{
+		{ID: siteID, Name: "site", Status: code.RepoStatusActive, Kind: code.RepoProject,
+			Owner: code.Owner{Kind: code.OwnerUnit, Ref: "u"}, Visibility: code.VisibilityCompany},
+		{ID: "0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9f", Name: "s.lab", Status: code.RepoStatusActive,
+			Kind:  code.RepoScratch,
+			Owner: code.Owner{Kind: code.OwnerSeat, Ref: "s"}, Visibility: code.VisibilityCompany},
+	}
+	// EVERY TIER A ROLE CAN CARRY, an unset one and one no build writes among
+	// them.
+	for _, tier := range append(code.Tiers(), "", "admin") {
+		withheld := builtin.CodeWritesWithheld(tier)
+		if len(withheld) != 0 && !slices.Equal(withheld, builtin.CodeWrites()) {
+			t.Errorf("tier %q withholds %v, want all ten writes or none", tier, withheld)
+		}
+		for _, repo := range repos {
+			g := code.GrantOf(agent, repo, tierRoster{tier: tier})
+			admits := g.MayPush() && g.Access >= code.AccessMaintain
+			if admits == (len(withheld) != 0) {
+				t.Errorf("tier %q on %s: its grant pushes %v and holds %s, and the writes are withheld: %v",
+					tier, repo.Name, g.MayPush(), g.Access, len(withheld) != 0)
+			}
+		}
+		if len(withheld) == 0 && tier != code.TierFullAccess {
+			t.Errorf("tier %q is offered the writes, and only full_access creates a scratch repository", tier)
+		}
+	}
+}
+
 // THE CODE WRITES ARE IN BOTH CATALOGUES: a seat's registry and the operator
 // catalogue both list the ten, from the one list, wherever the code host's
 // writes are wired — and neither lists one where they are not, the reads

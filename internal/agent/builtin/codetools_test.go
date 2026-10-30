@@ -1704,7 +1704,10 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
 // codeCatalogueBudget is the most bytes the twenty-one code tools'
-// definitions may add to a tool catalogue as a CLI's prompt renders it.
+// definitions may add to a tool catalogue as a CLI's prompt renders it: what
+// a seat at full_access carries, the one tier offered the writes
+// (CodeWritesWithheld); every other seat carries the reads alone
+// ([codeReadsCatalogueBudget]).
 //
 // 31 300: measured at 29 628 (~7 407 tokens), so ~6% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
@@ -1739,13 +1742,28 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // spelled out, and each part in a sentence of its own).
 const codeCatalogueBudget = 31_300
 
+// codeReadsCatalogueBudget is the most bytes the eleven code reads'
+// definitions may add to a tool catalogue as a CLI's prompt renders it: what
+// every seat of a company hosting code carries on every round, whatever its
+// tier, since a seat below full_access is offered the reads alone
+// (CodeWritesWithheld).
+//
+// 18 600: measured at 17 575 (~4 394 tokens) when the code writes were first
+// withheld below full_access, so ~6% headroom, the rule [codeCatalogueBudget]
+// states — a code read a later part adds raises this deliberately, with its
+// measured cost, as it raises that. The ten writes are the 12 053 bytes
+// (~3 013 tokens) between the two budgets' figures, carried by a full_access
+// seat alone.
+const codeReadsCatalogueBudget = 18_600
+
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code carries the twenty-one definitions on every round of every turn: a CLI's
-// catalogue rides in the user text (cliagent.RenderPrompt), so nothing caches
-// them, and each byte is paid again every round. Measured as that catalogue
-// renders them — indented, HTML-escaped, the twenty-one added to a catalogue
-// already holding a tool, so each one's separator and indentation count — and
-// held to a budget, so a later description edit is a decision rather than
+// code carries the eleven reads' definitions on every round of every turn, and
+// a seat at full_access the ten writes' beside them: a CLI's catalogue rides in
+// the user text (cliagent.RenderPrompt), so nothing caches them, and each byte
+// is paid again every round. Measured as that catalogue renders them —
+// indented, HTML-escaped, added to a catalogue already holding a tool, so each
+// one's separator and indentation count — the reads alone and all twenty-one,
+// each held to a budget, so a later description edit is a decision rather than
 // drift, as the executor prompt's budgets make a sentence one
 // (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1760,19 +1778,31 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 	}
 	other := llm.ToolDef{Name: "lookup_colleague", Description: "Who to ask.",
 		Parameters: map[string]any{"type": "object"}}
-	with := []llm.ToolDef{other}
-	for _, tool := range builtin.CodeTools(writeDeps(newCodeHost(), &codeWrites{})) {
-		with = append(with, llm.ToolDef{Name: tool.Name(), Description: tool.Description(),
-			Parameters: tool.Parameters()})
+	added := func(deps builtin.CodeDeps) int {
+		with := []llm.ToolDef{other}
+		for _, tool := range builtin.CodeTools(deps) {
+			with = append(with, llm.ToolDef{Name: tool.Name(), Description: tool.Description(),
+				Parameters: tool.Parameters()})
+		}
+		return rendered(with) - rendered([]llm.ToolDef{other})
 	}
-	got := rendered(with) - rendered([]llm.ToolDef{other})
-	if got > codeCatalogueBudget {
-		t.Errorf("the code tools add %d bytes (~%d tokens) to every round's catalogue, past their budget of %d",
-			got, cliagent.EstimateTokens(strings.Repeat(" ", got)), codeCatalogueBudget)
-		return
+	for _, c := range []struct {
+		what        string
+		got, budget int
+	}{
+		{"the eleven code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
+		{"all twenty-one code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
+			codeCatalogueBudget},
+	} {
+		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))
+		if c.got > c.budget {
+			t.Errorf("%s add %d bytes (~%d tokens) to every round's catalogue, past their budget of %d", c.what,
+				c.got, tokens, c.budget)
+			continue
+		}
+		t.Logf("%s add %d bytes (~%d tokens) to every round's catalogue (budget %d, headroom %d)", c.what, c.got,
+			tokens, c.budget, c.budget-c.got)
 	}
-	t.Logf("the code tools add %d bytes (~%d tokens) to every round's catalogue (budget %d, headroom %d)", got,
-		cliagent.EstimateTokens(strings.Repeat(" ", got)), codeCatalogueBudget, codeCatalogueBudget-got)
 }
 
 // ---- the guidance and the docs ------------------------------------------ //

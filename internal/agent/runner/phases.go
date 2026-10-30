@@ -73,7 +73,9 @@ type Config struct {
 	// onboarding pass's ([Runner.seatSnapshot]): the ones the authority table
 	// refuses the seat before any object is named, which the engine asks per
 	// turn (internal/agent/builtin's Withheld) — a tool whose row names a
-	// role grant this seat's role does not carry.
+	// role grant this seat's role does not carry — and the code writes where
+	// the seat's code tier writes no repository at all (builtin's
+	// CodeWritesWithheld), every call of which its grant would refuse.
 	//
 	// THE REGISTRY IS THE EPOCH'S, shared by every seat, so a tool only some
 	// seats may call is registered for all of them and left off the surfaces

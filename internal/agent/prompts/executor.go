@@ -135,7 +135,10 @@ const KeyCodeWrites = "code_writes"
 // small change committed on the server, and a scratch repository of the
 // seat's own. The section renders only where the executor holds EVERY one of
 // them; the code host's writes are registered together, where a company hosts
-// code and its writes are served, so a seat holds all of them or none.
+// code and its writes are served, and left off together where the seat's code
+// tier writes nothing (internal/agent/builtin's CodeWritesWithheld), so a seat
+// holds all of them or none — and a seat that may change no repository is told
+// nothing about changing one.
 // Exported for the test in internal/agent/builtin that holds them to the code
 // writes that package registers, which this package cannot import.
 func CodeWriteTools() []string {

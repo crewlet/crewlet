@@ -103,6 +103,14 @@ func TestASeatsModelIsShownTheHealthToolsOnlyWhereItsRoleIsGranted(t *testing.T)
 // of a turn c builds over reg, the model answering nothing back.
 func shownTools(t *testing.T, c *Company, handle string, reg *tools.Registry) []string {
 	t.Helper()
+	names, _ := shownExecutor(t, c, handle, reg)
+	return names
+}
+
+// shownExecutor is [shownTools] and the text of every message the executor's
+// first round sends with them — its prompt — the model answering nothing back.
+func shownExecutor(t *testing.T, c *Company, handle string, reg *tools.Registry) ([]string, string) {
+	t.Helper()
 	sent := &toolRecorder{}
 	models, err := phase.NewRegistry([]phase.Entry{{Key: "only", Provider: sent}})
 	if err != nil {
@@ -120,12 +128,13 @@ func shownTools(t *testing.T, c *Company, handle string, reg *tools.Registry) []
 	return sent.first()
 }
 
-// toolRecorder is a model that records the tool names of the first request it
-// is sent and refuses every request.
+// toolRecorder is a model that records the tool names and the message text of
+// the first request it is sent and refuses every request.
 type toolRecorder struct {
-	mu    sync.Mutex
-	names []string
-	seen  bool
+	mu     sync.Mutex
+	names  []string
+	prompt strings.Builder
+	seen   bool
 }
 
 func (*toolRecorder) Model() string { return "recorder" }
@@ -138,14 +147,18 @@ func (s *toolRecorder) Complete(_ context.Context, req llm.Request) (*llm.Comple
 		for _, def := range req.Tools {
 			s.names = append(s.names, def.Name)
 		}
+		for _, m := range req.Messages {
+			s.prompt.WriteString(m.Content)
+			s.prompt.WriteString("\n")
+		}
 	}
 	return nil, errors.New("the recorder answers nothing")
 }
 
-func (s *toolRecorder) first() []string {
+func (s *toolRecorder) first() ([]string, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return slices.Clone(s.names)
+	return slices.Clone(s.names), s.prompt.String()
 }
 
 // idleGitNodes is a status scatter no case calls.

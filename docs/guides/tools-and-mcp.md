@@ -336,7 +336,14 @@ them, and the operator catalogue records no call to one. The ten writes each
 deliver to the code host, so a turn woken about work on a repository that
 answered by moving a branch delivered; no worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
-catalogue is recorded as any write is.
+catalogue is recorded as any write is. A seat is offered the ten only where
+its `role.code.access` is `full_access`: below it, no repository's grant lets
+the seat change anything ([Who may read and
+push](../concepts/code-host.md#who-may-read-and-push)), so a `read_only` or
+`review` seat — `read_only` is what a seat that sets none runs at — is offered
+the eleven reads alone, and its prompt says nothing about changing code,
+rather than carrying ten tools it would be refused on every repository on
+every round.
 
 | Tool | Description |
 |------|-------------|

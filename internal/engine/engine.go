@@ -275,7 +275,9 @@ func (c *Company) RunnerFor(ctx context.Context, handle string, reg *tools.Regis
 		// builtins the authority table refuses it before any object is
 		// named — the health tools, where its role carries no health grant
 		// — asked of the same decision every call is, so it is offered a
-		// tool exactly where it is admitted to it ([Company.withheldFrom]).
+		// tool exactly where it is admitted to it; and the code writes,
+		// where its code tier writes no repository, so every call of one
+		// would be refused ([Company.withheldFrom]).
 		Withheld: c.withheldFrom(ctx, handle, reg),
 		Models:   c.Models,
 		Caps: runner.Caps{

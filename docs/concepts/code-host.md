@@ -3322,7 +3322,11 @@ repository by, the first row that holds:
 
 So a `full_access` seat in the owning unit writes — creates and fast-forwards
 branches, creates tags — and only the unit's lead, at `full_access`, also
-forces and deletes. A `review` seat reads whatever its relation.
+forces and deletes. A `review` seat reads whatever its relation. Below
+`full_access` a seat changes no repository at all, so it is not offered the
+[code write tools](../guides/tools-and-mcp.md#the-companys-code) either: a
+`read_only` or `review` seat reads with the code tools, and is told nothing
+about writing with them.
 
 **A seat's own branches.** A `full_access` seat owns
 `refs/heads/seats/<its handle>/` on every repository it may read, and may do
