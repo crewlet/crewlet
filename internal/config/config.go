@@ -102,6 +102,18 @@ var (
 	// that is ALWAYS a typo, and the one an editor can be pointed at.
 	ErrUnknownField = errors.New("unknown field")
 
+	// ErrRemovedField reports a key this build RETIRED and refuses by name
+	// ([removedKeys]): a key that once meant something, not a typo.
+	//
+	// IT IS AN UNKNOWN FIELD, and says so: it wraps [ErrUnknownField],
+	// renders as one and is classified as one, so every reader that
+	// branches on an unknown field reads it unchanged. Its own sentinel
+	// for the one reader that treats a retired key differently from a typo:
+	// `crewlet run`'s -company seed, which a company the store already
+	// holds outranks, and which a deployment written before the key was
+	// retired still carries ([LoadCompanySeed]).
+	ErrRemovedField = fmt.Errorf("%w", ErrUnknownField)
+
 	// ErrShape reports a value whose YAML shape is wrong — a mapping where
 	// a list belongs, a scalar where a block belongs.
 	ErrShape = errors.New("wrong shape")

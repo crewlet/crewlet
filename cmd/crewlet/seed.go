@@ -454,40 +454,35 @@ func decideStored(ctx context.Context, boot *config.Bootstrap, seed tierBSeed,
 					return seedPlan{}, err
 				}
 			}
-			if !same {
-				log.WarnContext(ctx, "company_seed_ignored",
-					"file", seed.Path, "fleet_revision", state.fleets.revision.ID,
-					"reason", "this node has seen the fleet's company "+
-						state.fleets.revision.ID+"; -company only bootstraps a "+
-						"company that does not exist yet",
-					"hint", seedIgnoredHint(seed.Path))
-			}
+			seedOutranked(ctx, log, seed, same,
+				"file", seed.Path, "fleet_revision", state.fleets.revision.ID,
+				"reason", "this node has seen the fleet's company "+
+					state.fleets.revision.ID+"; -company only bootstraps a "+
+					"company that does not exist yet")
 		}
 		return seedPlan{act: seedNone, fleets: fleets}, nil
 	}
 	booted := *state.boot
-	differs := false
+	same := false
 	if seed.Company != nil {
-		same, err := seed.is(booted.document)
-		if err != nil {
+		var err error
+		if same, err = seed.is(booted.document); err != nil {
 			return seedPlan{}, err
 		}
-		differs = !same
 	}
 	company, err := runnableRevision(boot, booted, state.over())
 	if err != nil {
 		return seedPlan{}, err
 	}
-	if differs {
+	if seed.Company != nil {
 		// THE COMPANY EXISTS AND THIS FILE IS ONLY A BOOTSTRAP, so the store
 		// wins. Loud, because the operator edited a file that is not going to
 		// take effect, and the old behaviour's one virtue was that it always
 		// did something.
-		log.WarnContext(ctx, "company_seed_ignored",
+		seedOutranked(ctx, log, seed, same,
 			"file", seed.Path, "boot_revision", booted.revision.ID,
 			"reason", "the store already holds a company, and -company "+
-				"only bootstraps a company that does not exist yet",
-			"hint", seedIgnoredHint(seed.Path))
+				"only bootstraps a company that does not exist yet")
 	}
 	// AT THE INSTANT IT WAS APPLIED FROM, never the latest the fleet gave it:
 	// a re-activation this node refused raises that one without having been
@@ -495,6 +490,50 @@ func decideStored(ctx context.Context, boot *config.Bootstrap, seed tierBSeed,
 	// chart is stamped once the activation that publishes it is applied.
 	return seedPlan{act: seedNone, company: company, activatedAt: booted.revision.ServedAt,
 		boot: booted.revision, fleets: fleets}, nil
+}
+
+// seedOutranked says that the -company file is not imported, because a company
+// that exists outranks it: attrs name that company and why. same is whether
+// the file is that company byte for byte, which is no news: every node of a
+// fleet started from one company.yaml carries it.
+//
+// A STALE FILE ([tierBSeed.Retired]) is said whatever it was compared with,
+// and in its own words (company_file_stale): the keys it still carries, each
+// by its path and line, and how to refresh it from the store. It is not told
+// [seedIgnoredHint]'s two ways to make the file the company, since both refuse
+// a file in a retired shape.
+func seedOutranked(ctx context.Context, log *slog.Logger, seed tierBSeed, same bool,
+	attrs ...any) {
+
+	switch {
+	case seed.Retired != nil:
+		log.WarnContext(ctx, "company_file_stale", append(attrs,
+			"retired_keys", retiredKeys(seed.Retired),
+			"detail", "the file still carries keys this build retired, so it "+
+				"is ignored: the node runs the company that exists, which the "+
+				"per-seat access migration upgrades in the store",
+			"hint", "once the migration has run (seat_access_migration_written), "+
+				"refresh the file from the store: stop the node and run "+
+				"`crewlet config export > "+seed.Path+"`")...)
+	case !same:
+		log.WarnContext(ctx, "company_seed_ignored",
+			append(attrs, "hint", seedIgnoredHint(seed.Path))...)
+	}
+}
+
+// retiredKeys names each retired key a stale file's refusal is about, by its
+// path and its line in the file.
+func retiredKeys(refusal error) string {
+	problems := config.Problems(refusal)
+	keys := make([]string, 0, len(problems))
+	for _, p := range problems {
+		key := p.Path
+		if p.Line > 0 {
+			key += fmt.Sprintf(" (line %d)", p.Line)
+		}
+		keys = append(keys, key)
+	}
+	return strings.Join(keys, ", ")
 }
 
 // seedIgnoredHint is what a -company file a company outranks is told: the two

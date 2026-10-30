@@ -313,19 +313,15 @@ func fleetOutranks(ctx context.Context, plane coord.Plane, seed tierBSeed,
 	target coord.Activation, cipher secrets.Cipher, log *slog.Logger) {
 
 	same, _, err := seed.isFleets(ctx, plane, target, cipher)
-	if same {
-		return
-	}
 	attrs := []any{"file", seed.Path, "fleet_revision", target.RevisionID,
 		"epoch", target.Epoch,
 		"reason", "the fleet already runs a company, and -company only " +
-			"bootstraps a company that does not exist yet",
-		"hint", seedIgnoredHint(seed.Path)}
+			"bootstraps a company that does not exist yet"}
 	if err != nil {
 		// NOT COMPARED, so not shown to be the file: said, with why.
 		attrs = append(attrs, "compare_error", err)
 	}
-	log.WarnContext(ctx, "company_seed_ignored", attrs...)
+	seedOutranked(ctx, log, seed, same, attrs...)
 }
 
 // revisionBuild builds a company as this node's apply would build it before
@@ -339,6 +335,15 @@ func importSeed(ctx context.Context, configs *store.Configs, plane coord.Plane,
 	pub queue.Publisher, seed tierBSeed, base store.Revision, cipher secrets.Cipher,
 	nodeID string, build revisionBuild, log *slog.Logger,
 ) error {
+	// A FILE STILL CARRYING A KEY THIS BUILD RETIRED IS NEVER WRITTEN, and
+	// this is the one place a seed's file is. What it was read as is the
+	// file without those keys, and a revision stored from it would drop
+	// what they said without a word. Refused as every other door refuses
+	// it, with the refusal the file earned when it was read, before
+	// anything is built or stored.
+	if seed.Retired != nil {
+		return seed.Retired
+	}
 	document, err := json.Marshal(seed.Company)
 	if err != nil {
 		return fmt.Errorf("encode the company config: %w", err)
