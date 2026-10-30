@@ -120,6 +120,13 @@ func walk(
 	if in.Record != nil {
 		cred = in.Record.Credential
 	}
+	// A CREDENTIAL THE VENDOR PROVES GONE is not one the seat holds,
+	// whatever the ledger recorded sealing: the account's credential is
+	// one per account, so any lane's proof speaks for all of them.
+	gone := false
+	for _, lane := range lanes {
+		gone = gone || in.Have[lane].CredentialGone
+	}
 	for i, lane := range lanes {
 		want := in.Want[lane].Normalized()
 		have := in.Have[lane]
@@ -131,8 +138,11 @@ func walk(
 			// exists, and this lane has not been granted on it yet.
 			have.Exists, have.Enabled, have.DisabledBy = true, false, ""
 		}
-		if have.Exists && have.Credential == nil {
+		if have.Exists && have.Credential == nil && !gone {
 			have.Credential = cred
+		}
+		if gone {
+			have.Credential = nil
 		}
 		var applied *Desired
 		if in.Record != nil {
@@ -166,11 +176,11 @@ func walk(
 				}
 			}
 			enabled := have.Enabled || len(ops) > 0 && ops[0].op == OpEnable
-			if enabled && cred == nil && !minted {
+			if enabled && (cred == nil || gone) && !minted {
 				ops = append(ops, planned{op: OpMint})
 				minted = true
 			}
-			if in.Ask.Rotate && !rotated && have.Enabled && cred != nil {
+			if in.Ask.Rotate && !rotated && have.Enabled && cred != nil && !gone {
 				ops = append(ops, planned{op: OpRotate})
 				rotated = true
 			}
@@ -193,7 +203,7 @@ func walk(
 			cred = nil
 		}
 		if eff.credential != nil {
-			cred = eff.credential
+			cred, gone = eff.credential, false
 		}
 	}
 	return nil
