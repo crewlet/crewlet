@@ -236,6 +236,8 @@ var classified = map[string]struct {
 	"code.ReaderOptions.Limits": {seamValue, "the limits a repository's detail reports"},
 	"code.ReaderOptions.Roster": {seamGrant, "the chart a seat's read of a repository is " +
 		"judged by: which repositories it lists, and whether it reads one"},
+	"code.ReaderOptions.Now": {seamNone, "the clock a change's routing dates the notices still kept " +
+		"by"},
 
 	"query.Options.NodeID": {seamNone, "this node's name, which a refusal about the node names"},
 	"query.Options.Cache": {seamNone, "the node's git cache, synced from the code log's rows like " +
