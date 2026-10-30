@@ -5,13 +5,14 @@ import (
 	"strings"
 )
 
-// How much of a repository one agent may do.
+// The three tiers a seat's GitHub access was once stored as.
 //
-// THREE TIERS, and the same three the control plane's console offers, because
-// an operator who sets a seat to Review there and reads "Review" here is
-// looking at one decision rather than two that happen to share a word. The
-// vocabulary is the contract; the permission maps below are this engine's
-// reading of it.
+// RETIRED: a seat now stores GitHub's own permissions ([Permissions]), and
+// nothing grants by tier. What remains here is what the migration reads
+// ([TierPermissions]) and what a roster written before it still shows: the
+// closed set, its labels, and each tier's permission list. [Denied] and
+// [Excess] are not about tiers at all and are kept here beside the lists they
+// were written against.
 
 // Tier is how much of a repository an agent may do.
 type Tier string
@@ -150,10 +151,6 @@ func (t Tier) Permissions() map[string]string {
 	}
 }
 
-// PermissionWorkflows is GitHub's key for the permission a push needs to
-// change a workflow file.
-const PermissionWorkflows = "workflows"
-
 // Access is what one seat's tokens may do: its tier, and the one grant no
 // tier carries by itself.
 //
@@ -232,25 +229,6 @@ func Excess(held map[string]string) []string {
 	var out []string
 	for _, name := range Denied {
 		if level := strings.TrimSpace(held[name]); level != "" {
-			out = append(out, name)
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
-// Shortfall is what an access needs and an installation does not hold.
-//
-// The other half of the same question, and the one an operator can act on: an
-// app installed with fewer permissions than its access asks for cannot mint
-// the token that access asks for at all, because GitHub refuses a token
-// request naming a permission the installation was not granted, and says why
-// only at the token endpoint.
-func Shortfall(access Access, held map[string]string) []string {
-	var out []string
-	for name, want := range access.Permissions() {
-		got := strings.TrimSpace(held[name])
-		if got == "" || (want == "write" && got == "read") {
 			out = append(out, name)
 		}
 	}
