@@ -278,7 +278,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 		sa.Lanes[lane] = seataccess.LaneAnswer{
 			Desired: d, Observed: observed, Sync: lr.Sync, Plan: nonNilSteps(steps[lane]),
 			Tool:        seataccess.ToolStateOf(q.Company, lane, d, observed),
-			Administers: d.Enabled && seataccess.NeedsStepUp(offers[lane], seataccess.Desired{}, d),
+			Administers: seataccess.Administers(offers[lane], d),
 		}
 	}
 	return sa, nil

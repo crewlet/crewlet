@@ -110,6 +110,48 @@ func TestNeedsStepUp(t *testing.T) {
 	}
 }
 
+// THE STEP-UP FAILS CLOSED (D10): with the vendor's role list unread, the
+// offer vouches for no level, so any move to one needs the step-up, however
+// harmless it may turn out to be; and a level the vendor does not list is
+// treated the same. Keeping a level and turning a seat off still need none.
+// What the tab marks as an administration role claims only what the offer
+// shows.
+//
+// Mutation: judge an unlisted level as not administering, and a machine
+// token raises a seat to the vendor's admin role while its list is unread.
+func TestTheStepUpFailsClosedOnALevelTheOfferCannotVouchFor(t *testing.T) {
+	t.Parallel()
+	unread := seataccess.Options{Live: false}
+	listed := seataccess.Options{Live: true, Levels: []seataccess.Level{{ID: "std"}}}
+	for _, tc := range []struct {
+		name          string
+		opts          seataccess.Options
+		before, after seataccess.Desired
+		want          bool
+	}{
+		{"unread, a raise", unread, on("std"), on("admin"), true},
+		{"unread, turning on", unread, seataccess.Desired{}, on("std"), true},
+		{"unread, keeping the level", unread, on("admin"), on("admin"), false},
+		{"unread, turning off", unread, on("admin"), seataccess.Desired{Level: "admin"}, false},
+		{"unread, product access only", unread, seataccess.Desired{}, on(""), false},
+		{"a level the vendor does not list", listed, on("std"), on("owner"), true},
+	} {
+		if got := seataccess.NeedsStepUp(tc.opts, tc.before, tc.after); got != tc.want {
+			t.Errorf("%s: NeedsStepUp = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	admin := seataccess.Options{Levels: []seataccess.Level{{ID: "std"}, {ID: "admin", Administers: true}}}
+	if !seataccess.Administers(admin, on("admin")) || seataccess.Administers(admin, on("std")) {
+		t.Error("Administers does not follow the vendor's own marking")
+	}
+	if seataccess.Administers(unread, on("admin")) {
+		t.Error("an unread offer marked a seat as holding an administration role")
+	}
+	if seataccess.Administers(admin, seataccess.Desired{Level: "admin"}) {
+		t.Error("a seat that is off was marked as administering")
+	}
+}
+
 // THE TOOL STATE THE TAB REPORTS PER SEAT (D15).
 func TestToolStateOf(t *testing.T) {
 	t.Parallel()
