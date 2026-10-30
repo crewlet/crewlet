@@ -112,8 +112,10 @@ type Server struct {
 	// process of its kind (gitproc.ReadDeadline), pageBytes an answer's
 	// JSON (code.MaxGitAnswerBytes), probes a landed-in search's ancestry
 	// checks (MaxLandedProbes), touchedPaths and touchedBytes a revision's
-	// touched list (code.MaxTouchedPaths, code.MaxTouchedBytes) and
-	// patchBytes the diff its patch-id is taken of (MaxPatchIDDiffBytes) —
+	// touched list (code.MaxTouchedPaths, code.MaxTouchedBytes),
+	// patchBytes the diff its patch-id is taken of (MaxPatchIDDiffBytes), and
+	// classedBlob and classedBytes the Go its classification lexes, a
+	// version and in all (code.MaxClassedBlobBytes, code.MaxClassedBytes) —
 	// fields so this package's tests can scale them (export_test.go).
 	syncWait     time.Duration
 	gitBudget    time.Duration
@@ -122,6 +124,8 @@ type Server struct {
 	touchedPaths int
 	touchedBytes int
 	patchBytes   int64
+	classedBlob  int64
+	classedBytes int64
 	// flights is every page a read of this node is cutting that its copy's
 	// memo held none of, by repository and the page's memo key: a read that
 	// misses the same page waits for that read's run and asks the memo again,
@@ -193,7 +197,8 @@ func New(o Options) (*Server, error) {
 	life, end := context.WithCancel(context.Background())
 	return &Server{o: o, life: life, end: end, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
 		pageBytes: code.MaxGitAnswerBytes, probes: MaxLandedProbes, touchedPaths: code.MaxTouchedPaths,
-		touchedBytes: code.MaxTouchedBytes, patchBytes: MaxPatchIDDiffBytes}, nil
+		touchedBytes: code.MaxTouchedBytes, patchBytes: MaxPatchIDDiffBytes, classedBlob: code.MaxClassedBlobBytes,
+		classedBytes: code.MaxClassedBytes}, nil
 }
 
 // Read answers q: a page of the tree, file, diff, comparison or interdiff it

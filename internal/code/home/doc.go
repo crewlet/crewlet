@@ -69,8 +69,10 @@
 // — its head inside its target's tip, whatever push moved the target there —
 // through the repository's committer, decided against the change's head and
 // the tip the home read; or matches the touched paths against the path owners
-// (code.MatchOwners) and asks the change writer to record the facts, the
-// owners matched and the digest of the owners matched against. And for each
+// (code.MatchOwners) and asks the change writer to record the facts — the
+// trees of the base and the head and the touched paths' classes among them,
+// as the git node read them — the owners matched and the digest of the owners
+// matched against. And for each
 // change owing its MERGE — a new head revision, or one its moved target asks
 // again within the repository's budget, the oldest merge first (merge.go) — it
 // merges the change over this node's own copy, in a scratch beside it, and

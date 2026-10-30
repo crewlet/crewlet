@@ -46,10 +46,11 @@ import (
 // so is a path moved before `--`. And every path `--output=x` spells is read
 // as the path it is: its history lists its commit, its blame its line. A
 // landed-in read's ancestry checks are held too: whole ids, both sides. And a
-// change's revisions: their facts walk and diff the paths by ids alone,
-// anchors on them are found by the batch and diffed by pairs numbered rather
-// than named, and an interdiff kept to them filters git's records as a
-// filtered stat does, its touched paths no pathspec.
+// change's revisions: their facts walk and diff the paths by ids alone, and
+// lex a Go file's two versions — `--output=y.go`'s — from blobs a batch is
+// fed by id, anchors on them are found by the batch and diffed by pairs
+// numbered rather than named, and an interdiff kept to them filters git's
+// records as a filtered stat does, its touched paths no pathspec.
 //
 // Mutations: the log's path before `--`, or `--output=x` added to the log's
 // or the blame's arguments → red.
@@ -57,7 +58,7 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 	t.Parallel()
 	rec := &recording{}
 	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
-	paths := []string{"--output=x/f", "-r", "a:b", "nl\nname"}
+	paths := []string{"--output=x/f", "-r", "a:b", "nl\nname", "--output=y.go"}
 	files := map[string]string{}
 	for _, p := range paths {
 		files[p] = "one\n"
@@ -149,6 +150,11 @@ func TestAPathReachesGitOnlyAsData(t *testing.T) {
 			}
 		}
 	}
+	if !slices.ContainsFunc(ran, func(c gitproc.Cmd) bool {
+		return slices.Equal(c.Args, []string{"cat-file", "--batch", "--buffer"})
+	}) {
+		t.Error("the facts lexed no Go file's versions: --output=y.go's change ran no batch of its blobs")
+	}
 	fed := strings.Join(rec.fed("cat-file"), "\x00")
 	for _, p := range paths {
 		if !strings.Contains(fed, head+":"+p+"\x00") {
@@ -182,7 +188,8 @@ var templates = [][]string{
 	{"merge-base", "<oid>", "<oid>"},
 	{"merge-base", "--is-ancestor", "<oid>", "<oid>"},
 	{"rev-list", "--left-right", "--count", "<range>"},
-	{"diff-tree", "-r", "--name-only", "-z", "--no-renames", "<oid>", "<oid>"},
+	{"diff-tree", "-r", "--raw", "-z", "--no-renames", "<oid>", "<oid>"},
+	{"cat-file", "--batch", "--buffer"},
 	{"diff-tree", "-r", "-p", "--full-index", "--no-renames", "--no-color", "--no-ext-diff", "--no-textconv", "-U3",
 		"<oid>", "<oid>"},
 	{"patch-id", "--verbatim"},

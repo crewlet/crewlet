@@ -347,7 +347,8 @@ func (c *changes) land(ctx context.Context, repoID string, due code.ChangeDue, a
 }
 
 // revise asks the repository's change writer to record due's revision's facts
-// f, its touched paths matched against owners, and answers whether they were
+// f — its trees and its classes with the rest, as the git node read them —
+// its touched paths matched against owners, and answers whether they were
 // recorded: an answer that the rows moved since — superseded, the change
 // closed or merged — is the next pass's to read; one that decided nothing for
 // a reason of the log's is this turn's failure.
@@ -358,8 +359,9 @@ func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue,
 	res, err := c.estate.Converse(ctx, code.ConversationWrite{OpID: statelog.NewOpID(c.now(), ""), Seen: at,
 		Revise: &code.Revise{RepoID: repoID, ChangeID: due.ID, N: due.Revision, HeadOID: due.Head,
 			TargetRef: due.TargetRef, TargetOID: due.Tip, TargetPosition: due.TipPosition, BaseOID: f.MergeBase,
-			PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmitted, Touched: f.Touched, TouchesAll: f.TouchesAll,
-			Node: c.node, RequestedOwners: matched, OwnersDigest: digest}})
+			BaseTree: f.BaseTree, HeadTree: f.HeadTree, PatchID: f.PatchID, PatchIDOmitted: f.PatchIDOmitted,
+			Touched: f.Touched, TouchesAll: f.TouchesAll, Classes: f.Classes, Node: c.node,
+			RequestedOwners: matched, OwnersDigest: digest}})
 	switch {
 	case err != nil:
 		return false, fmt.Errorf("home: record the facts of revision %d of change %d of repository %s: %w",
@@ -374,6 +376,7 @@ func (c *changes) revise(ctx context.Context, repoID string, due code.ChangeDue,
 	}
 	c.log.Debug("code_change_facts_recorded", "repo", repoID, "change", due.Number, "revision", due.Revision,
 		"target", due.TargetRef, "tip", due.Tip, "touched", len(f.Touched), "touches_all", f.TouchesAll,
+		"classed", len(f.Classes.WhitespaceOnly)+len(f.Classes.CommentOnly), "classes_complete", f.Classes.Complete,
 		"owners", len(matched), "position", res.Position.String())
 	return true, nil
 }

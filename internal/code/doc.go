@@ -216,7 +216,8 @@
 //
 // A REVISION'S FACTS ARE ON THE CHANGE'S SUBJECT TOO (revise.go): what the
 // repository's home git node read of the change's head revision against its
-// target — its base, its patch-id, the files it touches — and the path owners
+// target — its base, the trees of its base and its head, its patch-id, the
+// files it touches and their classes ([RevisionClasses]) — and the path owners
 // whose globs those files match, MATCHED ON THE HOME ([MatchOwners]) beside
 // the digest of the owners matched against ([OwnersDigest]), is a [Revise]
 // the change writer decides as the home's own write, naming no asker:
@@ -233,8 +234,10 @@
 // [ReadinessOf] over the rows one snapshot holds and the chart one epoch holds
 // — a [Precondition] a [PreconditionKind]: not a draft, its head revision's
 // facts recorded, one counted approval (an eligible reviewer's standing
-// verdict, never an author's, carried to a later revision only on an equal
-// recorded patch id), no standing blocker — each named with who can clear it
+// verdict, never an author's, carried to a later revision only by its code —
+// the two revisions' recorded base and head trees equal,
+// [ChangeClassNoCodeChange] — or by an equal recorded patch id), no standing
+// blocker — each named with who can clear it
 // (S40) — and its head merging cleanly — each met, unmet or computing, an
 // unmet one naming whom it waits on. Every read of changes judges it again in
 // its own transaction, so it takes the reader's chart whoever asks; and every
@@ -794,9 +797,10 @@
 // # A change's revisions are read by the ids their rows record
 //
 // Three of those reads are of a change's revisions: a revision's FACTS against
-// its target ([GitRevisionFacts]) — its merge base, the files it touches and
-// the patch-id of its diff, the engine's own read, which its repository's home
-// asks naming no asker ([GitReadKind.EnginesOwn]) — where lines anchored in
+// its target ([GitRevisionFacts]) — its merge base, the trees of its base and
+// its head, the files it touches and their classes, and the patch-id of its
+// diff, the engine's own read, which its repository's home asks naming no
+// asker ([GitReadKind.EnginesOwn]) — where lines anchored in
 // one revision are in another ([GitReanchor]), and what the change changed
 // between two ([GitInterdiff]). Each names its commits by the whole ids the
 // rows record, never an abbreviation: an interdiff compares two revisions'
@@ -850,6 +854,17 @@
 // some three times the time of code as long ([MaxClassedBlobBytes] has the
 // measure), where keeping every comment to the walk's end took nine, and
 // thirty times the allocation.
+//
+// A REVISION'S CLASSES RIDE ITS FACTS ([Revise], revise.go): the home's git
+// node lexes each touched Go file changed in place — a regular file on both
+// sides, in one mode — within [MaxClassedBytes] of Go a revision, and the
+// facts name each classed path by its place in the touched list
+// ([RevisionClasses]), INCOMPLETE where a bound or the read's budget cut the
+// lexing short or the revision touches all, so a path no list names is one
+// of no class only where they are complete. [ChangeClassNoCodeChange] is no
+// path's: it is a relation between two revisions, which the facts make
+// judgeable by recording the trees of the base and the head — equal pairs
+// hold the same code, which an approval carries across ([ReadinessOf]).
 //
 // # A protection rule's merge gate rides it whole
 //

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"go/build"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -61,7 +62,9 @@ func newEstate() *estate {
 }
 
 // hold puts change n of repo on repo's due list, owing its facts alone, its
-// head head and its target main at tip, the facts its home reads of it f.
+// head head and its target main at tip, the facts its home reads of it f —
+// with the trees a git node reads beside them, where f names none and its
+// head is no merged one's.
 func (e *estate) hold(repo string, n int64, head, tip string, f code.RevisionFactsAnswer) code.ChangeDue {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -70,6 +73,9 @@ func (e *estate) hold(repo string, n int64, head, tip string, f code.RevisionFac
 		TipPosition: statelog.Position{Stream: topics.CodeLogStream, Seq: 30}, FactsDue: true}
 	e.due[repo] = append(e.due[repo], due)
 	f.Head, f.Target = head, tip
+	if !f.HeadInTarget && f.HeadTree == "" {
+		f.BaseTree, f.HeadTree = oid("7"), oid("8")
+	}
 	e.facts[head] = f
 	return due
 }
@@ -651,6 +657,31 @@ func TestAHomeRefreshesReadinessWithoutAMerge(t *testing.T) {
 	if len(e.merged()) != 2 {
 		t.Errorf("the home asked %d mergeabilities, want the two refreshes alone: %+v", len(e.merged()),
 			e.merged())
+	}
+}
+
+// THE HOME RECORDS THE CLASSES ITS GIT READ: what a revision's facts read
+// answered of its code — the trees of its base and its head, and its touched
+// paths' classes — rides the revise the home asks the change writer for, as
+// the git node read it: the home lexes nothing and judges nothing of it.
+//
+// Mutation: leave the classes out of the revise — the facts record none, red.
+func TestTheHomeRecordsTheClassesItsGitRead(t *testing.T) {
+	t.Parallel()
+	e := newEstate()
+	classed := code.RevisionClasses{WhitespaceOnly: []int{1}, CommentOnly: []int{0}, Complete: true}
+	e.hold(repoA, 1, oid("a"), oid("1"), code.RevisionFactsAnswer{MergeBase: oid("1"), BaseTree: oid("3"),
+		HeadTree: oid("4"), PatchID: oid("e"), Touched: []string{"a.go", "b.go"}, Classes: classed})
+	p := &placement{homes: map[string]string{repoA: "node-a"}}
+	loopOn(t, "node-a", e, p, newNudges(), time.Hour)
+	e.waitDone(t, repoA, 10*time.Second)
+	revises, _ := e.wrote()
+	if len(revises) != 1 {
+		t.Fatalf("the home recorded %d revisions' facts, want its one change's: %+v", len(revises), revises)
+	}
+	if r := revises[0]; r.BaseTree != oid("3") || r.HeadTree != oid("4") || !reflect.DeepEqual(r.Classes, classed) {
+		t.Errorf("the facts recorded trees %s and %s and classes %+v, want the read's %s, %s and %+v", r.BaseTree,
+			r.HeadTree, r.Classes, oid("3"), oid("4"), classed)
 	}
 }
 

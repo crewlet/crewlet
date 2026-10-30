@@ -148,17 +148,19 @@
 //
 // A read's own git — every process of its kind, a comparison's two walks and
 // its stat, a patch's lookup and its diff, a landed-in search's ancestry
-// checks or a revision's facts' four as a listing's one — is given ONE budget
+// checks or a revision's facts' six as a listing's one — is given ONE budget
 // of run time, gitproc.ReadDeadline, each process what the ones before it
 // left, a lookup that ends its own run once it has read what it needs
 // included: run out, the read is too large to answer anywhere — save a
 // landed-in search, which by then knows the oldest move that kept its commit
 // and answers how far it reached, as its bound of checks ends it (landed.go),
-// a revision's patch-id, which is omitted rather than refused (facts.go), and
-// a history's walk, whose page answers the commits it reached with its cursor
-// past them (log.go). Its wait for each process's read-lane slot is charged
-// nothing, since it is the node's contention and not the read's size. The
-// short checks before it (objects.go) run to their own bound, outside it.
+// a revision's patch-id, which is omitted rather than refused, and its
+// classes, answered incomplete (facts.go), and a history's walk, whose page
+// answers the commits it reached with its cursor past them (log.go). Its wait
+// for each process's read-lane slot is charged nothing, since it is the
+// node's contention and not the read's size. The short checks before it
+// (objects.go) run to their own bound, outside it; a revision's facts' own
+// lookup of its trees and blobs, inside it, is charged to it like the rest.
 //
 // And the caller's context ENDS WHEN THE ANSWER IS DUE (code.AnswerBy, the
 // estate's git arm and its in-process run alike): every wait takes it, and a

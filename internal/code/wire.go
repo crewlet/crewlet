@@ -1901,21 +1901,26 @@ type RevisionRow struct {
 // RevisionFactsRow is a revision's facts as the change's home recorded them
 // (code_revision_facts, [Revise]): the target branch and the tip they were
 // read against with the position that moved it there, the base the change is
-// measured from, the id of the change it makes — or that none was taken — the
-// files it touches or that it touches all, the git node that recorded them, the
+// measured from, the trees of the base and of the head, the id of the change
+// it makes — or that none was taken — the files it touches or that it touches
+// all, the classes of their changes, the git node that recorded them, the
 // path-owner match — the digest of the owners matched against, those matched
 // and those asked no review of — and the record that wrote them. A revision
 // whose head its target holds has none: its change is merged, and its home
-// lands it.
+// lands it. Two revisions whose rows name the same trees hold the same code
+// ([ChangeClassNoCodeChange]).
 type RevisionFactsRow struct {
 	TargetRef       string            `json:"target_ref"`
 	TargetOID       string            `json:"target_oid"`
 	TargetPosition  statelog.Position `json:"target_position"`
 	BaseOID         string            `json:"base_oid,omitempty"`
+	BaseTree        string            `json:"base_tree"`
+	HeadTree        string            `json:"head_tree"`
 	PatchID         string            `json:"patch_id,omitempty"`
 	PatchIDOmitted  bool              `json:"patch_id_omitted,omitempty"`
 	Touched         []string          `json:"touched"`
 	TouchesAll      bool              `json:"touches_all,omitempty"`
+	Classes         RevisionClasses   `json:"classes,omitzero"`
 	Node            string            `json:"node"`
 	OwnersDigest    string            `json:"owners_digest"`
 	RequestedOwners []Owner           `json:"requested_owners,omitempty"`
@@ -3111,6 +3116,13 @@ type RevisionFactsAnswer struct {
 	// share none, whose change is measured from the empty tree: every file of
 	// Head.
 	MergeBase string `json:"merge_base,omitempty"`
+	// BaseTree and HeadTree are the trees of the base — the empty tree's id
+	// where there is none — and of Head: two revisions holding the same pair
+	// hold the same code, byte for byte, which an approval carries across
+	// whatever their patch ids say ([ChangeClassNoCodeChange]). Empty only
+	// where HeadInTarget, which measures nothing.
+	BaseTree string `json:"base_tree,omitempty"`
+	HeadTree string `json:"head_tree,omitempty"`
 	// PatchID is `git patch-id --verbatim` of the cumulative diff from the
 	// base to Head: the same for two revisions whose changes are the same
 	// lines with the same lines around them, wherever the base put them — a
@@ -3129,9 +3141,16 @@ type RevisionFactsAnswer struct {
 	// not UTF-8), and Touched is empty, to be read as every path.
 	Touched    []string `json:"touched"`
 	TouchesAll bool     `json:"touches_all,omitempty"`
+	// Classes is the path classes of the touched files' changes, each path
+	// named by its place in Touched ([RevisionClasses]): each touched Go file
+	// changed in place, both of its versions lexed ([ClassifyGo]) within the
+	// bounds a revision's classification keeps to ([MaxClassedBytes]) and
+	// what the read's budget of git left — incomplete past either, and where
+	// the revision touches all.
+	Classes RevisionClasses `json:"classes,omitzero"`
 	// HeadInTarget is Head reachable from Target: the change is in its
 	// target already, merged by whatever moved the target there. Its change
-	// is then nothing: no id, no path.
+	// is then nothing: no id, no path, no tree.
 	HeadInTarget bool `json:"head_in_target,omitempty"`
 }
 

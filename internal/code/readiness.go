@@ -27,9 +27,15 @@ import (
 //     recorded ([Revise]) — computing until its home reads them.
 //   - APPROVAL: ONE COUNTED APPROVAL — an ELIGIBLE reviewer's STANDING
 //     verdict (code_participants.verdict: the latest of their reviews that
-//     judges) approving the head revision, or an earlier revision whose diff
-//     the head carries unchanged (X02: both revisions' recorded patch ids
-//     equal, neither empty nor omitted). Eligible is a person — who maintains
+//     judges) approving the head revision, or an earlier revision the head
+//     carries unchanged, by either of two CARRY-FORWARD kinds: its CODE
+//     ([ChangeClassNoCodeChange]: both revisions' recorded base and head
+//     trees equal, so the code a merge would bring is the same byte for
+//     byte, however their histories differ — and whatever their patch ids
+//     say, an omitted one included), or its DIFF (X02: both revisions'
+//     recorded patch ids equal, neither empty nor omitted — the same lines
+//     changed among the same neighbours, wherever a rebase put them).
+//     Eligible is a person — who maintains
 //     every repository — or a seat the deciding chart lets review the
 //     repository ([AccessReview]); NEVER AN AUTHOR, whose review of their own
 //     change counts for nothing, and who becomes one by pushing a revision
@@ -267,20 +273,36 @@ type ReadinessRows struct {
 	Merge *RecordedMerge
 }
 
-// RevisionPatch is what one revision's recorded facts say of its diff: the
-// branch they were read against, the diff's patch id ("" for a revision that
-// changes nothing), and whether none was taken.
+// RevisionPatch is what one revision's recorded facts say of its code and its
+// diff: the branch they were read against, the trees of its base and its
+// head, the diff's patch id ("" for a revision that changes nothing), and
+// whether none was taken.
 type RevisionPatch struct {
-	N              int64
-	TargetRef      string
-	PatchID        string
-	PatchIDOmitted bool
+	N                  int64
+	TargetRef          string
+	BaseTree, HeadTree string
+	PatchID            string
+	PatchIDOmitted     bool
 }
 
 // identified reports a patch id that names the diff it was taken of: one
 // taken, of a revision that changes something. An empty or an omitted id
 // equals nothing, so no approval carries across it.
 func (f RevisionPatch) identified() bool { return f.PatchID != "" && !f.PatchIDOmitted }
+
+// sameCode reports two revisions holding the same code: both trees recorded,
+// and equal — the base's, so the code a merge starts from is the same, and
+// the head's, so the code it brings is ([ChangeClassNoCodeChange]). A tree
+// not recorded equals nothing.
+func (f RevisionPatch) sameCode(o RevisionPatch) bool {
+	return f.BaseTree != "" && f.HeadTree != "" && f.BaseTree == o.BaseTree && f.HeadTree == o.HeadTree
+}
+
+// carries reports facts an approval of their revision can be carried from by
+// either kind: trees recorded, or an identified patch id.
+func (f RevisionPatch) carries() bool {
+	return (f.BaseTree != "" && f.HeadTree != "") || f.identified()
+}
 
 // Approval is a reviewer's standing verdict approving a revision.
 type Approval struct {
@@ -391,9 +413,9 @@ func (j readinessJudge) approval() Precondition {
 	head, current := j.headFacts()
 	p := Precondition{Kind: PreconditionApproval}
 	var (
-		onHead, carried []Party
-		carriedFrom     int64
-		pending         bool
+		onHead, unchanged, carried []Party
+		unchangedFrom, carriedFrom int64
+		pending                    bool
 	)
 	for _, a := range j.rows.Approvals {
 		if j.author(a.Reviewer) || !j.eligible(a.Reviewer) {
@@ -405,13 +427,19 @@ func (j readinessJudge) approval() Precondition {
 		}
 		from, recorded := j.factsOf(a.Revision)
 		switch {
-		case a.Revision > n, !recorded, !from.identified():
+		case a.Revision > n, !recorded, !from.carries():
 			// NEVER CARRIES: a revision past the head is none the change has,
-			// and one whose diff no recorded id names can never be shown to
-			// be the head's — its home measures the head alone.
+			// and one whose code no recorded trees and whose diff no recorded
+			// id name can never be shown to be the head's — its home
+			// measures the head alone.
 		case !current:
 			pending = true
-		case head.identified() && head.PatchID == from.PatchID:
+		case head.sameCode(from):
+			// NO CODE CHANGE: the head holds the code that was approved,
+			// byte for byte, whatever its patch id says — or omits.
+			unchanged = append(unchanged, a.Reviewer)
+			unchangedFrom = max(unchangedFrom, a.Revision)
+		case head.identified() && from.identified() && head.PatchID == from.PatchID:
 			carried = append(carried, a.Reviewer)
 			carriedFrom = max(carriedFrom, a.Revision)
 		}
@@ -420,10 +448,22 @@ func (j readinessJudge) approval() Precondition {
 	case len(onHead) > 0:
 		p.State = PreconditionMet
 		p.Detail = fmt.Sprintf("revision %d is approved by %s", n, namedAll(onHead))
-	case len(carried) > 0:
+	case len(unchanged) > 0 || len(carried) > 0:
+		// EACH KIND THAT CARRIED IS NAMED, the code's first: an approval
+		// carried by its trees needs no patch id, so one omitted reads as
+		// no reason it carried.
 		p.State = PreconditionMet
-		p.Detail = fmt.Sprintf("revision %d carries the diff %s approved unchanged (equal patch ids, revision %d "+
-			"the latest approved)", n, namedAll(carried), carriedFrom)
+		var says []string
+		if len(unchanged) > 0 {
+			says = append(says, fmt.Sprintf("revision %d holds the code %s approved unchanged (%s: the base and "+
+				"head trees of revision %d, the latest approved)", n, namedAll(unchanged), ChangeClassNoCodeChange,
+				unchangedFrom))
+		}
+		if len(carried) > 0 {
+			says = append(says, fmt.Sprintf("revision %d carries the diff %s approved unchanged (equal patch ids, "+
+				"revision %d the latest approved)", n, namedAll(carried), carriedFrom))
+		}
+		p.Detail = strings.Join(says, "; ")
 	case pending:
 		p.State = PreconditionComputing
 		p.Detail = fmt.Sprintf("an approval of an earlier revision waits for revision %d's facts against %s, "+
@@ -710,7 +750,7 @@ func readinessRowsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubjec
 	if err := readinessEach(ctx, tx, "facts", readinessFactsSQL, string(encoded), at,
 		func(scan func(...any) (int, error)) error {
 			var f RevisionPatch
-			i, err := scan(&f.N, &f.TargetRef, &f.PatchID, &f.PatchIDOmitted)
+			i, err := scan(&f.N, &f.TargetRef, &f.BaseTree, &f.HeadTree, &f.PatchID, &f.PatchIDOmitted)
 			if err == nil {
 				out[i].Facts = append(out[i].Facts, f)
 			}
@@ -814,8 +854,9 @@ const (
 	readinessMergesSQL = `SELECT m.change_id, m.revision, m.target_ref, m.target_oid, m.state, m.conflicts_count,
 			m.conflicts_omitted
 		FROM json_each(?) AS j CROSS JOIN code_mergeability AS m WHERE m.change_id = CAST(j.value AS TEXT)`
-	readinessFactsSQL = `SELECT f.change_id, f.n, f.target_ref, f.patch_id, f.patch_id_omitted FROM json_each(?) AS j
-		CROSS JOIN code_revision_facts AS f
+	readinessFactsSQL = `SELECT f.change_id, f.n, f.target_ref, f.base_tree, f.head_tree, f.patch_id,
+			f.patch_id_omitted
+		FROM json_each(?) AS j CROSS JOIN code_revision_facts AS f
 		WHERE f.change_id = CAST(j.value ->> 0 AS TEXT) AND f.n = CAST(j.value ->> 1 AS INTEGER)`
 	standingBlockersSQL = `SELECT id, raiser, raiser_kind, state FROM code_findings INDEXED BY ` + blockersKey + `
 		WHERE change_id = ? AND ` + standingBlockers + ` ORDER BY position, id LIMIT ?`

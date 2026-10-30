@@ -116,6 +116,84 @@ func TestAnApprovalCarriesOnlyToAnEqualPatchID(t *testing.T) {
 	}
 }
 
+// omitting is the home's write of revision rev's facts on change — its head
+// head against main — holding the code named held, its diff past the bound
+// on one a patch id is taken of, so its id is omitted.
+func (n *node) omitting(repo, change string, rev int64, head, held string) code.ConversationWrite {
+	n.t.Helper()
+	w := codeOf(n.revising(repo, change, rev, oidOf(head), mainRef, nil), held)
+	w.Revise.PatchID, w.Revise.PatchIDOmitted = "", true
+	return w
+}
+
+// A NO-CODE-CHANGE CARRIES AN APPROVAL PAST AN OMITTED PATCH ID. A change
+// whose diff passes the bound on one a patch id is taken of — a vendored
+// tree — has its id omitted on every revision, and an omitted id equals
+// nothing, so no approval carries by its diff. But a revision whose base and
+// head trees are the approved revision's — a message amended, commits
+// squashed — holds the very code that was approved, byte for byte, and the
+// approval carries to it by its code, the detail naming the kind that
+// carried (no_code_change). A revision whose code moved carries nothing.
+//
+// Mutation: drop the code's arm of the carry — revision 2's approval is
+// unmet, red.
+func TestANoCodeChangeCarriesAnApprovalPastAnOmittedPatchID(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+
+	converse(t, w, n.omitting(repo, change, 1, "B", "the vendored tree"))
+	converse(t, w, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
+	n.revise(repo, "B", "B2")
+	converse(t, w, n.omitting(repo, change, 2, "B2", "the vendored tree"))
+	requireState(t, readinessOf(t, n, 1), code.PreconditionApproval, code.PreconditionMet,
+		`revision 2 holds the code seat "plat-lead" approved unchanged (no_code_change`)
+
+	n.revise(repo, "B2", "B3")
+	converse(t, w, n.omitting(repo, change, 3, "B3", "the vendored tree, one file of it changed"))
+	requireState(t, readinessOf(t, n, 1), code.PreconditionApproval, code.PreconditionUnmet,
+		"no approval counts on revision 3")
+}
+
+// NO CODE CHANGE IS REVISION TO REVISION: what carries an approval by its code
+// is the head revision holding the APPROVED revision's base and head trees —
+// never a diff that is empty against its own base, which changes nothing and
+// holds other code than the approver read — and it holds across a revision
+// of other code between the two: a head whose code returns to the approved
+// code byte for byte holds what the approver read, as an equal patch id
+// carries across one.
+//
+// Mutation: carry by the head's own diff being empty (its base tree its head
+// tree) rather than by the approved revision's trees — revision 2 carries,
+// red.
+func TestNoCodeChangeIsRevisionToRevision(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+
+	converse(t, w, codeOf(n.patched(repo, change, 1, "B", oidOf("the retry diff")), "the retry"))
+	converse(t, w, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
+
+	n.revise(repo, "B", "B2")
+	empty := n.revising(repo, change, 2, oidOf("B2"), mainRef, nil)
+	empty.Revise.BaseTree, empty.Revise.HeadTree, empty.Revise.PatchID = oidOf("main"), oidOf("main"), ""
+	converse(t, w, empty)
+	requireState(t, readinessOf(t, n, 1), code.PreconditionApproval, code.PreconditionUnmet,
+		"no approval counts on revision 2")
+
+	n.revise(repo, "B2", "B3")
+	back := codeOf(n.revising(repo, change, 3, oidOf("B3"), mainRef, nil), "the retry")
+	back.Revise.PatchID, back.Revise.PatchIDOmitted = "", true
+	converse(t, w, back)
+	requireState(t, readinessOf(t, n, 1), code.PreconditionApproval, code.PreconditionMet,
+		`revision 3 holds the code seat "plat-lead" approved unchanged (no_code_change: the base and head `+
+			`trees of revision 1`)
+}
+
 // AN APPROVAL WAITS FOR FACTS: an approval of an earlier revision is judged by
 // both revisions' recorded patch ids, so while the head revision's facts
 // against its target are unrecorded the approval precondition is COMPUTING —

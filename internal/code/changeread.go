@@ -674,15 +674,16 @@ func (r changeRow) wire() ChangeRow {
 type factsScan struct {
 	n                                               sql.NullInt64
 	targetRef, targetOID, base, patch, node, digest sql.NullString
-	owners, skipped, touched                        sql.NullString
+	baseTree, headTree                              sql.NullString
+	owners, skipped, classes, touched               sql.NullString
 	targetPosition, position                        sql.NullInt64
 	omitted, touchesAll                             sql.NullBool
 }
 
 // targets is where a scan of [revisionFactsColumns] writes, in their order.
 func (s *factsScan) targets() []any {
-	return []any{&s.n, &s.targetRef, &s.targetOID, &s.targetPosition, &s.base, &s.patch, &s.omitted,
-		&s.touchesAll, &s.node, &s.digest, &s.position, &s.owners, &s.skipped, &s.touched}
+	return []any{&s.n, &s.targetRef, &s.targetOID, &s.targetPosition, &s.base, &s.baseTree, &s.headTree, &s.patch,
+		&s.omitted, &s.touchesAll, &s.node, &s.digest, &s.position, &s.owners, &s.skipped, &s.classes, &s.touched}
 }
 
 // row is the facts as a read serves them, and nil for a revision of none.
@@ -691,11 +692,17 @@ func (s *factsScan) row() (*RevisionFactsRow, error) {
 		return nil, nil
 	}
 	f := &RevisionFactsRow{TargetRef: s.targetRef.String, TargetOID: s.targetOID.String,
-		TargetPosition: unpacked(s.targetPosition.Int64), BaseOID: s.base.String, PatchID: s.patch.String,
-		PatchIDOmitted: s.omitted.Bool, Touched: []string{}, TouchesAll: s.touchesAll.Bool, Node: s.node.String,
-		OwnersDigest: s.digest.String, Position: unpacked(s.position.Int64)}
+		TargetPosition: unpacked(s.targetPosition.Int64), BaseOID: s.base.String, BaseTree: s.baseTree.String,
+		HeadTree: s.headTree.String, PatchID: s.patch.String, PatchIDOmitted: s.omitted.Bool, Touched: []string{},
+		TouchesAll: s.touchesAll.Bool, Node: s.node.String, OwnersDigest: s.digest.String,
+		Position: unpacked(s.position.Int64)}
 	if s.touched.String != "" {
 		f.Touched = strings.Split(s.touched.String, "\x00")
+	}
+	if s.classes.String != "" {
+		if err := json.Unmarshal([]byte(s.classes.String), &f.Classes); err != nil {
+			return nil, fmt.Errorf("its classes: %w", err)
+		}
 	}
 	if s.owners.String != "" {
 		if err := json.Unmarshal([]byte(s.owners.String), &f.RequestedOwners); err != nil {
@@ -845,8 +852,9 @@ const (
 		WHERE r.change_id = ? AND r.n < ? ORDER BY r.n DESC LIMIT ?`
 	// revisionFactsColumns is every column of a revision's facts a read
 	// serves, in [factsScan]'s order.
-	revisionFactsColumns = `f.n, f.target_ref, f.target_oid, f.target_position, f.base_oid, f.patch_id,
-		f.patch_id_omitted, f.touches_all, f.node, f.owners_digest, f.position, f.owners, f.skipped, f.touched`
+	revisionFactsColumns = `f.n, f.target_ref, f.target_oid, f.target_position, f.base_oid, f.base_tree,
+		f.head_tree, f.patch_id, f.patch_id_omitted, f.touches_all, f.node, f.owners_digest, f.position, f.owners,
+		f.skipped, f.classes, f.touched`
 	listedReposSQL = `SELECT id, name, status, owner_kind, owner, visibility FROM code_repos
 		WHERE id IN (SELECT CAST(value AS TEXT) FROM json_each(?))`
 )

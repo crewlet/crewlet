@@ -42,7 +42,8 @@ func (n *node) tip(repo, ref string) (string, statelog.Position) {
 // revising is the home's write of revision rev's facts on change — its head
 // head, against target at its tip — touching touched, the path owners matched
 // against owners: what a home that read them would send, its owners matched
-// by code.MatchOwners.
+// by code.MatchOwners. Its base is A, and its head's tree its head's own, so
+// no two heads hold the same code unless a case says they do (codeOf).
 func (n *node) revising(repo, change string, rev int64, head, target string, owners []code.PathOwner,
 	touched ...string) code.ConversationWrite {
 
@@ -51,8 +52,17 @@ func (n *node) revising(repo, change string, rev int64, head, target string, own
 	matched, digest := code.MatchOwners(owners, touched, false)
 	return code.ConversationWrite{OpID: statelog.NewOpID(time.Now(), ""), Revise: &code.Revise{
 		RepoID: repo, ChangeID: change, N: rev, HeadOID: head, TargetRef: target, TargetOID: tip,
-		TargetPosition: at, BaseOID: oidOf("A"), PatchID: oidOf("patch-" + head), Touched: touched, Node: n.id,
+		TargetPosition: at, BaseOID: oidOf("A"), BaseTree: oidOf("the tree of A"),
+		HeadTree: oidOf("the tree of " + head), PatchID: oidOf("patch-" + head), Touched: touched, Node: n.id,
 		RequestedOwners: matched, OwnersDigest: digest}}
+}
+
+// codeOf is w's revise as one holding the trees of the code named held — the
+// base's and the head's — whatever its head commit: what a revision whose
+// commits moved and whose code did not reads.
+func codeOf(w code.ConversationWrite, held string) code.ConversationWrite {
+	w.Revise.BaseTree, w.Revise.HeadTree = oidOf("the base tree of "+held), oidOf("the head tree of "+held)
+	return w
 }
 
 // storedFacts is a revision's facts as n's rows hold them.
@@ -501,8 +511,9 @@ func TestAReviseAppliesFromItsRecordAlone(t *testing.T) {
 	repo, change := ownedChange(t, a, "web", owners...)
 	w, _ := writerOn(t, a, a.pub)
 	ctx := t.Context()
-	res, err := w.Converse(ctx, a.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go",
-		"docs/upload.md"))
+	first := a.revising(repo, change, 1, oidOf("B"), mainRef, owners, "upload/retry.go", "docs/upload.md")
+	first.Revise.Classes = code.RevisionClasses{CommentOnly: []int{0}, Complete: true}
+	res, err := w.Converse(ctx, first)
 	requireConversed(t, res, err)
 	a.revise(repo, "B", "B2")
 	res, err = w.Converse(ctx, a.revising(repo, change, 2, oidOf("B2"), mainRef, owners, "upload/retry.go"))
@@ -512,6 +523,117 @@ func TestAReviseAppliesFromItsRecordAlone(t *testing.T) {
 		"code_conversations"} {
 		if got, want := b.dump(table), a.dump(table); !slices.Equal(got, want) {
 			t.Errorf("%s replayed as\n\t%v\nwant\n\t%v", table, got, want)
+		}
+	}
+}
+
+// factsRead is the facts of revision rev of web's change number as a change
+// read serves them, failing t where the read serves none.
+func factsRead(t *testing.T, n *node, number, rev int64) code.RevisionFactsRow {
+	t.Helper()
+	answer, err := readChange(t, n, ada, "", "web", number, 0, "")
+	if err != nil {
+		t.Fatalf("read web!%d: %v", number, err)
+	}
+	for _, r := range answer.Revisions {
+		if r.N == rev && r.Facts != nil {
+			return *r.Facts
+		}
+	}
+	t.Fatalf("the read of web!%d serves no facts of revision %d: %+v", number, rev, answer.Revisions)
+	return code.RevisionFactsRow{}
+}
+
+// A CLASS IS RECORDED ON THE REVISION'S FACTS: what its home read of a
+// revision's code — the path classes of the files it touches, each by its
+// place in the touched list, whether its classification was complete, and
+// the trees of its base and its head — rides the revise as the home sent it,
+// is kept on the revision's facts row, and is served with its facts by a
+// change read. Facts that touch all list no path, so they class none and are
+// never complete: their row keeps no classes, and the read serves none.
+//
+// Mutation: write no classes to the row (bind "" for the column) — the read
+// serves none, red.
+func TestAClassIsRecordedOnTheRevisionsFacts(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	ctx := t.Context()
+	classed := code.RevisionClasses{WhitespaceOnly: []int{2}, CommentOnly: []int{0}, Complete: true}
+	write := n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "upload/retry.go", "docs/upload.md",
+		"upload/backoff.go")
+	write.Revise.Classes = classed
+	res, err := w.Converse(ctx, write)
+	requireConversed(t, res, err)
+	if r := decodedRevise(t, n, res.Position); !reflect.DeepEqual(r.Classes, classed) ||
+		r.BaseTree != write.Revise.BaseTree || r.HeadTree != write.Revise.HeadTree {
+		t.Fatalf("the revise recorded classes %+v and trees %s and %s, want the home's %+v, %s and %s", r.Classes,
+			r.BaseTree, r.HeadTree, classed, write.Revise.BaseTree, write.Revise.HeadTree)
+	}
+	if f := factsRead(t, n, 1, 1); !reflect.DeepEqual(f.Classes, classed) || f.BaseTree != write.Revise.BaseTree ||
+		f.HeadTree != write.Revise.HeadTree {
+		t.Errorf("revision 1's facts are read with classes %+v and trees %s and %s, want %+v, %s and %s",
+			f.Classes, f.BaseTree, f.HeadTree, classed, write.Revise.BaseTree, write.Revise.HeadTree)
+	}
+
+	n.revise(repo, "B", "B2")
+	all := n.revising(repo, change, 2, oidOf("B2"), mainRef, nil)
+	all.Revise.TouchesAll = true
+	res, err = w.Converse(ctx, all)
+	requireConversed(t, res, err)
+	if f := factsRead(t, n, 1, 2); !f.TouchesAll || !f.Classes.IsZero() {
+		t.Errorf("revision 2's facts, which touch all, are read touching all = %t with classes %+v, want no "+
+			"class and incomplete", f.TouchesAll, f.Classes)
+	}
+	if got := n.count(`SELECT COUNT(*) FROM code_revision_facts WHERE change_id = ? AND n = 2 AND classes = ''`,
+		change); got != 1 {
+		t.Errorf("revision 2's facts row keeps classes, want none for facts that touch all")
+	}
+}
+
+// A REVISE'S CLASSES NAME ITS TOUCHED PATHS, and its trees are whole ids: a
+// class names a path by its place in the touched list, so a revise naming a
+// place past the list, places out of order or one twice, a path in both
+// lists, or classes beside facts that touch all — which list no path, so
+// class none and are never complete — is no write at all, refused before
+// anything is decided, as is one naming no tree or a tree no id spells.
+//
+// Mutation: drop classesProblem from the revise's rules — the place past the
+// list is accepted, red.
+func TestARevisesClassesNameItsTouchedPaths(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	w, _ := writerOn(t, n, n.pub)
+	for name, tc := range map[string]struct {
+		set   func(r *code.Revise)
+		field string
+	}{
+		"a place past the list": {func(r *code.Revise) { r.Classes.WhitespaceOnly = []int{2} },
+			"revise.classes.whitespace_only[0]"},
+		"places out of order": {func(r *code.Revise) { r.Classes.CommentOnly = []int{1, 0} },
+			"revise.classes.comment_only[1]"},
+		"a place twice": {func(r *code.Revise) { r.Classes.CommentOnly = []int{0, 0} },
+			"revise.classes.comment_only[1]"},
+		"a path in both lists": {func(r *code.Revise) {
+			r.Classes.WhitespaceOnly, r.Classes.CommentOnly = []int{1}, []int{1}
+		}, "revise.classes.comment_only[0]"},
+		"classes of facts that touch all": {func(r *code.Revise) {
+			r.Touched, r.TouchesAll, r.Classes.Complete = nil, true, true
+		}, "revise.classes"},
+		"no head tree":           {func(r *code.Revise) { r.HeadTree = "" }, "revise.head_tree"},
+		"a base tree of no id":   {func(r *code.Revise) { r.BaseTree = "the tree" }, "revise.base_tree"},
+		"the zero id as a tree":  {func(r *code.Revise) { r.HeadTree = code.ZeroOID }, "revise.head_tree"},
+		"a negative place named": {func(r *code.Revise) { r.Classes.CommentOnly = []int{-1} }, "comment_only[0]"},
+	} {
+		cw := n.revising(repo, change, 1, oidOf("B"), mainRef, nil, "upload/retry.go", "upload/backoff.go")
+		tc.set(cw.Revise)
+		before := n.end()
+		if _, err := w.Converse(t.Context(), cw); !errors.Is(err, code.ErrInvalidProposal) ||
+			!strings.Contains(err.Error(), tc.field) || n.end() != before {
+			t.Errorf("%s answered %v, want ErrInvalidProposal naming %s, nothing appended", name, err, tc.field)
 		}
 	}
 }

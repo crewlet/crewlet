@@ -753,6 +753,29 @@ func (r RevisionRow) encodedBytes() int {
 	return n
 }
 
+// encodedBytes is the length of the classes' JSON encoding: each list a
+// class names a path in, then whether they are complete.
+func (c RevisionClasses) encodedBytes() int {
+	n, first := 2, true
+	for _, list := range []struct {
+		key    string
+		places []int
+	}{{"whitespace_only", c.WhitespaceOnly}, {"comment_only", c.CommentOnly}} {
+		if len(list.places) == 0 {
+			continue
+		}
+		places := 2 + max(len(list.places)-1, 0)
+		for _, at := range list.places {
+			places += intBytes(int64(at))
+		}
+		n, first = n+field(list.key, places, first), false
+	}
+	if c.Complete {
+		n += field("complete", trueBytes, first)
+	}
+	return n
+}
+
 // encodedBytes is the length of the facts' JSON encoding.
 func (f RevisionFactsRow) encodedBytes() int {
 	n := 2 + field("target_ref", stringBytes(f.TargetRef), true) +
@@ -761,6 +784,7 @@ func (f RevisionFactsRow) encodedBytes() int {
 	if f.BaseOID != "" {
 		n += field("base_oid", stringBytes(f.BaseOID), false)
 	}
+	n += field("base_tree", stringBytes(f.BaseTree), false) + field("head_tree", stringBytes(f.HeadTree), false)
 	if f.PatchID != "" {
 		n += field("patch_id", stringBytes(f.PatchID), false)
 	}
@@ -770,6 +794,9 @@ func (f RevisionFactsRow) encodedBytes() int {
 	n += field("touched", nullableStringsBytes(f.Touched), false)
 	if f.TouchesAll {
 		n += field("touches_all", trueBytes, false)
+	}
+	if !f.Classes.IsZero() {
+		n += field("classes", f.Classes.encodedBytes(), false)
 	}
 	n += field("node", stringBytes(f.Node), false) + field("owners_digest", stringBytes(f.OwnersDigest), false)
 	if len(f.RequestedOwners) > 0 {

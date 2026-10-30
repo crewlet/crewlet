@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -190,6 +193,13 @@ func TestTouchedPathsPastTheBoundTouchEverything(t *testing.T) {
 		case f.PatchID == "" || f.PatchIDOmitted:
 			t.Errorf("%s: the facts carry no id (%q, omitted %t): a list's bound is no patch's", tc.name, f.PatchID,
 				f.PatchIDOmitted)
+		case f.Classes.Complete == tc.all:
+			// A LIST CLASSES EVERY PATH IT NAMES — none here is Go — and one
+			// that touches all names none, so its classes are never whole.
+			t.Errorf("%s: the classes are complete = %t, want %t", tc.name, f.Classes.Complete, !tc.all)
+		case f.BaseTree == "" || f.HeadTree == "":
+			t.Errorf("%s: the facts name trees %q and %q, want both, whatever the list", tc.name, f.BaseTree,
+				f.HeadTree)
 		}
 	}
 
@@ -258,7 +268,7 @@ func TestAPatchIDPastItsBoundIsOmitted(t *testing.T) {
 		{"the patch ran out the budget", "-p", true},
 		{"its id ran out the budget", "--verbatim", true},
 		{"the merge base ran out the budget", "merge-base", false},
-		{"the paths' walk ran out the budget", "--name-only", false},
+		{"the paths' walk ran out the budget", "--raw", false},
 	} {
 		s := x.server(0, query.Options{Git: endsAt{Pool: node.Pool(), arg: tc.arg}})
 		a, err := s.Read(t.Context(), factsQ(repo, head, base))
@@ -321,10 +331,11 @@ type unnameable struct {
 }
 
 func (p unnameable) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) {
-	if !slices.Contains(c.Args, "--name-only") {
+	if c.Args[0] != "diff-tree" || !slices.Contains(c.Args, "--raw") {
 		return p.Pool.Run(ctx, c)
 	}
-	if _, err := c.Stdout.Write([]byte("a.txt\x00" + p.path + "\x00")); err != nil {
+	header := ":100644 100644 " + strings.Repeat("1", 40) + " " + strings.Repeat("2", 40) + " M\x00"
+	if _, err := c.Stdout.Write([]byte(header + "a.txt\x00" + header + p.path + "\x00")); err != nil {
 		return gitproc.Result{}, err
 	}
 	return gitproc.Result{}, nil
@@ -351,5 +362,214 @@ func TestAPathNoReadCouldNameTouchesAll(t *testing.T) {
 	if f := x.facts(s, repo, head, base); !f.TouchesAll || len(f.Touched) != 0 {
 		t.Fatalf("the facts of a change touching a path no read names list %d paths (touches all %t), want "+
 			"them to touch all, with no list", len(f.Touched), f.TouchesAll)
+	}
+}
+
+// commitStaged writes files into the work tree, runs stage for what a
+// written file cannot say — a mode, a deletion, a link — stages every change,
+// then commits and pushes main through the first git node, answering the
+// commit.
+func (x *fixture) commitStaged(files map[string]string, stage func(), message string) string {
+	x.t.Helper()
+	for rel, content := range files {
+		if err := os.WriteFile(filepath.Join(x.work, rel), []byte(content), 0o644); err != nil {
+			x.t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	if stage != nil {
+		stage()
+	}
+	x.git("add", "-A")
+	x.git("commit", "-q", "-m", message)
+	x.push(codetest.RepoName, "main")
+	return x.p.Head(x.work)
+}
+
+// link points the work tree's link at target, replacing it.
+func (x *fixture) link(link, target string) {
+	x.t.Helper()
+	path := filepath.Join(x.work, link)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		x.t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		x.t.Fatal(err)
+	}
+}
+
+// classesOf is what f's classes say of each path it touches, by path: its
+// class, and nothing for a path of none.
+func classesOf(f *code.RevisionFactsAnswer) map[string]code.ChangeClass {
+	out := map[string]code.ChangeClass{}
+	for _, at := range f.Classes.WhitespaceOnly {
+		out[f.Touched[at]] = code.ChangeClassWhitespaceOnly
+	}
+	for _, at := range f.Classes.CommentOnly {
+		out[f.Touched[at]] = code.ChangeClassCommentOnly
+	}
+	return out
+}
+
+// A GO CHANGE IS CLASSED FROM ITS TWO VERSIONS. A change touching four files
+// — one only reindented, one whose doc comment alone is rewritten, one whose
+// code changes, and a text file — has the first classed whitespace_only and
+// the second comment_only, each by its place in the touched list and in the
+// list of its narrowest class, the third and the text file classed nothing,
+// and its classification complete. Its facts name the trees of its base and
+// its head, as git names them: what tells two revisions holding the same
+// code apart from two whose diffs merely look alike.
+//
+// Mutations: lex each path's head against itself — the code change reads as
+// whitespace, red; name the head's tree as the base's — the base tree is not
+// git's, red.
+func TestAGoChangeIsClassedFromItsTwoVersions(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	base := x.commit(map[string]string{
+		"a.go":  "package p\n\nfunc a() int {\n\treturn 1\n}\n",
+		"b.go":  "package p\n\n// b answers two.\nfunc b() int { return 2 }\n",
+		"c.go":  "package p\n\nfunc c() int { return 3 }\n",
+		"d.txt": "d\n",
+	}, "base")
+	head := x.commit(map[string]string{
+		"a.go":  "package p\n\nfunc a() int {\n        return 1\n}\n",
+		"b.go":  "package p\n\n// b answers two, whatever it is asked.\nfunc b() int { return 2 }\n",
+		"c.go":  "package p\n\nfunc c() int { return 4 }\n",
+		"d.txt": "e\n",
+	}, "head")
+	repo := x.repo(codetest.RepoName)
+	f := x.facts(x.server(0, query.Options{}), repo, head, base)
+
+	want := map[string]code.ChangeClass{"a.go": code.ChangeClassWhitespaceOnly, "b.go": code.ChangeClassCommentOnly}
+	switch got := classesOf(f); {
+	case !slices.Equal(f.Touched, []string{"a.go", "b.go", "c.go", "d.txt"}):
+		t.Fatalf("the change touches %v, want its four files", f.Touched)
+	case !reflect.DeepEqual(got, want):
+		t.Errorf("the change's paths are classed %v, want %v", got, want)
+	case !reflect.DeepEqual(f.Classes, code.RevisionClasses{WhitespaceOnly: []int{0}, CommentOnly: []int{1},
+		Complete: true}):
+		t.Errorf("the classes = %+v, want a.go's place whitespace only, b.go's comment only, and complete",
+			f.Classes)
+	}
+	if want := strings.TrimSpace(x.git("rev-parse", base+"^{tree}")); f.BaseTree != want {
+		t.Errorf("the facts name the base's tree %s, want git's %s", f.BaseTree, want)
+	}
+	if want := strings.TrimSpace(x.git("rev-parse", head+"^{tree}")); f.HeadTree != want {
+		t.Errorf("the facts name the head's tree %s, want git's %s", f.HeadTree, want)
+	}
+}
+
+// A MODE CHANGE IS NEVER CLASSED, and neither is any path a lexer has no two
+// versions of a Go file for: a Go file whose comment changed beside its
+// executable bit (a change no lexer sees, to whether it runs), one added, one
+// deleted, and a symbolic link named like a Go file whose target moved by a
+// space — a blob that lexes as whitespace, which is no Go source — each has
+// no class, while a Go file whose comment alone changed beside them is
+// comment_only, so the classification ran, and is complete.
+//
+// Mutation: class a path whatever its modes (drop the mode terms of
+// lexableEntry) — m.go reads comment_only and link.go whitespace_only, red.
+func TestAModeChangeIsNeverClassed(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	base := x.commitStaged(map[string]string{
+		"c.go":    "package p\n\n// c one\nfunc c() {}\n",
+		"gone.go": "package p\n\nfunc gone() {}\n",
+		"m.go":    "package p\n\n// m one\nfunc m() {}\n",
+	}, func() { x.link("link.go", "a.go") }, "base")
+	head := x.commitStaged(map[string]string{
+		"c.go": "package p\n\n// c two\nfunc c() {}\n",
+		"m.go": "package p\n\n// m two\nfunc m() {}\n",
+		"n.go": "package p\n\n// n\nfunc n() {}\n",
+	}, func() {
+		x.link("link.go", "a.go ")
+		if err := os.Remove(filepath.Join(x.work, "gone.go")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(x.work, "m.go"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}, "head")
+	repo := x.repo(codetest.RepoName)
+	f := x.facts(x.server(0, query.Options{}), repo, head, base)
+
+	if raw := x.git("diff-tree", "-r", "--raw", "--no-renames", base, head); !strings.Contains(raw,
+		":100644 100755 ") || !strings.Contains(raw, ":120000 120000 ") {
+		t.Fatalf("the fixture changed no mode and no link:\n%s", raw)
+	}
+	want := map[string]code.ChangeClass{"c.go": code.ChangeClassCommentOnly}
+	switch got := classesOf(f); {
+	case !slices.Equal(f.Touched, []string{"c.go", "gone.go", "link.go", "m.go", "n.go"}):
+		t.Fatalf("the change touches %v, want its five paths", f.Touched)
+	case !reflect.DeepEqual(got, want):
+		t.Errorf("the change's paths are classed %v, want only %v: a mode change, an added or deleted file "+
+			"and a link are never classed", got, want)
+	case !f.Classes.Complete:
+		t.Error("the classification is incomplete, want every path judged")
+	}
+}
+
+// A BOUND CUTS CLASSIFICATION INCOMPLETE. Three Go files whose comments alone
+// change are lexed in the touched list's order while the Go they take stays
+// within the bound in all: at the bound every one is classed and the
+// classification complete; a byte short and the last is never read — its
+// class unknown, not none — so the classes say they are INCOMPLETE, the first
+// two classed all the same. A version past the bound on one file leaves that
+// file unread with no class, as the lexer gives none past it, and the rest
+// whole. And a classification that runs out what the read's budget of git
+// left is answered incomplete, the facts' base, paths, trees and id with it:
+// a class only relaxes, so classes cut short never fail the facts.
+//
+// Mutations: class past the bound (drop the total's check) — the byte-short
+// row is complete, red; fail the read where the lexing ran out the budget —
+// the last row red.
+func TestABoundCutsClassificationIncomplete(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	before := map[string]string{
+		"a.go": "package p\n\n// a\nfunc a() {}\n",
+		"b.go": "package p\n\n// b, the longest of the three files by far\nfunc b() {}\n",
+		"c.go": "package p\n\n// c\nfunc c() {}\n",
+	}
+	after := map[string]string{}
+	total := 0
+	for p, src := range before {
+		after[p] = strings.Replace(src, "// ", "// so said ", 1)
+		total += len(src) + len(after[p])
+	}
+	base := x.commit(before, "base")
+	head := x.commit(after, "head")
+	repo := x.repo(codetest.RepoName)
+	for _, tc := range []struct {
+		name        string
+		blob, bytes int64
+		classed     []int
+		complete    bool
+	}{
+		{"at the bound", code.MaxClassedBlobBytes, int64(total), []int{0, 1, 2}, true},
+		{"a byte short", code.MaxClassedBlobBytes, int64(total - 1), []int{0, 1}, false},
+		{"a version past its bound", int64(len(after["b.go"]) - 1), code.MaxClassedBytes, []int{0, 2}, true},
+	} {
+		s := x.server(0, query.Options{})
+		query.SetClassedBounds(s, tc.blob, tc.bytes)
+		f := x.facts(s, repo, head, base)
+		if !slices.Equal(f.Classes.CommentOnly, tc.classed) || len(f.Classes.WhitespaceOnly) != 0 ||
+			f.Classes.Complete != tc.complete {
+			t.Errorf("%s: the classes = %+v, want %v comment only, complete = %t", tc.name, f.Classes,
+				tc.classed, tc.complete)
+		}
+	}
+
+	s := x.server(0, query.Options{Git: endsAt{Pool: x.f.Nodes()[0].Pool(), arg: "--batch"}})
+	a, err := s.Read(t.Context(), factsQ(repo, head, base))
+	switch {
+	case err != nil:
+		t.Fatalf("the facts of a classification out of the budget = %v, want them answered", err)
+	case !a.RevisionFacts.Classes.IsZero():
+		t.Errorf("a classification out of the budget answered %+v, want no class and incomplete",
+			a.RevisionFacts.Classes)
+	case a.RevisionFacts.PatchID == "" || len(a.RevisionFacts.Touched) != 3 || a.RevisionFacts.HeadTree == "":
+		t.Errorf("a classification out of the budget answered the facts %+v, want the rest of them whole",
+			a.RevisionFacts)
 	}
 }

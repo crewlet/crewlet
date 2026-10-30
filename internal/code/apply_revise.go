@@ -9,8 +9,9 @@ import (
 )
 
 // applyRevise writes a revision's facts ([Revise]) — the row of its revision,
-// the facts of another target it replaces where the change was retargeted, or
-// of an earlier tip — and asks each reviewer the record names as a path
+// its trees and its classes among them, the facts of another target it
+// replaces where the change was retargeted, or of an earlier tip — and asks
+// each reviewer the record names as a path
 // owner's, a participant of the change, where the change holds no ask of
 // them: the decide asked only those whose ask it did not hold, and the
 // broker's arbitration on the change's subject applies the record against
@@ -33,8 +34,9 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 			r.ChangeID, at.position, err)
 	}
 	if _, err := tx.ExecContext(ctx, writeFactsSQL, r.ChangeID, r.N, r.TargetRef, r.TargetOID,
-		r.TargetPosition.Packed(), r.BaseOID, r.PatchID, r.PatchIDOmitted, len(r.Touched), r.TouchesAll, r.Node,
-		r.OwnersDigest, wide.bytes(), at.packed, wide.owners, wide.skipped, wide.touched); err != nil {
+		r.TargetPosition.Packed(), r.BaseOID, r.BaseTree, r.HeadTree, r.PatchID, r.PatchIDOmitted, len(r.Touched),
+		r.TouchesAll, r.Node, r.OwnersDigest, wide.bytes(), at.packed, wide.owners, wide.skipped, wide.classes,
+		wide.touched); err != nil {
 		return 0, conversationCounts{}, fmt.Errorf("code: write revision %d of %s's facts at %s: %w", r.N,
 			r.ChangeID, at.position, err)
 	}
@@ -65,18 +67,27 @@ func applyRevise(ctx context.Context, tx *sql.Tx, at applyContext, r Revise) (in
 
 // factsWide is a revision's facts' wide columns as a row keeps them: its
 // touched paths NUL-separated — no path of a tree holds a NUL — and its
-// matched and skipped owners as JSON, each "" for none.
+// matched and skipped owners and its classes as JSON, each "" for none.
 type factsWide struct {
-	touched, owners, skipped string
+	touched, owners, skipped, classes string
 }
 
 // bytes is what the wide columns weigh, as code_revision_facts.bytes and the
 // conversation's text_bytes count them.
-func (w factsWide) bytes() int64 { return int64(len(w.touched) + len(w.owners) + len(w.skipped)) }
+func (w factsWide) bytes() int64 {
+	return int64(len(w.touched) + len(w.owners) + len(w.skipped) + len(w.classes))
+}
 
 // factsColumns is r's wide columns.
 func factsColumns(r Revise) (factsWide, error) {
 	w := factsWide{touched: strings.Join(r.Touched, "\x00")}
+	if !r.Classes.IsZero() {
+		encoded, err := json.Marshal(r.Classes)
+		if err != nil {
+			return factsWide{}, err
+		}
+		w.classes = string(encoded)
+	}
 	if len(r.RequestedOwners) > 0 {
 		encoded, err := json.Marshal(r.RequestedOwners)
 		if err != nil {
@@ -100,16 +111,17 @@ func factsColumns(r Revise) (factsWide, error) {
 // decide made only where the change held none, a conflict on its key a skip.
 const (
 	writeFactsSQL = `INSERT INTO code_revision_facts (change_id, n, target_ref, target_oid, target_position,
-			base_oid, patch_id, patch_id_omitted, touched_count, touches_all, node, owners_digest, bytes, position,
-			owners, skipped, touched)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			base_oid, base_tree, head_tree, patch_id, patch_id_omitted, touched_count, touches_all, node,
+			owners_digest, bytes, position, owners, skipped, classes, touched)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (change_id, n) DO UPDATE SET target_ref = excluded.target_ref,
 			target_oid = excluded.target_oid, target_position = excluded.target_position,
-			base_oid = excluded.base_oid, patch_id = excluded.patch_id,
-			patch_id_omitted = excluded.patch_id_omitted, touched_count = excluded.touched_count,
-			touches_all = excluded.touches_all, node = excluded.node, owners_digest = excluded.owners_digest,
-			bytes = excluded.bytes, position = excluded.position, owners = excluded.owners,
-			skipped = excluded.skipped, touched = excluded.touched`
+			base_oid = excluded.base_oid, base_tree = excluded.base_tree, head_tree = excluded.head_tree,
+			patch_id = excluded.patch_id, patch_id_omitted = excluded.patch_id_omitted,
+			touched_count = excluded.touched_count, touches_all = excluded.touches_all, node = excluded.node,
+			owners_digest = excluded.owners_digest, bytes = excluded.bytes, position = excluded.position,
+			owners = excluded.owners, skipped = excluded.skipped, classes = excluded.classes,
+			touched = excluded.touched`
 	askPathOwnerSQL = `INSERT INTO code_reviewers (change_id, reviewer, reviewer_kind, reason, state, requested_by,
 			requested_by_kind, note, position)
 		VALUES (?, ?, ?, ?, ?, '', '', '', ?)

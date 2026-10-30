@@ -71,8 +71,9 @@ This is the product's current shape, not a configuration choice:
   ([A change a push opens](#a-change-a-push-opens)); a repository's committer
   decides a change's opening, its edits and its close, a push to a change's
   branches writes its revisions, merges it or closes it, the repository's home
-  records each revision's facts — asking a review of the [path
-  owners](#path-owners) whose paths it touches — and whether it merges cleanly
+  records each revision's facts — its [classes](#change-classes) among them,
+  asking a review of the [path owners](#path-owners) whose paths it touches —
+  and whether it merges cleanly
   into its target ([Mergeability](#mergeability)) with the change's
   [readiness](#merge-readiness) judged beside it, and lands a change whose
   head its target holds ([The home's change work](#the-homes-change-work)), the
@@ -254,7 +255,7 @@ protect:
 |---|---|---|
 | `merge_by` | `writers`: anybody who may write to the repository merges | `maintainers`: only those who maintain it; `persons`: a person, never a seat |
 | `approvals` | `none` | `one`: a merge waits for one counted approval |
-| `approvals_unless` | none | The path classes — `whitespace_only`, `comment_only` — that exempt a change from those approvals: one whose every touched path is of a class listed waits for none |
+| `approvals_unless` | none | The [path classes](#change-classes) — `whitespace_only`, `comment_only` — that exempt a change from those approvals: one whose every touched path is of a class listed waits for none |
 | `human_paths` | none | At most 32 globs, in the [path owners'](#path-owners) grammar: a change touching a path one matches waits for a **person's** approval, whatever else approved it — unless every path that glob matched is of a class its `unless` lists |
 | `checks` | none | At most 32 checks a merge waits for, each by the name a repository's [checks file](#the-checks-file) gives it: a lowercase letter or digit, then up to 63 more of them, `.`, `_` and `-` — one rule for both, so a rule never requires a check no repository can define |
 | `landing` | `pre_land`, `depth: 4`, `batch: 4` | `policy`: `pre_land` tests each change merged on the branch before it lands, and `post_land` lands changes ahead of their checks and checks the branch's newest tip; `depth`: how many candidates the queue tests at once, 1 to 8; `batch`: how many waiting changes one candidate takes, 1 to 8 |
@@ -267,7 +268,8 @@ A merge gate on a `tag` rule is refused, at the first gate field it sets: a tag
 never moves, so no merge reaches one. `no_code_change` is refused in
 `approvals_unless` and in an `unless`: it is a revision's class, never a
 path's, and an approval already carries across a revision that changed
-nothing. Each check, each human path's glob and each class is listed once. A
+nothing ([Merge readiness](#merge-readiness)). Each check, each human path's
+glob and each class is listed once. A
 gate is recorded with every field resolved and every list sorted, whatever
 order the document wrote them in, so one declaration is one record on every
 node, and an activation that changes nothing writes nothing for it. A gate
@@ -4118,8 +4120,10 @@ alike:
 | Fact | What it is |
 |---|---|
 | `merge_base` | Where the head's history meets the target's: the **base** the change is measured from, as a merge of it would be. A history that shares no commit with its target's has none, and its change is measured from the empty tree — every file of its head. |
-| `head_in_target` | The target holds the head already: the change is merged, by whatever moved the target there, and has nothing left to measure — no path and no id. |
+| `head_in_target` | The target holds the head already: the change is merged, by whatever moved the target there, and has nothing left to measure — no path, no tree and no id. |
+| `base_tree`, `head_tree` | The trees of the base — the empty tree, for a history that shares none with its target's — and of the head: two revisions naming the same pair hold the same code, byte for byte, which an approval carries across ([Change classes](#change-classes)). |
 | `touched` | Every file the change touches: each path the diff from the base to the head changes, in git's order, a moved file as its two paths. Past 1 000 paths, past 48 KiB of the list as JSON, or at a path that is not UTF-8 (which JSON cannot carry exactly), the facts say `touches_all` and give no list — read as every path by everything that reads one, where a list cut at its bound would leave the files past the cut out. |
+| `classes` | What each touched Go file's change is — `whitespace_only` or `comment_only` — named by its place in `touched`, and whether every touched path was judged (`complete`): [Change classes](#change-classes). |
 | `patch_id` | `git patch-id --verbatim` of the change's cumulative diff from its base, three lines of context around every change: the same for two revisions whose changes are the same lines among the same neighbours, wherever the base put them — a rebase onto a target that moved nothing near them keeps it — and another for any changed byte. Empty for a revision that changes nothing. |
 | `patch_id_omitted` | No id was taken: the diff is past 256 MiB, or it and its id ran out what was left of the read's ten seconds of git. An omitted id, like an empty one, equals nothing. |
 
@@ -4132,17 +4136,22 @@ diff's `index` line writes them, which git otherwise abbreviates to however
 many digits the repository at hand needs — two copies of one repository
 holding different counts of objects would identify one change apart.
 
-**The base and the paths are what the read cannot do without; the id it can.**
-The four steps run one after another in the node's read lane — the merge
-base, the walk of the touched paths, the diff written into a spool (a file
-with no name on the cache's volume, gone when the read ends), and `git
-patch-id` reading it back — never two at once, which would hold two of the
-lane's slots for one read. A merge base or a walk that runs out the read's
-budget of git makes the read too large to answer, as any read's git does. A
-diff past 256 MiB, or a diff or an id that ran out what the budget left, is
-answered with the id omitted instead: the safe side, since an omitted id
-equals nothing, and the base and the paths that everything else reads —
-an interdiff among them — are there.
+**The base, the paths and the trees are what the read cannot do without;
+the id and the classes it can.** The six steps run one after another in the
+node's read lane — the merge base, the walk of the touched paths (git's raw
+records, whose modes and blob ids say which paths a lexer classes), one
+lookup of the two trees and of each such path's two blobs' sizes, the diff
+written into a spool (a file with no name on the cache's volume, gone when
+the read ends), `git patch-id` reading it back, and one `git cat-file
+--batch` writing the Go files' versions for the lexer — never two at once,
+which would hold two of the lane's slots for one read. A merge base, a walk
+or a lookup that runs out the read's budget of git makes the read too large
+to answer, as any read's git does. A diff past 256 MiB, or a diff or an id
+that ran out what the budget left, is answered with the id omitted instead:
+the safe side, since an omitted id equals nothing, and the base, the paths
+and the trees that everything else reads — an interdiff among them — are
+there. Classes cut short by their bound or by the budget are answered
+incomplete, the same side: a class only relaxes.
 
 **Measured**, over changes rewriting every fourth line of files of 256 KiB,
 three reads each on two cores: a revision's facts took 18 ms for a 1 MiB
@@ -4155,8 +4164,9 @@ takes its id.
 
 A revision's facts are read ONCE, by the repository's [home](#the-home-git-node),
 and recorded on the change, where every later reader finds them: an approval
-carried from one revision to the next on an equal `patch_id`, an interdiff
-kept to the files two revisions touch, the change's readiness. The record is
+carried from one revision to the next by its code or by an equal `patch_id`,
+an interdiff kept to the files two revisions touch, the classes a merge
+gate's exemptions read, the change's readiness. The record is
 a **revise**, a write of the change's [conversation](#reviews-and-findings):
 the home asks it of the repository's committing data node, whose change writer
 decides it in one snapshot and publishes it on the change's own subject, as it
@@ -4165,7 +4175,7 @@ the engine's own.
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base, the `patch_id` or that none was taken, and the files touched or that it touches all; the git node that recorded them; and its path-owner match — the digest of the owners matched against, those matched and those asked no review of, with why |
+| `code_revision_facts` | each revision of a change its home read | The target branch, the tip read and the position of the record that moved the branch there; the base and the trees of the base and the head; the `patch_id` or that none was taken; the files touched or that it touches all, and their [classes](#change-classes); the git node that recorded them; and its path-owner match — the digest of the owners matched against, those matched and those asked no review of, with why |
 
 - **Facts are of the change's head revision against its target now.** A
   revise is decided only while they still are: facts of a revision a push has
@@ -4211,6 +4221,74 @@ A write of facts that is refused appends nothing: `superseded` is the home's
 alone, answered to no person and no seat, and a closed or merged change takes
 no facts (`change_closed`, `change_merged`). `crewlet.code.conversation.writes`
 counts them under `op` `revise`, beside the conversation's other writes.
+
+### Change classes
+
+A change's **class** says what a review of it need not read: a class only
+ever *relaxes* — a [merge gate](#merge-gates) may exempt a change of one from
+an approval it would otherwise wait for — so a class is given only where it
+is true of the program and of every tool that reads the file, and whatever
+cannot be shown so gets none. A revision's facts carry two kinds.
+
+**Path classes**, one a touched file, as the language's own lexer judges the
+file's two versions — Go's, `go/scanner`, the one lexer there is so far:
+
+| Class | A touched file's change that is |
+|---|---|
+| `whitespace_only` | Its tokens and its comments the same: only the space between tokens moved — never a newline that ends a statement, which in Go is a token of its own, and never a raw string's spaces, which are its value. |
+| `comment_only` | Its tokens the same once its comments are set aside, no comment a tool reads as an instruction changed, and nothing around one. Every `whitespace_only` change is a `comment_only` one too, and is listed as the narrower. |
+
+- **A directive is code, and so is the layout around one.** A comment the
+  compiler, cgo, `go generate`, `go test`, the build or a linter reads —
+  `//go:` lines, `//line`, `// +build`, `//export`, a cgo preamble, an
+  example's `Output:`, `//nolint` and `//lint:ignore` among them — changes
+  what the file builds, runs or reports, and whitespace alone changes what
+  one does (a `//go:generate` indented off its line's start is ignored), so
+  no class holds where one, what follows it or where it sits changed.
+- **Only a Go file changed in place is classed**: a path ending in `.go`,
+  a regular file on both sides in the same mode. A file added or deleted has
+  no second version, a mode change changes what no lexer reads — whether
+  the file runs — a symbolic link's blob is a path and a submodule no blob
+  at all, so none of them has a class, and neither has a file of another
+  language yet.
+- **Bounded, and incomplete past the bound.** A version past 1 MiB is left
+  unread, with no class — past every hand-written file of Go's own tree. A
+  revision lexes at most 16 MiB of Go in all, both versions of every file
+  counted, in the touched list's order: the file that would take it past
+  that is not read, nor any after it, and the revision's classes are
+  **incomplete** — as they are where its lexing ran out what the read's ten
+  seconds of git left, and always where the revision touches all, which
+  lists no path to class. Incomplete classes keep the classes of the files
+  lexed, and say nothing of the rest; complete ones say a file no list names
+  has no class. So an exemption that holds only where every path a change
+  touches is of a class requires them complete.
+
+The facts record the classes as `classes`: `whitespace_only` and
+`comment_only`, each the places in `touched` — counted from 0 — of the files
+of that class, and `complete`. Places rather than paths, because the facts
+are one page beside a touched list of up to 48 KiB, and a thousand files
+reformatted, named a second time, would not fit it.
+
+**`no_code_change` is a revision's class, never a path's**: a revision whose
+base and head trees are those of a revision an approval stands on holds the
+code that was approved, byte for byte — a message amended, commits squashed
+or reordered, a branch pushed again — and the approval carries to it
+([Merge readiness](#merge-readiness)), however its history differs and
+whatever its `patch_id` says, an omitted one included: a change past
+256 MiB of diff, whose id is never taken, keeps its approval across a
+revision that changed nothing. The facts record the two trees
+(`base_tree`, `head_tree`) rather than the class, because the class is a
+relation between two revisions, which the reader of the two rows judges in
+its own snapshot, as it compares two patch ids. It is never compared with
+the revision's own base — a diff that is empty against it changes nothing,
+and holds other code than an approver read — and it is refused in a gate's
+`approvals_unless` and `unless`, where an approval already carries across
+it.
+
+**Measured** (`BenchmarkClassifyGo`, two cores): two versions of a 1 MiB
+file take 34 ms to lex as ordinary code and up to 116 ms as nothing but
+comments under a directive, so a revision's 16 MiB of Go is lexed in under
+a second at the most — a tenth of the read's ten seconds of git.
 
 ### The home's change work
 
@@ -4364,7 +4442,7 @@ records: what a merge counts is the change's own reviews and findings.
 |---|---|---|
 | `draft` | The change is open for review, not a draft. | Its owner, who marks it ready — as a principal that maintains the repository or a person may. |
 | `facts` | Its head revision's [facts](#recorded-on-the-change) against its current target are recorded. | Nobody: it is `computing` until its home reads them. |
-| `approval` | ONE COUNTED APPROVAL stands: an eligible reviewer's standing verdict approves the head revision, or an earlier revision whose diff the head carries unchanged. | The reviewers asked who may approve it; its owner, to ask one, where nobody is. |
+| `approval` | ONE COUNTED APPROVAL stands: an eligible reviewer's standing verdict approves the head revision, or an earlier revision whose code or diff the head carries unchanged. | The reviewers asked who may approve it; its owner, to ask one, where nobody is. |
 | `blocker` | No blocker stands. | Its owner while a blocker is open; each blocker an author answered, its raiser, who judges the answer. |
 | `mergeable` | Its head revision merges cleanly into its target, as its home recorded it — "as of" the tip it merged into, whatever the target did since. | Its owner, on a conflict. It is `computing` until its home merges the head revision, and while a merge decided nothing within its deadline. |
 
@@ -4375,14 +4453,18 @@ records: what a merge counts is the change's own reviews and findings.
   approving it becomes one. A reviewer's later request for changes replaces
   their verdict, withdrawing their approval and holding nothing else: a merge
   counts approvals and standing blockers, not requests.
-- **An approval carries to a later revision only on an equal patch id**: both
-  revisions' recorded `patch_id`s equal, neither empty nor omitted — the same
-  lines changed among the same neighbours, as a rebase that moved nothing near
-  them keeps it ([A revision's facts](#a-revisions-facts)). Until the head
-  revision's facts are recorded, an approval of an earlier one is `computing`;
-  an approval of a revision whose own facts were never recorded — its head
-  moved before its home read them — never carries, since a home reads the
-  head revision alone.
+- **An approval carries to a later revision by its code or by its diff**, the
+  detail naming which: by its CODE where the two revisions' recorded base and
+  head trees are equal (`no_code_change`, [Change classes](#change-classes)) —
+  the very code that was approved, whatever the two `patch_id`s say, an
+  omitted one included; by its DIFF where their recorded `patch_id`s are
+  equal, neither empty nor omitted — the same lines changed among the same
+  neighbours, as a rebase that moved nothing near them keeps it ([A
+  revision's facts](#a-revisions-facts)). Until the head revision's facts are
+  recorded, an approval of an earlier one is `computing`; an approval of a
+  revision whose own facts were never recorded — its head moved before its
+  home read them — never carries, since a home reads the head revision
+  alone.
 - **Each standing blocker is named with who can clear it**: its raiser — by
   dismissing it, or by a review of a later revision that does not carry it —
   the seat the chart lets maintain the repository (its owning unit's

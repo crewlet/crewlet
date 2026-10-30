@@ -173,6 +173,56 @@ func TestAPageIsCutAgainstTheWholeAnswer(t *testing.T) {
 	}
 }
 
+// A CLASSED FACTS ANSWER IS ONE PAGE: the room a revision's touched list has
+// is what its answer leaves with every other field at its widest — its
+// classes naming every place the list may hold among them — so swept across
+// page bounds a few bytes apart around the bound at which the list of a
+// change whose every file is classed just fits, every answer encodes within
+// its page: a list its classes would take past the page touches all, and
+// classes nothing, instead.
+//
+// Mutation: leave the classes out of the envelope the list's room is measured
+// against — a bound where the list fits alone and not beside its classes
+// answers past its page, red.
+func TestAClassedFactsAnswerIsOnePage(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	const files = 40
+	before, after := map[string]string{}, map[string]string{}
+	for i := range files {
+		p := fmt.Sprintf("w/%02d-%s.go", i, strings.Repeat("g", 20))
+		before[p], after[p] = "package p\n\nvar x = 1\n", "package p\n\nvar x  = 1\n"
+	}
+	base := x.commit(before, "base")
+	head := x.commit(after, "head")
+	repo := x.repo(codetest.RepoName)
+	whole := mustRead(t, x.server(0, query.Options{}), factsQ(repo, head, base))
+	if f := whole.RevisionFacts; f.TouchesAll || len(f.Classes.WhitespaceOnly) != files || !f.Classes.Complete {
+		t.Fatalf("the premise: the facts of %d files reformatted list %d paths (touch all %t) and class %d (%t)",
+			files, len(f.Touched), f.TouchesAll, len(f.Classes.WhitespaceOnly), f.Classes.Complete)
+	}
+	size := encoded(t, whole)
+	listed, all := 0, 0
+	for limit := size - 400; limit <= size+200; limit += 7 {
+		s := x.server(0, query.Options{})
+		query.SetPageBytes(s, limit)
+		query.SetTouchedBounds(s, files, code.MaxTouchedBytes)
+		a := mustRead(t, s, factsQ(repo, head, base))
+		if n := encoded(t, a); n > limit {
+			t.Errorf("at a page of %d bytes the facts encode to %d, listing %d paths and classing %d", limit, n,
+				len(a.RevisionFacts.Touched), len(a.RevisionFacts.Classes.WhitespaceOnly))
+		}
+		if a.RevisionFacts.TouchesAll {
+			all++
+		} else {
+			listed++
+		}
+	}
+	if listed == 0 || all == 0 {
+		t.Fatalf("the sweep listed the paths at %d bounds and touched all at %d: it crossed no bound", listed, all)
+	}
+}
+
 // A PAGE IS COSTED IN THE ENCODER'S OWN TERMS: what the page cutter counts
 // for any text — every ASCII byte, the escaped ones among them, runes of two,
 // three and four bytes, U+2028 and U+2029, and bytes that are not UTF-8, alone,

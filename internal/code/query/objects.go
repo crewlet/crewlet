@@ -273,8 +273,18 @@ func (r *read) expand(ctx context.Context, abbrevs []string) (map[string]string,
 }
 
 // check is what ONE cat-file batch says of each line of in, in order: the
-// object it names, or the zero object where it names nothing.
+// object it names, or the zero object where it names nothing. Before the
+// read's own git begins it runs to its own bound, as every short check does;
+// inside it — a revision's facts looking up their trees and blobs — to what
+// is left of the read's budget, which it is charged to.
 func (r *read) check(ctx context.Context, in []string) ([]object, error) {
+	deadline := gitproc.ReadDeadline
+	if r.metered {
+		var err error
+		if deadline, err = r.budget(); err != nil {
+			return nil, err
+		}
+	}
 	var stdin bytes.Buffer
 	for _, line := range in {
 		stdin.WriteString(line)
@@ -300,7 +310,7 @@ func (r *read) check(ctx context.Context, in []string) ([]object, error) {
 	res, err := r.s.o.Git.Run(ctx, gitproc.Cmd{
 		Dir: r.synced.Dir, Dropping: r.synced.Dropping,
 		Args: []string{"cat-file", "--batch-check", "-Z"}, Config: r.s.o.Cache.ServeConfig(),
-		Stdin: &stdin, Stdout: recs, Class: gitproc.ClassRead, Deadline: gitproc.ReadDeadline,
+		Stdin: &stdin, Stdout: recs, Class: gitproc.ClassRead, Deadline: deadline,
 	})
 	if err == nil {
 		err = recs.close()

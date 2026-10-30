@@ -584,9 +584,9 @@ var cacheWriters = []writerRow{
 			"ids a read resolved; query.TestAPathReachesGitOnlyAsData holds the argument list to its " +
 			"template", nil},
 	{"internal/code/query/facts.go", kindGit + " diff-tree",
-		"a revision's facts: the paths a change touches (`-r --name-only -z --no-renames`) and its patch for " +
-			"patch-id (`-r -p --full-index …`, written to the reader through its Stdout, into a spool the cache " +
-			"made with no name), whose only arguments not spelled as literals are the base and head the read " +
+		"a revision's facts: the paths a change touches, as raw records (`-r --raw -z --no-renames`), and its " +
+			"patch for patch-id (`-r -p --full-index …`, written to the reader through its Stdout, into a spool " +
+			"the cache made with no name), whose only arguments not spelled as literals are the base and head the read " +
 			"resolved to whole ids — the empty tree's id, a constant, for a history sharing none with its " +
 			"target's; query.TestAPathReachesGitOnlyAsData holds both argument lists to their " +
 			"templates, so no --output can be added unseen", nil},

@@ -80,6 +80,27 @@ func (c ChangeClass) Valid() bool { return slices.Contains(ChangeClasses(), c) }
 // one file.
 const MaxClassedBlobBytes = 1 << 20
 
+// MaxClassedBytes is the most Go a revision's classification lexes — both
+// versions of every path it classes, counted together — in the touched
+// list's order: the path whose two versions would take it past this is not
+// read, nor is any after it, and the revision's classes are INCOMPLETE
+// ([RevisionClasses]). How MANY paths it lexes is bounded by the touched list
+// itself ([MaxTouchedPaths]): a pair of small files costs a lookup and a
+// lexer's setup, nothing a thousand of them make long.
+//
+// 16 MIB, A TENTH OF A READ'S GIT: lexing costs what the bytes cost, at most
+// 58 ms a MiB — two versions at MaxClassedBlobBytes of nothing but comments
+// under a //go:noinline, the arm costing most of BenchmarkClassifyGo
+// (MaxClassedBlobBytes has the figures) — so the bound is some 0.93 s of
+// lexing, a tenth of the ten seconds a read's own git is given
+// (gitproc.ReadDeadline), which the lexing runs inside of, since it reads
+// the blobs off their cat-file as git writes them. The rest of the budget is
+// the facts' own: their walk, their patch and its id. The paths' bound is
+// the one reached first by ordinary code — a thousand files at the median of
+// Go's own tree, 2.7 KB, are some 5 MiB of both versions — so this cuts a
+// revision of large files alone: generated code, or a vendored tree.
+const MaxClassedBytes = 16 << 20
+
 // byteOrderMark is the UTF-8 byte-order mark, which go/scanner skips at a
 // file's start: no whitespace, so a change adding or removing one has no
 // class.

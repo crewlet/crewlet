@@ -963,8 +963,9 @@ func (n *node) seedFacts(changeID string, revisions int, width int64) {
 	ctx := n.t.Context()
 	if err := n.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, err := store.InsertRows(ctx, tx, n.db.Caps().MaxVariables, `INSERT INTO code_revision_facts
-			(change_id, n, target_ref, target_oid, target_position, touched_count, node, owners_digest, bytes,
-			position, touched) VALUES `, `(?, ?, 'refs/heads/main', '', 1, 1, 'node-a', '', ?, 1, ?)`, ``,
+			(change_id, n, target_ref, target_oid, target_position, base_tree, head_tree, touched_count, node,
+			owners_digest, bytes, position, classes, touched)
+			VALUES `, `(?, ?, 'refs/heads/main', '', 1, '', '', 1, 'node-a', '', ?, 1, '', ?)`, ``,
 			revisions, func(i int) []any {
 				return []any{changeID, i + 1, width, strings.Repeat("p", int(min(width, 1<<10)))}
 			}); err != nil {

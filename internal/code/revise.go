@@ -83,6 +83,25 @@ import (
 // who may review it is asked, the lead of the repository's owner — its unit's
 // effective lead, or the lead of the unit an owning seat sits in — so a change
 // nobody is asked to review still reaches somebody (lead_fallback).
+//
+// # A revision's classes ride its facts
+//
+// What the home read of a revision includes its CLASSES, two kinds of them.
+// The TREES of its base and its head ([Revise.BaseTree], [Revise.HeadTree]):
+// two revisions holding the same pair hold the same code, byte for byte, so
+// an approval of the one carries to the other however their histories differ
+// and whatever their patch ids say — [ChangeClassNoCodeChange], a revision
+// carry-forward kind ([ReadinessOf]), where an omitted patch id carries
+// nothing. The trees are recorded rather than the class itself, because the
+// class is a relation between two revisions: recorded, it would be judged by
+// a home against the rows it read of the revision before, which a late
+// record of that revision may replace after; compared, it is judged by
+// whoever reads the two rows, in one snapshot, as two patch ids are. And the
+// PATH classes of the paths it touches ([RevisionClasses]): what each touched
+// Go file's change is to the language's own lexer ([ClassifyGo]), within the
+// bounds a revision's classification keeps to ([MaxClassedBytes]) — what a
+// merge gate's exemptions read ([MergeGate.ApprovalsUnless],
+// [HumanPath.Unless]).
 
 // SkipReason is why a revise asked no review of a path owner whose globs its
 // revision touched (code_revision_facts.skipped). A closed set ([SkipReasons]).
@@ -144,6 +163,20 @@ type Revise struct {
 	// that shares no commit with its target's — and never the head itself,
 	// which its target would hold (this file's head).
 	BaseOID string `json:"base_oid,omitempty"`
+	// BaseTree and HeadTree are the trees of the base and of the head — the
+	// empty tree's id for a history that shares no commit with its target's —
+	// which a later revision holding the same pair holds the same code as
+	// (this file's head, "A revision's classes ride its facts").
+	//
+	// BASE FORMAT, under the condition [OpRevise] states: fields the op
+	// gained after it landed, so once a build without them has run they take
+	// {Name: "Revise.BaseTree", Since: 2, Op: "revise", Path:
+	// []string{"mutation", "base_tree"}} and {Name: "Revise.HeadTree", Since:
+	// 2, Op: "revise", Path: []string{"mutation", "head_tree"}}, which an
+	// older build defers the record by rather than record facts no approval
+	// could be carried by.
+	BaseTree string `json:"base_tree"`
+	HeadTree string `json:"head_tree"`
 	// PatchID is `git patch-id --verbatim` of the cumulative diff from the
 	// base, "" for a revision that changes nothing and where PatchIDOmitted.
 	PatchID        string `json:"patch_id,omitempty"`
@@ -152,6 +185,17 @@ type Revise struct {
 	// every path, with no list.
 	Touched    []string `json:"touched"`
 	TouchesAll bool     `json:"touches_all,omitempty"`
+	// Classes is the path classes of the touched files' changes, each named
+	// by its place in Touched ([RevisionClasses]).
+	//
+	// BASE FORMAT, under the condition [OpRevise] states: a field the op
+	// gained after it landed, so once a build without it has run it takes
+	// {Name: "Revise.Classes", Since: 2, Op: "revise", Path:
+	// []string{"mutation", "classes"}}, which an older build defers the
+	// record by rather than record facts that class nothing. Omitted where
+	// it is the zero value — nothing classed, the classification incomplete
+	// — which an older build's facts mean already.
+	Classes RevisionClasses `json:"classes,omitzero"`
 	// Node is the git node that recorded the facts: the repository's home as
 	// it took itself to be, which asked for them.
 	Node string `json:"node"`
@@ -184,6 +228,74 @@ type Revise struct {
 // it unasked, and a change reaching more than sixty-four of either has an
 // audience no wake is the way to — the rest read it in their listings.
 const MaxReReviewers = 64
+
+// RevisionClasses is what the changes of the paths a revision touches are to
+// a lexer ([ClassifyGo]): each touched path a class holds of, in the list of
+// its NARROWEST class — a whitespace_only change is a comment_only one too,
+// and is listed as whitespace_only alone.
+//
+// A PATH IS NAMED BY ITS PLACE in the facts' touched list, counted from 0,
+// never by its name again: the facts are one page beside a touched list of up
+// to [MaxTouchedBytes] (MaxGitAnswerBytes), and a class list naming every
+// path a second time — a thousand Go files reformatted — would take the
+// page twice over, where a thousand places take some four kilobytes.
+//
+// COMPLETE IS WHAT LETS A LIST BE READ AS EVERY PATH. A path no list names
+// has no class: one no lexer reads (another language, a file added, deleted
+// or changed in its mode, a symbolic link, a submodule), one whose versions
+// ClassifyGo gives none — and, where the classification is NOT complete, one
+// it never reached: past [MaxClassedBytes] of Go a revision's classification
+// lexes, past the read's budget of git, and every path of a revision that
+// touches all, which lists none. So a reader exempting a change because every
+// path it touches is of a class requires Complete: incomplete, an empty list
+// would read as every path classed.
+type RevisionClasses struct {
+	WhitespaceOnly []int `json:"whitespace_only,omitempty"`
+	CommentOnly    []int `json:"comment_only,omitempty"`
+	Complete       bool  `json:"complete,omitempty"`
+}
+
+// IsZero reports classes that say nothing — no path classed, the
+// classification incomplete — which a record, an answer and a row omit
+// (encoding/json's omitzero asks it), an empty list and none alike.
+func (c RevisionClasses) IsZero() bool {
+	return len(c.WhitespaceOnly) == 0 && len(c.CommentOnly) == 0 && !c.Complete
+}
+
+// classesProblem refuses classes as facts touching touched — or all — carry
+// them: each list ascending, each place once and of a touched path, no path
+// in both lists, and neither a list nor completeness for a revision that
+// touches all, which lists no path to name. Which paths a class may hold of
+// is the lexer's, on the git node, and no rule here: a build that lexes
+// another language classes its paths, and an older writer deciding its
+// record must not refuse them.
+func classesProblem(c RevisionClasses, touched []string, all bool) error {
+	if all && (c.Complete || len(c.WhitespaceOnly) > 0 || len(c.CommentOnly) > 0) {
+		return badField("revise.classes", "a revision that touches all lists no path, so its classes name none "+
+			"and are never complete")
+	}
+	classed := make(map[int]bool, len(c.WhitespaceOnly)+len(c.CommentOnly))
+	for _, list := range []struct {
+		field  string
+		places []int
+	}{{"revise.classes.whitespace_only", c.WhitespaceOnly}, {"revise.classes.comment_only", c.CommentOnly}} {
+		for i, at := range list.places {
+			field := fmt.Sprintf("%s[%d]", list.field, i)
+			switch {
+			case at < 0 || at >= len(touched):
+				return badField(field, "%d is no place in the touched list of %d paths", at, len(touched))
+			case i > 0 && at <= list.places[i-1]:
+				return badField(field, "%d is not after %d: a class names its paths in the touched list's order, "+
+					"each once", at, list.places[i-1])
+			case classed[at]:
+				return badField(field, "%s is classed already: a path is listed under its narrowest class alone",
+					touched[at])
+			}
+			classed[at] = true
+		}
+	}
+	return nil
+}
 
 // OwnersDigest is the digest of a repository's path owners: the SHA-256, in
 // lowercase hex, of their JSON in the ONE form a record carries them in
@@ -243,14 +355,16 @@ func ownsAny(globs, paths []string) bool {
 }
 
 // validFields holds a revise to [ConversationWrite.Validate]'s rules: a
-// revision from 1; whole object ids for the head, the target's tip, the base
-// and the patch id where set; a base that is not the head, which its target
-// would hold (this file's head); the target a branch a change may name, and
-// its tip's position one on the code log; an omitted id with no id; a touched
-// list within the bounds the facts keep it to, beside no word that it touches
-// all, of clean paths; the node a node id config admits; the matched owners
-// each a unit or a seat, sorted and once, at most MaxPathOwners; a digest of
-// SHA-256's width in lowercase hex; and no field the writer stamps.
+// revision from 1; whole object ids for the head, the target's tip, the
+// base's and the head's trees, and the base and the patch id where set; a
+// base that is not the head, which its target would hold (this file's head);
+// the target a branch a change may name, and its tip's position one on the
+// code log; an omitted id with no id; a touched list within the bounds the
+// facts keep it to, beside no word that it touches all, of clean paths; its
+// classes naming its touched paths ([classesProblem]); the node a node id
+// config admits; the matched owners each a unit or a seat, sorted and once,
+// at most MaxPathOwners; a digest of SHA-256's width in lowercase hex; and no
+// field the writer stamps.
 func (r *Revise) validFields() error {
 	if r.N < 1 {
 		return badField("revise.n", "%d; a change's revisions count from 1", r.N)
@@ -261,6 +375,7 @@ func (r *Revise) validFields() error {
 	}{
 		{"revise.head_oid", r.HeadOID, false}, {"revise.target_oid", r.TargetOID, false},
 		{"revise.base_oid", r.BaseOID, true}, {"revise.patch_id", r.PatchID, true},
+		{"revise.base_tree", r.BaseTree, false}, {"revise.head_tree", r.HeadTree, false},
 	} {
 		if (id.id != "" || !id.empty) && (!gitref.ValidOID(id.id) || id.id == ZeroOID) {
 			return badField(id.field, "%q is not a whole object id", id.id)
@@ -287,6 +402,9 @@ func (r *Revise) validFields() error {
 		return badField("revise.patch_id", "the facts omitted the id, and name one")
 	}
 	if err := touchedProblem(r.Touched, r.TouchesAll); err != nil {
+		return err
+	}
+	if err := classesProblem(r.Classes, r.Touched, r.TouchesAll); err != nil {
 		return err
 	}
 	if !config.ValidNodeID(r.Node) {
