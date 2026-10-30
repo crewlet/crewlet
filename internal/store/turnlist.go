@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The list of turns, which is the one view of a working company that did not
@@ -742,7 +743,7 @@ func (l *EventLog) TurnShares(ctx context.Context, q TurnQuery) (TurnShares, err
 		return out, nil
 	}
 	if !q.Sort.Valid() {
-		return TurnShares{}, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+		return TurnShares{}, fmt.Errorf("%w: sort %q is not one of %s", ErrTurnSort, q.Sort, words.Or(TurnSorts))
 	}
 	at := q.at()
 	err := l.db.Read(ctx, func(tx *sql.Tx) error {
@@ -834,7 +835,7 @@ func (l *EventLog) TurnPartials(ctx context.Context, q TurnQuery) (partials []Tu
 		limit = MaxTurnPage
 	}
 	if !q.Sort.Valid() {
-		return nil, false, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+		return nil, false, fmt.Errorf("%w: sort %q is not one of %s", ErrTurnSort, q.Sort, words.Or(TurnSorts))
 	}
 	read := readPage
 	// ONE ROW PAST THE PAGE, so the page can say whether it is the last.
@@ -871,7 +872,7 @@ func (l *EventLog) ListedTurns(ctx context.Context, q TurnQuery) ([]string, erro
 		return out, nil
 	}
 	if !q.Sort.Valid() {
-		return nil, fmt.Errorf("%w: sort %q is not one of %v", ErrTurnSort, q.Sort, TurnSorts)
+		return nil, fmt.Errorf("%w: sort %q is not one of %s", ErrTurnSort, q.Sort, words.Or(TurnSorts))
 	}
 	listed, err := turnPartials(ctx, l.db.sql, q, readListed, len(q.IDs))
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"path"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // schemaFS carries the consolidated schema into the binary, so a deployment is
@@ -238,7 +240,7 @@ func SchemaFile(estate Estate, name string) ([]byte, error) {
 // `0001` in the other are two migrations and neither can mask the other.
 func schemaVersions(estate Estate) ([]string, error) {
 	if !estate.Valid() {
-		return nil, fmt.Errorf("store: %q is not an estate; the estates are %v", estate, Estates)
+		return nil, fmt.Errorf("store: %q is not an estate; the estates are %s", estate, words.And(Estates))
 	}
 	entries, err := fs.ReadDir(schemaFS, path.Join("schema", string(estate)))
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Routing reasons, strongest claim first.
@@ -236,12 +237,24 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	if link := p.link(n.PageID); link != "" {
 		meta["url"] = link
 	}
+	body := wakeBody(record)
+	if body != "" {
+		// WHO WROTE THE BODY, for the fence the spine puts it in
+		// (ADR-0040): every word of a change's text is its author's — the
+		// remark, the new page's opening line, the note they saved with —
+		// and the record states their kind, which names them when the
+		// roster no longer holds the handle. WHAT it is follows from the
+		// kind of change alone ([Prompt.Provenance]), so it is not
+		// stamped beside it.
+		meta[notify.BodyAuthorField] = record.Actor
+		meta[notify.BodyAuthorKindField] = string(record.ActorKind)
+	}
 	return notify.Inbound{
 		Source:    Source,
 		EventType: string(n.Kind),
 		Sender:    record.Actor,
 		Subject:   n.Title,
-		Body:      wakeBody(record),
+		Body:      body,
 		Metadata:  meta,
 	}
 }
@@ -271,6 +284,21 @@ func wakeBody(record MutationRecord) string {
 		return strings.TrimSpace(body)
 	}
 	return n.Excerpt
+}
+
+// excerptSource is what a change's excerpt is, by the kind of change that
+// carried it — which on this surface decides it, since only a comment's change
+// carries a remark: a remark on a comment, the page's opening line on a create,
+// and the author's note about the change on every other kind (a save's
+// message).
+func excerptSource(kind ChangeKind) provenance.Source {
+	switch kind {
+	case ChangeComment, ChangeCommentEdited:
+		return provenance.SourcePageComment
+	case ChangeCreated:
+		return provenance.SourcePageBody
+	}
+	return provenance.SourceChangeNote
 }
 
 // link is where the person a change woke opens the page: the DASHBOARD's

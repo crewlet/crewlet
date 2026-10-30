@@ -23,7 +23,19 @@
  *    tool's own schema, and every property the schema REQUIRES is here;
  *  - `domain` — the log the write lands in, whose position raises this tab's
  *    read floor for that domain (`protocol/session.ts`), or `null` for a
- *    write that lands in no log a question reads;
+ *    write that lands in no log a question reads. A wrong one is SILENT: a
+ *    write filed under `null` raises no floor, so the screen's next read may
+ *    come from before the press;
+ *  - `apps` — the apps ANY ONE of which the change needs, in the order its
+ *    authority row names them: its app for an app's change, the row's own set
+ *    for one that draws on whichever of several the caller holds
+ *    (`answer_knowledge`, the tracker and the knowledge base it answers
+ *    from), and none for a change no app holds (pausing a seat, answering a
+ *    coding run). What a control the engine does not offer is held with —
+ *    "needs Worklet access" — so a reader is told what to ask an admin for
+ *    (`lib/useWriteAccess.ts`). It is the authority table's, stated per row
+ *    rather than guessed from the domain: a change can need an app and land
+ *    in no log;
  *  - `refreshes` — questions OUTSIDE that domain's session set
  *    (`contract/domains.ts`) that the write also moves, asked again without a
  *    floor because they cannot take one;
@@ -36,8 +48,9 @@
  * HELD AGAINST THE REAL CATALOGUE by `internal/api/operator`'s
  * `TestEveryActionTheDashboardTakesIsOneTheActTransportServes`: every tool is
  * served by the act transport and is not a read, every argument is one its
- * schema takes, every required one is present, and every scope is the one its
- * authority class gives it. A renamed argument in Go is a red build here
+ * schema takes, every required one is present, every domain is the log its
+ * tool writes, and every scope and app set is the one its authority row
+ * gives it. A renamed argument in Go is a red build here
  * rather than a button the tools' own gate refuses `invalid_body` — an
  * argument the tool does not declare — the first time somebody presses it.
  */
@@ -68,6 +81,7 @@ export const ACTIONS = {
       "labels",
     ],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: ["work_search"],
     scope: "person",
   },
@@ -77,6 +91,7 @@ export const ACTIONS = {
     // reconnect. It lands in no log, so it raises no floor.
     args: ["q"],
     domain: null,
+    apps: ["worklet", "doclet"],
     refreshes: [],
     scope: "person",
   },
@@ -109,12 +124,14 @@ export const ACTIONS = {
       "watch",
     ],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: ["work_search"],
     scope: "person",
   },
   restore_work_item: {
     args: ["item"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: ["work_search"],
     scope: "person",
   },
@@ -125,12 +142,14 @@ export const ACTIONS = {
     // who may make it: the project's lead, or an admin.
     args: ["project", "target_date"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "company",
   },
   set_pins: {
     args: ["views", "favorites"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
@@ -143,6 +162,7 @@ export const ACTIONS = {
     // `handle` is whose queue: the reader's own, or a report's for a lead.
     args: ["handle", "items", "if_match"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
@@ -158,6 +178,7 @@ export const ACTIONS = {
     // optionally with the options it is to choose between (`decision`).
     args: ["item", "answers", "choice", "body", "reply_to", "ask", "decision"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
@@ -175,6 +196,7 @@ export const ACTIONS = {
     // question nobody showed.
     args: ["turn_id", "launch_id", "choice", "answer"],
     domain: null,
+    apps: [],
     refreshes: ["sandbox_runs", "decisions"],
     scope: "person",
   },
@@ -187,6 +209,7 @@ export const ACTIONS = {
     // moves on the agents push, which every node sends when its watch lands.
     args: ["handle", "reason", "stop_running"],
     domain: null,
+    apps: [],
     refreshes: [],
     scope: "person",
   },
@@ -194,6 +217,7 @@ export const ACTIONS = {
     // AND RESUMES IT: the mail that waited is delivered first, in order.
     args: ["handle"],
     domain: null,
+    apps: [],
     refreshes: [],
     scope: "person",
   },
@@ -206,6 +230,7 @@ export const ACTIONS = {
     // `agent_turn_steered`, which the trace re-reads.
     args: ["turn_id", "note"],
     domain: null,
+    apps: [],
     refreshes: ["turn"],
     scope: "person",
   },
@@ -221,6 +246,7 @@ export const ACTIONS = {
     // the same write with an empty body: a page that only groups pages.
     args: ["title", "body", "container", "parent", "labels", "status"],
     domain: "pages",
+    apps: ["doclet"],
     refreshes: ["knowledge"],
     scope: "person",
   },
@@ -234,6 +260,7 @@ export const ACTIONS = {
     // follows the page as the person or stops following it.
     args: ["page", "base_version", "body", "message", "watch"],
     domain: "pages",
+    apps: ["doclet"],
     refreshes: ["knowledge"],
     scope: "person",
   },
@@ -241,6 +268,7 @@ export const ACTIONS = {
     // A PAGE'S THREAD: a remark, or a reply to one (`reply_to`).
     args: ["page", "body", "reply_to"],
     domain: "pages",
+    apps: ["doclet"],
     refreshes: [],
     scope: "person",
   },
@@ -250,6 +278,7 @@ export const ACTIONS = {
     // the place between the neighbours as the board stands when it lands.
     args: ["item", "before", "after", "status", "if_match"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: ["work_search"],
     scope: "person",
   },
@@ -260,12 +289,136 @@ export const ACTIONS = {
     // screen sends.
     args: ["container", "name", "type", "params", "personal"],
     domain: "tracker",
+    apps: ["worklet"],
     refreshes: [],
     scope: "person",
   },
   mark_inbox: {
     args: ["read", "unread", "snooze", "unsnooze", "read_through"],
     domain: "tracker",
+    apps: ["worklet"],
+    refreshes: [],
+    scope: "person",
+  },
+  // ---- THE COMPANY'S OWN CHAT (`routes/chatlet`) -------------------------- //
+  //
+  // Every gesture the chat screen makes, each the tool a person's own
+  // assistant calls for it, made as the seat the session holds. The handles
+  // a message names and whether it addressed the whole room are the ENGINE's
+  // reading of the body — the tool takes no `mentions` and no flag — so a
+  // message is sent as what was typed.
+  post_message: {
+    // THE COMPOSER'S SEND. A message is sequenced and arbitrates nothing at
+    // the broker, so the operation key (the request's `Idempotency-Key`) is
+    // what tells a retry from a second remark: the outbox repeats an
+    // unanswered message under the key it was first sent with
+    // (`routes/chatlet/outbox.ts`).
+    args: ["channel", "body"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  reply_in_thread: {
+    // THE THREAD PANE'S SEND: `reply_to` is the thread's root, and the engine
+    // files a reply to a reply under the same one.
+    args: ["channel", "reply_to", "body"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  edit_message: {
+    // A ROW'S "EDIT", offered on the reader's own messages only: the engine
+    // refuses an edit from anybody but the author, an admin's included.
+    args: ["channel", "message_id", "body"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  delete_message: {
+    // A ROW'S "DELETE": a tombstone the thread keeps its root through. The
+    // author's own, or an admin's moderation of anybody's — so it is offered
+    // on the reader's own messages, and on everybody's to an admin.
+    args: ["channel", "message_id"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  react_to_message: {
+    // AN EMOJI ON A MESSAGE, or taken back (`remove`).
+    args: ["channel", "message_id", "emoji", "remove"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  join_channel: {
+    // "JOIN" on a room the reader may read and is not in — the room's own
+    // header, and the browse dialog's rows.
+    args: ["channel"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  leave_channel: {
+    args: ["channel"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  create_channel: {
+    // "NEW ROOM": the name it claims (`channel`, as every chat tool names its
+    // room), who may read it, its topic, and the people in it from the start.
+    // A unit's room is the org chart's and is never made here.
+    args: ["channel", "kind", "topic", "members"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  open_dm: {
+    // "NEW DIRECT MESSAGE": the others in it. The author is added by the
+    // engine, and opening one that exists is that room.
+    args: ["to"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  update_channel: {
+    // A ROOM'S "TOPIC" DIALOG: the topic and the purpose, and only what moved.
+    // Archiving is not offered there — it closes the room for everybody in it
+    // and is its creator's, its unit's lead's or an admin's — and neither is
+    // how long the room keeps what is said, which is an admin's own gesture.
+    args: ["channel", "topic", "purpose"],
+    domain: "chat",
+    apps: ["chatlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  mark_chat_read: {
+    // HOW FAR THE READER HAS READ, flushed on a timer and on the way out
+    // (`routes/chatlet/cursor.ts`), and a room's MUTE. A person's attention is a
+    // coordination record rather than a record on the chat log, so it lands
+    // in no log a question reads and raises no floor.
+    //
+    // IT MOVES THE RAIL, and asks it nothing here. `chat_channels` answers
+    // each room's unread count and mute from this very record, and the
+    // write's answer IS the record as it left it, named by its seat — the
+    // form the `chat_cursor_moved` push takes, which reaches every tab of the
+    // seat's, this one included. The press applies that answer to the tab's
+    // read state (`markRead`), and the rail asks again once the revision
+    // moves, whichever of the two arrives first. A `refreshes` here asked a
+    // second time whenever the push won the race, and the second ask
+    // discarded the first after the engine had counted every room's unread.
+    args: ["cursors", "mute", "unmute"],
+    domain: null,
+    apps: ["chatlet"],
     refreshes: [],
     scope: "person",
   },

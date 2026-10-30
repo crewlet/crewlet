@@ -3,8 +3,10 @@ package worklet_test
 import (
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -407,6 +409,111 @@ func TestTheFeedNarrowsToWhoWasWriting(t *testing.T) {
 	}); len(got.Records) != 0 {
 		t.Errorf("actor_kinds=system answers %d records, and the engine wrote "+
 			"none of them", len(got.Records))
+	}
+}
+
+// AN AUDIT OF SEVERAL KINDS IS ONE FEED, PAGED IN THE LOG'S ORDER.
+//
+// Each author kind is read as its own arm and the arms are merged, so the
+// claim is about the merge: across pages, every commit of every kind named
+// comes back exactly once, newest first, with the kinds interleaved as the log
+// interleaved them — never one kind's page and then the other's, which is what
+// a merge that dropped its own ORDER BY or LIMIT would answer — and a kind
+// named twice is read once.
+func TestAnAuditOfSeveralKindsIsOneFeedInTheLogsOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	filedTask(t, r, "t-1")
+	operator := r.writer.As("ops-1", worklet.AuthorOperator, worklet.Provenance{})
+	agent := r.writer.As("swe", worklet.AuthorAgent, worklet.Provenance{})
+	for i, writer := range []*worklet.Writer{operator, r.writer, agent, operator,
+		r.writer, operator} {
+		title := "title " + itoa(i)
+		if _, err := writer.UpdateTask(t.Context(), "op-edit-"+itoa(i), "t-1", "ENG",
+			worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields,
+			nil); err != nil {
+			t.Fatalf("edit %d: %v", i, err)
+		}
+		r.drain()
+	}
+	audit := worklet.ActivityQuery{Workspace: true, ActorKinds: []worklet.AuthorKind{
+		worklet.AuthorOperator, worklet.AuthorHuman, worklet.AuthorOperator}}
+
+	var want []uint64
+	for _, record := range r.activity(worklet.ActivityQuery{Workspace: true}).Records {
+		if record.ActorKind == worklet.AuthorOperator || record.ActorKind == worklet.AuthorHuman {
+			want = append(want, record.LogSeq)
+		}
+	}
+	if len(want) < 6 {
+		t.Fatalf("the feed carries %d operator and human commits, want at least "+
+			"the create and five edits", len(want))
+	}
+	var got []uint64
+	for page := 0; page < len(want); page++ {
+		audit.Limit = 2
+		answer := r.activity(audit)
+		for _, record := range answer.Records {
+			got = append(got, record.LogSeq)
+		}
+		if answer.NextCursor == "" {
+			break
+		}
+		audit.Cursor = answer.NextCursor
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the audit paged as %v, want %v — every operator and human "+
+			"commit once, newest first, as the log made them", got, want)
+	}
+}
+
+// A TASK'S ACTIVITY IS ITS WHOLE HISTORY, AND THE CONTAINER BESIDE IT A CHECK.
+//
+// Every history row carries the project it was WRITTEN in, so a container read
+// as a row filter beside a task hid every change the task had before it moved
+// — its creation among them — from anybody asking about it in the project it
+// is in now. A tracker holder reads the whole tracker, so the container keeps
+// no row out that the reader is not owed; it is a check that the task is filed
+// there, and one it is not filed in is refused naming the one it is, rather
+// than answered with nothing, which reads as a task nothing ever happened to.
+func TestATasksActivityIsItsWholeHistoryInItsContainer(t *testing.T) {
+	t.Parallel()
+	r := moveFixture(t)
+	title := "before the move"
+	if _, err := r.writer.UpdateTask(t.Context(), "op-before", "m-root", "ENG",
+		worklet.NoIfMatch, worklet.TaskPatch{Title: &title}, worklet.ChangeFields,
+		nil); err != nil {
+		t.Fatalf("edit before the move: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.MoveTaskToProject(t.Context(),
+		statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	r.drain()
+
+	whole := r.activity(worklet.ActivityQuery{Task: "m-root"})
+	inOPS := r.activity(worklet.ActivityQuery{Task: "m-root", Project: "OPS"})
+	var before bool
+	for _, record := range whole.Records {
+		before = before || record.Project == "ENG"
+	}
+	if !before {
+		t.Fatalf("the task's own feed holds no row written in ENG, so this case "+
+			"tests nothing: %+v", whole.Records)
+	}
+	if len(inOPS.Records) != len(whole.Records) {
+		t.Errorf("the task's activity in OPS answers %d of its %d records — the "+
+			"ones written before it moved are missing", len(inOPS.Records),
+			len(whole.Records))
+	}
+
+	_, err := r.reader.Activity(t.Context(), worklet.ActivityQuery{
+		Task: "m-root", Project: "ENG", Level: statelog.ReadStale,
+	}, wednesday)
+	if !errors.Is(err, worklet.ErrBadQuery) || !strings.Contains(err.Error(), "OPS") {
+		t.Errorf("the task's activity in ENG, which it left, = %v, want a bad "+
+			"query naming OPS, the project it is filed in", err)
 	}
 }
 

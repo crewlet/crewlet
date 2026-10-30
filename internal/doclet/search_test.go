@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -79,6 +80,26 @@ func TestAToolSkillPageCostsTheAnswerNoPlace(t *testing.T) {
 	for _, hit := range answer.Hits {
 		if hit.Container != "ENG" {
 			t.Errorf("a %s page was returned: %+v", hit.Container, hit)
+		}
+	}
+}
+
+// A NATIVE HIT IS A COLLEAGUE'S PAGE WITH NOBODY NAMED (ADR-0040): every write
+// to a page here is a company principal's, so the surface vouches for whoever
+// wrote it — never `own`, since the index does not say who — and every hit a
+// search answers carries that label, for whichever node renders it.
+func TestANativeHitIsAColleaguesPageWithNobodyNamed(t *testing.T) {
+	t.Parallel()
+	s := searchCorpus(t, map[string][2]string{
+		"eng-00": {"ENG", "Deploy runbook"}, "eng-01": {"ENG", "Deploy checklist"}})
+	answer := s.Search(t.Context(), knowledge.Query{Text: "deploy", Limit: 5})
+	if len(answer.Hits) != 2 {
+		t.Fatalf("answered %+v, want both pages", answer.Hits)
+	}
+	want := provenance.Label{Source: provenance.SourcePageBody, Trust: provenance.TrustColleague}
+	for _, hit := range answer.Hits {
+		if !reflect.DeepEqual(hit.Provenance, want) {
+			t.Errorf("%s is labelled %+v, want %+v", hit.PageID, hit.Provenance, want)
 		}
 	}
 }

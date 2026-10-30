@@ -36,10 +36,13 @@ import {
 } from "~/contract/brand.ts";
 import { fmtBytes, utf8Bytes } from "../format.ts";
 
-/** A bound in bytes as a sentence says it: "512 KB", "2 MB", the whole unit where it is one. */
+/**
+ * A bound in bytes as a sentence says it: "512 KiB", "2 MiB", the whole unit
+ * where it is one, labelled in the binary units `fmtBytes` and the engine use.
+ */
 function boundWords(bytes: number): string {
-  if (bytes % (1 << 20) === 0) return `${bytes / (1 << 20)} MB`;
-  if (bytes % (1 << 10) === 0) return `${bytes / (1 << 10)} KB`;
+  if (bytes % (1 << 20) === 0) return `${bytes / (1 << 20)} MiB`;
+  if (bytes % (1 << 10) === 0) return `${bytes / (1 << 10)} KiB`;
   return fmtBytes(bytes);
 }
 import type { BrandDocument } from "~/protocol/index.ts";

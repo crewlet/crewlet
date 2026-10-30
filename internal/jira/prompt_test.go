@@ -225,7 +225,7 @@ func TestTheTrackerNeverWakesTheActor(t *testing.T) {
 		"jira:issue_created", "jira:issue_updated", "jira:issue_deleted",
 		"comment_created", "comment_deleted",
 	} {
-		if (jira.Prompt{}).WakesActor(event) {
+		if (jira.Prompt{}).WakesActor(notify.Inbound{Source: jira.Backend, EventType: event}) {
 			t.Errorf("%s wakes its own actor", event)
 		}
 	}

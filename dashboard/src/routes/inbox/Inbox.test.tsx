@@ -1572,6 +1572,9 @@ describe("the pane", () => {
       await settle();
     };
     const outcome = () => document.querySelector(".crewlet-reading-pane__outcome")?.textContent;
+    // How often the pane names somebody, across everything it draws.
+    const timesNamed = (who: string) =>
+      (document.querySelector(".crewlet-reading-pane")?.textContent ?? "").split(who).length - 1;
 
     test("is shown as sent while the run still waits on its question", async () => {
       await answerRun({});
@@ -1618,7 +1621,14 @@ describe("the pane", () => {
       );
     });
 
-    test("refused as answered already, says whose and when on the reader's clock", async () => {
+    // WHO ANSWERED IS SAID ONCE: by the refusal's sentence where it names
+    // them, and otherwise by the line that says when.
+    //
+    // Mutation: name them on the line whatever the strip says, and the
+    // engine's sentence has them twice; never name them there, and the
+    // dashboard's own sentence and a dismissed strip leave them unnamed.
+    test("refused as answered already, says whose once and when on the reader's clock", async () => {
+      const said = "This question was already answered by @miles, so your answer was not used.";
       await answerRun(
         {
           status: "answered",
@@ -1629,25 +1639,50 @@ describe("the pane", () => {
         [],
         {
           refused: 409,
-          body: {
-            error: "already_answered",
-            tool: "answer_run",
-            detail: "This question was already answered by @miles, so your answer was not used.",
-          },
+          body: { error: "already_answered", tool: "answer_run", detail: said },
         },
       );
       await settle();
-      // THE REFUSAL'S ONE SENTENCE, drawn as every refusal of its code is,
-      // and only the time beside it, on the reader's clock.
-      const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
-      expect(strip).toBe(ACT_ERRORS.already_answered);
-      const when = screen.getByText(/^Answered by @miles at /).textContent ?? "";
-      expect(when).toMatch(/^Answered by @miles at \S+\.$/);
+      // THE ENGINE'S ONE SENTENCE FOR THE REFUSAL, the refusal catalog's
+      // naming who answered, drawn as every refusal worded for a person is
+      // (ADR-0060), and only the time beside it, on the reader's clock.
+      const strip = document.querySelector(".crewlet-refusal-strip") as HTMLElement;
+      expect(strip.firstChild?.textContent).toBe(said);
+      const when = screen.getByText(/^Answered at /).textContent ?? "";
+      expect(when).toMatch(/^Answered at \S+\.$/);
       expect(when).not.toContain("UTC");
+      expect(timesNamed("@miles")).toBe(1);
       // ASKED AGAIN FOR THE RECORD, by the refusal's own look-again.
       expect(asked.filter((a) => a.kind === "sandbox_runs").length).toBeGreaterThan(
         runsAskedAtPress,
       );
+      // DISMISSED, the sentence that named them is gone, and the line names
+      // them instead.
+      fireEvent.click(within(strip).getByRole("button", { name: "Dismiss" }));
+      expect(document.querySelector(".crewlet-refusal-strip")).toBeNull();
+      expect(screen.getByText(/^Answered by @miles at \S+\.$/)).toBeTruthy();
+      expect(timesNamed("@miles")).toBe(1);
+    });
+
+    test("refused as answered already in the dashboard's words, says whose and when", async () => {
+      // AN OLDER NODE answers the refusal with no detail, so the dashboard's
+      // own sentence for the code is drawn, which names nobody, and the line
+      // beside it says who answered as well as when.
+      await answerRun(
+        {
+          status: "answered",
+          answer_ids: ["a0"],
+          answered_by: "miles",
+          answered_at: "2026-09-30T11:35:00Z",
+        },
+        [],
+        { refused: 409, body: { error: "already_answered", tool: "answer_run" } },
+      );
+      await settle();
+      const strip = document.querySelector(".crewlet-refusal-strip")?.firstChild?.textContent ?? "";
+      expect(strip).toBe(ACT_ERRORS.already_answered);
+      expect(screen.getByText(/^Answered by @miles at \S+\.$/)).toBeTruthy();
+      expect(timesNamed("@miles")).toBe(1);
     });
 
     test("is refused, naming whose answer was used, when another was recorded first", async () => {
@@ -1804,7 +1839,7 @@ describe("who is looking", () => {
 // promising updates that cannot arrive. Mutation: keep the pane's default
 // copy and the Jira title is gone.
 test("on a Jira company the list and the empty pane say asks and mentions arrive in Jira", async () => {
-  mount({ services: { tracker: "jira", knowledge: "doclet" } });
+  mount({ services: { tracker: "jira", knowledge: "doclet", chat: "chatlet" } });
   await settle();
   expect(
     screen.getByText("Jira handles work items, so asks and mentions arrive there."),

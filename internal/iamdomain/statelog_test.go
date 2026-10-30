@@ -23,7 +23,7 @@ import (
 // that their tables are byte-identical. That the comparison holds at all is
 // what says the sealing happens at the WRITER rather than on each node, which
 // is what keeps a name, an address and a seed ciphertext on the log and in
-// every node's rows alike.
+// every data node's rows alike.
 func TestTheIdentityDomainIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {

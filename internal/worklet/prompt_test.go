@@ -163,18 +163,82 @@ func TestALateNoticeSaysWhyItIsLate(t *testing.T) {
 	}
 }
 
+// EVERY COMMENT WAKE CARRIES THE COMMENT, whatever reason routed it.
+//
+// A remark reaches the item's assignee, reporter and watchers as well as
+// whoever it names, and to all of them the change is the remark. The wake
+// reports itself as carrying its text (no recon needed) and the "what changed"
+// block leaves a comment to the opener, so an opener that quoted it for the
+// four "somebody said something to you" reasons alone handed every other
+// recipient "a comment was added" and nothing of what it said.
+func TestEveryCommentWakeCarriesTheComment(t *testing.T) {
+	t.Parallel()
+	const said = "please also cover the rollback path"
+	for _, kind := range []worklet.ChangeKind{worklet.ChangeComment, worklet.ChangeCommentEdited} {
+		for _, reason := range worklet.Reasons {
+			n := promptNotification(reason, kind)
+			n.Body = said
+			if (worklet.Prompt{}).RequiresRecon(n) {
+				t.Errorf("a %s wake routed as %s asks for recon although it carries its text",
+					kind, reason)
+			}
+			if got := (worklet.Prompt{}).Build(n, nil); !strings.Contains(got, said) {
+				t.Errorf("a %s wake routed as %s does not say what was said:\n%s",
+					kind, reason, got)
+			}
+		}
+	}
+}
+
 // THE ONE REASON THAT WAKES ITS OWN ACTOR IS THE ONE THAT IS A CONSEQUENCE.
 //
 // A person who closed a blocker learns from this that the task it was blocking
 // is now workable — which they could not have derived from their own write.
 // Every other change here is something the actor already knows, and waking
 // them about it is a seat reading its own comment back to itself.
+//
+// EVERY COPY CARRIES ONE EVENT TYPE: the unblocked notice to the actor and the
+// copies of the same status change to its watchers are all `status`, and only
+// the routing reason stamped on each recipient's copy tells them apart — so the
+// prompt is asked about the copy, and a reading of the event type as a reason
+// answers no for the one copy that has to reach the actor.
 func TestOnlyAnUnblockedNoticeWakesItsActor(t *testing.T) {
 	t.Parallel()
 	for _, reason := range worklet.Reasons {
 		want := reason == worklet.ReasonUnblocked
-		if got := (worklet.Prompt{}).WakesActor(string(reason)); got != want {
-			t.Errorf("WakesActor(%s) = %v, want %v", reason, got, want)
+		n := promptNotification(reason, worklet.ChangeStatus)
+		if got := (worklet.Prompt{}).WakesActor(n); got != want {
+			t.Errorf("WakesActor(a status change's copy routed as %s) = %v, want %v", reason, got, want)
+		}
+	}
+}
+
+// AND THE SPINE LETS THAT COPY THROUGH TO THE ACTOR'S OWN SEAT.
+//
+// The self-action guard drops a notification whose actor is its recipient
+// unless the source's prompt says the copy reaches its actor. The tracker's
+// router already lets the unblocked copy through on the same rule, so a
+// spine that read the event type in its place would drop, at the far end, the
+// one notice the router kept for the person who closed the blocker.
+func TestTheSpineDeliversTheUnblockedCopyToItsActor(t *testing.T) {
+	t.Parallel()
+	reg := firstPartyRegistry(t, "eng")
+	seat, ok := reg.ByHandle("eng")
+	if !ok {
+		t.Fatal("the registry does not hold the seat")
+	}
+	prompts := notify.NewPrompts(worklet.Prompt{})
+	for reason, want := range map[worklet.Reason]bool{
+		worklet.ReasonUnblocked: true,
+		worklet.ReasonAssignee:  false,
+		worklet.ReasonWatcher:   false,
+	} {
+		n := promptNotification(reason, worklet.ChangeStatus)
+		n.Metadata[notify.ActorField] = "eng"
+		got, why := notify.Deliverable(prompts, reg, n, seat)
+		if got != want {
+			t.Errorf("a copy routed as %s to its own actor: deliverable = %v (%s), want %v",
+				reason, got, why, want)
 		}
 	}
 }
@@ -281,7 +345,7 @@ func TestAnAskedWakeRendersTheOptionsAndTheAnsweringCall(t *testing.T) {
 		"- `hold` — Hold for the audit: about a week",
 		"The audit reviews last quarter's code.",
 		`{"item":"ENG-1","answers":"c-ask","choice":"ship","body":`,
-		"one of: ship, hold",
+		`one of "ship" or "hold"`,
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("the asked wake does not say %q:\n%s", want, prompt)

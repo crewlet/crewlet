@@ -41,16 +41,30 @@ type Directory string
 const (
 	// DirSeat is the org chart's seats, by handle and seat name.
 	DirSeat Directory = "seat"
+	// DirMember is the org chart's seats as a chat room's membership names
+	// them, by handle and seat name. A handle the chart no longer lists may
+	// still be a member (a seat removed from the chart stays in the rooms it
+	// was in), so it is sent as written, as a read's is, and the write's
+	// preview, which reads the room, decides it.
+	DirMember Directory = "member"
 	// DirUnit is the org chart's units, by key and name.
 	DirUnit Directory = "unit"
 	// DirProject is Worklet's projects, by key and name.
 	DirProject Directory = "project"
 	// DirSpace is Doclet's spaces, by key and name.
 	DirSpace Directory = "space"
+	// DirRoom is the company's own chat rooms, by name as people write it
+	// ("#launch") and by id. NOT A LIST: a room is read one at a time through
+	// its own read ([Resolver.Room]), which reaches every room the person may
+	// read by its name, where the rail lists only the rooms they are in. A
+	// name the room's read cannot place is sent as written and never
+	// refused here, for the route, or a write's preview, which reads the
+	// room itself, to decide in its own words.
+	DirRoom Directory = "room"
 )
 
-// Directories are the four, in declaration order.
-var Directories = []Directory{DirSeat, DirUnit, DirProject, DirSpace}
+// Directories are the six, in declaration order.
+var Directories = []Directory{DirSeat, DirMember, DirUnit, DirProject, DirSpace, DirRoom}
 
 // Valid reports whether d is a directory this build knows.
 func (d Directory) Valid() bool { return slices.Contains(Directories, d) }
@@ -65,6 +79,7 @@ var directoryRead = map[Directory]struct {
 	walk   func(doc any) []Entry
 }{
 	DirSeat:    {"GET /org", "seats", seatEntries},
+	DirMember:  {"GET /org", "seats", seatEntries},
 	DirUnit:    {"GET /org", "units", unitEntries},
 	DirProject: {"GET /worklet/projects", "projects", listEntries("projects", "key", "name")},
 	DirSpace:   {"GET /containers", "spaces", listEntries("containers", "key", "name")},
@@ -94,12 +109,113 @@ type Resolver struct {
 	// unreadable remembers a directory that could not be read, so a turn
 	// does not ask again for every call.
 	unreadable map[Directory]bool
+	// rooms are the chat rooms the turn has read, each by the reference a
+	// call named it by, its id or its name ([DirRoom]): one that could not
+	// be read is remembered as such too.
+	rooms map[string]roomRead
+	// viewer is the seat the person reads chat as, read once ([Resolver.Room]).
+	viewer *roomRead
+}
+
+// roomRead is one chat room as its read answered it, or that it could not be
+// read: its id, its name (empty for a direct conversation, which has none),
+// whether it is a direct conversation and the handles of the people in it.
+type roomRead struct {
+	ok             bool
+	id, name, kind string
+	people         []string
 }
 
 // NewResolver is a resolver reading through read, the turn's grant.
 func NewResolver(read proposal.Read) *Resolver {
 	return &Resolver{read: read, cache: map[Directory][]Entry{},
-		unreadable: map[Directory]bool{}}
+		unreadable: map[Directory]bool{}, rooms: map[string]roomRead{}}
+}
+
+// Room is the chat room ref names as the turn says it ([cards.Room]), read
+// through the person's own grant: a room the call names by its name is said
+// by it and read for nothing, and one named by its id is read once per turn,
+// a direct conversation said by its people beside the person (as the chat
+// screen names one), each by their seat's name. False where the room could
+// not be read: a room the person may not read is answered by its read exactly
+// as one nobody holds. WHERE THE PERSON'S OWN SEAT CANNOT BE READ (a seat the
+// chart no longer holds, which chat still answers as), a direct conversation
+// is said by all of its people, the person among them: said by nothing, two
+// conversations read by their ids would be one read to the drawer.
+func (r *Resolver) Room(ctx context.Context, ref string) (cards.Room, bool) {
+	if name := roomName(ref); name != "" {
+		return cards.Room{Name: name}, true
+	}
+	room := r.room(ctx, ref)
+	switch {
+	case !room.ok:
+		return cards.Room{}, false
+	case room.name != "":
+		return cards.Room{Name: room.name}, true
+	case room.kind != "dm" && room.kind != "group":
+		// A NAMED KIND WITH NO NAME is no room this build can say; a
+		// newer peer's, drawn by what its answer holds rather than guessed.
+		return cards.Room{}, false
+	}
+	viewer, known := r.viewerSeat(ctx)
+	var with []string
+	for _, handle := range room.people {
+		if known && handle == viewer {
+			continue
+		}
+		name, named := r.SeatName(ctx, handle)
+		if !named {
+			name = handle
+		}
+		with = append(with, name)
+	}
+	return cards.Room{With: inWords(with)}, true
+}
+
+// room is the room ref names, as its own read answers it, read once per turn
+// under the resolver's lock.
+func (r *Resolver) room(ctx context.Context, ref string) roomRead {
+	ref = strings.TrimSpace(ref)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if room, read := r.rooms[ref]; read {
+		return room
+	}
+	var room roomRead
+	if ref != "" && r.read != nil {
+		if doc, err := readGet(ctx, r.read, chatRoomRoute,
+			map[string]string{"channel_id": ref}, nil); err == nil {
+			room = roomRead{id: value(doc, "channel.id"), name: value(doc, "channel.name"),
+				kind: value(doc, "channel.kind")}
+			room.ok = room.id != ""
+			members, _ := cards.Lookup(doc, "members").([]any)
+			for _, m := range members {
+				if handle := value(m, "handle"); handle != "" {
+					room.people = append(room.people, handle)
+				}
+			}
+		}
+	}
+	r.rooms[ref] = room
+	return room
+}
+
+// viewerSeat is the seat the person reads chat as, as the person's own
+// viewer read answers it, the seat every chat question is answered for; read
+// once per turn.
+func (r *Resolver) viewerSeat(ctx context.Context) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.viewer == nil {
+		r.viewer = &roomRead{}
+		if r.read != nil {
+			if doc, err := readGet(ctx, r.read, "GET /viewer", nil, nil); err == nil {
+				r.viewer.id = value(doc, "handle")
+				r.viewer.ok = r.viewer.id != ""
+			}
+		}
+	}
+	return r.viewer.id, r.viewer.ok
 }
 
 // Entries is directory d as the person may read it, and whether it could be
@@ -157,51 +273,253 @@ func (r *Resolver) SeatName(ctx context.Context, handle string) (string, bool) {
 // is every value of a directory that could not be read. args itself is never
 // changed.
 //
+// A LIST IS RESOLVED ENTRY BY ENTRY, by the same rule: a list of names (the
+// people a direct message goes to), or a list of members each naming its seat
+// by `handle` (a room's membership).
+//
 // A VALUE THAT NAMES NOTHING THE DIRECTORY LISTS is refused, listing the
 // choices, for a write, which changes a record that must be there now: a card
 // the route would refuse once approved is never drawn. A read sends a value
 // that could be a key as it is, because a read may name what the directory no
 // longer lists (a seat removed from the chart still has its turns), and the
 // route decides it; only a value no key is spelled like (it has a space in it)
-// is refused with the choices, since it can only have been meant as a name.
+// is refused with the choices, since it can only have been meant as a name. A
+// membership ([DirMember]) is held to the read's rule for the read's reason: a
+// seat removed from the chart is still in the rooms it was in.
+//
+// EVERY VALUE IT CANNOT PLACE IS NAMED IN ONE REFUSAL (ADR-0059): every
+// argument's and every list entry's, each by its path (`to[1]`,
+// `members[2].handle`), with each directory's choices once after them. A
+// direct message to three people the chart does not hold is told all three at
+// once, where stopping at the first cost the model an attempt per person.
 func (r *Resolver) Resolve(ctx context.Context, t Tool, args map[string]any) (map[string]any, error) {
+	out, faults := r.resolveAll(ctx, t, args, false)
+	if len(faults) > 0 {
+		return nil, refusedNames(nil, faults)
+	}
+	return out, nil
+}
+
+// Prepare is a call's arguments as the turn sends them: held to t's schema
+// ([Tool.Check]), and every name in them resolved to its record's key
+// ([Resolver.Resolve]). EVERY FAULT OF BOTH IS NAMED IN ONE REFUSAL
+// (ADR-0059), the schema's first: an argument it refuses and a name that
+// places nothing are answered together, where resolving first answered a
+// misnamed seat alone and the schema's faults only on the next attempt.
+//
+// A VALUE THE SCHEMA FAULTS IS NOT RESOLVED: its fault is named already, and
+// it is not the shape a name is read from. A name and the key it resolves to
+// are held to one bound ([nameBytes]), so the key of a name the schema took is
+// a value it takes too.
+func (r *Resolver) Prepare(ctx context.Context, t Tool, args map[string]any) (map[string]any, error) {
+	if t.schema == nil {
+		return nil, fmt.Errorf("%w: %s declares no schema", ErrInvalidArguments, t.Name)
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	found := t.schema.problems(t.Name, args)
+	out, faults := r.resolveAll(ctx, t, args, true)
+	if len(found) > 0 || len(faults) > 0 {
+		return nil, refusedNames(found, faults)
+	}
+	return out, nil
+}
+
+// resolveAll is args with every name in them resolved, and every value that
+// could not be placed, in the order met. Where checked, a value t's schema
+// faults is left as it is: naming its fault is the schema's.
+func (r *Resolver) resolveAll(ctx context.Context, t Tool, args map[string]any,
+	checked bool) (map[string]any, []nameFault) {
+
 	if len(t.Names) == 0 || len(args) == 0 {
 		return args, nil
 	}
 	out, cloned := args, false
+	var faults []nameFault
 	for _, arg := range slices.Sorted(maps.Keys(t.Names)) {
-		raw, isText := args[arg].(string)
-		value := strings.TrimSpace(raw)
-		if !isText || value == "" {
-			continue
+		var held *schema
+		if checked {
+			held = t.schema.properties[arg]
 		}
-		dir := t.Names[arg]
-		if t.Kind != KindWrite && keyShaped(dir, value) {
-			// A READ OF A KEY AS IT IS SPELLED sends it as written, the
-			// route deciding it as it would without the resolver, and reads
-			// no directory: a read is one request, and the directory could
-			// only have told it the key it already has.
-			continue
-		}
-		entries, readable := r.Entries(ctx, dir)
-		if !readable {
-			continue
-		}
-		key, found, err := match(dir, arg, value, entries)
-		if !found && t.Kind != KindWrite && !strings.ContainsFunc(value, unicode.IsSpace) {
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		if key != raw {
+		resolved, moved := r.resolveValue(ctx, t, arg, argPath(t, arg), held, args[arg],
+			&faults)
+		if moved {
 			if !cloned {
 				out, cloned = maps.Clone(args), true
 			}
-			out[arg] = key
+			out[arg] = resolved
 		}
 	}
-	return out, nil
+	return out, faults
+}
+
+// argPath is where a refusal names t's argument arg: under the tool's name, as
+// its schema's faults are named, so the faults of one call read as one list.
+func argPath(t Tool, arg string) string {
+	if t.Name == "" {
+		return arg
+	}
+	return t.Name + "." + arg
+}
+
+// resolveValue is v, the value of t's argument arg at path, with every name in
+// it resolved: a string, or a list of strings or of members, each naming its
+// seat by `handle`; and whether any of it moved. A list that moved is a copy,
+// so the call's own is never changed. Every value it cannot place is added to
+// faults, and every other entry of a list is still resolved. held, where set,
+// is the schema v is held to: a value it faults is left for it to name.
+func (r *Resolver) resolveValue(ctx context.Context, t Tool, arg, path string, held *schema,
+	v any, faults *[]nameFault) (any, bool) {
+
+	switch value := v.(type) {
+	case string:
+		if held != nil && len(held.problems(path, value)) > 0 {
+			return v, false
+		}
+		key, fault := r.resolve(ctx, t, arg, path, value)
+		if fault != nil {
+			*faults = append(*faults, *fault)
+			return v, false
+		}
+		return key, key != value
+	case []any:
+		var entries *schema
+		if held != nil {
+			if held.kind != "array" {
+				return v, false
+			}
+			entries = held.items
+		}
+		out, moved := value, false
+		for i, entry := range value {
+			resolved, entryMoved := r.resolveEntry(ctx, t, arg, fmt.Sprintf("%s[%d]", path, i),
+				entries, entry, faults)
+			if entryMoved {
+				if !moved {
+					out, moved = slices.Clone(value), true
+				}
+				out[i] = resolved
+			}
+		}
+		return out, moved
+	}
+	return v, false
+}
+
+// resolveEntry is one entry of a list resolved: a name, or a member naming its
+// seat by `handle`, as a room's membership is written ({"handle": ...,
+// "follow_all": ...}), every other field of it kept.
+func (r *Resolver) resolveEntry(ctx context.Context, t Tool, arg, path string, held *schema,
+	entry any, faults *[]nameFault) (any, bool) {
+
+	member, isMember := entry.(map[string]any)
+	if !isMember {
+		return r.resolveValue(ctx, t, arg, path, held, entry, faults)
+	}
+	handle, isText := member["handle"].(string)
+	if !isText || (held != nil && held.kind != "object") {
+		return entry, false
+	}
+	var heldHandle *schema
+	if held != nil {
+		heldHandle = held.properties["handle"]
+	}
+	key, moved := r.resolveValue(ctx, t, arg, path+".handle", heldHandle, handle, faults)
+	if !moved {
+		return entry, false
+	}
+	resolved := maps.Clone(member)
+	resolved["handle"] = key
+	return resolved, true
+}
+
+// resolve is one value of t's argument arg as the call should send it: the key
+// of the record it names; or raw itself where it is empty, where its directory
+// could not be read, or where it is sent as written (a read's key, a member's
+// handle). A value that names no record, or several, is its fault at path.
+func (r *Resolver) resolve(ctx context.Context, t Tool, arg, path, raw string) (string, *nameFault) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return raw, nil
+	}
+	dir := t.Names[arg]
+	if dir == DirRoom {
+		// A ROOM IS READ BY THE NAME THE CALL WROTE, and its id is what its
+		// read answered; a room named by its id, or one its read cannot
+		// place, is sent as written ([DirRoom]).
+		if roomName(value) == "" {
+			return raw, nil
+		}
+		if room := r.room(ctx, value); room.ok {
+			return room.id, nil
+		}
+		return raw, nil
+	}
+	asWritten := t.Kind != KindWrite || dir == DirMember
+	if asWritten && keyShaped(dir, value) {
+		// A READ OF A KEY AS IT IS SPELLED sends it as written, the route
+		// deciding it as it would without the resolver, and reads no
+		// directory: naming a key adds no request to the read, and the
+		// directory could only have told it the key it already has. A
+		// member's handle is sent the same way, for the write's preview to
+		// decide against the room.
+		return raw, nil
+	}
+	entries, readable := r.Entries(ctx, dir)
+	if !readable {
+		return raw, nil
+	}
+	key, named := match(dir, value, entries)
+	switch {
+	case len(named) > 1:
+		return "", &nameFault{path: path, value: value, dir: dir, named: named}
+	case key != "":
+		return key, nil
+	case asWritten && !strings.ContainsFunc(value, unicode.IsSpace):
+		return raw, nil
+	}
+	return "", &nameFault{path: path, value: value, dir: dir, choices: entries}
+}
+
+// nameFault is one value a call names that its directory cannot place: one
+// naming no record it lists, refused with the directory's choices, or one
+// naming several, refused naming them for the model to pick one by its key.
+type nameFault struct {
+	path, value string
+	dir         Directory
+	// named are the records a name several share.
+	named []Entry
+	// choices are the directory as the person may read it, for a value that
+	// names none of it.
+	choices []Entry
+}
+
+// Error is the fault as its refusal names it.
+func (f nameFault) Error() string {
+	plural := directoryRead[f.dir].plural
+	if len(f.named) > 1 {
+		return fmt.Sprintf("%s: %q names %d %s; name one by its key: %s", f.path, f.value,
+			len(f.named), plural, shownList(f.named))
+	}
+	return fmt.Sprintf("%s: %q is not one of the %s you can see", f.path, f.value, plural)
+}
+
+// refusedNames is one refusal naming the schema's faults found and then
+// every name's in the order met, and after them, once each, the choices of
+// every directory a value named nothing in.
+func refusedNames(found []error, faults []nameFault) error {
+	var notes []string
+	for _, f := range faults {
+		found = append(found, f)
+		if len(f.named) > 1 {
+			continue
+		}
+		if note := choices(directoryRead[f.dir].plural, f.choices); !slices.Contains(notes, note) {
+			notes = append(notes, note)
+		}
+	}
+	return refusedFor(found, notes...)
 }
 
 // keyShaped reports whether v is spelled as dir's keys are: a seat's handle and
@@ -209,7 +527,7 @@ func (r *Resolver) Resolve(ctx context.Context, t Tool, args map[string]any) (ma
 // upper case (`ENG`, `HOME`). A name a person says ("Company", "QA Engineer")
 // is not, so it is read against the directory.
 func keyShaped(dir Directory, v string) bool {
-	lower := dir == DirSeat || dir == DirUnit
+	lower := dir == DirSeat || dir == DirMember || dir == DirUnit
 	for i, r := range v {
 		switch {
 		case r >= '0' && r <= '9':
@@ -230,32 +548,25 @@ const maxChoices = 30
 // (a space's key is upper case, a handle lower, and a person types either);
 // else the one record whose name it is, compared without case, spacing or a
 // leading "the" and a trailing noun for the directory ("the Company space").
-// found is false for a value that names no record at all, which is refused
-// with the choices; a name two records share is found and refused naming
-// them.
-func match(dir Directory, arg, value string, entries []Entry) (key string, found bool, err error) {
+// The key is "" for a value that names no record at all, which is refused
+// with the choices, and for a name several records share, which named holds
+// and which is refused naming them.
+func match(dir Directory, value string, entries []Entry) (key string, named []Entry) {
 	for _, e := range entries {
 		if strings.EqualFold(e.Key, value) {
-			return e.Key, true, nil
+			return e.Key, nil
 		}
 	}
 	want := spoken(dir, value)
-	var named []Entry
 	for _, e := range entries {
 		if e.Name != "" && spoken(dir, e.Name) == want {
 			named = append(named, e)
 		}
 	}
-	plural := directoryRead[dir].plural
-	switch len(named) {
-	case 1:
-		return named[0].Key, true, nil
-	case 0:
-		return "", false, fmt.Errorf("%w: %s: %q is not one of the %s you can see. %s",
-			ErrInvalidArguments, arg, value, plural, choices(plural, entries))
+	if len(named) == 1 {
+		return named[0].Key, named
 	}
-	return "", true, fmt.Errorf("%w: %s: %q names %d %s; name one by its key: %s",
-		ErrInvalidArguments, arg, value, len(named), plural, shownList(named))
+	return "", named
 }
 
 // spoken is a name as a person says it, for comparing: lower case, single
@@ -278,6 +589,7 @@ func spoken(dir Directory, name string) string {
 // which kind of record it is ("the Company space", "the Core team").
 var directoryNouns = map[Directory][]string{
 	DirSeat:    {"seat", "agent"},
+	DirMember:  {"seat", "agent"},
 	DirUnit:    {"unit", "team"},
 	DirProject: {"project"},
 	DirSpace:   {"space"},

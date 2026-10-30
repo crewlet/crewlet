@@ -717,6 +717,31 @@ func TestAgentMemoryIsAskedOfTheHolderWithTheSeatWhole(t *testing.T) {
 	}
 }
 
+// THE SKILLS' ORDER IS ASKED OF THE HOLDER, which cuts the page: a screen that
+// sorted the page it was handed answered the most used of the newest. An order
+// the store does not read is refused as bad params, naming the ones it does,
+// rather than answered newest under another name.
+//
+// Mutation: drop the order from the query this handler sends, and the holder
+// is asked for the newest.
+func TestAgentMemoryAsksTheHolderForTheSkillsInTheirOrder(t *testing.T) {
+	t.Parallel()
+	cfg := company(t)
+	memory := &stubMemory{}
+	answer(t, queries.Sources{Company: companySource(t, cfg), Memory: memory},
+		"agent_memory", map[string]any{"id": "cto", "skills_order": "uses"})
+	if memory.skills != learning.SkillsMostUsed {
+		t.Errorf("the holder was asked for the skills in %q, want %q",
+			memory.skills, learning.SkillsMostUsed)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Company: companySource(t, cfg), Memory: &stubMemory{}})
+	if _, err := r.Answer(everyGrant(t), "agent_memory",
+		map[string]any{"id": "cto", "skills_order": "-uses"}); !errors.Is(err, queries.ErrBadParams) {
+		t.Errorf("an order the store does not read: %v, want bad params", err)
+	}
+}
+
 // --- the fleet's config columns --------------------------------------------
 
 func TestFleetCarriesEachNodesConfigState(t *testing.T) {
@@ -925,8 +950,9 @@ func TestFleetCarriesEachNodesOwnLiveStatus(t *testing.T) {
 			InFlight: 4, Posture: "shed",
 		}.Meta(),
 	})
-	// A peer whose beat carried no status: its status hook overran its
-	// budget, so the heartbeat published the placement half alone.
+	// A peer whose beat carried no status: its status hook did not answer
+	// within its share of the beat, so the heartbeat published the
+	// placement half alone.
 	claim(coord.NodeResource("node-b"), "node-b:1", map[string]any{
 		"roles": []any{"ingress"},
 	})
@@ -3094,7 +3120,7 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	// UNDER THE STATUS KEY, which is where the presence heartbeat puts it
 	// and where [coord.StatusFromMeta] looks.
 	claim("node-a", map[string]any{coord.StatusKey: coord.NodeStatus{
-		ProjectionsReady: 2, ProjectionsTotal: 3,
+		AppliersReady: 2, AppliersTotal: 3,
 	}.Meta()})
 	claim("node-b", map[string]any{coord.StatusKey: coord.NodeStatus{}.Meta()})
 
@@ -3105,14 +3131,14 @@ func TestTheFleetSaysHowFarANodesOwnCopyHasComeUp(t *testing.T) {
 	for _, row := range rows(t, body["nodes"]) {
 		byID[fmt.Sprint(row["id"])] = row
 	}
-	if got := byID["node-a"]["projections_ready"]; got != float64(2) {
-		t.Errorf("node-a reports %v of its projections ready, want 2", got)
+	if got := byID["node-a"]["appliers_ready"]; got != float64(2) {
+		t.Errorf("node-a reports %v of its appliers ready, want 2", got)
 	}
-	if got := byID["node-a"]["projections_total"]; got != float64(3) {
+	if got := byID["node-a"]["appliers_total"]; got != float64(3) {
 		t.Errorf("node-a reports a total of %v, want 3", got)
 	}
-	if _, present := byID["node-b"]["projections_total"]; present {
-		t.Error("a node that published no projection counts carries a total " +
+	if _, present := byID["node-b"]["appliers_total"]; present {
+		t.Error("a node that published no applier counts carries a total " +
 			"anyway, so a screen draws 0 of 0 — which reads as ready")
 	}
 }

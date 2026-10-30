@@ -235,6 +235,27 @@ func UnknownDetail(unvouched bool) string {
 		"as the " + Header + " header."
 }
 
+// Reused is what a write is answered with when the state log refused it because
+// an operation its key derives already names a write to another object
+// ([statelog.ReasonOpReused]): what the request names moved since the key was
+// first sent, or the key was sent with another request. Nothing was written,
+// and a new key settles it where no wait would.
+//
+// THE FRAMEWORK'S OWN REFUSAL IS NEVER SAID BESIDE IT. It names the operation,
+// the subject it landed on and the one this request is about, broker paths a
+// person cannot act on, and /iam answered it after the directory's own
+// sentinel. One sentence for every surface that takes a key, for
+// [UnknownDetail]'s reason: the operator's surface answered it in a sentence
+// of its own, and the two would have drifted as UnknownDetail's copies did.
+//
+// IN A PERSON'S WORDS (ADR-0060), where [UnknownDetail] is the rule a client
+// retries by: every surface that answers it answers a person, and one who
+// pressed a button again never chose the key, so it says what moved and what
+// to do rather than which key to replace. The answer's `field` names [Header],
+// which is what a client changes.
+const Reused = "What this change was about moved since it was first sent, " +
+	"so nothing was written. Look again, then make the change."
+
 // Digest is what binds a write's operation to its request: the path (the
 // object), the query and the decoded body, in a form one request always
 // produces — the body re-encoded from its decoded value, so the same fields

@@ -3,6 +3,7 @@ package assistantapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
@@ -23,6 +25,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // audits is the compliance read's domain half, recording the order of its two
@@ -35,6 +38,9 @@ type audits struct {
 	owner    uuid.UUID
 	missing  bool
 	unopened bool
+	// refuse and unread, when set, are what recording a read and opening
+	// it answer.
+	refuse, unread error
 }
 
 func (a *audits) RecordAuditRead(_ context.Context, c assistantdomain.Call, _ uuid.UUID,
@@ -44,6 +50,9 @@ func (a *audits) RecordAuditRead(_ context.Context, c assistantdomain.Call, _ uu
 	defer a.mu.Unlock()
 	if a.missing {
 		return assistantdomain.AuditReceipt{}, assistantdomain.ErrNotFound
+	}
+	if a.refuse != nil {
+		return assistantdomain.AuditReceipt{}, a.refuse
 	}
 	a.steps, a.reason, a.reader = append(a.steps, "record"), reason, c.By
 	return assistantdomain.AuditReceipt{}, nil
@@ -57,6 +66,9 @@ func (a *audits) AuditTranscript(_ context.Context, _ assistantdomain.AuditRecei
 	if a.unopened {
 		return assistantdomain.Transcript{}, fmt.Errorf("%w: %w", assistantdomain.ErrAuditPending,
 			assistantdomain.ErrNotFound)
+	}
+	if a.unread != nil {
+		return assistantdomain.Transcript{}, a.unread
 	}
 	a.steps = append(a.steps, "open")
 	return assistantdomain.Transcript{Conversation: assistantdomain.Conversation{Owner: a.owner}}, nil
@@ -450,6 +462,58 @@ func TestAComplianceReadNeedsAReason(t *testing.T) {
 	}
 	if len(s.audits.steps) != 0 || len(s.audit.events) != 0 {
 		t.Errorf("refused reads left %v and %d records", s.audits.steps, len(s.audit.events))
+	}
+}
+
+// A COMPLIANCE READ THE LOG REFUSED WROTE NOTHING, so it is told as the
+// condition it is, never as a read whose outcome nobody knows: a record the
+// log refused at its ceiling is `503` in a person's words with no
+// Retry-After, a read of the conversation this node could not make yet is
+// `503` under its own wait, and a fault is `500`. The record's refusal was an
+// unknown outcome asking the administrator to send the same read again, and
+// the read's was `500`. Mutation: answer a refused record as unknown again,
+// or drop the condition arm from audited, and a row goes red.
+func TestAComplianceReadTheLogRefusedIsACondition(t *testing.T) {
+	t.Parallel()
+	full := &statelog.Unavailable{Reason: statelog.ReasonLogFull,
+		Detail: "raise stream.assistant_log_max_bytes"}
+	behind := fmt.Errorf("assistantdomain: read: %w", &statelog.Unavailable{
+		Reason: statelog.ReasonBehind, Detail: "the read needs 3:4182 applied"})
+	fullSaid, _ := builtin.ConditionSentence(full)
+	behindSaid, _ := builtin.ConditionSentence(behind)
+	fresh := time.Now().Add(time.Hour)
+	for name, c := range map[string]struct {
+		refuse, unread error
+		status         int
+		says           string
+		retry          bool
+	}{
+		"a record the log refused":         {full, nil, http.StatusServiceUnavailable, fullSaid, false},
+		"a read this node can't make yet":  {nil, behind, http.StatusServiceUnavailable, behindSaid, true},
+		"a fault in reading what it opens": {nil, errors.New("open /var/lib/crewlet/replicated.db: disk I/O error"), http.StatusInternalServerError, "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.audits.refuse, s.audits.unread = c.refuse, c.unread
+			r := httptest.NewRequest(http.MethodPost, auditPath,
+				strings.NewReader(`{"protocol_version": 1, "reason": "Legal hold"}`))
+			r = r.WithContext(approvaltest.As(r.Context(), admin(fresh)))
+			r.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			s.handler.ServeHTTP(rec, r)
+			var body map[string]any
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if rec.Code != c.status || body["outcome"] != nil ||
+				(c.says != "" && body["detail"] != c.says) ||
+				(rec.Header().Get("Retry-After") != "") != c.retry {
+				t.Errorf("answered %d %v (Retry-After %q), want %d saying %q",
+					rec.Code, body, rec.Header().Get("Retry-After"), c.status, c.says)
+			}
+			if len(s.audit.events) != 0 {
+				t.Error("a read that never opened was recorded as one")
+			}
+		})
 	}
 }
 

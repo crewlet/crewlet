@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
@@ -69,7 +71,9 @@ const (
 	// is one a node answered `unvouched` ([statelog.Result.Unvouched]):
 	// that node's ledger cannot say whether the operation landed, and
 	// another node's may, so the answer is not final until every node has
-	// been asked.
+	// been asked. One that no node ran, where some node never answered, is
+	// [ErrOutcomeUnknown], never [ErrUnserved]: a node that did not answer
+	// may have run it.
 	opIdempotentWrite
 
 	// opOnceWrite has no id a caller holds, so a repeat is a second write.
@@ -245,6 +249,25 @@ type op[A, R any] struct {
 // so a new operation's types are checked the moment it is declared.
 var registry = map[string]*opSpec{}
 
+// WriteDomains is every domain this router carries a write for, by its
+// state-log name, sorted — read off the operation table, so a domain whose
+// first write operation is declared is in it from that line on.
+//
+// EXPORTED for the gates that must cover every routed domain: a surface
+// that classes a writer's refusal or names a write's object outside a tool
+// (internal/agent/builtin's WriterClass and ObjectArgs) declares each domain
+// once, and a domain routed here and not declared there is a person's
+// content refusal answered as a fault.
+func WriteDomains() []string {
+	seen := map[string]bool{}
+	for _, spec := range registry {
+		if spec.class != opRead && spec.domain != "" {
+			seen[spec.domain] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(seen))
+}
+
 // define declares an operation, with the domain whose log its floor is on —
 // empty for one that carries no floor. Package-level, at init: a duplicate
 // name is a build that cannot serve, so it panics rather than silently
@@ -305,12 +328,12 @@ func (o op[A, R]) ungated() op[A, R] {
 }
 
 // repeatableWhen declares a once-write that is IDEMPOTENT for the calls whose
-// arguments say so: a page write whose actor carries the caller's own
-// operation key ([doclet.Actor.OpKey]), or a comment carrying its turn's
-// ([doclet.NewComment.TurnKey]), derives its operation id, and a create its
-// page's id, from that key and what the write says rather than minting one per
-// call, so a repeat under it is the same operation and the ledger answers it
-// with the first copy's outcome. Such a call fails over as an
+// arguments say so: a page or chat write whose actor carries the caller's own
+// operation key ([doclet.Actor.OpKey], [chatlet.Actor.OpKey]) derives its operation
+// id — and a create its page's or its room's id, a post its message's — from
+// that key and what the write says rather than minting one per call, so a
+// repeat under it is the same operation and the ledger answers it with the
+// first copy's outcome. Such a call fails over as an
 // [opIdempotentWrite] does; one without a key is still never repeated
 // ([opOnceWrite]). A property of the ASKING side, since the class is what the
 // asker may do with an unanswered request, and the server runs the operation

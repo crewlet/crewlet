@@ -165,7 +165,18 @@ export function useKnowledgeAnswer(term: string, wanted: boolean): AnswerState {
               state = { kind: "unknown", reason: result.reason };
               break;
             case "refused":
-              state = { kind: "refused", sentence: result.sentence, remedy: result.remedy };
+              // IN THE ENGINE'S OWN WORDS where it has them. The act route
+              // answers a refusal's `detail` only in a person's words
+              // (ADR-0060), as a spent budget's names whose ceiling it was,
+              // and the dashboard's sentence for the class is written about a
+              // change ("could not make the change just now"), which a
+              // question is not. A refusal nobody has worded for a person yet
+              // carries no detail, and the class's sentence is all there is.
+              state = {
+                kind: "refused",
+                sentence: result.detail || result.sentence,
+                remedy: result.remedy,
+              };
               break;
           }
           setSettled({ key, state });

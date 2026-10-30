@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // One person's inbox — what the company asked of them, in the order the log
@@ -123,7 +124,7 @@ type InboxNotice struct {
 	// handle as though it were a task.
 	SubjectKeyCollision bool `json:"subject_key_collision,omitempty"`
 
-	Excerpt string `json:"excerpt,omitempty"`
+	Excerpt string `json:"excerpt,omitempty" untrusted:"fence"`
 
 	// Actor is who made the change, joined from the history row. A notice
 	// whose history row has been reanchored away carries none rather than
@@ -301,8 +302,8 @@ func (r *Reader) Inbox(ctx context.Context, q InboxQuery, now time.Time) (
 			"default before it reads")
 	case !q.Snoozed.Valid():
 		return InboxAnswer{}, fmt.Errorf("worklet: %q is not a snoozed scope; "+
-			"pass one of %v; a surface resolves an absent `snoozed` to %q "+
-			"before it reads", q.Snoozed, SnoozeScopes, SnoozeExclude)
+			"pass one of %s; a surface resolves an absent `snoozed` to %q "+
+			"before it reads", q.Snoozed, words.Or(SnoozeScopes), SnoozeExclude)
 	}
 	for _, reason := range q.Reasons {
 		if !slices.Contains(Reasons, reason) {
@@ -522,6 +523,24 @@ func (f inboxFilter) clauses() ([]string, []any, bool) {
 	return where, args, true
 }
 
+// inboxStatement is [readInbox]'s one statement over its predicate, the last
+// placeholder the page's limit — named so the plan test explains exactly what
+// the reader issues.
+func inboxStatement(where []string) string {
+	return `
+		SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation,
+		       n.created_at, n.reason, n.addressed, n.fallback_only,
+		       n.kind, n.subject_id, n.subject_key, n.task_id,
+		       ` + keyOpensAnother("n.subject_key", "n.task_id") + `,
+		       n.excerpt, COALESCE(h.actor, ''), COALESCE(h.actor_kind, ''),
+		       COALESCE(h.comment_id, ''), COALESCE(h.turn_id, '')
+		  FROM tracker_notifications n
+		  LEFT JOIN tracker_history h ON h.id = n.record_id
+		 WHERE ` + strings.Join(where, " AND ") + `
+		 ORDER BY n.log_seq DESC
+		 LIMIT ?`
+}
+
 // readInbox reads one page of the notification rows.
 //
 // THE JOIN IS LEFT, because the two tables have different lifetimes: the
@@ -560,18 +579,7 @@ func readInbox(ctx context.Context, tx *sql.Tx, handle string, q InboxQuery,
 	args = append(args, narrowedArgs...)
 	args = append(args, limit+1)
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT n.record_id, n.log_seq, n.log_stream, n.log_generation,
-		       n.created_at, n.reason, n.addressed, n.fallback_only,
-		       n.kind, n.subject_id, n.subject_key, n.task_id,
-		       `+keyOpensAnother("n.subject_key", "n.task_id")+`,
-		       n.excerpt, COALESCE(h.actor, ''), COALESCE(h.actor_kind, ''),
-		       COALESCE(h.comment_id, ''), COALESCE(h.turn_id, '')
-		  FROM tracker_notifications n
-		  LEFT JOIN tracker_history h ON h.id = n.record_id
-		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY n.log_seq DESC
-		 LIMIT ?`, args...)
+	rows, err := tx.QueryContext(ctx, inboxStatement(where), args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("worklet: read %s's inbox: %w", handle, err)
 	}

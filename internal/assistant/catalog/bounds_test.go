@@ -95,6 +95,13 @@ var readBounds = map[string]bound{
 	"list_config_changes": {kind: boundCapped,
 		why: "config_audit answers the newest revisions, at most 50, as a bare list with no cursor"},
 	"get_company_principles": {kind: boundConfig, why: "the company's one principles document"},
+	"list_chat_rooms":        {kind: boundPage},
+	"get_chat_room":          {kind: boundRecord, record: "channel"},
+	"read_chat_messages":     {kind: boundPage},
+	"get_chat_thread":        {kind: boundPage},
+	"list_chat_mentions":     {kind: boundPage},
+	"search_chat": {kind: boundCapped,
+		why: "a ranked search answers its best matches, at most 50, never a page of a list"},
 }
 
 // segments are a request path's segments, each unescaped.

@@ -12,12 +12,13 @@
  */
 
 export { Store } from "./store.ts";
-export type { StoreState, Slice } from "./store.ts";
+export type { ChatLive, ChatRoomLive, HeldChatChange, StoreState, Slice } from "./store.ts";
 export {
   LiveSocket,
   QueryError,
   isLogRefusal,
   queryErrorCode,
+  DETAILED_QUERY_ERRORS,
   unavailableRetryMs,
 } from "./socket.ts";
 export type { RoomListener } from "./socket.ts";
@@ -58,9 +59,10 @@ export {
   sessionNeedsEnrolment,
   sessionRestored,
   setStepUpConfirmer,
+  setTabReader,
   stepUpAsked,
 } from "./signin.ts";
-export type { SessionNeed, StepUpConfirmer } from "./signin.ts";
+export type { SessionNeed, StepUpConfirmer, TabReader } from "./signin.ts";
 export { SessionKeepAlive, SESSION_KEEPALIVE_MS } from "./keepalive.ts";
 // THE WRITE AND THE FLOOR IT RAISES, so the replay can hand a captured
 // `/operator/act` answer to the client's own `act` and read the floor back off

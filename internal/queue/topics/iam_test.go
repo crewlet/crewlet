@@ -9,8 +9,8 @@ import (
 
 // THE SUBJECT AND ITS INVERSE AGREE ON EVERY SHAPE THE IAM LOG CARRIES.
 //
-// Same invariant as the other four domains', and the shape that makes it worth
-// restating for a fifth is the LOGIN: internal/iam REQUIRES a dot in a person's
+// Same invariant as every other domain's, and the shape that makes it worth
+// restating here is the LOGIN: internal/iam REQUIRES a dot in a person's
 // login, so `jane.doe` is not an occasional awkward id here, it is what every
 // login claim's subject looks like. A parser splitting on every dot would
 // recover `jane` — a claim on a different address, which somebody else may
@@ -60,8 +60,8 @@ func TestAnIamSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 	}
 }
 
-// THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — and, with five
-// domains on one broker, that includes the other four's subjects.
+// THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — and, with
+// every domain on one broker, that includes every other domain's subjects.
 func TestTheIamPathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
 	for _, subject := range []string{
@@ -73,6 +73,10 @@ func TestTheIamPathRefusesWhatItDidNotBuild(t *testing.T) {
 		topics.TrackerLogPrefix + ".task.1",
 		topics.TrackerVectorsPrefix + ".source.1",
 		topics.PagesLogPrefix + ".page.1",
+		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
+		topics.ArtifactsLogPrefix + ".artifact.1",
+		topics.ArtifactDataLogPrefix + ".store.1",
+		topics.ChatLogPrefix + ".message.1",
 	} {
 		if kind, id, ok := topics.IamLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+

@@ -9,10 +9,10 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
-	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -45,12 +45,12 @@ func TestARunTakenOverIsServedTheSurfaceItLeft(t *testing.T) {
 		// AS THE ROW HOLDS THEM: in the order they finished.
 		{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "first"},
 			Result: "created"}, Seq: 3},
-		{Call: ledger.Call{Name: runner.ActivateTool, Args: map[string]any{"name": "jira_create"},
+		{Call: ledger.Call{Name: toolname.Activate, Args: map[string]any{"name": "jira_create"},
 			Result: "jira_create is active"}, Seq: 2},
 		{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
 			Result: "posted"}, Seq: 1},
 		// A FAILED ACTIVATION activated nothing.
-		{Call: ledger.Call{Name: runner.ActivateTool, Args: map[string]any{"name": "slack_history"},
+		{Call: ledger.Call{Name: toolname.Activate, Args: map[string]any{"name": "slack_history"},
 			Result: "no", Failed: true}, Seq: 4},
 	}, spent)
 	if err != nil {
@@ -100,9 +100,9 @@ func TestARunTakenOverKeepsTheSkillsItLoaded(t *testing.T) {
 	r, _ := guardedRunner(t, newCapture(), tools.OriginBuiltin)
 	surface, _, err := r.ReopenAgentRun(context.Background(), execstate.State{
 		Version: execstate.Version, Round: 1,
-		ActiveTools: []string{"slack_post", skills.LoaderTool},
+		ActiveTools: []string{"slack_post", toolname.LoadToolSkill},
 	}, []runner.BridgedCall{
-		{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "chat-conventions"},
+		{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
 			Result: "Always thread your reply."}, Seq: 1},
 	}, runner.Bridged{})
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/credential"
@@ -143,22 +144,26 @@ func TestAResetLinkIsRefusedWhereNoPasswordShouldBeSet(t *testing.T) {
 // every app (ADR-0033), so an admin is issued a link for a fellow admin and for
 // somebody holding every app — the CONTROLS — and what refuses one is a name
 // this build does not know on the person's row: kept there and ignored, never
-// one this issuer can be shown to hold (403, nothing landed, nothing
-// announced). Mutation: drop the conferral check and the last case is issued a
-// link.
+// one this issuer can be shown to hold (403 `forbidden`, nothing landed,
+// nothing announced). It is the record's own rule, which no permission lifts,
+// so it is not `unauthorized`, whose sentence would send an administrator to
+// ask for access. Mutation: drop the conferral check and the last case is
+// issued a link.
 func TestAResetLinkIsRefusedForSomebodyHoldingAGrantTheIssuerLacks(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		grants []iam.Grant
 		status int
+		code   httpjson.Code
 	}{
 		{"a fellow admin (a control)",
-			[]iam.Grant{iam.GrantAdmin}, http.StatusCreated},
+			[]iam.Grant{iam.GrantAdmin}, http.StatusCreated, ""},
 		{"a person holding every app (a control)",
-			slices.Clone(iam.Apps), http.StatusCreated},
+			slices.Clone(iam.Apps), http.StatusCreated, ""},
 		{"a person holding a name this build does not know",
-			[]iam.Grant{iam.GrantWorklet, "billing"}, http.StatusForbidden},
+			[]iam.Grant{iam.GrantWorklet, "billing"}, http.StatusForbidden,
+			httpjson.CodeForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -173,6 +178,9 @@ func TestAResetLinkIsRefusedForSomebodyHoldingAGrantTheIssuerLacks(t *testing.T)
 			}
 			if tc.status != http.StatusForbidden {
 				return
+			}
+			if got.body["error"] != string(tc.code) {
+				t.Errorf("answered %v, want %s", got.body["error"], tc.code)
 			}
 			if _, shown := got.body["url"]; shown {
 				t.Errorf("a refused issue showed a link: %v", got.body)

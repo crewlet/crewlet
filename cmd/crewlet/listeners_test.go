@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
@@ -340,7 +341,11 @@ func TestASeatsNodeServesItsOwnBoxesTheirToolsOnLoopback(t *testing.T) {
 	if got := bridge.Reaches(false); got != "" {
 		t.Errorf("a box off the host is handed %q, with no fleet address set", got)
 	}
-	surface, err := serveBound(t, boot, e, reconcilerFor(t, boot, e), listeners, log)
+	// THE PROCESS'S CHAT HUB, as `crewlet run` attaches it beside the engine
+	// on every node, a seats node serving no API included.
+	chatLive := api.NewEngineChatLive(t.Context(), e)
+	t.Cleanup(func() { chatLive.Stop(context.WithoutCancel(t.Context())) })
+	surface, err := serveBound(t, boot, e, reconcilerFor(t, boot, e), chatLive, listeners, log)
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}
@@ -436,7 +441,8 @@ func TestASeatsNodeWithNoAPIPortBindsNothing(t *testing.T) {
 		listeners.close(context.Background(), logging.Get("test"))
 		t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 	}
-	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, listeners, engine.DeepHost{}, logging.Get("test"))
+	surface, err := serveAPI(t.Context(), boot, e, nil, nil, nil, nil, nil, listeners,
+		engine.DeepHost{}, logging.Get("test"))
 	if err != nil {
 		t.Fatalf("serveAPI: %v", err)
 	}

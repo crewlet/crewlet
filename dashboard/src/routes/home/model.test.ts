@@ -47,10 +47,24 @@ const base = {
 };
 
 describe("the status sentence", () => {
+  test("never says nothing needs a decision over an answer that could not account for everything", () => {
+    const text = sentenceText(
+      statusSentence({
+        ...base,
+        waiting: { count: 0, floor: false, oldestAt: null, partial: true },
+      }),
+    );
+    expect(text).not.toMatch(/nothing needs your decision/i);
+    expect(text).toMatch(/^Nimbus is running on 3 nodes\./);
+  });
+
   test("never prints a zero or a wrong plural", () => {
     expect(
       sentenceText(
-        statusSentence({ ...base, waiting: { count: 0, floor: false, oldestAt: null } }),
+        statusSentence({
+          ...base,
+          waiting: { count: 0, floor: false, oldestAt: null, partial: false },
+        }),
       ),
     ).toBe(
       "Nimbus is running on 3 nodes. Nothing needs your decision, and no agents are working right now.",
@@ -59,7 +73,7 @@ describe("the status sentence", () => {
       sentenceText(
         statusSentence({
           ...base,
-          waiting: { count: 1, floor: false, oldestAt: null },
+          waiting: { count: 1, floor: false, oldestAt: null, partial: false },
           conditions: 1,
           working: 1,
         }),
@@ -72,7 +86,7 @@ describe("the status sentence", () => {
         statusSentence({
           ...base,
           nodes: 1,
-          waiting: { count: 3, floor: false, oldestAt: null },
+          waiting: { count: 3, floor: false, oldestAt: null, partial: false },
           conditions: 2,
           working: 4,
         }),
@@ -88,7 +102,7 @@ describe("the status sentence", () => {
           statusSentence({
             ...base,
             nodes,
-            waiting: { count: n, floor: false, oldestAt: null },
+            waiting: { count: n, floor: false, oldestAt: null, partial: false },
             conditions: n,
             working: n,
           }),
@@ -104,7 +118,7 @@ describe("the status sentence", () => {
   test("weights the decisions figure, and only it", () => {
     const runs = statusSentence({
       ...base,
-      waiting: { count: 3, floor: false, oldestAt: null },
+      waiting: { count: 3, floor: false, oldestAt: null, partial: false },
       working: 4,
     });
     expect(runs.filter((r) => r.strong).map((r) => r.text)).toEqual(["3 decisions"]);
@@ -112,7 +126,12 @@ describe("the status sentence", () => {
 
   test("a capped count is a floor, and plural", () => {
     expect(
-      sentenceText(statusSentence({ ...base, waiting: { count: 1, floor: true, oldestAt: null } })),
+      sentenceText(
+        statusSentence({
+          ...base,
+          waiting: { count: 1, floor: true, oldestAt: null, partial: false },
+        }),
+      ),
     ).toContain("1+ decisions are waiting on you");
   });
 
@@ -274,9 +293,15 @@ describe("the figures", () => {
     const waiting = waitingOf(
       { handle: "jane", items: [], total: 2, capped: false, oldest_at: "2026-09-22T10:00:00Z" },
       [{ at: "2026-09-22T08:00:00Z" }],
+      false,
     );
-    expect(waiting).toEqual({ count: 3, floor: false, oldestAt: "2026-09-22T08:00:00Z" });
-    expect(waitingOf(null, [])).toBeNull();
+    expect(waiting).toEqual({
+      count: 3,
+      floor: false,
+      oldestAt: "2026-09-22T08:00:00Z",
+      partial: false,
+    });
+    expect(waitingOf(null, [], false)).toBeNull();
   });
 });
 

@@ -8,10 +8,10 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -118,8 +118,18 @@ func Decide(chart authz.Chart) Authorizer {
 		case iam.Anonymous:
 			return ErrUnauthenticated
 		}
+		// AT THE INSTANT THE REQUEST WAS ROUTED ([authz.DecidedAt]): a tool
+		// a routed request calls on its own behalf — the work surface's
+		// tool-backed routes, which dispatch into this gate — is one more
+		// check of that request, so it is judged at the instant its route
+		// was, as every other check of it is. Judged at its own clock, a
+		// proof the route admitted could lapse while the body was read and
+		// the call be refused as stale on the request the route had just
+		// let through. A turn, and an operator call no route decided (the
+		// MCP surface, the act route), carry no such instant and are judged
+		// now.
 		return DecisionError(action,
-			authz.Decide(ctx, principal, action, object, chart, time.Now()))
+			authz.Decide(ctx, principal, action, object, chart, authz.DecidedAt(ctx)))
 	}
 }
 
@@ -168,7 +178,22 @@ type DecisionRefused struct {
 }
 
 func (e *DecisionRefused) Error() string {
-	return fmt.Sprintf("%s (%s)", ErrRefused, e.Decision.Reason)
+	refusal := fmt.Sprintf("%s (%s)", ErrRefused, e.Decision.Reason)
+	if e.Decision.Reason == authz.ReasonUnseated {
+		// THE ONE REFUSAL WHOSE REMEDY NO GRANT NAMES, and so the one the
+		// sentence has to: what admits is a binding, and the envelope's
+		// `grants` is empty by design.
+		refusal += ": it's made as a seat and this credential acts as none. " +
+			"Bind it to a human seat with `crewlet iam bind`"
+	}
+	if e.Decision.Reason == authz.ReasonRole && e.Decision.Role.Valid() {
+		// THE ROLE IS THE REMEDY, and the artifact's owner is who gives it:
+		// the envelope carries it as `role`, and the sentence beside it says
+		// the same, so a route's refusal and a tool's read alike.
+		refusal += ": it needs the " + string(e.Decision.Role) + " role on the " +
+			"artifact, which its owner can share with you"
+	}
+	return refusal
 }
 
 // Unwrap makes every [DecisionRefused] an [ErrRefused].
@@ -211,16 +236,16 @@ var subjectOf = map[string]subject{
 	// [authz.ErrUnresolved], and the tool reads the item, probes its asks
 	// ([worklet.AskedOn]) and decides again. See [getWorkItem.CallForTurn]
 	// and [commentOnWorkItem.CallForTurn].
-	"get_work_item":        {kind: authz.KindTask, inTool: true},
-	"comment_on_work_item": {kind: authz.KindTask, inTool: true},
+	GetWorkItemTool:           {kind: authz.KindTask, inTool: true},
+	worklet.CommentOnWorkTool: {kind: authz.KindTask, inTool: true},
 
 	// THE PERSONAL ONES THAT TAKE NO NAME are about the caller: `my_work`,
 	// `mark_inbox` and `set_pins` take no handle, because a model that
 	// could name whose day to read could read anybody's. An unnamed owner
 	// is the CALLER — see [subject.objectFor].
-	"my_work":    {kind: authz.KindPerson},
-	"mark_inbox": {kind: authz.KindPerson},
-	"set_pins":   {kind: authz.KindPerson},
+	worklet.MyWorkTool:    {kind: authz.KindPerson},
+	worklet.MarkInboxTool: {kind: authz.KindPerson},
+	worklet.SetPinsTool:   {kind: authz.KindPerson},
 
 	// AND THE ONES THAT DO ARE DECIDED ON WHOSE RECORD THE NAME IS, NOT ON
 	// WHAT WAS TYPED. Each tool resolves its `handle` first
@@ -232,9 +257,9 @@ var subjectOf = map[string]subject{
 	// was refused as leading nobody called that, before the tool ever
 	// resolved it — and an administrator's decision on a login was a
 	// decision about a record nothing of that person's is under.
-	"get_person":     {kind: authz.KindPerson, inTool: true},
-	"work_inbox":     {kind: authz.KindPerson, inTool: true},
-	"set_priorities": {kind: authz.KindPerson, inTool: true},
+	worklet.GetPersonTool:     {kind: authz.KindPerson, inTool: true},
+	worklet.WorkInboxTool:     {kind: authz.KindPerson, inTool: true},
+	worklet.SetPrioritiesTool: {kind: authz.KindPerson, inTool: true},
 
 	// A SAVED VIEW IS EITHER, and its own class reads whichever it
 	// names. Its container is a kind plus a key in ONE argument
@@ -248,7 +273,7 @@ var subjectOf = map[string]subject{
 	// handle, so a bound person typing their login saved a view under a
 	// name no strip of theirs reads, and one that marked it protected was
 	// then refused their own next save.
-	"save_work_view": {kind: authz.KindView, personal: "personal", container: "container"},
+	worklet.SaveWorkViewTool: {kind: authz.KindView, personal: "personal", container: "container"},
 
 	// THE TRASH IS DECIDED BY THE TASK'S OWN ROW — its project and its
 	// reporter — which is stored and never an argument: the tools take a
@@ -266,21 +291,21 @@ var subjectOf = map[string]subject{
 	// project is passed to the writer as a PRECONDITION and the tracker
 	// refuses a task filed elsewhere by then with a conflict — the same
 	// holds for `update_work_item`'s re-route.
-	"remove_work_item":  {kind: authz.KindTask, inTool: true},
-	"restore_work_item": {kind: authz.KindTask, inTool: true},
+	worklet.RemoveWorkItemTool:  {kind: authz.KindTask, inTool: true},
+	worklet.RestoreWorkItemTool: {kind: authz.KindTask, inTool: true},
 
 	// AND SO IS A FILE'S REMOVAL, decided by the project it is kept in —
 	// which the tool settles before it asks, since a call that names no
 	// project means the caller's own team's, and the gate cannot know
 	// whose that is. Decided here on the argument, every removal from the
 	// caller's own project was refused as naming none.
-	"remove_project_file": {kind: authz.KindProject, inTool: true},
+	worklet.RemoveProjectFileTool: {kind: authz.KindProject, inTool: true},
 
 	// AND SO IS A MOVE, for the same reason and against the same project:
 	// the item's own, read off the row. Moving work to another project is
 	// a re-route with a re-key, so it is the lead's of the project the
 	// item is LEAVING — see workmove.go.
-	"move_work_item": {kind: authz.KindTask, inTool: true},
+	worklet.MoveWorkItemTool: {kind: authz.KindTask, inTool: true},
 
 	// A SEAT'S WORK IS DECIDED ON THE SEAT, and the seat is never quite
 	// what the arguments state. A pause and a resume name it by a handle
@@ -292,10 +317,10 @@ var subjectOf = map[string]subject{
 	// answer is decided on the run's own row: its requester through the
 	// self arm, its seat's lead otherwise. See seatpause.go, steer.go and
 	// answerrun.go.
-	"pause_seat":  {kind: authz.KindPerson, inTool: true},
-	"resume_seat": {kind: authz.KindPerson, inTool: true},
-	"steer_turn":  {kind: authz.KindPerson, inTool: true},
-	"answer_run":  {kind: authz.KindPerson, inTool: true},
+	PauseSeatTool:  {kind: authz.KindPerson, inTool: true},
+	ResumeSeatTool: {kind: authz.KindPerson, inTool: true},
+	SteerTurnTool:  {kind: authz.KindPerson, inTool: true},
+	AnswerRunTool:  {kind: authz.KindPerson, inTool: true},
 
 	// AN ARTIFACT IS DECIDED BY ITS STORED ROW (its owner, its shares and
 	// whether an agent owns it), which no argument states, and inside a
@@ -324,6 +349,20 @@ var subjectOf = map[string]subject{
 	QueryArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
 	WriteArtifactDataTool: {kind: authz.KindArtifact, inTool: true},
 	SetArtifactSchemaTool: {kind: authz.KindArtifact, inTool: true},
+
+	// A CHAT MESSAGE IS DECIDED ON WHOSE WORDS IT IS, which is its stored
+	// row and never an argument: the tools name a message by its id. An
+	// admin is admitted on the unread message — moderation, which takes a
+	// message down in a room the moderator cannot read without showing it
+	// to them — and anybody else is told [authz.ErrUnresolved], read as
+	// themselves, and decided again on its author. See
+	// [ChatDeps.remarkAuthority].
+	chatlet.EditMessageTool:   {kind: authz.KindMessage, inTool: true},
+	chatlet.DeleteMessageTool: {kind: authz.KindMessage, inTool: true},
+
+	// AND A READ CURSOR IS THE CALLER'S OWN RECORD, as an inbox's marks
+	// are: `mark_chat_read` takes no handle, so its owner is the caller.
+	chatlet.MarkChatReadTool: {kind: authz.KindPerson},
 }
 
 // subject is what one tool is about, as the names of its own arguments.

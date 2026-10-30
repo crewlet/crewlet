@@ -36,9 +36,10 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
   <body>
     <h1>Slack app install {{.Heading}}</h1>
     {{if .Error}}
-      <p>Slack reported an error: <code>{{.Error}}</code></p>
-      <p>Close this tab and start the install again with Install on the
-      agent's row in Slack's Agents tab, under Company › Integrations.</p>
+      <p>{{.Error}}</p>
+      {{if .Manual}}<p>Go back to the app's settings in Slack and install it again.</p>
+      {{else}}<p>Close this tab and start the install again with Install on the
+      agent's row in Slack's Agents tab, under Company › Integrations.</p>{{end}}
     {{else if .Done}}
       <p>Approved for agent <strong>@{{.Handle}}</strong>. Crewlet has sealed
       its bot token, and the agent starts answering in Slack shortly.</p>
@@ -57,9 +58,9 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
       Slack's Agents tab, which finishes the install on its own. You can
       close this tab.</p>
     {{else}}
-      <p>No <code>code</code> query parameter. Open this page by installing
-      a Crewlet agent's Slack app with Install on the agent's row in Slack's
-      Agents tab, under Company › Integrations.</p>
+      <p>Slack didn't send an install code with this page. Open it by
+      installing a Crewlet agent's Slack app with Install on the agent's row
+      in Slack's Agents tab, under Company › Integrations.</p>
     {{end}}
   </body>
 </html>
@@ -81,7 +82,21 @@ type slackOAuthView struct {
 	// one could not be, and never quote the code or a token.
 	Done           bool
 	Reason, Remedy string
+
+	// Manual is an install pressed on the app's own settings in Slack,
+	// which carries no state: a refusal sends the person back there.
+	Manual bool
 }
+
+// What the page tells a person Slack refused, in its own words rather than
+// Slack's code: the code is the log's.
+const (
+	// slackCancelled is Slack's `access_denied`: the person declined.
+	slackCancelled = "The install was cancelled in Slack."
+
+	// slackRefused is any other refusal Slack sent back.
+	slackRefused = "Slack didn't approve the install."
+)
 
 // SlackInstaller finishes an install a seat's install link began
 // ([slack.Installs]).
@@ -111,10 +126,21 @@ type SlackInstaller interface {
 // The code alone grants nothing without the app's client secret.
 func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
-	view := slackOAuthView{Error: q.Get("error"), Code: q.Get("code"), Handle: q.Get("state")}
+	view := slackOAuthView{Code: q.Get("code"), Handle: q.Get("state")}
 	status := http.StatusOK
-	switch {
-	case view.Error != "":
+	switch refused := q.Get("error"); {
+	case refused != "":
+		// SLACK'S CODE IS LOGGED, NOT SHOWN: a person reads access_denied as
+		// a fault in their own access, and the query is whatever the address
+		// that brought the browser here says, printed on the dashboard's
+		// origin.
+		view.Error = slackRefused
+		if refused == "access_denied" {
+			view.Error = slackCancelled
+		}
+		view.Manual = view.Handle == ""
+		log.Warn("slack_oauth_refused", "error", refused)
+		view.Code, view.Handle = "", ""
 		view.Heading, status = "failed", http.StatusBadRequest
 	case slack.IsInstallState(view.Handle):
 		status = r.completeSlackInstall(req.Context(), w.Header(), &view)
@@ -131,6 +157,9 @@ func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {
 		log.Info("slack_oauth_manual_install")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// NOT CACHED: a code that installs an app should not outlive the page
+	// that received it in a browser's cache.
+	w.Header().Set("Cache-Control", "no-store")
 	pagepolicy.Set(w.Header(), slackOAuthPolicy)
 	w.WriteHeader(status)
 	// Rendered straight to the response: the template is parsed at

@@ -14,8 +14,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { READER_HEADER, READER_PARAM } from "../contract/identity.ts";
 import { rest } from "./rest.ts";
-import { currentSessionNeed, sessionRestored } from "./signin.ts";
+import { currentSessionNeed, sessionRestored, setTabReader } from "./signin.ts";
 import { LiveSocket } from "./socket.ts";
 import { Store } from "./store.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
@@ -375,6 +376,83 @@ describe("the engine's close codes", () => {
     expect(ScriptedWebSocket.dials).toHaveLength(dialled + 1);
   });
 
+  // A REFUSED DIAL WHILE THE BROWSER IS SOMEBODY ELSE'S IS NOT READ AS THEIRS.
+  //
+  // Somebody signed in as somebody else in another tab, and their session may
+  // only enrol a second factor. The handshake carries no header — a browser
+  // sets none on a WebSocket — so it is refused for THEIR session, and a probe
+  // that named nobody would read that refusal and route this tab, still the
+  // last person's, into the new person's enrolment. The probe names the tab's
+  // reader, the engine answers `reader_changed`, and the tab is handed to them
+  // instead. Mutation: send the probe without `readerHeaders()` and this tab
+  // is asked for an enrolment.
+  test("a refused dial for somebody else's session hands the tab to them", async () => {
+    let moved = 0;
+    const uninstall = setTabReader({ current: () => "p-0", moved: () => moved++ });
+    const engine = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (!String(input).endsWith("/ws/stream")) return engine(input, init);
+      const named = new Headers(init?.headers).get(READER_HEADER);
+      return named !== null && named !== "p-1"
+        ? new Response(JSON.stringify({ error: "reader_changed" }), { status: 409 })
+        : new Response(JSON.stringify({ error: "second_factor_enrolment_required" }), {
+            status: 403,
+          });
+    });
+    try {
+      const { store } = started();
+      dial(0).closeWith(1006);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(moved).toBe(1);
+      expect(currentSessionNeed()).toBeNull();
+      expect(store.state.accessRefused).toBeNull();
+    } finally {
+      uninstall();
+    }
+  });
+
+  // A SOCKET THAT DROPPED AND DIALS AGAIN UNDER A COOKIE THAT MOVED IS NOT
+  // SERVED AS THE NEW PERSON.
+  //
+  // The tab is read by p-0; a sign-in in another tab moved the cookie to p-1,
+  // and its close of this tab's session did not land; then the socket dropped
+  // for an unrelated reason. Every dial names the tab's reader in its URL — the
+  // one place a handshake can carry it — so the engine refuses this one before
+  // the stream runs, the browser reports 1006, and the probe hands the tab
+  // over. Mutation: dial without `readerQuery()` and the redial names nobody,
+  // so the engine serves it as p-1 and this tab draws their company.
+  test("a redial under a cookie somebody else's sign-in moved hands the tab over", async () => {
+    let moved = 0;
+    const uninstall = setTabReader({ current: () => "p-0", moved: () => moved++ });
+    const engine = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (!String(input).endsWith("/ws/stream")) return engine(input, init);
+      const named = new Headers(init?.headers).get(READER_HEADER);
+      return named !== null && named !== "p-1"
+        ? new Response(JSON.stringify({ error: "reader_changed" }), { status: 409 })
+        : new Response("{}", { status: 426 });
+    });
+    /** The engine's guard, deciding a handshake by the reader its URL names. */
+    const handshake = (sock: ScriptedWebSocket) => {
+      const named = new URL(sock.url).searchParams.get(READER_PARAM);
+      if (named === null || named === "p-1") sock.open();
+      else sock.closeWith(1006);
+    };
+    try {
+      const { store } = started();
+      // Opened while the cookie was still p-0's, then dropped.
+      dial(0).open();
+      dial(0).closeWith(1006);
+      await vi.advanceTimersByTimeAsync(1_000);
+      handshake(dial(1));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.state.connected).toBe(false);
+      expect(moved).toBe(1);
+    } finally {
+      uninstall();
+    }
+  });
+
   test("a refusal that lands while a dial is in flight is not undone by that dial's close", async () => {
     // The probe is asynchronous and the reconnect is not waiting for it, so
     // the refusal can arrive with the NEXT dial already out. That dial's own
@@ -476,6 +554,105 @@ describe("what a dial presents", () => {
     const probe = fetchInits[fetches.findIndex((url) => url.endsWith("/ws/stream"))];
     expect(probe?.credentials).toBe("same-origin");
     expect(new Headers(probe?.headers).has("Authorization")).toBe(false);
+  });
+
+  // THE READER IS THE ONE THING THE URL CARRIES, because a browser sets no
+  // header on a WebSocket: the principal id the tab recorded, which is no
+  // secret, under the parameter the engine's guard reads on an upgrade.
+  test("a tab that knows its reader names them in the handshake URL, and nothing else", () => {
+    const uninstall = setTabReader({
+      current: () => "018f3a9c-0000-7000-8000-0000000000aa",
+      moved: () => {},
+    });
+    try {
+      started();
+      const url = new URL(dial(0).url);
+      expect(url.pathname).toBe("/ws/stream");
+      expect([...url.searchParams]).toEqual([
+        [READER_PARAM, "018f3a9c-0000-7000-8000-0000000000aa"],
+      ]);
+    } finally {
+      uninstall();
+    }
+  });
+});
+
+// A TAB THAT HAS RECORDED NOBODY LEARNS WHO BEFORE IT DIALS. The frame dials
+// once its session read has recorded the reader — and when that read failed
+// too, and the socket redials on its own; a dial naming nobody is served as
+// whoever holds the cookie, so a sign-in in another tab before the tab's next
+// session read was adopted as its reader by a tab drawing the company it was
+// served for the last one. The session is read first and taken, and the dial
+// names whoever it recorded; a read that says nothing dials nothing.
+describe("a tab that has recorded nobody", () => {
+  /** A tab reader that records what the app takes, as `lib/reader.ts` does. */
+  function unrecorded(): {
+    socket: LiveSocket;
+    recorded: () => string | null;
+    uninstall: () => void;
+  } {
+    let recorded: string | null = null;
+    const uninstall = setTabReader({ current: () => recorded, moved: () => {} });
+    const socket = new LiveSocket(new Store(), {
+      takeSession: (person) => {
+        recorded ??= person;
+        return true;
+      },
+    });
+    running.push(socket);
+    return { socket, recorded: () => recorded, uninstall };
+  }
+
+  // Mutation: dial before the read and the first dial names nobody, before
+  // any session read went out.
+  test("reads who it is signed in as, records them, and dials naming them", async () => {
+    const tab = unrecorded();
+    try {
+      tab.socket.start();
+      expect(ScriptedWebSocket.dials).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetches).toEqual([expect.stringMatching(/\/auth\/session$/)]);
+      expect(tab.recorded()).toBe("p-1");
+      expect(ScriptedWebSocket.dials).toHaveLength(1);
+      expect(new URL(dial(0).url).searchParams.get(READER_PARAM)).toBe("p-1");
+    } finally {
+      tab.uninstall();
+    }
+  });
+
+  // A READ THAT SAYS NOTHING DIALS NOTHING, and is asked again on the
+  // backoff — a dial would be served as whoever holds the cookie. A `401`
+  // is nobody: the sign-in need, and no dial. Mutation: dial on a failed
+  // read and the first row's dials are not zero.
+  test("dials nothing on a read that failed, until a read answers", async () => {
+    const tab = unrecorded();
+    try {
+      sessionStatus = 503;
+      tab.socket.start();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(ScriptedWebSocket.dials).toHaveLength(0);
+      expect(fetches.filter((u) => u.endsWith("/auth/session")).length).toBeGreaterThan(1);
+      sessionStatus = 200;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(ScriptedWebSocket.dials).toHaveLength(1);
+      expect(new URL(dial(0).url).searchParams.get(READER_PARAM)).toBe("p-1");
+    } finally {
+      tab.uninstall();
+    }
+  });
+
+  test("a read answered 401 dials nothing and asks for the sign-in", async () => {
+    const tab = unrecorded();
+    try {
+      sessionStatus = 401;
+      tab.socket.start();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(ScriptedWebSocket.dials).toHaveLength(0);
+      expect(fetches.filter((u) => u.endsWith("/auth/session"))).toHaveLength(1);
+      expect(currentSessionNeed()).toBe("sign_in");
+    } finally {
+      tab.uninstall();
+    }
   });
 });
 

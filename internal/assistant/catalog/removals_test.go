@@ -101,8 +101,9 @@ func unitArgs(body map[string]any, removes ...string) map[string]any {
 // on purpose is declared by the seat's path; a path named that the change
 // does not remove is refused; and a route that does not replace takes no
 // `removes`. The unit's own `id`, which its path names, is the route's to
-// fill. Mutation: skip [removalCheck], or compare against the body rather
-// than the read, and a case here fails.
+// fill, and every removal at fault, of either kind, is one refusal. Mutation:
+// skip [removalCheck], compare against the body rather than the read, or stop
+// at the first fault, and a case here fails.
 func TestAReplaceNeverRemovesByOmission(t *testing.T) {
 	t.Parallel()
 	change := replacingChange(t)
@@ -174,6 +175,16 @@ func TestAReplaceNeverRemovesByOmission(t *testing.T) {
 	_, err = change.Preview(t.Context(), read, wednesday, unitArgs(withAnalyst(nil), "lead"))
 	if got := refusal(err); !strings.Contains(got, "names lead, which this change does not remove") {
 		t.Errorf("a removal named but not made was refused with %q", got)
+	}
+	// BOTH FAULTS, EVERY PATH OF EACH, ARE ONE REFUSAL (ADR-0059): a removal
+	// the call does not declare beside two it declares and does not make.
+	noProject := withAnalyst(func(u map[string]any) { delete(u, "project") })
+	_, err = change.Preview(t.Context(), read, wednesday, unitArgs(noProject, "lead", "owner"))
+	if got := refusal(err); !strings.Contains(got, "would remove project from") ||
+		!strings.Contains(got, "names lead and owner, neither of which this change removes") ||
+		!strings.Contains(got, "Include them in the body") ||
+		!strings.Contains(got, "List in `removes` only") {
+		t.Errorf("an undeclared removal beside two unmade ones was refused with %q", got)
 	}
 
 	_, err = change.Preview(t.Context(), read, wednesday, map[string]any{

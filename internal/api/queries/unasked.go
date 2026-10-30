@@ -44,7 +44,7 @@ type WorkSearcher interface {
 // this package from the org its answer is made of, so the node that answers
 // never resolves a handle against an org the asker's may differ from.
 type SeatMemory interface {
-	Memory(ctx context.Context, seat memread.Seat, limit int) (memread.Memory, error)
+	Memory(ctx context.Context, seat memread.Seat, q memread.MemoryQuery) (memread.Memory, error)
 	Episode(ctx context.Context, seat memread.Seat, id string) (memread.EpisodeDetail, error)
 	Threads(ctx context.Context, seat memread.Seat, conversation string, limit int) (memread.Threads, error)
 	Overview(ctx context.Context, seats []memread.Seat) (memread.Overview, error)
@@ -97,8 +97,8 @@ func (s Sources) workSearch(ctx context.Context, p Params) (any, error) {
 			"mode":      string(mode),
 			"available": false,
 			"reason":    "building",
-			"note": "this node joined recently and is still indexing the company's work — " +
-				"items that exist are simply not findable from here yet",
+			"note": "this node joined recently and is still indexing the company's work, " +
+				"so items that exist are simply not findable from here yet",
 		}
 		outcome(out, knowledge.Outcome{})
 		return out, nil

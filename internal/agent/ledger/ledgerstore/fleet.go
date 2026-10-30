@@ -1,9 +1,10 @@
 // Package ledgerstore persists the turn engine's two cross-turn ledgers.
 //
 // A subpackage rather than more files in ledger, so ledger keeps the property
-// its own doc claims: it imports nothing from crewlet. The turn context, the
-// prompt builder and the API layer all hold ledger VALUES, and a package that
-// dragged a database behind it would be held by all three.
+// its own doc claims: it imports nothing from crewlet but a standard-library
+// leaf. The turn context, the prompt builder and the API layer all hold ledger
+// VALUES, and a package that dragged a database behind it would be held by all
+// three.
 //
 // THE TWO LEDGERS LIVE IN DIFFERENT PLACES, and the split is what each is
 // for:

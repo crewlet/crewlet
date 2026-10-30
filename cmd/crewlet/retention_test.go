@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -71,6 +74,7 @@ func (n *fakeRetentionNode) lastGate() url.Values {
 func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 	t.Helper()
 	n := &fakeRetentionNode{}
+	logs := identityLogs(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /query/retention", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -130,16 +134,7 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 					return
 				}
 				result := engine.GateResult{Node: r.PathValue("node"), OpID: opID,
-					Domains: []engine.DomainGate{
-						{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
-							OpID: opID + ".evict.tracker", Outcome: statelog.OutcomeApplied,
-							Position: statelog.Position{
-								Stream: "CREWLET_TRACKER_LOG", Seq: 918280002}},
-						{Domain: "pages", Stream: "CREWLET_PAGES_LOG",
-							OpID: opID + ".evict.pages", Outcome: statelog.OutcomeApplied,
-							Position: statelog.Position{
-								Stream: "CREWLET_PAGES_LOG", Seq: 4410}},
-					}}
+					Domains: everyLogApplied(logs, opID, verb, r.PathValue("node"))}
 				if n.gateResult != nil {
 					result.Domains = n.gateResult.Domains
 				}
@@ -152,6 +147,50 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 	n.server = httptest.NewServer(asEngine(mux))
 	t.Cleanup(n.server.Close)
 	return n
+}
+
+// identityLogs is every log a node's gate gesture writes: each
+// identity-claiming domain of the register, in its order.
+//
+// DERIVED FROM THE REGISTER rather than typed here: the fake answered for two
+// logs while every node writes three, so the command was never shown the
+// identity estate's line, and a domain the register gains would have stayed
+// out of it too.
+func identityLogs(t *testing.T) []statelog.Domain {
+	t.Helper()
+	var out []statelog.Domain
+	for _, domain := range engine.Domains() {
+		if domain.ClaimsIdentity() {
+			out = append(out, domain)
+		}
+	}
+	if len(out) < 7 {
+		t.Fatalf("the register holds %d identity-claiming log(s), fewer than the "+
+			"tracker's, the knowledge base's, the identity estate's, the "+
+			"artifacts log's, the artifact datastore's, the assistant's and chat's",
+			len(out))
+	}
+	return out
+}
+
+// everyLogApplied is a gesture applied on every one of logs, each under the
+// operation id the engine derives for it and at a position of its own: the
+// first log's at the fixtures' usual height, and every later one's a multiple
+// of the knowledge base's.
+func everyLogApplied(logs []statelog.Domain, opID, verb, node string) []engine.DomainGate {
+	out := make([]engine.DomainGate, 0, len(logs))
+	for i, domain := range logs {
+		stream := domain.Stream().Name
+		seq := uint64(918280002)
+		if i > 0 {
+			seq = uint64(4410 * i)
+		}
+		out = append(out, engine.DomainGate{Domain: domain.Name(), Stream: stream,
+			OpID:     statelog.StepOpID(opID, verb, domain.Name()+":"+node),
+			Outcome:  statelog.OutcomeApplied,
+			Position: statelog.Position{Stream: stream, Seq: seq}})
+	}
+	return out
 }
 
 // blockedReport is a fleet whose trim is held by the backup term — the state a
@@ -399,12 +438,14 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 	report.Alarms = []statelog.Alarm{
 		{
 			Kind:   statelog.KindBackupAge,
-			Detail: "no verified backup has been recorded, and the policy asks for one every 24h",
+			Detail: "no verified backup of this log has been recorded, and the policy asks for one every 24h",
 			Remedy: "Run `crewlet backup` against any node.",
 			Domains: []statelog.AlarmDomain{
-				{Domain: "tracker", Detail: "the trim has not advanced for 46h, and the log is " +
+				{Domains: []string{"tracker"}, Detail: "no verified backup of this log has been recorded, and the " +
+					"policy asks for one every 24h; the trim has not advanced for 46h, and the log is " +
 					"keeping up to 1200 record(s) older than its 24h replay window", Term: statelog.TermBackupFloor},
-				{Domain: "pages", Detail: "the trim has not advanced for 46h, and the log is " +
+				{Domains: []string{"pages"}, Detail: "the newest verified backup of this log is 46h old, and the " +
+					"policy asks for 24h; the trim has not advanced for 46h, and the log is " +
 					"keeping up to 7 record(s) older than its 24h replay window", Term: statelog.TermBackupFloor},
 			},
 		},
@@ -412,7 +453,7 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 			Kind:    statelog.KindLogHeadroom,
 			Detail:  "3% of the log's byte ceiling for ordinary writes is left",
 			Remedy:  "Raise the log's ceiling.",
-			Domains: []statelog.AlarmDomain{{Domain: "vectors", Detail: "3% of the log's byte ceiling for ordinary writes is left"}},
+			Domains: []statelog.AlarmDomain{{Domains: []string{"vectors"}, Detail: "3% of the log's byte ceiling for ordinary writes is left"}},
 		},
 	}
 	node.report = report
@@ -422,9 +463,11 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 		t.Fatal("two active alarms exited zero")
 	}
 	for _, want := range []string{
-		"backup_age: no verified backup has been recorded",
-		"  tracker (backup_floor): the trim has not advanced for 46h, and the log is keeping up to 1200 record(s)",
-		"  pages (backup_floor): the trim has not advanced for 46h, and the log is keeping up to 7 record(s)",
+		"backup_age: no verified backup of this log has been recorded",
+		"  tracker (backup_floor): no verified backup of this log has been recorded",
+		"keeping up to 1200 record(s)",
+		"  pages (backup_floor): the newest verified backup of this log is 46h old",
+		"keeping up to 7 record(s)",
 		"log_headroom on vectors: 3% of the log's byte ceiling for ordinary writes is left",
 	} {
 		if !strings.Contains(stderr, want) {
@@ -436,22 +479,79 @@ func TestRetentionStatusPrintsTheLogsAnAlarmStandsOn(t *testing.T) {
 	}
 }
 
-// MAINTENANCE IS PRINTED ABOVE EVERYTHING, because while it is open every
-// number below it describes a fleet in which nothing is running: no seats, no
-// duties, no scheduler, no write routes. It was visible on no surface at all —
-// an operator watching a company go completely quiet had nothing to read that
-// said why, and the alarm that names it only fires after an hour of it.
+// A MEASUREMENT TAKEN ALIKE ON EVERY LOG IS PRINTED ONCE, naming them.
+//
+// A deployment minutes old has no backup of any log, and the report measured
+// that in the same sentence on each: printed as the headline and then once per
+// log, it said one fact six times. The report carries it once, naming the
+// logs, and this prints what it is given — read here off the engine's own
+// rendering (internal/api/testdata/retention_alarms.json, `make
+// retention-alarms`), so a report that went back to an entry per log fails
+// this rather than a fixture typed to agree with the printer.
+//
+// Mutation: carry each log's entry on its own again in the report, regenerate
+// the golden, and the sentence is printed six times.
+func TestRetentionStatusPrintsAYoungFleetsMissingBackupOnce(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join(sourcetree.Root(t), "internal", "api",
+		"testdata", "retention_alarms.json"))
+	if err != nil {
+		t.Fatalf("read the engine's retention alarms: %v", err)
+	}
+	var golden struct {
+		Alarms map[string][]statelog.Alarm `json:"alarms"`
+	}
+	if err := json.Unmarshal(raw, &golden); err != nil {
+		t.Fatalf("decode the engine's retention alarms: %v", err)
+	}
+	young := golden.Alarms["young"]
+	if len(young) != 1 || young[0].Kind != statelog.KindBackupAge || len(young[0].Domains) == 0 {
+		t.Fatalf("the young fleet's alarms are %+v, want backup_age standing on its logs", young)
+	}
+	var logs []string
+	for _, d := range young[0].Domains {
+		logs = append(logs, d.Domains...)
+	}
+	if len(logs) < 2 {
+		t.Fatalf("the young fleet's backup_age stands on %v; this case needs several logs", logs)
+	}
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Alarms = young
+	node.report = report
+
+	_, stderr, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err == nil {
+		t.Fatal("an active alarm exited zero")
+	}
+	headline := "backup_age on " + strings.Join(logs, ", ") + ": " + young[0].Detail
+	if !strings.Contains(stderr, headline) {
+		t.Errorf("stderr never says %q:\n%s", headline, stderr)
+	}
+	if n := strings.Count(stderr, young[0].Detail); n != 1 {
+		t.Errorf("the young fleet's missing backup is printed %d times, want once "+
+			"naming every log:\n%s", n, stderr)
+	}
+}
+
+// MAINTENANCE IS PRINTED ABOVE EVERYTHING, because while it is open the fleet
+// is held: no node starts in service, and every node restarted for it runs no
+// seats, duties, scheduler or write routes. It was visible on no surface at
+// all: an operator watching a company go quiet had nothing to read that said
+// why, and the alarm that names it only fires after an hour of it. Only a node
+// in service answers this page, so its line says what holds the fleet, never
+// that nothing is publishing.
 func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report.Maintenance = &statelog.MaintenanceReport{
+	report.Maintenance = []statelog.MaintenanceReport{{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
 		Phase: "observe", Attempt: 2,
 		TargetMaxBytes: 2000000000, OriginalMaxBytes: 1000000000,
 		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC), By: "sre@example.com",
 		ParticipantsMissing: []string{"node-4", "node-7"},
-	}
+	}}
 	node.report = report
 
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
@@ -463,11 +563,52 @@ func TestRetentionStatusLeadsWithAnOpenMaintenanceWindow(t *testing.T) {
 		t.Errorf("the first line is %q — a blocked trim read without knowing "+
 			"nothing is running sends an operator after the wrong thing", first)
 	}
+	if strings.Contains(first, "no publisher") ||
+		!strings.Contains(first, "no node starts in service until it closes") {
+		t.Errorf("the first line is %q, want it to say what holds the fleet and "+
+			"never that nothing is publishing, which is false of the node printing it",
+			first)
+	}
 	for _, want := range []string{"observe", "attempt 2", "sre@example.com",
-		"node-4, node-7"} {
+		`"node-4" and "node-7"`} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the report never mentions %q:\n%s", want, stdout)
 		}
+	}
+}
+
+// EVERY OPEN WINDOW IS PRINTED, each with what it waits on. A window is per
+// log and two can be open at once; printed as the oldest alone, the other's
+// outstanding nodes went unsaid until the first had closed.
+//
+// Mutation: print the first window alone and the pages log's line is missing.
+func TestRetentionStatusPrintsEveryOpenWindow(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Maintenance = []statelog.MaintenanceReport{{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9", Phase: "sealing", Attempt: 1,
+		Since:               time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
+		ParticipantsMissing: []string{"node-4"},
+	}, {
+		Stream: "CREWLET_PAGES_LOG", OperationID: "op-10", Phase: "sealing", Attempt: 1,
+		Since:               time.Date(2031, 4, 2, 3, 0, 0, 0, time.UTC),
+		ParticipantsMissing: []string{"node-7"},
+	}}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	tracker := strings.Index(stdout, "MAINTENANCE IS OPEN on CREWLET_TRACKER_LOG")
+	pages := strings.Index(stdout, "MAINTENANCE IS OPEN on CREWLET_PAGES_LOG")
+	if tracker < 0 || pages < tracker {
+		t.Fatalf("the report does not lead with both windows, the oldest first:\n%s", stdout)
+	}
+	if !strings.Contains(stdout[tracker:pages], `waiting on "node-4"`) ||
+		!strings.Contains(stdout[pages:], `waiting on "node-7"`) {
+		t.Errorf("each window does not say what it waits on:\n%s", stdout)
 	}
 }
 
@@ -478,11 +619,11 @@ func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 	t.Parallel()
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report.Maintenance = &statelog.MaintenanceReport{
+	report.Maintenance = []statelog.MaintenanceReport{{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
 		Phase: "sealed", Attempt: 1,
 		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
-	}
+	}}
 	node.report = report
 
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
@@ -495,6 +636,38 @@ func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 	}
 }
 
+// A WINDOW HELD BY AN ADMISSION SAYS SO, AHEAD OF WHO IT WAITS ON.
+//
+// At opened every node can have restarted and the window still wait on one
+// node's stale admission, which no participant owes. The banner said only
+// "waiting on" every participant, so a reader went looking for restarts that
+// had happened. And a window held only by an admission is not waiting on its
+// operator. Mutation: drop the admission line, or print the operator line
+// beside it, and this fails.
+func TestAWindowHeldByAnAdmissionSaysSo(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Maintenance = []statelog.MaintenanceReport{{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
+		Phase: "opened", Attempt: 1,
+		Since:              time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
+		AdmissionsBlocking: []string{"node-3"},
+	}}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if want := `held by an admission from "node-3": nothing is sent while it stands.`; !strings.Contains(stdout, want) {
+		t.Errorf("the banner never says %q:\n%s", want, stdout)
+	}
+	if strings.Contains(stdout, "waiting on its operator") {
+		t.Errorf("a window held by an admission is said to wait on its operator:\n%s", stdout)
+	}
+}
+
 // AN ABANDONED WINDOW SAYS WHOSE DECISION IT IS STILL CARRYING OUT.
 //
 // Abandoning from anywhere but `opened` keeps the window — and the fleet in it —
@@ -503,14 +676,16 @@ func TestAnOperationWithNobodyOutstandingSaysWhoItIsWaitingFor(t *testing.T) {
 func TestAnAbandonedWindowSaysWhoAbandonedIt(t *testing.T) {
 	node := newFakeRetentionNode(t)
 	report := blockedReport()
-	report.Maintenance = &statelog.MaintenanceReport{
+	report.Maintenance = []statelog.MaintenanceReport{{
 		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
 		Phase: "sealing", Attempt: 1,
 		Since: time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
-		By:    "sre@example.com", Blocked: "abandoned_by_operator",
+		By:    "sre@example.com", Blocked: coord.BlockAbandoned,
+		BlockedDetail: "This window was abandoned, so it's no longer trying to " +
+			"reach 8.0 GiB.",
 		AbandonedBy: coord.MaintenanceParty{By: "ana.admin",
 			OperatorID: "pat:0192f00d-0000-7000-8000-00000000000a"},
-	}
+	}}
 	node.report = report
 
 	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
@@ -519,6 +694,92 @@ func TestAnAbandonedWindowSaysWhoAbandonedIt(t *testing.T) {
 	}
 	if want := "abandoned by ana.admin (through pat:0192f00d-0000-7000-8000-00000000000a)"; !strings.Contains(stdout, want) {
 		t.Errorf("the banner never says %q:\n%s", want, stdout)
+	}
+	// AND WHY IT IS BLOCKED IN THE NODE'S SENTENCE, never the block's code,
+	// which told a person nothing. Mutation: print m.Blocked and this fails.
+	if strings.Contains(stdout, string(coord.BlockAbandoned)) {
+		t.Errorf("the banner prints the block's code:\n%s", stdout)
+	}
+	if want := "This window was abandoned, so it's no longer trying"; !strings.Contains(stdout, want) {
+		t.Errorf("the banner never says %q:\n%s", want, stdout)
+	}
+}
+
+// A WINDOW THE NODE COULDN'T READ IS SAID, never left out.
+//
+// The page printed the report's open windows alone, so a log whose window the
+// node couldn't read printed nothing, which reads as a log with no window open
+// during exactly the coordination outage that stops the read. Mutation: drop
+// the line and the want goes red.
+func TestAWindowTheNodeCouldNotReadIsSaid(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.MaintenanceUnread = []string{"CREWLET_PAGES_LOG", "CREWLET_TRACKER_LOG"}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	for _, want := range []string{`This node couldn't read whether a capacity window ` +
+		`is open on "CREWLET_PAGES_LOG" and "CREWLET_TRACKER_LOG". A data node ` +
+		`restarted now won't start in service until it can read it.`,
+		"-stream <log>` asks again for one of them."} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the page never says %q:\n%s", want, stdout)
+		}
+	}
+	// THE ANSWERING NODE IS IN SERVICE, so nothing here says publishing may
+	// be paused. Mutation: say it again.
+	if strings.Contains(stdout, "publishing") {
+		t.Errorf("the page says publishing may be paused, which is false of the "+
+			"node answering it:\n%s", stdout)
+	}
+
+	// ONE LOG IS NAMED IN THE COMMAND that asks again.
+	report.MaintenanceUnread = []string{"CREWLET_PAGES_LOG"}
+	node.report = report
+	stdout, _, err = cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	if want := "`crewlet retention maintenance status -stream CREWLET_PAGES_LOG` " +
+		"asks again.\n"; !strings.Contains(stdout, want) {
+		t.Errorf("the page never says %q:\n%s", want, stdout)
+	}
+}
+
+// WHAT A WINDOW'S PAGE COULDN'T READ IS SAID AS THAT, never printed as a list.
+// The acknowledgements and the admissions are read beside each window, and an
+// unreadable register printed as an empty list said the window was waiting on
+// its operator, or on nobody's admission. Mutation: print the lists whatever
+// the flags say.
+func TestAWindowsUnreadPartsAreSaid(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	report := blockedReport()
+	report.Maintenance = []statelog.MaintenanceReport{{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "op-9",
+		Phase: "opened", Attempt: 1,
+		Since:      time.Date(2031, 4, 2, 2, 0, 0, 0, time.UTC),
+		AcksUnread: true, AdmissionsUnread: true,
+	}}
+	node.report = report
+
+	stdout, _, err := cli(t, "retention", "status", bootstrapForURL(t, node.server.URL))
+	if err != nil {
+		t.Fatalf("retention status: %v", err)
+	}
+	for _, want := range []string{"couldn't read whether an admission is holding it.",
+		"couldn't read which nodes have restarted for it, so who it's waiting on is unknown."} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the page never says %q:\n%s", want, stdout)
+		}
+	}
+	if strings.Contains(stdout, "waiting on its operator") {
+		t.Errorf("a window whose registers couldn't be read is said to wait on its "+
+			"operator:\n%s", stdout)
 	}
 }
 
@@ -780,7 +1041,7 @@ func TestAGateGestureThatMissedALogSaysHowToFinishIt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"pages: unknown (this node cannot tell",
-		"run it through another node the fleet still counts: -url <that node> -op-id " + gesture,
+		"run it through another node the fleet still counts: -api <that node> -op-id " + gesture,
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the unvouched log's output never says %q:\n%s", want, stdout)
@@ -870,12 +1131,13 @@ func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 			fmt.Errorf("engine: readmit node node-4: %w", &engine.ReadmissionUnjudged{
 				Node: "node-4",
 				Err:  errors.New("read the positions register: coordination is unreachable")})},
+		// THE ENGINE'S OWN ERROR, whose told sentence is the detail this
+		// command prints: a hand-built ErrNotPublishing told nothing, so
+		// the line the operator reads was never exercised.
 		{"an eviction in a capacity window", "evict", "not_publishing",
-			fmt.Errorf("%w: an eviction appends a record to the state log, and this "+
-				"node runs in seal mode", engine.ErrNotPublishing)},
+			engine.NotPublishing("an eviction", statelog.ModeSeal)},
 		{"a readmission in a capacity window", "readmit", "not_publishing",
-			fmt.Errorf("%w: a readmission appends a record to the state log, and this "+
-				"node runs in seal mode", engine.ErrNotPublishing)},
+			engine.NotPublishing("a readmission", statelog.ModeSeal)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			node.mu.Lock()
@@ -896,6 +1158,13 @@ func TestAGateRefusalsWaitNamesWhatItWaitsOn(t *testing.T) {
 					t.Errorf("a %s refusal carries %s's advice %q: %v\n%s", c.code,
 						code, line, got, said)
 				}
+			}
+			// The node capitalises the sentence, so it is matched from its
+			// second letter.
+			if told, ok := statelog.Tell(c.err); ok && c.code == "not_publishing" &&
+				!strings.Contains(said, told[1:]) {
+				t.Errorf("the refusal never prints the engine's own sentence %q:\n%s",
+					told, said)
 			}
 		})
 	}
@@ -934,6 +1203,32 @@ func TestAGateTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 	}
 	if want := "-op-id " + sent + " -force"; !strings.Contains(stderr, want) {
 		t.Errorf("the unanswered gesture never says %q:\n%s", want, stderr)
+	}
+}
+
+// A GESTURE'S OPERATION NAMES ITS NODE IN ONE STEP OF THE GRAMMAR, whatever
+// the node's id holds.
+//
+// A node id may hold dots, and in the grammar a dot begins a step, so the
+// name `evict-node-a.b` read as the name `evict-node-a` with a step `b`. The
+// node goes into the name the way the route's does ([statelog.OpNamePart]).
+//
+// Mutation: compose the name from the bare node and the id is named another
+// way than the route's.
+func TestAGestureNamesADottedNodeInOneStep(t *testing.T) {
+	t.Parallel()
+	node := newFakeRetentionNode(t)
+	base := bootstrapForURL(t, node.server.URL)
+	node.hangUp = true
+
+	if _, _, err := cli(t, "retention", "evict", "node-a.b", base,
+		"-confirm", "node-a.b", "-force"); err == nil {
+		t.Fatal("a gesture the node never answered exited zero")
+	}
+	sent := node.lastGate().Get("op_id")
+	if want := "evict-" + statelog.OpNamePart("node-a.b"); !statelog.OpNamed(sent, want) {
+		t.Errorf("the command sent op_id %q, want one named %q — the node's own "+
+			"dot read as a step of the gesture", sent, want)
 	}
 }
 
@@ -1051,7 +1346,7 @@ func TestReadmittingANodeBelowTheFloorIsRefused(t *testing.T) {
 	base := "http://127.0.0.1:" + strconv.Itoa(boot.API.Port)
 	// THE FIXTURE'S OWN CREDENTIAL, through the environment [cli] sets:
 	// the command takes one there and nowhere else.
-	node := []string{"-url", base}
+	node := []string{"-api", base}
 	deadline := time.Now().Add(20 * time.Second)
 	for !e.StateLogHydrated(t.Context()) {
 		if time.Now().After(deadline) {

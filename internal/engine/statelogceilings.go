@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
@@ -69,8 +70,9 @@ type domainCeiling struct {
 	// Floor is the smallest value Field accepts, which is how far "set it
 	// to a smaller ceiling" can reach. Declared by the register entry
 	// beside Field, because the floor is the FIELD's (Tier A validates
-	// it) and not the budget's: [MinDomainCeiling] is where scaling stops,
-	// and the identity log's and the usage log's fields go well below it.
+	// it) and not the budget's: [MinDomainCeiling] is where scaling stops
+	// unless the entry declares ScalesTo, and the identity log's, the usage
+	// log's and the Dashboard Assistant's fields go well below it.
 	// A refusal that offered a smaller ceiling only above that gibibyte
 	// never offered one for a 512 MiB ask whose field takes 64 MiB.
 	Floor int64
@@ -112,17 +114,20 @@ func (c domainCeiling) scaleFloor() int64 {
 // it is a company that cannot claim a seat.
 const StreamBudgetShare = 0.5
 
-// MinDomainCeiling is the floor a scaled-down ceiling never goes below.
+// MinDomainCeiling is the floor a scaled-down ceiling never goes below, unless
+// its register entry declares a lower one ([domainCeiling.ScalesTo]).
 //
 // A gibibyte, which is the floor Tier A's own validation enforces on the
-// CORPUS-SIZED logs' fields — the tracker's, the vector changelog's and the
-// knowledge base's — because below it a log that grows with a corpus is not a
-// log, it is a window that refuses appends within a week of a company starting
-// work. It is where SCALING stops and it is nobody's floor but theirs: the
-// identity estate's and the usage log's fields go down to 64 MiB,
-// a log that asks for less than this keeps what it asked for because scaling
-// never raises, and the capacity verb holds a target to the floor of the log's
-// own field ([capacityBounds]), never to this.
+// CORPUS-SIZED logs' fields — the tracker's, the vector changelog's, the
+// knowledge base's, the artifacts log's, the artifact datastore's and chat's —
+// because below it a log that grows with a corpus is not a log, it is a window
+// that refuses appends within a week of a company starting work. It is where
+// SCALING stops and it is nobody's floor but theirs: the identity estate's,
+// the usage log's and the Dashboard Assistant's fields go down to 64 MiB, the
+// assistant's entry lets scaling take its unset ceiling down to that floor,
+// any other log that asks for less than a gibibyte keeps what it asked for
+// because scaling never raises, and the capacity verb holds a target to the
+// floor of the log's own field ([capacityBounds]), never to this.
 const MinDomainCeiling int64 = 1 << 30
 
 // tierACeiling is where Tier A puts one domain's ceiling on a volume with free
@@ -154,6 +159,17 @@ const MinDomainCeiling int64 = 1 << 30
 // trailing window — the corpus grows every year the company exists — so an
 // unset one takes the same share of the volume the mutation log derives,
 // whatever the mutation log is set to (config.Stream.VectorsMaxBytes).
+//
+// The chat log holds a trailing window too, and it is the one such log that
+// does NOT follow the mutation log's ceiling: it grows faster than the mutation
+// log, so following it at that ratio would make it the largest ask here, and
+// the proportional division below would then create the vector changelog under
+// a model change on the volumes most deployments have
+// ([config.Stream.ChatLogMaxBytes] has the figures and what they cost). So it
+// asks for a fixed excursion budget, capped on a small volume at a quarter of
+// that same share ([config.DerivedChatLogDivisor]) — see [chatMaxBytes], which
+// is also where the one asymmetry among these is written down: chat's default
+// is the DOMAIN's rather than config's.
 func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (domainCeiling, error) {
 	entry, found := registrationFor(domain.Name())
 	if !found || entry.Ceiling == nil {
@@ -164,6 +180,46 @@ func tierACeiling(stream config.Stream, domain statelog.Domain, free int64) (dom
 	ceiling := entry.Ceiling(stream, free)
 	ceiling.FollowsVolume = followsVolume(entry, stream)
 	return ceiling, nil
+}
+
+// chatMaxBytes is the chat log's ask, and whether it was derived.
+//
+// # Why this one is not a method on config.Stream like the others
+//
+// The number an unset value asks for is DECLARED BY THE DOMAIN —
+// [chatlet.ChatLogMaxBytes], beside the census it is derived from — and
+// internal/config cannot import internal/chatlet. The mutation log's, the
+// knowledge base's and the vector changelog's have no such home: they are
+// arithmetic over the disk, or over each other. Copying 8 GiB into config so
+// this could look like its siblings would be the drift `internal/textcut` and
+// `internal/whsec` each exist to record: two spellings of one number, each doc
+// comment asserting it matches the other, with nothing enforcing it.
+//
+// # And why an UNSET value is capped by the disk, at a quarter of the share
+//
+// The declared default is a number chosen for an EXCURSION — here a
+// completely blocked trim — rather than for this machine, and a broker refuses
+// a reservation it cannot back. So an unset value is capped by the disk and
+// the node boots; an operator who WROTE a number gets it, because they named a
+// ceiling for a disk they can see.
+//
+// The cap is a QUARTER of the share of free space the mutation log derives
+// from, not the whole of it, because the fit below scales every derived ask in
+// proportion and this one is paid for out of the vector changelog's room for a
+// model change — an excursion designed not to alarm. Capped at the whole share
+// the 8 GiB was asked for in full on a 64 GiB volume, and the changelog was
+// created where the reference company's fifth-year re-embedding bottoms under
+// the headroom alarm; [config.DerivedChatLogDivisor] has the figures and what
+// the quarter costs this log. And never below the field's own floor
+// ([config.ChatLogMaxBytesFloor]), so a node never derives a ceiling its own
+// validation would refuse to be told.
+func chatMaxBytes(stream config.Stream, free int64) (int64, bool) {
+	if stream.ChatLogMaxBytes > 0 {
+		return stream.ChatLogMaxBytes, false
+	}
+	capped := min(int64(chatlet.ChatLogMaxBytes),
+		config.DerivedLogMaxBytes(free)/config.DerivedChatLogDivisor)
+	return max(capped, config.ChatLogMaxBytesFloor), true
 }
 
 // followsVolume reports whether entry's ceiling, left unset, is derived from
@@ -385,20 +441,21 @@ func sizeCeilings(ctx context.Context, host domainHost, stream config.Stream,
 // ONE RULE FOR EVERY BROKER: the limit, less every reservation the broker has
 // granted to a stream that is not a state log. Where the broker states its
 // limit, that is what it has left with the logs' own ceilings (holding) added
-// back. Where it states none this node can read, the stream volume's free
-// space stands in for the limit, and what the broker reports reserved beyond
-// the logs' own (the object bucket's, say) comes off it: free space already
-// contains the logs' ceilings, because a reservation never spends it, but no
-// byte of it can be granted twice. A budget that could not be read reports no
-// reservation, so free space is all this node has.
+// back. Where it states none this node can read, the cap such a server holds
+// on the stream volume's free space ([unstatedLimit]) stands in for the limit,
+// and what the broker reports reserved beyond the logs' own (the object
+// bucket's, say) comes off it: free space already contains the logs' ceilings,
+// because a reservation never spends it, but no byte of it can be granted
+// twice. A budget that could not be read reports no reservation, so that cap
+// is all this node has.
 func logsGrantable(budget jetstream.StorageBudget, readErr error, free, holding int64) int64 {
 	if readErr != nil {
-		return free
+		return unstatedLimit(free)
 	}
 	if available := budget.Available(); available >= 0 {
 		return available + holding
 	}
-	return max(free-max(budget.Committed-holding, 0), 0)
+	return max(unstatedLimit(free)-max(budget.Committed-holding, 0), 0)
 }
 
 // heldCeiling is one log's answer to [domainHost.DomainStreamCeiling]: the
@@ -705,16 +762,19 @@ func (s *stateLog) specOf(domain statelog.Domain) (statelog.StreamSpec, domainCe
 // logs at their floors and the nats object bucket, with the setting that
 // moves the bucket.
 //
-// # Where the ceiling came from, in one of three words
+// # Where the ceiling came from, in one of four words
 //
-// SET, DERIVED or FIXED, because each says something different about what a
-// smaller one costs. A set ceiling is the operator's. A derived one followed
-// the volume's free space and was scaled into the logs' share of the broker,
-// and scaling stops at [MinDomainCeiling]. A fixed one is the log's own
-// default — the identity estate's and the usage log's, which do not follow the
-// volume and whose fields go below the gibibyte. Reading every unset ceiling as
-// derived told an operator refused a 512 MiB identity log that it went no
-// lower than a gibibyte, and withheld the smaller ceiling its field accepts.
+// SET, DERIVED, SCALED or FIXED, because each says something different about
+// what a smaller one costs. A set ceiling is the operator's. A derived one
+// followed the volume's free space and was scaled into the logs' share of the
+// broker, and scaling stops at [MinDomainCeiling]. A scaled one is the log's
+// own default scaled into that share down to its field's floor
+// ([domainCeiling.ScalesTo]): the Dashboard Assistant's. A fixed one is the
+// log's own default and nothing else: the identity estate's and the usage
+// log's, which do not follow the volume and whose fields go below the
+// gibibyte. Reading every unset ceiling as derived told an operator refused a
+// 512 MiB identity log that it went no lower than a gibibyte, and withheld the
+// smaller ceiling its field accepts.
 //
 // The budget is read AGAIN, at the refusal, rather than carried from sizing:
 // the logs created before this one have reserved since, and the number that

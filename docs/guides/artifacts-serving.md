@@ -76,8 +76,9 @@ at `INFO` (`api_artifacts_not_bound`). In a fleet,
 every ingress node that serves the dashboard should serve artifacts too, behind
 the same load balancer, so a viewer's dashboard and its frames reach a node
 either way. A node serving artifacts needs nothing else: it reads artifact rows
-from the estate (through a data node if it holds none) and bytes from the
-object store, exactly as every node does.
+from its own copy of the estate (`ingress` requires `data`, so every node that
+binds the origin holds one) and bytes from the object store, exactly as every
+node does.
 
 `external_url` decides the **origin mode**, and `crewlet validate` checks it:
 

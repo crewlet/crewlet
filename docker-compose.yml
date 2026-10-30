@@ -220,7 +220,7 @@ services:
 
   # THE ONLY DATABASE IN THIS FILE, and it is Mattermost's, not the
   # engine's. Mattermost requires PostgreSQL; the engine requires no
-  # database service at all — its store is a local file it creates and
+  # database service at all — its store is two local files it creates and
   # owns exclusively — so there is nothing here for this instance to be
   # shared with, and `down -v` on this profile costs a clean chat
   # instance and nothing the engine holds.

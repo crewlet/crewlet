@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ChainHash is the stable identity of where a seat sits in the org: the
@@ -436,7 +437,7 @@ func Hint(o *org.Organization, r *org.Role) string {
 		"knowledge-base tools and skipping an area that has none:\n" +
 		strings.Join(bullets, "\n") + "\n\n" +
 		"Keep each convention you should apply from now on with " +
-		"`reflect_and_persist`, as a declarative fact rather than an " +
-		"instruction to yourself. Then call `mark_onboarded` with a one-line " +
+		"`" + toolname.ReflectAndPersist + "`, as a declarative fact rather than an " +
+		"instruction to yourself. Then call `" + toolname.MarkOnboarded + "` with a one-line " +
 		"summary."
 }

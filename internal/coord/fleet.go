@@ -1030,8 +1030,8 @@ type Fires interface {
 // delivers a batch whose acknowledgement was lost AGAIN, to whichever member
 // asks next — so without a decision a batch can land in two logs, and every
 // figure derived from a node's own log counts it twice: the usage domain sums
-// each node's day, so a stateless node's spend would be billed once per data
-// node that happened to write it.
+// each data node's day, so a stateless node's spend would be billed once per
+// data node that happened to write it.
 //
 // # Create-only, written AFTER the rows, and the loser deletes
 //
@@ -1424,12 +1424,11 @@ type Secrets interface {
 //
 // # No retention
 //
-// The bucket has no age, for the reason the budget counter has none: a status
-// is standing state rather than a short-horizon question. One that expired
-// would make a converged integration read as one nobody has ever looked at,
-// on a timer nobody chose, and the loop would then re-provision against a
-// third-party app it had already agreed with. There are at most as many keys
-// here as there are surfaces, so nothing grows.
+// The bucket has no age, because a status is standing state rather than a
+// short-horizon question. One that expired would make a converged integration
+// read as one nobody has ever looked at, on a timer nobody chose, and the loop
+// would then re-provision against a third-party app it had already agreed with.
+// There are at most as many keys here as there are surfaces, so nothing grows.
 type Integrations interface {
 	// IntegrationStatuses returns every recorded status, keyed by the
 	// surface it describes.
@@ -1606,13 +1605,14 @@ type Mailboxes interface {
 //
 // A KV backend removes a key by appending a delete or purge MARKER, and a
 // bucket the broker ages takes the marker with everything else when it ages
-// out. The families above that no clock may reap — the runs, the channels,
-// the mailboxes, the secrets, the budgets, the integration statuses, the
-// positions register — keep every marker for the life of the deployment, and
-// each one is a leader read on every listing that meets it (internal/coord/kv
-// walk.go says why a marker is read again rather than trusted). So the
-// markers are swept, as a DECISION under the maintenance duty, for the reason
-// the channels are: a bucket's age cannot express which records may go.
+// out. The families here that no clock may reap — the activation pointer, the
+// runs, the channels, the mailboxes, the secrets, the integration statuses, the
+// object store's backend record, the positions register, the chat read state —
+// keep every marker for the life of the deployment, and each one is a leader
+// read on every listing that meets it (internal/coord/kv walk.go says why a
+// marker is read again rather than trusted). So the markers are swept, as a
+// DECISION under the maintenance duty, for the reason the channels are: a
+// bucket's age cannot express which records may go.
 //
 // # It changes no answer
 //
@@ -1642,6 +1642,7 @@ type Fleet interface {
 	Plane
 	Channels
 	Follows
+	ChatReads
 	Fires
 	Rebases
 	SandboxRuns
@@ -1766,23 +1767,38 @@ type TrashReaps interface {
 //
 // Every method's seat is the seat's handle, which is immutable (ADR-0013) —
 // what internal/notify's FollowStore hands in. This store resolves nothing; it
-// keys on the name it is given.
+// keys on the name it is given — and it RANKS nothing either: which of two
+// reasons is the stronger is internal/notify's vocabulary, so the caller
+// chooses and this store makes the choice safe against a concurrent one.
 //
-// # Three methods, and no purge
+// # Two methods, and nothing removes a follow
 //
 // Retention here is the BUCKET's age, like every other aged slot: every
 // re-assert rewrites the record, so the age is a true last-activity stamp and
-// the broker expires what has gone quiet. A sweep would have nothing to delete.
+// the broker expires what has gone quiet. A sweep would have nothing to
+// delete, and there is no unfollow either: no surface offers a person or a
+// seat a way to stop following a thread, so the age is the only thing that
+// ends a follow.
 type Follows interface {
-	// Follow records that a seat follows a thread, or refreshes an
-	// existing follow's reason.
+	// Follow records that a seat follows a thread, or refreshes the follow
+	// it has, and answers the reason the record holds afterwards.
 	//
-	// The reason is OVERWRITTEN rather than kept: a seat first pulled into
-	// a thread by a collective shout and later named personally is now
-	// following for the stronger reason, and an operator asking why it
-	// answered should see the mention rather than the shout that happened
-	// to come first.
-	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
+	// THE REASON IS CHOSEN AGAINST THE RECORD IT REPLACES: choose is handed
+	// the reason held, and whether a follow is held at all, and answers the
+	// reason to write — and the write lands only on the record choose was
+	// shown. One that loses to another writer reads again and asks again.
+	// A choice made from an earlier read is a decision about a record
+	// somebody may since have rewritten, and the reason decides whether a
+	// reply obliges an answer: a seat named in a thread a moment before a
+	// broadcast is written there must not be left following it for the
+	// broadcast. choose may run more than once, so it must be a pure
+	// function of what it is handed.
+	//
+	// EVERY CALL WRITES, an unchanged reason included, because the write is
+	// what moves the bucket's age: a follow refreshed only when its reason
+	// changed would expire in a thread the seat is still active in.
+	Follow(ctx context.Context, backend, seat, channel, thread string, at time.Time,
+		choose func(held string, following bool) string) (string, error)
 
 	// Following reports why a seat follows a thread, and whether it does.
 	//
@@ -1793,19 +1809,4 @@ type Follows interface {
 	// reply is quiet and self-healing where a spurious wake is a burst of
 	// turns that cannot be taken back.
 	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
-
-	// Unfollow drops a follow, reporting whether one was there.
-	//
-	// The counterpart of an explicit subscription: a seat told to stop
-	// watching a thread must actually stop, and waiting out the retention
-	// horizon is not stopping.
-	//
-	// SERIALIZABLE, which is the property both backends have to reach by
-	// different means: `true` is reported exactly when this call removed
-	// something, and every outcome is one some sequential order of the
-	// concurrent calls would have produced. A follow re-asserted while an
-	// unfollow is in flight is therefore removed, exactly as it is when the
-	// re-assert loses by a nanosecond — and the next mention re-follows
-	// through the ordinary path.
-	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 }

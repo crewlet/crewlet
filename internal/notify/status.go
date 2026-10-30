@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 )
@@ -92,13 +91,15 @@ const (
 	StatusOff StatusMode = "off"
 
 	// StatusAddressed is the default: exactly the cases where a person is
-	// plausibly waiting on THIS agent — a direct message, a personal
-	// mention, or a thread it already follows.
+	// plausibly waiting on THIS agent — whatever the backend's own
+	// [AddressRule] says, which is a direct message, a personal mention,
+	// or a thread the seat is in for one of those reasons.
 	//
-	// A broadcast and a passive top-level channel message are excluded
-	// deliberately. Every bot in the channel wakes on those and the triage
-	// prompt tells most of them to stay silent, so lighting up N
-	// indicators is noise rather than signal.
+	// A broadcast, a passive top-level channel message and a thread the
+	// seat merely spoke in are excluded deliberately. Every bot in the
+	// channel wakes on those and the triage prompt tells most of them to
+	// stay silent, so lighting up N indicators is noise rather than
+	// signal.
 	StatusAddressed StatusMode = "addressed"
 
 	// StatusAlways shows it on every chat-triggered turn, which is what a
@@ -114,13 +115,6 @@ func (m StatusMode) Valid() bool {
 	}
 	return false
 }
-
-// DirectChannelTypes are every chat backend's spelling of "this is a private
-// conversation, not a room".
-//
-// A normalised vocabulary each transport maps its own onto, so the decision
-// below never has to know a backend's id conventions.
-var DirectChannelTypes = []string{"im", "mpim", "D", "G"}
 
 // Conversation is the thread a status belongs to.
 type Conversation struct {
@@ -138,46 +132,29 @@ type Conversation struct {
 // the indicator the person is watching stays the one that clears.
 //
 // Raising a status needs a THREAD ANCHOR, and a top-level message has no
-// thread yet — so its own id is the anchor. That is the same value the chat
-// prompt tells the agent to reply under, which is what makes the indicator
-// appear where the reply will land rather than somewhere else in the channel.
+// thread yet — so its own id is the anchor. Through [Anchor], which is the
+// same value the chat prompt tells the agent to reply under: that is what
+// makes the indicator appear where the reply will land rather than somewhere
+// else in the channel.
 func ConversationOf(metadata map[string]string, backend string) (Conversation, bool) {
 	if len(metadata) == 0 || backend == "" || metadata[TransportField] != backend {
 		return Conversation{}, false
 	}
-	channel := metadata["channel"]
-	anchor := metadata["thread_ts"]
-	if anchor == "" {
-		anchor = metadata["ts"]
-	}
+	channel, anchor := metadata[ChannelField], Anchor(metadata)
 	if channel == "" || anchor == "" {
 		return Conversation{}, false
 	}
 	return Conversation{Channel: channel, Thread: anchor}, true
 }
 
-// Addressed reports whether a person is plausibly waiting on THIS agent.
-//
-// dmPrefix is the belt-and-braces fallback for the one backend with a
-// meaningful one, where a channel id beginning with a known letter is always
-// a direct message — so the answer stays right even if metadata arrives
-// without a channel type at all.
-//
-// It is OPT-IN PER BACKEND and must stay empty where channel ids are opaque.
-// A backend whose ids are arbitrary alphanumerics would mark random public
-// channels as direct messages, and raise an indicator on every seat for
-// traffic nobody addressed to any of them.
-func Addressed(metadata map[string]string, dmPrefix string) bool {
-	return addressOf(metadata, dmPrefix) != addressNone
-}
-
 // address is WHY a chat message is addressed to a seat, or that it is not.
 //
-// [Addressed] is this with the reason dropped, and the chat prompt states the
-// reason in place of its triage guidance ([ChatPrompt.Build]). ONE FUNCTION
-// ANSWERS BOTH, because the delivery check holds an addressed turn to an
-// answer: a prompt that judged "addressed" by a rule of its own could tell a
-// seat to stay silent on a message the engine then refuses to let it ignore.
+// [AddressRule.Addressed] is the same answer with the reason dropped, and the
+// chat prompt states the reason in place of its triage guidance
+// ([ChatPrompt.Build]). BOTH READ ONE RULE, because the delivery check holds
+// an addressed turn to an answer: a prompt that judged "addressed" by a rule
+// of its own could tell a seat to stay silent on a message the engine then
+// refuses to let it ignore.
 type address int
 
 const (
@@ -186,20 +163,37 @@ const (
 	addressDirect
 	// addressMention: the seat was named personally ([FollowMention]).
 	addressMention
-	// addressThread: a reply in a thread the seat follows.
+	// addressThread: a message in a thread the seat follows for a reason its
+	// backend's rule says obliges a reply, never merely because it spoke
+	// there ([FollowReason.Addresses]).
 	addressThread
+	// addressRouted: a reason the message itself carries, which its backend's
+	// rule counts and which is neither a direct conversation, a mention nor a
+	// thread the seat follows — the backend routed the message to the seat to
+	// answer. No thread is claimed for it: the seat may be in none.
+	addressRouted
 )
 
-// addressOf decides [address], strongest reason first.
-func addressOf(metadata map[string]string, dmPrefix string) address {
+// addressOf decides [address] under one backend's [AddressRule], strongest
+// reason first.
+//
+// BUILT FROM THE RULE'S OWN PARTS, [AddressRule.IsDirect] and the follows the
+// backend stated, over the same two keys [AddressRule.Addressed] reads, so it
+// names a reason for exactly the messages that method calls addressed. A
+// mention the backend's rule does not count is no reason here either, or the
+// prompt would tell a seat it was named on a message the rule leaves it free
+// to pass over.
+func addressOf(metadata map[string]string, rule AddressRule) address {
+	reason := FollowReason(metadata[FollowReasonField])
 	switch {
-	case slices.Contains(DirectChannelTypes, metadata["channel_type"]),
-		dmPrefix != "" && strings.HasPrefix(metadata["channel"], dmPrefix):
+	case rule.IsDirect(metadata):
 		return addressDirect
-	case metadata["thread_follow_reason"] == string(FollowMention):
+	case reason == FollowMention && rule.addressing(reason):
 		return addressMention
-	case metadata["thread_following"] != "":
+	case rule.addressing(FollowReason(metadata[FollowingField])):
 		return addressThread
+	case rule.addressing(reason):
+		return addressRouted
 	}
 	return addressNone
 }
@@ -220,14 +214,20 @@ type StatusPoster interface {
 	// own expiry.
 	StatusRefresh() time.Duration
 
-	// DMChannelPrefix marks a direct message unambiguously on this
-	// backend, or is empty where its ids are opaque. See [Addressed].
-	DMChannelPrefix() string
+	// AddressRule is this backend's answer to "was this message addressed
+	// to this seat?", and it is the SAME VALUE its chat prompt carries —
+	// declared once per backend and read here.
+	//
+	// The indicator says "this agent is working on your message" and the
+	// delivery check says "this agent owes your message an answer". Two
+	// rules would let one of them be right, so there is one; see
+	// [AddressRule].
+	AddressRule() AddressRule
 
 	// SetStatus raises or updates the indicator. It never returns an
 	// error: a failed call reports false and the status expires on the
 	// backend's side, which is a cosmetic loss and not a turn's problem.
-	SetStatus(ctx context.Context, handle, channel, thread, status string) bool
+	SetStatus(ctx context.Context, post StatusPost) bool
 
 	// ClearStatus takes the indicator down.
 	//
@@ -243,6 +243,22 @@ type StatusPoster interface {
 	// that ignores its status argument, which is the entire class of
 	// backend this method exists for.
 	ClearStatus(ctx context.Context, handle, channel, thread string) bool
+}
+
+// StatusPost is one raise or re-assertion of an indicator: whose it is, the
+// conversation it sits in, the turn holding it, and the words.
+type StatusPost struct {
+	Handle, Channel, Thread string
+
+	// Turn is the run of the NEWEST turn holding the indicator — the one
+	// that most recently began or took back its hold — which a backend that
+	// can name a turn links to, so a person can open what the agent is
+	// doing. A vendor's indicator names none and reads nothing here.
+	Turn string
+
+	// Text is the phrase, empty on a backend that renders none
+	// ([StatusPoster.SupportsStatusText]).
+	Text string
 }
 
 // statusRequestTimeout bounds every request an indicator makes: the raise,
@@ -264,8 +280,12 @@ type statusKey struct{ handle, channel, thread string }
 
 // session is one live indicator, shared by every turn holding it open.
 type session struct {
-	key   statusKey
-	turns map[string]bool
+	key statusKey
+
+	// holds are the turns holding the indicator open, in the order each
+	// last began or took back its hold, so the newest is the last: the turn
+	// a post names ([StatusPost.Turn]). Guarded by the driver's mutex.
+	holds []string
 
 	// seed fixes which lines this conversation draws, and rotation counts
 	// the phase changes it has been through — together they are what make
@@ -294,6 +314,20 @@ type session struct {
 	// raise can land after the clear. See "Stopped between posts" above.
 	stop chan struct{}
 	done chan struct{}
+}
+
+// hold records turn as the newest holder: appended, or moved to the end if it
+// already holds. Caller holds the driver's mutex.
+func (s *session) hold(turn string) {
+	s.holds = append(slices.DeleteFunc(s.holds, func(t string) bool { return t == turn }), turn)
+}
+
+// newest is the turn a post names. Caller holds the driver's mutex.
+func (s *session) newest() string {
+	if len(s.holds) == 0 {
+		return ""
+	}
+	return s.holds[len(s.holds)-1]
 }
 
 // wake asks the session's goroutine to re-assert, and never blocks. See
@@ -388,7 +422,7 @@ func (d *StatusDriver) Shows(metadata map[string]string) bool {
 	case StatusAlways:
 		return true
 	default:
-		return Addressed(metadata, d.poster.DMChannelPrefix())
+		return d.poster.AddressRule().Addressed(metadata)
 	}
 }
 
@@ -428,13 +462,13 @@ func (d *StatusDriver) Begin(ctx context.Context, handle, turnID, phase string, 
 		// JOIN, do not re-raise. The indicator is already up and its
 		// heartbeat is running; a second raise would reset the text a
 		// reader is watching to this turn's line for no reason.
-		s.turns[turnID] = true
+		s.hold(turnID)
 		d.mu.Unlock()
 		return &StatusSession{driver: d, key: key, turn: turnID}
 	}
 
 	s := &session{
-		key: key, turns: map[string]bool{turnID: true},
+		key: key, holds: []string{turnID},
 		// Seeded on the TURN, not the thread: two turns in one thread
 		// should not read as one long thought, and the seed is what
 		// makes their lines differ.
@@ -485,7 +519,9 @@ func (d *StatusDriver) Rejoin(handle, turnID string) *StatusSession {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for key, s := range d.sessions {
-		if key.handle == handle && s.turns[turnID] {
+		if key.handle == handle && slices.Contains(s.holds, turnID) {
+			// THE RESUMED TURN IS THE NEWEST: it is the one working now.
+			s.hold(turnID)
 			return &StatusSession{driver: d, key: key, turn: turnID}
 		}
 	}
@@ -574,8 +610,8 @@ func (s *StatusSession) End(ctx context.Context, keepAlive bool) {
 		d.mu.Unlock()
 		return
 	}
-	delete(sess.turns, s.turn)
-	if len(sess.turns) > 0 {
+	sess.holds = slices.DeleteFunc(sess.holds, func(t string) bool { return t == s.turn })
+	if len(sess.holds) > 0 {
 		d.mu.Unlock()
 		return
 	}
@@ -731,11 +767,12 @@ func (s *session) stopped() bool {
 func (d *StatusDriver) repost(ctx context.Context, s *session) {
 	d.mu.Lock()
 	text := d.phrases.Pick(s.phase, s.seed, s.rotation)
+	turn := s.newest()
 	d.mu.Unlock()
-	d.post(ctx, s.key, text)
+	d.post(ctx, s.key, turn, text)
 }
 
-func (d *StatusDriver) post(ctx context.Context, key statusKey, text string) {
+func (d *StatusDriver) post(ctx context.Context, key statusKey, turn, text string) {
 	ctx, cancel := context.WithTimeout(ctx, statusRequestTimeout)
 	defer cancel()
 	if !d.poster.SupportsStatusText() {
@@ -743,7 +780,8 @@ func (d *StatusDriver) post(ctx context.Context, key statusKey, text string) {
 		// backend cannot render.
 		text = ""
 	}
-	if !d.poster.SetStatus(ctx, key.handle, key.channel, key.thread, text) {
+	if !d.poster.SetStatus(ctx, StatusPost{Handle: key.handle, Channel: key.channel,
+		Thread: key.thread, Turn: turn, Text: text}) {
 		log.DebugContext(ctx, "working_status_not_raised", "backend", d.poster.StatusBackend(),
 			"handle", key.handle, "channel", key.channel)
 	}

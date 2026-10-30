@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
@@ -161,6 +161,10 @@ type ArtifactBox interface {
 	// Files lists every regular file under dir, at most max of them. The
 	// listing is the box's and is treated as untrusted: every path is held
 	// to the workspace and the published-path grammar again by the caller.
+	// A dir that names no directory of the workspace — missing, a file or
+	// a link — is [ErrNotADirectory], the caller's to change; a workspace
+	// that is gone is [ErrNoWorkspace]; and a walk that could not read all
+	// of dir is [ErrListIncomplete], never a shorter listing.
 	Files(ctx context.Context, dir string, max int) ([]string, error)
 
 	// Open streams one regular file. A path that names anything else is
@@ -170,6 +174,21 @@ type ArtifactBox interface {
 
 // ErrNoBox reports a turn with no coding run's box a publish may read.
 var ErrNoBox = errors.New("builtin: this turn holds no coding run's box to publish from")
+
+// ErrNotADirectory is a directory a publish named that the coding run's
+// workspace does not hold as one: it is missing, or it is a file or a link,
+// which a listing never follows. The caller's argument, as a path naming no
+// file is ([sandbox.ErrNotRegularFile]), and never a fault of this node.
+var ErrNotADirectory = errors.New("builtin: the path is not a directory in the coding run's workspace")
+
+// ErrNoWorkspace is a coding run's box whose workspace is gone: no dir a
+// publish names can list, so it is never the dir's fault ([ErrNotADirectory]).
+var ErrNoWorkspace = errors.New("builtin: the coding run's workspace is gone from its box")
+
+// ErrListIncomplete is a listing that could not read all of the dir it walked:
+// a directory under it the box's user can't open, or a read error. What it did
+// read is not the build, so it is refused rather than published short.
+var ErrListIncomplete = errors.New("builtin: the coding run's box could not list all of the directory")
 
 // ArtifactRequesters composes the principal a seat's turn is acting for.
 type ArtifactRequesters interface {
@@ -278,7 +297,7 @@ func (d ArtifactDeps) link(id artifacts.ID) string {
 // focused where the call named. A person's call (an operator's assistant) is
 // not presence: their own tab is.
 func (d ArtifactDeps) present(c artifactCaller, id artifacts.ID,
-	activity artifacts.PresenceActivity, focus artifacts.Focus) {
+	activity presence.Activity, focus presence.Focus) {
 
 	if d.Presence == nil || !c.agent() || c.principal.Seat == "" {
 		return
@@ -287,7 +306,8 @@ func (d ArtifactDeps) present(c artifactCaller, id artifacts.ID,
 	if c.turn != nil {
 		turn = c.turn.RunID
 	}
-	d.Presence.Touch(id, c.principal.Seat, turn, activity, focus)
+	d.Presence.Touch(presence.ArtifactRoom(id), presence.Agent{Seat: c.principal.Seat,
+		Turn: turn, Activity: activity, Focus: focus})
 }
 
 // orgFor is the chart a call reads: the turn's, or the surface's own.
@@ -419,11 +439,6 @@ func (c artifactCaller) self() string { return iam.RecordOwner(c.principal) }
 // the agent-only rules are about.
 func (c artifactCaller) agent() bool { return c.principal.Kind == iam.KindSeat }
 
-// artifactCallNamespace scopes the derivation of a turn's artifact operation
-// keys. FIXED for the life of the format: a new one would make every re-run
-// turn's publish a second version.
-const artifactCallNamespace = "crewlet.artifacts.call"
-
 // caller resolves who this call is, or the refusal it is answered with.
 func (d ArtifactDeps) caller(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any, writes bool) (artifactCaller, *tools.Result) {
@@ -480,9 +495,9 @@ func (d ArtifactDeps) ceilingFor(ctx context.Context, turn *turnctx.Turn,
 // operation settles the operation key a write's records derive from, the
 // `op_id` its answer carries, or the refusal of one brought back.
 //
-//   - IN A TURN, a key derived from the turn's seed, the tool and this call's
-//     repeat count in the run ([pageOpKey]'s rule), so a re-run turn's publish
-//     is the first run's and lands once;
+//   - IN A TURN, the call's key ([callOpKey], the one derivation every
+//     domain's writes take), so a re-run turn's publish is the first run's
+//     and lands once;
 //   - OUTSIDE ONE, the key the caller's transport carries, as it was sent;
 //   - on the operator's MCP, which carries none, the `op_id` an earlier answer
 //     handed back for exactly this call, or a fresh one the answer hands out.
@@ -493,17 +508,13 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 	if text, _ := argval.String(raw); text == "" {
 		brought = false
 	}
-	if seed := turnKey(turn); seed != "" {
+	if turnKey(turn) != "" {
 		if brought {
 			return "", "", fmt.Sprintf("%s takes no `op_id` in a turn: the turn "+
 				"names the operation, so the same call made again is already the "+
 				"same publish. Leave it out.", tool)
 		}
-		identity := []string{artifactCallNamespace, seed, tool}
-		if n := turn.CallLog().Ordinal(tool, args); n > 0 {
-			identity = append(identity, "repeat:"+strconv.Itoa(n))
-		}
-		return statelog.DeriveOpID(turnSince(turn), "", identity...), "", ""
+		return callOpKey(turn, tool, nil, args, ""), "", ""
 	}
 	if d.CallerKey != nil {
 		if k := d.CallerKey(ctx); k != "" {
@@ -529,7 +540,7 @@ func (d ArtifactDeps) operation(ctx context.Context, turn *turnctx.Turn, tool st
 	if err := statelog.CheckCallerOpID(op); err != nil {
 		return "", "", fmt.Sprintf("%s refused that `op_id`: %v", tool, err)
 	}
-	if !answeredFor(op, call) {
+	if !statelog.OpNamed(op, call) {
 		return "", "", fmt.Sprintf("%s refused that `op_id`, and nothing was written: "+
 			"it was answered for another call, another tool or this one with other "+
 			"arguments. To finish that call, send its arguments unchanged with it; to "+
@@ -759,16 +770,25 @@ func (d ArtifactDeps) head(ctx context.Context, tool string, args map[string]any
 func artifactNotFound(tool, ref string) tools.Result {
 	return refusedBy(tools.RefusalNotFound, artifactsdomain.ErrNotFound,
 		fmt.Sprintf("%s: there is no artifact %q you can open. Check the id, or "+
-			"find it with list_artifacts.", tool, clip(ref)))
+			"find it with "+ListArtifactsTool+".", tool, clip(ref)))
 }
 
 // artifactTrashed is the answer for a read of an artifact in the trash, to a
 // caller it is disclosed to: its content is not served until a person
 // restores it, so nothing of it is read.
-func artifactTrashed(tool string, h artifactsdomain.Head) tools.Result {
-	return refusedBy(tools.RefusalNotFound, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: "+
-		"artifact %s is in the trash, and its content is not served until its owner (%s) "+
-		"restores it. Nothing was read.", tool, h.ID, h.Owner))
+//
+// THE ARTIFACT'S STATE, A CONFLICT, as every gesture on a trashed artifact is
+// and as the API's `409 artifact_trashed` says — never `not_found`: the
+// artifact is there, and a caller told it is not makes another.
+//
+// THE ARTIFACT AS THE MODEL NAMED IT (ref), the rule [artifactNotFound]
+// keeps: the argument it passed may be a link or a label, and a uuid it never
+// typed is not how it knows the artifact. The owner by their handle, which is
+// how a seat names a colleague.
+func artifactTrashed(tool, ref string, h artifactsdomain.Head) tools.Result {
+	return refusedBy(tools.RefusalConflict, artifactsdomain.ErrTrashed, fmt.Sprintf("%s: "+
+		"artifact %q is in the trash, and its content is not served until its owner (%s) "+
+		"restores it. Nothing was read.", tool, clip(ref), h.Owner))
 }
 
 // artifactReadFailure explains a read of the artifacts domain that did not
@@ -784,8 +804,9 @@ func artifactReadFailure(ctx context.Context, tool, ref string, err error) tools
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not "+
-			"read the artifacts right now (%s). This is NOT an empty result: do not "+
-			"conclude the artifact does not exist. Try again shortly.", tool, why))
+			"read the artifacts%s (%s). This is NOT an empty result: do not "+
+			"conclude the artifact does not exist. %s", tool, rightNow(err), why,
+			conditionNext(err, "Try again, or say you could not check.", stuckRead)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s could not read the artifacts: %s. "+
 		"This is NOT an empty result: say you could not check.", tool, faultSaid))

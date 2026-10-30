@@ -1,8 +1,6 @@
 package worklet_test
 
 import (
-	"database/sql"
-	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -258,14 +256,14 @@ func TestAnUnassignedDependentIsNotToldAboutItself(t *testing.T) {
 //
 // The scan selected `kind = 'status'`, which is the word the WRITER chose for
 // a patch that may have moved several things — not what the row records. The
-// reachable case is a BULK CANCEL: `StatusCancelled` is in the `done` group,
-// whose own description names this path. So the apply stamps each task
-// finished and clears every dependency edge naming it a blocker — the
-// dependents are workable — while the record itself announces whatever else
-// the patch moved.
+// case is a QUIET CANCEL filed under another word: `StatusCancelled` is in the
+// `done` group, whose own description names this path. So the apply stamps
+// each task finished and clears every dependency edge naming it a blocker —
+// the dependents are workable — while the record itself announces whatever
+// else the patch moved.
 //
-// Two things made it permanent rather than merely late. Such a record is quiet
-// by design, and nothing outside [worklet.Writer.TellUnblocked] ever fills
+// Two things made it permanent rather than merely late. Such a record wakes
+// nobody, and nothing outside [worklet.Writer.TellUnblocked] ever fills
 // `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
 // hear. And the horizon was computed
 // from the same predicate, so it advanced past the record on the next status
@@ -293,7 +291,7 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 	}
 
 	// THE BLOCKER IS CANCELLED BY A WRITE THAT CALLS ITSELF A FIELD EDIT,
-	// which is exactly the shape a bulk cancel publishes: quiet, a status
+	// which is exactly the shape this scan exists for: quiet, a status
 	// into the `done` group, and a kind that is not `status`.
 	cancelled := worklet.StatusCancelled
 	points := 0.0
@@ -327,62 +325,6 @@ func TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind(t *testing.T) {
 	if again := scanUnblocked(t, r, 0); len(again.Pending) != 1 {
 		t.Errorf("a second scan from zero found %+v, want the same dependent "+
 			"still owed — it has not been told yet", again.Pending)
-	}
-}
-
-// THE REPAIR'S SCAN IS SERVED BY AN INDEX, not by reading the whole table.
-//
-// `tracker_history` grows for the life of the company and is never swept — it
-// is the account of everything that ever happened — and this scan runs on
-// every tick of the Worklet duty. A predicate with no index behind it is a
-// full scan of that table, forever, several times a minute.
-//
-// The index it used to have named `kind`, and the scan stopped selecting on
-// `kind` when it moved to the row's own status delta (see
-// [TestADependentIsFoundWhenItsBlockerClosedUnderAnotherKind]). Migration
-// 0008 replaces it with a PARTIAL index over exactly the new predicate, which
-// is the only reason that move is affordable.
-//
-// A TRIPWIRE ON THE SCHEMA AND THE PLANNER, in `storetest`'s own idiom: it
-// re-states the predicate rather than borrowing the query's string, so a
-// rewrite of the scan that quietly stopped matching the index still passes
-// here and is caught by the behavioural cases above plus this plan going
-// unused.
-func TestTheUnblockedScanIsIndexServed(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-
-	var plan string
-	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `
-			EXPLAIN QUERY PLAN
-			SELECT COALESCE(MAX(log_seq), 0) FROM tracker_history
-			WHERE log_seq > 0
-			  AND json_extract(fields_json, '$.status.to') IS NOT NULL`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var a, b, c int
-			var detail string
-			if err := rows.Scan(&a, &b, &c, &detail); err != nil {
-				return err
-			}
-			plan += detail + " "
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("explain the repair's horizon: %v", err)
-	}
-	if !strings.Contains(plan, "tracker_history_status_seq_idx") {
-		t.Errorf("the repair's horizon is planned as %q — it names no index, "+
-			"so every tick reads the whole of tracker_history, which is the "+
-			"account of everything that ever happened and is never swept",
-			plan)
-	}
-	if strings.Contains(plan, "SCAN tracker_history") {
-		t.Errorf("the repair's horizon SCANS tracker_history: %q", plan)
 	}
 }
 

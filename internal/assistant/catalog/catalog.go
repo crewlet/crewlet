@@ -46,7 +46,9 @@
 // and [Resolver.Resolve] replaces a name with the key, reading each directory
 // through the turn's grant, before a read is sent or a write is previewed
 // (names.go). It never decides access: a directory the person cannot read
-// resolves nothing, and the route decides the value as written.
+// resolves nothing, and the route decides the value as written. The call is
+// held to its schema in the same pass ([Resolver.Prepare]), and every fault
+// of both, every name it cannot place included, is one refusal (ADR-0059).
 //
 // # A write is previewed from the object as it is now
 //
@@ -69,6 +71,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // As is how a curated tool is built on one surface.
@@ -207,8 +210,10 @@ type Tool struct {
 	// Trust is how far the model may rely on a read's answer: the least
 	// its writers earn. Colleague where every text the card carries was
 	// written by the company's own principals (agents and people alike,
-	// as provenance.TrustFor counts them); external where it originates
-	// outside the company.
+	// by provenance.TrustForHosted, the one rule for a surface the engine
+	// hosts); external where it originates outside the company. On a write,
+	// the trust of what its request answers, which the turn its approval
+	// resumes reads; empty is the engine's own records, by the hosted rule.
 	Trust provenance.Trust
 	// TrustOf, for a read whose answer may or may not carry text from
 	// outside the company, decides the answer's trust from what it holds
@@ -237,10 +242,18 @@ type Tool struct {
 	// of one tool with different arguments never look like one read drawn
 	// twice.
 	Scope func(args Args) string
+	// Room, for a read of one chat room, is the argument that names the
+	// room: the step and the card's title say where the read is, before the
+	// rest of its scope, as the turn says the room ("in #launch", "with Ada
+	// Lovelace", [cards.Options.Room]). A room named by its id says nothing a
+	// person reads, and a direct conversation has nothing else to be named
+	// by, so two conversations read by their ids are two titles.
+	Room string
 	// Names are the arguments that name a seat, a unit, a project or a
 	// space, each by its directory: the call takes the record's key or its
-	// name, and the turn resolves a name to the key before the request or
-	// the preview is built ([Resolver.Resolve]).
+	// name, one or a list of them (the people a direct message goes to, a
+	// room's members), and the turn resolves a name to the key before the
+	// request or the preview is built ([Resolver.Resolve]).
 	Names map[string]Directory
 	// Build turns the call's arguments into the one request it sends, on
 	// one of Routes. Call it through [Tool.Request], which checks the
@@ -261,8 +274,9 @@ type Tool struct {
 	// the three inputs a write's tier is derived from.
 	Destructive bool
 	// ChangesVisibility marks a write that changes who can see something (a
-	// share, an unshare): its preview must name the audience (D09), which
-	// proposal.Preview.Check holds when told so.
+	// share, an unshare) or puts something in front of people (every chat
+	// write, read by whoever reads its room): its preview must name the
+	// audience (D09), which proposal.Preview.Check holds when told so.
 	ChangesVisibility bool
 
 	// Preview is a write's or a page action's preview: what the call would
@@ -290,14 +304,15 @@ type Tool struct {
 }
 
 // StepLabel is the sentence the drawer shows for one call of the tool: its
-// own [Tool.Label] where it has one, and otherwise a sentence from what the
-// catalogue already says of it, never its model-facing name. A write is a
+// own [Tool.Label] where it has one, its scope after it as o says it
+// ([Tool.ScopeOf]), and otherwise a sentence from what the catalogue already
+// says of it, never its model-facing name. A write is a
 // proposal being prepared, named by the task it touches where the call names
 // one; a page action prepares a change to the screen; a link is looked up.
-func (t Tool) StepLabel(args map[string]any) string {
+func (t Tool) StepLabel(args map[string]any, o cards.Options) string {
 	if t.Label != nil {
 		if l := strings.TrimSpace(t.Label(args)); l != "" {
-			return withScope(l, t.ScopeOf(Args(args)))
+			return withScope(l, t.ScopeOf(Args(args), o))
 		}
 	}
 	switch t.Kind {
@@ -317,12 +332,18 @@ func (t Tool) StepLabel(args map[string]any) string {
 	return strings.ToUpper(t.Phrase[:1]) + t.Phrase[1:]
 }
 
-// ScopeOf is the call's scope ([Tool.Scope]), "" for a tool that states none.
-func (t Tool) ScopeOf(args Args) string {
-	if t.Scope == nil {
-		return ""
+// ScopeOf is the call's scope: where a read of one room is ([Tool.Room]), as
+// o says the room, then what its own [Tool.Scope] says; "" for a tool that
+// states neither.
+func (t Tool) ScopeOf(args Args, o cards.Options) string {
+	room, own := "", ""
+	if t.Room != "" {
+		room = roomWhere(args.String(t.Room), o)
 	}
-	return strings.TrimSpace(t.Scope(args))
+	if t.Scope != nil {
+		own = t.Scope(args)
+	}
+	return scopeOf(room, own)
 }
 
 // withScope is a label or a title with the call's scope after it, the one
@@ -375,7 +396,7 @@ func (t Tool) Request(args map[string]any) (exec.Request, error) {
 	}
 	if _, ok := t.RouteOf(req); !ok {
 		return exec.Request{}, fmt.Errorf("catalog: %s built %s %s, which is none of its "+
-			"routes %v", t.Name, req.Method, req.Path, t.Routes)
+			"routes %s", t.Name, req.Method, req.Path, words.And(t.Routes))
 	}
 	return req, nil
 }

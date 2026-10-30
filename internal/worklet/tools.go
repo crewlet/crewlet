@@ -1,5 +1,7 @@
 package worklet
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // Worklet's tool names.
 //
 // BARE, not prefixed. A first-party tool may be named in a prompt — this build
@@ -18,9 +20,9 @@ package worklet
 const (
 	ListWorkItemsTool  = "list_work_items"
 	GetWorkItemTool    = "get_work_item"
-	CreateWorkItemTool = "create_work_item"
+	CreateWorkItemTool = toolname.CreateWorkItem
 	UpdateWorkItemTool = "update_work_item"
-	CommentOnWorkTool  = "comment_on_work_item"
+	CommentOnWorkTool  = toolname.CommentOnWorkItem
 
 	// MergeWorkItemTool folds one item into another, and it is a SEAT's
 	// for the reason the trash tools are not.
@@ -80,12 +82,12 @@ const (
 	// hold. Every other facet it carries is gated inside, on the project's
 	// lead or an admin, who overrides it (archiving also on a
 	// principal that is not an agent), and the refusals name which.
-	WriteProjectTool = "write_project"
+	WriteProjectTool = toolname.WriteProject
 
 	// TaskActivityTool is what HAPPENED, which no board can answer: a
 	// board is about what is there now, and every question about a change
 	// — who moved this, when did it stop being blocked, what did that
-	// bulk edit do — is about the ordered log instead.
+	// merge do — is about the ordered log instead.
 	TaskActivityTool = "task_activity"
 
 	// MyWorkTool is the one call a turn opens with. Seven lists in one
@@ -204,10 +206,11 @@ func Tools() []string {
 // WriteTools are the five that count as a DELIVERY.
 //
 // A turn woken by an assignment answers by moving the task, commenting on it,
-// or filing the follow-up work — and the delivery gate has to know that, or
-// such a turn is corrected and looped for having "done nothing". Reading is not
-// delivering, which is why get and list are not here: a turn that only read is
-// exactly the turn the gate exists to catch.
+// filing the follow-up work, or merging it into the item it duplicates — and
+// the delivery gate has to know that, or such a turn is corrected and looped
+// for having "done nothing". Reading is not delivering, which is why get and
+// list are not here: a turn that only read is exactly the turn the gate exists
+// to catch.
 //
 // A MOVE IS ONE: a lead woken to triage an item filed in the wrong project
 // answers by moving it, and the root's own move wakes the people on it.

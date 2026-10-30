@@ -27,8 +27,8 @@ import (
 //
 //   - `page_reads{page, days}` — the seats that READ the page, how, how often
 //     and in which turn, over up to [PageReadsMaxDays] company days, from the
-//     replicated `usage` domain (ADR-0020): every node's reads, a departed
-//     node's included, the same on whichever node answers.
+//     replicated `usage` domain (ADR-0020): every data node's reads, a
+//     departed node's included, the same on whichever node answers.
 //   - the `page` answer's `skill_loaded_by` — the seats a TOOL-SKILL page was
 //     loaded or offered to, from the same rows.
 //   - the `page` answer's `linked_from` — the pages and tasks whose bodies
@@ -85,7 +85,7 @@ type PageReadsAnswer struct {
 	DistinctSeatsToday int `json:"distinct_seats_today"`
 
 	// Elided is how many (page, via) entries the per-seat-day cap dropped
-	// across the window, on every node — entries of which some may have
+	// across the window, on every data node — entries of which some may have
 	// been this page's. Zero says the list is complete.
 	Elided int64 `json:"elided"`
 }
@@ -260,9 +260,8 @@ func (s Sources) pageReads(ctx context.Context, p Params) (any, error) {
 	if p.Has("days") {
 		days = p.Int("days", 0)
 		if days < 1 || days > PageReadsMaxDays {
-			return nil, fmt.Errorf("%w: days=%v, and a page's readers cover 1 to %d "+
-				"company days — ask for at most %d", ErrBadParams, p.Values()["days"],
-				PageReadsMaxDays, PageReadsMaxDays)
+			return nil, fmt.Errorf("%w: the days parameter is %q, and a page's readers cover 1 "+
+				"to %d company days", ErrBadParams, p.String("days"), PageReadsMaxDays)
 		}
 	}
 	now, loc := s.clock(), s.zone()
@@ -331,8 +330,8 @@ type pageReadsFold struct {
 	handles map[string]chartSeat
 }
 
-// foldPageReads sums every node's days into one row per (seat, via), keeps
-// the newest read's details, and counts today's distinct seats.
+// foldPageReads sums every data node's days into one row per (seat, via),
+// keeps the newest read's details, and counts today's distinct seats.
 //
 // PURE over its inputs, so the arithmetic — the sums across nodes and days,
 // which read is the newest, what "today" is — is tested without a database.

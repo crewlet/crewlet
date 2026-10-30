@@ -119,8 +119,8 @@ func TestEveryWriteRefusalIsMarked(t *testing.T) {
 // TestNoRefusalSpellsThePackagePrefix walks EVERY file of the package, not
 // only [writeFiles] — a read's parameter check is built with [invalid] too —
 // for a refusal whose sentence opens with "worklet:". The prefix is the
-// refusal's own to add ([refusal.Error]): spelled again, the log reads
-// "worklet: tracker: …" and [Sentence] hands a person the package's name.
+// refusal's own to add ([Refusal.Error]): spelled again, the log reads
+// "worklet: tracker: …" and [Sentence] hands its reader the package's name.
 func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")
@@ -171,7 +171,7 @@ func TestNoRefusalSpellsThePackagePrefix(t *testing.T) {
 // [forbidden] and [forbiddenAs]: the Go error reads as every error here does, prefix and
 // all, which is the text a model was tuned against; a sentinel the sentence
 // wraps is still reachable beside the mark; and [Sentence] is the words alone,
-// which is what a person is shown.
+// which is what a tool tells a model.
 func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 	t.Parallel()
 	inner := errors.New("disk")
@@ -218,15 +218,20 @@ func TestAMarkedRefusalKeepsItsSentenceAndItsChain(t *testing.T) {
 			errors.Is(alone, ErrForbidden), errors.Is(alone, sentinel), errors.Is(alone, ErrInvalid))
 	}
 
-	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: a refusal a caller wrapped
-	// is its whole message, and an error this package did not write as a
-	// refusal is too.
+	// CONTEXT IS NEVER DROPPED TO TIDY A PREFIX: an error this package wrote
+	// loses the "worklet:" it opens with and keeps every word after it, the
+	// context a caller here gave it included; one another package wrapped
+	// opens with its context and is its whole message.
 	wrapped := fmt.Errorf("worklet: create ENG: %w", err)
-	if got := Sentence(wrapped); got != wrapped.Error() {
-		t.Errorf("a wrapped refusal's sentence is %q, want its whole message", got)
+	if got, want := Sentence(wrapped), strings.TrimPrefix(wrapped.Error(), "worklet: "); got != want {
+		t.Errorf("a wrapped refusal's sentence is %q, want %q", got, want)
 	}
-	if got := Sentence(ErrNoTask); got != ErrNoTask.Error() {
-		t.Errorf("an unmarked error's sentence is %q, want its whole message", got)
+	if got, want := Sentence(ErrNoTask), "no such task"; got != want {
+		t.Errorf("a sentinel's sentence is %q, want %q", got, want)
+	}
+	outside := fmt.Errorf("move ENG-1: %w", ErrNoTask)
+	if got := Sentence(outside); got != outside.Error() {
+		t.Errorf("a refusal another package wrapped is %q, want its whole message", got)
 	}
 }
 

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -84,6 +83,15 @@ import (
 // served the chart whole. What only a read serves is a seat's or a unit's
 // fields.
 //
+// THE ANSWER IS THE WRITE'S OWN DECISION, folded from every refused part in the
+// order the authority table asks its own checks ([authz.Combine]): a bar on
+// the caller — an agent's seat on the chart's verb — names no permission and
+// lists no part; a refusal on authority names the parts' reason where they
+// agree and `no_grant` where they do not, with the permission that admits
+// every part, and lists each part with its own reason and grants; and a write
+// refused only because the caller's proof lapsed is the `403
+// step_up_required` the route itself would have answered.
+//
 // # Before validation, and before the seat-holder check
 //
 // A write its caller may not make is refused before the document is validated,
@@ -126,20 +134,70 @@ type RefusedChange struct {
 	Value string `json:"value,omitempty"`
 	// Reason is the authority table's own reason for refusing it.
 	Reason authz.Reason `json:"reason"`
+	// Grants are the permissions any one of which would admit this part —
+	// the part's own [authz.Decision.Grants], so each part names its own
+	// remedy beside the write's.
+	Grants []iam.Grant `json:"grants"`
 }
 
-// AdmissionError reports a write its caller may not make, naming every part.
+// AdmissionError reports a write its caller may not make: the decision the
+// whole write was refused by, and every part a permission would lift.
 type AdmissionError struct {
+	// Decision is the write's own, folded from every part refused
+	// ([authz.Combine]): the rule that refused it and the permission that
+	// would admit all of it.
+	Decision authz.Decision
+
+	// Refused are the parts refused on AUTHORITY ([authz.Reason.Authority])
+	// — a part only a fresher proof would admit is admitted by one, and a
+	// bar on the caller is about who is asking rather than any part — and
+	// empty where the write was refused by a bar alone.
 	Refused []RefusedChange
 }
 
 func (e *AdmissionError) Error() string {
+	if len(e.Refused) == 0 {
+		return "configapi: this change was refused (" + string(e.Decision.Reason) + ")"
+	}
 	parts := make([]string, 0, len(e.Refused))
 	for _, r := range e.Refused {
 		parts = append(parts, r.Kind+" "+r.ID)
 	}
 	return "configapi: this change reaches outside what you lead: " +
 		strings.Join(parts, ", ")
+}
+
+// refusedPart is one part of a write and the decision it was refused by.
+type refusedPart struct {
+	change   RefusedChange
+	decision authz.Decision
+}
+
+// refusal is the error for a write whose parts were refused: their decision
+// folded into the write's own, and the parts a permission would lift listed.
+func refusal(parts []refusedPart) *AdmissionError {
+	decisions := make([]authz.Decision, 0, len(parts))
+	var listed []RefusedChange
+	for _, part := range parts {
+		decisions = append(decisions, part.decision)
+		if part.decision.Reason.Authority() {
+			change := part.change
+			change.Reason = part.decision.Reason
+			change.Grants = slices.Clone(part.decision.Grants)
+			if change.Grants == nil {
+				change.Grants = []iam.Grant{}
+			}
+			listed = append(listed, change)
+		}
+	}
+	decision := authz.Combine(decisions...)
+	if !decision.Reason.Authority() {
+		// A BAR ON THE CALLER, or a proof gone stale: no part is what
+		// shut the write, so none is named as though a permission would
+		// open it.
+		listed = nil
+	}
+	return &AdmissionError{Decision: decision, Refused: listed}
 }
 
 // principalOf is who a request was resolved to, answering the request itself
@@ -157,14 +215,27 @@ func principalOf(w http.ResponseWriter, r *http.Request) (*iam.Principal, bool) 
 // addressedCheck is a dry run of one seat or unit whose address the caller was
 // admitted to, which is answered when it changes nothing; charter is a write
 // of the charter alone.
+//
+// AT THE INSTANT THE ROUTE DECIDED ([authz.DecidedAt]): the route already
+// asked the caller's proof, and a proof it accepted that lapsed while the body
+// was read and the document built would otherwise refuse every part of the
+// write as stale — telling an administrator, on each, that they need admin.
+//
+// THE ORG CHART'S OWN VERB IS ASKED OF THE WHOLE DOCUMENT TOO, beside
+// `config.write`, when the write changes the chart: whoever holds admin may
+// change anything in the document, and the chart's verb bars an agent's seat
+// whatever it holds ([authz.ActionOrgWrite] is human-only). The route decides
+// that verb on the org chart's routes, and the entity routes outside the chart
+// decide `config.write`, which bars nobody — so the admission asks it itself
+// rather than trusting that every route that reaches it asked first.
 func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 	addressedCheck, charter bool) error {
 
-	now := time.Now()
+	at := authz.DecidedAt(ctx)
 	if charter {
 		if diff := config.DiffOrg(prior, next); charterOnly(diff) {
 			d := authz.Decide(ctx, p, authz.ActionPrinciplesWrite,
-				authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, now)
+				authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, at)
 			if d.Allowed {
 				return nil
 			}
@@ -177,42 +248,52 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 		}
 	}
 	company := authz.Decide(ctx, p, authz.ActionConfigWrite,
-		authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, now)
-	if company.Allowed {
-		return nil
-	}
+		authz.Object{Kind: authz.KindCompany}, authz.NoChart{}, at)
 	diff := config.DiffOrg(prior, next)
 	if len(diff.Changes) == 0 && len(diff.Settings) == 0 {
-		if addressedCheck {
+		if company.Allowed || addressedCheck {
 			return nil
 		}
-		return &AdmissionError{Refused: []RefusedChange{{Kind: "document",
-			Why: "unchanged", Reason: company.Reason}}}
+		return refusal([]refusedPart{{change: RefusedChange{Kind: "document",
+			Why: "unchanged"}, decision: company}})
+	}
+	if company.Allowed {
+		if len(diff.Changes) == 0 {
+			return nil
+		}
+		// AT THE ROOT, where the admin path is asked before any chart and
+		// a refusal of the caller is a bar about who they are.
+		chart := authz.Decide(ctx, p, authz.ActionOrgWrite,
+			authz.Object{Kind: authz.KindUnit}, authz.NoChart{}, at)
+		if chart.Allowed {
+			return nil
+		}
+		return &AdmissionError{Decision: authz.Combine(company, chart)}
 	}
 	charts := map[config.OrgSide]authz.Chart{
 		config.OrgBefore: orgchart.Of(diff.Before),
 		config.OrgAfter:  orgchart.Of(diff.After),
 	}
-	var refused []RefusedChange
+	var refused []refusedPart
 	for _, key := range diff.Settings {
-		refused = append(refused, RefusedChange{Kind: "setting", ID: key,
-			Reason: company.Reason})
+		refused = append(refused, refusedPart{change: RefusedChange{Kind: "setting",
+			ID: key}, decision: company})
 	}
 	for _, change := range diff.Changes {
 		for _, path := range change.Credentials {
-			refused = append(refused, RefusedChange{Kind: string(change.Kind),
-				ID: change.ID, Op: string(change.Op), Why: "credential", Value: path,
-				Reason: company.Reason})
+			refused = append(refused, refusedPart{change: RefusedChange{
+				Kind: string(change.Kind), ID: change.ID, Op: string(change.Op),
+				Why: "credential", Value: path}, decision: company})
 		}
 		for _, field := range change.Keys {
-			refused = append(refused, RefusedChange{Kind: string(change.Kind),
-				ID: change.ID, Op: string(change.Op), Why: "key", Value: field,
-				Reason: company.Reason})
+			refused = append(refused, refusedPart{change: RefusedChange{
+				Kind: string(change.Kind), ID: change.ID, Op: string(change.Op),
+				Why: "key", Value: field}, decision: company})
 		}
 		for _, touch := range change.Touches {
 			d := authz.Decide(ctx, p, authz.ActionOrgWrite,
 				authz.Object{Kind: authz.KindUnit, ID: change.ID, Container: touch.Unit},
-				charts[touch.Side], now)
+				charts[touch.Side], at)
 			if d.Unknown() {
 				// A FAULT, NOT A WAIT: both trees are in hand, so nothing
 				// a retry brings could answer what these could not.
@@ -220,15 +301,15 @@ func admit(ctx context.Context, p iam.Principal, prior, next *config.Company,
 					change.Kind, change.ID, touch.Unit, d.Err)
 			}
 			if !d.Allowed {
-				refused = append(refused, RefusedChange{Kind: string(change.Kind),
-					ID: change.ID, Op: string(change.Op), Side: string(touch.Side),
-					Place: touch.Unit, Why: touch.Why, Value: touch.Value,
-					Reason: d.Reason})
+				refused = append(refused, refusedPart{change: RefusedChange{
+					Kind: string(change.Kind), ID: change.ID, Op: string(change.Op),
+					Side: string(touch.Side), Place: touch.Unit, Why: touch.Why,
+					Value: touch.Value}, decision: d})
 			}
 		}
 	}
 	if len(refused) > 0 {
-		return &AdmissionError{Refused: refused}
+		return refusal(refused)
 	}
 	return nil
 }
@@ -247,16 +328,26 @@ func charterOnly(diff config.OrgDiff) bool {
 	return true
 }
 
-// refuseAdmission answers a write its caller may not make: the authority
-// table's 403, naming admin — the one permission that would have admitted all
-// of it — and every part refused.
+// refuseAdmission answers a write its caller may not make by the rule that
+// refused it, in the status and code the authority table's own mapping gives
+// that rule ([authz.RefusalFields]) — and, for a refusal on authority, every
+// part a permission would lift.
+//
+// FROM THE PARTS' OWN DECISIONS, never a permission written here: it named
+// admin beside the first part's reason whatever had decided, so an agent's
+// seat was told it needed admin, a write refused for a lead relation and for
+// a credential named the relation alone, and a proof that had lapsed was a
+// list of parts each "needing" admin rather than the `403 step_up_required`
+// a client re-proves and replays on.
 func refuseAdmission(w http.ResponseWriter, err *AdmissionError) {
-	detail := authz.RefusalDetail(err.Refused[0].Reason, []iam.Grant{iam.GrantAdmin})
-	detail["refused"] = err.Refused
-	detail["hint"] = "Leads can change seats and units in their own units " +
-		"only. Settings, credentials, ${VAR} references, projects, spaces, " +
-		"channels, addresses and contact ids need admin."
-	httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
+	status, code, detail := authz.RefusalFields(err.Decision)
+	if code == httpjson.CodeUnauthorized && len(err.Refused) > 0 {
+		detail["refused"] = err.Refused
+		detail["hint"] = "Leads can change seats and units in their own units " +
+			"only. Settings, credentials, ${VAR} references, projects, spaces, " +
+			"channels, addresses and contact ids need admin."
+	}
+	httpjson.FailWithFields(w, status, code, detail)
 }
 
 // mayReach decides a — a read or a write of one seat or unit of the active
@@ -270,7 +361,7 @@ func (s *Service) mayReach(w http.ResponseWriter, r *http.Request, a authz.Actio
 
 	o, err := company.Organization()
 	if err != nil {
-		s.fail(w, "build the organization the request is decided on", err)
+		s.fail(w, r, "build the organization the request is decided on", err)
 		return false
 	}
 	p, ok := principalOf(w, r)
@@ -279,7 +370,7 @@ func (s *Service) mayReach(w http.ResponseWriter, r *http.Request, a authz.Actio
 	}
 	d := authz.Decide(r.Context(), *p, a,
 		authz.Object{Kind: authz.KindUnit, ID: id, Container: placeOf(o, kind, id)},
-		orgchart.Of(o), time.Now())
+		orgchart.Of(o), authz.DecidedAt(r.Context()))
 	if d.Unknown() || !d.Allowed {
 		authz.EnvelopeRefusal(w, r, authz.Policy{Action: a}, d)
 		return false

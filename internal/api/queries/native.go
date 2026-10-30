@@ -7,34 +7,37 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Worklet and Doclet, read for a screen.
 //
-// # These read THIS NODE'S OWN COPY, and that is the whole reason they are cheap
+// # These read A DATA NODE'S COPY, and that is the whole reason they are cheap
 //
 // Every other way to answer "what is on the board" is a listing over the
 // fleet's own record — O(keys) message deliveries, on a request path, for a
-// page a dashboard refreshes. This node's copy is what makes it a SQL query
-// instead, and it is the same copy a seat's own tools read, so an operator and
-// an agent looking at one task see one task.
+// page a dashboard refreshes. A copy of the replicated estate is what makes it
+// a SQL query instead, and it is reached through the same estate router a
+// seat's own tools read through, so an operator and an agent looking at one
+// task see one task: this node's copy while it serves, another data node's
+// while it does not. Only a data node serves these screens — Tier A refuses
+// `ingress` without `data` — so the router is here for the copy that is out
+// of service, never for a node holding none.
 //
-// The two halves reach that copy differently, and the difference is visible in
-// the answers rather than hidden here: the tracker's rows are derived by an
-// applier from an ordered log, so every answer carries the level it was served
-// at and what it could not account for; the wiki's are maintained by a
-// projector following a bucket's change feed, which could only say hydrated or
-// not.
+// Both halves' rows are derived by a state-log applier from an ordered log, so
+// every answer carries the level it was served at and the position it
+// answered at, rather than a flag saying whether the copy was ready.
 //
 // # A COPY THAT HAS NOT CAUGHT UP SAYS SO rather than answering empty
 //
-// Both native backends are state-log domains now, so both say it the same way:
+// Both native backends are state-log domains, so both say it the same way:
 // through the coverage every answer carries, which is a POSITION rather than a
 // boolean. "This company has no work" is an answer a person acts on — they
 // file the duplicate, they conclude the migration failed — and a node that has
@@ -59,10 +62,13 @@ import (
 // whose caller is allowed to choose. So the function is the unit here, and
 // there is no level constant beside it to reach for by mistake.
 //
-// The rules themselves are [worklet.ParseFreshness]'s and not restated here.
-// One grammar serves the board, the socket, the REST route and a seat's own
-// tools, and a second reading of these keys would be the one place a freshness
-// key meant something slightly different.
+// The rules themselves are [statelog.ParseFreshness]'s and not restated here.
+// One grammar serves every domain's questions, the socket, the REST routes and
+// a seat's own tools, and a second reading of these keys would be the one
+// place a freshness key meant something slightly different. The FRAMEWORK'S
+// rather than a domain's, because this function serves every domain: read
+// through the tracker's, a bad `read_level` on a chat or a wiki question was
+// refused as "worklet: …", naming a domain the caller never asked about.
 //
 // WHAT THIS ADDS is the SURFACE, which the grammar cannot know: an absent or
 // unpermitted level resolves to this surface's default through
@@ -70,9 +76,9 @@ import (
 // all — it renders the level and the lag beside the rows, so a person who
 // asked for a weaker answer is shown the one they got.
 func freshness(p Params) (statelog.Freshness, error) {
-	got, err := worklet.ParseFreshness(p)
+	got, err := statelog.ParseFreshness(p)
 	if err != nil {
-		return got, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return got, refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	got.Level = statelog.LevelFor(statelog.SurfaceDashboard, got.Level)
 	// AND THE BOUND IS CHECKED AGAINST THE LEVEL THAT WILL BE SERVED,
@@ -234,7 +240,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// the estate router, and no copy could answer it yet.
 		return nil, err
 	case err != nil:
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	// THIS SURFACE'S OWN DEFAULT, applied where an absent level resolves.
 	// A dashboard tile polls, and a poll that took a quorum round trip
@@ -259,7 +265,7 @@ func (s Sources) workItems(ctx context.Context, p Params) (any, error) {
 		// [ErrUnavailable]: the caller narrows and asks again, where
 		// "unavailable" tells a polling screen to send the identical
 		// query back every few seconds for ever.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
@@ -391,8 +397,10 @@ func (s Sources) workItem(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	if unread {
+		// A READ POSTS NOTHING, so it names no remark of the caller's own:
+		// only an open ask admits it.
 		asked, err := worklet.AskedOn(ctx, s.Work, detail.Task.ID,
-			iam.RecordOwner(principal), fresh)
+			iam.RecordOwner(principal), "", fresh)
 		if err != nil {
 			// THE PROBE COULD NOT READ THE THREAD, which says nothing
 			// about whether this caller was asked: unknown, never a
@@ -438,7 +446,7 @@ func (s Sources) mayReadItem(ctx context.Context, principal iam.Principal,
 		return false, fmt.Errorf("%w: this node cannot decide %s on %s yet: %w",
 			ErrUnavailable, authz.ActionWorkRead, object.ID, d.Err)
 	case !d.Allowed:
-		return false, refused("work_item", d)
+		return false, NewRefusal("work_item", d)
 	}
 	return false, nil
 }
@@ -529,8 +537,8 @@ func (s Sources) workComments(ctx context.Context, p Params) (any, error) {
 // turns tab rather than on every poll of the detail.
 //
 // FROM THE TRACKER'S ROWS, NOT THE EVENT HISTORY. `turns{work_item=}` answers
-// a similar-looking question from each node's event store, which keeps thirty
-// days and is scattered across the fleet; this is the task's own durable
+// a similar-looking question from each data node's event store, which keeps
+// thirty days and is scattered across the fleet; this is the task's own durable
 // account — the same rows its `spend` sums — so a turn listed here is a turn
 // the cost panel counted, on any node, at any age.
 func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
@@ -548,7 +556,7 @@ func (s Sources) workItemTurns(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, worklet.ErrNoTask):
 		return nil, ErrNotFound
 	case errors.Is(err, worklet.ErrInvalid):
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
@@ -810,8 +818,8 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		After: strings.TrimSpace(p.String("after")),
 	}
 	if f.Roots && f.ParentID != "" {
-		return nil, fmt.Errorf("%w: roots and parent ask opposite questions — "+
-			"name the parent whose children you want, or roots=true for the top of the container", ErrBadParams)
+		return nil, fmt.Errorf("%w: roots and parent ask opposite questions. "+
+			"Name the parent whose children you want, or roots=true for the top of the container", ErrBadParams)
 	}
 	for _, name := range splitList(p.String("status")) {
 		status := doclet.Status(name)
@@ -828,6 +836,15 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 		f.Skills = &skills
 	}
 	f.Onboarding = p.Bool("onboarding", false)
+	// THE ORDER IS THE READER'S to serve, so a value it does not read is
+	// refused here naming the set, and an order it does not serve for this
+	// narrowing is refused below naming what it is served for.
+	if order := strings.TrimSpace(p.String("order")); order != "" {
+		f.Order = doclet.ListOrder(order)
+		if !f.Order.Valid() {
+			return nil, badParams("order", order, names(doclet.ListOrders()))
+		}
+	}
 
 	// THE CALLER'S OWN, defaulting to `stale` like every other dashboard
 	// poll: a screen that redraws every twenty seconds and took a quorum
@@ -845,6 +862,10 @@ func (s Sources) pageList(ctx context.Context, p Params) (any, error) {
 	list, err := s.Pages.List(ctx, f, fresh)
 	if errors.Is(err, doclet.ErrBadCursor) {
 		return nil, badParams("after", f.After, []string{"the after of a previous answer"})
+	}
+	if errors.Is(err, doclet.ErrUnservedOrder) {
+		return nil, fmt.Errorf("%w: order=%s is served beside skills=true alone",
+			ErrBadParams, f.Order)
 	}
 	if err != nil {
 		return nil, err
@@ -918,15 +939,20 @@ func names[T ~string](values []T) []string {
 }
 
 // badParams refuses a filter naming the value and what would have been valid.
+//
+// "THE <NAME> PARAMETER", never the bare name: a refusal reaches a person
+// through httpjson.Sentence, which capitalises a plain leading word, so a
+// parameter called `suspended` or `kind` read as "Suspended is required", a
+// word the parameter is not; and the set in words ([choices]).
 func badParams(field, got string, allowed []string) error {
 	if got == "" {
-		return fmt.Errorf("%w: %s is required", ErrBadParams, field)
+		return fmt.Errorf("%w: the %s parameter is required", ErrBadParams, field)
 	}
 	if len(allowed) == 0 {
-		return fmt.Errorf("%w: %s=%q", ErrBadParams, field, got)
+		return fmt.Errorf("%w: the %s parameter can't be %q", ErrBadParams, field, got)
 	}
-	return fmt.Errorf("%w: %s=%q (want one of %s)",
-		ErrBadParams, field, got, strings.Join(allowed, ", "))
+	return fmt.Errorf("%w: the %s parameter is one of %s, and %q isn't",
+		ErrBadParams, field, words.Or(allowed), got)
 }
 
 // ---- projects ----------------------------------------------------------- //
@@ -944,7 +970,7 @@ func (s Sources) workProjects(ctx context.Context, p Params) (any, error) {
 	if err != nil {
 		// A REFUSAL ABOUT THE REQUEST — the value names itself and the
 		// accepted ones, so a 400 tells the caller what to send instead.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	q.Units = s.chartUnits()
 	// THE CALLER'S OWN — see [freshness].
@@ -989,7 +1015,7 @@ func (s Sources) workProject(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, worklet.ErrNoType):
 		// A BAD PARAMETER, not a missing record: the project is there
 		// and `for_type` is what to change. The refusal lists the types.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}
@@ -1048,7 +1074,6 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		Actor:    strings.TrimSpace(p.String("actor")),
 		Assignee: strings.TrimSpace(p.String("assignee")),
 		Q:        strings.TrimSpace(p.String("q")),
-		Batch:    strings.TrimSpace(p.String("batch")),
 		Limit:    p.Int("limit", 0),
 		Cursor:   strings.TrimSpace(p.String("cursor")),
 	}
@@ -1149,7 +1174,7 @@ func (s Sources) workActivity(ctx context.Context, p Params) (any, error) {
 		// BY ITS SENTINEL and nothing wider. Every failure that was not
 		// the state log's used to take this arm, so a store this node
 		// could not read was answered 400 as the caller's mistake.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}

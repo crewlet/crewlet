@@ -42,6 +42,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/whsec"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var pinned = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
@@ -92,8 +93,11 @@ type vault struct {
 	authors map[string]secrets.Author
 	// fail is what Set answers once failAfter values are in the store, so a
 	// case can fail a submission's second credential rather than its first.
+	// failName, when set, keeps fail to the one name: a case where one seal
+	// lands and the next does not.
 	fail      error
 	failAfter int
+	failName  string
 }
 
 func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
@@ -101,7 +105,8 @@ func (v *vault) Set(_ context.Context, name, value string, by secrets.Author,
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.fail != nil && len(v.values) >= v.failAfter {
+	if v.fail != nil && len(v.values) >= v.failAfter &&
+		(v.failName == "" || v.failName == name) {
 		return v.fail
 	}
 	if v.values == nil {
@@ -191,7 +196,9 @@ type configFixture struct {
 // gatedPlane is a fleet a case can take down: while down, the pointer cannot
 // be read, as a coordination store between leaders cannot — after the reads
 // allow still lets through, so a case can take it down partway through a
-// request. While unanswered, an activation lands and its answer is lost.
+// request. While unanswered, an activation lands and its answer is lost;
+// while dropped, it is lost before it lands and answered the same, because
+// the store's client cannot tell the two apart.
 //
 // And meanwhile, armed, is another write landing between two reads of a
 // request: it runs once, at the read after the ones skip lets by. contested,
@@ -203,6 +210,7 @@ type gatedPlane struct {
 	down       atomic.Bool
 	allow      atomic.Int64
 	unanswered atomic.Bool
+	dropped    atomic.Bool
 	meanwhile  atomic.Pointer[func()]
 	skip       atomic.Int64
 	contested  atomic.Pointer[func()]
@@ -222,6 +230,10 @@ func (p *gatedPlane) Target(ctx context.Context) (coord.Activation, bool, error)
 func (p *gatedPlane) Activate(ctx context.Context, req coord.ActivationRequest) (coord.Activation, error) {
 	if m := p.contested.Load(); m != nil && p.contested.CompareAndSwap(m, nil) {
 		(*m)()
+	}
+	if p.dropped.Load() {
+		return coord.Activation{}, fmt.Errorf("%w: publish the activation: no answer",
+			coord.ErrUnavailable)
 	}
 	if !p.unanswered.Load() {
 		return p.Plane.Activate(ctx, req)
@@ -245,7 +257,7 @@ func newConfigSurface(t *testing.T, writers ...string) configFixture {
 	f := configFixture{db: db, cipher: testCipher(t), plane: gate, gate: gate}
 	cfg, err := configapi.New(configapi.Options{
 		Store: db, Plane: f.plane, Cipher: f.cipher,
-		Holders: func(context.Context, []string, time.Time) (
+		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
 			return nil, nil
@@ -715,6 +727,8 @@ func TestTheExternalURLIsAnsweredOnce(t *testing.T) {
 	}
 }
 
+// AN UNKNOWN KIND IS REFUSED BY NAME, its hint offering the kinds this build
+// serves as the alternatives they are.
 func TestAnUnknownKindIsRefusedByName(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -724,8 +738,12 @@ func TestAnUnknownKindIsRefusedByName(t *testing.T) {
 	if res.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", res.Code, res.Body)
 	}
-	if got := decode(t, res)["error"]; got != "unknown_kind" {
+	body := decode(t, res)
+	if got := body["error"]; got != "unknown_kind" {
 		t.Errorf("error = %v", got)
+	}
+	if got, want := body["hint"], "One of "+words.Or(integration.Kinds)+"."; got != want {
+		t.Errorf("hint = %v, want %q", got, want)
 	}
 }
 
@@ -890,7 +908,9 @@ func TestASubmissionIsValidatedAsTheWholeCompany(t *testing.T) {
 }
 
 // A STALE BASE IS REFUSED BEFORE ANYTHING IS WRITTEN, and the refusal names
-// both sides so the caller can re-read and re-derive.
+// both sides so the caller can re-read and re-derive. 409, because the base
+// is the body's `if_match` rather than an If-Match header: a race the request
+// stated no HTTP condition about (a disconnect's header is 412, below).
 func TestAStaleRevisionIsRefused(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -1409,6 +1429,51 @@ func TestRotatingASecretPublishesAnyway(t *testing.T) {
 }
 
 // --- disconnect ------------------------------------------------------------- //
+
+// A DISCONNECT UNDER A STALE If-Match IS A FAILED PRECONDITION: the base it
+// names is the request's own header, so it is answered as the configuration
+// surface answers the same header (`412 revision_advanced`,
+// [configapi.RevisionStatus]) — where a connect, whose base is the body's
+// `if_match`, is the 409 above. Nothing is removed.
+//
+// Mutation: answer the stale arms 409 whatever the request stated, or 412
+// wherever an If-Match header arrived, and this goes red.
+func TestADisconnectUnderAStaleIfMatchIsAFailedPrecondition(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	connect := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs",
+		`{"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}, "generate": ["webhook_token"]}`, nil)
+	if connect.Code != http.StatusCreated {
+		t.Fatalf("connect = %d: %s", connect.Code, connect.Body)
+	}
+
+	res := s.do(t, http.MethodDelete, "/setup/integrations/datadog", `{"force": true}`,
+		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("status = %d, want 412: %s", res.Code, res.Body)
+	}
+	if body := decode(t, res); body["error"] != "revision_advanced" ||
+		body["current_revision_id"] == nil {
+		t.Errorf("refusal = %v, want revision_advanced naming the current revision", body)
+	}
+	after := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
+	if after["configured"] != true {
+		t.Errorf("configured = %v after a refused disconnect", after["configured"])
+	}
+
+	// AND ONLY THE HEADER A WRITE READS: a connect reads no If-Match, so
+	// one that carries a header and loses on its body's base stated no
+	// condition the server evaluated.
+	ignored := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", `{
+		"if_match": "01JSOMETHINGELSE",
+		"values": {"route_to": "sre-lead", "enabled": "true", "site": "datadoghq.com", "api_key": "dd-api", "app_key": "dd-app"}
+	}`, map[string]string{"If-Match": `"01JSOMETHINGELSE"`})
+	if ignored.Code != http.StatusConflict {
+		t.Errorf("a connect with a header it does not read = %d, want 409: %s",
+			ignored.Code, ignored.Body)
+	}
+}
 
 // A FORCED DISCONNECT REMOVES THE BLOCK AND NAMES WHAT IS ORPHANED, without
 // deleting it. A credential an operator may be sharing with another
@@ -2912,5 +2977,46 @@ func TestEverySetupRouteIsAdmins(t *testing.T) {
 				t.Error("a refused submission sealed a value")
 			}
 		})
+	}
+}
+
+// A SUBMISSION THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]):
+// the detail was encoding/json's own sentence (`json: unknown field
+// "valuez"`, "json: cannot unmarshal string into Go struct field .values of
+// type map[string]string"). Mutation: answer err.Error() again and both rows
+// go red; answer the App's begin under `hint` again and its case does.
+func TestASubmissionThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t)
+	for _, tc := range []struct{ body, says string }{
+		{`{"valuez": {}}`, `In the body, "valuez" isn't a field this takes.`},
+		{`{"values": "route_to"}`, `In the body, "values" holds text where an object belongs.`},
+	} {
+		res := s.do(t, http.MethodPost, "/setup/integrations/datadog/inputs", tc.body, nil)
+		body := decode(t, res)
+		if res.Code != http.StatusBadRequest || body["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 saying %q", tc.body, res.Code,
+				body, tc.says)
+		}
+	}
+	// THE GITHUB APP'S BEGIN TOO, under `detail` as every other setup route
+	// answers it: under `hint` a screen read the code's own sentence first
+	// and this one after it.
+	res := s.do(t, http.MethodPost, "/setup/integrations/github/app", `{"seat": 5}`, nil)
+	body := decode(t, res)
+	if res.Code != http.StatusBadRequest ||
+		body["detail"] != `In the body, "seat" holds a number where text belongs.` ||
+		body["hint"] != nil {
+		t.Errorf("the App's begin answered %d %v, want 400 saying it in detail", res.Code, body)
+	}
+	// THE CHECK OF A TYPED VALUE TOO, which reads its body as a submission
+	// does.
+	res = s.do(t, http.MethodPost, "/setup/integrations/datadog/verify",
+		`{"field": "api_key", "value": "x", "store": true}`, nil)
+	body = decode(t, res)
+	if res.Code != http.StatusBadRequest ||
+		body["detail"] != `In the body, "store" isn't a field this takes.` {
+		t.Errorf("the check answered %d %v, want 400 saying it in words", res.Code, body)
 	}
 }

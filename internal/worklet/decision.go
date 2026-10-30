@@ -5,13 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/decision"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A DECISION IS A STRUCTURED ASK: ADR-0023.
@@ -45,7 +45,10 @@ import (
 // A decision is set only on the comment that ASKS, and never changes after:
 // the answer names an option by id, so an ask whose options could be edited
 // under it would turn an answer given to one set of options into an answer
-// to another. The writer refuses an edit that changes it.
+// to another. No write can change it, so none is refused for trying: a post
+// naming a remark already on the thread is answered from its row
+// ([postedComment]), and the one door to an edit is [Writer.EditComment],
+// which forms it from the stored row and so carries the decision whole.
 
 // checkText is [decision.CheckText] for an optional value, as this package's
 // refusal, marked [ErrInvalid] with the sentence unchanged: what an answered
@@ -270,15 +273,6 @@ func checkCommentShape(task string, c *Comment) error {
 	return nil
 }
 
-// sameDecision reports whether an edit leaves a comment's decision as it was
-// asked.
-func sameDecision(a, b *decision.Decision) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return reflect.DeepEqual(*a, *b)
-}
-
 // checkChoice is the check that an answer's choice names an option of the
 // decision it answers. No choice is always an answer: a person may answer a
 // decision in prose — "none of these" is an answer too.
@@ -294,7 +288,7 @@ func checkChoice(task, ask string, d *decision.Decision, choice string) error {
 	if _, ok := d.Option(choice); !ok {
 		return invalidSaying(caveat.NotAnOption(), "the choice %q is not an option of the "+
 			"decision in %s on task %s — it offers %s", choice, ask, task,
-			strings.Join(d.OptionIDs(), ", "))
+			words.Or(d.OptionIDs()))
 	}
 	return nil
 }

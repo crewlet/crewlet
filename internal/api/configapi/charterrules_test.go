@@ -165,7 +165,7 @@ func TestAnImportWarnsAboutTheCharterWhereAnEditIsRefused(t *testing.T) {
 
 // AN IMPORT RELAXES THE CHARTER AND NOTHING ELSE: a file breaking another
 // admission rule (two units on one key) is refused as any write is, and a
-// stale If-Match is a conflict as on any write.
+// stale If-Match is a failed precondition as on any write.
 func TestAnImportRelaxesOnlyTheCharter(t *testing.T) {
 	t.Parallel()
 	summary := map[string]string{"X-Summary": "an import"}
@@ -180,8 +180,8 @@ func TestAnImportRelaxesOnlyTheCharter(t *testing.T) {
 			res.Code, body)
 	}
 	if res := s.do(t, http.MethodPut, "/config?import=true", faultyCharterDoc()+"timezone: UTC\n",
-		map[string]string{"X-Summary": "x", "If-Match": `"not-` + first + `"`}); res.Code != http.StatusConflict {
-		t.Errorf("an import under a stale If-Match = %d %s, want 409", res.Code, res.Body)
+		map[string]string{"X-Summary": "x", "If-Match": `"not-` + first + `"`}); res.Code != http.StatusPreconditionFailed {
+		t.Errorf("an import under a stale If-Match = %d %s, want 412", res.Code, res.Body)
 	}
 	if n := s.revisionCount(t); n != 1 {
 		t.Errorf("refused imports stored %d revisions", n-1)

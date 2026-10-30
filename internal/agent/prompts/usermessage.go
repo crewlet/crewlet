@@ -3,6 +3,8 @@ package prompts
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // PriorWorkHeader introduces the prior-work ledger: what an EARLIER ROUND of
@@ -28,7 +30,7 @@ const PriorWorkHeader = "## Already done earlier in this turn" +
 	" over: re-run it if you need the data, never invent it." +
 	"\n- **Everything else** changed something outside the engine: do NOT" +
 	" issue it again — a person sees the second one as a duplicate. If it" +
-	" was the delivery, it still counts: name it in `submit_work`'s" +
+	" was the delivery, it still counts: name it in `" + toolname.SubmitWork + "`'s" +
 	" `deliveries`." +
 	"\n- **`→ error`** did not take effect: retry it, fixed." +
 	"\nDeliver only what is still missing. A follow-up to an earlier" +

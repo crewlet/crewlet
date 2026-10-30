@@ -52,9 +52,9 @@ func NewApplier() Applier { return Applier{} }
 // held to the key they seek by the plan test beside this file — as [Applied]'s
 // are, and for its reason: with no statistics the planner prefers the one-column
 // day index over a primary key that does not cover the figure a statement reads,
-// and walks every node's day to read one object, so the one statement it took
-// that way names the key. (The clears seek the key already — a DELETE reads no
-// column the key does not hold.)
+// and walks every data node's day to read one object, so the one statement it
+// took that way names the key. (The clears seek the key already — a DELETE
+// reads no column the key does not hold.)
 const (
 	applySeatHeadSQL = `
 		SELECT version FROM usage_turns WHERE day = ? AND node = ? AND agent_id = ?`

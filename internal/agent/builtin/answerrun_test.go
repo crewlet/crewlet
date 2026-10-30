@@ -154,10 +154,15 @@ func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	if err := json.Unmarshal([]byte(result.Output), &answer); err != nil {
 		t.Fatal(err)
 	}
-	if answer["outcome"] != "pending" || answer["question"] != "which branch?" ||
-		answer["launch_id"] != "launch-t1" || answer["answer_id"] != deliveredID.String() {
+	if answer["outcome"] != "pending" || answer["launch_id"] != "launch-t1" ||
+		answer["answer_id"] != deliveredID.String() {
 		t.Errorf("answer = %v, want pending with the question it answered and the "+
 			"answer's own id", answer)
+	}
+	// THE QUESTION IT ANSWERED, as the run's words: fenced under the seat
+	// whose coding run asked it (ADR-0040).
+	if got := unfenced(t, answer["question"]); got != "which branch?" {
+		t.Errorf("the answer carries the question %q, want the one it answered", got)
 	}
 }
 
@@ -410,7 +415,7 @@ func TestAnswerRunDeliversAChoiceOfTheQuestionsOwnOptions(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"an unoffered choice", map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "choice": "rewrite"}, "keep, exact"},
+		{"an unoffered choice", map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "choice": "rewrite"}, `it offers "keep" or "exact"`},
 		{"a choice on an open question", map[string]any{"turn_id": "t2", "launch_id": "launch-t2", "choice": "keep"}, "no options"},
 		{"neither a choice nor words", map[string]any{"turn_id": "t1", "launch_id": "launch-t1"}, "`choice`"},
 	} {

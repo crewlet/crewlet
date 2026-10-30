@@ -44,7 +44,7 @@ The hierarchy is informational + delegation-routing, not a special upward escala
 
 - **Event-driven** — agents are reactive; events trigger agent work, agent work produces events
 - **Concurrent by default** — a seat's turn, its MCP children and the node's own duties run in parallel, and every shared structure is checked under the race detector
-- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM is required: the tracker and the knowledge base ship with the engine, so a company with one signed-in coding CLI and nothing else runs
+- **Provider-agnostic**: pluggable LLM, storage, tracker, knowledge and embedding backends, each behind a small contract; external tools via MCP. Only the LLM, and a place for its runs, is required: the tracker, the knowledge base and chat ship with the engine, and a [code sandbox](code-sandbox.md) cell of `local: {}` with `default_run_in: direct` is the engine host itself, with nothing to sign up for, so a company with one signed-in Claude Code or OpenCode, that cell, and nothing else runs ([Choosing Your Stack](../getting-started/choosing-your-stack.md#code-sandbox-where-every-executor-runs))
 - **Config-driven** — a company is a YAML document, validated against a schema generated from the same types the engine runs on
 - **Extension-oriented**: anything beyond running the company is built outside the process, not added to the core
 - **Observable**: structured logging, OpenTelemetry tracing, and an event store the dashboard reads, from day one
@@ -61,14 +61,14 @@ flowchart TB
     subgraph proc["<b>crewlet run</b> — one process by default; node.roles picks the groups"]
         direction TB
         API["<b>ingress — API + dashboard</b><br/>webhook routes · REST · /config · /secrets<br/>/ws/stream · OTLP ingest · /health · /ready"]
-        SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models, each a coding CLI"]
-        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · retention sweep · learning passes"]
-        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · reflection · observability edge"]
+        SEAT["<b>seats — the agents</b><br/>Seat host: leases, mailboxes, MCP children<br/>Turn engine: executor → reviewer, one per running turn<br/>Post-turn reflection, where the seat's memory is held<br/>Tool registry: builtins · per-role MCP · a2a_ask<br/>Provider chain: fallback models, each a coding CLI"]
+        DUTY["<b>workers — company-wide singletons</b><br/>scheduler · sandbox waiter · maintenance sweep · learning passes<br/>log trim · embeddings · identity sweep · object collector<br/>chat prune · trash reaper · integration reconcile"]
+        CORE["<b>always on, whatever the roles</b><br/>notification service — parse, resolve, wake<br/>config reconciler · node presence · observability edge · chat hub<br/>usage publisher, on a data node"]
     end
 
     STREAM[("<b>Event stream</b><br/><i>embedded NATS JetStream by default</i><br/>crewlet.agent.SEAT-ID.inbox · .control · .reflect<br/>crewlet.notifications.inbound · crewlet.events.*<br/>crewlet.config.* · crewlet.memory.* · dlq.*")]
     KV[("<b>Coordination KV</b><br/><i>on the stream's own broker</i><br/>seat · node · worker leases with a fencing epoch<br/>activation pointer · per-node status<br/>ledgers · counters · the company's secrets")]
-    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history")]
+    DB[("<b>Store</b><br/><i>two local files, owned exclusively</i><br/>this node's: crewlet_events · agent_diary · episodes<br/>replicated: the tracker, the pages, the vectors,<br/>the identity directory, the usage history, the artifacts,<br/>their datastores, the Dashboard Assistant's conversations, chat")]
 
     EXT -->|"webhooks / websocket"| API
     API -->|"verify · claim once per fleet · publish"| STREAM
@@ -92,7 +92,7 @@ node, the hop-by-hop path a trigger takes across a fleet, what a turn does,
 where every table and bucket lives, and what changes when a second node
 appears.
 
-**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is a local file it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own file. OpenTelemetry for distributed tracing.
+**Infrastructure**: none to operate. The stream is a NATS JetStream server the process embeds, and the store is two local files it creates. Outgrowing one node moves only the stream: the embedded servers join one cluster, or every node dials one external NATS (see [Running a Fleet](../guides/fleet.md)). It is the same client code either way — embedded versus external is a connection choice, not a second backend — and the store stays each node's own files. OpenTelemetry for distributed tracing.
 
 **One node type**: `crewlet run` is the node, and what it does is a config value: `node.roles` picks from `data` (hold the company's durable state), `ingress` (serve the HTTP API and its webhooks), `seats` (run agents), and `workers` (the company-wide singleton duties). The default is all four: one process holding the company's records, serving the API and the dashboard and running every agent, which is the whole stack. Giving the API nodes of its own is the same command with `-roles data,ingress`: an engine that serves the API and claims no seats, so both topologies are the same code path rather than two wirings that have to be kept in step. And an agent host can hold **no data at all** — `-roles seats` on a scratch store, joined to the fleet as a leaf — which keeps it small and disposable while its seats read and write through a node that holds the data ([ADR-0025](https://github.com/crewlet/crewlet/blob/main/adr/0025-a-node-without-data-reaches-the-estate-through-one-that-holds-it.md)).
 
@@ -168,10 +168,10 @@ adr/                      # Architecture decision records — a decision that
                           #   binds more than one package, with the gate that
                           #   anchors each one to its authority
 cmd/crewlet/              # The one binary: run, validate, schema, migrate,
-                          #   budgets, backup, retention, work, objects,
-                          #   fleet, seats, secrets, config, iam, llm, search,
-                          #   and the six integration CLIs — gitlab/github/
-                          #   jira/slack
+                          #   budgets, backup, retention, worklet, objects,
+                          #   fleet, seats, artifacts, chatlet, secrets, config,
+                          #   iam, llm, search, assistant, and the six
+                          #   integration CLIs — gitlab/github/jira/slack
                           #   `provision`, confluence `import|resync`,
                           #   mattermost `provision|doctor`
 internal/
@@ -207,14 +207,19 @@ internal/
 ├── iamdomain/            # The identity estate — statelog's fourth domain:
 │                         #   people, logins, credentials, invitations and
 │                         #   sessions, uniqueness arbitrated on one subject
-├── usage/                # Each node's day, replicated — statelog's fifth
-│                         #   domain: spend, turns and reads that outlive the
-│                         #   node that recorded them
+├── usage/                # Each data node's day, replicated — statelog's
+│                         #   fifth domain: spend, turns and reads that
+│                         #   outlive the node that recorded them
+├── chatlet/              # Chatlet, the engine's own chat, statelog's ninth
+│                         #   domain: rooms, threads, messages and reactions,
+│                         #   a message sequenced on its room's subject
 ├── eventfan/             # The fleet's turn-level history, read from every
-│                         #   node at query time, with coverage on every answer
+│                         #   data node at query time, with coverage on every
+│                         #   answer
 ├── search/               # Both halves of knowledge search — the BM25 index
 │                         #   and the two-stage semantic retrieval — plus the
-│                         #   embedding domain and the fleet's bucket fan-out
+│                         #   embedding domain, the fleet's bucket fan-out and
+│                         #   chat's own keyword index
 ├── textindex/            # The analyzer and the BM25 arithmetic, as pure
 │                         #   functions: Turso has no fts5
 ├── changefeed/           # How a committed record becomes a WAKE, derived by
@@ -278,7 +283,18 @@ internal/
 ├── jsinflight/           # A compare-and-set the leader answers "another write
 │                         #   is still in flight" is waited out until the
 │                         #   leader decides it, never read as a lost race
-├── httpx/ textcut/      # The shared HTTP transport; rune-safe shortening
+├── httpx/ textcut/       # The shared HTTP transport; rune-safe shortening
+├── plainjson/            # JSON read as text: `<`, `>` and `&` as themselves,
+│                         #   for every record and answer a person or a model
+│                         #   reads
+├── toolname/             # The engine's own tool names that a package below
+│                         #   their owner must spell, declared once and held
+│                         #   by a walk of every string literal in the tree
+├── keyset/               # A row's place in an order as the arms the rows
+│                         #   after or before it are read through — one seek
+│                         #   of the order's index each — so a later page
+│                         #   and a task's neighbours cost what the first
+│                         #   page does
 ├── api/                  # REST + dashboard: webhooks/, stream/, queries/,
 │                         #   livestate/, configapi/, setupapi/, secretsapi/,
 │                         #   auth/, httpjson/, mcpbridge/, operator/ (ONE

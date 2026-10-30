@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The namespaces a turn's messages, steps and cards are derived in from the
@@ -229,7 +230,8 @@ func (w *Writer) RecordMessage(ctx context.Context, c Call, turn uuid.UUID,
 		return statelog.Result{}, err
 	}
 	if !m.Role.Valid() {
-		return statelog.Result{}, invalid("role %q is not one of %v", m.Role, wire.MessageRoles)
+		return statelog.Result{}, invalid("role %q is not one of %s", m.Role,
+			words.Or(wire.MessageRoles))
 	}
 	if err := checkText("the message", m.Text, MessageMaxBytes); err != nil {
 		return statelog.Result{}, err
@@ -352,8 +354,8 @@ func checkAttachments(role wire.MessageRole, files []wire.FileRef) error {
 		case seen[f.FileID]:
 			return invalid("file %s is attached twice", f.FileID)
 		case !slices.Contains(wire.AttachmentMediaTypes, f.MediaType):
-			return invalid("attachment %s is %q, and only %v are attached", f.FileID,
-				f.MediaType, wire.AttachmentMediaTypes)
+			return invalid("attachment %s is %q, and only %s are attached", f.FileID,
+				f.MediaType, words.And(wire.AttachmentMediaTypes))
 		case f.Size <= 0 || f.Size > wire.FileMaxBytes:
 			return invalid("attachment %s is %d bytes, want 1..%d", f.FileID, f.Size,
 				wire.FileMaxBytes)

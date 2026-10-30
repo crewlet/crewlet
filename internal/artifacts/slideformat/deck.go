@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- the files ------------------------------------------------------------ //
@@ -320,7 +321,7 @@ func parseIndex(raw []byte, decode jsonform.Reader) (*Index, []Finding) {
 		bad("title is longer than %d bytes", MaxTitleBytes)
 	}
 	if _, ok := ThemeByID(idx.Theme); idx.Theme != "" && idx.Theme != BrandTheme && !ok {
-		bad("theme is %q, and a deck's theme is one of %s", idx.Theme, strings.Join(themeIDs(), ", "))
+		bad("theme is %q, and a deck's theme is one of %s", idx.Theme, words.Or(themeIDs()))
 	}
 	if idx.Lists != "" && idx.Lists != "css" {
 		bad("lists is %q, and the only list style is css", idx.Lists)

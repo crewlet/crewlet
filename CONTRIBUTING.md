@@ -32,7 +32,7 @@ make build        # or: go build ./...
 
 `make help` lists every target, and that is the whole setup — nothing to
 install beyond the prerequisites above. The engine embeds its own event
-stream (a NATS JetStream server) and its store is a local file it creates, so
+stream (a NATS JetStream server) and its store is two local files it creates, so
 `crewlet run` in an empty directory is a working company — there is no broker
 to operate and nothing to point a DSN at.
 
@@ -91,6 +91,17 @@ is the form to copy into a hook or a script. The inline
 fails: the shell discards a command substitution's exit status, and gofmt
 handed no paths formats its standard input, finds nothing wrong and exits 0.
 Run from anywhere but the module root, the listing fails every time.
+
+**Two of those gates judge formatting, at two standards.** `gofmt -l` over
+`go run ./internal/sourcetree/gofiles` is one of them; `golangci-lint run` is
+the other, because `.golangci.yml` enables the `gofmt` *formatter* too and its
+`simplify` pass is on — so a redundant composite-literal type passes the first
+and fails the second. `make fmt` repairs both (it runs `gofmt -s -w` over that
+same list); `golangci-lint fmt` repairs those plus the `goimports` grouping the
+lint job also enforces — hand it the captured list too, since on its own it
+steps over a dot-directory by name but walks into a nested checkout anywhere
+else. Reach for one of those two rather than plain `gofmt -w`, which cannot
+fix what the linter reports.
 
 Run the dashboard's suites through `npm test` (or `npm test -- <file>` for
 one file, `npm run test:watch` for the watch loop), never a bare
@@ -589,6 +600,43 @@ fuller one whatever the change. Only a case whose subject is the derived
 limit, or a refusal below the floor, states a size of its own; one that
 reserves nothing, or only what the broker reports it has left, needs none.
 
+A case that starts an engine never runs below `internal/engine`'s
+`startedLeaseTTL`, which is `config.MinLeaseTTL` and the floor `engine.New`
+holds every bootstrap to anyway. The lease TTL is also the seat watchdog's
+threshold, and once a host goes that long without a beat the watchdog ends the
+process with status 75: in a test, the whole binary and every case running in
+it, which no assertion reports. Two cases at three seconds sat one loaded
+runner from it, and the one meant to catch a start context cancelling the
+renewer could never fail, because the watchdog ended the binary first. So a
+case reads the renew or the deadline it is about off the host or its store
+(`seat.Host.MayStart`, a lease's deadline) rather than waiting for a lease to
+lapse, and a case whose subject is a fraction of a shorter TTL builds an
+`Engine` literal that starts no seat host.
+
+What a query plan says is read in `storetest`, once. The pinned driver may
+rewrite a correlated scalar subquery that selects one aggregate into a join
+against its whole child table, grouped by the correlation columns, and whether
+it does is chosen by its cost guess over a database nobody has ANALYZEd rather
+than by any line of the statement. So `storetest.Decorrelated` is the one check
+for it: the `scalar_subquery_<n>` operand the rewrite produces, never the
+`ephemeral_subquery_` index a FROM-clause subquery is joined through, held to
+the driver in both directions, so a driver bump that renames or stops the
+rewrite fails there before it blinds a gate. The tracker's and the knowledge
+base's index gates, search's vector and lexical gates and the chat prune's room
+read each refuse what `Decorrelated` flags.
+
+`Decorrelated` sits beside the one vocabulary every plan gate reads a plan
+through, over either estate's handle (`Handle`: the node's own file as much as
+the replicated estate): `PlanTree`, `Plan` and `Details`; `IndexesIn`, `Seeks`,
+`Walks`, `Sorts` and `ScansHeap`; `IndexesOn`; and `StatementLiterals`, the
+walk of the module's source a gate's completeness check makes, which fails when
+it read nothing outside the gate's own package. Two copies of how a plan is
+spelled are two gates a driver bump blinds one at a time, and a gate's private
+reading had already planned a copy of the statement it held, so a walk of every
+Go file of the module, tests included, refuses an `EXPLAIN QUERY PLAN` spelled
+in a literal anywhere but `storetest/plan.go`. Package `store`'s own files
+alone are exempt, since they cannot import the package that imports them.
+
 ### The end-to-end gates
 
 `internal/e2e` runs a real engine, a real broker and the real API, then
@@ -652,6 +700,19 @@ states with their reasons:
   field, the file or the variable they have to change — not just what failed.
 - **Comments explain WHY**, and especially why an obvious alternative is
   wrong. The diff shows what the code does.
+- **A field holding words somebody else wrote is declared on the field**, as a
+  credential's `secret:"true"` is: a read type tags it `untrusted:"fence"`
+  (words at length: a body, a comment, a message, an excerpt) or
+  `untrusted:"name"` (a title, a name, a label), the tag `provenance.FieldTag`
+  names. The agent runtime's read tools refuse to answer a declared field they
+  did not fence or name the writers of,
+  `provenance.TestEveryDeclaredFieldHoldsText` holds every tag in the tree to
+  those two kinds and to a type that holds text, and `agent/builtin`'s sweep
+  (`TestEveryToolThatHandsOverSomebodysWordsIsFenced`) derives from the
+  declarations which tools hand such words to a model. So a new read type that
+  carries somebody's words declares them, or a tool answering it is never held
+  to the fence — see
+  [`adr/0040`](adr/0040-content-a-model-reads-carries-its-provenance.md).
 - **Every piece of state answers "who has to agree on it?"** — *this node
   alone* is the node's own database file; *every node, identically, derived
   from an ordered log* is the replicated estate, written only by a state log's
@@ -1129,9 +1190,9 @@ an older build:
   a state-log record this build cannot read is deferred and kept, never
   dropped — except a gate record above the version it reads, or one whose
   envelope it cannot decode at all, which stops the applier rather than
-  apply it wrong — which is why every node names the version it reads on
-  its position heartbeat, a writer of a gate above the base version waits on
-  that census before publishing one, and an envelope never refuses what a
+  apply it wrong — which is why every data node names the version it reads
+  on its position heartbeat, a writer of a gate above the base version waits
+  on that census before publishing one, and an envelope never refuses what a
   newer build may add to it; and a bump of the seat-host lease protocol makes
   the newer node refuse to claim beside a live lower lease. That contract
   runs FORWARD, to the builds after this one, and never obliges this tree to

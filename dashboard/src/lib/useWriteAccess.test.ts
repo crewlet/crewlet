@@ -10,10 +10,12 @@ import {
   WRITE_REASONS,
   configGuardedReason,
   configWriteAccess,
+  directSeatAccess,
   linkOf,
   mayChangeConfig,
   messageSeatAccess,
   orgWriteAccess,
+  OWN_SEAT_DIRECT,
   OWN_SEAT_MESSAGE,
   SERVICE_OFF_REASONS,
   writeAccess,
@@ -26,7 +28,7 @@ import { managedSentence } from "~/protocol/configAnswer.ts";
 import type { ServicesRun } from "./services.ts";
 
 /** A company running every service built into Crewlet. */
-const EVERY: ServicesRun = { tracker: true, knowledge: true };
+const EVERY: ServicesRun = { tracker: true, knowledge: true, chat: true };
 
 const BOUND: ViewerState = {
   login: "jane.founder",
@@ -34,6 +36,7 @@ const BOUND: ViewerState = {
   admin: false,
   worklet: true,
   doclet: true,
+  chatlet: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -48,6 +51,7 @@ const BOUND: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatVendors: [],
 };
 
 /** Signed in, and the directory binds them to no seat. */
@@ -112,6 +116,50 @@ test("a change in an app the reader lacks names that app", () => {
       EVERY,
     ),
   ).toMatchObject({ block: "no_access", reason: expect.stringContaining("Doclet access") });
+  // AND CHATLET'S, whose every gesture is the Chatlet app's — a person's read
+  // cursor included, which lands in no log and is held by its app all the
+  // same.
+  for (const tool of ["post_message", "mark_chat_read"] as const) {
+    expect(writeAccess(tool, { ...BOUND, acts: [] }, "open", EVERY), tool).toEqual({
+      can: false,
+      block: "no_access",
+      reason: "This change needs Chatlet access. An admin can give it to you.",
+    });
+  }
+  expect(
+    writeAccess(
+      "post_message",
+      { ...BOUND, grants: ["chatlet"], chatlet: true, acts: [] },
+      "open",
+      EVERY,
+    ),
+  ).toMatchObject({ block: "not_served" });
+});
+
+// A CHANGE THAT NEEDS AN APP AND LANDS IN NO LOG. `answer_knowledge` spends a
+// model call and writes nothing a question reads, and it is either of the two
+// apps it answers from: a reader holding neither is told either would do,
+// where reading the app off the log the write lands in told them the engine
+// does not make the change. The CONTROL is a reader holding one app, whom the
+// app does not hold — what holds them is the engine's own list. Mutation: read
+// the app off `domain` again and the first reads `not_served`.
+test("a change several apps open names each of them to a reader holding none", () => {
+  const none: ViewerState = {
+    ...BOUND,
+    grants: [],
+    worklet: false,
+    doclet: false,
+    chatlet: false,
+    acts: [],
+  };
+  expect(writeAccess("answer_knowledge", none, "open", EVERY)).toEqual({
+    can: false,
+    block: "no_access",
+    reason: "This change needs Worklet or Doclet access. An admin can give it to you.",
+  });
+  expect(
+    writeAccess("answer_knowledge", { ...none, grants: ["doclet"], doclet: true }, "open", EVERY),
+  ).toMatchObject({ block: "not_served" });
 });
 
 // A QUEUED WRITE IS ONE THE PERSON WALKED AWAY FROM believing it happened:
@@ -202,13 +250,13 @@ test("messaging your own seat is held after everything a person can clear", () =
 // the first two read `can: true`.
 test("a change into a service the company does not run is held, and says why", () => {
   const acting = { ...BOUND, acts: ["create_work_item", "write_page", "pause_seat"] };
-  const jira: ServicesRun = { tracker: false, knowledge: true };
+  const jira: ServicesRun = { tracker: false, knowledge: true, chat: true };
   expect(writeAccess("create_work_item", acting, "open", jira)).toEqual({
     can: false,
     block: "held",
     reason: SERVICE_OFF_REASONS.tracker,
   });
-  const confluence: ServicesRun = { tracker: true, knowledge: false };
+  const confluence: ServicesRun = { tracker: true, knowledge: false, chat: true };
   expect(writeAccess("write_page", acting, "open", confluence)).toEqual({
     can: false,
     block: "held",
@@ -219,6 +267,48 @@ test("a change into a service the company does not run is held, and says why", (
   expect(writeAccess("create_work_item", acting, "offline", jira)).toMatchObject({
     block: "offline",
   });
+});
+
+// A DIRECT MESSAGE IS OFFERED ONLY WHERE A ROOM CAN BE, and held as Message
+// is otherwise. The company has to run Chatlet and the reader hold Chatlet,
+// and then it is open_dm's own access, held last on the reader's own seat.
+// Mutation: offer it on a company not running Chatlet, or to a reader
+// without Chatlet, and a null row goes red; drop the own-seat hold and the held
+// row does.
+test("a direct message is offered only where Chatlet runs, and held on your own seat", () => {
+  const reader: ViewerState = {
+    ...BOUND,
+    grants: ["chatlet"],
+    chatlet: true,
+    acts: ["open_dm"],
+  };
+  const can = writeAccess("open_dm", reader, "open", EVERY);
+  expect(can.can).toBe(true);
+  expect(directSeatAccess(can, reader, "swe", EVERY)).toBe(can);
+  expect(directSeatAccess(can, reader, "jane", EVERY)).toEqual({
+    can: false,
+    block: "held",
+    reason: OWN_SEAT_DIRECT,
+  });
+  const offline = writeAccess("open_dm", reader, "offline", EVERY);
+  expect(directSeatAccess(offline, reader, "jane", EVERY)).toBe(offline);
+  expect(directSeatAccess(can, reader, "swe", { ...EVERY, chat: false })).toBeNull();
+  expect(directSeatAccess(can, { ...reader, chatlet: false }, "swe", EVERY)).toBeNull();
+});
+
+// A CHANGE INTO A ROOM IS HELD WHERE THE COMPANY RUNS NO CHATLET, ahead of
+// any access the reader could be given, as a task is where it runs no
+// Worklet. Mutation: drop the chat arm of `actionService` and the first reads
+// `can: true`.
+test("a change into a room is held where the company runs no Chatlet", () => {
+  const acting = { ...BOUND, grants: ["chatlet"], chatlet: true, acts: ["post_message"] };
+  const slack: ServicesRun = { tracker: true, knowledge: true, chat: false };
+  expect(writeAccess("post_message", acting, "open", slack)).toEqual({
+    can: false,
+    block: "held",
+    reason: SERVICE_OFF_REASONS.chat,
+  });
+  expect(writeAccess("post_message", acting, "open", EVERY).can).toBe(true);
 });
 
 // A SCREEN SHOWING SOMEBODY ELSE'S RECORD HOLDS EVERY CHANGE ON IT, with its

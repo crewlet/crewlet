@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // The write tools. Every call is a PROPOSAL and never an effect (ADR-0051):
@@ -34,18 +35,38 @@ func DeriveTier(act authz.Action, destructive bool) Tier {
 	return TierReversible
 }
 
-// write is a write tool executing as act on the act route, the call's
-// arguments sent as the act tool's own, under the same names.
-func write(name, tool string, destructive bool, phrase, description string, s *schema) Tool {
+// write is a write tool executing as verb's tool on the act route, the call's
+// arguments sent as that tool's own, under the same names.
+//
+// THE ACT TOOL IS NAMED BY ITS VERB. Where a tool exists the authority table
+// names its verb after it, and internal/agent/builtin's walks hold the two
+// equal in both directions, so the verb is at once the tool's name and what
+// the write's tier and apps are derived from. It is also the one spelling of
+// the name this package can read: the tool's owner (the tracker, the pages,
+// the builtins) is a package internal/assistant's import walk keeps the
+// assistant from reaching, and a literal here would be a copy that a rename
+// of the tool leaves behind.
+func write(name string, verb authz.Action, destructive bool, phrase, description string,
+	s *schema) Tool {
+	tool := string(verb)
 	return Tool{
 		Name: name, Act: tool, Kind: KindWrite, Phrase: phrase, Description: description,
 		schema: s, Routes: []string{ActRoute}, Destructive: destructive,
-		Tier: DeriveTier(authz.Action(tool), destructive),
-		Apps: appsOf(authz.Action(tool)),
+		Tier: DeriveTier(verb, destructive),
+		Apps: appsOf(verb),
 		Build: func(a map[string]any) (exec.Request, error) {
 			return act(tool, Args(a))
 		},
 	}
+}
+
+// answersRun is a write whose request answers with a coding run's question
+// beside its receipt: what the resumed turn reads of it is fenced by the one
+// rule for a coding run's words (provenance.CodingRun), as every read of that
+// question is.
+func answersRun(t Tool) Tool {
+	t.Trust = provenance.CodingRun("").Trust
+	return t
 }
 
 // appsOf is the app a verb's row asks, as a list.
@@ -59,7 +80,7 @@ func appsOf(a authz.Action) []iam.Grant {
 // writeTools are the write tools, in the order a model meets them.
 func writeTools() []Tool {
 	out := []Tool{
-		write("create_task", "create_work_item", false, "file tasks",
+		write("create_task", authz.ActionWorkCreate, false, "file tasks",
 			"Propose filing a task, or a question a colleague owes an answer to (ask). Search "+
 				"first. The person approves before anything is filed.",
 			object([]string{"title"}, map[string]*schema{
@@ -75,7 +96,7 @@ func writeTools() []Tool {
 				"due":      text("When it is due: a date (2031-04-16) or today, tomorrow, eow, eom, +7d.", nameBytes),
 				"labels":   names("Tags the project declares.", 20),
 			})),
-		write("update_task", "update_work_item", true, "change tasks",
+		write("update_task", authz.ActionWorkUpdate, true, "change tasks",
 			"Propose changing a task's fields. Read it with get_task first and pass its version "+
 				"as if_match, so the change applies to what the person saw.",
 			object([]string{"item", "if_match"}, map[string]*schema{
@@ -90,14 +111,14 @@ func writeTools() []Tool {
 				"due":      text("A new due date (2031-04-16, today, eow, +7d).", nameBytes),
 				"labels":   names("The task's tags, replacing them.", 20),
 			})),
-		write("comment_on_task", "comment_on_work_item", false, "comment on tasks",
+		write("comment_on_task", authz.ActionWorkComment, false, "comment on tasks",
 			"Propose a comment on a task, or a reply to one.",
 			object([]string{"item", "body"}, map[string]*schema{
 				"item":     text("The task's key or id.", nameBytes),
 				"body":     text("The comment, in Markdown.", bodyBytes),
 				"reply_to": text("The id of the comment this replies to.", nameBytes),
 			})),
-		write("answer_decision", "comment_on_work_item", false, "answer questions on tasks",
+		write("answer_decision", authz.ActionWorkComment, false, "answer questions on tasks",
 			"Propose answering a question asked of the person on a task, choosing one of its "+
 				"options where it carries a decision.",
 			object([]string{"item"}, map[string]*schema{
@@ -106,38 +127,38 @@ func writeTools() []Tool {
 				"choice":  text("The id of the option chosen, where the question offers options.", nameBytes),
 				"body":    text("The answer, or why this option, in Markdown.", bodyBytes),
 			})),
-		write("set_my_priorities", "set_priorities", false, "reorder priorities",
+		write("set_my_priorities", authz.ActionPrioritiesSet, false, "reorder priorities",
 			"Propose the person's priority order, most important first, or a report's by "+
 				"their handle.",
 			object([]string{"items"}, map[string]*schema{
 				"items":  names("Task keys or ids, most important first.", 100),
 				"handle": text("A report's handle or seat name. Default the person's own list.", nameBytes),
 			})),
-		write("mark_inbox", "mark_inbox", false, "mark the inbox",
+		write(markInboxTool, authz.ActionInboxMark, false, "mark the inbox",
 			"Propose marking inbox notices read or unread, by their record ids.",
 			object(nil, map[string]*schema{
 				"read":   names("Record ids to mark read.", 200),
 				"unread": names("Record ids to mark unread.", 200),
 			})),
-		write("pause_agent", "pause_seat", true, "pause agents",
+		write("pause_agent", authz.ActionSeatPause, true, "pause agents",
 			"Propose pausing an agent seat, optionally stopping the turn it is running.",
 			object([]string{"handle", "reason"}, map[string]*schema{
 				"handle":       text("The seat's handle or name.", nameBytes),
 				"reason":       text("Why, in one line.", lineBytes),
 				"stop_running": flag("Stop the turn it is running now as well."),
 			})),
-		write("resume_agent", "resume_seat", false, "resume agents",
+		write("resume_agent", authz.ActionSeatResume, false, "resume agents",
 			"Propose resuming a paused agent seat.",
 			object([]string{"handle"}, map[string]*schema{
 				"handle": text("The seat's handle or name.", nameBytes),
 			})),
-		write("steer_turn", "steer_turn", false, "steer running turns",
+		write(steerTurnTool, authz.ActionTurnSteer, false, "steer running turns",
 			"Propose a note to a turn that is running now; it becomes that agent's input.",
 			object([]string{"turn_id", "note"}, map[string]*schema{
 				"turn_id": text("The running turn's id.", nameBytes),
 				"note":    text("The note, verbatim.", 8<<10),
 			})),
-		write("answer_coding_run", "answer_run", false, "answer coding runs",
+		answersRun(write("answer_coding_run", authz.ActionRunAnswer, false, "answer coding runs",
 			"Propose an answer to a coding run parked on a question for the person.",
 			object([]string{"turn_id", "launch_id"}, map[string]*schema{
 				"turn_id": text("The run's turn id.", nameBytes),
@@ -148,8 +169,8 @@ func writeTools() []Tool {
 				// The bound answer_run itself refuses past (builtin.MaxRunAnswerBytes).
 				"answer": text("The answer in words, verbatim: the whole answer to an open "+
 					"question, or what to add to a choice.", 16<<10),
-			})),
-		write("create_page", "write_page", false, "write pages",
+			}))),
+		write("create_page", authz.ActionPageCreate, false, "write pages",
 			"Propose a new knowledge page.",
 			object([]string{"title", "body"}, map[string]*schema{
 				"title":     text("The page's title.", lineBytes),
@@ -160,12 +181,12 @@ func writeTools() []Tool {
 				"status":    oneOf("published (the default) or draft.", "published", "draft"),
 				"message":   text("One line on why the page exists.", lineBytes),
 			})),
-		write("edit_page", "save_page", true, "edit pages",
-			"Propose a new version of a page. Read it with get_page first and pass its version "+
-				"as base_version.",
+		write("edit_page", authz.ActionPageSave, true, "edit pages",
+			"Propose a new version of a page. Read it with "+getPageTool+" first and pass "+
+				"its version as base_version.",
 			object([]string{"page", "base_version", "body"}, map[string]*schema{
 				"page":         text("The page's id.", nameBytes),
-				"base_version": positive("The page's version from get_page.", 1<<30),
+				"base_version": positive("The page's version from "+getPageTool+".", 1<<30),
 				"body":         text("The whole new body, in Markdown.", bodyBytes),
 				"title":        text("A new title.", lineBytes),
 				"message":      text("One line on what changed and why.", lineBytes),
@@ -180,7 +201,8 @@ func writeTools() []Tool {
 		out[i].Names = writeNames[out[i].Name]
 	}
 	out = append(out, principlesWrite(), budgetWrite(), seatAccessWrite())
-	return append(out, shareTools()...)
+	out = append(out, shareTools()...)
+	return append(out, chatWrites()...)
 }
 
 // writeNames are the arguments of each write that name a seat, a project or a
@@ -210,7 +232,7 @@ func shareTools() []Tool {
 	audience := text("A seat's handle, unit:<key> for a team and everybody under it, or "+
 		"company.", nameBytes)
 	share := Tool{
-		Name: "share_artifact", Act: string(authz.ActionArtifactShare), Kind: KindWrite,
+		Name: shareArtifactTool, Act: string(authz.ActionArtifactShare), Kind: KindWrite,
 		Phrase:      "share artifacts",
 		Description: "Propose sharing an artifact the person owns with a seat, a team or the company.",
 		schema: object([]string{"artifact", "to", "role"}, map[string]*schema{
@@ -239,7 +261,7 @@ func shareTools() []Tool {
 		StepUp: func(a Args) bool { return a.String("to") == string(artifacts.AudienceCompany) },
 	}
 	unshare := Tool{
-		Name: "unshare_artifact", Act: string(authz.ActionArtifactUnshare), Kind: KindWrite,
+		Name: unshareArtifactTool, Act: string(authz.ActionArtifactUnshare), Kind: KindWrite,
 		Phrase:      "withdraw shares",
 		Description: "Propose withdrawing one audience's share of an artifact the person owns.",
 		schema: object([]string{"artifact", "from"}, map[string]*schema{

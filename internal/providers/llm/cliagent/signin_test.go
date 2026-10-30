@@ -171,7 +171,9 @@ func newSignInProvider(t *testing.T, c signInCase) *Provider {
 // verdict is the expected one.
 func checkSignIn(t *testing.T, p *Provider, c signInCase) {
 	t.Helper()
-	d := p.Diagnose(t.Context(), DiagnoseOptions{})
+	// AN EMPTY HOME: a login the machine running the suite holds would turn
+	// every remedy into "adopt it", whatever the case is about.
+	d := p.Diagnose(t.Context(), DiagnoseOptions{HostHome: t.TempDir()})
 	var problem string
 	for _, line := range d.Problems {
 		if strings.HasPrefix(line, "no sign-in") {

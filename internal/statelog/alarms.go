@@ -169,12 +169,13 @@ const (
 	// that number, so at 2× they are describing a different company.
 	CensusDriftFactor = 2.0
 
-	// LinearizableReadsPerSeatDay is the read rate this engine's log sizing
-	// was derived from, per agent seat.
+	// LinearizableReadsPerSeatDay is the reference company's read rate per
+	// agent seat — the rate the logs its seats read at `linearizable` are
+	// sized from, and the one their read models declare ([ReadModel]).
 	//
 	// ONE HUNDRED AND TWENTY-FIVE: the reference company's 12 500
 	// linearizable reads a day over its 100 seats. It is the census input
-	// every capacity decision under the log rests on — a `linearizable`
+	// every capacity decision under such a log rests on — a `linearizable`
 	// read appends a barrier record, so the rate is a term in a log's byte
 	// ceiling, in how often the trim has to run to stay under it, and in
 	// how long a rejoining node's replay takes — and it is PER SEAT because
@@ -210,8 +211,39 @@ const (
 	LimitWaitingGrace = 15 * time.Minute
 )
 
+// ReadModel is what one domain DECLARES about the linearizable reads its log
+// takes: the barrier records a day each agent seat's reads append to it.
+//
+// # Per domain, because the logs are read differently
+//
+// A barrier lands on the log of the domain a read is about, so the rate is a
+// property of who reads that domain and how, and one figure charged to every
+// log with a read index is a claim about all of them that is true of some.
+// It was one figure: every such log was expected to take the whole company's
+// 125 reads a day per seat, so the identity estate's log — which no read
+// takes a barrier on, because every identity answer is a node's own rows —
+// was held to a census its ceiling was never sized for, and the ceiling was
+// sized with no barrier bytes in it at all. Declared per domain, the census a
+// log is held to and the barriers its ceiling is sized for are one number,
+// stated where the domain is registered.
+//
+// REQUIRED OF EVERY DOMAIN THAT HAS A BARRIER, by the engine's register: a
+// domain that grants `linearizable` says how often it is read that way, and
+// zero is a declaration rather than a default — the identity estate makes it,
+// and its log's first barrier is then `census_drift` naming its ceiling,
+// which is the alarm a new linearizable reader of it should meet.
+type ReadModel struct {
+	// PerSeatDay is the linearizable reads a day each agent seat's reads
+	// put on this log. Zero declares that no read of the domain takes a
+	// barrier.
+	PerSeatDay int
+}
+
 // Census is what one log's expected read rate is derived from.
 type Census struct {
+	// Reads is the log's domain's declared read model.
+	Reads ReadModel
+
 	// Seats is the running company's agent seats.
 	Seats int
 
@@ -236,27 +268,28 @@ type Census struct {
 //
 // # Per seat, and at least one
 //
-// The seats' reads come from their tools, so the company's figure is
-// [LinearizableReadsPerSeatDay] times its seats. A company with NO agent seat
-// is counted as one: its operators still read through the dashboard and the
-// operator MCP, and an expectation of zero would be an alarm that could never
-// fire, on exactly the company whose first seat has not been hired yet.
+// The seats' reads come from their tools, so the company's figure is the
+// domain's declared rate ([ReadModel.PerSeatDay]) times its seats. A company
+// with NO agent seat is counted as one: its operators still read through the
+// dashboard and the operator MCP, and an expectation of zero on a log they
+// read would fire on the first read anybody made, on exactly the company whose
+// first seat has not been hired yet.
 //
-// # The whole company's figure on every log, not a share of it
+// # The whole company's figure on each log it reads, not a share of it
 //
 // The census says how many reads a company makes and not how they split
-// between the tracker and the knowledge base, so each log is sized for all of
-// them — which is how their ceilings are sized too: each domain's log has its
-// own budget. Divided across the logs instead, the tracker's log would be
-// expected to take a fraction of the census, and the reference company, whose
-// reads are mostly the tracker's, would fire the alarm doing exactly the work
-// it was sized for.
+// between the tracker and the knowledge base, so each of those logs declares
+// all of them — which is how their ceilings are sized too: each domain's log
+// has its own budget. Divided across the logs instead, the tracker's log would
+// be expected to take a fraction of the census, and the reference company,
+// whose reads are mostly the tracker's, would fire the alarm doing exactly the
+// work it was sized for. A log no read takes a barrier on declares none.
 //
 // # Plus what the engine reads on its own
 //
 // [Census.Background] is added to it, for the reason it gives.
 func (c Census) Expected() int {
-	return LinearizableReadsPerSeatDay*max(c.Seats, 1) + max(c.Background, 0)
+	return max(c.Reads.PerSeatDay, 0)*max(c.Seats, 1) + max(c.Background, 0)
 }
 
 // Kind names one alarm.
@@ -348,10 +381,16 @@ type Reading struct {
 	// the trim runs once, and every node whose domain declares no ceiling.
 	HeadroomFraction *float64
 
-	// BackupAge is how old the newest verified backup is, and BackupMaxAge
-	// what the operator asked for. A zero BackupMaxAge is a node with no
-	// backup policy, which is not an alarm — it is a deployment that has
-	// said it does not want one.
+	// BackupAge is how old the backup one log's trim counts is — the
+	// newest verified point the policy counts that covers the log — and
+	// BackupMaxAge what the operator asked for. A zero BackupMaxAge is a
+	// node with no backup policy, which is not an alarm — it is a
+	// deployment that has said it does not want one.
+	//
+	// A PER-DOMAIN CONDITION, evaluated once per log from the report's
+	// rows ([ReportInputs.BackupMaxAge]) for the reason the headroom is:
+	// the logs' backups have one age each, and the one a node-wide
+	// reading carried was the newest point's, whatever it covered.
 	//
 	// BackupAge IS A POINTER, for the reason HeadroomFraction is one: zero
 	// is a real and reassuring value here — a copy verified this second —
@@ -400,11 +439,12 @@ type Reading struct {
 	// than by a node-wide caller.
 	//
 	// DeferredJudgesCopy is whether that log is a [Domain.ReadinessInput] —
-	// the tracker's and the knowledge base's are; the identity estate's,
-	// the vectors' and the usage domain's are not — which is whether the
-	// grace is ALSO when this node stops serving its copy of the estate
-	// (its seats stay, and read it from the other data nodes). The alarm
-	// fires at the grace either way, because an upgrade is the remedy
+	// the tracker's, the knowledge base's and chat's are; the identity
+	// estate's, the vectors', the usage domain's, the artifacts log's, the
+	// artifact datastore's and the Dashboard Assistant's are not — which is
+	// whether the grace is ALSO when this node stops serving its copy of the
+	// estate (its seats stay, and read it from the other data nodes). The
+	// alarm fires at the grace either way, because an upgrade is the remedy
 	// either way; what it may not do is tell an operator a node's copy was
 	// taken out of service over a log that judges none — or that it was
 	// not, over the one log among several that took it out, which is why
@@ -433,14 +473,14 @@ type Reading struct {
 	SearchDegradedFraction, SearchScopedFraction float64
 
 	// HistoryPartialFraction is the fraction of this node's fleet history
-	// reads answered without every live node, and HistoryReadBudget the
-	// budget those reads waited on for the other nodes — internal/eventfan's
-	// FleetReadBudget, which a node that did not answer inside is what makes
-	// an answer partial.
+	// reads answered without every live data node, and HistoryReadBudget the
+	// budget those reads waited on for the other data nodes —
+	// internal/eventfan's FleetReadBudget, which a node that did not answer
+	// inside is what makes an answer partial.
 	//
 	// THE BUDGET TRAVELS WITH THE READING rather than being imported here,
 	// because the scatter that owns it is a layer ABOVE this framework: it
-	// reads every node's own event log, and the framework every replicated
+	// reads every data node's own event log, and the framework every replicated
 	// domain is built on depending on the fleet's history reader for one
 	// constant would put that reader under every domain's build. The node
 	// that counted the reads is the one that knows what they waited on, and
@@ -480,10 +520,24 @@ type Reading struct {
 	// circling for ever behind everything queued after it.
 	RecordsGated, FeedUnreadable int
 
-	// MaintenanceOpenFor is how long a maintenance operation has been in
-	// flight, with the phase it is stuck in.
-	MaintenanceOpenFor time.Duration
-	MaintenancePhase   string
+	// MaintenanceOpenFor is how long the oldest capacity window has been
+	// open, with the log it is on and the phase it is stuck in.
+	//
+	// MaintenanceUnreadable says that window is the one this node last READ
+	// open and can't read now, MaintenanceOpenFor is then how long it had
+	// been open WHEN THAT READ ANSWERED, and MaintenanceReadAgo how long ago
+	// that was. A window is open, absent, or unreadable, and the third is
+	// neither of the others: read as absent, a coordination blip cleared a
+	// firing alarm, and read as open on this node's clock, a window last read
+	// at 59 minutes crossed the hour during the blip and raised one about a
+	// window that might have closed. So the alarm judges an unreadable log
+	// on what this node last knew of it, as old as it was then, and the
+	// detail says that is what it is.
+	MaintenanceOpenFor    time.Duration
+	MaintenanceStream     string
+	MaintenancePhase      string
+	MaintenanceUnreadable bool
+	MaintenanceReadAgo    time.Duration
 
 	// FreeBytes and StoreBytes are one volume's free space and what this
 	// node's databases occupy ON IT, and StoreVolume the directory that
@@ -512,6 +566,15 @@ type Reading struct {
 	// furthest past its census said nothing of a second log past its own
 	// until the first came back under.
 	LinearizableReads, LinearizableReadsExpected int
+
+	// LogCeilingField is the Tier A field that sets this log's byte ceiling
+	// (`stream.iam_log_max_bytes`, say), which a log past its census names
+	// in its own line: each log's ceiling is its own field, sized from
+	// what that log holds, and one remedy naming the mutation log's sent an
+	// operator of every other log to the wrong field. Empty where the
+	// caller named none. Per DOMAIN, filled by the report from
+	// [DomainInputs.CeilingField].
+	LogCeilingField string
 
 	// LogBytesPerDay is what one log took in over the trailing day,
 	// LogMaxBytes the ceiling its broker enforces and ReplayWindow the
@@ -626,8 +689,8 @@ type Alarm struct {
 	// Detail says what was measured, in the operator's units. It is the
 	// half of an alarm that makes it actionable: "apply_lag" is a name,
 	// and "this node is 4m12s behind" is a fact. For a per-log condition
-	// it is the most pressing log's measurement; each log in [Alarm.Domains]
-	// carries its own.
+	// it is the most pressing log's measurement; each entry in
+	// [Alarm.Domains] carries its own logs'.
 	Detail string `json:"detail"`
 
 	// Remedy is what to do about it. Carried on the alarm rather than
@@ -639,12 +702,10 @@ type Alarm struct {
 	// Domains is every log this alarm stands on, for a condition that is a
 	// property of a log rather than of the node ([PerLogKinds]): the logs
 	// nearing or short of their ceiling, the logs whose trim is held, the
-	// logs holding a record past the deferral grace, the logs whose floor
-	// cannot be read and the logs past their census — and under
-	// [KindBackupAge] the logs whose [KindTrimBlocked] the missing or stale
-	// backup absorbs: held past their replay window and keeping records
-	// older than it. A younger hold is listed under no alarm. Empty for a
-	// node-wide condition.
+	// logs whose backup is missing or older than the policy, the logs
+	// holding a record past the deferral grace, the logs whose floor cannot
+	// be read and the logs past their census. Empty for a node-wide
+	// condition.
 	//
 	// ONE ALARM PER KIND, WITH ITS LOGS IN IT, rather than one alarm per log.
 	// The kind is the alarm's identity on the count, the gauge and every
@@ -652,7 +713,13 @@ type Alarm struct {
 	// raised `trim_blocked` once per log told the health count four while
 	// the gauge said one, and drew one cause as four problems on the
 	// operator's screen. Detail is the most pressing log's measurement;
-	// each entry here carries its own.
+	// each entry here carries its own logs'.
+	//
+	// ONE ENTRY PER MEASUREMENT, naming every log it was taken on, where no
+	// trim term holds them ([AlarmDomain.Domains]). A deployment minutes old
+	// with no backup measures the same sentence on every log, and an entry
+	// per log made every surface print it once per log under a headline
+	// that was already that sentence.
 	//
 	// THE LOG LINES ARE STILL PER LOG. The [Tracker] forms one instance per
 	// (kind, log) from this list, so a second log joining a kind that is
@@ -684,22 +751,36 @@ type AlarmEntry struct {
 	Since time.Time `json:"since,omitzero"`
 }
 
-// AlarmDomain is one log an alarm stands on, and what was measured there.
+// AlarmDomain is one measurement an alarm stands on, and the logs it was
+// taken on.
 type AlarmDomain struct {
-	// Domain is the log's registered name.
-	Domain string `json:"domain"`
+	// Domains is the logs' registered names, in the report's own order —
+	// never empty. ONE LOG WHEREVER Term IS SET: a held trim's entry carries
+	// that log's own instant and its own count of what it keeps, which no
+	// other log shares. EVERY LOG MEASURED IDENTICALLY otherwise, so a
+	// measurement the report took on five logs in the same words is carried
+	// once, naming the five, and each surface renders what it is given
+	// rather than folding repeats of its own: a young fleet's missing backup
+	// was printed once per log under a headline that already said it, on
+	// the dashboard and in `crewlet retention status` alike.
+	Domains []string `json:"domains"`
 
-	// Detail is this log's own measurement, in the operator's units.
+	// Detail is these logs' measurement, in the operator's units — under
+	// [KindBackupAge], followed by the held trim's where Term is set, since
+	// that log raises no [KindTrimBlocked] to say it.
 	Detail string `json:"detail"`
 
 	// Term is the trim term holding this log, where the alarm is about its
-	// trim. It is the term's own name, which is what `crewlet retention
-	// status` prints and the retention guide is indexed by.
+	// trim: under [KindTrimBlocked], and under [KindBackupAge] for a log
+	// whose trim the backup term is holding, which raises no
+	// [KindTrimBlocked] of its own. It is the term's own name, which is what
+	// `crewlet retention status` prints and the retention guide is indexed
+	// by.
 	Term TermName `json:"term,omitempty"`
 
-	// Since is when this log's trim stopped advancing, where the alarm is
-	// about its trim. An instant rather than an age, so a reader renders
-	// the age against its own clock instead of trusting one frozen at the
+	// Since is when this log's trim stopped advancing, wherever Term is
+	// set. An instant rather than an age, so a reader renders the age
+	// against its own clock instead of trusting one frozen at the
 	// evaluation.
 	Since time.Time `json:"since,omitzero"`
 }
@@ -853,17 +934,23 @@ var table = []rule{
 				return "", false
 			}
 			if r.BackupAge == nil {
-				return fmt.Sprintf("no verified backup has been recorded, and "+
-					"the policy asks for one every %s", spoken(r.BackupMaxAge)), true
+				return fmt.Sprintf("no verified backup of this log has been "+
+					"recorded, and the policy asks for one every %s",
+					spoken(r.BackupMaxAge)), true
 			}
-			return fmt.Sprintf("the newest verified backup is %s old, and the "+
-					"policy asks for %s", spoken(*r.BackupAge), spoken(r.BackupMaxAge)),
+			return fmt.Sprintf("the newest verified backup of this log is %s "+
+					"old, and the policy asks for %s", spoken(*r.BackupAge),
+					spoken(r.BackupMaxAge)),
 				*r.BackupAge > r.BackupMaxAge
 		},
 		remedy: "Run `crewlet backup` against any node, whatever its roles, " +
-			"and check whatever was meant to run it. The trim does not " +
-			"advance past a backup older than the policy, and does not " +
-			"advance at all until there is one.",
+			"and check whatever was meant to run it; under `backup_floor: " +
+			"operator`, acknowledge each named log's off-host copy with " +
+			"`crewlet retention ack -stream <its stream> -position <n>`, n " +
+			"being the sequence the copy reaches. The trim does not advance " +
+			"a log past a backup older than the policy, and does not " +
+			"advance it at all until there is one.",
+		perLog: true,
 	},
 	{
 		// A BLOCKED TRIM IS AN ORDINARY STATE until it has cost something,
@@ -977,8 +1064,9 @@ var table = []rule{
 				r.SearchP95 > InteractiveSearchTarget
 		},
 		remedy: "The corpus has outgrown what one node's share can scan in " +
-			"the budget. Adding a node divides the buckets again, with no " +
-			"configuration and no rebuild. See docs/guides/search.md.",
+			"the budget. Adding a data node divides the buckets again, with " +
+			"no configuration and no rebuild; a node without `data` takes " +
+			"no range. See docs/guides/search.md.",
 	},
 	{
 		kind: KindSearchDegraded,
@@ -1009,8 +1097,8 @@ var table = []rule{
 		// budget, so that budget is the threshold — named in the detail
 		// from the value the reading carries, which is the constant the
 		// scatter waits on ([Reading.HistoryReadBudget]), never restated.
-		// PROCESS-WIDE rather than per log: the reads are of each node's
-		// own event log, which is no state log at all.
+		// PROCESS-WIDE rather than per log: the reads are of each data
+		// node's own event log, which is no state log at all.
 		kind: KindHistoryPartial,
 		fires: func(r Reading) (string, bool) {
 			budget := "the fleet read budget"
@@ -1018,17 +1106,17 @@ var table = []rule{
 				budget = "the " + spoken(r.HistoryReadBudget) + " fleet read budget"
 			}
 			return fmt.Sprintf("%.0f%% of fleet history reads were answered without "+
-					"every node, because one did not answer inside %s",
+					"every data node, because one did not answer inside %s",
 					r.HistoryPartialFraction*100, budget),
 				r.HistoryPartialFraction > 0
 		},
-		remedy: "Turn-level history lives only on the node that published it, so " +
-			"a partial answer is missing that node's rows, and every answer names " +
-			"the node in its `coverage`. A node that has left the fleet is gone " +
-			"with its detail, and the aggregates survive it in the usage domain; " +
-			"a live node that keeps missing the budget is slow on its own store " +
-			"or its route, and its own `pool_starved` and `apply_lag` alarms say " +
-			"which.",
+		remedy: "Turn-level history lives only on the data node that published " +
+			"it or keeps it in custody, so a partial answer is missing that node's " +
+			"rows, and every answer names the node in its `coverage`. A node that " +
+			"has left the fleet is gone with its detail, and the aggregates survive " +
+			"it in the usage domain; a live node that keeps missing the budget is " +
+			"slow on its own store or its route, and its own `pool_starved` and " +
+			"`apply_lag` alarms say which.",
 	},
 	{
 		kind: KindRecallBelowFloor,
@@ -1092,7 +1180,7 @@ var table = []rule{
 	},
 	{
 		// NOT `feed_dead_letters`, WHICH NAMED A PATH THIS ENGINE DOES
-		// NOT HAVE. Both domain consumers set `MaxDeliver: -1`
+		// NOT HAVE. Every domain feed's consumer sets `MaxDeliver: -1`
 		// deliberately — a record nobody can handle yet is a retry
 		// rather than a poison message, and a delivery budget that ran
 		// out would drop a wake silently — so nothing ever reaches a
@@ -1112,12 +1200,33 @@ var table = []rule{
 	{
 		kind: KindMaintenanceOpen,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("a maintenance operation has been open for %s in "+
-					"phase %q", spoken(r.MaintenanceOpenFor), r.MaintenancePhase),
-				r.MaintenanceOpenFor > MaintenanceAlarmAfter
+			fires := r.MaintenanceOpenFor > MaintenanceAlarmAfter
+			if !r.MaintenanceUnreadable {
+				return fmt.Sprintf("a capacity window on %s has been open for %s "+
+					"in phase %q", r.MaintenanceStream, spoken(r.MaintenanceOpenFor),
+					r.MaintenancePhase), fires
+			}
+			// THE NEXT STEP IS THE READ'S, NOT THE WINDOW'S: finishing or
+			// abandoning it goes through the read that is failing, and it
+			// may have closed since.
+			when := "when this node last read it"
+			if r.MaintenanceReadAgo > 0 {
+				when += ", " + spoken(r.MaintenanceReadAgo) + " ago"
+			}
+			return fmt.Sprintf("a capacity window on %s had been open for %s in "+
+				"phase %q %s. This node can't read the window now, so it can't "+
+				"tell whether it has closed, and it can't be finished or "+
+				"abandoned through this node until it can", r.MaintenanceStream,
+				spoken(r.MaintenanceOpenFor), r.MaintenancePhase, when), fires
 		},
-		remedy: "Maintenance stops every publisher on every node. Finish it or " +
-			"abandon it; nothing is being written while it is open.",
+		// TRUE OF THE NODE THAT RAISES IT, which is one still publishing:
+		// only a node in service evaluates this table, so "nothing is being
+		// written" was false of every node that ever said it. What a window
+		// does is hold the fleet: no node starts in service while it is open,
+		// and a node restarted for it publishes nothing until it closes.
+		remedy: "While a capacity window is open no node starts in service, and " +
+			"every node restarted for it publishes nothing. Finish it or abandon " +
+			"it.",
 	},
 	{
 		kind: KindVolumeLow,
@@ -1169,14 +1278,26 @@ var table = []rule{
 		kind:   KindCensusDrift,
 		perLog: true,
 		fires: func(r Reading) (string, bool) {
+			// THE LOG'S OWN CEILING FIELD, where the caller named it: the
+			// remedy is one sentence for every log, and the field is
+			// what differs between them.
+			ceiling := ""
+			if r.LogCeilingField != "" {
+				ceiling = fmt.Sprintf("; its ceiling is `%s`", r.LogCeilingField)
+			}
+			// A DECLARED ZERO FIRES ON THE FIRST BARRIER: a log whose
+			// domain declares that no read takes one was sized with no
+			// barrier bytes in it, so any is a reader nobody counted.
 			return fmt.Sprintf("%d linearizable reads a day against the %d this "+
-					"log was sized for", r.LinearizableReads,
-					r.LinearizableReadsExpected),
-				r.LinearizableReadsExpected > 0 &&
-					float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
+					"log was sized for%s", r.LinearizableReads,
+					r.LinearizableReadsExpected, ceiling),
+				float64(r.LinearizableReads) > CensusDriftFactor*float64(r.LinearizableReadsExpected)
 		},
-		remedy: "Re-derive the log's ceiling and the trim's cadence from the real " +
-			"rate. See `stream.tracker_retention` in " +
+		remedy: "Each read past the census is a barrier record on the named log, " +
+			"so re-derive that log's own ceiling — the field its line names — " +
+			"adding what its barriers take at the real rate to whatever else the " +
+			"field is sized from, and the trim's cadence " +
+			"(`stream.tracker_retention`). See " +
 			"docs/getting-started/configuration.md.",
 	},
 	{
@@ -1424,10 +1545,10 @@ func Frac(v float64) *float64 { return &v }
 func PerDay(v uint64) *uint64 { return &v }
 
 // PerLogKinds is every alarm evaluated once per log rather than once per node,
-// in the table's own order: the six a reader of the reference has to know list
-// the logs they stand on ([Alarm.Domains]) and write a pair of log lines for
-// each of those logs ([Tracker]), while counting once on the health envelope
-// and the gauge.
+// in the table's own order: the seven a reader of the reference has to know
+// list the logs they stand on ([Alarm.Domains]) and write a pair of log lines
+// for each of those logs ([Tracker]), while counting once on the health
+// envelope and the gauge.
 func PerLogKinds() []Kind {
 	var out []Kind
 	for _, rule := range table {
@@ -1447,28 +1568,6 @@ func PerEntryKinds() []Kind {
 		}
 	}
 	return out
-}
-
-// perEntryKind reports whether kind is one of [PerEntryKinds].
-func perEntryKind(kind Kind) bool {
-	for _, rule := range table {
-		if rule.kind == kind {
-			return rule.perEntry
-		}
-	}
-	return false
-}
-
-// perLogKind reports whether kind is one of [PerLogKinds]: a condition whose
-// log lines the [Tracker] writes once per log it stands on. A kind the table
-// does not hold is not one.
-func perLogKind(kind Kind) bool {
-	for _, rule := range table {
-		if rule.kind == kind {
-			return rule.perLog
-		}
-	}
-	return false
 }
 
 // Age is a measured age, for the Reading field whose zero value is a real and

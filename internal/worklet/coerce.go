@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The coercion table: what a field value may BE, decided once at the write.
@@ -800,7 +801,7 @@ func refuseUnsetRequired(ctx context.Context, tx *sql.Tx, current Task,
 		return nil
 	}
 	sort.Strings(cleared)
-	return invalid("a %s in project %s requires %v, and this edit "+
+	return invalid("a %s in project %s requires %s, and this edit "+
 		"clears them — set another value rather than emptying the field",
-		current.Type, current.Project, cleared)
+		current.Type, current.Project, words.And(cleared))
 }

@@ -48,7 +48,7 @@ type Page struct {
 	// Title is the page's ADDRESS within its container, unique and claimed.
 	// The displayed form keeps the author's own capitalisation;
 	// [NormalizeTitle] is what the claim and every comparison use.
-	Title string `json:"title"`
+	Title string `json:"title" untrusted:"name"`
 
 	// Body is markdown, the canonical and only format.
 	//
@@ -56,10 +56,10 @@ type Page struct {
 	// XHTML beside markdown would have every reader — the search indexer,
 	// the skill parser, an agent, a person — needing to know which, and the
 	// one that guessed wrong would render markup as prose.
-	Body string `json:"body,omitempty"`
+	Body string `json:"body,omitempty" untrusted:"fence"`
 
 	Status Status   `json:"status"`
-	Labels []string `json:"labels,omitempty"`
+	Labels []string `json:"labels,omitempty" untrusted:"name"`
 
 	Watchers []string `json:"watchers,omitempty"`
 	Muted    []string `json:"muted,omitempty"`
@@ -108,7 +108,7 @@ type Comment struct {
 	Author     string     `json:"author"`
 	AuthorKind AuthorKind `json:"author_kind"`
 
-	Body     string   `json:"body"`
+	Body     string   `json:"body" untrusted:"fence"`
 	Mentions []string `json:"mentions,omitempty"`
 	ReplyTo  string   `json:"reply_to,omitempty"`
 

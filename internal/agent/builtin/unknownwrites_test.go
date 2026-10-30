@@ -73,8 +73,11 @@ func (u *unknownWriter) WriteView(_ context.Context, opID string,
 	return u.answer(opID)
 }
 
+// ViewPrior holds every view a case names, as a shared tab on ENG: a save
+// naming an id no view holds is refused before it writes anything.
 func (u *unknownWriter) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
-	return worklet.ViewPrior{}, nil
+	return worklet.ViewPrior{Held: true,
+		Container: worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}}, nil
 }
 
 func (u *unknownWriter) WriteTypes(_ context.Context, opID string,

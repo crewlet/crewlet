@@ -21,7 +21,7 @@ import (
 // was open handed its child a copy, and Linux refuses to execute a file any
 // process holds open for writing until that child executes in turn. The window
 // is short and this package forks constantly — internal/sandbox's
-// waitExecutable measured 17 refusals in 200 runs of a just-written script with
+// suite measured 17 refusals in 200 runs of a just-written script with
 // eight goroutines forking beside it — and a refusal reads as nothing a case
 // asserts: a run's script finds no CLI, or a version probe answers nothing and
 // the gate takes its fallback. So a stand-in is written by a process of its own

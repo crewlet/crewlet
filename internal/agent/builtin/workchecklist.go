@@ -47,7 +47,7 @@ func assignmentReason(args map[string]any) (string, string) {
 	if _, assigning := args["assignee"]; !assigning {
 		return "", "`reason` explains an ASSIGNMENT and this call sets no " +
 			"`assignee`. To explain any other change, comment on the item " +
-			"with comment_on_work_item."
+			"with " + worklet.CommentOnWorkTool + "."
 	}
 	if n := utf8.RuneCountInString(reason); n > MaxAssignmentReason {
 		return "", fmt.Sprintf("`reason` is %d characters and an assignment "+
@@ -75,7 +75,7 @@ func checklistSchema() map[string]any {
 			"{list, name, assignee?}; remove_item {item}; rename_item {item, " +
 			"name}; set_done {item, done}; assign_item {item, assignee} " +
 			"(\"\" for nobody). Lists and items are named by the ids " +
-			"get_work_item shows; the change is applied to the checklists as " +
+			GetWorkItemTool + " shows; the change is applied to the checklists as " +
 			"they are when it lands, so somebody else's tick in the meantime " +
 			"is kept.",
 		"properties": map[string]any{

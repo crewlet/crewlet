@@ -1,10 +1,13 @@
 package builtin_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -17,7 +20,9 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -519,15 +524,81 @@ func TestEveryNoteIsSignedAndBound(t *testing.T) {
 	}
 }
 
-// THE RUNNING NODE COULD NOT VERIFY THE NOTE: it took nothing, and the person
-// is told that — what it holds, and that the keyring is what to fix — rather
-// than `unknown`, which a retry would never change. On the probe as on the
-// offer, and nothing is offered after a probe that says so.
+// AN UNVERIFIED NOTE IS LOGGED ON THE ASKING NODE NAMING THE NODE THAT RUNS THE
+// TURN AND THE KEYS IT HOLDS, as fields of their own: the running node used to
+// write them as a sentence about "this node", which the asking node's line read
+// as itself, beside advice to add the key "on the node running the turn".
+// Mutation: drop either field from the line and this fails. Not parallel: it
+// adds a destination to the process's logger.
+func TestAnUnverifiedNoteIsLoggedWithTheNodeToAddTheKeyOn(t *testing.T) {
+	var lines lockedLines
+	debug := slog.LevelDebug
+	logging.SetFile(logging.FileSink{Writer: &lines, Format: logging.FormatJSON, Level: &debug})
+	t.Cleanup(func() { logging.SetFile(logging.FileSink{}) })
+	asker := &fleetAsker{replies: []steer.Reply{{Version: 1, TurnID: "run-logged",
+		Unverified: &steer.Unverified{Node: "node-2", HeldKeys: []string{"k0", "k9"}}}}}
+	steerCall(t, newSteerRig(t, asker, requestKey(), operatorCaller, seatLeads),
+		"run-logged", "use staging")
+	var found bool
+	for _, rec := range lines.records(t) {
+		if rec["msg"] != "steer_turn_unverified" || rec["turn_id"] != "run-logged" {
+			continue
+		}
+		found = true
+		held, _ := rec["held_keys"].([]any)
+		if rec["running_node"] != "node-2" ||
+			!slices.Equal(held, []any{"k0", "k9"}) {
+			t.Errorf("the line %v doesn't name the running node and the keys it holds", rec)
+		}
+	}
+	if !found {
+		t.Fatal("no steer_turn_unverified line was logged")
+	}
+}
+
+// lockedLines collects what the process's logger writes, one JSON record a
+// line, safe for the logger's writes and the test's read.
+type lockedLines struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedLines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedLines) records(t *testing.T) []map[string]any {
+	t.Helper()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []map[string]any
+	scan := bufio.NewScanner(bytes.NewReader(l.buf.Bytes()))
+	for scan.Scan() {
+		var rec map[string]any
+		if err := json.Unmarshal(scan.Bytes(), &rec); err == nil {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// THE RUNNING NODE COULD NOT VERIFY THE NOTE: it took nothing, and the refusal
+// says so rather than `unknown`, which a retry would never change, and under
+// no wait, since only an operator bringing the keys into agreement does. It is
+// a CONDITION ([steer.ErrUnverified]), so each reader has words of their own:
+// the person's sentence says who fixes it, and the assistant that called the
+// tool is told the same and that sending it again won't help. The keys and the
+// turn go to the log: said to the person steering, they were a turn id and key
+// ids nobody at a dashboard chose. On the probe as on the offer, and nothing is
+// offered after a probe that says so.
+// Mutation: put reply.Unverified back into the sentence, refuse on another
+// cause, or let the condition clear on a wait, and this fails.
 func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 	t.Parallel()
 	unverified := steer.Reply{Version: 1, TurnID: "run-1",
-		Unverified: "the node running turn run-1 does not hold the key the note is " +
-			"signed under (it holds [k0]) — add the key to its secrets.keys"}
+		Unverified: &steer.Unverified{Node: "node-2", HeldKeys: []string{"k0"}}}
 	for name, caller := range map[string]iam.Principal{
 		"the offer, by the deployment's operator": operatorCaller,
 		"the probe, by a lead":                    boundTo("jane"),
@@ -538,9 +609,24 @@ func TestANoteTheRunningNodeCouldNotVerifyIsRefusedAsUnavailable(t *testing.T) {
 			res, _ := steerCall(t, newSteerRig(t, asker, requestKey(), caller, seatLeads),
 				"run-1", "use staging")
 			if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
-				!strings.Contains(res.Output, "secrets.keys") {
-				t.Fatalf("answered %s: %q, want unavailable naming the keyring",
+				!strings.Contains(res.Output, "an administrator") {
+				t.Fatalf("answered %s: %q, want unavailable saying who fixes it",
 					tools.RefusalOf(res), res.Output)
+			}
+			person, ok := builtin.ConditionSentence(res.Cause)
+			if !ok || !strings.Contains(person, "your note") ||
+				!strings.Contains(person, "An administrator") {
+				t.Errorf("a person is told %q (%v), want who fixes it", person, ok)
+			}
+			for _, said := range []string{res.Output, person} {
+				for _, leak := range []string{"run-1", "node-2", "k0", "secrets.keys"} {
+					if strings.Contains(said, leak) {
+						t.Errorf("the refusal %q names %q, which only the log should", said, leak)
+					}
+				}
+			}
+			if builtin.RetryAfter(res.Cause, time.Second) != 0 {
+				t.Errorf("the refusal carries a wait, and no wait changes the keys")
 			}
 			if len(asker.asked) != 1 {
 				t.Errorf("asked the fleet %d times, want once and nothing offered after", len(asker.asked))
@@ -616,7 +702,18 @@ func TestNoRunRecordProbesThenOffers(t *testing.T) {
 
 // AUTHORITY IS DECIDED ON THE ANCHORED SEAT: a lead of another seat is refused
 // on the seat the run's sealed record names, with nothing filed and the fleet
-// asked nothing — and a record whose anchor did not open decides nothing at all.
+// asked nothing — and a record whose anchor did not open decides nothing at all,
+// under no wait, since the launch sealed the anchor once.
+//
+// ONE UNDER A KEY THIS NODE DOES NOT HOLD is the fleet's nodes not holding the
+// same keys, the fact a note the running node could not verify is, and it is
+// told the same way: the condition [steer.ErrSeatKeyUnknown], whose words for a
+// person say who fixes it and name neither the keys nor the turn, and a model
+// told that sending it again won't help. A record that names no seat, or whose
+// anchor does not verify, is no condition: no keyring opens it.
+//
+// Mutation: refuse the unheld key on the bare no-wait mark again, drop its arm
+// from the condition table, or let it clear on a wait, and its row fails.
 func TestAuthorityIsDecidedOnTheAnchoredSeat(t *testing.T) {
 	t.Parallel()
 	ceoLead := leadPairs{{"jane", "agent-ceo"}: true}
@@ -634,30 +731,71 @@ func TestAuthorityIsDecidedOnTheAnchoredSeat(t *testing.T) {
 				runs.filedNotes())
 		}
 	})
-	t.Run("an anchor that did not open", func(t *testing.T) {
-		t.Parallel()
-		asker := &fleetAsker{}
-		runs := &runRecords{recorded: true, seat: builtin.RunSeat{
-			Unverified: "the record's seat is sealed under a key this node does not hold (it holds [k1])"}}
-		res, _ := steerCall(t, newSteerRigOn(t, asker, runs, requestKey(), boundTo("jane"), seatLeads),
-			"run-1", "use staging")
-		if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
-			!strings.Contains(res.Output, "it holds [k1]") {
-			t.Fatalf("answered %s: %q, want unavailable naming why", tools.RefusalOf(res), res.Output)
-		}
-		if len(asker.asked) != 0 || len(runs.filedNotes()) != 0 {
-			t.Errorf("a note was sent on a seat nobody can vouch for: asked %+v, filed %+v",
-				asker.asked, runs.filedNotes())
-		}
-	})
+	for name, tc := range map[string]struct {
+		why       error
+		condition bool
+		saying    string
+	}{
+		"an anchor under a key this node does not hold": {steer.ErrSeatKeyUnknown, true,
+			"an administrator needs to give the fleet's nodes the same keys"},
+		"a record that names no seat":    {steer.ErrSeatUnnamed, false, "names no seat"},
+		"an anchor that does not verify": {steer.ErrSeatUnverified, false, "does not verify"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			asker := &fleetAsker{}
+			runs := &runRecords{recorded: true, seat: builtin.RunSeat{Unverified: tc.why}}
+			res, _ := steerCall(t, newSteerRigOn(t, asker, runs, requestKey(), boundTo("jane"),
+				seatLeads), "run-1", "use staging")
+			if !res.Failed || tools.RefusalOf(res) != tools.RefusalUnavailable ||
+				!strings.Contains(res.Output, tc.saying) {
+				t.Fatalf("answered %s: %q, want unavailable saying %q", tools.RefusalOf(res),
+					res.Output, tc.saying)
+			}
+			if builtin.RetryAfter(res.Cause, time.Second) != 0 {
+				t.Errorf("the refusal carries a wait, and the launch sealed the anchor once")
+			}
+			person, ok := builtin.ConditionSentence(res.Cause)
+			if ok != tc.condition || errors.Is(res.Cause, tc.why) != tc.condition {
+				t.Fatalf("a condition: %v (%q), want %v", ok, person, tc.condition)
+			}
+			if tc.condition {
+				if !strings.Contains(person, "An administrator") ||
+					!strings.Contains(res.Output, "won't change that") {
+					t.Errorf("a person is told %q and the model %q, want who fixes it and "+
+						"that sending it again won't help", person, res.Output)
+				}
+				for _, leak := range []string{"run-1", "k1", "secrets.keys"} {
+					if strings.Contains(person, leak) {
+						t.Errorf("a person is told %q, which names %q", person, leak)
+					}
+				}
+			}
+			if len(asker.asked) != 0 || len(runs.filedNotes()) != 0 {
+				t.Errorf("a note was sent on a seat nobody can vouch for: asked %+v, filed %+v",
+					asker.asked, runs.filedNotes())
+			}
+		})
+	}
 }
 
 // EVERY FILING OUTCOME HAS ITS REFUSAL, each in the class the person's surface
 // acts on and with its own sentence: a turn that holds too many unread notes,
 // one that has taken all it takes, one that has ended — and a record that
-// could not be read or written, which sent nothing and says to try again.
+// could not be read or written, told as what stopped it. A store that did not
+// answer is a condition, `unavailable` in its own words with the wait that
+// clears it; anything else is a fault of this node, `internal_error`, its error
+// in the log and never in the sentence, and no retry invited: a record this
+// node cannot decode was answered "Try again" under the undecided hint, and
+// polled for as long as the person kept pressing.
+//
+// Mutation: answer a record's failure as a bare unavailable again, or put the
+// error's text into the sentence, and the fault rows go red.
 func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 	t.Parallel()
+	unanswered := fmt.Errorf("coord/kv: write the sandbox run: %w: %w", coord.ErrUnavailable,
+		errors.New("nats: timeout"))
+	undecodable := errors.New("sandbox: decode run run-1: unexpected end of JSON input")
 	for _, tc := range []struct {
 		name   string
 		runs   func(t *testing.T) *runRecords
@@ -666,21 +804,33 @@ func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 	}{
 		{"full", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusFull})
-		}, tools.RefusalNotesFull, "notes it has not read yet"},
+		}, tools.RefusalNotesFull, "notes it hasn't read yet"},
 		{"spent", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusSpent})
 		}, tools.RefusalNotesSpent, "put the rest on the work item"},
 		{"closed", func(t *testing.T) *runRecords {
 			return recordedTurn(t, builtin.RunFiled{Status: steer.StatusClosed})
 		}, tools.RefusalNotRunning, "is not running"},
-		{"a record that could not be written", func(t *testing.T) *runRecords {
+		{"a record the store did not write", func(t *testing.T) *runRecords {
 			runs := recordedTurn(t, builtin.RunFiled{})
-			runs.fileErr = errors.New("coord: the store is unavailable")
+			runs.fileErr = unanswered
 			return runs
-		}, tools.RefusalUnavailable, "a retry is the same note"},
-		{"a record that could not be read", func(*testing.T) *runRecords {
-			return &runRecords{seatErr: errors.New("coord: the store is unavailable")}
-		}, tools.RefusalUnavailable, "could not be read, so nothing was sent"},
+		}, tools.RefusalUnavailable, "Could not file the note on the record of turn run-1's " +
+			"coding run (the coordination store did not answer). Try again shortly."},
+		{"a record the store did not read", func(*testing.T) *runRecords {
+			return &runRecords{seatErr: unanswered}
+		}, tools.RefusalUnavailable, "Could not read the record of turn run-1's coding run " +
+			"(the coordination store did not answer). Nothing was sent. Try again shortly."},
+		{"a filing this node could not make", func(t *testing.T) *runRecords {
+			runs := recordedTurn(t, builtin.RunFiled{})
+			runs.fileErr = undecodable
+			return runs
+		}, tools.RefusalInternalError, "Could not file the note on the record of turn run-1's " +
+			"coding run: a fault in this node itself"},
+		{"a record this node cannot read", func(*testing.T) *runRecords {
+			return &runRecords{seatErr: undecodable}
+		}, tools.RefusalInternalError, "Could not read the record of turn run-1's coding " +
+			"run: a fault in this node itself"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -690,6 +840,11 @@ func TestEveryFilingOutcomeHasItsRefusal(t *testing.T) {
 			if !res.Failed || tools.RefusalOf(res) != tc.want || !strings.Contains(res.Output, tc.saying) {
 				t.Errorf("answered failed=%v %s: %q, want %s saying %q", res.Failed,
 					tools.RefusalOf(res), res.Output, tc.want, tc.saying)
+			}
+			for _, own := range []string{"nats", "coord/kv", "JSON", "decode"} {
+				if strings.Contains(res.Output, own) {
+					t.Errorf("the sentence %q carries the error's own %q", res.Output, own)
+				}
 			}
 			if len(asker.asked) != 0 {
 				t.Errorf("the fleet was asked %+v", asker.asked)

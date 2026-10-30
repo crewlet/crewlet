@@ -93,6 +93,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MaxFinishingCorrectives bounds the FINISHING correctives: the re-prompts a
@@ -1612,13 +1613,13 @@ func offered(terminators []string, tools []llm.ToolDef) []string {
 // halfway must be sent back to the WORK rather than pushed into submitting a
 // report of work it has not done.
 func finishingCorrective(terminators []string) string {
-	names := make([]string, 0, len(terminators))
+	names := make([]words.Said, 0, len(terminators))
 	for _, name := range terminators {
-		names = append(names, "`"+name+"`")
+		names = append(names, words.Said("`"+name+"`"))
 	}
-	call := names[0]
+	call := string(names[0])
 	if len(names) > 1 {
-		call = "one of " + strings.Join(names, ", ")
+		call = "one of " + words.Or(names)
 	}
 	return "Your last reply ended without calling " + call + ", so this phase has not " +
 		"finished. Nothing written in a reply is read or delivered — a report written " +

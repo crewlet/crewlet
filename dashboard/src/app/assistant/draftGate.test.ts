@@ -99,6 +99,21 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/doclet/page/Editor.tsx"],
     why: "the editor's link popover; what it inserts lands in the body the editor declares",
   },
+  // A PAGE WITH SEVERAL BOXES OPEN AT ONCE declares one draft whose fields are
+  // all of them (`boxes.ts`): the page context carries one draft, and a box
+  // that declared its own hid every other box at its next keystroke.
+  "routes/chatlet/Composer.tsx": {
+    screen: ["routes/chatlet/Room.tsx"],
+    why: "the room's message box and an open thread's reply box, fields of the room's one draft",
+  },
+  "routes/chatlet/Transcript.tsx": {
+    screen: ["routes/chatlet/Room.tsx"],
+    why: "a message open for a rewrite, a field of the room's one draft",
+  },
+  "routes/worklet/item/Body.tsx": {
+    screen: ["routes/worklet/item/edit.tsx"],
+    why: "a task's title and description editors, fields of the one draft its page's edits declare",
+  },
 };
 
 /** A module with editing marks and no draft the assistant could be asked about, and why. */
@@ -111,6 +126,9 @@ const NOT_A_DRAFT: Readonly<Record<string, string>> = {
   "routes/artifacts/FolderDialogs.tsx": "modal: naming a folder",
   "routes/artifacts/HistoryTab.tsx": "modal: a version's note, in its dialog",
   "routes/artifacts/RenameDialog.tsx": "modal: renaming an artifact",
+  "routes/chatlet/RoomSettings.tsx": "modal: a room's topic and purpose, in its dialog",
+  "routes/chatlet/StartDirect.tsx": "modal: opening a direct conversation, in its dialog",
+  "routes/chatlet/StartRoom.tsx": "modal: making a room, in its dialog",
   "routes/inbox/NoticeActions.tsx": "modal: a snooze's time",
   "routes/settings/AccessDialogs.tsx": "modal: an access change, in its dialog",
   "routes/worklet/NewProject.tsx": "modal: a new project's owner and key",

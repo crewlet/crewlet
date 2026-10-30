@@ -24,9 +24,9 @@ func handlesOf(n int) []string {
 //
 // [worklet.Notify.Validate] read `Kind`, `Fields` and `Excerpt` and NOTHING on
 // the snapshot, so ten collections went onto the log unbounded. That is not a
-// screen rendering badly: a snapshot is copied onto the log, replicated to
-// every node, held for the stream's whole retention window and read back by
-// every applier — and the design's own arithmetic sums these caps to about
+// screen rendering badly: a snapshot is copied onto the log, held by each of
+// the stream's replicas for its whole retention window and applied into every
+// data node's rows — and the design's own arithmetic sums these caps to about
 // 19 KiB worst and sizes MaxCommitBytes from it. The caps that held were
 // incidental properties of whichever builder happened to read a bounded table.
 //
@@ -144,13 +144,17 @@ func TestAnUnwatchIsNeverRefusedHoweverManyAreWatching(t *testing.T) {
 	}
 	r.drain()
 
-	// GROWING PAST IT IS REFUSED, which is the cap doing its job.
+	// GROWING PAST IT IS REFUSED, which is the cap doing its job — as the
+	// TASK'S STATE: the gesture names one person, and it lands once
+	// somebody stops watching. Refused as the request's, it told a caller
+	// to change an argument nothing was wrong with.
 	if _, err := r.writer.UpdateTask(t.Context(), "op-watch", "t-1", "ENG",
 		worklet.NoIfMatch,
 		worklet.TaskPatch{Watch: &worklet.WatchIntent{
 			Handle: "one-more", Watch: true,
-		}}, worklet.ChangeWatchers, nil); err == nil {
-		t.Error("a sixty-fifth explicit watch was accepted")
+		}}, worklet.ChangeWatchers, nil); !errors.Is(err, worklet.ErrState) ||
+		errors.Is(err, worklet.ErrInvalid) {
+		t.Errorf("a sixty-fifth explicit watch answered %v, want the task's state", err)
 	}
 
 	// AND LEAVING IS NOT, which is the half that was broken.
@@ -340,5 +344,67 @@ func TestACreatePastACapNamesNoTask(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), task.ID) {
 		t.Errorf("the refusal names the id of a task that was never created: %v", err)
+	}
+}
+
+// ONE CALL NAMES AT MOST [worklet.MaxTasksNamed] OTHER TASKS: a dependency
+// change's counterparties, and a rank order's own moves beside a re-spread's
+// neighbours.
+//
+// Each counterparty is a commit of its own and each move a placement on one
+// record, so a call past the cap is a batch rather than a gesture, and both
+// writers refuse it before anything is read or published — naming the count,
+// so the caller knows how far to split it. AT the cap neither refusal is the
+// cap's: the call goes on to whatever it would have met next.
+//
+// Mutation: drop either check and its over-the-cap row is accepted.
+func TestOneCallNamesAtMostMaxTasksNamedTasks(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	ids := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("t-%04d", i)
+		}
+		return out
+	}
+	depend := func(n int) error {
+		_, err := r.writer.Depend(t.Context(), fmt.Sprintf("op-depend-%d", n),
+			worklet.DependencyChange{Task: "dep", Project: "ENG", WaitingOnAdd: ids(n)},
+			fixedLeads{})
+		return err
+	}
+	move := func(n int) error {
+		placements := make([]worklet.Placement, n)
+		for i, id := range ids(n) {
+			rank, err := worklet.IntegerAt(uint64(i + 1))
+			if err != nil {
+				t.Fatalf("a rank key for placement %d: %v", i, err)
+			}
+			placements[i] = worklet.Placement{Task: id, Rank: rank}
+		}
+		_, err := r.writer.MoveTasks(t.Context(), fmt.Sprintf("op-move-%d", n), "ENG", placements)
+		return err
+	}
+	for _, tc := range []struct {
+		name   string
+		call   func(int) error
+		max    int
+		refuse string
+	}{
+		{"a dependency change's counterparties", depend, worklet.MaxTasksNamed,
+			"one call may name"},
+		{"a rank order's placements", move, worklet.MaxTasksNamed + worklet.RankRespreadInline,
+			"one record carries at most"},
+	} {
+		over := tc.call(tc.max + 1)
+		if !errors.Is(over, worklet.ErrInvalid) || !strings.Contains(over.Error(), tc.refuse) ||
+			!strings.Contains(over.Error(), fmt.Sprint(tc.max+1)) {
+			t.Errorf("%s: %d were answered %v, want the cap's refusal naming the count",
+				tc.name, tc.max+1, over)
+		}
+		if at := tc.call(tc.max); at != nil && strings.Contains(at.Error(), tc.refuse) {
+			t.Errorf("%s: exactly %d were refused by the cap: %v", tc.name, tc.max, at)
+		}
 	}
 }

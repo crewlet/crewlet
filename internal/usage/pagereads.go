@@ -45,13 +45,15 @@ type PageReadsQuery struct {
 // the statement one plan however long the list.
 const pageReadsChunk = 250
 
-// PageReads reads every node's reads of some pages over q's days, in (page,
-// day, node, seat, via) order — through `usage_reads_page_idx`, which is
+// PageReads reads every data node's reads of some pages over q's days, in
+// (page, day, node, seat, via) order — through `usage_reads_page_idx`, which is
 // exactly this question's shape.
 //
-// EVERY NODE'S ROWS, which is why this is the domain's and not the event
-// log's: a seat's reads are recorded where its turn ran, and a page's readers
-// are the union — including a node that has since left the fleet.
+// EVERY DATA NODE'S ROWS, which is why this is the domain's and not the event
+// log's: a seat's reads are recorded in the day of the data node whose event
+// log holds its turn — where it ran, or that node's custody keeper — and a
+// page's readers are the union, including a node that has since left the
+// fleet.
 func PageReads(ctx context.Context, estate Estate, q PageReadsQuery) ([]PageRead, error) {
 	if err := (SpendQuery{From: q.From, To: q.To}).check(); err != nil {
 		return nil, err

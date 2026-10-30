@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Providers is the Tier B model surface: which LLMs a seat can be pointed
@@ -675,7 +676,7 @@ func (l *LLMProvider) validate(path Path) error {
 	}
 	if l.Agent != "" && !l.Agent.Valid() {
 		p.add(at(path, "agent"), ErrUnknownValue, "%q (want %s)",
-			l.Agent, names(CLIAgentNames))
+			l.Agent, words.Or(CLIAgentNames))
 	}
 	// Left unbounded, a timeout of 0 or a negative one passes validation
 	// and reaches a process supervisor that reads it as "expire
@@ -693,7 +694,7 @@ func (l *LLMProvider) validate(path Path) error {
 	}
 	if l.Auth.Mode != "" && !slices.Contains(CLIAgentAuthModes, l.Auth.Mode) {
 		p.add(at(path, "auth.mode"), ErrUnknownValue, "%q (want %s)",
-			l.Auth.Mode, names(CLIAgentAuthModes))
+			l.Auth.Mode, words.Or(CLIAgentAuthModes))
 	}
 	// THE SPELLING, and that the entry can be placed at all. Whether the
 	// cell is configured is a question about providers.sandbox, and whether
@@ -708,13 +709,13 @@ func (l *LLMProvider) validate(path Path) error {
 	case l.RunIn == "":
 	case !slices.Contains(Placements, l.RunIn):
 		p.add(at(path, "run_in"), ErrUnknownValue, "%q (want %s)",
-			l.RunIn, names(Placements))
+			l.RunIn, words.Or(Placements))
 	case (l.Agent == "" || l.Agent.Valid()) && !l.runsExecutor():
 		p.add(at(path, "run_in"), ErrConflict,
 			"%s has no in-box runner, so no run is ever launched on this entry and nothing "+
-				"reads where it would be placed — only %s launch an executor run. Remove the "+
+				"reads where it would be placed: only %s launch an executor run. Remove the "+
 				"field, or move the entry to one of those CLIs",
-			l.AgentName(), names(CodingAgents))
+			l.AgentName(), words.And(CodingAgents))
 	}
 	p.wrap(l.validateProfile(path))
 	return p.err()
@@ -1016,14 +1017,14 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"%q profile names none (api_key_env): this CLI reads each model "+
 					"provider's key from that provider's own variable. Leave auth.mode "+
 					"at subscription, drop auth.api_key, and set the key in env under "+
-					"the variable of the provider its model names, as a ${VAR} — e.g. "+
+					"the variable of the provider its model names, as a ${VAR}, e.g. "+
 					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
 		case profile.APIKeyEnv == "":
 			p.add(at(path, "auth.mode"), ErrConflict,
 				"api-key puts the entry's key in the CLI's key variable, and the "+
 					"%q profile names none (api_key_env), so the key would reach "+
-					"nothing: this CLI reads a key only from %s, so put it there — "+
-					"`crewlet llm login`, or a credential bundle — or, if your build of "+
+					"nothing: this CLI reads a key only from %s, so put it there "+
+					"(`crewlet llm login`, or a credential bundle), or, if your build of "+
 					"the CLI does read a key variable, name it with "+
 					"overrides.api_key_env",
 				agent, profile.LoginLocation())
@@ -1036,7 +1037,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				"name this entry's key as auth.api_key: the %q CLI reads its key from "+
 					"%s, a variable other vendors' keys are kept under too, so the "+
 					"engine does not read it from its own environment or secret store "+
-					`in this entry's place — e.g. api_key: "${DASHSCOPE_API_KEY}"`,
+					`in this entry's place (for example api_key: "${DASHSCOPE_API_KEY}")`,
 				agent, profile.APIKeyEnv)
 		}
 	}
@@ -1050,8 +1051,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		!profile.EnvSignIn && profile.APIKeyEnv != "" {
 		p.add(at(path, "auth.mode"), ErrConflict,
 			"subscription signs the CLI in with a login it keeps or a headless token, and "+
-				"the %q profile names neither — no credential_paths, credential_store or "+
-				"token_env — so the entry would sign in to nothing: this CLI signs in with "+
+				"the %q profile names neither (no credential_paths, credential_store or "+
+				"token_env), so the entry would sign in to nothing. This CLI signs in with "+
 				"its key, so set auth.mode: api-key and give the key as auth.api_key (the "+
 				"CLI reads it from %s)", agent, profile.APIKeyEnv)
 	}
@@ -1060,8 +1061,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 		switch {
 		case profile.TokenEnv == "":
 			p.add(at(path, "auth.token"), ErrConflict,
-				"the %q profile names no token_env — this CLI mints no headless "+
-					"token — so the token would reach nothing: remove it, or name the "+
+				"the %q profile names no token_env (this CLI mints no headless "+
+					"token), so the token would reach nothing: remove it, or name the "+
 					"variable your build of the CLI reads with overrides.token_env", agent)
 		case mode != AuthSubscription:
 			p.add(at(path, "auth.token"), ErrConflict,
@@ -1137,7 +1138,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 				p.add(entry(at(path, "env"), name), ErrConflict,
 					"%s is set by the %q profile under auth.mode subscription, to %q, to "+
 						"choose the login the seat's home holds; a value here is replaced on "+
-						"every call, so drop it — a different value is set with "+
+						"every call, so drop it. A different value is set with "+
 						"overrides.subscription_env", name, l.Agent, profile.SubscriptionEnv[name])
 				continue
 			}
@@ -1154,7 +1155,7 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"%s is a variable the engine sets for every call of this CLI to keep "+
 						"it inside its seat's own home and its call's working directory "+
 						"(%s); a value here would replace that isolation for every seat, so "+
-						"drop it — %s", name, strings.Join(isolation, ", "),
+						"drop it: %s", name, strings.Join(isolation, ", "),
 					isolationRemedy(name, layer, profile))
 			}
 		}
@@ -1290,13 +1291,19 @@ func relocationRemedy(field, root, dir string, kept []string) string {
 	if len(kept) == 0 {
 		return remedy + "; a different directory is set with overrides." + field
 	}
-	fields := strings.Join(kept, ", ")
-	if n := len(kept); n > 1 {
-		fields = strings.Join(kept[:n-1], ", ") + " and " + kept[n-1]
-	}
 	return fmt.Sprintf("%s; a different directory is set with overrides.%s, moving the "+
 		"%s kept under %s beneath it in the same override, since the CLI finds them "+
-		"through this variable", remedy, field, fields, dir)
+		"through this variable", remedy, field, fieldNames(kept), dir)
+}
+
+// fieldNames is a profile's field names as a sentence about the file says
+// them, bare beside the overrides paths it names: "a", "a and b".
+func fieldNames(fields []string) string {
+	said := make([]words.Said, len(fields))
+	for i, f := range fields {
+		said[i] = words.Said(f)
+	}
+	return words.And(said)
 }
 
 // ---- embeddings ------------------------------------------------------ //
@@ -1610,8 +1617,8 @@ var EmbeddingModels = map[string]EmbeddingModel{
 		InputTokens: 128_000, WrapTokens: EmbeddingWrapTokens,
 		Undocumented: "Cohere's Compatibility API " +
 			"(docs.cohere.com/docs/compatibility-api) states no limit on the " +
-			"inputs or the tokens one request may carry — the native Embed " +
-			"API's 96 texts a call is a different endpoint's",
+			"inputs or the tokens one request may carry (the native Embed " +
+			"API's 96 texts a call is a different endpoint's)",
 	},
 }
 
@@ -1806,7 +1813,7 @@ func (e *EmbeddingProvider) ResolvedKey(r *Resolver) string {
 func (e *EmbeddingProvider) validate(path Path) error {
 	var p problems
 	if e.Type != "" && !slices.Contains(EmbeddingProviderTypes, e.Type) {
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, names(EmbeddingProviderTypes))
+		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", e.Type, words.Or(EmbeddingProviderTypes))
 	}
 	if strings.TrimSpace(e.Model) == "" {
 		p.add(at(path, "model"), ErrMissing, "name the embedding model")
@@ -1824,7 +1831,7 @@ func (e *EmbeddingProvider) validate(path Path) error {
 			MinEmbeddingWidth, MaxEmbeddingWidth, e.Dimensions)
 	case e.Dimensions > 0 && e.Dimensions < MinEmbeddingWidth:
 		p.add(at(path, "dimensions"), ErrOutOfRange,
-			"%d is below the %d floor — leave it unset to take %q's own width, "+
+			"%d is below the %d floor: leave it unset to take %q's own width, "+
 				"or state a width of at least %d",
 			e.Dimensions, MinEmbeddingWidth, strings.TrimSpace(e.Model), MinEmbeddingWidth)
 	case e.Dimensions > MaxEmbeddingWidth:
@@ -1908,7 +1915,7 @@ func (e *EmbeddingProvider) validateLimits(path Path, p *problems) {
 			p.add(at(path, limit.field), ErrOutOfRange,
 				"%d is above the %d %s for %q as its vendor documents it; this "+
 					"field may only lower a documented limit (for a gateway or a "+
-					"proxy that accepts less) — leave it unset to take %d",
+					"proxy that accepts less): leave it unset to take %d",
 				limit.stated, documented, limit.what, name, documented)
 		case limit.stated == 0 && documented == 0 && known:
 			p.add(at(path, limit.field), ErrMissing,

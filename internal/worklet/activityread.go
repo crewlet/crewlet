@@ -89,10 +89,9 @@ type ActivityRecord struct {
 
 	Project string `json:"project,omitempty"`
 
-	Excerpt   string           `json:"excerpt,omitempty"`
+	Excerpt   string           `json:"excerpt,omitempty" untrusted:"fence"`
 	Fields    map[string]Delta `json:"fields,omitempty"`
 	CommentID string           `json:"comment_id,omitempty"`
-	BatchID   string           `json:"batch_id,omitempty"`
 	TurnID    string           `json:"turn_id,omitempty"`
 
 	// Ask is the question this commit asked or answered, as it stands now
@@ -232,8 +231,6 @@ type ActivityQuery struct {
 	// [ActivityRecord.Notified]. Not to what woke somebody: a change can
 	// be announced and still reach nobody.
 	Notified *bool
-
-	Batch string
 
 	Limit  int
 	Cursor string
@@ -479,30 +476,12 @@ func activityScope(q ActivityQuery) statelog.ScopeSet {
 func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 	[]ActivityRecord, string, error) {
 
-	where, args, err := compileActivity(ctx, tx, q)
+	predicate, err := compileActivity(ctx, tx, q)
 	if err != nil {
 		return nil, "", err
 	}
-	clause := ""
-	if len(where) > 0 {
-		clause = " WHERE " + joinAnd(where)
-	}
-	// NEWEST FIRST. A feed is read from the top, and the cursor pages
-	// backwards through the log — which is why the keyset is `<` rather
-	// than `>` and why it needs no tie-break: a composed position is
-	// unique per record by construction.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT h.id, h.log_seq, h.log_stream, h.log_generation,
-		       h.created_at, h.effective_at, h.kind, h.actor, h.actor_kind,
-		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
-		       h.excerpt, h.fields_json, h.comment_id, h.batch_id, h.turn_id,
-		       h.notified, h.late,
-		       (SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id),
-		       COALESCE((SELECT k.key_collision FROM tracker_tasks k
-		                 WHERE k.id = h.subject_id), 0)
-		FROM tracker_history h`+clause+`
-		ORDER BY h.log_seq DESC
-		LIMIT ?`, append(args, limit+1)...)
+	statement, args := activityStatement(predicate, limit+1)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("worklet: read the activity feed: %w", err)
 	}
@@ -523,14 +502,13 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		var authored, effective int64
 		var kind, actorKind, subjectKind string
 		var fields string
-		var batch, key sql.NullString
+		var key sql.NullString
 		var notified, late, collision int
 		if err := rows.Scan(&record.ID, &packed, &record.LogStream,
 			&record.LogGeneration, &authored, &effective, &kind, &record.Actor,
 			&actorKind, &record.OperatorID, &subjectKind, &record.SubjectID,
 			&record.Project, &record.Excerpt, &fields, &record.CommentID,
-			&batch, &record.TurnID, &notified, &late, &key,
-			&collision); err != nil {
+			&record.TurnID, &notified, &late, &key, &collision); err != nil {
 			return nil, "", fmt.Errorf("worklet: scan an activity row: %w", err)
 		}
 		record.LogSeq = uint64(packed) % statelog.GenerationStride
@@ -539,7 +517,6 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		record.Kind = ChangeKind(kind)
 		record.ActorKind = AuthorKind(actorKind)
 		record.SubjectKind = ObjectKind(subjectKind)
-		record.BatchID = batch.String
 		record.SubjectKey = key.String
 		record.SubjectKeyCollision = collision == 1
 		record.Notified, record.Late = notified != 0, late != 0
@@ -580,6 +557,94 @@ func readActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery, limit int) (
 		}.String()
 	}
 	return out, next, nil
+}
+
+// activityStatement is the feed's one statement over [compileActivity]'s
+// predicate, reading `rows` rows, and its arguments — named so the plan test
+// explains exactly what the reader issues.
+//
+// NEWEST FIRST. A feed is read from the top, and the cursor pages backwards
+// through the log — which is why the keyset is `<` rather than `>` and why it
+// needs no tie-break: a composed position is unique per record by
+// construction.
+//
+// # The audit is ONE ARM PER AUTHOR KIND, merged
+//
+// `tracker_history_actor_kind_seq_idx` is `(actor_kind, log_seq DESC)`, so ONE
+// kind is a range on it in the feed's own order and a LIMIT stops it after a
+// page. A SET of kinds is not: written `actor_kind IN (…)`, this engine seeks
+// each value and then sorts everything the seeks found, which for the audit
+// screen's `operator,human` was every commit any person or token had ever made,
+// read and sorted on each load — and a one-value IN plans the same way, since
+// the planner does not treat it as equality. So each kind is its own arm,
+// `actor_kind = ? … ORDER BY log_seq DESC LIMIT ?`, which seeks and stops, and
+// the arms are merged under the page's own order and limit: the one sort is
+// over at most one page per kind, however old the company is.
+func activityStatement(p activityPredicate, rows int) (string, []any) {
+	switch len(p.actorKinds) {
+	case 0:
+		return `
+		SELECT ` + activityColumns + `, ` + activityKeys + `
+		FROM tracker_history h` + whereClause(p.where) + `
+		ORDER BY h.log_seq DESC
+		LIMIT ?`, append(append([]any{}, p.args...), rows)
+	case 1:
+		return `
+		SELECT ` + activityColumns + `, ` + activityKeys + `
+		FROM tracker_history h` + whereClause(append(slices.Clone(p.where),
+			"h.actor_kind = ?")) + `
+		ORDER BY h.log_seq DESC
+		LIMIT ?`, append(append(append([]any{}, p.args...), p.actorKinds[0]), rows)
+	}
+	arms := make([]string, len(p.actorKinds))
+	var args []any
+	for i, kind := range p.actorKinds {
+		arms[i] = `SELECT * FROM (
+			SELECT ` + activityColumns + `
+			FROM tracker_history h` + whereClause(append(slices.Clone(p.where),
+			"h.actor_kind = ?")) + `
+			ORDER BY h.log_seq DESC
+			LIMIT ?)`
+		args = append(append(append(args, p.args...), kind), rows)
+	}
+	return `
+		SELECT ` + activityColumns + `, ` + activityKeys + `
+		FROM (` + strings.Join(arms, `
+		UNION ALL `) + `) h
+		ORDER BY h.log_seq DESC
+		LIMIT ?`, append(args, rows)
+}
+
+// activityColumns is every column a feed row is read with, under the alias
+// `h` — the table's, or an audit arm's.
+const activityColumns = `h.id, h.log_seq, h.log_stream, h.log_generation,
+		       h.created_at, h.effective_at, h.kind, h.actor, h.actor_kind,
+		       h.operator_id, h.subject_kind, h.subject_id, h.project_key,
+		       h.excerpt, h.fields_json, h.comment_id, h.turn_id,
+		       h.notified, h.late`
+
+// activityKeys is the subject's key and its collision flag, read once per row
+// of the page — over the merged arms rather than inside each, so an audit
+// resolves a page of keys rather than a page per kind.
+const activityKeys = `(SELECT k.key FROM tracker_tasks k WHERE k.id = h.subject_id),
+		       COALESCE((SELECT k.key_collision FROM tracker_tasks k
+		                 WHERE k.id = h.subject_id), 0)`
+
+// whereClause is ` WHERE ` and the clauses ANDed, or nothing.
+func whereClause(where []string) string {
+	if len(where) == 0 {
+		return ""
+	}
+	return " WHERE " + joinAnd(where)
+}
+
+// activityPredicate is the feed's compiled filter: the clauses every row must
+// meet with their arguments, and the author kinds the feed is narrowed to,
+// which [activityStatement] reads one arm at a time rather than as a clause.
+type activityPredicate struct {
+	where      []string
+	args       []any
+	actorKinds []any
 }
 
 // counterpartyKeys resolves the task ids a page of deltas points at.
@@ -730,6 +795,12 @@ var counterpartyDeltaFields = func() []string {
 	return append(out, "blocking", "priorities", "parent", "removed_with")
 }()
 
+// taskKeysStatement is [resolveTaskKeys]' read of n tasks' keys, named for
+// the plan test.
+func taskKeysStatement(n int) string {
+	return `SELECT id, key FROM tracker_tasks WHERE id IN (` + placeholders(n) + `)`
+}
+
 // resolveTaskKeys reads the item keys of ids this node holds a row for.
 //
 // CHUNKED ON THE ESTATE'S OWN PARAMETER LIMIT, which is the shape the applier
@@ -751,9 +822,7 @@ func resolveTaskKeys(ctx context.Context, tx *sql.Tx, ids []string,
 		for _, id := range chunk {
 			args = append(args, id)
 		}
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id, key FROM tracker_tasks WHERE id IN (`+
-				placeholders(len(chunk))+`)`, args...)
+		rows, err := tx.QueryContext(ctx, taskKeysStatement(len(chunk)), args...)
 		if err != nil {
 			return nil, fmt.Errorf("worklet: resolve the item keys this "+
 				"activity page points at: %w", err)
@@ -796,26 +865,43 @@ func scanTaskKeys(rows *sql.Rows, into map[string]string) error {
 
 // compileActivity turns the query into a predicate.
 func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
-	[]string, []any, error) {
+	activityPredicate, error) {
 
-	var where []string
-	var args []any
+	var p activityPredicate
 	add := func(clause string, values ...any) {
-		where = append(where, clause)
-		args = append(args, values...)
+		p.where = append(p.where, clause)
+		p.args = append(p.args, values...)
 	}
 
+	project := ProjectKey(q.Project)
 	if task := strings.TrimSpace(q.Task); task != "" {
 		// THE ID, RESOLVED FROM WHATEVER THE CALLER HELD. A feed asked
 		// for by a FORMER key must answer the same rows — the history is
 		// the one place a rename is most likely to be looked up from.
-		id, err := resolveTaskID(ctx, tx, task)
+		id, filed, err := resolveTaskIn(ctx, tx, task)
 		if err != nil {
-			return nil, nil, err
+			return activityPredicate{}, err
+		}
+		// A TASK'S ACTIVITY IS ITS WHOLE HISTORY, and a container named
+		// beside it is a SCOPE CHECK rather than a row filter. As a filter
+		// it hid every row the task was written before it moved projects
+		// — each row carries the project it was written in — and asked
+		// the planner to intersect the task's rows with the container's
+		// whole history and sort them. It narrows nothing a reader is
+		// owed either: a tracker holder reads the whole tracker
+		// (ADR-0033), so the container is never what keeps a row out. So
+		// the task's own rows are read by its subject, and a container it
+		// is not filed in is refused naming the one it is, rather than
+		// answered with a history the caller would read as somebody
+		// else's task's, or with nothing.
+		if project != "" && filed != project {
+			return activityPredicate{}, fmt.Errorf("%w: task %s is filed in "+
+				"project %s, not %s — a task's activity is its whole history, "+
+				"wherever it was written: name the project it is in, or drop "+
+				"the container", ErrBadQuery, task, filed, project)
 		}
 		add("h.subject_id = ?", id)
-	}
-	if project := ProjectKey(q.Project); project != "" {
+	} else if project != "" {
 		add("h.project_key = ?", project)
 	}
 	if !q.Since.IsZero() {
@@ -840,20 +926,14 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 	if actor := strings.TrimSpace(q.Actor); actor != "" {
 		add("h.actor = ?", actor)
 	}
-	if len(q.ActorKinds) > 0 {
-		// THE INDEX IS `(actor_kind, log_seq DESC)` — migration 0012 — so
-		// a single kind is a range on it and the feed's own newest-first
-		// order comes out of the index rather than a temp b-tree over
-		// every commit the company has ever made. A set of kinds is one
-		// range each, which SQLite plans as a lookup per value.
-		values := make([]any, 0, len(q.ActorKinds))
-		for _, kind := range q.ActorKinds {
-			values = append(values, string(kind))
+	// THE AUTHOR KINDS ARE NOT A CLAUSE but the statement's arms — one
+	// range of `(actor_kind, log_seq DESC)` each, see [activityStatement].
+	// Each kind once: two arms of one kind would put its commits on the
+	// page twice.
+	for _, kind := range q.ActorKinds {
+		if !slices.Contains(p.actorKinds, any(string(kind))) {
+			p.actorKinds = append(p.actorKinds, string(kind))
 		}
-		add("h.actor_kind IN ("+placeholders(len(values))+")", values...)
-	}
-	if batch := strings.TrimSpace(q.Batch); batch != "" {
-		add("h.batch_id = ?", batch)
 	}
 	if assignee := strings.TrimSpace(q.Assignee); assignee != "" {
 		// A JOIN TO THE TASK'S CURRENT ASSIGNEE, which is what a caller
@@ -872,11 +952,11 @@ func compileActivity(ctx context.Context, tx *sql.Tx, q ActivityQuery) (
 	if cursor := strings.TrimSpace(q.Cursor); cursor != "" {
 		at, err := statelog.ParsePosition(cursor)
 		if err != nil {
-			return nil, nil, err
+			return activityPredicate{}, err
 		}
 		// STRICTLY BEFORE, because the feed is newest-first: the cursor
 		// names the last row of the previous page.
 		add("h.log_seq < ?", at.Packed())
 	}
-	return where, args, nil
+	return p, nil
 }

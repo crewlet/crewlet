@@ -115,7 +115,7 @@ const downloadHead = 32 << 10
 // getFile answers GET /worklet/files/{project}/{path...}: the file's bytes,
 // streamed, as an attachment.
 func (s *served) getFile(w http.ResponseWriter, r *http.Request) {
-	fresh, err := worklet.ParseFreshness(queries.FromQuery(r.URL.Query()))
+	fresh, err := statelog.ParseFreshness(queries.FromQuery(r.URL.Query()))
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": err.Error()})
@@ -213,7 +213,7 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
@@ -254,11 +254,14 @@ func (s *served) putFile(w http.ResponseWriter, r *http.Request) {
 	// bytes is another write, which lands as asked.
 	asked := map[string]any{"hash": object.Hash, "content_type": contentType,
 		"if_match": version}
-	result, err := s.Work.FileWriter(actor).PutFile(r.Context(),
-		keyedOp(key, "file-put", project+"/"+filePath, asked), worklet.FilePut{
-			Project: project, Path: filePath, ContentType: contentType,
-			Object: object, IfMatch: version,
-		})
+	opID, ok := keyedOp(w, r, key, "file-put", project+"/"+filePath, asked)
+	if !ok {
+		return
+	}
+	result, err := s.Work.FileWriter(actor).PutFile(r.Context(), opID, worklet.FilePut{
+		Project: project, Path: filePath, ContentType: contentType,
+		Object: object, IfMatch: version,
+	})
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionFileWrite), key, result.Outcome, result.Position, err)
 	if err != nil {
@@ -287,14 +290,17 @@ func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
-	result, err := s.Work.FileWriter(actor).RemoveFile(r.Context(),
-		keyedOp(key, "file-remove", project+"/"+filePath,
-			map[string]any{"if_match": version}),
-		project, filePath, version)
+	opID, ok := keyedOp(w, r, key, "file-remove", project+"/"+filePath,
+		map[string]any{"if_match": version})
+	if !ok {
+		return
+	}
+	result, err := s.Work.FileWriter(actor).RemoveFile(r.Context(), opID, project,
+		filePath, version)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionFileRemove), key, result.Outcome, result.Position, err)
 	if err != nil {
@@ -306,7 +312,8 @@ func (s *served) deleteFile(w http.ResponseWriter, r *http.Request) {
 
 // acceptsFiles reads the project an upload names, refusing — before a byte of
 // the body is read — one there is none of and one that takes no files, in the
-// writer's own sentence ([worklet.AcceptFiles]). It reports whether to go on.
+// writer's own sentence and class ([worklet.AcceptFiles]). It reports whether
+// to go on.
 //
 // AT THE LEVEL EVERY DECISION HERE READS AT ([decisionRead]), and only an
 // early refusal: the write's own decide is what actually judges the project.
@@ -321,9 +328,11 @@ func (s *served) acceptsFiles(w http.ResponseWriter, r *http.Request, project st
 	if err == nil {
 		return true
 	}
-	if errors.Is(err, worklet.ErrInvalid) {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid,
-			map[string]string{"detail": worklet.Sentence(err)})
+	if errors.Is(err, worklet.ErrState) {
+		// THE PROJECT'S STATE, answered as the write itself would answer
+		// it — by the one mapping ([operator.FailWrite]), `409 conflict`
+		// in the writer's sentence — before a byte of the body is read.
+		operator.FailWrite(r.Context(), w, err, "", nil)
 		return false
 	}
 	fileReadFailed(w, r, err)
@@ -331,12 +340,13 @@ func (s *served) acceptsFiles(w http.ResponseWriter, r *http.Request, project st
 }
 
 // filePathOf is the route's file path, normalised as the tracker keeps it —
-// refused `400 bad_path` naming what is wrong with it.
+// refused `400 bad_path` naming what is wrong with it, in the tracker's
+// sentence rather than its error, which opens with the package's name.
 func filePathOf(w http.ResponseWriter, r *http.Request) (string, bool) {
 	filePath, err := worklet.NormalizeFilePath(r.PathValue("path"))
 	if err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadPath,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 		return "", false
 	}
 	return filePath, true
@@ -378,15 +388,16 @@ func answerFile(w http.ResponseWriter, key string, result worklet.WriteResult,
 // fileReadFailed answers a read a byte route took — the file, or the project
 // an upload names — that could not be served: the two that are about the
 // RESOURCE under their own codes, and everything else as every read here is
-// answered ([readFailed]).
+// answered ([readFailed]), each in its package's words without its name
+// ([builtin.ReadRefusalSentence]).
 func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, worklet.ErrNoProject):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoProject,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": builtin.ReadRefusalSentence(err)})
 	case errors.Is(err, worklet.ErrNoFile):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoFile,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": builtin.ReadRefusalSentence(err)})
 	default:
 		readFailed(w, r, err)
 	}
@@ -396,45 +407,69 @@ func fileReadFailed(w http.ResponseWriter, r *http.Request, err error) {
 // that stopped arriving is the CLIENT'S (400, never a 503 telling it to retry
 // a request whose own connection failed), one over the cap is the one
 // spelling of a 413 every JSON surface answers, and a store that did not take
-// them is a condition that clears when it answers again — the broker's own
-// election at the soonest, the default store being the data nodes' NATS
-// bucket — with the store's own words in the log.
+// them is a CONDITION in its own words and under its own hint
+// ([operator.AnswerCondition]): a full one is `503` with no Retry-After and
+// says who makes room ([objstore.ErrFull]), one that did not answer is `503`
+// under an election's wait ([objstore.ErrUnanswered]), and the upload ran out
+// of its pace or was abandoned the same way. Anything else is a FAULT of this
+// node, `500`, its words the log's.
+//
+// THE FIRST TWO IN A PERSON'S WORDS ([paced.Unread], [fileTooLarge]), never the
+// error's: it opens with the store's or the reader's package words
+// ("objstore: the object is over its size limit (1073741824 bytes)") and ends
+// with the read's own failure as Go spells it, which goes to the log.
+//
+// ONE READING WITH EVERY SURFACE THAT STORES A FILE — an artifact's upload,
+// write_project_file and the artifact tools answer the same failures the same
+// way, because the store classifies them once: an unclassified failure was a
+// 503 inviting a retry here and a 500 there.
 func bytesFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
 	switch {
 	case errors.Is(err, paced.ErrBody):
+		log.InfoContext(r.Context(), "api_file_body_unread", "op_id", key,
+			"error", err.Error())
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeUnreadableBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": paced.Unread})
 	case errors.Is(err, objstore.ErrTooLarge):
 		httpjson.FailWith(w, http.StatusRequestEntityTooLarge, httpjson.CodeBodyTooLarge,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": fileTooLarge})
+	case operator.AnswerCondition(r.Context(), w, log, "api_file_store_unavailable", err, nil,
+		"op_id", key):
+		// A CONDITION, under its own words and hint.
 	default:
-		log.WarnContext(r.Context(), "api_file_store_unavailable", "op_id", key,
+		log.ErrorContext(r.Context(), "api_file_store_failed", "op_id", key,
 			"error", err.Error())
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-			httpjson.RetrySeconds(statelog.ElectionRetryHint), httpjson.Detail{
-				"detail": "the file's content could not be stored in the object " +
-					"store right now, and nothing was recorded",
-				"op_id": key,
-			})
+		httpjson.FailWithFields(w, http.StatusInternalServerError,
+			httpjson.CodeInternalError, httpjson.Detail{"op_id": key})
 	}
 }
+
+// fileTooLarge is a file over [worklet.MaxFileBytes] as the person uploading
+// it reads it.
+var fileTooLarge = "This file is over " + objstore.SizeWords(worklet.MaxFileBytes) +
+	", the most a project's file can hold."
 
 // fileWriteFailed answers what the tracker's file writer refused: the
 // refusals about the file as a resource under their own codes, and anything
 // else through the one refusal mapping ([operator.FailWrite]) — so a
 // forbidden write, a conflict, a node that could not decide and a fault of the
 // node's own read here as they read on every write.
+//
+// EVERY ONE IN THE WRITER'S SENTENCE ([worklet.Sentence]), as the one mapping
+// answers the rest: the error's own text opens with the package's name
+// ("worklet: no such project: ENG"), which says where it came from and
+// nothing a person acts on.
 func fileWriteFailed(w http.ResponseWriter, r *http.Request, err error, key string) {
 	switch {
 	case errors.Is(err, worklet.ErrNoProject):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoProject,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 	case errors.Is(err, worklet.ErrNoFile):
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNoFile,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 	case errors.Is(err, worklet.ErrStaleVersion):
 		httpjson.FailWith(w, http.StatusPreconditionFailed, httpjson.CodeVersionMoved,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": worklet.Sentence(err)})
 	case errors.Is(err, worklet.ErrUploadStale):
 		// THE BYTES ARE STORED AND MAY NOT BE NAMED ANY MORE: the upload
 		// took longer than a write may name its object after
@@ -442,13 +477,15 @@ func fileWriteFailed(w http.ResponseWriter, r *http.Request, err error, key stri
 		// that lands — a new upload is a new object, under this key or
 		// another.
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeUploadExpired,
-			map[string]string{"detail": err.Error()})
-	case errors.Is(err, worklet.ErrInvalid):
-		// THE WRITE CAN NEVER LAND AS SENT — an archived project, a
-		// content type no row may hold — which is the request's to change.
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalid,
 			map[string]string{"detail": worklet.Sentence(err)})
 	default:
+		// A CONTENT REFUSAL — a content type no row may hold — is `422
+		// invalid` and an archived project the project's state, `409
+		// conflict`, each in the writer's own sentence, BY THE ONE MAPPING
+		// every write surface answers a class with: this route had its own
+		// arm, which answered both `400 invalid`, so a state the request
+		// could not change read as a request to fix, and an invalid one
+		// was a status no other surface answers the class with.
 		failErr(w, r, err, key)
 	}
 }

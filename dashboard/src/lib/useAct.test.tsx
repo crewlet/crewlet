@@ -11,6 +11,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { useState } from "react";
 import { ToastProvider } from "@crewlethq/ui";
 
 import { caveatToast, useAct } from "./useAct.ts";
@@ -36,6 +37,7 @@ const BOUND: ViewerState = {
   admin: false,
   worklet: true,
   doclet: false,
+  chatlet: false,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -50,6 +52,7 @@ const BOUND: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatVendors: [],
 };
 
 interface Sent {
@@ -231,7 +234,12 @@ test("unknown stays on screen, and its Retry sends the same operation key", asyn
   expect(posts[0]!.opId).toBeTruthy();
   expect(posts[1]!.opId).toBe(posts[0]!.opId);
 
-  // AND A NEW PRESS IS A NEW OPERATION.
+  // AND A NEW PRESS IS A NEW OPERATION, pressed once the retry has answered:
+  // a button whose write is still out is busy and takes no press, so pressed
+  // a commit early the press went nowhere.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Pin" }).getAttribute("aria-busy")).toBeNull(),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Pin" }));
   await waitFor(() => expect(posts).toHaveLength(3));
   expect(posts[2]!.opId).not.toBe(posts[0]!.opId);
@@ -469,6 +477,57 @@ test("an abandoned press resolves with null and reports nothing", async () => {
   controller.abort();
   await waitFor(() => expect(got).toHaveBeenCalledWith(null));
   expect(screen.queryByText(/Could not confirm/)).toBeNull();
+});
+
+/** Two presses through `run`, the second naming the first's operation key. */
+function Repeat({ onResult }: { onResult: (r: unknown) => void }) {
+  const pin = useAct("set_pins");
+  const [first, setFirst] = useState("");
+  return (
+    <>
+      <button
+        onClick={() =>
+          void pin
+            .run({ views: { add: ["v1"] } }, { done: "Pinned", quiet: true })
+            .then((r) => setFirst(r?.opId ?? ""))
+        }
+      >
+        First
+      </button>
+      <button
+        onClick={() =>
+          void pin
+            .run({ views: { add: ["v1"] } }, { done: "Pinned", quiet: true }, { opId: first })
+            .then(onResult)
+        }
+      >
+        Again
+      </button>
+    </>
+  );
+}
+
+// A CALLER THAT KEEPS ITS OWN PRESSES REPEATS ONE UNDER ITS KEY. The chat
+// outbox holds a row per message nobody answered for, each with a Retry of its
+// own, so the hook's one held refusal cannot be what a retry reads — and a
+// retry sent under a fresh key is a second message rather than the first again.
+test("a press naming an earlier press's operation key is that press again", async () => {
+  const posts = engine(() => json({ tool: "set_pins", outcome: "unknown" }, 504));
+  const got = vi.fn();
+  render(
+    <ToastProvider>
+      <Repeat onResult={got} />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "First" }));
+  await waitFor(() => expect(posts).toHaveLength(1));
+  await new Promise((r) => setTimeout(r, 20));
+  fireEvent.click(screen.getByRole("button", { name: "Again" }));
+  await waitFor(() => expect(got).toHaveBeenCalled());
+  expect(posts).toHaveLength(2);
+  expect(posts[0]!.opId).toBeTruthy();
+  expect(posts[1]!.opId).toBe(posts[0]!.opId);
+  expect(got.mock.calls[0]![0]).toMatchObject({ opId: posts[0]!.opId });
 });
 
 // LAST IN THE FILE, because the tab's floor it raises is shared with every

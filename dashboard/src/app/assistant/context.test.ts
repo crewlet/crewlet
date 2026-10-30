@@ -140,6 +140,12 @@ describe("what the person has open", () => {
       id: "a1",
       noun: "artifact",
     });
+    // A CHATLET ROOM'S PAGE IS THAT ROOM, which a brief may then cite.
+    expect(buildPageContext(record("chatlet", { id: "r1" }), null).selection).toEqual({
+      kind: "room",
+      id: "r1",
+      noun: "room",
+    });
   });
 
   test("a list screen has nothing open until a row is peeked", () => {

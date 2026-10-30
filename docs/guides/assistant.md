@@ -54,9 +54,26 @@ says what the change does in plain words, read from the resource as it is now
 and what the change makes of it: "Add seat Technical Writer", "Remove seat QA
 Engineer", "Adopt version 4 of the brand kit", with one row per field that
 moves, each named by the seat or unit it belongs to ("Technical Writer ›
-Goal"). A change that deletes something, removes a member such as a seat, or
-removes fields is marked destructive: the card says what goes and whether the
-configuration history can revert it. The exact request, its body with secrets
+Goal"). A route that acts rather than writes a resource (a purge, a restore, a
+move) is titled by what it does, as the route itself declares it: "Purge item
+ENG-4", "Restore page Runbook", with everything the request sends as its rows,
+a prune's cutoff included. A record is named by what people call it, read with
+the person's own access where its address says nothing a person reads (a page
+by its title, a chat room by its name), and in plain words ("the page") where
+that read is not theirs, never by an internal id. A change that deletes
+something, destroys it for good, removes a member such as a seat, or removes
+fields is marked destructive: the card says what goes and whether the
+configuration history can revert it. Nothing undoes a purge, erasing or pruning
+a chat room's messages, or a room's horizon, so each of their cards leads with
+what goes, read from what the change sends, and says it cannot be undone:
+"Erase 2 messages from #general", "Delete what #general said before 1 January
+2031", "Keep #general's messages for 7 days". Keeping a room's messages for
+ever loses nothing, and is not marked destructive. A change that calls one of
+the tools the dashboard's own controls send (a reaction in chat, say) is shown
+as that call: titled by the tool ("React to message"), with the arguments it
+sends. A call one of the dedicated tools below makes is prepared with that tool
+instead, whose card reads what it changes. The exact request,
+its body with secrets
 masked, is under **Technical details** for an administrator; everybody else
 reviews the rows, which are built from the same request. A change prepared against
 a resource that has moved since is refused rather than overwritten. Before any
@@ -73,7 +90,8 @@ person asked to remove leads the card ("This removes ..."). A task or a
 page that names no project or space
 is shown, and sent, with the one it will land in, or refused when the person's
 team owns none (ADR-0055). Adding a
-seat to the org chart, editing a person's permissions, purging a task or
+seat to the org chart, editing a person's permissions, purging a task,
+erasing or pruning a chat room's messages, setting a room's horizon or
 adopting a brand are all proposals the person approves, at the same step-up
 the screen would ask.
 
@@ -87,6 +105,7 @@ offered only to a person who could make the same change on its screen:
 | Write a page, edit a page | People holding Doclet | Doclet's own write |
 | Share an artifact, withdraw a share | The artifact's owner | The artifact's sharing, with the audience named on the card; a share to the whole company asks the person to confirm it is them |
 | Pause or resume an agent, steer a running turn, answer a coding run | Whoever may do it on the seat's screen | The operator control the screen sends |
+| Post in a chat room, reply in a thread, send a direct message, edit or delete a message, change a room's topic, purpose or archive, change who is in a room, leave a room | People holding Chatlet | Chat's own write, as the person: the card names the room and who will read it, a membership change shows who joins and who leaves and takes out only the people the assistant names, deleting a message or taking somebody out of a room (yourself included) is marked destructive with what goes at the top, and a change made meanwhile to the room's settings or members, or to the message, makes the proposal stale (**Prepare it again**); a message said in the room does not |
 | Change the company's mission, vision or standing policies | Administrators | `PUT /config/charter`, the route Company › Principles saves through: the card shows a word diff of the mission and vision and one row per policy, the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change made to the principles meanwhile makes the proposal stale (**Prepare it again**) |
 | Set or remove one token ceiling: a seat's or the company's, for a day, a week or a month | Administrators | The write Company › Budgets saves: the seat as read with only that window's ceiling changed (`PUT /config/roles/{handle}`), or a merge patch of the company's one window (`PATCH /config`). The card shows one row, the ceiling now and the new one, the history line and the route's warnings; the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change to the configuration meanwhile makes the proposal stale. A lead changing a seat they lead goes through the generic change or Budgets itself |
 
@@ -149,10 +168,10 @@ time.
 ## Briefs
 
 The drawer's **Brief me on this page** row (or "Brief me on this decision",
-"this task", "this agent" where the screen has one record open) asks a
-**brief turn**: an ordinary turn of a new conversation, started, admitted,
-metered, recorded and streamed as any question is, that answers in a fixed
-shape rather than in prose. What a person sees is on the
+"this task", "this agent", "this room" where the screen has one record open)
+asks a **brief turn**: an ordinary turn of a new conversation, started,
+admitted, metered, recorded and streamed as any question is, that answers in a
+fixed shape rather than in prose. What a person sees is on the
 [concept page](../concepts/assistant.md#opening-it). What it means for you:
 
 - **It only reads.** A brief turn is offered the person's read tools and the
@@ -166,10 +185,13 @@ shape rather than in prose. What a person sees is on the
   something to do, ranked, the first the one to do first; a fact merely worth
   knowing goes in the optional `context` line, never a row
   ([ADR-0062](https://github.com/crewlet/crewlet/blob/main/adr/0062-a-briefs-verdict-is-its-rows-counted-and-every-row-is-something-to-do.md)).
-- **Its rows are the engine's.** A row survives only when the record it cites
-  appears in what this turn's own reads answered and the record's own read,
-  sent again as the person, answers it; the address is the engine's link
-  table's. A row the engine cannot check is dropped, never drawn, and counted
+- **Its rows are the engine's.** A row cites a task, a project, an agent, a
+  page, an artifact or a chat room (by its id or its name, `#launch`, which
+  the room's own read resolves), exactly the records whose screen the engine's
+  link table opens through a read of the record. A row survives only when the
+  record it cites appears in what this turn's own reads answered and the
+  record's own read, sent again as the person, answers it; the address is the
+  engine's link table's. A row the engine cannot check is dropped, never drawn, and counted
   in `crewlet.assistant.brief.rows_dropped`. A row is drawn danger only when
   that read carried the fact (a seat stopped or whose last turn failed, a task
   marked urgent).
@@ -191,7 +213,7 @@ shape rather than in prose. What a person sees is on the
 - **Its spend is its own.** Its rounds are recorded under the aux purpose
   `assistant_brief`, charged to the person's and the company's windows like
   any turn's, and its own cap below stops a brief that sets out to read the
-  company. Its turns are stamped with prompt version `assistant.brief.v3`.
+  company. Its turns are stamped with prompt version `assistant.brief.v4`.
 - **A card it cannot draw reads as a note.** A stored card in a shape this
   version's contract refuses (any brief written before prompt version
   `assistant.brief.v3`, or a newer node's card read by an older one during a
@@ -334,7 +356,12 @@ address, and a box on another machine cannot dial it.
 ## Retention and erasure
 
 A conversation untouched for `assistant.retention_days` (30 by default, 1 to
-365) is purged by the trash reaper. **Clear** in the panel purges one at once.
+365) is purged by the trash reaper. The setting is read from the revision the
+fleet's activation pointer names, and only on a node that runs that revision:
+a node that refused the fleet's revision, or booted on an offline import the
+fleet has not taken, purges no conversation for its age until it runs the
+fleet's, so a purge comes late rather than by a setting the company has since
+changed. **Clear** in the panel purges one at once.
 Removing a person from the directory erases every conversation they own in one
 record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the
@@ -391,7 +418,7 @@ The assistant adds no hidden channel to the audit log. What it records:
 | `assistant_conversation_read` | An administrator's compliance read | Reader, owner, conversation and reason |
 
 A brief turn is an `assistant_turn_completed` like any other, told apart by its
-prompt version (`assistant.brief.v3`), and its spend is recorded under the aux
+prompt version (`assistant.brief.v4`), and its spend is recorded under the aux
 purpose `assistant_brief`.
 
 The `crewlet.assistant.*` metrics (turn duration, time to first output, turns

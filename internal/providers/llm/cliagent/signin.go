@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // signIn is how one entry's CLI authenticates, as far as this engine can see:
@@ -314,7 +315,7 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 		return ModeSignIn{
 			Mode: AuthEnv, Variables: slices.Clone(names),
 			Reads: fmt.Sprintf("signs the CLI in with its env alone (one of %s)",
-				strings.Join(names, ", ")),
+				words.Or(names)),
 			Unset: "and its env sets none of them",
 			Supply: fmt.Sprintf("set one in providers.llm.%s.env, with the cloud provider's "+
 				"credentials or the gateway's address beside it", p.key),
@@ -377,10 +378,14 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 			return misconfigured(AuthInheritEnv, fmt.Sprintf(
 				"forwards nothing, since the %q profile names neither a token_env nor an api_key_env", p.agent)), true
 		}
+		named := make([]words.Said, len(forwarded))
+		for i, name := range forwarded {
+			named[i] = words.Said(name)
+		}
 		sign := ModeSignIn{
 			Mode: AuthInheritEnv, Variables: held, Misnamed: misnamed,
 			Reads: fmt.Sprintf("hands the CLI only %s from the engine's own process environment, "+
-				"never from the secret store", strings.Join(forwarded, " or ")),
+				"never from the secret store", words.Or(named)),
 			Unset:  "and it is not set there",
 			Supply: "export it in the engine's environment",
 		}
@@ -397,8 +402,12 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 			if len(misnamed) > 1 {
 				what = "the variables"
 			}
+			fields, names := make([]words.Said, len(misnamed)), make([]words.Said, len(misnamed))
+			for i := range misnamed {
+				fields[i], names[i] = words.Said(misnamed[i]), words.Said(misnamedNames[i])
+			}
 			sign.Supply = fmt.Sprintf("name %s your build of the CLI reads in %s, since no shell "+
-				"can export %s", what, strings.Join(misnamed, " and "), strings.Join(misnamedNames, " or "))
+				"can export %s", what, words.And(fields), words.Or(names))
 		default:
 			sign.Supply = fmt.Sprintf("export %s in the engine's environment, since no shell can "+
 				"export %s (%s)", held[0], misnamedNames[0], misnamed[0])

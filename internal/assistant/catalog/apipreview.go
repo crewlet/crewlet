@@ -30,13 +30,20 @@ import (
 //  2. A PUT, a PATCH or a DELETE on a path the table also reads (a GET on the
 //     same path) reads that representation through the turn's grant.
 //  3. What the change makes of it: a PUT's body replaces it, a PATCH's body is
-//     merged onto it (RFC 7396, the API's own patch format), a DELETE takes it
-//     away, and a POST creates what its body states.
+//     merged onto it (RFC 7396, the API's own patch format), and a DELETE
+//     takes it away. A POST does what its route declares ([authz.Effect]): a
+//     create adds what its body states, and a call on the act route, a
+//     rewrite, a destruction or a question shows its body and its query as
+//     sent, since what it does to what is there is its route's or its
+//     tool's, titled by its action ([describe]); a call a curated write
+//     makes is that write's to propose ([curatedCall]).
 //  4. The rows are the fields that move and nothing else: a structural diff,
 //     a list of records matched by the identity each carries (a seat's
 //     handle, a unit's id) so one new seat is one added member with its
-//     fields, long text as a word diff, a removal as the values it removes.
-//     The request itself leads the card, and its body, redacted, follows.
+//     fields, long text as a word diff, a removal as the values it removes,
+//     and a field a write sets to null, which no value shows, as cleared.
+//     The request itself, its body redacted, is the card's technical details
+//     for an approver who administers the company, never a row.
 //  5. The proposal is bound to the representation it was shown: a strong
 //     entity tag becomes the write's If-Match ([proposal.RevisionEntity]),
 //     and a representation stating its own version field is re-read by the
@@ -83,6 +90,13 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	req, route, err := g.request(Args(args), false)
 	if err != nil {
 		return proposal.Preview{}, fmt.Errorf("%w: %w", ErrInvalidArguments, err)
+	}
+	if req.Method == http.MethodPost && !route.Effect.Valid() {
+		// A POST THAT SAYS NOTHING OF WHAT IT DOES is never a card: its
+		// method does not say, and a title guessed for it would be what the
+		// person approves ([authz.Effect]).
+		return proposal.Preview{}, fmt.Errorf("%w: %s does not say what it does, so no "+
+			"card can show it truthfully", ErrInvalidArguments, route.Pattern)
 	}
 	act := string(route.Action)
 	if route.Pattern == ActRoute {
@@ -143,7 +157,7 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 	// call's to correct whether or not the route would take the body.
 	address, _ := pathValues(args["path"])
 	removals, removalErr := removalCheck(route, req.Method, before, changed, address,
-		Args(args).Strings("removes"), lowerFirst(callTitle(Args(args))))
+		Args(args).Strings(RemovesArgument), lowerFirst(callTitle(Args(args))))
 	if removalErr != nil {
 		return proposal.Preview{}, removalErr
 	}
@@ -166,7 +180,10 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		after = changed
 	}
 	l := newLabeller(before, after)
-	said := describe(route, req.Method, creates, before, after, body, removals, address, l)
+	record, _ := body.(map[string]any)
+	said := describe(route, req.Method, creates, before, after, subject{body: record,
+		query: req.Query, named: g.named(ctx, read, route, req.Method, address)},
+		removals, address, l)
 	d := differ{l: l}
 	if len(removals) > 0 {
 		// THE REMOVALS LEAD THE ROWS as one line, beside the warning the
@@ -178,10 +195,21 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 		d.c.fact("removes", "Deletes", capitalised(said.Object))
 	case req.Method == http.MethodDelete:
 		d.leaves("", before, proposal.Removed)
+	case route.Effect == authz.EffectCalls:
+		// A CALL'S ARGUMENTS travel in `args`, which labels none of them.
+		d.sent(after, "args.", req.Query, "")
+	case req.Method == http.MethodPost && acts(route.Effect):
+		d.sent(after, "", req.Query, capitalised(said.Object))
 	case before == nil:
 		d.leaves("", after, func(field, label, v string) wire.Change {
 			return proposal.Added(field, label, v, false)
 		})
+		if req.Method == http.MethodPut && !creates {
+			d.cleared("", after)
+		}
+		if req.Method == http.MethodPost {
+			d.queried(req.Query)
+		}
 	default:
 		d.diff("", before, after)
 	}
@@ -584,6 +612,118 @@ func (d *differ) addedLeaves(field string, v any, onRecord bool) {
 // removedLeaves appends a row for every value v holds, as removed.
 func (d *differ) removedLeaves(field string, v any) {
 	d.leaves(field, v, proposal.Removed)
+}
+
+// sent appends the rows of a POST that does not create: every value its body
+// and its query send, as sent ([proposal.Fact]), never as a value it adds,
+// since what it does to what is there is its route's or its tool's. Each is
+// labelled by its own name, below wrapper (a call's `args`). A request sending
+// nothing names what it acts on in one row (object), or says it sends nothing,
+// so the card still shows what the person approves.
+func (d *differ) sent(body any, wrapper string, query url.Values, object string) {
+	n := len(d.c)
+	d.leaves("", body, func(field, _, value string) wire.Change {
+		return proposal.Fact(field, d.l.label(strings.TrimPrefix(field, wrapper)), value)
+	})
+	d.cleared("", body)
+	d.queried(query)
+	switch {
+	case len(d.c) > n:
+	case object != "":
+		d.c.fact("object", "Applies to", object)
+	default:
+		d.c.fact("sent", "Details", "None")
+	}
+}
+
+// cleared appends a row for every field v sets to null beneath field, where
+// the request is not a create: a null is no value to draw, and what clearing
+// a field means is its route's (a room's horizon goes back to the company's),
+// so the row says only that the request clears it. A create's null sets
+// nothing and is no row.
+func (d *differ) cleared(field string, v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			d.cleared(join(field, k), t[k])
+		}
+	case nil:
+		if field != "" {
+			d.c.fact(field, d.l.label(field), "Cleared")
+		}
+	}
+}
+
+// queried appends a row for every parameter a POST's query sends, as sent: a
+// verb whose arguments travel in its query (a prune's cutoff and its
+// confirmation, a backup's directory) shows them as a body's would be.
+func (d *differ) queried(query url.Values) {
+	for _, name := range slices.Sorted(maps.Keys(query)) {
+		value := redact.Secrets(strings.Join(query[name], ", "))
+		d.c.fact("query."+name, cards.FieldLabel(name), value)
+	}
+}
+
+// named is what a best-effort read of the record a change is about calls it,
+// for its card: the record a registered family is about ([resource.Of]), or
+// the one a POST that does not create acts on ([actedOn]), read through the
+// turn's grant, as the person. A record they may not read, one the table
+// serves no read of, and any failure name nothing, and the card says it in
+// neutral words; the read decides nothing about the change, whose route still
+// decides it, and binds nothing.
+func (g generic) named(ctx context.Context, read proposal.Read, route Route, method string,
+	address map[string]string) string {
+
+	res, _ := resourceOf(route)
+	path := res.Of
+	if path == "" && method == http.MethodPost && acts(route.Effect) {
+		path = actedOn(route.Path())
+	}
+	if path == "" {
+		return ""
+	}
+	values := map[string]string{}
+	for _, segment := range strings.Split(path, "/") {
+		if name, wild := wildcardName(segment); wild {
+			values[name] = address[name]
+		}
+	}
+	req, err := fill(http.MethodGet+" "+path, values, nil)
+	if err != nil {
+		return ""
+	}
+	if _, ok := g.table.readerOf(req.Path); !ok {
+		return ""
+	}
+	resp, err := read(ctx, req)
+	if err != nil || !cards.Permitted(resp.Status) || resp.Truncated {
+		return ""
+	}
+	doc, err := cards.Decode(resp.Body)
+	if err != nil {
+		return ""
+	}
+	if r, ok := resourceAt(path); ok && r.Named != nil {
+		return oneLineValue(r.Named(doc))
+	}
+	return representationName(doc)
+}
+
+// actedOn is the record a path pattern's action follows: the path up to its
+// last wildcard ("/worklet/items/{key}" of "/worklet/items/{key}/purge"), or
+// "" where its action names a record of its own ("remove-peer/{peer}") or
+// follows none.
+func actedOn(path string) string {
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if lastLiteral(segments) != len(segments)-1 {
+		return ""
+	}
+	for i := len(segments) - 2; i >= 0; i-- {
+		if _, wild := wildcardName(segments[i]); wild {
+			return "/" + strings.Join(segments[:i+1], "/")
+		}
+	}
+	return ""
 }
 
 // leaves appends row(field, label, value) for every scalar v holds beneath

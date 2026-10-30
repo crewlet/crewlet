@@ -47,6 +47,28 @@ func TestAnAudienceRefusesWhatNamesNoPrincipalSet(t *testing.T) {
 	}
 }
 
+// AN AUDIENCE OF NO KIND IS TOLD ONE WAY, whether it arrived as a kind or as
+// an audience's text, and in words rather than a program's: the two paths said
+// "kind … is not one this build shares with (want one of …)" and "… is not
+// `seat:<handle>`, …". Mutation: put either sentence back and its row fails.
+func TestAnAudienceOfNoKindIsToldOneWay(t *testing.T) {
+	t.Parallel()
+	const forms = " isn't someone you can share with. Use `seat:<handle>`, `unit:<key>` or `company`"
+	_, parsed := ParseAudience("team")
+	for _, c := range []struct {
+		name, want string
+		err        error
+	}{
+		{"a text with no kind", `"team"` + forms, parsed},
+		{"a kind this build does not know", `"team"` + forms,
+			(Audience{Kind: "team", ID: "eng"}).Validate()},
+	} {
+		if c.err == nil || !strings.HasSuffix(c.err.Error(), c.want) {
+			t.Errorf("%s: %v, want it to end %q", c.name, c.err, c.want)
+		}
+	}
+}
+
 // A NEW SEAT AUDIENCE IS A SEAT HANDLE, NEVER A LOGIN. `seat:token:maya` was
 // written, counted by Maya's Shared listing and admitted by nothing, since the
 // authority table matches a seat share against the principal's seat alone.

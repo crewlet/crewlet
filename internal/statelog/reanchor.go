@@ -6,11 +6,28 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ErrReanchorRefused reports a generation transition that was not permitted.
 var ErrReanchorRefused = errors.New("statelog: reanchor refused")
+
+// refuseReanchor is a reanchor refused for the reason format says, told to the
+// operator in those words ([Telling]) and standing on [ErrReanchorRefused].
+func refuseReanchor(format string, args ...any) error {
+	return &Telling{Say: fmt.Sprintf(format, args...), Err: ErrReanchorRefused}
+}
+
+// stoppedReanchor is a reanchor that stopped on a fault, told to the operator
+// as format says (what was committed and what to do) with the fault kept for
+// the log.
+func stoppedReanchor(fault error, format string, args ...any) error {
+	return &Telling{Say: fmt.Sprintf(format, args...), Err: fault}
+}
 
 // A REANCHOR MOVES ONE DOMAIN, and the generation it moves is that domain's.
 //
@@ -148,9 +165,11 @@ type ReanchorInputs struct {
 	// NIL FOR EVERY OTHER CASE: a recreated log is followed from its first
 	// record and an abandoned one from these rows' own checkpoint, so each
 	// applies everything past where it starts. And nil for a domain that
-	// claims no identity — the vectors — whose post-restore records are
-	// re-embeddings of sources: skipping them keeps these rows' vectors, which
-	// describe the sources these rows' own domains keep.
+	// claims no identity — the vectors and the usage days — which every data
+	// node re-anchors on its own copy, with no fleet guard and no walk of the
+	// tail. The vectors' post-restore records are re-embeddings of sources:
+	// skipping them keeps these rows' vectors, which describe the sources
+	// these rows' own domains keep.
 	Unheld *TailRecord
 
 	// Opened is the sequence of THIS node's own record opening the
@@ -162,10 +181,13 @@ type ReanchorInputs struct {
 	// beneath it is what the walk exists to find.
 	Opened uint64
 
-	// PeersReanchored is how many peers have already re-anchored THIS
-	// stream: they stand at a later generation of this domain than this
-	// node's checkpoint, and a generation moves only by a reanchor or by
-	// adopting the snapshot of a node that ran one.
+	// ReanchoredPeers are the peers that have already re-anchored THIS
+	// stream, by node id: they stand at a later generation of this domain
+	// than this node's checkpoint, and a generation moves only by a
+	// reanchor or by adopting the snapshot of a node that ran one. BY NAME,
+	// because the refusal they cause sends the operator to one of them:
+	// adopt its snapshot, or evict it if it is gone, and neither can be
+	// done to a count.
 	//
 	// ANY IS A REFUSAL, force or no force, and the reason is not caution:
 	// the fleet's history in that generation is the re-anchored peer's
@@ -186,7 +208,7 @@ type ReanchorInputs struct {
 	// generation any more — the eviction says it is not coming back — and
 	// counted, a decommissioned node that had re-anchored held every other
 	// node's reanchor refused for ever ([ReanchorInputs.Abandoned]).
-	PeersReanchored int
+	ReanchoredPeers []string
 
 	// Position is this node's own committed sequence at the OLD
 	// generation, and Highest is the highest any peer published at that
@@ -202,7 +224,7 @@ type ReanchorInputs struct {
 	// nothing it applied is lost by a reanchor that follows it. Only the
 	// most caught-up node may reanchor, because whatever it did not apply is
 	// what the fleet loses — and an EVICTED peer is left out for
-	// PeersReanchored's reason: what it applied is on no disk the fleet will
+	// ReanchoredPeers's reason: what it applied is on no disk the fleet will
 	// read again. HighestPeer names the peer at Highest, for the refusal.
 	Position    uint64
 	Highest     uint64
@@ -235,7 +257,7 @@ type ReanchorInputs struct {
 	// remaining node's reanchor for ever, force or no force, while every
 	// one of them waited for a donor that did not exist. The operator's
 	// eviction of it is the statement that it is not coming back, so its
-	// generation stops being the fleet's ([ReanchorInputs.PeersReanchored]
+	// generation stops being the fleet's ([ReanchorInputs.ReanchoredPeers]
 	// and [ReanchorInputs.Highest] leave evicted peers out) — but its NUMBER
 	// was used, and its record holds that generation's subject, so the
 	// transition opens the generation after it rather than a second history
@@ -405,16 +427,34 @@ func (in ReanchorInputs) Case() (ReanchorCase, uint64, error) {
 		// and what it holds in the abandoned generations is void.
 		return ReanchorAbandoned, in.Position, nil
 	}
-	return "", 0, fmt.Errorf("%w: %s is the stream this node's rows are keyed "+
+	// AND WHO MOVED IT ON, where somebody did: this is the refusal a node a
+	// peer re-anchored past reads, and the peer is what it acts on.
+	onward := "the applier follows it, a node below its first surviving " +
+		"sequence adopts a peer's snapshot instead, and a node a peer " +
+		"re-anchored past adopts from that peer (or, if the peer is gone for " +
+		"good, re-anchors once it's evicted)"
+	if len(in.ReanchoredPeers) > 0 {
+		have, snapshot, evict := reanchoredPast(in.ReanchoredPeers)
+		onward = fmt.Sprintf("%s re-anchored it past this node. Adopt %s instead, "+
+			"or evict a peer that's gone for good (%s) and re-run", have, snapshot, evict)
+	}
+	return "", 0, refuseReanchor("%s is the stream this node's rows are keyed "+
 		"to (created %s) and it ends at %d, at or past this node's checkpoint "+
-		"at %d, on the record the checkpoint names — it still holds every record "+
-		"the rows are missing, so there is "+
-		"nothing to re-anchor: the applier follows it, a node below its first "+
-		"surviving sequence adopts a peer's snapshot instead, and a node a peer "+
-		"re-anchored past adopts from that peer — or, if the peer is gone for "+
-		"good, re-anchors once it is evicted",
-		ErrReanchorRefused, in.Stream, ConfirmationOf(in.StreamCreatedAt),
-		in.LastSeq, in.Position)
+		"at %d, on the record the checkpoint names. It still holds every record "+
+		"the rows are missing, so there's nothing to re-anchor: %s",
+		in.Stream, ConfirmationOf(in.StreamCreatedAt), in.LastSeq, in.Position, onward)
+}
+
+// reanchoredPast names the peers that re-anchored a log past this node, as the
+// subject of "have", with the snapshot this node adopts from them and the
+// eviction that releases a peer gone for good, in the number the set has.
+func reanchoredPast(peers []string) (have, snapshot, evict string) {
+	if len(peers) == 1 {
+		return words.And(peers) + " has", "its snapshot",
+			fmt.Sprintf("`crewlet retention evict %s -confirm %s`", peers[0], peers[0])
+	}
+	return words.And(peers) + " have", "a snapshot from one of them",
+		"`crewlet retention evict <node> -confirm <node>` for each"
 }
 
 // Discarding is the refusal a reanchor of these facts makes unless the operator
@@ -432,16 +472,16 @@ func (in ReanchorInputs) Discarding() error {
 		in.Unheld == nil {
 		return nil //nolint:nilerr // see above: Case's refusal is reported by Case
 	}
-	return fmt.Errorf("%w: %s was restored from an older copy and holds records "+
-		"this node's rows do not — the newest that writes rows is %s, stored at "+
+	return refuseReanchor("%s was restored from an older copy and holds records "+
+		"this node's rows don't. The newest that writes rows is %s, stored at "+
 		"%s. A restored reanchor follows the log from its end, %d, so they would "+
 		"be applied on no node: every other node adopts this node's snapshot, and "+
 		"what they wrote is lost to whoever it was acknowledged to. Keep them "+
 		"instead by not re-anchoring this node: replace its rows with a peer's "+
 		"that followed the log (stop it, move its replicated database aside and "+
-		"start it again — it replays the log or adopts a snapshot), which gives "+
+		"start it again: it replays the log or adopts a snapshot), which gives "+
 		"up what only this node's rows hold. Or discard them: re-run with the "+
-		"discard flag. %s", ErrReanchorRefused, in.Stream, *in.Unheld,
+		"discard flag. %s", in.Stream, *in.Unheld,
 		in.Unheld.StoredAt.UTC().Format(time.RFC3339Nano), in.LastSeq,
 		unheldCaveat(*in.Unheld))
 }
@@ -458,7 +498,7 @@ func unheldCaveat(r TailRecord) string {
 	}
 	return "(The ledger names every record these rows applied since it last lost " +
 		"any, those held from a peer's snapshot included, so this one is not " +
-		"among them — unless a gate dropped it, which writes no row; then the " +
+		"among them, unless a gate dropped it, which writes no row; then the " +
 		"discard flag discards nothing.)"
 }
 
@@ -486,17 +526,16 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 		// NO INSTANT IS NO CONFIRMATION, whatever was typed: the check
 		// below would compare against the year one, and the checkpoint
 		// would be keyed to a stream nobody can name.
-		return ReanchorPlan{}, fmt.Errorf("%w: %s's creation instant is unknown, so there is "+
-			"nothing a confirmation could name — read the stream again",
-			ErrReanchorRefused, in.Stream)
+		return ReanchorPlan{}, refuseReanchor("%s's creation instant is unknown, so there's "+
+			"nothing a confirmation could name. Read the stream again", in.Stream)
 	case guard.Confirm == "":
-		return ReanchorPlan{}, fmt.Errorf("%w: confirm the live stream's creation instant "+
-			"(%s) — this verb declares every position this node holds on %s "+
-			"stale and there is no undo", ErrReanchorRefused, live, in.Stream)
+		return ReanchorPlan{}, refuseReanchor("confirm the live stream's creation instant "+
+			"(%s). This declares every position this node holds on %s "+
+			"stale, and there's no undo", live, in.Stream)
 	case !confirms(guard.Confirm, in.StreamCreatedAt):
-		return ReanchorPlan{}, fmt.Errorf("%w: the confirmation names %q and the "+
-			"live stream %s was created at %s — running this on the wrong estate "+
-			"cannot be undone", ErrReanchorRefused, guard.Confirm, in.Stream, live)
+		return ReanchorPlan{}, refuseReanchor("the confirmation names %q and the "+
+			"live stream %s was created at %s. Running this on the wrong estate "+
+			"can't be undone", guard.Confirm, in.Stream, live)
 	}
 	// WHICH CASE, BEFORE THE FLEET: a stream that holds every record the rows
 	// are missing is one no guard below has anything to weigh on.
@@ -510,34 +549,37 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 	if refusal := in.Discarding(); refusal != nil && !guard.Discard {
 		return ReanchorPlan{}, refusal
 	}
-	if in.ClaimsIdentity && in.PeersReanchored > 0 {
-		return ReanchorPlan{}, fmt.Errorf("%w: %d peer(s) have already re-anchored "+
-			"%s — they stand at a later generation of it than this node's %d. A "+
-			"second reanchor from this node's rows would open that generation "+
-			"over a different prefix of the lost history, and the identity claim "+
-			"would be violated silently and for ever, with no log left to "+
-			"reconcile the two from — adopt a re-anchored peer's snapshot instead, "+
-			"and if the peer is gone for good, evict it (crewlet retention evict) "+
-			"and re-run: an evicted peer's generation is abandoned, not the fleet's",
-			ErrReanchorRefused, in.PeersReanchored, in.Stream, in.Generation)
+	if peers := in.ReanchoredPeers; in.ClaimsIdentity && len(peers) > 0 {
+		have, snapshot, evict := reanchoredPast(peers)
+		they := "it stands"
+		if len(peers) > 1 {
+			they = "they stand"
+		}
+		return ReanchorPlan{}, refuseReanchor("%s already re-anchored %s: %s at a "+
+			"later generation of it than this node's %d. A second reanchor from "+
+			"this node's rows would open that generation over a different prefix "+
+			"of the lost history, and the identity claim would be violated "+
+			"silently and for ever, with no log left to reconcile the two from. "+
+			"Adopt %s instead. A peer that's gone for good is evicted (%s) before "+
+			"you re-run: an evicted peer's generation is abandoned, not the "+
+			"fleet's", have, in.Stream, they, in.Generation, snapshot, evict)
 	}
 	if in.ClaimsIdentity && !guard.Force {
 		if !in.RegisterReadable {
-			return ReanchorPlan{}, fmt.Errorf("%w: the positions register could not be read, "+
-				"so whether this is the most caught-up node is unknown — and "+
-				"whatever it did not apply is what the fleet loses. Re-run with "+
-				"the force flag if that is accepted", ErrReanchorRefused)
+			return ReanchorPlan{}, refuseReanchor("the positions register couldn't be read, " +
+				"so whether this is the most caught-up node is unknown, and " +
+				"whatever it didn't apply is what the fleet loses. Re-run with " +
+				"the force flag if that's accepted")
 		}
 		if in.Position < in.Highest {
 			who, remedy := "the fleet", "re-anchor on the node that did instead"
 			if in.HighestPeer != "" {
 				who, remedy = in.HighestPeer, "re-anchor on "+in.HighestPeer+" instead"
 			}
-			return ReanchorPlan{}, fmt.Errorf("%w: this node is at %d and %s reached %d "+
-				"holding history the log does not — only the most caught-up node "+
+			return ReanchorPlan{}, refuseReanchor("this node is at %d and %s reached %d "+
+				"holding history the log doesn't. Only the most caught-up node "+
 				"may reanchor, because everything above its own position is what "+
-				"the reanchor discards; %s", ErrReanchorRefused, in.Position, who,
-				in.Highest, remedy)
+				"the reanchor discards; %s", in.Position, who, in.Highest, remedy)
 		}
 	}
 	// THE GENERATION AFTER EVERY ONE THIS DOMAIN HAS USED: this node's own,
@@ -546,8 +588,8 @@ func PermitReanchor(in ReanchorInputs, guard ReanchorGuard) (ReanchorPlan, error
 	// second opening of it is two histories under one number.
 	base := max(in.Generation, in.Abandoned)
 	if base >= MaxGeneration {
-		return ReanchorPlan{}, fmt.Errorf("%w: %s is at generation %d, the last "+
-			"the packed position can carry", ErrReanchorRefused, in.Stream, base)
+		return ReanchorPlan{}, refuseReanchor("%s is at generation %d, the last "+
+			"the packed position can carry", in.Stream, base)
 	}
 	// THE NEW GENERATION IS DERIVED LOCALLY, from this domain's own
 	// checkpoint and what the caller already read: this verb runs when the
@@ -591,14 +633,62 @@ type GenerationFacts struct {
 	Inputs ReanchorInputs
 
 	// By names the operator as the audit trail records them, ByKind the
-	// kind of party that is (a person, a machine, a Tier A token), and
-	// OperatorID the credential they acted through — the three columns
-	// every other write carries, so a generation's audit row says who moved
-	// the log and through what, and never only a name. Writer is this node.
-	By, ByKind, OperatorID, Writer string
+	// kind of actor that is — in the vocabulary [iam.ActorFor] records a
+	// party under — and OperatorID the credential they acted through: the
+	// three columns every other write carries, so a generation's audit row
+	// says who moved the log and through what, and never only a name — read
+	// for every domain by [GenerationFacts.Author]. Writer is this node.
+	By         string
+	ByKind     iam.ActorKind
+	OperatorID string
+	Writer     string
 
 	// At is the authored instant.
 	At time.Time
+}
+
+// Author is the party a generation record names as its author, in the ACTOR
+// vocabulary ([iam.ActorKind]) every domain's audit columns are written in —
+// the name bare, the kind beside it and the credential beside both — and
+// false where the facts name nobody: then the record is the NODE's, under
+// [GenerationFacts.Writer], which each domain records the way its own node
+// writer records itself rather than as an empty author column.
+//
+// ONE MAPPING FOR EVERY DOMAIN'S GENERATION RECORD, because one reanchor names
+// one party and the audit feed reads the histories side by side: written once
+// per domain — the tracker's, the knowledge base's, the identity estate's, the
+// artifacts log's, the artifact datastore's, the Dashboard Assistant's and
+// chat's — it was seven copies of one rule, already apart on what counts as
+// nobody (a name of spaces was a party to two of them and the node to the
+// others). A domain only says what the actor kind is in its own columns.
+//
+// THE KIND IS AN ACTOR KIND, the one [iam.ActorFor] records a party under,
+// which is what the engine's reanchor passes — typed, so a principal's word (a
+// seat, a person, a machine) is not one a caller can hand in without saying
+// it converts. A kind the actor vocabulary does not hold, the zero value of a
+// hand-built set of facts included, is an OPERATOR: a party acting on the
+// company's behalf that claims to be neither a seat nor a person nor the
+// engine, which is what [iam.ActorFor] itself answers for a kind it cannot
+// read.
+//
+// AN OPERATOR WITH NO CREDENTIAL BESIDE IT is a credential acting under its
+// own login — the one party whose name [iam.ActorFor] also records as its
+// credential — so the name stands in for the credential there and nowhere
+// else: under any other kind it would put a seat's handle or a person's in the
+// credential column, and the engine acts through no credential at all.
+func (f GenerationFacts) Author() (iam.Actor, bool) {
+	if strings.TrimSpace(f.By) == "" {
+		return iam.Actor{}, false
+	}
+	kind := f.ByKind
+	if !kind.Valid() {
+		kind = iam.ActorOperator
+	}
+	operator := f.OperatorID
+	if operator == "" && kind == iam.ActorOperator {
+		operator = f.By
+	}
+	return iam.Actor{Name: f.By, Kind: kind, OperatorID: operator}, true
 }
 
 // GenerationEncoder is the one step of a reanchor only the targeted domain can
@@ -606,8 +696,8 @@ type GenerationFacts struct {
 //
 // DECLARED HERE because the transition is the caller. And REQUIRED of every
 // domain rather than optional, because "this domain keeps no record of it" is a
-// claim the domain has to make about itself — the vectors make it, and say
-// why — rather than something a nil could leave unsaid.
+// claim the domain has to make about itself — the vectors and the usage log
+// each make it, and say why — rather than something a nil could leave unsaid.
 type GenerationEncoder interface {
 	// GenerationRecord encodes the record, and reports false for a domain
 	// that keeps none.
@@ -689,14 +779,16 @@ type ReanchorDeps struct {
 	// DB is the replicated estate, which holds the checkpoint.
 	DB Estate
 
-	// By names the operator for the record, ByKind the kind of party they
+	// By names the operator for the record, ByKind the kind of actor they
 	// are and OperatorID the credential they acted through
 	// ([GenerationFacts.By]); NodeID is this node — the writer the eviction
 	// gate compares against. All three about the operator travel, because a
 	// generation record that carried only a name recorded every reanchor as
 	// an operator acting through a credential named after themselves.
-	By, ByKind, OperatorID string
-	NodeID                 string
+	By         string
+	ByKind     iam.ActorKind
+	OperatorID string
+	NodeID     string
 
 	// CompletionBudget bounds the steps after the generation record is
 	// appended, which run on a context DETACHED from the caller's — see
@@ -809,7 +901,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	switch {
 	case d.Domain == nil:
 		return ReanchorPlan{}, errors.New("statelog: a reanchor names no domain, " +
-			"and a reanchor moves exactly one — the one whose stream the operator " +
+			"and a reanchor moves exactly one: the one whose stream the operator " +
 			"confirmed")
 	case d.DB == nil:
 		return ReanchorPlan{}, errors.New("statelog: a reanchor has no store")
@@ -820,7 +912,7 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 			"adopted", d.Domain.Name())
 	case d.NodeID == "":
 		return ReanchorPlan{}, fmt.Errorf("statelog: a reanchor of %s has no node "+
-			"id — the generation record is stamped with it for the eviction gate",
+			"id, and the generation record is stamped with it for the eviction gate",
 			d.Domain.Name())
 	}
 	spec := d.Spec
@@ -921,21 +1013,21 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 			unheld, walkErr := UnheldTail(post, d.Domain, spec, d.DB, d.Stream, in.Generation,
 				in.FirstSeq, plan.Cursor)
 			if walkErr != nil {
-				return ReanchorPlan{}, fmt.Errorf("statelog: %s's generation %d is "+
-					"open at sequence %d, and whether the records below it hold "+
-					"writes this node's rows do not could not be read — nothing "+
-					"else is committed; re-run the reanchor: %w", d.Domain.Name(),
-					gen, opened, walkErr)
+				return ReanchorPlan{}, stoppedReanchor(walkErr, "%s's generation %d is "+
+					"open at sequence %d, and this node couldn't read whether the "+
+					"records below it hold writes its rows lack. Nothing else is "+
+					"committed; re-run the reanchor", d.Domain.Name(),
+					gen, opened)
 			}
 			if unheld != nil && !guard.Discard {
-				return ReanchorPlan{}, fmt.Errorf("%w: %s's generation %d is open at "+
-					"sequence %d, and records this node's rows do not hold landed "+
-					"below it after the log was read — the newest is %s. Nothing "+
+				return ReanchorPlan{}, refuseReanchor("%s's generation %d is open at "+
+					"sequence %d, and records this node's rows don't hold landed "+
+					"below it after the log was read. The newest is %s. Nothing "+
 					"else is committed. Re-run with the discard flag to finish "+
 					"re-anchoring and apply them on no node; or keep them by "+
 					"replacing this node's rows with a peer's, and evict this node "+
 					"(crewlet retention evict), which abandons the generation it "+
-					"opened", ErrReanchorRefused, d.Domain.Name(), gen, opened, *unheld)
+					"opened", d.Domain.Name(), gen, opened, *unheld)
 			}
 			plan.Discarded = unheld
 		}
@@ -943,10 +1035,10 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 
 	// 5. THIS NODE'S CONSUMER, before the checkpoint it resumes from.
 	if err := d.Consumer.Reset(post, plan.Cursor); err != nil {
-		return ReanchorPlan{}, fmt.Errorf("statelog: move this node's %s consumer "+
-			"to sequence %d of the adopted stream — nothing is committed, so "+
-			"re-running the reanchor repeats it: %w", d.Domain.Name(),
-			plan.Cursor, err)
+		return ReanchorPlan{}, stoppedReanchor(err, "this node's %s consumer "+
+			"couldn't be moved to sequence %d of the adopted stream. Nothing is "+
+			"committed, so re-running the reanchor repeats it", d.Domain.Name(),
+			plan.Cursor)
 	}
 
 	// THE RECORD THE NEW CHECKPOINT NAMES — the log's own at its sequence,
@@ -960,10 +1052,10 @@ func Reanchor(ctx context.Context, d ReanchorDeps, in ReanchorInputs,
 	if plan.Cursor > 0 {
 		_, _, storedAt, ok, readErr := d.Stream.At(post, plan.Cursor)
 		if readErr != nil {
-			return ReanchorPlan{}, fmt.Errorf("statelog: read %s's record at sequence "+
-				"%d, which the new checkpoint names — nothing is committed, so "+
-				"re-running the reanchor repeats it: %w", d.Domain.Name(),
-				plan.Cursor, readErr)
+			return ReanchorPlan{}, stoppedReanchor(readErr, "%s's record at sequence "+
+				"%d, which the new checkpoint names, couldn't be read. Nothing is "+
+				"committed, so re-running the reanchor repeats it", d.Domain.Name(),
+				plan.Cursor)
 		}
 		if ok {
 			names = storedAt
@@ -1080,19 +1172,19 @@ func reanchoredDetail(c ReanchorCase) string {
 // perfectly suited to.
 //
 // It is ANOTHER node's record when two nodes opened the generation
-// independently — the register could not be read and both forced, or each
-// read it before the other's row said anything — and carrying on from it was
-// the defect. Both committed a checkpoint in the generation, each over its own
+// independently — the register could not be read and both forced, or each read
+// it before the other's row said anything — and carrying on from it was the
+// defect. Both committed a checkpoint in the generation, each over its own
 // rows: two histories under one number, which the identity claim forbids and
-// nothing on the log could ever reconcile, since every node applies the same
-// records into whichever rows it holds. So the record is READ BACK and its
-// writer compared with this node's, whatever the guard allowed: no force and
-// no unreadable register reaches past it, because nothing the operator could
-// know makes two openings of one generation safe. The duplicate case needs the
-// read too — the broker checks its window before the expectation on a
-// clustered stream, so a message id that collided with a peer's would be
-// acknowledged as though it had landed; the domains' message ids name their
-// writer, and this does not rely on it.
+// nothing on the log could ever reconcile, since every data node applies the
+// same records into whichever rows it holds. So the record is READ BACK and its
+// writer compared with this node's, whatever the guard allowed: no force and no
+// unreadable register reaches past it, because nothing the operator could know
+// makes two openings of one generation safe. The duplicate case needs the read
+// too — the broker checks its window before the expectation on a clustered
+// stream, so a message id that collided with a peer's would be acknowledged as
+// though it had landed; the domains' message ids name their writer, and this
+// does not rely on it.
 //
 // # It answers where the record is
 //
@@ -1113,17 +1205,36 @@ func appendGeneration(ctx context.Context, d ReanchorDeps, spec StreamSpec, gen 
 			return seq, nil
 		}
 		return seq, generationIsOurs(ctx, d, subject, seq, gen)
-	case faultFull, faultTooLarge, faultRefused:
-		return 0, fmt.Errorf("the broker refused to store the record: %s", detail)
+	// EACH REFUSAL WITH ITS OWN REMEDY, because they have opposite ones: a
+	// full log is cleared by raising its ceiling, and the other two are not
+	// cleared by anything an operator re-runs. Folded into one sentence, none
+	// said what to do. What the broker said goes to the lines this node logs.
+	case faultFull:
+		return 0, stoppedReanchor(errors.New(detail), "%s is at its ceiling, so the "+
+			"broker refused the generation record and nothing landed. Raise the "+
+			"ceiling with `crewlet retention set-capacity %s <bytes> -confirm <bytes>`, "+
+			"then re-run the reanchor", spec.Name, spec.Name)
+	case faultTooLarge:
+		return 0, stoppedReanchor(errors.New(detail), "the broker refused the "+
+			"generation record as larger than %s takes, so nothing landed, and "+
+			"re-running the reanchor won't change that. The lines this node "+
+			"logged name the limit", spec.Name)
+	case faultRefused:
+		return 0, stoppedReanchor(errors.New(detail), "the broker refused to store "+
+			"the generation record on %s, so nothing landed, and re-running the "+
+			"reanchor won't change that. The lines this node logged say what the "+
+			"broker answered", spec.Name)
 	case faultRejected, faultUnknown:
 		held, found, probe := d.Stream.LastSeq(ctx, subject)
 		switch {
 		case probe != nil:
-			return 0, fmt.Errorf("the append was not acknowledged (%v) and whether "+
-				"%s holds a record could not be read: %w", err, subject, probe)
+			return 0, stoppedReanchor(fmt.Errorf("the append was not acknowledged "+
+				"(%w) and whether %s holds a record could not be read: %w", err,
+				subject, probe), "the generation record wasn't acknowledged, and "+
+				"whether it landed couldn't be read. Re-run the reanchor")
 		case !found:
-			return 0, fmt.Errorf("the append was not acknowledged and %s holds "+
-				"nothing, so nothing landed — re-run the reanchor: %w", subject, err)
+			return 0, stoppedReanchor(err, "the generation record wasn't "+
+				"acknowledged and nothing landed. Re-run the reanchor")
 		}
 		return held, generationIsOurs(ctx, d, subject, held, gen)
 	}
@@ -1143,25 +1254,27 @@ func generationIsOurs(ctx context.Context, d ReanchorDeps, subject string, seq u
 	got, payload, _, ok, err := d.Stream.At(ctx, seq)
 	switch {
 	case err != nil:
-		return fmt.Errorf("%s already holds a record, at sequence %d, and it could "+
-			"not be read to learn whose it is — nothing was committed; re-run "+
-			"the reanchor: %w", subject, seq, err)
+		return stoppedReanchor(err, "the generation already holds a record, at "+
+			"sequence %d, and it couldn't be read to learn whose it is. Nothing "+
+			"was committed; re-run the reanchor", seq)
 	case !ok:
-		return fmt.Errorf("%s held a record at sequence %d and the log no longer "+
-			"has it, so whose it was is unknown — nothing was committed; re-run "+
-			"the reanchor", subject, seq)
+		return stoppedReanchor(fmt.Errorf("%s held a record at sequence %d and "+
+			"the log no longer has it", subject, seq), "the generation held a "+
+			"record at sequence %d and the log no longer has it, so whose it was "+
+			"is unknown. Nothing was committed; re-run the reanchor", seq)
 	case got != subject:
-		return fmt.Errorf("the broker named sequence %d as %s's and holds a record "+
-			"of %s there — nothing was committed; re-run the reanchor", seq,
-			subject, got)
+		return stoppedReanchor(fmt.Errorf("the broker named sequence %d as %s's "+
+			"and holds a record of %s there", seq, subject, got), "the broker "+
+			"named sequence %d as the generation's and holds another record "+
+			"there. Nothing was committed; re-run the reanchor", seq)
 	}
 	env, err := d.Domain.Envelope(payload)
 	if err != nil {
-		return fmt.Errorf("%w: %s's generation %d is already opened by a record at "+
-			"sequence %d of %s whose envelope does not decode (%v), so whether "+
-			"this node wrote it cannot be told — and a second opening of one "+
-			"generation is the one thing this must not do", ErrReanchorRefused,
-			d.Domain.Name(), gen, seq, d.Spec.Name, err)
+		return &Telling{Say: fmt.Sprintf("%s's generation %d is already opened by "+
+			"a record at sequence %d of %s that this build can't read, so whether "+
+			"this node wrote it can't be told, and a second opening of one "+
+			"generation is the one thing this must not do", d.Domain.Name(), gen,
+			seq, d.Spec.Name), Err: fmt.Errorf("%w: %w", ErrReanchorRefused, err)}
 	}
 	if env.Writer == d.NodeID {
 		return nil
@@ -1170,13 +1283,12 @@ func generationIsOurs(ctx context.Context, d ReanchorDeps, subject string, seq u
 	if writer == "" {
 		writer = "a writer that did not say who it was"
 	}
-	return fmt.Errorf("%w: %s's generation %d was already opened by %s — its "+
+	return refuseReanchor("%s's generation %d was already opened by %s: its "+
 		"record is at sequence %d of %s. It opened it from its own rows, and a "+
 		"second opening from this node's would put two histories under one "+
 		"generation number, which nothing on the log could ever reconcile; "+
 		"this node adopts a snapshot from a node in that generation instead",
-		ErrReanchorRefused, d.Domain.Name(), gen, writer, seq,
-		d.Spec.Name)
+		d.Domain.Name(), gen, writer, seq, d.Spec.Name)
 }
 
 // stillConfirmed reads the stream's instant again and refuses unless it is the
@@ -1190,17 +1302,16 @@ func generationIsOurs(ctx context.Context, d ReanchorDeps, subject string, seq u
 func stillConfirmed(ctx context.Context, stream ReanchorStream, in ReanchorInputs) error {
 	live, err := stream.CreatedAt(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: %s's creation instant could not be read again after "+
-			"the generation record, so which stream it went to is unknown and "+
-			"nothing was committed — re-run the reanchor: %w",
-			ErrReanchorRefused, in.Stream, err)
+		return &Telling{Say: fmt.Sprintf("%s's creation instant couldn't be read "+
+			"again after the generation record, so which stream it went to is "+
+			"unknown and nothing was committed. Re-run the reanchor", in.Stream),
+			Err: fmt.Errorf("%w: %w", ErrReanchorRefused, err)}
 	}
 	if IdentityOf(in.StreamCreatedAt, live, true) != StreamSame {
-		return fmt.Errorf("%w: %s was created at %s when this reanchor read it and "+
-			"at %s now — it was rebuilt again while the reanchor ran, and nothing "+
+		return refuseReanchor("%s was created at %s when this reanchor read it and "+
+			"at %s now. It was rebuilt again while the reanchor ran, and nothing "+
 			"was committed; confirm the new instant and re-run",
-			ErrReanchorRefused, in.Stream, ConfirmationOf(in.StreamCreatedAt),
-			ConfirmationOf(live))
+			in.Stream, ConfirmationOf(in.StreamCreatedAt), ConfirmationOf(live))
 	}
 	return nil
 }

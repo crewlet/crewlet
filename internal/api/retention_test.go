@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -60,6 +62,28 @@ type fakeStateLog struct {
 	abandoned iam.Actor
 	excluded  iam.Actor
 
+	// confirmed is the operation the last abandon's confirmation named, and
+	// abandonErr what the engine answers it. abandonClears answers it as an
+	// abandonment from `opened`, which clears the window and answers none.
+	confirmed     string
+	abandonErr    error
+	abandonClears bool
+
+	// openWindows and unreadWindows are every window open on any log and
+	// every log whose window couldn't be read, as a gesture's answer names
+	// them.
+	openWindows   []coord.MaintenanceOperation
+	unreadWindows []string
+
+	// window is the operation the capacity status reads, with the
+	// acknowledgements and admissions beside it; a nil one is unread.
+	window     *coord.MaintenanceOperation
+	acks       []coord.MaintenanceAck
+	admissions []coord.Admission
+	// acksErr and admissionsErr are those two reads failing after the
+	// window answered.
+	acksErr, admissionsErr error
+
 	// unreadable is the broker's answer to a LIVE read of a stream's
 	// instant, nil while it answers.
 	unreadable error
@@ -70,6 +94,10 @@ type fakeStateLog struct {
 	// reanchored is the last reanchor asked for, and plan what it answers.
 	reanchored engine.ReanchorRequest
 	plan       statelog.ReanchorPlan
+
+	// gestureErr, where set, is what every capacity gesture, the reanchor and
+	// the maintenance status answer instead of their defaults.
+	gestureErr error
 }
 
 func (f *fakeStateLog) ReanchorStatus(_ context.Context, stream string) (
@@ -102,7 +130,8 @@ func (f *fakeStateLog) generationOf(stream string) (uint32, error) {
 	f.asked = stream
 	generation, runs := f.generations[stream]
 	if !runs {
-		return 0, fmt.Errorf("%w: %q", engine.ErrUnknownStream, stream)
+		streams := slices.Sorted(maps.Keys(f.generations))
+		return 0, &engine.UnknownStreamError{Stream: stream, Streams: streams}
 	}
 	return generation, nil
 }
@@ -113,6 +142,9 @@ func (f *fakeStateLog) Reanchor(_ context.Context, req engine.ReanchorRequest) (
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.reanchored = req
+	if f.gestureErr != nil {
+		return statelog.ReanchorPlan{}, f.gestureErr
+	}
 	if f.plan.Generation == 0 {
 		return statelog.ReanchorPlan{}, errors.New("not exercised here")
 	}
@@ -125,15 +157,35 @@ func (f *fakeStateLog) SetCapacity(_ context.Context, req engine.CapacityRequest
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.capacity = req
-	return coord.MaintenanceOperation{}, errors.New("not exercised here")
+	if f.gestureErr != nil {
+		return coord.MaintenanceOperation{}, f.gestureErr
+	}
+	// THE REFUSAL A NODE IN NORMAL MODE GIVES, which [fakeStateLog.Mode] is.
+	return coord.MaintenanceOperation{}, &statelog.Telling{Say: "this node is " +
+		"publishing, so a capacity change can't run here"}
 }
 
-func (f *fakeStateLog) AbandonCapacity(_ context.Context, _ string, by iam.Actor) (
-	coord.MaintenanceOperation, error) {
+func (f *fakeStateLog) AbandonCapacity(_ context.Context, _, operationID string,
+	by iam.Actor) (coord.MaintenanceOperation, error) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.abandoned = by
+	f.confirmed = operationID
+	if f.abandonErr != nil {
+		return coord.MaintenanceOperation{Stream: "CREWLET_TRACKER_LOG",
+			OperationID: "capacity:open", Phase: coord.PhaseBaselined}, f.abandonErr
+	}
+	if f.gestureErr != nil {
+		return coord.MaintenanceOperation{}, f.gestureErr
+	}
+	if f.abandonClears {
+		return coord.MaintenanceOperation{}, nil
+	}
+	if f.window != nil {
+		// AN ABANDONMENT PAST `opened` answers the window it is carrying.
+		return *f.window, nil
+	}
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
@@ -143,13 +195,35 @@ func (f *fakeStateLog) ExcludeParticipant(_ context.Context, _, _ string,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.excluded = by
+	if f.gestureErr != nil {
+		return coord.MaintenanceOperation{}, f.gestureErr
+	}
 	return coord.MaintenanceOperation{}, errors.New("not exercised here")
 }
 
-func (f *fakeStateLog) CapacityStatus(context.Context, string) (
-	coord.MaintenanceOperation, []coord.MaintenanceAck, []coord.Admission, bool, error) {
+func (f *fakeStateLog) CapacityStatus(context.Context, string) (engine.CapacityState, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.gestureErr != nil {
+		return engine.CapacityState{}, f.gestureErr
+	}
+	if f.window == nil {
+		return engine.CapacityState{}, errors.New("not exercised here")
+	}
+	return engine.CapacityState{Op: *f.window, Found: true, Acks: f.acks,
+		AcksErr: f.acksErr, Admissions: f.admissions, AdmissionsErr: f.admissionsErr}, nil
+}
 
-	return coord.MaintenanceOperation{}, nil, nil, false, errors.New("not exercised here")
+func (f *fakeStateLog) CapacityAcks(context.Context, string) ([]coord.MaintenanceAck, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.acks, f.acksErr
+}
+
+func (f *fakeStateLog) CapacityWindows(context.Context) ([]coord.MaintenanceOperation, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.openWindows, f.unreadWindows
 }
 
 func (f *fakeStateLog) Mode() statelog.MaintenanceMode { return statelog.ModeNormal }
@@ -171,6 +245,71 @@ func postAck(t *testing.T, a *api.App, path string) (int, map[string]any) {
 	var body map[string]any
 	_ = json.NewDecoder(rec.Result().Body).Decode(&body)
 	return rec.Code, body
+}
+
+// A WINDOW THE STATUS READ IS ANSWERED, WHATEVER FAILED AFTER IT. The window is
+// read first and the acknowledgements and the admissions after it, and either
+// failing was answered as the window's own 503: "couldn't read whether a
+// capacity window is open" about a window the node had just read open. Each
+// part is said as unread beside the window, and nothing is formed from it.
+//
+// Mutation: answer a part's failure as the window's 503, or form a list from
+// the part that failed, and this fails.
+func TestAStatusAnswersTheWindowItReadAndNamesWhatItCouldNot(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		acksErr, admissionsErr error
+		unread, absent         []string
+	}{
+		"acknowledgements": {acksErr: errors.New("store unreachable"),
+			unread: []string{"acks_unread"}, absent: []string{"acks", "restarts_missing",
+				"admissions_unread"}},
+		"admissions": {admissionsErr: errors.New("store unreachable"),
+			unread: []string{"admissions_unread"}, absent: []string{"admissions",
+				"admissions_blocking", "acks_unread"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			log := &fakeStateLog{
+				window: &coord.MaintenanceOperation{
+					Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open",
+					Phase: coord.PhaseOpened, Attempt: 1,
+					Participants: []string{"node-1", "node-2"},
+				},
+				acksErr: tc.acksErr, admissionsErr: tc.admissionsErr,
+			}
+			b := closedPosture()
+			a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+				Capacity: log, Nodes: &fakeNodeGate{}})
+			req := httptest.NewRequest(http.MethodGet,
+				"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("a window read beside a part that failed answered %d: %s",
+					rec.Code, rec.Body)
+			}
+			var body map[string]any
+			if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["open"] != true || body["operation"] == nil {
+				t.Errorf("the window read is not answered: %v", body)
+			}
+			for _, key := range tc.unread {
+				if body[key] != true {
+					t.Errorf("%s = %v, want true", key, body[key])
+				}
+			}
+			for _, key := range tc.absent {
+				if _, said := body[key]; said {
+					t.Errorf("the status answers %s = %v beside a part it couldn't read",
+						key, body[key])
+				}
+			}
+		})
+	}
 }
 
 // THE FLEET'S CONTROLS RECORD WHO PRESSED THEM: the eviction gate is handed
@@ -225,7 +364,8 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 		t.Errorf("the reanchor was handed %+v, want %+v", log.reanchored.By, want)
 	}
 
-	postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
+	postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG"+
+		"&confirm=capacity:open")
 	if log.abandoned != want {
 		t.Errorf("the abandon was handed %+v, want %+v", log.abandoned, want)
 	}
@@ -233,6 +373,254 @@ func TestTheFleetControlsRecordWhoPressedThem(t *testing.T) {
 		"&node=n1&confirm=n1")
 	if log.excluded != want {
 		t.Errorf("the exclusion was handed %+v, want %+v", log.excluded, want)
+	}
+}
+
+// AN ABANDONMENT IS CONFIRMED BEFORE IT RUNS.
+//
+// ?confirm= repeats the open operation's id. The route refuses one that is
+// missing before the engine is asked, and answers the engine's refusal of one
+// naming another operation as the same refusal, carrying the operation that is
+// open, rather than as a refused capacity change. The CLI used to compare the
+// id after the abandonment had already run.
+//
+// Mutation: drop the missing-confirm check and the first half fails (the
+// engine is asked); map the mismatch through the generic refusal and the
+// second half fails.
+func TestAnAbandonmentIsConfirmedBeforeItRuns(t *testing.T) {
+	t.Parallel()
+	log := &fakeStateLog{}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+
+	code, body := postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG")
+	if code != http.StatusBadRequest || body["error"] != "confirm_required" {
+		t.Fatalf("an abandonment with no confirmation answered %d %v, want 400 "+
+			"confirm_required", code, body)
+	}
+	// THE STATUS READ AS THE CLI TAKES IT, here and on a mismatch below: the
+	// CLI refuses one that names no log.
+	const status = "`crewlet retention maintenance status -stream CREWLET_TRACKER_LOG`"
+	if detail, _ := body["detail"].(string); !strings.Contains(detail, status) {
+		t.Errorf("the refusal %q doesn't name %s", detail, status)
+	}
+	if log.abandoned != (iam.Actor{}) {
+		t.Fatalf("the engine was asked to abandon with no confirmation: %+v", log.abandoned)
+	}
+
+	log.abandonErr = &engine.ConfirmMismatchError{Stream: "CREWLET_TRACKER_LOG",
+		Open: "capacity:open", Named: "capacity:other"}
+	code, body = postAck(t, a, "/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG"+
+		"&confirm=capacity:other")
+	if code != http.StatusBadRequest || body["error"] != "confirm_required" {
+		t.Fatalf("a confirmation naming another operation answered %d %v, want "+
+			"400 confirm_required", code, body)
+	}
+	if log.confirmed != "capacity:other" {
+		t.Errorf("the engine was handed confirmation %q, want the one sent", log.confirmed)
+	}
+	detail, _ := body["detail"].(string)
+	if !strings.Contains(detail, "capacity:open") || !strings.Contains(detail, status) {
+		t.Errorf("the refusal %q doesn't name the operation that is open and %s",
+			detail, status)
+	}
+	if op, _ := body["operation"].(map[string]any); op["operation_id"] != "capacity:open" {
+		t.Errorf("the refusal carries operation %v, want the open one", body["operation"])
+	}
+}
+
+// A BLOCKED OPERATION CARRIES ITS SENTENCE BESIDE ITS CODE, on every answer
+// that carries one.
+//
+// The operation's `blocked` is a code for scripts, and every client printed it
+// as the reason a window needed a person. Each answer carrying an operation
+// now carries `blocked_detail` beside it ([statelog.BlockedDetail]), so a
+// client shows the node's words and never has to make its own. An abandoned
+// window's sentence is decided by its seal, so every answer reads the window's
+// acknowledgements for it. Mutation: answer the bare record from the status or
+// from a gesture, or word a gesture's window without its acknowledgements, and
+// its half fails.
+func TestABlockedOperationCarriesItsSentenceBesideItsCode(t *testing.T) {
+	t.Parallel()
+	window := coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open",
+		Phase: coord.PhaseSealing, Attempt: 1, TargetMaxBytes: 8 << 30,
+		Participants: []string{"node-1"}, Blocked: coord.BlockAbandoned,
+		AbandonedBy:       coord.MaintenanceParty{By: "ana.admin"},
+		WriteIncarnations: map[string]string{"node-1": "node-1:old"},
+	}
+	// THE SEAL HOLDS on these, so the sentence says one set-capacity closes
+	// the window, which only an answer that read them can say.
+	acks := []coord.MaintenanceAck{{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1",
+		OperationID: "capacity:open", Attempt: 1, Incarnation: "node-1:new", Mode: "seal"}}
+	log := &fakeStateLog{window: &window, acks: acks}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+	for name, req := range map[string]*http.Request{
+		"the status": httptest.NewRequest(http.MethodGet,
+			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil),
+		"an abandonment": httptest.NewRequest(http.MethodPost,
+			"/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG&confirm=capacity:open", nil),
+	} {
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", name, rec.Code, rec.Body)
+		}
+		var body struct {
+			Operation struct {
+				Blocked       string `json:"blocked"`
+				BlockedDetail string `json:"blocked_detail"`
+			} `json:"operation"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Operation.Blocked != string(coord.BlockAbandoned) {
+			t.Errorf("%s's operation carries blocked %q, want the code for scripts",
+				name, body.Operation.Blocked)
+		}
+		if want := statelog.BlockedDetail(window, acks, nil); body.Operation.BlockedDetail != want ||
+			!strings.Contains(want, "waiting on no node") {
+			t.Errorf("%s's operation carries blocked_detail %q, want %q", name,
+				body.Operation.BlockedDetail, want)
+		}
+	}
+}
+
+// A WINDOW'S STATUS ANSWERS WHAT ITS NEXT STEP WAITS ON.
+//
+// At opened the next step is the baseline, which reads a restart into a
+// maintenance mode from every participant and the admissions, so that is what
+// the status names. The seal's list there named every node restarted before
+// the window as owing a seal restart the procedure hadn't asked for yet. Past
+// opened the seal is the next step and no step reads an admission again, so
+// the answer swaps; once it has sealed, nothing waits on a node.
+//
+// Mutation: answer the seal's list at every phase and the opened half fails;
+// answer the admissions at every phase and the baselined half fails.
+func TestAWindowsStatusAnswersWhatItsNextStepWaitsOn(t *testing.T) {
+	t.Parallel()
+	log := &fakeStateLog{
+		window: &coord.MaintenanceOperation{
+			Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:open",
+			Phase: coord.PhaseOpened, Attempt: 1,
+			Participants: []string{"node-1", "node-2", "node-3"},
+		},
+		acks: []coord.MaintenanceAck{
+			{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1", Incarnation: "node-1:2",
+				Mode: "maintenance"},
+		},
+		admissions: []coord.Admission{{NodeID: "node-3", Incarnation: "node-3:1"}},
+	}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+	read := func() map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet,
+			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		a.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("the status answered %d: %s", rec.Code, rec.Body)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	opened := read()
+	if got := fmt.Sprint(opened["restarts_missing"]); got != "[node-2 node-3]" {
+		t.Errorf("restarts_missing at opened = %s, want node-2 and node-3", got)
+	}
+	if got := fmt.Sprint(opened["admissions_blocking"]); got != "[node-3]" {
+		t.Errorf("admissions_blocking at opened = %s, want node-3", got)
+	}
+	if _, said := opened["blocking"]; said {
+		t.Errorf("the status at opened names the seal's list: %v", opened["blocking"])
+	}
+
+	log.mu.Lock()
+	log.window.Phase = coord.PhaseBaselined
+	log.window.WriteIncarnations = map[string]string{"node-1": "node-1:2",
+		"node-2": "node-2:2", "node-3": "node-3:2"}
+	log.mu.Unlock()
+	baselined := read()
+	if blocking, _ := baselined["blocking"].(string); !strings.Contains(blocking, "node-2") {
+		t.Errorf("blocking past opened = %q, want the seal's list naming node-2", blocking)
+	}
+	if _, said := baselined["admissions_blocking"]; said {
+		t.Errorf("the status past opened names admissions no step reads: %v",
+			baselined["admissions_blocking"])
+	}
+	if _, said := baselined["restarts_missing"]; said {
+		t.Errorf("the status past opened names the baseline's list: %v",
+			baselined["restarts_missing"])
+	}
+
+	// AND ONCE IT HAS SEALED IT IS SEALED, whatever the nodes wrote since:
+	// the seal's rule applied to node-2 restarted again said "not sealed"
+	// under PHASE sealed, and nothing after the seal waits on a node.
+	// Mutation: judge sealed and confirmed by the seal's rule and this fails.
+	for _, phase := range []coord.MaintenancePhase{coord.PhaseSealed, coord.PhaseConfirmed} {
+		log.mu.Lock()
+		log.window.Phase = phase
+		log.mu.Unlock()
+		after := read()
+		if after["sealed"] != true {
+			t.Errorf("the status at %s says sealed is %v", phase, after["sealed"])
+		}
+		if blocking, said := after["blocking"]; said {
+			t.Errorf("the status at %s names the seal's list: %v", phase, blocking)
+		}
+	}
+}
+
+// A GESTURE THAT CLOSES A WINDOW NAMES EVERY WINDOW STILL OPEN, and every log
+// whose window couldn't be read.
+//
+// A node won't start in service while any log has a window open, or while it
+// can't read whether one has, and only the node can say which: the CLI told
+// an operator to restart in service whenever its own window closed, and with
+// a second log's window still open every node refused to boot. An abandonment
+// from `opened` clears its window, so it answers no operation, and the
+// windows beside it.
+//
+// Mutation: drop the windows from the answer and this fails.
+func TestAClosingGestureNamesTheWindowsStillOpen(t *testing.T) {
+	t.Parallel()
+	log := &fakeStateLog{
+		abandonClears: true,
+		openWindows: []coord.MaintenanceOperation{{
+			Stream: "CREWLET_PAGES_LOG", OperationID: "capacity:pages",
+			Phase: coord.PhaseApplied, TargetMaxBytes: 1 << 33,
+		}},
+		unreadWindows: []string{"CREWLET_VECTORS_LOG"},
+	}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+		Capacity: log, Nodes: &fakeNodeGate{}})
+	code, body := postAck(t, a, "/worklet/retention/maintenance/abandon?"+
+		"stream=CREWLET_TRACKER_LOG&confirm=capacity:open")
+	if code != http.StatusOK {
+		t.Fatalf("the abandonment answered %d %v", code, body)
+	}
+	if op, said := body["operation"]; !said || op != nil {
+		t.Errorf("a cleared window answered operation %v, want none", op)
+	}
+	if got := fmt.Sprint(body["open_windows"]); got != "[map[operation_id:capacity:pages "+
+		"phase:applied stream:CREWLET_PAGES_LOG target_max_bytes:8.589934592e+09]]" {
+		t.Errorf("open_windows = %s, want the pages window", got)
+	}
+	if got := fmt.Sprint(body["unread_windows"]); got != "[CREWLET_VECTORS_LOG]" {
+		t.Errorf("unread_windows = %s, want the log nobody could read", got)
 	}
 }
 
@@ -291,6 +679,67 @@ func TestAnAcknowledgementCarriesTheNamedStreamsOwnGeneration(t *testing.T) {
 	}
 }
 
+// EVERY LOG'S ACKNOWLEDGEMENT STANDS BESIDE THE OTHERS.
+//
+// Under `backup_floor: operator` the procedure is one acknowledgement per
+// log, in turn. The route writes each one to the fleet's register, and
+// the register kept ONE operator row: each acknowledgement replaced the last,
+// so following the procedure left exactly one log covered — whichever was
+// acknowledged last — and the trim blocked on the others. Here the route writes
+// to the real register, and every log acknowledged must still be covered, at
+// its own reach, after the last.
+func TestEveryLogsAcknowledgementStandsBesideTheOthers(t *testing.T) {
+	t.Parallel()
+	fleet := coordmemory.NewFleet()
+	node := &fakeStateLog{generations: map[string]uint32{
+		"CREWLET_TRACKER_LOG":     3,
+		"CREWLET_PAGES_LOG":       7,
+		"CREWLET_TRACKER_VECTORS": 1,
+	}}
+	b := closedPosture()
+	a := newApp(t, api.Options{Bootstrap: &b, Retention: fleet, Capacity: node})
+	acks := []struct {
+		stream     string
+		seq        uint64
+		generation uint32
+	}{
+		{"CREWLET_TRACKER_LOG", 918100000, 3},
+		{"CREWLET_PAGES_LOG", 40400, 7},
+		{"CREWLET_TRACKER_VECTORS", 77000, 1},
+	}
+	for _, ack := range acks {
+		code, body := postAck(t, a, fmt.Sprintf("/worklet/retention/ack?stream=%s&position=%d",
+			ack.stream, ack.seq))
+		if code != http.StatusOK {
+			t.Fatalf("acknowledging %s answered %d: %v", ack.stream, code, body)
+		}
+	}
+
+	points, err := fleet.BackupPoints(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted := coord.CountedBackups(points, true)
+	for _, ack := range acks {
+		newest, ok := coord.NewestBackupOf(counted, ack.stream)
+		if !ok {
+			t.Errorf("%s is covered by no acknowledgement after all three were "+
+				"given — a later one replaced it (register %+v)", ack.stream, points)
+			continue
+		}
+		at := newest.Streams[ack.stream]
+		if at.Seq != ack.seq || at.Generation != ack.generation {
+			t.Errorf("%s is acknowledged at %d (generation %d), want its own %d "+
+				"(generation %d)", ack.stream, at.Seq, at.Generation, ack.seq,
+				ack.generation)
+		}
+		if len(newest.Streams) != 1 {
+			t.Errorf("the acknowledgement covering %s reaches %v — each names the "+
+				"one log it was given for", ack.stream, newest.Streams)
+		}
+	}
+}
+
 // A STREAM THIS NODE DOES NOT RUN IS REFUSED, rather than acknowledged at some
 // other log's generation.
 //
@@ -316,6 +765,177 @@ func TestAnAcknowledgementNamingAnUnknownStreamIsRefused(t *testing.T) {
 	}
 	if register.calls != 0 {
 		t.Errorf("a point was written anyway: %v", register.point)
+	}
+}
+
+// A RETENTION ROUTE TELLS ITS OPERATOR THE REFUSAL AND KEEPS THE FAULT FOR ITS
+// LOG.
+//
+// Every one of these routes answered `err.Error()` as its detail, so an
+// operator's command line printed the package that wrote the refusal
+// ("engine: ...", "statelog: reanchor refused: ...") and, where a read had
+// failed underneath, the broker's own words. A refusal the engine tells
+// ([statelog.Told]) is answered in its sentence alone; anything else is a
+// fault, answered in the route's own words with a code of its own and never
+// with the error's text. Mutation: answer `err.Error()` again at any one of
+// these and its case fails.
+func TestARetentionRouteTellsItsRefusalAndKeepsItsFaultForTheLog(t *testing.T) {
+	t.Parallel()
+	raw := errors.New("nats: timeout")
+	told := &statelog.Telling{Say: "there's no capacity operation on CREWLET_TRACKER_LOG", Err: raw}
+	reanchorTold := &statelog.Telling{Say: "the confirmation names \"x\"", Err: statelog.ErrReanchorRefused}
+	// THE ENGINE'S ANSWER TO A STREAM NO WINDOW CAN BE OPEN ON, which every
+	// window verb gives before it reads anything (the engine's own suite
+	// holds that it does): here is what each route makes of it.
+	unknown := &engine.UnknownStreamError{Stream: "NOPE", Streams: []string{"CREWLET_TRACKER_LOG"}}
+	cases := []struct {
+		name, method, path string
+		err                error
+		status             int
+		code               httpjson.Code
+		detail             string // the whole detail, or "" to check only that it is clean
+	}{
+		{"an unknown stream on an acknowledgement", http.MethodPost,
+			"/worklet/retention/ack?stream=NOPE&position=9", nil,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"an unknown stream on a reanchor status", http.MethodGet,
+			"/worklet/retention/reanchor?stream=NOPE", nil,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"a capacity refusal", http.MethodPost,
+			"/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=9&confirm=9", told,
+			http.StatusConflict, httpjson.CodeCapacityRefused,
+			"There's no capacity operation on CREWLET_TRACKER_LOG."},
+		{"a capacity fault", http.MethodPost,
+			"/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=9&confirm=9", raw,
+			http.StatusInternalServerError, httpjson.CodeCapacityFailed,
+			"The capacity change on CREWLET_TRACKER_LOG stopped on an error, and " +
+				"this node's log says which. Read where it stands with `crewlet " +
+				"retention maintenance status -stream CREWLET_TRACKER_LOG` before going on."},
+		{"an abandon fault", http.MethodPost,
+			"/worklet/retention/maintenance/abandon?stream=CREWLET_TRACKER_LOG&confirm=capacity:open", raw,
+			http.StatusInternalServerError, httpjson.CodeCapacityFailed,
+			"The abandonment on CREWLET_TRACKER_LOG stopped on an error, and " +
+				"this node's log says which. Read where it stands with `crewlet " +
+				"retention maintenance status -stream CREWLET_TRACKER_LOG` before going on."},
+		{"an exclusion fault", http.MethodPost,
+			"/worklet/retention/maintenance/exclude?stream=CREWLET_TRACKER_LOG&node=n1&confirm=n1", raw,
+			http.StatusInternalServerError, httpjson.CodeCapacityFailed,
+			"The exclusion on CREWLET_TRACKER_LOG stopped on an error, and " +
+				"this node's log says which. Read where it stands with `crewlet " +
+				"retention maintenance status -stream CREWLET_TRACKER_LOG` before going on."},
+		{"an unknown stream on an abandonment", http.MethodPost,
+			"/worklet/retention/maintenance/abandon?stream=NOPE&confirm=capacity:open", unknown,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"an unknown stream on an exclusion", http.MethodPost,
+			"/worklet/retention/maintenance/exclude?stream=NOPE&node=n1&confirm=n1", unknown,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"an unknown stream on a maintenance status", http.MethodGet,
+			"/worklet/retention/maintenance?stream=NOPE", unknown,
+			http.StatusNotFound, httpjson.CodeUnknownStream,
+			`"NOPE" isn't a log this node keeps. Use "CREWLET_TRACKER_LOG".`},
+		{"an exclusion refusal", http.MethodPost,
+			"/worklet/retention/maintenance/exclude?stream=CREWLET_TRACKER_LOG&node=n1&confirm=n1", told,
+			http.StatusConflict, httpjson.CodeCapacityRefused,
+			"There's no capacity operation on CREWLET_TRACKER_LOG."},
+		{"a reanchor refusal", http.MethodPost,
+			"/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG&confirm=x", reanchorTold,
+			http.StatusConflict, httpjson.CodeReanchorRefused,
+			`The confirmation names "x".`},
+		{"a reanchor fault", http.MethodPost,
+			"/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG&confirm=x", raw,
+			http.StatusInternalServerError, httpjson.CodeReanchorFailed, ""},
+		{"an unreadable maintenance window", http.MethodGet,
+			"/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", nil,
+			http.StatusServiceUnavailable, httpjson.CodeMaintenanceUnreadable,
+			"Couldn't read whether a capacity window is open on CREWLET_TRACKER_LOG " +
+				"just now. Ask again in a moment, and if it keeps failing, this " +
+				"node's log says why."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			node := &fakeStateLog{generations: map[string]uint32{"CREWLET_TRACKER_LOG": 3},
+				gestureErr: c.err}
+			b := closedPosture()
+			a := newApp(t, api.Options{Bootstrap: &b, Retention: &fakeBackupRegister{},
+				Capacity: node})
+			req := httptest.NewRequest(c.method, c.path, nil)
+			req.Header.Set("Authorization", "Bearer secret")
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, req)
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("the answer is not JSON: %v (%s)", err, rec.Body)
+			}
+			if rec.Code != c.status || body["error"] != string(c.code) {
+				t.Fatalf("answered %d %v, want %d %s: %v", rec.Code, body["error"],
+					c.status, c.code, body)
+			}
+			detail, _ := body["detail"].(string)
+			if c.detail != "" && detail != c.detail {
+				t.Errorf("detail = %q, want %q", detail, c.detail)
+			}
+			// A READ A WAIT CLEARS SAYS WHEN TO ASK AGAIN: every 503 here
+			// is coordination or the broker not answering.
+			if c.status == http.StatusServiceUnavailable && rec.Header().Get("Retry-After") == "" {
+				t.Error("a 503 answered no Retry-After")
+			}
+			for _, leak := range []string{"nats:", "engine:", "statelog:", "not exercised"} {
+				if strings.Contains(detail, leak) {
+					t.Errorf("detail %q carries %q, which only the log should", detail, leak)
+				}
+			}
+			if detail == "" {
+				t.Error("the answer carries no detail")
+			}
+		})
+	}
+}
+
+// AN OPERATION ID THE GRAMMAR REFUSES IS TOLD BY WHAT IS WRONG WITH IT, naming
+// the field it came in, and never in the framework's own text, which named the
+// tool argument a model sends rather than the parameter this route reads.
+// Mutation: answer the error's text again and this fails.
+func TestAGateRefusalOfAnOperationIDSaysWhatIsWrongWithIt(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: &fakeNodeGate{}}),
+		"/worklet/retention/evict/node-4?confirm=node-4&op_id=op-abc")
+	if code != http.StatusBadRequest || body["field"] != "op_id" {
+		t.Fatalf("an invented op_id answered %d %v, want 400 naming the field", code, body)
+	}
+	want := "The op_id is not an operation id this engine accepts, which is a " +
+		"UUIDv7, optionally followed by a dot and a name. Send back the op_id an " +
+		"earlier answer returned, unchanged, or leave it out to start the gesture afresh."
+	if body["detail"] != want {
+		t.Errorf("detail = %q, want %q", body["detail"], want)
+	}
+}
+
+// A GATE THAT FAILED BEFORE ANYTHING WAS WRITTEN SAYS SO AND HANDS BACK ITS
+// OPERATION, so the same request can be sent again: the detail is the route's
+// words, the fault is the log's. Mutation: answer the error's text again, or
+// drop the op_id, and this fails.
+func TestAGateFaultSaysNothingWasWrittenAndHandsBackItsOperation(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	gate := &fakeNodeGate{readmit: errors.New("engine: read the floors: nats: timeout")}
+	code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+		"/worklet/retention/readmit/node-4?confirm=node-4")
+	if code != http.StatusInternalServerError || body["error"] != "gate_failed" {
+		t.Fatalf("an untyped failure answered %d %v, want 500 gate_failed", code, body)
+	}
+	detail, _ := body["detail"].(string)
+	if strings.Contains(detail, "nats") || strings.Contains(detail, "engine:") ||
+		!strings.Contains(detail, "nothing was written") {
+		t.Errorf("detail = %q, want the route's own words saying nothing was written", detail)
+	}
+	if op, _ := body["op_id"].(string); op == "" || body["node"] != "node-4" {
+		t.Errorf("the answer carries op_id %v and node %v, want both", body["op_id"], body["node"])
 	}
 }
 
@@ -353,7 +973,7 @@ func TestTheDeploymentControlsRefuseInTheEnvelope(t *testing.T) {
 		{http.MethodPost, "/worklet/retention/reanchor?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeConfirmRequired},
 		{http.MethodPost, "/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG", http.StatusBadRequest, httpjson.CodeTargetRequired},
 		{http.MethodPost, "/worklet/retention/capacity?stream=CREWLET_TRACKER_LOG&bytes=1024&confirm=1024", http.StatusConflict, httpjson.CodeCapacityRefused},
-		{http.MethodGet, "/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", http.StatusInternalServerError, httpjson.CodeMaintenanceUnreadable},
+		{http.MethodGet, "/worklet/retention/maintenance?stream=CREWLET_TRACKER_LOG", http.StatusServiceUnavailable, httpjson.CodeMaintenanceUnreadable},
 	}
 	for _, tc := range cases {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
@@ -398,7 +1018,7 @@ type fakeNodeGate struct {
 	asked []engine.GateRequest
 }
 
-func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.GateResult, error) {
+func (f *fakeNodeGate) answer(req engine.GateRequest, verb string, refusal error) (engine.GateResult, error) {
 	f.mu.Lock()
 	f.asked = append(f.asked, req)
 	f.mu.Unlock()
@@ -410,22 +1030,20 @@ func (f *fakeNodeGate) answer(req engine.GateRequest, refusal error) (engine.Gat
 		out.Node, out.OpID = req.Node, req.OpID
 		return out, nil
 	}
-	return engine.GateResult{Node: req.Node, OpID: req.OpID, Domains: []engine.DomainGate{
-		{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG", OpID: req.OpID + ".evict.tracker",
-			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Seq: 12}},
-		{Domain: "pages", Stream: "CREWLET_PAGES_LOG", OpID: req.OpID + ".evict.pages",
-			Outcome:  statelog.OutcomeApplied,
-			Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Seq: 7}},
-	}}, nil
+	// EVERY LOG A NODE'S GESTURE WRITES, applied ([gateLogs]).
+	var domains []engine.DomainGate
+	for i, domain := range gateLogs() {
+		domains = append(domains, appliedOn(i, domain, req.OpID, verb, req.Node))
+	}
+	return engine.GateResult{Node: req.Node, OpID: req.OpID, Domains: domains}, nil
 }
 
 func (f *fakeNodeGate) Evict(_ context.Context, req engine.GateRequest) (engine.GateResult, error) {
-	return f.answer(req, f.evict)
+	return f.answer(req, "evict", f.evict)
 }
 
 func (f *fakeNodeGate) Readmit(_ context.Context, req engine.GateRequest) (engine.GateResult, error) {
-	return f.answer(req, f.readmit)
+	return f.answer(req, "readmit", f.readmit)
 }
 
 // A READMISSION REFUSED BELOW THE FLOOR IS A 409 CARRYING BOTH NUMBERS, and a
@@ -456,8 +1074,8 @@ func TestAReadmissionBelowTheFloorIsRefusedAsAnAnswer(t *testing.T) {
 		t.Errorf("error = %v, want readmission_refused", body["error"])
 	}
 	detail, _ := body["detail"].(string)
-	if detail != httpjson.Sentence(refusal.Error()) {
-		t.Errorf("detail = %q, want the refusal's own sentence %q", detail, refusal.Error())
+	if detail != httpjson.Sentence(refusal.Tell()) {
+		t.Errorf("detail = %q, want the refusal's own sentence %q", detail, refusal.Tell())
 	}
 	if hint, _ := body["hint"].(string); hint != httpjson.Sentence(refusal.Remedy().Detail) {
 		t.Errorf("hint = %q, want the refusal's remedy", hint)
@@ -729,6 +1347,11 @@ func TestTheReanchorStatusTellsAnUnknownStreamFromAnUnreadableOne(t *testing.T) 
 		t.Fatalf("a stream the broker did not answer for answered %d: %v — "+
 			"reported as unknown, the operator goes looking for a typo", code, body)
 	}
+	if detail, _ := body["detail"].(string); strings.Contains(detail, "nats") ||
+		!strings.Contains(detail, "CREWLET_PAGES_LOG") {
+		t.Errorf("detail = %q, want the stream named and the broker's words left "+
+			"to the log", detail)
+	}
 	// THE ACKNOWLEDGEMENT DOES NOT ASK THE BROKER FOR AN INSTANT IT DOES NOT
 	// USE: the generation is the node's own.
 	if code, body := postAck(t, a,
@@ -823,6 +1446,32 @@ func TestAGateRefusesAnOperationIDTheEngineDidNotMint(t *testing.T) {
 			t.Errorf("the invented %s op_id still reached the gate: %+v", verb,
 				gate.asked)
 		}
+	}
+}
+
+// A GESTURE'S OPERATION NAMES ITS NODE IN ONE STEP OF THE GRAMMAR, whatever
+// the node's id holds.
+//
+// A node id may hold dots, and in the grammar a dot begins a step, so an id
+// the route minted for `node-a.b` read as the name `evict-node-a` with a step
+// `b`. The node goes into the name through [statelog.OpNamePart], as the
+// command line's and the dashboard's do.
+//
+// Mutation: compose the name from the bare node and the id the route mints is
+// named another way.
+func TestAGateNamesADottedNodeInOneStep(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	gate := &fakeNodeGate{}
+	code, body := postAck(t, newApp(t, api.Options{Bootstrap: &b, Nodes: gate}),
+		"/worklet/retention/evict/node-a.b?confirm=node-a.b")
+	if code != http.StatusOK || len(gate.asked) != 1 {
+		t.Fatalf("an eviction of a dotted node answered %d %v and ran as %+v",
+			code, body, gate.asked)
+	}
+	if want := "evict-" + statelog.OpNamePart("node-a.b"); !statelog.OpNamed(gate.asked[0].OpID, want) {
+		t.Errorf("the route minted %q, want an id named %q — the node's own dot "+
+			"read as a step of the gesture", gate.asked[0].OpID, want)
 	}
 }
 

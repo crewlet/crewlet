@@ -2,22 +2,29 @@ package queries_test
 
 import (
 	"context"
+	"os"
+	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
@@ -101,10 +108,11 @@ func everySeam(t *testing.T) queries.Sources {
 		Sandbox:  memorySandbox{},
 		// A RUNNING RUN'S LIVE OUTPUT: the real reader over an empty
 		// fleet record, which answers every run `not_running`.
-		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet())},
-		Config:      surface,
-		Work:        emptyWork{},
-		Pages:       emptyPages{},
+		SandboxTail: &sandbox.TailReader{Pending: sandbox.NewCoordStore(coordmemory.NewFleet()),
+			Condition: func(err error) bool { _, ok := builtin.Condition(err); return ok }},
+		Config: surface,
+		Work:   emptyWork{},
+		Pages:  emptyPages{},
 		// THE SEARCH INDEX IS ITS OWN SEAM, so a node with a board and
 		// no index is a real shape this sweep can describe.
 		WorkSearch: emptyWork{},
@@ -126,6 +134,14 @@ func everySeam(t *testing.T) queries.Sources {
 		// THIS NODE'S SIGN-IN POSTURE, which internal/api fills from the
 		// Bootstrap on every node that serves the API.
 		SignIn: &queries.SignInPolicy{},
+		// THE COMPANY'S OWN CONVERSATION. Three seams rather than one:
+		// a search is asked for a viewer rather than over rooms, and the
+		// badges are coordination's rather than the log's — so a surface
+		// with the rooms and neither of the others is a real shape, and
+		// `chat_search` is gated on its own seam.
+		Chat:       emptyChat{},
+		ChatSearch: emptyChat{},
+		ChatReads:  coordmemory.NewFleet(),
 		// THE MODEL QUESTIONS, each its own seam: what this node resolved
 		// for each model, the fleet's device sign-ins, and the catalogue a
 		// model step suggests from. Every engine that serves the API wires
@@ -149,6 +165,56 @@ type emptyFiles struct{}
 
 func (emptyFiles) Files(context.Context, worklet.FileQuery) (worklet.FileListing, error) {
 	return worklet.FileListing{}, nil
+}
+
+// emptyChat is the chat reader and its keyword index with nothing in them, on
+// emptyWork's terms: this sweep is about which NAMES exist.
+type emptyChat struct{}
+
+func (emptyChat) Channels(context.Context, string, chatlet.ChannelsQuery,
+	statelog.Freshness) (chatlet.ChannelListing, error) {
+
+	return chatlet.ChannelListing{}, nil
+}
+
+func (emptyChat) Channel(context.Context, string, string,
+	statelog.Freshness) (chatlet.ChannelDetail, error) {
+
+	return chatlet.ChannelDetail{}, nil
+}
+
+func (emptyChat) ChannelNamed(context.Context, string, string,
+	statelog.Freshness) (chatlet.ChannelDetail, error) {
+
+	return chatlet.ChannelDetail{}, nil
+}
+
+func (emptyChat) Messages(context.Context, string, chatlet.TranscriptQuery,
+	statelog.Freshness) (chatlet.Transcript, error) {
+
+	return chatlet.Transcript{}, nil
+}
+
+func (emptyChat) Thread(context.Context, string, chatlet.ThreadQuery,
+	statelog.Freshness) (chatlet.Thread, error) {
+
+	return chatlet.Thread{}, nil
+}
+
+func (emptyChat) Mentions(context.Context, string, chatlet.MentionQuery,
+	statelog.Freshness) (chatlet.MentionFeed, error) {
+
+	return chatlet.MentionFeed{}, nil
+}
+
+func (emptyChat) RoomNames(context.Context, string,
+	statelog.Freshness) (chatlet.RoomNames, error) {
+
+	return chatlet.RoomNames{}, nil
+}
+
+func (emptyChat) Search(context.Context, estate.ChatQuery) (estate.ChatSearchAnswer, error) {
+	return estate.ChatSearchAnswer{Hits: []search.ChatHit{}}, nil
 }
 
 // emptyWork and emptyPages are the native readers with nothing in them, on
@@ -363,6 +429,79 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 				"call it", kind)
 		}
 	}
+}
+
+// AND THE SWEEP ITSELF CANNOT GO QUIET.
+//
+// Both gates above are only as wide as [everySeam]: Register tests each seam
+// for nil, so a seam the helper does not set registers nothing, and every name
+// behind it disappears from `registeredKinds` without either direction saying
+// a word. That is not hypothetical — it is how the chat family arrived, gated
+// on three seams this helper did not set, and it was caught only because six
+// rooms happened to ask for those names. An operator-only family, or one read
+// over REST from the docs, would have gone in silently and this sweep would
+// have reported a pass over a surface it could not see.
+//
+// So the gating conditions are READ FROM Register ITSELF rather than restated
+// here, on the reasoning the reader gate above takes when it reads the
+// dashboard's own calls through clientsource: a list of seams kept by hand
+// beside the one that matters is the second copy that drifts.
+func TestEverySeamThatGatesAQuestionIsInTheSweep(t *testing.T) {
+	t.Parallel()
+	source, err := os.ReadFile("answers.go")
+	if err != nil {
+		t.Fatalf("Register's own source could not be read, so this gate "+
+			"certifies nothing: %v", err)
+	}
+	gates := regexp.MustCompile(`s\.([A-Z][A-Za-z0-9]*) != nil`).
+		FindAllStringSubmatch(registerBody(t, string(source)), -1)
+	if len(gates) == 0 {
+		t.Fatal("Register gates nothing on a seam at all, which it has always " +
+			"done — so this gate certifies nothing")
+	}
+	sweep := reflect.ValueOf(everySeam(t))
+	seen := map[string]bool{}
+	for _, gate := range gates {
+		name := gate[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		field := sweep.FieldByName(name)
+		if !field.IsValid() {
+			t.Errorf("Register gates on Sources.%s and no such field exists — "+
+				"this gate is reading a Register it does not understand", name)
+			continue
+		}
+		if field.IsNil() {
+			t.Errorf("Register gates every name behind Sources.%s on it being "+
+				"non-nil and everySeam leaves it nil, so those names are absent "+
+				"from this sweep and BOTH directions of it go quiet about them",
+				name)
+		}
+	}
+}
+
+// registerBody is Register's own body, which is where a gate on a seam lives.
+//
+// BOUNDED AT THE NEXT TOP-LEVEL DECLARATION rather than read to the end of the
+// file, because the answers below it test their seams for a different reason:
+// a nil `Events` behind a seat's phase history is an empty list rather than an
+// absent question, and reading those as gates would demand seams this sweep
+// has no use for.
+func registerBody(t *testing.T, source string) string {
+	t.Helper()
+	const decl = "\nfunc Register(r *Registry, s Sources) {"
+	from := strings.Index(source, decl)
+	if from < 0 {
+		t.Fatal("Register's declaration was not found, so this gate certifies " +
+			"nothing — it has been renamed or reshaped")
+	}
+	body := source[from+len(decl):]
+	if end := strings.Index(body, "\nfunc "); end >= 0 {
+		return body[:end]
+	}
+	return body
 }
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.

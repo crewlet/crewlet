@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -96,6 +97,11 @@ type fakeTracker struct {
 	threadQuery worklet.ThreadQuery
 	threadErr   error
 
+	// posted is the remark UpdateTask answers that it found already on the
+	// task — the call that posted it, made again — for the cases about what
+	// the comment tool reports of a write answered from a row.
+	posted *worklet.PostedRemark
+
 	// depended is every dependency change the tool composed, dependErr
 	// what the sequence answers, and dependAnswer — when set — the result
 	// it answers in place of the default applied commit.
@@ -139,6 +145,8 @@ type fakeTracker struct {
 	// viewQuery is the last strip the view listing asked for, so a case
 	// can assert WHOSE strip a caller was shown.
 	viewQuery worklet.ViewQuery
+	// viewListing is the strip Views answers.
+	viewListing worklet.ViewListing
 	// myWorkZone is the clock the last day was cut on, which is the half
 	// of that read a tool decides rather than the tracker.
 	myWorkZone *time.Location
@@ -153,6 +161,9 @@ type fakeTracker struct {
 	// to.
 	personQuery worklet.PersonQuery
 	inboxQuery  worklet.InboxQuery
+	// inbox is the page Inbox answers, where a case sets one; nil answers
+	// its one placeholder notice.
+	inbox *worklet.InboxAnswer
 
 	readErr  error
 	writeErr error
@@ -234,7 +245,7 @@ func (f *fakeTracker) Task(_ context.Context, idOrKey string, want worklet.Detai
 
 func (f *fakeTracker) Views(_ context.Context, q worklet.ViewQuery) (worklet.ViewListing, error) {
 	f.viewQuery = q
-	return worklet.ViewListing{}, nil
+	return f.viewListing, nil
 }
 
 func (f *fakeTracker) ExpandedQuery(_ context.Context, params map[string]any,
@@ -494,7 +505,7 @@ func (f *fakeTracker) UpdateTask(_ context.Context, opID, _, _ string, ifMatch u
 	return worklet.WriteResult{
 		Key: "ENG-1", Outcome: statelog.OutcomeApplied,
 		Position: statelog.Position{Stream: "S", Generation: 1, Seq: 12},
-		Version:  12,
+		Version:  12, Posted: f.posted,
 	}, nil
 }
 
@@ -645,10 +656,10 @@ func callWorkAs(ctx context.Context, t *testing.T, reg *tools.Registry,
 
 // ---- the cases -------------------------------------------------------- //
 
-// THE THREE WRITES COUNT AS A DELIVERY. A turn woken by an assignment answers
-// by moving the item, commenting on it, or filing the follow-up — and without
-// this the gate sees only builtins, concludes the turn reached nobody, and
-// corrects it into another round.
+// THE FIVE WRITES COUNT AS A DELIVERY. A turn woken by an assignment answers by
+// moving the item, commenting on it, filing the follow-up, or merging it into
+// the item it duplicates — and without this the gate sees only builtins,
+// concludes the turn reached nobody, and corrects it into another round.
 func TestTheTrackerWritesCountAsDeliveries(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -883,7 +894,8 @@ func TestACommentCarriesTheTurnsKeyAndItsMentions(t *testing.T) {
 }
 
 // A BAD ENUM IS REFUSED WITH THE LIST, so the model's next call is right
-// rather than being another guess.
+// rather than being another guess: every value, each quoted as the refused one
+// beside it is, read whole.
 func TestABadEnumIsRefusedWithTheValidValues(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -891,21 +903,27 @@ func TestABadEnumIsRefusedWithTheValidValues(t *testing.T) {
 	// THE CLOSE REASON IS THE STATUS. The tracker has no separate field:
 	// `cancelled` IS "finished without being delivered", which is what
 	// makes it invisible to a delivery count with no second value to keep in step.
-	for _, tc := range []struct{ field, value, want string }{
-		{"status", "wip", "in_progress"},
-		{"status", "wontfix", "cancelled"},
-		{"priority", "P0", "urgent"},
+	statuses := "The statuses are: " + words.And(worklet.Statuses) + "."
+	priorities := "The priorities are: " + words.And(worklet.Priorities) + "."
+	for _, tc := range []struct {
+		tool       string
+		args       map[string]any
+		want, list string
+	}{
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "status": "wip"}, "in_progress", statuses},
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "status": "wontfix"}, "cancelled", statuses},
+		{builtin.UpdateWorkItemTool, map[string]any{"item": "ENG-1", "priority": "P0"}, "urgent", priorities},
+		{builtin.CreateWorkItemTool, map[string]any{"title": "somewhere", "project": "ENG", "priority": "P0"},
+			"urgent", priorities},
 	} {
-		got := callWork(t, reg, builtin.UpdateWorkItemTool, map[string]any{
-			"item": "ENG-1", tc.field: tc.value,
-		})
+		got := callWork(t, reg, tc.tool, tc.args)
 		if !got.Failed {
-			t.Errorf("%s=%q was accepted", tc.field, tc.value)
+			t.Errorf("%s %v was accepted", tc.tool, tc.args)
 			continue
 		}
-		if !strings.Contains(got.Output, tc.want) {
-			t.Errorf("the refusal of %s=%q does not list the valid values: %s",
-				tc.field, tc.value, got.Output)
+		if !strings.Contains(got.Output, tc.want) || !strings.Contains(got.Output, tc.list) {
+			t.Errorf("the refusal of %s %v does not list the valid values as %q: %s",
+				tc.tool, tc.args, tc.list, got.Output)
 		}
 	}
 }
@@ -1585,6 +1603,9 @@ func (f *fakeTracker) Inbox(_ context.Context, q worklet.InboxQuery,
 	_ time.Time) (worklet.InboxAnswer, error) {
 
 	f.inboxQuery = q
+	if f.inbox != nil {
+		return *f.inbox, nil
+	}
 	return worklet.InboxAnswer{
 		Handle:         q.Handle,
 		PrimaryReasons: worklet.DefaultPrimaryReasons,
@@ -1930,8 +1951,9 @@ func TestACreateStartsInTheStatusItNames(t *testing.T) {
 	bad := callWork(t, reg, builtin.CreateWorkItemTool, map[string]any{
 		"title": "somewhere", "project": "ENG", "status": "shipping",
 	})
-	if !bad.Failed || !strings.Contains(bad.Output, "shipping") {
-		t.Errorf("an unknown status was not refused by name: %s", bad.Output)
+	if !bad.Failed || !strings.Contains(bad.Output, `"shipping" is not a status. The statuses are: `+
+		words.And(worklet.Statuses)+".") {
+		t.Errorf("an unknown status was not refused by name, naming every status: %s", bad.Output)
 	}
 	if len(trk.created) != 2 {
 		t.Errorf("the refused create filed a task anyway (%d filed)", len(trk.created))

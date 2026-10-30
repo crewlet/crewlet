@@ -387,7 +387,7 @@ func (c *Company) validateMCPEnvServers() error {
 			}
 			p.add(entry(at(path, "mcp_env"), key), ErrUnknownValue,
 				"%q is not a declared tool server: mcp_servers has %s. "+
-					"Nothing reads this block — the engine looks the "+
+					"Nothing reads this block: the engine looks the "+
 					"credentials up per SERVER, so a key naming none is never "+
 					"consulted and the server it was meant for starts with "+
 					"none", key, listOrNone(declared))
@@ -482,7 +482,7 @@ func (c *Company) validateSeatEmails() error {
 				"%d seats declare the email %q (%s; compared lower-cased with "+
 					"any plus tag dropped). The party registry keys on that "+
 					"form and the first seat wins, so all but one of these "+
-					"silently stops being findable by address — mail meant for "+
+					"silently stops being findable by address, and mail meant for "+
 					"one person resolves to another. Give each seat its own "+
 					"address",
 				len(holders), email, strings.Join(names, ", "))
@@ -528,7 +528,7 @@ func (c *Company) validateReferenceShapes() error {
 		if lead != "" && !org.ValidHandle(lead) {
 			p.add(at(path, "lead"), ErrShape,
 				"%q is not a seat handle: %s. A unit's lead names the seat's "+
-					"HANDLE, not its display name — %q resolves to nobody, so "+
+					"HANDLE, not its display name. %q resolves to nobody, so "+
 					"this unit has no lead, every escalation from it reaches "+
 					"the parent's, and its lead-targeted schedules never fire",
 				lead, handleRule, lead)
@@ -540,7 +540,7 @@ func (c *Company) validateReferenceShapes() error {
 			p.add(at(path, "unit"), ErrShape,
 				"%q is not a unit key: %s. A seat declared at the org root "+
 					"joins its unit by KEY (the unit's `id:`), not by the "+
-					"team's display name — %q matches no key, so this seat "+
+					"team's display name. %q matches no key, so this seat "+
 					"stays at the root, outside the unit's credentials and "+
 					"invisible to its lead", ref, unitKeyRule, ref)
 		}
@@ -551,7 +551,7 @@ func (c *Company) validateReferenceShapes() error {
 			}
 			p.add(idx(at(path, "manages"), i), ErrShape,
 				"%q is neither a seat handle nor a unit key. A `manages:` "+
-					"entry takes a seat's handle (%s) or a unit's key (%s) — a "+
+					"entry takes a seat's handle (%s) or a unit's key (%s). A "+
 					"display name matches neither, so this entry expands to "+
 					"nobody and the seat's roster is short without saying so",
 				target, handleRule, unitKeyRule)

@@ -514,7 +514,7 @@ func refuseScratchStore(boot *config.Bootstrap, command, instead string) error {
 	if boot == nil || !boot.Store.Scratch {
 		return nil
 	}
-	return fmt.Errorf("%s: this node's store is scratch (store.scratch) — it holds "+
+	return fmt.Errorf("%s: this node's store is scratch (store.scratch): it holds "+
 		"no data and is deleted at every boot, so nothing written into it offline "+
 		"survives the next start. %s", command, instead)
 }

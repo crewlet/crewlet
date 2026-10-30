@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // objectsDirName holds the objects a backup carries, each under the name the
@@ -307,13 +308,9 @@ func unanswered(unreachable []string, of int) error {
 		return nil
 	}
 	sort.Strings(unreachable)
-	shown := unreachable
-	if len(shown) > 5 {
-		shown = append(shown[:5:5], fmt.Sprintf("and %d more", len(unreachable)-5))
-	}
-	return fmt.Errorf("%w: %d of %d (%v) — the object store did not answer for "+
+	return fmt.Errorf("%w: %d of %d (%s) — the object store did not answer for "+
 		"them; take the backup again once it does", ErrObjectsUnreachable,
-		len(unreachable), of, shown)
+		len(unreachable), of, words.AndMore(unreachable, 5))
 }
 
 func sortLost(lost []LostObject) {

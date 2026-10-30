@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"math"
@@ -14,9 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/store"
@@ -261,6 +265,12 @@ type node struct {
 	// has to read the directory, and deriving it a second time from the
 	// bootstrap would be a second place to decide where they go.
 	snapshotDir string
+
+	// chat is the node's chat hub, attached to its engine as `crewlet run`
+	// attaches one ([newEngine]) — on every node, an API or none, because a
+	// seat raises its working indicator wherever its turn runs, as its
+	// member of the room's presence on that node's presence hub.
+	chat *api.EngineChatLive
 }
 
 // start stands one up.
@@ -284,7 +294,7 @@ type nodeSpec struct {
 	// company amends the golden company document.
 	company func(doc string) string
 	// boot amends the operator's half of the configuration, for the cases
-	// that need it — a bearer token a person writes with.
+	// that need it — the sign-in a person's browser uses ([withSignIn]).
 	boot func(*config.Bootstrap)
 	// env is what the node's `${VAR}` references resolve to beyond the
 	// harness's own ([nodeEnvironment]).
@@ -329,28 +339,77 @@ func startNode(t *testing.T, spec nodeSpec) *node {
 	boot.Store.Path = filepath.Join(t.TempDir(), "crewlet.db")
 	brokertest.StoreIn(&boot.Stream, filepath.Join(t.TempDir(), "stream"))
 	withServingTierA(t, &boot)
+	// AFTER THE HARNESS'S OWN SETTINGS AND BEFORE THE SEED AND THE ENGINE, so
+	// an amendment can override a path or the credential as well as add to
+	// them — the seed then lands where the amended store opens — and nothing
+	// it sets is quietly overwritten by a default applied afterwards.
 	if spec.boot != nil {
 		spec.boot(&boot)
 	}
 	seedStore(t, &boot)
 
 	ln := bridgeListener(t, "")
-	e, err := engine.New(t.Context(), engine.Options{
+	e, chatLive := bootEngine(t, engine.Options{
 		Bootstrap: &boot, Company: cfg, ActivatedAt: harnessActivation,
 		Environment: nodeEnvironment(spec.env), SandboxPollInterval: runPollInterval,
 		BoxHostURL: listenerURL(ln),
 	})
-	if err != nil {
-		t.Fatalf("engine.New: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
 	}
 
-	app, srv := serveAPI(t, e, &boot, ln, nil)
+	app, srv := serveAPI(t, e, &boot, chatLive.Hub(), ln, nil)
 
-	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
+	return &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID(),
+		chat: chatLive}
+}
+
+// newEngine builds a node's engine as `crewlet run` builds it: [engine.New],
+// and straight after it the process's chat hub ([api.NewEngineChatLive]) —
+// started, and attached to the engine whether or not the node will serve an
+// API. A node that serves one mounts its socket over the same hub
+// ([serveAPI]); a node that serves none still answers the fleet's presence
+// probe for the indicators its seats raise, which is what the hub exists on
+// such a node for.
+//
+// NEVER a sequence written out at each boot path. The hub used to be built by
+// the API's wiring here ([wireAPI]), which is exactly where `crewlet run` must
+// not build it (TestRunBuildsTheChatHubOnEveryNode): a node the harness stood
+// up with no API — the stateless pair's seats-only member — attached none, and
+// an indicator its seat raised was answered for by nobody.
+//
+// THE TEARDOWN IS RETURNED in the order the two came up, for the caller to run
+// in reverse ([stopInReverse]) — the hub before the engine, in `crewlet run`'s
+// shutdown order: the engine's appliers announce into the hub until it stops,
+// and its teardown closes the broker the hub's answerer is subscribed on. Both
+// on [context.WithoutCancel], because the context a boot runs under has often
+// ended by the time its teardown runs. Returned on failure too, holding
+// whatever did come up. The caller starts the engine.
+func newEngine(ctx context.Context, opts engine.Options) (
+	*engine.Engine, *api.EngineChatLive, []func(), error) {
+
+	e, err := engine.New(ctx, opts)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	stops := []func(){func() { e.Stop(context.WithoutCancel(ctx)) }}
+	chatLive := api.NewEngineChatLive(ctx, e)
+	stops = append(stops, func() { chatLive.Stop(context.WithoutCancel(ctx)) })
+	return e, chatLive, stops, nil
+}
+
+// bootEngine is [newEngine] for a node that lives as long as its test, on the
+// test's goroutine: torn down when the test ends — registered before anything
+// can fail, so an engine that never started is stopped too — and failing the
+// test when the engine is refused.
+func bootEngine(t *testing.T, opts engine.Options) (*engine.Engine, *api.EngineChatLive) {
+	t.Helper()
+	e, chatLive, stops, err := newEngine(t.Context(), opts)
+	t.Cleanup(func() { stopInReverse(stops) })
+	if err != nil {
+		t.Fatalf("engine.New: %v", err)
+	}
+	return e, chatLive
 }
 
 // seedStore writes the migrated store image where boot's store will open, so a
@@ -454,6 +513,14 @@ type scriptedModel struct {
 	// submits — the scripted half of a turn whose subject is what a tool
 	// did rather than what the model said.
 	scripted []scriptedCall
+
+	// chat scripts an executor that was woken in a room: which chat tool
+	// it reaches for, in what order, and how it answers the engine's own
+	// refusal of a delivery claim. Nil for every case whose subject is not
+	// the company's own chat. It lives in chat_test.go, beside the cases
+	// it serves — this field and the one branch below are all the shared
+	// endpoint has to know about it.
+	chat *chatScript
 }
 
 // scriptedCall is one tool call the executor makes.
@@ -621,6 +688,26 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 			reply = toolUse(call.tool, call.input)
 			break
 		}
+		if answer, hold, ok := m.chatAnswer(req); ok {
+			// A SEAT WOKEN IN A ROOM. Recorded as execute like every
+			// other request of this phase — what differs is that the
+			// script reads what the request hands back, because the
+			// request it has to get right is the one after the engine
+			// refused a delivery claim. See [chatScript].
+			saw("execute")
+			// HELD, if the case asked, until it has seen the seat at
+			// work — or until the engine stops waiting for this answer,
+			// so a case that failed first cannot leave a request open
+			// for the server's close to wait on.
+			if hold != nil {
+				select {
+				case <-hold:
+				case <-r.Context().Done():
+				}
+			}
+			reply = answer
+			break
+		}
 		if query, ok := m.shouldSearch(); ok {
 			saw("execute")
 			reply = toolUse("search_knowledge", map[string]any{"query": query})
@@ -637,10 +724,15 @@ func (m *scriptedModel) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		saw("execute")
 		reply = toolUse("submit_work", map[string]any{
-			// `delivered` with no cited call, which is honest here: this
-			// company registers no delivery tool and nobody is waiting on
-			// the turn, so the answer IS the artifact and the engine
-			// demands a citation only where a tool was the way to deliver.
+			// `delivered` with no cited call, which is honest for the
+			// wakes this default serves: an unaddressed notification
+			// ([node.wake]) owes nobody a tool reply, so the answer IS
+			// the artifact and the engine demands a citation only where a
+			// tool was the way to deliver. A turn somebody IS waiting on —
+			// a task assignment, a message addressed to the seat — is
+			// scripted by its case ([scriptedModel.callOnExecute],
+			// [chatScript]), because this claim is refused there until the
+			// rounds run out and the engine writes the outcome itself.
 			"outcome": "delivered",
 			"summary": "Three PRs merged, one incident, zero regressions.",
 		})
@@ -888,4 +980,67 @@ func waitFor(t *testing.T, what string, cond func() bool, diag ...func() string)
 func hydrated(t *testing.T, e *engine.Engine) func() bool {
 	t.Helper()
 	return func() bool { return e.StateLogHydrated(t.Context()) }
+}
+
+// turnRecordCalling is the executor's record of the turn on this node that
+// called tool successfully, as this node's own event store holds it, or nil
+// while it holds none.
+//
+// WHAT SAYS THE TURN DELIVERED rather than only acted. A script that served
+// its citing submission ([chatScript.submitted], or the last call a capture
+// queued with [scriptedModel.callOnExecute]) knows what it SENT, and the
+// engine may still have refused it — after which the turn ends on the rescue
+// path, with an outcome the engine wrote rather than one the model chose
+// ([types.AgentPhaseCompleted.RescueFired]). Only the phase record says which.
+//
+// n IS THE NODE WHOSE STORE HOLDS THE TURN'S RECORDS: the node that ran it,
+// whose publish listener stores what it publishes — or, for a node that holds
+// no data, the data member its audit trail lands on.
+func turnRecordCalling(t *testing.T, n *node, tool string) *types.AgentPhaseCompleted {
+	t.Helper()
+	stored := n.engine.Backends().Store.Events()
+	rows, err := stored.List(t.Context(), store.ListQuery{Type: "agent_phase_completed", Limit: 200})
+	if err != nil {
+		return nil
+	}
+	for _, row := range rows {
+		full, err := stored.ByID(t.Context(), row.ID, time.Now())
+		if err != nil {
+			continue
+		}
+		var ev events.Event
+		if json.Unmarshal(full.Payload, &ev) != nil {
+			continue
+		}
+		record, ok := events.DataAs[*types.AgentPhaseCompleted](&ev)
+		if !ok || record.Phase != types.PhaseExecute {
+			continue
+		}
+		if slices.ContainsFunc(record.ToolExecutions, func(call types.ToolExecution) bool {
+			succeeded, _ := call["success"].(bool)
+			return call["name"] == tool && succeeded
+		}) {
+			return record
+		}
+	}
+	return nil
+}
+
+// deliveredThrough fails the case unless the turn whose records n holds that
+// delivered with tool — a post in a room, a comment on a work item — ended on
+// the model's own `delivered` rather than on the rescue path
+// ([turnRecordCalling]).
+func deliveredThrough(t *testing.T, n *node, tool string) {
+	t.Helper()
+	var record *types.AgentPhaseCompleted
+	waitFor(t, n.id+"'s record of the turn that delivered with "+tool, func() bool {
+		record = turnRecordCalling(t, n, tool)
+		return record != nil
+	})
+	if record.RescueFired || record.Decision != string(turn.OutcomeDelivered) {
+		t.Errorf("the turn that delivered with %s ended %q (rescued: %v) after "+
+			"%d rounds — its submission citing that call never landed, so the "+
+			"engine wrote the outcome rather than the turn", tool, record.Decision,
+			record.RescueFired, record.RoundsUsed)
+	}
 }

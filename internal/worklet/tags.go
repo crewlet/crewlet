@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A project's tag set — the one catalogue any seat may add to.
@@ -70,9 +71,9 @@ func (e TagEdit) Empty() bool {
 	return len(e.Add) == 0 && len(e.Rename) == 0 && len(e.Archive) == 0
 }
 
-// TagClash is an add refused because its label is already another tag's label
-// or slug in the project — two groupings a person cannot tell apart, which the
-// work would then split between at random.
+// TagClash is an add — or a rename — refused because its label is already
+// another tag's label or slug in the project: two groupings a person cannot
+// tell apart, which the work would then split between at random.
 //
 // # Why a type
 //
@@ -83,12 +84,14 @@ func (e TagEdit) Empty() bool {
 // nothing a seat could act on. The fields are what an answer names: the tag
 // being declared, the one it clashes with, and the project.
 //
-// A REFUSAL LIKE ANY OTHER as well: it is [ErrInvalid] under [errors.Is], and
-// [Sentence] reads it without the package prefix, so a caller that does not
-// look for the type still classes and words it as every content refusal here.
+// A REFUSAL LIKE ANY OTHER as well: it is [ErrTaken] under [errors.Is] — the
+// collision it is, which another label avoids now and which the same label
+// meets until the other tag gives it up — and [Sentence] reads it without the
+// package prefix, so a caller that does not look for the type still classes and
+// words it as every collision here.
 type TagClash struct {
 	Project string
-	// Slug and Label are the tag the add declared.
+	// Slug and Label are the tag the add declared, or the rename gave.
 	Slug, Label string
 	// Other is the project's own tag whose label or slug it collides with.
 	Other Tag
@@ -96,13 +99,16 @@ type TagClash struct {
 
 func (e *TagClash) Error() string { return "worklet: " + e.sentence() }
 
-// Unwrap classes the clash as the content refusal it is.
-func (e *TagClash) Unwrap() error { return ErrInvalid }
+// Unwrap classes the clash as the collision it is.
+func (e *TagClash) Unwrap() error { return ErrTaken }
 
+// sentence names the tag that holds the label and the two ways past it. Two
+// tags a person cannot tell apart split the work between them at random, which
+// is the whole rule, so it is the remedy rather than the reason that is said.
 func (e *TagClash) sentence() string {
-	return fmt.Sprintf("%s already has a tag %s labelled %q — two tags a "+
-		"person cannot tell apart split the work between them at random",
-		e.Project, e.Other.Slug, e.Other.Label)
+	return fmt.Sprintf("%s already has a tag labelled %q (%s). Use that tag if "+
+		"it means the same, or give %s a label of its own", e.Project,
+		e.Other.Label, e.Other.Slug, e.Slug)
 }
 
 // TagsFull is an add refused because the project already keeps
@@ -115,13 +121,13 @@ type TagsFull struct {
 
 func (e *TagsFull) Error() string { return "worklet: " + e.sentence() }
 
-// Unwrap classes the full set as the content refusal it is.
-func (e *TagsFull) Unwrap() error { return ErrInvalid }
+// Unwrap classes the full set as the PROJECT'S STATE ([ErrState]): the add
+// is well formed, and it lands once a tag is archived to make room.
+func (e *TagsFull) Unwrap() error { return ErrState }
 
 func (e *TagsFull) sentence() string {
-	return fmt.Sprintf("%s already has %d tags, which is the most a project "+
-		"keeps — archive what is no longer filed under before declaring more",
-		e.Project, MaxTagsPerProject)
+	return fmt.Sprintf("%s already has %d tags, the most a project can. "+
+		"Archive one it no longer files under first", e.Project, MaxTagsPerProject)
 }
 
 // TagAuthority is what a caller may do to a tag set.
@@ -146,7 +152,7 @@ type TagAuthority struct {
 // The caveats it returns are the near-duplicates the edit declared, and they
 // are ADVISORY: a lead can merge two tags and a refusal with no override would
 // block `apis` behind `api` for ever. THE APPLY MUST NEVER DEPEND ON ONE:
-// every node applies the same record, and only this node saw the caveat.
+// every data node applies the same record, and only this node saw the caveat.
 func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 	edit TagEdit, authority TagAuthority) (WriteResult, error) {
 
@@ -163,7 +169,7 @@ func (w *Writer) WriteTags(ctx context.Context, opID, project string,
 		// tidying up and the answer is "ask the lead" rather than
 		// "you cannot".
 		return WriteResult{}, forbidden("renaming or archiving a tag of %s is "+
-			"the project lead's, or a person's own — it changes the word on "+
+			"the project lead's, or a person's own: it changes the word on "+
 			"every task already filed under it, and takes a filter off "+
 			"everybody's board. Adding a tag is open to every seat", project)
 	}
@@ -273,16 +279,16 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 		switch {
 		case slug == "":
 			return TagSet{}, nil, nil, false, invalid("a tag needs a "+
-				"name, and %q normalises to nothing — a tag slug is lowercase "+
+				"name, and %q normalises to nothing. A tag slug is lowercase "+
 				"letters, digits and hyphens", want.Label)
 		case !ValidTagSlug(slug):
 			return TagSet{}, nil, nil, false, invalid("%q is not a tag "+
-				"slug — a tag starts with a letter or a digit and carries "+
+				"slug. A tag starts with a letter or a digit and carries "+
 				"lowercase letters, digits and hyphens, up to 64 characters",
 				slug)
 		case len(label) > MaxTagLabel:
 			return TagSet{}, nil, nil, false, invalid("the tag %s is "+
-				"labelled with %d characters and at most %d are stored — a tag "+
+				"labelled with %d characters and at most %d are stored. A tag "+
 				"is rendered on every row it is on, and one this long pushes "+
 				"the title off the screen", slug, len(label), MaxTagLabel)
 		}
@@ -325,7 +331,7 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 		at, exists := bySlug[slug]
 		if !exists {
 			return TagSet{}, nil, nil, false, invalid("%s has no tag "+
-				"%q — a rename names the tag by its SLUG, which never changes "+
+				"%q. A rename names the tag by its SLUG, which never changes "+
 				"because it is what every task's row holds",
 				current.Project, raw)
 		}
@@ -340,9 +346,8 @@ func applyTagEdit(current TagSet, edit TagEdit, actor string, at time.Time) (
 				slug, len(label), MaxTagLabel)
 		}
 		if other, clash := taken[strings.ToLower(label)]; clash && other != at {
-			return TagSet{}, nil, nil, false, invalid("%s already has a "+
-				"tag %s labelled %q", current.Project,
-				next.Tags[other].Slug, next.Tags[other].Label)
+			return TagSet{}, nil, nil, false, &TagClash{Project: current.Project,
+				Slug: slug, Label: label, Other: next.Tags[other]}
 		}
 		if next.Tags[at].Label == label {
 			continue
@@ -549,17 +554,38 @@ func editDistance(a, b string, max int) int {
 // The declared check is separate and has to read, which is why the two are not
 // one function.
 func normaliseTags(project string, raw []string) ([]string, error) {
+	out, err := tagSlugs(raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) > MaxTagsPerTask {
+		return nil, invalid("%d tags on one task in %s and at most "+
+			"%d are carried. A task filed under more groupings than that is "+
+			"not grouped", len(out), project, MaxTagsPerTask)
+	}
+	return out, nil
+}
+
+// tagSlugs is every tag a caller named, as the rows hold it ([TagSlug]), each
+// once and in the order first named — or the content refusal ([invalid]) of
+// the first that is not a tag.
+//
+// ONE RULE FOR WHAT A TAG IS, read by a write ([normaliseTags]) and by a
+// filter ([Query.parseTags]) alike: the rows hold what this answers, and a
+// filter that normalised a value another way, or refused one a write would
+// store, would answer about tags no task carries.
+func tagSlugs(raw []string) ([]string, error) {
 	out := make([]string, 0, len(raw))
 	seen := map[string]bool{}
 	for _, r := range raw {
 		slug := TagSlug(r)
 		switch {
 		case slug == "":
-			return nil, invalid("%q is not a tag — a tag is "+
+			return nil, invalid("%q is not a tag. A tag is "+
 				"lowercase letters, digits and hyphens, and this normalises "+
 				"to nothing", r)
 		case !ValidTagSlug(slug):
-			return nil, invalid("%q is not a tag slug — a tag "+
+			return nil, invalid("%q is not a tag slug. A tag "+
 				"starts with a letter or a digit and carries lowercase "+
 				"letters, digits and hyphens, up to 64 characters", slug)
 		case seen[slug]:
@@ -570,11 +596,6 @@ func normaliseTags(project string, raw []string) ([]string, error) {
 		}
 		seen[slug] = true
 		out = append(out, slug)
-	}
-	if len(out) > MaxTagsPerTask {
-		return nil, invalid("%d tags on one task in %s and at most "+
-			"%d are carried — a task filed under more groupings than that is "+
-			"not grouped", len(out), project, MaxTagsPerTask)
 	}
 	return out, nil
 }
@@ -622,7 +643,7 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 		case live[slug]:
 		case archived[slug]:
 			return invalid("the tag %s is archived in %s, so no "+
-				"new work is filed under it — the tasks already under it keep "+
+				"new work is filed under it. The tasks already under it keep "+
 				"it", slug, project)
 		default:
 			unknown = append(unknown, slug)
@@ -640,12 +661,26 @@ func declaredTags(ctx context.Context, tx *sql.Tx, project string, tags []string
 	near := nearTags(set.Tags, unknown[0])
 	hint := ""
 	if len(near) > 0 {
-		hint = fmt.Sprintf(" Did you mean %s?", strings.Join(near, " or "))
+		hint = fmt.Sprintf(" Did you mean %s?", words.Or(near))
 	}
-	return invalid("%s does not declare the tag %v — its tags are "+
-		"%v.%s Declare one with write_project(tags.add), or pass "+
-		"`labels_create_missing` to declare it at this write",
-		project, unknown, declared, hint)
+	// ONE SENTENCE FOR BOTH READERS, as every content refusal here is: a
+	// model reads it in a tool's answer and a person on a write surface
+	// reads it as it stands, so the remedy names the two ARGUMENTS that
+	// declare a tag (the body a person's surface sends is the tool's own
+	// arguments) and agrees in number with what it is about. It used to say
+	// "Declare one with write_project(tags.add) … declare it" for several
+	// tags, naming an argument nothing reads.
+	named, it := "the tag "+words.And(unknown), "it"
+	if len(unknown) > 1 {
+		named, it = "the tags "+words.And(unknown), "them"
+	}
+	its := " Its tags are " + words.And(declared) + "."
+	if len(declared) == 0 {
+		its = " It has no tags yet."
+	}
+	return invalid("%s doesn't have %s.%s%s Add %s to %s's tags first (`tags_add`), "+
+		"or set `labels_create_missing` to add %s as this work is filed",
+		project, named, its, hint, it, project, it)
 }
 
 // EnsureTags declares the tags a write is about to use that the project lacks.
@@ -699,10 +734,10 @@ func (w *Writer) EnsureTags(ctx context.Context, opID, project string,
 	// pass the flag it had passed — about a tag that may have landed.
 	result, err := w.WriteTags(ctx, opID, project, TagEdit{Add: add},
 		TagAuthority{})
-	if err = resolved(fmt.Sprintf("the declaration of %v in %s", created,
+	if err = resolved(fmt.Sprintf("the declaration of %s in %s", words.And(created),
 		project), result, err); err != nil {
-		return nil, nil, fmt.Errorf("worklet: declare %v in %s: %w",
-			created, project, err)
+		return nil, nil, fmt.Errorf("worklet: declare %s in %s: %w",
+			words.And(created), project, err)
 	}
 	// WHAT THE WRITE DECLARED, never what the read above guessed: the read
 	// is outside any snapshot, so a colleague declaring the same word in

@@ -1,7 +1,9 @@
 package workapi_test
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -239,13 +242,60 @@ func TestAnUnvouchedUnknownSaysAnotherNodeCanAnswer(t *testing.T) {
 	}
 }
 
+// A WRITE NO DATA NODE ANSWERED IS UNKNOWN, CARRYING ITS KEY — never a
+// refusal saying nothing ran.
+//
+// The estate's router asks every data node under the request's operation, and
+// each that stayed silent may have run it, so it answers
+// [estate.ErrOutcomeUnknown]. Told it as the estate unserved — `503
+// unavailable` and no outcome — a client read "nothing ran" and sent the
+// request again under a NEW key: a second purge, a second item. The answer is
+// the unknown every lost acknowledgement gets, settled by the same request
+// under the same key, and in fixed words, since the router's names the nodes.
+//
+// Mutation: drop ClassifyWrite's unknown arm and the purge's row goes red;
+// drop writeFailure's and the tool-backed row does.
+func TestAWriteNoDataNodeAnsweredIsAnUnknownCarryingItsKey(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, method, target string
+		body                 any
+	}{
+		{"a tool-backed route", http.MethodPost, "/worklet/items",
+			map[string]any{"title": "rotate the key", "project": "ENG"}},
+		{"a write this surface makes", http.MethodPost,
+			"/worklet/items/t-1/purge?confirm=ENG-1&reason=why", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			r.writes.err = fmt.Errorf("%w (tracker.purge, asked of data-b, data-c)",
+				estate.ErrOutcomeUnknown)
+			key := statelog.NewOpID(time.Now(), "")
+			got := r.do(as(admin("ana")), c.method, c.target, c.body, opkey.Header, key)
+			if got.status != http.StatusServiceUnavailable ||
+				got.body["outcome"] != httpjson.OutcomeUnknown {
+				t.Fatalf("answered %d %v, want 503 saying its outcome is unknown",
+					got.status, got.body)
+			}
+			assertOperationOf(t, got, key)
+			if raw, _ := json.Marshal(got.body); strings.Contains(string(raw), "data-b") {
+				t.Errorf("the router's node list reached the answer: %s", raw)
+			}
+		})
+	}
+}
+
 // WHAT A PURGE DESTROYED IS NOT FOUND, NOT UNAVAILABLE.
 //
 // A write refused because its object carries a permanent deletion marker will
 // be refused on every node for ever; answered 503 it sent a client looking for
-// a node that would take it.
+// a node that would take it. And it carries none of the framework's words,
+// which name the subject it met: nobody has worded it for a person, so its
+// code's own message stands alone (ADR-0060).
 //
-// Mutation: drop the deletion arm and both answer 503.
+// Mutation: drop the deletion arm and both answer 503; tell it in the
+// writer's or the tool's sentence again and both name the refusal.
 func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -262,8 +312,15 @@ func TestAWriteOnWhatAPurgeDestroyedIsNotFound(t *testing.T) {
 			r := newRig(t, chart{})
 			r.writes.err = &statelog.Unavailable{Reason: statelog.ReasonDeleted,
 				Detail: "ENG-1 was purged"}
-			if got := r.do(as(admin("ana")), c.method, c.target, c.body); got.status != http.StatusNotFound {
-				t.Errorf("answered %d %v, want 404", got.status, got.body)
+			got := r.do(as(admin("ana")), c.method, c.target, c.body)
+			if got.status != http.StatusNotFound ||
+				got.body["error"] != string(httpjson.CodeNotFound) {
+				t.Errorf("answered %d %v, want 404 not_found", got.status, got.body)
+			}
+			if detail, has := got.body["detail"]; has ||
+				strings.Contains(fmt.Sprint(got.body), "purged") {
+				t.Errorf("answered %v (detail %v), want the code's own message alone",
+					got.body, detail)
 			}
 		})
 	}
@@ -433,9 +490,11 @@ func TestAnOperationIDInABodyIsTheCallersToChange(t *testing.T) {
 // object ([statelog.ReasonOpReused]) — a key sent back with a request it was
 // not answered for — and nothing is written. A new key settles it and no wait
 // does, so it is 409 naming the header, where it was the 503 every refusal
-// was.
+// was — told in words of its own, never the framework's refusal, which names
+// the operation and both subjects.
 //
-// Mutation: drop the arm and both rows answer 503.
+// Mutation: drop the arm and both rows answer 503; put the refusal's sentence
+// back in front of the arm's words and both carry the framework's.
 func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -458,6 +517,10 @@ func TestAKeyNamingAnotherWriteIsAConflict(t *testing.T) {
 			if got.status != http.StatusConflict || got.body["field"] != opkey.Header {
 				t.Errorf("answered %d %v, want 409 naming %s", got.status, got.body,
 					opkey.Header)
+			}
+			if detail, _ := got.body["detail"].(string); detail != opkey.Reused {
+				t.Errorf("the detail is %q, want the arm's own words alone: %q", detail,
+					opkey.Reused)
 			}
 			assertOperationOf(t, got, key)
 		})
@@ -560,6 +623,76 @@ func TestAKeySentWithAnotherRequestIsAnotherOperation(t *testing.T) {
 			}
 			for _, op := range ops {
 				assertMintedWith(t, op, key)
+			}
+		})
+	}
+}
+
+// A WRITE THIS SURFACE MAKES ITSELF IS KEYED BY THE ONE RULE.
+//
+// The remark's edit, the purge and chat's erase and prune publish under the id
+// [statelog.KeyedOpID] derives from the request's key, the verb, the object
+// and what the request asks — the rule the knowledge base's and chat's stores
+// derive every keyed write by — and never a spelling of this surface's own. A
+// second spelling had a namespace the stores' did not and read the key's
+// instant without asking whether it carried one; one rule cannot answer one
+// key two ways.
+//
+// Mutation: restore a namespace in [keyedOp]'s derivation and every row goes
+// red.
+func TestAWriteThisSurfaceMakesIsKeyedByTheOneRule(t *testing.T) {
+	t.Parallel()
+	cutoff := time.Date(2026, 5, 1, 9, 30, 0, 0, time.UTC)
+	erasePath, eraseBody := eraseOf("2", []string{"m-2", "m-1"}, "a key was pasted")
+	for _, c := range []struct {
+		name, method, target string
+		body                 any
+		verb, object         string
+		asks                 map[string]any
+		published            func(r *rig) string
+	}{
+		{name: "a remark's edit", method: http.MethodPatch,
+			target: "/worklet/items/ENG-1/comments/c-1",
+			body:   map[string]any{"body": "second"},
+			verb:   "comment-edit", object: "c-1",
+			asks:      map[string]any{"body": "second"},
+			published: func(r *rig) string { return r.writes.opIDs[0] }},
+		{name: "a purge", method: http.MethodPost,
+			target: "/worklet/items/t-1/purge?confirm=ENG-1&reason=retention",
+			verb:   "purge", object: "t-1",
+			asks:      map[string]any{"confirm": "ENG-1", "reason": "retention"},
+			published: func(r *rig) string { return r.writes.opIDs[0] }},
+		{name: "an erase", method: http.MethodPost, target: erasePath, body: eraseBody,
+			verb: "chat-erase", object: theRoom,
+			asks: map[string]any{"message_ids": []string{"m-1", "m-2"},
+				"reason": "a key was pasted"},
+			published: func(r *rig) string { return r.rooms.all()[0].opID }},
+		{name: "a prune", method: http.MethodPost,
+			target: pruneAt(cutoff.Format(time.RFC3339), cutoff.Format(time.RFC3339)),
+			verb:   "chat-prune", object: theRoom,
+			asks:      map[string]any{"cutoff": cutoff.UnixNano()},
+			published: func(r *rig) string { return r.rooms.all()[0].opID }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, chart{})
+			r.reader.addComment("t-1", worklet.Comment{ID: "c-1", Task: "t-1",
+				Author: "ana", AuthorKind: worklet.AuthorHuman, Body: "first"})
+			got := r.do(as(admin("ana")), c.method, c.target, c.body,
+				opkey.Header, statelog.NewOpID(time.Now(), ""))
+			if got.status != http.StatusOK {
+				t.Fatalf("answered %d: %v", got.status, got.body)
+			}
+			// THE KEY THE ANSWER NAMES, which is the caller's scoped by who
+			// sent it — the key every id the request writes derives from.
+			key, _ := got.body["op_id"].(string)
+			want, err := statelog.KeyedOpID(key, c.verb, c.object, c.asks)
+			if err != nil {
+				t.Fatalf("KeyedOpID: %v", err)
+			}
+			if published := c.published(r); published != want {
+				t.Errorf("the write was published as %q, want %q — the id the "+
+					"one keyed rule derives from the request's key", published, want)
 			}
 		})
 	}

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- the kind table ------------------------------------------------------ //
@@ -220,20 +222,17 @@ func (r EntryRule) indexAt(path, essence string) bool {
 	return slices.Contains(r.Indexes, EntryIndex{Path: path, Essence: essence})
 }
 
-// Names is what an entry the rule admits is, as a refusal says it: "text/html"
-// or "text/markdown, or doc.json".
+// Names is what an entry the rule admits is, as a refusal says it:
+// `"text/html"` or `"text/markdown" or "doc.json"`.
 func (r EntryRule) Names() string {
 	parts := slices.Clone(r.Essences)
 	for _, i := range r.Indexes {
 		parts = append(parts, i.Path)
 	}
-	switch len(parts) {
-	case 0:
+	if len(parts) == 0 {
 		return "any file"
-	case 1:
-		return parts[0]
 	}
-	return strings.Join(parts[:len(parts)-1], ", ") + ", or " + parts[len(parts)-1]
+	return words.Or(parts)
 }
 
 // KindSpec is everything the engine and the dashboard decide by kind.

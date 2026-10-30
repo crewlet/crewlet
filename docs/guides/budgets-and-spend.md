@@ -130,10 +130,12 @@ list recent turns one by one, for a client that wants the last day as it
 happens; no screen of the bundled dashboard draws it.
 
 **Every named window** — 7, 30 or 90 days, or two dates you name — is read from
-the replicated [`usage` domain](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
+the replicated [`usage` domain](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
 Every data node derives its own day from its own event log — its own seats',
-and those of the nodes without `data` whose events it keeps through custody —
-and publishes it whole; every data node applies every node's days. So a named window is:
+and those of the nodes without `data` whose events it keeps through
+[custody](deployment.md#custody-the-rows-of-a-node-without-data) — and
+publishes it whole; every data node applies every data node's days. So a named
+window is:
 
 - **the company's**, whichever node answers — a three-node fleet no longer shows
   a third of its spend on the node the dashboard happened to reach;
@@ -161,7 +163,7 @@ the first day it may start on. See
 | History | Reaches back | Bounded by |
 |---|---|---|
 | Spend (named windows) | **181 days** | The `usage` domain's history (`spend_history_seconds` on `GET /health`) |
-| Turns, events, traces | 30 days | Each node's event log (`event_history_seconds`) |
+| Turns, events, traces | 30 days | Each data node's event log (`event_history_seconds`) |
 
 181 is not a round number: the longest window offered is 90 days, comparing it
 with the 90 before it reaches back 180, and the day before that is the one a

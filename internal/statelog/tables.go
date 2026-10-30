@@ -787,9 +787,10 @@ func (t tables) retain(ctx context.Context, tx *sql.Tx, rec Record, compacted bo
 	}
 	// THE ONE DATA-DRIVEN COLLECTION IN THIS FILE. A record's scope is the
 	// complete set of object paths its apply may write, stated by the
-	// writer, and the paths NEST — a bulk edit over a project states the
-	// project and every task under it, so this is a collection whose size
-	// is the edit's, not a fixed one.
+	// writer, and the paths NEST — a write that names a task's keys states
+	// the task and every key beside it (the tracker's carries up to 64
+	// terms), so this is a collection whose size is the record's, not a
+	// fixed one.
 	//
 	// THE ERROR NO LONGER NAMES THE PATH, and that is the deliberate cost:
 	// a chunk carries up to a thousand of them, so naming one would be a

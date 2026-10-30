@@ -19,14 +19,14 @@ import type {
   ArtifactChangedPush,
   ArtifactDataPush,
   ArtifactJoined,
-  ArtifactPresenceMember,
+  RoomMember,
   ArtifactPresencePush,
   ArtifactRole,
   PresenceActivity,
   PresenceFocus,
   QueryError,
 } from "~/protocol/index.ts";
-import { PRESENCE_FRAMES_PER_SECOND } from "~/contract/artifacts.ts";
+import { PRESENCE_FRAMES_PER_SECOND } from "~/contract/presence.ts";
 import { useClient } from "../store-hooks.ts";
 
 /** Where the tab stands in the room. */
@@ -41,7 +41,7 @@ export type RoomState =
 /** Who is in the room, as the engine last described it. */
 export interface Roster {
   /** Every member presented, the reader's own session included, by session. */
-  members: ReadonlyMap<string, ArtifactPresenceMember>;
+  members: ReadonlyMap<string, RoomMember>;
   /** Past fifty members the room presents the most recent and counts the rest. */
   counts: { human: number; agent: number } | null;
   truncated: boolean;
@@ -61,7 +61,7 @@ export interface ArtifactRoom {
   state: RoomState;
   roster: Roster;
   /** The members the chrome draws: everybody but the reader's own session. */
-  others: ArtifactPresenceMember[];
+  others: RoomMember[];
   /** Say what the reader is doing; coalesced to the engine's per-socket rate. */
   say: (activity: PresenceActivity, focus: PresenceFocus) => void;
 }
@@ -76,7 +76,7 @@ export function mergeRoster(roster: Roster, push: ArtifactPresencePush): Roster 
 
 /** A join's roster as the map a room keeps. */
 export function rosterOf(answer: ArtifactJoined): Roster {
-  const members = new Map<string, ArtifactPresenceMember>();
+  const members = new Map<string, RoomMember>();
   for (const member of answer.roster.members ?? []) members.set(member.session, member);
   return {
     members,

@@ -408,7 +408,7 @@ export function Turns({
             {list.pageError ? (
               <QueryState error={list.pageError} refusal={null} loading={false} />
             ) : (
-              <Button size="small" variant="secondary" onClick={list.older} disabled={list.paging}>
+              <Button size="small" variant="secondary" onClick={list.next} disabled={list.paging}>
                 {list.paging ? "Loading…" : "Load older turns"}
               </Button>
             )}

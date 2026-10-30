@@ -13,12 +13,12 @@ import (
 // `usage` domain rather than from any one node's event log.
 //
 // Every named window is days and nothing finer, and that is a property of the
-// source rather than a limitation to work around: a node publishes one record
-// per (node, day, seat), cumulative, so a day is the smallest thing every node
-// agrees on. An hour, a turn and a "since 14:05" are not in it — and an answer
-// that invented them by reading this node's event log for the edges would be
-// the one-node answer this domain replaced, glued to a fleet answer at a seam
-// nobody can see.
+// source rather than a limitation to work around: a data node publishes one
+// record per (node, day, seat), cumulative, so a day is the smallest thing
+// every data node agrees on. An hour, a turn and a "since 14:05" are not in it
+// — and an answer that invented them by reading this node's event log for the
+// edges would be the one-node answer this domain replaced, glued to a fleet
+// answer at a seam nobody can see.
 
 // MaxSpendRangeDays is the longest window a spend answer is asked for.
 //
@@ -35,10 +35,10 @@ const MaxSpendRangeDays = 90
 // was asked for — is older than the horizon's floor.
 //
 // A REFUSAL rather than a truncated answer: the rows before the floor are gone
-// on every node, so an answer "floored" to it would put a heading over figures
-// covering fewer days than it names — the previous-window chart at 30 and 90
-// days read exactly that way, silently empty, while the event log was its
-// source.
+// on every data node, so an answer "floored" to it would put a heading over
+// figures covering fewer days than it names — the previous-window chart at 30
+// and 90 days read exactly that way, silently empty, while the event log was
+// its source.
 //
 // NOT [ErrWindowLength], which it was until a 152-day window lying wholly
 // inside the history was refused as one that "reaches past the spend
@@ -54,7 +54,8 @@ var ErrWindowLength = fmt.Errorf("tokens: a spend window is 1 to %d company days
 //
 // NAMED horizon, not coverage: a fanned answer carries a coverage of the NODES
 // that answered, and this one asked no node — it is read from the replicated
-// estate, which every node holds whole. What bounds it is time, not presence.
+// estate, which every data node holds whole. What bounds it is time, not
+// presence.
 type Horizon struct {
 	// Days is the history the domain keeps, in days (usage.History).
 	Days int `json:"days"`
@@ -144,8 +145,10 @@ func (r Range) Since() time.Time { return r.First.Start }
 func (r Range) Until() time.Time { return r.Last.End }
 
 // Cell is one company day's spend for one seat under one (phase, worker,
-// model, provider entry), summed over every node that ran the seat that day by
-// the caller or left as one row per node — the fold adds either way.
+// model, provider entry), summed over every data node whose day holds the seat
+// — the node that ran it, or the data node keeping that node's events in
+// custody — by the caller or left as one row per node; the fold adds either
+// way.
 //
 // It is the usage domain's `usage_tokens` row with the seat named as that
 // day's record named it. Bucket.Calls is the row's own call count, never one

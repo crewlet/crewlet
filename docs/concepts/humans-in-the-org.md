@@ -67,8 +67,15 @@ give a person one for each surface they are on. A person who works only
 through the dashboard is on none of them: they act as their seat through the
 [identity directory](#acting-as-your-seat-on-the-dashboard-and-the-api), and a
 seat with no `contact` block is a legitimate seat rather than a mistake. It is
-not refused. What changes is that no agent can @-mention them: a lead's roster
-tells its agents to hand that person work by assigning it in the tracker, and
+not refused. On the engine's [own chat](chatlet.md) nothing changes for them: a
+room addresses a person by their seat's handle, so an agent mentions them there
+like anybody else — a lead's roster gives each human report as `@handle` and
+tells it to mention them in the company's chat or send them a direct message,
+whatever contact identities they hold, unless the seat's holder is
+[withheld](#a-suspended-holder-is-withdrawn-with-no-configuration-change) —
+and they read it on the dashboard. On a vendor's surface no agent can
+@-mention them: a lead's roster tells its agents to hand that person work by
+assigning it in the tracker, and on a company that talks on Mattermost or Slack
 the configuration names the seat in a **warning** at its `contact` — printed by
 `crewlet validate` and carried on every `/config` write's answer — the one
 place the engine says so, and a warning because the state is legitimate. Add a
@@ -182,7 +189,7 @@ vacant):
 
 | The card says | What it means | What an administrator can do from the card's menu, its peek and its page |
 |---|---|---|
-| **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, both apps ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
+| **Open seat** | Nobody holds it and no invitation names it | **Invite** (on the card's menu, **Invite someone…**) — an address and their access, every app ticked and Admin not to start; the link is shown once, and the person chooses their login and password when they redeem it. **Add person** (**Add a person…**) — an address, optionally a name and a login (proposed from the address when left empty), and their access, ticked the same way; the person exists at once, `active`, and you are shown their **first password link** once |
 | **Invited ·** an address | An open invitation holds it until it is redeemed, cancelled or lapses — a week. Nobody else can be invited onto it, created on it or bound to it meanwhile | **Cancel invitation**, which frees the seat |
 | **Held by** a name | A person holds it, at whatever stage, or a service account or a token's row is bound to it | Nothing here: the person is changed, moved, suspended or removed in Settings › People, and a service account in Settings › Service accounts |
 
@@ -285,6 +292,11 @@ What the binding buys:
   the wake your own change sends. There is still no way for a caller to name a seat to act as.
   See [who a write is attributed
   to](../reference/api-endpoints.md#who-a-write-is-attributed-to).
+- **The company's own chat is yours to speak in.** On
+  [`chat.backend: chatlet`](chatlet.md#people) every room is read, and every message
+  written, as the seat you hold — with the `chatlet` app — because a room shows
+  each speaker by seat and its members are seats. Your messages carry the
+  seat's handle with author kind `human`, like every other write.
 
 **A credential bound to no seat is ordinary.** A pipeline, an automation, the
 deployment's own break-glass token — each acts as itself under its own login,
@@ -293,7 +305,9 @@ its own all the same: its pins, its inbox marks, its priorities and its
 personal views are kept under that **login**, which is the name every write it
 makes is attributed to and the name every personal read answers for — so what
 its assistant arranges is what its screens show. What it lacks is the work the
-chart addresses to a seat, and the screens say so, naming `crewlet iam bind`:
+chart addresses to a seat, and the company's own chat, which is read and
+spoken in only as a seat (`unseated`), and the screens say so, naming
+`crewlet iam bind`:
 a service account or a token's row is bound to a human seat nobody holds. A
 **person** is never in this state: they hold a human seat for as long as they
 are here, and the directory refuses every write that would leave one without
@@ -442,6 +456,18 @@ Two consequences:
    the prompts and tool errors steer the LLM to leave state on the
    surface and end the turn.
 
+**On Chatlet the first consequence holds and its REASON does not, which is
+worth knowing before you choose that backend.** A human seat still has no turn
+to wake, so nothing changes about delivery. But the sentence above — "the
+person is already notified natively by the tool where the work lives" — is
+true because Jira emails its assignee and Slack pings its mentions, and with
+`chat.backend: chatlet` there is no such tool: the engine is where the
+conversation lives, and the engine has never sent anything as itself. So a
+person mentioned in Chatlet learns about it when they next open the
+dashboard, and not before. What they get there is an unread count and a mention
+feed. See [Chatlet § What is not here](chatlet.md#what-is-not-here); an agent that
+genuinely needs a person *now* escalates through a surface that does push.
+
 ---
 
 ## How a person learns they have work
@@ -461,7 +487,10 @@ on where the work lives:
   among their decisions, and may open that item and post their answer to it
   ([You may answer what you were asked](identity-and-access.md#what-each-app-opens));
   agents send everything else through Worklet, which is why the
-  dashboard warns when Worklet is left unticked for a person.
+  dashboard warns when Worklet is left unticked for a person. A mention in the
+  engine's own chat is not a notice here: chat keeps its own unread counts and
+  a mention feed, read in the dashboard's Chatlet with the `chatlet` app, and the
+  dashboard warns of an unticked Chatlet on a company that runs it.
 - **The dashboard, the moment that inbox moves.** For somebody with no Slack or
   Jira account — a person who works in Crewlet only — this is the delivery
   surface.
@@ -496,7 +525,9 @@ sequenceDiagram
   dashboards reading through a sound data node. Its own applier is then the
   one thing on it nobody vouches for, so for as long as the copy is out the
   node follows a sound data node's movements instead, relayed over the
-  broker, and withholds its own. Each switch — onto a peer, from one peer to
+  broker, and withholds its own. Every ask and answer on that relay is signed
+  under the fleet keyring and bound to the ask it answers, so an answer the
+  fleet did not sign reaches no screen. Each switch — onto a peer, from one peer to
   another, back to its own applier — sends every watched inbox one frame that
   counts nothing, because what moved during the switch is not replayed: the
   dashboard reads the inbox again, as it does on any frame.
@@ -565,6 +596,10 @@ colleague-surface tools** during Execute, never via the engine:
   [Tool Capabilities](tool-capabilities.md)). The human's reply lands on
   the agent's own bot identity and re-enters through the normal inbound
   pipeline, so the answer goes back to the agent that asked.
+- **The engine's own chat** — the agent opens a direct conversation with
+  `send_dm`, or names the person by handle in a room with `post_message`,
+  both first-party tools. The person's reply is a record on the chat log, and
+  the wake it derives goes back to the agent it answers like any other.
 - **Jira / Confluence / GitHub** — the agent comments / requests review
   with its own tools and the mention markup; the target is the artifact
   (issue / page / PR), the human is mentioned in the body.
@@ -583,17 +618,22 @@ When a turn only discovers it needs a human at review, the reviewer
 returns `self_iterate` with a note, and the executor's next round makes
 the mention. Once the mention has gone out the reviewer ends the turn
 `done` instead — the human's reply is what re-triggers the agent, so no
-further round of that turn can produce it. If the agent genuinely **can't reach the human** (it has no
-chat tool, or the human has no contact ID), that surfaces as a gap to
-close: give the agent the tool, or route the work through a colleague who
-has it. A human with no contact ID at all is the legitimate case of a
-person who works only through the dashboard, which the configuration warns
-about at the seat's `contact`: the roster tells a lead to hand them work by assigning
-it in the tracker, and a contact identity is what to add the day they join a
-surface the company runs. The engine never manufactures a sender to bridge
-the gap: there is no "Crewlet" DM and no engine-side fallback. Escalation is ordinary
-colleague-tool use, so a report reaches a human exactly the way it reaches
-an agent.
+further round of that turn can produce it. If the agent genuinely **can't
+reach the human** (it has no chat tool, or the human has no contact ID on
+the vendor surface it would mention them on — the engine's own chat needs
+none), that surfaces as a gap to close: give the agent the tool, or route
+the work through a colleague who has it. A human with no contact ID at all
+is the legitimate case of a person who works only through the dashboard.
+On a company that talks on Mattermost or Slack the configuration warns
+about it at the seat's `contact` — and about a seat whose only ids are for
+other surfaces, since a GitHub login reaches nobody in a chat room: the
+roster tells a lead to hand them work by assigning it in the tracker, and
+an id on that workspace is what to add the day they join it. On the
+engine's own chat there is nothing to warn about, because the person reads
+the rooms on the dashboard as their seat. The engine never manufactures a
+sender to bridge the gap: there is no "Crewlet" DM and no engine-side
+fallback. Escalation is ordinary colleague-tool use, so a report reaches a
+human exactly the way it reaches an agent.
 
 ---
 
@@ -766,6 +806,19 @@ holds two kinds of entry:
   resolved against the live server at connect, are carried across into the
   new registry instead: they are facts about a server rather than about the
   company.
+
+The engine's **own surfaces hold no entry at all**, and need none: on its
+[work tracker](task-engine.md), its [knowledge base](knowledge-system.md) and
+its [chat](chatlet.md) the actor a record names is the seat's handle, so the id a
+wake names its sender by IS that handle. The engine declares those three
+sources to every registry it builds as namespaces whose ids are handles, and
+`ByExternalID` on one answers `ByHandle`. That is what makes a person's comment
+on a Worklet task, a remark on a Doclet page or a message in the engine's chat
+come from their seat everywhere a sender is read — the
+[learning](agent-learning.md) profile it is filed under, the
+[requester](artifacts.md#sharing) an agent's artifact tools act for,
+and the colleague a [thread block](agent-runtime.md#text-somebody-else-wrote)
+fences them as — rather than from an outside party nobody can name.
 
 ### A suspended holder is withdrawn with no configuration change
 

@@ -13,7 +13,7 @@ import (
 // pageActivity answers a page of the wiki's change feed.
 //
 // THE ROWS WERE ALWAYS HERE. `pages_history` has one row per change since the
-// domain landed and ships two indexes naming readers nobody wrote — "one
+// domain landed and shipped two indexes naming readers nobody wrote — "one
 // page's activity" and "the company-wide digest" — so a wiki that recorded
 // every edit, replicated it and snapshotted it offered no way to ask what had
 // changed. `work_activity`'s own shape, one domain over.

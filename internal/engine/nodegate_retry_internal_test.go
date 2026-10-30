@@ -493,7 +493,9 @@ func TestAGestureIsFinishedWhenItsCallerGoesAway(t *testing.T) {
 // A node id may hold dots and a gesture id may hold anything, so a plain dotted
 // join spelled gesture `x` on node `y.evict.tracker.z` and gesture
 // `x.evict.tracker.y` on node `z` as the same operation — one ledger row
-// answering two gestures.
+// answering two gestures. And every id is the grammar's: the steps after the
+// gesture are two segments, whatever the node holds, the second naming its
+// log readably however the node had to be written.
 func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 	t.Parallel()
 	type parts struct {
@@ -514,6 +516,11 @@ func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 		{"a", false, "tracker", "b"},
 	} {
 		id := domainOpID(p.gesture, p.readmit, p.domain, p.node)
+		steps := strings.Split(strings.TrimPrefix(id, p.gesture+"."), ".")
+		if len(steps) != 2 || !strings.HasPrefix(steps[1], p.domain+":") {
+			t.Errorf("%+v derives %q, whose steps after the gesture are %q — "+
+				"not the sign and a step naming the log", p, id, steps)
+		}
 		if other, dup := seen[id]; dup {
 			t.Fatalf("%+v and %+v both derive %q", p, other, id)
 		}
@@ -528,7 +535,7 @@ func TestADomainOperationIDNamesOneOperation(t *testing.T) {
 // -op-id. For an evicted node, a log rebuilt under it, a full log or an
 // operation superseded since, the same command fails the same way for ever.
 // And the advice was a sentence in the command line's vocabulary, which the
-// dashboard rendered word for word beside a dialog with no -op-id, -url or
+// dashboard rendered word for word beside a dialog with no -op-id, -api or
 // -force: the remedy is now a closed set of actions each surface renders in its
 // own words, and the sentence beside it names none of them.
 func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
@@ -587,7 +594,7 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// told the node they ran it on was evicted when it was not.
 		"evicted, another node's copy": {gate: copied(statelog.ReasonEvicted),
 			actions: []statelog.GateAction{retry},
-			detail:  "node node-x's copy, which this node's own write was collapsed onto, and it applies nowhere because that node is evicted — a fact about node node-x and not about this one. The broker holds its operation id for the log's duplicate window, 2m0s, from when it landed. Once that has passed, the same gesture under the same operation id finishes it here"},
+			detail:  "node node-x's copy, which this node's own write was collapsed onto, and it applies nowhere because that node is evicted, a fact about node node-x and not about this one. The broker holds its operation id for the log's duplicate window, 2m0s, from when it landed. Once that has passed, the same gesture under the same operation id finishes it here"},
 		"overtaken, another node's copy": {gate: copied(statelog.ReasonOvertaken),
 			actions: []statelog.GateAction{retry},
 			detail:  "because that node wrote it from rows a restored reanchor had overtaken"},
@@ -600,7 +607,7 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 		// copy meets today.
 		"a later gate, another node's copy": {gate: copied(statelog.Reason("a_later_gate")),
 			actions: []statelog.GateAction{retry},
-			detail:  "applies nowhere because a gate dropped it (a_later_gate) — a fact about node node-x"},
+			detail:  "applies nowhere because a gate dropped it (a_later_gate), a fact about node node-x"},
 		"wrong stream": {gate: refused(statelog.ReasonWrongStream),
 			actions: []statelog.GateAction{statelog.GateReanchor}, detail: "re-anchor"},
 		"log full": {gate: refused(statelog.ReasonLogFull),
@@ -648,7 +655,7 @@ func TestAGateLogIsAdvisedARetryOnlyWhereOneCanFinishIt(t *testing.T) {
 			!strings.Contains(remedy.Detail, tc.detail) {
 			t.Errorf("%s: detail = %q, want it to name %q", name, remedy.Detail, tc.detail)
 		}
-		for _, flag := range []string{"-op-id", "-url", "-force", "crewlet "} {
+		for _, flag := range []string{"-op-id", "-api", "-force", "crewlet "} {
 			if strings.Contains(remedy.Detail, flag) {
 				t.Errorf("%s: detail %q names %q, which only the command line has",
 					name, remedy.Detail, flag)

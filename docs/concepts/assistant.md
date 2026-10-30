@@ -40,14 +40,16 @@ the one to do first and has the main button; when there are two or more, it
 is marked **Do first**. A quiet line of context follows only when a fact from
 elsewhere changes what to do, and then up to two questions you may want to
 ask next. When the screen has one record open (a decision open in the Inbox, a
-task, an agent, an artifact), the row says so, "Brief me on this decision",
-and the brief covers that record and its immediate context only: the question
-asked, its task, the agent on it and its recent thread. Ask a follow-up in the
-same conversation as you would any question.
+task, an agent, an artifact, a Chatlet room), the row says so, "Brief me on
+this decision", and the brief covers that record and its immediate context
+only: the question asked, its task, the agent on it and its recent thread. Ask
+a follow-up in the same conversation as you would any question.
 
 A brief only reads, as you. Every row names a record the assistant read for
-this brief and that you may open, checked again by the engine before the row
-is drawn; a row it cannot check is left out rather than shown. A row is drawn
+this brief and that you may open (a task, a project, an agent, a page, an
+artifact, or a chat room, where a question asked of you there waits), checked
+again by the engine before the row is drawn; a row it cannot check is left out
+rather than shown. A row is drawn
 in red only for a fact the engine read (an agent stopped or whose last turn
 failed, a task marked urgent), never because the model chose to. The brief
 says when it was read: it is a reading of the page at that moment, so ask
@@ -82,7 +84,10 @@ API, the same way the dashboard's own screens load. So:
   guessing.
 - **A refusal stays a refusal.** When something needs a permission you do not
   hold, the assistant shows a card saying which one, with a ready-made request
-  you can copy to an administrator. It cannot obtain the access for you.
+  you can copy to an administrator. It cannot obtain the access for you. When
+  no permission would help, for example with something only you can do
+  yourself or a change the assistant can only propose, the card says why in
+  the engine's own words and offers no request.
 - **It never acts as anyone else.** It cannot impersonate a colleague, an
   agent or an administrator, and nothing you type can make it.
 
@@ -93,8 +98,9 @@ sees each step's request (its method and path) beside it. A refusal is said in
 plain words too: the assistant is handed the engine's exact reason and says
 what to change.
 What a step read is not drawn as a card beside the answer. The first time
-the answer names a record it read (a task by its key, such as GOP-11, or an
-agent, a team, a project or a page by its name), that mention is a chip: press
+the answer names a record it read (a task by its key, such as GOP-11, a chat
+room by its name with its #, such as #launch, or an agent, a team, a project
+or a page by its name), that mention is a chip: press
 it for a peek with the record's facts, its body and the list under it, and
 **Open** to go to its page. A record it read and never named is on one
 **Also read** line under the answer, with a chip of its own. A table's peek
@@ -119,6 +125,7 @@ is a table ("Agents"), and one record is its values and the lists it holds
 |---|---|
 | Worklet (needs `worklet`) | Search and list tasks, read a task and its thread, a task's cost, your inbox and queue, projects, workload, open decisions |
 | Doclet (needs `doclet`) | Search pages, read a page, and list the spaces by name and key |
+| Chatlet (needs `chatlet`) | Your rooms and what is unread in them (your most recently active rooms, or only those with something unread), a room and who is in it, what was said in a room or a thread lately, where you were named, and a search of every room you may read, by what was said and who said it. A room is asked for by its name ("#launch"); the answer's "#launch" is the room's chip, and a direct conversation is named by the people in it. Older messages are found by a search; the room's chip opens the room, which holds all of it |
 | Everyone | Agents and their activity, the org chart, turns you may read (with why a failed one failed), coding runs, token spend and budgets, the company feed, artifacts shared with you |
 | Administrators (needs `admin`) | Integrations, fleet health, and the history of configuration changes |
 
@@ -134,8 +141,10 @@ answer is one chip.
 by its name or its key, through your own reads of the chart, the projects and
 the spaces, and cards name seats by their names. A change that names something
 that is not there, or a name two records share, is refused before any card,
-listing the choices, rather than after you approve it; the assistant never says
-something does not exist without having looked.
+listing the choices, rather than after you approve it; every name the call got
+wrong is named at once, beside anything else wrong with it, so the assistant
+fixes them all in one go. It never says something does not exist without
+having looked.
 
 **Ask or plan when the request is open.** A clear request is acted on at once.
 When what to change, or for whom, is genuinely open, or the request is a matter
@@ -146,8 +155,13 @@ proposes its first step. It says what each proposal does before its card.
 **Prepare changes for you to approve:** filing, changing and commenting on
 tasks, answering a decision, setting your priorities, marking your inbox,
 pausing and resuming an agent, steering a running turn, answering a coding
-run's question, writing and editing knowledge pages, and sharing or unsharing
-an artifact. It only offers the changes your permissions allow.
+run's question, writing and editing knowledge pages, sharing or unsharing an
+artifact, and in chat: posting in a room, replying in a thread, sending a
+direct message, editing your message or deleting a message, changing a room's
+topic, purpose, archive or members, and leaving a room. Each chat card names
+the room and who will read it, and a change to who is in a room shows everyone
+it adds and takes out, and takes out only the people you asked it to. It only
+offers the changes your permissions allow.
 
 **Change what is on your screen**, on screens that accept it: apply a filter,
 fill in a draft in an editor, or select records. These are proposals too, and
@@ -261,10 +275,19 @@ These limits are structural: they hold whatever the model is asked or reads.
   changes nothing in Crewlet without your approval, but what it fetches from
   the web is not checked by anyone. Do not hand deep work a task whose data
   must not leave the company.
-- **It cannot manage access or secrets.** People, permissions, tokens,
-  invitations, secrets, setup, configuration changes, fleet operations and
-  purges are never available to it, even to an administrator. Make those
-  changes on their own screens.
+- **It cannot sign anybody in or handle a secret.** Signing in and the session
+  and token ceremonies (creating or inviting a person, minting or revoking a
+  token, resetting a password or a second factor, ending sessions), anything
+  that carries a credential or a secret in clear (revealing or writing a
+  secret, connecting an integration), and approving its own proposals are never
+  available to it, even to an administrator. Make those changes on their own
+  screens.
+- **An administrator's other changes are proposals too.** A configuration
+  change, editing what a person may do, a fleet operation, purging a task, a
+  page or an artifact, and erasing or pruning a chat room's messages or setting
+  its horizon are each prepared for an administrator to approve, at the same
+  recent sign-in the screen would ask. A change that destroys something for
+  good says so at the top of its card.
 - **It cannot read other people's conversations**, and nobody else can read
   yours, with the one audited exception below.
 - **Instructions found in your data cannot make it write.** A task
@@ -276,10 +299,12 @@ These limits are structural: they hold whatever the model is asked or reads.
 - **No address the model writes is opened.** A link is live only where the
   dashboard built it, from parts it checked, to a place that is your
   company's: a task's key opens the task, a seat's handle the seat, a pull
-  request or a repository your configured code host, and an address on a host
-  your company configured (GitHub, GitLab, Jira, Confluence, Mattermost) opens
-  as the dashboard rebuilds it from what it names, with nothing else the
-  model wrote. Any other address is shown as its words and the host it names,
+  request or a repository your configured code host, under an organization or
+  group its configuration names, and an address on a host your company
+  configured (GitHub, GitLab, Jira, Confluence, Mattermost) opens as the
+  dashboard rebuilds it from what it names, a GitHub or GitLab address only
+  under such an organization or group, with nothing else the model wrote. Any
+  other address is shown as its words and the host it names,
   which you can read and copy but not click, and a picture is shown as its
   description and never loaded. The Inbox reads an agent's words by the same
   rule.
@@ -337,6 +362,11 @@ model cannot answer rather than leaving you waiting:
   signed out, it reached its usage limit, it took too long, or it could not be
   started. **Try again** is offered only where asking again can help: after a
   usage limit resets, or after a model that took too long.
+- **When Crewlet cannot take it.** A question, an image or an approval that
+  Crewlet cannot take right now (its copy of the records is behind, the room
+  for them is full, or a store did not answer) is refused in words that say
+  what happened and who clears it. It asks you to try again only where waiting
+  helps.
 
 | You see | What to do |
 |---|---|

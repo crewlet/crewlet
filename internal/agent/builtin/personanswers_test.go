@@ -21,14 +21,14 @@ import (
 )
 
 // personAnswer is one answer that landed, as a person's surface answers it:
-// the tool's answer without its model-only keys ([builtin.ForPerson]) and its
-// caveats in a person's words, decoded.
+// the tool's answer for a person without its model-only keys
+// ([builtin.ForPerson]) and its caveats in a person's words, decoded.
 func personAnswer(t *testing.T, name string, res tools.Result) map[string]any {
 	t.Helper()
 	if res.Failed {
 		t.Fatalf("%s was refused: %s", name, res.Output)
 	}
-	raw, ok := builtin.ForPerson(res.Output)
+	raw, ok := builtin.ForPerson(res)
 	if !ok {
 		t.Fatalf("%s answered something that is not a receipt: %s", name, res.Output)
 	}

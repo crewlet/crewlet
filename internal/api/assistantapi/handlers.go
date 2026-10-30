@@ -62,7 +62,7 @@ func (s *Surface) create(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.svc.Create(r.Context(), caller, key)
 	if err != nil {
-		s.fail(w, r, err)
+		s.failWrite(w, r, key, err)
 		return
 	}
 	httpjson.Write(w, http.StatusCreated, wire.ConversationCreated{Conversation: created})
@@ -102,7 +102,7 @@ func (s *Surface) clear(w http.ResponseWriter, r *http.Request) {
 	}
 	answer, err := s.svc.Clear(r.Context(), caller, id, key)
 	if err != nil {
-		s.fail(w, r, err)
+		s.failWrite(w, r, key, err)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, answer)
@@ -145,7 +145,7 @@ func (s *Surface) ask(w http.ResponseWriter, r *http.Request) {
 		Conversation: conversation, Key: key, Input: body.Input.Text, Page: body.PageContext,
 		Read: grant, Attachments: body.Attachments, Mode: body.Mode})
 	if err != nil {
-		s.fail(w, r, err)
+		s.failWrite(w, r, key, err)
 		return
 	}
 	httpjson.Write(w, http.StatusAccepted, accepted)
@@ -196,7 +196,7 @@ func (s *Surface) stop(w http.ResponseWriter, r *http.Request) {
 	}
 	answer, err := s.svc.Stop(r.Context(), p.ID, id, key)
 	if err != nil {
-		s.fail(w, r, err)
+		s.failWrite(w, r, key, err)
 		return
 	}
 	httpjson.Write(w, http.StatusAccepted, answer)

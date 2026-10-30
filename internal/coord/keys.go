@@ -22,10 +22,11 @@ import "strings"
 // KeySeparator is what joins a key's segments.
 //
 // A dot, because a key becomes a subject token path under the bucket, and
-// that is what makes a CLASS filterable: a consumer subscribed to the change
-// class of a family selects every change key and nothing else. Every other
-// byte in a segment is escaped, so a segment can never contain one of these
-// and a key's shape is exactly the number of segments it was built from.
+// that is what makes a CLASS filterable: a listing of one class — the
+// presence leases, the seat pauses — asks the broker for that class's keys
+// ([DocumentFilter]) and reads nothing else. Every other byte in a segment is
+// escaped, so a segment can never contain one of these and a key's shape is
+// exactly the number of segments it was built from.
 const KeySeparator = "."
 
 // DocumentKey builds a key from its segments, escaping each.
@@ -33,17 +34,19 @@ const KeySeparator = "."
 // SEGMENT BY SEGMENT, and this is load-bearing rather than tidy. A key is a
 // subject token path, so a raw segment containing a dot would split into two
 // tokens and change what a filtered watch matches; a segment containing a
-// space, a colon or a non-ASCII letter is refused by the store outright. Page
-// titles and seat handles contain all four. Escaping each segment and joining
-// with the separator is what lets a title be part of a key at all, and what
-// keeps `class.a.b` distinct from a single segment that happened to spell it.
+// space, a colon or a non-ASCII letter is refused by the store outright. A
+// node id may carry a dot and a Slack thread's id always does. Escaping each
+// segment and joining with the separator is what lets either be part of a key
+// at all, and what keeps `class.a.b` distinct from a single segment that
+// happened to spell it.
 //
 // AN EMPTY SEGMENT IS NOT A KEY. Every segment names something — a class, an
-// id, a project, a title — so an empty one is a caller that lost a value on
+// id, a node, a thread — so an empty one is a caller that lost a value on
 // the way here, and the key it would build is one [DocumentSegments] refuses.
-// That refusal is the design: a key nobody can decode is caught at the first
-// listing that reads it back, where a key that silently decoded to an empty
-// name would put a document belonging to nothing into a projection.
+// That refusal is the design: every listing skips a key it cannot decode, so
+// the record is one no listing returns, where a key that silently decoded to
+// an empty name would be returned by every listing as a record naming nothing
+// — a lease on no seat, a follow on no thread — for its reader to act on.
 func DocumentKey(segments ...string) string {
 	escaped := make([]string, len(segments))
 	for i, seg := range segments {
@@ -81,9 +84,9 @@ func DocumentFilter(segments ...string) string {
 // DocumentSegments recovers the segments of a key, reporting false for one
 // this grammar did not write.
 //
-// A malformed key is skipped rather than guessed at, on the lease table's
-// rule: a listing that invented a segment would put a document nobody wrote
-// into a projection.
+// A malformed key is skipped rather than guessed at: a listing that invented a
+// segment would hand its caller a record under a name no writer used, and the
+// caller would act on it as the record that name belongs to.
 func DocumentSegments(key string) ([]string, bool) {
 	if key == "" {
 		return nil, false

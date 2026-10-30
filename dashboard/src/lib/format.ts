@@ -567,9 +567,17 @@ export function textBudget(
   return { bytes, limit, over, line };
 }
 
+/**
+ * A size in bytes, in powers of 1024 and labelled as such: KiB, MiB, GiB, TiB.
+ *
+ * THE ENGINE'S LABELS, because the same size is printed by the CLI and said in
+ * the node's own sentences (`8.0 GiB`), and the dashboard drew those powers of
+ * 1024 as KB, MB and GB, so one banner read "Resizing 4.0 GB to 8.0 GB" over a
+ * sentence about 8.0 GiB.
+ */
 export function fmtBytes(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return EMPTY_VALUE;
-  const units = ["B", "KB", "MB", "GB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let v = n;
   let u = 0;
   while (v >= 1024 && u < units.length - 1) {
@@ -608,8 +616,9 @@ export function openSentence(text: string): string {
 /**
  * A clause as a sentence: its first letter capitalised ([openSentence]) and a
  * full stop after it. The engine writes a measurement as a clause, so its log
- * line can carry it after a colon ("backup_age: no verified backup has been
- * recorded"); a screen that prints it on its own line prints it as a sentence.
+ * line can carry it after a colon ("backup_age: no verified backup of this log
+ * has been recorded"); a screen that prints it on its own line prints it as a
+ * sentence.
  */
 export function asSentence(clause: string): string {
   const head = openSentence(clause);

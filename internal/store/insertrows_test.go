@@ -179,3 +179,47 @@ func TestInsertRowsRefusesARaggedRow(t *testing.T) {
 		}
 	}
 }
+
+// recordingExec keeps the statements an insert issues.
+type recordingExec struct {
+	inner      store.Execer
+	statements []string
+}
+
+func (r *recordingExec) ExecContext(ctx context.Context, query string,
+	args ...any) (sql.Result, error) {
+
+	r.statements = append(r.statements, query)
+	return r.inner.ExecContext(ctx, query, args...)
+}
+
+// AN INSERT ISSUES THE STATEMENT [store.InsertStatement] NAMES, which is what
+// lets a plan test explain a collection write's own statement rather than a
+// copy assembled beside it: the prefix, the row template once per row joined
+// by a comma, and the suffix after a space — or no space at all with none.
+func TestAnInsertIssuesTheStatementItNames(t *testing.T) {
+	t.Parallel()
+	if got, want := store.InsertStatement("P ", "(?)", "S", 3), "P (?),(?),(?) S"; got != want {
+		t.Fatalf("InsertStatement = %q, want %q", got, want)
+	}
+	if got, want := store.InsertStatement("P ", "(?)", "", 1), "P (?)"; got != want {
+		t.Fatalf("InsertStatement with no suffix = %q, want %q", got, want)
+	}
+	_, w := insertRowsStore(t)
+	const prefix, row, suffix = `INSERT INTO ins_rows (a, b, c) VALUES`, `(?,?,?)`,
+		`ON CONFLICT (a, b) DO NOTHING`
+	if err := w.Tx(t.Context(), func(tx *sql.Tx) error {
+		rec := &recordingExec{inner: tx}
+		if _, err := store.InsertRows(t.Context(), rec, 32766, prefix, row, suffix, 3,
+			func(i int) []any { return []any{"a", string(rune('x' + i)), i} }); err != nil {
+			return err
+		}
+		if want := store.InsertStatement(prefix, row, suffix, 3); len(rec.statements) != 1 ||
+			rec.statements[0] != want {
+			t.Errorf("InsertRows issued %q, want the one statement %q", rec.statements, want)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+}

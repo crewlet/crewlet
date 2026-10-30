@@ -1,7 +1,6 @@
 package e2e
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -81,22 +80,19 @@ func TestANodeWithNoCompanySignsInAndServesWorkAfterItsFirstApply(t *testing.T) 
 	// exists: the company arrives by apply, and its seats' executors call
 	// their tools back over this node's bridge from the first turn.
 	ln := bridgeListener(t, "")
-	e, err := engine.New(t.Context(), engine.Options{
+	e, chatLive := bootEngine(t, engine.Options{
 		Bootstrap: &boot, Environment: nodeEnvironment(nil), SandboxPollInterval: runPollInterval,
 		BoxHostURL: listenerURL(ln),
 	})
-	if err != nil {
-		t.Fatalf("engine.New with no company: %v", err)
-	}
-	t.Cleanup(func() { e.Stop(context.Background()) })
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("engine.Start: %v", err)
 	}
 	if e.Company() != nil {
 		t.Fatal("the premise: this node has no company")
 	}
-	app, srv := serveAPI(t, e, &boot, ln, nil)
-	n := &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID()}
+	app, srv := serveAPI(t, e, &boot, chatLive.Hub(), ln, nil)
+	n := &node{engine: e, app: app, server: srv, model: model, id: e.Node().ID(),
+		chat: chatLive}
 
 	operator := newBrowser(t)
 	file := map[string]any{"title": "the first thing we do", "project": "ENG"}

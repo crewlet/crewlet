@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/assistant/exec"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // RevisionKind is what a source revision is a revision of.
@@ -21,6 +22,17 @@ const (
 	RevisionArtifact RevisionKind = "artifact"
 	// RevisionPerson is a person's record by seat handle, at its version.
 	RevisionPerson RevisionKind = "person"
+	// RevisionRoom is a chat room by id, at a digest of the room as a card
+	// shows it: its settings and its whole membership, which a change of
+	// either moves and a message said in the room does not. NOT the room's
+	// own `revision`, which every message moves, so a change bound to it
+	// would go stale whenever anybody spoke.
+	RevisionRoom RevisionKind = "room"
+	// RevisionMessage is a chat message by `<room id>/<message id>`, each
+	// part path-escaped, at the position of the record that last changed it
+	// (`<generation>:<sequence>`), which an edit and a delete move and a
+	// reaction does not.
+	RevisionMessage RevisionKind = "message"
 	// RevisionCharter is the company's principles (`GET /config/charter`),
 	// at the entity tag the route answers, unquoted: the one revision whose
 	// version is an HTTP entity tag, which the approved write is sent under
@@ -55,9 +67,10 @@ const (
 	VersionPresent = "present"
 )
 
-// RevisionKinds are the eight, in declaration order.
+// RevisionKinds are the ten, in declaration order.
 var RevisionKinds = []RevisionKind{RevisionTask, RevisionPage, RevisionArtifact, RevisionPerson,
-	RevisionCharter, RevisionEntity, RevisionResource, RevisionCreate}
+	RevisionRoom, RevisionMessage, RevisionCharter, RevisionEntity, RevisionResource,
+	RevisionCreate}
 
 // CharterID is the one charter's id in a revision: a company has one.
 const CharterID = "company"
@@ -91,7 +104,8 @@ func (r Revision) String() string { return string(r.Kind) + ":" + r.ID + "@" + r
 //     entity), rather than replacing what another write put there.
 //   - Every other kind's precondition travels in the write's own arguments (a
 //     task's if_match, a page's base_version), or is the re-read's alone (a
-//     resource's version field), and the request carries none.
+//     resource's version field, a chat room's settings and members, a chat
+//     message's position), and the request carries none.
 //
 // Never both: at an address with no representation the two describe two
 // different resources (the API's `conflicting_preconditions`).
@@ -120,8 +134,8 @@ func ParseRevision(s string) (Revision, error) {
 	}
 	r := Revision{Kind: RevisionKind(kind), ID: rest[:at], Version: rest[at+1:]}
 	if !r.Kind.Valid() {
-		return Revision{}, fmt.Errorf("%w: revision kind %q is not one of %v", ErrInvalid,
-			kind, RevisionKinds)
+		return Revision{}, fmt.Errorf("%w: revision kind %q is not one of %s", ErrInvalid,
+			kind, words.Or(RevisionKinds))
 	}
 	return r, nil
 }

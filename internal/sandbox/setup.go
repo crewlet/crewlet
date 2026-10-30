@@ -90,7 +90,9 @@ func (s SetupStep) timeout() time.Duration {
 //
 // Distinct from an install failure on purpose: a failed setup step is an
 // OPERATOR CONFIG problem (a broken role or provider setup command), not a
-// coding-agent install problem, and the two want different debugging.
+// coding-agent install problem, and the two want different debugging. One
+// status says the recipe is not what broke: a command that exits
+// [exitTempFail] says a download it makes failed for now ([SetupError.why]).
 //
 // THREE FAILURES, AND THE MESSAGE SAYS WHICH. A step fails writing one of its
 // files, or running a command that then exits non-zero, or running a command
@@ -115,6 +117,12 @@ type SetupError struct {
 	Exited bool
 	Exit   int
 	Detail string
+
+	// Err is what the box answered where it did not run the step to an
+	// exit status — a write or a command it could not take — and nil for
+	// a command that exited: what kept the step from running is the
+	// box's, and [WhyOf] reads it through [SetupError.Unwrap].
+	Err error
 }
 
 func (e *SetupError) Error() string {
@@ -133,6 +141,40 @@ func (e *SetupError) Error() string {
 	return msg
 }
 
+// Unwrap is what the box answered, where it answered something.
+func (e *SetupError) Unwrap() error { return e.Err }
+
+// why is a step a command of which EXITED non-zero: the recipe is the
+// company's, so a person changes it. A step the box never ran to an exit is
+// not classed here: the box's own answer says why ([SetupError.Err]).
+//
+// EXCEPT A COMMAND THAT EXITED [exitTempFail], which is the recipe saying
+// that a download it makes is failing on the far side, and still was once
+// the command's own retries ran out: a wait clears that, not a person
+// ([WhySetupUnavailable]). Only the recipe can tell the two apart: the
+// engine has a status, and an account of the failure it does not read. A
+// step that downloads on every new box, as the sandbox guide's stock-image
+// recipe installs its coding CLI from npm and GitHub, makes a registry's
+// outage an ordinary way for a setup to fail, and classed with every other
+// exit it would read as a setup an administrator has to fix, which no wait
+// clears. Every other status is
+// still the recipe's to change, the step's own timeout (124) among them: a
+// command that runs until timeout_seconds stops it is as likely a network
+// the box cannot reach as a slow one, and the budget is the operator's.
+func (e *SetupError) why() (Why, bool) {
+	if e.Exited && e.Exit == exitTempFail {
+		return WhySetupUnavailable, true
+	}
+	return WhyConfiguration, e.Exited
+}
+
+// exitTempFail is the status a setup command exits with to say its failure
+// is temporary: EX_TEMPFAIL, which sysexits.h defines as a temporary failure
+// worth retrying, so the convention is the shell's own rather than a number
+// only this engine reads that way. docs/concepts/code-sandbox.md tells a
+// recipe when to use it.
+const exitTempFail = 75
+
 // ApplySetup applies every step to a fresh box: write files, run commands, in
 // order.
 //
@@ -150,7 +192,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 		paths := slices.Sorted(maps.Keys(step.Files))
 		for _, path := range paths {
 			if err := box.WriteFile(ctx, path, []byte(step.Files[path])); err != nil {
-				return &SetupError{Step: step.Name, File: path, Detail: err.Error()}
+				return &SetupError{Step: step.Name, File: path, Detail: err.Error(), Err: err}
 			}
 		}
 		for i, cmd := range step.Commands {
@@ -159,7 +201,7 @@ func ApplySetup(ctx context.Context, box Sandbox, steps []SetupStep, env map[str
 				TimeoutSec: step.timeout().Seconds(),
 			})
 			if err != nil {
-				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error()}
+				return &SetupError{Step: step.Name, Command: i + 1, Detail: err.Error(), Err: err}
 			}
 			if result.ExitCode != 0 {
 				// NOT the command text. The engine resolves nothing in a

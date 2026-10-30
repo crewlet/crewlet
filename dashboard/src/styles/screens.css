@@ -9460,6 +9460,349 @@ a.live-row:focus-visible {
   list-style: none;
 }
 
+/* ---- Chatlet ---------------------------------------------------------------
+
+   THE SCREEN OWNS THE HEIGHT RATHER THAN GROWING THE PAGE. Chatlet asks the shell
+   for the window (`app/fill.tsx`), so the page scroller stops being one and
+   this grid takes what is left: the rail scrolls itself, the transcript
+   scrolls itself, and the composer stays where somebody's hands are. A
+   transcript inside a scrolling page leaves the reader scrolling two things
+   at once, and the one that moves under them is whichever the pointer
+   happens to be over. */
+
+.chat-frame {
+  display: grid;
+  /* THE RAIL GIVES WAY BEFORE THE TRANSCRIPT DOES. The room's track starts at
+     the transcript's floor (`TRANSCRIPT_FLOOR` in `app/layout.ts`), so a
+     screen too narrow for both at their widest takes the rail from 260px
+     towards 200px first, and the rail stacks only below that (the folds at
+     the end of this section). */
+  grid-template-columns: minmax(200px, 260px) minmax(320px, 1fr);
+  gap: var(--spacing-4);
+  /* The row is the whole box the shell handed over, and `min-height: 0` is
+     what lets a grid child scroll rather than stretch its parent. */
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.chat-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: var(--spacing-1);
+}
+
+.chat-rail-label {
+  padding: var(--spacing-3) var(--spacing-2) var(--spacing-1);
+}
+
+.chat-rail-row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  padding: var(--spacing-2);
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+  transition: background var(--motion-duration-fast) var(--motion-easing-default);
+}
+.chat-rail-row:hover {
+  background: var(--color-surface-hover);
+}
+/* WHERE THE READER IS, which is the one thing the accent is spent on. The
+   ground plus an edge, the same pairing `.thread-entry.as-row.selected` takes,
+   so the two lists in this product that select a row select it identically. */
+.chat-rail-row.selected {
+  background: var(--color-brand-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-brand-accent);
+}
+.chat-rail-row:focus-visible {
+  outline: 2px solid var(--color-brand-accent);
+  outline-offset: -2px;
+}
+
+.chat-rail-title {
+  font-weight: var(--font-weight-medium);
+}
+/* A PREVIEW IS ONE LINE AND IS CUT AT A PIXEL, which is `.truncate`'s case
+   rather than `.clamp`'s: the row height IS the line, and a preview that wrapped
+   would make every row in the rail a different height as people talk. */
+.chat-rail-preview {
+  color: var(--color-text-tertiary);
+}
+
+.chat-main,
+.chat-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  min-height: 0;
+}
+/* A LIST VIEW FILLS THE MAIN COLUMN, as a room does, so the body below its
+   header has a height to scroll within. */
+.chat-list {
+  flex: 1 1 auto;
+}
+
+/* A LIST VIEW SCROLLS ITSELF, as the room's transcript does. Under the fill the
+   shell's own scroller stops being one (the kit sets `overflow: hidden` on it),
+   so a list that grew past the window was clipped at its foot with nothing to
+   scroll it: the mention feed's older rows and its "Older mentions", Search
+   chat's lower hits. The header and the search toolbar stay outside it, where
+   the reader's hands are. */
+.chat-list-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: var(--spacing-2);
+}
+
+/* ONE ROW OF A RANKED OR DATED LIST: a mention in the feed, a hit in Search
+   chat. The room and the moment on one line, the words under it, and a rule
+   between rows. Chatlet's own rather than a shared list row, because the shared
+   one went with the search screen it was drawn for, and a class two screens
+   lean on is one neither owns. */
+.chat-hit {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding: var(--spacing-3);
+  border-bottom: 1px solid var(--color-border-default);
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+}
+.chat-hit:last-child {
+  border-bottom: none;
+}
+.chat-hit:hover {
+  background: var(--color-surface-hover);
+}
+.chat-hit:focus-visible {
+  outline: 2px solid var(--color-brand-accent);
+  outline-offset: -2px;
+}
+
+.chat-room {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--spacing-4);
+  min-height: 0;
+  flex: 1 1 auto;
+}
+/* A THREAD IS BESIDE THE ROOM, never instead of it: the reader is answering
+   something that was said in a conversation that is still going on, and a pane
+   that replaced the room would hide the next line of it. On a screen too
+   narrow for both it stands under the room instead (the folds below). */
+.chat-room.with-thread {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
+}
+
+.chat-room-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  padding-bottom: var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
+  min-width: 0;
+}
+
+.chat-scroller {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: var(--spacing-2);
+}
+.chat-scroller:focus-visible {
+  outline: 2px solid var(--color-brand-accent);
+  outline-offset: 2px;
+}
+
+.chat-older {
+  display: flex;
+  justify-content: center;
+  padding: var(--spacing-2) 0;
+}
+
+/* The pill that offers what arrived while somebody was reading history. It
+   sits over the foot of the transcript rather than in it, so admitting rows
+   does not itself move the list under the pointer. */
+.chat-jump {
+  display: flex;
+  justify-content: center;
+  margin-top: calc(var(--spacing-6) * -1);
+  pointer-events: none;
+}
+.chat-jump > * {
+  pointer-events: auto;
+}
+
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--spacing-1) var(--spacing-2);
+  border-radius: var(--radius-md);
+}
+.chat-message:hover {
+  background: var(--color-surface-hover);
+}
+/* THE ROOT OF A THREAD, drawn as the thing the pane is about. */
+.chat-message.root {
+  background: var(--color-surface-elevated);
+}
+/* A TOMBSTONE IS STILL A ROW. The body is gone and the message is not: a reply
+   still resolves to it, and a thread keeps the line it hangs off. */
+.chat-message.tombstone {
+  font-style: italic;
+}
+/* NOT YET A MESSAGE. Dashed, because the row is a claim this tab is making
+   rather than a record the company holds — and the same edge the design system
+   draws a human seat's avatar with, for the same reason: it is the one that
+   reads as "provisional" without being a colour. */
+.chat-message.pending {
+  border: 1px dashed var(--color-border-default);
+}
+/* THE BROKER DID NOT ANSWER. Caution rather than danger: nothing failed, and
+   the message may well be in the room — which is exactly why it cannot be
+   drawn as sent. */
+.chat-message.pending[data-state="unknown"] {
+  border-color: var(--color-feedback-warning);
+  background: var(--color-feedback-warning-soft);
+}
+.chat-message.pending[data-state="refused"] {
+  border-color: var(--color-feedback-danger);
+  background: var(--color-feedback-danger-soft);
+}
+
+.chat-author {
+  align-items: baseline;
+  min-width: 0;
+}
+
+/* THE BODY IS WHAT SOMEBODY TYPED, whitespace and all: a message is text
+   rather than markup here, so the newlines they pressed are the ones they
+   meant. `pre-wrap` rather than `pre`, so a pasted line still wraps into the
+   column instead of scrolling the room sideways. `anywhere` for the token
+   nobody can wrap — a url, a stack frame, a base64 blob. */
+.chat-body {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+}
+
+.chat-meta {
+  align-items: center;
+  min-width: 0;
+}
+
+.chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--color-border-default);
+  min-width: 0;
+}
+
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
+  min-height: 0;
+  padding: var(--spacing-3);
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+.chat-thread-head {
+  align-items: center;
+  padding-bottom: var(--spacing-2);
+  border-bottom: 1px solid var(--color-border-default);
+}
+.chat-thread-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Who is in the room right now. It is the one band on this screen that is not
+   on the log at all — nothing here is durable, nothing is replayed, and a
+   keystroke that reached the chat log would be a row every data node applies
+   and every backup carries. */
+.chat-presence {
+  align-items: center;
+  min-height: var(--spacing-6);
+  color: var(--color-text-tertiary);
+}
+
+/* EACH COLUMN GIVES WAY BY THE SCREEN'S OWN WIDTH (`@container page`), as
+   `.split` and `.inbox-panes` do, and never by the window's: the sidebar, a
+   peek column and the assistant's track each take a share of the window that
+   a media query cannot see. Folded at the phone's window width, all three
+   columns stood beside the assistant's column on a 1280 window, and the
+   transcript beside an open thread was 0px wide. The widths are
+   `app/layout.ts`'s (`CHAT_THREAD_FOLD`, `CHAT_RAIL_FOLD`), from the rail,
+   the transcript at its floor, the thread and the gaps between, and
+   `screenwidth.test.ts` holds these literals to them.
+
+   THE THREAD STACKS FIRST, under the room and never in its place, for the
+   reason it stands beside it: the room is the conversation still going on. */
+@container page (width < 978px) {
+  .chat-room.with-thread {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* THEN THE RAIL STACKS ABOVE THE ROOM: the rooms, then the one open, then its
+   thread. A phone takes this layout, since a human teammate answering from
+   their phone is this product's second named reader, and so does a laptop
+   whose screen the assistant's column has made as narrow. */
+@container page (width < 539px) {
+  /* THE RAIL TAKES WHAT IT HOLDS, UP TO ITS SHARE, AND THE VIEW BELOW IT TAKES
+     THE REST — an explicit row each, because two auto rows split the free
+     space evenly and the rail's cap would leave a gap under it. */
+  .chat-frame {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  /* TWO FIFTHS OF THE VIEW, AND THE VIEW IS THE SCROLLER'S: chat fills the
+     shell (`app/fill.tsx`), so this column is exactly `100cqb` tall and the
+     page does not scroll — the rail and the room below it share it. A
+     fraction of `vh` measured the whole window, bar and banner included, so on
+     a short phone the rail took more than its share and the composer was
+     pushed under the fold of a page that cannot scroll to it. */
+  .chat-rail {
+    max-height: calc(100cqb * 0.4);
+  }
+}
+
 /* ---- Artifacts ------------------------------------------------------- */
 
 /* THE GALLERY'S FIELD is a search box in the page bar, as Agents' finder. */

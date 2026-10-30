@@ -3,6 +3,8 @@ package prompts
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ReviewHeader is the reviewer's contract: the rules that decide its one
@@ -58,7 +60,7 @@ import (
 // for one that narrated a fix it never made — "no git or test calls, so the
 // claim is fabricated" — and sent a delivered turn back to max_iterations.
 const ReviewHeader = "\n## REVIEW phase" +
-	"\nJudge the work below, then call `submit_review` exactly once." +
+	"\nJudge the work below, then call `" + toolname.SubmitReview + "` exactly once." +
 	"\n" +
 	"\n`## What the agent did` is the evidence: calls marked `→ success` " +
 	"happened, and `→ error` calls did not take effect. `## What the agent " +
@@ -93,7 +95,7 @@ const ReviewHeader = "\n## REVIEW phase" +
 // can reach somebody, rendered only where the seat holds it
 // ([ReviewInput.OffersA2A]): a reviewer told to send a round to a tool the
 // seat does not have writes notes the next round can only fail to follow.
-const reviewA2ARule = " An agent colleague is reached with `a2a_ask`."
+const reviewA2ARule = " An agent colleague is reached with `" + toolname.A2AAsk + "`."
 
 // reviewBlockedOutcome closes the blocked rule: the two answers past "not
 // yet", and the one obligation no handoff discharges.

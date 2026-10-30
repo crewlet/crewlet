@@ -1,8 +1,8 @@
 /**
  * The facts a node wears, and the one that had no reader at all.
  *
- * `internal/api/queries/fleet.go` has written `projections_ready` /
- * `projections_total` on every node row since they were added, with a comment
+ * `internal/api/queries/fleet.go` has written `appliers_ready` /
+ * `appliers_total` on every node row since they were added, with a comment
  * saying where the fact belongs: "the fleet view", because it is the answer to
  * "why is the new node holding nothing". The client type never declared them
  * and no screen read them, so the answer carried the fact and nobody could see
@@ -90,10 +90,10 @@ describe("nodeFacts", () => {
   test("a node that is still replaying says how far it has come", () => {
     // Two integers, not a bool: "3 of 5" and "0 of 2" are the two readings an
     // operator has to tell apart, which is why the engine sends a pair.
-    expect(fact(node({ projections_ready: 3, projections_total: 5 }), "Copies")?.value).toBe(
+    expect(fact(node({ appliers_ready: 3, appliers_total: 5 }), "Copies")?.value).toBe(
       "3 of 5 ready",
     );
-    expect(fact(node({ projections_ready: 0, projections_total: 2 }), "Copies")?.value).toBe(
+    expect(fact(node({ appliers_ready: 0, appliers_total: 2 }), "Copies")?.value).toBe(
       "0 of 2 ready",
     );
   });
@@ -119,7 +119,7 @@ describe("nodeFacts", () => {
     // non-zero, so a dash here would claim a reading the engine does not keep
     // — and `FactLine` drops an empty value, which is the honest rendering.
     expect(fact(node(), "Copies")?.value).toBe("");
-    expect(fact(node({ projections_total: 0 }), "Copies")?.value).toBe("");
+    expect(fact(node({ appliers_total: 0 }), "Copies")?.value).toBe("");
   });
 
   // THE ROLES ARE A FACT, AND A SET: the Nodes table gives its Roles column
@@ -137,7 +137,7 @@ describe("nodeFacts", () => {
     // A node can hold the current revision and still be replaying the log its
     // state is derived from; only one of those makes its seats servable.
     const labels = nodeFacts({
-      node: node({ projections_ready: 1, projections_total: 4 }),
+      node: node({ appliers_ready: 1, appliers_total: 4 }),
       answer: AT3,
     }).map((f) => f.label);
     expect(labels.indexOf("Copies")).toBe(labels.indexOf("Epoch") + 1);
@@ -280,6 +280,110 @@ describe("whether a node runs the fleet's revision", () => {
     mount(fleet([node({ id: "current-0", ...runsActive })]), "current-0");
     const panel = await runningPanel();
     expect(within(panel).getByText("running the active revision")).toBeDefined();
+  });
+});
+
+// A MISSING POSTURE IS ONE OF TWO ABSENCES, and the dash says which, in the
+// node's row and among its facts alike. A node that could not read its control
+// plane on a heartbeat still publishes the rest of its status, so its row
+// carries `in_flight` and no posture; one whose heartbeat carried no status
+// carries neither. Both used to read "This node has published no presence
+// heartbeat", which neither is: a listed node holds the presence lease its
+// heartbeat renews. The words are the dash's title as well as what a screen
+// reader hears, since a sighted reader otherwise sees one dash for both.
+describe("a node's posture", () => {
+  class InertWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSED = 3;
+    readyState = InertWebSocket.CONNECTING;
+    send(): void {}
+    close(): void {}
+  }
+
+  const UNREAD = "This node could not read the control plane on its last heartbeat";
+  const SILENT = "This node's last heartbeat carried no status";
+
+  /** A status published whole but for its posture, as such a heartbeat sends it. */
+  const unread = node({
+    id: "unread-0",
+    in_flight: 2,
+    draining: false,
+    started_at: "2020-05-01T08:00:00Z",
+  });
+  /** No status at all: no in-flight count and no posture. */
+  const silent = node({ id: "silent-0" });
+  const serving = node({ id: "serving-0", in_flight: 0, draining: false, posture: "serve" });
+
+  /** Draws the Nodes screen over these nodes, and answers each one's row by id. */
+  async function rowsOf(nodes: FleetNode[]) {
+    Object.defineProperty(globalThis, "WebSocket", { writable: true, value: InertWebSocket });
+    location.hash = "#/settings/nodes";
+    const answer = {
+      nodes,
+      seats: [],
+      duties: [],
+      unplaceable: [],
+      unmanned_roles: [],
+      this_node: nodes[0]!.id,
+      target_epoch: 3,
+    };
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) =>
+      what === "fleet" ? Promise.resolve(answer) : new Promise(() => {});
+    const view = render(
+      <ClientContext.Provider value={{ store, socket }}>
+        <SessionReading>
+          <ViewerProvider>
+            <Router>
+              <Fleet />
+            </Router>
+          </ViewerProvider>
+        </SessionReading>
+      </ClientContext.Provider>,
+    );
+    expect(await screen.findAllByText(nodes[0]!.id)).not.toHaveLength(0);
+    return (id: string) =>
+      [...view.container.querySelectorAll<HTMLElement>(".crewlet-data-grid__row")].find((r) =>
+        r.textContent?.includes(id),
+      )!;
+  }
+
+  /** The node's Posture fact, drawn as its page and its peek draw it. */
+  function postureFact(n: FleetNode) {
+    return render(<>{fact(n, "Posture")?.value}</>).container;
+  }
+
+  afterEach(() => {
+    cleanup();
+    location.hash = "#/";
+  });
+
+  test("a status without a posture is a control plane the node could not read", async () => {
+    const row = await rowsOf([unread, silent]);
+    // Its title for a sighted reader, and the same words for a screen reader.
+    expect(within(row("unread-0")).getByTitle(UNREAD).textContent).toContain(UNREAD);
+    expect(within(row("silent-0")).queryByTitle(UNREAD)).toBeNull();
+    cleanup();
+    expect(within(postureFact(unread)).getByTitle(UNREAD).textContent).toContain(UNREAD);
+  });
+
+  test("a heartbeat that carried no status says so, never that the node sent none", async () => {
+    const row = await rowsOf([silent, unread]);
+    expect(within(row("silent-0")).getByTitle(SILENT).textContent).toContain(SILENT);
+    expect(within(row("unread-0")).queryByTitle(SILENT)).toBeNull();
+    expect(screen.queryByText(/published no presence heartbeat/)).toBeNull();
+    cleanup();
+    expect(within(postureFact(silent)).getByTitle(SILENT).textContent).toContain(SILENT);
+  });
+
+  test("a posture the node read is its own word, the same tag in its row and its facts", async () => {
+    const row = await rowsOf([serving]);
+    const tone = (el: HTMLElement) => el.closest(".crewlet-tag")?.className ?? "";
+    expect(tone(within(row("serving-0")).getByText("serve"))).toContain("crewlet-tag--success");
+    cleanup();
+    expect(tone(within(postureFact(serving)).getByText("serve"))).toContain("crewlet-tag--success");
   });
 });
 

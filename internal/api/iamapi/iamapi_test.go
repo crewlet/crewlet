@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // --- the rig ------------------------------------------------------------- //
@@ -602,14 +603,21 @@ func (w *fakeWriter) CancelInvitation(_ context.Context, _, opID, reason string)
 // admitted everything would pass it. THROUGH [iam.Expand] on both sides, as
 // the domain compares — so an admin confers every app, and a name this build
 // does not know is kept where the row holds it and refused where it is added.
+// REFUSED AS THE DOMAIN REFUSES: a permission the caller lacks names it, and a
+// name this build does not know names none.
 func (w *fakeWriter) MayConfer(before, after []iam.Grant) error {
 	held := iam.Expand(before)
 	caller := iam.Principal{Grants: w.grants}
 	for _, g := range after {
-		if !slices.Contains(held, g) && !caller.Can(g) {
-			return fmt.Errorf("%w: conferring %s needs the same grant",
-				iamdomain.ErrRefused, g)
+		if slices.Contains(held, g) || caller.Can(g) {
+			continue
 		}
+		if !g.Valid() {
+			return &iamdomain.Refusal{Grants: []iam.Grant{},
+				Err: fmt.Errorf("%q isn't a permission", g)}
+		}
+		return &iamdomain.Refusal{Grants: []iam.Grant{g},
+			Err: fmt.Errorf("conferring %s needs the same grant", g)}
 	}
 	return nil
 }
@@ -1193,7 +1201,7 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutGrants(t *testing.T) {
 					"naming grants", got.status, got.body)
 			}
 			if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
-				"admin, worklet, doclet") {
+				"from "+words.And(iam.AllGrants)+", or [] for the overview only") {
 				t.Errorf("the refusal reads %q, want the permissions named", detail)
 			}
 			if len(r.writer.calls) != 0 {
@@ -1208,10 +1216,14 @@ func TestAPersonIsNeverCreatedOrInvitedWithoutGrants(t *testing.T) {
 			unknown := maps.Clone(tc.body)
 			unknown["grants"] = []string{"worklet", "billing"}
 			got = r.as(administrator(), http.MethodPost, tc.target, unknown)
+			// IN THE ONE SENTENCE EVERY SURFACE REFUSES IT WITH: this route
+			// answers before the record would, and its own hand-joined
+			// list was the only words /iam ever told. Mutation: put
+			// that list back and this fails.
 			if got.status != http.StatusBadRequest || got.body["field"] != "grants" ||
-				!strings.Contains(fmt.Sprint(got.body["detail"]), `"billing"`) {
+				got.body["detail"] != iam.NotAGrant("billing")+"." {
 				t.Errorf("a name this build does not know answered %d %v, want "+
-					"400 naming it and the set", got.status, got.body)
+					"400 with %q", got.status, got.body, iam.NotAGrant("billing"))
 			}
 			if len(r.writer.calls) != 0 {
 				t.Errorf("an unknown name published %v", r.writer.calls)
@@ -1324,9 +1336,9 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 				t.Fatalf("answered %d %v, want %d", got.status, got.body, tc.status)
 			}
 			if tc.status != http.StatusOK {
-				if !strings.Contains(fmt.Sprint(got.body["detail"]), `"payroll"`) ||
-					!strings.Contains(fmt.Sprint(got.body["detail"]), "admin, worklet, doclet") {
-					t.Errorf("the refusal reads %v, want the name and the set", got.body)
+				if got.body["detail"] != iam.NotAGrant("payroll")+"." {
+					t.Errorf("the refusal reads %v, want %q", got.body,
+						iam.NotAGrant("payroll"))
 				}
 				if len(r.writer.calls) != 0 {
 					t.Errorf("an unknown addition published %v", r.writer.calls)
@@ -1345,22 +1357,24 @@ func TestAnUnknownGrantMayBeRemovedButNotAddedOverHTTP(t *testing.T) {
 // AUTHORITY.
 //
 // The identity estate refuses every administrative record written through a
-// machine token ([iamdomain.ErrTokenRefused], wrapping ErrRefused): a token
-// may carry admin (ADR-0033), so what keeps it off inviting, granting and
-// suspending is that nobody is present, not a permission. The answer is the
-// code the authority table's presence rows give the same request at the route
-// — 403 `token_refused`, reason `token_refused`, NO permission named, since
-// none would admit a token — and never `unauthorized`, which would send the
-// caller to ask for admin they already hold. It is matched BEFORE the
-// authority arm it wraps. The CONTROL is a plain authority refusal, which is
-// still `unauthorized`.
+// machine token ([iamdomain.ErrTokenRefused], in a refusal naming no
+// permission): a token may carry admin (ADR-0033), so what keeps it off
+// inviting, granting and suspending is that nobody is present, not a
+// permission. The answer is the code the authority table's presence rows give
+// the same request at the route — 403 `token_refused`, reason
+// `token_refused`, NO permission named, since none would admit a token — and
+// never `unauthorized`, which would send the caller to ask for admin they
+// already hold. It is matched BEFORE the refusal arms, since every token
+// refusal is one. The CONTROL is a refusal a permission lifts, which is still
+// `unauthorized`.
 //
-// Mutation: match ErrRefused first and every row answers `unauthorized`.
+// Mutation: match the refusal arms first and every row answers `forbidden`.
 func TestATokenWritingAnAdministrativeRecordIsTokenRefused(t *testing.T) {
 	t.Parallel()
-	byToken := fmt.Errorf("%w: %w: the stage was asked through the machine "+
-		"token pat:x, and an administrative identity record needs a person "+
-		"present — sign in", iamdomain.ErrRefused, iamdomain.ErrTokenRefused)
+	byToken := &iamdomain.Refusal{Grants: []iam.Grant{}, Err: fmt.Errorf("%w: "+
+		"the stage was asked through the machine token pat:x, and an "+
+		"administrative identity record needs a person present — sign in",
+		iamdomain.ErrTokenRefused)}
 	for _, tc := range administrativeRequests() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1384,8 +1398,9 @@ func TestATokenWritingAnAdministrativeRecordIsTokenRefused(t *testing.T) {
 
 			// THE CONTROL: the same record refused for authority alone.
 			r = newRig(t)
-			r.writer.refusals = map[string]error{tc.call: fmt.Errorf(
-				"%w: this party may not", iamdomain.ErrRefused)}
+			r.writer.refusals = map[string]error{tc.call: &iamdomain.Refusal{
+				Grants: []iam.Grant{iam.GrantAdmin},
+				Err:    errors.New("this party may not")}}
 			got = r.as(administrator(), tc.method, tc.target, tc.body)
 			if got.status != http.StatusForbidden ||
 				got.body["error"] != string(httpjson.CodeUnauthorized) {
@@ -1999,11 +2014,19 @@ func TestEveryRouteMountsWithAVerbTheTableKnows(t *testing.T) {
 // The domain refuses a person's `token:ops` and a kind it does not enrol with
 // sentinels of their own, and this surface used to fall through to a 500 on
 // both — telling an administrator who typed a login the engine was broken, and
-// sending them looking for an outage instead of at the field.
+// sending them looking for an outage instead of at the field. The detail is
+// the domain's sentence without the sentinel a value's refusal opens with
+// ([iamdomain.Sentence]): "invalid login: …" said what errors.Is finds, in
+// front of what the administrator has to change. Mutation: answer err.Error()
+// again and the login and value rows go red.
 func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 	t.Parallel()
-	for _, refusal := range []error{iamdomain.ErrInvalidLogin,
-		iamdomain.ErrNotEnrollable, iamdomain.ErrInvalid} {
+	for refusal, want := range map[error]string{
+		iamdomain.ErrInvalidLogin: "The domain's own sentence.",
+		iamdomain.ErrNotEnrollable: "Only people and service accounts can be " +
+			"added: the domain's own sentence.",
+		iamdomain.ErrInvalid: "The domain's own sentence.",
+	} {
 		r := newRig(t)
 		r.writer.err = fmt.Errorf("%w: the domain's own sentence", refusal)
 		got := r.as(administrator(), http.MethodPost, "/iam/people", map[string]any{
@@ -2014,10 +2037,8 @@ func TestARefusedLoginOrKindIsABadRequestAndNotAFault(t *testing.T) {
 			t.Errorf("%v answered %d, want 400 (body %v)", refusal, got.status,
 				got.body)
 		}
-		if detail, _ := got.body["detail"].(string); !strings.Contains(detail,
-			"the domain's own sentence") {
-			t.Errorf("%v: the detail %q does not carry the domain's reason",
-				refusal, detail)
+		if detail, _ := got.body["detail"].(string); detail != want {
+			t.Errorf("%v: the detail is %q, want %q", refusal, detail, want)
 		}
 	}
 }
@@ -2332,8 +2353,9 @@ func TestAnEditThatChangedNoDocumentAnswersItsOutcome(t *testing.T) {
 func TestARefusalPartwayNamesWhatLanded(t *testing.T) {
 	t.Parallel()
 	r := newRig(t)
-	r.writer.refusals = map[string]error{"update": fmt.Errorf(
-		"%w: conferring doclet needs the same grant", iamdomain.ErrRefused)}
+	r.writer.refusals = map[string]error{"update": &iamdomain.Refusal{
+		Grants: []iam.Grant{iam.GrantDoclet},
+		Err:    errors.New("conferring doclet needs the same grant")}}
 	got := r.as(administrator(), http.MethodPatch, "/iam/people/"+alice.String(),
 		map[string]any{"login": "alice.ops", "grants": []string{"doclet"}})
 	if got.status != http.StatusForbidden {
@@ -2454,12 +2476,15 @@ func TestAGesturesOwnReasonSaysWhatWasDoneAndByWhom(t *testing.T) {
 // `bad_params`, whose sentence is about a query parameter. It is `invalid`
 // now, naming the value and the holder by their login, with the ids beside the
 // sentence rather than in it. A value held by an open invitation names the
-// invitation and how to cancel it — and WHICH value: an invitation holds its
+// invitation in its field and says to cancel it, with neither the
+// invitation's id nor the route that cancels it in the sentence a person
+// reads — and WHICH value: an invitation holds its
 // seat as well as its address, and "that address" said of a seat told an
 // administrator a value they never typed was taken. Mutation: answer the
 // domain's error as the detail and every case goes red; name the holder by id
 // and the login cases do; word every invitation's value as an address and the
-// seat's case does.
+// seat's case does; put the invitation's id back in its sentence and both
+// invitation cases do.
 func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -2477,11 +2502,11 @@ func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 		{"an address an invitation holds", &iamdomain.ErrTaken{
 			Field: iamdomain.UniqueEmail, Value: "0123456789abcdef",
 			Invitation: "inv-1"}, "That address belongs to an open invitation. " +
-			"Cancel it first (DELETE /iam/invitations/inv-1)", "seat"},
+			"Cancel the invitation first, or wait for it to expire.", "seat"},
 		{"a seat an invitation holds", &iamdomain.ErrTaken{
 			Field: iamdomain.UniqueSeat, Value: "platform-lead",
 			Invitation: "inv-1"}, "The seat platform-lead belongs to an open " +
-			"invitation. Cancel it first (DELETE /iam/invitations/inv-1)",
+			"invitation. Cancel the invitation first",
 			"that address"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2497,7 +2522,8 @@ func TestAValueSomebodyHoldsIsRefusedInWordsAPersonReads(t *testing.T) {
 				strings.Contains(detail, tc.absent) ||
 				strings.Contains(detail, "iamdomain") ||
 				strings.Contains(detail, tc.taken.Value) && tc.taken.Field == iamdomain.UniqueEmail ||
-				strings.Contains(detail, bob.String()) {
+				strings.Contains(detail, bob.String()) ||
+				tc.taken.Invitation != "" && strings.Contains(detail, tc.taken.Invitation) {
 				t.Errorf("answered %d %v, want 409 `invalid` saying %q", got.status,
 					got.body, tc.want)
 			}
@@ -2661,5 +2687,28 @@ func TestTheTrailServesTheCredentialBesideTheActor(t *testing.T) {
 	if _, present := own["operator_id"]; present {
 		t.Errorf("an entry naming no credential serves operator_id %v",
 			own["operator_id"])
+	}
+}
+
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]): which
+// field held what where something else belongs, never encoding/json's own
+// sentence, which names Go's struct and the field's Go type ("json: cannot
+// unmarshal string into Go struct field createBody.grants of type
+// []iam.Grant"). Mutation: answer err.Error() again and both rows go red.
+func TestABodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ body, says string }{
+		{`{"email":"dana@example.com","seat":"founder","grants":"admin"}`,
+			`In the body, "grants" holds text where a list belongs.`},
+		{`[1]`, "The body is a list where an object belongs."},
+	} {
+		r := newRig(t)
+		got := r.as(administrator(), http.MethodPost, "/iam/people",
+			json.RawMessage(tc.body))
+		if got.status != http.StatusBadRequest || got.body["error"] != "invalid_body" ||
+			got.body["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 invalid_body saying %q", tc.body,
+				got.status, got.body, tc.says)
+		}
 	}
 }

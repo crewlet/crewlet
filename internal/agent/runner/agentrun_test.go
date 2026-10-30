@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -116,17 +117,17 @@ func TestTheExecutorsPromptTravelsInItsTwoHalves(t *testing.T) {
 func TestACollectedRunReachesOnlyWhatItsLaunchDid(t *testing.T) {
 	t.Parallel()
 	marker := func(t *testing.T, reg *tools.Registry) {
-		if err := reg.Register(stubTool{name: runner.MarkOnboardedTool, out: "ok"}, tools.OriginBuiltin); err != nil {
+		if err := reg.Register(stubTool{name: toolname.MarkOnboarded, out: "ok"}, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register: %v", err)
 		}
 	}
 	got := executeRound(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{register: marker}, 1, "", nil,
 		run{calls: []llm.ToolCall{{ID: "s", Name: "slack_post"}}, text: "done"}, runner.RunRecord{})
-	if slices.Contains(got.surface.Catalogue, runner.MarkOnboardedTool) {
+	if slices.Contains(got.surface.Catalogue, toolname.MarkOnboarded) {
 		t.Error("the collected executor can reach mark_onboarded")
 	}
-	if slices.Contains(toolNames(got.launch.Surface.ToolDefs()), runner.MarkOnboardedTool) {
+	if slices.Contains(toolNames(got.launch.Surface.ToolDefs()), toolname.MarkOnboarded) {
 		t.Error("the launched run was offered mark_onboarded")
 	}
 }
@@ -782,11 +783,11 @@ func TestACollectedRunListsTheToolsItActivated(t *testing.T) {
 				ActiveTools: []string{"lookup_colleague", "reflect"}},
 			Answer: "filed the flaky test",
 			Bridged: []runner.BridgedCall{
-				{Call: ledger.Call{Name: runner.ActivateTool, Args: map[string]any{"name": "jira_create"},
+				{Call: ledger.Call{Name: toolname.Activate, Args: map[string]any{"name": "jira_create"},
 					Result: "jira_create is active"}, Seq: 1},
 				{Call: ledger.Call{Name: "jira_create", Args: map[string]any{"summary": "flaky test"},
 					Result: "created"}, Seq: 2},
-				{Call: ledger.Call{Name: runner.ActivateTool, Args: map[string]any{"name": "slack_history"},
+				{Call: ledger.Call{Name: toolname.Activate, Args: map[string]any{"name": "slack_history"},
 					Result: "no", Failed: true}, Seq: 3},
 				{Call: ledger.Call{Name: runner.SubmitWorkTool, Args: map[string]any{
 					"outcome": "delivered", "summary": "filed the flaky test",

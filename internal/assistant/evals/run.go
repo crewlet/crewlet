@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Options are how a suite is run.
@@ -268,7 +269,7 @@ func judge(e Expect, frames []wire.Frame, refusals []string, heard bool) Trial {
 		}
 	}
 	if next < len(e.Calls) {
-		fail("calls: %s not called in order (called %v)", e.Calls[next], t.Calls)
+		fail("calls: %s not called in order (called %s)", e.Calls[next], words.And(t.Calls))
 	}
 	for _, tool := range e.Never {
 		if slices.Contains(t.Calls, tool) {
@@ -338,10 +339,10 @@ func judgeBrief(e ExpectBrief, card *wire.BriefCard, fail func(string, ...any)) 
 		tones = append(tones, n.Tone)
 	}
 	if !slices.Equal(cited, e.Needs) {
-		fail("brief.needs: %v, want %v", cited, e.Needs)
+		fail("brief.needs: %s, want %s", words.And(cited), words.And(e.Needs))
 	}
 	if len(e.Tones) > 0 && !slices.Equal(tones, e.Tones) {
-		fail("brief.tones: %v, want %v", tones, e.Tones)
+		fail("brief.tones: %s, want %s", words.And(tones), words.And(e.Tones))
 	}
 	if e.Verdict != "" && card.Verdict() != e.Verdict {
 		fail("brief.verdict: %q, want %q", card.Verdict(), e.Verdict)

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Prefilter is what a regular expression's matches cannot do without: a few
@@ -210,11 +212,11 @@ func (p Prefilter) String() string {
 	if len(p.clauses) == 0 {
 		return "admits every text"
 	}
-	var parts []string
+	var parts []words.Said
 	for _, set := range p.Clauses() {
-		parts = append(parts, fmt.Sprintf("one of %q", set))
+		parts = append(parts, words.Said("one of "+words.Or(set)))
 	}
-	return "needs " + strings.Join(parts, " and ")
+	return "needs " + words.And(parts)
 }
 
 const (

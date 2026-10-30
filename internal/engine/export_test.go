@@ -85,6 +85,12 @@ func WithSweepEvery(opts Options, every time.Duration) Options {
 	return opts
 }
 
+// RelistFleetView asks this node's view of the fleet's presence leases for a
+// listing now ([coord.LeaseView.Invalidate]) rather than at its cadence — a
+// third of the lease TTL — for a test outside the package that opens an input
+// the view reads and must not tie how soon the view sees it to a lease TTL.
+func RelistFleetView(e *Engine) { e.dataView.Invalidate() }
+
 // SettleSeatServers waits until no seat this node holds has a pass over its
 // per-role children in flight, for a test outside the package that reads what
 // an apply's reconcile of those children did: the apply hands each seat's

@@ -14,7 +14,7 @@ import (
 // The derived columns: values the applier COMPUTES from the rows it already
 // holds rather than copies out of a record.
 //
-// Four today, and the rule all follow is [statelog.Deriver]'s: maintained
+// Five today, and the rule all follow is [statelog.Deriver]'s: maintained
 // INCREMENTALLY by the apply, and REDERIVED by [Applier.Rederive] whenever the
 // checkpoint's rule set differs from this build's — a cursor a reanchor created
 // (derivation 0), or rows adopted from a build whose rules differ — in this Go,
@@ -33,12 +33,16 @@ import (
 //   - A task's `updated_at`, the effective instant of the newest record that
 //     changed it — the `effective_at` of its newest history row — written by
 //     [Applier.applyTask] and recomputed by [restampUpdated].
+//   - A question's `answered_by`, the first answer the log carries after it,
+//     stamped by the answering remark's apply ([writeComment]) and walked
+//     again by [rederiveAnswers] — see apply_answers.go.
 
 // DerivationVersion is the rule set this build derives its columns at.
 //
 // Bumped by ANY change to what a derived column holds, the first one a column
-// adds included: the bump is what re-derives every node's rows in this Go, so
-// a node holding rows derived under another rule set converges on this one.
+// adds included: the bump is what re-derives every data node's rows in this
+// Go, so a node holding rows derived under another rule set converges on this
+// one.
 const DerivationVersion = 1
 
 var _ statelog.Deriver = (*Applier)(nil)
@@ -55,10 +59,13 @@ func (a *Applier) DerivationVersion() int { return DerivationVersion }
 // the group: a company that adds `shipped` or renames `done` must not change
 // what a reopen is. An unknown slug is in no group and so is never finished,
 // which reads a status this build does not know as unfinished on BOTH sides —
-// the same answer the history row's delta gives it on every node.
+// the same answer the history row's delta gives it on every data node.
 func reopened(from, to Status) bool {
 	return from.Group().Finished() && !to.Group().Finished()
 }
+
+// countReopenStatement is [countReopen]'s write, named for the plan test.
+const countReopenStatement = `UPDATE tracker_tasks SET reopens = reopens + 1 WHERE id = ?`
 
 // countReopen adds one to a task's reopen counter when the history row this
 // apply has just written records a reopen.
@@ -83,8 +90,7 @@ func countReopen(ctx context.Context, tx *sql.Tx, subject Subject, fields string
 	if moved.Status == nil || !reopened(Status(moved.Status.From), Status(moved.Status.To)) {
 		return 0, nil
 	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE tracker_tasks SET reopens = reopens + 1 WHERE id = ?`, subject.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, countReopenStatement, subject.ID); err != nil {
 		return 0, fmt.Errorf("worklet: count the reopen of task %s: %w", subject.ID, err)
 	}
 	return 1, nil
@@ -92,8 +98,8 @@ func countReopen(ctx context.Context, tx *sql.Tx, subject Subject, fields string
 
 // Rederive implements [statelog.Deriver]: every derived column recomputed from
 // the rows this transaction holds — a task's `reopens`, a project's
-// `active_count`, each task history row's hand-off count and a task's
-// `updated_at`.
+// `active_count`, each task history row's hand-off count, a task's
+// `updated_at` and a question's `answered_by`.
 func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOptions) (int, error) {
 	reopens, err := rederiveReopens(ctx, tx)
 	if err != nil {
@@ -111,8 +117,36 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 	if err != nil {
 		return 0, err
 	}
-	return reopens + active + handOffs + updated, nil
+	answers, err := rederiveAnswers(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	return reopens + active + handOffs + updated + answers, nil
 }
+
+// restampStatement is [restampUpdated]'s read for one task, or for every task
+// when id is empty — named for the plan test.
+//
+// The one task's filter sits INSIDE the aggregate, so a late record reads its
+// own history rows through the subject index rather than grouping the
+// company's whole history to keep one group of it.
+func restampStatement(id string) (string, []any) {
+	scope, args := "", []any{string(KindTask)}
+	if id != "" {
+		scope, args = " AND subject_id = ?", append(args, id)
+	}
+	return `
+		SELECT t.id, t.document, h.newest
+		FROM tracker_tasks t
+		JOIN (SELECT subject_id, MAX(effective_at) AS newest
+		        FROM tracker_history WHERE subject_kind = ?` + scope + `
+		       GROUP BY subject_id) h ON h.subject_id = t.id
+		WHERE h.newest > 0 AND t.updated_at <> h.newest`, args
+}
+
+// restampUpdatedStatement is [restampUpdated]'s write of one task's last
+// change, named for the plan test.
+const restampUpdatedStatement = `UPDATE tracker_tasks SET updated_at = ?, document = ? WHERE id = ?`
 
 // restampUpdated is every task's `updated_at` recomputed as the newest
 // `effective_at` among its own history rows — every task's when id is empty,
@@ -137,20 +171,7 @@ func (a *Applier) Rederive(ctx context.Context, tx *sql.Tx, _ statelog.ApplyOpti
 // changed" instants for one task — so both are rewritten, in Go, because the
 // document's instant is RFC 3339 text and the column's is the store's integer.
 func restampUpdated(ctx context.Context, tx *sql.Tx, id string) (int, error) {
-	// The one task's filter sits INSIDE the aggregate, so a late record
-	// reads its own history rows through the subject index rather than
-	// grouping the company's whole history to keep one group of it.
-	scope, args := "", []any{string(KindTask)}
-	if id != "" {
-		scope, args = " AND subject_id = ?", append(args, id)
-	}
-	query := `
-		SELECT t.id, t.document, h.newest
-		FROM tracker_tasks t
-		JOIN (SELECT subject_id, MAX(effective_at) AS newest
-		        FROM tracker_history WHERE subject_kind = ?` + scope + `
-		       GROUP BY subject_id) h ON h.subject_id = t.id
-		WHERE h.newest > 0 AND t.updated_at <> h.newest`
+	query, args := restampStatement(id)
 	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: read the tasks whose last change moved: %w", err)
@@ -185,14 +206,23 @@ func restampUpdated(ctx context.Context, tx *sql.Tx, id string) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("worklet: encode task %s: %w", r.id, err)
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET updated_at = ?, document = ? WHERE id = ?`,
+		if _, err := tx.ExecContext(ctx, restampUpdatedStatement,
 			r.newest, document, r.id); err != nil {
 			return 0, fmt.Errorf("worklet: stamp task %s's last change: %w", r.id, err)
 		}
 	}
 	return len(repairs), nil
 }
+
+// activeCountsStatement is [rederiveActiveCounts]' recount of every project,
+// named for the plan test.
+const activeCountsStatement = `UPDATE tracker_projects SET active_count = ` +
+	activeRecount + ` WHERE active_count <> ` + activeRecount
+
+// activeRecount is one project's active work, counted from its task rows.
+const activeRecount = `(SELECT COUNT(*) FROM tracker_tasks t
+		WHERE t.project_key = tracker_projects.key
+		  AND t.status_group = ? AND t.removed_at IS NULL)`
 
 // rederiveActiveCounts is every project's `active_count` recounted from its
 // task rows.
@@ -210,18 +240,21 @@ func restampUpdated(ctx context.Context, tx *sql.Tx, id string) (int, error) {
 // company's projects are tens; the count seeks each through the tasks'
 // project index.
 func rederiveActiveCounts(ctx context.Context, tx *sql.Tx) (int, error) {
-	const recount = `(SELECT COUNT(*) FROM tracker_tasks t
-		WHERE t.project_key = tracker_projects.key
-		  AND t.status_group = ? AND t.removed_at IS NULL)`
-	res, err := tx.ExecContext(ctx,
-		`UPDATE tracker_projects SET active_count = `+recount+
-			` WHERE active_count <> `+recount,
+	res, err := tx.ExecContext(ctx, activeCountsStatement,
 		string(GroupActive), string(GroupActive))
 	if err != nil {
 		return 0, fmt.Errorf("worklet: recount the active work of every project: %w", err)
 	}
 	return affected(res)
 }
+
+// clearReopensStatement and setReopensStatement are [rederiveReopens]' two
+// writes, named for the plan test: every counter cleared, a pass over the
+// whole table by definition, and then each task's written by its key.
+const (
+	clearReopensStatement = `UPDATE tracker_tasks SET reopens = 0 WHERE reopens <> 0`
+	setReopensStatement   = `UPDATE tracker_tasks SET reopens = ? WHERE id = ?`
+)
 
 // rederiveReopens is every task's `reopens` recomputed from the status deltas
 // in its history rows.
@@ -239,7 +272,7 @@ func rederiveReopens(ctx context.Context, tx *sql.Tx) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE tracker_tasks SET reopens = 0 WHERE reopens <> 0`)
+	res, err := tx.ExecContext(ctx, clearReopensStatement)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: clear the reopen counters to re-derive them: %w", err)
 	}
@@ -257,8 +290,7 @@ func rederiveReopens(ctx context.Context, tx *sql.Tx) (int, error) {
 	slices.Sort(ids)
 	written := 0
 	for _, id := range ids {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE tracker_tasks SET reopens = ? WHERE id = ?`, counts[id], id)
+		res, err := tx.ExecContext(ctx, setReopensStatement, counts[id], id)
 		if err != nil {
 			return 0, fmt.Errorf("worklet: write the re-derived reopens of task %s: %w", id, err)
 		}
@@ -271,13 +303,16 @@ func rederiveReopens(ctx context.Context, tx *sql.Tx) (int, error) {
 	return max(cleared, written), nil
 }
 
-// reopensFromHistory counts each task's reopens over its history rows.
-func reopensFromHistory(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
-	rows, err := tx.QueryContext(ctx, `
+// reopensStatement is [reopensFromHistory]' walk of every task status row,
+// named for the plan test.
+const reopensStatement = `
 		SELECT subject_id, json_extract(fields_json, '$.status')
 		FROM tracker_history
-		WHERE subject_kind = ? AND json_extract(fields_json, '$.status') IS NOT NULL`,
-		string(KindTask))
+		WHERE subject_kind = ? AND json_extract(fields_json, '$.status') IS NOT NULL`
+
+// reopensFromHistory counts each task's reopens over its history rows.
+func reopensFromHistory(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
+	rows, err := tx.QueryContext(ctx, reopensStatement, string(KindTask))
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the status history to re-derive reopens: %w", err)
 	}

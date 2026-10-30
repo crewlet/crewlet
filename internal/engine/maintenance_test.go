@@ -79,6 +79,17 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// delete.
 		"assistant_anchors",
 		"assistant_ops",
+		// THE CHAT LOG'S anchor table and operation ledger, per node, for
+		// the reason every registered domain's pair is (see pages_ops
+		// below).
+		"chat_anchors",
+		"chat_ops",
+		// EACH HUMAN SEAT'S CHAT READ STATE, a coordination record with
+		// no age: without this entry the cursors, mutes and
+		// do-not-disturb of every seat anybody ever read a room as were
+		// kept for the life of the deployment, long after the company
+		// stopped having the seat.
+		"chat_read_state",
 		// THE CONFIGURATION ARCHIVE, which had no horizon at all: every
 		// node adopts its own copy of every revision it has ever met,
 		// one row per config write holding the whole document, and
@@ -105,9 +116,9 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		"counterparty_profiles",
 		"events",
 		// THE IDENTITY ESTATE'S TWO, which sort here, swept on every
-		// node by the same per-node jobs every other domain's are: every
-		// node runs every domain in the register, whatever its roles, so
-		// every node holds rows in them to sweep.
+		// data node by the same per-node jobs every other domain's are:
+		// every data node runs every domain in the register, whatever its
+		// other roles, so every data node holds rows in them to sweep.
 		//
 		// The estate's OTHER retention — the authentication trail's two
 		// horizons — is deliberately NOT here: it is a record on the
@@ -388,13 +399,15 @@ func TestEveryRetentionOutlastsTheSweepInterval(t *testing.T) {
 		"a2a_channels_idle":     maintenance.ChannelIdleTimeout,
 		"counterparty_profiles": maintenance.CounterpartyRetention,
 		"seat_mailboxes":        maintenance.MailboxRetirementGrace,
-		// NEITHER NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the
-		// absence is the point rather than an omission. Both are
-		// state-log domains: their records are a log the retention gate
-		// trims, and their durable rows are written by an applier — so
-		// there is no per-node sweep of ROWS to give a horizon to, and
-		// a delete on one node's own authority is what the identity
-		// claim forbids.
+		"chat_read_state":       maintenance.ChatReadForgetGrace,
+		// NO NATIVE BACKEND HAS A ROW-SWEEP ENTRY, and the absence is
+		// the point rather than an omission. Every one is a state-log
+		// domain: its records are a log the retention gate trims, and
+		// its durable rows are written by an applier — so there is no
+		// per-node sweep of ROWS to give a horizon to, and a delete on
+		// one node's own authority is what the identity claim forbids.
+		// Chat's message horizon is no exception: it is a prune RECORD
+		// a fleet duty publishes to the log, applied on every node.
 		//
 		// Their OPERATION LEDGERS are the exception, and they are here
 		// under one entry because every domain takes the same horizon:

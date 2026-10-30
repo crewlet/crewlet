@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
@@ -93,6 +95,37 @@ type RacedError struct {
 	// history and no other's, so it is diffed and reverted there alone
 	// ([KeptRevision]).
 	Node string
+	// Stated is a write whose request named Base in its If-Match header
+	// ([ApplyRequest.Stated]): what it lost is a precondition it stated.
+	// Never set by a write whose If-Match was another tag (the charter's, an
+	// entity's), a write that reads none (a reload, a revert), a base sent as
+	// a body field, or `If-Match: *`, which names no revision.
+	Stated bool
+}
+
+// Status is the status a [RacedError] is refused with: 412 where the request
+// stated the revision it lost in its If-Match header ([RacedError.Stated]),
+// and 409 where it stated none.
+//
+// HTTP'S RULE, the one every surface here answers a moved version by (RFC
+// 9110 §13.1.1): a condition the request stated as a header that turned out
+// false is a FAILED PRECONDITION, whether it was false when the request
+// arrived or became false before the activation's compare-and-set landed;
+// either way the server did not perform what was conditioned on it. A write
+// that named no revision lost a race it never declared a condition for,
+// which is a conflict. The code is `revision_advanced` either way, because
+// what moved is the company's revision; crewlet-operator and the dashboard
+// read the code, and the status says only which kind of request lost.
+//
+// DECIDED BY WHAT WAS JUDGED, carried on the error from the precondition
+// check, never by reading the request again: a route whose If-Match is
+// another resource's tag, or that reads none, would otherwise answer a stray
+// header's revision as a precondition it never evaluated.
+func (e *RacedError) Status() int {
+	if e.Stated {
+		return http.StatusPreconditionFailed
+	}
+	return http.StatusConflict
 }
 
 func (e *RacedError) Error() string {
@@ -223,6 +256,12 @@ type ApplyRequest struct {
 	// what arrives in an `If-Match` header, and a caller that forwards one
 	// is doing the standard thing rather than the wrong thing.
 	Expect string
+
+	// Stated is an Expect the caller's own request named in its If-Match
+	// header (`/setup`'s forced disconnect forwards it, PATCH /config judged
+	// it): a write that then loses its race is refused 412 rather than 409
+	// ([RacedError.Status]). `*` names no revision and is never stated.
+	Stated bool
 }
 
 // Apply merges a patch onto the active revision and activates the result.
@@ -245,13 +284,24 @@ func (s *Service) Apply(ctx context.Context, req ApplyRequest) (Applied, error) 
 type base struct {
 	revision store.Revision
 	found    bool
-	// document is the revision's stored bytes, unsealed; nil when nothing
-	// is active.
+	// document is the revision's stored bytes, opened; nil when nothing is
+	// active, and when the revision is stored without a seal
+	// ([base.unsealed]).
 	document []byte
 	// prior is document decoded, held to no rule: it is where the masks a
 	// redacted read handed back are restored from. Nil when nothing is
-	// active.
+	// active, and when the revision is stored without a seal
+	// ([base.unsealed]).
 	prior *config.Company
+	// unsealed reports an active revision stored without a seal, which a
+	// whole document replaces having read NOTHING from it
+	// ([draft.wholeDocument]): document and prior stay nil, so no mask is
+	// restored from it and no field carried from it, the write is admitted
+	// and judged as one replacing nothing, and every seat somebody holds
+	// that the new document drops is refused (seatheld.go). It is still the
+	// base: the revision the write's preconditions and its activation's
+	// compare-and-set are judged against. See [Service.prepare].
+	unsealed bool
 }
 
 // draft is one kind of write: what the caller built it on, how it turns the
@@ -293,6 +343,9 @@ type draft struct {
 	// judges, and the author the revision records — one value for both, so
 	// the party a write was admitted as is the party it is stored under.
 	by iam.Actor
+	// stated is an expect the request named in its If-Match header
+	// ([RacedError.Stated]).
+	stated bool
 	// warnings derives warnings the write itself carries beside the
 	// document's own ([Company.Warnings]): a removal's resolution moves.
 	// Nil for none.
@@ -309,6 +362,17 @@ type draft struct {
 	// the company, so a managed document does not refuse it: see
 	// [Service.Authorize].
 	republishes bool
+	// wholeDocument is a write that can be built without the active
+	// revision's document: a whole document replacing it ([replaceDraft]),
+	// which restores masks and carries unknown fields from that document
+	// only when it opens. It alone goes on over an active revision stored
+	// without a seal, reading nothing from it ([base.unsealed]). Every
+	// other write is built from the active document (a patch merges onto
+	// it, an entity write splices into it, the charter's write edits it, a
+	// reload re-publishes it, a revert is judged on what it changes from
+	// it), so over a revision nothing can read it is refused as every
+	// reader of that revision is ([RefuseUnreadable]).
+	wholeDocument bool
 }
 
 // prepared is a write built and checked, and not yet stored: everything a dry
@@ -321,10 +385,16 @@ type prepared struct {
 	// nothing was configured, and pointed whether the fleet's pointer named
 	// it: what the compare-and-set expects is the base when it did, and no
 	// pointer at all when it did not.
-	base     store.Revision
-	pointed  bool
-	document []byte
-	warnings []config.Warning
+	base    store.Revision
+	pointed bool
+	// baseUnsealed reports a base stored without a seal ([base.unsealed]),
+	// and baseFleet one read off the pointer that this node holds no row
+	// for ([fleetRevision.fleet]): a base that is both is never kept in this
+	// node's history ([Service.commit]).
+	baseUnsealed bool
+	baseFleet    bool
+	document     []byte
+	warnings     []config.Warning
 	// held are the warnings the active revision already carries, by
 	// [warningKey]: what a dry run tells apart from the ones this write
 	// introduces ([checkedWarnings]).
@@ -335,6 +405,9 @@ type prepared struct {
 	by iam.Actor
 	// source is the draft's, resolved: what the revision records.
 	source string
+	// stated is the draft's: a race this write loses at the compare-and-set
+	// is a precondition its request stated ([RacedError.Stated]).
+	stated bool
 	// company is the proposed document, decoded: what [Service.CheckEntity]
 	// hands a caller testing a draft entry.
 	company *config.Company
@@ -352,7 +425,9 @@ type prepared struct {
 //     can be kept.
 //   - The stored document, opened and held to no rule: it is the merge base
 //     and the prior masks are restored from, and a revision this build
-//     would refuse must stay replaceable by the write that corrects it.
+//     would refuse must stay replaceable by the write that corrects it. One
+//     stored WITHOUT A SEAL is replaced by a whole document and read by
+//     nothing ([base.unsealed]); every other write is refused over it.
 //   - The proposal, built by the draft.
 //   - Whether the caller may make it: admin, or a lead inside
 //     their own subtree (admission.go). The engine's own writes are not asked.
@@ -392,7 +467,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		// equals a bare revision id: a caller doing the standard thing was
 		// answered 409 with their own current revision named as the
 		// conflict.
-		return nil, &RacedError{Base: d.expect, Current: active.ID}
+		return nil, &RacedError{Base: d.expect, Current: active.ID, Stated: d.stated}
 	}
 	b := base{revision: active, found: found}
 	if found {
@@ -403,7 +478,29 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		// build's struct and marshalling it back silently drops every field
 		// this build does not know, and the older node then publishes the
 		// result as the fleet's configuration.
-		if b.document, b.prior, err = s.openDocument(active); err != nil {
+		b.document, b.prior, err = s.openDocument(cur)
+		var unreadable *UnreadableRevisionError
+		switch {
+		case err == nil:
+		case d.wholeDocument && errors.As(err, &unreadable) && unreadable.Unsealed():
+			// AN UNSEALED ACTIVE REVISION IS REPLACED, NEVER READ, which is
+			// the offline import's rule (cmd/crewlet's importConfig) held
+			// online: the refusal every reader answers it with names a
+			// whole document sent with PUT /config as its remedy
+			// ([UnreadableRevisionError.Remedy]), and refusing that too
+			// left a fleet whose active revision nothing could replace
+			// without stopping a node. Nothing vouches for what its body
+			// says, so nothing is taken from it: see [base.unsealed].
+			//
+			// ONLY UNSEALED. A revision SEALED is somebody's document
+			// whether or not this node can open it: under a key this
+			// keyring does not hold, which putting the key back recovers
+			// whole, or in a form this build does not read, which the
+			// newer build that sealed it reads. Replaced here, every
+			// credential and field in it would be lost to a write that
+			// could not read them.
+			b.unsealed = true
+		default:
 			return nil, fmt.Errorf("configapi: open the active revision: %w", err)
 		}
 	}
@@ -414,6 +511,11 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	// WHO MAY MAKE IT, BEFORE ANYTHING IS SAID ABOUT IT: a refusal names what
 	// the caller may not change, rather than what is wrong with parts of the
 	// company they cannot read.
+	//
+	// AGAINST b.prior, which is nil over an unsealed base: a write judged
+	// against no document changes every setting and adds every seat and
+	// unit, so only admin may replace a revision nobody can read, and a
+	// lead's write is refused for reaching outside what they lead.
 	if d.principal != nil {
 		if err := admit(ctx, *d.principal, b.prior, company, d.addressedCheck,
 			d.charter); err != nil {
@@ -421,7 +523,14 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		}
 	}
 	derived := config.Derive(company)
-	if invalid := d.rules(company, b.prior); invalid != nil {
+	invalid := d.rules(company, b.prior)
+	if b.unsealed {
+		if masked := company.UnresolvedMasks(); len(masked) > 0 {
+			invalid = errors.Join(unrestorableMasks(masked),
+				config.WithoutFaultsAt(invalid, masked))
+		}
+	}
+	if invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
 	}
 	// A FIELD ONLY THE ENGINE WRITES, changed by anybody else, is refused:
@@ -442,7 +551,7 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	}
 	// AFTER THE RULES, because a document that is refused anyway takes no
 	// seat away, and it is the one step here that reads outside this node.
-	if err := s.checkHeldSeats(ctx, b.prior, company); err != nil {
+	if err := s.checkHeldSeats(ctx, b, company); err != nil {
 		return nil, err
 	}
 	warnings := company.Warnings()
@@ -453,12 +562,38 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 		company:  company,
 		document: document, warnings: warnings, derived: derived, by: d.by,
 		source: cmp.Or(d.source, revisionSource), pointed: cur.pointed,
-		held: heldWarnings(b.prior),
+		held: heldWarnings(b.prior), stated: d.stated,
 	}
 	if found {
-		p.base = active
+		p.base, p.baseUnsealed, p.baseFleet = active, b.unsealed, cur.fleet
 	}
 	return p, nil
+}
+
+// unrestorableMasks refuses the credentials of a document that still hold the
+// redaction marker when the revision it replaces is stored without a seal, one
+// fault per masked path.
+//
+// A mask is restored from the revision a write replaces, and that revision is
+// read by nothing ([base.unsealed]), so every mask stands for a value nothing
+// here holds. Said in these words IN PLACE OF the validator's own, which
+// [Service.prepare] drops for the same paths ([config.WithoutFaultsAt]):
+// [config.Company.Validate] refuses the same marker in words about members
+// that are new or renamed, which sends whoever sent it looking for a rename
+// they never made, when what it needs is the value itself. Every other fault
+// is still reported beside these, as over a revision that opens.
+func unrestorableMasks(masked []config.Path) error {
+	faults := make([]error, 0, len(masked))
+	for _, path := range masked {
+		faults = append(faults, &config.Fault{
+			Path: path, Kind: config.ErrUnknownValue,
+			Detail: fmt.Sprintf("still holds the redaction marker %q. A masked "+
+				"value is filled in from the active revision, and that one is "+
+				"stored without a seal, so there's nothing to fill it from. Write "+
+				"the real value or a ${VAR} reference here", config.Redacted),
+		})
+	}
+	return errors.Join(faults...)
 }
 
 // commit seals, stores and points the fleet at a prepared write.
@@ -468,7 +603,9 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 // activate <id>`, where the other order would point the fleet at a revision no
 // node can read. Its base is kept first where this node holds no row for it — a
 // fleet revision the reconciler has not ticked onto yet — because the parent is
-// a row of this node's history ([store.Configs.InsertOn]).
+// a row of this node's history ([store.Configs.InsertOn]); a base the pointer
+// carried WITHOUT A SEAL is the one exception, never kept, and the write's row
+// names no parent ([store.Configs.Insert]).
 //
 // STORED AS HISTORY, AND ONLY THAT. The pointer is the company, and what this
 // node boots on is the reconciler's to move once its engine has applied the
@@ -497,11 +634,28 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		return Applied{}, fmt.Errorf("configapi: seal the config: %w", err)
 	}
 	at := s.now()
-	id, err := s.configs.InsertOn(ctx, p.base, store.Revision{
+	r := store.Revision{
 		ParentID: p.base.ID, Source: p.source, CreatedBy: by.Name,
 		CreatedByKind: by.Kind, OperatorID: by.OperatorID,
 		Summary: summary, Payload: payload, CreatedAt: at,
-	})
+	}
+	var id string
+	if p.baseUnsealed && p.baseFleet {
+		// A BODY THAT ARRIVED WITHOUT A SEAL IS NEVER KEPT, which is the
+		// reconciler's rule too: it keeps a pointer's revision only once
+		// this node's keyring opens it ([store.Configs.SawFleet]), because
+		// the seal is what says a node of this fleet wrote it, and a write
+		// replacing it is no reason to file a body from outside the fleet
+		// in this node's history under the author its pointer claims. The
+		// write is still built on it, so its activation is conditioned on
+		// it and replaces exactly the revision that was read; only its row
+		// here names no parent. This node's OWN unsealed copy is held
+		// already and is named, as the offline import names it.
+		r.ParentID = ""
+		id, err = s.configs.Insert(ctx, r)
+	} else {
+		id, err = s.configs.InsertOn(ctx, p.base, r)
+	}
 	if err != nil {
 		return Applied{}, fmt.Errorf("configapi: store the config: %w", err)
 	}
@@ -536,7 +690,7 @@ func (s *Service) commit(ctx context.Context, p *prepared, summary string) (Appl
 		log.InfoContext(ctx, "config_activation_raced",
 			"revision", id, "expected", p.base.ID, "by", by.Name,
 			"operator", by.OperatorID)
-		raced := &RacedError{Base: p.base.ID, Stored: id, Node: s.node}
+		raced := &RacedError{Base: p.base.ID, Stored: id, Node: s.node, Stated: p.stated}
 		if current, _, terr := s.plane.Target(ctx); terr == nil {
 			raced.Current = current.RevisionID
 		}
@@ -603,8 +757,10 @@ func importRules(next, _ *config.Company) error {
 // on; nil reads the patch from req.Patch, which is all a programmatic caller
 // has.
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
+	expect := strings.TrimSpace(req.Expect)
 	return draft{
-		expect: req.Expect, requireActive: true, by: req.By, engine: req.Engine,
+		expect: req.Expect, stated: req.Stated && expect != "" && expect != "*",
+		requireActive: true, by: req.By, engine: req.Engine,
 		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {
@@ -654,12 +810,16 @@ func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 // or empty for nothing, which refuses the write if a revision has appeared
 // since. A full replacement built on nothing and landing on something would
 // discard a company its author never saw.
+//
+// It is the one write that goes on over an active revision stored without a
+// seal ([draft.wholeDocument]), and it reads nothing from one: what it
+// restores and carries below comes only from a revision that opened.
 func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 	return draft{
 		expect: built, expectAbsent: built == "", by: by,
-		rules: authoredRules, authored: true,
+		rules: authoredRules, authored: true, wholeDocument: true,
 		build: func(b base) (*config.Company, []byte, error) {
-			if b.found {
+			if b.prior != nil {
 				// The masks the caller was shown come back as the values
 				// they hide. Without this, a reader who fetched the config,
 				// changed one line and sent it back would replace every
@@ -672,7 +832,7 @@ func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 			if err != nil {
 				return nil, nil, fmt.Errorf("configapi: encode the config: %w", err)
 			}
-			if b.found {
+			if b.document != nil {
 				// A full replacement still keeps what this build cannot
 				// represent: nobody sending it through this build could have
 				// named such a field, so nobody meant to remove one. See

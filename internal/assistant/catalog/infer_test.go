@@ -216,6 +216,52 @@ func TestAGenericReadIsCardedAsTheThingItReads(t *testing.T) {
 	}
 }
 
+// A GENERIC READ IS FENCED AT THE TRUST ITS ROUTE EARNS (ADR-0040): the event
+// log, which carries what integrations and vendors' chats sent, is external,
+// and the company's own document a colleague's, by the one rule for a surface
+// the engine hosts; an answer with no body carries nobody's words, and is the
+// read's own trust whatever its route. Mutation: drop the generic read's
+// TrustOf, or read the event log by the hosted rule, and the event log reads as
+// a colleague's; label the read itself external and the empty answer does.
+func TestAGenericReadIsFencedAtTheTrustItsRouteEarns(t *testing.T) {
+	t.Parallel()
+	table, err := catalog.NewRouteTable(readRoutes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := catalog.GenericTools(table, admin, nil)[1]
+	answers := realAnswers(t)
+	for _, c := range []struct {
+		route string
+		body  bool
+		want  provenance.Trust
+	}{
+		{"GET /config", true, provenance.TrustColleague},
+		{"GET /events", true, provenance.TrustExternal},
+		{"HEAD /events", false, provenance.TrustColleague},
+	} {
+		resp := exec.Response{Status: 200}
+		if c.body {
+			body, err := json.Marshal(answers[c.route])
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body = body
+		}
+		res, err := catalog.Shape(read, catalog.Args{"route": c.route}, resp,
+			provenance.NewBoundary(), time.Now(), cards.Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", c.route, err)
+		}
+		if res.Trust != c.want {
+			t.Errorf("%s is read at %q, want %q", c.route, res.Trust, c.want)
+		}
+		if c.body && !strings.Contains(res.Model, "trust="+string(c.want)) {
+			t.Errorf("%s is not fenced at %q:\n%.300s", c.route, c.want, res.Model)
+		}
+	}
+}
+
 // A GENERIC REQUEST IS TITLED BY ITS PATH, by one rule for the card and the
 // step: the last literal, singular before the wildcard that picks one of it,
 // the literal above it for a fixed resource two deep, and the values the call
@@ -257,11 +303,11 @@ func TestAGenericRequestIsTitledByWhatItReaches(t *testing.T) {
 	}
 	_, read, change := generic(t, admin)
 	args := map[string]any{"route": "GET /config/units/{id}", "path": map[string]any{"id": "eng"}}
-	if got := read.StepLabel(args); got != "Reading unit · eng" {
+	if got := read.StepLabel(args, cards.Options{}); got != "Reading unit · eng" {
 		t.Errorf("a read's step is labelled %q, want it titled as its card is", got)
 	}
 	args["route"] = "PUT /config/units/{id}"
-	if got := change.StepLabel(args); got != "Preparing unit · eng" {
+	if got := change.StepLabel(args, cards.Options{}); got != "Preparing unit · eng" {
 		t.Errorf("a change's step is labelled %q, want it titled as its request", got)
 	}
 }

@@ -5,9 +5,9 @@ package queries
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -96,7 +96,7 @@ func (s Sources) workInbox(ctx context.Context, p Params) (any, error) {
 		// not a log position, or a position from another log. The cursor
 		// is parsed by the reader, and it used to be parsed inside the
 		// read's transaction, so a pasted-wrong cursor was a 500.
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, refusedBy(err, builtin.ReadRefusalSentence(err))
 	case err != nil:
 		return nil, err
 	}

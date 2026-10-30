@@ -56,6 +56,20 @@ func (t *companyBrand) Description() string {
 		"`brand` is null when the company has adopted none."
 }
 
+// brandReadFailure explains a read of the company's brand that did not
+// answer: never "no brand", which a model would act on as the company having
+// none.
+func brandReadFailure(ctx context.Context, err error) tools.Result {
+	if why, ok := Condition(err); ok {
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf(CompanyBrandTool+" could "+
+			"not read the company's brand%s (%s). This is NOT \"no brand\": do not "+
+			"conclude the company has none. %s", rightNow(err), why,
+			conditionNext(err, "Try again shortly.", stuckRead)))
+	}
+	return faulted(ctx, CompanyBrandTool, err, CompanyBrandTool+" could not read the company's "+
+		"brand: "+faultSaid+". This is NOT \"no brand\": say you could not check.")
+}
+
 func (t *companyBrand) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
@@ -79,13 +93,7 @@ func (t *companyBrand) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	adoption, adopted, err := t.deps.Reader.Brand(ctx, seatRead)
 	if err != nil {
-		if why, ok := Condition(err); ok {
-			return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("get_company_brand could "+
-				"not read the company's brand right now (%s). This is NOT \"no brand\": do not "+
-				"conclude the company has none. Try again shortly.", why)), nil
-		}
-		return faulted(ctx, t.Name(), err, "get_company_brand could not read the company's "+
-			"brand: "+faultSaid+". This is NOT \"no brand\": say you could not check."), nil
+		return brandReadFailure(ctx, err), nil
 	}
 	if !adopted {
 		out["brand"] = nil
@@ -95,14 +103,14 @@ func (t *companyBrand) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	kit, err := brandformat.DecodeAdopted(adoption.BrandJSON)
 	if err != nil {
-		return faulted(ctx, t.Name(), err, "get_company_brand could not read the adopted brand's "+
+		return faulted(ctx, t.Name(), err, CompanyBrandTool+" could not read the adopted brand's "+
 			"record: "+faultSaid+"."), nil
 	}
 	read := newForeignRead(turn, c.self())
 	brand, err := brandAnswer(adoption, kit)
 	b := kit.Brand()
 	if err != nil {
-		return faulted(ctx, t.Name(), err, "get_company_brand could not name where the brand's "+
+		return faulted(ctx, t.Name(), err, CompanyBrandTool+" could not name where the brand's "+
 			"files go: "+faultSaid+"."), nil
 	}
 	if voice := voiceText(b.Voice); voice != "" {

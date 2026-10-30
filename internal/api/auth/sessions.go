@@ -267,6 +267,27 @@ func RetryIdentity(cause error) int {
 		RetryIdentitySeconds*time.Second))
 }
 
+// UnavailableIdentity answers a request the identity estate could not serve:
+// `503 identity_unavailable` under the hint [RetryIdentity] gives cause, and,
+// where cause is a refusal the state log made, its sentence for a person
+// ([statelog.ConditionSentence]) in `detail`, whose advice agrees with that
+// hint. nil where nothing caused it, which answers the code's own words.
+//
+// THE REFUSAL'S OWN WORDS, NOT THE CODE'S, because the code's ("can't check
+// who you are right now, try again in a moment") asked for a wait under no
+// Retry-After where none clears the refusal — a full log, an evicted node — and
+// on a directory listing was not about who the caller is at all. One writer
+// for every site on /iam and /auth, so a read and a write of one surface tell
+// one refusal in one sentence.
+func UnavailableIdentity(w http.ResponseWriter, cause error) {
+	var detail httpjson.Detail
+	if said, ok := statelog.ConditionSentence(cause); ok {
+		detail = httpjson.Detail{"detail": said}
+	}
+	httpjson.UnavailableWith(w, httpjson.CodeIdentityUnavailable,
+		RetryIdentity(cause), detail)
+}
+
 // UnreadLevel is the level an identity read a request could not make is
 // logged at: WARN, because a node that cannot read its identity estate is
 // one an operator should hear about — unless the request itself has gone
@@ -381,11 +402,11 @@ func NewSessions(deps SessionsDeps) (*Sessions, error) {
 			"same answer as refused")
 	case deps.Directory == nil:
 		return nil, errors.New("auth: the session arm needs the identity " +
-			"directory — a bearer's signature says it was minted here and " +
+			"directory: a bearer's signature says it was minted here and " +
 			"the rows say whether it is still live")
 	case deps.Applier == nil:
 		return nil, errors.New("auth: the session arm needs the identity " +
-			"applier to wait on — a sign-in answers before this node applies " +
+			"applier to wait on: a sign-in answers before this node applies " +
 			"the session it opened, so without it every write made straight " +
 			"after signing in is refused 503")
 	case deps.Chart == nil:

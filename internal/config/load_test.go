@@ -307,9 +307,67 @@ func TestAFractionInAWholeNumberFieldIsRefused(t *testing.T) {
 			t.Errorf("api.port: %s = (%v, %v), want 8080 — a whole number in another spelling", whole, cfg, err)
 		}
 	}
-	cfg, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: 12.5\n"), NewResolver(MapSource{}))
-	if err != nil || cfg.Coordination.LeaseTTLSeconds != 12.5 {
-		t.Errorf("a fractional lease TTL = (%v, %v), want 12.5 — that field takes fractions", cfg, err)
+	cfg, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: 22.5\n"), NewResolver(MapSource{}))
+	if err != nil || cfg.Coordination.LeaseTTLSeconds != 22.5 {
+		t.Errorf("a fractional lease TTL = (%v, %v), want 22.5 — that field takes fractions", cfg, err)
+	}
+}
+
+// A NUMBER THAT IS NOT FINITE IS REFUSED, NAMING THE FIELD, in both tiers and
+// through a Tier A reference.
+//
+// YAML spells NaN and infinity (`.nan`, `.inf`), the decoder reads either
+// into a fractional field faithfully, and NaN then fails every comparison a
+// validator bounds a value with — so `lease_ttl_seconds: .nan` passed "not
+// negative", `notification_coalesce_window_seconds: .nan` passed "0..60",
+// and each became a duration Go leaves undefined. Every spelling the decoder
+// reads as one is asked, and a finite fraction beside them still loads.
+//
+// Mutation: drop refuseNonFinite from decodeNode, and every case loads.
+func TestANumberThatIsNotFiniteIsRefused(t *testing.T) {
+	t.Parallel()
+	parsers := []struct {
+		name  string
+		path  string
+		parse func(value string) error
+	}{
+		{"a Tier A lease TTL", "coordination.lease_ttl_seconds", func(v string) error {
+			_, err := ParseRunnableBootstrap([]byte("coordination:\n  lease_ttl_seconds: "+v+"\n"),
+				NewResolver(MapSource{}))
+			return err
+		}},
+		{"a Tier A reference", "store.busy_timeout_seconds", func(v string) error {
+			_, err := ParseRunnableBootstrap([]byte("store:\n  busy_timeout_seconds: \"${BUSY}\"\n"),
+				NewResolver(MapSource{"BUSY": v}))
+			return err
+		}},
+		{"a Tier B window", "notification_coalesce_window_seconds", func(v string) error {
+			_, err := ParseCompany([]byte("name: Acme\nnotification_coalesce_window_seconds: " + v + "\n"))
+			return err
+		}},
+	}
+	for _, p := range parsers {
+		for _, value := range []string{".nan", ".NaN", ".NAN", ".inf", "+.Inf", "-.INF"} {
+			t.Run(p.name+"/"+value, func(t *testing.T) {
+				t.Parallel()
+				err := p.parse(value)
+				if !errors.Is(err, ErrShape) {
+					t.Fatalf("%s: %s = %v, want a wrong shape — no setting has a meaning for it",
+						p.path, value, err)
+				}
+				problems := Problems(err)
+				if len(problems) != 1 || problems[0].Path != p.path || problems[0].Line == 0 {
+					t.Fatalf("problems = %+v, want one at %s with its line", problems, p.path)
+				}
+				if !strings.Contains(problems[0].Message, "not a finite number") {
+					t.Errorf("message = %q, want it to say the value is not a finite number",
+						problems[0].Message)
+				}
+			})
+		}
+		if err := p.parse("2.5"); err != nil && errors.Is(err, ErrShape) {
+			t.Errorf("%s: a finite fraction was refused as a wrong shape: %v", p.path, err)
+		}
 	}
 }
 

@@ -136,10 +136,12 @@ func TestDeepWorkIsOfferedOnlyWhereItCanRun(t *testing.T) {
 // A RUN REACHES CREWLET ONLY THROUGH THE TURN'S OWN SURFACE: its read is one
 // request through the dispatcher on the turn's grant, drawn as a step nested
 // under the run's; the run's step is re-sent with its progress and closed with
-// its outcome; its report reaches the model fenced as the run's own words; its
-// files are kept and carded; and its box is discarded. Mutation: execute the
-// bridged call through anything but the turn's surface and the dispatcher
-// sees no request on the turn's grant.
+// its outcome; its report reaches the model fenced as the run's own words, at
+// the trust of text nobody in the company wrote (ADR-0054); its files are kept
+// and carded; and its box is discarded. Mutation: execute the bridged call
+// through anything but the turn's surface and the dispatcher sees no request
+// on the turn's grant; fence the report at any trust but external and its
+// label fails.
 func TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface(t *testing.T) {
 	t.Parallel()
 	script := evals.NewDeepScript(evals.DeepRunScript{
@@ -192,7 +194,8 @@ func TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface(t *testing.T) {
 	}
 	answer, ok := toolAnswer(f, "c-deep")
 	if !ok || !strings.Contains(answer.Content, "Three teams cover the work") ||
-		!strings.Contains(answer.Content, "deep_work") || !strings.Contains(answer.Content, "teams.md") {
+		!strings.Contains(answer.Content, " source=deep_work trust=external ") ||
+		!strings.Contains(answer.Content, "teams.md") {
 		t.Fatalf("the model read the run as %q", answer.Content)
 	}
 	if kept, discarded := script.Kept(), script.Discarded(); len(kept) != 0 || len(discarded) != 1 {
@@ -201,6 +204,51 @@ func TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface(t *testing.T) {
 	run := script.Runs()[0]
 	if strings.Contains(run.System, "SENTINEL") || strings.Contains(run.Brief, "SENTINEL") {
 		t.Fatal("the turn's grant reached the run's prompt")
+	}
+}
+
+// A DELIVERED FILE THE STORE DID NOT KEEP IS TOLD BY WHAT KEPT IT OUT: the
+// model reads the condition the store met, in the words a model is told one
+// in ([assistant.Unkept]), so it can tell the person why and whether another
+// run would fare better; a fault of the node is told only as a file not kept,
+// its reason in the log. The note said "could not be kept" whatever it was.
+// Mutation: drop the condition's words from the note and the first case goes
+// red; tell a fault's own error and the second does.
+func TestADeliveredFileTheStoreDidNotKeepIsToldByItsCause(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		refuse error
+		says   string
+	}{
+		"a condition": {&assistant.Unkept{Said: "the company's file storage is full",
+			Cause: errors.New("objstore: the object store's byte reservation is spent")},
+			"Not delivered: teams.md, because the company's file storage is full."},
+		"a fault": {errors.New("open /var/lib/crewlet/objects: disk I/O error"),
+			"Not delivered: teams.md could not be kept."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			script := evals.NewDeepScript(evals.DeepRunScript{
+				Files:  []assistant.DeepFile{{Name: "teams.md", Content: []byte("# Teams\n")}},
+				Report: "The teams are in teams.md."})
+			files := evals.NewFiles(evals.NewClock().Now)
+			files.RefuseStores(c.refuse)
+			f := assistanttest.NewRig(t, evals.RigOptions{Company: deepCompany(t), Deep: script,
+				Files: files, Rounds: []evals.Round{startDeep("Redefine the teams"),
+					evals.Say("Here is the analysis.")}})
+			accepted, err := f.Ask("teams", "Propose new teams", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.Follow(accepted.TurnID, 0)
+			answer, ok := toolAnswer(f, "c-deep")
+			if !ok || !strings.Contains(answer.Content, c.says) ||
+				strings.Contains(answer.Content, "/var/lib") ||
+				strings.Contains(answer.Content, "byte reservation") {
+				t.Fatalf("the model read the run as %q, want %q and no error's own text",
+					answer.Content, c.says)
+			}
+		})
 	}
 }
 

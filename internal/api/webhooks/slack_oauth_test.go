@@ -39,15 +39,33 @@ func TestALinkFromTheRetiredCommandSaysWhereInstallsAreMadeNow(t *testing.T) {
 	}
 }
 
+// A REFUSAL IS SAID IN THE PAGE'S OWN WORDS: Slack's code is the log's, and
+// the remedy follows where the install began.
 func TestTheOAuthLandingSaysWhatWentWrong(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)
-	res := getLanding(t, e, "error=access_denied")
-	if res.Code != http.StatusBadRequest {
-		t.Fatalf("got %d, want 400", res.Code)
-	}
-	if !strings.Contains(res.Body.String(), "access_denied") {
-		t.Error("the page does not report Slack's reason")
+	for _, tc := range []struct {
+		query, says, remedy string
+	}{
+		{"error=access_denied", "The install was cancelled in Slack.", "app's settings in Slack"},
+		{"error=invalid_scope", "Slack didn't approve the install.", "app's settings in Slack"},
+		{"error=access_denied&state=sre", "The install was cancelled in Slack.", "Agents tab"},
+	} {
+		res := getLanding(t, e, tc.query)
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("%s: got %d, want 400", tc.query, res.Code)
+		}
+		body := res.Body.String()
+		if !strings.Contains(body, tc.says) || !strings.Contains(body, tc.remedy) {
+			t.Errorf("%s: the page does not say %q with the remedy naming %q:\n%s",
+				tc.query, tc.says, tc.remedy, body)
+		}
+		if strings.Contains(body, "access_denied") || strings.Contains(body, "invalid_scope") {
+			t.Errorf("%s: the page printed Slack's code", tc.query)
+		}
+		if got := res.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s: Cache-Control = %q, want no-store", tc.query, got)
+		}
 	}
 }
 

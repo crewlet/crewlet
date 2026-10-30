@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/httpx"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ClientTimeout bounds one call to Datadog.
@@ -123,8 +124,8 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}
 	if !KnownSite(site) {
 		return nil, fmt.Errorf(
-			"datadog: %q is not a region Datadog serves: it is one of %s",
-			opts.Site, strings.Join(sites, ", "))
+			"datadog: %q isn't a region Datadog serves. Use %s",
+			opts.Site, words.Or(sites))
 	}
 	client := opts.HTTP
 	if client == nil {

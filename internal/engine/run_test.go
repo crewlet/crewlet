@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
+	"github.com/crewlet/crewlet/internal/seat"
 )
 
 // newEngine stands up a real engine on an embedded stream in a temp directory.
@@ -831,36 +832,64 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// startedLeaseTTL is the lease TTL a case here STARTS an engine at when it
+// shortens the lease: the shortest a deployment may set ([config.MinLeaseTTL]),
+// because [engine.New] holds every bootstrap to it.
+//
+// THE TTL IS ALSO THE WATCHDOG'S THRESHOLD. [engine.New] arms the seat
+// watchdog at the host's own TTL ([seat.Watchdog] says why the two are one
+// number) and [engine.Engine.Start] starts it; once the host goes longer than
+// that without a beat it ends the PROCESS with status 75 — here the test
+// binary, and every case running in it. So a TTL shortened to make a lapse or
+// an allowance quick inside one case is also how close the whole binary sits
+// to that exit on a loaded runner, and the floor's margin, measured on this
+// package's own engines under load, is the doc of [config.MinLeaseTTL]: it
+// used to be stated here, as the shortest TTL a case started an engine at,
+// before the floor existed and two cases here started theirs at three seconds.
+//
+// So no case waits out what it needs a short TTL for: it reads the renew or
+// the deadline it is about off the host or its store. A case whose subject is
+// a fraction of a shorter TTL builds an Engine literal rather than booting one
+// (TestAHoldGivenBackDuringTheTeardownIsAStepOfItsAllowance runs at 1.5 s).
+const startedLeaseTTL = config.MinLeaseTTL
+
+// CANCELLING THE START CONTEXT DOES NOT STOP THE ENGINE.
+//
+// Stop is what ends an engine. The seat host derives its heartbeat and sweep
+// loops from whatever Start is given, so an engine started on a signal context
+// would stop renewing its leases the instant SIGTERM arrived — before the drain
+// began. The drain then waits for in-flight turns while every lease lapses at
+// the TTL and peers claim seats this node is still running turns on.
+//
+// A RENEW BEGUN AFTER THE CANCEL IS THE EVIDENCE, read where the host judges
+// one: [seat.Host.MayStart] admits a seat only while its last renew is within
+// one heartbeat, measured from a stamp read before the store call it records.
+// So a yes more than a heartbeat past the cancel is a renew begun after it. A
+// host whose loops died with the context began its last renew no later than
+// the cancel and refuses every seat from one heartbeat past it, for good; a
+// live one renews every heartbeat and admits again within the next. The case
+// polls each seat from one heartbeat past the cancel for one heartbeat more.
+//
+// IT WAITS FOR NO LEASE TO LAPSE. It slept two TTLs and then read the host,
+// which kept it at a TTL of three seconds — and the TTL is also the threshold
+// at which the engine's watchdog ends the whole test binary ([startedLeaseTTL]
+// has the measurement). So against the regression it names it never failed:
+// measured, the watchdog ended the binary with status 75, its host 3.3 s
+// without a beat, three seconds before the case would have read anything, and
+// took every case running beside it down too. Read off the renews, the window
+// closes two heartbeats past the cancel, and a host whose loops died beat last
+// no earlier than one beat before it, so its watchdog fires no sooner than a
+// TTL less a beat past the cancel — later, which the case checks rather than
+// assumes. The regression is reported here, and the cleanup's Stop disarms the
+// watchdog before it can end the binary.
+//
+// Mutation: start the node on the caller's context in [engine.Engine.Start],
+// and this fails naming both seats while the binary lives on.
 func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	t.Parallel()
-	// Stop is what ends an engine. The seat host derives its heartbeat and
-	// sweep loops from whatever Start is given, so an engine started on a
-	// signal context would stop renewing its leases the instant SIGTERM
-	// arrived — before the drain began. The drain then waits for in-flight
-	// turns while every lease lapses at the TTL and peers claim seats this
-	// node is still running turns on.
-	//
-	// The TTL is shortened so the lapse would happen inside a test rather
-	// than in forty-five seconds. The heartbeat follows it — one third,
-	// per [seat.HeartbeatRatio] — which is what makes a short TTL workable
-	// at all.
-	//
-	// THREE SECONDS, NOT 0.9. At 0.9 the renewal loop had 300 ms to land a
-	// beat, and it lost that race under the full suite: a hundred and ten
-	// packages under the race detector, each embedding its own broker, and
-	// one scheduling hiccup is all it takes. The assertion is not weakened
-	// by the change — a renewer that died with the context still lapses
-	// well inside the wait below — it is the BUDGET for a live one that
-	// was wrong, and a test that fails for a reason other than the thing
-	// it tests costs a whole CI run every time it does.
-	//
-	// Three seconds gives a beat a full second, which is the same order as
-	// the 15 s [waitFor] allows every other wait in this file, and the
-	// wait below is two TTLs so a dead renewer is caught with a TTL to
-	// spare.
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-		b.Coordination.LeaseTTLSeconds = 3
+		b.Coordination.LeaseTTLSeconds = startedLeaseTTL.Seconds()
 	})
 	e := newEngine(t, engine.Options{Bootstrap: b})
 
@@ -868,23 +897,51 @@ func TestCancellingTheStartContextDoesNotStopTheEngine(t *testing.T) {
 	if err := e.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	waitFor(t, "the seats to be claimed", func() bool {
-		return len(e.Node().Host().Held()) == 2
+	host := e.Node().Host()
+	// THE PREMISE: both seats held AND admitted, so a refusal after the
+	// cancel can only be a renew that never came, never a seat still
+	// establishing.
+	waitFor(t, "both seats to be claimed and admitted", func() bool {
+		held := host.Held()
+		return len(held) == 2 && !slices.ContainsFunc(held, func(handle string) bool {
+			_, fresh := host.MayStart(handle)
+			return !fresh
+		})
 	})
+	seats := host.Held()
+	heartbeat := host.HeartbeatInterval()
+	// THE PREMISE, checked rather than commented: the window closes before
+	// the watchdog could end the binary over a host whose loops died, whose
+	// last beat is at most one beat older than the cancel.
+	if reach := host.TTL() - seat.WatchdogBeatInterval; 2*heartbeat >= reach {
+		t.Fatalf("the premise: the window closes %v past the cancel, past the %v "+
+			"at which the watchdog may end the binary over a dead heartbeat",
+			2*heartbeat, reach)
+	}
 
 	cancel()
-	// TWO TTLs past the cancel: an engine whose loops died with the
-	// context stopped renewing at the cancel, so its leases lapsed a whole
-	// TTL before this read.
-	time.Sleep(6 * time.Second)
-
-	if got := e.Node().Host().Held(); len(got) != 2 {
-		t.Errorf("held seats = %v after the start context was cancelled, want both: "+
-			"the engine stopped renewing its leases without being stopped", got)
+	cancelled := time.Now()
+	// FROM ONE HEARTBEAT PAST THE CANCEL: before it, a yes may be a renew
+	// begun before the cancel, which proves nothing.
+	time.Sleep(time.Until(cancelled.Add(heartbeat)))
+	until := cancelled.Add(2 * heartbeat)
+	stale := slices.Clone(seats)
+	for len(stale) > 0 && time.Now().Before(until) {
+		stale = slices.DeleteFunc(stale, func(handle string) bool {
+			_, fresh := host.MayStart(handle)
+			return fresh
+		})
+		time.Sleep(20 * time.Millisecond)
 	}
-	if _, ok := e.Node().Host().MayStart("ceo"); !ok {
-		t.Error("the seat host no longer considers a held seat fresh: " +
-			"its heartbeat died with the start context")
+	if len(stale) > 0 {
+		t.Errorf("no renew of %v began after the start context was cancelled: from "+
+			"one heartbeat (%v) past the cancel to two, the seat host refused them as "+
+			"stale, so its heartbeat died with the context it was started on",
+			stale, heartbeat)
+	}
+	if got := host.Held(); !slices.Equal(got, seats) {
+		t.Errorf("held seats = %v after the start context was cancelled, want %v: "+
+			"the engine stopped holding its seats without being stopped", got, seats)
 	}
 }
 

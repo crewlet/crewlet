@@ -562,9 +562,7 @@ func TestAttachingToAPausedContainerRefusesItAndLeavesItPaused(t *testing.T) {
 	runtime := filepath.Join(dir, "runtime")
 	script := "#!/bin/sh\necho \"$@\" >> " + calls + "\n" +
 		"if [ \"$1\" = inspect ]; then read s < " + state + "; echo \"$s\"; fi\n"
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutable(t, runtime, script)
 	local := &Local{opts: LocalOptions{Placement: Container}, root: filepath.Join(dir, "boxes"), cli: containerCLI{path: runtime}}
 	layout, err := local.layout("box1")
 	if err != nil {
@@ -1630,8 +1628,11 @@ func TestATimedOutControlCommandTakesItsChildrenWithIt(t *testing.T) {
 	}
 
 	cancel()
-	if err := <-done; err != nil {
-		t.Fatalf("runHost: %v", err)
+	// THE CALLER'S CANCELLATION IS ITS OWN ANSWER, never the command's
+	// timeout: answered as 124, a cancelled launch was told as a box that
+	// timed out or an image the runtime would not start.
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("runHost cancelled by its caller answered %v; want the cancellation", err)
 	}
 	if !procgrouptest.AwaitGone(t, child, 5*time.Second) {
 		t.Fatal("a cancelled control command left its grandchild running")
@@ -1731,10 +1732,7 @@ func TestTheContainerRuntimeSeesNoneOfTheEnginesSecrets(t *testing.T) {
 	// is what is under test, so nothing the case needs can travel in it.
 	runtime := filepath.Join(dir, "docker")
 	script := fmt.Sprintf("#!/bin/sh\n/usr/bin/env > '%s'\n", dump)
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, runtime)
+	writeExecutable(t, runtime, script)
 	// The rootless probe is one of the runtime calls, and it is the one every
 	// container box makes first.
 	runtimeIsRootless(t.Context(), containerCLI{path: runtime})
@@ -1779,10 +1777,7 @@ func TestTheRuntimeGetsWhatItsRuntimeEnvDeclares(t *testing.T) {
 	dump := filepath.Join(dir, "env")
 	runtime := filepath.Join(dir, "docker")
 	script := fmt.Sprintf("#!/bin/sh\n/usr/bin/env > '%s'\n", dump)
-	if err := os.WriteFile(runtime, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, runtime)
+	writeExecutable(t, runtime, script)
 	t.Setenv("PATH", dir)
 	t.Setenv("DOCKER_CONFIG", "/home/engine/.docker")
 	t.Setenv("SSH_AUTH_SOCK", "/tmp/the-engines-own-agent.sock")

@@ -41,4 +41,13 @@ export const SESSION_QUERIES = {
     "answered_decisions",
   ],
   pages: ["pages", "page", "containers", "page_activity", "page_revision"],
+  chat: [
+    "chat_channels",
+    "chat_channel",
+    "chat_messages",
+    "chat_thread",
+    "chat_mentions",
+    "chat_search",
+    "chat_room_names",
+  ],
 } as const;

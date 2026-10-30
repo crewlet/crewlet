@@ -322,6 +322,27 @@ func isReason(err error, reason wire.ViewerReason) bool {
 	return ok && refused.Reason == reason
 }
 
+// A READ OF THE ASSISTANT'S OWN RECORDS THAT FAILED IS THE STORE'S OWN ERROR,
+// never the assistant's Unavailable: the HTTP surface tells it as the
+// condition of the node or the fault it is (internal/api/assistantapi). Told
+// as Unavailable, every such failure carried a wait of two seconds, so a full
+// log was asked again every two seconds and a broken store was said to be
+// coming back.
+//
+// Mutation: answer readFailure's store error as an Unavailable again and the
+// transcript's read answers unavailable.
+func TestAFailedReadOfItsRecordsIsTheStoresOwnError(t *testing.T) {
+	t.Parallel()
+	f := assistanttest.NewRig(t, evals.RigOptions{})
+	f.Store.FailConversations(1)
+	_, err := f.Svc.Transcript(t.Context(), f.Person, f.Conversation)
+	if err == nil || errors.Is(err, assistant.ErrUnavailable) ||
+		!strings.Contains(err.Error(), "the store is away") {
+		t.Errorf("a transcript the store could not read answered %v, want the "+
+			"store's own error", err)
+	}
+}
+
 // A RESUMED STREAM REPLAYS ONLY WHAT IT MISSED, and one whose frames are gone
 // is answered from the transcript.
 func TestAResumedStreamReplaysOnlyWhatItMissed(t *testing.T) {

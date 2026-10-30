@@ -191,22 +191,24 @@ func adoptFrom(t *testing.T, donor *roundTrip) *roundTrip {
 // held the first application, and publish a second copy. The sweep now
 // records how far back it forgot, and the publisher reads that before it
 // trusts the silence.
+//
+// A RETITLE, because its decide finds nothing in the rows to answer a retry
+// with and so would publish again. A comment would not test this: a remark's
+// row is its post's own record, and a retry finds it there and publishes
+// nothing whatever the ledger kept (TestARemarkAlreadyPostedIsAnsweredByItsRow).
 func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	r.applyWhileWriting()
 	created := r.createTask("who owns the rollback")
 
-	comment := func(op, id string) (worklet.WriteResult, error) {
+	retitle := func(op, title string) (worklet.WriteResult, error) {
 		return r.writer.UpdateTask(t.Context(), op, created.ID, "ENG",
-			worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
-				ID: id, Task: created.ID, Author: "ana",
-				AuthorKind: worklet.AuthorHuman, Body: "I do.",
-				CreatedAt: wednesday,
-			}}, worklet.ChangeComment, nil)
+			worklet.NoIfMatch, worklet.TaskPatch{Title: &title},
+			worklet.ChangeFields, nil)
 	}
-	op := statelog.NewOpID(time.Now().Add(-time.Hour), "comment-"+created.ID)
-	if first, err := comment(op, "cm-1"); err != nil || first.Outcome != statelog.OutcomeApplied {
+	op := statelog.NewOpID(time.Now().Add(-time.Hour), "retitle-"+created.ID)
+	if first, err := retitle(op, "who owns the rollback now"); err != nil || first.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("the first application = (%+v, %v), want applied", first.Result, err)
 	}
 	r.drain()
@@ -225,7 +227,7 @@ func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 	}
 	end := r.logEnd(t)
 
-	retry, err := comment(op, "cm-1")
+	retry, err := retitle(op, "who owns the rollback now")
 	if err != nil {
 		t.Fatalf("the retry: %v", err)
 	}
@@ -240,7 +242,8 @@ func TestAWriteRetriedAfterItsLedgerRowWasSweptIsNotAppliedTwice(t *testing.T) {
 
 	// AND THE CONTROL: an operation minted after the sweep's cutoff is
 	// judged by its row as ever, or the sweep would refuse every write.
-	fresh, err := comment(statelog.NewOpID(time.Now(), "comment-"+created.ID), "cm-2")
+	fresh, err := retitle(statelog.NewOpID(time.Now(), "retitle-"+created.ID),
+		"who owns the rollback today")
 	if err != nil || fresh.Outcome != statelog.OutcomeApplied {
 		t.Fatalf("a fresh operation after the sweep = (%+v, %v), want applied",
 			fresh.Result, err)

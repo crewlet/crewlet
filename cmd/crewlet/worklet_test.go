@@ -116,7 +116,7 @@ func (n *fakePurgeNode) set(change func(*fakePurgeNode)) {
 // resurrecting anything — and no CLI verb, no route and no tool reached it. A
 // company could not destroy a task under any circumstances: an erasure request
 // had no mechanism, and a credential pasted into a task body stayed in the
-// durable rows of every node for ever.
+// durable rows of every data node for ever.
 func TestWorkletPurgeReachesTheOneOperationNothingUndoes(t *testing.T) {
 	t.Parallel()
 	node := newFakePurgeNode(t)
@@ -260,7 +260,7 @@ func TestEveryPurgeThatNamesItsOperationIsRetriedUnderIt(t *testing.T) {
 		says      string
 	}{
 		{"an unknown", "unknown", false, "No acknowledgement"},
-		{"an unvouched unknown", "unknown", true, "another node with -url"},
+		{"an unvouched unknown", "unknown", true, "another node with -api"},
 		{"a refusal", "", false, "This attempt wrote nothing"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -279,7 +279,7 @@ func TestEveryPurgeThatNamesItsOperationIsRetriedUnderIt(t *testing.T) {
 }
 
 // `pending` IS NOT A FAILURE AND MUST NOT BE RETRIED: the record is on the log
-// and every node applies it as it reaches it. The node says so with a 202,
+// and every data node applies it as it reaches it. The node says so with a 202,
 // which the command used to read as an error — the ordinary next move after
 // which is running it again.
 func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
@@ -291,7 +291,7 @@ func TestAPendingPurgeSaysNotToRunItAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a pending purge was reported as a failure: %v", err)
 	}
-	if !strings.Contains(stdout, "Do not run this again") {
+	if !strings.Contains(stdout, "Don't run this again") {
 		t.Errorf("a pending purge read as something to retry:\n%s", stdout)
 	}
 }
@@ -319,10 +319,10 @@ func TestAPurgeTheNodeNeverAnsweredNamesItsOperation(t *testing.T) {
 		t.Fatalf("the unanswered purge sent the key %q and printed:\n%s\nwant the "+
 			"retry that names it", sent, stderr)
 	}
-	if purgeRequestTimeout <= 3*statelog.DefaultResolveBudget ||
-		purgeRequestTimeout <= nodeRequestTimeout {
+	if logWriteTimeout <= 3*statelog.DefaultResolveBudget ||
+		logWriteTimeout <= nodeRequestTimeout {
 		t.Errorf("worklet purge waits %s, not past the three %s waits a purge can "+
-			"make and the %s a round trip gets", purgeRequestTimeout,
+			"make and the %s a round trip gets", logWriteTimeout,
 			statelog.DefaultResolveBudget, nodeRequestTimeout)
 	}
 }

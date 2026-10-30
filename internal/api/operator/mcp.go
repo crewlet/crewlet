@@ -2,7 +2,6 @@ package operator
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // MCPPath is the route the MCP transport is mounted at.
@@ -79,11 +79,15 @@ func (s *Server) mcpServer(cat catalogue) *mcp.Server {
 // anybody, which is the same rule a seat's tools follow and the same reason.
 func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		var args map[string]any
-		if len(req.Params.Arguments) > 0 {
-			if err := json.Unmarshal(req.Params.Arguments, &args); err != nil {
-				return nil, fmt.Errorf("operator: %s: bad arguments: %w", name, err)
-			}
+		// THE ONE DECODE every transport into a tool shares
+		// ([toolargs.Decode]): through json.Number, so a number past
+		// 2^53 reaches the tool as the caller sent it.
+		args, err := toolargs.Decode(req.Params.Arguments)
+		if err != nil {
+			// THE ARGUMENTS' OWN WORDS ([toolargs.Decode]) after the
+			// tool's name, which is what the assistant called: an
+			// "operator:" in front named this package to it.
+			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 		result, err := s.run(ctx, cat, Call{
 			Transport: types.TransportMCP, Tool: name, Args: args,
@@ -127,13 +131,12 @@ func (s *Server) handlerFor(cat catalogue, name string) mcp.ToolHandler {
 // catalogue is read for each request, so there is no list-changed
 // notification to push, and no tool here asks the client anything back.
 //
-// # Three answers before any tool runs
+// # Two answers before any tool runs
 //
 // A node that has not been handed a company answers `503
-// no_active_revision`; one whose catalogue is empty — no native half, no
-// search, no seat controls — answers as the route's absence would, since an
-// endpoint that lists no tools reads to an operator as broken; and anything
-// else is served over the catalogue the request found.
+// no_active_revision`, and anything else is served over the catalogue the
+// request found — never an empty one, since [New] requires the seat controls
+// every node can serve whatever backends its company runs.
 //
 // EVERY METHOD IS STILL ROUTED HERE, so a GET for the server-to-client stream
 // and a DELETE to end a session are answered by the SDK's own 405 with
@@ -155,13 +158,9 @@ func (s *Server) MCPHandler() http.Handler {
 			return
 		}
 		cat, up := s.catalogueFor()
-		switch {
-		case !up:
+		if !up {
 			httpjson.NoActiveRevision(w, httpjson.Detail{
 				"detail": httpjson.NativeHalvesNotUp})
-			return
-		case len(cat.tools) == 0:
-			httpjson.NoRoute(w, r)
 			return
 		}
 		srv := s.mcpServer(cat)

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
@@ -186,8 +187,8 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	if t.deps.Desk == nil || t.deps.Actor == nil {
-		return refused(tools.RefusalUnavailable, AnswerRunTool+" is unavailable: "+
-			"this surface was built without the run record."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), AnswerRunTool+
+			" is unavailable: this surface was built without the run record."), nil
 	}
 	actor, err := t.deps.Actor(ctx, turn)
 	if err != nil {
@@ -197,18 +198,18 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	turnID := strings.TrimSpace(argString(args, "turn_id"))
 	if turnID == "" {
-		return failed("answer_run needs a `turn_id` — the parked run's turn id."), nil
+		return failed(AnswerRunTool + " needs a `turn_id` — the parked run's turn id."), nil
 	}
 	launchID := strings.TrimSpace(argString(args, "launch_id"))
 	if launchID == "" {
-		return failed("answer_run needs a `launch_id`: the question you are answering, " +
+		return failed(AnswerRunTool + " needs a `launch_id`: the question you are answering, " +
 			"the run's `launch_id` read with it on the sandbox-runs board."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
 	choice := strings.TrimSpace(argString(args, "choice"))
 	switch {
 	case answer == "" && choice == "":
-		return failed("answer_run needs a `choice` naming the option chosen, or an " +
+		return failed(AnswerRunTool + " needs a `choice` naming the option chosen, or an " +
 			"`answer` saying what the coding agent should be told, or both."), nil
 	case len(answer) > MaxRunAnswerBytes:
 		return failed(fmt.Sprintf("That answer is %d KiB and one answer may be at most %d KiB: "+
@@ -221,7 +222,7 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	run, found, err := t.deps.Desk.Run(ctx, turnID)
 	switch {
 	case err != nil:
-		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf("answer_run could not "+
+		return nodeFailure(ctx, AnswerRunTool, err, fmt.Sprintf(AnswerRunTool+" could not "+
 			"read run %s", clip(turnID)), "This does NOT mean it is gone, and "+
 			"nothing was answered."), nil
 	case !found:
@@ -260,8 +261,8 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// asks a new question only under a new job, so the options this checks
 	// are the ones the answer reaches.
 	if _, unoffered := sandbox.AnswerText(run.Decision, choice, answer); unoffered != nil {
-		return refusedBy(tools.RefusalInvalid, unoffered, fmt.Sprintf("answer_run was refused: %s. "+
-			"Nothing was answered.", unoffered.Error())), nil
+		return refusedBy(tools.RefusalInvalid, unoffered, fmt.Sprintf(AnswerRunTool+
+			" was refused: %s. Nothing was answered.", unoffered.Error())), nil
 	}
 	parties, refusal := t.parties(ctx, run)
 	if refusal != nil {
@@ -309,7 +310,16 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if choice != "" {
 		result["choice"] = choice
 	}
-	return jsonResult(result)
+	// THE QUESTION IS THE RUN'S WORDS, written by the seat's coding agent in
+	// the seat's name, and whoever answers it is usually reading through an
+	// assistant: it goes back fenced by the one rule for a coding run's words
+	// ([provenance.CodingRun]), as every other door to them reads them
+	// (ADR-0040), not as a line of the engine's receipt.
+	read := newForeignRead(turn, actor.Handle)
+	asked := provenance.CodingRun(parties.handle)
+	read.fenceAt(fieldPath{}.key("question"), asked.Source, asked.Trust, asked.Authors,
+		run.Question)
+	return read.answer(ctx, AnswerRunTool, result, "")
 }
 
 // answeredAlready is the refusal an answer gets for a question already
@@ -354,7 +364,7 @@ func (t *answerRun) parties(ctx context.Context, run sandbox.PendingRun) (runPar
 	if err != nil || id == uuid.Nil {
 		return runParties{}, refusalOf(faulted(ctx, AnswerRunTool,
 			fmt.Errorf("pending run %s names seat id %q: %w", run.TurnID, run.AgentID,
-				errUnreadableSeatID), fmt.Sprintf("answer_run cannot answer run %s: its "+
+				errUnreadableSeatID), fmt.Sprintf(AnswerRunTool+" cannot answer run %s: its "+
 				"record names no seat id this build can read, so the seat it would wake "+
 				"cannot be named — %s.", clip(run.TurnID), faultSaid)))
 	}

@@ -48,7 +48,7 @@ data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":
 
 id: 3db96f52-a891-5953-9735-0ae522cf6347.13
 event: card
-data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":13,"at":"2026-10-24T09:41:01.3Z","kind":"card","card":{"card_id":"c172b9d6-305a-531e-89c7-169222450f2f","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"error","error":{"refusal":{"code":"unauthorized","message":"You do not have access to this.","grants":["admin"]},"phrase":"read the fleet"}}}}
+data: {"v":1,"conversation_id":"403212ed-5a4a-586d-8af6-c62411a17c2f","turn_id":"3db96f52-a891-5953-9735-0ae522cf6347","seq":13,"at":"2026-10-24T09:41:01.3Z","kind":"card","card":{"card_id":"c172b9d6-305a-531e-89c7-169222450f2f","message_id":"78addea6-fc63-505c-827c-0fd10ce55d12","card":{"type":"error","error":{"refusal":{"code":"unauthorized","message":"You do not have access to this.","reason":"no_grant","grants":["admin"]},"phrase":"read the fleet"}}}}
 
 id: 3db96f52-a891-5953-9735-0ae522cf6347.14
 event: step

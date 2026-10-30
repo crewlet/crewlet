@@ -66,6 +66,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -97,7 +98,7 @@ const nakDelay = 2 * time.Second
 // no key class and no change record to name one with.
 type Source struct {
 	// Name is the notification source a parser registers under, and the
-	// scope of this estate's claim keys — "work", "page", "tracker".
+	// scope of this estate's claim keys — "work", "page", "chat".
 	Name string
 
 	// Group is the durable consumer's name, and it is STABLE for the
@@ -191,6 +192,12 @@ type Record struct {
 	// a translator that parses it.
 	Key string
 
+	// StoredAt is the broker's own instant for the record — when the change
+	// that may wake somebody was stored, which every node reads alike — and
+	// what the wake it becomes is timed from ([Options.Objectives]). Zero
+	// from an estate that cannot say, which times nothing.
+	StoredAt time.Time
+
 	// Payload is the record's bytes, verbatim.
 	Payload []byte
 }
@@ -234,8 +241,8 @@ type Translator interface {
 type Delivery struct {
 	// Body is the payload a parser reads. The whole record travels in it,
 	// so the node that wins a feed message routes without reading anything
-	// — a projection that had not caught up would otherwise route from a
-	// stale head, or block the feed until it had.
+	// — a copy that had not caught up with its log would otherwise route
+	// from a stale head, or block the feed until it had.
 	Body map[string]any
 
 	// ID is the record's own id, used for the claim and as the seed of
@@ -264,6 +271,27 @@ type Feed struct {
 	// is a legal deployment — an embedded engine and every test — and
 	// leaves the log line as the only surface, which is where it was.
 	metrics *metrics.Recorder
+
+	// judge is the node's objective meter; nil records nothing.
+	judge Objectives
+}
+
+// Objectives is the node's service objective meter, as the feed records into
+// it: one WAKE LATENCY event for every wake this node publishes, timed from
+// the broker's instant for the record that wakes somebody to the wake on the
+// inbound edge.
+//
+// HERE, because every domain that wakes anybody wakes them through this feed,
+// so one recording site times the tracker's, the knowledge base's and chat's
+// alike — and the wake is derived from the durable record, so from its storing
+// to the inbound edge is the engine's whole share of a wake before the
+// notification service routes it. ONE EVENT PER PUBLISHED WAKE: a record that
+// wakes nobody is a decision and no wake; a record another node already
+// claimed was that node's event; and a publish that failed is no event of its
+// own, since the redelivery that publishes it is timed from the same stored
+// instant and so carries the delay. Satisfied by [*objectives.Meter].
+type Objectives interface {
+	RecordSince(n objectives.Name, stamp time.Time, answered bool)
 }
 
 // Options configure a feed.
@@ -275,6 +303,10 @@ type Options struct {
 
 	// Metrics is where an untranslatable record is counted. Optional.
 	Metrics *metrics.Recorder
+
+	// Objectives is where every published wake is timed ([Objectives]).
+	// Optional.
+	Objectives Objectives
 
 	// Now is the clock the claim is taken on. Nil takes the wall clock.
 	Now func() time.Time
@@ -302,7 +334,7 @@ func New(opts Options) (*Feed, error) {
 	f := &Feed{
 		opener: opts.Opener, publisher: opts.Publisher,
 		claims: opts.Claims, translator: opts.Translator, now: opts.Now,
-		metrics: opts.Metrics,
+		metrics: opts.Metrics, judge: opts.Objectives,
 	}
 	if f.now == nil {
 		f.now = func() time.Time { return time.Now().UTC() }
@@ -341,13 +373,14 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 		// because the alternative — acking — would drop a wake permanently
 		// on a build that is about to be upgraded past the problem.
 		//
-		// AND NOTHING ENDS IT. Both domain consumers set `MaxDeliver: -1`
-		// deliberately (see [jetstream] — a budget that ran out would drop
-		// a wake silently), so this record circles at the head of the
-		// consumer with every wake behind it waiting. That is the right
-		// trade and it has NO OTHER SYMPTOM: the feed simply stops moving,
-		// on a fleet whose every other surface is healthy. So it is
-		// counted, and the count is what `feed_unreadable` fires on.
+		// AND NOTHING ENDS IT. Every domain feed's consumer sets
+		// `MaxDeliver: -1` deliberately (see [jetstream] — a budget that
+		// ran out would drop a wake silently), so this record circles at
+		// the head of the consumer with every wake behind it waiting.
+		// That is the right trade and it has NO OTHER SYMPTOM: the feed
+		// simply stops moving, on a fleet whose every other surface is
+		// healthy. So it is counted, and the count is what
+		// `feed_unreadable` fires on.
 		f.count(metrics.TrackerFeedUnreadable)
 		log.WarnContext(ctx, "changefeed_untranslatable", "key", msg.Key,
 			"position", msg.Position, "stream", msg.Stream, "generation", msg.Gen,
@@ -386,6 +419,9 @@ func (f *Feed) handle(ctx context.Context, msg *Message) {
 			"error", err.Error())
 		f.nak(ctx, msg)
 		return
+	}
+	if f.judge != nil {
+		f.judge.RecordSince(objectives.WakeLatency, msg.StoredAt, true)
 	}
 	f.ack(ctx, msg)
 }

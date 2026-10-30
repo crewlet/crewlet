@@ -42,6 +42,7 @@ describe("expand", () => {
       "doclet",
       "worklet",
       "artifacts",
+      "chatlet",
     ]);
   });
 
@@ -58,7 +59,9 @@ describe("holds", () => {
   test("counts every app an admin carries", () => {
     expect(holds(["admin"], "worklet")).toBe(true);
     expect(holds(["admin"], "doclet")).toBe(true);
+    expect(holds(["admin"], "chatlet")).toBe(true);
     expect(holds(["worklet"], "doclet")).toBe(false);
+    expect(holds(["worklet"], "chatlet")).toBe(false);
     expect(holds(["worklet"], "admin")).toBe(false);
   });
 
@@ -86,6 +89,7 @@ describe("the words", () => {
   test("a set is said as Admin, its apps, or the overview", () => {
     expect(accessLine(["admin", "worklet", "doclet"])).toBe("Admin");
     expect(accessLine(["doclet", "worklet"])).toBe("Worklet · Doclet");
+    expect(accessLine(["chatlet", "worklet", "doclet"])).toBe("Worklet · Doclet · Chatlet");
     expect(accessLine(["worklet"])).toBe("Worklet");
     expect(accessLine([])).toBe("Overview only");
   });
@@ -97,18 +101,23 @@ describe("the words", () => {
   });
 
   test("a lock names its access and who can give it", () => {
+    expect(accessNames(["worklet"])).toBe("Worklet");
     expect(accessNames(["worklet", "doclet"])).toBe("Worklet or Doclet");
+    // THREE OR MORE AS THE ENGINE SAYS THEM, commas and "or" before the last.
+    expect(accessNames(["worklet", "doclet", "artifacts"])).toBe("Worklet, Doclet or Artifacts");
     expect(needsWords("Search", ["doclet"])).toBe(
       "Search needs Doclet access. An admin can give it to you.",
     );
   });
 
-  // NOTHING THE ENGINE ACCEPTED WAS PRESENTED — a 401 — so the repair is to
-  // sign in, not to ask an admin for access.
-  test("a refusal naming no access asks for a credential, not an admin", () => {
+  // A LOCK NAMING NO ACCESS SAYS ONLY THAT THERE IS NONE: it said "Sign in
+  // to see this.", the 401's sentence, so a signed-in person a rule refused
+  // naming nothing was told to sign in. Which refusal it was is
+  // `authorityWords`', which is told what refused.
+  test("a lock naming no access never asks a signed-in reader to sign in", () => {
     const said = needsWords("Reading one pass", []);
-    expect(said).toBe("Sign in to see this.");
-    expect(said).not.toMatch(/admin|operator|token/);
+    expect(said).toBe("You don’t have access to this.");
+    expect(said).not.toMatch(/sign in|admin|operator|token/i);
   });
 });
 

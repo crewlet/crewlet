@@ -20,7 +20,9 @@
  *     digit, underscore or hyphen on either side, so GOP-11 is never found
  *     in GOP-110 or GOP-11-b. A slash delimits tokens, so both keys of
  *     "GOP-10/GOP-11" are found. A record carries a key where it has one (a
- *     task's, a project's: `AssistantEntityCard.key`).
+ *     task's, a project's, a chat room's name with its "#", "#launch":
+ *     `AssistantEntityCard.key`). A direct conversation has no name, so no
+ *     key, and its heading (its people) is never matched.
  *  2. A NAME is matched only for the kinds whose title is a name people
  *     write (an agent, a team, a project, a page, a space, an artifact, a
  *     schedule), exactly, as a whole phrase at the same boundaries, and only
@@ -46,7 +48,9 @@
  *     rule is `lib/writtenOut.ts`'s, which the inline tokens read too.
  *  4. In each run of text, the earliest mention wins; where two start at one
  *     place, the longer. Only a record's FIRST mention, in reading order, is
- *     its chip; the rest stay text.
+ *     its chip; the rest stay text, which the inline tokens read as they read
+ *     any words: a later mention of a room the reader may read is that room's
+ *     token (`lib/inlineTokens.ts`, rule 1a), never a colour.
  *  5. Only the prose is read: the Markdown renderer hands over each run of
  *     the words a reader reads (`RenderOptions.prose`), never a code span,
  *     a code block or a link's label, so a key in `code` is the model

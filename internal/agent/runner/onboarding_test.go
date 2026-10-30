@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -89,7 +90,7 @@ func onboardingRunner(t *testing.T, store runner.Markers, latch *runner.Latch, p
 
 // markOnboarded is the response that marks the seat.
 func markOnboarded() llmtest.Response {
-	return calling(llmtest.Call{Name: runner.MarkOnboardedTool, Args: `{"notes":"read the pages"}`})
+	return calling(llmtest.Call{Name: toolname.MarkOnboarded, Args: `{"notes":"read the pages"}`})
 }
 
 // marking is a provider that calls mark_onboarded on its first round.
@@ -268,7 +269,7 @@ func TestTheOnboardingPassAsksOnAutoAndIsReAskedToMark(t *testing.T) {
 	if len(reqs) != 2 {
 		t.Fatalf("the pass was asked %d times, want 2", len(reqs))
 	}
-	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.MarkOnboardedTool) {
+	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, toolname.MarkOnboarded) {
 		t.Errorf("the second round opened on %q, want the finishing corrective", last.Content)
 	}
 	role := &org.Role{Name: "CTO", DeclaredHandle: "cto"}
@@ -366,7 +367,7 @@ func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
 		t.Fatal("the pass never called the model")
 	}
 	offered := prov.offeredFor("onboarding")[0]
-	for _, want := range []string{runner.ListMCPToolsTool, runner.ActivateTool} {
+	for _, want := range toolname.Discovery() {
 		if !slices.Contains(offered, want) {
 			t.Errorf("the onboarding surface offers %v, without %s: the pass "+
 				"cannot reach the knowledge-base tools its prompt sends it to", offered, want)
@@ -376,7 +377,7 @@ func TestTheOnboardingSurfaceCanDiscoverTools(t *testing.T) {
 	if !strings.Contains(system, "\n## Tools to discover\n- search_knowledge") {
 		t.Errorf("the knowledge-base tool the pass must activate is not listed:\n%s", system)
 	}
-	for _, held := range []string{runner.ReflectAndPersistTool, runner.MarkOnboardedTool} {
+	for _, held := range []string{toolname.ReflectAndPersist, toolname.MarkOnboarded} {
 		if strings.Contains(system, "- "+held) {
 			t.Errorf("the pass's prompt lists %s, which its surface already offers", held)
 		}

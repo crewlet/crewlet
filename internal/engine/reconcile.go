@@ -480,7 +480,34 @@ func (r *Reconciler) boots(revisionID string) { r.booting.Store(&revisionID) }
 // Read from the store on every call rather than cached, because it is asked by
 // the readiness probe and a cached posture is a node that reports healthy
 // through the whole window in which it stopped being so.
+//
+// It FAILS OPEN: a control plane it cannot read answers serve — see
+// [Reconciler.ReadPosture] for the reason, and for the one reader that must
+// not be handed that answer.
 func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
+	posture, err := r.ReadPosture(ctx)
+	if err != nil {
+		return configplane.PostureServe
+	}
+	return posture
+}
+
+// ReadPosture is [Reconciler.Posture] without its fail-open answer: the
+// posture this node concluded, or the error that kept it from reading the
+// control plane.
+//
+// FOR THE PEERS. The readiness probe and the admission gate want the
+// fail-open answer, because the alternative takes every node out of rotation
+// on a database blip. The presence heartbeat must not have it: broadcast, the
+// fail-open serve is a confident healthy posture on exactly the node an
+// operator is looking for. The engine used to catch that only when the read
+// overran the beat's budget, by the budget's clock — so a plane that refused
+// at once had its fail-open serve published as this node's answer.
+//
+// The gate is decided exactly as [Reconciler.Posture] decides it: a plane it
+// cannot read records serve here too, so which of the two a caller asks
+// through never changes what [Reconciler.Admits] answers.
+func (r *Reconciler) ReadPosture(ctx context.Context) (configplane.Posture, error) {
 	// BOUNDED, because this is on the liveness and readiness path. The view
 	// below is two coordination round trips, one of which iterates the
 	// fleet's keys — which the NATS client's default per-API timeout does
@@ -490,9 +517,10 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 	// timeout to get there and the operator learns nothing.
 	//
 	// ProbeReadBudget is an eighth of the reconcile cadence and inside a
-	// typical 5s liveness timeout, so a slow plane degrades to the
-	// fail-open PostureServe answer below — which this function's own
-	// comment already promises for a plane it cannot read.
+	// typical 5s liveness timeout, so a slow plane degrades to the error
+	// below — which [Reconciler.Posture] answers with the fail-open
+	// PostureServe it promises for a plane it cannot read, and the gate
+	// records the same.
 	ctx, cancel := context.WithTimeout(ctx, ProbeReadBudget)
 	defer cancel()
 
@@ -505,9 +533,10 @@ func (r *Reconciler) Posture(ctx context.Context) configplane.Posture {
 		// of rotation on a database blip.
 		r.log.WarnContext(ctx, "posture_unknown", "error", err,
 			"detail", "cannot read the control plane; assuming this node is current")
-		return r.decide(configplane.PostureServe)
+		r.decide(configplane.PostureServe)
+		return "", fmt.Errorf("read this node's posture: %w", err)
 	}
-	return r.decide(configplane.DecidePosture(view))
+	return r.decide(configplane.DecidePosture(view)), nil
 }
 
 // ProbeReadBudget bounds one coordination read made for a health probe: the
@@ -1057,22 +1086,36 @@ func (r *Reconciler) fleetRevision(ctx context.Context, target coord.Activation)
 //
 // A body stored or published UNSEALED is refused whatever its origin: the seal
 // is what says a node of this fleet wrote it, so a plaintext one could have
-// been authored by anything that reaches the store or the broker. A body
-// sealed under a key this keyring does not hold is a keyring that is missing a
-// key the fleet seals under.
+// been authored by anything that reaches the store or the broker, and what
+// replaces it is an admin's whole document, which reads nothing from it
+// (internal/api/configapi). A body sealed under a key this keyring does not
+// hold is a keyring that is missing a key the fleet seals under. And a body
+// SEALED IN A FORM THIS BUILD DOES NOT READ is neither of those: most likely a
+// newer build sealed it, so it is not unsealed, no write replaces it, and the
+// fix is that build.
 func openRefusal(revisionID string, local bool, err error) error {
 	switch {
+	case errors.Is(err, secrets.ErrUnknownEnvelope) && local:
+		return fmt.Errorf("engine: this node's own copy of revision %s is sealed "+
+			"in a form this build doesn't read, so it is not applied. A newer "+
+			"build of Crewlet most likely sealed it here: run that build on this "+
+			"node again: %w", revisionID, err)
+	case errors.Is(err, secrets.ErrUnknownEnvelope):
+		return fmt.Errorf("engine: the fleet's revision %s is sealed in a form "+
+			"this build doesn't read, so it is neither applied nor kept. A newer "+
+			"build of Crewlet most likely sealed it: upgrade this node to the "+
+			"build the rest of the fleet runs: %w", revisionID, err)
 	case errors.Is(err, secrets.ErrUnsealedWithKey) && local:
 		return fmt.Errorf("engine: this node's own copy of revision %s is stored "+
-			"without a seal, so it is not applied; import the document again "+
-			"(`crewlet config import` or PUT /config), which stores it sealed: %w",
-			revisionID, err)
+			"without a seal, so it is not applied. An admin replaces it by "+
+			"sending the whole document again with PUT /config or `crewlet "+
+			"config import`, which stores it sealed: %w", revisionID, err)
 	case errors.Is(err, secrets.ErrUnsealedWithKey):
 		return fmt.Errorf("engine: the fleet's revision %s arrived through the "+
 			"coordination store without a seal, so it is neither applied nor "+
-			"kept: every node of this fleet seals what it publishes, so this body "+
-			"could have been forged by anything that reaches the broker: %w",
-			revisionID, err)
+			"kept. Every node of this fleet seals what it publishes, so anything "+
+			"that reaches the broker could have written it. An admin replaces it "+
+			"by sending the whole document with PUT /config: %w", revisionID, err)
 	default:
 		return fmt.Errorf("engine: revision %s does not open under this node's "+
 			"keyring, so it is neither applied nor kept; every node has to hold "+

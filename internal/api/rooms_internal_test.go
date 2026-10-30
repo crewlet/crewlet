@@ -37,9 +37,11 @@ func (h roomHeads) Artifact(_ context.Context, id artifacts.ID, _ statelog.Fresh
 }
 
 // A ROOM'S JOIN IS THE DATASTORE'S OWN ADMISSION WITH THE READ VERB: a reader
-// a share admits gets the role it grants; one with no relation, an artifact
-// nothing holds and one in the trash are each answered as absent; a read this
-// node could not make is undecidable, never absent.
+// a share admits gets the role it grants; one with no relation and an artifact
+// nothing holds are each answered as absent; an artifact in the trash is the
+// trash to a reader it is disclosed to (`artifact_trashed` on the socket) and
+// absent to anybody else; a read this node could not make is undecidable,
+// never absent.
 func TestARoomIsJoinedByTheDatastoresOwnAdmission(t *testing.T) {
 	t.Parallel()
 	live, trashed := artifacts.IDFor("rooms-live"), artifacts.IDFor("rooms-trashed")
@@ -63,16 +65,20 @@ func TestARoomIsJoinedByTheDatastoresOwnAdmission(t *testing.T) {
 		id   artifacts.ID
 		want artifacts.Role
 	}{
-		"a viewer's share":         {"erin", live, artifacts.RoleViewer},
-		"the owner":                {"dana", live, artifacts.RoleOwner},
-		"no relation":              {"fred", live, ""},
-		"an artifact in the trash": {"erin", trashed, ""},
-		"nothing at that id":       {"erin", artifacts.IDFor("rooms-nothing"), ""},
+		"a viewer's share":                   {"erin", live, artifacts.RoleViewer},
+		"the owner":                          {"dana", live, artifacts.RoleOwner},
+		"no relation":                        {"fred", live, ""},
+		"an artifact in the trash, unshared": {"fred", trashed, ""},
+		"nothing at that id":                 {"erin", artifacts.IDFor("rooms-nothing"), ""},
 	} {
 		got, err := access.Standing(t.Context(), person(tc.who), tc.id)
 		if err != nil || got != tc.want {
 			t.Errorf("%s: standing %q, %v; want %q", name, got, err, tc.want)
 		}
+	}
+	if got, err := access.Standing(t.Context(), person("erin"), trashed); got != "" ||
+		!errors.Is(err, artifactsdomain.ErrTrashed) {
+		t.Errorf("a reader of a binned artifact: standing %q, %v; want the trash", got, err)
 	}
 	broken := roomAccess{gate: artifactsapi.Gate{Heads: roomHeads{err: errors.New("the copy is behind")},
 		Chart: authz.NoChart{}}}

@@ -77,11 +77,10 @@ func (f *Fleet) DeleteSeatPause(_ context.Context, seat uuid.UUID, version uint6
 // WatchSeatPauses streams every pause, the marker, then every change.
 //
 // The snapshot and the registration happen under ONE lock, which is the whole
-// ordering guarantee: a write lands either before the snapshot (and is in it)
-// or after the registration (and is delivered as a change). The KV backend
-// gives the same guarantee by starting its change hint before it lists, and
-// confirming every hint on the leader — see its WatchSeatPauses. This twin has
-// one copy, so every update it delivers is already the current state.
+// ordering guarantee (watch.go). The KV backend gives the same guarantee by
+// certifying its first answer against the bucket's key index and reading every
+// change after it off the same consumer — see its WatchSeatPauses. This twin
+// has one copy, so every update it delivers is already the current state.
 func (f *Fleet) WatchSeatPauses(ctx context.Context) (<-chan coord.SeatPauseUpdate, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

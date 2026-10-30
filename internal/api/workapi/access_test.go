@@ -97,8 +97,8 @@ func TestTheTidyRoutesPassTheAuthor(t *testing.T) {
 
 // A PURGE ASKS FOR A RECENT SIGN-IN.
 //
-// A purge destroys a row on every node and nothing undoes it, so beside admin
-// it asks for the step-up every other irreversible gesture asks for: an
+// A purge destroys a row on every data node and nothing undoes it, so beside
+// admin it asks for the step-up every other irreversible gesture asks for: an
 // administrator whose proof is older than the window is refused
 // `step_up_required` naming it, with nothing destroyed, and the same
 // administrator a moment after proving who they are is served.

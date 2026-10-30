@@ -245,8 +245,8 @@ func TestAStreamRebuiltUnderARunningNodeIsNamed(t *testing.T) {
 //     different logs and accepts the write.
 //
 // Whatever lands is not a local mistake: the recovery follows the rebuilt log
-// from its head, so every node applies it as though it continued the history
-// it was never arbitrated in.
+// from its head, so every data node applies it as though it continued the
+// history it was never arbitrated in.
 func TestAStreamRebuiltUnderARunningNodeRefusesItsWrites(t *testing.T) {
 	t.Parallel()
 	e, js := aRunningNode(t)

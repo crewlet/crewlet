@@ -82,7 +82,7 @@ func refuseAdmission(w http.ResponseWriter, r *http.Request, action authz.Action
 	case errors.Is(err, ErrNoSuchArtifact):
 		notFound(w)
 	case errors.As(err, &refused):
-		refuseDecision(w, r, action, refused.Decision)
+		operator.RefuseDecision(w, r, action, refused.Decision)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
 		trashed(w)
 	case errors.Is(err, ErrRecordUnwritten):
@@ -93,22 +93,6 @@ func refuseAdmission(w http.ResponseWriter, r *http.Request, action authz.Action
 		// THE CHART OR THE ESTATE COULD NOT TELL: unknown, never a refusal.
 		unavailable(w, err, "this node could not decide who may act on this artifact")
 	}
-}
-
-// refuseDecision renders a refusal of the authority table: the tools' own
-// envelope ([operator.RefuseDecision]), and for a caller whose relation is
-// below the verb's role, the role named, so the dashboard can say whom to ask
-// for what.
-func refuseDecision(w http.ResponseWriter, r *http.Request, action authz.Action, d authz.Decision) {
-	if d.Err == nil && d.Reason == authz.ReasonRole && d.Role.Valid() {
-		detail := authz.RefusalDetail(d.Reason, d.Grants)
-		detail["role"] = string(d.Role)
-		detail["detail"] = "this needs the " + string(d.Role) + " role on the artifact; " +
-			"its owner can share it with you at that role"
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
-		return
-	}
-	operator.RefuseDecision(w, r, action, d)
 }
 
 // notFound is the answer for an artifact this caller is answered as absent:
@@ -130,10 +114,11 @@ func invalid(w http.ResponseWriter, detail string) {
 		map[string]string{"detail": detail})
 }
 
-// unavailable is a 503 whose cause says whether, and when, to come back.
+// unavailable is a 503 whose cause says whether, and when, to come back
+// ([builtin.RetryAfter], the hint beside the words a condition is told in).
 func unavailable(w http.ResponseWriter, cause error, detail string) {
 	httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
-		httpjson.RetrySeconds(statelog.RetryAfter(cause, authz.RetryUndecidedSeconds*time.Second)),
+		httpjson.RetrySeconds(builtin.RetryAfter(cause, authz.RetryUndecidedSeconds*time.Second)),
 		httpjson.Detail{"detail": detail})
 }
 
@@ -143,16 +128,28 @@ func trashed(w http.ResponseWriter) {
 		"detail": "the artifact is in the trash; its owner restores it first"})
 }
 
-// prefixes are the package names a refusal's text begins with, which the
-// person reading the detail has no use for.
-var prefixes = []string{"artifactsdomain: ", "artifactupload: ", "artifactsapi: ", "artifactserve: ",
-	"artifacts: ", "objectives: "}
+// prefixes are the names of the packages beside the publish pipeline a
+// refusal here may open with — this surface's own, the artifact origin's and
+// the objectives' — which the person reading the detail has no use for.
+var prefixes = []string{"artifactsapi: ", "artifactserve: ", "objectives: "}
 
-// say is err's text as a detail a person reads.
+// say is err as a detail a person reads.
+//
+// A LOST RACE AND A CREATE OF WHAT IS THERE are told in the state log's words
+// for a person ([statelog.Sentence]), as every surface tells them: the
+// artifacts' own text for a lost race carries the framework's after it, the
+// broker subject the race was lost on. Every other refusal of the artifacts is
+// worded by the publish pipeline ([artifactupload.Sentence]), which cuts every
+// package name and class word wherever it sits: this surface trimmed package
+// names from the front only, so a refusal read "invalid: kind …" and a
+// manifest's "invalid: manifest: invalid: …".
 func say(err error) string {
-	text := err.Error()
+	if said, ok := statelog.Sentence(err); ok {
+		return said
+	}
+	text := artifactupload.Sentence(err)
 	for _, p := range prefixes {
-		text = strings.TrimPrefix(text, p)
+		text = strings.ReplaceAll(text, p, "")
 	}
 	return text
 }
@@ -203,15 +200,22 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 	switch {
 	case errors.As(err, &moved):
 		// A MOVED HEAD IS ANSWERED BY THE PUBLISH ROUTES with the entry's
-		// text to merge onto; a gesture reaching here names no base.
+		// text to merge onto, `412` because they take their base as the
+		// If-Match header. A gesture reaching here stated no such header,
+		// so it is the class's own conflict, as a tool is told it: a 412
+		// says a precondition the request stated was false, and this one
+		// stated none.
 		detail["head"] = moved.Head.HeadNumber
-		fail(http.StatusPreconditionFailed, httpjson.CodeVersionMoved)
+		fail(http.StatusConflict, httpjson.CodeStaleVersion)
 	case errors.As(err, &gone):
 		detail["paths"] = gone.Paths
 		fail(http.StatusConflict, httpjson.CodeCarriedObjectGone)
 	case errors.As(err, &quota):
+		// 409, NOT 413: what the write collided with is how much the
+		// company holds, which a smaller request does not change — the
+		// tools' `quota_exceeded` class, answered in its status.
 		detail["limit"], detail["usage"], detail["key"] = quota.Limit, quota.Usage, quota.Key
-		fail(http.StatusRequestEntityTooLarge, httpjson.CodeQuotaExceeded)
+		fail(http.StatusConflict, httpjson.CodeQuotaExceeded)
 	case errors.As(err, &mismatch):
 		detail["path"] = mismatch.Path
 		failClient(httpjson.CodeUploadMismatch)
@@ -258,8 +262,12 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 		fail(http.StatusConflict, httpjson.CodeUploadConsumed)
 	case errors.Is(err, artifactsdomain.ErrLabelTaken):
 		fail(http.StatusConflict, httpjson.CodeLabelTaken)
+	case errors.Is(err, artifactsdomain.ErrLabelsFull):
+		fail(http.StatusConflict, httpjson.CodeLabelsFull)
 	case errors.Is(err, artifactsdomain.ErrSourceTaken):
 		fail(http.StatusConflict, httpjson.CodeSourceTaken)
+	case errors.Is(err, artifactsdomain.ErrExists):
+		fail(http.StatusConflict, httpjson.CodeExists)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
 		fail(http.StatusConflict, httpjson.CodeArtifactTrashed)
 	case errors.Is(err, artifactsdomain.ErrPurging):
@@ -271,9 +279,9 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 	case errors.Is(err, artifactsdomain.ErrFolderNameTaken):
 		fail(http.StatusConflict, httpjson.CodeFolderNameTaken)
 	case errors.Is(err, artifactsdomain.ErrFolderCycle):
-		fail(http.StatusConflict, httpjson.CodeFolderCycle)
+		failClient(httpjson.CodeFolderCycle)
 	case errors.Is(err, artifactsdomain.ErrFolderDepth):
-		fail(http.StatusConflict, httpjson.CodeFolderDepth)
+		failClient(httpjson.CodeFolderDepth)
 	case errors.Is(err, artifactsdomain.ErrFolderLimit):
 		fail(http.StatusConflict, httpjson.CodeFolderLimit)
 	case errors.As(err, &ambiguous):
@@ -282,7 +290,7 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 			candidates[i] = c.ID
 		}
 		detail["candidates"] = candidates
-		fail(http.StatusConflict, httpjson.CodeFolderAmbiguous)
+		failClient(httpjson.CodeFolderAmbiguous)
 	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
 		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
 		fail(http.StatusForbidden, httpjson.CodeForbidden)
@@ -293,10 +301,19 @@ func writeFailed(w http.ResponseWriter, r *http.Request, key, verb string, err e
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		operator.Interrupted(w, r, key, verb, err)
 	default:
-		if words, ok := builtin.Condition(err); ok {
-			log.WarnContext(r.Context(), "artifacts_write_unavailable", "verb", verb,
-				"op_id", key, "error", err.Error())
-			unavailable(w, err, "this node could not "+verb+" right now: "+words)
+		// A CONDITION OF THE NODE, in a person's words for it
+		// ([builtin.ConditionSentence]) and its error to the log: it was
+		// "this node could not <verb> right now: " followed by the model's
+		// clause, which for a state-log refusal was the refusal's own text.
+		// The file store's own two are among them: a full one, `503` with
+		// no Retry-After saying who makes room ([objstore.ErrFull]), and one
+		// that did not take the bytes, under an election's wait
+		// ([objstore.ErrUnanswered]) — the reading a project file's upload
+		// gives both, where this route answered the second as a fault.
+		if said, ok := builtin.ConditionSentence(err); ok {
+			operator.LogCondition(r.Context(), log, "artifacts_write_unavailable", err,
+				"verb", verb, "op_id", key)
+			unavailable(w, err, said)
 			return
 		}
 		// A FAILURE THE DOMAIN DID NOT NAME is this node's own fault, and
@@ -317,7 +334,18 @@ func readFailed(w http.ResponseWriter, r *http.Request, err error, what string) 
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			map[string]string{"detail": say(err)})
 	default:
-		log.WarnContext(r.Context(), "artifacts_read_unavailable", "what", what, "error", err.Error())
-		unavailable(w, err, "this node could not read "+what+" right now")
+		// A CONDITION in a person's words for it, which say whether to come
+		// back exactly as the Retry-After does: "right now" told a person
+		// to come back to a log at its ceiling.
+		if said, ok := builtin.ConditionSentence(err); ok {
+			operator.LogCondition(r.Context(), log, "artifacts_read_unavailable", err,
+				"what", what)
+			unavailable(w, err, said)
+			return
+		}
+		// A FAILURE NO CONDITION CLAIMS is this node's own fault, which no
+		// wait clears: it was a 503 telling a person to come back for it.
+		log.ErrorContext(r.Context(), "artifacts_read_failed", "what", what, "error", err.Error())
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 	}
 }

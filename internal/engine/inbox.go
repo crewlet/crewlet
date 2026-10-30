@@ -18,7 +18,7 @@ import "github.com/crewlet/crewlet/internal/worklet"
 // COPY SERVES. A copy out of service keeps its node in rotation, and its
 // applier is the one thing on that node nobody vouches for, so for as long as
 // it is out the movements come from a sound peer's applier instead, relayed
-// (inboxrelay.go), and its own are withheld. A node that serves no sockets
+// (liverelay.go), and its own are withheld. A node that serves no sockets
 // simply has nobody registered here.
 //
 // A SETTER for [Engine.SetOnCompanyPublished]'s reason: the API half is built
@@ -45,21 +45,10 @@ func (e *Engine) SetOnInboxGap(fn func()) {
 }
 
 // inboxMoved is what the tracker applier calls after a committed batch that
-// wrote somebody a notice.
-//
-// KEPT FOR THIS NODE'S RELAY FOLLOWERS whatever its copy's state — a server
-// answers a follower only while its copy serves ([inboxRelay.answerNow]) — and
-// handed to this node's own sockets only while they are not being relayed a
-// peer's: one source at a time.
+// wrote somebody a notice: announced to this node's sockets and kept for its
+// relay followers, one source at a time ([Engine.announce]).
 func (e *Engine) inboxMoved(moved []worklet.InboxMovement) {
-	relay := e.inboxRelay.Load()
-	if relay != nil {
-		relay.record(moved)
-		if relay.relaying.Load() {
-			return
-		}
-	}
-	e.deliverInbox(moved)
+	e.announce(liveBatch{Inbox: moved})
 }
 
 // inboxListening reports whether anything on this node registered for its

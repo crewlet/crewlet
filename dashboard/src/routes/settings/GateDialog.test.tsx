@@ -249,7 +249,7 @@ test("an eviction nobody could judge offers force", async () => {
   engine(golden.refusals["eviction_unjudged"]!);
   render(<GateDialog node="node-4" evict onHeld={() => {}} onClose={() => {}} />);
   confirmAndPress("node-4", "Evict");
-  await waitFor(() => expect(screen.getByText(/cannot be judged/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Couldn.t tell whether node-4/)).toBeTruthy());
   expect(screen.getByRole("checkbox", { name: "Force the eviction" })).toBeTruthy();
 });
 
@@ -433,7 +433,7 @@ test("a refused finish renders beside the answer it already had", async () => {
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: "Finish this gesture" }));
-  await waitFor(() => expect(screen.getByText(/cannot be judged/)).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Couldn.t tell whether node-4/)).toBeTruthy());
   expect(screen.getByText(/Finishing it was refused, and wrote nothing/)).toBeTruthy();
   // THE ANSWER IS STILL THERE: its operation, and Finish under it.
   expect(screen.getByText(result.op_id)).toBeTruthy();

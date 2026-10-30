@@ -26,7 +26,7 @@
  *  - NO ACCESS — the change is an app's and the reader does not hold that
  *    app: "This change needs Worklet access. An admin can give it to you."
  *    Decided only for a change `viewer.acts` leaves out, and only where the
- *    app the change writes to ([actionApp]) is one the reader lacks — so a
+ *    reader holds none of the apps the change needs ([actionApps]) — so a
  *    change the engine DOES offer without the app (answering an ask you were
  *    asked) is never held by it;
  *  - NOT SERVED — the engine does not make this change for this person at
@@ -57,7 +57,7 @@ import { isOwnSeat } from "./seats.ts";
 import { useConnection } from "./store-hooks.ts";
 import { useViewer, type ViewerState } from "./viewer.ts";
 import { useServicesRun, type Service, type ServicesRun } from "./services.ts";
-import { ADMIN, DOCLET, WORKLET, holds, needsWords, type App } from "./access.ts";
+import { ADMIN, holds, needsWords, type App } from "./access.ts";
 import type { ActionTool } from "~/protocol/act.ts";
 import { ACTIONS } from "~/contract/actions.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
@@ -107,32 +107,38 @@ export const WRITE_REASONS: Readonly<Record<Exclude<WriteBlock, "held" | "no_acc
   not_served: "This can’t be changed from here.",
 };
 
+// EVERY ROW'S APPS ARE APPS, checked by the compiler: an app spelled wrong in
+// the table would be a lock that names access nobody can be given.
+const NEEDS: { readonly [T in ActionTool]: { readonly apps: readonly App[] } } = ACTIONS;
+
 /**
- * The app a change writes to — the tracker for a change landing in the
- * tracker's log, the knowledge base for one landing in its pages — or null
- * for a change that is no app's (pausing a seat, answering a coding run).
+ * The apps ANY ONE of which a change needs — its app for an app's change,
+ * every app for one that draws on whichever the caller holds
+ * (`answer_knowledge`), none for a change that is no app's (pausing a seat,
+ * answering a coding run).
  *
- * READ OFF THE ROW'S OWN `domain` (`contract/actions.ts`), the log the
- * engine says the write lands in, never a list of tool names kept here: a
- * change lands in an app's log exactly when it is that app's to make.
+ * THE ROW'S OWN `apps` (`contract/actions.ts`), which an engine gate holds to
+ * the authority table's row for the tool. It used to be read off the row's
+ * `domain`, the log the write lands in — a different fact, which agreed only
+ * while every app's change landed in that app's log: `answer_knowledge` lands
+ * in none and needs an app, so a reader holding neither was told the engine
+ * does not make the change rather than what to ask an admin for.
  */
-export function actionApp(tool: ActionTool): App | null {
-  const domain: string | null = ACTIONS[tool].domain;
-  if (domain === "tracker") return WORKLET;
-  if (domain === "pages") return DOCLET;
-  return null;
+export function actionApps(tool: ActionTool): readonly App[] {
+  return NEEDS[tool].apps;
 }
 
 /**
  * The service built into Crewlet a change lands in, read off the same
- * `domain`: Worklet for the `tracker` log, Doclet for the `pages` log. A
- * company running another system in its place, or none, has nowhere for the
- * change to land.
+ * `domain`: Worklet for the `tracker` log, Doclet for the `pages` log, Chatlet
+ * for the `chat` log. A company running another system in its place, or
+ * none, has nowhere for the change to land.
  */
 export function actionService(tool: ActionTool): Service | null {
   const domain: string | null = ACTIONS[tool].domain;
   if (domain === "tracker") return "tracker";
   if (domain === "pages") return "knowledge";
+  if (domain === "chat") return "chat";
   return null;
 }
 
@@ -145,11 +151,12 @@ export function actionService(tool: ActionTool): Service | null {
 export const SERVICE_OFF_REASONS: Readonly<Record<Service, string>> = {
   tracker: "Worklet is not in use, so no task can be filed or changed here.",
   knowledge: "Doclet is not in use, so no page can be written here.",
+  chat: "Chatlet is not in use, so nothing can be said in a room here.",
 };
 
-/** The sentence a change is held with when the reader lacks its app. */
-export function noAccessReason(app: App): string {
-  return needsWords("This change", [app]);
+/** The sentence a change is held with when the reader holds none of its apps. */
+export function noAccessReason(apps: readonly App[]): string {
+  return needsWords("This change", apps);
 }
 
 /** The decision itself, over values — what the hook reads, and what a test pins. */
@@ -181,9 +188,9 @@ export function writeAccess(
     // remedy they can ask an admin for, and "this engine does not make this
     // change for you" about a change it would make once they held it sends
     // them nowhere.
-    const app = actionApp(tool);
-    if (app !== null && !holds(viewer.grants, app)) {
-      return { can: false, block: "no_access", reason: noAccessReason(app) };
+    const apps = actionApps(tool);
+    if (apps.length > 0 && !apps.some((app) => holds(viewer.grants, app))) {
+      return { can: false, block: "no_access", reason: noAccessReason(apps) };
     }
     return blocked("not_served");
   }
@@ -265,6 +272,42 @@ export function messageSeatAccess(
 /** [messageSeatAccess] for this browser now. */
 export function useMessageSeatAccess(handle: string): WriteAccess {
   return messageSeatAccess(useWriteAccess("create_work_item"), useViewer(), handle);
+}
+
+/** What a direct message to the reader's own seat says. */
+export const OWN_SEAT_DIRECT =
+  "This is your own seat, so a direct message here would be to yourself.";
+
+/**
+ * Whether this browser may open a DIRECT conversation with the seat `handle`
+ * in the company's own chat — `open_dm`'s access, HELD on the reader's own
+ * seat — or null where none is offered at all.
+ *
+ * OFFERED BESIDE Message, never instead of it, and only where it can mean
+ * something: the company runs Chatlet (`runs.chat`; on a vendor's, the
+ * conversation is there and this engine holds no room for it) and the reader
+ * holds Chatlet. A person writes to a seat there as they would
+ * to a colleague: a remark that obliges nothing, where Message files an ask
+ * the seat owes an answer on. Held, as Message is, on the reader's own seat —
+ * the engine adds the author to every direct conversation, so one with only
+ * yourself in it is no conversation.
+ */
+export function directSeatAccess(
+  access: WriteAccess,
+  viewer: Pick<ViewerState, "handle" | "chatlet">,
+  handle: string,
+  /** Which of Crewlet's own services the company runs (`lib/services.ts`). */
+  runs: ServicesRun,
+): WriteAccess | null {
+  if (!runs.chat || !viewer.chatlet) return null;
+  return access.can && isOwnSeat(viewer, handle)
+    ? { can: false, block: "held", reason: OWN_SEAT_DIRECT }
+    : access;
+}
+
+/** [directSeatAccess] for this browser now. */
+export function useDirectSeatAccess(handle: string): WriteAccess | null {
+  return directSeatAccess(useWriteAccess("open_dm"), useViewer(), handle, useServicesRun());
 }
 
 // ---------------------------------------------------------------------------

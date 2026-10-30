@@ -35,7 +35,7 @@ type ViewRow struct {
 	// [ViewRow.Key] instead.
 	ID   string   `json:"id,omitempty"`
 	Key  string   `json:"key"`
-	Name string   `json:"name"`
+	Name string   `json:"name" untrusted:"name"`
 	Type ViewType `json:"type"`
 
 	Container Container `json:"container"`
@@ -60,7 +60,7 @@ type ViewRow struct {
 
 	Rank   Rank              `json:"rank,omitempty"`
 	Icon   string            `json:"icon,omitempty"`
-	Params map[string]string `json:"params,omitempty"`
+	Params map[string]string `json:"params,omitempty" untrusted:"name"`
 
 	// Count is how many tasks this view selects when it is RUN — the
 	// `total_hint` a `work_items{view, container}` read of it answers, with
@@ -364,13 +364,13 @@ func countView(ctx context.Context, tx *sql.Tx,
 			return 0, false, err
 		}
 	}
-	where, args, err := compile(parsed, q.Now, fields)
+	set, err := compile(parsed, q.Now, fields)
 	if err != nil {
 		// COMPILING IS PURE — it reads nothing — so a failure here is
 		// about the view and never about the store.
 		return 0, false, fmt.Errorf("%w: %w", errUncountable, err)
 	}
-	return countHint(ctx, tx, where, args)
+	return countHint(ctx, tx, set)
 }
 
 // viewScope is the read's closure: the container the strip belongs to.
@@ -416,7 +416,7 @@ func implicitViews(container Container) []ViewRow {
 		//
 		// NO `sort`, deliberately, unlike the timeline: [sortTerms]
 		// already orders a removed listing by `removed_at DESC`, which is
-		// the one order this tab wants and the only index over these rows.
+		// the one order this tab wants and the order its indexes hold.
 		// Naming it here would be a second copy of that decision, and the
 		// two would drift.
 		{Key: ViewKeyTrash, Name: "Trash", Type: ViewTable,

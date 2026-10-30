@@ -165,6 +165,9 @@ func TestAManagedDocumentRefusesAGitHubAppBeforeGitHubIsAsked(t *testing.T) {
 	if !errors.As(err, &managed) {
 		t.Fatalf("a callback begun by alice = %v, want the managed refusal", err)
 	}
+	// AND THE PERSON IS TOLD WHERE THE APP IS ADDED, not which token the
+	// config surface refused.
+	toldAs(t, "a managed document", err, "managed outside Crewlet")
 	if asked.Load() != 0 {
 		t.Error("the callback exchanged GitHub's one-time code before refusing")
 	}

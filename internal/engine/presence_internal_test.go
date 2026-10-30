@@ -49,14 +49,15 @@ func TestEveryNodeRunsAPresenceHubTheFleetHears(t *testing.T) {
 		t.Fatalf("presence frames are sealed in %q, want %q", got, presence.Channel)
 	}
 
-	room := artifacts.IDFor("engine-presence-suite")
-	shown := make(chan artifacts.PresenceMember, 16)
+	room := presence.ArtifactRoom(artifacts.IDFor("engine-presence-suite"))
+	shown := make(chan presence.Member, 16)
 	api.Presence().OnChange(func(c presence.Change) {
 		for _, m := range c.Upsert {
 			shown <- m
 		}
 	})
-	if _, _, err := api.Presence().Join(room, presence.Local{Seat: "dana", Kind: iam.ActorHuman}); err != nil {
+	if _, err := api.Presence().Join(room, presence.Local{Seat: "dana", Kind: iam.ActorHuman},
+		func(string, presence.Roster) bool { return true }); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.After(10 * time.Second)
@@ -64,8 +65,8 @@ func TestEveryNodeRunsAPresenceHubTheFleetHears(t *testing.T) {
 		// TOUCHED AGAIN EACH ROUND: the API node's listen is its
 		// reconciler's, and a touch before it holds the listen is heard
 		// by nobody until the rebroadcast.
-		seats.Presence().Touch(room, "agent-cto", "run-1", artifacts.PresenceEditing,
-			artifacts.Focus{Collection: "review"})
+		seats.Presence().Touch(room, presence.Agent{Seat: "agent-cto", Turn: "run-1",
+			Activity: presence.Editing, Focus: presence.Focus{Collection: "review"}})
 		select {
 		case m := <-shown:
 			if m.Seat == "agent-cto" && m.Kind == iam.ActorAgent {

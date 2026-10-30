@@ -183,9 +183,20 @@ func (s *Decisions) recordAudit(w http.ResponseWriter, r *http.Request) (auditCa
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
 			httpjson.Detail{"detail": err.Error()})
 		return auditCall{}, false
-	case err != nil || receipt.Result().Outcome == "unknown":
+	case err != nil:
+		// A RECORD THE STORE REFUSED WROTE NOTHING, so it is no unknown
+		// outcome: a condition of the node is told as one, in a person's
+		// words under its own hint, and anything else is a fault.
+		if !operator.AnswerCondition(ctx, w, s.log, "assistant_audit_read_condition", err,
+			nil, "conversation", id, "op_id", key) {
+			s.log.ErrorContext(ctx, "assistant_audit_read_failed", "conversation", id,
+				"op_id", key, "error", err)
+			httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		}
+		return auditCall{}, false
+	case receipt.Result().Outcome == "unknown":
 		s.log.WarnContext(ctx, "assistant_audit_read_unconfirmed", "conversation", id,
-			"op_id", key, "error", err)
+			"op_id", key)
 		httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, key, false,
 			httpjson.Detail{"detail": opkey.UnknownDetail(false)})
 		return auditCall{}, false
@@ -210,6 +221,9 @@ func (s *Decisions) audited(w http.ResponseWriter, r *http.Request, a auditCall,
 		// RECORDED, AND NO SUCH FILE IN THIS CONVERSATION: the read stays on
 		// the owner's record as the attempt it was.
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+	case operator.AnswerCondition(r.Context(), w, s.log, "assistant_audit_read_condition", err,
+		nil, "conversation", a.conversation, "op_id", a.key):
+		// A CONDITION, in a person's words and under its own hint.
 	default:
 		s.log.ErrorContext(r.Context(), "assistant_audit_read_failed", "conversation",
 			a.conversation, "error", err)

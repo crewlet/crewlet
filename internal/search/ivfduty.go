@@ -379,7 +379,7 @@ func (e *Embedder) trainFrom(ctx context.Context, dim int, set trainingSet, basi
 		"sources", n, "lists", lists, "probes", choice.Probes,
 		"recall", measurement.Recall, "floor", measurement.Floor,
 		"worst_shape", string(measurement.Shape),
-		"head_misses", measurement.HeadMisses, "shapes", fmt.Sprintf("%+v", choice.Shapes),
+		"head_misses", measurement.HeadMisses, "shapes", choice.Shapes,
 		"installed", record.Lists > 0)
 	return e.publishIndex(ctx, dim, record)
 }

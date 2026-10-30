@@ -12,10 +12,10 @@
 //
 // The replicated estate forbids a UNIQUE index outside a primary key, because
 // a constraint violation inside an apply transaction aborts it
-// DETERMINISTICALLY on every node at once — a rare cosmetic anomaly becomes a
-// fleet-wide stalled log with no partial-failure arm to recover through. So
-// there is no uniqueness constraint anywhere in this estate, and there is
-// nothing to add one to.
+// DETERMINISTICALLY on every data node at once — a rare cosmetic anomaly
+// becomes a fleet-wide stalled log with no partial-failure arm to recover
+// through. So there is no uniqueness constraint anywhere in this estate, and
+// there is nothing to add one to.
 //
 // What keeps an address, a login and a seat binding to one holder instead is
 // that EVERY WRITE THAT SETS OR FREES ONE IS A RECORD ON ONE SUBJECT — the
@@ -82,7 +82,7 @@
 // seat ([Writer.humanSeat]); a node running no company has none to offer
 // ([ErrNoCompany]). The WRITER's decides are where the rule is enforced and
 // never the applier, which writes whatever a record says, because refusing a
-// record there stops the log on every node.
+// record there stops the log on every data node.
 package iamdomain
 
 import (
@@ -200,7 +200,7 @@ const (
 	// ONE SUBJECT PER NODE, so two operators evicting two nodes never
 	// contend and two evicting one do. It is the domain's own copy of the
 	// gate every state log installs: the record states a POSITION, and
-	// every node then reaches the same verdict about every record with no
+	// every data node then reaches the same verdict about every record with no
 	// clock, no coordination read and no agreement beyond the order they
 	// already share.
 	KindEviction ObjectKind = "eviction"

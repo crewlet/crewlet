@@ -30,7 +30,9 @@
  * ends, so the retry reaches a peer behind a load balancer, or this node once
  * it has restarted. So is a starting node's `503 starting`, for the same
  * reason the other way round: the node is about to serve, and the retry
- * reaches it once it does.
+ * reaches it once it does. And so is a `503 seat_holders_unavailable` that
+ * names a wait: the node could not read just now who holds the seats the
+ * draft removes, so it stored nothing, and the retry asks again once it can.
  *
  * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again
  * on their own: the answer to the next check is the same refusal. So a change
@@ -105,10 +107,12 @@ export type CheckStatus =
 
 /**
  * Why a check was left unchecked, which is what the toolbar says: the
- * engine's answer never arrived, the engine failed, or the node refused it
- * while draining or starting. Every one backs off and lets a save through.
+ * engine's answer never arrived, the engine failed, the node refused it
+ * while draining or starting, or it could not read, for now, something the
+ * check needs (`unavailable`: who holds the seats the draft removes). Every
+ * one backs off and lets a save through.
  */
-export type UncheckedWhy = "unanswered" | "failed" | "draining" | "starting";
+export type UncheckedWhy = "unanswered" | "failed" | "draining" | "starting" | "unavailable";
 
 /**
  * Why the engine holds a revision the draft was not built on: every reason
@@ -151,13 +155,19 @@ export type CheckOutcome =
       readonly detail: string;
     };
 
-/** What an unchecked answer was, in one sentence: [unsettledSentence] for the engine's own two. */
+/**
+ * What an unchecked answer was, in one sentence: [unsettledSentence] for the
+ * engine's own two, and for a condition waiting clears the engine's own
+ * sentence, which says what it could not read and that nothing was written.
+ */
 export function uncheckedSentence(outcome: Extract<CheckOutcome, { status: "unchecked" }>): string {
   switch (outcome.why) {
     case "draining":
       return "This node is draining.";
     case "starting":
       return "This node is still starting.";
+    case "unavailable":
+      return outcome.detail;
     case "unanswered":
     case "failed":
       return unsettledSentence({
@@ -258,6 +268,7 @@ export function classifyCheck(
       };
     case "draining":
     case "starting":
+    case "unavailable":
       return {
         status: "unchecked",
         why: refusal.kind,

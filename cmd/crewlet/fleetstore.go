@@ -89,7 +89,7 @@ func fleetStoreRemedy(err error, bootstrapPath string) error {
 	case errors.Is(err, engine.ErrNoFleetStoreHere):
 		return fmt.Errorf("%w\n\nWith %s's engine stopped, reach the store through "+
 			"a node that is running: name it with -api, with one of its Tier A "+
-			"tokens in %s — or start this node's engine and re-run", err,
+			"tokens in %s, or start this node's engine and re-run", err,
 			bootstrapPath, apiTokenEnv)
 	case errors.Is(err, jetstream.ErrStoreDirHeld):
 		// AN ENGINE STARTING WITH -import-company is the one engine named
@@ -119,6 +119,14 @@ func (f fleetBackend) Set(ctx context.Context, name, value string, by secrets.Au
 	source secrets.Source, now time.Time) (storedSecret, error) {
 
 	return storedSecret{Author: by}, f.Store.Set(ctx, name, value, by, source, now)
+}
+
+// Unset removes the row. Nothing is re-activated, as for [fleetBackend.Set]:
+// the note an unset prints says when each engine stops resolving it
+// ([secretsStoppedRemovalNote]).
+func (f fleetBackend) Unset(ctx context.Context, name string) (removedSecret, error) {
+	gone, err := f.Store.Unset(ctx, name)
+	return removedSecret{Removed: gone}, err
 }
 
 // SetMany writes each row in turn, every one checked before the first is
@@ -169,5 +177,5 @@ func fleetSecrets(fs *engine.FleetStore, boot *config.Bootstrap) (*fleetsecrets.
 // engine was stopped: which broker, and that no node stood in between.
 func reachedDirectly(fs *engine.FleetStore) string {
 	return "the fleet's store, reached through " + fs.Where +
-		" — this node's engine is stopped"
+		" (this node's engine is stopped)"
 }

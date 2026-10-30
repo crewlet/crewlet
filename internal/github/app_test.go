@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -298,6 +299,65 @@ func TestATokenCarriesOnlyWhatTheTierAsksFor(t *testing.T) {
 	}
 	if token.Token != "ghs_x" {
 		t.Errorf("token = %q", token.Token)
+	}
+}
+
+// A RATE LIMIT IS TOLD APART FROM A REFUSAL, by both of GitHub's clients.
+// GitHub answers its limit 429, or 403 with `x-ratelimit-remaining: 0` (its
+// primary limit) or a `retry-after` (a secondary one), and a 403 with neither
+// is a credential that may not do this: a wait clears the first, and a person
+// the second, which is what a caller deciding a seat's next step reads. The
+// headers tell them apart, never the message. Mutation: drop the 429's
+// reading or either header's, and its row goes red on both clients.
+func TestARateLimitIsToldApartFromARefusal(t *testing.T) {
+	t.Parallel()
+	_, keyPEM := testKey(t)
+	for name, c := range map[string]struct {
+		status  int
+		headers map[string]string
+		limited bool
+	}{
+		"a 429": {status: http.StatusTooManyRequests, limited: true},
+		"a 403 at the primary limit": {status: http.StatusForbidden,
+			headers: map[string]string{"X-RateLimit-Remaining": "0"}, limited: true},
+		"a 403 at a secondary limit": {status: http.StatusForbidden,
+			headers: map[string]string{"Retry-After": "60"}, limited: true},
+		"a 403 refusing the credential": {status: http.StatusForbidden,
+			headers: map[string]string{"X-RateLimit-Remaining": "4999"}},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			for key, value := range c.headers {
+				w.Header().Set(key, value)
+			}
+			w.WriteHeader(c.status)
+			_, _ = w.Write([]byte(`{"message":"refused"}`))
+		}))
+		t.Cleanup(srv.Close)
+		app, err := github.NewAppClient(7, keyPEM, srv.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, minted := app.MintToken(context.Background(), 11,
+			tierPerms("read_only", false), nil)
+		client, err := github.NewClient(github.ClientOptions{
+			APIBase: srv.URL, WebBase: srv.URL, Token: "secret",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, read := client.RepoOf(context.Background(), "acme", "api")
+		forbidden := c.status == http.StatusForbidden && !c.limited
+		for via, answer := range map[string]error{"the app's client": minted, "a token's client": read} {
+			var refused *github.APIError
+			if !errors.As(answer, &refused) {
+				t.Errorf("%s, %s: %v, want an *APIError", name, via, answer)
+				continue
+			}
+			if refused.RateLimited != c.limited || refused.Forbidden() != forbidden {
+				t.Errorf("%s, %s: rate limited %v and forbidden %v, want %v and %v", name,
+					via, refused.RateLimited, refused.Forbidden(), c.limited, forbidden)
+			}
+		}
 	}
 }
 

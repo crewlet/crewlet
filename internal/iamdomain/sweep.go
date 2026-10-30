@@ -18,7 +18,8 @@ import (
 // correction landed, and indistinguishable from an applier that had diverged.
 //
 // So the publisher resolves each horizon to a POSITION, once, and publishes
-// it. Every node then deletes exactly the same rows, whatever its clock says.
+// it. Every data node then deletes exactly the same rows, whatever its clock
+// says.
 //
 // # Per bucket, and why the division is the point
 //
@@ -47,6 +48,31 @@ import (
 // for would hold this store's only writer past the point every other domain's
 // apply is waiting at, which is the contention the budget exists to bound.
 const MaxSweepRows = statelog.ApplyTxRowBudget
+
+// sweepTrailStatement collects one class of one bucket's trail below a
+// position, a seek of the index 0041 ships for exactly this range delete.
+const sweepTrailStatement = `
+	DELETE FROM iam_history
+	WHERE rowid IN (
+		SELECT rowid FROM iam_history
+		WHERE bucket = ? AND class = ? AND version < ?
+		LIMIT ?)`
+
+// The two statements a sweep collects one bucket's invitations by — the ones
+// that aged out unredeemed and the ones redeemed — each a seek of the partial
+// index 0041 ships for exactly its predicate.
+const (
+	sweepOpenInvitationsStatement = `
+		DELETE FROM iam_invites WHERE rowid IN (
+			SELECT rowid FROM iam_invites
+			WHERE bucket = ? AND redeemed_at = 0 AND expires_at < ?
+			LIMIT ?)`
+	sweepSpentInvitationsStatement = `
+		DELETE FROM iam_invites WHERE rowid IN (
+			SELECT rowid FROM iam_invites
+			WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ?
+			LIMIT ?)`
+)
 
 // applySweep deletes one bucket's expired rows below the positions the
 // publisher resolved.
@@ -109,12 +135,7 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 		if horizon.before == 0 {
 			continue
 		}
-		if err := spend("the "+string(horizon.class)+" trail", `
-			DELETE FROM iam_history
-			WHERE rowid IN (
-				SELECT rowid FROM iam_history
-				WHERE bucket = ? AND class = ? AND version < ?
-				LIMIT ?)`,
+		if err := spend("the "+string(horizon.class)+" trail", sweepTrailStatement,
 			bucket, string(horizon.class), int64(horizon.before)); err != nil {
 			return int(written), err
 		}
@@ -144,24 +165,16 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 			// aged out, because every reader reads it as aged out
 			// ([InvitationRow.Spent], [openInvitation]): kept, it was the
 			// one row every reader calls dead whose sealed address stayed
-			// in every node's estate for good. No writer of any build has
+			// in every data node's estate for good. No writer of any build has
 			// formed one — the issue refuses it — so this moves no row a
 			// node on another build holds, and two builds sweep the same
 			// rows.
-			{"invitations", `
-				DELETE FROM iam_invites WHERE rowid IN (
-					SELECT rowid FROM iam_invites
-					WHERE bucket = ? AND redeemed_at = 0 AND expires_at < ?
-					LIMIT ?)`},
+			{"invitations", sweepOpenInvitationsStatement},
 			// WHAT WAS SPENT, and not only what lapsed: a redeemed
 			// invitation is as unpresentable as an expired one, and kept
 			// it would be every address anybody was ever invited at,
-			// sealed, in every node's estate.
-			{"redeemed invitations", `
-				DELETE FROM iam_invites WHERE rowid IN (
-					SELECT rowid FROM iam_invites
-					WHERE bucket = ? AND redeemed_at > 0 AND redeemed_at < ?
-					LIMIT ?)`},
+			// sealed, in every data node's estate.
+			{"redeemed invitations", sweepSpentInvitationsStatement},
 		} {
 			if err := spend(collect.what, collect.sql, bucket, expired); err != nil {
 				return int(written), err
@@ -198,16 +211,16 @@ func (a *Applier) applySweep(ctx context.Context, tx *sql.Tx, at applyContext) (
 //
 // # One ordered pick, spent person by person
 //
-// The pick is ordered by (person, credential), so every node takes the same
-// subset under the budget, and it is spent a whole person at a time — the
+// The pick is ordered by (person, credential), so every data node takes the
+// same subset under the budget, and it is spent a whole person at a time — the
 // person's document and every row collected for them — because a person half
 // collected would hold rows its document no longer lists. A person with more
 // due than the whole budget is collected in part, first to last, or they could
 // never be collected at all.
 //
 // A DOCUMENT THIS BUILD CANNOT READ IS LEFT ALONE, credentials and all: failing
-// the apply would stop this domain's log on every node at once, and the rows it
-// derived are the ones every node of this build keeps identically.
+// the apply would stop this domain's log on every data node at once, and the
+// rows it derived are the ones every data node of this build keeps identically.
 func collectCredentials(ctx context.Context, tx *sql.Tx, at applyContext,
 	bucket, expired, budget int64) (int64, error) {
 
@@ -269,14 +282,23 @@ func collectCredentials(ctx context.Context, tx *sql.Tx, at applyContext,
 	return written, nil
 }
 
+// The two statements [collectOwned] keeps a person's document in step with
+// the credentials a sweep collected by, each by the person's key.
+const (
+	personDocumentStatement = `SELECT document FROM iam_people WHERE id = ?`
+	sweptDocumentStatement  = `
+		UPDATE iam_people
+		   SET document = ?, version = MAX(version, ?)
+		 WHERE id = ?`
+)
+
 // collectOwned removes one person's collected credentials from their document
 // and their rows.
 func collectOwned(ctx context.Context, tx *sql.Tx, at applyContext,
 	person string, ids []string) (int64, error) {
 
 	var document []byte
-	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM iam_people WHERE id = ?`, person).Scan(&document)
+	err := tx.QueryRowContext(ctx, personDocumentStatement, person).Scan(&document)
 	var written int64
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -311,10 +333,8 @@ func collectOwned(ctx context.Context, tx *sql.Tx, at applyContext,
 			return 0, fmt.Errorf("iamdomain: re-encode person %s without their "+
 				"swept credentials: %w", person, err)
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE iam_people
-			   SET document = ?, version = MAX(version, ?)
-			 WHERE id = ?`, rewritten, at.packed, person); err != nil {
+		if _, err := tx.ExecContext(ctx, sweptDocumentStatement,
+			rewritten, at.packed, person); err != nil {
 			return 0, fmt.Errorf("iamdomain: rewrite person %s without their "+
 				"swept credentials: %w", person, err)
 		}

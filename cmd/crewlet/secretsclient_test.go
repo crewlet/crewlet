@@ -528,8 +528,43 @@ func TestUnsetReportsWhetherARowWent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unset: %v", err)
 	}
-	if removed {
+	if removed.Removed {
 		t.Error("removed = true for a row the node said was not there")
+	}
+}
+
+// AN UNSET THROUGH A NODE SAYS WHAT THE NODE'S RE-ACTIVATION DID (ADR-0070):
+// the node it went through, and the revision the running fleet stopped
+// resolving the value at, never the stopped engine's note, which would tell
+// an operator the removal waits for a start that is not coming.
+//
+// Mutations, each red: the store line left out, the node's reload unread, and
+// the stopped engine's note given through a node.
+func TestAnUnsetThroughANodeSaysWhatItsReactivationDid(t *testing.T) {
+	t.Parallel()
+	node := newFakeSecretsNode(t)
+	node.body = `{"removed":true,"read_by":["integrations.gitlab.token"],` +
+		`"reload":{"revision_id":"r-9","epoch":12}}`
+	cfg := bootstrapWithKeyring(t, "k1")
+
+	var out, errs bytes.Buffer
+	err := runIn(invocation{environ: tokenEnviron("ops-token")}, []string{"secrets", "unset", "GL_TOKEN",
+		"-config", cfg, "-api", node.server.URL}, &out, &errs)
+	if err != nil {
+		t.Fatalf("unset: %v\n%s", err, errs.String())
+	}
+	if node.last.method != http.MethodDelete || node.last.path != "/secrets/GL_TOKEN" {
+		t.Fatalf("the node saw %s %s", node.last.method, node.last.path)
+	}
+	for _, want := range []string{"removed GL_TOKEN\n", "written to ", node.server.URL,
+		removalReloadNote(&configapi.Reloaded{RevisionID: "r-9", Epoch: 12})} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("unset said %q, want it to carry %q", out.String(), want)
+		}
+	}
+	if strings.Contains(out.String(), secretsStoppedRemovalNote) {
+		t.Errorf("an unset through a running node was told this node's engine "+
+			"starts without it: %q", out.String())
 	}
 }
 

@@ -368,11 +368,13 @@ test("a reader without Admin sees no write control, and an administrator sees th
   mount(ADMIN);
   await screen.findAllByText("Bo Lang");
   await screen.findAllByText("sam@example.com");
-  await screen.findAllByRole("button", { name: "Invite person" });
+  // EACH WAITED FOR: the list's controls and the opened person's (their
+  // credentials' Revoke) are drawn on separate commits, as the reader's
+  // half above waits for the credentials before it looks.
   for (const name of ["Invite person", "Cancel", "Revoke"]) {
-    expect(screen.getAllByRole("button", { name: new RegExp(`^${name}`) }).length).toBeGreaterThan(
-      0,
-    );
+    expect(
+      (await screen.findAllByRole("button", { name: new RegExp(`^${name}`) })).length,
+    ).toBeGreaterThan(0);
   }
   expect(screen.getByRole("button", { name: /^More for / })).toBeTruthy();
   // A SEAT'S OWN GESTURES stay on the seat: this page invites through a picker.
@@ -400,8 +402,9 @@ test("invite person picks an open seat, then invites onto it", async () => {
   mount(ADMIN);
   fireEvent.click(await screen.findByRole("button", { name: "Invite person" }));
   const picker = await screen.findByRole("dialog", { name: "Invite person" });
-  await settle();
-  pick(within(picker).getByLabelText(/^Seat/), /Lee Ops/);
+  // THE SEAT FIELD IS DRAWN ONCE THE OPEN SEATS HAVE ANSWERED, which a fixed
+  // number of ticks only sometimes outwaits.
+  pick(await within(picker).findByLabelText(/^Seat/), /Lee Ops/);
   fireEvent.click(within(picker).getByRole("button", { name: "Continue" }));
   const invite = await screen.findByRole("dialog", { name: "Invite someone as Lee Ops" });
   fireEvent.change(within(invite).getByLabelText("Email address"), {
@@ -659,7 +662,7 @@ test("an edit refused part way reads the directory again", async () => {
       json(403, {
         error: "unauthorized",
         message:
-          "You don’t have the access this needs (Admin, Worklet or Doclet). Ask an admin for it.",
+          "You don’t have the access this needs (Admin, Worklet, Doclet or Chatlet). Ask an admin for it.",
         id: "p-bo",
         landed: ["identity"],
       }),
@@ -874,14 +877,14 @@ test("unticking Admin keeps the apps it included", async () => {
   expect(admin).toHaveProperty("disabled", false);
   expect(tracker).toHaveProperty("checked", true);
   expect(tracker).toHaveProperty("disabled", true);
-  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(3);
+  expect(within(edit).getAllByText("Included with Admin.")).toHaveLength(4);
   fireEvent.click(admin);
   expect(within(edit).getByRole("checkbox", { name: "Worklet" })).toHaveProperty("checked", true);
   expect(within(edit).getByRole("checkbox", { name: "Worklet" })).toHaveProperty("disabled", false);
   fireEvent.click(within(edit).getByRole("button", { name: "Save" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { add_grants: ["worklet", "doclet", "artifacts"], remove_grants: ["admin"] },
+    { add_grants: ["worklet", "doclet", "artifacts", "chatlet"], remove_grants: ["admin"] },
   ]);
 });
 
@@ -929,7 +932,7 @@ test("a service account's mint starts from its own access, and never a name this
   fireEvent.click(within(mint).getByRole("button", { name: "Create token" }));
   await settle();
   expect(eng.writes().map((w) => w.body)).toEqual([
-    { grants: ["worklet", "admin", "doclet", "artifacts"] },
+    { grants: ["worklet", "admin", "doclet", "artifacts", "chatlet"] },
   ]);
 });
 
@@ -1319,7 +1322,7 @@ test("an unclaimed node running no company says to create the company first", as
   invitations = { invitations: [], next: "" };
   seatsAnswer = json(409, {
     error: "no_active_revision",
-    message: "This node has not been handed a company yet.",
+    message: "This node isn't running a company yet.",
     hint: "this node runs no company yet",
   });
   engine();

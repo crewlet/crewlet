@@ -6,15 +6,19 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is everything the spine needs to know about ONE third-party app.
 //
-// Eight questions, and each is asked by a different part of the spine — which
-// is why they are one interface rather than eight registries that could drift
+// Nine questions, and each is asked by a different part of the spine — which
+// is why they are one interface rather than nine registries that could drift
 // out of step about what a source is:
 //
 //   - Build renders the trigger a seat is woken with.
+//   - Provenance says what the notification's body is and who wrote it, which
+//     is how the spine fences it before Build is handed it ([Render]).
 //   - RequiresRecon says whether that trigger is the context or a POINTER at
 //     it, which the turn-start prefetches read.
 //   - SubjectIsLabel says whether the subject is part of what was sent or
@@ -28,7 +32,7 @@ import (
 //     the episodes column, and the value a parked coding run matches a
 //     person's answer against — they answer on the conversation, not into
 //     the batch.
-//   - WakesActor says whether an event reaches the party who caused it.
+//   - WakesActor says whether a notification reaches the party who caused it.
 //   - DigestBody is the supersede rule when several of them merge.
 //
 // The count was "four" over five bullets for as long as the interface had
@@ -46,10 +50,30 @@ type Prompt interface {
 
 	// Build renders the notification as the ask a seat is given.
 	//
+	// n.Body ARRIVES FENCED: [Render], the one caller, has already put it
+	// inside a fence of the wake's token labelled by [Prompt.Provenance]
+	// (ADR-0040), so a prompt renders it where it likes and cannot hand a
+	// seat somebody's words bare. A blank body arrives as it is.
+	//
 	// Parties resolves external ids to colleagues; a nil one is valid and
 	// means the raw ids are rendered, which is what a node with no org
 	// context can honestly do.
 	Build(n Inbound, parties Parties) string
+
+	// Provenance is what the notification's body is — the surface it was
+	// read from — and who wrote it, which is what the spine fences it as
+	// ([Render]) and what the turn's ask is fenced as where an auxiliary
+	// model reads it.
+	//
+	// Asked of the source because only it knows its surfaces: a code
+	// host's body is a comment on one event and a description on the next,
+	// and the person who CAUSED the event (who assigned the issue) is often
+	// not who wrote the body (who opened it). Most sources answer from what
+	// their parser stamped ([Stated]); a source whose body is always one
+	// kind of thing by one party, a chat message by its sender, answers
+	// from that. An author nobody can name is no author, which the fence
+	// labels `external`.
+	Provenance(n Inbound, parties Parties) Provenance
 
 	// RequiresRecon reports that the body only says WHERE to look.
 	//
@@ -146,7 +170,7 @@ type Prompt interface {
 	// keeps one ledger.
 	ConversationIdentity(metadata map[string]string, subject string) string
 
-	// WakesActor reports whether an event type reaches the party who
+	// WakesActor reports whether a notification reaches the party who
 	// caused it, overriding the self-action rule.
 	//
 	// True for an event reporting the OUTCOME of the actor's own action —
@@ -155,10 +179,20 @@ type Prompt interface {
 	// already knows about, which is nearly everything: their own comment,
 	// their own assignment, their own edit.
 	//
-	// Only the third-party app can say which of its event types are which, so it is
-	// asked here rather than pattern-matched on the name centrally. See
-	// [WakesActor] for what happens to a source with no registered prompt.
-	WakesActor(eventType string) bool
+	// Only the third-party app can say which of its notifications are
+	// which, so it is asked here rather than pattern-matched on the name
+	// centrally. See [WakesActor] for what happens to a source with no
+	// registered prompt.
+	//
+	// HANDED THE WHOLE NOTIFICATION, never its event type alone: a code
+	// host's answer is its event type (a failed pipeline), but the native
+	// tracker's is the ROUTING REASON the parser stamped on each
+	// recipient's copy — a status change that unblocked somebody's task
+	// reaches its actor as `unblocked` and every other copy of the same
+	// change does not, and the event type is `status` on all of them. Asked
+	// with the type alone, a prompt that needs the reason reads the type
+	// as one and answers no for every copy.
+	WakesActor(n Inbound) bool
 
 	// DigestBody is the per-source supersede rule for one constituent of a
 	// merged trigger.
@@ -192,11 +226,19 @@ type Inbound struct {
 
 	Subject string
 
-	// Body is the message as it arrived. The prompt turns it into the
-	// enriched trigger; this stays raw.
+	// Body is the message as it arrived, raw. The prompt turns it into the
+	// enriched trigger and is handed it fenced ([Render]); every other
+	// question the spine asks of a notification is asked of it raw.
 	Body string
 
 	Metadata map[string]string
+
+	// Fence is the token a prompt fences the foreign text it weaves into the
+	// trigger under ([provenance.Fence]): minted by the delivery for this
+	// wake alone and recorded on the notification it publishes, so the turn
+	// that reads the trigger can re-key those fences onto its own. Set by the
+	// service, never by a parser.
+	Fence provenance.Boundary
 
 	// Owes names the CHAT SURFACE the woken seat promised to post on, when
 	// the promise is not simply "answer where you were asked" — which
@@ -224,15 +266,21 @@ type Parties interface {
 	// ByExternalID resolves a transport-scoped external id. The second
 	// result is false when nobody matches, which is ordinary: most senders
 	// on a shared channel are not colleagues.
+	//
+	// It answers for EVERY source, the engine's own included: on a
+	// first-party source the id is the seat's handle, and the registry
+	// answers it as one ([NewRegistry]'s handle namespaces) — so a reader
+	// that asks whoever a trigger names, without knowing which sources are
+	// the engine's, is answered the same colleague a first-party prompt
+	// names.
 	ByExternalID(transport, externalID string) (Party, bool)
 
 	// ByHandle resolves a seat's own identity.
 	//
 	// FOR THE FIRST-PARTY SOURCES, whose actor IS a handle: nothing on
 	// Worklet or Doclet authenticates as an account
-	// somewhere else, so there is no external id to scope and asking for
-	// one would mean registering every seat's handle as its own external
-	// id in a namespace that exists only to satisfy this call.
+	// somewhere else, so a prompt that already holds the handle asks by it
+	// rather than through a namespace.
 	//
 	// A vendor parser must NOT reach for this to shortcut a lookup its
 	// payload cannot support — a Slack id is not a handle, and treating
@@ -301,9 +349,17 @@ func cmpFirst(a, b string) string {
 // make registration order matter, leak one test's third-party app into the
 // next, and give a process no way to run two companies with different
 // integration sets, which is exactly what an epoch swap is.
+//
+// THE ZERO VALUE IS A REGISTRY WITH NO APPS, and answers every source with the
+// generic fallback. That is why the fallback is not a field: it held
+// [Generic] wherever [NewPrompts] built the value and nil everywhere else, so
+// a service handed a zero registry — an ordinary configuration, every node
+// has one before an integration is wired — panicked on the first delivery of
+// any source. A type that has to be constructed to be usable is one whose
+// zero value should have been refused, and this one is copied and passed by
+// value on every inbound event.
 type Prompts struct {
 	bySource map[string]Prompt
-	fallback Prompt
 }
 
 // NewPrompts builds a registry over the given third-party apps.
@@ -311,7 +367,7 @@ type Prompts struct {
 // A later entry for the same source REPLACES an earlier one, so a caller can
 // layer an override over the defaults without having to filter the list first.
 func NewPrompts(prompts ...Prompt) Prompts {
-	registry := Prompts{bySource: make(map[string]Prompt, len(prompts)), fallback: Generic{}}
+	registry := Prompts{bySource: make(map[string]Prompt, len(prompts))}
 	for _, p := range prompts {
 		if p == nil || p.Source() == "" {
 			continue
@@ -331,12 +387,9 @@ func (r Prompts) With(p Prompt) Prompts {
 	if p == nil || p.Source() == "" {
 		return r
 	}
-	next := Prompts{bySource: maps.Clone(r.bySource), fallback: r.fallback}
+	next := Prompts{bySource: maps.Clone(r.bySource)}
 	if next.bySource == nil {
 		next.bySource = map[string]Prompt{}
-	}
-	if next.fallback == nil {
-		next.fallback = Generic{}
 	}
 	next.bySource[p.Source()] = p
 	return next
@@ -351,7 +404,7 @@ func (r Prompts) For(source string) Prompt {
 	if p, ok := r.bySource[source]; ok {
 		return p
 	}
-	return r.fallback
+	return Generic{}
 }
 
 // Sources names the third-party apps with a prompt of their own, sorted.

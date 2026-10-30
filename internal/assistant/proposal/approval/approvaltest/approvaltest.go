@@ -46,7 +46,13 @@ type Store struct {
 	bounds    []time.Time
 	unknown   bool
 	fail      error
-	now       func() time.Time
+	// failAfter is how many more moves land before every later one fails
+	// with failLater, when failLater is set.
+	failAfter int
+	failLater error
+	// unread, when set, is what every later read of a proposal answers.
+	unread error
+	now    func() time.Time
 }
 
 var _ approval.Store = (*Store)(nil)
@@ -55,6 +61,9 @@ var _ approval.Store = (*Store)(nil)
 func (s *Store) Proposal(_ context.Context, owner, id uuid.UUID) (assistantdomain.Proposal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.unread != nil {
+		return assistantdomain.Proposal{}, s.unread
+	}
 	p, ok := s.proposals[id]
 	if !ok || p.Owner != owner {
 		return assistantdomain.Proposal{}, assistantdomain.ErrNotFound
@@ -88,6 +97,12 @@ func (s *Store) Move(ctx context.Context, c assistantdomain.Call, id uuid.UUID,
 	}
 	if s.fail != nil {
 		return approval.Written{}, s.fail
+	}
+	if s.failLater != nil {
+		if s.failAfter == 0 {
+			return approval.Written{}, s.failLater
+		}
+		s.failAfter--
 	}
 	if s.ops[c.OpID] {
 		return approval.Written{Outcome: "applied", Collapsed: true}, nil
@@ -148,6 +163,22 @@ func (s *Store) FailMoves(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fail = err
+}
+
+// FailMovesAfter lets the next n moves land and makes every later one fail
+// with err, as a store that stops answering partway through a decision does.
+func (s *Store) FailMovesAfter(n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failAfter, s.failLater = n, err
+}
+
+// FailReads makes every later read of a proposal fail with err, as a copy
+// behind its log does.
+func (s *Store) FailReads(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unread = err
 }
 
 // AnswerUnknown makes every later move answer unknown, as a broker nobody
@@ -322,6 +353,8 @@ type Turns struct {
 	bounds []time.Time
 	// withdrawn makes Carries answer false.
 	withdrawn bool
+	// unread, when set, is what every later Carries answers.
+	unread error
 }
 
 var _ approval.Turns = (*Turns)(nil)
@@ -367,7 +400,18 @@ func (t *Turns) Withdraw() {
 func (t *Turns) Carries(context.Context, uuid.UUID, uuid.UUID, uuid.UUID) (bool, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if t.unread != nil {
+		return false, t.unread
+	}
 	return !t.withdrawn, nil
+}
+
+// FailCarries makes every later Carries fail with err, as a read of the
+// turn's records that this node could not make does.
+func (t *Turns) FailCarries(err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.unread = err
 }
 
 // Lapsed are the turns asked to end as expired, in order.

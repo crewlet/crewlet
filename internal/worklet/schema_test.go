@@ -2,12 +2,18 @@ package worklet_test
 
 import (
 	"database/sql"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -207,16 +213,25 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 			count++
 		}
 	}
-	// Nineteen: eleven plain and eight partial, the abandoned move's among
-	// them (replicated migration 0018) and the move stragglers' (0041) —
-	// each partial on a flag a healthy company holds on no row, so neither is
-	// a cost any ordinary commit pays. EVERY ONE IS REACHED BY A PLAN, which
+	// Twenty: three over every row (key resolution, the apply's duplicate
+	// probe and the tree's, replicated 0058 — every read of a task's subtasks,
+	// a root's absent parent included, because this engine's planner reaches
+	// no index partial on `parent_id IS NOT NULL` from `parent_id = ?`), ten
+	// partial on the live side of the tombstone, and seven
+	// partial on something rarer — the trash's two (replicated migration
+	// 0056, one per scope a listing has), the subtree restore's, the
+	// re-spread's, and the abandoned merge's, the abandoned move's (0018) and
+	// the move stragglers' (0041), the last three on a flag a healthy company
+	// holds on no row. Each of the seven is the size of the rows it is about,
+	// so no ordinary commit writes one. EVERY ONE IS REACHED BY A PLAN, which
 	// is what TestEveryIndexServesARegisteredQuery establishes and this count
 	// makes visible — an index added without a reader moves this number
 	// before it moves a benchmark, nine that no plan reached were deleted
-	// along the way, and the embed duty's on `embed_rev` went at 0039: a
-	// column nothing wrote, kept by a gate entry for a selection nothing ran.
-	const want = 19
+	// along the way, the embed duty's on `embed_rev` went at 0039: a column
+	// nothing wrote, kept by a gate entry for a selection nothing ran, and the
+	// batch filter's on `batch_id` at 0053, for the same reason: a plan
+	// reached it, for a `batch=` that could only ever match nothing.
+	const want = 20
 	if count != want {
 		t.Fatalf("tracker_tasks carries %d indexes and the enumeration is %d — "+
 			"every one of them is a write cost on every commit, so the two have "+
@@ -255,6 +270,107 @@ func TestEveryTrackerTableIsAccountedFor(t *testing.T) {
 			"that either a record must rebuild or the log owns, and there is no "+
 			"third answer", table)
 	}
+}
+
+// EVERY COLUMN OF A REPRODUCIBLE TABLE IS NAMED BY A STATEMENT THIS PACKAGE
+// RUNS.
+//
+// A column no statement here names is one no applier writes and no reader
+// reads: it holds its default on every row of every node, rides every
+// snapshot, and says nothing. Two were found only by reading the code —
+// `embed_rev`, gone at replicated 0039, and `batch_id` on tasks and history,
+// gone at 0053 — because nothing compared the schema with the statements. So
+// the columns are read out of the migrated database, as every case here reads
+// the schema, and each is held to the STRING LITERALS of this package's own
+// source, which is where every statement it runs is written; a comment naming
+// a column does not count, because a comment runs nothing.
+//
+// The log's own machinery tables are not held here: the state-log framework
+// writes them, from its own package.
+//
+// Mutation: drop the history half of replicated 0053 and this fails on
+// tracker_history.batch_id.
+func TestEveryTrackerColumnIsNamedByAStatement(t *testing.T) {
+	t.Parallel()
+	statements := trackerLiterals(t)
+	dbNode, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
+	t.Cleanup(func() {
+		if err := dbNode.Close(); err != nil {
+			t.Errorf("close: %v", err)
+		}
+	})
+	checked := 0
+	for _, table := range worklet.ReproducibleTables {
+		var columns []string
+		if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(t.Context(),
+				`SELECT name FROM pragma_table_info(?)`, table)
+			if err != nil {
+				return err
+			}
+			defer func() { _ = rows.Close() }()
+			for rows.Next() {
+				var name string
+				if err := rows.Scan(&name); err != nil {
+					return err
+				}
+				columns = append(columns, name)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatalf("read %s's columns: %v", table, err)
+		}
+		if len(columns) == 0 {
+			t.Errorf("%s has no columns: it is not in the schema at all", table)
+		}
+		for _, column := range columns {
+			checked++
+			if !regexp.MustCompile(`\b` + regexp.QuoteMeta(column) + `\b`).MatchString(statements) {
+				t.Errorf("%s.%s is named by no statement this package runs: no "+
+					"applier writes it and no reader reads it, so a new numbered "+
+					"replicated migration drops it", table, column)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no reproducible table has a column, so this guard read nothing")
+	}
+}
+
+// trackerLiterals is every string literal in this package's non-test source,
+// joined by newlines.
+func trackerLiterals(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(sourcetree.Root(t), "internal", "worklet")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	var out strings.Builder
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if value, err := strconv.Unquote(lit.Value); err == nil {
+					out.WriteString(value)
+					out.WriteByte('\n')
+				}
+			}
+			return true
+		})
+	}
+	if out.Len() == 0 {
+		t.Fatalf("%s holds no string literal, so this guard is reading nothing", dir)
+	}
+	return out.String()
 }
 
 // THE SPEND COLUMNS ARE ONE LIST, AND THE DDL IS DRIVEN FROM IT.

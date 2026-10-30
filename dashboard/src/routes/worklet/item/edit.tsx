@@ -32,9 +32,20 @@
  * The same rule the list's inline cells keep: a disabled picker on every row
  * says one sentence eight times. The reason is drawn once, where the
  * refusal would be, and every value renders as the value.
+ *
+ * # And one draft for every editor open on it
+ *
+ * The title and the description are each edited in place (`Body.tsx`), and
+ * with both open the person's assistant has to see and fill both. The page
+ * context carries one draft, so the editors do not each declare their own,
+ * which hid the other at every keystroke: each puts itself into the task's
+ * boxes (`app/assistant/boxes.ts`), and the page's edits declare ONE draft
+ * whose fields are the editors open now, held while the one write is out.
  */
 
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { DraftBoxes, DraftBoxesContext, boxesDraft, useOpenBoxes } from "~/app/assistant/boxes.ts";
+import { useAssistantDraft } from "~/app/assistant/draft.ts";
 import { RefusalNote } from "~/components/WriteButton.tsx";
 import { WorkConflictNote } from "../shapes/cells.tsx";
 import { useAct, type Act } from "~/lib/useAct.ts";
@@ -99,6 +110,7 @@ export function ItemEditsProvider({
 }) {
   const write = useAct("update_work_item");
   const [lost, setLost] = useState(false);
+  const [boxes] = useState(() => new DraftBoxes());
   const edit = useCallback(
     async (patch: ItemPatch, done: string, conditional = true) => {
       // A CONDITIONAL EDIT WHILE A PRESS IS OUT IS NOT SENT: it carries the
@@ -138,7 +150,48 @@ export function ItemEditsProvider({
     }),
     [write, edit, item, label, lost, forget, seatName],
   );
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={value}>
+      <DraftBoxesContext.Provider value={boxes}>
+        {children}
+        <ItemDraft boxes={boxes} label={label} version={version} busy={write.busy} />
+      </DraftBoxesContext.Provider>
+    </Ctx.Provider>
+  );
+}
+
+/**
+ * The task's one draft for the person's own assistant: every editor open on
+ * it, its title, its description or both, which the editors put themselves
+ * into (`Body.tsx`). Held while the page's one write is out, as each
+ * editor's Save is.
+ */
+function ItemDraft({
+  boxes,
+  label,
+  version,
+  busy,
+}: {
+  boxes: DraftBoxes;
+  label: string;
+  version: number;
+  busy: boolean;
+}) {
+  const open = useOpenBoxes(boxes);
+  const names = open.boxes.map((box) => box.label.toLowerCase()).join(" and ");
+  useAssistantDraft(
+    boxesDraft(open, {
+      id: label,
+      revision: version,
+      scope: `The ${names} of ${label} you are editing (not saved)`,
+      help:
+        `Every editor open on ${label} is a field: its title, its description or both. ` +
+        "You can propose new text for any of them; Save stays the person's. Any other " +
+        "field of the task is changed with update_task.",
+      blocked: () => (busy ? "The task is being saved." : null),
+    }),
+  );
+  return null;
 }
 
 /**

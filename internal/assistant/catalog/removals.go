@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A REPLACE NEVER REMOVES BY OMISSION (ADR-0055).
@@ -32,6 +33,12 @@ import (
 // of the body, which the request digest binds, and of the representation the
 // source revision names, which the approval re-reads. The `removes` argument
 // only admits the call; what the card warns of is computed, never echoed.
+
+// RemovesArgument is the one argument a write takes that it never sends: what
+// the call says it removes from what it replaces (the generic change's paths,
+// a chat room's members). It admits a removal the preview found, and the
+// request makes the removal by leaving it out.
+const RemovesArgument = "removes"
 
 // removesArgument is the generic change's `removes`: the paths the call
 // intends to remove from what the route replaces.
@@ -147,7 +154,9 @@ func covered(path string, declared []string) bool {
 
 // removalCheck holds a replace's removals to the call's `removes`: every
 // removal declared, every declaration a removal. It answers the removals the
-// card warns of, or the step's refusal.
+// card warns of, or the step's refusal, which names EVERY removal the call
+// does not declare and every declaration the change does not make, in one
+// refusal (ADR-0059).
 func removalCheck(route Route, method string, before, after any, address map[string]string,
 	declared []string, title string) ([]string, error) {
 
@@ -163,24 +172,19 @@ func removalCheck(route Route, method string, before, after any, address map[str
 		return nil, nil
 	}
 	removals := removalsOf(before, after, address)
-	var undeclared []string
+	var undeclared, unmade []string
 	for _, r := range removals {
 		if !covered(r, declared) {
 			undeclared = append(undeclared, r)
 		}
 	}
-	if len(undeclared) > 0 {
-		return nil, undeclaredRemoval(title, undeclared)
-	}
 	for _, d := range declared {
 		if !slices.ContainsFunc(removals, func(r string) bool { return covered(r, []string{d}) }) {
-			return nil, &PreviewRefusal{Status: http.StatusUnprocessableEntity,
-				Refusal: wire.Refusal{
-					Code:    removalCode,
-					Message: "`removes` names " + d + ", which this change does not remove from " + title + ".",
-					Hint:    "List in `removes` only what the body leaves out or empties.",
-				}}
+			unmade = append(unmade, d)
 		}
+	}
+	if len(undeclared) > 0 || len(unmade) > 0 {
+		return nil, undeclaredRemoval(title, undeclared, unmade)
 	}
 	return removals, nil
 }
@@ -190,24 +194,39 @@ func removalCheck(route Route, method string, before, after any, address map[str
 const removalCode = "undeclared_removal"
 
 // undeclaredRemoval is the refusal of a replace that would remove paths the
-// call did not declare, in the words the model acts on.
-func undeclaredRemoval(title string, paths []string) *PreviewRefusal {
+// call did not declare, or that declares paths it would not remove, in the
+// words the model acts on: both, every path of each, in one refusal.
+func undeclaredRemoval(title string, undeclared, unmade []string) *PreviewRefusal {
+	var said, hints []string
+	if len(undeclared) > 0 {
+		said = append(said, "This would remove "+inWords(undeclared)+" from "+title+".")
+		hints = append(hints, "Include them in the body to keep them, or list them in "+
+			"`removes` if the person asked for that.")
+	}
+	if len(unmade) > 0 {
+		which := "which this change does not remove"
+		switch {
+		case len(unmade) == 2:
+			which = "neither of which this change removes"
+		case len(unmade) > 2:
+			which = "none of which this change removes"
+		}
+		said = append(said, "`removes` names "+inWords(unmade)+", "+which+" from "+title+".")
+		hints = append(hints, "List in `removes` only what the body leaves out or empties.")
+	}
 	return &PreviewRefusal{Status: http.StatusUnprocessableEntity, Refusal: wire.Refusal{
-		Code:    removalCode,
-		Message: "This would remove " + inWords(paths) + " from " + title + ".",
-		Hint: "Include them in the body to keep them, or list them in `removes` if the " +
-			"person asked for that.",
+		Code: removalCode, Message: strings.Join(said, " "), Hint: strings.Join(hints, " "),
 	}}
 }
 
-// inWords is a list of paths joined as a sentence: "project", "project and
-// space", "project, space and lead".
+// inWords is a list of paths as a sentence says it: "project", "project and
+// space", "project, space and lead". Each path is a [words.Said], written as
+// the body writes it rather than quoted, because that is how this refusal's
+// other sentences name a path and how the model writes it back in `removes`.
 func inWords(paths []string) string {
-	switch len(paths) {
-	case 0:
-		return ""
-	case 1:
-		return paths[0]
+	said := make([]words.Said, len(paths))
+	for i, p := range paths {
+		said[i] = words.Said(p)
 	}
-	return strings.Join(paths[:len(paths)-1], ", ") + " and " + paths[len(paths)-1]
+	return words.And(said)
 }

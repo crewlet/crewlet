@@ -17,15 +17,15 @@ import (
 // Not a patch, which is the opposite of the tracker's choice for its largest
 // objects: a person is authored as a FORM and submitted whole, so the writer
 // always holds the complete new value and a patch would be a diff it computed
-// in order to be reassembled by every node. The objects are also small — a person is a
-// name, an address, a stage and a handful of grants.
+// in order to be reassembled by every data node. The objects are also small — a
+// person is a name, an address, a stage and a handful of grants.
 //
 // # What a payload may and may not carry
 //
 // A NAME OR AN ADDRESS IS ALWAYS SEALED. Never the cleartext, on any payload,
-// at any version: the record is on the broker, in every node's deferred table,
-// in every snapshot and in every backup, and sealing at the WRITER under the
-// fleet keyring is what keeps every one of those ciphertext. See [Sealer].
+// at any version: the record is on the broker, in every data node's deferred
+// table, in every snapshot and in every backup, and sealing at the WRITER under
+// the fleet keyring is what keeps every one of those ciphertext. See [Sealer].
 //
 // A BLIND IS ALWAYS THE MATCHED FORM. Never the address it was derived from —
 // a blind is what a directory decide and a lookup compare, and the
@@ -199,8 +199,8 @@ type Invitation struct {
 // NO IP ADDRESS, NO USER AGENT, NO DEVICE FINGERPRINT, and the absence is the
 // design rather than a field nobody got to. Where a session was opened from is
 // a request-scoped observation; putting one on a replicated, retained record
-// would make every node's database a location history of everybody who works
-// here — and a state log's records outlive the rows derived from them.
+// would make every data node's database a location history of everybody who
+// works here — and a state log's records outlive the rows derived from them.
 type Session struct {
 	V int `json:"v"`
 
@@ -707,8 +707,8 @@ func (c Identifiers) Empty() bool {
 // rather than a local delete: these rows are identity-claimed, so two nodes
 // sweeping on their own clocks would hold different bytes and "N byte-identical
 // copies" would quietly become a claim about how synchronised their clocks
-// were. The publisher resolves each horizon to a position ONCE, and every node
-// then deletes exactly the same rows.
+// were. The publisher resolves each horizon to a position ONCE, and every data
+// node then deletes exactly the same rows.
 type Sweep struct {
 	V int `json:"v"`
 
@@ -731,7 +731,7 @@ type Sweep struct {
 	// and never subtracts.
 	//
 	// THE PUBLISHER READ IT, ONCE, and that is the whole of the clock
-	// this path is allowed: every node then compares the same carried
+	// this path is allowed: every data node then compares the same carried
 	// value against the broker instants its rows already hold, so a node
 	// whose own clock is a year out deletes exactly what its peers do.
 	Expired time.Time `json:"expired,omitzero"`

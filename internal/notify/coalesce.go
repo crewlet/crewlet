@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Coalescing: N events in one partition become ONE trigger.
@@ -131,8 +132,12 @@ func digest(prompt Prompt, ordered []constituent, superseded map[int]bool) strin
 	b.WriteString("The earlier events are listed oldest first; the MOST RECENT is " +
 		"rendered in full after them. Handle them as ONE piece of work, and " +
 		"reply at most once.\n\n")
+	// ONE TOKEN FOR THE DIGEST: the latest constituent's, which its body —
+	// rendered whole below — is already fenced under and which the merged
+	// event carries, so every earlier fence is moved onto it.
+	fence := provenance.Boundary(ordered[len(ordered)-1].event.FenceBoundary)
 	for i, c := range ordered[:len(ordered)-1] {
-		b.WriteString(digestLine(prompt, c, superseded[i]) + "\n")
+		b.WriteString(digestLine(prompt, c, superseded[i], fence) + "\n")
 	}
 	b.WriteString("\n---\n\n")
 	b.WriteString(ordered[len(ordered)-1].event.Body)
@@ -146,7 +151,13 @@ func digest(prompt Prompt, ordered []constituent, superseded map[int]bool) strin
 // mattered is as likely to be at the end of a long message as the start.
 // Continuation lines are indented so a multi-line body stays inside its
 // bullet rather than reading as the next one.
-func digestLine(prompt Prompt, c constituent, duplicate bool) string {
+//
+// WHAT A CONSTITUENT'S PROMPT FENCED IS RENDERED FENCED. A source that fences
+// what somebody said ([ChatPrompt]) put the message in its own body under the
+// constituent's own token; the line carries those fences, moved onto fence —
+// the digest's token — in place of the raw message, which would hand the
+// seat an earlier speaker's words unlabelled beside a later one's fenced.
+func digestLine(prompt Prompt, c constituent, duplicate bool, fence provenance.Boundary) string {
 	sender := c.event.Sender
 	if sender == "" {
 		sender = "(unknown sender)"
@@ -167,6 +178,13 @@ func digestLine(prompt Prompt, c constituent, duplicate bool) string {
 	body := strings.TrimSpace(effectiveBody(prompt, c.event))
 	if body == "" {
 		return label + ": (no message body — superseded by later state)"
+	}
+	own := provenance.Boundary(c.event.FenceBoundary)
+	if fenced := provenance.Fences(c.event.Body, own); len(fenced) > 0 {
+		for i, f := range fenced {
+			fenced[i] = provenance.Rekey(f, own, fence)
+		}
+		return label + ":\n  " + strings.ReplaceAll(strings.Join(fenced, "\n"), "\n", "\n  ")
 	}
 	return label + ": " + strings.ReplaceAll(body, "\n", "\n  ")
 }

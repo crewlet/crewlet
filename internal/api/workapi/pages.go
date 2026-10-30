@@ -31,20 +31,23 @@ func (s *Service) pageRoutes(mount mounter) {
 	}
 	page := func(a authz.Action) authz.Policy { return kinded(a, authz.KindPage) }
 
-	route("POST /doclet/pages", page(authz.ActionPageCreate), (*served).postPage)
+	route("POST /doclet/pages", page(authz.ActionPageCreate).Creating(), (*served).postPage)
 	// A SAVE NAMES THE VERSION IT EDITS, so it never creates a page.
 	route("PUT /doclet/pages/{id}", page(authz.ActionPageSave).WhenAbsent(authz.AddedElsewhere(
 		"A page is created with POST /doclet/pages.")), (*served).putPage)
-	route("POST /doclet/pages/{id}/rename", page(authz.ActionPageRead), (*served).postPageRename)
-	route("POST /doclet/pages/{id}/comments", page(authz.ActionPageComment), (*served).postPageComment)
+	route("POST /doclet/pages/{id}/rename", page(authz.ActionPageRead).Rewriting(),
+		(*served).postPageRename)
+	route("POST /doclet/pages/{id}/comments", page(authz.ActionPageComment).Creating(),
+		(*served).postPageComment)
 	route("PATCH /doclet/pages/{id}/comments/{cid}", page(authz.ActionPageComment),
 		(*served).patchPageComment)
 	route("DELETE /doclet/pages/{id}/comments/{cid}", page(authz.ActionPageRead),
 		(*served).deletePageComment)
 	route("DELETE /doclet/pages/{id}", page(authz.ActionPageRead), (*served).deletePage)
-	route("POST /doclet/pages/{id}/restore", page(authz.ActionPageRead), (*served).postPageRestore)
+	route("POST /doclet/pages/{id}/restore", page(authz.ActionPageRead).Rewriting(),
+		(*served).postPageRestore)
 	// THE PURGE NEEDS NO ROW TO DECIDE, as the work purge does not.
-	route("POST /doclet/pages/{id}/purge", authz.Policy{Action: authz.ActionPagePurge},
+	route("POST /doclet/pages/{id}/purge", authz.Policy{Action: authz.ActionPagePurge}.Destroying(),
 		(*served).postPagePurge)
 }
 
@@ -63,11 +66,10 @@ func (s *served) postPage(w http.ResponseWriter, r *http.Request) {
 // has a header for, and the tool refuses a save without one.
 func (s *served) putPage(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
-	if !ok || !fromPath(w, args, "page", r.PathValue("id")) ||
-		!ifMatch(w, r, args, "base_version") {
+	if !ok || !fromPath(w, args, "page", r.PathValue("id")) {
 		return
 	}
-	s.call(w, r, builtin.SavePageTool, args)
+	s.callIfMatched(w, r, builtin.SavePageTool, args, "base_version")
 }
 
 func (s *served) postPageComment(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +170,7 @@ func (s *served) postPagePurge(w http.ResponseWriter, r *http.Request) {
 	if doclet.NormalizeTitle(confirm) != doclet.NormalizeTitle(detail.Page.Title) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
-				"page is %q — nothing was destroyed", confirm, detail.Page.Title)})
+				"page is %q, so nothing was destroyed", confirm, detail.Page.Title)})
 		return
 	}
 	if !s.maySkillPage(w, r, detail.Page.Container) {

@@ -27,7 +27,7 @@ import (
 func actingAssistApp(t *testing.T) (*assistApp, *recordedAudit) {
 	t.Helper()
 	audit := &recordedAudit{}
-	operators, err := operator.New(operator.Options{
+	operators, err := operator.New(withSeatControls(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			return operator.Halves{Work: builtin.WorkDeps{
 				Reader: stubWorkReader{},
@@ -36,7 +36,7 @@ func actingAssistApp(t *testing.T) (*assistApp, *recordedAudit) {
 		},
 		Authorize: builtin.Decide(authz.NoChart{}),
 		Audit:     audit,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
 	}

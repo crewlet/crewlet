@@ -104,7 +104,7 @@ prompt on its own model — a frontier model to work, a cheap one to check. See
 ## Quickstart
 
 There is no infrastructure to bring up. Crewlet is one binary: it embeds its
-event stream (a NATS JetStream server) and its database is a local file it
+event stream (a NATS JetStream server) and its database is two local files it
 creates. Its models run through the **coding CLI** each vendor ships — Claude
 Code, Codex or OpenCode, installed beside it — so the vendor's own harness
 drives every model, on your plan or your key. Describe a company and run it:
@@ -212,7 +212,10 @@ first turn with no integrations at all, then wiring in the real ones.
 > repo's compose file. Neither needs a tracker or a wiki account: both run Worklet
 > and Doclet, and [Jira](docs/integrations/jira.md) /
 > [Confluence](docs/integrations/confluence.md) are the blocks that move those
-> halves to Atlassian. Every setting in both carries its reasoning in a comment.
+> halves to Atlassian. Both talk on Mattermost; a company that declares no chat
+> surface gets the engine's own [chat](docs/concepts/chatlet.md) instead, with its
+> rooms in the dashboard. Every setting in both carries its reasoning in a
+> comment.
 
 > **Rather not write it by hand?** An AI assistant can interview you and author
 > both files, checking its own work against the shipped JSON Schema — see
@@ -234,7 +237,7 @@ Crewlet is the engine; the surfaces your agents work on are yours to choose — 
 | **Tracker** | [Jira](docs/integrations/jira.md) — Cloud or Data Center — or [GitLab](docs/integrations/gitlab.md) / [GitHub](docs/integrations/github.md) issues |
 | **Knowledge base** | [Confluence](docs/integrations/confluence.md) — searched at turn start and on demand, run as the asking seat |
 | **Code host** | [GitLab](docs/integrations/gitlab.md) — gitlab.com or self-hosted — or [GitHub](docs/integrations/github.md), github.com or Enterprise Server |
-| **Chat** | [Mattermost](docs/integrations/mattermost.md) — self-hosted, one bot identity per agent — or [Slack](docs/integrations/slack.md), one app per agent |
+| **Chat** | [Chatlet, the engine's own](docs/concepts/chatlet.md) — rooms in the dashboard, and the default where no vendor is declared — or [Mattermost](docs/integrations/mattermost.md), self-hosted, one bot identity per agent, or [Slack](docs/integrations/slack.md), one app per agent |
 | **Code sandbox** | [The engine host](docs/concepts/code-sandbox.md), as a process tree or a container; Claude Code or OpenCode as the coding agent |
 
 The knowledge base is **single-homed** — one searcher per company, because two would
@@ -299,7 +302,7 @@ flowchart LR
     API["<b>REST API + dashboard</b><br/><i>inside the engine's<br/>own process</i>"]
     Q["<b>Event stream</b><br/><i>embedded JetStream,<br/>clustered or external for a fleet</i>"]
     ENG["<b>Engine</b><br/><i>one turn engine<br/>per seat</i>"]
-    DB[("<b>Store</b><br/>one local file<br/>events · memory · config")]
+    DB[("<b>Store</b><br/>two local files<br/>events · memory · config ·<br/>the replicated estate")]
 
     EXT -->|webhooks| API
     API <--> Q
@@ -363,7 +366,7 @@ Full reference: [CLI](docs/reference/cli.md) ·
 **Core concepts**
 - [Overview](docs/concepts/overview.md) · [Organization model](docs/concepts/organization-model.md) · [Humans in the org chart](docs/concepts/humans-in-the-org.md)
 - [Agent runtime](docs/concepts/agent-runtime.md) · [Turn engine](docs/concepts/turn-engine.md) · [LLM backends](docs/concepts/llm-backends.md) · [Code sandbox](docs/concepts/code-sandbox.md)
-- [Knowledge system](docs/concepts/knowledge-system.md) · [Agent learning](docs/concepts/agent-learning.md) · [Tool skills](docs/concepts/tool-skills.md)
+- [Knowledge system](docs/concepts/knowledge-system.md) · [Chatlet](docs/concepts/chatlet.md) · [Agent learning](docs/concepts/agent-learning.md) · [Tool skills](docs/concepts/tool-skills.md)
 - [Event system](docs/concepts/event-system.md) · [Scheduling](docs/concepts/scheduling.md) · [Configuration](docs/concepts/configuration.md)
 - [Dashboard Assistant](docs/concepts/assistant.md): ask questions and approve changes, acting as you
 

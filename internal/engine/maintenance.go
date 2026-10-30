@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
 	"github.com/crewlet/crewlet/internal/node"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -140,6 +142,15 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// every listing that meets one pays a leader read for it. See
 		// [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
+		// AND EACH HUMAN SEAT'S CHAT READ STATE, for the mailboxes'
+		// reason: its bucket has no age, so the record of a seat the
+		// company no longer has is forgotten only by a decision taken
+		// against the revision the fleet is pointed at — a grace after a
+		// sweep first saw the seat gone. Registered whatever chat backend
+		// the company runs, because the records outlive a move off Chatlet
+		// and the job costs one listing of an empty bucket where
+		// there are none. See [maintenance.ChatReadJobs].
+		jobs = append(jobs, maintenance.ChatReadJobs(fleet, e.humanSeatHandles)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can
@@ -180,9 +191,9 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			})...)
 			// AND THE INBOX'S OWN SWEEP, which is a range delete rather
 			// than a repair and is therefore PER NODE —
-			// `tracker_notifications` is Divergent, so each node holds
-			// its own rows and a singleton would tidy one and let the
-			// rest grow for ever. Contributed here rather than in
+			// `tracker_notifications` is Divergent, so each data node
+			// holds its own rows and a singleton would tidy one and let
+			// the rest grow for ever. Contributed here rather than in
 			// worklet.Jobs because that list runs under the duty and
 			// this one must not. Its horizon is the one the PUBLISHED
 			// company states, asked at every sweep — the one the
@@ -383,15 +394,55 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 	return company.Seats(), nil
 }
 
+// humanSeatHandles is the chat read-state reconcile's roster: every HUMAN seat
+// of the revision the fleet is pointed at, or an error saying why that is
+// unknown ([Engine.fleetCompany]).
+//
+// HUMAN SEATS, because a read state is kept under the seat a person acts as
+// and only a human seat is ever acted as by a person or a bound machine: a
+// record under any other handle is one nobody can reach, which this roster
+// lets the reconcile forget a grace after it is first seen rather than keep
+// for as long as an agent seat of that name exists. And the SEAT rather than
+// its holder, because the record is the seat's: a person removed or moved
+// from a seat the company still has leaves it to the seat's next holder, as
+// the seat's inbox stays.
+func (e *Engine) humanSeatHandles(ctx context.Context) ([]string, error) {
+	company, err := e.fleetCompany(ctx, e.Company())
+	if err != nil {
+		return nil, err
+	}
+	var handles []string
+	for role := range company.Org.AllRoles() {
+		if role.EffectiveKind() == org.KindHuman {
+			handles = append(handles, role.Handle())
+		}
+	}
+	slices.Sort(handles)
+	return handles, nil
+}
+
 // fleetCompany is c when it is the company of the activation the fleet is
 // pointed at, or an error saying why that is unknown.
 //
-// THE RULE EVERY CALLER THAT JUDGES A SEAT ABSENT AND ACTS ON IT FOLLOWS — the
-// mailbox sweep, and the clearing of a removed seat's pause
-// ([Engine.clearRemovedSeatPauses]) — because both act on something no undo
-// restores: a retired mailbox's mail, a pause a person placed. A node applying
-// a revision the fleet has since replaced does not have a seat the newer one
-// added, and would judge it absent.
+// THE RULE EVERY FLEET DECISION FOLLOWS THAT DESTROYS, BY THE COMPANY
+// DOCUMENT, SOMETHING NO UNDO RESTORES:
+//
+//   - the mailbox sweep, which judges a seat absent and retires its mail;
+//   - the clearing of a removed seat's pause ([Engine.clearRemovedSeatPauses]),
+//     a pause a person placed;
+//   - the forgetting of a removed human seat's chat read state
+//     ([Engine.humanSeatHandles]), every room's cursor the seat held;
+//   - the chat prune ([Engine.chatRetentionPolicy]), which deletes on every
+//     data node each message older than the horizon the document states;
+//   - the assistant's retention purge ([Engine.assistantRetention]), which
+//     purges every conversation left unused for the term the document states.
+//
+// A node applying a revision the fleet has since replaced, or running one the
+// fleet never activated, has neither a seat the newer revision added nor the
+// horizon it states, and would destroy by what it has instead. So each of them
+// acts only on the company this answers and on nothing while it is unknown:
+// what it would have destroyed waits for a node that runs the fleet's
+// revision, which is late rather than wrong.
 //
 // COMPARED ON THE ACTIVATION'S INSTANT, which the pointer publishes strictly
 // later on every activation ([coord.ActivationAt]) and which a company carries
@@ -399,8 +450,9 @@ func (e *Engine) activeSeats(ctx context.Context) ([]placement.Seat, error) {
 // an unchanged revision, the rotation gesture, is a different activation here
 // too, and a company applied from the pointer's own activation is accepted
 // even while the reconciler is still inside the apply that publishes it. A
-// company no activation has named — one handed to [New] in code — is unknown
-// until the reconciler's first apply.
+// company no activation has named, whether one handed to [New] in code or an
+// offline command's offer the fleet has not taken, is unknown until this node
+// applies the pointer's revision.
 func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error) {
 	if e.backends == nil || e.backends.Fleet == nil {
 		return nil, fmt.Errorf("engine: this node has no fleet store to read the activation pointer from")
@@ -414,12 +466,22 @@ func (e *Engine) fleetCompany(ctx context.Context, c *Company) (*Company, error)
 	}
 	switch {
 	case c == nil:
-		return nil, errors.New("engine: this node publishes no company yet; seats are " +
-			"judged once it does")
+		return nil, errors.New("engine: this node publishes no company yet; nothing " +
+			"the company document would destroy is decided here until it does")
+	case c.ActivatedAt.IsZero():
+		// AN OFFER, most likely: what this node runs no activation has
+		// named, so there is no instant of its own to report.
+		return nil, fmt.Errorf("engine: this node serves a company no activation has "+
+			"named (an offline command's choice the fleet has not taken, or one "+
+			"handed to the engine in code) and the fleet is on activation epoch %d "+
+			"of %s; nothing the company document would destroy is decided here "+
+			"until this node has applied it", target.Epoch,
+			target.At.Format(time.RFC3339Nano))
 	case store.EncodeTime(c.ActivatedAt) != store.EncodeTime(target.At):
 		return nil, fmt.Errorf("engine: this node serves the activation of %s and the "+
-			"fleet is on activation epoch %d of %s; seats are judged once this node "+
-			"has applied it", c.ActivatedAt.Format(time.RFC3339Nano), target.Epoch,
+			"fleet is on activation epoch %d of %s; nothing the company document would "+
+			"destroy is decided here until this node has applied it",
+			c.ActivatedAt.Format(time.RFC3339Nano), target.Epoch,
 			target.At.Format(time.RFC3339Nano))
 	}
 	return c, nil

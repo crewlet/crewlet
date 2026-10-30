@@ -99,6 +99,7 @@ import type { InAppTarget } from "./openInApp.ts";
 import {
   approve,
   clearConversation,
+  clearRefusal,
   decline,
   newConversation,
   openConversation,
@@ -135,9 +136,12 @@ export interface DrawerProps {
   /** The reader's own name, for the greeting. */
   name: string;
   /**
-   * Where the panel stands. As an overlay or the whole window it is a modal,
-   * where the page's own keys stand aside and the panel answers ⌘. itself;
-   * as the whole window its foot is where a toast would otherwise land.
+   * Where the panel stands. As the whole window it is a modal, where the
+   * page's own keys stand aside and the panel answers ⌘. itself, and its foot
+   * is where a toast would otherwise land. Over the page's end edge it is not
+   * a modal (the frame passes `asideModal={false}`): the page beside it stays
+   * live, with no veil and no Tab trap, and the frame's own binding answers ⌘.
+   * from inside it, as it does beside the column.
    */
   shape: AssistantShape;
 }
@@ -164,7 +168,7 @@ export function Drawer({
   name,
   shape,
 }: DrawerProps) {
-  const modal = shape !== "column";
+  const modal = shape === "sheet";
   const view = useConversation();
   const page = usePageSnapshot();
   const toast = useToast();
@@ -175,7 +179,7 @@ export function Drawer({
   const [removed, setRemoved] = useState<string | null>(null);
   const [recents, setRecents] = useState<Recent[] | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [clearFailed, setClearFailed] = useState(false);
+  const [clearFailed, setClearFailed] = useState<string | null>(null);
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   const running = openTurn(view);
   // THE SHELL'S ONE CLOCK, as every relative time on screen reads it. The
@@ -611,9 +615,9 @@ export function Drawer({
           />
         ) : (
           <ChatThread ref={thread} label="Conversation" busy={running !== null}>
-            {clearFailed ? (
+            {clearFailed !== null ? (
               <Callout variant="warning" role="alert">
-                The conversation could not be cleared. Try again from Conversations.
+                {clearFailed}
               </Callout>
             ) : null}
             {view.turns.length === 0 ? (
@@ -653,15 +657,15 @@ export function Drawer({
         onConfirm={async () => {
           try {
             await clearConversation();
-            setClearFailed(false);
+            setClearFailed(null);
             setConfirming(false);
             toast.show({
               variant: "success",
               title: "Conversation cleared",
               message: "It is no longer in your history.",
             });
-          } catch {
-            setClearFailed(true);
+          } catch (err) {
+            setClearFailed(clearRefusal(err));
             setConfirming(false);
           }
         }}

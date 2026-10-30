@@ -48,7 +48,7 @@ import (
 // revision a meaningful gesture — it mints a new epoch every node is
 // watching, which is how a rotated secret reaches a running fleet.
 
-const configUsage = `crewlet config — the company configuration in the store
+const configUsage = `crewlet config: the company configuration in the store
 
 Usage:
   crewlet config import FILE       Write a company document as a new revision to boot on
@@ -144,12 +144,12 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 		dryRun   bool
 	)
 	var (
-		apiURL  string
+		apiURL  = new(string)
 		summary string
 	)
 	switch sub {
 	case "import":
-		fs.StringVar(&apiURL, "api", "",
+		apiURL = nodeAPIFlag(fs,
 			"import through a running node's API; default is the "+
 				"api.host:port in -config when the engine holds the store")
 		fs.StringVar(&summary, "summary", "",
@@ -187,7 +187,7 @@ func runConfig(environ config.Source, args []string, stdout, stderr io.Writer) e
 		return importCompany(ctx, importTarget{
 			bootstrapPath: *bootstrapPath,
 			path:          subject,
-			apiURL:        apiURL,
+			apiURL:        *apiURL,
 			summary:       summary,
 			environ:       environ,
 		}, stdout)
@@ -312,9 +312,16 @@ func importConfig(ctx context.Context, cs *configStore, path string,
 		case errors.Is(err, secrets.ErrUnsealedWithKey):
 			// AN UNSEALED REVISION IS REPLACED, NEVER COMPARED: this import
 			// is the remedy every reader's refusal of one names
-			// ([refuseUnsealed]), so refusing it here too left a store
-			// whose company is plaintext with no way out at all. Nothing is
-			// read from it — it is only the new one's parent.
+			// ([refuseUnsealed]; configapi's UnreadableRevisionError.Remedy
+			// names it beside PUT /config), so refusing it here too left a
+			// store whose company is plaintext with no way out at all.
+			// Nothing is read from it — it is only the new one's parent.
+			// PUT /config is the same rule held online, and it is also where
+			// this command goes while a node holds the store (configapi's
+			// prepare reads nothing from an unsealed base either). A revision
+			// SEALED in a form this build does not read is not this:
+			// [openStored] refuses it, and the import with it, since it is
+			// somebody's document and only the build that sealed it reads it.
 		case err != nil:
 			return err
 		case bytes.Equal(current, document):
@@ -437,23 +444,23 @@ func lockedStoreRemedy(sub string) string {
 	const stop = "stop `crewlet run` on this node and re-run."
 	switch sub {
 	case "show", "export":
-		return "Read it through the running node instead — GET /config " +
+		return "Read it through the running node instead (GET /config " +
 			"serves the fleet's revision with its credentials masked, and " +
-			"GET /config/revisions/<id> any other — or " + stop
+			"GET /config/revisions/<id> any other), or " + stop
 	case "revisions":
-		return "Read them through the running node instead — GET " +
-			"/config/revisions — or " + stop
+		return "Read them through the running node instead (GET " +
+			"/config/revisions), or " + stop
 	case "diff":
-		return "Compare them through the running node instead — GET " +
-			"/config/revisions/<id>/diff?against=<id|active> — or " + stop
+		return "Compare them through the running node instead (GET " +
+			"/config/revisions/<id>/diff?against=<id|active>), or " + stop
 	case "activate":
-		return "Activate it through the running node instead — POST " +
+		return "Activate it through the running node instead (POST " +
 			"/config/revisions/<id>/revert stores that revision's document " +
-			"again and activates it fleet-wide — or " + stop
+			"again and activates it fleet-wide), or " + stop
 	case "rekey":
-		return "Re-seal through the running node instead — POST " +
+		return "Re-seal through the running node instead (POST " +
 			"/config/reload stores the fleet's document again under that " +
-			"node's active key — or " + stop
+			"node's active key), or " + stop
 	default:
 		// Every subcommand that opens the store is named above; a new one
 		// still gets the stop, which is always true.
@@ -639,23 +646,37 @@ func renderValue(v any) string {
 }
 
 // openStored opens a revision this node's store holds, and a refusal says what
-// brings it back.
+// brings it back ([storedRefusal]).
+func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
+	document, err := secrets.Open(cipher, rev.Payload)
+	if err != nil {
+		return nil, storedRefusal(rev.ID, err)
+	}
+	return document, nil
+}
+
+// storedRefusal is why a revision this node's store holds does not open, and
+// what brings it back, for every command that meets one, a rekey's check of
+// its seal included.
 //
 // An UNSEALED revision is refused: nothing vouches for who wrote it, and its
 // document comes back only by importing it again from the operator's own
-// copy. A revision sealed under a key the keyring does not hold needs that key
-// back.
-func openStored(cipher secrets.Cipher, rev store.Revision) ([]byte, error) {
-	document, err := secrets.Open(cipher, rev.Payload)
+// copy. A revision SEALED IN A FORM THIS BUILD DOES NOT READ is somebody's
+// document, most likely a newer build's, which that build reads and nothing
+// here replaces. A revision sealed under a key the keyring does not hold needs
+// that key back.
+func storedRefusal(revisionID string, err error) error {
 	switch {
-	case err == nil:
-		return document, nil
 	case errors.Is(err, secrets.ErrUnsealedWithKey):
-		return nil, refuseUnsealed(rev.ID)
+		return refuseUnsealed(revisionID)
+	case errors.Is(err, secrets.ErrUnknownEnvelope):
+		return fmt.Errorf("revision %s is sealed in a form this build of crewlet "+
+			"doesn't read, most likely by a newer build, so nothing here reads or "+
+			"replaces it; run the build that sealed it: %w", revisionID, err)
 	default:
-		return nil, fmt.Errorf("revision %s does not open under this node's "+
+		return fmt.Errorf("revision %s does not open under this node's "+
 			"keyring; restore the key it was sealed under to secrets.keys: %w",
-			rev.ID, err)
+			revisionID, err)
 	}
 }
 

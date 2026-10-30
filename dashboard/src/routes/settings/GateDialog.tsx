@@ -4,7 +4,7 @@
  * # One gesture, every identity-claiming log, and each log's own answer
  *
  * The engine judges the gesture once and then writes its record to every log
- * the trim counts nodes on (the `tracker` and `pages` logs) and each log
+ * the trim counts nodes on (every identity-claiming log) and each log
  * answers on its own, with the three-valued outcome every write has (D134) or
  * the refusal that stopped it. So this dialog renders ONE ROW PER LOG, and the
  * summary above them is driven by `complete` — whether every log holds the

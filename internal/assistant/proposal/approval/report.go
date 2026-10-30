@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE PAGE'S HALF OF A PAGE ACTION. An approved page action is sent to the
@@ -44,8 +45,8 @@ func (a *Approver) Report(ctx context.Context, r Report) (wire.ActionAnswer, err
 		return wire.ActionAnswer{}, err
 	}
 	if !r.Report.State.Valid() {
-		return wire.ActionAnswer{}, fmt.Errorf("%w: state %q is not one of %v",
-			ErrInvalidReport, r.Report.State, wire.ActionStates)
+		return wire.ActionAnswer{}, fmt.Errorf("%w: state %q is not one of %s",
+			ErrInvalidReport, r.Report.State, words.Or(wire.ActionStates))
 	}
 	p, err := a.load(ctx, d.person.ID, r.Action)
 	if err != nil {

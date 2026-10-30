@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net"
 	"net/url"
@@ -42,6 +43,47 @@ import (
 // `-token` flag anyway, documented, beside this comment; it is gone, and with
 // it the second source a 401 had to send an operator to check.
 const apiTokenEnv = "CREWLET_API_TOKEN"
+
+// nodeAPIFlagName is the flag every command that reaches a running node names
+// it by, registered only through [nodeAPIFlag].
+const nodeAPIFlagName = "api"
+
+// nodeAPIFlag registers -api on fs: the running node a command reaches, which
+// [nodeBaseURL] takes as its override. usage says what the command does there
+// and what the default is, which is all that differs between them.
+//
+// ONE SPELLING, REGISTERED IN ONE PLACE. Seven flag sets registered their own,
+// and the CLI ended up with two names for one address: `-api` on `iam`,
+// `config import`, `secrets`, `llm` and the provisioners (two of them), `-url`
+// on every command built on [nodeClientFor]. So an operator retrying an `iam` write through
+// another node and a `retention evict` through another node typed different
+// flags for the same thing. `-api` is the name kept: more commands took it,
+// and it names WHAT is addressed — the node's API, which Tier A's `api` block
+// is the default for — rather than the shape of the value, where `-url` would
+// sit beside a provisioner's `-public-url` naming something else entirely.
+func nodeAPIFlag(fs *flag.FlagSet, usage string) *string {
+	return fs.String(nodeAPIFlagName, "", usage)
+}
+
+// opIDFlagName is the flag every command whose write can come back unknown
+// takes the retry's operation id by, registered only through [opIDFlag].
+const opIDFlagName = "op-id"
+
+// opIDFlag registers -op-id on fs: the operation id an unknown answer named,
+// sent back with the retry — as the Idempotency-Key header, or as the op_id a
+// retention gesture's route reads from its query — so the retry is that
+// operation rather than a second one. usage says what a retry of this command
+// finishes.
+//
+// ONE SPELLING, for [nodeAPIFlag]'s reason: `iam` took the same id as
+// `-idempotency-key` while `seats`, `work purge` and the retention gestures
+// took `-op-id`, so one operator retrying two unknown writes typed two flags
+// for one thing. `-op-id` is the name kept, because more commands took it and
+// it names what goes in it — the op id every one of those answers prints —
+// where the other named the HTTP header it travels in.
+func opIDFlag(fs *flag.FlagSet, usage string) *string {
+	return fs.String(opIDFlagName, "", usage)
+}
 
 // nodeBaseURL is the API address of the node a Tier A file describes, or the
 // override if one was given.

@@ -321,8 +321,9 @@ func fakeGitHub(t *testing.T, app map[string]any) *httptest.Server {
 }
 
 // convertOneApp drives a whole creation for one seat, from the begin route
-// through GitHub's redirect, against a fake GitHub.
-func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any) {
+// through GitHub's redirect, against a fake GitHub, and answers the state the
+// redirect carried.
+func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any) string {
 	t.Helper()
 	server := fakeGitHub(t, app)
 	// THE CONVERSION GOES WHERE THE COMPANY SAYS GITHUB IS, which is what
@@ -352,6 +353,7 @@ func (s *surface) convertOneApp(t *testing.T, handle string, app map[string]any)
 	if seat, err := flow.Complete(t.Context(), "one-time-code", state); err != nil {
 		t.Fatalf("complete %s: %v", seat, err)
 	}
+	return state
 }
 
 // seatDoc reads one seat back through the entity route the flow writes it on.
