@@ -2,13 +2,12 @@ package mattermost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"slices"
 	"strings"
-
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The per-seat operations the access pass is built from (design 5.2).
@@ -168,18 +167,25 @@ func (c *Client) SetChannels(
 	return out, nil
 }
 
-// TurnOff revokes the tokens this engine minted on a bot and deactivates it.
-//
-// THE TOKENS FIRST, THEN THE MARKER, THEN THE DEACTIVATION. A disabled bot
-// keeps its tokens, so one deactivated with a live token is an agent that
-// works again the moment anybody re-enables it. The marker is written before
-// the deactivation, so an interrupted run leaves a marked, live bot rather
-// than a deactivated one with no provenance (D3). Only this engine's own
-// tokens are revoked: an administrator may have minted one by hand.
-func (c *Client) TurnOff(ctx context.Context, bot BotAccount, handle string) error {
-	if _, err := c.RevokeMinted(ctx, bot.ID, TokenDescription(handle), ""); err != nil {
-		return fmt.Errorf("revoke the bot's tokens: %w", err)
+// RevokeEngineTokens revokes every token this engine minted on a bot for a
+// seat, and reports how many. Only this engine's own: an administrator may
+// have minted one by hand, and a deactivated bot's tokens authenticate as
+// nothing anyway.
+func (c *Client) RevokeEngineTokens(ctx context.Context, bot BotAccount, handle string) (int, error) {
+	revoked, err := c.RevokeMinted(ctx, bot.ID, TokenDescription(handle), "")
+	if err != nil {
+		return revoked, fmt.Errorf("revoke the bot's tokens: %w", err)
 	}
+	return revoked, nil
+}
+
+// Deactivate marks a bot as this engine's off and deactivates it.
+//
+// THE MARKER BEFORE THE DEACTIVATION, so an interrupted run leaves a marked,
+// live bot rather than a deactivated one with no provenance (D3). Marked
+// whatever state the bot is in, so one already deactivated by hand is still
+// recorded as this engine's off once the seat's document says off too.
+func (c *Client) Deactivate(ctx context.Context, bot BotAccount) error {
 	if err := c.MarkDisconnected(ctx, bot.ID); err != nil {
 		return fmt.Errorf("record that this engine is turning the bot off: %w", err)
 	}
@@ -192,7 +198,20 @@ func (c *Client) TurnOff(ctx context.Context, bot BotAccount, handle string) err
 	return nil
 }
 
-// TurnOn reactivates a bot this engine deactivated and clears the marker.
+// TurnOff revokes the tokens this engine minted on a bot, then marks and
+// deactivates it.
+//
+// THE TOKENS FIRST: a disabled bot keeps its tokens, so one deactivated with
+// a live token is an agent that works again the moment anybody re-enables
+// it. One rule for a seat turned off, a departed seat and a disconnect.
+func (c *Client) TurnOff(ctx context.Context, bot BotAccount, handle string) error {
+	if _, err := c.RevokeEngineTokens(ctx, bot, handle); err != nil {
+		return err
+	}
+	return c.Deactivate(ctx, bot)
+}
+
+// TurnOn reactivates a bot and clears the marker.
 //
 // THE MARKER GOES WITH IT, or a live bot still described as disconnected
 // would read as this engine's off on the next pass.
@@ -206,55 +225,19 @@ func (c *Client) TurnOn(ctx context.Context, bot BotAccount) error {
 	return nil
 }
 
-// MintInto creates one access token on a bot and records it in the seat's
-// sink.
+// RetireTokens revokes the tokens this engine minted on a bot other than keep,
+// which is a rotation's second half: keep was minted and sealed by the step
+// before, so the tokens it replaces hold values nothing reads.
 //
-// A FAILED RECORD REVOKES THE TOKEN (design 5.2): Mattermost serves a token's
-// value once, so one minted and not recorded is a live credential held by
-// nobody. The returned error is the record's failure with the revocation's
-// outcome appended, never replaced by it.
-func (c *Client) MintInto(
-	ctx context.Context, sink provision.TokenSink, userID, handle, sinkVar string,
-) (Token, error) {
-	if sink == nil {
-		return Token{}, provision.ErrNoSink
+// IT REFUSES RATHER THAN GUESSES. Mattermost lists no creation time for a
+// token, so the one it keeps is named; a keep the bot does not hold means the
+// token just minted is gone, and revoking the others would leave the seat
+// with nothing.
+func (c *Client) RetireTokens(ctx context.Context, bot BotAccount, handle, keep string) (int, error) {
+	held := bot.MintedTokens(handle)
+	if keep == "" || !slices.ContainsFunc(held, func(t Token) bool { return t.ID == keep }) {
+		return 0, errors.New("mattermost: the token this rotation minted is not on the bot, " +
+			"so no older token was revoked; rotate again")
 	}
-	token, err := c.CreateAccessToken(ctx, userID, TokenDescription(handle))
-	if err != nil {
-		return Token{}, err
-	}
-	if err := sink.Record(ctx, sinkVar, token.Value); err != nil {
-		// DETACHED: the failure is often the cancellation itself, and a
-		// revocation that inherited it would do nothing.
-		if revokeErr := c.RevokeToken(context.WithoutCancel(ctx), token.ID); revokeErr != nil {
-			return Token{}, fmt.Errorf(
-				"minted a token for %s and could not record it (%w), and could not "+
-					"revoke it either (%v): it is live on the bot and held by nobody, "+
-					"so revoke the token %s in the bot's settings",
-				handle, err, revokeErr, token.ID)
-		}
-		return Token{}, fmt.Errorf(
-			"minted a token for %s and could not record it, so it was revoked "+
-				"again; the next pass mints another: %w", handle, err)
-	}
-	return Token{ID: token.ID, Description: token.Description}, nil
-}
-
-// Rotate mints a new token, records it, and then revokes the tokens this
-// engine minted before it.
-//
-// IN THAT ORDER: the old token keeps the bot's websocket authenticated until
-// the new value is recorded, so a rotation that fails part way leaves the
-// seat with a working credential.
-func (c *Client) Rotate(
-	ctx context.Context, sink provision.TokenSink, bot BotAccount, handle, sinkVar string,
-) (Token, error) {
-	minted, err := c.MintInto(ctx, sink, bot.ID, handle, sinkVar)
-	if err != nil {
-		return Token{}, err
-	}
-	if _, err := c.RevokeMinted(ctx, bot.ID, TokenDescription(handle), minted.ID); err != nil {
-		return minted, fmt.Errorf("revoke the replaced tokens: %w", err)
-	}
-	return minted, nil
+	return c.RevokeMinted(ctx, bot.ID, TokenDescription(handle), keep)
 }

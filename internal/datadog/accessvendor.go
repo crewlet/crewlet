@@ -66,6 +66,14 @@ func (accessVendor) Steps(
 	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
 	_ seataccess.Desired, _ seataccess.Observed,
 ) []seataccess.Step {
+	out := datadogSteps(seat, op)
+	for i := range out {
+		out[i].Index = i
+	}
+	return out
+}
+
+func datadogSteps(seat seataccess.SeatRef, op seataccess.Op) []seataccess.Step {
 	sink := seataccess.SinkName(integration.KindDatadog, AppKeyField, seat.Handle)
 	mint := seataccess.Step{
 		Op: op, Verb: seataccess.VerbMint, By: seataccess.ByCrewlet,
@@ -73,14 +81,12 @@ func (accessVendor) Steps(
 	}
 	switch op {
 	case seataccess.OpCreate:
-		mint.Index = 1
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbCreate, By: seataccess.ByCrewlet,
 			Text: "Create a Datadog service account for " + seatLabel(seat) +
 				", holding the role this seat names",
 		}, mint}
 	case seataccess.OpEnable:
-		mint.Index = 1
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbEnable, By: seataccess.ByCrewlet,
 			Text: "Turn its Datadog service account back on",
@@ -97,7 +103,7 @@ func (accessVendor) Steps(
 			Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
 			Text: "Delete its application keys and clear " + sink,
 		}, {
-			Op: op, Verb: seataccess.VerbDisable, By: seataccess.ByCrewlet, Index: 1,
+			Op: op, Verb: seataccess.VerbDisable, By: seataccess.ByCrewlet,
 			Text: "Disable its Datadog service account",
 			Note: "Datadog keeps the account and everything it authored, so turning it " +
 				"back on needs no person.",
@@ -112,7 +118,7 @@ func (accessVendor) Steps(
 	case seataccess.OpRotate:
 		mint.Text = "Mint a new application key and seal it as " + sink
 		return []seataccess.Step{mint, {
-			Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet, Index: 1,
+			Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
 			Text: "Delete the application key it replaces",
 		}}
 	default:
@@ -153,7 +159,10 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 			"key did not both resolve, and Datadog refuses a write carrying only one",
 			integration.ErrNotConfigured)
 	}
-	return &accessSession{client: client, creds: creds, provisioning: cfg.Provisioning}, nil
+	return &accessSession{
+		client: client, creds: creds, provisioning: cfg.Provisioning,
+		memo: newStepMemo(),
+	}, nil
 }
 
 // accessSession is one pass's connection to Datadog.
@@ -161,6 +170,7 @@ type accessSession struct {
 	client       *Client
 	creds        Credentials
 	provisioning *config.DatadogProvisioning
+	memo         *stepMemo
 }
 
 // Options is every role the organization has, managed first in Datadog's own
@@ -319,16 +329,16 @@ func emailDomain(p *config.DatadogProvisioning) string {
 	return DefaultEmailDomain
 }
 
-// Apply takes one step at Datadog.
+// Apply takes one step at Datadog, chosen by its op and verb.
 func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	switch in.Step.Op {
 	case seataccess.OpCreate:
-		if in.Step.Index == 0 {
+		if in.Step.Verb == seataccess.VerbCreate {
 			return s.create(ctx, in)
 		}
 		return s.mint(ctx, in, false)
 	case seataccess.OpEnable:
-		if in.Step.Index == 0 {
+		if in.Step.Verb == seataccess.VerbEnable {
 			return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
 				return seataccess.StepResult{}, s.refused(in,
 					s.client.EnableUser(ctx, s.creds, account.ID))
@@ -347,7 +357,7 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		})
 	case seataccess.OpDisable:
 		return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
-			if in.Step.Index == 0 {
+			if in.Step.Verb == seataccess.VerbRevoke {
 				if err := s.client.RevokeKeys(ctx, s.creds, account); err != nil {
 					return seataccess.StepResult{}, s.refused(in, err)
 				}
@@ -373,11 +383,11 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			return seataccess.StepResult{Disabled: true, Revoked: []string{AppKeyField}}, nil
 		})
 	case seataccess.OpRotate:
-		if in.Step.Index == 0 {
+		if in.Step.Verb == seataccess.VerbMint {
 			return s.mint(ctx, in, false)
 		}
 		return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
-			_, err := s.client.RetireKeys(ctx, s.creds, account)
+			_, err := s.client.RetireKeys(ctx, s.creds, account, s.memo.minted(in.Seat.Handle))
 			return seataccess.StepResult{}, s.refused(in, err)
 		})
 	default:
@@ -396,6 +406,7 @@ func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (s
 	if err != nil {
 		return seataccess.StepResult{}, s.refused(in, err)
 	}
+	s.memo.account(in.Seat.Handle, created.ID)
 	return seataccess.StepResult{AccountID: created.ID, Account: email}, nil
 }
 
@@ -456,6 +467,7 @@ func (s *accessSession) mint(
 				revokeErr)
 		}
 		accountID, keyID := account.ID, key.ID
+		s.memo.mint(in.Seat.Handle, keyID)
 		return seataccess.StepResult{Minted: []seataccess.Minted{{
 			Field: AppKeyField, Value: key.Key,
 			Revoke: func(ctx context.Context) error {
@@ -475,10 +487,7 @@ func (s *accessSession) withAccount(
 	ctx context.Context, in seataccess.ApplyInput,
 	fn func(Account) (seataccess.StepResult, error),
 ) (seataccess.StepResult, error) {
-	accountID := in.Have.AccountID
-	if in.Record != nil && in.Record.Held() {
-		accountID = in.Record.Account.ID
-	}
+	accountID := s.memo.accountOf(in)
 	if accountID == "" {
 		return seataccess.StepResult{}, fmt.Errorf(
 			"datadog: %s has no account to %s", in.Seat.Handle, in.Step.Verb)

@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // What an agent's bot may do at Mattermost, in Mattermost's own terms.
@@ -20,20 +22,21 @@ import (
 // rather than through a Crewlet word for each.
 
 // The system roles a bot account can hold, as Mattermost's API spells them
-// (`PUT /api/v4/users/{id}/roles`).
+// (`PUT /api/v4/users/{id}/roles`). The company document's own spelling, so
+// the document and this package cannot name a role two ways.
 const (
 	// RoleSystemUser is every account's base role. Mattermost labels it
 	// Member.
-	RoleSystemUser = "system_user"
+	RoleSystemUser = config.MattermostSystemUser
 	// RolePostAllPublic is the post:channels permission: post in every
 	// public channel, joined or not.
-	RolePostAllPublic = "system_post_all_public"
+	RolePostAllPublic = config.MattermostSystemPostAllPublic
 	// RolePostAll is the post:all permission: post in every channel,
 	// private ones included.
-	RolePostAll = "system_post_all"
+	RolePostAll = config.MattermostSystemPostAll
 	// RoleSystemAdmin is System Admin, which grants every other system
 	// administration privilege with it.
-	RoleSystemAdmin = "system_admin"
+	RoleSystemAdmin = config.MattermostSystemAdmin
 )
 
 // RoleOption is one access a seat may hold, as the Agents tab offers it.
@@ -51,32 +54,31 @@ type RoleOption struct {
 }
 
 // roleOptions are the four accesses, IN MATTERMOST'S OWN ORDER of what they
-// grant, which is the only order a "raise" is derived from.
+// grant, which is the only order a "raise" is derived from. The role sets are
+// the company document's ([config.MattermostRoleSets]), so what the validator
+// admits and what this package offers are one table; the words are
+// Mattermost's names for them.
 //
 //nolint:gochecknoglobals // an immutable table, not state
-var roleOptions = []RoleOption{
-	{
-		Roles: []string{RoleSystemUser},
-		Label: "Member",
-		Hint:  "Reads and posts in the channels it has joined.",
-	},
-	{
-		Roles: []string{RoleSystemUser, RolePostAllPublic},
-		Label: "Member with post:channels",
-		Hint:  "Also posts in every public channel without joining it.",
-	},
-	{
-		Roles: []string{RoleSystemUser, RolePostAll},
-		Label: "Member with post:all",
-		Hint:  "Also posts in every channel, private ones included, without joining it.",
-	},
-	{
-		Roles:          []string{RoleSystemUser, RoleSystemAdmin},
-		Label:          "System Admin",
-		Hint:           "Every System Admin privilege, including users, teams and settings.",
-		Administration: true,
-	},
-}
+var roleOptions = func() []RoleOption {
+	words := []RoleOption{
+		{Label: "Member", Hint: "Reads and posts in the channels it has joined."},
+		{Label: "Member with post:channels",
+			Hint: "Also posts in every public channel without joining it."},
+		{Label: "Member with post:all",
+			Hint: "Also posts in every channel, private ones included, without joining it."},
+		{Label: "System Admin", Administration: true,
+			Hint: "Every System Admin privilege, including users, teams and settings."},
+	}
+	sets := config.MattermostRoleSets()
+	if len(sets) != len(words) {
+		panic("mattermost: the document's role sets and this package's names disagree")
+	}
+	for i := range words {
+		words[i].Roles = sets[i]
+	}
+	return words
+}()
 
 // RoleOptions is every access a seat may hold, in Mattermost's order.
 func RoleOptions() []RoleOption {
@@ -91,6 +93,28 @@ func RoleOptions() []RoleOption {
 // DefaultRoles is what a seat that names no roles is given: Member, the
 // least a bot can hold and still read the channels it is in.
 func DefaultRoles() []string { return slices.Clone(roleOptions[0].Roles) }
+
+// CanonicalLevel is a role list as the seat's access level: the option's roles
+// in the document's order, joined by a space, which is the id the Agents tab
+// offers it under. An empty list is [DefaultRoles].
+func CanonicalLevel(roles []string) (string, error) {
+	canonical, err := CanonicalRoles(roles)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join(canonical, " "), nil
+}
+
+// LevelOf is the level an account's roles read as: the option's id where they
+// are one of the four, and the roles as Mattermost spells them otherwise (an
+// account changed by hand to something this engine does not offer, which is
+// drift the pass restores).
+func LevelOf(roles []string) string {
+	if option, ok := optionOf(roles); ok && len(normalizeRoles(roles)) > 0 {
+		return strings.Join(option.Roles, " ")
+	}
+	return strings.Join(normalizeRoles(roles), " ")
+}
 
 // ErrUnknownRoles is a role list that is not one of the four Mattermost
 // options.

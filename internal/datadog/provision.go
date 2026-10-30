@@ -14,14 +14,22 @@ import (
 // FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
 const SeatEnv = org.MCPEnvDatadog
 
-// CredentialKeys are the spellings a seat's application key arrives under.
+// CredentialKeys are the spellings a seat's application key arrives under in
+// a seat's `mcp_env.datadog` block.
 //
 // A LIST rather than one name, for the reason GitLab's is: a company writes
 // its own mcp_env, and refusing to find a credential because it was spelled
 // the other obvious way is a silent no-op an operator cannot debug.
 //
+// [ToolHeader] IS ONE OF THEM, and it was missing: it is the header Datadog's
+// MCP server reads, so a seat that named only it gave its tool a key while
+// this package found none and silently dropped the seat. With the engine now
+// binding the seat's own key under that header itself (D15), every spelling
+// here is a credential position the document rules refuse for a managed
+// integration (D4) and the migration recognises.
+//
 //nolint:gochecknoglobals // an immutable list, not state
-var CredentialKeys = []string{"DD_APP_KEY", "DATADOG_APP_KEY", "app_key"}
+var CredentialKeys = []string{"DD_APP_KEY", "DATADOG_APP_KEY", "app_key", ToolHeader}
 
 // DefaultEmailDomain is what a service account's address is built under when
 // the company names none.

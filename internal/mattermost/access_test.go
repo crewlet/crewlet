@@ -28,7 +28,7 @@ func TestCanonicalRolesAcceptsExactlyTheFourOptions(t *testing.T) {
 		{[]string{" System_Post_All_Public ", "system_user", "system_user"},
 			[]string{"system_user", "system_post_all_public"}},
 		{[]string{"system_post_all", "system_user"}, []string{"system_user", "system_post_all"}},
-		{[]string{"system_admin", "system_user"}, []string{"system_user", "system_admin"}},
+		{[]string{"system_user", "system_admin"}, []string{"system_admin", "system_user"}},
 	} {
 		got, err := mattermost.CanonicalRoles(tc.in)
 		if err != nil || !slices.Equal(got, tc.want) {
