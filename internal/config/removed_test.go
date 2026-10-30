@@ -12,7 +12,10 @@ import (
 
 // retiredSeedYAML is a company.yaml written before per-seat access: the GitHub
 // tier, Datadog's company-wide role and the single Mattermost channel, each
-// retired and refused by name, and nothing else wrong with it.
+// retired and refused by name. Read without them, it is runnable, and it is
+// also what such a file always is under the per-seat access rules: its seat
+// blocks say nothing of whether they are on, and two seats name one Datadog
+// key in mcp_env, where the engine mints each seat its own.
 const retiredSeedYAML = `
 name: Legacy
 providers:
@@ -27,23 +30,27 @@ integrations:
       api_key: "${DATADOG_API_KEY}"
       app_key: "${DATADOG_APP_KEY}"
       role: r-1
+mcp_servers:
+  - {name: datadog, transport: http, url: "https://mcp.datadoghq.com/v1/mcp", shared: false}
 roles:
   - name: SRE
     handle: sre
+    mcp_env: {datadog: {DD_APPLICATION_KEY: "${DATADOG_SEAT_KEY}"}}
     integrations:
       github:
-        enabled: false
         tier: full_access
       mattermost:
-        enabled: false
         channel: town-square
+  - name: On-call
+    handle: oncall
+    mcp_env: {datadog: {DD_APPLICATION_KEY: "${DATADOG_SEAT_KEY}"}}
 `
 
 // retiredSeedKeys is where retiredSeedYAML carries each retired key.
 var retiredSeedKeys = []string{
 	"integrations.datadog.provisioning.role:14",
-	"roles[0].integrations.github.tier:21",
-	"roles[0].integrations.mattermost.channel:24",
+	"roles[0].integrations.github.tier:23",
+	"roles[0].integrations.mattermost.channel:25",
 }
 
 // writeSeed writes doc as a company file in a directory of its own.
@@ -76,6 +83,11 @@ func placesOf(err error) []string {
 // which reads without the key. The refusal is kept whole, typed as a retired
 // key and classified as the unknown field it is, for the one place the file
 // would be written.
+//
+// SUCH A FILE ALSO BREAKS THE PER-SEAT ACCESS RULES, and that is no fault
+// here: they are admission rules, which a file meets only where it is written
+// as a revision, so they refuse nothing a seed loads for. The case asserts the
+// fixture does break them, so it cannot pass for want of the trap.
 func TestASeedFileWhoseOnlyFaultIsARetiredKeyLoadsWithoutIt(t *testing.T) {
 	t.Parallel()
 	path := writeSeed(t, retiredSeedYAML)
@@ -88,8 +100,18 @@ func TestASeedFileWhoseOnlyFaultIsARetiredKeyLoadsWithoutIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCompanySeed refused a file whose only fault is retired keys: %v", err)
 	}
-	if file.Company == nil || file.Company.Name != "Legacy" || len(file.Company.Roles) != 1 {
+	if file.Company == nil || file.Company.Name != "Legacy" || len(file.Company.Roles) != 2 {
 		t.Fatalf("the seed is not the file's company: %+v", file.Company)
+	}
+	admission := Problems(file.Company.ValidateAdmission())
+	for _, rule := range []string{
+		"roles[0].integrations.github.enabled",        // a seat block that says nothing of whether it is on
+		"roles[0].mcp_env.datadog.DD_APPLICATION_KEY", // a credential the engine mints and seals
+		"roles[1]", // one variable named by two seats
+	} {
+		if !slices.ContainsFunc(admission, func(p Problem) bool { return p.Path == rule }) {
+			t.Errorf("the fixture does not break the per-seat access rule at %s: %v", rule, admission)
+		}
 	}
 	if file.Retired == nil || file.Retired.Error() != refused.Error() {
 		t.Fatalf("the set-aside refusal is %v,\nwant LoadCompanyToRun's own: %v", file.Retired, refused)
