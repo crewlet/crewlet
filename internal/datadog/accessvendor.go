@@ -136,7 +136,13 @@ func seatLabel(seat seataccess.SeatRef) string {
 }
 
 // Open builds a session from the company's Datadog block.
-func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
+func (v accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
+	return v.open(in, nil)
+}
+
+// open is [accessVendor.Open] with the transport a test points at a fake
+// region; nil is the default client.
+func (accessVendor) open(in seataccess.OpenInput, hc *http.Client) (seataccess.Session, error) {
 	if in.Config == nil {
 		return nil, fmt.Errorf("datadog: %w: no company document", integration.ErrNotConfigured)
 	}
@@ -145,7 +151,7 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 		return nil, fmt.Errorf("datadog: %w: integrations.datadog is off or has no provisioning block",
 			integration.ErrNotConfigured)
 	}
-	client, err := NewClient(ClientOptions{Site: cfg.Provisioning.Site})
+	client, err := NewClient(ClientOptions{Site: cfg.Provisioning.Site, HTTP: hc})
 	if err != nil {
 		return nil, err
 	}
