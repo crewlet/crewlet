@@ -196,7 +196,7 @@ func readRemoval(text []byte) (RemovalRequest, string, error) {
 func removalDraft(id string, req RemovalRequest, expect string) draft {
 	return draft{
 		expect: expect, requireActive: true,
-		rules: authoredRules,
+		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			next, err := config.DecodeCompany(b.document)
 			if err != nil {

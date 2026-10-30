@@ -4234,6 +4234,21 @@
     "scheduling": {
       "$ref": "#/$defs/Scheduling"
     },
+    "seat_access_migrated": {
+      "description": "Integrations whose agent seats state their access per seat. Written by the engine's migration.",
+      "items": {
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
     "skill_variables": {
       "additionalProperties": {
         "type": [
