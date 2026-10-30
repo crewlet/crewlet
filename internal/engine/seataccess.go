@@ -126,6 +126,10 @@ func (e *Engine) syncSeatAccess(
 		Handles:    in.handles,
 		Disconnect: in.disconnect,
 		OnDrift:    e.publishDriftRestored,
+		// THE MIGRATION'S GATE: until the document marks the integration
+		// migrated onto per-seat access, its seats say nothing per seat,
+		// and read as off they would have every account turned off.
+		Unmigrated: !company.Config.SeatAccessMigratedFor(string(kind)),
 	})
 	if in.sink != nil {
 		// FLUSHED WHATEVER THE SYNC CONCLUDED: every value it recorded is
@@ -163,7 +167,14 @@ func (e *Engine) withSeatAccess(
 	case err != nil:
 		return nil, fmt.Errorf("engine: %s access sync: %w", kind, err)
 	}
-	return append(findings, report.Findings...), nil
+	// AND THE COMPANY CREDENTIALS A SEAT ONCE SHARED (D12), until each is
+	// replaced: the integration's own finding, which its Agents tab draws.
+	shared, err := e.SharedCredentialFindings(ctx, kind, report.Records)
+	if err != nil {
+		return nil, fmt.Errorf("engine: %s shared credentials: %w", kind, err)
+	}
+	findings = append(findings, report.Findings...)
+	return append(findings, shared...), nil
 }
 
 // tearDownSeatAccess is a disconnect's seat half: every seat of kind turned

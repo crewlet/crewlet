@@ -504,7 +504,7 @@ func TestNewRefusesAProbeSetMissingAKind(t *testing.T) {
 		Sink:   func(iam.Actor) (provision.TokenSink, error) { return nil, nil },
 		Status: &statusStore{}, SlackApps: func() map[string]string { return nil },
 		StateCipher: testCipher(t), StateClaims: coordmemory.NewFleet(),
-		WebhookBaseKey: oneListener,
+		WebhookBaseKey: oneListener, Access: &fakeAccess{},
 	})
 	if err == nil || !strings.Contains(err.Error(), "gitlab") {
 		t.Fatalf("a probe set without gitlab built a surface: %v", err)

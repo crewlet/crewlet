@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,13 +29,19 @@ func (m *recordingMux) Handle(pattern string, h http.Handler) {
 	m.ServeMux.Handle(pattern, h)
 }
 
+// readsSentAsPost are the routes that read with a POST, because what they read
+// about is a body: the plan of an access draft writes nothing, so it is the
+// read verb and asks for no proof.
+var readsSentAsPost = []string{"POST /setup/integrations/{kind}/access/plan"}
+
 // CONNECTING AN INTEGRATION ASKS FOR A RECENT PROOF, AND READING ONE DOES NOT.
 //
 // Every route the surface mounts, as a person holding every grant whose proof
-// is two hours old: a write — a submission, a pass, a disconnect, an app — is
-// refused `step_up_required` naming `step_up` before its handler runs, and a
-// read is served. Walked over the mount, so a route added later is held to the
-// same line without being listed here.
+// is two hours old: a write (a submission, a pass, a disconnect, an app, an
+// agent's access saved or acted on) is refused `step_up_required` naming
+// `step_up` before its handler runs, and a read is served. Walked over the
+// mount, so a route added later is held to the same line without being listed
+// here.
 func TestConnectingAnIntegrationAsksForARecentProof(t *testing.T) {
 	t.Parallel()
 	svc := newService(t, setupapi.Options{WebhookBase: fixtureWebhookBase,
@@ -50,7 +57,8 @@ func TestConnectingAnIntegrationAsksForARecentProof(t *testing.T) {
 	writes := 0
 	for _, pattern := range mux.patterns {
 		method, path, _ := strings.Cut(pattern, " ")
-		path = strings.NewReplacer("{kind}", "gitlab", "{id}", "a-run").Replace(path)
+		path = strings.NewReplacer("{kind}", "gitlab", "{id}", "a-run", "{handle}", "sre",
+			"{lane}", "gitlab", "{action}", "retry").Replace(path)
 		req := httptest.NewRequest(method, path, strings.NewReader("{}"))
 		req = req.WithContext(iam.WithPrincipal(req.Context(), stale))
 		rec := httptest.NewRecorder()
@@ -59,7 +67,7 @@ func TestConnectingAnIntegrationAsksForARecentProof(t *testing.T) {
 		_ = json.Unmarshal(rec.Body.Bytes(), &body)
 		steppedUp := rec.Code == http.StatusForbidden &&
 			body["error"] == string(httpjson.CodeStepUpRequired)
-		if method == http.MethodGet {
+		if method == http.MethodGet || slices.Contains(readsSentAsPost, pattern) {
 			if steppedUp {
 				t.Errorf("the read %s asked for a step-up", pattern)
 			}
