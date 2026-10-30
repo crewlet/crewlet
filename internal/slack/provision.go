@@ -289,55 +289,13 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 // configToken is the app-configuration token this run manages apps with.
 //
-// REUSED WHILE IT IS STILL GOOD, because Slack's rotation is single-use in
-// both directions: each rotate invalidates the refresh token it was given,
-// so rotating on every run turns a lost write into an operator locked out of
-// their own apps. A token within a minute of expiry is treated as expired —
-// a run that started with fifty seconds left would fail half way through.
+// The CLI's holder of the pair is the ledger file, and the flag or variable
+// is a BOOTSTRAP that seeds a ledger holding nothing ([Admin.ConfigToken]
+// says why the held pair wins once there is one).
 func (o Options) configToken(ctx context.Context, at time.Time) (string, error) {
-	held := o.Ledger.ConfigToken
-	if held.Token != "" && (held.ExpiresAt.IsZero() || held.ExpiresAt.After(at.Add(time.Minute))) {
-		return held.Token, nil
-	}
-	// THE LEDGER'S PAIR BEATS THE OPERATOR'S SHELL, which is the reverse
-	// of the usual "an explicit input wins" rule and the reverse is the
-	// point. Slack's rotation is single-use in BOTH directions: every
-	// successful rotate invalidates the refresh token it was given, so the
-	// value in a shell export is dead the moment this command first used
-	// it. Preferring it would take the ledger's live pair — the only way
-	// back into the operator's apps — and trade it for a token Slack has
-	// already retired, on every run after the first, for ever.
-	//
-	// The flag and the variable are therefore a BOOTSTRAP: they seed a
-	// ledger that holds nothing, and are ignored once it does.
-	refresh := strings.TrimSpace(held.RefreshToken)
-	if refresh == "" {
-		refresh = strings.TrimSpace(o.ConfigRefreshToken)
-	}
-	if refresh == "" {
-		return "", errors.New(
-			"slack: no app-configuration token: create one at " +
-				"https://api.slack.com/reference/manifests#config-tokens and " +
-				"pass its refresh token, which this run exchanges for a " +
-				"12-hour access token")
-	}
-	rotated, err := o.Admin.RotateConfigToken(ctx, refresh)
-	if err != nil {
-		return "", err
-	}
-	// PERSISTED BEFORE USE. The rotate call already invalidated the
-	// refresh token it was given, so this pair is now the only way back
-	// into the operator's apps — losing it here would cost them every app
-	// this ledger describes.
-	o.Ledger.ConfigToken.Token = rotated.Token
-	o.Ledger.ConfigToken.RefreshToken = rotated.RefreshToken
-	o.Ledger.ConfigToken.ExpiresAt = rotated.ExpiresAt
-	if err := o.Ledger.Save(o.LedgerPath); err != nil {
-		return "", fmt.Errorf(
-			"slack: the app-configuration token was rotated and could not be "+
-				"recorded, which invalidates the refresh token you supplied: %w", err)
-	}
-	return rotated.Token, nil
+	return o.Admin.ConfigToken(ctx,
+		ledgerConfigTokenStore{ledger: o.Ledger, path: o.LedgerPath},
+		o.ConfigRefreshToken, at, false)
 }
 
 // appGone reports a Slack error meaning the recorded app is not there any
