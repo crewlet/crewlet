@@ -20,7 +20,6 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/provision"
-	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/whsec"
 )
@@ -265,7 +264,6 @@ func readersOfTheCompany() []readerRun {
 			}}
 	}
 	const sink, public = "-print", "-public-url=https://crewlet.example.com"
-	const slackConfigToken = "-config-token=xoxe-1-a-fixture-refresh-token"
 	return []readerRun{
 		vendorRun("gitlab provision", sink, public, "-admin-token=glpat-admin"),
 		vendorRun("gitlab provision", "-dry-run", public),
@@ -282,13 +280,6 @@ func readersOfTheCompany() []readerRun {
 		vendorRun("confluence import"),
 		vendorRun("confluence resync"),
 		vendorRun("mattermost doctor", "-admin-token=mm-admin"),
-		// WITH AN APP-CONFIGURATION TOKEN, so a run the refusal let through
-		// goes on to Slack, which no case's run reaches: its first request
-		// fails the case ([unreachableSlack]).
-		vendorRun("slack provision", "-secret-store", public, slackConfigToken),
-		vendorRun("slack provision", "-secret-store", public, slackConfigToken, "-reinstall"),
-		vendorRun("slack provision", sink, public, slackConfigToken),
-		vendorRun("slack provision", sink, public, slackConfigToken, "-reinstall"),
 		llmRun("list"),
 		llmRun("status"),
 		llmRun("export"),
@@ -351,19 +342,12 @@ func TestAClusterMemberWithItsEngineStoppedRefusesEveryReaderOfTheCompany(t *tes
 }
 
 // A RUN THAT READS NO STORED VALUE DECIDES NO ROUTE, and so runs where every
-// route is refused — a cluster member with its engine stopped: a dry run that
-// resolves nothing, a plan with nothing in it — a Slack run with no seat to
-// provision among them, whatever its sink. Refusing them would refuse a
-// question the store has no part in, and routing them on a solo node would
+// route is refused (a cluster member with its engine stopped): a dry run that
+// resolves nothing, and a plan with nothing in it. Refusing them would refuse
+// a question the store has no part in, and routing them on a solo node would
 // start its broker for a store nothing reads.
 //
-// A Slack seat whose credentials are literals is no seat to provision: the run
-// leaves it to the operator who wrote them, and records or reads back nothing
-// for it.
-//
-// Mutation: route before the empty-plan or dry-run return, or decide a Slack
-// run's plan is empty by its seats rather than by those it can provision, and
-// these go red.
+// Mutation: route before the empty-plan or dry-run return, and these go red.
 func TestARunThatReadsNoStoredValueDecidesNoRoute(t *testing.T) {
 	t.Parallel()
 	cfg := clusterMemberConfig(t)
@@ -373,16 +357,9 @@ func TestARunThatReadsNoStoredValueDecidesNoRoute(t *testing.T) {
 		"    url: VENDOR\n    team: nimbus\n  confluence:\n    url: VENDOR\n    email: ops@example.com\n"+
 		"    token: t\n    webhook_secret: \"${CONFLUENCE_WEBHOOK_SECRET}\"\nroles:\n"+
 		"  - name: CEO\n    handle: ceo\n", vendor)
-	literal := companyAt(t, "name: Nimbus\nproviders:\n  sandbox: {fake: true}\n  llm:\n    main:\n      model: claude-sonnet-5\n"+
-		"roles:\n  - name: CEO\n    handle: ceo\n    llm: main\n    integrations:\n      slack:\n"+
-		"        bot_token: xoxb-a-literal-token\n        signing_secret: a-literal-signing-secret\n",
-		vendor)
-	ledger := filepath.Join(t.TempDir(), "ledger.json")
 	for _, args := range [][]string{
 		{"confluence", "import", company, t.TempDir(), "-dry-run"},
 		{"confluence", "import", empty, t.TempDir()},
-		{"slack", "provision", empty, "-print", "-ledger", ledger},
-		{"slack", "provision", literal, "-secret-store", "-ledger", ledger},
 	} {
 		t.Run(strings.Join(args[:2], " ")+" "+strings.Join(args[3:], " "), func(t *testing.T) {
 			out, errs, err := cli(t, append(args, "-config", cfg)...)
@@ -661,7 +638,6 @@ func TestAProvisioningRunsChoiceOfSinkIsAnsweredBeforeAnyRoute(t *testing.T) {
 		{"github", "provision", public},
 		{"jira", "provision", public},
 		{"confluence", "provision", public},
-		{"slack", "provision", public, "-config-token=xoxe-refresh"},
 	} {
 		for _, tc := range []struct {
 			name  string
@@ -819,27 +795,14 @@ func TestARunReadingTheCompanysValuesIsToldItsOwnWayPast(t *testing.T) {
 
 // COMMANDS ON A RUNNING NODE DO NOT DIE ON ITS LOCK.
 //
-// `slack provision` with no seat to provision reads none of the company's
-// values and asks the store nothing, so against a running node it neither
-// meets the lock nor needs a credential for the node. `llm list` reads the
-// company's values and so reads them through the node, as every provisioning
-// command does — the entry's conventional bundle among them, in one batch.
+// `llm list` reads the company's values and so reads them through the node, as
+// every provisioning command does, the entry's conventional bundle among them,
+// in one batch.
 func TestCommandsOnARunningNodeDoNotDieOnItsLock(t *testing.T) {
 	t.Parallel()
 	node := newRevealNode(t, map[string]string{"CREWLET_LLM_CLI_SUB_CREDENTIALS": aBundle(t)})
 	cfg := bootstrapForURL(t, node.server.URL)
 	holdTheStore(t, storePathOf(t, cfg), store.EstateNode)
-
-	// WITH NO CREDENTIAL FOR THE NODE AT ALL: a run that routed its store
-	// would need one to reach the node it is going through, so succeeding
-	// without one is what shows nothing was opened.
-	if out, errs, err := cliIn(t, noEnviron, "slack", "provision", gitlabCompanyFile(t), "-print",
-		"-config", cfg, "-ledger", filepath.Join(t.TempDir(), "ledger.json")); err != nil {
-		t.Errorf("slack provision on a running node: %v\n%s%s", err, out, errs)
-	}
-	if len(node.tokens) != 0 {
-		t.Errorf("a command that reads no value asked the node %d time(s)", len(node.tokens))
-	}
 
 	company, entry := cliAgentCompanyFile(t)
 	if out, errs, err := cli(t, "llm", "list", "-company", company, "-config", cfg); err != nil {
@@ -1013,13 +976,6 @@ func TestAProvisioningRunAsksForItsSeatsTokensInItsFirstBatch(t *testing.T) {
 			return []string{"gitlab", "provision", companyAt(t, readerCompanyDoc, vendor),
 				"-public-url", "https://crewlet.example.com"}
 		}, []string{"GITLAB_SIGNING_SECRET"}, "-rotate", "no provisioning token"},
-		{"slack provision", func(vendor string) []string {
-			return []string{"slack", "provision",
-				installedSlackApps(t, companyAt(t, readerCompanyDoc, vendor), "ceo")}
-		}, []string{"SLACK_BOT_TOKEN_CEO"}, "-reinstall", "no address for this deployment"},
-		{"slack provision of an app nobody installed", func(vendor string) []string {
-			return []string{"slack", "provision", companyAt(t, readerCompanyDoc, vendor)}
-		}, nil, "-reinstall", "no address for this deployment"},
 	} {
 		for _, fresh := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s, fresh %v", tc.name, fresh), func(t *testing.T) {
@@ -1072,69 +1028,6 @@ func TestAnEnvironmentOnlyRunDecidesNoRoute(t *testing.T) {
 	if !strings.Contains(out, "PROVIDER") {
 		t.Errorf("the listing did not print:\n%s", out)
 	}
-}
-
-// A SLACK RUN READS BACK ONLY THE INSTALLED APPS IT PROVISIONS. A seat whose
-// signing_secret is a literal names a bot_token variable, but the run takes it
-// no further than its plan's note — nothing is created or installed for it —
-// so its token is never read back, and through a node never revealed for a
-// run that does not use it. Nor is the token of a seat whose app the ledger
-// does not record installed — recorded with no bot user, or not recorded at
-// all: that app is installed whatever the store holds, so a reveal of its
-// token answers nothing the run uses, and a refused one would refuse the run.
-//
-// Mutation: read back every seat whose bot_token is a variable, and the
-// half-literal seat's token is asked for; read back every seat the run
-// provisions, and the two uninstalled seats' tokens are.
-func TestASlackRunReadsBackOnlyTheInstalledAppsItProvisions(t *testing.T) {
-	t.Parallel()
-	plans := []slack.SeatPlan{
-		{Handle: "ceo", TokenVar: "SLACK_BOT_TOKEN_CEO", SigningVar: "SLACK_SIGNING_SECRET_CEO"},
-		{Handle: "cto", TokenVar: "SLACK_BOT_TOKEN_CTO"},
-		{Handle: "cfo", TokenVar: "SLACK_BOT_TOKEN_CFO", SigningVar: "SLACK_SIGNING_SECRET_CFO"},
-		{Handle: "coo", TokenVar: "SLACK_BOT_TOKEN_COO", SigningVar: "SLACK_SIGNING_SECRET_COO"},
-	}
-	ledger := &slack.Ledger{Apps: map[string]slack.AppRecord{
-		"ceo": installedSlackRecord("ceo"),
-		"cto": installedSlackRecord("cto"),
-		// CREATED AND NEVER INSTALLED: a -no-install run's, or one whose
-		// operator skipped the click.
-		"cfo": {AppID: "A0CFO", ClientID: "1.2", ClientSecret: "cs", SigningSecret: "ss"},
-	}}
-	for _, tc := range []struct {
-		only, want []string
-	}{
-		{nil, []string{"SLACK_BOT_TOKEN_CEO"}},
-		{[]string{"cto"}, nil},
-		{[]string{"cfo", "coo"}, nil},
-		{[]string{"ceo", "cto", "cfo"}, []string{"SLACK_BOT_TOKEN_CEO"}},
-	} {
-		if got := slackTokenVars(plans, ledger, tc.only); !slices.Equal(got, tc.want) {
-			t.Errorf("-handles %v reads back %v, want %v", tc.only, got, tc.want)
-		}
-	}
-}
-
-// installedSlackRecord is the ledger's record of handle's app as a run that
-// completed its OAuth exchange leaves it.
-func installedSlackRecord(handle string) slack.AppRecord {
-	id := strings.ToUpper(handle)
-	return slack.AppRecord{AppID: "A0" + id, ClientID: "1.2", ClientSecret: "cs",
-		SigningSecret: "ss", BotUserID: "U0BOT" + id, TeamID: "T0ACME"}
-}
-
-// installedSlackApps writes the ledger beside company, recording each of
-// handles' apps installed.
-func installedSlackApps(t *testing.T, company string, handles ...string) string {
-	t.Helper()
-	ledger := &slack.Ledger{Apps: map[string]slack.AppRecord{}}
-	for _, handle := range handles {
-		ledger.Apps[handle] = installedSlackRecord(handle)
-	}
-	if err := ledger.Save(slack.LedgerPathFor(company)); err != nil {
-		t.Fatal(err)
-	}
-	return company
 }
 
 // A -secret-store RUN THROUGH A RUNNING NODE HAS NOTHING LEFT TO DO, AND ONE

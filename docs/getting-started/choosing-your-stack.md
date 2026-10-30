@@ -349,14 +349,16 @@ There is no self-hosted variant:
    `role.integrations.slack`, and the shared Slack MCP tool server in
    `mcp_servers`. Each agent is its own bot identity: own token, own DM,
    own @-mention.
-3. **Provision the apps** with
-   [`crewlet slack provision`](../integrations/slack.md),
-   which creates one app per agent through Slack's App Manifest APIs, points
-   each app's event subscriptions at `POST /webhooks/slack/{handle}`, and
-   writes the obtained secrets back under the exact `${VAR}` names the YAML
-   references. Two things stay manual, because Slack has no API for either:
-   generating one app *configuration token* (once, ever) and clicking
-   **Allow** on each app's install. The engine's API must be reachable from
+3. **Let the engine create the apps.** Enter one app *configuration token*
+   on Slack's connect form, under Company › Integrations, and turn each agent
+   on from the Slack integration's
+   [Agents tab](../integrations/slack.md#per-agent-access-from-the-agents-tab).
+   The engine creates one app per agent through Slack's App Manifest APIs,
+   points each app's event subscriptions at `POST /webhooks/slack/{handle}`,
+   and seals what Slack serves under names it derives from the handle. Two
+   things stay manual, because Slack has no API for either: generating the
+   configuration token (once, ever) and clicking **Allow** on each app's
+   install. The engine's API must be reachable from
    Slack (public URL, or a tunnel during development) for both the events-URL
    verification and the OAuth landing page.
 

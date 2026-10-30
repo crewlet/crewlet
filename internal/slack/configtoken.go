@@ -17,12 +17,10 @@ import (
 //
 // Slack's app-configuration access token lives twelve hours, and the refresh
 // token that renews it is SINGLE USE: each rotation answers a new pair and
-// retires the refresh token it was given. So the rules are the same whoever
-// holds the pair (the CLI's ledger file, or the company's sealed secret the
-// reconcile loop reads, D11): reuse a token that is still good, rotate only
-// when it is not, and make the new pair durable before using it. Written
-// twice, one holder would eventually rotate needlessly or use before saving,
-// and either locks the company out of its own apps.
+// retires the refresh token it was given. So the rules are: reuse a token that
+// is still good, rotate only when it is not, and make the new pair durable
+// before using it. A rotation that is used before it is saved, or one made
+// needlessly, is how a company is locked out of its own apps.
 
 // ConfigTokenStore keeps the app-configuration token pair between runs.
 type ConfigTokenStore interface {
@@ -171,24 +169,4 @@ func (s SinkConfigTokenStore) SaveConfigToken(ctx context.Context, token ConfigT
 		return err
 	}
 	return s.Sink.Record(ctx, s.Var, encoded)
-}
-
-// ledgerConfigTokenStore keeps the pair in the CLI's ledger file.
-type ledgerConfigTokenStore struct {
-	ledger *Ledger
-	path   string
-}
-
-func (s ledgerConfigTokenStore) LoadConfigToken(context.Context) (ConfigToken, error) {
-	held := s.ledger.ConfigToken
-	return ConfigToken{
-		Token: held.Token, RefreshToken: held.RefreshToken, ExpiresAt: held.ExpiresAt,
-	}, nil
-}
-
-func (s ledgerConfigTokenStore) SaveConfigToken(_ context.Context, token ConfigToken) error {
-	s.ledger.ConfigToken.Token = token.Token
-	s.ledger.ConfigToken.RefreshToken = token.RefreshToken
-	s.ledger.ConfigToken.ExpiresAt = token.ExpiresAt
-	return s.ledger.Save(s.path)
 }
