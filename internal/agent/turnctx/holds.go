@@ -76,8 +76,9 @@ type Holds struct {
 // past anything a turn's work needs, and is refused naming the bound rather
 // than holding a row past what a run row should carry. On a run row a key is
 // at most 72 bytes (a ref's key, 69, quoted and with its comma; a
-// repository's id 39), so the set is at most about 72 KiB on a row that
-// already carries the whole suspended conversation. sandbox.MaxCodeHolds is
+// repository's id 39), so the set is at most about 72 KiB: the largest field
+// the row keeps, since its conversation and tool log are beside it rather
+// than on it (internal/sandbox). sandbox.MaxCodeHolds is
 // the same number (this package and that one import neither, and engine's
 // TestATurnHoldsWhatItsRowMay holds the two equal).
 const MaxHolds = 1024
