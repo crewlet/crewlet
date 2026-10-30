@@ -41,9 +41,11 @@ units:
         handle: dev
         integrations:
           slack:
+            enabled: false
             bot_token: ${DEV_SLACK_BOT}
             signing_secret: ${DEV_SLACK_SIGNING}
           mattermost:
+            enabled: false
             bot_token: ${DEV_MM_BOT}
       - name: Ops
         handle: ops

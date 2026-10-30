@@ -122,10 +122,10 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 			Disconnector: drop[pass.Kind()],
 		})
 	}
-	// TEARDOWN ONLY for a surface with no pass. Slack's apps are created
-	// from the command line, so there is nothing here to converge, but a
-	// disconnect for it still has a block to drop, and without a
-	// registration that intent would sit on the fleet row for ever.
+	// TEARDOWN ONLY for a surface with no pass. None in this build has
+	// none, but a kind added without one still has a block a disconnect
+	// drops, and without a registration that intent would sit on the fleet
+	// row for ever.
 	for _, kind := range integration.Kinds {
 		if converged[kind] {
 			continue
@@ -228,8 +228,9 @@ func (e *Engine) startIntegrations(ctx context.Context) {
 // same pass list the loop registers ([Engine.setupPasses]) rather than from
 // the runner, which is nil on a node with no coordination store and would
 // then call every surface one no pass converges. What it tells a reader is
-// whether a surface with no report is waiting for one or will never get one —
-// Slack, whose apps are created by hand, is the second.
+// whether a surface with no report is waiting for one or will never get one.
+// Every surface this build knows has a pass now: Slack's converges its agents'
+// own apps (D11 of per-seat integration access).
 func (e *Engine) Converges(kind integration.Kind) bool {
 	for _, pass := range e.setupPasses() {
 		if pass.Kind() == kind {
@@ -396,6 +397,7 @@ func (c *passConverger) Reconcile(ctx context.Context) ([]integration.Finding, e
 	// inside the lease the worker is holding.
 	findings, err := c.pass.Run(ctx, setup.PassInput{
 		Sink:           sink,
+		By:             loopActor(),
 		WebhookBase:    c.engine.webhookBase,
 		WebhookBaseKey: c.engine.webhookBaseKey,
 	})

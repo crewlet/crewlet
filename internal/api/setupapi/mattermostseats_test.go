@@ -20,9 +20,9 @@ const mattermostDoc = `{
   },
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu",
-     "integrations": {"mattermost": {"bot_token": "${SRE_MATTERMOST_TOKEN}", "channel": "engineering"}}},
+     "integrations": {"mattermost": {"enabled": false, "bot_token": "${SRE_MATTERMOST_TOKEN}", "channels": ["engineering"]}}},
     {"name": "Builder", "handle": "builder", "llm": "zulu",
-     "integrations": {"mattermost": {"bot_token": "${BUILDER_MATTERMOST_TOKEN}"}}},
+     "integrations": {"mattermost": {"enabled": false, "bot_token": "${BUILDER_MATTERMOST_TOKEN}"}}},
     {"name": "Reviewer", "handle": "reviewer", "llm": "zulu"},
     {"name": "Jane Founder", "handle": "founder", "kind": "human",
      "contact": {"github_login": "jane"}}
@@ -97,17 +97,17 @@ func TestTheMattermostRosterNamesEveryAgentsBot(t *testing.T) {
 		t.Errorf("builder detail = %q, want the sync it is waiting on", detail)
 	}
 
-	// AND THE SEAT THAT HAS NOT OPTED IN IS TOLD WHERE TO, at the address it
-	// actually writes to: a Mattermost token lives on the seat's own block,
-	// not in mcp_env, and pointing an operator at the wrong file is the
+	// AND THE SEAT THAT HAS NOT OPTED IN IS TOLD HOW TO: turned on at
+	// Mattermost, where the engine provisions the bots, it gets one; nobody
+	// names its token, and pointing an operator at a field to fill is the
 	// same dead end as saying nothing.
 	reviewer := seats["reviewer"]
 	if reviewer["present"] == true {
 		t.Error("a seat with no mattermost block is reported holding a credential")
 	}
 	detail, _ := reviewer["detail"].(string)
-	if !strings.Contains(detail, "integrations.mattermost.bot_token") {
-		t.Errorf("reviewer detail = %q, want the address a bot token is named at", detail)
+	if !strings.Contains(detail, "Agents tab") {
+		t.Errorf("reviewer detail = %q, want where the agent is turned on", detail)
 	}
 	if strings.Contains(detail, "mcp_env") {
 		t.Errorf("reviewer detail = %q sends an operator to mcp_env, where a "+

@@ -239,6 +239,54 @@ Data Center deliveries are claimed fleet-wide on the `X-Atlassian-Webhook-Identi
 
 ---
 
+## Per-agent access
+
+A seat's Confluence access rides on the same Atlassian service account as its
+Jira access, described in [Jira: Per-agent access](jira.md#per-agent-access):
+one account, one product grant per product, one API token whose scopes are
+the union of the products the seat is on. What differs is how a space is
+granted, and that is the site's choice:
+
+```yaml
+roles:
+  - name: SRE
+    integrations:
+      confluence:
+        enabled: true              # off until turned on
+        space_role: <space role id>  # where the site has role-based access
+        spaces: [ENG]              # empty: every space the company names
+```
+
+- **A site with role-based access** (Atlassian's space roles, a beta): the
+  seat holds one space role in each listed space, chosen from the site's own
+  roles read live: Viewer, Collaborator, Manager, Admin and any custom role.
+- **A site without it**: the seat holds space permissions by operation, under
+  Confluence's names (View, Add pages, Delete pages, Add comments, Export
+  space, Admin and the rest), stored as `operations: [read:space, create:page]`.
+  View is granted first and removed last, because Confluence requires it for
+  every other permission and removes them all with it. A set without View is
+  refused on save and reported by the sync, naming View; the Agents tab keeps
+  it checked while anything else is, from the lane's `required_level`.
+- **Space keys** are compared as Confluence matches them: a global space's key
+  in any case (`eng` is `ENG`), a personal space's `~` key exactly as written.
+
+- **Product access only**, offered first on either kind of site: the account
+  has Confluence and holds no space role or permission of its own, so the
+  site's and each space's permissions alone decide what it sees. Leave
+  `space_role`, `operations` and `spaces` out. Moving a seat to it removes its
+  space roles or permissions; a `spaces` list needs a role or permissions.
+
+Admin, and any custom role or permission set that administers a space, is an
+administration grant: a raise to it carries a warning and asks for a fresh
+step-up. Off removes the seat's space access and replaces its token with one
+without Confluence's scopes (`read:confluence-content.all`,
+`write:confluence-content`, `read:confluence-space.summary`,
+`read:confluence-user`), or revokes it when the seat is off on Jira too. Space
+access is managed with the site credential in `integrations.confluence`, whose
+account needs to administer the company's spaces.
+
+---
+
 ## Query-Time Confluence Search
 
 Crewlet keeps no local copy of Confluence content. Shared knowledge is searched **live at query time**: the auxiliary model turns a turn's trigger into a short text query — once per turn — and the searcher runs it as CQL against `/rest/api/content/search`. There is no startup walk, no vector index, and no webhook-driven re-index of page bodies; Confluence is the live source of truth and is read on demand.

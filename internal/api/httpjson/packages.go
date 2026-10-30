@@ -11,7 +11,8 @@ package httpjson
 // reads every package clause in the module and fails, naming the difference,
 // when a package is added, renamed or removed without this table following.
 var goPackages = map[string]bool{
-	"a2a": true, "a2atest": true, "adr": true, "api": true,
+	"a2a": true, "a2atest": true, "accessmigrate": true, "adr": true, "agentaccess": true,
+	"api":    true,
 	"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 	"artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 	"artifactspike": true, "artifactupload": true,
@@ -56,7 +57,7 @@ var goPackages = map[string]bool{
 	"redact": true, "references": true, "runner": true, "runtoken": true,
 	"s3fake": true, "s3obj": true, "sandbox": true, "sandboxtest": true,
 	"schedule": true, "scheduletest": true, "search": true, "seat": true,
-	"secrets": true, "secretsapi": true, "session": true, "setup": true,
+	"seataccess": true, "seataccesstest": true, "secrets": true, "secretsapi": true, "session": true, "setup": true,
 	"setupapi": true, "setuptest": true, "signedask": true, "skills": true,
 	"skillsync": true, "slack": true, "slideformat": true, "solo": true,
 	"sourcetree": true, "sqlledger": true,

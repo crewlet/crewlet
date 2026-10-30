@@ -3,9 +3,6 @@ package atlassian
 import (
 	"fmt"
 	"strings"
-
-	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // AccountName is the display name one seat's account carries.
@@ -23,8 +20,8 @@ import (
 // it. The name is the field that survives.
 //
 // The marker is the handle because a handle is immutable (ADR-0013): a
-// document that changes one has removed the seat, and the teardown that sees
-// it gone removes its account. The label is the role as the document names it
+// document that changes one has removed the seat, and per-seat access reaches
+// its account through the ledger. The label is the role as the document names it
 // today.
 func AccountName(role, handle string) string {
 	label := strings.TrimSpace(role)
@@ -49,61 +46,4 @@ func HandleFrom(displayName string) string {
 		return ""
 	}
 	return strings.TrimSpace(handle)
-}
-
-// PlanFor is the seats this company wants an Atlassian identity for.
-//
-// A seat opts IN by naming a ${VAR} in one of its mcp_env Atlassian blocks,
-// exactly as every other provisioned app works: the variable is where the
-// minted token is written, and a seat with nowhere to put one is a seat this
-// pass leaves alone rather than an error.
-func PlanFor(o *org.Organization) (*provision.Plan, error) {
-	plan := &provision.Plan{}
-	if o == nil {
-		return plan, nil
-	}
-	for seat := range o.AllRoles() {
-		if !seat.IsAgent() {
-			// A human seat is a person with their own Atlassian account;
-			// minting one an identity would create a second for somebody
-			// who already has one.
-			continue
-		}
-		handle := seat.Handle()
-		key, value := seatCredential(seat.MCPEnv)
-		if key == "" {
-			continue
-		}
-		name, ok := provision.SoleVar(value)
-		if !ok {
-			// THE NOTE NAMES THE SHAPE, NEVER THE VALUE: it is printed in a
-			// report an operator pastes into a ticket, and the value is
-			// either a credential or a string containing one.
-			plan.Note("%s: mcp_env %s is not a whole ${VAR} reference, so there is "+
-				"nowhere to write a minted token — point it at a variable, or "+
-				"manage this seat's account by hand", handle, key)
-			continue
-		}
-		entry := provision.Seat{Handle: handle, Role: seat.Name, TokenVar: name}
-		// WHERE THE ADDRESS GOES. Atlassian names the account itself, and its
-		// product APIs take Basic base64(address:token), so a seat holding
-		// only the token authenticates as nobody. The address is not
-		// something an operator can write down in advance.
-		if where, value := seatEmail(seat.MCPEnv); where != "" {
-			if emailVar, ok := provision.SoleVar(value); ok {
-				entry.EmailVar = emailVar
-			} else {
-				plan.Note("%s: mcp_env %s is not a whole ${VAR} reference, so there "+
-					"is nowhere to write the address Atlassian assigns this "+
-					"account — point it at a variable", handle, where)
-			}
-		} else {
-			plan.Note("%s: no mcp_env address slot, so this seat cannot use the "+
-				"account: Atlassian authenticates its products as "+
-				"base64(address:token), and the token alone is refused. Add "+
-				"JIRA_USERNAME with a ${VAR} beside the token", handle)
-		}
-		plan.Add(entry)
-	}
-	return plan, nil
 }

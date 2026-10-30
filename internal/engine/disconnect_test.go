@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -90,22 +91,22 @@ func TestADisconnectOnANodeWithNoCompanyIsDeferredRatherThanFatal(t *testing.T) 
 	}
 }
 
-// A TEARDOWN THAT CANNOT REMOVE THE ACCOUNTS MUST NOT REPORT THAT IT DID.
+// A DISCONNECT THAT IS ASKED TO REMOVE ACCOUNTS IT CANNOT REACH REFUSES.
 //
-// [Engine.dropBlock] runs the vendor step and then removes the block — which
+// [Engine.dropBlock] runs the vendor step and then removes the block, which
 // for Atlassian carries the `${VAR}` pointing at the organization key. So a
-// teardown that answers nil when that key did not resolve has the block
-// removed out from under it: every service account this engine created is
-// orphaned at Atlassian, nothing in the document can authenticate a second
-// attempt, and the operator is told remove_seats succeeded. The credential each
-// of those accounts holds is still live and still sealed.
+// teardown that answered nil when that key did not resolve had the block
+// removed out from under it: every service account this engine created was
+// orphaned at Atlassian, nothing in the document could authenticate a second
+// attempt, and the operator was told remove_seats succeeded.
 //
-// gitlabPass and mattermostPass both refuse here, naming the credential they
-// could not resolve. Atlassian was the outlier, and its silence was the
-// destructive direction rather than the safe one.
-func TestATeardownWithNoOrganizationKeyRefusesRatherThanClaimingSuccess(t *testing.T) {
+// The accounts are the ledger's now, and removed by the disconnect's access
+// sync, so the refusal is there: the ledger records an account and the
+// vendor cannot be opened. Without remove_seats nothing is removed, so a
+// disconnect needs no key.
+func TestATeardownThatCannotReachTheAccountsItMustRemoveRefuses(t *testing.T) {
 	t.Parallel()
-	e := &Engine{}
+	e, _ := sealingEngine(t, "https://jira.example.com")
 	cfg, err := config.ParseCompany([]byte(`
 name: Acme
 providers:
@@ -130,26 +131,51 @@ roles:
 		t.Fatalf("company: %v", err)
 	}
 	e.epoch.current.Store(company)
-
-	pass := &atlassianPass{engine: e}
-	_, err = pass.Teardown(t.Context(), setup.TeardownInput{RemoveSeats: true})
-	if err == nil {
-		t.Fatal("the teardown reported success with no key to remove an " +
-			"account with; dropBlock then takes the key's own pointer away " +
-			"and every agent's account is orphaned at Atlassian")
+	ledger, err := e.SeatAccessLedger()
+	if err != nil {
+		t.Fatal(err)
 	}
-	// THE VARIABLE IS NAMED, because that is the one thing the operator has
-	// to change and nothing else in the message can be acted on.
-	if !strings.Contains(err.Error(), "ATLASSIAN_ORG_KEY_NOBODY_SET") {
-		t.Errorf("Teardown = %v, which does not name the variable that did "+
-			"not resolve", err)
+	if err := ledger.Put(t.Context(), seataccess.Record{
+		Kind: integration.KindAtlassian, Handle: "ceo",
+		Account: &seataccess.Account{ID: "557058:ceo", State: seataccess.AccountActive},
+	}); err != nil {
+		t.Fatal(err)
 	}
+	by := iam.Actor{Name: "founder", Kind: iam.ActorOperator}
 
-	// AND WITHOUT remove_seats THERE IS GENUINELY NOTHING TO DO: Atlassian
-	// holds no webhook this engine registered, so a disconnect that leaves
-	// the accounts alone needs no key at all.
-	if _, err := pass.Teardown(t.Context(), setup.TeardownInput{}); err != nil {
-		t.Errorf("a teardown that keeps the accounts refused: %v", err)
+	if err := e.tearDownSeatAccess(t.Context(), integration.KindAtlassian, by, true); err == nil ||
+		!strings.Contains(err.Error(), "1 agent account(s) to remove") {
+		t.Fatalf("tearDownSeatAccess with remove_seats = %v; want a refusal naming the "+
+			"account it cannot reach", err)
+	}
+	if err := e.tearDownSeatAccess(t.Context(), integration.KindAtlassian, by, false); err != nil {
+		t.Errorf("a disconnect that keeps the accounts refused: %v", err)
+	}
+}
+
+// A REMOVAL THAT IS STILL WAITING HOLDS THE DISCONNECT: an app only a person
+// can delete, or one the vendor refused to, leaves its account in the ledger,
+// and dropping the block then would drop the only connection that confirms
+// the removal while the operator is told it finished.
+func TestARemovalStillWaitingHoldsTheDisconnect(t *testing.T) {
+	t.Parallel()
+	e, _ := sealingEngine(t, "https://jira.example.com")
+	ledger, err := e.SeatAccessLedger()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := accountsLeft(t.Context(), ledger, integration.KindSlack); err != nil {
+		t.Errorf("an empty ledger held the disconnect: %v", err)
+	}
+	if err := ledger.Put(t.Context(), seataccess.Record{
+		Kind: integration.KindSlack, Handle: "swe",
+		Account: &seataccess.Account{ID: "A0SWE", State: seataccess.AccountDisabled},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := accountsLeft(t.Context(), ledger, integration.KindSlack); err == nil ||
+		!strings.Contains(err.Error(), "swe") {
+		t.Errorf("an account still held answered %v, want a refusal naming it", err)
 	}
 }
 

@@ -33,7 +33,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
-	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
@@ -111,13 +110,6 @@ type invocation struct {
 	// credential ([nodeTokenOrEmpty]), and where a provisioning command
 	// reads the operator's own ([operatorCredential]).
 	environ config.Source
-
-	// slack is the client `crewlet slack provision` reaches Slack's Web API
-	// through, nil for the default one. Slack is the one vendor no document
-	// addresses — every other vendor command reaches the instance its
-	// company file names — so this is the only way a run reaches anything
-	// but slack.com.
-	slack *http.Client
 }
 
 // runIn is [run] against an invocation it is HANDED: the environment every
@@ -329,12 +321,12 @@ Usage:
                               on their own scripts or against a candidate model
   crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's coding CLI
                               starts, relaying its stdio to the engine's tools
-  crewlet gitlab <cmd>        Reconcile the company's seats into a GitLab instance
+  crewlet gitlab <cmd>        Register a GitLab group's webhook and its signing secret
   crewlet github <cmd>        Report a GitHub deployment's seat accounts and hook it
   crewlet jira <cmd>          Report a Jira instance's seat accounts and projects
-  crewlet slack <cmd>         Create, update and install one Slack app per seat
+  crewlet slack <cmd>         Retired: each agent's Slack app is the reconcile loop's
   crewlet confluence <cmd>    Register the inbound hooks; publish markdown and tool skills into spaces
-  crewlet mattermost <cmd>    Reconcile a Mattermost team, and diagnose one
+  crewlet mattermost <cmd>    Diagnose a Mattermost install
   crewlet version             Print the version
   crewlet help                Show this message
 
@@ -1453,6 +1445,16 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// the third-party app and leaving the block behind.
 	if configSurface != nil {
 		e.UseConfigWriter(engineConfigWriter{surface: configSurface})
+		// THE COMPANY MOVES ONTO PER-SEAT ACCESS before this node starts its
+		// seats, on every node that holds the estate: the first to write
+		// wins the revision's compare-and-set and the rest find nothing left
+		// to do. What makes it safe is not this order but the gate the
+		// revision carries: the access pass for an integration acts on no
+		// seat until the document marks the integration migrated, so a pass
+		// that runs first, or an integration whose vendor did not answer,
+		// changes nothing at any vendor.
+		migrateSeatAccessOnce(ctx, e, configSurface,
+			fleetsecrets.New(e.Backends().Fleet, cipher), log)
 	}
 
 	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
@@ -1509,6 +1511,14 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// that landed mid-boot would apply an epoch to a node that has not
 	// claimed anything yet, which is work with nowhere to go.
 	go reconciler.Run(ctx)
+
+	// AND IT KEEPS LOOKING: an integration left gated because its vendor did
+	// not answer, or one a person connected since, is migrated by a later
+	// attempt.
+	if configSurface != nil {
+		go keepMigratingSeatAccess(ctx, e, configSurface,
+			fleetsecrets.New(e.Backends().Fleet, cipher), log)
+	}
 
 	// A NODE STOPS FOR ONE OF TWO REASONS, and both take the one shutdown
 	// below: a signal, which is somebody else's decision, or the engine
@@ -1989,6 +1999,10 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		// activation goes unanswered names it as the one node holding the
 		// revision it stored, the way /health and the fleet answer name it.
 		Node: e.Node().ID(),
+		// AND WHICH AGENT SEATS A WRITE RAISES to an administration role at
+		// a vendor (D10), from the vendors' own offers, so every authored
+		// write asks a person's fresh step-up for one.
+		Raises: e.SeatAccessRaises,
 	})
 }
 
@@ -2154,65 +2168,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	announceUnclaimed(ctx, e.AnyPerson, engine.SeatViewOf(e).HumanSeats,
 		e.IAM().SeatClaims)
 
-	// The fleet's integration status, which both the reconcile loop and a
-	// pass run from the dashboard write.
-	integrationStatus, err := e.IntegrationStore()
+	// THE SLACK INSTALL LINKS, signed under the fleet keyring and spent on
+	// the fleet's claim registry, so the node a browser returns to finishes
+	// a link any node minted. Built before the setup surface, which mints
+	// them, and the webhook landing below, which finishes them.
+	slackInstalls, err := e.SlackInstalls(boot.Secrets.TokenMaterial())
 	if err != nil {
-		return nil, fmt.Errorf("api: integration status: %w", err)
+		return nil, err
 	}
-	// Connecting an integration from the dashboard. It writes through the
-	// TWO surfaces above rather than reaching for the store and the plane
-	// itself: a credential is sealed by the same store /secrets serves,
-	// and the pointer to it lands through the same merge, validation and
-	// activation PATCH /config performs.
-	setupSurface, err := setupapi.New(setupapi.Options{
-		Config: configSurface,
-		// The fleet's own store, sealed with the same keyring — the one
-		// every node holds, since Tier A refuses a file without it.
-		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
-		// THIS NODE'S resolution chain, so a requirement can say whether
-		// a ${VAR} actually resolved rather than only whether somebody
-		// wrote one down. That gap is the silent outage the whole
-		// secret_usable family exists to surface.
-		Resolve: e.LookupSecret,
-		// WHERE A VENDOR REACHES THIS DEPLOYMENT — the public listener's
-		// address where one is configured, `api.external_url` otherwise —
-		// from Tier A rather than through the resolver above: it cannot
-		// change under a running process, so this surface can never answer
-		// two different addresses inside one request. And the key it is
-		// read from, which every refusal about the address names.
-		WebhookBase:    boot.API.WebhookBase(),
-		WebhookBaseKey: boot.API.WebhookBaseKey(),
-		// The third-party apps this build can provision over the API, the recorder
-		// their minted credentials go through, and the fleet row a pass
-		// writes its findings to. That last one is the SAME row the
-		// reconcile loop writes: a pass an operator ran and a tick that
-		// ran a minute later must not disagree about an integration.
-		Passes: e.SetupRunner(),
-		Sink:   e.SetupSink,
-		Status: integrationStatus,
-		// AND THE CHECK A PERSON CAN MAKE BEFORE ANY OF THAT: one
-		// read-only identity call per vendor, with a credential typed and
-		// not yet stored.
-		Probes: engine.SetupProbes(),
-		// WHICH SLACK APP EACH AGENT IS. Named nowhere in the company
-		// document, because the app is what issues the token; the
-		// running transport learned it from Slack when it wired the
-		// seat, and this is the only process that holds it.
-		SlackApps: e.SlackApps,
-		// ONE AGENT'S OWN GITHUB APP, which is the one thing here a
-		// reconcile loop cannot do alone: an app is created by POSTing a
-		// manifest from a page carrying the operator's own GitHub session.
-		// The state ties the browser that comes back to the seat that
-		// started and to who started it, sealed under the SAME keyring
-		// every node holds, so a fleet where the two halves land on
-		// different nodes still agrees.
-		StateCipher: cipher,
-		// And the fleet's claim registry SPENDS each state, so a link that
-		// reached a log or a browser history cannot be presented a second
-		// time, on this node or any other.
-		StateClaims: e.Backends().Fleet,
-	})
+
+	// Connecting an integration from the dashboard, and each agent's access
+	// at each vendor: built by the one constructor the fleet suite calls too.
+	setupSurface, err := api.NewSetupSurface(boot, e, configSurface, cipher, slackInstalls)
 	if err != nil {
 		return nil, err
 	}
@@ -2559,6 +2526,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Claims:    e.Backends().Fleet,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
+			// AND EACH AGENT'S SLACK INSTALL, finished here when Slack
+			// returns the person's browser: the same object the setup
+			// surface mints install links with.
+			SlackInstalls: slackInstalls,
 		},
 	}
 	// HOW A PERSON BECOMES A PRINCIPAL, the other end of the cookie it
@@ -3517,7 +3488,7 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary str
 	by iam.Actor) error {
 
 	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
-		Patch: patch, Summary: summary, By: by,
+		Patch: patch, Summary: summary, By: by, Engine: true,
 	})
 	return err
 }
@@ -3550,7 +3521,7 @@ func (w engineConfigWriter) SetSeat(
 	ctx context.Context, handle string, body []byte, summary string, by iam.Actor,
 ) error {
 	_, err := w.surface.ApplyEntity(ctx, configapi.ApplyEntityRequest{
-		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by,
+		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by, Engine: true,
 	})
 	return err
 }

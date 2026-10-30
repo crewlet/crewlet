@@ -206,7 +206,7 @@ type PositionRegister interface {
 
 // PositionKey is a node's key in the register.
 //
-// THE REGISTER HOLDS TEN KEY CLASSES, and every one needs the same
+// THE REGISTER HOLDS ELEVEN KEY CLASSES, and every one needs the same
 // retention, which is NONE.
 //
 // Four are the trim's: this one, [HoldKey] and [BackupPointKey] are its
@@ -220,15 +220,18 @@ type PositionRegister interface {
 // to stop sitting it out, which ages out of meaning by its own stamp, and
 // [DeviceSignInKey], a sign-in in progress, whose lifetime is a field of the
 // record that its readers keep ([DeviceSignIn.Lapsed]) because a bucket age
-// would restart at every update.
+// would restart at every update. The eleventh is [SeatAccessKey], the ledger
+// of accounts the engine created at a vendor, which an age would forget while
+// the account still exists there.
 //
 // They share a bucket because they share that retention and because a bucket
 // is a stream with a replica count, a place in every sweep and a retention
 // decision of its own. What none of them may have is an AGE: an expiring
 // position reads as a node that has applied nothing, an expiring operation
 // admits every publisher in the fleet, an expiring admission hides one, an
-// expiring acknowledgement un-seals a barrier that has already run, and an
-// expiring pause resumes a seat nobody resumed. A listing over any class
+// expiring acknowledgement un-seals a barrier that has already run, an
+// expiring pause resumes a seat nobody resumed, and an expiring ledger record
+// orphans a live account. A listing over any class
 // filters on the first segment, and that filter is load-bearing rather than
 // tidy: a hold decoded as a positions row is a node id of "" with a domains
 // map of zero values, which the trim reads as a node that has applied nothing

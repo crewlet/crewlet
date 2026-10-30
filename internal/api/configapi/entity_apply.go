@@ -50,6 +50,9 @@ type ApplyEntityRequest struct {
 	// Expect is the revision the caller built this edit on, empty for
 	// unconditional. See [ApplyRequest.Expect].
 	Expect string
+
+	// Engine marks the engine's own write. See [ApplyRequest.Engine].
+	Engine bool
 }
 
 // ApplyEntity splices one entity into the active revision and activates it.
@@ -58,7 +61,7 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 	if err != nil {
 		return Applied{}, err
 	}
-	d.by = req.By
+	d.by, d.engine = req.By, req.Engine
 	prepared, err := s.prepare(ctx, d)
 	if err != nil {
 		return Applied{}, err
@@ -129,7 +132,7 @@ func entityDraft(kind, id string, body submitted, expect string, create bool) (d
 		// that no longer exists is valid on its own and breaks the
 		// company, and a per-entity surface is exactly where that gets
 		// introduced.
-		rules: authoredRules,
+		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			// A SECOND COPY, so the splice lands on a document that still
 			// has everything the caller did not send, and the prior stays

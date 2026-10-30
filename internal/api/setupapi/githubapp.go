@@ -345,7 +345,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tier, _ := github.ParseTier(seatTier(seat))
+	perms := seatPermissions(seat)
 	base := s.publicBase()
 	if base == "" {
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoExternalURL, map[string]string{
@@ -380,11 +380,13 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		DeliveryOff: !deliverable,
 		RedirectURL: base + "/webhooks/github-app",
 		SetupURL:    base + "/webhooks/github-app?installed=" + handle,
-		Access:      github.Access{Tier: tier, Workflows: seatWorkflows(seat)},
+		// D5: REGISTERED AT THE SEAT'S OWN PERMISSIONS, never wider, so a
+		// leaked key reaches only what the seat may do.
+		Permissions: perms,
 	})
 	httpjson.Write(w, http.StatusOK, map[string]any{
-		"seat": handle,
-		"tier": string(tier),
+		"seat":        handle,
+		"permissions": perms.Strings(),
 		// THE ACCOUNT THAT WILL OWN THE APP. An app registered under a
 		// person's own account cannot be installed on the organization
 		// that owns the repositories.
@@ -798,6 +800,13 @@ func (s *Service) recordSeatApp(
 	// be a day after the first. Zero is the state the screen reports as
 	// "installed nowhere yet", which is a thing an operator can act on.
 	block["installation_id"] = 0
+	// CREATING AN AGENT'S APP TURNS IT ON AT GITHUB (D9's explicit opt-in),
+	// unless the block already says either way: every seat block states
+	// `enabled`, and creating an app never turns back on an agent somebody
+	// turned off.
+	if _, stated := block["enabled"]; !stated {
+		block["enabled"] = true
+	}
 	integrations["github"] = block
 	role["integrations"] = integrations
 
@@ -855,24 +864,13 @@ func seatByHandle(roster *org.Organization, handle string) *org.Role {
 	return nil
 }
 
-// seatTier is the access tier this seat runs at, as written down.
-//
-// THE RAW VALUE, unparsed. Every caller passes it to [github.ParseTier], which
-// already answers the default for an empty string and for a typo and is the
-// package that owns the closed set — so a second "or default" here would be a
-// place for the two to disagree about what an unrecognised tier runs at.
-func seatTier(seat *org.Role) string {
+// seatPermissions is the GitHub App permissions this seat is set to, as
+// written down: what its app is registered with and its tokens carry.
+func seatPermissions(seat *org.Role) github.Permissions {
 	if seat == nil || seat.GitHub == nil {
-		return ""
+		return github.Permissions{}
 	}
-	return seat.GitHub.Tier
-}
-
-// seatWorkflows is whether this seat opts in to workflow writes, as written
-// down. [github.Access] decides what that grants at the seat's tier, so the
-// raw value is all a caller needs.
-func seatWorkflows(seat *org.Role) bool {
-	return seat != nil && seat.GitHub != nil && seat.GitHub.Workflows
+	return github.PermissionsOf(seat.GitHub.Permissions)
 }
 
 // orgOf is the organization whose repositories these agents work in.

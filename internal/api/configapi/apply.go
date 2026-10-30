@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -238,6 +239,10 @@ type ApplyRequest struct {
 	// for the party — or the engine's own name for a write a timer made.
 	By iam.Actor
 
+	// Engine marks the engine's own write ([draft].engine), which may change
+	// a field only the engine writes.
+	Engine bool
+
 	// Expect is the revision the caller built this edit on. Empty states no
 	// precondition, which is what a script that owns the config outright
 	// wants: the edit is built on the fleet's revision as this call reads
@@ -345,6 +350,13 @@ type draft struct {
 	// document's own ([Company.Warnings]): a removal's resolution moves.
 	// Nil for none.
 	warnings func(next, prior *config.Company) []config.Warning
+	// authored is a write a caller composed (a patch, a whole document, an
+	// entity, a removal), held to every rule an author is, and engine the
+	// engine's own write of one: an installation it discovered, an app it
+	// recorded, a block a disconnect removed. Only an authored write that is
+	// not the engine's is refused a change to a field the engine alone
+	// writes ([config.RefuseEngineWritten]).
+	authored, engine bool
 	// republishes is a write that re-publishes the active document's
 	// stored bytes unchanged ([Service.Reload]). It changes nothing about
 	// the company, so a managed document does not refuse it: see
@@ -520,6 +532,22 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	}
 	if invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
+	}
+	// A FIELD ONLY THE ENGINE WRITES, changed by anybody else, is refused:
+	// a GitHub App id written by a person or a model points an agent at an
+	// app that is not its own. A document the operator writes is exempt:
+	// it renders what the engine reported back to it.
+	if d.authored && !d.engine && !s.Managed() {
+		if refused := config.RefuseEngineWritten(b.prior, company); refused != nil {
+			return nil, &ValidationError{Err: refused, Derived: derived}
+		}
+	}
+	// A RAISE IS A PERSON'S (raise.go), asked of a request's write once its
+	// rules hold, since judging it may ask a vendor what it offers.
+	if d.principal != nil && !s.Managed() && !authz.Checking(ctx) {
+		if err := s.admitRaises(ctx, *d.principal, b, company); err != nil {
+			return nil, err
+		}
 	}
 	// AFTER THE RULES, because a document that is refused anyway takes no
 	// seat away, and it is the one step here that reads outside this node.
@@ -729,11 +757,10 @@ func importRules(next, _ *config.Company) error {
 // on; nil reads the patch from req.Patch, which is all a programmatic caller
 // has.
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
-	expect := strings.TrimSpace(req.Expect)
 	return draft{
-		expect: req.Expect, stated: req.Stated && expect != "" && expect != "*",
-		requireActive: true, by: req.By,
-		rules: authoredRules,
+		expect: req.Expect, stated: statedPrecondition(req.Stated, req.Expect),
+		requireActive: true, by: req.By, engine: req.Engine,
+		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {
 				return nil, nil, &PatchError{Err: errEmptyPatch}
@@ -789,7 +816,7 @@ func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 	return draft{
 		expect: built, expectAbsent: built == "", by: by,
-		rules: authoredRules, wholeDocument: true,
+		rules: authoredRules, authored: true, wholeDocument: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			if b.prior != nil {
 				// The masks the caller was shown come back as the values
@@ -1032,4 +1059,12 @@ func checkedWarnings(p *prepared) []checkedWarning {
 		out = append(out, checkedWarning{Warning: w, Introduced: !p.held[keyOf(w)]})
 	}
 	return out
+}
+
+// statedPrecondition is whether expect is a precondition its request stated:
+// one its If-Match header named, never `*` or nothing, whose lost race is
+// answered 412 ([RacedError.Stated]).
+func statedPrecondition(stated bool, expect string) bool {
+	expect = strings.TrimSpace(expect)
+	return stated && expect != "" && expect != "*"
 }

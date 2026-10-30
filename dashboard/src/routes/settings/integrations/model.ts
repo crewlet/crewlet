@@ -20,7 +20,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { SERVICE_NAMES, chatVendorName, useBackends, type OrgServices } from "~/lib/services.ts";
-import { asSentence, plural } from "~/lib/format.ts";
+import { asSentence } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, IntegrationTool, ReconcileFinding } from "~/contract/integrations.ts";
@@ -131,13 +131,6 @@ export const BUCKET_WORDS: Record<Bucket, { label: string; tone: Tone }> = {
 /** One agent on one tool, as a person reads it. */
 export type SeatStatus = "ready" | "pending" | "action" | "missing";
 
-export const SEAT_WORDS: Record<SeatStatus, { label: string; tone: Tone }> = {
-  ready: { label: "Ready", tone: "success" },
-  pending: { label: "Setting up", tone: "info" },
-  action: { label: "Needs you", tone: "warning" },
-  missing: { label: "No account", tone: "neutral" },
-};
-
 export interface SeatRow {
   handle: string;
   name: string;
@@ -145,11 +138,6 @@ export interface SeatRow {
   status: SeatStatus;
   /** Who this agent is at the tool, or what is missing, in the engine's words. */
   detail: string;
-  /**
-   * How much the agent may do there, where the tool grades it: the engine's
-   * own words, and its tier id where the engine has a scale for it.
-   */
-  tier?: { id?: string | undefined; label: string; hint?: string | undefined };
   /** The engine's step for an app the agent needs a person to make. */
   seat?: SetupSeatState;
   /** The surface key the agent's step is taken on (what the app route is keyed on). */
@@ -166,6 +154,8 @@ export type Owner = "you" | "crewlet" | "vendor";
 /** One thing wrong with a tool, and the one control that answers it. */
 export interface Issue {
   key: string;
+  /** The engine's finding kind, where the issue is one of the loop's findings. */
+  kind?: string;
   tone: "danger" | "warning";
   /** What is wrong, as a sentence. */
   problem: string;
@@ -301,6 +291,7 @@ const KIND_WORDS: Record<string, string> = {
   identity_failed: "An agent's account could not be made",
   grant_pending: "A permission is waiting on approval",
   grant_short: "An agent has less access than it needs",
+  credential_shared: "Agents share one key",
 };
 
 /**
@@ -338,6 +329,7 @@ function issuesOf(
         fix = { label: "Open setup", intent: "agents" };
       out.push({
         key: `${p.surface.key}:${f.kind}:${f.subject ?? ""}`,
+        kind: f.kind,
         tone: f.phase === "unconfigured" || f.kind === "credential_rejected" ? "danger" : "warning",
         problem: asSentence(
           f.detail ||
@@ -454,9 +446,6 @@ function seatRowsOf(
       detail: finding?.detail
         ? asSentence(finding.detail)
         : seat.detail || (status === "ready" ? "Set up" : "Nothing set up for this agent yet"),
-      tier: seat.tier_label
-        ? { id: seat.tier, label: seat.tier_label, hint: seat.tier_hint }
-        : undefined,
       seat,
       toolKey: roster?.key,
       finding,
@@ -690,24 +679,6 @@ export function useIntegrations(): Model {
     dropFor,
     watch,
   };
-}
-
-/**
- * The line a working tool's overview says: "Working.", then what it counts,
- * as one sentence of its own.
- */
-export function workingLine(tool: Pick<Tool, "seats" | "delivered">): string {
-  const parts: string[] = [];
-  const ready = tool.seats.filter((s) => s.status === "ready").length;
-  if (tool.seats.length > 0) parts.push(`${ready} of ${plural(tool.seats.length, "agent")} ready`);
-  if (tool.delivered !== null)
-    parts.push(
-      tool.delivered === 0
-        ? "nothing delivered yet"
-        : plural(tool.delivered, "delivery", "deliveries"),
-    );
-  if (parts.length === 0) return "Working.";
-  return `Working. ${asSentence(parts.join(", "))}`;
 }
 
 /** The tool a route segment names: its own key, or any surface it covers. */

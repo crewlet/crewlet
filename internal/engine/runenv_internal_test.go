@@ -45,7 +45,7 @@ roles:
     llm: zulu
     sandbox:
       env:
-        GITLAB_TOKEN: "${SWE_GITLAB_TOKEN}"
+        GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
         DATABASE_URL: "${SWE_TEST_DATABASE}"
       optional_keys: [DATABASE_URL]
 `
@@ -82,7 +82,7 @@ func TestAnExecutorRunCarriesWhatItsEnvironmentResolves(t *testing.T) {
 	}
 
 	e.secretsMu.Lock()
-	e.installSecrets(map[string]string{"SWE_GITLAB_TOKEN": "glpat-swe"})
+	e.installSecrets(map[string]string{"GITLAB_TOKEN_SWE": "glpat-swe"})
 	e.secretsMu.Unlock()
 	if err := launchExecutor(t, e, c, seat, "t2"); err != nil {
 		t.Fatalf("LaunchExecutor once the token was sealed: %v", err)
@@ -112,11 +112,11 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 	e := &Engine{}
 
 	run := e.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"GITLAB_TOKEN": "${SWE_GITLAB_TOKEN}"}}, nil)
+		Env: map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"}}, nil)
 	if run.gap == nil || !run.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run waiting for the gitlab integration", run.gap)
 	}
-	if said := "waiting for the gitlab integration to mint ${SWE_GITLAB_TOKEN}"; !strings.Contains(run.gap.reason(), said) {
+	if said := "waiting for the gitlab integration to mint ${GITLAB_TOKEN_SWE}"; !strings.Contains(run.gap.reason(), said) {
 		t.Errorf("the gap %q does not say %q", run.gap.reason(), said)
 	}
 	run.logGap(t.Context(), seat.Handle(), "the run starts without them")
@@ -148,7 +148,7 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 	stopped := blocked.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env: map[string]string{"GITLAB_TOKEN": "${SWE_GITLAB_TOKEN}"}}, nil)
+		Env: map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"}}, nil)
 	if stopped.gap == nil || stopped.gap.waiting() {
 		t.Fatalf("gap = %+v: want a run the blocked gitlab pass will not mint for", stopped.gap)
 	}
@@ -164,7 +164,7 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 	// value nothing will supply, and started without its code-host identity
 	// the run would spend its box cloning nothing.
 	declared := e.runEnvironment(t.Context(), c, seat, &org.RoleSandbox{
-		Env:          map[string]string{"GITLAB_TOKEN": "${SWE_GITLAB_TOKEN}"},
+		Env:          map[string]string{"GITLAB_TOKEN": "${GITLAB_TOKEN_SWE}"},
 		OptionalKeys: []string{"GITLAB_TOKEN"}}, nil)
 	if declared.gap == nil || !declared.gap.waiting() {
 		t.Errorf("gap = %+v: a key a pass mints, declared optional, must still wait for it",
@@ -312,7 +312,7 @@ func TestARunStartedWithoutTheSeatsEmailSaysSo(t *testing.T) {
 		Material: runtoken.OneKey("k", "test-key"), BaseURL: "https://engine.example.com",
 	}))
 	e.secretsMu.Lock()
-	e.installSecrets(map[string]string{"SWE_GITLAB_TOKEN": "glpat-swe"})
+	e.installSecrets(map[string]string{"GITLAB_TOKEN_SWE": "glpat-swe"})
 	e.secretsMu.Unlock()
 	seat := c.Org.AgentSeatByHandle("swe")
 	seat.Email = "${SWE_EMAIL_NOBODY_SETS}"

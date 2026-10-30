@@ -200,7 +200,7 @@ func writeTools() []Tool {
 		}
 		out[i].Names = writeNames[out[i].Name]
 	}
-	out = append(out, principlesWrite(), budgetWrite())
+	out = append(out, principlesWrite(), budgetWrite(), seatAccessWrite())
 	out = append(out, shareTools()...)
 	return append(out, chatWrites()...)
 }

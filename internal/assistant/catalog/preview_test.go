@@ -150,6 +150,8 @@ var objectBodies = map[string]map[string]any{
 		"token_budget": map[string]any{"day": float64(1500000)},
 		catalog.SummaryKey: "Raise QA Engineer's daily token budget from 1,000,000 tokens " +
 			"to 1,500,000 tokens"},
+	"set_seat_access": {"seats": map[string]any{"qa": map[string]any{"datadog": map[string]any{
+		"enabled": true, "level": "role-ro"}}}},
 }
 
 // A CHANGE PREPARED AGAINST AN OLD VERSION IS STALE, and a revision that moved

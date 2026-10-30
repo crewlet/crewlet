@@ -67,6 +67,7 @@ roles:
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: tok-ceo
   - name: Founder
     kind: human

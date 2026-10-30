@@ -247,7 +247,23 @@ const (
 	ActionSecretWrite     Action = "secrets.write"
 	ActionSetupRead       Action = "setup.read"
 	ActionSetupConnect    Action = "setup.connect"
-	ActionFleetOperate    Action = "fleet.operate"
+	// ActionSetupAccessWrite is saving what each agent seat may do on one
+	// integration (`PUT /setup/integrations/{kind}/access`): whether the
+	// seat is on, its access in the vendor's own terms and its scope. ITS
+	// OWN VERB AND NOT [ActionSetupConnect], because the two carry different
+	// things: a connect carries vendor credentials in its body and a pass
+	// that mints them, which the assistant never takes, and this carries
+	// neither, so a person's assistant may prepare it for their approval.
+	ActionSetupAccessWrite Action = "setup.access.write"
+	// ActionSetupAccessRaise is that save when it raises a seat to an
+	// administration role at a vendor (Datadog Admin Role, GitLab
+	// Maintainer or Owner, Jira Administrators, Confluence Admin,
+	// Mattermost System Admin, GitHub Read and write on Contents or
+	// Workflows). Asked ON TOP of [ActionSetupAccessWrite] once the body
+	// shows such a raise, and refused to a machine token: an agent made an
+	// administrator at a vendor is a decision a person makes at a keyboard.
+	ActionSetupAccessRaise Action = "setup.access.raise"
+	ActionFleetOperate     Action = "fleet.operate"
 	// ActionFleetRead is the deployment's own controls READ — the
 	// maintenance window's status and the value a reanchor must echo.
 	// Admin's as [ActionFleetOperate] is, and its own verb because it asks
@@ -1151,6 +1167,17 @@ var rules = map[Action]rule{
 	ActionSecretWrite:  {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionSetupRead:    {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
 	ActionSetupConnect: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
+	// AN AGENT'S ACCESS AT A VENDOR is admin's at the step-up window, as
+	// every other write of the company document is, and the assistant
+	// prepares it for the person's approval: it names no credential and no
+	// variable, only what the seat may do. A RAISE TO AN ADMINISTRATION
+	// ROLE also needs a person present, so no pipeline holding a token can
+	// make an agent a vendor's administrator; an approved assistant request
+	// is that person, deciding that one request (ADR-0051).
+	ActionSetupAccessWrite: {class: ClassAdmin, recency: iam.RecencyStepUp,
+		assist: AssistApprove},
+	ActionSetupAccessRaise: {class: ClassAdmin, recency: iam.RecencyStepUp,
+		presence: PresenceRequired, assist: AssistApprove},
 	ActionFleetOperate: {class: ClassAdmin, recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionFleetRead:    {class: ClassAdmin, recency: iam.RecencyAny, assist: AssistRead},
 	// A MODEL'S CHECKS AND ITS RETRY are admin's with no step-up: neither

@@ -140,9 +140,9 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 			// its path sits in.
 			name: "a config rule inside a nested seat",
 			doc: "name: Acme\nunits:\n  - name: Eng\n    roles:\n      - name: Dev\n" +
-				"        integrations:\n          slack: {signing_secret: \"${S}\"}\n",
+				"        integrations:\n          slack: {bot_token: \"xoxb-${REST}\"}\n",
 			messageHas: "bot_token",
-			want:       []located{{"units[0].roles[0].integrations.slack.bot_token", "missing", "dev", ""}},
+			want:       []located{{"units[0].roles[0].integrations.slack.bot_token", "shape", "dev", ""}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -165,6 +165,8 @@ const (
 	agentOnlyOnHuman = "agent-only field set on a human seat"
 	githubAppOnHuman = "a human seat has no GitHub App"
 	avatarOnHuman    = "a human seat is drawn as the person it is"
+
+	seatAccessOnHumanSeat = "a human seat holds no account the engine manages"
 )
 
 // humanSeatKey is one key a seat is authored with, as a human seat would
@@ -208,7 +210,11 @@ var humanSeatKeys = []humanSeatKey{
 	{"space", "DOCS", agentOnlyOnHuman},
 	{"mcp_env", "{atlassian: {JIRA_USERNAME: sarah}}", agentOnlyOnHuman},
 	{"behavioral_guidelines", "[Reply fast]", agentOnlyOnHuman},
-	{"integrations.github", "{tier: read_only}", githubAppOnHuman},
+	{"integrations.github", "{enabled: false}", githubAppOnHuman},
+	{"integrations.datadog", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.gitlab", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.jira", "{enabled: false}", seatAccessOnHumanSeat},
+	{"integrations.confluence", "{enabled: false}", seatAccessOnHumanSeat},
 	{"avatar", "{character: hexlet, color: cyan}", avatarOnHuman},
 }
 
@@ -276,6 +282,7 @@ func TestEveryAgentOnlyKeyIsRefusedOnAHumanSeatWhereItWasWritten(t *testing.T) {
 			problems := config.Problems(parsed(t, humanSeatWith(k)).Validate())
 			got := append(locatedOf(problems, agentOnlyOnHuman), locatedOf(problems, githubAppOnHuman)...)
 			got = append(got, locatedOf(problems, avatarOnHuman)...)
+			got = append(got, locatedOf(problems, seatAccessOnHumanSeat)...)
 			var want []located
 			if k.refusal != "" {
 				want = []located{{"roles[0]." + k.key, "conflict", "sarah", ""}}
@@ -524,20 +531,11 @@ func TestAParserProblemCarriesItsLineAndNoSegmentsWhenUnplaced(t *testing.T) {
 // A REFERENCE THAT RESOLVES TO NOTHING IS LOCATED WHERE IT WAS WRITTEN: a lead
 // at the unit's `lead`, a unit reference at the seat's `unit`, a manages entry
 // at the index it was written at (normalization rewrites the list, so the
-// normalized position is not it), and an access level at its key.
+// normalized position is not it).
 func TestReferenceWarningsAreLocatedWhereTheyWereWritten(t *testing.T) {
 	t.Parallel()
 	cfg := parsed(t, `
 name: Acme
-integrations:
-  gitlab:
-    enabled: true
-    url: https://gitlab.example.com
-    signing_secret: "${GITLAB_SIGNING_SECRET}"
-    provisioning:
-      group: acme
-      access_levels:
-        former.engineer: maintainer
 roles:
   - name: CEO
     manages: [eng, ghost]
@@ -568,9 +566,6 @@ units:
 		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "phantom",
 			config.Path{"units", 0, "children", 0, "lead"}},
 		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "ghost", config.Path{"roles", 0, "manages", 1}},
-		{"gitlab_access_level", "integrations.gitlab.provisioning.access_levels.former.engineer", "", "",
-			"integrations.gitlab.provisioning.access_levels", "former.engineer",
-			config.Path{"integrations", "gitlab", "provisioning", "access_levels", "former.engineer"}},
 	}
 	if !reflect.DeepEqual(got, expected) {
 		t.Errorf("warnings =\n%+v\nwant\n%+v", got, expected)

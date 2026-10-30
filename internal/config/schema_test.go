@@ -160,7 +160,6 @@ func TestSchemaEnumsMatchTheValidators(t *testing.T) {
 		{"Slack", "typing_status", strs(WorkingStatuses)},
 		{"Mattermost", "typing_status", strs(WorkingStatuses)},
 		{"ChatletConfig", "typing_status", strs(WorkingStatuses)},
-		{"GitLabProvisioning", "access_level", strs(GitLabAccessLevels)},
 		{"GitLabProvisioning", "group_webhook", strs(ContainerWebhookModes)},
 		// The same closed set on both code hosts, which is why it is one
 		// type — and why both rows are here: a rename that updated one
@@ -554,7 +553,7 @@ integrations:
     enabled: true
     url: https://gitlab.com
     signing_secret: "${GITLAB_SIGNING_SECRET}"
-    provisioning: {group: acme, access_level: maintainer, group_webhook: auto}
+    provisioning: {group: acme, group_webhook: auto}
 mcp_servers:
   - name: gitlab
     shared: false
@@ -581,13 +580,13 @@ units:
   - name: Core
     id: core
     lead: cto
-    mcp_env: {gitlab: {GITLAB_TOKEN: "${GL_SHARED}"}}
+    mcp_env: {gitlab: {GITLAB_HOST: gitlab.com}}
     project: ENG
     roles:
       - name: CTO
         handle: cto
         llm: [oc, default]
-        integrations: {mattermost: {bot_token: "${MM_CTO}", username: cto-bot}}
+        integrations: {mattermost: {enabled: false, bot_token: "${MATTERMOST_BOT_TOKEN_CTO}", username: cto-bot}}
         sandbox:
           max_turns: 0
           pause_ttl_seconds: 600
@@ -896,7 +895,7 @@ units:
 		{
 			name: "a Mattermost username named by a reference", tier: TierCompany,
 			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: " +
-				"{bot_token: \"${MM_CTO}\", username: \"${MM_CTO_USERNAME}\"}}}\n",
+				"{enabled: false, bot_token: \"${MM_CTO}\", username: \"${MM_CTO_USERNAME}\"}}}\n",
 		},
 		{
 			name: "a Mattermost username with a reference inside it", tier: TierCompany, editorCatches: true,
@@ -912,7 +911,7 @@ units:
 		// same refusal on a bot token is the validator's alone.
 		{
 			name: "a Mattermost bot token with a reference inside it", tier: TierCompany, validatorOnly: true,
-			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: {bot_token: \"tok-${MM_CTO}\"}}}\n",
+			yaml: "name: Acme\nroles:\n  - {name: CTO, integrations: {mattermost: {enabled: false, bot_token: \"tok-${MM_CTO}\"}}}\n",
 		},
 		{
 			name: "a Slack bot token with a reference inside it", tier: TierCompany, validatorOnly: true,
@@ -1012,18 +1011,17 @@ units:
 			name: "a jira block naming its instance twice", tier: TierCompany, validatorOnly: true,
 			yaml: "name: Acme\nintegrations:\n  jira: {url: \"https://jira.example.com\", cloud_id: acme-cloud, token: t, webhook_secret: s}\n",
 		},
-		// The per-seat half: an app with BOTH credentials is a working
-		// config, and one with a single half is a validator rule a JSON
-		// Schema cannot express (a required pair inside an optional
-		// object).
+		// The per-seat half: the engine names a seat's Slack credentials
+		// (D4), so a block naming both, one or neither is a working config.
 		{
 			name: "a per-seat Slack app", tier: TierCompany,
-			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
+			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {enabled: false, bot_token: \"${T}\", signing_secret: \"${S}\"}}}\n",
 		},
 		{
-			name: "a per-seat Slack app with half its credentials",
-			tier: TierCompany, validatorOnly: true,
-			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {bot_token: \"${T}\"}}}\n",
+			// D4: the engine names a seat's Slack credentials, so a block
+			// naming only one, or neither, is a working config.
+			name: "a per-seat Slack app naming one credential", tier: TierCompany,
+			yaml: "name: Acme\nroles:\n  - {name: CEO, integrations: {slack: {enabled: false, bot_token: \"${T}\"}}}\n",
 		},
 		{
 			// validatorOnly, and for one reason: the schema cannot express

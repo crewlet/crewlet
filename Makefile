@@ -223,9 +223,9 @@ GOFILES = $(GO) run ./internal/sourcetree/gofiles
 
 COMPOSE ?= docker compose
 
-# Passed through to the vendor bootstrap scripts, which provision the seats of
-# the company config named here and skip that step when it is empty:
-#   make mattermost-up COMPANY=examples/nimbus.company.yaml
+# Passed through to the GitLab bootstrap script, which reconciles the company
+# config named here and skips that step when it is empty:
+#   make gitlab-up COMPANY=examples/nimbus.company.yaml
 COMPANY ?=
 
 .DEFAULT_GOAL := help
@@ -673,7 +673,7 @@ require-node: ## fail unless node is on PATH (the e2e client replay and the Open
 
 mattermost-up: ## start Mattermost and bootstrap it (profile: mattermost)
 	$(COMPOSE) --profile mattermost up -d
-	COMPANY=$(COMPANY) scripts/mattermost-dev-bootstrap.sh
+	scripts/mattermost-dev-bootstrap.sh
 
 mattermost-down: ## stop the Mattermost stack
 	$(COMPOSE) --profile mattermost down

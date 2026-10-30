@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/integration/integrationtest"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // The Datadog half of [integration.Reconciler]'s safety contract, certified
@@ -55,15 +54,9 @@ import (
 // it is a query, which is the direction that fails loudly rather than
 // silently.
 //
-// The sealed store is the other half. A pass that re-sealed a seat's
-// application key on every converged run would write nothing at Datadog and
-// still be rotating the credential every running agent authenticates with, so
-// [sealedStore] counts every Record and every Discard. Flush is NOT counted,
-// and that is not an omission: both sinks that reach this pass in production
-// make it a no-op — provision.SecretStoreSink.Flush returns nil, and the
-// engine's refreshingSink rebuilds the resolver snapshot only when something
-// was actually sealed — so counting it would make the clause unsatisfiable
-// for a reason nobody could act on.
+// The pass seals nothing: each agent's account and key are the per-seat
+// access sync's, which has its own tests. So the organization is the whole of
+// what a write here can reach.
 
 // Every route this pass can land on, in the shape [routeOf] reduces one to.
 //
@@ -148,16 +141,12 @@ type serviceAccount struct {
 // converged BY RUNNING THE PASS — see [convergedDatadog] — and a pass can only
 // converge a world that remembers what it was told.
 type alertingOrg struct {
-	t        integrationtest.TB
-	roleID   string
-	roleName string
+	t integrationtest.TB
 
 	mu       sync.Mutex
 	accounts []*serviceAccount
-	keys     map[string][]datadog.AppKey
 	hook     *datadog.Webhook
 	writes   int
-	next     int
 }
 
 // newAlertingOrg builds one, reporting to the CASE that drives it.
@@ -176,12 +165,9 @@ type alertingOrg struct {
 // originates from a Reconcile call made synchronously inside a case, so no
 // handler can still be running, and reporting into a case that has finished,
 // once that case returns.
-func newAlertingOrg(t integrationtest.TB, roleName string) *alertingOrg {
+func newAlertingOrg(t integrationtest.TB) *alertingOrg {
 	t.Helper()
-	return &alertingOrg{
-		t: t, roleID: "role-1", roleName: roleName,
-		keys: map[string][]datadog.AppKey{},
-	}
+	return &alertingOrg{t: t}
 }
 
 // mutations is every write this organization has received, by route.
@@ -189,11 +175,6 @@ func (o *alertingOrg) mutations() int {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	return o.writes
-}
-
-func (o *alertingOrg) id(prefix string) string {
-	o.next++
-	return prefix + strconv.Itoa(o.next)
 }
 
 func (o *alertingOrg) serve(w http.ResponseWriter, r *http.Request) {
@@ -210,22 +191,17 @@ func (o *alertingOrg) serve(w http.ResponseWriter, r *http.Request) {
 		o.write(w, map[string]any{"orgs": []any{
 			map[string]any{"name": "Acme", "public_id": "p1"},
 		}})
-	case r.Method == http.MethodGet && r.URL.Path == "/api/v2/roles":
-		o.write(w, rows([]any{o.row(o.roleID, map[string]any{"name": o.roleName})}))
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v2/users":
 		o.listUsers(w)
-	case r.Method == http.MethodPost && r.URL.Path == accountsRoute:
-		o.createAccount(w, r)
-	case strings.HasPrefix(r.URL.Path, accountsRoute+"/"):
-		o.serveKeys(w, r)
 	case strings.HasPrefix(r.URL.Path, hookCollection):
 		o.serveWebhook(w, r)
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/v2/users/"):
-		// A DECOMMISSION, ON THE RECONCILE PATH. Datadog models
-		// disabling a user as a DELETE, and a pass that reached it would
-		// be tearing down the seat it is meant to be keeping.
-		o.t.Errorf("a reconcile pass disabled %s; that is a teardown gesture "+
-			"and it takes an agent's identity away", r.URL.Path)
+		// A DECOMMISSION, ON THE COMPANY'S PASS. Datadog models
+		// disabling a user as a DELETE, and every agent's account is the
+		// access sync's: this pass reaching it would be taking an agent's
+		// identity away behind the sync's back.
+		o.t.Errorf("the company's pass disabled %s; agents' accounts are the "+
+			"access sync's", r.URL.Path)
 		o.refuse(w, http.StatusInternalServerError, "not a reconcile route")
 	default:
 		// FAIL LOUD. An unserved route answered with a plain 404 is read
@@ -249,91 +225,6 @@ func (o *alertingOrg) listUsers(w http.ResponseWriter) {
 		}))
 	}
 	o.write(w, rows(out))
-}
-
-func (o *alertingOrg) createAccount(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Data struct {
-			Attributes struct {
-				Email string `json:"email"`
-				Name  string `json:"name"`
-			} `json:"attributes"`
-			Relationships struct {
-				Roles struct {
-					Data []struct {
-						ID string `json:"id"`
-					} `json:"data"`
-				} `json:"roles"`
-			} `json:"relationships"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		o.refuse(w, http.StatusBadRequest, "undecodable body")
-		return
-	}
-	// THE ROLE COMES WITH THE CREATE, which is the one thing a fake can
-	// check that the client's own test cannot: an account that exists for
-	// a moment without one inherits the organization's default.
-	roles := body.Data.Relationships.Roles.Data
-	if len(roles) != 1 || roles[0].ID != o.roleID {
-		o.t.Errorf("an account was created holding %v, want the configured role %q",
-			roles, o.roleID)
-	}
-	account := &serviceAccount{
-		id: o.id("u"), email: body.Data.Attributes.Email,
-		name: body.Data.Attributes.Name,
-	}
-	o.accounts = append(o.accounts, account)
-	o.write(w, map[string]any{"data": o.row(account.id, map[string]any{
-		"email": account.email, "name": account.name,
-	})})
-}
-
-// serveKeys is the application-key half: one account's keys, without their
-// values, and the mint and revoke that move them.
-func (o *alertingOrg) serveKeys(w http.ResponseWriter, r *http.Request) {
-	account, tail, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, accountsRoute+"/"), "/")
-	keyID := strings.TrimPrefix(tail, "application_keys/")
-	switch {
-	case r.Method == http.MethodGet && tail == "application_keys":
-		out := make([]any, 0, len(o.keys[account]))
-		for _, key := range o.keys[account] {
-			out = append(out, o.row(key.ID, map[string]any{"name": key.Name}))
-		}
-		o.write(w, rows(out))
-	case r.Method == http.MethodPost && tail == "application_keys":
-		var body struct {
-			Data struct {
-				Attributes struct {
-					Name string `json:"name"`
-				} `json:"attributes"`
-			} `json:"data"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		key := datadog.AppKey{
-			ID: o.id("k"), Name: body.Data.Attributes.Name,
-			// THE VALUE IS SERVED ONCE, which is Datadog's own rule and
-			// the reason the pass may not mint on a converged world.
-			Key: "dd-app-key-" + account,
-		}
-		o.keys[account] = append(o.keys[account], key)
-		o.write(w, map[string]any{"data": o.row(key.ID, map[string]any{
-			"key": key.Key, "name": key.Name,
-		})})
-	case r.Method == http.MethodDelete && keyID != "" && keyID != tail:
-		kept := o.keys[account][:0]
-		for _, key := range o.keys[account] {
-			if key.ID != keyID {
-				kept = append(kept, key)
-			}
-		}
-		o.keys[account] = kept
-		w.WriteHeader(http.StatusNoContent)
-	default:
-		o.t.Errorf("the pass asked for %s %s on an account's keys",
-			r.Method, r.URL.Path)
-		o.refuse(w, http.StatusNotFound, "no route")
-	}
 }
 
 // serveWebhook is the inbound half, out of ONE definition, so a case asserts
@@ -438,32 +329,6 @@ func (o *alertingOrg) refuse(w http.ResponseWriter, status int, detail string) {
 	o.write(w, map[string]any{"errors": []string{detail}})
 }
 
-// sealedStore is this deployment's own half of "a write".
-//
-// The suite's package doc is explicit that a write is anything a person would
-// have to undo and that it is WIDER than a request to the vendor: a pass that
-// re-seals a seat's key on every converged run rotates the credential every
-// running agent is authenticating with, and nothing at Datadog would show it.
-type sealedStore struct {
-	*sink
-	writes int
-}
-
-func newSealedStore() *sealedStore { return &sealedStore{sink: newSink()} }
-
-// Record counts the ATTEMPT rather than the success, because a pass hammering
-// a store that refuses every write is the same fault as one hammering a store
-// that accepts them.
-func (s *sealedStore) Record(ctx context.Context, name, value string) error {
-	s.writes++
-	return s.sink.Record(ctx, name, value)
-}
-
-func (s *sealedStore) Discard(ctx context.Context) error {
-	s.writes++
-	return s.sink.Discard(ctx)
-}
-
 // datadogWorld is a Datadog organization, plus the pass that runs against it
 // as [integration.Reconciler] sees it.
 //
@@ -473,7 +338,6 @@ func (s *sealedStore) Discard(ctx context.Context) error {
 // nothing else.
 type datadogWorld struct {
 	org  *alertingOrg
-	keys *sealedStore
 	opts datadog.Options
 }
 
@@ -500,33 +364,31 @@ func (w *datadogWorld) Reconcile(ctx context.Context) ([]integration.Finding, er
 	return res.Findings(), nil
 }
 
-// mutations is every write since this world was built, at Datadog and in the
-// sealed store.
-func (w *datadogWorld) mutations() int { return w.org.mutations() + w.keys.writes }
+// mutations is every write since this world was built, at Datadog.
+func (w *datadogWorld) mutations() int { return w.org.mutations() }
 
 // convergedDatadog stands the organization up and converges it BY RUNNING THE
 // PASS.
 //
 // # Converged by the pass rather than by a fixture
 //
-// The alternative is a hand-written fixture holding the accounts, the keys
-// and the webhook definition a converged company has. It is the tempting one
-// and it is weaker in the direction that matters: it encodes what the harness
-// author BELIEVES converged looks like, so a pass whose idea of converged has
-// drifted from that belief writes on every run and the fixture calls it
-// converged anyway. Datadog makes that especially easy to get wrong — the
-// webhook definition has to match on four fields including a JSON-encoded
-// header, and a users row without `service_account: true` is dropped as a
-// real person, which turns a converged world into one that creates. Running
-// the real pass makes the world converged by definition, and the only
-// question left is the one worth asking: whether the SECOND pass writes.
+// The alternative is a hand-written fixture holding the webhook definition a
+// converged company has. It is the tempting one and it is weaker in the
+// direction that matters: it encodes what the harness author BELIEVES
+// converged looks like, so a pass whose idea of converged has drifted from
+// that belief writes on every run and the fixture calls it converged anyway.
+// The webhook definition has to match on four fields including a JSON-encoded
+// header. Running the real pass makes the world converged by definition, and
+// the only question left is the one worth asking: whether the SECOND pass
+// writes.
 //
 // The seeding pass's own writes are not counted: [integrationtest.Run] takes
 // its baseline from Mutations() after New returns.
 //
-// TWO SEATS, because every write this pass makes on the identity half is
-// per-seat. One seat counts 1 where the bug's shape is N, and a harness
-// cannot tell "wrote once" from "wrote once per seat" with one of them.
+// TWO AGENT ACCOUNTS the access sync manages, and a PERSON under the same
+// domain. The accounts are what the orphan advisory must not report; the
+// person is what the service-account check exists to drop, since Datadog's
+// user filter is a free-text substring match on the address.
 //
 // BOTH t AND tb, deliberately. [integrationtest.TB] is the narrow interface
 // the suite's own tests drive its cases with and it has no Cleanup, so the
@@ -535,12 +397,16 @@ func (w *datadogWorld) mutations() int { return w.org.mutations() + w.keys.write
 func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 	t.Helper()
 	cfg := cfgWith()
-	org := newAlertingOrg(tb, datadog.RoleName(cfg.Provisioning))
-	// A REAL PERSON UNDER THE SAME DOMAIN, because Datadog's user filter
-	// is a free-text substring match on the address and one is what the
-	// service-account check exists to drop. Without it every row in the
-	// listing is a seat, and a fixture where nothing has to be filtered
-	// cannot notice a pass that stopped filtering.
+	org := newAlertingOrg(tb)
+	var managed []string
+	for i, handle := range []string{seatOne, seatTwo} {
+		id := "agent-" + strconv.Itoa(i+1)
+		org.accounts = append(org.accounts, &serviceAccount{
+			id: id, email: datadog.AccountEmail(cfg.Provisioning, handle),
+			name: strings.ToUpper(handle) + " (Crewlet)",
+		})
+		managed = append(managed, id)
+	}
 	org.accounts = append(org.accounts, &serviceAccount{
 		id: "person-1", email: "someone@agents.test.invalid",
 		name: "A Colleague", person: true,
@@ -551,9 +417,7 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 
 	// The client is pointed at the fake by rewriting the host on the way
 	// out: the endpoint is built from the SITE, which is the whole point
-	// of the region check. Through [httpxtest.Rewrite], which is where the
-	// reason this uses the SERVER'S own pool rather than the shared default
-	// is now written down once for the whole tree.
+	// of the region check.
 	client, err := datadog.NewClient(datadog.ClientOptions{
 		Site: cfg.Provisioning.Site,
 		HTTP: &http.Client{Transport: httpxtest.Rewrite(tb, srv)},
@@ -562,29 +426,12 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 		tb.Fatalf("NewClient: %v", err)
 	}
 
-	handles := []string{seatOne, seatTwo}
-	plan := &provision.Plan{}
-	for _, handle := range handles {
-		plan.Add(provision.Seat{
-			Handle: handle, Role: strings.ToUpper(handle),
-			TokenVar: strings.ToUpper(handle) + "_DD_KEY",
-			// FROM THE PACKAGE'S OWN DERIVATION rather than spelled out
-			// here. The address is Datadog's key for a seat's identity,
-			// and a harness that wrote its own would certify a pass
-			// against accounts the real plan would never find.
-			Email: datadog.AccountEmail(cfg.Provisioning, handle),
-		})
-	}
-
-	keys := newSealedStore()
-	world := &datadogWorld{org: org, keys: keys, opts: datadog.Options{
-		Client: client, Config: cfg, Plan: plan, Creds: pair, Sink: keys,
+	world := &datadogWorld{org: org, opts: datadog.Options{
+		Client: client, Config: cfg, Creds: pair, Managed: managed,
 		// BOTH OF THESE THE WAY THE ENGINE SETS THEM. Either one empty
 		// makes ensureWebhook return before it reads anything, so the
-		// inbound half — half of what this pass does, and the half that
-		// writes on every tick when it gets convergence wrong — would
-		// never be exercised and the converged clause would pass for the
-		// wrong reason.
+		// inbound half would never be exercised and the converged clause
+		// would pass for the wrong reason.
 		WebhookBase: base, WebhookToken: token,
 	}}
 
@@ -602,18 +449,8 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 		tb.Fatalf("%s", "the seeding pass wrote nothing, so there is no "+
 			"converged world here to certify a second pass against")
 	}
-	for _, handle := range handles {
-		if keys.held[strings.ToUpper(handle)+"_DD_KEY"] == "" {
-			tb.Fatalf("%s holds no application key after the seeding pass, so "+
-				"the second pass would mint rather than keep", handle)
-		}
-	}
 	org.mu.Lock()
 	defer org.mu.Unlock()
-	if len(org.accounts) != len(handles)+1 {
-		tb.Fatalf("the organization holds %d users, want one per seat beside "+
-			"the person that was already there", len(org.accounts))
-	}
 	if org.hook == nil {
 		tb.Fatalf("%s", "no webhook was registered, so the inbound half of the "+
 			"pass is not being exercised")
@@ -622,69 +459,40 @@ func convergedDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 }
 
 // outstandingDatadog is the same organization with two things genuinely
-// wrong — one in each half of the pass, and both of them a PERSON's to undo.
+// wrong, one in each half of the pass, and both of them a PERSON's to settle.
 //
 // # Why a second world exists at all
 //
 // [integrationtest.Reconciler.Outstanding]'s doc states it: a converged pass
 // reports no findings, so every clause that walks the findings list walks an
-// empty one and certifies nothing. For Datadog that was three of the nine.
-// This world is what those three are run against, and it has to prove itself
-// first — the suite's anti-vacuity clause fails if it reports nothing, or
-// nothing a person owes.
+// empty one and certifies nothing. This world is what those clauses are run
+// against, and it has to prove itself first: the suite's anti-vacuity clause
+// fails if it reports nothing, or nothing a person owes.
 //
 // # Why THESE two faults
 //
-// They are the two states this package learned about the hard way, they sit
-// one in each half of the pass, and each is STABLE across passes — which the
-// two-passes-agree clause needs and which rules out every fault the pass
-// would simply fix on the first tick:
+// Each is STABLE across passes, which the two-passes-agree clause needs and
+// which rules out every fault the pass would simply fix on the first tick:
 //
-//   - SEATONE'S SERVICE ACCOUNT IS DISABLED AT DATADOG. Not a hypothetical
-//     shape: disabling one is exactly how [datadog.Teardown] decommissions a
-//     seat, and a disabled account stays in the users listing — so an
-//     operator who disconnected, removed seats, and later switched the block
-//     back on has precisely this organization. The pass reports it and
-//     deliberately does not re-enable it, because undoing somebody's
-//     decommission is their decision, which is also what makes it stable
-//     here. It reads as identity_failed, owed by an admin.
 //   - THIS DEPLOYMENT HAS NO PUBLIC BASE URL, so there is no address to point
 //     a webhook at and every monitor this company has fires into nothing. It
-//     is the fault an alerting integration is worst at showing, because
-//     Datadog itself reports nothing wrong: the surface looks like coverage.
-//     It reads as ingress_blocked on the field somebody has to set.
-//
-// TWO RATHER THAN ONE, because the pass reports through two independent
-// halves and a world that broke only one leaves the other's finding path
-// exactly as unwalked as a converged world does. seatTwo is left converged
-// beside seatOne for the same reason in the other direction.
+//     reads as ingress_blocked on the field somebody has to set.
+//   - AN ENABLED SERVICE ACCOUNT AT THIS COMPANY'S DOMAIN THAT NOTHING
+//     MANAGES, the kind a live organization accumulates. It is reported and
+//     never touched, which is what makes it stable here. It reads as
+//     registration_orphaned, owed by an admin.
 //
 // Neither fault makes this pass write, which is incidental rather than
 // required: the suite counts mutations only over the converged world.
 func outstandingDatadog(t *testing.T, tb integrationtest.TB) *datadogWorld {
 	t.Helper()
 	world := convergedDatadog(t, tb)
-
-	// THE INGRESS HALF. Built converged and then taken away, so the world
-	// is one this deployment could actually be in rather than one that was
-	// never wired up.
 	world.opts.WebhookBase = ""
-
-	// THE IDENTITY HALF, applied at DATADOG rather than in the plan: the
-	// seat still wants an identity and the account is still in the
-	// listing, which is the whole reason this state went unnoticed.
-	decommissioned := datadog.AccountEmail(world.opts.Config.Provisioning, seatOne)
 	world.org.mu.Lock()
 	defer world.org.mu.Unlock()
-	for _, account := range world.org.accounts {
-		if account.email == decommissioned {
-			account.disabled = true
-			return world
-		}
-	}
-	tb.Fatalf("%s has no account to decommission, so this world is converged "+
-		"after all and the three clauses that walk a findings list are back "+
-		"to walking an empty one", seatOne)
+	world.org.accounts = append(world.org.accounts, &serviceAccount{
+		id: "stray-1", email: "crewlet-left-over@agents.test.invalid", name: "Left over",
+	})
 	return world
 }
 
@@ -729,8 +537,8 @@ func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
 	// row offers somebody to act on: a finding naming the wrong thing is a
 	// person sent to the wrong field.
 	want := map[integration.FindingKind]string{
-		integration.FindingIngressBlocked: "api.external_url",
-		integration.FindingIdentityFailed: seatOne,
+		integration.FindingIngressBlocked:       "api.external_url",
+		integration.FindingRegistrationOrphaned: "datadog service accounts",
 	}
 	for _, f := range findings {
 		subject, expected := want[f.Kind]
@@ -750,13 +558,14 @@ func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
 			"shorter list than this world was built to produce", kind, subject)
 	}
 
-	// AND THE SEAT BESIDE IT IS STILL FINE, which is what makes the
-	// identity finding above about one decommissioned account rather than
-	// about a pass that reports every seat broken.
+	// AND THE AGENTS' OWN ACCOUNTS ARE NOT AMONG THE ORPHANS, which is
+	// what makes the advisory about the stray account rather than about a
+	// pass that reports every account it sees.
 	for _, f := range findings {
-		if f.Subject == seatTwo {
-			t.Errorf("%s was reported too, so the world is broken more widely "+
-				"than it is meant to be: %s", seatTwo, f.Detail)
+		for _, subject := range f.Subjects {
+			if strings.Contains(subject, seatOne) || strings.Contains(subject, seatTwo) {
+				t.Errorf("an agent's own account was reported as an orphan: %s", subject)
+			}
 		}
 	}
 }
@@ -766,33 +575,19 @@ func TestTheOutstandingWorldReportsEveryFaultItHolds(t *testing.T) {
 // A Mutations() that answered 0 whatever happened would make the clause above
 // vacuous in exactly the way the stub it replaced was, and nothing in the
 // suite can tell the difference: it only ever compares the number to itself.
-// So both halves are exercised here — a write at Datadog, and a write into
-// this deployment's own sealed store — by asking a converged world for a
-// second seat's identity, which is the pass doing its job rather than a
+// So a write is made here by moving this deployment's address, which the pass
+// answers by rewriting the webhook: the pass doing its job rather than a
 // contrivance.
-func TestTheWriteCounterCountsBothHalves(t *testing.T) {
+func TestTheWriteCounterCountsTheVendorsWrites(t *testing.T) {
 	t.Parallel()
 	world := convergedDatadog(t, t)
-	before, vendorBefore, storeBefore := world.mutations(), world.org.mutations(), world.keys.writes
-
-	world.opts.Plan.Add(provision.Seat{
-		Handle: "dba", Role: "DBA", TokenVar: "DBA_DD_KEY",
-		Email: datadog.AccountEmail(world.opts.Config.Provisioning, "dba"),
-	})
+	before := world.mutations()
+	world.opts.WebhookBase = "https://moved.example.com"
 	if _, err := world.Reconcile(context.Background()); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
-
-	if world.org.mutations() <= vendorBefore {
-		t.Errorf("a seat with no account was provisioned without a single "+
-			"write reaching Datadog: %d", world.org.mutations()-vendorBefore)
-	}
-	if world.keys.writes <= storeBefore {
-		t.Errorf("a key was minted and the sealed store recorded nothing: %d",
-			world.keys.writes-storeBefore)
-	}
 	if world.mutations() <= before {
-		t.Errorf("Mutations() did not move over a pass that provisioned a seat")
+		t.Errorf("a moved webhook was rewritten without a single write reaching Datadog")
 	}
 }
 

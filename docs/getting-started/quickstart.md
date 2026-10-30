@@ -952,29 +952,30 @@ each), then wire them in:
   If your company already runs on [Slack](../integrations/slack.md), use it —
   the agents land where the conversations already happen, under the
   workspace admin and compliance setup you already have. It needs a public
-  URL for its Events API and one OAuth **Allow** click per agent:
-  ```bash
-  export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
-  crewlet slack provision company.yaml -secret-store -public-url https://your-server.com
-  crewlet config import company.yaml        # the block, with what was just minted
-  ```
+  URL for its Events API, an app configuration token entered once on Slack's
+  connect form under Company › Integrations, and one **Allow** click per agent
+  from the Slack integration's Agents tab: the engine creates each agent's app
+  and seals its bot token when the click comes back.
   To try a vendor chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's
   `docker-compose.yml` and needs no account, no inbound URL and no clicks.
-  Its block names the instance as `url: "${MATTERMOST_URL}"` and
-  `team: nimbus`, the team the script creates:
+  Its block names the instance as `url: "${MATTERMOST_URL}"`,
+  `team: nimbus` (the team the script creates) and
+  `provisioning.admin_token: "${MATTERMOST_ADMIN_TOKEN}"`:
   ```bash
   docker compose --profile mattermost up -d --wait
   scripts/mattermost-dev-bootstrap.sh       # writes MATTERMOST_* to .env
-  set -a; . ./.env; set +a                  # the admin token the provisioner uses
+  set -a; . ./.env; set +a
   export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
   printf %s "$MATTERMOST_URL" | crewlet secrets set MATTERMOST_URL
-  crewlet mattermost provision company.yaml -secret-store
-  crewlet config import company.yaml        # the block, with what was just minted
+  printf %s "$MATTERMOST_ADMIN_TOKEN" | crewlet secrets set MATTERMOST_ADMIN_TOKEN
+  crewlet config import company.yaml        # the block
   ```
-  The engine was started before `.env` existed, so `MATTERMOST_URL` reaches
-  it through the secret store, beside the bots' tokens, rather than through
-  its environment, which nothing changes while it runs.
+  Then turn each agent on in the Mattermost integration's Agents tab: the
+  engine creates its bot and seals its token itself. The engine was started
+  before `.env` existed, so `MATTERMOST_URL` and the admin token reach it
+  through the secret store rather than through its environment, which
+  nothing changes while it runs.
   Running that stack on a **remote host** rather than this machine? Set
   `MATTERMOST_PUBLIC_URL` to the address your browser uses first — see
   [The Site URL](../integrations/mattermost.md#the-site-url). The engine

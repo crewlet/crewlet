@@ -261,6 +261,19 @@ func (g generic) preview(ctx context.Context, read proposal.Read, _ time.Time,
 func checked(ctx context.Context, read proposal.Read, req exec.Request,
 	revision string) ([]string, error) {
 
+	body, err := checkAnswer(ctx, read, req, revision)
+	if err != nil {
+		return nil, err
+	}
+	return checkWarnings(body), nil
+}
+
+// checkAnswer is [checked]'s request and the admitted check's whole answer,
+// for a preview that draws more of the check than its warnings (the plan an
+// agent's access change would take, set_seat_access).
+func checkAnswer(ctx context.Context, read proposal.Read, req exec.Request,
+	revision string) ([]byte, error) {
+
 	check := req
 	check.Query = maps.Clone(req.Query)
 	if check.Query == nil {
@@ -278,7 +291,7 @@ func checked(ctx context.Context, read proposal.Read, req exec.Request,
 	case !cards.Permitted(resp.Status):
 		return nil, &PreviewRefusal{Status: resp.Status, Refusal: exec.RefusalOf(resp)}
 	}
-	return checkWarnings(resp.Body), nil
+	return resp.Body, nil
 }
 
 // checkWarnings are a check's `warnings` this change introduces, each its

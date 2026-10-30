@@ -435,6 +435,9 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 	if !changed && len(secretsToWrite) == 0 {
 		return Result{}, fmt.Errorf("setup: the submission carried no values")
 	}
+	if changed {
+		turnOn(seat, reqs, in.Values)
+	}
 
 	// ENCODED AND AUTHORIZED BEFORE ANY VALUE IS SEALED, as the company-wide
 	// half is, and for its reasons.
@@ -475,6 +478,34 @@ func (w Writer) writeSeat(ctx context.Context, reqs []Requirement, in Submission
 		return Result{Secrets: written}, err
 	}
 	return Result{RevisionID: id, Epoch: epoch, Secrets: written}, nil
+}
+
+// turnOn states `enabled: true` on every seat integration block a submission
+// wrote into that does not already say whether the seat is on.
+//
+// A PERSON CONNECTING ONE AGENT'S APP IS TURNING THAT AGENT ON THERE: it is
+// the explicit opt-in D9 asks for, and every seat block must state `enabled`,
+// so a connect that wrote the credential and left the block silent would be
+// refused as a document. A block that already says either way keeps it: a
+// connect never turns back on an agent somebody turned off.
+func turnOn(seat map[string]any, reqs []Requirement, values map[string]string) {
+	for _, r := range reqs {
+		if _, submitted := values[r.Field]; !submitted {
+			continue
+		}
+		parts := strings.Split(r.ConfigPath, ".")
+		if len(parts) < 3 || parts[0] != "integrations" {
+			continue
+		}
+		integrations, _ := seat["integrations"].(map[string]any)
+		block, _ := integrations[parts[1]].(map[string]any)
+		if block == nil {
+			continue
+		}
+		if _, stated := block["enabled"]; !stated {
+			block["enabled"] = true
+		}
+	}
 }
 
 func (w Writer) now() time.Time {

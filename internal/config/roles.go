@@ -10,7 +10,6 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Role is the AUTHORED shape of one seat — a `roles:` entry.
@@ -373,14 +372,19 @@ func (s *RoleSandbox) validate(path Path) error {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: how much it may do, and where."`
-	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
-	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
+	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
+	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
+	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
+	Datadog    *RoleDatadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
+	GitLab     *RoleGitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
+	Jira       *RoleJira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
+	Confluence *RoleConfluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
-	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil
+	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
+		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.
@@ -395,27 +399,21 @@ func (r RoleIntegrations) IsZero() bool {
 // THE CREDENTIALS ARE NOT TYPED IN. An app is created from a manifest the
 // engine builds, and GitHub returns its private key exactly once, to the
 // engine, at conversion time. What an operator does is click through the
-// creation and the install. Everything here except the tier and the
-// repositories is therefore written by the engine, not by a person.
+// creation and the install. Everything here except `enabled`, the permissions
+// and the repositories is therefore written by the engine, not by a person.
 type RoleGitHub struct {
-	// Tier is how much of a repository this seat may do: read_only,
-	// review or full_access. Empty is read_only, which is the least this
-	// engine will hand out and the right answer for a seat nobody has
-	// thought about yet.
-	Tier string `yaml:"tier,omitempty" json:"tier,omitempty" desc:"read_only, review or full_access. Empty means read_only."`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own GitHub App. Off suspends the installation and keeps the app."`
+
+	// Permissions are the App's repository permissions in GitHub's own
+	// terms, each read or write; a permission left out is No access. The
+	// app is registered at these (least privilege, D5), so a raise past
+	// them waits for an owner to accept it at GitHub.
+	Permissions map[string]GitHubAccess `yaml:"permissions,omitempty" json:"permissions,omitempty" desc:"GitHub App permissions (contents, issues, pull_requests, checks, actions, deployments, workflows), each read or write; absent is No access."`
 
 	// Repos are the repositories this seat works in, as owner/name. Empty
 	// means every repository the installation covers, which is what the
 	// operator chose when they installed the app.
 	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty" desc:"Repositories this seat works in, as owner/name. Empty means all the installation covers."`
-
-	// Workflows opts a full_access seat in to GitHub's `workflows: write`,
-	// without which GitHub refuses any push whose commits change a file
-	// under `.github/workflows`. OFF unless written, and refused on every
-	// other tier: the same grant lets the seat's branches run a workflow it
-	// rewrote, with the secrets the repository hands its runs, so it is a
-	// decision a company takes for one seat rather than one a tier implies.
-	Workflows bool `yaml:"workflows,omitempty" json:"workflows,omitempty" desc:"full_access only: also grant workflows: write, so the seat can push changes to .github/workflows. Off by default."`
 
 	// AppID and AppSlug are the app GitHub created from the manifest. The
 	// SLUG is what the bot's login is derived from, so it is what an
@@ -449,10 +447,12 @@ type RoleGitHub struct {
 	WebhookSecret string `secret:"true" yaml:"webhook_secret,omitempty" json:"webhook_secret,omitempty" desc:"Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once."`
 }
 
-// IsZero lets an unset block drop out of a round trip.
+// IsZero lets an unset block drop out of a round trip. A block that says only
+// `enabled` or only its permissions is not unset: dropping it would turn the
+// seat's GitHub access off, or forget what it asked for.
 func (g *RoleGitHub) IsZero() bool {
-	return g == nil || (g.Tier == "" && len(g.Repos) == 0 && !g.Workflows && g.AppID == 0 &&
-		g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "" &&
+	return g == nil || (g.Enabled == nil && len(g.Permissions) == 0 && len(g.Repos) == 0 &&
+		g.AppID == 0 && g.AppSlug == "" && g.InstallationID == 0 && g.PrivateKey == "" &&
 		g.WebhookSecret == "")
 }
 
@@ -465,27 +465,13 @@ func (g *RoleGitHub) Held() bool {
 
 // validate checks a seat's GitHub App.
 //
-// THE TIER, THE REPOSITORIES AND THE WORKFLOWS OPT-IN ARE WHAT A PERSON
-// WRITES, so they are the only things that can be wrong in a way worth
-// refusing. Everything else is written by the engine after GitHub has
-// answered, and refusing a half-built record would refuse the document
-// between the two clicks that build it.
+// THE REPOSITORIES ARE WHAT A PERSON WRITES here beside the permissions (held
+// to GitHub's own terms where the seat's access is checked), so they are what
+// can be wrong in a way worth refusing. Everything else is written by the
+// engine after GitHub has answered, and refusing a half-built record would
+// refuse the document between the two clicks that build it.
 func (g *RoleGitHub) validate(path Path) error {
 	var p problems
-	if tier := normalTier(g.Tier); tier != "" && !slices.Contains(CodeAccessTiers, tier) {
-		p.add(at(path, "tier"), ErrUnknownValue,
-			"%q is not an access tier; give one of %s. An unknown tier would "+
-				"run the seat read-only, which is safe and is not what the "+
-				"document says",
-			g.Tier, words.Or(CodeAccessTiers))
-	}
-	if g.Workflows && g.TierOrDefault() != TierFullAccess {
-		p.add(at(path, "workflows"), ErrConflict,
-			"workflow writes are for a full_access seat only, and this seat is %s: "+
-				"a seat that cannot push code has nothing to push a workflow with. "+
-				"Set tier to full_access, or remove workflows",
-			g.TierOrDefault())
-	}
 	for i, repo := range g.Repos {
 		if name := strings.TrimSpace(repo); name == "" || !strings.Contains(name, "/") {
 			p.add(idx(at(path, "repos"), i), ErrUnknownValue,
@@ -495,40 +481,6 @@ func (g *RoleGitHub) validate(path Path) error {
 		}
 	}
 	return p.err()
-}
-
-// The access tiers a code host's seat can be set to.
-//
-// RESTATED HERE rather than imported from internal/github, because config is
-// the leaf every integration package depends on and reaching the other way
-// for three words would invert that. The same reasoning [Datadog] follows for
-// its tag key. Each code host's package owns the real vocabulary and the
-// permissions behind it, and a test asserts the two lists agree.
-const (
-	TierReadOnly   = "read_only"
-	TierReview     = "review"
-	TierFullAccess = "full_access"
-)
-
-// CodeAccessTiers is the closed set, in order of how much it grants.
-var CodeAccessTiers = []string{TierReadOnly, TierReview, TierFullAccess}
-
-// normalTier reads a tier the way the code hosts do, so a document written
-// `full-access` is not refused for a hyphen the engine itself accepts.
-func normalTier(raw string) string {
-	return strings.ToLower(strings.TrimSpace(strings.ReplaceAll(raw, "-", "_")))
-}
-
-// TierOrDefault is the tier this seat runs at.
-//
-// READ ONLY when the document is silent, which is the least this engine hands
-// out. A seat nobody has thought about should ask for more rather than
-// already hold it.
-func (g *RoleGitHub) TierOrDefault() string {
-	if tier := normalTier(g.Tier); slices.Contains(CodeAccessTiers, tier) {
-		return tier
-	}
-	return TierReadOnly
 }
 
 // RoleSlack is a seat's own Slack app.
@@ -547,36 +499,24 @@ func (g *RoleGitHub) TierOrDefault() string {
 // team channel and which names one room per unit whatever chat backend the
 // company runs on.
 type RoleSlack struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own Slack app. Off revokes the bot token and keeps the app."`
+
 	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
 	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
 }
 
 // validate checks a seat's Slack app.
 //
-// THE TWO CREDENTIALS ARE NOT INTERCHANGEABLE and each half fails silently
-// on its own. Without a bot token the seat receives messages it can never
-// answer; without a signing secret its route answers 503 to every delivery
-// while the app's own settings page reports a healthy request URL. So
-// declaring the block at all means declaring both.
+// THE CREDENTIALS ARE NOT REQUIRED (D4): the engine seals a seat's bot token
+// and signing secret under names it derives from the handle, so a block that
+// names neither is the ordinary one. Where a block still names a bot token,
+// it is one whole `${VAR}` or a literal: the transport resolves the token only
+// when it is one whole reference, and anything else would reach Slack as
+// written, braces and all. Which positions a managed seat may name at all is
+// the document's access rules, not this check.
 func (s *RoleSlack) validate(path Path) error {
 	var p problems
-	// The transport reads the token with [envref.Resolve]; the signing
-	// secret is expanded wherever its references sit, so only the token
-	// is held to one whole reference.
 	pointerOrLiteral(&p, at(path, "bot_token"), s.BotToken)
-	if strings.TrimSpace(s.BotToken) == "" {
-		p.add(at(path, "bot_token"), ErrMissing,
-			"required: without it this seat receives messages it cannot "+
-				"answer. `crewlet slack provision` mints one into the ${VAR} "+
-				"this field points at")
-	}
-	if strings.TrimSpace(s.SigningSecret) == "" {
-		p.add(at(path, "signing_secret"), ErrMissing,
-			"required: this seat's /webhooks/slack/<handle> route has nothing "+
-				"to verify a delivery with otherwise and answers 503 to every "+
-				"one, while the app's own settings page reports a healthy "+
-				"request URL")
-	}
 	return p.err()
 }
 
@@ -587,6 +527,16 @@ func (s *RoleSlack) validate(path Path) error {
 // and the MCP tool server alike. There is no signing secret because there
 // is no inbound webhook to verify.
 type RoleMattermost struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has a Mattermost bot. Off revokes its tokens and deactivates it."`
+
+	// Roles are the bot account's Mattermost roles, by Mattermost's own
+	// names: one of [MattermostRoleSets].
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"Mattermost roles: system_user, plus system_post_all_public or system_post_all, or system_admin."`
+
+	// Channels are the channels the bot is a member of, each within
+	// provisioning.channels where that list is set.
+	Channels []string `yaml:"channels,omitempty" json:"channels,omitempty" desc:"Channels this agent's bot is a member of."`
+
 	// BotToken is the bot account's personal access token. A whole-value
 	// ${VAR} is what makes the seat provisionable; a literal marks a
 	// manually managed bot, which the provisioner reports and leaves alone.
@@ -603,13 +553,6 @@ type RoleMattermost struct {
 	// whole reference beside the pattern, and [RoleMattermost.validate]
 	// refuses exactly what the schema does.
 	Username string `yaml:"username,omitempty" json:"username,omitempty" js:"pattern=^[a-z0-9][a-z0-9._-]*$;pointer" desc:"Bot username, or one whole ${VAR} naming it; defaults to the seat handle."`
-
-	// Channel is a PROVISIONING input, not a posting default: the reconcile
-	// adds this bot to it, on top of the company-wide
-	// `provisioning.channels`. Nothing aims a message with it — the engine's
-	// transport posts none, and an agent's messages are the Mattermost MCP
-	// server's calls on this same token, each naming its own channel.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Channel this seat's bot is added to at provisioning, on top of provisioning.channels."`
 }
 
 // validate checks a seat's Mattermost bot.
@@ -750,7 +693,6 @@ func (r *Role) Seat() *org.Role {
 		seat.Mattermost = org.MattermostIdentity{
 			BotToken: m.BotToken,
 			Username: m.Username,
-			Channel:  m.Channel,
 		}
 	}
 	// AND THE CODE HOST'S, which this conversion used to DROP. Everything
@@ -759,10 +701,17 @@ func (r *Role) Seat() *org.Role {
 	// the first — a fact about a seat that the running seat does not carry
 	// is a fact the running company cannot see.
 	if g := r.Integrations.GitHub; g != nil {
+		var perms map[string]string
+		if len(g.Permissions) > 0 {
+			perms = make(map[string]string, len(g.Permissions))
+			for key, level := range g.Permissions {
+				perms[key] = string(level)
+			}
+		}
 		seat.GitHub = &org.GitHubApp{
-			Tier: g.Tier, Repos: append([]string(nil), g.Repos...),
-			Workflows: g.Workflows,
-			AppID:     g.AppID, AppSlug: g.AppSlug,
+			Enabled: SeatAccessOn(g.Enabled), Permissions: perms,
+			Repos: append([]string(nil), g.Repos...),
+			AppID: g.AppID, AppSlug: g.AppSlug,
 			InstallationID: g.InstallationID,
 			PrivateKey:     g.PrivateKey,
 			WebhookSecret:  g.WebhookSecret,

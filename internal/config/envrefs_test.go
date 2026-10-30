@@ -45,6 +45,7 @@ roles:
       notion: {NOTION_TOKEN: "${NOTION_TOKEN}"}
     integrations:
       slack:
+        enabled: false
         bot_token: "${SLACK_BOT_TOKEN_CEO}"
         signing_secret: "${SLACK_SIGNING_CEO}"
 `

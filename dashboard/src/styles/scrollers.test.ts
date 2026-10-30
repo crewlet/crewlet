@@ -140,11 +140,11 @@ const LITERAL_BOUND: Record<string, string> = {
     "the list inside a filter menu's Popover: an overlay, never a box in the page's flow",
   "screens.css .composer-picklist":
     "a pick list inside the composer's Modal, which is portaled outside the page",
-  "screens.css .int-manifest-text":
+  "integrations.css .int-manifest-text":
     "the manifest inside the integration setup Modal, which is portaled outside the page",
   "screens.css .design-opened--actual":
     "a board at its own size inside the opened-board Modal, which is portaled outside the page",
-  "screens.css .int-subjects":
+  "integrations.css .int-subjects":
     "9rem of chips on a finding — shorter than any view it can sit in, so once scrolled to it is wholly on screen",
 };
 

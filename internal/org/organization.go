@@ -622,14 +622,6 @@ const (
 	// RefManages is a manages entry that is neither a seat's handle nor a
 	// unit's key.
 	RefManages RefKind = "manages"
-	// RefGitLabAccessLevel is a key of
-	// integrations.gitlab.provisioning.access_levels naming no seat's
-	// handle. The organization carries no integrations, so
-	// [Organization.DanglingRefs] never reports it: the config layer does
-	// (config.Company.DanglingRefs). The kind is declared here so the whole
-	// vocabulary of dangling references, and its rendering in
-	// [DanglingRef.Message], lives in one place.
-	RefGitLabAccessLevel RefKind = "gitlab_access_level"
 )
 
 // DanglingRef is a name that resolved to nothing.
@@ -637,8 +629,7 @@ type DanglingRef struct {
 	Kind RefKind
 	// From is what carries the reference, by the DISPLAY name a person
 	// reads: the unit (for a lead), the seat (for a unit reference or a
-	// manages entry), or the document path of the map (for a GitLab access
-	// level).
+	// manages entry).
 	From string
 	// To is the handle or key, as written, that resolved to nothing.
 	To string
@@ -667,10 +658,6 @@ func (d DanglingRef) Message() string {
 		return fmt.Sprintf("seat %q manages %q, which is neither a seat's handle "+
 			"nor a unit's key, so the entry manages nobody. Correct the entry or "+
 			"add a seat or unit answering to it", d.From, d.To)
-	case RefGitLabAccessLevel:
-		return fmt.Sprintf("%s names handle %q, which no seat has, so a seat "+
-			"added later with that handle would be given this access level. "+
-			"Remove the entry or correct the handle", d.From, d.To)
 	default:
 		return fmt.Sprintf("%s reference %q on %q resolves to nothing", d.Kind, d.To, d.From)
 	}
