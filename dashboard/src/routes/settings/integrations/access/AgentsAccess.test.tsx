@@ -13,7 +13,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
-import type { AccessAnswer } from "~/contract/access.ts";
+import type { AccessAnswer, AccessSeatLane } from "~/contract/access.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
   confluenceAnswer,
@@ -33,6 +33,8 @@ const calls = vi.hoisted(() => ({
   act: [] as unknown[],
   install: [] as unknown[],
   stepUp: false,
+  /** A save refused as stale, once. */
+  stale: false,
 }));
 
 vi.mock("./api.ts", async (actual) => {
@@ -66,16 +68,23 @@ vi.mock("./api.ts", async (actual) => {
       }),
       save: vi.fn(async (kind: string, seats: unknown, ifMatch: string) => {
         calls.save.push({ kind, seats, ifMatch });
+        if (calls.stale) {
+          calls.stale = false;
+          const { RestError } = await import("~/protocol/rest.ts");
+          throw new RestError(409, { error: "revision_advanced" });
+        }
         return datadogAnswer();
       }),
       install: vi.fn(async (kind: string, handle: string, lane: string) => {
         calls.install.push({ kind, handle, lane });
         return { url: "https://slack.com/oauth/v2/authorize?state=one-use" };
       }),
-      act: vi.fn(async (kind: string, handle: string, lane: string, action: string) => {
-        calls.act.push({ kind, handle, lane, action });
-        return datadogAnswer();
-      }),
+      act: vi.fn(
+        async (kind: string, handle: string, lane: string, action: string, revision?: string) => {
+          calls.act.push({ kind, handle, lane, action, ...(revision ? { revision } : {}) });
+          return { ...datadogAnswer(), revision: "rev-8" };
+        },
+      ),
     },
   };
 });
@@ -86,27 +95,34 @@ beforeEach(() => {
   calls.act = [];
   calls.install = [];
   calls.stepUp = false;
+  calls.stale = false;
 });
 afterEach(cleanup);
 
 function draw(data: AccessAnswer, over: { held?: string; readOnly?: string; only?: string } = {}) {
   const reload = vi.fn();
-  render(
+  const onAnswer = vi.fn();
+  const ui = (answer: AccessAnswer) => (
     <LayerHost>
       <AgentsAccess
-        kind={data.kind}
-        name={laneWords(data.options[0]!.lane).name}
-        data={data}
+        kind={answer.kind}
+        name={laneWords(answer.options[0]!.lane).name}
+        data={answer}
         reload={reload}
+        onAnswer={onAnswer}
         held={over.held}
         readOnly={over.readOnly}
         only={over.only}
         avatarOf={() => null}
       />
-    </LayerHost>,
+    </LayerHost>
   );
-  return { reload };
+  const { rerender } = render(ui(data));
+  return { reload, onAnswer, redraw: (next: AccessAnswer) => rerender(ui(next)) };
 }
+
+/** A lane before any sync ran: what the plan says is all there is. */
+const unsynced = ({ sync: _, ...lane }: AccessSeatLane): AccessSeatLane => lane;
 
 const details = (name: string, product = "Datadog") =>
   fireEvent.click(screen.getByRole("button", { name: `Show ${name}'s ${product} details` }));
@@ -139,7 +155,7 @@ test("an off seat's details are one sentence", () => {
 });
 
 test("a change is a draft, and the review shows the engine's plan and saves against the revision read", async () => {
-  const { reload } = draw(datadogAnswer());
+  const { reload, onAnswer } = draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   expect(screen.getByText("Not saved")).toBeTruthy();
   expect(screen.getByRole("region", { name: "Unsaved changes" }).textContent).toContain(
@@ -155,7 +171,9 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   fireEvent.click(screen.getByRole("button", { name: "Save and sync" }));
   await waitFor(() => expect(calls.save).toHaveLength(1));
   expect(calls.save[0]).toMatchObject({ ifMatch: "rev-7" });
-  await waitFor(() => expect(reload).toHaveBeenCalled());
+  // THE SAVE'S ANSWER IS THE TAB AS IT NOW STANDS, drawn rather than read again.
+  await waitFor(() => expect(onAnswer).toHaveBeenCalledTimes(1));
+  expect(reload).not.toHaveBeenCalled();
 });
 
 test("turning a seat off says in the review what that does at the vendor", async () => {
@@ -224,7 +242,10 @@ test("a role changed by hand offers restore or keep", () => {
   );
   expect(screen.getByText(/Datadog shows Datadog Read Only Role/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Keep Datadog's setting" }));
-  expect(calls.act).toEqual([{ kind: "datadog", handle: "sre", lane: "datadog", action: "keep" }]);
+  // KEEP WRITES THE DOCUMENT, so it states the revision it read.
+  expect(calls.act).toEqual([
+    { kind: "datadog", handle: "sre", lane: "datadog", action: "keep", revision: "rev-7" },
+  ]);
 });
 
 test("a reader who may not change access gets the reading and no control", () => {
@@ -354,7 +375,19 @@ test("Slack's waiting install opens a freshly minted link in a new tab", async (
       seat("pm", "PM", {
         slack: {
           ...onLane({ variable: "SLACK_BOT_TOKEN_PM" }),
-          sync: { at: new Date().toISOString(), outcome: "waiting", steps: [] },
+          sync: {
+            at: new Date().toISOString(),
+            outcome: "waiting",
+            steps: [
+              {
+                op: "create",
+                verb: "approve",
+                by: "you",
+                text: "Approve the install in Slack",
+                done: false,
+              },
+            ],
+          },
           plan: [
             { op: "create", verb: "approve", by: "you", text: "Approve the install in Slack" },
           ],
@@ -412,4 +445,131 @@ test("Jira's product access with no project role is a choice of its own, with no
   const picker = (name: string) => document.querySelector(`[aria-label="${name}"]`);
   expect(picker("PM's Jira projects")).toBeNull();
   expect(picker("QA's Jira projects")).not.toBeNull();
+});
+
+test("an account turned off at the vendor by hand offers Turn back on and Keep off, with no plan", () => {
+  // AS THE ENGINE SENDS IT: the seat stays on in the document, the account is
+  // off by hand, nothing is planned and no change-by-hand time is set.
+  const base = datadogAnswer().seats[2]!.lanes.datadog!;
+  draw(
+    datadogAnswer({
+      observed: { ...base.observed, enabled: false, disabled_by: "hand" },
+      plan: [],
+    }),
+  );
+  expect(screen.getByText("Turned off at Datadog by somebody else")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Turn back on" }));
+  expect(calls.act).toEqual([
+    { kind: "datadog", handle: "sre", lane: "datadog", action: "restore" },
+  ]);
+  expect(screen.getByRole("button", { name: "Keep off" })).toBeTruthy();
+});
+
+test("a wait says the sync's own reason and remedy, and links where the engine says", () => {
+  draw(
+    datadogAnswer({
+      sync: {
+        at: new Date().toISOString(),
+        outcome: "waiting",
+        steps: [{ op: "create", verb: "approve", by: "you", text: "Approve it", done: false }],
+        error: {
+          step: "approve",
+          said: "The app is waiting for an owner to approve its install.",
+          remedy: "An organization owner approves it under Installed apps.",
+          actor: "you",
+          action_url: "https://example.invalid/approve",
+        },
+      },
+    }),
+  );
+  expect(screen.getByText("The app is waiting for an owner to approve its install.")).toBeTruthy();
+  expect(screen.getByText("An organization owner approves it under Installed apps.")).toBeTruthy();
+  expect(screen.queryByText("Approve it.")).toBeNull();
+  expect(screen.getByRole("link", { name: /Open Datadog/ }).getAttribute("href")).toBe(
+    "https://example.invalid/approve",
+  );
+});
+
+test("an external lane that is on reads as managed outside Crewlet, with nothing to wait on", () => {
+  const data = datadogAnswer({ plan: [], tool: "live" });
+  data.options = [{ ...data.options[0]!, managed: "external" }];
+  draw(data);
+  expect(screen.getAllByText("Managed outside Crewlet").length).toBeGreaterThan(0);
+  expect(screen.queryByText("Next sync")).toBeNull();
+  expect(screen.queryByText("Needs you")).toBeNull();
+});
+
+test("a save refused as stale keeps the draft, reads again and plans again against the new revision", async () => {
+  calls.stale = true;
+  const { reload, redraw } = draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid.");
+  fireEvent.click(screen.getByRole("button", { name: "Save and sync" }));
+  expect(await screen.findByText(/Somebody changed these agents/)).toBeTruthy();
+  expect(reload).toHaveBeenCalled();
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  redraw({ ...datadogAnswer(), revision: "rev-8" });
+  await waitFor(() => expect(calls.plan).toHaveLength(2));
+  expect(calls.plan[1]).toEqual(calls.plan[0]);
+  fireEvent.click(await screen.findByRole("button", { name: "Save and sync" }));
+  await waitFor(() => expect(calls.save).toHaveLength(2));
+  expect(calls.save[1]).toMatchObject({ ifMatch: "rev-8" });
+});
+
+test("a seat action draws the answer it returns rather than reading again", async () => {
+  const { reload, onAnswer } = draw(
+    datadogAnswer({
+      sync: {
+        at: new Date().toISOString(),
+        outcome: "failed",
+        steps: [],
+        error: { step: "rerole", said: "Refused.", remedy: "Retry.", actor: "crewlet" },
+      },
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(onAnswer).toHaveBeenCalledTimes(1));
+  expect(onAnswer.mock.calls[0]![0]).toMatchObject({ revision: "rev-8" });
+  expect(reload).not.toHaveBeenCalled();
+});
+
+test("rotating a credential says what it does at the vendor before it runs", async () => {
+  draw(datadogAnswer());
+  details("SRE");
+  fireEvent.click(screen.getByRole("button", { name: "Rotate credential" }));
+  const dialog = screen.getByRole("alertdialog", { name: "Rotate SRE's Datadog credential?" });
+  expect(within(dialog).getByText(/deletes the old one/)).toBeTruthy();
+  expect(calls.act).toEqual([]);
+  fireEvent.click(within(dialog).getByRole("button", { name: "Rotate credential" }));
+  await waitFor(() =>
+    expect(calls.act).toEqual([
+      { kind: "datadog", handle: "sre", lane: "datadog", action: "rotate" },
+    ]),
+  );
+});
+
+test("an install the browser would not open in a new tab is drawn as a link", async () => {
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  draw({
+    kind: "slack",
+    revision: "rev-7",
+    syncing: false,
+    options: [{ lane: "slack", live: false }],
+    seats: [
+      seat("pm", "PM", {
+        slack: {
+          ...unsynced(onLane({ variable: "SLACK_BOT_TOKEN_PM" })),
+          plan: [
+            { op: "create", verb: "approve", by: "you", text: "Approve the install in Slack" },
+          ],
+        },
+      }),
+    ],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Install in Slack" }));
+  const link = await screen.findByRole("link", { name: /Open the install page/ });
+  expect(link.getAttribute("href")).toBe("https://slack.com/oauth/v2/authorize?state=one-use");
+  expect(screen.getByText(/kept the install page from opening/)).toBeTruthy();
+  open.mockRestore();
 });

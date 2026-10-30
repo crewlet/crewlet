@@ -51,7 +51,7 @@ import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import "~/styles/access.css";
 import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
-import { PermissionsDialog, RemoveDialog, ReviewDialog } from "./Dialogs.tsx";
+import { PermissionsDialog, RemoveDialog, ReviewDialog, RotateDialog } from "./Dialogs.tsx";
 import {
   accessWords,
   availableActions,
@@ -88,8 +88,10 @@ export interface AgentsAccessProps {
   /** The integration in the reader's own words. */
   name: string;
   data: AccessAnswer;
-  /** Read again after a write. */
+  /** Read again: after a write that was refused, or one that answered nothing to draw. */
   reload: () => void;
+  /** Draw the answer a write returned, which is the tab as it now stands. */
+  onAnswer?: ((answer: AccessAnswer) => void) | undefined;
   /** Why nothing here may be changed (a managed document, a reader who is not an admin), or undefined. */
   held: string | undefined;
   /** The one line a read-only tab shows (the operator manages access), or undefined. */
@@ -123,6 +125,7 @@ export function AgentsAccess({
   name,
   data,
   reload,
+  onAnswer,
   held,
   readOnly,
   avatarOf,
@@ -136,7 +139,23 @@ export function AgentsAccess({
   const [review, setReview] = useState(false);
   const [removing, setRemoving] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
+  const [rotating, setRotating] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [said, setSaid] = useState("");
+  // WHAT EACH SEAT'S LANE HAS IN FLIGHT, so its own buttons say so and the
+  // rest of the table stays usable.
+  const [pending, setPending] = useState<Record<string, Pending>>({});
+  // INSTALL LINKS THE BROWSER WOULD NOT OPEN in a new tab, drawn as links.
+  const [links, setLinks] = useState<Record<string, string>>({});
+  const keyOf = (seat: AccessSeat, lane: Lane) => `${seat.handle}:${lane.key}`;
+  const begin = (seat: AccessSeat, lane: Lane, what: Pending) =>
+    setPending((p) => ({ ...p, [keyOf(seat, lane)]: what }));
+  const end = (seat: AccessSeat, lane: Lane) =>
+    setPending((p) => {
+      const { [keyOf(seat, lane)]: _, ...rest } = p;
+      return rest;
+    });
+  /** Draw a write's answer, or read again where the caller keeps none. */
+  const adopt = (answer: AccessAnswer) => (onAnswer ? onAnswer(answer) : reload());
 
   const lanes = lanesOf(data);
   const seats = only ? data.seats.filter((s) => s.handle === only) : data.seats;
@@ -176,8 +195,10 @@ export function AgentsAccess({
 
   // THE TAB OPENS IN THE CLICK, so a popup blocker lets it through, and goes
   // to the link once the engine has minted it: single-use, so never stored.
+  // A BLOCKED TAB is said, and the link drawn where the button was.
   const install = async (seat: AccessSeat, lane: Lane) => {
     const tab = window.open("", "_blank");
+    begin(seat, lane, "install");
     try {
       const { url } = await accessApi.install(kind, seat.handle, lane.key);
       if (new URL(url).protocol !== "https:") throw new Error("The install link was not secure.");
@@ -185,23 +206,40 @@ export function AgentsAccess({
         tab.opener = null;
         tab.location.href = url;
       } else {
-        window.open(url, "_blank", "noopener,noreferrer");
+        setLinks((l) => ({ ...l, [keyOf(seat, lane)]: url }));
       }
       setSaid("");
     } catch (err) {
       tab?.close();
       setSaid(refusalWords(err));
+    } finally {
+      end(seat, lane);
     }
   };
 
   const act = async (seat: AccessSeat, lane: Lane, action: AccessSeatAction) => {
+    begin(seat, lane, action);
     try {
-      await accessApi.act(kind, seat.handle, lane.key, action);
+      // KEEP WRITES THE DOCUMENT, so it states the revision it read; a save
+      // in between refuses it `revision_advanced`, and the tab reads again.
+      const answer = await accessApi.act(
+        kind,
+        seat.handle,
+        lane.key,
+        action,
+        action === "keep" ? data.revision : undefined,
+      );
       setSaid("");
+      setLinks((l) => {
+        const { [keyOf(seat, lane)]: _, ...rest } = l;
+        return rest;
+      });
+      adopt(answer);
     } catch (err) {
       setSaid(refusalWords(err));
-    } finally {
       reload();
+    } finally {
+      end(seat, lane);
     }
   };
 
@@ -352,10 +390,7 @@ export function AgentsAccess({
                           disabled={off || locked || seat.departed}
                           placeholder={levelName(lane, "")}
                           onChange={(v) => {
-                            const level = joinLevels(
-                              lane,
-                              (Array.isArray(v) ? v : [v]).map(String),
-                            );
+                            const level = joinLevels((Array.isArray(v) ? v : [v]).map(String));
                             // PRODUCT ACCESS ONLY TAKES NO SCOPE, so choosing it clears one.
                             change(
                               seat,
@@ -472,6 +507,8 @@ export function AgentsAccess({
                       held={held}
                       readOnly={readOnly !== undefined}
                       step={stepFor?.(seat.handle)}
+                      pending={pending[key]}
+                      link={links[key]}
                       onAct={(a) => void act(seat, lane, a)}
                       onInstall={() => void install(seat, lane)}
                       onRemove={() => setRemoving({ seat, lane })}
@@ -485,10 +522,9 @@ export function AgentsAccess({
                       saved={saved}
                       now={now}
                       actions={availableActions(lane, saved, held !== undefined, data.syncing)}
+                      pending={pending[key]}
                       onAction={(a) =>
-                        a === "rotate"
-                          ? void act(seat, lane, "rotate")
-                          : setRemoving({ seat, lane })
+                        a === "rotate" ? setRotating({ seat, lane }) : setRemoving({ seat, lane })
                       }
                     />
                   )}
@@ -536,11 +572,14 @@ export function AgentsAccess({
           data={data}
           draft={draft}
           onClose={() => setReview(false)}
-          onSaved={() => {
+          onSaved={(answer) => {
             setDraft({});
             setReview(false);
-            reload();
+            adopt(answer);
           }}
+          // A SAVE REFUSED AS STALE keeps the draft and reads again; the
+          // review plans it again against the revision that came back.
+          onStale={reload}
         />
       )}
       {editing && (
@@ -569,11 +608,29 @@ export function AgentsAccess({
           }}
         />
       )}
+      {rotating && (
+        <RotateDialog
+          seat={rotating.seat}
+          lane={rotating.lane}
+          onClose={() => setRotating(null)}
+          onRotate={async () => {
+            await act(rotating.seat, rotating.lane, "rotate");
+            setRotating(null);
+          }}
+        />
+      )}
     </div>
   );
 }
 
-/** What a lane is waiting on, under its row: a refusal, a person's step, or a change made by hand. */
+/** The action a seat's lane has in flight, if any, for its buttons' pending state. */
+type Pending = AccessSeatAction | "install" | undefined;
+
+/**
+ * What a lane is waiting on, under its row: a seat that left, a refusal, an
+ * account turned off at the vendor by hand, a change made there, or a step
+ * only a person can take.
+ */
 function LaneMessage({
   lane,
   seat,
@@ -583,6 +640,8 @@ function LaneMessage({
   held,
   readOnly,
   step,
+  pending,
+  link,
   onAct,
   onInstall,
   onRemove,
@@ -596,6 +655,9 @@ function LaneMessage({
   /** The operator writes the document: Keep, which would write it, is not offered. */
   readOnly: boolean;
   step: ReactNode;
+  pending: Pending;
+  /** An install link the browser would not open in a new tab, drawn as a link instead. */
+  link: string | undefined;
   onAct: (action: "retry" | "keep" | "restore" | "done") => void;
   onInstall: () => void;
   onRemove: () => void;
@@ -603,6 +665,22 @@ function LaneMessage({
   if (syncing && saved.plan.length > 0) return null;
   const busy = held !== undefined;
   const keep = !busy && !readOnly;
+  const o = saved.observed;
+  const press = (
+    action: "retry" | "keep" | "restore" | "done",
+    label: ReactNode,
+    quiet = false,
+  ) => (
+    <Button
+      size="small"
+      variant={quiet ? "ghost" : "secondary"}
+      loading={pending === action}
+      disabled={pending !== undefined && pending !== action}
+      onClick={() => onAct(action)}
+    >
+      {label}
+    </Button>
+  );
   // WHERE A PERSON ACTS AT THE VENDOR is the engine's to say, step by step.
   const at = (url: string | undefined) =>
     url ? (
@@ -617,14 +695,20 @@ function LaneMessage({
         variant="warning"
         title={`${seat.name} left the company`}
         action={
-          busy || !saved.observed.exists ? undefined : (
-            <Button size="small" variant="secondary" onClick={onRemove}>
+          busy || !o.exists ? undefined : (
+            <Button
+              size="small"
+              variant="secondary"
+              loading={pending === "remove"}
+              disabled={pending !== undefined && pending !== "remove"}
+              onClick={onRemove}
+            >
               Remove account
             </Button>
           )
         }
       >
-        {saved.observed.exists
+        {o.exists
           ? `Its account at ${lane.name} is kept until you remove it.`
           : `It has no account at ${lane.name}.`}
       </Callout>
@@ -636,17 +720,12 @@ function LaneMessage({
         title={`${lane.name} refused the last sync`}
         action={
           <span className="agent-access-actions">
-            {!busy && (
-              <Button size="small" variant="secondary" onClick={() => onAct("retry")}>
-                Retry
-              </Button>
-            )}
+            {!busy && press("retry", "Retry")}
             {at(saved.sync.error.action_url)}
-            {keep && saved.desired.level !== saved.observed.level && saved.observed.level && (
-              <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
-                Keep {levelName(lane, saved.observed.level)}
-              </Button>
-            )}
+            {keep &&
+              saved.desired.level !== o.level &&
+              o.level &&
+              press("keep", `Keep ${levelName(lane, o.level)}`, true)}
           </span>
         }
       >
@@ -654,26 +733,25 @@ function LaneMessage({
         <p>{saved.sync.error.remedy}</p>
       </Callout>
     );
-  } else if (saved.observed.changed_by_hand_at && saved.plan.length > 0) {
-    const handOff =
-      saved.observed.exists && !saved.observed.enabled && saved.observed.disabled_by === "hand";
-    const when = relTime(saved.observed.changed_by_hand_at, now);
-    const levelMoved = saved.desired.level !== saved.observed.level;
-    body = handOff ? (
+  } else if (
+    // TURNED OFF AT THE VENDOR BY HAND (D3): the engine plans nothing for it,
+    // and leaves the seat off until somebody decides, so this is read off the
+    // account alone.
+    saved.desired.enabled &&
+    o.exists &&
+    !o.enabled &&
+    o.disabled_by === "hand"
+  ) {
+    const when = o.changed_by_hand_at ? ` ${relTime(o.changed_by_hand_at, now)}` : "";
+    body = (
       <Callout
         variant="warning"
-        title={`Turned off at ${lane.name} ${when} by somebody else`}
+        title={`Turned off at ${lane.name}${when} by somebody else`}
         action={
           busy ? undefined : (
             <span className="agent-access-actions">
-              <Button size="small" variant="secondary" onClick={() => onAct("restore")}>
-                Turn back on
-              </Button>
-              {keep && (
-                <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
-                  Keep off
-                </Button>
-              )}
+              {press("restore", "Turn back on")}
+              {keep && press("keep", "Keep off", true)}
             </span>
           )
         }
@@ -681,39 +759,45 @@ function LaneMessage({
         Crewlet leaves {seat.name} off until you decide, in case that was deliberate.
         {keep && " Keep off turns it off here too."}
       </Callout>
-    ) : (
+    );
+  } else if (o.changed_by_hand_at && saved.plan.length > 0) {
+    const when = relTime(o.changed_by_hand_at, now);
+    const levelMoved = saved.desired.level !== o.level;
+    body = (
       <Callout
         variant="warning"
         title={`Changed at ${lane.name} ${when}`}
         action={
           busy ? undefined : (
             <span className="agent-access-actions">
-              <Button size="small" variant="secondary" onClick={() => onAct("restore")}>
-                Restore now
-              </Button>
-              {keep && (
-                <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
-                  Keep {lane.name}&apos;s setting
-                </Button>
-              )}
+              {press("restore", "Restore now")}
+              {keep && press("keep", `Keep ${lane.name}'s setting`, true)}
             </span>
           )
         }
       >
-        {lane.name} shows{" "}
-        {levelMoved ? accessWords(lane, saved.observed) : scopeWords(lane, saved.observed.scope)},
-        and Crewlet&apos;s setting is{" "}
+        {lane.name} shows {levelMoved ? accessWords(lane, o) : scopeWords(lane, o.scope)}, and
+        Crewlet&apos;s setting is{" "}
         {levelMoved ? levelName(lane, saved.desired.level) : scopeWords(lane, saved.desired.scope)}.
         {keep
           ? ` The next sync restores Crewlet's setting unless you keep ${lane.name}'s.`
           : " The next sync restores Crewlet's setting."}
       </Callout>
     );
-  } else if (saved.sync?.outcome === "waiting" || saved.plan.some((s) => s.by === "you")) {
-    const waiting =
-      (saved.sync?.steps ?? []).find((s) => s.by === "you" && !s.done) ??
-      saved.plan.find((s) => s.by === "you");
-    if (!waiting) return null;
+  } else if (
+    saved.sync?.outcome === "waiting" ||
+    (!saved.sync && saved.plan.some((s) => s.by === "you"))
+  ) {
+    // A WAIT IS SAID IN THE SYNC'S OWN WORDS: its reason and remedy where the
+    // sync recorded them, else the step it stopped at. The plan is read only
+    // before any sync ran.
+    const error = saved.sync?.error;
+    const waiting = saved.sync
+      ? saved.sync.steps.find((s) => s.by === "you" && !s.done)
+      : saved.plan.find((s) => s.by === "you");
+    if (!error && !waiting) return null;
+    const install = laneWords(lane.key).install;
+    const where = at(error?.action_url ?? waiting?.action_url);
     body = (
       <Callout
         variant="warning"
@@ -721,22 +805,38 @@ function LaneMessage({
         action={
           <span className="agent-access-actions">
             {step ??
-              at(waiting.action_url) ??
-              (!busy && laneWords(lane.key).install ? (
-                <Button size="small" variant="secondary" onClick={onInstall}>
-                  {laneWords(lane.key).install}
+              where ??
+              (link ? (
+                <ButtonLink size="small" variant="secondary" href={link} external>
+                  Open the install page
+                </ButtonLink>
+              ) : !busy && install ? (
+                <Button
+                  size="small"
+                  variant="secondary"
+                  loading={pending === "install"}
+                  disabled={pending !== undefined && pending !== "install"}
+                  onClick={onInstall}
+                >
+                  {install}
                 </Button>
               ) : null)}
-            {!busy && !step && (
-              <Button size="small" variant="ghost" onClick={() => onAct("done")}>
-                Done, check again
-              </Button>
-            )}
+            {!busy && !step && press("done", "Done, check again", true)}
           </span>
         }
       >
-        <p>{waiting.text}.</p>
-        {waiting.note && <p>{waiting.note}</p>}
+        {error ? (
+          <>
+            <p>{error.said}</p>
+            <p>{error.remedy}</p>
+          </>
+        ) : (
+          <>
+            <p>{waiting!.text}.</p>
+            {waiting!.note && <p>{waiting!.note}</p>}
+          </>
+        )}
+        {link && <p>Your browser kept the install page from opening in a new tab.</p>}
       </Callout>
     );
   }
@@ -759,6 +859,7 @@ function Details({
   saved,
   now,
   actions,
+  pending,
   onAction,
 }: {
   lane: Lane;
@@ -766,14 +867,23 @@ function Details({
   saved: AccessSeatLane;
   now: number;
   actions: SeatAction[];
+  pending: Pending;
   onAction: (action: SeatAction) => void;
 }) {
   const o = saved.observed;
+  const outside = managedOutside(lane);
   const buttons =
     actions.length > 0 ? (
       <span className="agent-access-detail-actions">
         {actions.map((a) => (
-          <Button key={a} size="small" variant="ghost" onClick={() => onAction(a)}>
+          <Button
+            key={a}
+            size="small"
+            variant="ghost"
+            loading={pending === a}
+            disabled={pending !== undefined && pending !== a}
+            onClick={() => onAction(a)}
+          >
             {ACTION_WORDS[a]}
           </Button>
         ))}
@@ -782,8 +892,8 @@ function Details({
   return (
     <div role="row">
       <div className="agent-access-details-cell" role="cell" aria-colspan={7}>
-        {!saved.desired.enabled ? (
-          <p className="agent-access-off">{offSentence(lane, saved)}</p>
+        {!saved.desired.enabled || seat.departed ? (
+          <p className="agent-access-off">{offSentence(lane, saved, seat.departed)}</p>
         ) : (
           <DescriptionList
             uniform
@@ -792,10 +902,17 @@ function Details({
             className="agent-access-facts"
             aria-label={`${seat.name} on ${lane.name}`}
             items={[
-              ["Account", o.exists ? (o.account ?? "Created") : "Not created yet"],
+              [
+                "Account",
+                o.exists
+                  ? (o.account ?? "Created")
+                  : outside
+                    ? (o.account ?? MANAGED_OUTSIDE)
+                    : "Not created yet",
+              ],
               [
                 laneWords(lane.key).access,
-                o.exists || managedOutside(lane) ? accessWords(lane, o) : "Not granted yet",
+                o.exists || outside ? accessWords(lane, o) : "Not granted yet",
               ],
               [
                 "Credential",
