@@ -442,6 +442,18 @@ test("the Agents tab counts the agents that are on", async () => {
   expect(within(tab).queryByText("3")).toBeNull();
 });
 
+// THE COUNT AND THE ATTENTION DOT ARE TWO FACTS: GitLab has an issue, so its
+// tab carries the dot, and still counts the one agent that is on, before it.
+// Mutation: let the marker stand in for the count and the "1" goes.
+test("an Agents tab that needs attention still counts the agents that are on", async () => {
+  mount(ADMIN, "gitlab", BUILT_IN, undefined, undefined, { access: () => datadogAnswer() });
+  const tab = await screen.findByRole("tab", { name: /Agents/ });
+  const count = await within(tab).findByText("1");
+  const dot = tab.querySelector(".crewlet-tabs__marker--warning");
+  expect(dot).not.toBeNull();
+  expect(count.compareDocumentPosition(dot!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
 // AN AGENT'S OWN WAIT IS SAID ON ITS ROW, with the step's own control, and not
 // again above the table as the integration's: the engine marks it `seat`. The
 // tab still says something needs attention. Mutation: list every finding

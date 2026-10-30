@@ -1,1 +1,0 @@
-import{r as e}from"./rolldown-runtime-hePW80VL.js";import{i as t}from"./react-DlYQp10C.js";import{Pn as n,jn as r}from"./authorityRemedy-CKAUuiSE.js";var i=e(t(),1),a=`Still working…`;function o(){let e=(0,i.useSyncExternalStore)(r,n,()=>!1);return{asked:e,reason:e?`Waiting for you to confirm who you are.`:a}}export{o as n,a as t};
