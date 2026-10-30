@@ -101,11 +101,12 @@ func TestTheGitHubRosterNamesTheStepEachAgentIsWaitingOn(t *testing.T) {
 		t.Errorf("a seat with no app reports present=%v satisfied=%v",
 			fresh["present"], fresh["satisfied"])
 	}
-	// THE TIER IS ANSWERED BEFORE THE APP EXISTS, because it is what the
-	// manifest will be built with. Silence is read_only, which is the least
-	// this engine hands out.
-	if fresh["tier"] != "read_only" {
-		t.Errorf("a seat that says nothing about its tier reports %v", fresh["tier"])
+	// NO TIER: a seat's access is GitHub's own permissions, read from the
+	// access tab, and the retired tier vocabulary is not on the wire.
+	for _, retired := range []string{"tier", "tier_label", "tier_hint"} {
+		if v, sent := fresh[retired]; sent {
+			t.Errorf("the roster still sends %s=%v", retired, v)
+		}
 	}
 
 	// CREATED AND INSTALLED NOWHERE: install it, and the engine can address
@@ -134,9 +135,6 @@ func TestTheGitHubRosterNamesTheStepEachAgentIsWaitingOn(t *testing.T) {
 	if half["present"] != true || half["satisfied"] != false {
 		t.Errorf("a created but uninstalled app reports present=%v satisfied=%v",
 			half["present"], half["satisfied"])
-	}
-	if half["tier"] != "full_access" {
-		t.Errorf("tier = %v, want the one the manifest would carry", half["tier"])
 	}
 
 	// FINISHED: no step, and nothing for the screen to offer.
