@@ -2,14 +2,10 @@ package doclet
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -40,33 +36,6 @@ type NewComment struct {
 	// not they watch, and each is subscribed.
 	Mentions []string
 
-	// TurnKey makes a comment made from a turn idempotent: a re-run turn
-	// posts once.
-	//
-	// IT DERIVES THE OPERATION ID rather than only the comment's own, so a
-	// re-run is the SAME operation: inside the log's duplicate window the
-	// broker collapses its append, past it the comment's own id makes the
-	// apply an upsert of the row the first run wrote, and once this node's
-	// ledger has lost the first run's row the state log answers it
-	// `unknown` rather than deciding it again — which is what TurnSince is
-	// for.
-	TurnKey string
-
-	// TurnSince is when the unit of work TurnKey names began, and it is the
-	// instant the derived operation id carries (see statelog.DeriveOpID).
-	// It must be the key's own — reproduced by every re-run — and never the
-	// instant of this call: the state log refuses to decide again an
-	// operation minted before its ledger's watermark whose row it no longer
-	// holds, and a call's own clock is always after it.
-	TurnSince time.Time
-
-	// Repeat is how many earlier calls in the turn's run asked the same
-	// tool for something else — see turnctx.CallLog. It is part of the
-	// derived id, so a remark made again after a different one is a second
-	// comment rather than the first one's retry, while a remark repeated
-	// with nothing between stays one. Zero adds nothing to the id.
-	Repeat int
-
 	Quiet bool
 }
 
@@ -88,7 +57,10 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	mentions := cleanList(in.Mentions)
 
 	at := s.now()
-	opID := s.commentOpID(actor, pageID, in)
+	opID, opErr := s.commentOpID(actor, pageID, in)
+	if opErr != nil {
+		return Comment{}, Written{}, opErr
+	}
 	subject := PageSubject(pageID)
 	comment := Comment{
 		V: DocumentVersion, ID: opID, PageID: pageID,
@@ -145,10 +117,11 @@ func (s *Store) Comment(ctx context.Context, actor Actor, pageID string,
 	if result.Collapsed {
 		// THE REMARK AN EARLIER COPY POSTED, as the rows hold it: its
 		// author and its instant are that copy's, and only the id, the
-		// page and the body are pinned by the operation this call shares
-		// with it — see [Store.commentOpID].
+		// page, the body and the remark it answers are pinned by the
+		// operation this call shares with it — see [Store.commentOpID].
 		comment, err = s.landedComment(ctx, Comment{
 			V: DocumentVersion, ID: opID, PageID: pageID, Body: body,
+			ReplyTo: comment.ReplyTo,
 		}, opID)
 		return comment, written, err
 	}
@@ -381,9 +354,8 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 	Comment, error) {
 
 	var document []byte
-	err := tx.QueryRowContext(ctx,
-		`SELECT document FROM pages_comments WHERE id = ? AND page_id = ?`,
-		commentID, pageID).Scan(&document)
+	err := tx.QueryRowContext(ctx, commentTxStatement, commentID, pageID).
+		Scan(&document)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Comment{}, fmt.Errorf("%w: comment %s on page %s",
@@ -396,38 +368,52 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 
 // commentOpID is the operation this comment belongs to.
 //
-// DERIVED FROM THE TURN when one is named, so a re-run turn is one operation
-// the ledger collapses rather than a second comment. The comment's own id is
-// the same value: one comment is one operation here, and two identifiers for
-// one thing is two places for a retry to disagree with itself.
+// DERIVED FROM THE CALLER'S KEY ([Actor.OpKey]) where it brought one — a
+// turn's call through its own key, which a seat's tools derive from the turn,
+// the tool, the call's arguments and its repeat count in the run; a person's
+// request through its Idempotency-Key — so a retry or a re-run turn is one
+// operation the ledger collapses rather than a second comment. The comment's
+// own id is the same value: one comment is one operation here, and two
+// identifiers for one thing is two places for a retry to disagree with itself.
 //
-// AND IT CARRIES THE INSTANT THE WORK BEGAN, never this call's, for the reason
-// [NewComment.TurnSince] gives — the turn's own, or, when there is no turn,
-// the one the caller's [Actor.OpKey] was minted at: a request retried after an
-// `unknown` must post once, and a comment is the gesture a person is most
-// likely to press twice.
-func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) string {
-	key, at := strings.TrimSpace(in.TurnKey), in.TurnSince
+// It is [statelog.KeyedObjectOpID], the derivation every keyed write takes,
+// UNNAMED because this is the comment's own id as well and a reader addresses
+// it: the page and the call it came from are on the row. That is also where
+// carrying the key's instant rather than this call's is argued — the gesture
+// a person is most likely to press twice is a comment, and a request retried
+// after an `unknown` must post once.
+//
+// OVER WHAT THE COMMENT ASKS ([commentAsk]), not its words alone: bound to the
+// body, the same key sent with the same words in another thread was the first
+// comment's operation — answered from the ledger as posted, with nothing
+// posted where it was asked to go.
+func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) (string, error) {
+	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {
-		key = strings.TrimSpace(actor.OpKey)
-		at, _ = statelog.OpMintedAt(key)
+		return s.newSeqID(), nil
 	}
-	if key == "" {
-		return s.newSeqID()
+	id, err := statelog.KeyedObjectOpID(key, "comment", pageID, commentAsk{
+		Body: strings.TrimSpace(in.Body), ReplyTo: strings.TrimSpace(in.ReplyTo),
+		Quiet: in.Quiet,
+	})
+	if err != nil {
+		return "", fmt.Errorf("doclet: %w", err)
 	}
-	sum := sha256.Sum256([]byte(strings.TrimSpace(in.Body)))
-	identity := []string{commentNamespace, pageID, key, hex.EncodeToString(sum[:])}
-	if in.Repeat > 0 {
-		identity = append(identity, "repeat:"+strconv.Itoa(in.Repeat))
-	}
-	// UNNAMED, because this is the comment's own id as well and a reader
-	// addresses it: the page and the turn it came from are on the row.
-	return statelog.DeriveOpID(at, "", identity...)
+	return id, nil
 }
 
-// commentNamespace scopes the derived operation ids. FIXED for the life of the
-// deployment: a new one would make every re-run turn post a duplicate.
-const commentNamespace = "crewlet.pages.comment"
+// commentAsk is what a comment SAYS, which its operation is bound to
+// ([Store.commentOpID]): its words, the remark it answers and whether it is
+// quiet — [renameAsk]'s terms for a remark.
+//
+// NOT ITS MENTIONS ([NewComment.Mentions]), which a seat's tool reads off the
+// words against the roster: a roster that moved between a call and its retry
+// would make the retry a second comment, and the words already decide them.
+type commentAsk struct {
+	Body    string
+	ReplyTo string
+	Quiet   bool
+}
 
 // Thread is one page's comments, oldest first.
 //
@@ -437,9 +423,7 @@ const commentNamespace = "crewlet.pages.comment"
 func (s *Store) Thread(ctx context.Context, pageID string) ([]Comment, error) {
 	var out []Comment
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT document FROM pages_comments WHERE page_id = ?
-			  ORDER BY created_at, id`, pageID)
+		rows, err := tx.QueryContext(ctx, threadStatement, pageID)
 		if err != nil {
 			return fmt.Errorf("doclet: read the thread on %s: %w", pageID, err)
 		}
@@ -480,10 +464,8 @@ func (s *Store) Revision(ctx context.Context, pageID string, version int) (
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
 		var author, message, title, body string
 		var created int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT title, body, message, author, created_at
-			  FROM pages_revisions WHERE page_id = ? AND edit_version = ?`,
-			pageID, version).Scan(&title, &body, &message, &author, &created)
+		err := tx.QueryRowContext(ctx, revisionStatement, pageID, version).
+			Scan(&title, &body, &message, &author, &created)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: revision %d of page %s", ErrNotFound,
 				version, pageID)
@@ -501,3 +483,15 @@ func (s *Store) Revision(ctx context.Context, pageID string, version int) (
 	})
 	return out, err
 }
+
+// commentTxStatement is [readCommentTx]'s read of one comment on one page, by
+// its key, named for the plan gate.
+const commentTxStatement = `SELECT document FROM pages_comments WHERE id = ? AND page_id = ?`
+
+// revisionStatement reads one immutable body by its page and its number — the
+// statement [Store.Revision] and [Reader.Revision] both read it with, named for
+// the plan gate.
+const revisionStatement = `
+			SELECT title, body, message, author, created_at
+			  FROM pages_revisions
+			 WHERE page_id = ? AND edit_version = ?`

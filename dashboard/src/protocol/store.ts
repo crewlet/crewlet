@@ -20,6 +20,10 @@ import { sameValue } from "./equal.ts";
 import type {
   AgentRow,
   CallVersions,
+  ChatChange,
+  ChatPresencePush,
+  ChatPresenceState,
+  ChatReadState,
   FeedRow,
   EventEnvelope,
   InboxChange,
@@ -38,6 +42,7 @@ import type {
 // alone as `protocol.js`, where the `~` alias does not exist.
 import { LIVE_CALL_DETAIL, MAX_EVENTS } from "../contract/wire.ts";
 import type { EngineHealth } from "../contract/health.ts";
+import { comparePositions, type LogPosition } from "./session.ts";
 
 /**
  * How many completed-phase envelopes a tab keeps, PAYLOAD AND ALL.
@@ -68,6 +73,161 @@ import type { EngineHealth } from "../contract/health.ts";
  * card that is late, never a turn that is gone.
  */
 export const MAX_PHASES = 200;
+
+/**
+ * How many live chat frames a tab keeps FOR ONE ROOM.
+ *
+ * TWO HUNDRED, from the company census rather than from a feeling: the design
+ * is sized for 20,000 messages a day across a rail of about twenty rooms, so
+ * two hundred is roughly an hour of the busiest room in the company and a
+ * multiple of that everywhere else. A frame is small — no body ever travels on
+ * one — so the bound is about a tab that is left open for a week rather than
+ * about bytes on any one screen.
+ *
+ * Eviction is drop-oldest, per room, and it costs nothing a reader can see: a
+ * frame is EVIDENCE that something landed, and what a screen draws is the
+ * transcript it re-read because of it. An evicted frame is a refetch that
+ * already happened — PROVIDED the signal a screen re-reads on is one eviction
+ * cannot hold still. That is why a screen watches [ChatRoomLive.frame] and
+ * [ChatLive.frames] and never the length of this list: past the bound a new
+ * frame leaves the length where it was, and a room watched by its length
+ * stopped re-reading at its two-hundredth frame.
+ */
+export const MAX_CHAT_LIVE = 200;
+
+/**
+ * How many rooms a tab keeps live state for at once.
+ *
+ * TWO HUNDRED AND FIFTY-SIX, sized from the most rooms one person's rail
+ * lists (`chatlet.MaxRailChannels`), so the rooms a reader is in fit when they
+ * are the ones talking — and a CLIENT bound, deliberately held to no engine
+ * constant. Frames arrive for every room the viewer may READ, which is wider
+ * than the rail (a public room and a unit's room are readable by any seat), so
+ * no value here could promise the rail's rooms a place, and nothing is owed
+ * one: what this bounds is memory — this many rooms of [MAX_CHAT_LIVE] frames
+ * at most, none of them carrying a body — for a tab left open for a week on a
+ * company with more readable rooms than that.
+ *
+ * Past it the room whose newest frame is oldest is dropped, which is the room
+ * nobody is looking at, and the loss costs what an evicted frame costs: a
+ * frame is evidence a screen already re-read on, and the room's next frame
+ * starts its live state again — at a [ChatRoomLive.frame] above any it had
+ * before, since that number is the tab's count rather than the room's.
+ */
+export const MAX_CHAT_ROOMS = 256;
+
+/**
+ * What this tab has seen happen in one room since it connected.
+ *
+ * NOT A TRANSCRIPT, and it must never become one: a frame carries no body, so
+ * everything rendered from this would be a second, poorer copy of the
+ * conversation, disagreeing with the transcript the first time an edit raced a
+ * reload. What it is for is deciding what to re-read.
+ */
+export interface ChatRoomLive {
+  /**
+   * The highest per-room message number any frame has announced.
+   *
+   * THE LIVE HIGH-WATER MARK, and the whole reason a screen can be cheap: a
+   * transcript that has rendered through 41 and sees 43 here knows it is
+   * behind without comparing any rows. It never moves backwards — a frame
+   * that arrives out of order is late, not new — and the FIRST frame for a
+   * room sets it rather than being measured against zero, because a tab that
+   * has just connected is not behind on a room it has never seen.
+   */
+  seq: number;
+
+  /**
+   * Where on the chat log the newest frame seen here sits, or null when no
+   * frame named one — what orders the eviction above, and the rooms a tab
+   * offers as the company's busiest. THE LOG'S ORDER, never the frame's `at`:
+   * the broker's instant is RFC 3339 with its trailing zeros trimmed, so
+   * compared as text it put `…:05Z` after every fraction of its own second
+   * and could move this room's newest moment backwards (`comparePositions`).
+   */
+  position: LogPosition | null;
+
+  /**
+   * Which accepted frame, counted across the whole tab ([ChatLive.frames]),
+   * was this room's newest.
+   *
+   * WHAT A SCREEN SHOWING THIS ROOM RE-READS ON, because it is the one number
+   * here that moves on every frame and on nothing else. Not the length of
+   * [changes], which is bounded and so stands still on every frame past the
+   * bound; not [seq], which a reaction or an edit does not move. And the
+   * TAB'S count rather than the room's own, so a room evicted at
+   * [MAX_CHAT_ROOMS] and heard from again comes back above every number it
+   * had — a per-room counter would start again at one, which is a value the
+   * screen may already be holding.
+   */
+  frame: number;
+
+  /** The frames themselves, newest first, bounded by [MAX_CHAT_LIVE]. */
+  changes: HeldChatChange[];
+}
+
+/**
+ * One frame as this tab holds it: the change the engine sent, and which
+ * accepted frame it was.
+ *
+ * THE ORDINAL IS WHAT LETS A SCREEN ASK WHAT ARRIVED SINCE IT LAST LOOKED,
+ * across rooms as well as within one. A screen that re-read everything it
+ * holds on every frame paid for a frame that touched none of it; one that
+ * reads only what a frame names has to know which frames it has not yet
+ * answered, and a frame's own position cannot say that — two rooms' frames
+ * arrive in whatever order the hub sent them, not in log order.
+ */
+export interface HeldChatChange extends ChatChange {
+  /** Which accepted frame this was, counted as [ChatLive.frames] counts. */
+  frame: number;
+}
+
+/** Every room this tab has seen a frame for. */
+export interface ChatLive {
+  rooms: Record<string, ChatRoomLive>;
+  /**
+   * How many frames this tab has accepted, in every room, since it loaded.
+   *
+   * WHAT A SCREEN THAT SPANS THE ROOMS RE-READS ON — the rail, the mention
+   * feed. It only rises: a redelivery is not counted, and neither bound
+   * takes anything back from it, so a frame in a room that has just been
+   * evicted moves it exactly as a frame anywhere else does. A sum of what
+   * the rooms hold could not say that — past either bound a new frame and
+   * the one it pushed out cancel. And it survives [Store.forgetSeat]: it
+   * carries nothing about anybody, only that something landed, and a count
+   * that went back to zero could come back to a number a screen holds.
+   */
+  frames: number;
+
+  /**
+   * The latest frame this tab has LET GO of — pushed off a room's list by
+   * [MAX_CHAT_LIVE], dropped with a room by [MAX_CHAT_ROOMS], or forgotten
+   * with a seat ([Store.forgetSeat]) — as its [HeldChatChange.frame], or
+   * 0 while nothing has been.
+   *
+   * WHAT TELLS "NOTHING ARRIVED" FROM "WHAT ARRIVED IS GONE". A screen that
+   * asks for the frames since one it answered and gets none has its answer
+   * only while this is below that frame: above it, a frame it never saw was
+   * let go, and the honest answer is that it cannot say what changed.
+   */
+  dropped: number;
+
+  /**
+   * The latest frame that named NO room, as its [HeldChatChange.frame] would
+   * have been, or 0 while none has arrived.
+   *
+   * THE ENGINE'S WORD THAT THIS TAB MAY HAVE MISSED FRAMES IN ANY ROOM: the
+   * node's live relay switched source or skipped a sequence, or the hub could
+   * not hand this socket a batch it was owed. Such a frame is counted (it
+   * moves [frames], so a screen spanning the rooms re-reads), it lets go of
+   * everything before it ([dropped], so the screen is told it cannot say what
+   * changed), and a screen showing ONE room re-reads on this as on a frame of
+   * that room's own — the room's own [ChatRoomLive.frame] cannot move for it,
+   * since the frame names no room, and a room no frame has reached yet has no
+   * entry to move.
+   */
+  gap: number;
+}
 
 /** What a heavy field reads as while nothing of it is held. */
 const NOTHING_HELD: Record<string, unknown> = {
@@ -279,13 +439,47 @@ export interface StoreState {
    * anyway, so there is nothing for a snapshot to restore.
    */
   inboxMoves: Record<string, number>;
+  /**
+   * What the company's conversation has done since this tab connected.
+   *
+   * ITS OWN SLICE, and not part of what a snapshot replaces: the degraded
+   * REST snapshot carries no chat at all, so folding this into the snapshot
+   * would blank an open transcript every five seconds while the socket is
+   * down.
+   */
+  chat: ChatLive;
+  /**
+   * Who is looking at, typing in, or working on a message in the room this
+   * socket's `presence` frame named: the room's members, as the presence
+   * hub's pushes left them.
+   *
+   * Its own slice because it MOVES ON A DIFFERENT CLOCK: presence changes
+   * with every keystroke a person in the room re-asserts and every phase a
+   * seat at work moves to, whatever the conversation does, so a rail that
+   * woke on it would re-render the whole channel list on each.
+   */
+  chatPresence: ChatPresenceState;
+  /**
+   * Where this person has read to, what they have muted, and whether they are
+   * in do-not-disturb — or null when nothing has said.
+   *
+   * NULL IS NOT AN EMPTY CURSOR SET. The coordination record may be
+   * unreadable, and a zero cursor for every room is what "you have read
+   * nothing anywhere" looks like: a screen badging a whole company unread
+   * because a bucket read failed is the failure this distinction exists to
+   * prevent.
+   */
+  chatRead: ChatReadState | null;
 }
 
 export type Slice = keyof StoreState;
 
 // What a snapshot replaces. `phases` is deliberately absent: a snapshot carries
 // payload-free feed rows and no phase payloads, so emitting it here would wake
-// every phase reader for an answer that did not move.
+// every phase reader for an answer that did not move. THE THREE CHAT SLICES
+// are absent for a stronger reason: a snapshot carries no chat, so listing one
+// here would hand an open transcript an empty answer every time the degraded
+// poll ticks.
 const ALL_DATA_SLICES: Slice[] = [
   "agents",
   "events",
@@ -317,6 +511,9 @@ function emptyState(): StoreState {
     authRejected: false,
     accessRefused: null,
     inboxMoves: {},
+    chat: { rooms: {}, frames: 0, dropped: 0, gap: 0 },
+    chatPresence: { rooms: {} },
+    chatRead: null,
   };
 }
 
@@ -623,6 +820,222 @@ export class Store {
     this.emit("inboxMoves");
   }
 
+  // ---- chat --------------------------------------------------------------
+
+  /**
+   * One committed chat record, as the socket announced it.
+   *
+   * ONE METHOD FOR SIX PUSH KINDS, because the frame already says which it is:
+   * `op` is the record's own word (`post`, `edit`, `react`, …) and the kind is
+   * a routing label the server derived FROM it. Taking the kind as well would
+   * be a second vocabulary for one fact, and the two would disagree on exactly
+   * the op somebody adds next.
+   *
+   * IT DERIVES NOTHING ABOUT WHAT A ROOM CONTAINS. A frame carries no body, so
+   * a transcript rendered from these would be a second copy of the
+   * conversation — the failure this store's own doc opens with. What is kept
+   * is the high-water mark a screen compares against what it has rendered, the
+   * count a screen re-reads on ([ChatRoomLive.frame], [ChatLive.frames]), and
+   * the frames themselves, so a screen can tell a new message from a reaction
+   * without asking the engine which it was.
+   */
+  applyChatChange(change: ChatChange | null | undefined): void {
+    if (!change) return;
+    // A FRAME THAT NAMES NO ROOM IS A GAP, never a record ([ChatLive.gap]).
+    if (!change.channel_id) {
+      this.applyChatGap();
+      return;
+    }
+    // One with no op id cannot be recognised coming back, so it is not kept.
+    // Impossible from this engine — every record carries one; a frame from a
+    // NEWER one is not, and dropping it is better than counting a redelivery
+    // of it twice.
+    if (!change.op_id) return;
+    const live = this.state.chat;
+    const rooms = live.rooms;
+    const room = rooms[change.channel_id] ?? { seq: 0, position: null, frame: 0, changes: [] };
+    // A REDELIVERY IS NOT A SECOND EVENT. The op id is the record's own
+    // idempotency key, so a frame that arrives twice — a reconnect that
+    // overlaps, a hub that re-sent — is the same record, and appending it
+    // would count one message as two everywhere a screen counts these.
+    if (room.changes.some((seen) => seen.op_id === change.op_id)) return;
+    const seq = typeof change.channel_seq === "number" ? change.channel_seq : 0;
+    live.frames += 1;
+    const changes = [{ ...change, frame: live.frames }, ...room.changes];
+    for (const gone of changes.slice(MAX_CHAT_LIVE)) {
+      live.dropped = Math.max(live.dropped, gone.frame);
+    }
+    rooms[change.channel_id] = {
+      // NEVER BACKWARDS. A frame that arrives out of order is late, not new,
+      // and a mark that moved down would make a screen re-read a room it is
+      // already ahead of, for ever.
+      seq: seq > room.seq ? seq : room.seq,
+      // THE LATER OF THE TWO, so a late frame cannot move the room's newest
+      // moment backwards; a frame that named no position moves nothing.
+      position:
+        comparePositions(change.position ?? null, room.position) > 0
+          ? (change.position ?? null)
+          : room.position,
+      frame: live.frames,
+      changes: changes.slice(0, MAX_CHAT_LIVE),
+    };
+    this.evictChatRooms();
+    this.emit("chat");
+  }
+
+  /**
+   * The engine could not say what this tab missed: read every room again.
+   *
+   * COUNTED AS A FRAME, so the screens that span the rooms move on it, and
+   * LETTING GO OF EVERY FRAME BEFORE IT, so a screen asking what arrived since
+   * the frame it last answered is told it cannot say — which is the truth,
+   * and what makes it read everything it holds again. What is held per room
+   * stays: it is what DID arrive, and a room's position still orders the
+   * eviction below.
+   */
+  private applyChatGap(): void {
+    const live = this.state.chat;
+    live.frames += 1;
+    live.dropped = live.frames;
+    live.gap = live.frames;
+    this.emit("chat");
+  }
+
+  /**
+   * Keep the live state to [MAX_CHAT_ROOMS] rooms, dropping the one whose
+   * newest frame is oldest.
+   *
+   * By where the room's newest frame sits on the log rather than by insertion
+   * order: a room that has been quiet for a week is the one nobody is looking
+   * at, whatever order this tab happened to hear about it in. A room no frame
+   * gave a position goes first, being the one nothing can say is recent.
+   */
+  private evictChatRooms(): void {
+    const live = this.state.chat;
+    const rooms = live.rooms;
+    const ids = Object.keys(rooms);
+    if (ids.length <= MAX_CHAT_ROOMS) return;
+    const oldest = ids.reduce((worst, id) =>
+      comparePositions(rooms[id]?.position ?? null, rooms[worst]?.position ?? null) < 0
+        ? id
+        : worst,
+    );
+    // ITS NEWEST FRAME IS THE LATEST OF ITS OWN that goes with it.
+    live.dropped = Math.max(live.dropped, rooms[oldest]?.frame ?? 0);
+    delete rooms[oldest];
+  }
+
+  /**
+   * One chat room's presence push, as the presence hub fanned it out.
+   *
+   * A ROSTER REPLACES and a change MERGES — members upserted by session,
+   * sessions left removed — exactly as an artifact's room is applied, because
+   * it is the same hub's fan-out: the engine hands a socket the room whole as
+   * it joins and every change after, and hands it a roster naming nobody when
+   * it takes the socket out. A room left with nobody in it is FORGOTTEN, so a
+   * tab that moved on holds nothing of the room it was in.
+   */
+  applyChatPresence(push: ChatPresencePush | null | undefined): void {
+    const room = push?.channel_id;
+    if (!push || typeof room !== "string" || room === "") return;
+    const members = new Map(
+      push.roster
+        ? []
+        : (this.state.chatPresence.rooms[room]?.members ?? []).map((m) => [m.session, m]),
+    );
+    for (const session of push.leave ?? []) members.delete(session);
+    for (const member of push.upsert ?? []) {
+      if (member && typeof member.session === "string") members.set(member.session, member);
+    }
+    const rooms = { ...this.state.chatPresence.rooms };
+    const counted = (push.counts?.human ?? 0) + (push.counts?.agent ?? 0);
+    if (members.size === 0 && counted === 0) delete rooms[room];
+    else
+      rooms[room] = {
+        members: [...members.values()],
+        counts: push.counts,
+        truncated: push.truncated,
+      };
+    this.state.chatPresence = { rooms };
+    this.emit("chatPresence");
+  }
+
+  /**
+   * The read state of the seat this tab reads chat as, from its own flush or
+   * from another tab's.
+   *
+   * IT IS NEVER MERGED WITH WHAT IS ON SCREEN. The record is authoritative and
+   * whole — the engine advances cursors and ignores a value below what it
+   * holds — so the answer to a flush and the push another tab caused are the
+   * same fact about different moments of one record.
+   *
+   * AND THE NEWER MOMENT WINS, BY THE RECORD'S REVISION, never by arrival:
+   * two flushes are taken in one order and their pushes can arrive in the
+   * other, so a frame below the revision held is late and is dropped — kept,
+   * it would put back a cursor or a mute the record has already moved past.
+   * `updated_at` cannot order them, being each flush's own instant from
+   * whichever node took it.
+   *
+   * BUT ONLY WITHIN ONE SEAT. The revision orders two states of one seat's
+   * record — on the coordination KV it is the bucket's own sequence, shared
+   * by everybody's — so a state NAMING ANOTHER SEAT is not older or newer
+   * than the one held: it is the seat this tab now reads as, after the one
+   * its session was bound to moved (the engine closes the socket then, and
+   * the tab dials again as the seat it holds now). Compared, it was dropped
+   * whenever the last seat's latest flush was newer than this one's record,
+   * and the rail answered for the new seat was thrown away until it wrote
+   * again. It replaces the held state, and everything else this tab held
+   * about the last seat goes with it ([forgetSeat]).
+   */
+  applyChatRead(state: ChatReadState | null | undefined): void {
+    if (!state) return;
+    const held = this.state.chatRead;
+    if (held && held.handle !== state.handle) {
+      this.forgetSeat();
+    } else if (held && (state.revision ?? 0) < (held.revision ?? 0)) {
+      return;
+    }
+    this.state.chatRead = state;
+    this.emit("chatRead");
+  }
+
+  /**
+   * Forget everything this tab holds about the SEAT it was reading chat as:
+   * the frames of the rooms it could read, who was in the rooms it had open,
+   * and its read state.
+   *
+   * ALL THREE ARE ONE SEAT'S. A frame reaches a socket only for a room its
+   * seat may read and carries that room's name and an excerpt of what was
+   * said, presence is for the rooms it had open, and a read state is its own
+   * by its key — so a tab now reading as another seat, kept any of them,
+   * would hold the last seat's private rooms under the next one's name, and
+   * offer the next a Mute that undid the last one's. Called by
+   * [applyChatRead] when a state names another seat, and by
+   * [setAccessRefused], which drops everything the engine served.
+   */
+  forgetSeat(): void {
+    this.state.chat = this.forgottenChat();
+    this.state.chatPresence = { rooms: {} };
+    this.state.chatRead = null;
+    this.emit("chat");
+    this.emit("chatPresence");
+    this.emit("chatRead");
+  }
+
+  /**
+   * The live chat state with every room let go of.
+   *
+   * THE COUNT STAYS: it is nobody's ([ChatLive.frames]), and a count that went
+   * back to zero could come back to a number a screen holds — which would
+   * hide every frame from that screen until the count passed it again. Every
+   * frame it counted is let go of, so a screen asking what arrived since one
+   * it answered is told it cannot say ([ChatLive.dropped]).
+   */
+  private forgottenChat(): ChatLive {
+    const { frames, gap } = this.state.chat;
+    return { rooms: {}, frames, dropped: frames, gap };
+  }
+
   /**
    * The engine knows this browser and will not serve it the company, or null.
    *
@@ -646,7 +1059,11 @@ export class Store {
       // The transport's own history (`lostAt`, `everConnected`) stays with
       // it: a refusal says who may read the company, not whether the engine
       // was reachable.
+      //
+      // And the chat count stays with the TAB, for the reason it outlives a
+      // seat ([forgottenChat]): an empty state's zero would roll it back.
       const { health, lastHealth, connected, lostAt, everConnected, authRejected } = this.state;
+      const chat = this.forgottenChat();
       Object.assign(this.state, emptyState(), {
         health,
         lastHealth,
@@ -655,8 +1072,9 @@ export class Store {
         everConnected,
         authRejected,
         accessRefused: next,
+        chat,
       });
-      this.emit(...ALL_DATA_SLICES, "phases", "inboxMoves");
+      this.emit(...ALL_DATA_SLICES, "phases", "inboxMoves", "chat", "chatPresence", "chatRead");
     }
     this.emit("health");
   }

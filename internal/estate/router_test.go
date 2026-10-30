@@ -1,9 +1,12 @@
 package estate
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,8 +16,11 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/search"
@@ -84,6 +90,10 @@ type fakeNode struct {
 	// one: waited for until the asker's deadline, where a node that is
 	// simply gone is known to have answered nothing.
 	hang chan struct{}
+
+	// rooms is this node's chat, nil for a company whose chat is not the
+	// engine's own — see chat_test.go.
+	rooms *chatDesk
 }
 
 func (f *fakeNode) note(op string) {
@@ -161,13 +171,7 @@ func (f *fakeNode) UpdateTask(_ context.Context, _, _, _ string, _ uint64,
 func (f *fakeNode) Comment(_ context.Context, actor doclet.Actor, _ string,
 	in doclet.NewComment) (doclet.Comment, doclet.Written, error) {
 	f.note("comment")
-	// THE TURN'S KEY FIRST, the order the pages store derives a comment's
-	// id in.
-	if in.TurnKey != "" {
-		f.keyed(in.TurnKey)
-	} else {
-		f.keyed(actor.OpKey)
-	}
+	f.keyed(actor.OpKey)
 	return doclet.Comment{Body: in.Body}, doclet.Written{}, nil
 }
 
@@ -177,7 +181,7 @@ func (f *fakeNode) Answer(_ context.Context, q knowledge.Query) (knowledge.Resul
 	f.queries = append(f.queries, q)
 	f.mu.Unlock()
 	return knowledge.Result{
-		Hits: []knowledge.Hit{{Title: "found on " + f.name}},
+		Hits: []knowledge.Hit{{Title: "found on " + f.name, Provenance: hitLabel}},
 		Outcome: knowledge.Outcome{ServedMode: knowledge.ModeKeyword,
 			Coverage: knowledge.Coverage{Nodes: []knowledge.NodeCoverage{}, Complete: true}},
 	}, nil
@@ -187,6 +191,19 @@ func (f *fakeNode) Building(context.Context) bool { return false }
 
 // backend is this node as a [Backend] over its copy of the estate.
 func (f *fakeNode) backend() Backend {
+	b := f.halves()
+	f.mu.Lock()
+	rooms := f.rooms
+	f.mu.Unlock()
+	if rooms != nil {
+		b.Chat, b.ChatWriter, b.ChatSearch = rooms, rooms, rooms
+	}
+	return b
+}
+
+// halves is this node's tracker, knowledge base and identity directory, and
+// the gates every operation passes.
+func (f *fakeNode) halves() Backend {
 	return Backend{
 		Tracker: f, PageWriter: f, Knowledge: f, Identity: f.directory,
 		Writer: func(a Actor) TrackerWriter {
@@ -541,6 +558,137 @@ func TestAnUnansweredTrackerWriteRepeatsUnderTheSameOperation(t *testing.T) {
 	}
 }
 
+// A REPEATABLE WRITE NO NODE ANSWERED IS UNKNOWN, NEVER UNSERVED.
+//
+// Every holder was asked under the same operation, none ran it, and at least
+// one never answered — so that one may have run it. "No data node could serve it" is the claim that
+// nothing ran, and a caller told that writes again, under a FRESH id where it
+// minted none, which is a second write: a purge appended twice, a task filed
+// twice. A READ nobody answered is still unserved, since a read ran nothing
+// that matters; and a write every node REFUSED is unserved too, since a node
+// that answered "I did not run it" did not.
+func TestARepeatableWriteNoNodeAnsweredIsUnknown(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	for _, node := range f.nodes {
+		node.set(func(n *fakeNode) { n.silent = true })
+	}
+	_, err := f.client.WriterAs(swe).CreateTask(t.Context(), "op-9",
+		worklet.Task{Project: "ENG"}, nil)
+	var unserved *ErrUnserved
+	if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) {
+		t.Fatalf("a write no node answered = %v, want ErrOutcomeUnknown and not "+
+			"ErrUnserved", err)
+	}
+	for _, name := range []string{"data-a", "data-b"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("the unknown write %q does not name %s, which it was sent to", err, name)
+		}
+	}
+
+	if _, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a read no node answered = %v, want ErrUnserved", err)
+	}
+
+	refusing := newFleet(t, "data-a", "data-b")
+	for _, node := range refusing.nodes {
+		node.set(func(n *fakeNode) { n.outOfService = true })
+	}
+	_, err = refusing.client.WriterAs(swe).CreateTask(t.Context(), "op-10",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.As(err, &unserved) || errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a write every node refused to run = %v, want ErrUnserved", err)
+	}
+
+	// ONE SILENT NODE IS ENOUGH: the other answering that it did not run
+	// the write says nothing about the one that never answered.
+	mixed := newFleet(t, "data-a", "data-b")
+	silentName, silent := mixed.first(t, mixed.client)
+	silent.set(func(n *fakeNode) { n.silent = true })
+	for name, node := range mixed.nodes {
+		if name != silentName {
+			node.set(func(n *fakeNode) { n.outOfService = true })
+		}
+	}
+	_, err = mixed.client.WriterAs(swe).CreateTask(t.Context(), "op-13",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) ||
+		!strings.Contains(err.Error(), silentName) {
+		t.Errorf("a write one node never answered and the other refused = %v, want "+
+			"ErrOutcomeUnknown naming %s", err, silentName)
+	}
+
+	// AND A WRITE WHOSE CALLER STOPPED LISTENING: the request was sent, and
+	// the caller's context ending says nothing about whether it ran.
+	wedged := newFleet(t, "data-a")
+	hang := make(chan struct{})
+	t.Cleanup(func() { close(hang) })
+	wedged.nodes["data-a"].set(func(n *fakeNode) { n.hang = hang })
+	wedged.client.writeBudget = 10 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	_, err = wedged.client.WriterAs(swe).CreateTask(ctx, "op-12",
+		worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("a write whose caller's deadline ended while a node held it = %v, "+
+			"want ErrOutcomeUnknown carrying the deadline", err)
+	}
+}
+
+// A WRITE STOPPED BEFORE ITS NEXT ASK IS STILL ONE A SILENT NODE MAY HAVE RUN.
+//
+// A request that cannot be made at all ends the walk — no other node would
+// fare better — but a node the write was already sent to, and never heard
+// from, may have committed it. So the walk's answer is unknown, carrying what
+// stopped it, rather than the bare failure of the ask that came after: told
+// that, a caller sees a refusal and writes again under a fresh id.
+func TestAWriteWhoseNextAskFailsAfterASilentNodeIsUnknown(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a", "data-b")
+	firstName, first := f.first(t, f.client)
+	first.set(func(n *fakeNode) { n.silent = true })
+	broken := errors.New("the queue went down between two asks")
+	r, err := NewRouter(RouterOptions{Self: "agent-1", Placement: f.placement,
+		Session: NewSession(), Envelopes: fleetEnvelopes,
+		Queue: &failingAfter{Asker: f.start(t), first: Subject(firstName), err: broken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.readBudget, r.writeBudget = 300*time.Millisecond, 300*time.Millisecond
+
+	_, err = r.WriterAs(swe).CreateTask(t.Context(), "op-11", worklet.Task{Project: "ENG"}, nil)
+	if !errors.Is(err, ErrOutcomeUnknown) || !errors.Is(err, broken) {
+		t.Fatalf("a write sent to a silent node and then stopped = %v, want "+
+			"ErrOutcomeUnknown carrying what stopped it", err)
+	}
+	if !strings.Contains(err.Error(), firstName) {
+		t.Errorf("the unknown write %q does not name %s, which it was sent to", err, firstName)
+	}
+
+	// A READ STOPPED THE SAME WAY RAN NOTHING THAT MATTERS: the failure as
+	// it is.
+	if _, err := r.Work().Tasks(t.Context(), worklet.Query{}, time.Now()); !errors.Is(err, broken) ||
+		errors.Is(err, ErrOutcomeUnknown) {
+		t.Errorf("a read stopped by its next ask = %v, want the ask's own failure", err)
+	}
+}
+
+// failingAfter asks the node on first through the fleet, and refuses every
+// other ask as one that could not be made at all.
+type failingAfter struct {
+	Asker
+	first string
+	err   error
+}
+
+func (a *failingAfter) Ask(ctx context.Context, subject string, request []byte,
+	want int) ([][]byte, error) {
+	if subject != a.first {
+		return nil, a.err
+	}
+	return a.Asker.Ask(ctx, subject, request, want)
+}
+
 // A WRITE'S POSITION IS THE NEXT REQUEST'S FLOOR, on whichever node answers
 // it — on the log of the operation's own domain, and on no other: a floor on
 // another domain's log, or on a stream no domain logs to, is never waited for.
@@ -720,6 +868,28 @@ func TestAWriteThatNamesNobodyIsRefused(t *testing.T) {
 	}
 	if f.nodes["data-a"].askedFor("create") || local.askedFor("create") {
 		t.Error("a serving node ran it")
+	}
+}
+
+// hitLabel is the provenance every fake node's hit carries: one no zero value
+// or default could stand in for, so a label lost on the wire cannot pass.
+var hitLabel = provenance.Label{Source: provenance.SourcePageBody, Trust: provenance.TrustColleague,
+	Authors: []provenance.Author{{Kind: iam.ActorHuman, Seat: "ana"}}}
+
+// A HIT'S PROVENANCE CROSSES WITH IT. The backend that found a page is the only
+// one that knows who can write there (ADR-0040), and the node rendering the
+// hit into a seat's prompt is, on a node without data, never that backend: a
+// label left behind would reach the seat as the zero label's `external`, or a
+// colleague's page as nothing at all.
+func TestAKnowledgeHitsLabelCrossesTheWire(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t, "data-a")
+	got := f.client.Knowledge().Search(t.Context(), knowledge.Query{Text: "deploys", Limit: 5})
+	if len(got.Hits) != 1 {
+		t.Fatalf("search = %+v, want the data node's hit", got)
+	}
+	if !reflect.DeepEqual(got.Hits[0].Provenance, hitLabel) {
+		t.Fatalf("the hit arrived labelled %+v, want %+v", got.Hits[0].Provenance, hitLabel)
 	}
 }
 
@@ -1115,8 +1285,8 @@ func TestACopyThatAdmitsNoSeatStillServesRequests(t *testing.T) {
 			"question", local.asked)
 	}
 	// AND ADMISSION STILL REFUSES IT: the two gates disagree on purpose.
-	if trackerServed, _, err := r.Serves(t.Context()); err != nil || trackerServed {
-		t.Fatalf("a copy that admits no seat was admitted (%v, %v)", trackerServed, err)
+	if served, err := r.Serves(t.Context()); err != nil || served.Tracker {
+		t.Fatalf("a copy that admits no seat was admitted (%+v, %v)", served, err)
 	}
 }
 
@@ -1266,9 +1436,9 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 	peer := f.nodes["data-a"]
 	local := &fakeNode{name: "data-self", units: chartOf("self"), notAdmitting: true}
 	r := f.router(t, "data-self", local)
-	trackerServed, _, err := r.Serves(t.Context())
-	if err != nil || trackerServed {
-		t.Fatalf("a node whose own copy admits no seat was admitted (%v, %v)", trackerServed, err)
+	served, err := r.Serves(t.Context())
+	if err != nil || served.Tracker {
+		t.Fatalf("a node whose own copy admits no seat was admitted (%+v, %v)", served, err)
 	}
 	if peer.askedFor("admits") {
 		t.Fatal("a peer was asked for a node whose own copy serves")
@@ -1276,15 +1446,15 @@ func TestAdmissionAsksTheCopyThatWillServeTheSeat(t *testing.T) {
 
 	// A COPY OUT OF SERVICE is asked of a data node whose copy serves.
 	local.set(func(n *fakeNode) { n.outOfService = true })
-	trackerServed, _, err = r.Serves(t.Context())
-	if err != nil || !trackerServed {
-		t.Fatalf("a node served by a peer was not admitted (%v, %v)", trackerServed, err)
+	served, err = r.Serves(t.Context())
+	if err != nil || !served.Tracker {
+		t.Fatalf("a node served by a peer was not admitted (%+v, %v)", served, err)
 	}
 
 	// AND A REMOTE NODE THAT ADMITS NO SEAT IS PASSED OVER, like a node
 	// that ran nothing.
 	peer.set(func(n *fakeNode) { n.notAdmitting = true })
-	if trackerServed, _, err = f.client.Serves(t.Context()); trackerServed {
+	if served, err = f.client.Serves(t.Context()); served.Tracker {
 		t.Fatalf("a node was admitted on a data node that admits no seat (%v)", err)
 	}
 }
@@ -1302,7 +1472,7 @@ func TestAdmissionsPingNeedsNoArguments(t *testing.T) {
 		"no arguments":    nil,
 	} {
 		rep := askSigned(t, f.start(t), "data-a", request{Op: "estate.ping", Args: args})
-		var answer served
+		var answer Served
 		if rep.Err != nil || rep.Unserved != "" || json.Unmarshal(rep.Result, &answer) != nil ||
 			!answer.Tracker {
 			t.Fatalf("%s: the ping was answered %+v, want the admission answer", name, rep)
@@ -1334,8 +1504,8 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 	begun := time.Now()
 	done := make(chan answer, 1)
 	go func() {
-		served, _, err := r.Serves(t.Context())
-		done <- answer{served, err}
+		served, err := r.Serves(t.Context())
+		done <- answer{served.Tracker, err}
 	}()
 	select {
 	case got := <-done:
@@ -1348,5 +1518,41 @@ func TestWedgedDataNodesCostAdmissionNoMoreThanItsBound(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("admission waited on every wedged data node in turn, past its bound")
+	}
+}
+
+// A DATA NODE'S REFUSAL IS NAMED IN THE ASKING NODE'S LOG. Handed back as the
+// asking node's own answer, it is told to a person as "the node answering this"
+// with the advice that the logs name it — and the error a surface logs carries
+// the refusal and no node, since the wire carries none. So the router names the
+// node it asked, at the level a surface logs the condition: WARN for one no
+// wait clears.
+//
+// Not parallel: it installs the process's log sink.
+//
+// Mutation: drop the line from settle and the log names nobody.
+func TestADataNodesRefusalIsNamedInTheAskingNodesLog(t *testing.T) {
+	var out bytes.Buffer
+	logging.Configure(slog.LevelInfo, logging.FormatText, &out)
+	t.Cleanup(func() { logging.Configure(slog.LevelError, logging.FormatText, io.Discard) })
+
+	f := newFleet(t, "data-a")
+	f.nodes["data-a"].failWith = &statelog.Refused{Code: statelog.RefuseDeferred,
+		Level: statelog.ReadLinearizable, Detail: "a record at 3:4182 this build cannot decode"}
+	_, err := f.client.Work().Tasks(t.Context(), worklet.Query{}, time.Now())
+	var refused *statelog.Refused
+	if !errors.As(err, &refused) || refused.Code != statelog.RefuseDeferred {
+		t.Fatalf("err = %v, want data-a's deferred refusal", err)
+	}
+	var line string
+	for l := range strings.Lines(out.String()) {
+		if strings.Contains(l, "estate_peer_refused") {
+			line = l
+		}
+	}
+	if line == "" || !strings.Contains(line, "node=data-a") ||
+		!strings.Contains(line, "WARN") || !strings.Contains(line, "3:4182") {
+		t.Fatalf("the asking node's log does not name the node that refused at "+
+			"WARN with its detail:\n%s", out.String())
 	}
 }

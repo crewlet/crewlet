@@ -49,15 +49,15 @@ func TestARefusedWriteLogsOneLineAndNothingItCarried(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPut, "/secrets/"+secretName, strings.NewReader(body))
 		req.Header.Set("If-Match", `"rev-41"`)
 		if requestID != "" {
-			req.Header.Set(requestIDHeader, requestID)
+			req.Header.Set(httpjson.RequestIDHeader, requestID)
 		}
 		res := httptest.NewRecorder()
 		inner.ServeHTTP(res, req)
 		return res
 	}
 	res := write(secretValue, "req-7f3a")
-	if res.Code != http.StatusConflict || res.Header().Get(requestIDHeader) != "req-7f3a" {
-		t.Fatalf("the refused write = %d with request id %q", res.Code, res.Header().Get(requestIDHeader))
+	if res.Code != http.StatusConflict || res.Header().Get(httpjson.RequestIDHeader) != "req-7f3a" {
+		t.Fatalf("the refused write = %d with request id %q", res.Code, res.Header().Get(httpjson.RequestIDHeader))
 	}
 	lines := strings.Split(strings.TrimSpace(logged.String()), "\n")
 	if len(lines) != 1 {
@@ -84,10 +84,10 @@ func TestARefusedWriteLogsOneLineAndNothingItCarried(t *testing.T) {
 
 	// A REQUEST ID THE CALLER DID NOT SEND is minted and answered.
 	logged.Reset()
-	if res := write(secretValue, ""); res.Header().Get(requestIDHeader) == "" ||
-		!strings.Contains(logged.String(), res.Header().Get(requestIDHeader)) {
+	if res := write(secretValue, ""); res.Header().Get(httpjson.RequestIDHeader) == "" ||
+		!strings.Contains(logged.String(), res.Header().Get(httpjson.RequestIDHeader)) {
 		t.Errorf("a refusal with no request id answered %q and logged %s",
-			res.Header().Get(requestIDHeader), logged.String())
+			res.Header().Get(httpjson.RequestIDHeader), logged.String())
 	}
 
 	// NOTHING for a write that lands, a 5xx, or a read.
@@ -205,9 +205,9 @@ func TestARefusedCheckSaysSoAndARefusedReadLogsNothing(t *testing.T) {
 	logged.Reset()
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		if res := send(method, "/config/roles/ceo"); res.Code != http.StatusUnprocessableEntity ||
-			res.Header().Get(requestIDHeader) != "" {
+			res.Header().Get(httpjson.RequestIDHeader) != "" {
 			t.Errorf("%s = %d answering request id %q, want the refusal with none", method,
-				res.Code, res.Header().Get(requestIDHeader))
+				res.Code, res.Header().Get(httpjson.RequestIDHeader))
 		}
 	}
 	if logged.Len() != 0 {

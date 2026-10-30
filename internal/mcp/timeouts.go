@@ -143,7 +143,7 @@ const (
 	RestartBase = 15 * time.Second
 
 	// RestartCeiling is the seat host's undead alarm interval (internal/
-	// seat's UndeadAlarmInterval, twenty heartbeats), the interval at which
+	// seat's UndeadAlarmInterval, five minutes), the interval at which
 	// a seat's other persistent failure is said again. Every failed attempt
 	// logs once, so this is how often a server that will not come back
 	// repeats itself, and it bounds how long a vendor that has recovered

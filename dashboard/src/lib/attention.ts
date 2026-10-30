@@ -37,8 +37,9 @@ import {
   type NameOf,
 } from "./seats.ts";
 import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
-import { fmtDateTime, listed } from "./format.ts";
+import { fmtDateTime } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
+import { andList } from "./words.ts";
 
 export type Severity = "critical" | "caution" | "info";
 
@@ -99,10 +100,13 @@ export const WHERE_OF: Record<Subject, Where> = {
 
 /** The subjects shown in one place, as the clause its quiet state says. */
 export function watchedIn(where: Where): string {
-  return listed(
+  return andList(
     (Object.keys(SUBJECTS) as Subject[])
       .filter((subject) => WHERE_OF[subject] === where)
       .map((subject) => SUBJECTS[subject]),
+    // THE SERIAL COMMA IS LOAD-BEARING HERE: the clauses carry their own
+    // "and" ("the company's and every seat's token budget").
+    { serialComma: true },
   );
 }
 

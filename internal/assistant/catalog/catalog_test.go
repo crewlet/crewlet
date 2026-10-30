@@ -39,8 +39,10 @@ func TestTheCatalogueHoldsTogether(t *testing.T) {
 		"get_fleet_health", "list_config_changes", "create_task", "update_task",
 		"comment_on_task", "answer_decision", "set_my_priorities", "mark_inbox",
 		"pause_agent", "resume_agent", "steer_turn", "answer_coding_run", "create_page",
-		"edit_page", "share_artifact", "unshare_artifact", "propose_page_change",
-		"open_in_app"} {
+		"edit_page", "share_artifact", "unshare_artifact", "post_chat_message",
+		"reply_in_chat_thread", "send_direct_message", "edit_chat_message",
+		"delete_chat_message", "update_chat_room", "set_chat_room_members",
+		"leave_chat_room", "propose_page_change", "open_in_app"} {
 		if !names[want] {
 			t.Errorf("the catalogue has no %s", want)
 		}
@@ -305,17 +307,18 @@ func TestEveryTableDrawsAFewColumnsNameFirst(t *testing.T) {
 func TestEveryStepIsASentence(t *testing.T) {
 	t.Parallel()
 	for _, tool := range catalog.Tools() {
-		label := tool.StepLabel(map[string]any{})
+		label := tool.StepLabel(map[string]any{}, cards.Options{})
 		if label == "" || label == tool.Name || label[:1] != strings.ToUpper(label[:1]) {
 			t.Errorf("%s steps read %q, want a sentence", tool.Name, label)
 		}
 	}
 	update := assistanttest.Tool(t, "update_task")
-	if got := update.StepLabel(map[string]any{"item": "FAIR-2"}); got != "Preparing a change to FAIR-2" {
+	if got := update.StepLabel(map[string]any{"item": "FAIR-2"},
+		cards.Options{}); got != "Preparing a change to FAIR-2" {
 		t.Errorf("an update of FAIR-2 reads %q", got)
 	}
 	page := assistanttest.Tool(t, "propose_page_change")
-	if got := page.StepLabel(map[string]any{}); got != "Preparing a change to this screen" {
+	if got := page.StepLabel(map[string]any{}, cards.Options{}); got != "Preparing a change to this screen" {
 		t.Errorf("a page change reads %q", got)
 	}
 }

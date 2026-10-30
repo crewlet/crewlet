@@ -25,6 +25,12 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 	return statelog.NewRows(db, Domain{}, spec, taskGuards)
 }
 
+// taskGuardsStatement is [taskGuards]' read, named for the plan test.
+const taskGuardsStatement = `
+		SELECT
+			(SELECT COUNT(*) FROM tracker_deletions WHERE task_id = ?),
+			(SELECT COUNT(*) FROM tracker_tasks WHERE id = ?)`
+
 // taskGuards answers the two object-level facts a first write needs.
 //
 // THE DELETION MARKER IS PERMANENT WHERE A GUARDING ROW IS NOT: a task below
@@ -43,10 +49,7 @@ func taskGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 		return false, false, nil
 	}
 	var removed, present int
-	err = tx.QueryRowContext(ctx, `
-		SELECT
-			(SELECT COUNT(*) FROM tracker_deletions WHERE task_id = ?),
-			(SELECT COUNT(*) FROM tracker_tasks WHERE id = ?)`,
+	err = tx.QueryRowContext(ctx, taskGuardsStatement,
 		subj.ID, subj.ID).Scan(&removed, &present)
 	if err != nil {
 		return false, false, fmt.Errorf("worklet: read the guards on task %s: %w",
@@ -81,7 +84,7 @@ func ReadScope(q Query) statelog.ScopeSet {
 		// nothing else the tracker files: the families (the catalogue,
 		// the people) sit beside it, and a board that names a field
 		// adds the catalogue below.
-		paths = append(paths, join(pathDomain, pathContainer))
+		paths = append(paths, statelog.ScopePath(pathDomain, pathContainer))
 	default:
 		paths = append(paths, pathDomain)
 	}

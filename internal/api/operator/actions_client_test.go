@@ -3,11 +3,13 @@ package operator_test
 import (
 	"slices"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
@@ -52,6 +54,80 @@ func scopeOf(t *testing.T, tool string) string {
 	return "person"
 }
 
+// appsOf is the apps a row has to declare, read off the authority table: the
+// row's own app for a change one app opens, its set for one ANY OF SEVERAL
+// apps opens ([authz.ClassAnyApp], [authz.AnyOf] — a question answered from
+// whichever halves the caller holds), and none for a change no app holds.
+// Read on the tool's OWN verb, the one [builtin.Admits] asks when the act
+// transport offers it, and in the row's order, which is the order its refusal
+// names them in.
+func appsOf(t *testing.T, tool string) []string {
+	t.Helper()
+	action := authz.Action(tool)
+	class, ok := authz.ClassOf(action)
+	if !ok {
+		t.Fatalf("%s has no row in the authority table", tool)
+	}
+	if class == authz.ClassAnyApp {
+		set, _ := authz.AnyOf(action)
+		out := make([]string, 0, len(set))
+		for _, app := range set {
+			out = append(out, string(app))
+		}
+		return out
+	}
+	app, _ := authz.AppOf(action)
+	if app == "" {
+		return []string{}
+	}
+	return []string{string(app)}
+}
+
+// attentionTools are the chat tools whose write is NOT a record on the chat
+// log: a person's read cursors, mutes and do-not-disturb are a coordination
+// record ([chatlet.MarkChatReadTool]), answered `applied` at no position, so
+// there is no floor for a read to wait on.
+var attentionTools = []string{chatlet.MarkChatReadTool}
+
+// actionLog is the state log a tool's write lands on, by the family the tool
+// is registered under — the work tools on the tracker's, the page tools on
+// the knowledge base's, the chat tools on chat's — or "" for a write that
+// lands on none: a pause, a steer, a run's answer, a question answered, a
+// person's attention.
+//
+// BY FAMILY RATHER THAN A TABLE OF TOOLS, so a tool added to a family is held
+// to that family's log without anybody writing its name here; the one carve-
+// out is declared above with its reason.
+func actionLog(tool string) string {
+	in := func(family ...[]string) bool {
+		for _, names := range family {
+			if slices.Contains(names, tool) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case slices.Contains(attentionTools, tool):
+		return ""
+	case in(worklet.Tools(), worklet.OperatorOnlyTools()):
+		return "tracker"
+	case in(builtin.PageTools()):
+		return "pages"
+	case in(chatlet.Tools(), chatlet.OperatorOnlyTools()):
+		return "chat"
+	}
+	return ""
+}
+
+// orNull spells a row's domain as the table writes it.
+func orNull(domain string) string {
+	if domain == "" {
+		return "null"
+	}
+	return strconv.Quote(domain)
+}
+
 // EVERY CHANGE THE DASHBOARD MAKES IS ONE THE ACT TRANSPORT SERVES, WITH THE
 // ARGUMENTS ITS TOOL TAKES.
 //
@@ -70,7 +146,15 @@ func scopeOf(t *testing.T, tool string) string {
 //     tool does not declare is refused `invalid_body` by the tools' own gate,
 //     which is what a row still naming `save_work_view`'s retired `owner`, or
 //     a `viewer` no tool takes, would meet on every press;
-//   - every row declares the scope its write's authority class gives it.
+//   - every row declares the scope its write's authority class gives it;
+//   - every row's `apps` are the apps its authority row opens it to
+//     ([appsOf]). A wrong set is a control held with the wrong remedy — or
+//     with none: a reader holding no app was told the engine does not make
+//     `answer_knowledge` for them while the table said either app would;
+//   - every row's `domain` is the log its tool's write lands on ([actionLog]),
+//     or null for one that lands on none. A wrong one is silent and costs
+//     read-your-writes: a write filed under `null` raises no floor, so the
+//     screen's next read may come from before the press.
 func TestEveryActionTheDashboardTakesIsOneTheActTransportServes(t *testing.T) {
 	t.Parallel()
 	s := fullSurface(t)
@@ -150,6 +234,25 @@ func TestEveryActionTheDashboardTakesIsOneTheActTransportServes(t *testing.T) {
 		if want := scopeOf(t, tool); len(scope) != 1 || scope[0] != want {
 			t.Errorf("%s declares scope %q, and its authority class makes it %q",
 				tool, scope, want)
+		}
+		apps, err := clientsource.Property(row, "apps")
+		if err != nil {
+			t.Errorf("%s: %v", tool, err)
+			continue
+		}
+		if got, want := clientsource.Strings(apps), appsOf(t, tool); !slices.Equal(got, want) {
+			t.Errorf("%s declares apps %q, and its authority row opens it to %q",
+				tool, got, want)
+		}
+		// A `null` domain carries no string, so it reads as no value at all.
+		domain := ""
+		if named := clientsource.Field(row, "domain"); len(named) == 1 {
+			domain = named[0]
+		}
+		if log := actionLog(tool); domain != log {
+			t.Errorf("%s declares domain %s and its write lands on %s — the "+
+				"screen's read after the press would wait on the wrong log, or "+
+				"on none, and could come from before it", tool, orNull(domain), orNull(log))
 		}
 	}
 }
@@ -238,7 +341,7 @@ var administrator = person("ada.admin", "jane-founder", iam.AllGrants...)
 // with no implementation behind it.
 func fullSurface(t *testing.T) *operator.Server {
 	t.Helper()
-	return newSurface(t, operator.Options{
+	s := newSurface(t, operator.Options{
 		Halves: fixed(operator.Halves{
 			Work: builtin.WorkDeps{
 				Reader:          struct{ fullReader }{},
@@ -259,6 +362,12 @@ func fullSurface(t *testing.T) *operator.Server {
 				Reader: struct{ builtin.PageReader }{},
 				Writer: struct{ builtin.PageWriter }{},
 			},
+			Chat: builtin.ChatDeps{
+				Reader:  struct{ builtin.ChatReader }{},
+				Writer:  struct{ builtin.ChatWriter }{},
+				Search:  struct{ builtin.ChatSearcher }{},
+				Cursors: struct{ builtin.ChatCursors }{},
+			},
 			Knowledge: struct{ builtin.KnowledgeSearcher }{},
 		}),
 		Org:    func() *org.Organization { return nil },
@@ -270,6 +379,17 @@ func fullSurface(t *testing.T) *operator.Server {
 			Budget: struct{ builtin.AnswerBudget }{},
 		},
 	})
+	// EVERY CHAT GESTURE A PERSON MAKES IS AMONG THEM, the read-state flush
+	// included: the chat screen writes through nothing else (ADR-0024), so a
+	// fixture that dropped them would refuse every chat row ACTIONS carries as
+	// "serves no such tool" while a real company serves it.
+	for _, name := range append(chatlet.Tools(), chatlet.OperatorOnlyTools()...) {
+		if !slices.Contains(s.Tools(), name) {
+			t.Fatalf("the full surface serves %v, without the chat tool %s",
+				s.Tools(), name)
+		}
+	}
+	return s
 }
 
 // fullReader is every read seam the work tools test their reader for, so one

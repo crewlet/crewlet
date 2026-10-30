@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"reflect"
@@ -86,6 +87,22 @@ type Result struct {
 	// code's own sentence and no detail, so a refusal nobody worded for a
 	// person tells them less, and never a model's words.
 	PersonRefusal caveat.Refusal
+
+	// PersonReceipt is a call that LANDED, its answer as a surface
+	// answering a person answers it, where the tool wrote one apart from
+	// Output: an answer that echoes words other principals wrote — a
+	// room's topic, a parked run's question, a page's title — labels them
+	// in Output for a model, fenced or defused under an envelope that says
+	// how far to believe them, and here they are as they were stored. Nil
+	// where Output is that answer already, and on a failure, which a
+	// person's surface answers from PersonRefusal.
+	//
+	// NEVER RENDERED, for Cause's reason: a model reads Output, labelled,
+	// and nothing here. It exists for the caller that answers a PERSON (the
+	// act route, ADR-0060), to whom the labels are a model's framing (a
+	// fence is a model's concern, ADR-0040): read off Output, a room's
+	// topic reached a person's answer wrapped in a fence's two lines.
+	PersonReceipt json.RawMessage
 }
 
 // Callable is the least a phase surface needs to offer something to a model

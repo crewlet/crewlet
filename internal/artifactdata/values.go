@@ -342,7 +342,7 @@ func checkLoose(field string, v canon.Value, depth int) error {
 }
 
 // addDecimal is a + b, computed EXACTLY on their decimal text and written back
-// as decimal text: an increment is applied on every node, and a float sum
+// as decimal text: an increment is applied on every data node, and a float sum
 // would carry a rounding error (0.1 + 0.2) into a counter for ever.
 func addDecimal(a, b string) (string, error) {
 	x, ok := new(big.Rat).SetString(a)

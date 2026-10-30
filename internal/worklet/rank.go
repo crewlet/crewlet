@@ -2,6 +2,7 @@ package worklet
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -68,7 +69,33 @@ const RankOrigin = "a0"
 // four characters, measured), so it fires only on a genuine same-gap nest of
 // 318–380 consecutive inserts into one gap, and it halves the worst-case
 // entry in the three rank-bearing indexes.
+//
+// The number is also the WHERE of `tracker_tasks_respread_idx` (replicated
+// 0002), so moving it takes a migration replacing that index: until one does,
+// every statement [longRank] is spelled into is refused with `no query
+// solution`, and TestEveryIndexServesARegisteredQuery fails first.
 const RankRenormaliseAt = 64
+
+// longRank is the term a statement selects a project's keys past
+// [RankRenormaliseAt] by — the rows a re-spread rewrites — over the rank
+// column `column`, for a read of `tracker_tasks_respread_idx`.
+//
+// THE THRESHOLD IS A LITERAL, never a bound value. The index is partial on
+// `length(rank) > 64`, and the planner proves a partial index may serve a read
+// only from a term it can compare with the index's own; `length(rank) > ?`
+// leaves it nothing to compare, so the index is not one it may use.
+//
+// AND EVERY READER NAMES THE INDEX (`INDEXED BY`), because a read of live long
+// keys is also a read of live keys in project order, which
+// `tracker_tasks_board_idx` serves: with no statistics the planner takes the
+// board index and walks every live task of the project to keep the few long
+// ones — on the apply path, on every node, for every record that places a
+// task. Named, the statement is a guard as well: a threshold the index no
+// longer implies, or an index that went, fails it loudly rather than as a
+// slower board.
+func longRank(column string) string {
+	return "length(" + column + ") > " + strconv.Itoa(RankRenormaliseAt)
+}
 
 // RankRespreadInline is where the inline repair stops and the project is
 // marked for the duty's paced walk instead.

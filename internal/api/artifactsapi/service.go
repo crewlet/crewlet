@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/brandformat"
 	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
@@ -260,43 +261,43 @@ func (s *Service) Routes(mux authz.Mux) error {
 		policy  authz.Policy
 		handler http.HandlerFunc
 	}{
-		{"POST /artifacts/uploads", create, s.intendCreate},
-		{"POST /artifacts/{id}/uploads", pre, s.intendPublish},
+		{"POST /artifacts/uploads", create.Creating(), s.intendCreate},
+		{"POST /artifacts/{id}/uploads", pre.Creating(), s.intendPublish},
 		{patternTransfer, pre, s.transfer},
-		{"POST /artifacts", create, s.create},
+		{"POST /artifacts", create.Creating(), s.create},
 		{"GET /artifacts/starters/slides", pre, s.slidesStarters},
-		{"POST /artifacts/checks", create, s.check},
-		{"POST /artifacts/{id}/versions", pre, s.publish},
-		{"POST /artifacts/{id}/versions/{n}/restore", pre, s.restoreVersion},
+		{"POST /artifacts/checks", create.Reading(), s.check},
+		{"POST /artifacts/{id}/versions", pre.Creating(), s.publish},
+		{"POST /artifacts/{id}/versions/{n}/restore", pre.Rewriting(), s.restoreVersion},
 		{"PATCH /artifacts/{id}", pre, s.patch},
 		{"PATCH /artifacts/{id}/versions/{n}", pre, s.label},
 		{"PUT /artifacts/{id}/shares", pre, s.share},
 		{"DELETE /artifacts/{id}/shares/{audience...}", pre, s.unshare},
-		{"POST /artifacts/{id}/transfer", pre, s.transferOwnership},
-		{"POST /artifacts/{id}/work-items", pre, s.linkWorkItem},
+		{"POST /artifacts/{id}/transfer", pre.Rewriting(), s.transferOwnership},
+		{"POST /artifacts/{id}/work-items", pre.Rewriting(), s.linkWorkItem},
 		{"DELETE /artifacts/{id}", pre, s.trash},
-		{"POST /artifacts/{id}/restore", pre, s.restore},
-		{"POST /artifacts/{id}/purge", purge, s.purge},
-		{"POST /artifacts/{id}/assets", pre, s.addAsset},
+		{"POST /artifacts/{id}/restore", pre.Rewriting(), s.restore},
+		{"POST /artifacts/{id}/purge", purge.Destroying(), s.purge},
+		{"POST /artifacts/{id}/assets", pre.Creating(), s.addAsset},
 		{"DELETE /artifacts/{id}/assets/{asset}", pre, s.removeAsset},
 		{"PUT /artifacts/{id}/pin", pre, s.pin},
 		{"DELETE /artifacts/{id}/pin", pre, s.unpin},
-		{"POST /artifacts/{id}/tickets", ticket, s.ticket},
+		{"POST /artifacts/{id}/tickets", ticket.Creating(), s.ticket},
 		{patternFiles, pre, s.file},
 		{"GET /artifacts/{id}/versions/{n}/source", pre, s.source},
 		{"GET /artifacts/{id}/versions/{n}/deck", pre, s.deck},
 		{"GET /artifacts/{id}/versions/{n}/doc", pre, s.doc},
 		{"GET /artifacts/{id}/versions/{n}/outline", pre, s.outline},
 		{"GET /artifacts/{id}/versions/{n}/dashboard", pre, s.board},
-		{"POST /artifacts/ready", ready, s.reportReady},
+		{"POST /artifacts/ready", ready.Creating(), s.reportReady},
 		{"PUT /artifacts/{id}/folder", pre, s.moveArtifact},
-		{"POST /artifacts/folder-moves", pre, s.moveArtifacts},
-		{"POST /artifact-folders", createFolder, s.createFolder},
+		{"POST /artifacts/folder-moves", pre.Rewriting(), s.moveArtifacts},
+		{"POST /artifact-folders", createFolder.Creating(), s.createFolder},
 		{"PATCH /artifact-folders/{id}", pre, s.patchFolder},
 		{"DELETE /artifact-folders/{id}", pre, s.removeFolder},
 		{"GET /brand", brand(authz.ActionBrandRead), s.brand},
 		{"GET /brand/files/{hash}", brand(authz.ActionBrandRead), s.brandFile},
-		{"POST /brand/adoptions", brand(authz.ActionBrandAdopt), s.adoptBrand},
+		{"POST /brand/adoptions", brand(authz.ActionBrandAdopt).Creating(), s.adoptBrand},
 		{"DELETE /brand/adoptions/current", brand(authz.ActionBrandClear), s.clearBrand},
 	} {
 		if err := router.Handle(route.pattern, route.policy, route.handler); err != nil {
@@ -308,11 +309,24 @@ func (s *Service) Routes(mux authz.Mux) error {
 
 // pipeline is the node's upload pipeline, or the refusal of a node that cannot
 // build one, rendered.
+//
+// EVERY ROUTE THAT CALLS IT IS TOLD THE SAME, so it names what they share — a
+// check of a page and a publish of an edit move no bytes, and were told this
+// node took no uploads.
+//
+// WHY IS THE LOG'S, AND NO WAIT CLEARS IT: the engine builds the pipeline once
+// for the life of the process, so a node that could not — no object store, no
+// coordination store, an embedded runtime it could not read — answers the same
+// after every wait, and the error naming which is a configuration's, for
+// whoever runs the node. It was the answer's detail, after "this node takes no
+// artifact uploads: ", under a Retry-After of two seconds.
 func (s *Service) pipeline(w http.ResponseWriter, r *http.Request) (Pipeline, bool) {
 	p, err := s.uploads()
 	if err != nil {
 		log.WarnContext(r.Context(), "artifacts_uploads_unavailable", "error", err.Error())
-		unavailable(w, err, "this node takes no artifact uploads: "+err.Error())
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, 0, httpjson.Detail{
+			"detail": "This node can't check or publish artifacts. Try another " +
+				"node, or have an administrator check this one."})
 		return nil, false
 	}
 	return p, true

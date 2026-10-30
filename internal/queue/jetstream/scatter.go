@@ -246,8 +246,21 @@ func (q *Queue) AskEach(ctx context.Context, subject string, request []byte, eac
 	// not: it waits ten seconds whatever its caller has, so an ask given
 	// two seconds against a connection that dropped after the check above
 	// took ten — the one thing this verb promises not to do.
+	//
+	// AND A FLUSH THAT FAILS IS NOT A FAILED ASK. The request is already in
+	// the connection's outbound buffer, and the flush only waits for the
+	// broker to confirm it: what failed is that confirmation, so the
+	// request may have reached a server — and goes out with the buffer if
+	// it has not. An error here says the ask could not be made at all,
+	// which a caller reads as "nobody received it": a routed write told
+	// its caller it was NOT made, and a note to a running turn that nothing
+	// was sent, when either may have been served. So the collection below
+	// runs as it would have: what arrives before the deadline is the
+	// answer, and a deadline already spent, or a connection closed for
+	// good, ends it at once with whatever that is.
 	if err := q.flush(ctx); err != nil {
-		return fmt.Errorf("ask %s: flush: %w", subject, q.brokerFailed(ctx, err))
+		q.log.Debug("scatter_ask_unflushed", "subject", subject,
+			"error", q.brokerFailed(ctx, err).Error())
 	}
 
 	for {

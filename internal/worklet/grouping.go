@@ -132,7 +132,7 @@ type Group struct {
 	// option id — and Label what a person reads, which differ exactly
 	// where the store keeps an id and a person knows a word.
 	Key   string `json:"key"`
-	Label string `json:"label,omitempty"`
+	Label string `json:"label,omitempty" untrusted:"name"`
 
 	// Count is over the WHOLE set, never over Rows: a column with four
 	// hundred tasks says four hundred and carries twenty.
@@ -215,12 +215,14 @@ type groupAxis struct {
 	// the stored value and a caller's value is that value.
 	Canonical func(key string) string
 
-	// Exists is the JOIN-FREE form of this axis as a predicate, used when
-	// `group=<value>` narrows the whole query. It has to be join-free
-	// because the narrowed predicate is shared with the count hint and
-	// the totals, and neither of those carries a join — so an axis
-	// expressed only as one would leave a header adding up the whole
-	// board while the rows showed one column of it.
+	// Exists is the JOIN-FREE form of this axis as a predicate: a probe of
+	// each task's own rows by their key ([groupAxis.filter]). It narrows
+	// the whole query when `group=<value>` asks for one column, because
+	// that predicate is shared with the count hint and the totals and
+	// neither carries a join — an axis expressed only as one would leave a
+	// header adding up the whole board while the rows showed one column
+	// of it. And it narrows every statement that reads ONE column or lane
+	// rather than counting them ([columnSet]).
 	Exists func(key string) (string, []any)
 }
 
@@ -259,28 +261,17 @@ func (a groupAxis) canonical(key string) string {
 // `window` is the query's own calendar, which only the relative due bands
 // read — see [dayWindow]; `units` is the chart the two unit axes label their
 // columns from, and nil leaves each column reading as the key the rows hold.
+//
+// ONE ALIAS FOR A FIELD'S JOIN on both axes of a lane board, because no
+// statement carries two: a lane is counted with its own join inside a column
+// that narrows it by the column's join-free predicate ([groupAxis.filter]),
+// and a run's rows are narrowed by both axes' join-free predicates. A lane
+// board on two custom fields — `group_by=f.team&group_by2=f.risk` — once
+// joined `tracker_field_values` as `gv` twice in one statement, which the
+// engine refuses; [TestTwoFieldAxesDrawASwimlaneBoard] is what holds it.
 func compileGroup(key string, fields map[string]resolvedField,
 	window dayWindow, units Units) (groupAxis, error) {
-	return compileAxis(key, "gv", fields, window, units)
-}
-
-// compileLane is [compileGroup] for the SECOND axis, the swimlanes.
-//
-// ITS OWN ALIAS, because a lane is read with the column's join in the same
-// statement: two custom-field axes — `group_by=f.team&group_by2=f.risk` —
-// each joined `tracker_field_values` as `gv`, and a statement carrying the
-// alias twice is refused by the engine, so that board failed its read on
-// every poll. Only the field axis names a join alias a second axis could
-// repeat: `tag` is one axis and cannot be both, and every other axis reads a
-// column of the task itself.
-func compileLane(key string, fields map[string]resolvedField,
-	window dayWindow, units Units) (groupAxis, error) {
-	return compileAxis(key, "gl", fields, window, units)
-}
-
-// compileAxis is one axis with its field join under `alias`.
-func compileAxis(key, alias string, fields map[string]resolvedField,
-	window dayWindow, units Units) (groupAxis, error) {
+	const alias = "gv"
 	if ref, ok := strings.CutPrefix(key, FieldKeyPrefix); ok && ref != "" {
 		field, held := fields[ref]
 		if !held {
@@ -305,7 +296,8 @@ func compileAxis(key, alias string, fields map[string]resolvedField,
 		}
 		return groupAxis{
 			Expr: alias + "." + column,
-			Join: " LEFT JOIN tracker_field_values " + alias + " ON " + alias +
+			Join: " LEFT JOIN tracker_field_values " + alias + " INDEXED BY " +
+				fieldValuesKey + " ON " + alias +
 				".task_id = t.id AND " + alias + ".field_id = ? AND " +
 				strings.ReplaceAll(liveFieldValue, "v.", alias+".") + pin,
 			JoinArgs: []any{field.ID},
@@ -319,6 +311,7 @@ func compileAxis(key, alias string, fields map[string]resolvedField,
 			Labels: labelsOf(field.Labels),
 			Exists: func(key string) (string, []any) {
 				inner := "SELECT 1 FROM tracker_field_values v " +
+					"INDEXED BY " + fieldValuesKey + " " +
 					"WHERE v.task_id = t.id AND v.field_id = ? AND " +
 					liveFieldValue
 				if !field.Multi {
@@ -362,9 +355,14 @@ func compileAxis(key, alias string, fields map[string]resolvedField,
 			Expr:  "gt.slug",
 			Join:  " LEFT JOIN tracker_task_tags gt ON gt.task_id = t.id",
 			Multi: true, Unset: "(untagged)",
+			// THE PROBE NAMES THE TAG TABLE'S KEY, for the reason
+			// [anchorProbe] names the task table's: with no statistics
+			// the planner took `slug = ?` for its seek and read every task
+			// carrying the tag once per row it narrowed — measured, at
+			// both scopes, on the reads that step through one column.
 			Exists: func(key string) (string, []any) {
-				inner := "SELECT 1 FROM tracker_task_tags g " +
-					"WHERE g.task_id = t.id"
+				inner := "SELECT 1 FROM tracker_task_tags g INDEXED BY " +
+					tagsKey + " WHERE g.task_id = t.id"
 				if key == "" {
 					return "NOT EXISTS (" + inner + ")", nil
 				}
@@ -567,33 +565,9 @@ func weekBucket(column string) string {
 
 // groupCounts reads one axis's distinct values and their counts.
 func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
-	where string, args []any, limit int) ([]Group, int, error) {
+	set taskSet, limit int) ([]Group, int, error) {
 
-	// THE DECLARED ORDER WHERE THERE IS ONE, and the largest column first
-	// where there is not — see [groupAxis.Order]. The CASE is built from
-	// the closed set's own sequence, so nothing here composes a caller's
-	// value into SQL.
-	order := "n DESC, g"
-	if len(axis.Order) > 0 {
-		var arms strings.Builder
-		arms.WriteString("CASE g")
-		for i, value := range axis.Order {
-			fmt.Fprintf(&arms, " WHEN '%s' THEN %d", value, i)
-		}
-		fmt.Fprintf(&arms, " ELSE %d END, g", len(axis.Order))
-		order = arms.String()
-	}
-	query := `SELECT ` + axis.Expr + ` AS g, COUNT(*) AS n
-	          FROM tracker_tasks t` + axis.Join + `
-	          WHERE ` + where + `
-	          GROUP BY g
-	          ORDER BY ` + order + `
-	          LIMIT ?`
-	// IN STATEMENT ORDER: the expression is written in the SELECT, the
-	// join after it, the predicate after that — and a placeholder binds
-	// where it is written.
-	bound := append(append([]any{}, axis.ExprArgs...), axis.JoinArgs...)
-	bound = append(bound, args...)
+	query, bound := groupCountsStatement(axis, set)
 	rows, err := tx.QueryContext(ctx, query, append(bound, limit+1)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("worklet: count the groups: %w", err)
@@ -630,26 +604,80 @@ func groupCounts(ctx context.Context, tx *sql.Tx, axis groupAxis,
 	return out, dropped, nil
 }
 
+// groupCountsStatement is the statement [groupCounts] counts an axis's
+// columns with, and its arguments up to the LIMIT it ends in — named for the
+// plan test.
+func groupCountsStatement(axis groupAxis, set taskSet) (string, []any) {
+	// THE DECLARED ORDER WHERE THERE IS ONE, and the largest column first
+	// where there is not — see [groupAxis.Order]. The CASE is built from
+	// the closed set's own sequence, so nothing here composes a caller's
+	// value into SQL.
+	order := "n DESC, g"
+	if len(axis.Order) > 0 {
+		var arms strings.Builder
+		arms.WriteString("CASE g")
+		for i, value := range axis.Order {
+			fmt.Fprintf(&arms, " WHEN '%s' THEN %d", value, i)
+		}
+		fmt.Fprintf(&arms, " ELSE %d END, g", len(axis.Order))
+		order = arms.String()
+	}
+	query := `SELECT ` + axis.Expr + ` AS g, COUNT(*) AS n
+	          FROM ` + set.from + axis.Join + `
+	          WHERE ` + set.where + `
+	          GROUP BY g
+	          ORDER BY ` + order + `
+	          LIMIT ?`
+	// IN STATEMENT ORDER: the expression is written in the SELECT, the
+	// join after it, the predicate after that — and a placeholder binds
+	// where it is written.
+	bound := append(append([]any{}, axis.ExprArgs...), axis.JoinArgs...)
+	return query, append(bound, set.args...)
+}
+
 // groupRows reads one group's own page.
 //
 // THE AXIS BECOMES A PREDICATE, which is what makes this the ordinary flat
-// statement: a column's rows are the answer's rows narrowed to one value, so
-// the same sort, the same joins and the same row shape serve both.
+// statement: a column's rows are the answer's rows narrowed to one value
+// ([columnSet]), so the same sort and the same row shape serve both.
 func groupRows(ctx context.Context, tx *sql.Tx, axis groupAxis, key string,
-	where string, args []any, terms []sortTerm, limit int,
+	set taskSet, terms []sortTerm, limit int,
 	dayStart time.Time) ([]TaskRow, error) {
 
-	// THE JOINED FORM HERE, not the join-free one: this statement already
-	// carries the axis's join for the GROUP BY's sake, so comparing the
-	// joined column is one predicate rather than a second subquery.
-	clause, values := axis.joinedFilter(key)
-	rows, _, err := readTasksJoined(ctx, tx, axis.Join, axis.JoinArgs,
-		"("+where+") AND "+clause,
-		append(append([]any{}, args...), values...), terms, limit, dayStart)
+	rows, _, err := readTasks(ctx, tx, columnSet(axis, key, set), terms,
+		limit, dayStart)
 	return rows, err
 }
 
-// joinedFilter is the axis as a predicate on the column its own join reached.
+// columnSet is a set narrowed to one column of an axis — what a column's or a
+// lane's rows are read from, and what a run of the drawing order counts and
+// steps through ([groupAxis.run]).
+//
+// # Why the column is the JOIN-FREE predicate
+//
+// [groupAxis.filter] is a probe of each task's own rows by their key, the one
+// `group=` narrows the whole query with. The axis's JOIN compared on its joined
+// column answers the same rows, and it is what the statements narrowing one
+// column used — but for a field or a tag axis a narrowed join is an INNER join
+// onto a child table whose key leads with the task, so the planner may drive
+// the statement from either side, and with no statistics it chooses by
+// estimates any other clause moves. Measured at the workspace, once the
+// subtask rollup's probe of each row's root changed the task side's estimate:
+// a field column walked every value of the field in the company in key order
+// before the first task, and a tag column sought every task carrying the tag
+// and then walked the whole task table once for each. A probe cannot be turned
+// round: it is one seek of the child's key per task the statement reads,
+// whichever way the rest of the predicate leans. Only a statement that COUNTS
+// the axis's values keeps the join ([groupCountsStatement]), because the
+// values are what it groups.
+func columnSet(axis groupAxis, key string, set taskSet) taskSet {
+	clause, values := axis.filter(key)
+	return set.and(clause, values)
+}
+
+// joinedFilter is the axis as a predicate on the column its own join reached —
+// the narrowing of a statement that carries the join to count the axis's own
+// values ([readSubgroups]).
 //
 // The expression's own bindings ride with it for the reason [groupAxis.filter]
 // gives, and the empty key writes it twice there too.
@@ -793,15 +821,14 @@ var ErrTooBroad = errors.New("worklet: this query selects more rows than the ans
 // whole point of the gate being cheap, and it means the honest thing to report
 // is the ceiling that was crossed rather than a total nobody counted.
 func checkGroupBreadth(ctx context.Context, tx *sql.Tx, q Query,
-	where string, args []any) error {
+	set taskSet) error {
 
 	if q.Scope.Project != "" {
 		return nil
 	}
-	query := `SELECT COUNT(*) FROM (SELECT 1 FROM tracker_tasks t WHERE ` +
-		where + ` LIMIT ?)`
+	query := cappedCountStatement(set.from, set.where)
 	var n int
-	bound := append(append([]any{}, args...), GroupByRowCeiling+1)
+	bound := append(append([]any{}, set.args...), GroupByRowCeiling+1)
 	if err := tx.QueryRowContext(ctx, query, bound...).Scan(&n); err != nil {
 		return fmt.Errorf("worklet: count what group_by=%s would sort: %w",
 			q.GroupBy, err)
@@ -825,20 +852,20 @@ func checkGroupBreadth(ctx context.Context, tx *sql.Tx, q Query,
 // row in the corpus to return twenty per column, which is what a board would
 // pay on every poll.
 func readGroups(ctx context.Context, tx *sql.Tx, q Query,
-	fields map[string]resolvedField, where string, args []any,
+	fields map[string]resolvedField, set taskSet,
 	terms []sortTerm) (grouped, error) {
 
 	// THE GATE BEFORE THE WORK, and before the axis is even compiled: what
 	// it refuses is the cost of the statements below, so paying any part of
 	// that cost first would be paying exactly what it exists to avoid.
-	if err := checkGroupBreadth(ctx, tx, q, where, args); err != nil {
+	if err := checkGroupBreadth(ctx, tx, q, set); err != nil {
 		return grouped{}, err
 	}
 	axis, err := compileGroup(q.GroupBy, fields, q.dayWindow(), q.Units)
 	if err != nil {
 		return grouped{}, err
 	}
-	// THE GROUP FILTER IS ALREADY IN `where` — [compile] adds it, in its
+	// THE GROUP FILTER IS ALREADY IN THE SET — [compile] adds it, in its
 	// join-free form, so the count hint and the totals are narrowed by it
 	// too. Narrowing again here would double the predicate and, worse,
 	// would leave those two describing the whole board.
@@ -857,7 +884,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 	if q.GroupBy2 != "" {
 		columns = MaxGroupsWithSubgroups
 	}
-	groups, dropped, err := groupCounts(ctx, tx, axis, where, args, columns)
+	groups, dropped, err := groupCounts(ctx, tx, axis, set, columns)
 	if err != nil {
 		return grouped{}, err
 	}
@@ -881,7 +908,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 			// one task as much as one with six.
 			continue
 		}
-		rows, err := groupRows(ctx, tx, axis, groups[i].Key, where, args,
+		rows, err := groupRows(ctx, tx, axis, groups[i].Key, set,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
 			return grouped{}, err
@@ -894,7 +921,7 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 		// One level and no more: a third would be a tree, and a board
 		// draws columns and swimlanes rather than a hierarchy.
 		inner, innerDropped, err := readSubgroups(ctx, tx, q, fields, axis,
-			groups[i].Key, where, args, terms, rowsPer)
+			groups[i].Key, set, terms, rowsPer)
 		if err != nil {
 			return grouped{}, err
 		}
@@ -907,42 +934,35 @@ func readGroups(ctx context.Context, tx *sql.Tx, q Query,
 // readSubgroups is the second axis within one column.
 func readSubgroups(ctx context.Context, tx *sql.Tx, q Query,
 	fields map[string]resolvedField, outer groupAxis, key string,
-	where string, args []any, terms []sortTerm, rowsPer int) ([]Group, int, error) {
+	set taskSet, terms []sortTerm, rowsPer int) ([]Group, int, error) {
 
-	inner, err := compileLane(q.GroupBy2, fields, q.dayWindow(), q.Units)
+	inner, err := compileGroup(q.GroupBy2, fields, q.dayWindow(), q.Units)
 	if err != nil {
 		return nil, 0, err
 	}
-	// THE OUTER COLUMN NARROWS THE INNER QUERY, and the outer axis's own
-	// join rides with it — a subgroup of a tag column is still inside that
-	// tag.
-	outerClause, outerArgs := outer.joinedFilter(key)
-	scoped := "(" + where + ") AND " + outerClause
-	bound := append(append([]any{}, args...), outerArgs...)
-	joined := groupAxis{
-		Expr: inner.Expr, ExprArgs: inner.ExprArgs,
-		Join: outer.Join + inner.Join,
-		JoinArgs: append(append([]any{}, outer.JoinArgs...),
-			inner.JoinArgs...),
-		Multi: inner.Multi, Unset: inner.Unset,
-	}
-	// BOTH JOINS' ARGUMENTS RIDE ON THE AXIS, in statement order: the
-	// count statement writes its joins before its WHERE, so the outer
-	// join's binding comes first, then the inner's, then the predicate's.
+	// THE OUTER COLUMN NARROWS THE INNER QUERY, by its own join-free
+	// predicate ([columnSet]) — a subgroup of a tag column is still inside
+	// that tag — so the lanes are counted over the inner axis alone, with
+	// its declared order: a lane board on a closed set is drawn in the set's
+	// order, as its columns are.
+	scoped := columnSet(outer, key, set)
 	// A NAMED SUBGROUP NARROWS THE INNER AXIS, exactly as `group` narrows
-	// the outer one — which is how a board loads one swimlane further.
+	// the outer one — which is how a board loads one swimlane further. On
+	// the counting statement it is the JOINED form, because that statement
+	// groups by the joined value: narrowed by the join-free probe instead, a
+	// label lane would count every other label of the tasks carrying it.
+	counted := scoped
 	if q.Subgroup != nil {
 		innerClause, innerArgs := inner.joinedFilter(*q.Subgroup)
-		scoped += " AND " + innerClause
-		bound = append(append([]any{}, bound...), innerArgs...)
+		counted = scoped.and(innerClause, innerArgs)
 	}
-	counts, dropped, err := groupCounts(ctx, tx, joined, scoped, bound, MaxSubgroups)
+	counts, dropped, err := groupCounts(ctx, tx, inner, counted, MaxSubgroups)
 	if err != nil {
 		return nil, 0, err
 	}
 	groupLabels(counts, inner)
 	for i := range counts {
-		rows, err := groupRows(ctx, tx, joined, counts[i].Key, scoped, bound,
+		rows, err := groupRows(ctx, tx, inner, counts[i].Key, scoped,
 			terms, rowsPer, q.DayStart)
 		if err != nil {
 			return nil, 0, err
@@ -972,7 +992,7 @@ func declaredOrder[T ~string](values []T) []string {
 //
 // ONLY THE COLUMNS THE PREDICATE ADMITS. An empty column is honest exactly
 // where a row could have landed in it, so the same filters that narrow the
-// predicate narrow this set, in the terms [compileWhere] writes them: the
+// predicate narrow this set, in the terms [compilePredicate] writes them: the
 // `status` and `status!` keys, `status_group`, the finished-work default that
 // `show_closed` lifts, and the overdue alias that carries an open-status
 // condition of its own. The `group=` column filter narrows the whole query to
@@ -1177,10 +1197,10 @@ func dueFilterRange(filter DateFilter) dueRange {
 
 // admittedStatuses is every status the query's own predicate could match.
 //
-// THE FINISHED-WORK RULE IS [compileWhere]'S, restated in the same three terms
-// so the two cannot disagree: finished work is excluded unless `show_closed`
-// asks for it, and the overdue alias ANDs the open condition back on whatever
-// `show_closed` said.
+// THE FINISHED-WORK RULE IS [compilePredicate]'S, restated in the same three
+// terms so the two cannot disagree: finished work is excluded unless
+// `show_closed` asks for it, and the overdue alias ANDs the open condition back
+// on whatever `show_closed` said.
 func admittedStatuses(q Query) []Status {
 	finished := q.ShowClosed.Finished()
 	for _, filter := range q.Dates {

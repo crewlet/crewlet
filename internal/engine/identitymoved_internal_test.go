@@ -11,7 +11,10 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
 // heardMoves keeps what the credential listener was handed.
@@ -155,6 +158,48 @@ func TestAReplacedEstateNamesEveryone(t *testing.T) {
 		t.Error("a replaced estate did not rebuild the party registry: its rows " +
 			"are a peer's, and a suspension the peer applied reaches contact " +
 			"routing only at the next periodic re-read")
+	}
+}
+
+// AN ESTATE REPLACED UNDER THE CHAT INDEX IS INDEXED AGAIN FROM ITS START.
+//
+// The chat index walks FORWARD over the transcript's own versions, so a row an
+// adoption replaced at a version the walk has already passed is never read
+// again: what this node indexed from the copy the adoption replaced — a copy
+// adopted over BECAUSE it was wrong, among other reasons — would answer
+// searches for as long as the deployment lived, and a search would say it
+// was answered over a caught-up index. The state log's own signal is the one
+// both an adoption and a reopen on a failed join's file raise, so it is the
+// one asked here, with an index that has caught up first: one that had not
+// would read as not ready whatever the signal did.
+func TestAReplacedEstateRebuildsTheChatIndex(t *testing.T) {
+	t.Parallel()
+	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{}, 1)
+	t.Cleanup(func() { _ = db.Close() })
+	index := search.NewChatIndexer(db, db.Replicated().Reader())
+	for range 16 {
+		worked, err := index.Sweep(t.Context(), time.Now())
+		if err != nil {
+			t.Fatalf("sweep the chat index: %v", err)
+		}
+		if worked == 0 {
+			break
+		}
+	}
+	if ready, err := index.Ready(t.Context()); err != nil || !ready {
+		t.Fatalf("the premise: the chat index over an empty transcript has not "+
+			"caught up (ready %v, %v)", ready, err)
+	}
+
+	e := &Engine{directoryNudge: make(chan struct{}, 1)}
+	e.native.Store(&native{chatIndex: index})
+	s := &stateLog{applyHooks: e.applyHooks()}
+	s.estateReplaced()
+	if ready, err := index.Ready(t.Context()); err != nil || ready {
+		t.Fatalf("the chat index still answers as caught up (%v, %v) over an estate "+
+			"that was replaced under it, so every search reads what it indexed "+
+			"from the copy that is gone", ready, err)
 	}
 }
 

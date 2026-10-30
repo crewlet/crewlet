@@ -37,7 +37,7 @@ func TestAStaleCompanyWriteLogsOneLineThroughTheApp(t *testing.T) {
 	}{
 		// The document: a base that is no longer the active revision.
 		{http.MethodPut, "/config", `"a-revision-long-gone"`, rosterCompany, "PUT /config",
-			"revision_advanced", http.StatusConflict},
+			"revision_advanced", http.StatusPreconditionFailed},
 		// The Models page's removal: a tag that is not the entry's own,
 		// the 412 the owner met.
 		{http.MethodDelete, "/config/llm-providers/zulu", `"llm-providers-long-gone"`, "",

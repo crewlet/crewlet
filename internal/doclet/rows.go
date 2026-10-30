@@ -42,11 +42,8 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	switch ObjectKind(subj.Kind) {
 	case KindPage:
 		var removed, present int
-		err = tx.QueryRowContext(ctx, `
-			SELECT
-				(SELECT COUNT(*) FROM pages_deletions WHERE page_id = ?),
-				(SELECT COUNT(*) FROM pages_heads WHERE id = ?)`,
-			subj.ID, subj.ID).Scan(&removed, &present)
+		err = tx.QueryRowContext(ctx, pageGuardsStatement, subj.ID, subj.ID).
+			Scan(&removed, &present)
 		if err != nil {
 			return false, false, fmt.Errorf("doclet: read the guards on page "+
 				"%s: %w", subj.ID, err)
@@ -58,9 +55,7 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 			return false, false, splitErr
 		}
 		var held int
-		err = tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM pages_titles WHERE container = ? AND title_token = ?`,
-			container, token).Scan(&held)
+		err = tx.QueryRowContext(ctx, titleGuardStatement, container, token).Scan(&held)
 		if err != nil {
 			return false, false, fmt.Errorf("doclet: read the guard on the "+
 				"address %s/%s: %w", container, token, err)
@@ -299,3 +294,13 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	}
 	return reason, gated, nil
 }
+
+// The guards [pageGuards] reads, named for the plan gate: a page's deletion
+// marker and its head, and an address's claim, each by its key.
+const (
+	pageGuardsStatement = `
+			SELECT
+				(SELECT COUNT(*) FROM pages_deletions WHERE page_id = ?),
+				(SELECT COUNT(*) FROM pages_heads WHERE id = ?)`
+	titleGuardStatement = `SELECT COUNT(*) FROM pages_titles WHERE container = ? AND title_token = ?`
+)

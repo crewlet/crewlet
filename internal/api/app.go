@@ -50,6 +50,10 @@ type App struct {
 	// before the service stops.
 	stopRooms []func()
 
+	// chatLive is the process's chat hub, which the socket carries chat
+	// through. The App's to mount and never to start or stop.
+	chatLive *stream.ChatHub
+
 	// runtime is the engine this process runs beside. See NodeRuntime.
 	runtime NodeRuntime
 
@@ -412,6 +416,23 @@ type Options struct {
 	// company's state until it closed on its own.
 	Credentials CredentialFeed
 
+	// ChatLive is the company's own chat on this node's sockets: the
+	// process's chat hub ([NewEngineChatLive]), whose committed frames, presence
+	// and read-state pushes the socket carries for each viewer the room
+	// admits. [New] mounts the socket over it and says so to it
+	// ([stream.ChatHub.AttachSockets]) — which is what makes it follow a
+	// peer's batches while this node's own copy is out of service, and
+	// what starts its read-state push — and neither starts nor stops it:
+	// the hub is the PROCESS's, attached to the engine on every node
+	// whether or not that node serves an API.
+	//
+	// REQUIRED, for Inbox's reason: a hub exists on every node, so a nil
+	// one here is a wiring mistake, and the screen it costs — a room that
+	// never updates while a person is talking in it — looks exactly like
+	// a quiet company. A company whose chat is not the engine's simply
+	// gives it nothing to say.
+	ChatLive *stream.ChatHub
+
 	// State is the projection to serve. Nil builds an empty one on
 	// [Options.Now].
 	//
@@ -546,6 +567,12 @@ type Options struct {
 	// else leaves out; `crewlet run` always wires it.
 	Rooms *Rooms
 
+	// Objectives is the node's service objective meter, which every
+	// committed change the socket pushes is timed into (change visibility,
+	// [stream.Objectives]). Nil records nothing; `crewlet run` always wires
+	// the engine's.
+	Objectives stream.Objectives
+
 	// Models serves the model routes under /llm/providers/ and
 	// /llm/device-sign-ins/, normally an llmapi.Service: a model's
 	// credential tested before it is stored, its checks, a retry of a
@@ -590,9 +617,9 @@ type Options struct {
 	//
 	// ONE SERVER, BUILT ONCE, WHOSE CATALOGUE IS READ PER CALL: the
 	// catalogue is the native halves', which a node meets at its first
-	// company. A request before that answers `503 no_active_revision`, and
-	// one to a node whose catalogue is empty answers as the route's absence
-	// would. [HumanSurfaces.Mount] is what hands it over.
+	// company, beside the seat controls every node serves. A request before
+	// that answers `503 no_active_revision`. [HumanSurfaces.Mount] is what
+	// hands it over.
 	//
 	// GUARDED, like every route the exemption list does not name. It
 	// writes to the company, and the request's principal is what lands on
@@ -763,6 +790,11 @@ func New(opts Options) (*App, error) {
 		// THE ARTIFACT ROOMS, every half or none ([Rooms]).
 		Rooms:   opts.Rooms.streamRooms(),
 		Metrics: opts.Rooms.metrics(),
+		// THE NODE'S OBJECTIVE METER, whatever the company keeps: every
+		// committed change the socket pushes is timed into it, an inbox
+		// movement as much as a room's, and a meter carried by the rooms
+		// left the inbox untimed on every node that serves none.
+		Objectives: opts.Objectives,
 
 		Now:            now,
 		HealthInterval: opts.HealthInterval,
@@ -771,13 +803,13 @@ func New(opts Options) (*App, error) {
 		return nil, fmt.Errorf("api: %w", err)
 	}
 	// AND WHAT EACH ARTIFACT'S APPLIERS COMMITTED, pushed to the sockets in
-	// its room, with every room told to re-read whenever this node's copies
-	// leave or return to service.
+	// its room: this node's own appliers while its copy serves and a sound
+	// peer's, relayed, while it does not, with every room told to re-read at
+	// each switch (the engine's live relay).
 	if r := opts.Rooms; r != nil && r.Feed != nil {
 		a.stopRooms = append(a.stopRooms,
 			r.Feed.OnArtifactsMoved(a.stream.ArtifactsMoved),
 			r.Feed.OnArtifactDataMoved(a.stream.ArtifactDataMoved))
-		r.Feed.SetOnArtifactsServing(a.stream.ArtifactsCopy)
 	}
 	// AND WHOSE INBOX MOVED, pushed to the sockets watching each seat —
 	// and when what this node hears has a gap, every watched inbox read
@@ -787,6 +819,11 @@ func New(opts Options) (*App, error) {
 	// AND WHOSE CREDENTIALS MOVED, deciding the sockets opened with them
 	// again.
 	opts.Credentials.SetOnIdentityMoved(a.pushIdentityMoved)
+	// AND THE COMPANY'S OWN CHAT, on the socket mounted below — told so
+	// once this app is built, not before: a build that failed past here
+	// serves no socket, and a hub told otherwise would follow a peer's
+	// batches for nobody.
+	a.chatLive = opts.ChatLive
 
 	tree := opts.Assets
 	if tree == nil {
@@ -882,7 +919,7 @@ func New(opts Options) (*App, error) {
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
-	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer))
+	mux.Handle(auth.SocketPath, stream.Handler(a.guard, a.csrf, a.stream, a.answer, a.chatLive))
 	// The OPERATOR surface: the same tracker and knowledge tools a seat
 	// holds, offered to a person's own assistant over MCP and to the person
 	// themself over the act route. Under its own
@@ -1054,18 +1091,15 @@ func New(opts Options) (*App, error) {
 	// exactly where the deployment had published them over https.
 	if opts.Bootstrap == nil || !opts.Bootstrap.API.Public.Enabled() {
 		a.handler = servedOn(opts.Bootstrap, false, chain)
-		// --- the Dashboard Assistant's dispatcher (WP1) ---
-		if err := bindDispatcher(opts.Dispatcher, a.handler); err != nil {
-			return nil, err
-		}
-		return a, nil
+	} else {
+		a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
+		a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
 	}
-	a.handler = servedOn(opts.Bootstrap, false, partition(false, chain))
 	// --- the Dashboard Assistant's dispatcher (WP1) ---
 	if err := bindDispatcher(opts.Dispatcher, a.handler); err != nil {
 		return nil, err
 	}
-	a.public = servedOn(opts.Bootstrap, true, partition(true, chain))
+	a.chatLive.AttachSockets()
 	return a, nil
 }
 
@@ -1171,6 +1205,7 @@ func (o Options) missing() error {
 		{"Runtime", o.Runtime == nil},
 		{"Inbox", o.Inbox == nil},
 		{"Credentials", o.Credentials == nil},
+		{"ChatLive", o.ChatLive == nil},
 		{"Sources.Company", o.Sources.Company == nil},
 		{"Sources.Events", o.Sources.Events == nil},
 		{"Sources.NodeID", strings.TrimSpace(o.Sources.NodeID) == ""},
@@ -1247,8 +1282,10 @@ func (o Options) missing() error {
 func (a *App) mountDeployment(mux authz.Mux) error {
 	router := authz.NewRouter(mux, authz.ContextGuard(authz.NoChart{}))
 	var failures []error
-	a.deploymentRoutes(func(pattern string, h http.HandlerFunc) {
-		if err := router.Handle(pattern, deploymentPolicy(pattern), h); err != nil {
+	a.deploymentRoutes(func(pattern string, does authz.Effect, h http.HandlerFunc) {
+		policy := deploymentPolicy(pattern)
+		policy.Effect = does
+		if err := router.Handle(pattern, policy, h); err != nil {
 			failures = append(failures, err)
 		}
 	})
@@ -1257,17 +1294,18 @@ func (a *App) mountDeployment(mux authz.Mux) error {
 
 // deploymentRoutes names every route [App.mountDeployment] mounts, through the
 // mount it is handed: separate from the router, so a walk can read the whole
-// list without standing the deployment up.
-func (a *App) deploymentRoutes(mount func(string, http.HandlerFunc)) {
+// list without standing the deployment up. A POST says what it does
+// ([authz.Effect]); every other route passes none.
+func (a *App) deploymentRoutes(mount func(string, authz.Effect, http.HandlerFunc)) {
 	// A POST, and a read posture of any kind never opens it: copying every
 	// credential and every seat's memory to a path the caller names is not
 	// a read. There is no budget reset beside it — a window's turnover IS
 	// the reset (ADR-0019), and a raw reset would re-arm a company mid-window.
-	mount("POST /backup", a.serveBackup)
+	mount("POST /backup", authz.EffectCreates, a.serveBackup)
 	// The move of the company's files to an S3 bucket: a copy every
 	// object passes through, and on the final pass the fleet's record of
 	// where its files are. See objectsmigrate.go.
-	mount("POST /objects/migrate", a.serveMigrateObjects)
+	mount("POST /objects/migrate", authz.EffectRewrites, a.serveMigrateObjects)
 	// The three retention gestures that write. See retention.go.
 	a.mountRetention(mount)
 	// The capacity window's own control surface. It is the one thing a
@@ -1384,7 +1422,7 @@ func (a *App) pushInboxMoved(moved []worklet.InboxMovement) {
 	for _, m := range moved {
 		a.stream.InboxChanged(stream.InboxChange{
 			Handle: m.Handle, UnreadDelta: m.UnreadDelta,
-			Subject: m.Subject, Reason: string(m.Reason),
+			Subject: m.Subject, Reason: string(m.Reason), Stored: m.At,
 		})
 	}
 }
@@ -1546,34 +1584,34 @@ func (a *App) Queries() *queries.Registry { return a.queries }
 // two to disagree about what "unauthorized" means.
 func (a *App) answer(ctx context.Context, what string, params map[string]any) (any, error) {
 	data, err := a.queries.Answer(ctx, what, params)
+	var refusal *queries.Refusal
 	switch {
 	case err == nil:
 		return data, nil
 	case errors.Is(err, queries.ErrUnknown):
 		return nil, fmt.Errorf("%w: %s", stream.ErrUnknownQuery, what)
-	case errors.Is(err, queries.ErrUnauthenticated),
-		errors.Is(err, queries.ErrUnauthorized):
-		// BOTH ONTO ONE SOCKET CODE, deliberately. The vocabulary here is
-		// shared with the dashboard, and the distinction the REST mapping
-		// draws — present something, versus the thing you presented does
-		// not carry this — has no consumer over a socket: every one
-		// authenticates at its handshake, so the unauthenticated arm is
-		// unreachable and a second code would be a wire change with
-		// nothing to read it.
+	case errors.As(err, &refusal):
+		// A REFUSAL ON AUTHORITY SAYS WHY, as it does over REST, and in the
+		// SAME WORDS: [stream.RefusedFor] answers it through the authority
+		// table's one mapping, so the code, the rule's reason and the grants
+		// that would have admitted the caller are the ones the REST twin
+		// writes. It was reduced to the question's name here once, so the one
+		// channel the dashboard reads was the one on which "you may not"
+		// could not say what would change that — and then spelled
+		// `unauthorized` here for itself, which a refusal the mapping words
+		// otherwise would have reached the dashboard as.
 		//
-		// AND A REFUSAL ON AUTHORITY SAYS WHY, as it does over REST: the
-		// rule's reason and the grants that would have admitted the
-		// caller travel on the frame. It was reduced to the question's
-		// name here, so the one channel the dashboard reads was the one
-		// on which "you may not" could not say what would change that.
-		var refusal *queries.Refusal
-		if errors.As(err, &refusal) {
-			return nil, &stream.RefusedError{What: what,
-				Refused: *stream.NewRefused(refusal.Reason, refusal.Grants)}
-		}
-		return nil, fmt.Errorf("%w: %s", stream.ErrUnauthorized, what)
+		// A QUESTION ASKED BY NOBODY ([queries.ErrUnauthenticated]) has no
+		// arm here and is answered as the fault it is: every socket
+		// authenticates at its handshake and closes when its credential
+		// ends, so a question on one that reaches the registry unresolved
+		// means this node lost who the socket is — which no refusal a client
+		// acts on describes.
+		return nil, stream.RefusedFor(what, refusal.Decision)
 	case errors.Is(err, queries.ErrNotFound):
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
+	case errors.Is(err, queries.ErrArtifactTrashed):
+		return nil, fmt.Errorf("%w: %s", stream.ErrArtifactTrashed, what)
 	case errors.Is(err, queries.ErrUnknownProvider):
 		// A REQUEST TO CHANGE, as a refused parameter is: the socket has
 		// one code for that, and the detail names the provider.
@@ -1620,7 +1658,7 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 	data, err := a.queries.AnswerWith(r.Context(), what,
 		queries.FromQuery(r.URL.Query()))
 	if err != nil {
-		writeQueryError(w, what, err)
+		writeQueryError(w, r, what, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
@@ -1637,7 +1675,9 @@ func (a *App) serveQuery(w http.ResponseWriter, r *http.Request) {
 // objects, so the one family of routes a dashboard reads most often was the
 // one whose refusals carried no sentence, and the code a client branched on
 // was the only thing it had to show.
-func writeQueryError(w http.ResponseWriter, what string, err error) {
+func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err error) {
+	var refusal *queries.Refusal
+	var revision *stream.RevisionError
 	switch {
 	case errors.Is(err, queries.ErrUnknown):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeUnknownQuery)
@@ -1649,7 +1689,7 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// up — stated because the mapping is this function's to get right
 		// whatever happens to run in front of it.
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
-	case errors.Is(err, queries.ErrUnauthorized):
+	case errors.As(err, &refusal):
 		// 403 AND NOT 401, because the caller has already been
 		// identified. This refusal is a GRANT one — the guard in front
 		// of this resolved somebody, and the question needs authority
@@ -1665,17 +1705,17 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// the guard answers it for a credential that is absent or
 		// refused, before this function is reached at all.
 		//
-		// AND IT SAYS WHY: the rule's reason and the grants that would
-		// have admitted the caller, carried on the registry's refusal
-		// rather than rewritten here — the same two fields every other
-		// refusal on authority answers with.
-		var refusal *queries.Refusal
-		if !errors.As(err, &refusal) {
-			httpjson.Fail(w, http.StatusForbidden, httpjson.CodeUnauthorized)
-			return
-		}
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			authz.RefusalDetail(refusal.Reason, refusal.Grants))
+		// AND IT SAYS WHY, in the AUTHORITY TABLE'S OWN MAPPING
+		// ([authz.RefusalFields]): the code, the rule's reason and the
+		// grants that would have admitted the caller, from the decision the
+		// registry's refusal carries whole — the answer every other surface
+		// gives the same refusal. It wrote `unauthorized` here for itself,
+		// which agreed with the mapping only for as long as no question was
+		// refused for a stale proof. A bare [queries.ErrUnauthorized] names
+		// no decision, and is answered by the default arm as the fault it
+		// is.
+		status, code, detail := authz.RefusalFields(refusal.Decision)
+		httpjson.FailWithFields(w, status, code, detail)
 	case errors.Is(err, queries.ErrBadParams):
 		// 400 AND ITS OWN CODE. The status was already right; the code
 		// said `query_failed`, which names a fault of this node for a
@@ -1692,6 +1732,18 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 			httpjson.Detail{"detail": err.Error()})
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
+	case errors.As(err, &revision):
+		// A REVISION THIS NODE CANNOT OPEN, under the /config route's own
+		// code and words, as the socket's frame carries them: answered by
+		// the default arm, a missing key was a 500 nobody could act on.
+		httpjson.FailWith(w, http.StatusConflict, revision.Code,
+			map[string]string{"detail": revision.Detail})
+	case errors.Is(err, queries.ErrArtifactTrashed):
+		// THE ARTIFACTS ROUTES' OWN ANSWER for the same artifact, so a
+		// question and the route beside it say one thing about it.
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeArtifactTrashed,
+			map[string]string{"detail": "the artifact is in the trash; its data is not " +
+				"served until it is restored"})
 	case errors.Is(err, stream.ErrNoCompany):
 		// A NATIVE QUESTION ON A NODE WITH NO COMPANY YET, answered as
 		// every surface answers that node — the webhook edge, the human
@@ -1732,13 +1784,18 @@ func writeQueryError(w http.ResponseWriter, what string, err error) {
 		// AND THE REFUSAL SAYS WHAT IT IS — its code and its words, the
 		// remedy — through [stream.UnavailableOf], the same reading the
 		// socket's error frame is built from.
+		//
+		// THE REFUSAL'S OWN DETAIL GOES TO THE LOG ([stream.LogUnavailable]):
+		// it names positions and settings for whoever runs the node, and
+		// the answer's words are a person's sentence for the refusal.
+		stream.LogUnavailable(r.Context(), log, "api_query_unavailable", err, "what", what)
 		u := stream.UnavailableOf(err)
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, u.RetryAfter, u.Fields())
 	default:
 		// The reason reaches the LOG, not the caller: it can carry a
 		// database path or a driver's own message, and nothing about
 		// holding a grant makes a caller somebody that path is for.
-		log.Warn("api_query_failed", "what", what, "error", err)
+		stream.LogFailed(r.Context(), log, "api_query_failed", err, "what", what)
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeQueryFailed)
 	}
 }

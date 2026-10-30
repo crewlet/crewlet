@@ -23,7 +23,10 @@
 //     verbatim, so each one is product copy rather than a log line, and it
 //     belongs to the CODE rather than to the call site: the same refusal reads
 //     the same wherever it came from, and a route with more to say says it in
-//     the detail rather than rewording the sentence.
+//     the detail rather than rewording the sentence. A code covering refusals
+//     with different remedies chooses among its sentences by the facts its
+//     detail carries — never by who wrote it — which is how `unauthorized`
+//     says the authority table's own reason ([messageFor]).
 //   - the [Detail] — the machine-readable facts about THIS refusal, as typed
 //     JSON: `{"missing_grant": "secrets.reveal"}`, `{"retry_after_ms": 4000}`,
 //     `{"relation": "leads", "subject": "sarah-chen"}`. Its `detail` and
@@ -59,6 +62,29 @@
 // The router's own 404 and 405, which [Mux] turns into this envelope, so that
 // EVERY refusal the engine writes carries a code — which is what lets a client
 // tell the node's own answer from a proxy's page in front of it.
+//
+// # Escaped at the one writer, read by decoders
+//
+// [Write] marshals with encoding/json's default, which spells `<`, `>` and `&`
+// as `\u003c`, `\u003e` and `\u0026`, and that is decided rather than left.
+// The escaping protects nothing here: every listener answers with `nosniff`
+// and a `default-src 'none'` policy (internal/api/pagepolicy), and no answer is
+// ever embedded in a page. Nor does it cost anything, because every reader of
+// the wire DECODES it, and a decoder reads `\u003c` as `<`. What it buys is
+// that the wire is spelled ONE way: encoding/json re-escapes whatever a value
+// embeds — a MarshalJSON's output, a json.RawMessage, a stored event payload —
+// so escaping at this one writer spells every answer alike, whatever produced
+// each part of it. Switched off here alone, the wire would be spelled however
+// each producer chose; the only uniform alternative is every encoder in the
+// tree writing unescaped, which no gate can hold for a json.Marshal whose bytes
+// are embedded somewhere later.
+//
+// So a reader that shows an answer as TEXT decodes it first and writes it
+// again for its own reader — the dashboard does, and a command's `-json`
+// prints through internal/plainjson (cmd/crewlet/jsonout.go) — and never
+// shows the bytes as they came. The live socket's frames
+// (internal/api/stream.EncodeFrame) are written the same way, for the same
+// reason, and a test beside each writer holds it.
 package httpjson
 
 import (
@@ -77,6 +103,7 @@ import (
 	"encoding/json"
 
 	"github.com/crewlet/crewlet/internal/configplane"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // Code is the machine-readable `error` value a failed request carries.
@@ -238,6 +265,15 @@ const (
 	// working password for as long as the outage lasted, which is the
 	// three-valued rule internal/coord states, applied to authentication.
 	CodeIdentityUnavailable Code = "identity_unavailable"
+	// CodeSeatHoldersUnavailable is a /config write that removes a human
+	// seat, or a whole document replacing an unsealed revision (which asks
+	// about every seat it does not keep), answered while this node could not
+	// read the identity directory to learn whether anybody holds them:
+	// nothing was written. Its own code because [CodeIdentityUnavailable]'s
+	// sentence is about the CALLER, and the caller here was resolved; what
+	// could not be read is who holds the seats the write takes away. 503,
+	// under the identity estate's hint.
+	CodeSeatHoldersUnavailable Code = "seat_holders_unavailable"
 
 	// CodeCSRFOrigin is a state-changing request a cross-site page could
 	// have caused: an `Origin` naming somewhere this deployment is not
@@ -346,7 +382,9 @@ const (
 	CodeNoActiveRevision Code = "no_active_revision"
 
 	// CodeRevisionAdvanced is a conditional write that lost: another write
-	// was activated after the one this was based on.
+	// was activated after the one this was based on. 412 where the request
+	// named that base in its If-Match header, a precondition that failed,
+	// and 409 where it named none (`configapi.RevisionStatus`).
 	CodeRevisionAdvanced Code = "revision_advanced"
 
 	// CodeAlreadyConfigured is a create-only write (If-None-Match: *) that
@@ -362,6 +400,30 @@ const (
 	// because the remedies share nothing: that one is a key to put back,
 	// and this one depends on which revision it is, which the hint names.
 	CodeUnsealedRevision Code = "unsealed_revision"
+
+	// CodeUnreadableFleetRevision is the fleet's revision, met only through
+	// its pointer, sealed under a key this node's keyring was never given.
+	// Its own code rather than [CodeUnreadableRevision], whose message tells
+	// the reader to put back a key the deployment lost: here the deployment
+	// holds it and this node does not.
+	CodeUnreadableFleetRevision Code = "unreadable_fleet_revision"
+
+	// CodeUnsealedFleetRevision is the fleet's revision arriving on its
+	// pointer without a seal. Every node seals what it activates, so it came
+	// from outside the fleet, and no node reads it.
+	CodeUnsealedFleetRevision Code = "unsealed_fleet_revision"
+
+	// CodeUnknownSealRevision is a revision SEALED in a form this build does
+	// not read, most likely by a newer build: this node's own copy (a node
+	// that ran the newer build and was taken back to this one) or the
+	// fleet's, met through its pointer. ONE code for both, because the
+	// remedy is one: run the build that sealed it. Its own code rather than
+	// [CodeUnsealedRevision], because the two send a caller opposite ways: a
+	// whole document replaces an unsealed revision, reading nothing from it,
+	// while a replacement here would discard a document somebody sealed. And
+	// rather than [CodeUnreadableRevision], whose message names a key to put
+	// back, when no key opens a form this build does not parse.
+	CodeUnknownSealRevision Code = "unknown_seal_revision"
 
 	// CodeInvalidRevisionID is a revision route with no revision named.
 	CodeInvalidRevisionID Code = "invalid_revision_id"
@@ -399,8 +461,9 @@ const (
 	CodeSeatHeld Code = "seat_held"
 
 	// CodeConflictingPreconditions is a write carrying both
-	// `If-None-Match: *` and `If-Match`, which describe two different
-	// resources at an entity's address.
+	// `If-None-Match` and `If-Match`: at an entity's address they describe
+	// two different resources, and on /config they ask opposite things of
+	// one company.
 	CodeConflictingPreconditions Code = "conflicting_preconditions"
 
 	// CodeValidationError is a write whose resulting document is invalid.
@@ -552,8 +615,22 @@ const (
 	//
 	// The wire value is internal/iam/session's own `CodeNoSeat`; the two
 	// are held equal by a test in internal/api/auth, since this package
-	// is a leaf and cannot import that one to share the constant.
+	// imports no engine machinery — only the vocabularies its sentences
+	// name, iam's permissions and configplane's interval — and that one is.
 	CodeSeatUnavailable Code = "seat_unavailable"
+
+	// CodeReaderChanged is a request that names the principal it was made
+	// FOR — a dashboard tab's reader, in internal/api/auth's ReaderHeader —
+	// while the credential it carries resolves to somebody else: the
+	// browser's session changed hands under the tab that sent it.
+	//
+	// A 409 AND NEVER A 401 OR A 403, because nothing is wrong with the
+	// credential or with what it may do: it is somebody else's than the
+	// request says, and the remedy is the CLIENT's — hand the tab to whoever
+	// the session is now — rather than a sign-in or a grant. Answered before
+	// any handler runs, so nothing was done, and a retry under the same
+	// operation key names no operation of the new principal's.
+	CodeReaderChanged Code = "reader_changed"
 
 	// CodeForbidden is a write the DOMAIN forbade this caller on a rule of
 	// its own, beside the authority table's: an agent re-ordering a
@@ -586,13 +663,20 @@ const (
 	// model. Declared here, on the table, for the reason every code is: a
 	// code with no sentence answers a person with nothing.
 
-	// CodeInvalid is an argument the tool refused, and its detail names
-	// which: the only class whose fix is to send something different.
+	// CodeInvalid is an argument the tool refused, which a refusal worded
+	// for a person names in its detail: the only class whose fix is to send
+	// something different.
 	CodeInvalid Code = "invalid"
-	// CodeStaleVersion is an object that changed after the caller read it.
+	// CodeStaleVersion is an object that changed after the caller read it,
+	// the version stated as a tool's argument or a body field. 409. The same
+	// version stated as an If-Match header is [CodeVersionMoved].
 	CodeStaleVersion Code = "stale_version"
 	// CodeConflict is a write that lost its race against other writers, or
-	// another gesture holding the object; it clears on its own.
+	// another gesture holding the object, which clears on its own — or the
+	// object the write is about refusing it by its state (archived, in the
+	// trash, its contents at their cap) until somebody changes it, which a
+	// refusal worded for a person names in its detail. Either way the request
+	// was not wrong and reading the object again is the move.
 	CodeConflict Code = "conflict"
 	// CodeExists is a create of something that already exists.
 	CodeExists Code = "exists"
@@ -727,8 +811,13 @@ const (
 	// the remedy — told apart from [CodeUnknownStream] so an operator does
 	// not go looking for a typo.
 	CodeStreamUnreadable Code = "stream_unreadable"
-	// CodeReanchorRefused is a reanchor the stream refused.
+	// CodeReanchorRefused is a reanchor the stream refused, or one that
+	// stopped where the detail says what is known and what to do.
 	CodeReanchorRefused Code = "reanchor_refused"
+	// CodeReanchorFailed is a reanchor that stopped on a fault nothing in the
+	// transition told: 500, the detail saying how to learn where it stands,
+	// and the fault in this node's log.
+	CodeReanchorFailed Code = "reanchor_failed"
 	// CodeTargetRequired is a capacity change that named no stream or no
 	// byte ceiling.
 	CodeTargetRequired Code = "target_required"
@@ -736,8 +825,13 @@ const (
 	// detail carries the operation already open, when there is one, since
 	// "never opened" and "open and stuck" have opposite next steps.
 	CodeCapacityRefused Code = "capacity_refused"
+	// CodeCapacityFailed is a capacity gesture that stopped on a fault
+	// nothing in the operation told: 500, the detail saying how to learn
+	// where it stands, and the fault in this node's log.
+	CodeCapacityFailed Code = "capacity_failed"
 	// CodeMaintenanceUnreadable is a capacity window whose state could not
-	// be read.
+	// be read: 503 with a Retry-After, because the log was named right and
+	// asking again is the remedy.
 	CodeMaintenanceUnreadable Code = "maintenance_unreadable"
 
 	// THE FLEET BROKER'S MEMBERSHIP: the removal of a voter the metadata
@@ -799,11 +893,12 @@ const (
 	// artifact's publish, the company's charter).
 	CodeBadIfMatch Code = "bad_if_match"
 	// CodeVersionMoved is a write whose If-Match names a version the thing
-	// it writes has moved past: a project file, an artifact whose head is
-	// past the version a publish was based on, or the company's charter
-	// changed since an editor read it. 412: read it again and decide again.
-	// An artifact's carries the live head and its entry's text to merge
-	// onto, and the charter's the charter as it stands (`current`).
+	// it writes has moved past: a project file, a work item or a page whose
+	// tool version the header stated, an artifact whose head is past the
+	// version a publish was based on, or the company's charter changed since
+	// an editor read it. 412: read it again and decide again. An artifact's
+	// carries the live head and its entry's text to merge onto, and the
+	// charter's the charter as it stands (`current`).
 	CodeVersionMoved Code = "version_moved"
 	// CodeUploadExpired is an upload whose bytes cannot be recorded any
 	// more: stored, and older than a write may name its object after (409),
@@ -866,9 +961,19 @@ const (
 	// its data may already be gone for good. 409: the purge finishes on its
 	// retry, an administrator's purge or the trash reaper's next pass.
 	CodeArtifactPurging Code = "artifact_purging"
-	// CodeQuotaExceeded is a write the company's plan quota refuses. 413,
-	// the detail naming the limit, the usage and the Tier A key an operator
-	// raises.
+	// CodeQuotaExceeded is a write past a limit on what is kept: the
+	// company's storage (the artifacts' bytes, or a datastore's footprint,
+	// the store's own or the company's), or a cap on what one datastore
+	// holds (its collections and documents, a collection's rows, one
+	// participant's rows). 409, the code of the tools' `quota_exceeded`
+	// refusal class, because it is the state of what is held that the write
+	// collided with and no larger or smaller request changes it. ITS
+	// SENTENCE STANDS ALONE, because what is beside it differs by route: the
+	// artifacts routes answer the limit, the usage and the Tier A key an
+	// operator raises; a datastore's routes answer the applier's reason,
+	// which names the limit, as the detail; and the act route answers the
+	// refusal in a person's words where the tool gave it some, and no
+	// detail otherwise (ADR-0060).
 	CodeQuotaExceeded Code = "quota_exceeded"
 	// CodeCarriedObjectGone is a publish carrying files the artifact no
 	// longer holds the bytes of. 409, the detail naming the paths to upload
@@ -917,9 +1022,13 @@ const (
 	// CodeSourceTaken is a create naming a source address another artifact
 	// of the same owner holds. 409.
 	CodeSourceTaken Code = "source_taken"
-	// CodeLabelTaken is a label another version of the artifact holds, or
-	// one past the labelled versions an artifact keeps. 409.
+	// CodeLabelTaken is a label another version of the artifact holds: a
+	// collision, which another label avoids. 409.
 	CodeLabelTaken Code = "label_taken"
+	// CodeLabelsFull is a label for a version of an artifact whose every
+	// kept label is in use: the artifact's state, which removing a label
+	// changes and no other label does. 409.
+	CodeLabelsFull Code = "labels_full"
 	// CodeBrandContrast is an adoption of a brand whose body text does not
 	// contrast enough with its light ground to be read. 422, the detail's
 	// `contrast` naming the pair, its two colours, the ratio and the floor.
@@ -942,10 +1051,10 @@ const (
 	// without regard to case. 409, the detail naming it.
 	CodeFolderNameTaken Code = "folder_name_taken"
 	// CodeFolderCycle is a folder moved into itself or a folder inside it.
-	// 409.
+	// 422: the destination is the argument to change.
 	CodeFolderCycle Code = "folder_cycle"
 	// CodeFolderDepth is a create or a move that would place a folder deeper
-	// than folders go. 409.
+	// than folders go. 422: a shallower destination lands.
 	CodeFolderDepth Code = "folder_depth"
 	// CodeFolderLimit is a create or a move past the folders the company or
 	// one folder holds. 409.
@@ -957,7 +1066,7 @@ const (
 	// (`confirm_widen`).
 	CodeFolderWidens Code = "folder_widens"
 	// CodeFolderAmbiguous is a folder path that names more than one folder
-	// the caller can see. 409, the detail listing each by id.
+	// the caller can see. 422, the detail listing each by id, which lands.
 	CodeFolderAmbiguous Code = "folder_ambiguous"
 )
 
@@ -967,12 +1076,9 @@ const (
 // `stale_version`, a rule that refused is `forbidden` and a value that failed
 // is `invalid`, the codes every write surface already answers with.
 const (
-	// CodeDataQuota is a datastore write the stamped plan quota refused:
-	// the store's or the company's footprint would pass its limit. 413,
-	// and the detail names the Tier A key an operator raises.
-	CodeDataQuota Code = "data_quota"
-	// CodeDataGone is a datastore whose artifact was purged, or is in the
-	// trash, so nothing is written to it. 410.
+	// CodeDataGone is a datastore whose artifact was purged, so nothing is
+	// written to it. 410. An artifact in the trash is [CodeArtifactTrashed],
+	// as it is on every other artifacts route: it is restored, not gone.
 	CodeDataGone Code = "data_gone"
 	// CodeNotUndoable is an undo of a write the history cannot undo. 409,
 	// and the detail says why.
@@ -1009,9 +1115,12 @@ const (
 	// CodeAssistantBusy is a person past their running turns or their turn
 	// rate. 429 with a Retry-After.
 	CodeAssistantBusy Code = "assistant_busy"
-	// CodeAssistantUnavailable is an assistant this node cannot run now:
-	// every model in its chain failing, or the turn's runner out of
-	// reach. 503, with a Retry-After where a wait is known to help.
+	// CodeAssistantUnavailable is an assistant this node cannot run now for
+	// a reason of its own: no model chain it can build, the node shutting
+	// down, or the turn's runner on a node this one cannot reach. 503 with
+	// no Retry-After, since no wait it knows clears any of them. A
+	// condition of the node is answered as one instead (unavailable, in a
+	// person's words under its own hint).
 	CodeAssistantUnavailable Code = "assistant_unavailable"
 	// CodeAssistantModelNotReady is a question refused before its first
 	// round because every model in the assistant's chain is known unusable
@@ -1118,12 +1227,16 @@ var codes = map[Code]string{
 	// ABOUT THE ACCESS, NOT A TOKEN. It said "that query needs an operator
 	// token", which was true while an operator token was the only credential
 	// and authority a single yes-or-no; a person signed in with a session
-	// and refused one permission was told to go and find a token. It NAMES
-	// THE PERMISSIONS there are (ADR-0033), because a person reading it on a
-	// screen has to know what to ask an admin for, and the refusal's
-	// `grants` beside it says which one.
-	CodeUnauthorized: "You don't have the access this needs (Admin, Worklet, " +
-		"Doclet or Artifacts). Ask an admin for it.",
+	// and refused one permission was told to go and find a token.
+	//
+	// THIS IS THE SENTENCE FOR A REFUSAL THAT SAYS NOTHING MORE about itself
+	// — no `reason` beside it — and it NAMES EVERY PERMISSION there is
+	// (ADR-0033), read off [iam.AllGrants], because a person reading it has
+	// to know what to ask an admin for. A refusal that carries the deciding
+	// rule's reason is told that rule's own sentence instead
+	// ([unauthorizedMessage]), since most of the rules it covers are ones
+	// no permission would change.
+	CodeUnauthorized: lacksSentence(grantWords(grantNames(iam.AllGrants))),
 	CodeQueryFailed: "That query could not be answered. The reason is in " +
 		"this node's log.",
 	CodeNotFound:  "There is no such record here.",
@@ -1134,6 +1247,8 @@ var codes = map[Code]string{
 		"Nothing changed.",
 	CodeIdentityUnavailable: "Can't check who you are right now. Try again " +
 		"in a moment.",
+	CodeSeatHoldersUnavailable: "Can't check who holds the seats this change " +
+		"removes right now, so nothing was written. Try again in a moment.",
 
 	CodePassInFlight: "A setup pass for this integration is already running. " +
 		"Wait for it to finish rather than starting a second one.",
@@ -1163,6 +1278,8 @@ var codes = map[Code]string{
 	CodeSessionRevoked: "This session has ended. Sign in again.",
 	CodeSeatUnavailable: "Your seat is no longer in the org chart. Ask an " +
 		"admin to move you to another seat.",
+	CodeReaderChanged: "Someone else is signed in on this browser now, so " +
+		"nothing changed. Reload the page to continue as them.",
 
 	CodeInviteSpent: "This invitation is no longer valid. Ask whoever sent it " +
 		"for a new one.",
@@ -1180,8 +1297,13 @@ var codes = map[Code]string{
 		"what was entered, then try again.",
 	CodeStaleVersion: "Somebody changed this after you read it, so nothing was " +
 		"written. Read it again and decide from what it says now.",
-	CodeConflict: "This collided with another change landing at the same " +
-		"moment, and nothing was written. Read it again, then retry.",
+	// A RACE OR A STATE, and it stands alone as well: the dashboard draws
+	// this sentence for every conflict nobody has worded for a person, so it
+	// says how to find out which rather than pointing at a detail it does not
+	// carry.
+	CodeConflict: "This collided with another change, or with the state the " +
+		"object is in now, and nothing was written. Read it again to see " +
+		"which, and what has to change before the same request lands.",
 	CodeExists:          "That already exists, so nothing was created.",
 	CodeAlreadyAnswered: "Somebody has already answered it.",
 	CodeReassignmentBudget: "It has been handed between seats as often as it " +
@@ -1243,19 +1365,24 @@ var codes = map[Code]string{
 		"fleet is back in normal mode.",
 	CodeReadmissionRefused: "That node is too far behind to be counted again " +
 		"yet, so nothing was written. The detail gives the positions.",
-	CodeGateFailed: "The eviction or readmission was not recorded. The detail " +
-		"says why.",
+	CodeGateFailed: "The eviction or readmission was not judged, so nothing was " +
+		"written. The reason is in this node's log; try again with the same `op_id`.",
 	CodeStreamRequired: "Name the stream this is about.",
 	CodeStreamUnreadable: "This node could not read that stream just now, so " +
 		"nothing was decided. Ask again in a moment.",
-	CodeReanchorRefused: "The reanchor was refused and nothing changed. The " +
-		"detail says why.",
+	CodeReanchorRefused: "The reanchor was refused or stopped. The detail says " +
+		"why, what was committed and what to do.",
+	CodeReanchorFailed: "The reanchor stopped on an error, and this node's log " +
+		"says which. Read where the reanchor stands before running it again.",
 	CodeTargetRequired: "Name the stream and the byte ceiling to move it to. A " +
 		"target is fixed for the life of the operation, so neither has a default.",
 	CodeCapacityRefused: "The capacity change was refused. The detail says why, " +
 		"and names the operation already open when there is one.",
-	CodeMaintenanceUnreadable: "The maintenance window's state could not be " +
-		"read. The detail says why.",
+	CodeCapacityFailed: "The capacity change stopped on an error, and this " +
+		"node's log says which. Read the maintenance status before going on.",
+	CodeMaintenanceUnreadable: "Couldn't read whether a capacity window is " +
+		"open just now. Ask again in a moment, and if it keeps failing, this " +
+		"node's log says why.",
 
 	CodeVoterInvalid: "That names no voter a removal could reach, so nothing " +
 		"changed. Name it by the node id or the peer id the broker listing shows.",
@@ -1329,6 +1456,14 @@ var codes = map[Code]string{
 		"build older than the mandatory keyring wrote, and a node reads only " +
 		"sealed revisions because the seal is what authenticates one. The hint " +
 		"says what brings its document back.",
+	CodeUnreadableFleetRevision: "This node doesn't hold the key the fleet " +
+		"sealed its revision under, so it can't read it. The hint says what " +
+		"fixes it.",
+	CodeUnsealedFleetRevision: "The fleet's revision arrived without a seal, " +
+		"so this node won't read it. The hint says what to do.",
+	CodeUnknownSealRevision: "That revision is sealed in a form this build of " +
+		"Crewlet doesn't read, most likely by a newer build, so this node can't " +
+		"read or replace it. The hint says what fixes it.",
 	CodeInvalidRevisionID: "Name the revision this is about.",
 	CodeAgainstNotFound:   "The revision to compare against is not held here.",
 	CodeUnsupportedPatchMediaType: "This endpoint takes a JSON Merge Patch: an " +
@@ -1371,9 +1506,9 @@ var codes = map[Code]string{
 		"restore it, then try again.",
 	CodeArtifactPurging: "This artifact is being deleted for good, so it " +
 		"cannot be restored. The deletion finishes on its own.",
-	CodeQuotaExceeded: "This would take the company past its artifacts quota, " +
-		"so nothing was saved. Remove artifacts, or ask an operator to raise " +
-		"the limit the detail names.",
+	CodeQuotaExceeded: "This would pass a limit on how much can be kept here, " +
+		"so nothing was saved. Remove what is no longer needed, or ask whoever " +
+		"sets the limit to raise it.",
 	CodeCarriedObjectGone: "Some files this version keeps are no longer stored, " +
 		"so nothing was published. Upload the files the detail names again.",
 	CodeUploadMismatch: "A file that arrived is not the one the upload " +
@@ -1404,8 +1539,10 @@ var codes = map[Code]string{
 	CodeBrandContrast: "The brand's text colour does not stand out enough from its " +
 		"light background to be read, so it was not adopted. Darken the text or " +
 		"lighten the background, then adopt it again.",
-	CodeLabelTaken: "Another version already has that label, or this " +
-		"artifact keeps no more labels. Choose another label.",
+	CodeLabelTaken: "Another version already has that label. Choose " +
+		"another one.",
+	CodeLabelsFull: "Every label this artifact keeps is in use. Remove one " +
+		"from a version that no longer needs it, then try again.",
 	CodeArtifactOriginUnset: "This engine has no address to open pages on, so " +
 		"this artifact can't be viewed yet. An operator sets " +
 		"`api.artifacts.external_url`.",
@@ -1422,11 +1559,8 @@ var codes = map[Code]string{
 		"to go ahead.",
 	CodeFolderAmbiguous: "That path names more than one folder you can see. Choose one " +
 		"of the folders the detail lists, by its id.",
-	CodeDataQuota: "This would take the data past its size limit, so nothing " +
-		"was written. Delete rows, or ask an operator to raise the limit the " +
-		"detail names.",
-	CodeDataGone: "This artifact's data is gone: the artifact was deleted or is " +
-		"in the trash, so nothing was written.",
+	CodeDataGone: "This artifact's data is gone: the artifact was deleted, so " +
+		"nothing was written.",
 	CodeNotUndoable: "That change can't be undone. The detail says why.",
 	CodeMigrationTooLarge: "This schema change rewrites too many rows at once, so " +
 		"nothing changed. Change fewer columns at a time.",
@@ -1445,7 +1579,7 @@ var codes = map[Code]string{
 		"Wait for it to finish, or stop it, then ask again.",
 	CodeAssistantBusy: "You have asked the assistant too much at once. Wait the moment " +
 		"Retry-After names, then ask again.",
-	CodeAssistantUnavailable:   "The assistant cannot answer right now. Try again in a moment.",
+	CodeAssistantUnavailable:   "The assistant can't answer here, and waiting won't change that.",
 	CodeAssistantModelNotReady: "The assistant's model cannot answer right now.",
 	CodeAssistantFileRefused: "This file cannot be attached. Attach a PNG, JPEG, WebP " +
 		"or GIF image.",
@@ -1491,7 +1625,9 @@ func (c Code) Valid() bool {
 }
 
 // Message is the sentence a person is shown for c, or "" for a code the table
-// does not carry.
+// does not carry — for a refusal under c that says nothing more about itself.
+// One that does may be shown a sentence chosen by what it says ([Envelope]):
+// `unauthorized` follows the deciding rule's reason.
 //
 // A code with no sentence still ANSWERS: `error` is what a client branches on,
 // and refusing over missing copy would turn a refusal into a failure. What it
@@ -1584,7 +1720,9 @@ func FailWithFields(w http.ResponseWriter, status int, code Code, detail Detail)
 }
 
 // Envelope is the refusal body [FailWithFields] writes, as a value: the
-// detail with `error` and `message` over it.
+// detail with `error` and `message` over it — the message the code's, chosen
+// by what the detail says where the code's sentence depends on it
+// ([messageFor]).
 //
 // EXPORTED FOR A RENDERING THAT IS ALSO A FIXTURE — the node gate's refusals,
 // whose bodies a golden file pins and the dashboard's suite reads — so the
@@ -1599,7 +1737,7 @@ func Envelope(code Code, detail Detail) map[string]any {
 		}
 	}
 	body[keyError] = string(code)
-	if message := code.Message(); message != "" {
+	if message := messageFor(code, detail); message != "" {
 		body[keyMessage] = message
 	} else {
 		// A refusal a person is shown nothing for. Not a failure of this
@@ -1798,17 +1936,26 @@ func NoActiveRevision(w http.ResponseWriter, detail Detail) {
 		detail)
 }
 
-// NativeHalvesNotUp is the detail every surface over Worklet and Doclet
+// NativeHalvesNotUp is the detail every surface over Worklet, Doclet and Chatlet
 // answers beside `no_active_revision`: the human write surface, the
-// operator's MCP surface, and the work, page and search questions on both
-// transports.
+// operator's act and MCP surfaces, and the work, page, chat and search
+// questions on both transports.
 //
 // ONE SENTENCE, for [NoActiveRevision]'s reason: it was written out at each of
 // the four places that answer it, and a client showing a person why a screen
-// is empty reads it from whichever of them it asked.
-const NativeHalvesNotUp = "this node has not been handed a company yet, so " +
-	"Worklet and Doclet are not running here; they come up with its first " +
-	"revision, with no restart"
+// is empty reads it from whichever of them it asked. It NAMES ALL THREE
+// HALVES, because each is the answer for every one of them: written while it
+// named Worklet and Doclet alone, a Chatlet verb on such a node (`crewlet chatlet`
+// prints the node's own words for it) was told that two halves it never asked
+// for were not running, and nothing about the one it had.
+//
+// IN A PERSON'S WORDS: it said the node "has not been handed a company" and
+// that the halves "come up with its first revision", which is how the engine
+// describes its own bring-up and nothing a person reading an empty screen acts
+// on.
+const NativeHalvesNotUp = "this node isn't running a company yet, so " +
+	"Worklet, Doclet and Chatlet aren't up here. The ones the company uses " +
+	"start as soon as it's set up, with no restart"
 
 // Unavailable writes a 503 carrying a Retry-After, which is the pair a client
 // needs to tell "come back" from "do not come back".
@@ -1873,17 +2020,48 @@ func ThrottledWith(w http.ResponseWriter, code Code, retryAfter time.Duration, d
 // THE ONLY OTHER WAY a 503 is written, so a route with something to say beside
 // the code cannot reach for [FailWithFields] and drop the header — which is how
 // a dozen of them came to answer "come back" without saying when.
+//
+// AND THE MESSAGE FOLLOWS THE HINT: a code whose own sentence invites a wait
+// reads its [waitless] sentence under no Retry-After, because the header and
+// the sentence beside it are one answer to "should I come back". A full log, a
+// full file store and an evicted node went out with no Retry-After and the
+// message "Try again in a moment", so a client that read the message rather
+// than the header sent the same request into the same refusal.
 func UnavailableWith(w http.ResponseWriter, code Code, retryAfterSeconds int, detail Detail) {
 	if retryAfterSeconds > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
+		FailWithFields(w, http.StatusServiceUnavailable, code, detail)
+		return
 	}
-	FailWithFields(w, http.StatusServiceUnavailable, code, detail)
+	body := Envelope(code, detail)
+	if said, ok := waitless[code]; ok && detail[keyOutcome] != OutcomeUnknown {
+		body[keyMessage] = said
+	}
+	Write(w, http.StatusServiceUnavailable, body)
+}
+
+// waitless are the sentences of the codes a caller writes under a hint it
+// derived (one that is zero where no wait clears the cause), as each reads
+// when it is zero: what happened, and that waiting does not change it — the
+// detail beside it says what does.
+//
+// NOT FOR A WRITE WHOSE OUTCOME NOBODY KNOWS ([UnknownOutcome]): it may have
+// landed, so "this can't be done" would be false, and it keeps the code's own
+// sentence, which sends the caller to retry the same operation or ask another
+// node.
+var waitless = map[Code]string{
+	CodeUnavailable: "This can't be done here, and waiting won't change that.",
+	CodeIdentityUnavailable: "Can't check who you are here, and waiting won't " +
+		"change that.",
+	CodeSeatHoldersUnavailable: "Can't check here who holds the seats this " +
+		"change removes, so nothing was written. Waiting won't change that.",
 }
 
 // OutcomeUnknown is the `outcome` a write nobody on this node can account for
 // answers with — the state log's own word for the third of its three outcomes
-// (statelog.OutcomeUnknown), spelled here because this package imports
-// nothing of the engine's; a test holds the two equal.
+// (statelog.OutcomeUnknown), spelled here because this package imports no
+// engine machinery, only the vocabularies its sentences name; a test holds
+// the two equal.
 const OutcomeUnknown = "unknown"
 
 // The keys an unknown outcome reserves, for [UnknownOutcome]'s rule that they

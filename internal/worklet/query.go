@@ -153,8 +153,11 @@ type SubtaskMode string
 
 const (
 	// SubtasksCollapsed hides a subtree behind its root. It and
-	// SubtasksExpanded filter ROOT tasks and let their subtrees ride along
-	// unfiltered; SubtasksSeparate filters every task on its own.
+	// SubtasksExpanded filter each task's ANCHOR and let what hangs from
+	// it ride along unfiltered — on the live side a tree's root, and in
+	// the trash the removal that took the task ([anchorOf]), so a task
+	// removed on its own is listed on its own; SubtasksSeparate filters
+	// every task on its own.
 	SubtasksCollapsed SubtaskMode = "collapsed"
 
 	// SubtasksExpanded shows a subtree under the root it rides along with,
@@ -195,7 +198,7 @@ type ShowClosed struct {
 }
 
 // Finished reports whether any finished work is in the answer — the one
-// question [compileWhere] and [admittedStatuses] both ask of this, stated
+// question [compilePredicate] and [admittedStatuses] both ask of this, stated
 // once so a fourth way to ask cannot reach one of them and not the other.
 func (s ShowClosed) Finished() bool {
 	return s.All || s.Recent > 0 || s.Since != nil
@@ -320,8 +323,11 @@ type Query struct {
 	// and `false` is the same exclusion said out loud.
 	//
 	// Without it there is no way to list what a removal hid, so nothing
-	// could reach [OpRestore] — `tracker_tasks_removed_idx` names
-	// `work_trash` as its reader and the reader did not exist.
+	// could reach [OpRestore] — `tracker_tasks_removed_idx` was declared
+	// for a `work_trash` reader that did not exist. A listing of the trash
+	// is read through the trash's own indexes ([taskSource]), and in the
+	// default subtask mode it lists each REMOVAL with what it took riding
+	// along ([anchorOf]).
 	Removed *bool
 
 	// Dates are keyed by the column they filter, so a compiler walks them
@@ -351,7 +357,6 @@ type Query struct {
 
 	LinkedPage string
 	References string
-	Batch      string
 
 	// Any is one level of disjunction, ANDed with the top-level keys.
 	Any []Query
@@ -512,7 +517,7 @@ type Params interface {
 // company's own and cannot be enumerated here — see [Query.parseFields].
 var QueryKeys = []string{
 	"any", "archived", "archived_at", "around", "asked_by", "asked_of", "assignee",
-	"batch", "blocked", "blocking", "checklist_assignee", "closed",
+	"blocked", "blocking", "checklist_assignee", "closed",
 	"closed_since", "collaborator",
 	"container", "created", "cursor", "done", "due", "estimate",
 	"fields", "finished", "flag", "group", "group_by", "group_by2",
@@ -606,7 +611,6 @@ func ParseQuery(p Params, now time.Time, loc *time.Location) (Query, error) {
 		// answering two ways depending on which parameter it was
 		// pasted into.
 		References: ProjectKey(p.String("references")),
-		Batch:      p.String("batch"),
 		AskedOf:    p.String("asked_of"),
 		// THE LIST, not the enum. See [Query.PriorityListOf].
 		PriorityListOf: strings.TrimSpace(p.String("priorities")),
@@ -778,7 +782,19 @@ func (q *Query) parseTags(p Params) error {
 				"are `any:`, `all:` and `none:`", head)
 		}
 	}
-	q.Tags = TagFilter{Mode: mode, Tags: csv(value)}
+	// EVERY TAG IS NORMALISED AS A WRITE NORMALISES IT ([tagSlugs], the
+	// write's own rule), because the rows hold slugs and a filter compares
+	// them exactly: left as typed, `tag=Regression` — what a model writes
+	// for the label it read — matched nothing, and an empty board reads as
+	// "no work carries this tag" rather than as a spelling the filter never
+	// resolved. A value that normalises to no slug is refused naming it, for
+	// the same reason and with the write's own refusal, and a tag named
+	// twice is named once.
+	tags, err := tagSlugs(csv(value))
+	if err != nil {
+		return err
+	}
+	q.Tags = TagFilter{Mode: mode, Tags: tags}
 	return nil
 }
 
@@ -994,7 +1010,7 @@ func (q *Query) parseText(p Params) error {
 		return fmt.Errorf("worklet: the find text is %d bytes and the bound is "+
 			"%d — this is a substring of a key or a title, and no title is "+
 			"longer, so a longer one matches nothing; to find work by what it "+
-			"is about, search it (search_work_items, or work_search)",
+			"is about, search it ("+SearchWorkItemsTool+", or work_search)",
 			len(q.Text), MaxQueryText)
 	}
 	return nil
@@ -1256,115 +1272,18 @@ func (q *Query) parseRowFields(p Params) error {
 // Wants reports whether the caller asked for one row fact.
 func (q Query) Wants(field RowField) bool { return slices.Contains(q.RowFields, field) }
 
-// ParseFreshness reads the four freshness keys — `read_level`,
-// `max_lag_seconds`, `max_lag_seq` and `min_position` — and is the ONE place
-// their rules are stated.
+// parseLevel reads the four freshness keys onto the query, through the
+// framework's one grammar for them ([statelog.ParseFreshness]).
 //
-// # Why one grammar and not one per question
-//
-// Seventeen registered questions take a level and a staleness bound, and
-// exactly ONE of them — the task board, which happens to be the one that goes
-// through [ParseQuery] — used to read either. The rest hardcoded a
-// level and never looked at a bound at all, so a caller asking a project
-// listing for a fresher answer was served the same one and told it came back
-// at the level asked for. One grammar serves the board, the socket, the REST
-// route and a seat's own tools, and a second reading of `read_level` would be
-// the one place a freshness key meant something slightly different.
-//
-// The shape it returns is the framework's own ([statelog.Freshness]) because
-// the knowledge base reads through the same four keys and a second struct
-// with the same four fields is how the two drift.
-//
-// # `min_position` and `session`
-//
-// `min_position` is a log position — `<stream>@<generation>:<sequence>`, the
-// form every write answers with and every wake carries — and the answer is
-// served from no earlier than it, at whatever level. It is what makes
-// `read_level=session` honest here: a session read waits for the caller's
-// own last write, this grammar had no key to carry one, and accepted bare the
-// level would wait for the zero position, serve this node's committed prefix
-// and label the answer `session`. So `session` is accepted ONLY beside a
-// `min_position`, and refused without one naming the key.
-func ParseFreshness(p Params) (statelog.Freshness, error) {
-	var out statelog.Freshness
-	if raw := strings.TrimSpace(p.String("min_position")); raw != "" {
-		at, err := statelog.ParsePosition(raw)
-		if err != nil {
-			return out, fmt.Errorf("min_position: %w", err)
-		}
-		out.MinPosition = at
-	}
-	value := strings.TrimSpace(p.String("read_level"))
-	if value == "" {
-		// ABSENT IS NOT A FIFTH STATE. It resolves to the SURFACE's own
-		// default — a seat tool linearizable, a dashboard poll stale —
-		// which is what makes the default a property of the surface
-		// rather than of the model that happened to omit the key.
-		//
-		// AND A BOUND WITHOUT A LEVEL IS STILL READ, because the surface
-		// that resolves an absent level to `stale` is exactly the one
-		// whose callers bound staleness — a dashboard poll. Refusing it
-		// here would refuse the common case; carrying it and letting a
-		// non-stale resolution ignore it would be the silent drop this
-		// grammar was already fixed for once.
-		return withBounds(out, p)
-	}
-	level := statelog.ReadLevel(value)
-	if !level.Valid() {
-		return out, fmt.Errorf("worklet: %q is not a read level; the four are "+
-			"linearizable, session, stale and consistent_prefix", value)
-	}
-	if level == statelog.ReadSession && out.MinPosition.IsZero() {
-		return out, fmt.Errorf("worklet: read_level=session waits for the " +
-			"caller's own last write and none was named — send the position " +
-			"that write answered with as min_position, or ask for " +
-			"linearizable, or for stale with max_lag_seq to bound how far " +
-			"behind an answer may be")
-	}
-	out.Level = level
-	if level != statelog.ReadStale {
-		for _, key := range []string{"max_lag_seq", "max_lag_seconds"} {
-			if p.Has(key) {
-				return out, fmt.Errorf("worklet: %s bounds how STALE an answer "+
-					"may be and read_level is %s, which is not a staleness "+
-					"bound at all", key, level)
-			}
-		}
-		return out, nil
-	}
-	return withBounds(out, p)
-}
-
-// withBounds reads the two staleness bounds onto an answer that may carry them.
-//
-// THE BOUND IS CARRIED, not just checked. A bound refused where it is
-// inconsistent and dropped where it is not is a bound that never bounded
-// anything — which is what `max_lag_seconds` did before it was fixed, and what
-// `max_lag_seq` did after, in the same function, for longer.
-func withBounds(f statelog.Freshness, p Params) (statelog.Freshness, error) {
-	if p.Has("max_lag_seconds") {
-		secs := p.Int("max_lag_seconds", 0)
-		if secs < 0 {
-			return f, fmt.Errorf("worklet: max_lag_seconds is how many seconds "+
-				"behind an answer may be, and %d is not a duration", secs)
-		}
-		f.MaxLag = time.Duration(secs) * time.Second
-	}
-	if p.Has("max_lag_seq") {
-		records := p.Int("max_lag_seq", 0)
-		if records < 0 {
-			return f, fmt.Errorf("worklet: max_lag_seq is how many records "+
-				"behind an answer may be, and %d is not a count", records)
-		}
-		f.MaxLagSeq = uint64(records)
-	}
-	return f, nil
-}
-
+// THE GRAMMAR IS NOT THE TRACKER'S. Every domain's questions read the same four
+// keys, and the parser lived here once — so a bad `read_level` on a chat or a
+// wiki question was refused naming the tracker. What stays here is the
+// tracker's own prefix on a tracker query's refusal, which every other refusal
+// of this grammar carries too.
 func (q *Query) parseLevel(p Params) error {
-	got, err := ParseFreshness(p)
+	got, err := statelog.ParseFreshness(p)
 	if err != nil {
-		return err
+		return fmt.Errorf("worklet: %w", err)
 	}
 	q.Level, q.MaxLag, q.MaxLagSeq = got.Level, got.MaxLag, got.MaxLagSeq
 	q.MinPosition = got.MinPosition

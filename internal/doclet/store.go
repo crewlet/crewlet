@@ -2,9 +2,7 @@ package doclet
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/textcut"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE KNOWLEDGE BASE'S WRITE PATH: one record per operation, published to the
@@ -224,9 +223,13 @@ func newTimeOrderedID() string { return statelog.NewOpID(time.Now(), "") }
 // name is held in this container" is the whole of what happened, while the
 // framework's wording for it — the object already exists — names an object
 // nobody asked about.
+//
+// ONLY ON A SUBJECT A PERSON EDITS — see [refusal], which reads the subject's
+// kind: a node's eviction gate goes through here too, and on its subject the
+// translation named a page after a node id.
 func (s *Store) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	result, err := s.publisher.Publish(ctx, req)
-	return result, refusal(err, req.Subject.ID)
+	return result, refusal(err, req.Subject)
 }
 
 // onPage publishes one write about one page, stating the page's CONTAINER in
@@ -306,8 +309,7 @@ var errPageMoved = errors.New("doclet: the page moved to another space under thi
 func (s *Store) containerOf(ctx context.Context, pageID string) (string, error) {
 	var container string
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
-		err := tx.QueryRowContext(ctx,
-			`SELECT container FROM pages_heads WHERE id = ?`, pageID).Scan(&container)
+		err := tx.QueryRowContext(ctx, containerOfStatement, pageID).Scan(&container)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -331,6 +333,14 @@ func inContainer(head Page, container string) error {
 
 // refusal is that translation, as a function over values.
 //
+// IT TRANSLATES ONLY ON A SUBJECT A PERSON EDITS — a page, a title, a
+// container. The log's own subjects (a node's eviction gate, a reanchor's
+// generation, a barrier) are arbitrated by the same framework, and their
+// refusals stay in its words: translated, two operators contending over one
+// node's gate were told "the page kept changing under this write: <node id>",
+// about an edit nobody was making. A kind added to [ObjectKinds] is red in
+// this function's test until somebody says whether a person edits it.
+//
 // Separate from the append because the append needs a broker, a store and a
 // log, and the two refusals that reach a person are reachable through none of
 // them on demand: an exhausted compare-and-set is sixteen lost races, which no
@@ -338,18 +348,33 @@ func inContainer(head Page, container string) error {
 // re-reads — and the branch a seat is told to act on had no producer at all
 // until this function existed, so [ErrConflict] was a sentinel the tool
 // surface matched on and nothing ever returned.
-func refusal(err error, subject string) error {
-	switch {
-	case err == nil:
+func refusal(err error, subject statelog.Subject) error {
+	if err == nil {
 		return nil
+	}
+	switch ObjectKind(subject.Kind) {
+	case KindPage, KindTitle, KindContainer:
+	default:
+		return err
+	}
+	switch {
 	case errors.Is(err, statelog.ErrExists):
-		return fmt.Errorf("%w: %s", ErrTitleTaken, subject)
+		// NOT THE SUBJECT: a title's is its container and a digest of the
+		// title, which says nothing to the person reading this beside the
+		// title they typed. The page that holds it is often the one meant.
+		return fmt.Errorf("%w. Open that page and edit it, or pick another title",
+			ErrTitleTaken)
 	case errors.Is(err, statelog.ErrConflict):
 		// The retry bound lives in the framework, which is where the
 		// rounds are counted; what does not live there is that a page is
 		// a thing a PERSON is editing, so the answer a seat needs is
 		// "read it again", not "the append failed".
-		return fmt.Errorf("%w: %s: %w", ErrConflict, subject, err)
+		//
+		// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the
+		// subject the race was lost on (a page's id, or a title's
+		// container and digest), and neither the subject itself: a caller
+		// that printed this error would show a person a broker path.
+		return fmt.Errorf("%w: %w", ErrConflict, statelog.ErrConflict)
 	}
 	return err
 }
@@ -434,7 +459,7 @@ var (
 	ErrNotFound = errors.New("doclet: no such record")
 
 	// ErrTitleTaken reports a title another page in the container holds.
-	ErrTitleTaken = errors.New("doclet: that title is taken in this container")
+	ErrTitleTaken = errors.New("doclet: a page in this space already has that title")
 
 	// ErrStaleVersion reports a save against a version that has moved.
 	ErrStaleVersion = errors.New("doclet: the page has changed since it was read")
@@ -481,55 +506,31 @@ type Actor struct {
 	// AN OPERATION ID THE ENGINE MINTED, held to [statelog.CheckCallerOpID]
 	// by every surface that takes one and by every write here, which refuses
 	// an actor carrying any other: the ids derived from it carry its instant
-	// — see [Store.operation].
+	// — see [statelog.KeyedOpID].
 	OpKey string
 }
 
 // operation is the id one write is published under: derived from the actor's
-// [Actor.OpKey] when there is one, and freshly minted when there is not.
+// [Actor.OpKey] when there is one, by [statelog.KeyedOpID] — which states why
+// the verb, the object, what the write says and the key's own instant are
+// each in it — and freshly minted when there is not.
 //
-// THE VERB AND THE OBJECT ARE PART OF THE DERIVATION, so one key covers every
-// record one gesture writes — a save and the rename that follows it are two
-// records, and one id for both would have the ledger collapse the second as a
-// redelivery of the first. The verb is also the id's NAME, which is what a
-// reader of the ledger finds it by, so it never holds a dot: in the grammar a
-// dot begins a gesture's STEP ([statelog.StepOpID]), and `comment.edit` would
-// read as the edit step of an operation called `comment`.
-//
-// AND WHAT THE WRITE SAYS IS PART OF IT: content is the write's own input —
-// the new page, the save, the title, the reason — digested whole. The ledger
-// answers an operation it already holds BEFORE the write is decided
-// ([statelog.Result.Collapsed]), so derived from the key, the verb and the
-// object alone, the same key sent with another body, another title or another
-// reason was the first write's operation: answered from the ledger, with
-// nothing of the second written — a change reported as made and silently
-// dropped. The human write surface bound its key to the request for exactly
-// that reason before handing it here; bound here, every caller that brings a
-// key is held to it, and a retry — which resends the same input — is still the
-// same operation.
-//
-// AND IT CARRIES THE KEY'S OWN INSTANT. The key is an operation id the engine
-// minted — every surface that takes one holds it to
-// [statelog.CheckCallerOpID] — and the ledger vouches for a retry by the
-// instant its id carries ([statelog.OpMintedAt]), so a derivation that
-// dropped it (a name-based uuid over the key) would be read as minted before
-// every loss the ledger ever had, and once it had swept anything such a write
-// was answered `unknown` without being published, on every attempt.
-//
-// An error is an input that will not encode, which is a type this package
-// declared wrongly rather than anything a caller sent.
+// The content is the write's own input — the new page, the save, the title,
+// the reason. Bound here rather than by each surface that brings a key, every
+// caller that brings one is held to it: the human write surface bound its key
+// to the request for that reason before handing it here. And the verbs are
+// spelled with a hyphen, `comment-edit`, because `comment.edit` would read as
+// the edit step of an operation called `comment`.
 func (s *Store) operation(actor Actor, verb, object string, content any) (string, error) {
 	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {
 		return s.newSeqID(), nil
 	}
-	said, err := json.Marshal(content)
+	id, err := statelog.KeyedOpID(key, verb, object, content)
 	if err != nil {
-		return "", fmt.Errorf("doclet: digest what a %s says: %w", verb, err)
+		return "", fmt.Errorf("doclet: %w", err)
 	}
-	sum := sha256.Sum256(said)
-	at, _ := statelog.OpMintedAt(key)
-	return statelog.DeriveOpID(at, verb, key, object, hex.EncodeToString(sum[:])), nil
+	return id, nil
 }
 
 // pageIDOf is the id a create gives its page: a FUNCTION OF THE OPERATION, so
@@ -709,9 +710,9 @@ func (s *Store) refuseUndeclared(container string) error {
 	slices.Sort(declared)
 	where := "this company declares none yet"
 	if len(declared) > 0 {
-		where = "write in one of: " + strings.Join(declared, ", ")
+		where = "write in " + words.Or(declared)
 	}
-	return invalid("container", "%s is not a space this company declares — a "+
+	return invalid("container", "%q isn't a space this company declares. A "+
 		"page lives in a declared space: a unit's or a seat's `space:`, "+
 		"`knowledge.root_space`, or the tool-skills container "+
 		"(`knowledge.skills_container`). Declare it in the company document, "+
@@ -736,15 +737,17 @@ func (a Actor) IsHuman() bool { return a.Kind == AuthorHuman || a.Kind == Author
 
 func (a Actor) validate() error {
 	if !a.Kind.Valid() {
-		return invalid("actor.kind", "%q is not one of %v", a.Kind, AuthorKinds())
+		return invalid("actor.kind", "%q is not one of %s", a.Kind, words.Or(AuthorKinds()))
 	}
 	// A KEY IS AN OPERATION ID THE ENGINE MINTED, or no key. Every id a
-	// write derives from it carries the key's own instant ([Store.operation]),
-	// and a key outside the grammar carries none — read as minted at the
-	// epoch, which is before every loss the ledger will ever have, so once it
-	// had swept anything each such write would be answered `unknown` without
-	// being published, on every attempt, for ever. Refused here, at the one
-	// boundary every write passes, rather than trusted to every surface.
+	// write derives from it carries the key's own instant
+	// ([statelog.KeyedOpID]), and a key outside the grammar carries none —
+	// read as minted at the epoch, which is before every loss the ledger
+	// will ever have, so once it had swept anything each such write would be
+	// answered `unknown` without being published, on every attempt, for ever.
+	// Refused here, at the one boundary every write passes, with the
+	// sentence a caller can act on — the derivation refuses one too, as the
+	// backstop, but in its own words.
 	if key := strings.TrimSpace(a.OpKey); key != "" {
 		if err := statelog.CheckCallerOpID(key); err != nil {
 			return invalid("actor.op_key", "%v", err)
@@ -868,9 +871,7 @@ const HeadRevision = `MAX(version, scoped_through)`
 func readHeadTx(ctx context.Context, tx *sql.Tx, id string) (Page, uint64, error) {
 	var document []byte
 	var revision int64
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, `+HeadRevision+` FROM pages_heads WHERE id = ?`, id).
-		Scan(&document, &revision)
+	err := tx.QueryRowContext(ctx, headTxStatement, id).Scan(&document, &revision)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Page{}, 0, fmt.Errorf("%w: page %s", ErrNotFound, id)
@@ -908,3 +909,11 @@ func nullableTime(t *time.Time) any {
 type SkillDetector interface {
 	IsSkill(body string) bool
 }
+
+// The store's own reads of one page's row by its key, named for the plan gate:
+// the space it is in ([Store.containerOf]), and its head inside a decision
+// ([readHeadTx]).
+const (
+	containerOfStatement = `SELECT container FROM pages_heads WHERE id = ?`
+	headTxStatement      = `SELECT document, ` + HeadRevision + ` FROM pages_heads WHERE id = ?`
+)

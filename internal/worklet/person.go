@@ -278,6 +278,16 @@ func (c SetChange[T]) both() bool {
 }
 
 // values is every value the change names, for the per-value checks.
+// asked is how many entries the change itself would put in the collection: a
+// whole set's, or an add's — what a cap on the collection can refuse before
+// the stored set is read.
+func (c SetChange[T]) asked() int {
+	if c.Set != nil {
+		return len(*c.Set)
+	}
+	return len(c.Add)
+}
+
 func (c SetChange[T]) values() []T {
 	var out []T
 	if c.Set != nil {
@@ -322,6 +332,20 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 			"a whole set and a change to it at once — a caller states one or "+
 			"the other, because whichever won would discard the other", named)
 	}
+	// A GESTURE PAST THE CAP ON ITS OWN is the request's — a whole set, or
+	// an add, longer than the list may ever be, which no state of the record
+	// lets land — and one that only pushes the record past it is the
+	// record's state, decided below on the set it would leave.
+	switch {
+	case gesture.Views.asked() > MaxPinnedViews:
+		return WriteResult{}, invalid("this gesture names %d views for %s "+
+			"and a person pins at most %d", gesture.Views.asked(), named,
+			MaxPinnedViews)
+	case gesture.Favorites.asked() > MaxFavorites:
+		return WriteResult{}, invalid("this gesture names %d things for %s "+
+			"to star and a person stars at most %d", gesture.Favorites.asked(),
+			named, MaxFavorites)
+	}
 	for _, view := range gesture.Views.values() {
 		if strings.TrimSpace(view) == "" {
 			return WriteResult{}, invalid("a pinned view of %s names "+
@@ -340,14 +364,17 @@ func (w *Writer) WritePins(ctx context.Context, opID, handle string,
 
 		views := gesture.Views.apply(post.PinnedViews)
 		favorites := gesture.Favorites.apply(post.Favorites)
+		// THE RECORD'S STATE: the gesture fits, and the set it would
+		// leave does not until something is unpinned.
 		switch {
 		case len(views) > MaxPinnedViews:
-			return invalid("%s would pin %d views and the maximum "+
-				"is %d — a strip where everything is first has no first; "+
-				"unpin one first", named, len(views), MaxPinnedViews)
+			// A STRIP WHERE EVERYTHING IS FIRST HAS NO FIRST, which is
+			// what the cap is for.
+			return refusedByState("that would make %d pinned views for %s, "+
+				"and %d is the most. Unpin one first", len(views), named, MaxPinnedViews)
 		case len(favorites) > MaxFavorites:
-			return invalid("%s would star %d things and the maximum "+
-				"is %d; unstar one first", named, len(favorites), MaxFavorites)
+			return refusedByState("that would make %d starred things for %s, "+
+				"and %d is the most. Unstar one first", len(favorites), named, MaxFavorites)
 		}
 		post.PinnedViews, post.Favorites = views, favorites
 		return nil
@@ -617,8 +644,8 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 		// stream is in a number space the inbox does not count in.
 		if stream := trackerStream; at.Stream != stream {
 			return invalid("%s is a position on %s, and an inbox is "+
-				"read through a position on %s — the one `work_inbox` answers",
-				at, at.Stream, stream)
+				"read through a position on %s — the one `%s` answers",
+				at, at.Stream, stream, WorkInboxTool)
 		}
 	}
 	if g.PrimaryReasons != nil {
@@ -630,6 +657,10 @@ func checkInboxGesture(g InboxGesture, now time.Time) error {
 	}
 	return nil
 }
+
+// recordPositionStatement is where one change sits in the log, read by
+// [inboxPositions] and named for the plan test.
+const recordPositionStatement = `SELECT log_seq FROM tracker_history WHERE id = ?`
 
 // inboxPositions finds the log position of every notice a gesture names.
 //
@@ -654,13 +685,12 @@ func inboxPositions(ctx context.Context, tx *sql.Tx,
 	out := make(map[string]uint64, len(ids))
 	for _, id := range ids {
 		var packed int64
-		switch err := tx.QueryRowContext(ctx,
-			`SELECT log_seq FROM tracker_history WHERE id = ?`, id).
+		switch err := tx.QueryRowContext(ctx, recordPositionStatement, id).
 			Scan(&packed); {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, invalid("record %s is not a change this "+
 				"company recorded — a mark names the `record_id` a "+
-				"`work_inbox` notice carries", id)
+				"`%s` notice carries", id, WorkInboxTool)
 		case err != nil:
 			return nil, fmt.Errorf("worklet: read where record %s sits: %w",
 				id, err)

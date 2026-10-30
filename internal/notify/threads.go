@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -14,8 +15,10 @@ import (
 //     channel, so it should see what is said in the channel.
 //   - A THREAD REPLY reaches it only if the seat FOLLOWS that thread.
 //   - A seat starts following when it is mentioned, when somebody uses a
-//     collective address, when it posts in the thread itself, or when
-//     something subscribes it explicitly.
+//     collective address, or when it posts in the thread itself. A
+//     top-level message that names it or the room starts the thread its
+//     own id becomes — FOR THAT REASON, because the reason is what decides
+//     whether the replies under it oblige an answer ([FollowReason.Addresses]).
 //
 // What differs per backend is only the shape of a thread identifier and the
 // GRAMMAR a mention is written in — Slack rewrites every mention into markup
@@ -39,9 +42,72 @@ const (
 	// FollowParticipated means the seat posted in the thread, which is what
 	// every chat client does when a person replies.
 	FollowParticipated FollowReason = "participated"
-	// FollowExplicit means something subscribed the seat directly.
-	FollowExplicit FollowReason = "explicit"
 )
+
+// followReasons is the vocabulary, strongest signal first. One list, so
+// [FollowReason.Valid] and [AddressingFollows] cannot know different sets.
+//
+// THERE IS NO "explicit". It meant "something subscribed the seat directly",
+// and the only thing that ever wrote it was a top-level message's follow of
+// its own thread — whatever had triggered it — so a broadcast's thread was
+// recorded as a subscription, and once the reason decided the reply
+// obligation every seat in the room owed an answer to every reply under
+// every @channel. That follow now records the reason that triggered it.
+var followReasons = []FollowReason{
+	FollowMention, FollowCollective, FollowParticipated,
+}
+
+// keep is the reason a follow holds once a seat is asserted into its thread
+// for asserted: the STRONGER of that and what it held.
+//
+// NEVER A DOWNGRADE, because the reason is what decides whether a reply
+// obliges an answer ([FollowReason.Addresses]). Overwritten by whatever came
+// last, a seat named in a thread and then caught by an @here there followed
+// it as a broadcast, and the next reply that should have been answered was
+// one it was free to ignore. A shout followed by a mention still upgrades.
+//
+// A held reason this build does not know is KEPT. It was written by a newer
+// build, which a rolling upgrade guarantees, and nothing here can rank it —
+// so overwriting it could be exactly the downgrade this rule exists to
+// prevent. The write still refreshes it.
+func keep(held FollowReason, following bool, asserted FollowReason) FollowReason {
+	switch {
+	case !following || held == "":
+		return asserted
+	case !held.Valid():
+		return held
+	case slices.Index(followReasons, held) <= slices.Index(followReasons, asserted):
+		return held
+	}
+	return asserted
+}
+
+// Valid reports whether r is a reason the engine knows.
+//
+// A reason read back out of a follow store or off a notification's metadata
+// is a VALUE rather than a panic: the row may have been written by a build
+// that knew a reason this one does not, which a rolling upgrade guarantees.
+func (r FollowReason) Valid() bool { return slices.Contains(followReasons, r) }
+
+// Addresses reports whether a seat in a conversation FOR THIS REASON owes
+// its next message a reply.
+//
+// MENTION ONLY. A collective address, and having spoken in a thread once,
+// put the seat in the room; neither makes it the addressee of
+// everything said there afterwards. Read as an obligation — which is what
+// the presence of a `thread_following` marker used to mean — every later
+// reply in every thread a seat had ever posted in became a turn that may not
+// end in silence, and a company of agents answering each other's threads
+// does not stop.
+//
+// MENTION IS A PROXY HERE, deliberately. What the obligation really wants is
+// "this conversation is the seat's own": a reply under a root it wrote, or a
+// message naming it. A vendor parser cannot see who wrote a thread's root —
+// it holds one delivery, not the thread, and no chat backend puts the root's
+// author on a reply — so being named is the closest evidence available. It
+// errs toward answering, which is the half a person notices: to them,
+// silence is indistinguishable from a message that was lost.
+func (r FollowReason) Addresses() bool { return r == FollowMention }
 
 // MentionGrammar is how one backend writes a mention.
 //
@@ -73,10 +139,19 @@ type MentionGrammar interface {
 // way back but for somebody to mention it again.
 //
 // THE SEAT IS NAMED BY ITS HANDLE, which is immutable (ADR-0013).
+//
+// Follow writes the reason choose answers for the record it replaces, and
+// answers that reason: choose is handed what is held and runs against the
+// record the write lands on, so a choice can never be made over a reason
+// another node wrote a moment before. That is what lets [ThreadTracker] keep
+// the STRONGER of two reasons when two messages in one thread are parsed at
+// once — which reason is stronger is this package's vocabulary, and the store
+// ranks nothing. Every call writes, an unchanged reason included, because the
+// write is the follow's activity stamp.
 type FollowStore interface {
-	Follow(ctx context.Context, backend, seat, channel, thread, reason string, at time.Time) error
+	Follow(ctx context.Context, backend, seat, channel, thread string, at time.Time,
+		choose func(held string, following bool) string) (string, error)
 	Following(ctx context.Context, backend, seat, channel, thread string) (string, bool, error)
-	Unfollow(ctx context.Context, backend, seat, channel, thread string) (bool, error)
 }
 
 // ChatMessage is one inbound chat message, in backend-neutral terms.
@@ -88,6 +163,11 @@ type ChatMessage struct {
 	// the follow model turns on, so a backend that reports a top-level
 	// message's own id here would deliver every reply in every thread.
 	Thread string
+
+	// ID is this message's own id — the thread every reply to it will
+	// carry, which is what a top-level message that names the seat makes
+	// it follow. Read only where Thread is empty.
+	ID string
 
 	Text string
 
@@ -162,9 +242,19 @@ type Delivery struct {
 	// Deliver is whether the message reaches the seat.
 	Deliver bool
 
-	// Reason is why, when a follow is involved. Empty for a top-level
-	// channel message, which needs none — the bot is in the channel.
+	// Reason is why THIS MESSAGE reached the seat: what it triggered, or,
+	// for a reply that triggered nothing, why the seat follows the thread.
+	// Empty for a top-level channel message that triggered nothing, which
+	// needs no reason — the bot is in the channel.
 	Reason FollowReason
+
+	// Following is why the seat is in this message's THREAD once this
+	// message is counted — the reason the follow holds afterwards, which
+	// for a trigger is the stronger of what it held and what it asserted,
+	// so an @here in a thread the seat was named in reaches it as a
+	// broadcast while it stays there because it was named. Empty where no
+	// follow is involved, and where one could not be recorded.
+	Following FollowReason
 
 	// Followed is whether THIS message established or refreshed a follow,
 	// as opposed to riding one already held.
@@ -180,7 +270,12 @@ type Delivery struct {
 //
 // The follow is recorded BEFORE the delivery decision and independently of
 // it: a mention in a thread means this seat follows the thread from now on,
-// whether or not this particular message is the one that wakes it.
+// whether or not this particular message is the one that wakes it. A
+// TOP-LEVEL message that triggers follows the thread its own id becomes, so
+// a seat named in a channel hears the answers to what it was asked without
+// being named again — recorded here, for the reason that triggered it, and
+// not by each backend after the fact: when both parsers did it themselves
+// they recorded every such follow as a subscription, a broadcast's included.
 //
 // An unreadable store reports NOT following — the read fails closed. A
 // missed thread reply is quiet and self-healing, because the next mention
@@ -193,21 +288,27 @@ type Delivery struct {
 func (t *ThreadTracker) Reaches(ctx context.Context, seat, selfIdentity string, m ChatMessage, at time.Time) (Delivery, error) {
 	reason, triggered := t.trigger(m, selfIdentity)
 
-	var err error
-	if triggered && m.Thread != "" {
-		err = t.store.Follow(ctx, t.Backend(), seat, m.Channel, m.Thread, string(reason), at)
+	// The thread a trigger follows: the one this message is in, or the one
+	// a top-level message starts.
+	thread := m.Thread
+	if thread == "" {
+		thread = m.ID
+	}
+	if triggered && thread != "" {
+		following, err := t.assert(ctx, seat, m.Channel, thread, reason, at)
 		if err != nil {
 			// The follow was not recorded, but this message still
 			// named the seat — deliver it and let the next mention
 			// re-establish the follow. Dropping it too would mean a
 			// store blip eats a message somebody addressed by name.
 			log.WarnContext(ctx, "thread_follow_not_recorded", "backend", t.Backend(),
-				"seat", seat, "thread", m.Thread, "error", err.Error())
+				"seat", seat, "thread", thread, "error", err.Error())
 			return Delivery{Deliver: true, Reason: reason}, err
 		}
+		return Delivery{Deliver: true, Reason: reason, Following: following, Followed: true}, nil
 	}
 	if triggered {
-		return Delivery{Deliver: true, Reason: reason, Followed: m.Thread != ""}, nil
+		return Delivery{Deliver: true, Reason: reason}, nil
 	}
 	if m.Thread == "" {
 		// A top-level channel message. The bot is in the channel.
@@ -218,7 +319,27 @@ func (t *ThreadTracker) Reaches(ctx context.Context, seat, selfIdentity string, 
 	if err != nil {
 		return Delivery{}, err
 	}
-	return Delivery{Deliver: following, Reason: FollowReason(held)}, nil
+	if !following {
+		return Delivery{}, nil
+	}
+	return Delivery{Deliver: true, Reason: FollowReason(held), Following: FollowReason(held)}, nil
+}
+
+// assert records that a seat is in a thread for reason, keeping a stronger
+// reason the follow already holds, and answers the reason it holds afterwards.
+//
+// THE ONE WRITE every follow takes — a trigger and the seat's own post alike —
+// so the no-downgrade rule ([keep]) and the activity stamp are one path rather
+// than one per caller: each of them used to decide for itself, and only one
+// remembered not to downgrade.
+func (t *ThreadTracker) assert(ctx context.Context, seat, channel, thread string,
+	reason FollowReason, at time.Time) (FollowReason, error) {
+
+	held, err := t.store.Follow(ctx, t.Backend(), seat, channel, thread, at,
+		func(held string, following bool) string {
+			return string(keep(FollowReason(held), following, reason))
+		})
+	return FollowReason(held), err
 }
 
 // trigger combines the backend's targeting with the text's grammar.
@@ -252,29 +373,21 @@ func (t *ThreadTracker) trigger(m ChatMessage, selfIdentity string) (FollowReaso
 // not even be running has joined a conversation.
 //
 // It does not downgrade an existing follow: a seat already following because
-// it was named keeps that reason, because participation is the weaker
-// signal and an operator reading `participated` on a thread the seat was
-// summoned to would be reading a lie.
+// it was named keeps that reason, because participation is the weaker signal,
+// an operator reading `participated` on a thread the seat was summoned to
+// would be reading a lie, and the reason decides whether the next reply
+// obliges an answer.
+//
+// It DOES refresh it. The follow's record is its activity stamp — the broker
+// expires what has gone quiet for ninety days (coord.FollowRetention) — and
+// a seat posting in a thread is the plainest activity there is. Returning
+// early on a follow already held let a thread the seat kept answering expire
+// ninety days after it was last NAMED there, and the next unnamed reply was
+// dropped.
 func (t *ThreadTracker) Participated(ctx context.Context, seat, channel, thread string, at time.Time) error {
 	if thread == "" {
 		return nil
 	}
-	if _, following, err := t.store.Following(ctx, t.Backend(), seat, channel, thread); err != nil {
-		return err
-	} else if following {
-		return nil
-	}
-	return t.store.Follow(ctx, t.Backend(), seat, channel, thread,
-		string(FollowParticipated), at)
-}
-
-// Follow subscribes a seat, by handle, to a thread explicitly.
-func (t *ThreadTracker) Follow(ctx context.Context, seat, channel, thread string, at time.Time) error {
-	return t.store.Follow(ctx, t.Backend(), seat, channel, thread,
-		string(FollowExplicit), at)
-}
-
-// Unfollow drops a subscription, reporting whether one was there.
-func (t *ThreadTracker) Unfollow(ctx context.Context, seat, channel, thread string) (bool, error) {
-	return t.store.Unfollow(ctx, t.Backend(), seat, channel, thread)
+	_, err := t.assert(ctx, seat, channel, thread, FollowParticipated, at)
+	return err
 }

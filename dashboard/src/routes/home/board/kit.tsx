@@ -26,13 +26,20 @@ import { Card, type NodeHue } from "@crewlethq/ui";
 import {
   DESTINATIONS,
   WORKSPACES,
+  closedBy,
   serviceShown,
   type Destination,
   type Service,
   type ServicesRun,
 } from "~/app/nav.ts";
-import { holdsAny, type Grant } from "~/lib/access.ts";
+import type { Grant } from "~/lib/access.ts";
 import { href, useParam } from "~/app/router.tsx";
+import { QueryState } from "~/components/common.tsx";
+import { missingFrom } from "~/components/CoverageNote.tsx";
+import { INCOMPLETE_NOTE } from "~/components/work.tsx";
+import type { QueryErrorCode } from "~/contract/errors.ts";
+import type { Coverage } from "~/contract/coverage.ts";
+import type { LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import { DEFAULT_RANGE, rangeOf } from "~/routes/home/model.ts";
 
 /** One choice a widget's setting offers: a saved view, a project, a seat. */
@@ -46,6 +53,13 @@ export interface WidgetChoices {
   loading: boolean;
   /** Said when there is nothing to choose from: "No saved views yet." */
   empty?: string;
+  /**
+   * Said beside the choices when they are not every one there is: the
+   * question that lists them stopped at its page ("Only the first 200
+   * projects are offered."). A reader looking for one that is not offered is
+   * told why rather than left to conclude it does not exist.
+   */
+  partial?: string;
 }
 
 /**
@@ -162,10 +176,15 @@ export function widgetShown(
   return widgetMissing(def, params, runs) === undefined;
 }
 
-/** Whether a reader holding `grants` may open a page: its workspace's grants and its own, as the sidebar locks them. */
+/**
+ * Whether a reader holding `grants` may open a page: nothing closes its
+ * ADDRESS, by the one rule the frame's refusal, the sidebar's locks and the
+ * palette read (`closedBy` in `nav.ts`) — the workspace's permissions first,
+ * then the section's. A destination carries no grants of its own to read, and
+ * a second rule here would offer a widget whose Open meets the frame's refusal.
+ */
 export function pageOpens(dest: Destination, grants: readonly string[]): boolean {
-  const row = WORKSPACES.find((w) => w.key === dest.workspace);
-  return holdsAny(grants, row?.grants) && holdsAny(grants, dest.grants);
+  return closedBy(dest.path, grants) === null;
 }
 
 /** A page's name with its workspace's, for a list of every page: "Settings › Backups & retention". */
@@ -287,4 +306,134 @@ export function WidgetNote({ children }: { children: ReactNode }) {
  */
 export function ChoiceNote({ thing }: { thing: string }) {
   return <WidgetNote>{`Choose a ${thing} in Edit Home.`}</WidgetNote>;
+}
+
+// ---------------------------------------------------------------------------
+// What an answer could not account for
+// ---------------------------------------------------------------------------
+
+/**
+ * The flags an answer carries about what it could not account for — the two
+ * every widget's questions share.
+ */
+export interface AnswerGaps {
+  /**
+   * False when the read met records this build cannot decode (the tracker's,
+   * the pages' and chat's answers), so rows may be missing and a count taken
+   * over them may be short. Only an explicit false is a gap: an answer that
+   * does not say is not one that said "incomplete".
+   */
+  complete?: boolean;
+  /** Which nodes a fleet answer was assembled from (ADR-0021). */
+  coverage?: Coverage | null;
+}
+
+/** What a widget with no rows says over an answer that could not account for everything. */
+export const NOTHING_TO_LIST = "Nothing to list";
+
+/** A figure's second line over an answer that could not account for everything. */
+export const PARTIAL_FIGURE = "May be incomplete";
+
+/**
+ * What the answers a widget draws from could not account for, one sentence
+ * per kind of gap, each said once however many answers share it.
+ *
+ * THE ONE PLACE A WIDGET LEARNS IT MAY BE WRONG. Every widget reads the
+ * answers its page reads, and those answers say when they are short: a
+ * record this build cannot decode met the read (`complete: false`), or a node
+ * did not answer a fleet read (`coverage`). Each widget reading those flags on
+ * its own was a chance per widget to miss one, and every one of them did:
+ * "You're caught up" was drawn over an inbox that said it could not account
+ * for everything, and "No turn failed" over a fleet read a node never
+ * answered. A widget's own reasons (a muted room, a list cut at its bound) go
+ * beside these, through [WidgetQuery]'s `gaps`.
+ */
+export function gapsOf(answers: readonly (AnswerGaps | null | undefined)[]): string[] {
+  const lines: string[] = [];
+  if (answers.some((a) => a?.complete === false)) lines.push(INCOMPLETE_NOTE);
+  const { nodes, incomplete } = missingFrom(answers.map((a) => a?.coverage));
+  if (nodes.length === 1) lines.push(`Node ${nodes[0]!.id} didn’t answer, so this may be short.`);
+  else if (nodes.length > 1)
+    lines.push(`${nodes.length} nodes didn’t answer, so this may be short.`);
+  else if (incomplete) lines.push("The list of nodes couldn’t be read, so this may be short.");
+  return lines;
+}
+
+/** What a widget claims when it has nothing to list: "You're caught up". */
+export interface EmptyClaim {
+  title: ReactNode;
+  hint: ReactNode;
+  /**
+   * `"none"` where the widget's card already names it with a title of its
+   * own, so the claim is not a second heading beside that title.
+   */
+  headingLevel?: "none";
+}
+
+/**
+ * Every widget's answer, drawn: the refusal or the wait its page would draw,
+ * its rows, and what the answers could not account for.
+ *
+ * A WIDGET NEVER CLAIMS "NOTHING" OVER AN ANSWER THAT COULD NOT ACCOUNT FOR
+ * EVERYTHING. Its `empty` is the claim it makes when there is nothing to list
+ * ("You're caught up", "No turn failed in the last 24 hours"), and that claim
+ * is drawn only when `gaps` is empty: with a gap and no rows the card says
+ * there is nothing to list and why it may be wrong, and with a gap and rows it
+ * draws the rows and says the gap under them. So the rule is decided here,
+ * once, for every widget, rather than remembered in each.
+ *
+ * `gaps` IS REQUIRED, from [gapsOf] over every answer the widget draws from
+ * and the widget's own lines: a widget whose answers carry no flag passes an
+ * empty list, which is a decision written down rather than a flag forgotten.
+ * Every widget module draws its answers through this and never through
+ * `QueryState` or `EmptyState` directly (`kit.test.tsx` holds them to it).
+ */
+export function WidgetQuery({
+  error,
+  refusal,
+  detail,
+  loading,
+  empty,
+  gaps,
+  children,
+}: {
+  error: QueryErrorCode | string | null;
+  refusal?: QueryRefusal | LogRefusal | null;
+  detail?: string;
+  loading: boolean;
+  /**
+   * What the widget says when there is nothing to list, given only when that
+   * is so: the claim it makes.
+   */
+  empty?: EmptyClaim;
+  /** What the answers could not account for: [gapsOf], and the widget's own lines. */
+  gaps: readonly string[];
+  children?: ReactNode;
+}) {
+  const state = { error, refusal, detail, loading };
+  if (empty !== undefined) {
+    if (gaps.length > 0) {
+      return (
+        <QueryState
+          {...state}
+          empty={{
+            title: NOTHING_TO_LIST,
+            hint: gaps.join(" "),
+            headingLevel: empty.headingLevel,
+          }}
+        />
+      );
+    }
+    return <QueryState {...state} empty={empty} />;
+  }
+  return (
+    <QueryState {...state}>
+      {children}
+      {gaps.map((line) => (
+        <p key={line} className="home-card-note">
+          {line}
+        </p>
+      ))}
+    </QueryState>
+  );
 }

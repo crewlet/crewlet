@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,15 +33,29 @@ func cardWords(p proposal.Preview) []string {
 	return out
 }
 
+// opaqueWords match an id no person reads: a UUID, anywhere in a sentence.
+var opaqueWords = regexp.MustCompile(`(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
+
+// computedRows are the rows whose value the card computes rather than the
+// request sends: what a change that sends nothing applies to, and what a
+// delete of nothing read deletes. A person reads them as the card's words.
+var computedRows = []string{"object", "removes"}
+
 // EVERY GENERIC CARD SPEAKS THE PERSON'S WORDS.
 //
 // For every write route the App mounts for the assistant, a change previewed
-// against a resource that holds a named record is titled, labelled and noted
-// in words: no method, no path, no wildcard, no `_summary`, no "API". The
-// request itself is the administrator's technical details, never a row. This
-// is the class "Change through the API" over `PUT /config/units/core` and a
-// raw JSON body belonged to. Mutation: title a change by its method, or put
-// the request back among the rows, and this names the route.
+// against a resource is titled, labelled and noted in words: no method, no
+// path, no wildcard, no `_summary`, no "API", and no opaque id. The request
+// itself is the administrator's technical details, never a row. This is the
+// class "Change through the API" over `PUT /config/units/core` and a raw JSON
+// body belonged to. Every route is previewed twice: against a record with a
+// name, and against one known only by its id while every id its path takes is
+// a UUID, which the card names by what the record is called or in neutral
+// words, never by that id. A verb nothing undoes (authz.IrreversibleOf) is
+// destructive on every route it decides, and a route of one is never skipped.
+// Mutation: title a change by its method, put the request back among the
+// rows, name a record by the id its path carries, or rate a purge or an erase
+// by its method, and this fails.
 func TestEveryGenericCardSpeaksThePersonsWords(t *testing.T) {
 	t.Parallel()
 	routes := everySurfaceApp(t).AssistantRoutes()
@@ -56,54 +71,90 @@ func TestEveryGenericCardSpeaksThePersonsWords(t *testing.T) {
 			change = tool
 		}
 	}
-	// THE RESOURCE AS A ROUTE WOULD ANSWER IT: one named record, and a check
-	// that admits the change.
-	read := func(_ context.Context, r exec.Request) (exec.Response, error) {
-		if r.Method != http.MethodGet {
-			return exec.Response{Status: http.StatusOK, Body: []byte(`{"valid":true}`)}, nil
+	const id = "7f3c2a9e-4b1d-4c8e-9a6f-2d5e8b1c0a47"
+	for _, record := range []struct {
+		name string
+		// doc is every read's answer, and body every change's.
+		doc  string
+		body map[string]any
+		// filled is what a wildcard takes: an id wildcard a UUID where
+		// the record is known by one.
+		filled func(wildcard string) string
+	}{
+		{"a named record", `{"name":"Example","goal":"Keep it running"}`,
+			map[string]any{"name": "Example", "goal": "Keep it running well"},
+			func(string) string { return "example" }},
+		{"a record known by its id", `{"id":"` + id + `","goal":"Keep it running"}`,
+			map[string]any{"goal": "Keep it running well"},
+			func(wildcard string) string {
+				if wildcard == "id" || wildcard == "cid" || strings.HasSuffix(wildcard, "_id") {
+					return id
+				}
+				return "example"
+			}},
+	} {
+		// THE RESOURCE AS A ROUTE WOULD ANSWER IT, and a check that admits
+		// the change.
+		read := func(_ context.Context, r exec.Request) (exec.Response, error) {
+			if r.Method != http.MethodGet {
+				return exec.Response{Status: http.StatusOK, Body: []byte(`{"valid":true}`)}, nil
+			}
+			return exec.Response{Status: http.StatusOK, Body: []byte(record.doc)}, nil
 		}
-		return exec.Response{Status: http.StatusOK,
-			Body: []byte(`{"name":"Example","goal":"Keep it running"}`)}, nil
-	}
-	previewed := 0
-	for _, r := range table.Routes() {
-		if r.Method() == http.MethodGet || r.Method() == http.MethodHead || r.Pattern == catalog.ActRoute {
-			continue
-		}
-		path := map[string]any{}
-		for _, segment := range strings.Split(r.Path(), "/") {
-			if strings.HasPrefix(segment, "{") && segment != "{$}" {
-				path[strings.TrimSuffix(strings.Trim(segment, "{}"), "...")] = "example"
+		previewed := 0
+		for _, r := range table.Routes() {
+			if r.Method() == http.MethodGet || r.Method() == http.MethodHead || r.Pattern == catalog.ActRoute {
+				continue
+			}
+			irreversible, _ := authz.IrreversibleOf(r.Action)
+			path := map[string]any{}
+			for _, segment := range strings.Split(r.Path(), "/") {
+				if strings.HasPrefix(segment, "{") && segment != "{$}" {
+					wildcard := strings.TrimSuffix(strings.Trim(segment, "{}"), "...")
+					path[wildcard] = record.filled(wildcard)
+				}
+			}
+			args := map[string]any{"route": r.Pattern, "path": path, "body": record.body,
+				"summary": "Keep the example running well"}
+			if r.Method() == http.MethodDelete {
+				delete(args, "body")
+			}
+			p, err := change.Preview(t.Context(), read, time.Now(), args)
+			switch {
+			case err != nil && irreversible:
+				t.Errorf("%s, %s: a verb nothing undoes previewed no card: %v", record.name,
+					r.Pattern, err)
+				continue
+			case err != nil:
+				// A route whose body this generic one does not fit refuses
+				// it before any card, which is not a card to read.
+				continue
+			}
+			previewed++
+			words := cardWords(p)
+			for _, c := range p.Changes {
+				if slices.Contains(computedRows, c.Field) {
+					words = append(words, c.To)
+				}
+			}
+			for _, w := range words {
+				if apiWords.MatchString(w) || opaqueWords.MatchString(w) {
+					t.Errorf("%s, %s: a person reads %q", record.name, r.Pattern, w)
+				}
+			}
+			if p.Technical == nil || p.Technical.Method != r.Method() {
+				t.Errorf("%s, %s: an administrator's card carries the technical details %+v",
+					record.name, r.Pattern, p.Technical)
+			}
+			if (r.Method() == http.MethodDelete || irreversible) && p.Risk != wire.RiskDestructive {
+				t.Errorf("%s, %s: a change nothing undoes is at risk %q", record.name, r.Pattern,
+					p.Risk)
 			}
 		}
-		args := map[string]any{"route": r.Pattern, "path": path,
-			"body":    map[string]any{"name": "Example", "goal": "Keep it running well"},
-			"summary": "Keep the example running well"}
-		if r.Method() == http.MethodDelete {
-			delete(args, "body")
+		if previewed < 10 {
+			t.Errorf("%s: only %d write routes previewed; the walk read nothing", record.name,
+				previewed)
 		}
-		p, err := change.Preview(t.Context(), read, time.Now(), args)
-		if err != nil {
-			// A route whose body this generic one does not fit refuses it
-			// before any card, which is not a card to read.
-			continue
-		}
-		previewed++
-		for _, words := range cardWords(p) {
-			if apiWords.MatchString(words) {
-				t.Errorf("%s: a person reads %q", r.Pattern, words)
-			}
-		}
-		if p.Technical == nil || p.Technical.Method != r.Method() {
-			t.Errorf("%s: an administrator's card carries the technical details %+v",
-				r.Pattern, p.Technical)
-		}
-		if r.Method() == http.MethodDelete && p.Risk != wire.RiskDestructive {
-			t.Errorf("%s: a delete is at risk %q", r.Pattern, p.Risk)
-		}
-	}
-	if previewed < 10 {
-		t.Errorf("only %d write routes previewed; the walk read nothing", previewed)
 	}
 }
 

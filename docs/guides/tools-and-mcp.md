@@ -65,14 +65,15 @@ A body sent back to a write still wrapped in the fence it was read in is
 stored without it.
 
 The writes on each side count as a **delivery** for the turn's own
-did-this-reach-anybody gate, and each waits for its own write to reach this
-node's projection before answering — so a turn that files an item and then
+did-this-reach-anybody gate, and each raises the floor the turn's next read
+carries, so whichever copy answers that read — this node's or another data
+node's — has applied the write first: a turn that files an item and then
 lists the project sees what it just filed.
 
-Every write answers with its `outcome` — `applied`, `pending` or `unknown`, the
-[three values every write has](replication.md#a-write-has-three-outcomes) — and
-the `position` it is durable at. A write whose outcome is **unknown** is never
-answered with the id, key, version or revision of something that may not
+Every write answers with its `outcome` — `applied`, `pending` or `unknown`,
+the [three values every write has](replication.md#a-write-has-three-outcomes)
+— and the `position` it is durable at. A write whose outcome is **unknown** is
+never answered with the id, key, version or revision of something that may not
 exist, on any write tool on either surface: the call fails, saying that the
 write may have landed and may not, under which operation, and what to do. That
 includes `create_work_item`, whose unknown answer names the key this attempt
@@ -85,23 +86,28 @@ after. And the `version` an update answers with is always the item's own and
 its newest — the one to send back as `if_match` — never another item's that
 the same call wrote, and never one its own dependency change has already moved
 the item past, when a call changes both; its `position` is likewise the call's
-last write, so waiting for it waits for all of them.
+last write, so waiting for it waits for all of them. A write that **a data
+node never answered**, and no other ran, is unknown too, never a refusal: the
+node that stayed silent may have run it, so it is not "not made", and the
+answer says what settles it for that call — the same operation again where the
+call carried one, a read before writing again where it did not.
 
 Where this node's operation ledger cannot vouch for the operation — it was
-minted before the ledger may have lost rows, a seat woken by a backlog trigger
-just after its node adopted a snapshot — the answer says this node cannot
-tell, because the same operation asked here answers the same way until the
-write reaches this node, and tells the caller to look before writing it again;
-a gesture that stopped part of the way through at such a step is not told to
-repeat itself either. A seat's own write under a plain lost acknowledgement is
-told to repeat the call with exactly the same arguments, before any different
-call to the same tool — that is the same operation, and it lands once.
-Reworded, it is a new one. Where the ledger cannot vouch for it, that same
-repeat is still safe — it publishes nothing this node cannot vouch for — but it
-answers the same way until the write reaches this node, so looking says sooner.
-The two writes that state a whole value rather than change one —
-`write_project` and `write_work_catalogue` — say instead that repeating them is
-harmless: each call is a new operation stating the same thing.
+minted before the ledger may have lost rows, as an `op_id` your assistant sends
+back more than thirty days after the write that first answered with it — the
+answer says this node cannot tell, because the same operation asked here
+answers the same way until the write reaches this node, and tells the caller to
+look before writing it again; a gesture that stopped part of the way through at
+such a step is not told to repeat itself either. A seat's own write under a
+plain lost acknowledgement is told to repeat the call with exactly the same
+arguments, before any different call to the same tool — that is the same
+operation, and it lands once. Reworded, it is a new one. Where the ledger
+cannot vouch for it, that same repeat is still safe — it publishes nothing this
+node cannot vouch for — but it answers the same way until the write reaches
+this node, so looking says sooner. The two writes that state a whole value
+rather than change one — `write_project` and `write_work_catalogue` — say
+instead that repeating them is harmless: each call is a new operation stating
+the same thing.
 
 A create or an update that declares its labels first (`labels_create_missing`)
 and cannot tell whether that declaration landed stops there too, and is
@@ -176,13 +182,13 @@ the engine mirrors no state it would have to keep in step. See
 
 ### Artifacts
 
-Sixteen more, registered on every node that takes artifact uploads (one with
-an object store, a coordination store and a data node to reach), whatever
-tracker or knowledge base the company runs: twelve for artifacts, their folders
-and the company's brand, and four for an artifact's datastore. Each tool is
-named for its authority row, and the operator catalogue serves the same
-sixteen, so an operator's own assistant publishes, files and writes rows exactly
-as a seat does.
+Seventeen more, registered on every node that takes artifact uploads (one
+with an object store, a coordination store and a data node to reach), whatever
+tracker or knowledge base the company runs: thirteen for artifacts, their
+folders and the company's brand, and four for an artifact's datastore. Each tool
+is named for its authority row, and the operator catalogue serves the same
+seventeen, so an operator's own assistant publishes, files and writes rows
+exactly as a seat does.
 
 | Tool | Description |
 |------|-------------|
@@ -329,6 +335,72 @@ own assistant, installed as the
 [`company-architect` skill](../getting-started/ai-authoring.md#the-company-architect-skill)
 is (copy the directory into your assistant's skills folder).
 
+### Chatlet
+
+Nine more, on the same terms and on the third axis: they are registered **only
+where the company runs the engine's own chat** (`chat.backend: chatlet`, the
+default). A company on Slack or Mattermost gets none of them and reaches its
+workspace through that vendor's own MCP tools instead, for the reason the
+tracker section gives — a seat offered a tool against a surface its company
+does not run reaches for it and fails at the call. They are the `chatlet` app's
+([Identity and access](../concepts/identity-and-access.md)), which every seat
+holds.
+
+| Tool | Description |
+|------|-------------|
+| `post_message` | Say something new in a room, as a top-level message. `@handle` reaches one colleague; `@channel` in the text is what addresses the whole room, and the receipt says so back |
+| `reply_in_thread` | Answer a message under its own thread, beside the question. Threads are one level deep, so a reply to a reply carries the same root |
+| `send_dm` | Say something privately to one colleague or a few, opening the conversation if it is not open. Never the place for an answer that was asked for in the open |
+| `read_channel` | Read a room, newest first, or one thread in it, oldest first. The rest of the room is not handed to a seat at turn start, so it reads it here when its answer depends on what was said before |
+| `list_channels` | The rooms this seat is in, most recently active first, with what each is for and the last thing said in it |
+| `search_messages` | Find a message by what it **says**, ranked across every room this seat may read — at most forty to an answer, twenty unless asked — and an answer from an index still being built says so rather than reading as nothing said. `read_channel` is the other half: one room, in order, from a point you name |
+| `react_to_message` | Put one emoji on a message (`message_id`), or take yours back |
+| `join_channel` / `leave_channel` | Move this seat's own membership, and nobody else's. A private room cannot be joined this way, and a unit's own room can be neither joined nor left — its membership is the org chart's, and either gesture would be undone by the next apply |
+
+Every tool that takes a `channel` takes the room's id or its **name** — `#eng`
+and `eng` are the same room. A name is the room's address, unique across the
+company, so it resolves for any room the seat may read whether or not it is
+in it: a public room, or a unit's own room, which is where a decision's
+outcome is often promised. A private room's name resolves only for its
+members, and to anybody else answers exactly as a name nobody holds.
+
+A message's `links`, at most eight on `post_message`, `reply_in_thread` and
+`send_dm`, are each an absolute `http`, `https` or `mailto` address, kept
+exactly as sent. A relative reference, a dashboard route (`#/...`) or any
+other scheme is refused, naming every entry that is not one (`links[1]`): no
+reader of the message could open it as it stands.
+
+What `read_channel`, `search_messages` and `list_channels` hand back that
+somebody said — every message and snippet, under its author, and a room's
+topic and purpose as the room's own label — arrives
+[fenced](../concepts/agent-runtime.md#text-somebody-else-wrote), and a body
+sent back to `post_message`, `reply_in_thread` or `send_dm` still wrapped in
+the fence it was read in is posted without it.
+
+**Three of them count as a delivery** for the turn's did-this-reach-anybody
+gate — `post_message`, `reply_in_thread` and `send_dm` — and the obligation is
+*source-scoped*: a turn woken in a room owes an answer **in** a room. A
+reaction is deliberately not one of them. It wakes nobody and discharges
+nothing, because a seat that could answer every obligation with a thumb would.
+A turn's write is made once however often the turn is re-run: its key is
+derived from the turn's unit of work and the call, and a join after a leave is
+a new join rather than the first one's retry.
+
+The same nine are served to **your** AI assistant and to the dashboard over the
+[operator surface](../reference/api-endpoints.md#the-chat-gestures-only-a-person-makes),
+as the seat the person behind the call holds, and seven more that no seat is
+given:
+`create_channel`, `open_dm`, `update_channel`, `set_channel_members`,
+`edit_message`, `delete_message` and `mark_chat_read`. A seat corrects what it
+said by replying rather than rewriting it; a room, its settings and its
+membership are the company's furniture; and a read cursor is a person's
+attention, which a seat — woken rather than reading — does not have. Every one
+of them is made as a seat, so a credential acting as itself is refused them
+all, the reads included.
+
+See [Chatlet](../concepts/chatlet.md) for who a message wakes, which of them owes a
+reply, and the two things the axis deliberately does not do.
+
 ### Per-Role MCP Servers (GitHub)
 
 Roles with GitHub credentials in `mcp_env.github` get a per-role instance of the [remote GitHub MCP server](https://github.com/github/github-mcp-server) (declared as a `shared: false` `http` entry in `mcp_servers`), giving them the full GitHub toolset for reading/reviewing/tracking code (issues, PRs, repos, code search, actions); code authoring is the seat's executor run's, with its own shell and git in its [box](../concepts/code-sandbox.md). See [GitHub Integration](../integrations/github.md).
@@ -449,6 +521,14 @@ A third-party MCP server holds its own schema and is not checked here.
   names it. A model or an MCP client reads the note after the answer. An act
   or work API answer, which a person reads, never carries it. The call is logged as `tool_args_outside_schema` and
   counted in `crewlet.tools.args_outside_schema`, by tool.
+- **An argument sent as `null` is one nobody sent,** to the check and to the
+  tool alike: the call reads as though it were left out, so it changes
+  nothing, and a `null` for an argument the tool does not take is not
+  refused. A `null` is a value only where the tool's schema declares it one,
+  and there it clears what it names: an update's `due`, `start`,
+  `estimate_minutes` and `points`, and a project's `target_date`. Inside an
+  object argument a `null` is the object's to read, as a custom field's value
+  in `fields` is cleared by one.
 - **The lenient readings are kept.** A number or a boolean where a string
   belongs, one string or a comma-separated one where a list belongs, and a
   numeric string where a number belongs are read exactly as before.
@@ -467,15 +547,16 @@ a model acts on:
 
 | Class | What it means | What a caller should do |
 |---|---|---|
-| `invalid` | An argument is wrong, and the sentence names which | Send something different |
+| `invalid` | The request is wrong — an argument outside its grammar, a value past a limit of its own, or an argument naming *another* object that cannot take part (a parent in the trash, an archived task type) — and the sentence names which | Send something different |
 | `not_found` | The item, page, skill or colleague the call is *about* does not exist | Stop; it is gone or was never there |
 | `forbidden` | This caller may not do this here — outside a turn, somebody else's inbox or priorities, a view protected for its owner, a project's policy without the lead's authority, a reserved container | Ask whoever the sentence names |
 | `stale_version` | The object changed after the caller read it | Read it again and decide from what it says now |
-| `conflict` | The write lost its race to other writers, or the object's state moved under it | Read it again; a retry may land |
+| `conflict` | The write lost its race to other writers, or the object the call is about is in a state that refuses it until somebody changes it — a room or a project archived, an item frozen in the trash, an artifact in the trash or being purged, a restore with nothing in the trash, or its own contents at their cap (a message carrying all its emoji, a label another version holds, a project keeping all its tags) — which the sentence names | Read it again; a race clears on its own, and a state is changed by whoever the sentence names, after which the same call lands |
 | `exists` | What the call would create is already there | Edit the existing one |
 | `already_answered` | The question this answers has an answer | Read the answer |
 | `reassignment_budget` | The item has been handed on as often as it may be | Do not reassign it again |
 | `inbox_full` | A person's inbox list is at its ceiling | Mark older entries read |
+| `quota_exceeded` | The write would take what is kept past a limit on it: the company's storage — an artifact's bytes, a datastore's footprint — which the sentence names with the setting an operator raises, or a cap on what one datastore holds — a collection's rows, one participant's rows, a store's collections and documents — which the sentence names. No permission lifts it | Remove what is no longer needed, or ask whoever sets the limit to raise it |
 | `notes_full` | The running turn a note is for already holds as many notes as may wait unread | Send it again once the turn has read them, at its next step |
 | `notes_spent` | The running turn has taken as many notes as a turn takes | Do not send it again; put the rest on the work item |
 | `not_running` | The run or turn the call addresses is not running, or not waiting for this | Nothing to act on |
@@ -485,11 +566,16 @@ a model acts on:
 
 An argument that merely *names* something missing — a `parent`, a `waiting_on`
 item, an `assignee` nobody has — is `invalid`, not `not_found`: the fix is the
-argument, and the call is not about that object.
+argument, and the call is not about that object. The same holds for a state: a
+`parent` in the trash is `invalid`, the argument to change, while editing the
+item that is in the trash is `conflict`, its state. That is the
+[one rule](../reference/api-endpoints.md#which-class-a-refusal-is) every
+domain's refusals are classed by, on every surface.
 
 **`invalid` is claimed, never assumed.** A write Worklet refuses on
-what it was asked — a field value it will not round, a tombstoned item, a cap
-the object would pass — is marked as such where the refusal is written. Any
+what it was asked — a field value it will not round, a parent in the trash, a
+value past its cap — is marked as such where the refusal is written, and so is
+one the item or project it is about refuses by its state, which is `conflict`. Any
 failure that is *not* marked is read as the node's, in one of two ways: a
 condition waiting clears — the log refused the append, the coordination store
 or the event broker did not answer, this node's store was busy with other
@@ -1088,7 +1174,7 @@ From the LLM's perspective, builtin tools and MCP tools are identical — both a
 |---|---|---|
 | **Condense** | the prior-work ledger's payloads past their budget (an argument value, a failed call's error, a round's produced text) and a conversation's older turns; a long chat thread's middle at turn start; the round-cap judge's view of the task and the last text; a delegated worker's answer past its share of the next task; a source document `answer_knowledge` reads; a turn card's one-line account; a recalled turn's ask and its account of what it did, each past 600 bytes (`## Similar prior work` when its bullets are shown rather than summarised, and `query_episodes`) or past about 11 KB (a sixth of one auxiliary call's input, so three turns' asks and accounts fit one call) before the episode summary reads them (`learning.summarize_episodes` on), every rewrite of one answer held to one thirty-second deadline; an episode's long task or outcome before the monthly compaction; a coding run's report or failure past what its record carries | The text has to fit, and what fits must still be what the text **said**. It is rewritten by the seat's own auxiliary model (`llm_auxiliary`, falling back to `llm`) through `internal/compact`, charged to the seat like any auxiliary call, labelled as condensed wherever it is shown, and cached per text. Where no model can condense it, the fallback is never a cut: whole entries are left out and counted, a size and a digest stand in its place, or it is carried whole |
 | **Refuse** | `reflect_and_persist` and `mark_onboarded` notes, `refine_skill` bodies and reasons, a `secrets` value, a Slack app manifest name, a counterparty trait, a search or `answer_knowledge` query past 400 bytes, a purge reason too long for its one-line record, a coding run's `ask_and_wait` question past 300 bytes, or its context past 16 KiB, refused to the run before anything is recorded so it rewrites them; a coding run's report or result line read back from its box past 32 MiB (its event and error streams are read as streams and from their end instead, and the refused piece is described by its size); in the dashboard, a title, a view's name, a question or a save note past the engine's cap, said under the field before the press | The value is *stored* or *sent on*, so half of it is a lasting half-fact. The caller can shorten it and retry, and the refusal names the field and the limit |
-| **Describe, don't quote** | a task's description and a long custom-field value on a history row (`N bytes`), free text past 600 bytes on a row, a set on a row (what joined and left rather than both sides), a vendor's refusal body (an HTML page's title rather than its markup) | A history row is a log line kept forever on every node; it says what moved and by how much, and the change record beside it holds the text |
+| **Describe, don't quote** | a task's description and a long custom-field value on a history row (`N bytes`), free text past 600 bytes on a row, a set on a row (what joined and left rather than both sides), a vendor's refusal body (an HTML page's title rather than its markup) | A history row is a log line kept forever on every data node; it says what moved and by how much, and the change record beside it holds the text |
 | **Say it, in whole units** | a coding run's transcript (whole lines from its start and its end, 64 KiB and 192 KiB, its middle counted — the plan opens it and a crash explains itself at the bottom), the end of its error stream (2 MiB, its unread start said by size) and its delivered refs (16 KiB of whole refs, the rest counted); an MCP server's stderr tail and a control command's output (whole lines, counted); error text on an event (`events.ClipDiagnostic`, 64 KiB, head kept); a vendor refusal past 2 KiB (marked); a knowledge snippet or an inbox excerpt (a preview of something one click away, marked) | The full text genuinely cannot travel — an unbounded subprocess, or an event the queue would REFUSE, which costs the operator the whole record rather than its tail — or it is a preview of something the reader can open; so it carries a marker, and where a reader can get the rest, says how |
 
 The embeddings input — the text a provider turns into a vector — is the one bound on what a machine is given rather than what a reader sees. The bound is the embedding *model's* own, carried per model with the vendor's documented limits ([Configuration § Providers](../getting-started/configuration.md#providers)), and the provider refuses an input past it before sending anything. What a longer text becomes is each caller's choice: the knowledge corpus embeds a document's opening, because the opening is what a search for the document is about, while a turn's ask, an episode and a diary note are split between words into pieces whose vectors are pooled into one, so all of the text is represented. Either way only the vector's input is bounded; the stored and displayed text stays complete.

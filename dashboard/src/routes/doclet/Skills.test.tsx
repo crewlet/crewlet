@@ -3,7 +3,7 @@
  * ways a skill reaches a seat.
  */
 
-import { act, cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 
@@ -37,14 +37,14 @@ const ORG = {
   units: [],
 };
 
-const skill = (id: string, title: string) => ({
+const skill = (id: string, title: string, updated_at = "2026-09-20T10:00:00Z") => ({
   id,
   container: "TS",
   title,
   status: "published",
   version: 1,
   skill: true,
-  updated_at: "2026-09-20T10:00:00Z",
+  updated_at,
   revision: 1,
 });
 
@@ -60,7 +60,10 @@ afterEach(() => {
   location.hash = "#/";
 });
 
-function mount(answers: Record<string, unknown>) {
+/** An answer, or one drawn from the params a question was asked with. */
+type Answer = unknown | ((params: Record<string, unknown>) => unknown);
+
+function mount(answers: Record<string, Answer>) {
   const store = new Store();
   store.applyHealth(healthFrame({ nodes: 1 }));
   store.applyOrg(withDerived(ORG) as never);
@@ -68,7 +71,10 @@ function mount(answers: Record<string, unknown>) {
   const asked: { kind: string; params: Record<string, unknown> }[] = [];
   socket.query = ((what: string, params?: Record<string, unknown>) => {
     asked.push({ kind: what, params: params ?? {} });
-    return Promise.resolve(answers[what] ?? FRAME_ANSWERS[what] ?? {});
+    const answer = answers[what];
+    return Promise.resolve(
+      (typeof answer === "function" ? answer(params ?? {}) : answer) ?? FRAME_ANSWERS[what] ?? {},
+    );
   }) as typeof socket.query;
   render(
     <ToastProvider>
@@ -126,6 +132,65 @@ test("the tool skills count is the listing's total, and loaded-by reads both way
   expect(within(wiki).getByText(/offered to PM/)).toBeTruthy();
 });
 
+// THE ORDER IS THE ENGINE'S, never a sort of the windows loaded. By name is
+// the knowledge base's own order and Newest is the engine's newest-first one,
+// each drawn exactly as answered: here the newest skill's title sorts last, so
+// a client sort of either kind would put it somewhere else. And no head is a
+// button, since a head would sort the rows one window holds.
+//
+// Mutation: sort the rows here by title again, and Newest draws "Zeta" last;
+// ask without the order, and Newest is answered in the title order.
+test("the tool skills are drawn in the order the engine read them in", async () => {
+  const byTitle = [
+    skill("s-1", "Alpha", "2026-09-20T10:00:00Z"),
+    skill("s-2", "Beta", "2026-09-22T10:00:00Z"),
+    skill("s-3", "Zeta", "2026-09-24T10:00:00Z"),
+  ];
+  const newest = [byTitle[2], byTitle[1], byTitle[0]];
+  const { asked } = mount({
+    pages: (params: Record<string, unknown>) => ({
+      pages: params.order === "newest" ? newest : byTitle,
+      limit: 500,
+      total: 3,
+    }),
+  });
+  await settle();
+  expect(asked.findLast((a) => a.kind === "pages")?.params).toMatchObject({ order: "title" });
+  const titles = () =>
+    [...document.querySelectorAll("[data-row-index]")].map((row) =>
+      ["Alpha", "Beta", "Zeta"].find((t) => row.textContent?.includes(t)),
+    );
+  expect(titles()).toEqual(["Alpha", "Beta", "Zeta"]);
+  expect(screen.queryByRole("button", { name: /^Updated/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /^Skill/ })).toBeNull();
+
+  fireEvent.click(screen.getByRole("radio", { name: "Newest" }));
+  await settle();
+  expect(asked.findLast((a) => a.kind === "pages")?.params).toMatchObject({
+    skills: true,
+    status: "published",
+    order: "newest",
+  });
+  expect(location.hash).toContain("sort=-updated");
+  expect(titles()).toEqual(["Zeta", "Beta", "Alpha"]);
+});
+
+// A LINK TO THE NEWEST SKILLS OPENS ON THEM: `sort=` is the URL's, so a
+// reader sent `sort=-updated` lands on the engine's newest order, and a
+// `sort=` no order answers to reads as the knowledge base's own.
+test("sort= in the address picks the engine's order", async () => {
+  location.hash = "#/doclet/skills?sort=-updated";
+  const { asked } = mount({ pages: { pages: [skill("s-1", "Alpha")], limit: 500, total: 1 } });
+  await settle();
+  expect(asked.findLast((a) => a.kind === "pages")?.params).toMatchObject({ order: "newest" });
+  expect(screen.getByRole("radio", { name: "Newest" }).getAttribute("aria-checked")).toBe("true");
+  cleanup();
+  location.hash = "#/doclet/skills?sort=loads";
+  const again = mount({ pages: { pages: [skill("s-1", "Alpha")], limit: 500, total: 1 } });
+  await settle();
+  expect(again.asked.findLast((a) => a.kind === "pages")?.params).toMatchObject({ order: "title" });
+});
+
 test("a seat's learned skills say how many of its total are listed", async () => {
   location.hash = "#/doclet/skills?kind=learned&seat=swe";
   const { asked } = mount({
@@ -155,9 +220,46 @@ test("a seat's learned skills say how many of its total are listed", async () =>
     },
   });
   await settle();
-  expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({ id: "swe" });
+  expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({
+    id: "swe",
+    skills_order: "uses",
+  });
   expect(screen.getByText("Triage an alert")).toBeTruthy();
   expect(screen.getByText("1 of 40 learned skills.")).toBeTruthy();
+});
+
+// THE HOLDER ORDERS A SEAT'S SKILLS, because it cuts the page: sorted here, the
+// most used were the most used of the newest fifty. The order in `sort=` is
+// asked for as `skills_order`, and the heads are not buttons, because a head
+// that re-sorted the page would answer another question under the same arrow.
+// Mutation: drop `skills_order` from the question and the holder is asked for
+// the newest.
+test("a seat's learned skills are ordered by the holder, in the order sort= names", async () => {
+  location.hash = "#/doclet/skills?kind=learned&seat=swe&sort=-updated";
+  const { asked } = mount({
+    agent_memory: {
+      id: "swe",
+      skills: [],
+      skills_total: 0,
+      diary: [],
+      diary_total: 0,
+      episodes: [],
+      episodes_total: 0,
+      counterparties: [],
+      counterparties_total: 0,
+      latest_reflection: null,
+      onboarded_at: "",
+      held_by: "node-a",
+    },
+  });
+  await settle();
+  expect(asked.find((a) => a.kind === "agent_memory")?.params).toEqual({
+    id: "swe",
+    skills_order: "updated",
+  });
+  expect(screen.getByRole("radio", { name: "Recently changed" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
 });
 
 // WHAT A SEAT LEARNED IS ITS TRAIL, which the engine answers to an admin and

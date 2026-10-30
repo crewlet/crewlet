@@ -497,9 +497,15 @@ export function Activity() {
       </div>
 
       {/* A NODE THAT DID NOT ANSWER is named where the rows are drawn: the
-          log is every node's, read at query time (ADR-0021), and a short
-          answer that did not say so would read exactly like a quiet company. */}
-      <CoverageNote coverage={[series.data?.coverage, ...pageCoverage]} what="this log" />
+          log is every data node's, read at query time (ADR-0021), and a short
+          answer that did not say so would read exactly like a quiet company.
+          The LIVE rows at the top are the push, which this node seeded at
+          boot from every node it could reach (`seeded_from`), so a node its
+          seed missed is one more node this log may be missing. */}
+      <CoverageNote
+        coverage={[series.data?.coverage, ...pageCoverage, engine?.seeded_from]}
+        what="this log"
+      />
 
       {/* THE CLOSED SET, so a category with nothing in it is still offered:
           that says the category exists and is quiet, which is an answer — and

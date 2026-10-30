@@ -81,3 +81,55 @@ func TestAPagesDetailSaysWhetherItIsAToolSkill(t *testing.T) {
 		t.Errorf("an ordinary page's detail says skill=%v onboarding=%v", got.Skill, got.Onboarding)
 	}
 }
+
+// A RENAMED PAGE IS DERIVED AGAIN, because one of the marks the applier
+// derives is a function of the title: a page is the onboarding page when it is
+// titled [doclet.OnboardingTitle]. A rename wrote the head and left the derived
+// row where the last save put it, so a page renamed to that title was not the
+// page every seat reads first, and the onboarding page renamed away from it
+// went on being one, until somebody saved its body. Each direction starts from
+// a page whose mark its create derived, so each fails on its own.
+//
+// Mutation: skip the derivation in the rename's apply, and both directions go
+// red.
+func TestARenamedPageIsDerivedAgain(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	onboarding := func() []string {
+		var out []string
+		for _, p := range r.list(doclet.Filter{Onboarding: true}).Pages {
+			out = append(out, p.ID)
+		}
+		return out
+	}
+	retired := r.write(author("jane"), doclet.NewPage{Container: "OPS",
+		Title: doclet.OnboardingTitle, Body: "how we used to start"})
+	fresh := r.write(author("jane"), doclet.NewPage{Title: "Welcome", Body: "start here"})
+	if got := onboarding(); len(got) != 1 || got[0] != retired.Page.ID {
+		t.Fatalf("before any rename the onboarding pages are %v, want the one "+
+			"created under that title alone", got)
+	}
+
+	if _, err := r.store.Rename(t.Context(), author("jane"), retired.Page.ID,
+		"Onboarding, retired", false); err != nil {
+		t.Fatalf("rename away from the onboarding title: %v", err)
+	}
+	if _, err := r.store.Rename(t.Context(), author("jane"), fresh.Page.ID,
+		doclet.OnboardingTitle, false); err != nil {
+		t.Fatalf("rename to the onboarding title: %v", err)
+	}
+	r.drain()
+	if got := onboarding(); len(got) != 1 || got[0] != fresh.Page.ID {
+		t.Errorf("after one page was renamed away from %q and another to it, "+
+			"the onboarding pages are %v, want %s alone", doclet.OnboardingTitle,
+			got, fresh.Page.ID)
+	}
+	if r.get(retired.Page.ID).Onboarding {
+		t.Errorf("the page renamed away from %q still says it is the "+
+			"onboarding page", doclet.OnboardingTitle)
+	}
+	if !r.get(fresh.Page.ID).Onboarding {
+		t.Errorf("a page renamed to %q says it is not the onboarding page",
+			doclet.OnboardingTitle)
+	}
+}

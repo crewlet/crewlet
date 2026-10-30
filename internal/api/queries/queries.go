@@ -7,6 +7,13 @@
 // which happens repeatedly once they diverge: a filter honoured on one path
 // and ignored on the other, a limit clamped differently, a field present over
 // HTTP and missing over the socket.
+//
+// A REFUSAL ON AUTHORITY travels as the decision that made it ([Refusal]), and
+// each transport words it through the authority table's one mapping, as every
+// other surface does. That is also why no question is decided by a verb that
+// asks a recent proof or a person present ([DecidedBy]): the socket has no code
+// for either refusal, so a question refused that way could only be told there
+// as a permission nobody could grant.
 package queries
 
 import (
@@ -26,6 +33,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Errors a query surface reports precisely. Everything else a query returns is
@@ -64,6 +72,18 @@ var (
 
 	// ErrBadParams is a request this surface understood and refused.
 	ErrBadParams = errors.New("queries: bad parameters")
+
+	// ErrArtifactTrashed is a question about the CONTENT of an artifact in
+	// the trash — its datastore — asked by somebody the artifact is
+	// disclosed to.
+	//
+	// NOT [ErrNotFound], which is what the same question is answered with
+	// for a caller the artifact is answered as absent to: the trash is the
+	// artifact's state, which its owner's restore ends, so both transports
+	// answer it as every artifacts route does (`409 artifact_trashed`). It
+	// was not found here, so the one artifact a datastore's REST routes
+	// said was binned, its questions said did not exist.
+	ErrArtifactTrashed = errors.New("queries: the artifact is in the trash")
 )
 
 // RefusalDetail is a [ErrBadParams] refusal's own sentence, for the caller.
@@ -122,6 +142,22 @@ func refuseAs(class error, format string, args ...any) error {
 	return &classedRefusal{sentence: fmt.Sprintf(format, args...), class: class}
 }
 
+// refusedBy is a refusal a DOMAIN decided about what a question asked, carried
+// as [ErrBadParams] with the domain's own error beneath it for [errors.Is] and
+// told in the domain's own sentence — the tracker's, the knowledge base's and
+// the state log's read refusals through [builtin.ReadRefusalSentence], chat's,
+// the artifacts' and a datastore's through each domain's Sentence.
+//
+// WRAPPED AS `%w: %w` IT WAS TOLD IN THE DOMAIN'S GO ERROR: [RefusalDetail]
+// takes out this package's sentinel and nothing else, so a question refused
+// by chat read "chatlet: invalid: `cursor`: …", by the tracker "worklet: this
+// read's request cannot be run: since: statelog: …", and by a datastore
+// "artifactdata: invalid: …" — package names and class words on the screen a
+// person asked the question from.
+func refusedBy(err error, sentence string) error {
+	return &classedRefusal{sentence: sentence, class: err}
+}
+
 // Refusal is a question refused on AUTHORITY: a caller this node knows, whose
 // grants — or, for a personal question, whose relation to the record it named
 // — do not reach what they asked. It is [ErrUnauthorized] to [errors.Is].
@@ -131,27 +167,46 @@ func refuseAs(class error, format string, args ...any) error {
 // caller, as values a client branches on. A sentence written beside the rule
 // — "needs the lead relation or admin" — is a second statement of the rule,
 // and it is the copy that goes stale the day the rule's admin path moves.
+//
+// THE DECISION WHOLE, embedded rather than copied into fields of its own, so
+// both transports answer it through the authority table's one mapping
+// ([authz.RefusalFields]) exactly as every other surface answers a refusal
+// the table made. It carried the reason and the grants alone, and each
+// transport then spelled `unauthorized` for itself: a refusal that needed a
+// fresher proof would have reached a reader as a missing permission, with
+// the window it names dropped on the way. Its Reason is the rule that decided
+// — [authz.ReasonNoGrant] for a question's declared permission,
+// [authz.ReasonStage] for a caller whose stage may not act, and whatever
+// [authz.Decide] concluded for a record a question named — and its Grants the
+// permissions any one of which would have admitted the caller, empty where no
+// permission would.
+//
+// BUILT ONLY BY [NewRefusal], which a walk in this package's tests holds, so no
+// refusal reaches a transport carrying a decision that refused nothing.
 type Refusal struct {
 	// What is what was refused: the question, or — where the question was
 	// admitted and the record it named was not — the verb asked of that
 	// record, which is the more useful half to a reader of the log.
 	What string
 
-	// Reason is the rule that decided, in the authority table's own words:
-	// [authz.ReasonNoGrant] for a question's declared permission,
-	// [authz.ReasonStage] for a caller whose stage may not act, and
-	// whatever [authz.Decide] concluded for a record a question named.
-	Reason authz.Reason
-
-	// Grants are the permissions any one of which would have admitted the
-	// caller — [authz.Decision.Grants], or the one permission a question is
-	// registered as requiring. Empty where no permission would.
-	Grants []iam.Grant
+	authz.Decision
 }
 
-// refused is the refusal an [authz.Decision] makes of one question.
-func refused(what string, d authz.Decision) *Refusal {
-	return &Refusal{What: what, Reason: d.Reason, Grants: d.Grants}
+// NewRefusal is the refusal an [authz.Decision] makes of one question, and the
+// one way a [Refusal] is built — exported so a transport's own tests can hand
+// its mapping the refusals a question reaches it with.
+//
+// A DECISION THAT REFUSED NOTHING PANICS. An admission and a decision this node
+// could not reach are both answered before a caller gets here — the second is
+// [ErrUnavailable], never a 403 — so one arriving is a wiring mistake in this
+// package, and rendered as a refusal it would tell a reader holding the
+// authority that they lack it.
+func NewRefusal(what string, d authz.Decision) *Refusal {
+	if d.Allowed || d.Unknown() {
+		panic(fmt.Sprintf("queries: %q was refused on a decision that refused "+
+			"nothing (allowed %t, error %v)", what, d.Allowed, d.Err))
+	}
+	return &Refusal{What: what, Decision: d}
 }
 
 // Error renders the refusal from its own values, so the sentence in a log can
@@ -159,11 +214,7 @@ func refused(what string, d authz.Decision) *Refusal {
 func (r *Refusal) Error() string {
 	var remedy string
 	if len(r.Grants) > 0 {
-		names := make([]string, 0, len(r.Grants))
-		for _, g := range r.Grants {
-			names = append(names, string(g))
-		}
-		remedy = "; carrying " + strings.Join(names, " or ") + " would admit it"
+		remedy = "; carrying " + words.Or(r.Grants) + " would admit it"
 	}
 	return fmt.Sprintf("queries: %q refused (%s)%s", r.What, r.Reason, remedy)
 }
@@ -415,7 +466,8 @@ func Requires(g iam.Grant) Posture { return Posture{kind: postureRequires, grant
 // DecidedBy is the posture of a question whose ANSWER decides, per record,
 // through the authority table's verb a. Any resolved principal whose stage may
 // act may ask; what they are shown is that verb's decision. a must be a verb
-// the table has a row for.
+// the table has a row for, and one that asks no recent proof and no person
+// present ([asksAPerson]).
 func DecidedBy(a authz.Action) Posture { return Posture{kind: postureDecidedBy, verb: a} }
 
 // Valid reports whether p is a posture a question may be registered with.
@@ -427,9 +479,43 @@ func (p Posture) Valid() bool {
 		return p.verb == "" && (p.grant == iam.GrantAdmin || p.grant.IsApp())
 	case postureDecidedBy:
 		_, known := authz.ClassOf(p.verb)
-		return p.grant == "" && known
+		return p.grant == "" && known && asksAPerson(p.verb) == ""
 	}
 	return false
+}
+
+// asksAPerson is what verb a asks of the party making it beyond a permission —
+// a recent proof on any of its arms, or a person present — or "" when it asks
+// neither.
+//
+// A QUESTION MAY NOT BE DECIDED BY ONE, because every question is answered over
+// the dashboard's socket as well as over REST, and the socket can carry
+// neither refusal: its vocabulary has no `step_up_required` and no
+// `token_refused` (the dashboard replays a step-up over REST alone), so a
+// question refused either way there would read as a missing permission nobody
+// could grant. The verbs an answer decides by inside itself, which no
+// registration names, are held to the same rule by a walk in internal/authz.
+func asksAPerson(a authz.Action) string {
+	recency, _ := authz.RecencyOf(a)
+	own, _ := authz.SelfRecencyOf(a)
+	presence, _ := authz.PresenceOf(a)
+	return demands(recency, own, presence)
+}
+
+// demands is [asksAPerson] over a row's three values: the window it asks of
+// everybody, the one its self arm states, and which arms need a person present.
+// Over values so every clause can be held on its own — no row in the table
+// today needs a person present without also asking a proof.
+func demands(recency, own iam.Recency, presence authz.Presence) string {
+	switch {
+	case recency.Demands():
+		return "a proof inside " + string(recency)
+	case own.Demands():
+		return "a proof inside " + string(own) + " of its self arm"
+	case presence != authz.PresenceOptional:
+		return "a person present (" + string(presence) + ")"
+	}
+	return ""
 }
 
 // String names the posture as a person reads it: "everybody", the permission
@@ -491,7 +577,9 @@ func NewRegistry() *Registry { return &Registry{entries: map[string]entry{}} }
 // one would answer to any credential at all, which is the exact shape of an
 // ungated surface that looks deliberate — and the panic is at start-up rather
 // than at the first request because a company finding out on the first
-// request has already served it.
+// request has already served it. So does a [DecidedBy] of a verb that asks a
+// recent proof or a person present, which the socket a question is also
+// answered over cannot refuse in its own words ([asksAPerson]).
 //
 // Registering a name twice panics too, rather than silently taking one of
 // them: two answers to one question is exactly the divergence this package
@@ -508,13 +596,22 @@ func (r *Registry) register(name string, e entry) {
 	if e.answer == nil {
 		panic(fmt.Sprintf("queries: %q registered with no answer", name))
 	}
+	if e.posture.kind == postureDecidedBy {
+		if asks := asksAPerson(e.posture.verb); asks != "" {
+			panic(fmt.Sprintf("queries: %q is decided by %s, which asks %s — "+
+				"and a question is answered over the dashboard's socket too, "+
+				"which cannot carry a step-up or tell a token's refusal from a "+
+				"missing permission. Decide it by a verb that asks neither",
+				name, e.posture.verb, asks))
+		}
+	}
 	if !e.posture.Valid() {
 		panic(fmt.Sprintf("queries: %q registered with the posture %s, which "+
 			"is not one a question may declare — Everybody, Requires(admin or "+
-			"one of %v), or DecidedBy(a verb internal/authz has a row for). A "+
+			"one of %s), or DecidedBy(a verb internal/authz has a row for). A "+
 			"question with no posture answers to any credential at all, and "+
 			"looks exactly like one somebody decided to leave open",
-			name, e.posture.debug(), iam.Apps))
+			name, e.posture.debug(), words.Or(iam.Apps)))
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -593,7 +690,7 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 		return nil, fmt.Errorf("%w: %q is asked as %s", ErrUnauthenticated,
 			what, e.posture)
 	case !principal.Stage.MayAct():
-		return nil, &Refusal{What: what, Reason: authz.ReasonStage}
+		return nil, NewRefusal(what, authz.Decision{Reason: authz.ReasonStage})
 	// A PRINCIPAL ACTING THROUGH THE ASSISTANT asks exactly what its
 	// person may ask, at every posture (ADR-0052's parity): a question is
 	// a read, and no question answers a credential or a secret in clear,
@@ -601,8 +698,8 @@ func (r *Registry) AnswerWith(ctx context.Context, what string, p Params) (any, 
 	// assistant among reads. A [DecidedBy] question decides each record
 	// through the authority table, whose assistant column then applies.
 	case e.posture.kind == postureRequires && !principal.Can(e.posture.grant):
-		return nil, &Refusal{What: what, Reason: authz.ReasonNoGrant,
-			Grants: []iam.Grant{e.posture.grant}}
+		return nil, NewRefusal(what, authz.Decision{Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{e.posture.grant}})
 	}
 	data, err := e.answer(ctx, p)
 	return data, classifyFailure(err)
@@ -673,11 +770,12 @@ func classifyFailure(err error) error {
 		errors.Is(err, ErrUnavailable),
 		errors.Is(err, ErrBadParams),
 		errors.Is(err, ErrNotFound),
+		errors.Is(err, ErrArtifactTrashed),
 		errors.Is(err, ErrUnauthenticated),
 		errors.Is(err, ErrUnauthorized):
 		return err
 	case errors.Is(err, statelog.ErrForeignPosition):
-		return fmt.Errorf("%w: %w", ErrBadParams, err)
+		return refusedBy(err, builtin.ReadRefusalSentence(err))
 	}
 	if unavailableHere(err) {
 		// WRAPPED, NOT REPLACED, so the refusal's own code, detail and

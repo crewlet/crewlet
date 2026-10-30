@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/signedask"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE TWO INSTRUCTION CHANNELS. A replay hands a peer a person's frames and a
@@ -328,8 +329,8 @@ func admitted[Q addressed, R signedask.Reply](ctx context.Context, f *Fleet, ch 
 		f.log.WarnContext(ctx, "assistant_fleet_request_refused", "disposition",
 			string(a.Disposition), "detail", a.Why+"; nothing was carried out")
 		rep := unverified(a.Request, fmt.Sprintf("the node running the turn does not hold "+
-			"the key the request is signed under (it holds %v); add the key to its "+
-			"secrets.keys", ch.HeldKeys()))
+			"the key the request is signed under (it holds %s); add the key to its "+
+			"secrets.keys", words.And(ch.HeldKeys())))
 		return zero, &rep, nil
 	case signedask.Tampered:
 		f.log.ErrorContext(ctx, "assistant_fleet_request_refused", "disposition",

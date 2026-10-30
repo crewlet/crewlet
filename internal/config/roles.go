@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Role is the AUTHORED shape of one seat — a `roles:` entry.
@@ -33,7 +34,8 @@ type Role struct {
 
 	// Kind is agent (the default, a spawned runtime seat) or human (an
 	// addressable-only seat that is never spawned; its contact identities
-	// are optional, and [Company.Warnings] names one that has none).
+	// are optional, and [Company.Warnings] names one that has none on the
+	// vendor chat surface the company talks on).
 	Kind org.RoleKind `yaml:"kind,omitempty" json:"kind,omitempty" js:"enum=agent|human" desc:"agent (default) or human."`
 
 	// Contact is a HUMAN seat's external identities — how agents mention
@@ -219,7 +221,7 @@ func (p *RolePlacement) validate(path Path) error {
 			hint = ". A ${VAR} is not resolved here: write the node id itself"
 		}
 		probs.add(at(path, "node"), ErrUnknownValue,
-			"%q is not a node id — one starts alphanumeric and holds only "+
+			"%q is not a node id: one starts alphanumeric and holds only "+
 				"letters, digits, '.', '_' or '-' (max 64 chars), and every "+
 				"node's own id is held to that, so this pin could never be "+
 				"satisfied%s", p.Node, hint)
@@ -241,7 +243,7 @@ func (p *RolePlacement) validate(path Path) error {
 					"node.labels, so this seat could never be placed")
 		case err != nil:
 			probs.add(where, ErrUnknownValue,
-				"%v — this seat is placed only on a node carrying the key "+
+				"%v. This seat is placed only on a node carrying the key "+
 					"under node.labels, and no node can carry one outside "+
 					"that grammar", err)
 		}
@@ -475,7 +477,7 @@ func (g *RoleGitHub) validate(path Path) error {
 			"%q is not an access tier; give one of %s. An unknown tier would "+
 				"run the seat read-only, which is safe and is not what the "+
 				"document says",
-			g.Tier, strings.Join(CodeAccessTiers, ", "))
+			g.Tier, words.Or(CodeAccessTiers))
 	}
 	if g.Workflows && g.TierOrDefault() != TierFullAccess {
 		p.add(at(path, "workflows"), ErrConflict,
@@ -632,7 +634,7 @@ func (m *RoleMattermost) validate(path Path) error {
 		hint := ""
 		if envref.Has(m.Username) {
 			// Only a whole reference with space around it reaches here.
-			hint = fmt.Sprintf(" — and so does the ${VAR} that names one: write %q",
+			hint = fmt.Sprintf(", and so does the ${VAR} that names one: write %q",
 				strings.TrimSpace(m.Username))
 		}
 		p.add(username, ErrUnknownValue,
@@ -847,7 +849,13 @@ type Unit struct {
 	// app this build refuses, and put "Team Slack channel" into the prompt
 	// of every agent in a company that talks on Mattermost. A unit's
 	// channel is a fact about the unit, not about who hosts it.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" desc:"Unit channel on the company's chat surface; inherited by child units."`
+	//
+	// IT IS AN ADDRESS, which is what the grammar is for — see
+	// [unitChannel]. THE PATTERN IS ON THE FIELD as well as in the
+	// validator, for the reason [Unit.ID] gives: the generator emits it
+	// into the published schema, and a schema accepting channels the engine
+	// refuses is exactly the drift the schema-diff test cannot see.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty" js:"pattern=^[a-z0-9][a-z0-9_-]{0,63}$" desc:"Unit channel on the company's chat surface, e.g. engineering; inherited by child units. Lowercase letters, digits, - and _."`
 
 	// Knowledge is free-text knowledge references for this unit. NOT a
 	// read scope — org-wide read scope is the knowledge block.
@@ -921,6 +929,21 @@ func (u *Unit) validate(path Path) error {
 				"starting with a letter, up to 64 characters. It is chosen once "+
 				"and read by nobody, so it can be short and dull", id)
 	}
+	// THE RAW VALUE, deliberately unlike the id above: that one is trimmed
+	// here and trimmed again by [Unit.Unit], so a padded id normalises
+	// end to end, while a channel is copied VERBATIM into the organization
+	// and from there into a prompt and a room name. Trimming it here would
+	// accept `" ops"` and leave a room named with a leading space — and it
+	// would also make the published schema, which carries this same pattern
+	// and cannot trim anything, stricter than the engine. That is the one
+	// direction the schema must never take.
+	if u.Channel != "" && !unitChannel.MatchString(u.Channel) {
+		p.add(at(path, "channel"), ErrShape,
+			"%q isn't a channel name. Use lowercase letters, digits, `-` and "+
+				"`_`, starting with a letter or a digit, up to 64 characters, "+
+				"with no spaces around it. Write the name, like `engineering`, "+
+				"not `#engineering` or an id like `C_ENG`", u.Channel)
+	}
 	for i := range u.Roles {
 		p.wrap(u.Roles[i].validate(idx(at(path, "roles"), i)))
 	}
@@ -941,6 +964,46 @@ func (u *Unit) validate(path Path) error {
 // regexp differing by one character is how a schema starts accepting what the
 // engine refuses.
 var entityID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
+// unitChannel is what a unit's channel may look like.
+//
+// # A channel is an ADDRESS now, and it had no rule at all
+//
+// The field shipped with no validation of any kind and two consumers — a line
+// in the prompt, and the list a structured ask's `inform` channel is checked
+// against — so anything an author typed was passed through to a model as
+// prose: `#eng`, `C_BACKEND`, `Engineering (private)`. With
+// `chat.backend: chatlet` the engine MINTS the room this names, routes a
+// unit's wakes to it, and hands the name to a model as something to type back
+// into a tool call, which makes every one of those three a different failure:
+// a name nobody can address, a rendering of an id Chatlet has no
+// concept of, and a name no vendor would accept either.
+//
+// The set is the INTERSECTION of the three surfaces rather than Chatlet's own:
+// Mattermost's channel URL names are lowercase alphanumerics with
+// `-` and `_` up to 64 characters, Slack's are lowercase letters, digits, `-`
+// and `_` up to 80, and the engine's own name admits exactly that set too,
+// reaching a broker subject only as a digest. So one grammar serves all
+// three, a company can switch backends without rewriting its org chart — a
+// vendor company's `dev_ops` validates — and the characters an author is most
+// likely to add — the `#` that is a rendering rather than a name, an upper
+// case, a space — are refused where they are written rather than printed into
+// a prompt.
+//
+// 64 characters because that is the shortest of the three limits, and the one
+// that truncates rather than refusing is the one that would give two units the
+// same room.
+//
+// # And why it is not [entityID]
+//
+// The two look alike and differ in the first character on purpose. An id is
+// a KEY this engine mints and nobody reads, so it may as well start with a
+// letter everywhere it lands; a channel is an ADDRESS on somebody's chat
+// surface, where `2fa-rollout` is an ordinary room name a vendor company
+// already has. Folding the two into one pattern would either refuse that
+// company's real channel or let an id start with a digit, and the second is
+// a key [MintUnitID] would then have to stop prefixing.
+var unitChannel = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 // MintUnitID is the id a unit gets when its document declares none: its name,
 // reduced to the key grammar [entityID] accepts.

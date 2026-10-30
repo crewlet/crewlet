@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
 	"github.com/crewlet/crewlet/internal/agent/skills"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
@@ -200,7 +201,7 @@ func TestASuccessfulLoadUnlocksTheToolsItCovers(t *testing.T) {
 	r := registry(t, skill("code", skills.Trigger{MCPServer: "gitlab"}, true))
 	g := skills.NewGuard(r, prompts.PhaseExecute, withLoader(nil, "gitlab"))
 
-	g.Observe(skills.LoaderTool, toolargs.Of(nil, map[string]any{"key": "code"}))
+	g.Observe(toolname.LoadToolSkill, toolargs.Of(nil, map[string]any{"key": "code"}))
 	if got := g.Check("create_mr", "gitlab"); got != "" {
 		t.Fatalf("the tool is still gated after its skill loaded: %s", got)
 	}
@@ -217,10 +218,10 @@ func TestOnlyALoadOfTheRightSkillUnlocksIt(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{"another skill's key", skills.LoaderTool, map[string]any{"key": "chat"}},
-		{"an empty key", skills.LoaderTool, map[string]any{"key": "  "}},
-		{"no key at all", skills.LoaderTool, map[string]any{}},
-		{"a key of the wrong type", skills.LoaderTool, map[string]any{"key": 7}},
+		{"another skill's key", toolname.LoadToolSkill, map[string]any{"key": "chat"}},
+		{"an empty key", toolname.LoadToolSkill, map[string]any{"key": "  "}},
+		{"no key at all", toolname.LoadToolSkill, map[string]any{}},
+		{"a key of the wrong type", toolname.LoadToolSkill, map[string]any{"key": 7}},
 		{"a different tool entirely", "create_mr", map[string]any{"key": "code"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

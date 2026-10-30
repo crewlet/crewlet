@@ -59,7 +59,7 @@ func TestEachEntrysRowIsItsSignInsStateOnThisNode(t *testing.T) {
 		seat, "swe", time.Now().Add(time.Hour))
 	t.Cleanup(func() { e.leaveLimitProbe(seat, providerBasis{models: c.Models, keys: []string{"plan", "spare"}}) })
 
-	rows := e.nodeStatus(t.Context()).Models
+	rows := beatOf(t, e).Models
 	if len(rows) != 2 {
 		t.Fatalf("rows = %+v, want one per entry", rows)
 	}
@@ -89,7 +89,7 @@ func TestEachEntrysRowIsItsSignInsStateOnThisNode(t *testing.T) {
 // never as a list of empty rows.
 func TestANodeWithNoModelsPublishesNoRows(t *testing.T) {
 	t.Parallel()
-	if rows := (&Engine{}).nodeStatus(t.Context()).Models; rows != nil {
+	if rows := beatOf(t, &Engine{}).Models; rows != nil {
 		t.Fatalf("a node with no revision published %+v", rows)
 	}
 }
@@ -150,11 +150,23 @@ func TestTheLoginWatcherSaysWhatTheCLISaysOfItsLogin(t *testing.T) {
 	}
 
 	e.checkHostLogins(t.Context(), true)
-	rows := e.nodeStatus(t.Context()).Models
+	rows := beatOf(t, e).Models
 	if row := rowOf(t, rows, "gone"); row.HostLogin == nil || row.HostLogin.State != coord.HostSignedOut {
 		t.Errorf("the signed-out entry's row = %+v, want its CLI's signed_out", row.HostLogin)
 	}
 	if row := rowOf(t, rows, "keyed"); row.HostLogin != nil {
 		t.Errorf("the key entry's row carries a login %+v", row.HostLogin)
 	}
+}
+
+// beatOf is what e's next heartbeat carries, a case failing where the beat
+// would publish nothing (the status reads [Engine.nodeStatus] makes did not
+// answer).
+func beatOf(t *testing.T, e *Engine) coord.NodeStatus {
+	t.Helper()
+	status, err := e.nodeStatus(t.Context())
+	if err != nil {
+		t.Fatalf("the beat answered nothing: %v", err)
+	}
+	return status
 }

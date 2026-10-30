@@ -83,6 +83,18 @@ func (r *Reader) TurnPlaces(ctx context.Context, runs []string,
 	return out, nil
 }
 
+// turnPlacesStatement is [readTurnPlaces]' read of n runs' tasks, named for
+// the plan test.
+func turnPlacesStatement(n int) string {
+	return `
+		SELECT t.turn_id, t.task_id, k.key, k.key_collision, k.title,
+		       COALESCE(json_extract(t.document, '$.spend.turns'), 0) > 0
+		  FROM tracker_turns t
+		  JOIN tracker_tasks k ON k.id = t.task_id AND k.removed_at IS NULL
+		 WHERE t.turn_id <> '' AND t.turn_id IN (` + placeholders(n) + `)
+		 ORDER BY t.turn_id, t.log_seq DESC`
+}
+
 func readTurnPlaces(ctx context.Context, tx *sql.Tx, runs []string,
 	out map[string]TurnPlace) error {
 
@@ -92,14 +104,7 @@ func readTurnPlaces(ctx context.Context, tx *sql.Tx, runs []string,
 	}
 	// THROUGH `tracker_turns_turn_idx` (replicated 0030), newest row first per
 	// run so the fallback below is the first row it sees.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT t.turn_id, t.task_id, k.key, k.key_collision, k.title,
-		       COALESCE(json_extract(t.document, '$.spend.turns'), 0) > 0
-		  FROM tracker_turns t
-		  JOIN tracker_tasks k ON k.id = t.task_id AND k.removed_at IS NULL
-		 WHERE t.turn_id <> '' AND t.turn_id IN (`+
-		strings.TrimSuffix(strings.Repeat("?,", len(runs)), ",")+`)
-		 ORDER BY t.turn_id, t.log_seq DESC`, args...)
+	rows, err := tx.QueryContext(ctx, turnPlacesStatement(len(runs)), args...)
 	if err != nil {
 		return fmt.Errorf("worklet: read the tasks of %d runs: %w", len(runs), err)
 	}

@@ -2,6 +2,7 @@ package seat
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -20,8 +21,8 @@ func TestPresenceCarriesThisNodesLiveStatus(t *testing.T) {
 	f := newFleet(t)
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"),
-		Status: func(context.Context) coord.NodeStatus {
-			return coord.NodeStatus{InFlight: 2, Posture: "serve"}
+		Status: func(context.Context) (coord.NodeStatus, error) {
+			return coord.NodeStatus{InFlight: 2, Posture: "serve"}, nil
 		},
 	})
 	h.renewNodePresence(f.ctx)
@@ -72,18 +73,18 @@ func presenceOf(t *testing.T, f *fleet, node string) coord.Lease {
 
 // THE BEAT IS NOT HOSTAGE TO A DISPLAY COLUMN. Answering may mean reading the
 // control plane, and this runs on the path that renews presence — so a hook
-// that overruns its share of the interval publishes nothing rather than
-// holding the renewal until the watchdog shoots the process.
+// that does not answer within its share of the interval publishes nothing
+// rather than holding the renewal until the watchdog shoots the process.
 func TestASlowStatusHookDoesNotHoldThePresenceRenewal(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	released := make(chan struct{})
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"),
-		Status: func(ctx context.Context) coord.NodeStatus {
+		Status: func(ctx context.Context) (coord.NodeStatus, error) {
 			<-ctx.Done()
 			close(released)
-			return coord.NodeStatus{InFlight: 7}
+			return coord.NodeStatus{InFlight: 7}, ctx.Err()
 		},
 	})
 	h.heartbeat = 5 * time.Millisecond
@@ -109,22 +110,93 @@ func TestASlowStatusHookDoesNotHoldThePresenceRenewal(t *testing.T) {
 // A HOST WITH A HEARTBEAT UNDER THE DIVISOR still gives the hook a turn: a
 // budget that rounds to zero expires before the call starts, and the column
 // would never be published at all.
-func TestATinyHeartbeatStillPublishesStatus(t *testing.T) {
+//
+// The budget is read rather than raced. This case used to publish through a
+// one-millisecond deadline and pass or fail on whether the scheduler let the
+// goroutine finish inside it — it failed under a loaded `make test` — so it
+// asserts the deadline the hook was HANDED, which is the floor's whole
+// promise and needs no clock to have behaved.
+func TestATinyHeartbeatStillGivesTheHookATurn(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	var (
+		deadline    time.Time
+		hasDeadline bool
+	)
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo"),
+		Status: func(ctx context.Context) (coord.NodeStatus, error) {
+			deadline, hasDeadline = ctx.Deadline()
+			return coord.NodeStatus{InFlight: 3}, nil
+		},
+	})
+	h.heartbeat = time.Nanosecond
+	if got := h.statusBudget(); got <= 0 {
+		t.Fatalf("a %v heartbeat gives the hook a budget of %v", h.heartbeat, got)
+	}
+
+	before := time.Now()
+	h.renewNodePresence(f.ctx)
+
+	if !hasDeadline || deadline.Sub(before) < h.statusBudget() {
+		t.Errorf("the hook was handed a deadline %v after the beat began (set: %v), want at least %v",
+			deadline.Sub(before), hasDeadline, h.statusBudget())
+	}
+	live, ok := coord.StatusFromMeta(presenceOf(t, f, "node-a").Meta)
+	if !ok || live.InFlight != 3 {
+		t.Errorf("status = %+v, published = %v", live, ok)
+	}
+}
+
+// WHETHER THE HOOK ANSWERED IS THE HOOK'S FACT, never the beat's clock after
+// it returned. A hook that hands back its whole answer is published even when
+// the deadline has passed by the time the beat looks — which is exactly what
+// a goroutine descheduled between the hook's return and that look used to
+// lose.
+func TestAnAnswerReturnedPastTheDeadlineIsStillPublished(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
 	h := f.newHost("node-a", Config{
 		Seats: seatsNamed("ceo"),
-		Status: func(context.Context) coord.NodeStatus {
-			return coord.NodeStatus{InFlight: 3}
+		Status: func(ctx context.Context) (coord.NodeStatus, error) {
+			// Finish the answer, then let the deadline pass before
+			// returning it: the beat now reads a dead context beside a
+			// complete answer.
+			<-ctx.Done()
+			return coord.NodeStatus{InFlight: 4}, nil
 		},
 	})
-	h.heartbeat = time.Nanosecond
+	h.heartbeat = 5 * time.Millisecond
 
 	h.renewNodePresence(f.ctx)
 
 	live, ok := coord.StatusFromMeta(presenceOf(t, f, "node-a").Meta)
-	if !ok || live.InFlight != 3 {
-		t.Errorf("status = %+v, published = %v", live, ok)
+	if !ok || live.InFlight != 4 {
+		t.Errorf("status = %+v, published = %v; an answered hook was discarded on the clock", live, ok)
+	}
+}
+
+// A HOOK THAT SAYS IT DID NOT ANSWER PUBLISHES NOTHING, however quickly it
+// said so: a read that failed at once is no more an answer than one the
+// deadline cut short.
+func TestAHookThatDidNotAnswerPublishesNoStatus(t *testing.T) {
+	t.Parallel()
+	f := newFleet(t)
+	h := f.newHost("node-a", Config{
+		Seats: seatsNamed("ceo"),
+		Status: func(context.Context) (coord.NodeStatus, error) {
+			return coord.NodeStatus{InFlight: 9}, errors.New("the control plane refused the read")
+		},
+	})
+
+	h.renewNodePresence(f.ctx)
+
+	lease := presenceOf(t, f, "node-a")
+	if live, ok := coord.StatusFromMeta(lease.Meta); ok {
+		t.Errorf("a hook that did not answer published %+v", live)
+	}
+	if profile, ok := placement.FromLease(lease); !ok || profile.ID != "node-a" {
+		t.Errorf("presence was not renewed: %v", lease.Meta)
 	}
 }
 

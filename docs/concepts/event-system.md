@@ -14,7 +14,7 @@ One interface serves all inter-component communication:
 
 | Where the broker runs | What that is |
 |---|---|
-| **In this process**: `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member (a solo node included) it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot (the **identity estate** among the state logs whose records live on that stream), and Worklet and Doclet put their items and pages there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf (an embedded node without `data`, joining the members over `stream.leaf.urls`) runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
+| **In this process**: `stream.type: embedded`, the default | A NATS JetStream server started in the engine's own process. No listener, no port, no service to operate: in the solo case it binds no socket at all, so the broker cannot be reached from outside the process. `stream.store_dir` makes its streams file-backed and restart-surviving, and on a broker member (a solo node included) it is **required**: left empty they would live in memory, and the engine refuses to boot rather than lose them at the first restart. That holds whether or not the node has a company yet, because every data node runs the engine's core from boot (the **identity estate** among the state logs whose records live on that stream), and Worklet, Doclet and Chatlet put their items, pages and messages there too (see [Configuration](../getting-started/configuration.md#tier-a)). Only a member keeps streams at all: a leaf (an embedded node without `data`, joining the members over `stream.leaf.urls`) runs no JetStream and keeps none, so it sets no `store_dir` (see [Satellite nodes](../guides/satellite-nodes.md)). |
 | **Somewhere else** — `stream.type: nats` | The same client code against a NATS server or cluster somebody else runs, dialled through `stream.url`. That sameness is what lets a laptop run the whole company with no services and a fleet run the same binary against a cluster. One thing the operator's server has to promise that the embedded one is built with: messages of 8 MiB, the largest the engine sends — a server that holds the engine's connection to a smaller `max_payload` is refused when the node starts rather than at its first large write (see [Deployment](../guides/deployment.md#an-external-nats-server)). |
 | **Nowhere — the in-memory twin** (`internal/queue/memory`) | The test twin: a real broker object plus N clients rather than one fused thing, so a test can stop a node and still inspect what its subscription retained. |
 
@@ -59,6 +59,19 @@ crewlet.events.{type}                # What the engine records about itself:
 # revision, because the authoritative path polls the activation pointer
 crewlet.config.revision_activated
 crewlet.config.revision_applied
+
+# Who is in which room right now — an artifact's or a chat room's: who is
+# looking, who is editing or typing, and which seat is working there (ADR-0038).
+# One subject per room, named by its kind and its id, that a node listens on
+# only while one of its sockets is in the room, and one fleet-wide subject a
+# node asks its peers on as it gains a room's first socket. Ephemeral — no
+# stream, no applier — and deliberately outside every log's wildcard, so a
+# keystroke is never a record every data node applies. Every frame is SEALED
+# under the fleet keyring and one the fleet did not seal shows nobody. A
+# person's chat read state has no subject at all — it is a coordination record
+# every node serving sockets watches
+crewlet.rooms.{artifact|chat}.{id}
+crewlet.rooms.ask
 
 # A seat's memory, ONE SUBJECT PER ROW, on a stream that retains one message
 # per subject — so it holds the current value of every row rather than a log of
@@ -177,7 +190,7 @@ flowchart TD
 
 For every source but chat the two are the same string — an issue key, a page id, a monitor id and a task's id are each one object that is both the merge unit and the durable thread. **Chat is where they differ, and only for a direct message**: a DM is one conversation however it is threaded, so its identity is the bare channel (`slack:D1`) while a reply in a thread still partitions on that thread (`slack:D1:1718.001`). In a shared channel a thread IS the conversation and the two coincide again. The rule that decides it is that **a partition key is always the identity or a finer cut of it**, so every event in one partition carries one identity: a turn is a partition and its ledger entry is written once, and constituents that disagreed about the identity would file it under whichever event sorted first. Before the two were separated, one value answered both questions — so a DM's first turn was filed under the channel, its thread reply looked its history up under the thread, and a seat re-read its own 1:1 line as a first turn every time.
 
-A notification Worklet or Doclet raised also carries `trigger_position`: where on its log the change that caused it was committed, as a position token (`<stream>@<generation>:<sequence>`). The turn it wakes hands that position to its node's read-your-writes floors before its first read, so whatever the seat then reads from that domain (a Worklet list or item, a page or a listing of pages), on whichever node answers it, is no older than the change it was woken for. The ranked searches are the exception: they read an index each node builds behind its own rows, so they carry no floor and may not find a change made a moment ago (see [Read-your-trigger](../guides/consistency.md#read-your-trigger-is-a-floor-not-the-mechanism)). A vendor's notification carries none.
+A notification Worklet, Doclet or Chatlet raised also carries `trigger_position`: where on its log the change that caused it was committed, as a position token (`<stream>@<generation>:<sequence>`). The turn it wakes hands that position to its node's read-your-writes floors before its first read, so whatever the seat then reads from that domain (a Worklet list or item, a page or a listing of pages, a room, a thread or a mention list), on whichever node answers it, is no older than the change it was woken for. The ranked searches are the exception: they read an index each node builds behind its own rows, so they carry no floor and may not find a change made a moment ago (see [Read-your-trigger](../guides/consistency.md#read-your-trigger-is-a-floor-not-the-mechanism)). A vendor's notification carries none.
 
 On the wire of an inbound notification the partition key rides the payload field `partition_key` and the identity rides `conversation_identity`, each read only from its own field: a notification that names a partition and no identity names no conversation. The partition is spelled as the one event whose subject is a batch spells it (`partition_key`, below), because everywhere else `conversation_key` is the **identity** — that is what a turn's events are tagged with in the event store.
 
@@ -189,7 +202,7 @@ On the wire of an inbound notification the partition key rides the payload field
 
 **A removed seat's subscriptions are retired, not kept.** `DeleteSubscription`'s caller is the maintenance duty: once a seat has been absent from the active revision for 24 hours, its coding runs are ended and its inbox and its sandbox control subscription are deleted together with the mail they still hold. The walk that creates inboxes records each seat in the coordination store first, because a removed handle is gone from the org the names are derived from and the retirement's stamps have to live somewhere; each sweep also lists the seat mailboxes the broker holds, so one that escaped that record is still found. See [Seat Ownership § The removed seat](seat-ownership.md#the-removed-seat).
 
-**The digest trigger.** A multi-event partition is merged by `internal/notify`'s coalescer into ONE notification: a chronological digest of the earlier messages, then the **latest** constituent's full enriched body — so the per-source scaffolding (triage guidance, `## Get full context`) renders exactly once and points at the most recent state. Two noise filters apply in the digest: per-source supersede rules (`notify.Prompt.DigestBody` — Jira `issue_updated` bodies, stale full descriptions whose current state the Jira prompt never renders anyway, collapse to their event lead) and a source-agnostic **same-sender duplicate dedupe** — a constituent whose effective body is byte-identical to a later message from the same sender collapses to a marker, so a third-party app that re-emits unchanged state does not bury the one actionable line. It is the backstop rather than the first line of defence: where a third-party app has a supersede rule the rule fires first (a code host's lifecycle events collapse to their lead there, never reaching this), and what reaches the dedupe is the case no rule anticipated. Two different people each saying "+1" are two facts and both survive. Comments and messages always keep their text. The merged event carries every constituent in `messages` (sender, salient body, metadata, per-message recon flag — full fidelity for the [learning workers](agent-learning.md), which observe **each distinct sender**), a conservative event-level recon merge and an equally conservative delivery-obligation merge (one direct ask inside a burst of broadcasts is still somebody waiting), the max-depth constituent's delegation bookkeeping (batching cannot launder the depth cap), and the FIRST constituent's trace context — the same event the merged ask leads with, because a span cannot have two parents and rooting the turn under the message the rest are replies to is what makes the trace readable. The other constituents are already recorded as the turn's interactions. Same-id duplicate deliveries (an at-least-once edge the requeue machinery itself can produce) are dropped at the handler before any merging. If a partition cannot be merged (a malformed constituent), the engine degrades to per-event dispatch — the tail is requeued as independent inbox messages FIRST, then the first event runs in the current ack scope — so a requeue failure aborts before any turn ran and a completed turn is never replayed by a later event's failure; partially-requeued copies collapse via the same-id dedupe on redelivery. A `NotificationsCoalesced` telemetry event records each merge for the dashboard / event store, naming the PARTITION that merged rather than the conversation it belongs to — on its own field, `partition_key`, which the event store promotes to a tag of that name. It is the only event that carries a partition, and it does not spell it `conversation_key`, which is the conversation identity on every other event a turn publishes: one promoted tag meaning the identity there and the batch here would make a query for "what did this seat do on that thread" silently mix in the batches its wakes arrived in.
+**The digest trigger.** A multi-event partition is merged by `internal/notify`'s coalescer into ONE notification: a chronological digest of the earlier messages, then the **latest** constituent's full enriched body — so the per-source scaffolding (triage guidance, `## Get full context`) renders exactly once and points at the most recent state. Two noise filters apply in the digest: per-source supersede rules (`notify.Prompt.DigestBody` — Jira `issue_updated` bodies, stale full descriptions whose current state the Jira prompt never renders anyway, collapse to their event lead) and a source-agnostic **same-sender duplicate dedupe** — a constituent whose effective body is byte-identical to a later message from the same sender collapses to a marker, so a third-party app that re-emits unchanged state does not bury the one actionable line. It is the backstop rather than the first line of defence: where a third-party app has a supersede rule the rule fires first (a code host's lifecycle events collapse to their lead there, never reaching this), and what reaches the dedupe is the case no rule anticipated. Two different people each saying "+1" are two facts and both survive. Comments and messages always keep their text, each inside the [fence](agent-runtime.md#text-somebody-else-wrote) its own delivery put it in, moved onto the digest's one token. The merged event carries every constituent in `messages` (sender, salient body, metadata, per-message recon flag — full fidelity for the [learning workers](agent-learning.md), which observe **each distinct sender**), a conservative event-level recon merge and an equally conservative delivery-obligation merge (one direct ask inside a burst of broadcasts is still somebody waiting), the max-depth constituent's delegation bookkeeping (batching cannot launder the depth cap), and the FIRST constituent's trace context — the same event the merged ask leads with, because a span cannot have two parents and rooting the turn under the message the rest are replies to is what makes the trace readable. The other constituents are already recorded as the turn's interactions. Same-id duplicate deliveries (an at-least-once edge the requeue machinery itself can produce) are dropped at the handler before any merging. If a partition cannot be merged (a malformed constituent), the engine degrades to per-event dispatch — the tail is requeued as independent inbox messages FIRST, then the first event runs in the current ack scope — so a requeue failure aborts before any turn ran and a completed turn is never replayed by a later event's failure; partially-requeued copies collapse via the same-id dedupe on redelivery. A `NotificationsCoalesced` telemetry event records each merge for the dashboard / event store, naming the PARTITION that merged rather than the conversation it belongs to — on its own field, `partition_key`, which the event store promotes to a tag of that name. It is the only event that carries a partition, and it does not spell it `conversation_key`, which is the conversation identity on every other event a turn publishes: one promoted tag meaning the identity there and the batch here would make a query for "what did this seat do on that thread" silently mix in the batches its wakes arrived in.
 
 **Two knobs** (Tier B, hot-reloadable — see the [configuration reference](../getting-started/configuration.md)):
 
@@ -202,7 +215,7 @@ With the window at `0`, an idle-agent burst worst-cases at **two** turns (the fi
 
 **Relation to the rate limiter.** `notification_rate_limit` (the notification service's valve, default off) *drops* notifications above N per seat per second. It remains purely a safety valve against pathological webhook storms and notification loops. Burst handling is coalescing's job: a coalesced comment is context preserved, a dropped one is context lost.
 
-DACI discussion happens in the team channel on the company's chat surface (Mattermost or Slack), with each agent's own chat MCP tools. The decision itself, when somebody has to choose, is a **structured ask** on a work item — a tracker comment carrying the options, answered by a `choice` — so it arrives as an ordinary tracker wake (`asked`, then `answered`) rather than as an event type of its own. The engine runs no workflow over it. See [Decision Framework](decision-framework.md) for details.
+DACI discussion happens in the team channel on the company's chat surface (the engine's own, Mattermost or Slack), with the [Chatlet](chatlet.md) tools or each agent's own chat MCP tools. The decision itself, when somebody has to choose, is a **structured ask** on a work item — a tracker comment carrying the options, answered by a `choice` — so it arrives as an ordinary tracker wake (`asked`, then `answered`) rather than as an event type of its own. The engine runs no workflow over it. See [Decision Framework](decision-framework.md) for details.
 
 ---
 
@@ -406,7 +419,9 @@ agent_phase_completed      # one phase's durable record: prompts, response,
                            # `error_kind` — a provider kind (rate_limit,
                            # auth, timeout, server, fatal, canceled),
                            # budget_exhausted, stopped for a phase a person
-                           # ended, canceled, or error
+                           # ended, canceled, sandbox_<class>
+                           # for an executor whose box could not
+                           # be started, or error
 auxiliary_spend            # what the seat's auxiliary model cost for one key —
                            # stage (turn, reflection, background, operator),
                            # purpose, seat or person, turn, model, provider
@@ -617,9 +632,9 @@ events — which ask `events` and `event_series` with `feed_only`, so a bar neve
 counts and a page never lists a row the feed would not hold. The row is still
 in `GET /events` without it, a turn's history and a trace.
 
-Every node applies `feed_only` to its own rows — its page and its bars alike —
-by its own copy of that class, and the rows a related-agent page pulls in by
-trace id are held to it too, since a turn's trace holds every one of its
+Every data node applies `feed_only` to its own rows — its page and its bars
+alike — by its own copy of that class, and the rows a related-agent page pulls
+in by trace id are held to it too, since a turn's trace holds every one of its
 accounting records.
 
 ---
@@ -669,14 +684,18 @@ back to the broker — a delivery it parked, a dead letter — relays the origin
 rather than claiming the event. The caller's own event is never written to;
 the queue stamps a copy.
 
-It is on the envelope because it is the **store-routing fact**. The event store
-is written by a publish listener inline on the publishing node (see
-[Publish Listeners](#publish-listeners)), so each node's database holds what
-that node published and nothing else — and a reader holding one row or one live
-frame has only `node` to find the node whose store holds the rest of that
-node's record, and to say where the work it describes ran. That is also why the
-backup audit record names no node of its own: the route publishes from the node
-that took the copy, so the envelope already says whose disk it is on.
+It is on the envelope because it is **where the work ran**. The event store is
+written by a publish listener inline on the publishing node (see
+[Publish Listeners](#publish-listeners)), so each data node's store holds what
+it published and the events it keeps in custody for a node without `data`,
+which keeps no store of its own
+([custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data)).
+So which store a row was read from does not say where it happened, and every
+stored row keeps the `node` its envelope carried: a reader holding one row or
+one live frame reads where the work it describes ran off the row itself. That is
+also why the backup audit record names no node of its own: the route publishes
+from the node that took the copy, so the envelope already says whose disk it is
+on.
 
 `node` is absent only on an event published through a queue client built
 without a node, which only a test harness builds. Like every envelope field it
@@ -697,18 +716,20 @@ Changes are additive-only — new fields get defaults, existing fields are never
 
 ## Reading the fleet's history
 
-Each node's event store holds what **that node** published and nothing else
-(see [Publish Listeners](#publish-listeners)), so no one store is the
-company's history. A read of turn-level detail — `events`, `event`,
+Each data node's event store holds what **that node** published, and the
+events of a node without `data` it keeps in
+[custody](../guides/deployment.md#custody-the-rows-of-a-node-without-data),
+and nothing else (see [Publish Listeners](#publish-listeners)), so no one store
+is the company's history. A read of turn-level detail — `events`, `event`,
 `event_series`, `trace`, `turn`, `turns`, `phases`, a seat's `llm_history`,
 the integrations' delivery counts and what became of those deliveries (the
 `notification_outcomes` question: each node's dropped and merged
 notifications per third-party app, counted over the window the delivery
-counts name) — is answered by **every live node at query time**
+counts name) — is answered by **every live data node at query time**
 (`internal/eventfan`, ADR-0021). The same scatter seeds the live
 projection when a node starts. It seeds the feed and each seat's last turn,
 so a restarted node's screens show the company rather than the part of it
-this node published, and the 24-hour spend window (the `phase_tokens`
+this node's store holds, and the 24-hour spend window (the `phase_tokens`
 question, cut to the asker's window and floored at the asker's instant, so
 every node answers the same one) behind the
 [`tokens` push](../reference/api-endpoints.md#pushes), which no screen draws:
@@ -724,7 +745,7 @@ sequenceDiagram
     D->>A: GET /turns
     par this node's own store
         A->>A: read its share
-    and every live peer, on crewlet.observe.read
+    and every live data node, on crewlet.observe.read
         A->>B: the same question
         A->>C: the same question
     end
@@ -737,11 +758,13 @@ sequenceDiagram
   directly and scatters the same question over the broker's ephemeral
   request/reply — no stream, no consumer, no stored record, because a read of
   the event log that wrote an event would grow the log every time somebody
-  looked at it. The roster is the fleet's live node leases.
+  looked at it. The roster is the live data nodes, read off the presence
+  leases: a node without `data` keeps no event store and serves no API, so it
+  neither asks nor is asked, and the asker is always a data node.
 - **Every answer says who answered.** `coverage` is
   `{nodes: [{id, answered, error}], complete}` on every one of these answers.
-  `complete` is true only when every live node answered; a node that did not
-  is named with the reason — no answer inside the **2-second** fleet read
+  `complete` is true only when every live data node answered; a node that did
+  not is named with the reason — no answer inside the **2-second** fleet read
   budget, a build speaking another protocol version, a reply it could not
   read, or its own read failing. A short answer that did not say so would
   read exactly like a quiet company.
@@ -819,7 +842,7 @@ sequenceDiagram
   and says it holds more, which the merge already handles.
 
 The `history_partial` [alarm](../reference/alarms.md) fires on the fraction
-of a node's history reads that came back without every node, at the fleet
+of a node's history reads that came back without every data node, at the fleet
 read budget it borrows rather than a threshold of its own.
 
 ---
@@ -907,15 +930,29 @@ The JetStream backend runs both on **core NATS** publish and subscribe, outside 
 
 ## Communication
 
-Two communication systems:
+Two communication systems, and the first of them has two implementations.
 
-### External Channels (Slack, Mattermost)
+### Channels (the engine's own, or Slack / Mattermost)
 
-Org-wide announcements, department coordination, and team discussions happen in the company's own chat (Slack or Mattermost channels). Agents post with their own MCP tools, and the **notification service** routes what arrives, a Slack webhook or a Mattermost socket event, to agent inboxes.
+Org-wide announcements, department coordination and team discussions happen in
+channels: one room per unit, plus whatever the company opens. Which product
+holds them is [`chat.backend`](chatlet.md), and it is exclusive — one live chat
+home, or a person replies in the place the agents are not reading.
 
 - **Org-wide** — announcements (via an `#announcements` channel)
 - **Department** — leads-only coordination (via the department's `channel`)
 - **Team** — team coordination and DACI discussion (via the unit's `channel`)
+
+On a **vendor** backend the rooms are Slack or Mattermost channels: agents post
+with their own MCP tools, and the notification service routes what arrives — a
+Slack webhook, a Mattermost socket event — to agent inboxes.
+
+On Chatlet the rooms are the engine's own, and the path is
+shorter in one specific way rather than different in kind: a message is a
+record on `CREWLET_CHAT_LOG`, and the wake is derived from that committed
+record by a durable consumer rather than from an inbound webhook. Everything
+after that — the routing, the inbox, the coalescing, the turn — is the same
+machinery, which is the point. A unit's `channel` is what opens its room.
 
 ### Ephemeral A2A channels (`internal/a2a`)
 

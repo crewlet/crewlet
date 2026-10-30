@@ -16,9 +16,9 @@ const RecordID = "5f0c5c8e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
 
 // World is a small company as the routes a write's preview reads answer it,
 // by request path and in each route's own shape: a task with a decision on its
-// thread, a person's priorities, an agent, a parked coding run, a page and an
-// artifact. Every proposing tool called with its [ProposalArgs] previews
-// against it.
+// thread, a person's priorities, an agent, a parked coding run, a page, an
+// artifact, and a private chat room with a message in it. Every proposing tool
+// called with its [ProposalArgs] previews against it.
 func World() map[string]any {
 	return map[string]any{
 		"/worklet/ENG-42": map[string]any{"task": map[string]any{"id": RecordID, "key": "ENG-42",
@@ -58,6 +58,22 @@ func World() map[string]any {
 			"head_number": 5},
 		"/config/charter": Charter(WorldMission, "Settling up takes seconds.",
 			"Miles is the final authority.", "Money is an integer number of cents."),
+		// A PRIVATE ROOM pm follows whole and ada is in, and the message pm
+		// wrote in it, as the room's read and the thread read answer them.
+		"/chatlet/channels/" + RecordID: map[string]any{"read_level": "stale", "complete": true,
+			"channel": map[string]any{"id": RecordID, "kind": "private", "name": "launch",
+				"topic": "Friday's release", "purpose": "Shipping the release",
+				"created_by": "pm"},
+			"revision": 4, "message_seq": 12, "member": true,
+			"members": []any{map[string]any{"handle": "pm", "follow_all": true},
+				map[string]any{"handle": "ada"}}},
+		"/chatlet/channels/" + RecordID + "/threads/" + RecordID: map[string]any{
+			"channel_id": RecordID, "root": map[string]any{
+				"message": map[string]any{"id": RecordID, "channel_id": RecordID,
+					"author": "pm", "author_kind": "agent", "body": "The old words.",
+					"links": []any{"https://example.com/plan"}},
+				"channel_seq": 12,
+				"position":    map[string]any{"stream": "chat", "generation": 1, "seq": 42}}},
 		"/config/roles/qa": Entity(`"rev-4"`, map[string]any{"handle": "qa",
 			"name": "QA Engineer", "goal": "Review the tests.",
 			"token_budget": map[string]any{"day": 1000000}}),
@@ -113,7 +129,19 @@ var ProposalArgs = map[string]map[string]any{
 	"unshare_artifact":          {"artifact": RecordID, "from": "unit:platform"},
 	"propose_page_change":       {"action": "work.filter.apply", "args": map[string]any{"status": "blocked"}},
 	"update_company_principles": {"mission": "Help friends share costs fairly."},
-	"set_token_budget":          {"seat": "qa", "window": "day", "tokens": float64(1500000)},
+	"post_chat_message":         {"channel": RecordID, "body": "Ship it on Friday."},
+	"reply_in_chat_thread":      {"channel": RecordID, "reply_to": RecordID, "body": "Agreed."},
+	"send_direct_message":       {"to": []any{"ada"}, "body": "Can you review the plan?"},
+	"edit_chat_message":         {"channel": RecordID, "message_id": RecordID, "body": "The new words."},
+	"delete_chat_message":       {"channel": RecordID, "message_id": RecordID},
+	"update_chat_room":          {"channel": RecordID, "topic": "Monday's release"},
+	// THE WHOLE MEMBERSHIP AFTER THE CHANGE: pm stays, by handle alone, the
+	// engineer joins and ada, whom the call names, leaves.
+	"set_chat_room_members": {"channel": RecordID, "members": []any{
+		map[string]any{"handle": "pm"}, map[string]any{"handle": "engineer"}},
+		"removes": []any{"ada"}},
+	"leave_chat_room":  {"channel": RecordID},
+	"set_token_budget": {"seat": "qa", "window": "day", "tokens": float64(1500000)},
 }
 
 // Answer is what a route answers world's record at r's path: 200 with it, or

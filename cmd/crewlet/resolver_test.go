@@ -112,10 +112,11 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 // invocation is handed ([runIn]), which for the binary is the process's.
 //
 // A GitLab admin PAT carries `api` scope over the whole group, and the store
-// is replicated to every node holding the keyring. Crewlet never persists
-// one; reading one back would imply it may be kept there — which is how the
-// most powerful credential in the deployment ends up in the shared table
-// beside the seat tokens it exists to mint. And a case that read the process's
+// is held on the coordination KV, which every node reads and every node's
+// keyring opens. Crewlet never persists one; reading one back would imply it
+// may be kept there — which is how the most powerful credential in the
+// deployment ends up in the shared store beside the seat tokens it exists to
+// mint. And a case that read the process's
 // environment would run on whatever the machine running the suite exports.
 //
 // Not parallel: it exports the credential on the process, to show a run
@@ -1142,14 +1143,14 @@ func TestASeatsNodeReadsAndStoresThroughTheDataNodeItNames(t *testing.T) {
 	base := []string{"doctor", "claude", "-no-smoke", "-company", company, "-config", cfg}
 
 	var out, notes bytes.Buffer
-	if err := runLLM(tokenEnviron("ops-token"), base, &out, &notes); err == nil ||
+	if err := runLLM(tokenEnviron("ops-token"), base, strings.NewReader(""), &out, &notes); err == nil ||
 		!strings.Contains(err.Error(), "store.scratch") || !strings.Contains(err.Error(), "-api") {
 		t.Fatalf("a seats node with no node named = %v, want a refusal naming store.scratch and -api", err)
 	}
 
 	out.Reset()
 	if err := runLLM(tokenEnviron("ops-token"), append(base, "-api", node.server.URL),
-		&out, &notes); err != nil {
+		strings.NewReader(""), &out, &notes); err != nil {
 		t.Fatalf("doctor through the named data node: %v\n%s", err, out.String())
 	}
 	if !strings.Contains(out.String(), "problems      : none\n") {

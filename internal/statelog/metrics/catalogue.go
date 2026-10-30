@@ -440,8 +440,9 @@ func Catalogue() []Instrument {
 			Name: StatelogLogHeadroomFraction, Kind: KindGauge, Unit: UnitCount,
 			Attributes: []string{"domain"},
 			Shows: "How much of the ceiling ordinary writes are held to is " +
-				"left on every log that claims identity (Worklet's, Doclet's " +
-				"and the identity estate's): the ceiling " +
+				"left on every log that claims identity (Worklet's, Doclet's, " +
+				"the identity estate's, the artifacts log's, the artifact " +
+				"datastore's, the Dashboard Assistant's and Chatlet's): the ceiling " +
 				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
@@ -459,19 +460,25 @@ func Catalogue() []Instrument {
 		{
 			Name: BackupAge, Kind: KindGauge, Unit: UnitSeconds,
 			Attributes: nil,
-			Shows: "How long ago the newest COMPLETE backup finished, read " +
-				"from the manifests on disk rather than from a counter this " +
-				"process keeps. A counter records that a process believed it " +
-				"took a backup; the disk records that one exists, and they " +
-				"differ in exactly the cases the alarm is for — a copy " +
-				"deleted, a volume never mounted, a schedule pointing at a " +
-				"path nobody ships from. A node holding no manifest reports " +
-				"NO SERIES rather than a value: zero is the freshest backup " +
-				"imaginable and every other number is an age nobody " +
-				"measured, so neither can stand for an absence. The absence " +
-				"is what the `backup_age` alarm says in words, and an " +
-				"`absent()` rule over this gauge is what a collector alerts " +
-				"on.",
+			Shows: "How long ago the newest COMPLETE backup THIS NODE took " +
+				"finished, read from the manifests in the directories it " +
+				"announced rather than from the fleet's register. The " +
+				"register records that a copy was announced; the disk " +
+				"records that it still exists, and they differ in exactly " +
+				"the cases worth catching — a copy deleted, a volume never " +
+				"mounted, a schedule pointing at a path nobody ships from. A " +
+				"node holding no manifest of its own reports NO SERIES " +
+				"rather than a value: zero is the freshest backup imaginable " +
+				"and every other number is an age nobody measured, so " +
+				"neither can stand for an absence, and an `absent()` rule " +
+				"over this gauge is what a collector alerts on. It is NOT " +
+				"what the `backup_age` alarm reads: the alarm ages, per log " +
+				"and fleet-wide, the newest verified point the trim counts " +
+				"in the register (under `backup_floor: operator`, the " +
+				"operator's acknowledgement of that log), so the two answer " +
+				"different questions and can disagree — a copy deleted " +
+				"after it was announced still counts for the alarm and the " +
+				"trim, and leaves this gauge.",
 		},
 		{
 			Name: BackupDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
@@ -498,11 +505,11 @@ func Catalogue() []Instrument {
 			Name: HistoryAnswers, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"question", "coverage"},
 			Shows: "What each fleet history read covered: `complete` when " +
-				"every live node answered inside the fleet read budget, " +
+				"every live data node answered inside the fleet read budget, " +
 				"`partial` when one did not. Turn-level detail lives only " +
-				"on the node that published it, so a partial answer is " +
-				"missing that node's rows — and the history_partial alarm " +
-				"is a fraction of this counter.",
+				"on the data node that published it or keeps it in custody, " +
+				"so a partial answer is missing that node's rows — and the " +
+				"history_partial alarm is a fraction of this counter.",
 		},
 
 		// ---- the store ------------------------------------------------
@@ -574,36 +581,12 @@ func Catalogue() []Instrument {
 			Name: TrackerFeedUnreadable, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"source"},
 			Shows: "Change records this build could not translate into a " +
-				"wake. Both domain consumers are deliberately uncapped, so " +
+				"wake. Every domain feed's consumer is deliberately uncapped, so " +
 				"such a record is never dropped — it redelivers for ever at " +
 				"the head of the consumer with every wake behind it " +
 				"waiting, which has no other symptom at all.",
 		},
 
-		// ---- bulk -----------------------------------------------------
-		{
-			Name: TrackerBulkCalls, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"result"},
-			Shows: "How often a bulk edit is issued, by `result`: " +
-				"`admitted` under the fleet's bulk lease, `refused` because " +
-				"another is applying, and `fail_open` — let through with NO " +
-				"lease, because the coordination store did not answer the " +
-				"admission or the mixed-version gate refused it. The refusal " +
-				"arithmetic rested on an assumed ten a day, a number with " +
-				"no counter behind it; this is that number. A `fail_open` " +
-				"is a bulk the fleet-wide bound did not cover, and counted " +
-				"as `admitted` it left no trace: a store that refused every " +
-				"admission looked exactly like a fleet whose bulks never " +
-				"collided.",
-		},
-		{
-			Name: TrackerBulkApplySeconds, Kind: KindCounter, Unit: UnitSeconds,
-			Attributes: nil,
-			Shows: "Seconds of applier occupancy bulk edits projected, " +
-				"summed. Over 24 hours it IS the fleet-wide read-degradation " +
-				"budget: every second here is a second in which reads are " +
-				"behind and writes are pending on every node.",
-		},
 		// ---- authentication -------------------------------------------
 		{
 			Name: AuthAttemptsFailed, Kind: KindCounter, Unit: UnitCount,
@@ -879,13 +862,13 @@ func Catalogue() []Instrument {
 		{
 			Name: ArtifactsPushLag, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"kind"},
-			Shows: "How long after the broker stored a committed datastore batch's newest " +
-				"record its `artifact_data` push was handed to this node's sockets " +
-				"(`kind` `data`): the applier's lag plus the fan-out. A datastore " +
-				"change is held to reach the socket within a second. An artifacts " +
-				"movement carries no broker instant, so `artifact_changed` is not " +
-				"measured here; its lag is the artifacts applier's own, in the state " +
-				"log's apply instruments.",
+			Shows: "How long after the broker stored a committed record its push was " +
+				"handed to this node's sockets, by `kind`: `changed` for an artifact's " +
+				"movement (`artifact_changed`) and `data` for a datastore's documents " +
+				"(`artifact_data`) — the applier's lag plus the fan-out, measured " +
+				"whether or not a socket is in the room. A change is held to reach " +
+				"the sockets watching it within a second (the `change_visibility` " +
+				"objective, which counts only the pushes some socket was handed).",
 		},
 		// ---- service objectives -------------------------------------------
 		{

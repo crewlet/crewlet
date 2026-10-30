@@ -7,7 +7,9 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A person's answer to a parked run is sealed onto the run's row.
@@ -139,6 +141,16 @@ type AnswerWords struct {
 	// binds to one and the login of anybody else, and the credential is the
 	// one the answer was given under.
 	By, ByKind, OperatorID string
+
+	// Label is who wrote Text as the fence around the delivery's message
+	// labelled it for the run's seat ([Reply.Label]): a chat reply's, which
+	// the run reads inside a fence of its turn's token under it
+	// ([AskedRun]). Nil for an answer by turn, which is the answering
+	// person's own instruction to the run (ADR-0068), defused rather than
+	// fenced, and for a reply whose words no surface labelled. SEALED WITH
+	// THE WORDS, so what the run is told about who wrote them comes out of
+	// the seal like everything else it is handed.
+	Label *provenance.Label
 }
 
 // attribution is who the resumed turn is told gave this answer: the author an
@@ -164,15 +176,16 @@ func (w AnswerWords) answerer() answerer {
 // A FIXED STRUCT AND NO omitempty, so the bytes are a function of the values
 // alone: every field is present, in this order, on every seal.
 type sealedAnswer struct {
-	TurnID     string          `json:"turn_id"`
-	LaunchID   string          `json:"launch_id"`
-	EventIDs   []string        `json:"event_ids"`
-	Via        types.AnswerVia `json:"via"`
-	By         string          `json:"by"`
-	ByKind     string          `json:"by_kind"`
-	OperatorID string          `json:"operator_id"`
-	Text       string          `json:"text"`
-	Choice     string          `json:"choice"`
+	TurnID     string            `json:"turn_id"`
+	LaunchID   string            `json:"launch_id"`
+	EventIDs   []string          `json:"event_ids"`
+	Via        types.AnswerVia   `json:"via"`
+	By         string            `json:"by"`
+	ByKind     string            `json:"by_kind"`
+	OperatorID string            `json:"operator_id"`
+	Text       string            `json:"text"`
+	Choice     string            `json:"choice"`
+	Label      *provenance.Label `json:"label"`
 }
 
 // Seal is answer recording words as the answer to the question run's job
@@ -185,7 +198,7 @@ func (s *AnswerSeal) Seal(run PendingRun, words AnswerWords, answer RecordedAnsw
 	body, err := json.Marshal(sealedAnswer{
 		TurnID: run.TurnID, LaunchID: run.LaunchID, EventIDs: answer.EventIDs, Via: words.Via,
 		By: words.By, ByKind: words.ByKind, OperatorID: words.OperatorID, Text: words.Text,
-		Choice: words.Choice,
+		Choice: words.Choice, Label: words.Label,
 	})
 	if err != nil {
 		return RecordedAnswer{}, fmt.Errorf("sandbox: encoding the answer to run %s: %w", run.TurnID, err)
@@ -212,8 +225,8 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 	switch verdict {
 	case statelog.Verified:
 	case statelog.KeyUnknown:
-		return AnswerWords{}, fmt.Errorf("%w (it holds %v) — add the key the fleet sealed it "+
-			"under to secrets.keys", ErrAnswerKeyUnknown, s.verifier.KeyIDs())
+		return AnswerWords{}, fmt.Errorf("%w (it holds %s) — add the key the fleet sealed it "+
+			"under to secrets.keys", ErrAnswerKeyUnknown, words.And(s.verifier.KeyIDs()))
 	default:
 		return AnswerWords{}, fmt.Errorf("%w: the frame does not verify under the key it names",
 			ErrAnswerUnopened)
@@ -229,12 +242,12 @@ func (s *AnswerSeal) Open(run PendingRun) (AnswerWords, error) {
 		return AnswerWords{}, fmt.Errorf("%w: it was sealed for the question launch %q asked, "+
 			"and the run's job is %q", ErrAnswerUnopened, sealed.LaunchID, run.LaunchID)
 	case !slices.Equal(sealed.EventIDs, answer.EventIDs):
-		return AnswerWords{}, fmt.Errorf("%w: it was sealed for deliveries %v, and the row names %v",
-			ErrAnswerUnopened, sealed.EventIDs, answer.EventIDs)
+		return AnswerWords{}, fmt.Errorf("%w: it was sealed for deliveries %s, and the row names %s",
+			ErrAnswerUnopened, words.And(sealed.EventIDs), words.And(answer.EventIDs))
 	case sealed.Via != answer.Via:
 		return AnswerWords{}, fmt.Errorf("%w: it was sealed as come by %q, and the row says %q",
 			ErrAnswerUnopened, sealed.Via, answer.Via)
 	}
 	return AnswerWords{Text: sealed.Text, Choice: sealed.Choice, Via: sealed.Via, By: sealed.By,
-		ByKind: sealed.ByKind, OperatorID: sealed.OperatorID}, nil
+		ByKind: sealed.ByKind, OperatorID: sealed.OperatorID, Label: sealed.Label}, nil
 }

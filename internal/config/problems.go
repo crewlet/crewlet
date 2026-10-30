@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seat/placement"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Problem is one validation failure, located in the document and classified:
@@ -96,6 +97,53 @@ func Problems(err error) []Problem {
 	}
 	walk(err)
 	return out
+}
+
+// WithoutFaultsAt is err with every fault located at one of paths left out,
+// and nil when nothing else is left.
+//
+// FOR A CALLER THAT KNOWS WHY those places are wrong better than the rule that
+// found them, and reports them in its own words beside every OTHER fault: a
+// write replacing a revision nothing was read from knows a masked credential
+// had nothing to be restored from, while [Company.Validate] can only list the
+// causes a restore leaves behind. Dropped here, a fault at such a place is
+// reported once, in the caller's words, and the rest of the document is still
+// judged whole. It walks what [Problems] walks: a join is split into its
+// parts, a fault is matched by its own path, and an error the company located
+// is matched by the problems it is, every one of which has to be at one of
+// paths (a rule about several entities is kept whole). Anything else is kept
+// as it was.
+func WithoutFaultsAt(err error, paths []Path) error {
+	at := func(p Path) bool {
+		return slices.ContainsFunc(paths, func(q Path) bool { return slices.Equal(p, q) })
+	}
+	if err == nil {
+		return nil
+	}
+	if l, ok := err.(*located); ok { //nolint:errorlint // As [Problems] reads one: see leafFault.
+		if len(l.problems) > 0 && !slices.ContainsFunc(l.problems,
+			func(p Problem) bool { return !at(p.Segments) }) {
+			return nil
+		}
+		return err
+	}
+	if f, ok := leafFault(err); ok {
+		if at(f.Path) {
+			return nil
+		}
+		return err
+	}
+	parts, ok := joinedParts(err)
+	if !ok {
+		return err
+	}
+	kept := make([]error, 0, len(parts))
+	for _, part := range parts {
+		if left := WithoutFaultsAt(part, paths); left != nil {
+			kept = append(kept, left)
+		}
+	}
+	return errors.Join(kept...)
 }
 
 // holdsProblems reports whether err carries anything this package located.
@@ -561,8 +609,11 @@ func (c *Company) ReferenceWarnings() []Warning {
 // in to.
 //
 // So is a seat whose executor chain holds an entry that can never run the
-// executor beside one that can ([Company.executorWarnings]), and a token
-// budget a seat's ceilings leave idle ([Company.budgetWarnings]).
+// executor beside one that can ([Company.executorWarnings]), a token budget
+// a seat's ceilings leave idle ([Company.budgetWarnings]), and what the unit
+// channels say about each other ([Company.channelAdvisories]): one room two
+// units claim on a vendor chat surface, and a Chatlet company that gives no
+// team a room.
 //
 // EMPTY, NEVER NIL, for the reason [Company.ReferenceWarnings] gives.
 func (c *Company) AdvisoryWarnings() []Warning {
@@ -573,7 +624,7 @@ func (c *Company) AdvisoryWarnings() []Warning {
 			out = append(out, advisory(idx(args, unsupplied.at), fmt.Sprintf(
 				"`-e %[1]s` copies %[1]s from the container runtime's own environment, "+
 					"which is its fixed allowlist plus providers.sandbox.local.runtime_env "+
-					"and never the engine's — and neither carries %[1]s, so the box gets "+
+					"and never the engine's, and neither carries %[1]s, so the box gets "+
 					"nothing for it. Put what a box needs in role.sandbox.env or a setup "+
 					"step's env, which reach the box directly; or declare "+
 					"`%[1]s: \"${%[1]s}\"` under runtime_env to have the runtime pass the "+
@@ -583,7 +634,108 @@ func (c *Company) AdvisoryWarnings() []Warning {
 	out = append(out, c.peoplelessWarnings()...)
 	out = append(out, c.unreachableWarnings()...)
 	out = append(out, c.executorWarnings()...)
-	return append(out, c.budgetWarnings()...)
+	out = append(out, c.budgetWarnings()...)
+	return append(out, c.channelAdvisories()...)
+}
+
+// channelAdvisories is what this company's unit channels say about each
+// other: a room two units both claim on a vendor surface, and a Chatlet
+// company that has asked for no rooms at all.
+//
+// Read from DECLARED channels rather than effective ones, because a child
+// unit inheriting its parent's channel is the feature rather than a
+// collision: [org.Organization.Normalize] cascades one down a whole branch,
+// so reading the effective value would warn about every team in a division
+// that named a channel once.
+func (c *Company) channelAdvisories() []Warning {
+	o, x := c.organization()
+	var declared []*org.Unit
+	holders := map[string][]*org.Unit{}
+	var first *org.Unit
+	for u := range o.AllUnits() {
+		if first == nil {
+			first = u
+		}
+		if u.DeclaredChannel == "" {
+			continue
+		}
+		declared = append(declared, u)
+		holders[u.DeclaredChannel] = append(holders[u.DeclaredChannel], u)
+	}
+
+	var out []Warning
+
+	// TWO UNITS IN ONE ROOM, warned about BESIDE EACH OF THEM, the same
+	// placement a duplicated name gets: fixing it means renaming one of the
+	// two, and an author who sees the warning on only one of them cannot
+	// tell which.
+	//
+	// Not a refusal ON A VENDOR SURFACE, because there it is a shape a real
+	// company writes on purpose: two teams that genuinely stand up together,
+	// or a unit split in the chart before the room it will move to exists.
+	// What it costs is worth saying once — every unit-scoped wake reaches
+	// both teams, and each team's prompt tells it that room is its own.
+	//
+	// ON CHATLET IT IS AN ADMISSION RULE INSTEAD
+	// ([Company.validateUnitRooms]), because there the engine builds the
+	// room and a room belongs to one unit — and an admission problem is
+	// already reported as a warning on an applied revision, so saying it
+	// here too would print one finding twice.
+	shared := declared
+	if c.ChatBackendFor() == ChatChatlet {
+		shared = nil
+	}
+	for _, u := range shared {
+		// KEYED ON THE UNIT rather than on its name, because two units
+		// sharing a name is itself a legal document to warn about (the
+		// admission rule that refuses one is not run here), and comparing
+		// names would have each of that pair hide the other.
+		others := make([]string, 0, len(holders[u.DeclaredChannel])-1)
+		for _, other := range holders[u.DeclaredChannel] {
+			if other != u {
+				others = append(others, other.Name)
+			}
+		}
+		if len(others) == 0 {
+			continue
+		}
+		w := advisory(at(x.units[u], "channel"), fmt.Sprintf(
+			"unit %q shares its channel %q with %s. Everything scoped to one "+
+				"of them lands in the other's room, and every seat in both is "+
+				"told that channel is its team's own. Give one of them a "+
+				"channel of its own, or leave the child's empty and let it "+
+				"inherit", u.Name, u.DeclaredChannel, words.And(others)))
+		w.Unit = u.Name
+		out = append(out, w)
+	}
+
+	// A CHATLET COMPANY WITH NO UNIT ROOMS AT ALL. The engine opens a
+	// channel for each one a unit declares, and that is the only kind of
+	// room whose members the org chart keeps — every other room is one a
+	// person opened from the dashboard and fills by hand. With none declared,
+	// no team has a room of its own until somebody makes one and adds its
+	// seats to it, and keeps adding them as the chart changes.
+	//
+	// IT DOES NOT SAY NOTHING ELSE OPENS A ROOM. It once did, and a person
+	// can open one; an advisory that overstates is one an author learns to
+	// skip.
+	//
+	// Only where there is a unit to write it on — a company with no units is
+	// a flat one whose seats have no teams to give rooms to, and a warning
+	// pointing at no line in the document is one nobody can act on. Located
+	// at the FIRST unit's `channel`, which is the line an author adds it to;
+	// the sentence says it is about all of them, because the path cannot.
+	if c.ChatBackendFor() == ChatChatlet && first != nil && len(declared) == 0 {
+		w := advisory(at(x.units[first], "channel"), fmt.Sprintf(
+			"no unit in this company declares a `channel`. In Chatlet, "+
+				"each channel a unit names gets a room whose members follow the "+
+				"org chart. Without one, a team only has a room if someone opens "+
+				"one by hand and adds its seats. Give the units that work in the "+
+				"open a channel, starting with %q", first.Name))
+		w.Unit = first.Name
+		out = append(out, w)
+	}
+	return out
 }
 
 // peoplelessWarnings is the one warning a company declaring no human seat
@@ -612,8 +764,26 @@ func (c *Company) peoplelessWarnings() []Warning {
 		"run it alone. Otherwise add a human seat for each person")}
 }
 
-// unreachableWarnings is every human seat that declares no contact identity:
-// nothing addressed to it on a chat surface reaches anybody.
+// unreachableWarnings is every human seat with no account on the vendor chat
+// surfaces this company talks on: nothing addressed to it there reaches
+// anybody.
+//
+// ONLY ON A VENDOR SURFACE (`chat.backend: vendor`), because that is the only
+// chat the sentence is true of. On the engine's own chat a person reads the
+// rooms on the dashboard as their seat, and a mention of the seat reaches
+// them with no identity to declare; with `chat.backend: none` there is no
+// chat surface for it to be about at all. Said everywhere, it told every
+// founder of a Chatlet company that the people they had just added could
+// not be reached, which is false, and an advisory that is false on the
+// default configuration is one an author learns to skip.
+//
+// JUDGED AGAINST THE SURFACES THIS COMPANY DECLARES ([chatVendors]), not
+// against the contact block as a whole: a GitHub login or an Atlassian
+// account id is how a code host or a tracker attributes the person, and says
+// nothing about whether a Mattermost mention reaches them. A seat reachable
+// on ANY of the declared surfaces is reachable — a company running both
+// Mattermost and Slack has people who are in one workspace and not the
+// other.
 //
 // A WARNING AND NOT A RULE, because the state is legitimate: a person who
 // works only through the dashboard has no chat account to declare, and
@@ -622,20 +792,52 @@ func (c *Company) peoplelessWarnings() []Warning {
 // assigning it in the tracker instead.
 //
 // AT THE SEAT'S `contact`, which is where the remedy is written.
+//
+// THE HANDLE IS QUOTED, never the sentence's first word: a handle is an
+// identifier, and a reader that puts an engine sentence in sentence case (the
+// dashboard's review raises an opening word) wrote `founder` as "Founder",
+// a seat nobody declared.
 func (c *Company) unreachableWarnings() []Warning {
+	if c.ChatBackendFor() != ChatVendor {
+		return nil
+	}
+	var surfaces []chatVendor
+	var titles, keys []words.Said
+	for _, vendor := range chatVendors {
+		if vendor.declaredAt(c) != "" {
+			surfaces = append(surfaces, vendor)
+			titles = append(titles, words.Said(vendor.title))
+			keys = append(keys, words.Said("`"+vendor.contactKey+"`"))
+		}
+	}
 	var out []Warning
 	for role, path := range c.EachRole() {
-		if role.Kind != org.KindHuman || !role.Contact.IsEmpty() {
+		if role.Kind != org.KindHuman || reachableOn(role.Contact, surfaces) {
 			continue
 		}
 		handle := role.IdentityKey()
-		w := advisory(at(path, "contact"), fmt.Sprintf("%s is a human seat with "+
-			"no chat contact, so chat messages to it reach nobody. Add one, or "+
-			"leave it if they only use the dashboard", handle))
+		w := advisory(at(path, "contact"), fmt.Sprintf("the human seat %q has no "+
+			"account on %s, so chat messages to it there reach nobody. Add a %s to "+
+			"its `contact`, or leave it if they only use the dashboard",
+			handle, words.Or(titles), words.Or(keys)))
 		w.Seat = handle
 		out = append(out, w)
 	}
 	return out
+}
+
+// reachableOn reports whether a human seat's contact names an account on any
+// of surfaces. A ${VAR} reference counts, as [org.HumanContact.IsEmpty]
+// counts one: it is an identity the operator has committed to.
+func reachableOn(contact *org.HumanContact, surfaces []chatVendor) bool {
+	for _, identity := range contact.Identities() {
+		for _, surface := range surfaces {
+			if identity.Transport == surface.transport {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Warnings is everything valid about this bootstrap that its author should
@@ -665,9 +867,40 @@ func (b *Bootstrap) Warnings() []Warning {
 	}
 
 	// A FLEET THAT TRIMS ONLY WHAT IT HAS BEEN TOLD IS OFF-SITE does not
-	// trim until somebody tells it, and the log grows until its ceiling
+	// trim until somebody tells it, and each log grows until its ceiling
 	// refuses writes. That is the configuration working as asked; it is
 	// also a state nobody discovers until the refusal.
+	//
+	// AND IT IS TOLD PER LOG. An acknowledgement names one stream
+	// (`crewlet retention ack -stream`), and the backup term blocks any log
+	// the counted point does not cover, so an operator who acknowledged the
+	// mutation log and read "until the first acknowledgement" as the whole
+	// gate would expect the knowledge base's log to trim too, and it does
+	// not.
+	//
+	// EVERY CEILING THE TRIM IS ALL THAT HOLDS BACK, rather than the
+	// mutation log's alone: the backup term is evaluated per log, and the
+	// ordered logs — the tracker's, the knowledge base's, the artifacts'
+	// and their datastore's, the identity estate's, the Dashboard
+	// Assistant's and chat's — carry no age bound, so nothing else ever
+	// removes a record from them. Naming one field sent an operator to the
+	// wrong ceiling whenever another log filled first: a full identity log
+	// refuses every sign-in and every change to who may do what, a full
+	// assistant log every question somebody asks the assistant, since it
+	// cannot record the turn, and a full chat log a message somebody typed.
+	//
+	// NO COUNT IN THE SENTENCE: the fields are listed by name, and a test
+	// reads them off [Stream] and holds the message to every one, so a log
+	// added with its ceiling cannot be left out of it — while a number
+	// beside the list is one more thing a new log has to remember to move.
+	//
+	// AND EVERY LOG, the two compacted ones included. They age their
+	// records out on the broker whatever the trim decides, so they never
+	// refuse a write — but the backup term and the `backup_age` alarm are
+	// evaluated on every running log alike, so a log nobody acknowledged
+	// raises that alarm for as long as nobody does. An advisory that named
+	// the ordered logs alone sent an operator to acknowledge those and leave
+	// two alarms firing for ever.
 	//
 	// ONLY WHERE THE FLOOR IS READ, which is a node holding the estate. Two
 	// readers decide which backups count under it, and both are armed with
@@ -688,10 +921,25 @@ func (b *Bootstrap) Warnings() []Warning {
 	if b.Profile("").HoldsData() &&
 		b.Stream.TrackerRetention.Floor() == BackupFloorOperator {
 		out = append(out, advisory(field("stream.tracker_retention.backup_floor"),
-			"`operator` means the trim advances only as far as somebody "+
-				"has acknowledged a backup. Until the first acknowledgement the log "+
-				"is never trimmed, and it grows until `stream.tracker_log_max_bytes` "+
-				"starts refusing writes"))
+			"`operator` means every state log is trimmed only as far as a "+
+				"backup of that log has been acknowledged, once per log "+
+				"(`crewlet retention ack -stream <log> -position <n>`; "+
+				"`crewlet retention status` names every one). Until its own "+
+				"acknowledgement a log is never trimmed. The ordered logs grow "+
+				"until their own ceiling starts refusing writes: "+
+				"`stream.tracker_log_max_bytes`, `stream.pages_log_max_bytes`, "+
+				"`stream.artifacts_log_max_bytes`, "+
+				"`stream.artifact_data_log_max_bytes`, "+
+				"`stream.iam_log_max_bytes`, where a full log refuses every "+
+				"sign-in, `stream.assistant_log_max_bytes`, where it refuses "+
+				"every question somebody asks the Dashboard Assistant, and "+
+				"`stream.chat_log_max_bytes`, where it refuses a message "+
+				"somebody typed. The two compacted logs "+
+				"(`stream.tracker_vectors_max_bytes`, "+
+				"`stream.usage_log_max_bytes`) age their records out on the "+
+				"broker regardless, but wait on an acknowledgement just the "+
+				"same: each log's `backup_age` alarm fires until it has one, "+
+				"and again once it is older than `backup_max_age`"))
 	}
 
 	// NOBODY OWNS THE BACKUP. A company that never backs up never trims,
@@ -732,7 +980,7 @@ func (b *Bootstrap) Warnings() []Warning {
 						"counted as a member: stream.cluster.peers names the OTHER "+
 						"members, and the quorum and replica rules count this node "+
 						"once. Remove it. Another name for this host that this file "+
-						"cannot recognise — a DNS alias, `localhost` — would be "+
+						"cannot recognise (a DNS alias, `localhost`) would be "+
 						"counted as a member it is not", d.Raw, d.Matches)))
 				continue
 			}
@@ -757,8 +1005,8 @@ func (b *Bootstrap) Warnings() []Warning {
 			out = append(out, advisory(field("stream.cluster.peers"), fmt.Sprintf(
 				"names %d other members, so this fleet's broker has %d, and no stream "+
 					"keeps more than %d copies: every member past the %dth is a voter "+
-					"in the metadata group — one more member every election and every "+
-					"stream or consumer created waits on — holding no copy anybody "+
+					"in the metadata group (one more member every election and every "+
+					"stream or consumer created waits on) holding no copy anybody "+
 					"asked for. Beyond %d a fleet adds LEAVES, not members (a node that "+
 					"holds data is always a member)",
 				others, others+1, MaxStreamReplicas, MaxStreamReplicas,
@@ -776,7 +1024,7 @@ func (b *Bootstrap) Warnings() []Warning {
 	if b.Node.Roles == nil {
 		if b.declaresFleet() {
 			out = append(out, advisory(field("node.roles"), fmt.Sprintf(
-				"is not declared, so this fleet node runs every role — %s — "+
+				"is not declared, so this fleet node runs every role (%s), "+
 					"including %q, which keeps a copy of the company's state on "+
 					"this disk, and %q, which runs agents here. Name the roles "+
 					"this node is for", strings.Join(nodeRoleNames, ", "),
@@ -895,8 +1143,8 @@ func (b *Bootstrap) logsAtDebug() bool {
 // level this reads is the one the document holds once `crewlet run` has
 // folded `-log-level` and `-debug` into it — not necessarily the file's.
 func (b *Bootstrap) unrecordedDebug() string {
-	level := "`logging.level` — which `-log-level` and `-debug` override on " +
-		"`crewlet run` — is " + b.loggingLevelName()
+	level := "`logging.level` (which `-log-level` and `-debug` override on " +
+		"`crewlet run`) is " + b.loggingLevelName()
 	raise := "Pass `-debug` to `crewlet run`, or set `logging.level`"
 	switch {
 	case strings.TrimSpace(b.Logging.File.Path) == "":

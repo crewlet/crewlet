@@ -1,14 +1,18 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // The prompt measurement is exercised HERE, over values, as well as through a
@@ -162,3 +166,51 @@ func TestTheTallyNamesThePhaseThatFailed(t *testing.T) {
 		t.Errorf("phases %v, want the failed phase listed as one that ran", s.Phases)
 	}
 }
+
+// A BOX THAT COULD NOT BE STARTED IS NAMED BY ITS CLASS. Every executor
+// runs in a coding sandbox, as its coding CLI's own run, and a box its
+// provider would not start failed the phase and the turn as `error`, while
+// the backend that met it had said what clears it. The kind is the sandbox's
+// class, read before a deadline its chain carries; a provider's own kind and
+// an unclassed failure keep theirs.
+//
+// Mutation: drop the sandbox arm and every class row reads `error`; read the
+// deadline first and the timed-out row reads `timeout`.
+func TestABoxThatCouldNotBeStartedIsNamedByItsClass(t *testing.T) {
+	t.Parallel()
+	for _, why := range sandbox.Whys {
+		err := fmt.Errorf("launching the executor's run: %w",
+			sandbox.Because(why, errors.New("e2b: create: 503 Service Unavailable")))
+		if got := ErrorKind(err); got != SandboxKindPrefix+string(why) {
+			t.Errorf("a box %s failure is kind %q; want %q", why, got, SandboxKindPrefix+string(why))
+		}
+	}
+	timedOut := sandbox.Because(sandbox.WhyProviderUnavailable,
+		fmt.Errorf("e2b: create: %w", context.DeadlineExceeded))
+	if got := ErrorKind(timedOut); got != "sandbox_provider_unavailable" {
+		t.Errorf("a provider request that ran out of time is kind %q", got)
+	}
+	if got := ErrorKind(errors.New("a broken thing")); got != "error" {
+		t.Errorf("an unclassed failure is kind %q, want error", got)
+	}
+
+	// A LAUNCH THIS NODE CANCELLED (a drain, a lost lease) is `canceled`,
+	// never the provider: the backend leaves the caller's own cancellation
+	// unclassed, and was marking it provider_unavailable.
+	provider, err := sandbox.NewE2B(sandbox.E2BOptions{APIKey: "k", Domain: "e2b.example.com",
+		HTTP: &http.Client{Transport: refusedTransport{context.Canceled}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = provider.Create(cancelled, sandbox.Spec{})
+	if got := ErrorKind(fmt.Errorf("launching the executor's run: %w", err)); got != "canceled" {
+		t.Errorf("a launch this node cancelled is kind %q, want canceled", got)
+	}
+}
+
+// refusedTransport fails every request with err, before any host answers.
+type refusedTransport struct{ err error }
+
+func (r refusedTransport) RoundTrip(*http.Request) (*http.Response, error) { return nil, r.err }

@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -101,6 +102,24 @@ func TestACollapsedWriteIsJudgedByTheWriterOfTheCopy(t *testing.T) {
 			}
 			if asked := h.gates.askedAbout(); !slices.Equal(asked, []string{tc.writer}) {
 				t.Errorf("the gates were asked about %v, want the copy's writer alone", asked)
+			}
+			// WHEN TO COME BACK AND WHAT A PERSON IS TOLD: another node's
+			// copy clears once the duplicate window lets go of the id, so
+			// it carries the window as its hint and asks the person to send
+			// it again then, never to readmit a node. This node's own copy
+			// is its own eviction, which no wait clears.
+			wait := statelog.RetryAfter(err, time.Second)
+			said, _ := statelog.ConditionSentence(err)
+			if tc.named != "" {
+				if wait != 2*time.Minute || !strings.HasSuffix(said,
+					statelog.TryAgainLater) || strings.Contains(said, "readmit") {
+					t.Errorf("another node's evicted copy waits %s and is told %q, "+
+						"want the 2m0s window and %q", wait, said,
+						statelog.TryAgainLater)
+				}
+			} else if wait != 0 || !strings.Contains(said, "readmit") {
+				t.Errorf("this node's own evicted copy waits %s and is told %q, "+
+					"want no wait and a readmission", wait, said)
 			}
 		})
 	}
@@ -403,10 +422,10 @@ func land(t *testing.T, h *harness, opID string) {
 //
 // A node whose rows were a restored copy's age goes on writing in the old
 // generation until it learns of the move; its record lands after the
-// reanchor's own and is overtaken on every node, and writes no ledger row. The
-// domain's gates know nothing of that rule — it is the framework's, on the
-// checkpoint — so a resolution that asked only them found no gate and a ledger
-// that vouched, and called the write a record applied without its row.
+// reanchor's own and is overtaken on every data node, and writes no ledger
+// row. The domain's gates know nothing of that rule — it is the framework's,
+// on the checkpoint — so a resolution that asked only them found no gate and a
+// ledger that vouched, and called the write a record applied without its row.
 //
 // WHICH generation and sequence it asks is the whole of the rule, and each is
 // the record's: the generation this call stamped its own append with, and the

@@ -17,10 +17,11 @@ import (
 // THE ASSISTANT IS TOLD WHY A HUMAN-ONLY GESTURE STAYS WITH ITS PERSON.
 //
 // A refusal of a verb on the human-only list is the engine's envelope with
-// the `assist_refused` reason, and its `detail`, the words the drawer shows,
-// is the sentence the list gives the verb's family: why it stays with the
-// person and where they do it, naming no internal verb. Every verb on the list
-// has one. Mutation: render the refusal without the sentence and this fails.
+// the `assist_refused` reason, and its `detail`, which the assistant's model
+// reads to tell its person what they can do, is the sentence the list gives
+// the verb's family: why it stays with the person and where they do it,
+// naming no internal verb. Every verb on the list has one. Mutation: render
+// the refusal without the sentence and this fails.
 func TestAHumanOnlyRefusalSaysWhyInPlainWords(t *testing.T) {
 	t.Parallel()
 	p := iam.Principal{ID: uuid.New(), Login: "ana.admin", Kind: iam.KindPerson,

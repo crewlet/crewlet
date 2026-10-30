@@ -6,7 +6,7 @@ import "slices"
 // applier each derive from these and none of them can see the others.
 
 // ReproducibleTables is every table a record's payload must be able to
-// rebuild, byte for byte, on every node.
+// rebuild, byte for byte, on every data node.
 var ReproducibleTables = []string{
 	// The store, its collections and interned paths.
 	"artifact_data_stores", "artifact_data_collections", "artifact_data_paths",

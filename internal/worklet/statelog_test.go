@@ -16,13 +16,13 @@ import (
 // THE TRACKER IS CERTIFIED BY THE FRAMEWORK'S OWN SUITE, not by a second one
 // written beside it.
 //
-// The properties every node's copy rests on — the declaration is consistent,
-// an unknown version still yields an envelope, the same records produce the
-// same rows, and applying a record twice is applying it once — belong to the
-// framework and are the same for every domain it carries. A domain-specific
-// copy of them would be a second opinion about a contract the framework
-// enforces, and the first time the two disagreed the domain's own would be the
-// one that ran.
+// The properties every data node's copy rests on — the declaration is
+// consistent, an unknown version still yields an envelope, the same records
+// produce the same rows, and applying a record twice is applying it once —
+// belong to the framework and are the same for every domain it carries. A
+// domain-specific copy of them would be a second opinion about a contract the
+// framework enforces, and the first time the two disagreed the domain's own
+// would be the one that ran.
 func TestTheTrackerIsACertifiedDomain(t *testing.T) {
 	t.Parallel()
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {

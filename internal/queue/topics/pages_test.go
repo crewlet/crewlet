@@ -52,20 +52,25 @@ func TestAPagesSubjectWithNoKindIsRefusedRatherThanBuilt(t *testing.T) {
 }
 
 // THE INVERSE REFUSES WHAT THE BUILDER COULD NOT HAVE PRODUCED — and, with
-// five domains on one broker, that now includes the other four's subjects.
+// every domain on one broker, that includes every other domain's subjects,
+// even one spelled in this log's own grammar. The other logs are read off
+// [everyLogPrefix], so a log the package gains is asked about here the day
+// its constants are declared.
 func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	t.Parallel()
-	for _, subject := range []string{
+	subjects := []string{
 		"",
 		"crewlet.agent.alice.inbox",
 		topics.PagesLogPrefix,
 		topics.PagesLogPrefix + ".",
 		topics.PagesLogPrefix + ".page.",
-		topics.TrackerLogPrefix + ".task.1",
-		topics.TrackerVectorsPrefix + ".source.1",
-		topics.UsageLogPrefix + ".seat.node-a.2026-09-23.a1",
-		topics.IamLogPrefix + ".session.0f3c",
-	} {
+	}
+	for _, prefix := range everyLogPrefix() {
+		if prefix != topics.PagesLogPrefix {
+			subjects = append(subjects, prefix+".page.1")
+		}
+	}
+	for _, subject := range subjects {
 		if kind, id, ok := topics.PagesLogPath(subject); ok {
 			t.Errorf("%q was read as kind %q id %q and is not a subject on the "+
 				"pages log", subject, kind, id)
@@ -73,7 +78,14 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 	}
 }
 
-// THE FIVE DOMAINS' SUBJECT SPACES ARE DISJOINT.
+// EVERY DOMAIN'S SUBJECT SPACE IS DISJOINT FROM EVERY OTHER'S, and so are the
+// ephemeral spaces beside them: the presence every kind of room shares,
+// `crewlet.rooms.`, and the Dashboard Assistant's running turns and fleet
+// instructions, which share its log's root `crewlet.assistant.`.
+//
+// The logs are read off [everyLogPrefix], so a log the package gains is
+// weighed here the day its constants are declared; an ephemeral space is
+// named, since no shape of constants marks one.
 //
 // They share one broker, and a stream created over a wildcard that overlapped
 // another's would take deliveries meant for it — silently, because both
@@ -81,11 +93,12 @@ func TestThePagesPathRefusesWhatItDidNotBuild(t *testing.T) {
 func TestNoDomainsSubjectSpaceOverlapsAnothers(t *testing.T) {
 	t.Parallel()
 	prefixes := map[string]string{
-		"tracker": topics.TrackerLogPrefix + ".",
-		"vectors": topics.TrackerVectorsPrefix + ".",
-		"pages":   topics.PagesLogPrefix + ".",
-		"iam":     topics.IamLogPrefix + ".",
-		"usage":   topics.UsageLogPrefix + ".",
+		"presence":        topics.PresencePrefix + ".",
+		"assistant turns": topics.AssistantTurnPrefix + ".",
+		"assistant fleet": topics.AssistantFleetPrefix,
+	}
+	for _, prefix := range everyLogPrefix() {
+		prefixes[prefix] = prefix + "."
 	}
 	for a, pa := range prefixes {
 		for b, pb := range prefixes {

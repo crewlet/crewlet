@@ -53,11 +53,14 @@ func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Wr
 		return errors.New("this node boots on no revision, so there is nothing to " +
 			"re-seal; run `crewlet config import`")
 	}
-	sealedUnder, sealed := secrets.EnvelopeKeyIDOf(rev.Payload)
-	switch {
-	case !sealed:
-		return refuseUnsealed(rev.ID)
-	case sealedUnder == active:
+	// WHY IT IS NOT A SEAL THIS BUILD READS, before the key id: a plaintext
+	// revision and one sealed in a form this build does not read both have
+	// no key id, and they are refused for opposite reasons.
+	if err = secrets.CheckSealed(rev.Payload); err != nil {
+		return storedRefusal(rev.ID, err)
+	}
+	sealedUnder, _ := secrets.EnvelopeKeyIDOf(rev.Payload)
+	if sealedUnder == active {
 		fmt.Fprintf(stdout, "revision %s is already sealed under %s\n", rev.ID, active)
 		return nil
 	}
@@ -72,7 +75,7 @@ func rekeyConfig(ctx context.Context, cs *configStore, dryRun bool, stdout io.Wr
 		// key back in secrets.keys and the error is otherwise a decrypt
 		// failure with nothing to act on.
 		return fmt.Errorf("revision %s is sealed under %s, which this "+
-			"keyring cannot open — restore that key to secrets.keys and "+
+			"keyring cannot open. Restore that key to secrets.keys and "+
 			"re-run: %w", rev.ID, sealedUnder, err)
 	}
 	id, err := reseal(ctx, cs, rev, document, fmt.Sprintf(

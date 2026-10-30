@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A tool server is started only with what its configuration references.
@@ -272,12 +273,26 @@ func (m *seatMint) kind(name string) (integration.Kind, bool) {
 	return kind, ok
 }
 
-// unissued is why the engine could not issue name this time, or "".
-func (m *seatMint) unissued(name string) string {
+// unissued is why the engine could not issue name this time and whether a
+// wait clears it, or the zero [issueFailure] where it did not try or did.
+func (m *seatMint) unissued(name string) issueFailure {
 	if m == nil {
-		return ""
+		return issueFailure{}
 	}
-	return m.token.unissued(name)
+	said := m.token.unissued(name)
+	if said == "" {
+		return issueFailure{}
+	}
+	return issueFailure{said: said, passes: m.token.passes()}
+}
+
+// issueFailure is a credential the engine went to issue a seat at use and
+// could not: the issuer's reason, as the log and a tool server's sentence
+// carry it, and whether a wait clears it ([mintPasses]) or a person's step on
+// the agent's app does.
+type issueFailure struct {
+	said   string
+	passes bool
 }
 
 // credentialMissing is why a server was not started — a seat's child, a
@@ -320,9 +335,11 @@ type credentialMissing struct {
 	minting map[string]integration.Kind
 
 	// unissued are the variables the engine went to issue this seat at use
-	// and could not, each with why ([seatToken.unissued]): a failure, but a
-	// passing one, retried at the next attempt. Never a token.
-	unissued map[string]string
+	// and could not, each with why ([seatToken.unissued]) and whether a wait
+	// clears it: a failure, retried on the restart schedule, which passes
+	// where GitHub did not answer and is a person's step where it refused.
+	// Never a token.
+	unissued map[string]issueFailure
 
 	// stopped is, for each integration that mints one of those and cannot
 	// until a person acts, what its last pass recorded about it
@@ -533,11 +550,11 @@ func credentialGap(
 		// issue and GitHub would not give is a failure with GitHub's
 		// reason, retried, never "waiting for the integration", which
 		// would read as a step somebody has yet to take.
-		if why := mint.unissued(name); why != "" {
+		if failure := mint.unissued(name); failure.said != "" {
 			if m.unissued == nil {
-				m.unissued = map[string]string{}
+				m.unissued = map[string]issueFailure{}
 			}
-			m.unissued[name] = why
+			m.unissued[name] = failure
 			continue
 		}
 		if kind, ok := mint.kind(name); ok {
@@ -718,16 +735,25 @@ func (m *credentialMissing) reason() string {
 			varRefs(m.empty), plural(m.empty, "is set to an empty value", "are set to empty values")))
 	}
 	for _, name := range slices.Sorted(maps.Keys(m.unissued)) {
-		// NOT "at the next attempt": the issuer holds a refusal for the
+		failure := m.unissued[name]
+		if !failure.passes {
+			// REFUSED, which asking again on the restart schedule does not
+			// change: the agent's app is a person's to fix first.
+			parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; it is "+
+				"not issued until somebody fixes the agent's GitHub App (its key, its "+
+				"installation or the permissions it asks for)", name, failure.said))
+			continue
+		}
+		// NOT "at the next attempt": the issuer holds a failed mint for the
 		// restart schedule's wait, and an attempt inside it is handed the
 		// same answer without a request ([github.Issuer.RetryWait]).
 		parts = append(parts, fmt.Sprintf("${%s} could not be issued: %s; GitHub is asked "+
-			"for it again on the restart schedule", name, m.unissued[name]))
+			"for it again on the restart schedule", name, failure.said))
 	}
 	if remedy := m.optionalRemedy(); remedy != "" {
 		parts = append(parts, remedy)
 	}
-	var waits []string
+	var waits []words.Said
 	for _, kind := range m.mintingKinds() {
 		var names []string
 		for name, k := range m.minting {
@@ -745,10 +771,10 @@ func (m *credentialMissing) reason() string {
 				kind, verb, varRefs(names), why))
 			continue
 		}
-		waits = append(waits, fmt.Sprintf("the %s integration to %s %s", kind, verb, varRefs(names)))
+		waits = append(waits, words.Said(fmt.Sprintf("the %s integration to %s %s", kind, verb, varRefs(names))))
 	}
 	if len(waits) > 0 {
-		parts = append(parts, "waiting for "+strings.Join(waits, " and "))
+		parts = append(parts, "waiting for "+words.And(waits))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -765,15 +791,15 @@ func (m *credentialMissing) optionalRemedy() string {
 	for key, where := range m.optional {
 		byWhere[where] = append(byWhere[where], key)
 	}
-	var lists []string
+	var lists []words.Said
 	for _, where := range slices.Sorted(maps.Keys(byWhere)) {
 		keys := byWhere[where]
 		slices.Sort(keys)
-		lists = append(lists, joined(keys)+" under "+where)
+		lists = append(lists, words.Said(asWritten(keys)+" under "+where))
 	}
 	keys := slices.Collect(maps.Keys(m.optional))
 	return fmt.Sprintf("or, if %s can go without %s, list %s",
-		m.reader, plural(keys, "it", "them"), strings.Join(lists, " and "))
+		m.reader, plural(keys, "it", "them"), words.And(lists))
 }
 
 // Error is the sentence the heartbeat carries and the log writes: why the
@@ -825,20 +851,22 @@ func plural(names []string, one, many string) string {
 
 // varRefs renders variable names as the references an operator wrote:
 // "${A}", "${A} and ${B}", "${A}, ${B} and ${C}".
-func varRefs(names []string) string {
-	refs := make([]string, len(names))
-	for i, name := range names {
-		refs[i] = "${" + name + "}"
+func varRefs(vars []string) string {
+	refs := make([]words.Said, len(vars))
+	for i, name := range vars {
+		refs[i] = words.Said("${" + name + "}")
 	}
-	return joined(refs)
+	return words.And(refs)
 }
 
-// joined renders a list for a sentence: "A", "A and B", "A, B and C".
-func joined(items []string) string {
-	if len(items) == 1 {
-		return items[0]
+// asWritten renders keys and paths as an operator writes them in the file, unquoted
+// beside the references [varRefs] writes: "A", "A and B", "A, B and C".
+func asWritten(items []string) string {
+	said := make([]words.Said, len(items))
+	for i, item := range items {
+		said[i] = words.Said(item)
 	}
-	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
+	return words.And(said)
 }
 
 // mintingStates reads the fleet's record of every integration that mints a

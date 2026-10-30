@@ -109,9 +109,11 @@ func TestAMoveKeepsItsMarkOverATaskFiledBehindItThatItCannotCarry(t *testing.T) 
 	})
 	_, err := lossy.MoveTaskToProject(t.Context(),
 		statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil)
-	if err == nil || !strings.Contains(err.Error(), "m-late") {
+	// NAMED BY ITS KEY, which is how the person reading it knows it.
+	late := oneTask(t, r, "m-late").Key
+	if err == nil || late == "" || !strings.Contains(err.Error(), late) {
 		t.Fatalf("a move over a task in the trash it cannot carry = %v, want an "+
-			"error naming m-late", err)
+			"error naming m-late by its key %q", err, late)
 	}
 	r.drain()
 	if !oneTask(t, r, "m-root").Moving {
@@ -358,10 +360,6 @@ func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 				OperatorID: "pat:0193"},
 			author: "jane.doe", kind: "human", operator: "pat:0193",
 		},
-		"a principal's kind": {
-			facts:  statelog.GenerationFacts{By: "jane.doe", ByKind: "person"},
-			author: "jane.doe", kind: "human",
-		},
 		"a token under its own login": {
 			facts:  statelog.GenerationFacts{By: "token:ops", ByKind: "operator"},
 			author: "token:ops", kind: "operator", operator: "token:ops",
@@ -372,6 +370,13 @@ func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 		},
 		"nobody named": {
 			facts:  statelog.GenerationFacts{},
+			author: "node-a", kind: "system",
+		},
+		// A NAME OF SPACES NAMES NOBODY, as it does on every other log's
+		// generation record ([statelog.GenerationFacts.Author]): this one
+		// read it as a person called "  ".
+		"a name of spaces": {
+			facts:  statelog.GenerationFacts{By: "  ", ByKind: "human"},
 			author: "node-a", kind: "system",
 		},
 	} {
@@ -394,5 +399,41 @@ func TestAGenerationRecordNamesItsOperatorsKindAndCredential(t *testing.T) {
 					record.OperatorID, tc.author, tc.kind, tc.operator)
 			}
 		})
+	}
+}
+
+// A MOVED TASK IS FOUND BY ITS TAGS IN THE PROJECT IT MOVED TO, AND ONLY THERE.
+//
+// A project's tag filter is read from that project's tag rows — the arm seeks
+// the slug and the project together — so it answers right only while every tag
+// row carries its task's CURRENT project. The applier rewrites a task's tag
+// rows with the task on every apply, which is what this holds across the one
+// change that moves a task between projects: found in OPS after the move, and
+// never in ENG.
+func TestAMovedTaskIsFoundByItsTagsInItsNewProject(t *testing.T) {
+	t.Parallel()
+	r := lateTagFixture(t)
+	tagged := newTask("m-tagged")
+	tagged.Key = "ENG-tagged"
+	tagged.Tags = []string{"late-tag"}
+	if _, err := r.writer.CreateTask(t.Context(), "op-tagged", tagged, nil); err != nil {
+		t.Fatalf("file the tagged task: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.MoveTaskToProject(t.Context(),
+		statelog.NewOpID(time.Now(), "move"), "m-tagged", "OPS", nil); err != nil {
+		t.Fatalf("move the tagged task: %v", err)
+	}
+	r.drain()
+	for container, want := range map[string]int{"project:OPS": 1, "project:ENG": 0} {
+		for _, filter := range []string{"late-tag", "all:late-tag"} {
+			got := ids(r.ask(map[string]any{"container": container, "tag": filter,
+				"subtasks": "separate"}))
+			if len(got) != want || (want == 1 && got[0] != "m-tagged") {
+				t.Errorf("tag=%s in %s answers %v after the move, want %d "+
+					"task(s) — the tag rows still carry the project it left",
+					filter, container, got, want)
+			}
+		}
 	}
 }

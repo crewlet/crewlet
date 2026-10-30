@@ -444,15 +444,22 @@ func (s Stall) exitCode() int {
 
 // exitNotice is the one line a node that ends itself leaves on stderr: what
 // stopped, why that ends the process, and the code it ends with.
+//
+// A stall names BOTH durations, each as what it is: how long the duty went
+// without a beat ([Stall.Lag], the whole time since its last one) and the
+// seat lease TTL that lag blew. It printed the lag alone as the time "past
+// the seat lease TTL", so a duty five seconds dark against a three-second
+// TTL was reported as five seconds past it — two seconds longer than it was
+// — to a reader who often has this line and the exit code and nothing else.
 func exitNotice(s Stall) string {
 	if s.Cause != nil {
 		return fmt.Sprintf("crewlet: %s declared it cannot go on: %v; exiting so "+
 			"this node is restarted rather than left serving on it (code %d)",
 			s.Duty, s.Cause, s.exitCode())
 	}
-	return fmt.Sprintf("crewlet: %s stalled %.1fs past the seat lease TTL; exiting "+
-		"so peers can take over cleanly (code %d)",
-		s.Duty, s.Lag.Seconds(), s.exitCode())
+	return fmt.Sprintf("crewlet: %s stalled for %.1fs, past the %.1fs seat lease "+
+		"TTL; exiting so peers can take over cleanly (code %d)",
+		s.Duty, s.Lag.Seconds(), s.Threshold.Seconds(), s.exitCode())
 }
 
 var _ Pulse = (*Host)(nil)

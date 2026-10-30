@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -82,7 +83,7 @@ func configSurface(t *testing.T, docs ...string) (*configapi.Service, []string) 
 	}
 	svc, err := configapi.New(configapi.Options{
 		Store: db, Plane: plane, Cipher: cipher, Node: "core-1",
-		Holders: func(context.Context, []string, time.Time) (
+		Holders: func(context.Context, func(string) bool, time.Time) (
 			map[string]configapi.SeatHolder, error) {
 
 			return nil, nil
@@ -292,5 +293,76 @@ func TestTheDiffQueryNeedsARevision(t *testing.T) {
 	queries.Register(r, queries.Sources{Config: surface})
 	if _, err := r.Answer(everyGrant(t), "config_diff", nil); err == nil {
 		t.Fatal("a diff query with no revision was answered")
+	}
+}
+
+// A FLEET REVISION THIS NODE CANNOT OPEN IS ANSWERED IN THE /config ROUTE'S
+// CODE AND WORDS on the socket's config questions: it was `query_failed`, a
+// failure no screen could say anything about, while REST named the key to add.
+func TestAConfigQuestionOnARevisionThisNodeCannotOpenSaysWhatFixesIt(t *testing.T) {
+	t.Parallel()
+	db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "cq.db"), store.Options{})
+	t.Cleanup(func() { _ = db.Close() })
+	keyring := func() secrets.Cipher {
+		key, err := secrets.GenerateKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cipher, err := secrets.NewCipher(secrets.Keyring{ActiveID: "k1",
+			Keys: map[string][]byte{"k1": key}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cipher
+	}
+	// THE FLEET'S REVISION, sealed under a key this node was never given.
+	plane := coordmemory.NewFleet()
+	cfg, err := config.ParseCompany([]byte(companyDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := secrets.Seal(keyring(), stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plane.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: "the-fleets", Summary: "peer", Payload: payload, At: pinned,
+		Origin: coord.RevisionOrigin{Author: "operator", AuthorKind: iam.ActorOperator,
+			Source: "peer", CreatedAt: pinned},
+	}); err != nil {
+		t.Fatalf("activate: %v", err)
+	}
+	svc, err := configapi.New(configapi.Options{
+		Store: db, Plane: plane, Cipher: keyring(), Node: "core-1",
+		Holders: func(context.Context, func(string) bool, time.Time) (
+			map[string]configapi.SeatHolder, error) {
+
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("configapi.New: %v", err)
+	}
+	r := queries.NewRegistry()
+	queries.Register(r, queries.Sources{Config: svc, Now: func() time.Time { return pinned }})
+	for what, params := range map[string]map[string]any{
+		"config":          nil,
+		"config_entities": {"kind": configapi.EntityLLMProviders},
+	} {
+		_, err := r.Answer(everyGrant(t), what, params)
+		var revision *stream.RevisionError
+		if !errors.As(err, &revision) || revision.Code != stream.CodeUnreadableFleetRevision {
+			t.Errorf("%s = %v, want the /config route's unreadable_fleet_revision", what, err)
+			continue
+		}
+		if !strings.Contains(revision.Detail, "secrets.keys") ||
+			strings.Contains(revision.Detail, "secrets:") {
+			t.Errorf("%s: the detail does not say which setting holds the key, in "+
+				"words: %q", what, revision.Detail)
+		}
 	}
 }

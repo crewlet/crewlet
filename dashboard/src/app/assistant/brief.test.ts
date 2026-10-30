@@ -33,11 +33,15 @@ describe("a brief", () => {
     expect(briefQuestion(context({ kind: "run", id: "r1", noun: "run" }))).toBe(
       "Brief me on this coding run",
     );
+    expect(briefQuestion(context({ kind: "room", id: "r2", noun: "room" }))).toBe(
+      "Brief me on this room",
+    );
   });
 
   test("names a record by its kind where the screen named no noun", () => {
     expect(recordWord({ kind: "seat", id: "qa" })).toBe("agent");
     expect(recordWord({ kind: "unit", id: "core" })).toBe("team");
     expect(recordWord({ kind: "container", id: "FAIR" })).toBe("space");
+    expect(recordWord({ kind: "room", id: "r2" })).toBe("room");
   });
 });

@@ -43,6 +43,7 @@ type Fleet struct {
 	budgets      map[string]coord.Tally
 	channels     map[string]coord.Channel
 	follows      map[string]followEntry
+	chatReads    map[string]coord.ChatReadState
 	fires        map[string]time.Time
 	custody      map[string]string
 	rebases      map[string]rebaseEntry
@@ -75,11 +76,13 @@ type Fleet struct {
 	maintAcks   map[string]coord.MaintenanceAck
 	maintRev    uint64
 
-	// pauseWatchers are the open seat-pause watches, and runWatchers the
-	// open watches of each sandbox run by its turn id, each told of every
-	// change under the lock that made it.
-	pauseWatchers map[*watcher[coord.SeatPauseUpdate]]struct{}
-	runWatchers   map[string]map[*watcher[coord.SandboxRunUpdate]]struct{}
+	// pauseWatchers are the open seat-pause watches, runWatchers the open
+	// watches of each sandbox run by its turn id, and chatReadWatchers the
+	// open watches of the chat read state, each told of every change under
+	// the lock that made it.
+	pauseWatchers    map[*watcher[coord.SeatPauseUpdate]]struct{}
+	runWatchers      map[string]map[*watcher[coord.SandboxRunUpdate]]struct{}
+	chatReadWatchers map[*watcher[coord.ChatReadUpdate]]struct{}
 
 	// retries and signIns are the two classes keyed by a model entry, each
 	// with its own open watches.
@@ -87,11 +90,12 @@ type Fleet struct {
 	signIns entryRecords[coord.DeviceSignIn, coord.DeviceSignInUpdate]
 
 	// version is the one counter every versioned write draws from, sandbox
-	// runs and mailbox records alike. Store-wide rather than per record, as
-	// a KV revision is, so a record deleted and created again never hands
-	// back a version an older incarnation of it already used: a caller still
-	// holding that version must lose, not win against a record it never
-	// read. A per-record counter restarting at 1 was exactly that bug.
+	// runs, mailbox records and chat read records alike. Store-wide rather
+	// than per record, as a KV revision is, so a record deleted and created
+	// again never hands back a version an older incarnation of it already
+	// used: a caller still holding that version must lose, not win against a
+	// record it never read. A per-record counter restarting at 1 was exactly
+	// that bug.
 	version uint64
 
 	epoch   int64
@@ -128,6 +132,7 @@ func NewFleet() *Fleet {
 		budgets:      map[string]coord.Tally{},
 		channels:     map[string]coord.Channel{},
 		follows:      map[string]followEntry{},
+		chatReads:    map[string]coord.ChatReadState{},
 		fires:        map[string]time.Time{},
 		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
@@ -931,15 +936,25 @@ func followKey(backend, handle, channel, thread string) string {
 	return coord.DocumentKey("follow", backend, handle, channel, thread)
 }
 
-// Follow records or refreshes a seat's follow on a thread.
-func (f *Fleet) Follow(_ context.Context, backend, handle, channel, thread, reason string, at time.Time) error {
+// Follow records or refreshes a seat's follow on a thread, writing the reason
+// choose answers for the record it replaces.
+//
+// ONE MUTEX ACROSS THE READ, THE CHOICE AND THE WRITE, which is the property
+// the KV backend reaches by binding its write to the revision it read: no
+// other follow can land between what choose was shown and what is written.
+func (f *Fleet) Follow(_ context.Context, backend, handle, channel, thread string, at time.Time,
+	choose func(held string, following bool) string) (string, error) {
+
 	if backend == "" || handle == "" || thread == "" {
-		return errors.New("coord/memory: a follow needs a backend, a handle and a thread")
+		return "", errors.New("coord/memory: a follow needs a backend, a handle and a thread")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.follows[followKey(backend, handle, channel, thread)] = followEntry{reason: reason, at: at.UTC()}
-	return nil
+	key := followKey(backend, handle, channel, thread)
+	held, following := f.follows[key]
+	reason := choose(held.reason, following)
+	f.follows[key] = followEntry{reason: reason, at: at.UTC()}
+	return reason, nil
 }
 
 // Following reports why a seat follows a thread, and whether it does.
@@ -956,19 +971,154 @@ func (f *Fleet) Following(_ context.Context, backend, handle, channel, thread st
 	return entry.reason, true, nil
 }
 
-// Unfollow drops a follow, reporting whether one was there.
-func (f *Fleet) Unfollow(_ context.Context, backend, handle, channel, thread string) (bool, error) {
-	if backend == "" || handle == "" || thread == "" {
-		return false, nil
+// ---- the per-person chat read state ------------------------------------ //
+
+// ChatRead reports one person's read state, the zero state meaning nobody has
+// opened chat as that person yet.
+func (f *Fleet) ChatRead(_ context.Context, handle string) (coord.ChatReadState, error) {
+	if handle == "" {
+		return coord.ChatReadState{}, errors.New(
+			"coord/memory: read a person's chat state needs a handle")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	key := followKey(backend, handle, channel, thread)
-	if _, ok := f.follows[key]; !ok {
+	return cloneChatRead(f.chatReads[handle]), nil
+}
+
+// AdvanceChatRead merges a flush into one person's record.
+//
+// NO RETRY LOOP HERE and that is not a simplification: the real backend's
+// rounds exist to lose a compare-and-set against another PROCESS, and this
+// twin holds the whole fleet under one mutex. The MERGE is the shared half —
+// [coord.MergeChatRead] — so the twin and the backend cannot disagree about
+// what a flush does, which is the only part a conformance suite can check.
+func (f *Fleet) AdvanceChatRead(_ context.Context, handle string,
+	delta coord.ChatReadDelta) (coord.ChatReadState, error) {
+
+	if handle == "" {
+		return coord.ChatReadState{}, errors.New(
+			"coord/memory: advance a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	merged, err := coord.MergeChatRead(f.chatReads[handle], delta)
+	if err != nil {
+		return coord.ChatReadState{}, err
+	}
+	// THE STORE-WIDE COUNTER, as every versioned write here draws from: a
+	// record forgotten and written again lands past every state the old
+	// one reported, which is what a screen ordering two states relies on.
+	f.version++
+	merged.Revision = f.version
+	f.chatReads[handle] = merged
+	f.notifyChatReadLocked(handle, &merged)
+	return cloneChatRead(merged), nil
+}
+
+// SetChatReadAbsence stamps or clears a record's seat's absence from the
+// company, reporting whether the seat has a record; one without is left
+// without. The rule is [coord.ChatReadState.WithAbsence], shared with the
+// real backend.
+func (f *Fleet) SetChatReadAbsence(_ context.Context, handle string, since time.Time) (bool, error) {
+	if handle == "" {
+		return false, errors.New("coord/memory: stamp a person's chat absence needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.chatReads[handle]
+	if !ok {
 		return false, nil
 	}
-	delete(f.follows, key)
+	if next, changed := stored.WithAbsence(since); changed {
+		f.version++
+		next.Revision = f.version
+		f.chatReads[handle] = next
+		f.notifyChatReadLocked(handle, &next)
+	}
 	return true, nil
+}
+
+// ForgetChatRead removes a person's record if it has been stamped absent at or
+// before absentBy, reporting whether it did.
+func (f *Fleet) ForgetChatRead(_ context.Context, handle string, absentBy time.Time) (bool, error) {
+	if handle == "" {
+		return false, errors.New("coord/memory: forget a person's chat state needs a handle")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	stored, ok := f.chatReads[handle]
+	if !ok || !stored.AbsentBy(absentBy) {
+		return false, nil
+	}
+	delete(f.chatReads, handle)
+	f.notifyChatReadLocked(handle, nil)
+	return true, nil
+}
+
+// ChatReaders lists every seat holding read state, in handle order, each with
+// its absence stamp.
+func (f *Fleet) ChatReaders(_ context.Context) ([]coord.ChatReader, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	readers := make([]coord.ChatReader, 0, len(f.chatReads))
+	for handle, stored := range f.chatReads {
+		readers = append(readers, coord.ChatReader{Handle: handle, AbsentSince: stored.AbsentSince})
+	}
+	slices.SortFunc(readers, func(a, b coord.ChatReader) int { return cmp.Compare(a.Handle, b.Handle) })
+	return readers, nil
+}
+
+// WatchChatReads streams every seat's read state, the marker, then every
+// change, under the twin's one-lock ordering (watch.go). The KV backend's
+// WatchChatReads certifies its first answer instead.
+func (f *Fleet) WatchChatReads(ctx context.Context) (<-chan coord.ChatReadUpdate, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	answer := make([]coord.ChatReadUpdate, 0, len(f.chatReads)+1)
+	for _, handle := range slices.Sorted(maps.Keys(f.chatReads)) {
+		state := cloneChatRead(f.chatReads[handle])
+		answer = append(answer, coord.ChatReadUpdate{Handle: handle, State: &state})
+	}
+	w := newWatcher(append(answer, coord.ChatReadUpdate{Current: true})...)
+	if f.chatReadWatchers == nil {
+		f.chatReadWatchers = map[*watcher[coord.ChatReadUpdate]]struct{}{}
+	}
+	f.chatReadWatchers[w] = struct{}{}
+	return w.serve(ctx, func() {
+		f.mu.Lock()
+		delete(f.chatReadWatchers, w)
+		f.mu.Unlock()
+	}), nil
+}
+
+// notifyChatReadLocked tells every watcher that a seat's record now holds
+// state, or nil when it was forgotten. Each watcher gets its own copy, maps
+// and slices included, so one consumer that keeps the state cannot see
+// another's edits — or the twin's next write.
+func (f *Fleet) notifyChatReadLocked(handle string, state *coord.ChatReadState) {
+	for w := range f.chatReadWatchers {
+		u := coord.ChatReadUpdate{Handle: handle}
+		if state != nil {
+			copied := cloneChatRead(*state)
+			u.State = &copied
+		}
+		w.push(u)
+	}
+}
+
+// cloneChatRead copies the maps and slices a caller could otherwise mutate
+// under the twin's own lock.
+//
+// The real backend hands back a decoded record that shares nothing with its
+// store; a twin that handed out its live map would let one caller's edit reach
+// another's read, and the suite would be proving a property only the twin has.
+func cloneChatRead(state coord.ChatReadState) coord.ChatReadState {
+	out := state
+	if state.Cursors != nil {
+		out.Cursors = maps.Clone(state.Cursors)
+	}
+	out.Muted = slices.Clone(state.Muted)
+	return out
 }
 
 // SweepMarkers removes nothing, because the twin keeps no markers: a delete

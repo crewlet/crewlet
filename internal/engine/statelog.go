@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/backoff"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -28,7 +29,9 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/usage"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -373,6 +376,22 @@ type stateLog struct {
 	// loop has not concluded anything yet.
 	snapshot atomic.Pointer[snapshotHeld]
 
+	// usageSeen is the usage log's generation on every data node as
+	// the heartbeat last read the positions register, this node's own taken
+	// from its runner — what the usage publisher holds a peer's reanchor
+	// against ([usage.PublisherDeps.Generations]). Nil before any reading.
+	// An atomic pointer because the heartbeat writes it while the
+	// publisher's tick reads it.
+	usageSeen atomic.Pointer[usage.Generations]
+
+	// usagePublisher is this node's usage publisher while it runs, nil
+	// otherwise — what the usage applier's first drain wakes
+	// ([stateLog.onDrained], [usage.Publisher.Nudge]), which after a
+	// reanchor of the usage log is the transition's last step. An atomic
+	// pointer because the publisher is armed and stopped by the engine
+	// while an applier runs.
+	usagePublisher atomic.Pointer[usage.Publisher]
+
 	// donor is this node's own donor once [Engine.startSnapshots] has built
 	// it, and nil before — which is every boot's join, since that runs
 	// first. A join asks it whether it is serving before naming this node
@@ -405,6 +424,11 @@ type stateLog struct {
 	// donor the fleet could have counted and did not. Buffered by one, as
 	// snapshotNudge is.
 	heartbeatNudge chan struct{}
+
+	// admit tells the engine's seat-claim gate that a log whose health
+	// gates admission has come level ([stateLog.levelHook]); nil tells
+	// nobody.
+	admit func()
 
 	// run is the context the runtime's loops run under — the heartbeat,
 	// the snapshot loop, the donor — and stop is what ends them. HELD
@@ -524,7 +548,7 @@ type applyHooks struct {
 	// requires `data` (ADR-0025) — so every node holding a socket tells its
 	// own, and the apply is the only thing that sees it on each. A node
 	// whose own copy is out of service relays a sound peer's announcements
-	// instead (inboxrelay.go), which this same hook feeds on that peer. It
+	// instead (liverelay.go), which this same hook feeds on that peer. It
 	// must not block.
 	inboxMoved func([]worklet.InboxMovement)
 
@@ -542,17 +566,35 @@ type applyHooks struct {
 	// for artifactsMoved's reason: the socket hub serves only this node's
 	// own sockets. It must not block. See [Engine.OnArtifactDataMoved].
 	artifactDataMoved func([]artifactdata.Moved)
+
+	// chatApplied is what the CHAT APPLIER calls after a committed batch,
+	// with what it wrote ([chatlet.Applied]) — see [Engine.SetChatLive].
+	// Threaded down for inboxMoved's reason, and relayed by the same relay
+	// while this node's copy is out of service: a room open on a node whose
+	// chat applier halted would otherwise go quiet until its socket moved
+	// elsewhere. It must not block.
+	chatApplied func([]chatlet.Applied)
+
+	// replaced is what the state log calls once its replicated estate was
+	// REPLACED under a running node — an adoption, or a reopen of the file
+	// a failed join installed ([stateLog.estateReplaced]) — for whatever
+	// this node keeps derived from those rows by a walk that only moves
+	// forward: the chat index ([search.ChatIndexer.RequestRebuild]). Not a
+	// post-commit hook, since no batch says it; beside them because it is
+	// the same kind of signal, handed down the same way. It must not block.
+	replaced func()
 }
 
 // applyHooks is every post-commit hook this engine hands its appliers.
 func (e *Engine) applyHooks() applyHooks {
 	return applyHooks{
-		nudgeSkills:    e.nudgeSkills,
-		identityMoved:  e.identityMoved,
-		inboxMoved:     e.inboxMoved,
-		artifactsMoved: e.artifactsMoved,
-
+		nudgeSkills:       e.nudgeSkills,
+		identityMoved:     e.identityMoved,
+		inboxMoved:        e.inboxMoved,
+		artifactsMoved:    e.artifactsMoved,
 		artifactDataMoved: e.artifactDataMoved,
+		chatApplied:       e.chatApplied,
+		replaced:          e.estateReplaced,
 	}
 }
 
@@ -799,6 +841,7 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		snapshotNudge:  make(chan struct{}, 1),
 		heartbeatNudge: make(chan struct{}, 1),
 		tailHoldEvery:  statelog.TrimHoldHeartbeat,
+		admit:          e.nudgeAdmission,
 	}
 	// PROVISION EVERY LOG FIRST, and only then decide whether this node
 	// can replay from where it is.
@@ -1285,8 +1328,12 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 			return evicted[node], readErr
 		},
 		// THE FIRST DRAIN WAKES THE SNAPSHOT LOOP, whose commonest boot
-		// skip — `unhydrated` — it is the end of ([stateLog.snapshotNudge]).
-		OnDrained: s.nudgeSnapshot,
+		// skip — `unhydrated` — it is the end of ([stateLog.snapshotNudge]),
+		// and the usage publisher for the usage log ([stateLog.onDrained]).
+		OnDrained: s.onDrained(domain),
+		// AND EVERY TIME THE LOOP COMES LEVEL, the seat-claim gate's watch,
+		// for a log whose health gates admission ([stateLog.levelHook]).
+		OnLevel: s.levelHook(domain),
 		// NO LOGGER, here or at any other statelog constructor: an absent
 		// one is the framework's own `component=statelog` logger. The
 		// engine's own labelled those lines `component=engine`, and the
@@ -1793,7 +1840,17 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 		}
 		bounds = append(bounds, bound)
 	}
-	return statelog.PermitReadmission(nodeID, register, bounds)
+	permitted := statelog.PermitReadmission(nodeID, register, bounds)
+	// A LOG THE FLEET RE-ANCHORED AND THIS NODE HASN'T caught up on is one it
+	// cannot judge the readmission on, which is this refusal's condition: told
+	// to the operator, with the node to ask instead, rather than answered as
+	// a fault with the remedy in this node's log alone.
+	var behind *statelog.ReanchorNotApplied
+	if errors.As(permitted, &behind) {
+		return &ReadmissionUnjudged{Node: nodeID, Log: behind.Domain, Behind: true,
+			Err: permitted}
+	}
+	return permitted
 }
 
 // readmissionBound is running's bound as this node's write fence reads it
@@ -2271,9 +2328,10 @@ func (e *Engine) applyEpoch() map[string]any { return e.Company().Epoch() }
 //
 // A node's checkpoint is a sequence on each domain's log. It can replay from
 // there as long as the log still HOLDS the record after it — and it may not:
-// the trim deletes records every node has applied, and a node that was down
-// long enough, or that has never run at all, wakes up below the floor. There
-// is nothing on the log for it to read, and no amount of waiting produces one.
+// the trim deletes records every data node it counts has applied, and a node
+// that was down long enough, or that has never run at all, wakes up below the
+// floor. There is nothing on the log for it to read, and no amount of waiting
+// produces one.
 //
 // So the check is per domain: is the record after this node's checkpoint at or
 // above the first sequence the stream still holds? That is
@@ -2473,8 +2531,8 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		return joinUnable, want, nil
 	case err != nil:
 		return "", statelog.OfferRequest{}, fmt.Errorf("engine: this node cannot "+
-			"replay its way to the fleet on %v and the join failed: %w",
-			slices.Concat(behind, passed), err)
+			"replay its way to the fleet on %s and the join failed: %w",
+			words.And(slices.Concat(behind, passed)), err)
 	}
 	// NO LINE OF ITS OWN: the adopter writes `statelog_adopted` with the
 	// donor, the artefact's checksum and when it was taken, and a second
@@ -3486,7 +3544,7 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 	out := make([]ReplicationStatus, 0, len(held))
 	for _, running := range held {
 		name := running.domain.Name()
-		row := ReplicationStatus{Name: name, Kind: "domain"}
+		row := ReplicationStatus{Name: name}
 		health, err := s.health(ctx, running)
 		switch {
 		case err != nil:
@@ -3879,6 +3937,17 @@ func clearsAtBoot(reason statelog.SkipReason) bool {
 // implementation.
 type snapshotTaker interface {
 	Take(ctx context.Context) (statelog.Manifest, error)
+}
+
+// levelHook is what a domain's apply loop tells each time it comes level with
+// its log ([statelog.RunnerDeps.OnLevel]): the seat-claim gate's watch for a
+// domain whose health gates admission, and nobody for one whose health does
+// not, whose level the gate never asks about — see admission.go.
+func (s *stateLog) levelHook(domain statelog.Domain) func() {
+	if s.admit == nil || !domain.ReadinessInput() {
+		return nil
+	}
+	return s.admit
 }
 
 // nudgeSnapshot wakes the snapshot loop, without waiting for it — see
@@ -4324,7 +4393,7 @@ func (s *stateLog) beat(ctx context.Context, interval time.Duration,
 // publishPositions writes one row describing every domain this node runs.
 //
 // EVERY DOMAIN IN ONE ROW, which is the register's own shape: the trim asks
-// "what has every node applied" about all of them at once, and a row per
+// "what has every data node applied" about all of them at once, and a row per
 // domain would be N writes saying one thing.
 //
 // AND THE SNAPSHOT THIS NODE HOLDS, stamped from what its own snapshot loop
@@ -4394,6 +4463,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	rows, rowsErr := s.fleet.Positions(ctx)
 	generations, genErr := map[string]uint32(nil), rowsErr
 	if rowsErr == nil {
+		s.observeUsageGenerations(rows)
 		generations, genErr = s.fleetGenerations(ctx, rows, s.openLogs(), above)
 		if genErr != nil && ctx.Err() == nil {
 			log.WarnContext(ctx, "statelog_generations_unread",

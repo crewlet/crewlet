@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- api ------------------------------------------------------------- //
@@ -569,7 +570,7 @@ type APIAuth struct {
 	// had to read to answer the one question they ever asked of it. The
 	// clamp keeps every app — [iam.AdminPosture.Effective] expands before it
 	// clamps — so an administrator signed in on a refusing node keeps the
-	// tracker and the knowledge base.
+	// tracker, the knowledge base and the chat.
 	//
 	// It is applied at DECISION time, per node, per request: nothing is
 	// written when it changes, so changing it takes effect on the next
@@ -940,7 +941,7 @@ type APIToken struct {
 	Token string `secret:"true" yaml:"token" json:"token" js:"required" desc:"Token value or ${VAR} reference."`
 
 	// Grants is what this credential may do: `admin`, `worklet`, `doclet`,
-	// `artifacts`. REQUIRED and non-empty: a credential's blast radius is
+	// `artifacts`, `chatlet`. REQUIRED and non-empty: a credential's blast radius is
 	// stated at the pin, never inferred. The founder's break-glass token is
 	// `[admin]`; a CI pipeline that files work is `[worklet]`.
 	//
@@ -953,7 +954,7 @@ type APIToken struct {
 	// STRICT, unlike a replicated row: a name this build does not know is
 	// refused here, naming the set, because a file an operator wrote is a
 	// typo rather than a newer peer's record.
-	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, worklet, doclet, artifacts. Required and non-empty."`
+	Grants []iam.Grant `yaml:"grants,omitempty" json:"grants,omitempty" desc:"What this credential may do: admin, worklet, doclet, artifacts, chatlet. Required and non-empty."`
 }
 
 // validate checks the auth block; serving is [Bootstrap.ServesAPI].
@@ -1015,7 +1016,7 @@ func (a *APIAuth) validateAdmin(path Path, serving bool) error {
 		}
 	case !a.Admin.Valid():
 		p.add(at(path, "admin"), ErrUnknownValue,
-			"%q isn't a valid value. Use one of %v", a.Admin, iam.AdminPostures)
+			"%q isn't a valid value. Use %s", a.Admin, words.Or(iam.AdminPostures))
 	}
 	return p.err()
 }
@@ -1088,8 +1089,8 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 
 		if len(t.Grants) == 0 {
 			p.add(at(tp, "grants"), ErrMissing,
-				"required. List the permissions this token gets, from %v",
-				iam.AllGrants)
+				"required. List the permissions this token gets, any of %s",
+				words.Or(iam.AllGrants))
 		}
 		p.wrap(checkGrants(at(tp, "grants"), t.Grants, a.Admin))
 	}
@@ -1129,8 +1130,7 @@ func checkGrants(path Path, grants []iam.Grant, admin iam.AdminPosture) error {
 	for i, g := range grants {
 		gp := idx(path, i)
 		if !g.Valid() {
-			p.add(gp, ErrUnknownValue,
-				"%q isn't a permission. Use one of %v", g, iam.AllGrants)
+			p.add(gp, ErrUnknownValue, "%s", iam.NotAGrant(g))
 		}
 	}
 	if admin == iam.AdminRefuse && slices.Contains(iam.Expand(grants), iam.GrantAdmin) {

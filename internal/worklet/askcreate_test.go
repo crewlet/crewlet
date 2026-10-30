@@ -81,17 +81,17 @@ func TestACreateCanCarryItsAskInOneRecord(t *testing.T) {
 	task.Assignee = "ana"
 	woken := worklet.Candidates(worklet.Wake{
 		Kind: worklet.ChangeCreated, After: task, Comment: &ask,
-	}.Notify(nil), false)
+	}.Notify(nil))
 	if len(woken) == 0 || woken[0].Handle != "ana" || woken[0].Reason != worklet.ReasonAsked {
 		t.Errorf("the create woke %+v, want ana first, asked", woken)
 	}
 }
 
 // THE ASK A CREATE CARRIES IS A QUESTION ON THIS TASK AND NOTHING ELSE: it
-// names a comment id (the row's key on every node), asks somebody, answers and
-// replies to nothing — a task that does not exist yet holds no comment to
-// answer — and its decision is well formed. Each is refused before the key is
-// minted, so a refusal costs no numbering gap.
+// names a comment id (the row's key on every data node), asks somebody,
+// answers and replies to nothing — a task that does not exist yet holds no
+// comment to answer — and its decision is well formed. Each is refused before
+// the key is minted, so a refusal costs no numbering gap.
 func TestACreatesAskIsAQuestionAndNothingElse(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

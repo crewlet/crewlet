@@ -98,7 +98,12 @@ func TestADataNodeReapsAPageOnlyOnceItsTermHasRunOut(t *testing.T) {
 
 // reapSource runs one pass of the reaper over every source this node arms, at
 // at, and answers the named source's part of the report, failing when the pass
-// did not visit every source the node offers.
+// did not visit every source the node offers or failed the named one.
+//
+// THE NAMED SOURCE'S FAILURE, NOT THE PASS'S. A pass's error joins every
+// source's, and on these nodes, whose company no activation has named, the
+// assistant's term is unknown and its source's part fails by design
+// ([Engine.assistantRetention]); the cases are about the source they name.
 func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	source string) trashreap.SourceReport {
 
@@ -111,10 +116,7 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	if err != nil {
 		t.Fatalf("build the reaper: %v", err)
 	}
-	report, err := r.Pass(t.Context())
-	if err != nil {
-		t.Fatalf("pass at %s: %v", at, err)
-	}
+	report, passErr := r.Pass(t.Context())
 	var names []string
 	for _, src := range sources {
 		names = append(names, src.Name())
@@ -128,10 +130,14 @@ func reapSource(t *testing.T, e *Engine, fleet trashreap.Reports, at time.Time,
 	}
 	for _, got := range report.Sources {
 		if got.Source == source {
+			if got.Error != "" {
+				t.Fatalf("the pass at %s failed %s: %s (the whole pass: %v)", at,
+					source, got.Error, passErr)
+			}
 			return got
 		}
 	}
-	t.Fatalf("the pass reaped %+v and nothing of %s", report.Sources, source)
+	t.Fatalf("the pass reaped %+v and nothing of %s (%v)", report.Sources, source, passErr)
 	return trashreap.SourceReport{}
 }
 

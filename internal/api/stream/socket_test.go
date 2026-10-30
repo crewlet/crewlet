@@ -17,6 +17,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/artifacts"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -70,7 +72,7 @@ func newSocketWith(t *testing.T, authOpts func(*config.APIAuth), query stream.Qu
 	guard := auth.New(&b)
 	svc := buildService(t, opts)
 
-	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, query))
+	srv := httptest.NewServer(stream.Handler(guard, auth.NewCSRF(&b), svc, query, nil))
 	t.Cleanup(srv.Close)
 	return &socketFixture{
 		server: srv, svc: svc,
@@ -521,7 +523,12 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		want string
 	}{
 		{stream.ErrUnknownQuery, stream.CodeUnknownQuery},
-		{stream.ErrUnauthorized, stream.CodeUnauthorized},
+		{stream.RefusedFor("config", authz.Decision{Reason: authz.ReasonNoGrant,
+			Grants: []iam.Grant{iam.GrantAdmin}}), stream.CodeUnauthorized},
+		// A BARE REFUSAL SENTINEL NAMES NO DECISION, so it is the fault
+		// it is rather than a refusal that cannot say what would change
+		// it — see stream.RefusedFor.
+		{stream.ErrUnauthorized, stream.CodeQueryFailed},
 		{stream.ErrNotFound, stream.CodeNotFound},
 		// A REFUSED REQUEST IS NOT A FAILED ONE. Left to the default it
 		// reached the client as `query_failed` — retried on every poll
@@ -529,6 +536,12 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		// node as though its own health were in question.
 		{stream.ErrBadParams, stream.CodeBadParams},
 		{stream.ErrUnavailable, stream.CodeUnavailable},
+		// A REVISION THIS NODE CANNOT OPEN, under the /config route's own
+		// code: answered `query_failed`, a missing key read as a failure
+		// nobody could explain.
+		{&stream.RevisionError{What: "config", Code: stream.CodeUnreadableFleetRevision,
+			Detail: "This node doesn't hold the key the fleet sealed this revision under."},
+			stream.CodeUnreadableFleetRevision},
 		{errors.New("the store fell over at /var/lib/crewlet/crewlet.db"), stream.CodeQueryFailed},
 	} {
 		f := newSocket(t, nil, func(context.Context, string, map[string]any) (any, error) {
@@ -551,6 +564,95 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 		if raw, _ := json.Marshal(got); strings.Contains(string(raw), "/var/lib") {
 			t.Errorf("the failure leaked its detail to the client: %s", raw)
 		}
+		// AND ITS WORDS, where the engine wrote them for the reader.
+		var revision *stream.RevisionError
+		if errors.As(tc.err, &revision) && got["detail"] != revision.Detail {
+			t.Errorf("a revision refusal carried detail %v, want %q", got["detail"],
+				revision.Detail)
+		}
+	}
+}
+
+// A REFUSAL FRAME IS THE AUTHORITY TABLE'S MAPPING, AND NEVER A CODE THE
+// SOCKET CANNOT SAY.
+//
+// Every refusal reason the table names is answered over the socket with the
+// code and the fields [authz.RefusalFields] gives it — the words the REST twin
+// and every other surface answer the same decision with — so a change to the
+// mapping reaches the socket or fails here: `unauthorized` with the reason,
+// the grants and, on an artifact refused for a role, the role it needs; and
+// `not_found` with nothing beside it for a caller with no relation to an
+// artifact, as for an id nothing holds. The two the mapping words in a code
+// this vocabulary lacks (a stale proof's `step_up_required`, a token's
+// `token_refused`) are answered as the fault they would be, carrying no
+// refusal: the socket cannot carry a step-up, and a frame code the dashboard
+// does not know reads to it as a failure of no kind.
+//
+// Mutation: drop the grants or the role in RefusedFor, answer every refusal
+// `unauthorized` whatever the mapping says, or answer no relation as the
+// fault, and this goes red.
+func TestARefusalFrameCarriesTheMappingsCodeAndFields(t *testing.T) {
+	t.Parallel()
+	decisions := map[string]authz.Decision{}
+	for _, r := range authz.Reasons {
+		d := authz.Decision{Reason: r, Grants: []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}}
+		switch r {
+		case authz.ReasonStepUp:
+			d.Recency = iam.RecencyStepUp
+		case authz.ReasonRole:
+			d.Role = artifacts.RoleEditor
+		}
+		decisions[string(r)] = d
+	}
+	if len(decisions) < 10 {
+		t.Fatalf("read %d refusal reasons; a walk that stopped reading the "+
+			"vocabulary certifies nothing", len(decisions))
+	}
+	f := newSocket(t, nil, func(_ context.Context, what string, _ map[string]any) (any, error) {
+		return nil, stream.RefusedFor(what, decisions[what])
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+	spoken := map[string]bool{}
+	for i, r := range authz.Reasons {
+		write(t, conn, map[string]any{"kind": "query", "id": i + 1, "what": string(r)})
+		got := next(t, conn)
+		_, code, detail := authz.RefusalFields(decisions[string(r)])
+		_, reason := got["reason"]
+		_, grants := got["grants"]
+		_, role := got["role"]
+		switch code {
+		case stream.CodeUnauthorized:
+			spoken[string(code)] = true
+			wantGrants, _ := json.Marshal(detail[authz.DetailGrants])
+			gotGrants, _ := json.Marshal(got["grants"])
+			wantRole, roleNamed := detail[authz.DetailRole]
+			if got["error"] != string(code) || got["reason"] != detail[authz.DetailReason] ||
+				string(gotGrants) != string(wantGrants) || role != roleNamed ||
+				(roleNamed && got["role"] != wantRole) {
+				t.Errorf("%s: the frame = %v, want error %s, reason %v, grants %s and "+
+					"role %v, as the mapping gives it", r, got, code,
+					detail[authz.DetailReason], wantGrants, wantRole)
+			}
+		case stream.CodeNotFound:
+			spoken[string(code)] = true
+			if got["error"] != stream.CodeNotFound || reason || grants || role {
+				t.Errorf("%s is %s to the mapping, an id nothing holds; the frame = %v, "+
+					"want not_found carrying nothing", r, code, got)
+			}
+		default:
+			if got["error"] != stream.CodeQueryFailed || reason || grants || role {
+				t.Errorf("%s is %s to the mapping, which this socket cannot say; "+
+					"the frame = %v, want query_failed carrying no refusal", r, code, got)
+			}
+		}
+	}
+	if !spoken[stream.CodeUnauthorized] || !spoken[stream.CodeNotFound] {
+		t.Fatalf("the walk reached the codes %v, which is not every code a refusal "+
+			"is spoken in here", spoken)
 	}
 }
 
@@ -560,16 +662,21 @@ func TestEachQueryFailureCarriesItsOwnCode(t *testing.T) {
 // caller — it names the parameter to change — and it reached the debug log and
 // nothing else, so a person who asked for a window past the spend history read
 // "the engine refused this request" with no word of which field or why. An
-// `unavailable` answer carries its STATE LOG's words, under the same key, and
-// never the error behind them. Every other code stays bare: its text can carry
-// a path, and a detail on it would be the leak the loop above guards against.
+// `unavailable` answer carries the STATE LOG's sentence for its refusal, under
+// the same key ([statelog.ConditionSentence]), and never the error behind it
+// or the refusal's own detail, which is written for whoever runs the node.
+// Every other code stays bare: its text can carry a path, and a detail on it
+// would be the leak the loop above guards against.
 //
 // Mutation: build the `unavailable` frame by setting its Unavailable alone,
-// and the state log's words never reach the frame.
+// and the state log's words never reach the frame; read the refusal's detail
+// into it, and the operator's remedy does.
 func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
 	t.Parallel()
 	const sentence = "days is 91, and a spend window is 1 to 90 company days — ask for at most 90"
 	const remedy = "raise the stream's byte ceiling"
+	full := &statelog.Refused{Code: statelog.RefuseLogFull, Detail: remedy}
+	told, _ := statelog.ConditionSentence(full)
 	for _, tc := range []struct {
 		err  error
 		want string
@@ -578,8 +685,7 @@ func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
 		{stream.ErrBadParams, ""},
 		{fmt.Errorf("%w: tokens: %w", stream.ErrUnavailable,
 			errors.New("open /var/lib/crewlet/crewlet.db: busy")), ""},
-		{fmt.Errorf("%w: tokens: %w", stream.ErrUnavailable,
-			&statelog.Refused{Code: statelog.RefuseLogFull, Detail: remedy}), remedy},
+		{fmt.Errorf("%w: tokens: %w", stream.ErrUnavailable, full), told},
 		{errors.New("open /var/lib/crewlet/crewlet.db: " + sentence), ""},
 	} {
 		f := newSocket(t, nil, func(context.Context, string, map[string]any) (any, error) {
@@ -599,6 +705,9 @@ func TestARefusalCarriesItsSentenceAndNothingElseDoes(t *testing.T) {
 			t.Errorf("%v: the frame carried a detail it has no business carrying: %v", tc.err, got)
 		case tc.want != "" && detail != httpjson.Sentence(tc.want):
 			t.Errorf("%v: detail = %v, want the refusal's own sentence %q", tc.err, detail, tc.want)
+		}
+		if text, _ := detail.(string); strings.Contains(text, remedy) {
+			t.Errorf("%v: the frame carried the refusal's own detail: %v", tc.err, got)
 		}
 		if tc.want == sentence && got["error"] != stream.CodeBadParams {
 			t.Errorf("%v: code = %v, want bad_params", tc.err, got["error"])
@@ -661,18 +770,20 @@ func TestTheSocketsCallerReachesTheQuery(t *testing.T) {
 	}
 }
 
-// TestAWatchNeedsAnOperator pins that a subscription is a WRITE.
+// TestAWatchNeedsAResolvedCaller pins that a subscription is a WRITE.
 //
 // A watch installs a row in this node's routing index on behalf of a caller
 // and leaves it there for the life of the socket, so a client nobody can name
-// that could install one would be writing server state anonymously.
+// that could install one would be writing server state anonymously. Any
+// principal the guard resolved may watch — a person, a token, an operator —
+// and is then decided by the authority table on the seat it names.
 //
 // THE UNAUTHENTICATED ARM IS NOW THE HANDSHAKE'S, which is what this asserts:
 // there is no anonymous socket to send a watch from any more, so the refusal
 // happens before a frame is ever read. The guard inside `watch` stays for the
 // one case that would resurrect it — the socket path being declared exempt —
 // and that case cannot be reached from here.
-func TestAWatchNeedsAnOperator(t *testing.T) {
+func TestAWatchNeedsAResolvedCaller(t *testing.T) {
 	t.Parallel()
 	// ADMIN, so the counterfactual below is about the credential and not
 	// about whose seat "lead" is — which is watch_test.go's.
@@ -689,7 +800,7 @@ func TestAWatchNeedsAnOperator(t *testing.T) {
 		t.Errorf("watchers = %d: an unauthenticated client wrote the index", got)
 	}
 
-	// The counterfactual: an operator's watch takes, and clearing it
+	// The counterfactual: a resolved caller's watch takes, and clearing it
 	// releases the bucket.
 	held, _, err := f.dial(t, fixtureToken)
 	if err != nil {
@@ -698,7 +809,7 @@ func TestAWatchNeedsAnOperator(t *testing.T) {
 	next(t, held)
 	write(t, held, map[string]any{"kind": "watch", "seat": "lead"})
 	waitFor(t, func() bool { return f.svc.Hub().Watchers("lead") == 1 },
-		"an operator's watch never reached the index")
+		"a resolved caller's watch never reached the index")
 	write(t, held, map[string]any{"kind": "watch", "seat": ""})
 	waitFor(t, func() bool { return f.svc.Hub().Watchers("lead") == 0 },
 		"clearing a watch left the client in the index")
@@ -970,7 +1081,7 @@ func TestAPrincipalWhoseStageMayNotActIsRefusedTheSocket(t *testing.T) {
 	b.API.Auth.Admin = iam.AdminServe
 	b.API.ExternalURL = fixtureOrigin
 	handler := stream.Handler(auth.New(&b), auth.NewCSRF(&b),
-		buildService(t, stream.Options{}), nil)
+		buildService(t, stream.Options{}), nil, nil)
 
 	for _, stage := range []iam.Stage{iam.StageActive, iam.StageSuspended,
 		iam.StageRetired} {

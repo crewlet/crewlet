@@ -327,10 +327,13 @@ func TestTheOpenDraftReachesTheModelFencedAndRedacted(t *testing.T) {
 // screen as it is now, and the turn resumes: its model reads the draft the
 // change left, and a second change to the same draft is proposed, not refused
 // as an action the screen does not accept. A decision that carries no screen
-// resumes on the one the turn parked on, which still accepts the action.
+// resumes on the one the turn parked on, which still accepts the action. What
+// the page reported of the change is the page's own word, which the engine
+// cannot verify: the model reads it fenced at the page's trust (ADR-0040).
 // Mutation: resume with no page and the second change is refused
 // "the screen does not accept that page action"; resume on the parked page
-// alone and the model never reads the applied value.
+// alone and the model never reads the applied value; fence the page's report
+// at any other trust and its label fails.
 func TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom(t *testing.T) {
 	t.Parallel()
 	for _, carried := range []bool{true, false} {
@@ -392,6 +395,16 @@ func TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom(t *testing.T) {
 		if carried && !strings.Contains(answer.Content[strings.Index(answer.Content, "screen now"):],
 			"source=page_context") {
 			t.Fatalf("the screen after the decision is not fenced as the page's:\n%s", answer.Content)
+		}
+		if at := strings.Index(answer.Content, " source=page_context trust=page "); at < 0 ||
+			!strings.Contains(answer.Content[at:], "Applied to Brand › Set up") {
+			t.Fatalf("carried=%v: the page's report is not fenced as the page's word:\n%s",
+				carried, answer.Content)
+		}
+		if at := strings.Index(answer.Content, " source=page_context trust=page "); at < 0 ||
+			!strings.Contains(answer.Content[at:], "Applied to Brand › Set up") {
+			t.Fatalf("carried=%v: the page's report is not fenced as the page's word:\n%s",
+				carried, answer.Content)
 		}
 	}
 }

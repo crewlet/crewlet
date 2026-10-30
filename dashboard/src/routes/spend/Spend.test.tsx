@@ -283,7 +283,7 @@ test("the custom window opens on the company days a named range covers", async (
 // about it, not that the screen asked wrong, and draws no figures.
 test("a window the engine refuses shows the engine's own sentence and no figures", async () => {
   const sentence =
-    "2026-06-01 to 2026-08-30 is 91 days, and a spend window is at most 90 — bring since and until closer together";
+    "2026-06-01 to 2026-08-30 is 91 days, and a spend window is at most 90. Bring since and until closer together";
   mount("#/settings/spend?window=2026-06-01T00:00:00.000Z/2026-08-31T00:00:00.000Z", <Spend />, {
     tokens: new QueryError("bad_params", null, sentence),
     viewer: VIEWER,
@@ -302,7 +302,7 @@ test("a window the engine refuses shows the engine's own sentence and no figures
 // comparison line.
 test("a refused window draws none of the previous window's figures, and says so once", async () => {
   const sentence =
-    "2026-05-01 to 2026-09-29 is 152 days, and a spend window is at most 90 — bring since and until closer together";
+    "2026-05-01 to 2026-09-29 is 152 days, and a spend window is at most 90. Bring since and until closer together";
   const refusal = () => new QueryError("bad_params", null, sentence);
   mount("#/settings/spend?window=30d", <Spend />, {
     tokens: (p: Record<string, unknown>) => (p.since ? refusal() : rollup(48_600_000)),
@@ -868,7 +868,7 @@ test("where the company runs no Worklet, the auxiliary model joins the side colu
         withDerived({
           timezone: "UTC",
           roles: [{ name: "CEO", handle: "ceo" }],
-          services: { tracker: "jira", knowledge: "doclet" },
+          services: { tracker: "jira", knowledge: "doclet", chat: "chatlet" },
         }),
       ),
   );

@@ -8,12 +8,13 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // BriefPromptVersion names a brief turn's system prompt ([briefRules]),
 // stamped on its turn row and audit record in place of [PromptVersion]. A
 // reworded sentence is a new version.
-const BriefPromptVersion = "assistant.brief.v3"
+const BriefPromptVersion = "assistant.brief.v4"
 
 // promptVersion is the prompt this turn runs on.
 func (t *turn) promptVersion() string {
@@ -41,9 +42,9 @@ var briefRules = fmt.Sprintf("You are the Crewlet assistant inside the company's
 	"- about: what the page or record is about right now, as a colleague would say it in one "+
 	"breath, on one line of at most %[1]d characters. The situation, not a list of counts.\n"+
 	"- needs: only what the person has to do, at most %[2]d, most pressing first. The first is "+
-	"the one you recommend doing first. Each is about one record you read (a task, a project, "+
-	"an agent, a page or an artifact), cited by its key, handle or id exactly as your read "+
-	"returned it. Its do is an instruction that starts with a verb and names the record "+
+	"the one you recommend doing first. Each is about one record you read (%[8]s), cited by "+
+	"its key, handle or id exactly as your read returned it, a chat room by its id or its "+
+	"name with its #. Its do is an instruction that starts with a verb and names the record "+
 	"(\"Answer ENG-42: ship Friday or wait?\", \"Raise Software Engineer's daily budget\"), "+
 	"at most %[3]d characters; its why, if it has one, is one fact, at most %[4]d characters. "+
 	"A need is something only this person can move: a decision asked of them, a stopped "+
@@ -74,7 +75,33 @@ var briefRules = fmt.Sprintf("You are the Crewlet assistant inside the company's
 	"call it twice in all.",
 	wire.BriefAboutMaxRunes, wire.BriefMaxNeeds, wire.BriefTextMaxRunes,
 	wire.BriefDetailMaxRunes, wire.BriefContextMaxRunes, wire.BriefMaxFollowUps,
-	wire.BriefQuestionMaxRunes)
+	wire.BriefQuestionMaxRunes, briefCitable())
+
+// briefCiteWords are the records a brief's row may cite as its rules name
+// them, by kind.
+var briefCiteWords = map[wire.ResourceKind]string{
+	wire.ResourceTask: "a task", wire.ResourceProject: "a project",
+	wire.ResourceSeat: "an agent", wire.ResourcePage: "a page",
+	wire.ResourceArtifact: "an artifact", wire.ResourceRoom: "a chat room",
+}
+
+// briefCitable is the records a brief's row may cite, in words: built from
+// [catalog.BriefRefKinds], so the rules can never name fewer kinds than the
+// answer's schema takes, or more. A kind with no words of its own is named by
+// itself, and TestTheBriefRulesNameEveryCitableKind holds every kind to words.
+// Each kind's words are a phrase rather than a value, so they are said through
+// [words.Or] as [words.Said], unquoted.
+func briefCitable() string {
+	said := make([]words.Said, 0, len(catalog.BriefRefKinds))
+	for _, k := range catalog.BriefRefKinds {
+		w, ok := briefCiteWords[k]
+		if !ok {
+			w = "a " + string(k)
+		}
+		said = append(said, words.Said(w))
+	}
+	return words.Or(said)
+}
 
 // buildBriefMessages is a brief turn's conversation as its loop starts it:
 // the brief's rules, the company and the person, the conversation so far,
@@ -124,11 +151,9 @@ func briefQuestion(in promptInput) string {
 		b.WriteString("Brief the person on this page: read what it shows, then say what it is " +
 			"about and what, if anything, on it they have to do.")
 	}
-	kinds := make([]string, 0, len(catalog.BriefRefKinds))
-	for _, k := range catalog.BriefRefKinds {
-		kinds = append(kinds, string(k))
-	}
-	fmt.Fprintf(&b, " A row may cite a %s.", strings.Join(kinds, ", "))
+	// THE KINDS AS THE ANSWER WRITES THEM, quoted as the values they are: the
+	// rules name the records in words, and a need's ref_kind takes these.
+	fmt.Fprintf(&b, " A need's ref_kind is one of %s.", words.Or(catalog.BriefRefKinds))
 	b.WriteString("\n\nThe screen, described by the screen itself:\n")
 	b.WriteString(pageFence(in.Boundary, page))
 	b.WriteString("\n\nWhat the person asked:\n")

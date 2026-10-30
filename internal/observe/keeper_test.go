@@ -414,7 +414,8 @@ func writeAt(t *testing.T, n *dataNode, batch *events.Event, at time.Time) {
 // published it would have filed it.
 //
 // Mutation: file the record under its event type in observe.Record, and the
-// row reads `inbound_delivery` rather than what the socket called it.
+// row reads `inbound_delivery` rather than what the socket called it; leave
+// the envelope's node off the record, and the row names no origin.
 func TestAStatelessNodesDeliveryIsKeptAsADelivery(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -467,6 +468,13 @@ func TestAStatelessNodesDeliveryIsKeptAsADelivery(t *testing.T) {
 	}
 	if row.Tags["recipient"] != "swe" || row.Tags["delivery_key"] != "p1" || row.Tags["route"] != "mattermost" {
 		t.Errorf("row tags = %v, want the seat, the post id and the socket route", row.Tags)
+	}
+	// AND IT NAMES WHERE IT ARRIVED: the node that published it, off the
+	// envelope — not the data node keeping it, and not the vendor's body,
+	// which is all its payload holds.
+	if row.Node != "seats-1" {
+		t.Errorf("the row kept on data-a names %q as its origin, want seats-1, the node "+
+			"that published it", row.Node)
 	}
 }
 

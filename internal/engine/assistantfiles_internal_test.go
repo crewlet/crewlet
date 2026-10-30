@@ -3,10 +3,14 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // THE ASSISTANT'S FILE STORE TELLS EVERY DOMAIN REFUSAL AS THE ORCHESTRATOR'S:
@@ -38,6 +42,44 @@ func TestAssistantFilesTellTheDomainsRefusalsAsTheOrchestrators(t *testing.T) {
 	}
 	if got := fileRefusal(fmt.Errorf("%w: a file needs a name", assistantdomain.ErrInvalid)); got.Error() != "assistant: invalid: a file needs a name" {
 		t.Errorf("a refusal as written reads %q", got)
+	}
+}
+
+// A FILE A CONDITION OF THE NODE KEPT OUT IS TOLD IN A MODEL'S WORDS for it:
+// the company's file storage full, a store that did not take the bytes and a
+// log that refused the file's record each reach the orchestrator as
+// [assistant.Unkept], saying what kept the file out without the error's own
+// text, which stays beneath for the route that tells a person; a fault is
+// returned as it is. Mutation: return every failure as it is and a deep run's
+// note says only that the file could not be kept; word a fault as a condition
+// and the last row goes red.
+func TestAFileAConditionKeptOutIsToldInAModelsWords(t *testing.T) {
+	t.Parallel()
+	for name, cause := range map[string]error{
+		"a full store": fmt.Errorf("assistantdomain: upload file x: %w", objstore.ErrFull),
+		"a store that did not answer": fmt.Errorf("assistantdomain: upload file x: %w: %w",
+			objstore.ErrUnanswered, errors.New("nats: timeout")),
+		"a refused record": &statelog.Unavailable{Reason: statelog.ReasonLogFull,
+			Detail: "raise stream.assistant_log_max_bytes"},
+	} {
+		said, _ := builtin.Condition(cause)
+		var condition *assistant.Unkept
+		got := unkept(cause)
+		if !errors.As(got, &condition) || condition.Said != said || said == "" ||
+			!errors.Is(got, cause) {
+			t.Errorf("%s reached the orchestrator as %v, want it told as %q with the "+
+				"error beneath", name, got, said)
+			continue
+		}
+		if strings.Contains(condition.Said, "nats") || strings.Contains(condition.Said, "objstore") ||
+			strings.Contains(condition.Said, "assistant_log_max_bytes") {
+			t.Errorf("%s is told in its error's own text: %q", name, condition.Said)
+		}
+	}
+	fault := errors.New("open /var/lib/crewlet/objects: disk I/O error")
+	var condition *assistant.Unkept
+	if got := unkept(fault); errors.As(got, &condition) || !errors.Is(got, fault) {
+		t.Errorf("a fault reached the orchestrator as %v, want it as it is", got)
 	}
 }
 

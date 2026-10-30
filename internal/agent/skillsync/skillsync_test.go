@@ -540,7 +540,7 @@ func TestARefreshWalks(t *testing.T) {
 	serves(t, r, "deploy", "tag the release")
 }
 
-// A REFRESH FROM ANOTHER BACKEND WALKS NOTHING. Doclet's page projection runs
+// A REFRESH FROM ANOTHER BACKEND WALKS NOTHING. Doclet's pages applier runs
 // for the life of the node, so it goes on reporting Doclet skill pages after an
 // apply moved the company's skills to Confluence, and walking the wiki for each
 // of those is a request that can find out nothing.

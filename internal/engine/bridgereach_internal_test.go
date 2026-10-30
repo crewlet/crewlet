@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
 // hostOnlyBridge is the bridge a seats node builds from its own listener
@@ -24,11 +25,14 @@ func hostOnlyBridge(t *testing.T) *mcpbridge.Bridge {
 // and no CREWLET_MCP_BRIDGE_URL, and every turn of it used to be refused for
 // the variable; a box on the host can always dial the host's own socket, so it
 // launches on that. A box in any other cell cannot, so its refusal names the
-// variable and the cell, never api.port, which is set.
+// variable and the cell, never api.port, which is set, and is classed as the
+// configuration it is: the variable is the operator's to set, and no wait sets
+// it.
 //
 // Mutation: open every session off the host and the direct row is refused;
 // open every session on it and the e2b row launches a box that dials a
-// loopback it cannot reach.
+// loopback it cannot reach; drop the cell refusal's class and the e2b row
+// goes red.
 func TestALaunchDialsTheBridgeWhereItsCellReachesIt(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -54,6 +58,9 @@ func TestALaunchDialsTheBridgeWhereItsCellReachesIt(t *testing.T) {
 					!strings.Contains(err.Error(), string(tc.runIn)) ||
 					strings.Contains(err.Error(), "api.port") {
 					t.Errorf("the refusal does not name the variable and the cell: %v", err)
+				}
+				if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+					t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
 				}
 				refusedCleanly(t, e, "t1", jobs)
 				return
@@ -141,7 +148,10 @@ roles:
 
 // A NODE WITH NO BRIDGE AT ALL REFUSES AN EXECUTOR, naming the fleet's
 // address, and opens nothing: a box with none of the seat's tools would burn
-// its run producing prose nothing collects.
+// its run producing prose nothing collects. Classed as configuration, which an
+// operator's setting clears and no wait does.
+//
+// Mutation: drop the class from the refusal and this goes red.
 func TestAnExecutorIsRefusedOnANodeWithNoBridge(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)
@@ -152,6 +162,9 @@ func TestAnExecutorIsRefusedOnANodeWithNoBridge(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), mcpbridge.BaseURLVar) {
 		t.Fatalf("a launch on a node with no bridge = %v, want it refused naming %s",
 			err, mcpbridge.BaseURLVar)
+	}
+	if why, ok := sandbox.WhyOf(err); !ok || why != sandbox.WhyConfiguration {
+		t.Errorf("the refusal is classed %q (%v), want %q", why, ok, sandbox.WhyConfiguration)
 	}
 	refusedCleanly(t, e, "t1", jobs)
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The provisioning commands, and the flags they share.
@@ -347,13 +348,9 @@ type outrankedSinkError struct {
 func (e *outrankedSinkError) Is(target error) bool { return target == errOutrankedSink }
 
 func (e *outrankedSinkError) Error() string {
-	refs := make([]string, len(e.names))
+	refs := make([]words.Said, len(e.names))
 	for i, name := range e.names {
-		refs[i] = "${" + name + "}"
-	}
-	held := refs[0]
-	if n := len(refs); n > 1 {
-		held = strings.Join(refs[:n-1], ", ") + " and " + refs[n-1]
+		refs[i] = words.Said("${" + name + "}")
 	}
 	return fmt.Sprintf("%s: the company's secret store (%s) holds %s, which this run "+
 		"can mint into, and the only place it would record a new value is %s. The "+
@@ -362,7 +359,7 @@ func (e *outrankedSinkError) Error() string {
 		"on with the stored value. Record with -secret-store instead, which reads the "+
 		"stored value back and writes into that store, or remove the value from the "+
 		"store first (crewlet secrets unset NAME). Nothing was sent to %s.",
-		e.command, e.store, held, e.sink, e.vendor, e.vendor)
+		e.command, e.store, words.And(refs), e.sink, e.vendor, e.vendor)
 }
 
 // freshSwitch is a provisioning command's flag for a fresh webhook secret —
@@ -458,12 +455,12 @@ func (s sinkStore) Get(_ context.Context, name string) (string, error) {
 }
 
 func (s sinkStore) Unset(ctx context.Context, name string) (bool, error) {
-	gone, err := s.target.Unset(ctx, name)
+	removed, err := s.target.Unset(ctx, name)
 	if err != nil {
 		return false, err
 	}
 	s.values.forgot(name)
-	return gone, nil
+	return removed.Removed, nil
 }
 
 // seatTokenVars is the variable each planned seat's token is recorded under,
@@ -503,11 +500,11 @@ func unionReads(lists ...[]string) []string {
 // Deliberately NOT through [companyStore.resolver], which every company value
 // goes through. This is the operator's credential rather than the company's, and
 // the difference is not bookkeeping: a GitLab admin PAT carries `api` scope
-// over the whole group, and the secret store is replicated to every node
-// that holds the keyring. Crewlet never persists one, and reading one back
-// from the store would imply it may be kept there — which is how the most
-// powerful credential in the deployment ends up in the shared table beside
-// the seat tokens it exists to mint.
+// over the whole group, and the secret store is held on the coordination KV,
+// which every node reads and every node's keyring opens. Crewlet never
+// persists one, and reading one back from the store would imply it may be
+// kept there — which is how the most powerful credential in the deployment
+// ends up in the shared store beside the seat tokens it exists to mint.
 //
 // THE INVOCATION'S, NOT THE PROCESS'S, as the node credential is: a case that
 // reads the process's runs on whatever the machine running the suite exports,
@@ -596,7 +593,7 @@ func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer)
 	// working out which seats landed.
 	if modeGiven && !gitlab.Mode(*mode).Valid() {
 		return fmt.Errorf("-mode %q is not one of %s",
-			*mode, strings.Join(gitlab.Modes(), ", "))
+			*mode, words.Or(gitlab.Modes()))
 	}
 
 	company, err := config.LoadCompanyToRun(companyPath, nil)
@@ -815,7 +812,7 @@ func printKept(w io.Writer, kept []string, fresh string) {
 	if len(kept) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "Left %d seat(s) alone — their credential still works, "+
+	fmt.Fprintf(w, "Left %d seat(s) alone: their credential still works, "+
 		"and rotating it would revoke what the running engine is using: %s\n"+
 		"  (pass %s to mint fresh ones; that run's Next: line says what the "+
 		"engine then needs)\n",
@@ -1216,7 +1213,7 @@ func printDoctor(w io.Writer, report *mattermost.Report) {
 		// SAID OUT LOUD: one failing line with nothing after it reads
 		// as "one thing is wrong", when what it means is "nothing else
 		// was even asked".
-		fmt.Fprintln(w, "\nThe checks stopped here — everything below this "+
+		fmt.Fprintln(w, "\nThe checks stopped here: everything below this "+
 			"would have reported a consequence rather than a cause. Fix it "+
 			"and run again.")
 	case report.Healthy():

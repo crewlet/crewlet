@@ -1,8 +1,9 @@
 package notify
 
 import (
-	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // ChatPrompt is the prompt every chat backend shares.
@@ -34,14 +35,11 @@ type ChatPrompt struct {
 	// Label is the backend's name as it appears in prose.
 	Label string
 
-	// DirectKinds are the channel_type values meaning a direct
-	// conversation.
-	DirectKinds []string
-
-	// DMPrefix marks a direct message unambiguously by channel id, or is
-	// empty where a backend's ids are opaque. See [Addressed] for why it
-	// must stay empty in that case.
-	DMPrefix string
+	// Address is how this backend decides a message was addressed to the
+	// seat — the SAME value its transport hands the working indicator,
+	// because the prompt telling an agent it was asked and the indicator
+	// telling a person it is working must not be two opinions.
+	Address AddressRule
 
 	// Collectives is this backend's everyone-in-the-room addresses, as
 	// rendered prose: "`@channel` / `@here`".
@@ -60,6 +58,20 @@ type ChatPrompt struct {
 
 	// IdentityNote optionally names the agent's own id here.
 	IdentityNote func(metadata map[string]string) string
+
+	// Author is who wrote the message, as its fence names them. Nil resolves
+	// the sender's id on this backend through the party registry, which is a
+	// vendor's whole answer: an id no seat holds is an outside party. A
+	// backend whose record states the author's kind (the engine's own chat)
+	// answers from it for a sender the registry no longer names.
+	Author func(metadata map[string]string, parties Parties) provenance.Author
+
+	// Hosted says this backend is one the engine hosts itself, where every
+	// message's sender authenticated as a company principal: a message whose
+	// sender nobody can name reads as a colleague's
+	// ([provenance.TrustForHosted]). A vendor's backend leaves it false, and
+	// there such a message is an outside party's.
+	Hosted bool
 }
 
 // Source implements [Prompt].
@@ -71,7 +83,7 @@ func (p ChatPrompt) Source() string { return p.Backend }
 // suppresses that at the door. Nothing a chat backend emits is an OUTCOME of
 // the actor's own action that the actor does not already know — which is the
 // only thing the exception is for.
-func (ChatPrompt) WakesActor(string) bool { return false }
+func (ChatPrompt) WakesActor(Inbound) bool { return false }
 
 // DigestBody implements [Prompt]: every constituent is kept.
 //
@@ -105,7 +117,18 @@ func (ChatPrompt) DigestBody(_, body string) string { return body }
 // where the dashboard reads it to say "gated" rather than "broken". Changing
 // what it means for chat would silently rewrite what every past turn in the
 // store claims about itself.
-func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata["thread_ts"] != "" }
+//
+// CHATLET IS THE ONE SOURCE THAT ANSWERS FALSE with a thread, and it
+// overrides this rather than weakening it: its trigger is never a pointer at a
+// message somewhere else. The record carries the message itself — what was
+// said, who said it, in which room and why it reached this seat, copied at
+// write time — so there is nothing to reconcile before the seat can reason,
+// and the prefetches this gates have a real query. The THREAD around it is not
+// on the record: it reaches the seat the way a vendor thread does, through the
+// prefetch's thread block over Chatlet's own thread reader, so one
+// mechanism serves every chat surface and a thread is never in the prompt
+// twice. See internal/chatlet's prompt.
+func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata[ThreadField] != "" }
 
 // SubjectIsLabel implements [Prompt]: always. A chat message has no subject
 // of its own — the parser names the surface ("Slack message", "Mattermost
@@ -114,22 +137,10 @@ func (ChatPrompt) RequiresRecon(n Inbound) bool { return n.Metadata["thread_ts"]
 func (ChatPrompt) SubjectIsLabel(Inbound) bool { return true }
 
 // Addressed implements [Prompt] through the same rule the working-status
-// indicator uses.
-//
-// ONE IMPLEMENTATION, deliberately: the indicator says "this agent is working
-// on your message" and the delivery check says "this agent owes your message
-// an answer", and the two disagreeing would raise a spinner on a turn allowed
-// to end in silence, or end one in silence after raising a spinner. [Build]
+// indicator uses — the backend's own [AddressRule], read here rather than
+// re-derived, so the two cannot disagree by construction. [Build]
 // reads the same rule, through [addressOf], to tell the seat which it is.
-func (p ChatPrompt) Addressed(n Inbound) bool { return Addressed(n.Metadata, p.DMPrefix) }
-
-// IsDirect reports whether an event happened in a direct conversation.
-func (p ChatPrompt) IsDirect(metadata map[string]string) bool {
-	if slices.Contains(p.DirectKinds, metadata["channel_type"]) {
-		return true
-	}
-	return p.DMPrefix != "" && strings.HasPrefix(metadata["channel"], p.DMPrefix)
-}
+func (p ChatPrompt) Addressed(n Inbound) bool { return p.Address.Addressed(n.Metadata) }
 
 // PartitionKey implements [Prompt].
 //
@@ -147,20 +158,16 @@ func (p ChatPrompt) IsDirect(metadata map[string]string) bool {
 // top-level message keys on its OWN id so its later replies land in the same
 // partition.
 func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
-	channel := metadata["channel"]
+	channel := metadata[ChannelField]
 	if channel == "" {
 		// No channel, no conversation identity — and a key that was
 		// just the thread would collide across channels.
 		return ""
 	}
-	thread := metadata["thread_ts"]
-	if thread == "" && p.IsDirect(metadata) {
+	if metadata[ThreadField] == "" && p.Address.IsDirect(metadata) {
 		return channel
 	}
-	anchor := thread
-	if anchor == "" {
-		anchor = metadata["ts"]
-	}
+	anchor := Anchor(metadata)
 	if anchor == "" {
 		return ""
 	}
@@ -210,11 +217,16 @@ func (p ChatPrompt) PartitionKey(metadata map[string]string, _ string) string {
 // would file the seat's own history under a thread its next turn never looks
 // up — which is the failure this branch exists to remove.
 func (p ChatPrompt) ConversationIdentity(metadata map[string]string, subject string) string {
-	channel := metadata["channel"]
+	channel := metadata[ChannelField]
 	if channel == "" {
 		return ""
 	}
-	if p.IsDirect(metadata) {
+	// THROUGH THE BACKEND'S OWN RULE, not a predicate of this prompt's:
+	// what counts as direct is a fact about the surface the message came
+	// from, and [AddressRule] is the one value that states it. A second
+	// answer here is how the delivery obligation and the partition key
+	// came to disagree about the same message.
+	if p.Address.IsDirect(metadata) {
 		return channel
 	}
 	return p.PartitionKey(metadata, subject)
@@ -229,7 +241,7 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	// ****" and render a blank From line.
 	who := n.Sender
 	if who == "" {
-		who = meta["user"]
+		who = meta[UserField]
 	}
 	if who == "" {
 		who = "unknown"
@@ -239,14 +251,21 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	// time and cannot be reached by an agent-to-agent ask — rather than as
 	// an opaque platform id.
 	if parties != nil {
-		if party, ok := parties.ByExternalID(p.Backend, meta["user"]); ok {
+		if party, ok := parties.ByExternalID(p.Backend, meta[UserField]); ok {
 			if label := party.Label(); label != "" {
-				who = label + " — `" + meta["user"] + "`"
+				who = label
+				// THE ID BESIDE THE NAME, which is what this surface's
+				// chat tools take to mention them — unless the id is the
+				// handle, as it is on the engine's own chat, which the
+				// label already carries.
+				if id := meta[UserField]; id != party.Handle {
+					who = label + " — `" + id + "`"
+				}
 			}
 		}
 	}
 
-	handle := meta["recipient_handle"]
+	handle := meta[RecipientField]
 	if handle == "" {
 		handle = "your handle"
 	}
@@ -275,13 +294,15 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 	// and asking it anyway told a seat it might stay silent on exactly the
 	// messages it may not. The triage is for what is left: a message in an
 	// open channel, which the seat may rightly leave alone.
-	switch addressOf(meta, p.DMPrefix) {
+	switch addressOf(meta, p.Address) {
 	case addressDirect:
 		b.WriteString("\n**Addressed to you:** this is a direct message.")
 	case addressMention:
 		b.WriteString("\n**Addressed to you:** the message names you.")
 	case addressThread:
 		b.WriteString("\n**Addressed to you:** you follow this thread.")
+	case addressRouted:
+		b.WriteString("\n**Addressed to you:** the message was routed to you to answer.")
 	default:
 		marker := "`" + handle + "`"
 		if self != "" {
@@ -290,30 +311,53 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 		b.WriteString(p.triage(marker))
 	}
 
-	thread := meta["thread_ts"]
+	thread := meta[ThreadField]
 	if thread != "" {
 		b.WriteString(threadBlock(self))
 	}
 
-	body := n.Body
-	if body == "" {
-		body = "(empty)"
+	if n.Body == "" {
+		b.WriteString("\n\n**Message:** (empty)")
+	} else {
+		// ALREADY FENCED as what somebody said ([Render]), under this
+		// prompt's own [ChatPrompt.Provenance].
+		b.WriteString("\n\n**Message:**\n" + n.Body)
 	}
-	b.WriteString("\n\n**Message:** " + body)
 	b.WriteString("\n**From:** " + who)
-	if channel := meta["channel"]; channel != "" {
+	if channel := meta[ChannelField]; channel != "" {
+		// The NAME beside the id where the backend supplies one: "eng"
+		// is what a person would say and what the agent has to
+		// recognise in the conversation, and the id is what its chat
+		// tools take. Rendering only the id makes the trigger name a
+		// room nobody can place.
+		if name := meta[ChannelNameField]; name != "" {
+			channel = name + " (`" + channel + "`)"
+		}
 		b.WriteString("\n**Channel:** " + channel)
 	}
-	switch {
+	// Through [Anchor], which is the same value the working indicator
+	// raises on: the reply and the spinner must land in one place.
+	switch anchor := Anchor(meta); {
+	case anchor == "":
 	case thread != "":
-		b.WriteString("\n**Thread:** " + thread + " (existing thread)")
-	case meta["ts"] != "":
-		b.WriteString("\n**Thread:** " + meta["ts"] +
+		b.WriteString("\n**Thread:** " + anchor + " (existing thread)")
+	default:
+		b.WriteString("\n**Thread:** " + anchor +
 			" (top-level message — reply as a thread)")
 	}
-	if ts := meta["ts"]; ts != "" {
+	if ts := meta[MessageIDField]; ts != "" {
 		b.WriteString("\n**Message id:** " + ts + " — for acting on this" +
 			" message itself (reacting to it) rather than replying.")
+	}
+	if meta[ReplayedField] != "" {
+		// A message re-read over the backend's API across a reconnect
+		// gap. How stale the conversation is changes what the seat
+		// should do about it — somebody may have answered already —
+		// and the parser stamping the fact is worth nothing if the
+		// trigger never says it.
+		b.WriteString("\n**Note:** this message was re-read after a connection" +
+			" gap rather than delivered live, so the conversation may have" +
+			" moved on since. Check the thread before replying.")
 	}
 	if p.MentionHint != nil {
 		if hint := p.MentionHint(meta); hint != "" {
@@ -321,6 +365,30 @@ func (p ChatPrompt) Build(n Inbound, parties Parties) string {
 		}
 	}
 	return b.String()
+}
+
+// Provenance implements [Prompt]: a message in a room or a thread, written by
+// its sender — every chat event IS a message, and its author is who sent it —
+// on a surface the engine hosts or a vendor's ([ChatPrompt.Hosted]).
+func (p ChatPrompt) Provenance(n Inbound, parties Parties) Provenance {
+	return Provenance{
+		Source:  provenance.SourceChatThread,
+		Authors: []provenance.Author{p.author(n.Metadata, parties)},
+		Hosted:  p.Hosted,
+	}
+}
+
+// author is [ChatPrompt.Author], or the registry's reading of the sender's id.
+func (p ChatPrompt) author(meta map[string]string, parties Parties) provenance.Author {
+	if p.Author != nil {
+		return p.Author(meta, parties)
+	}
+	if parties != nil {
+		if party, ok := parties.ByExternalID(p.Backend, meta[UserField]); ok {
+			return PartyAuthor(party)
+		}
+	}
+	return provenance.Author{}
 }
 
 // triage is the addressee guidance, identical on every backend, for a message

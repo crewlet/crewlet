@@ -120,6 +120,14 @@ func person(login string, grants ...iam.Grant) iam.Principal {
 		Stage: iam.StageActive, Grants: grants})
 }
 
+// machine is a credential acting as itself — a pipeline's service account the
+// identity directory binds to no seat — with these grants. Fresh by
+// construction, as every credential with nobody at a keyboard is.
+func machine(login string, grants ...iam.Grant) iam.Principal {
+	return proved(iam.Principal{ID: uuid.New(), Login: login, Kind: iam.KindMachine,
+		Stage: iam.StageActive, Grants: grants})
+}
+
 // seat is an agent principal acting as a seat.
 // personLeading is a HUMAN the chart knows by a seat handle, which is what
 // somebody signed in and bound to a seat is: [authz.actorOf] asks the chart by
@@ -142,7 +150,8 @@ func seat(handle string, grants ...iam.Grant) iam.Principal {
 // and spot the row whose answer is wrong for its neighbours.
 func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 	t.Parallel()
-	worklet, doclet, admin := iam.GrantWorklet, iam.GrantDoclet, iam.GrantAdmin
+	worklet, doclet, chat, admin := iam.GrantWorklet, iam.GrantDoclet,
+		iam.GrantChatlet, iam.GrantAdmin
 	for _, c := range []struct {
 		name    string
 		p       iam.Principal
@@ -217,9 +226,63 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		{"somebody using neither has nothing to search", personLeading("sam"),
 			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
 			false, authz.ReasonNoGrant},
+		// AND CHAT IS NOT ONE OF THE APPS IT DRAWS ON: the answer searches
+		// the pages and the board, never a room, so a person using chat alone
+		// has nothing to search either.
+		{"a person using chat alone has nothing to search", personLeading("sam", chat),
+			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
+			false, authz.ReasonNoGrant},
 		{"a seat never does — it has a search and a model of its own",
 			seat("sre", iam.Apps...), authz.ActionKnowledgeAnswer,
 			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonSeatRefused},
+		// AND NEITHER DOES A CREDENTIAL ACTING AS ITSELF, whatever it holds:
+		// the answer runs on the model of the seat its asker acts as, and it
+		// acts as none.
+		{"a credential bound to no seat has no model to answer on",
+			machine("ci:release", admin), authz.ActionKnowledgeAnswer,
+			authz.Object{Kind: authz.KindCompany}, false, authz.ReasonUnseated},
+		{"nor does a person the directory binds to none", person("jane.doe", admin),
+			authz.ActionKnowledgeAnswer, authz.Object{Kind: authz.KindCompany},
+			false, authz.ReasonUnseated},
+
+		// --- the chat -------------------------------------------------- //
+		{"chat posts in a room", personLeading("sam", chat), authz.ActionChatPost,
+			authz.Object{Kind: authz.KindChannel}, true, authz.ReasonGrant},
+		{"a seat holding the apps posts too", seat("sre", iam.Apps...),
+			authz.ActionChatPost, authz.Object{Kind: authz.KindChannel},
+			true, authz.ReasonGrant},
+		{"Worklet alone reads no room", personLeading("sam", worklet),
+			authz.ActionChatRead, authz.Object{Kind: authz.KindChannel},
+			false, authz.ReasonNoGrant},
+		{"a credential acting as itself says nothing, whatever it holds",
+			machine("ci:release", admin), authz.ActionChatPost,
+			authz.Object{Kind: authz.KindChannel}, false, authz.ReasonUnseated},
+		{"a room is a person's to make", personLeading("sam", chat),
+			authz.ActionChatCreate, authz.Object{Kind: authz.KindChannel},
+			true, authz.ReasonGrant},
+		{"and never a seat's", seat("sre", iam.Apps...), authz.ActionChatCreate,
+			authz.Object{Kind: authz.KindChannel}, false, authz.ReasonSeatRefused},
+		{"a message's author edits it", personLeading("sam", chat), authz.ActionChatEdit,
+			authz.Object{Kind: authz.KindMessage, Author: "sam"}, true, authz.ReasonAuthor},
+		{"a colleague does not", personLeading("ana", chat), authz.ActionChatEdit,
+			authz.Object{Kind: authz.KindMessage, Author: "sam"}, false, authz.ReasonNotAuthor},
+		{"admin takes a message down unread", personLeading("ops", admin),
+			authz.ActionChatDelete, authz.Object{Kind: authz.KindMessage, Unresolved: true},
+			true, authz.ReasonGrant},
+		{"a unit room's lead archives it", personLeading("cto", chat),
+			authz.ActionChatArchive, authz.Object{Kind: authz.KindChannel,
+				Container: "sre", Author: "sam"}, true, authz.ReasonLead},
+		{"its creator does", personLeading("sam", chat), authz.ActionChatArchive,
+			authz.Object{Kind: authz.KindChannel, Author: "sam"}, true, authz.ReasonAuthor},
+		{"a colleague does not archive a named room", personLeading("ana", chat),
+			authz.ActionChatArchive, authz.Object{Kind: authz.KindChannel, Author: "sam"},
+			false, authz.ReasonNotAuthor},
+		{"nor the lead of a unit it is not", personLeading("cto", chat),
+			authz.ActionChatArchive, authz.Object{Kind: authz.KindChannel,
+				Container: "web", Author: "sam"}, false, authz.ReasonNotLead},
+		{"a person marks their own read state", personLeading("sam", chat),
+			authz.ActionChatMark, authz.Object{Kind: authz.KindPerson, Owner: "sam"},
+			true, authz.ReasonSelf},
 
 		// --- the person asked ------------------------------------------- //
 		{"the person an open ask names reads the item", personLeading("sre"),
@@ -555,7 +618,7 @@ func TestTheAuthorityTableDecidesEveryClass(t *testing.T) {
 		// --- whether a seat works ---------------------------------------- //
 		// ITS LEAD PAUSES IT, and nobody who merely uses the company's
 		// apps: a rule that asked for one would let any colleague stop any
-		// seat. No app: a lead who uses neither still runs their team.
+		// seat. No app: a lead who uses none still runs their team.
 		{"a lead pauses their report", personLeading("cto"),
 			authz.ActionSeatPause, authz.Object{Kind: authz.KindPerson, Owner: "sre"},
 			true, authz.ReasonLead},
@@ -719,11 +782,15 @@ func TestAChartReadErrorIsUnknownNotARefusal(t *testing.T) {
 			authz.Object{Kind: authz.KindProject, Container: "PLATFORM"}},
 		{"a tidy", authz.ActionPageTrash,
 			authz.Object{Kind: authz.KindPage, Container: "RUNBOOKS"}},
+		{"a unit room's archive", authz.ActionChatArchive,
+			authz.Object{Kind: authz.KindChannel, Container: "sre", Author: "sam"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			d := authz.Decide(t.Context(), seat("cto", iam.Apps...), c.action, c.object,
-				chart{err: behind}, decidedAt)
+			// A PERSON BOUND TO THEIR SEAT, holding every app: a seat would
+			// be refused the human-only rows before any chart is read.
+			d := authz.Decide(t.Context(), personLeading("cto", iam.Apps...), c.action,
+				c.object, chart{err: behind}, decidedAt)
 			if !d.Unknown() {
 				t.Fatalf("a chart that could not answer decided %v (%q), which "+
 					"a surface renders as a refusal", d.Allowed, d.Reason)
@@ -864,41 +931,59 @@ func TestAVerbWithNoRuleIsRefused(t *testing.T) {
 // never hides a permission.
 func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 	t.Parallel()
-	nobody := func() iam.Principal { return person("jane.doe") }
-	for _, a := range authz.Actions() {
-		for _, kind := range authz.ObjectKinds {
-			for _, object := range []authz.Object{
-				{Kind: kind},
-				{Kind: kind, ID: "x", Owner: "somebody.else", Author: "somebody.else",
-					Container: "ELSEWHERE", ContainerKind: authz.KindProject},
-			} {
-				d := authz.Decide(t.Context(), nobody(), a, object, chart{}, decidedAt)
-				if d.Unknown() {
-					t.Fatalf("%s on %+v was undecidable against a chart that "+
-						"answers: %v", a, object, d.Err)
-				}
-				if d.Allowed {
-					continue
-				}
-				var admits []iam.Grant
-				for _, g := range iam.AllGrants {
-					alone := person("jane.doe", g)
-					got := authz.Decide(t.Context(), alone, a, object, chart{}, decidedAt)
-					if got.Allowed && got.Reason == authz.ReasonGrant {
-						admits = append(admits, g)
-					}
-				}
-				named := slices.Clone(d.Grants)
-				minimal := minimalCover(admits)
-				slices.Sort(named)
-				slices.Sort(minimal)
-				if !slices.Equal(named, minimal) {
-					t.Errorf("%s on %+v refused (%s) naming %v; the smallest "+
-						"permissions that would have admitted it alone are %v",
-						a, object, d.Reason, named, minimal)
+	// BOUND AND UNBOUND, because a verb made as a seat refuses the second
+	// before any permission is weighed — naming none, which this holds too —
+	// and decided only unbound, every such row's own grants would go
+	// unchecked.
+	for _, holder := range []func(...iam.Grant) iam.Principal{
+		func(g ...iam.Grant) iam.Principal { return person("jane.doe", g...) },
+		func(g ...iam.Grant) iam.Principal { return personLeading("jane", g...) },
+	} {
+		for _, a := range authz.Actions() {
+			for _, kind := range authz.ObjectKinds {
+				for _, object := range []authz.Object{
+					{Kind: kind},
+					{Kind: kind, ID: "x", Owner: "somebody.else", Author: "somebody.else",
+						Container: "ELSEWHERE", ContainerKind: authz.KindProject},
+				} {
+					refusalNamesItsCover(t, holder, a, object)
 				}
 			}
 		}
+	}
+}
+
+// refusalNamesItsCover is one case of the walk above: holder with nothing is
+// decided, and a refusal must name exactly the minimal cover of the grants
+// that, held alone, admit.
+func refusalNamesItsCover(t *testing.T, holder func(...iam.Grant) iam.Principal,
+	a authz.Action, object authz.Object) {
+
+	t.Helper()
+	nobody := holder()
+	d := authz.Decide(t.Context(), nobody, a, object, chart{}, decidedAt)
+	if d.Unknown() {
+		t.Fatalf("%s on %+v was undecidable against a chart that answers: %v",
+			a, object, d.Err)
+	}
+	if d.Allowed {
+		return
+	}
+	var admits []iam.Grant
+	for _, g := range iam.AllGrants {
+		got := authz.Decide(t.Context(), holder(g), a, object, chart{}, decidedAt)
+		if got.Allowed && got.Reason == authz.ReasonGrant {
+			admits = append(admits, g)
+		}
+	}
+	named := slices.Clone(d.Grants)
+	minimal := minimalCover(admits)
+	slices.Sort(named)
+	slices.Sort(minimal)
+	if !slices.Equal(named, minimal) {
+		t.Errorf("%s (seat %q) on %+v refused (%s) naming %v; the smallest "+
+			"permissions that would have admitted it alone are %v",
+			a, nobody.Seat, object, d.Reason, named, minimal)
 	}
 }
 

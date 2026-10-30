@@ -62,6 +62,10 @@ type Registry struct {
 	byID     map[uuid.UUID]string // derived id -> handle
 	byEmail  map[string]string    // matched form (iam.NormalizeEmail) -> handle
 	parties  []Party              // org order, stable
+	// handles is every namespace whose ids ARE seat handles — see
+	// [NewRegistry]. A fact about the engine rather than the org, and
+	// fixed for the registry's life like the rest of this half.
+	handles map[string]bool
 
 	// external and reverse are exact INVERSES of each other within each
 	// namespace — a bijection between the ids a namespace knows and the
@@ -107,15 +111,39 @@ type identityKey struct{ namespace, externalID string }
 // in practice: a company document may declare a seat's address as a `${VAR}`
 // reference, and an index built from those as written matched no payload at
 // all.
-func NewRegistry(o *org.Organization, lookup org.EnvLookup) *Registry {
+//
+// # handleNamespaces are the sources whose ids ARE seat handles
+//
+// The engine's own surfaces — its tracker, its knowledge base, its chat —
+// authenticate nobody as an account anywhere else: the actor a record names
+// is the seat's handle, so the id an event names its sender by IS that
+// handle. [Registry.ByExternalID] on one of these namespaces answers
+// [Registry.ByHandle], and every reader that asks a source who spoke — a
+// learning profile's subject, the requester an artifact tool's ceiling
+// bounds a turn by, the thread block's attribution — gets the colleague
+// rather than an outside party, without knowing which sources are the
+// engine's.
+//
+// DECLARED, never registered per seat: registering every handle as its own
+// external id would be a second copy of the seat index, rebuilt on every
+// apply and free to disagree with the first. And declared by the caller, the
+// engine, because which surfaces it hosts is a fact about the build — this
+// package cannot import the domains that name them.
+func NewRegistry(o *org.Organization, lookup org.EnvLookup, handleNamespaces ...string) *Registry {
 	r := &Registry{
 		byHandle: make(map[string]Party),
 		byRole:   make(map[string]string),
 		byID:     make(map[uuid.UUID]string),
 		byEmail:  make(map[string]string),
+		handles:  make(map[string]bool, len(handleNamespaces)),
 		external: make(map[string]map[string]string),
 		reverse:  make(map[string]map[string]string),
 		owned:    make(map[identityKey]string),
+	}
+	for _, ns := range handleNamespaces {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			r.handles[ns] = true
+		}
 	}
 	if o == nil {
 		return r

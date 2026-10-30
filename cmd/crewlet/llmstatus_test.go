@@ -56,7 +56,7 @@ func TestLLMStatusLeadsWithTheEnginesReading(t *testing.T) {
 		flags := statusEntry(t, `{"loggedIn": true, "authMethod": "claude.ai", "email": "ops@example.com"}`, 0,
 			"Login method: Claude Max account")
 		var out, errOut bytes.Buffer
-		if err := runLLM(noEnviron, append([]string{"status", "sub"}, flags...), &out, &errOut); err != nil {
+		if err := runLLM(noEnviron, append([]string{"status", "sub"}, flags...), strings.NewReader(""), &out, &errOut); err != nil {
 			t.Fatalf("status: %v (%s)", err, errOut.String())
 		}
 		want := "sub: signed in (claude.ai) as ops@example.com\nLogin method: Claude Max account\n"
@@ -68,7 +68,7 @@ func TestLLMStatusLeadsWithTheEnginesReading(t *testing.T) {
 		t.Parallel()
 		flags := statusEntry(t, `{"loggedIn": false, "authMethod": "none"}`, 1, "Not logged in")
 		var out, errOut bytes.Buffer
-		err := runLLM(noEnviron, append([]string{"status", "sub"}, flags...), &out, &errOut)
+		err := runLLM(noEnviron, append([]string{"status", "sub"}, flags...), strings.NewReader(""), &out, &errOut)
 		if err == nil || !strings.Contains(err.Error(), "crewlet llm login sub") {
 			t.Errorf("status of a signed-out entry = %v, want a failure naming the login", err)
 		}

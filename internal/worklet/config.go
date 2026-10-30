@@ -3,6 +3,8 @@ package worklet
 import (
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // What a DECLARATION may say, and why a name is checked as carefully as a slug.
@@ -235,9 +237,8 @@ func checkRollup(f *FieldDef) error {
 			"gather — the built-in ones are %s, or a field's id",
 			f.Slug, strings.Join(RollupFields, ", "))
 	case !slices.Contains(RollupOps, r.Op):
-		return invalid("field %s rolls up with %q and the "+
-			"aggregations are: %s", f.Slug, clip(r.Op),
-			strings.Join(RollupOps, ", "))
+		return invalid("field %s rolls up with %q, which isn't an "+
+			"aggregation. Use %s", f.Slug, clip(r.Op), words.Or(RollupOps))
 	}
 	// A DATE AGGREGATION ON A NUMBER is the earliest of a set of numbers
 	// under a word that means something else — and the reverse, a sum of
@@ -251,8 +252,8 @@ func checkRollup(f *FieldDef) error {
 	if dateField && !slices.Contains(DateRollupOps, r.Op) && r.Op != "count" {
 		return invalid("field %s takes the %s of %q, which is a "+
 			"date — a sum or an average of dates is a number of microseconds "+
-			"nobody meant. Use %s, or `count`",
-			f.Slug, r.Op, r.Field, strings.Join(DateRollupOps, " or "))
+			"nobody meant. Use %s",
+			f.Slug, r.Op, r.Field, words.Or(append(slices.Clone(DateRollupOps), "count")))
 	}
 	// A STATUS GROUP IS A WORD, so the only thing to do with a set of them
 	// is count them.

@@ -197,6 +197,7 @@ test("a session holding no app is dialled, and its sidebar locks the apps by nam
   );
   expect(row(/^Worklet/).querySelector("[title='Needs Worklet access']")).not.toBeNull();
   expect(row(/^Doclet/).querySelector("[title='Needs Doclet access']")).not.toBeNull();
+  expect(row(/^Chatlet/).querySelector("[title='Needs Chatlet access']")).not.toBeNull();
   expect(row(/^Home/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Principles/).querySelector(".crewlet-locked-label")).toBeNull();
   expect(row(/^Org chart/).querySelector(".crewlet-locked-label")).toBeNull();
@@ -249,14 +250,18 @@ test("Settings' column is locked where a grant is, and nowhere else", async () =
   const rows = within(column).getAllByRole("link");
   const locked = rows.filter((a) => (sections.get(a.getAttribute("href") ?? "") ?? []).length > 0);
   expect(locked.length).toBeGreaterThan(5);
-  for (const a of rows) {
-    const at = a.getAttribute("href") ?? "";
-    if (locked.includes(a)) {
-      expect(a.textContent, at).toMatch(/, Needs (Admin|Worklet) access/);
-    } else {
-      expect(a.textContent, at).not.toMatch(/needs/);
+  // THE LOCKS ARE DRAWN ONCE THE SESSION HAS ANSWERED, a commit after the
+  // column itself, so they are waited for rather than read at once.
+  await waitFor(() => {
+    for (const a of rows) {
+      const at = a.getAttribute("href") ?? "";
+      if (locked.includes(a)) {
+        expect(a.textContent, at).toMatch(/, Needs (Admin|Worklet) access/);
+      } else {
+        expect(a.textContent, at).not.toMatch(/needs/);
+      }
     }
-  }
+  });
 });
 
 // A ROUTE'S OWN LOCK READS THE SESSION TOO: a session whose socket never

@@ -187,14 +187,15 @@ A few things worth knowing when deploying Crewlet:
 - **Carrying a credential is not the same as being allowed to use it.** Every
   route and every socket question declares who may ask it (everybody, one of
   the [permissions](docs/concepts/identity-and-access.md#access-admin-and-one-permission-per-app),
-  `admin`, `worklet`, `doclet` or `artifacts`, or a verb the answer decides
-  record by record), and both transports are decided by the same registry, so
-  a question cannot be reached by choosing a channel. A route registered without saying
-  so is a build failure rather than a route that answers to anyone.
+  `admin`, `worklet`, `doclet`, `artifacts` or `chatlet`, or a verb the answer
+  decides record by record), and both transports are decided by the same
+  registry, so a question cannot be reached by choosing a channel. A route
+  registered without saying so is a build failure rather than a route that
+  answers to anyone.
 - **`admin` is host access: it runs code on every engine host.** It is
   deliberately one permission over the whole company — its configuration, its
-  credentials, its people and its deployment — and the configuration
-  configuration runs code: a stdio `mcp_servers` entry is a `command` the
+  credentials, its people and its deployment — and the configuration it
+  writes runs code: a stdio `mcp_servers` entry is a `command` the
   engine starts as its own user on every node that runs seats; a
   `providers.llm` entry names a coding CLI it runs, and every agent seat's
   executor is that CLI's own fully permissioned run, which a `run_in: direct`
@@ -283,7 +284,7 @@ A few things worth knowing when deploying Crewlet:
   than silent.
 - **A Tier A token is a real credential and is checked as one.** Each entry
   states its own `grants` (required and non-empty, naming only `admin`,
-  `worklet`, `doclet` and `artifacts`, and refused for `admin` on a node that refuses it),
+  `worklet`, `doclet`, `artifacts` and `chatlet`, and refused for `admin` on a node that refuses it),
   and its value must clear
   a 26-character floor on what the `${VAR}` *resolves to*, so a reference
   cannot be the way around the rule. At least one is required on every node
@@ -302,16 +303,31 @@ A few things worth knowing when deploying Crewlet:
   `stream.cluster.port`, and a node without `data` reaches them on
   `stream.leaf.port`. Every state-log record is signed under the Tier A keyring
   and verified before any node applies it, and so is every request one node
-  asks another to CARRY OUT, and every reply, on each of the three channels
-  that carry one: a node without `data` asking a data node's estate service to
-  write (the data node writes as the actor the request names), any node asking
-  a broker member to remove a voter from the metadata group (the member does it
-  through its own system account, changing the quorum every election runs on),
-  and a person's note to a running turn (the running node offers it as the
-  person it names). Unsigned, each would let anybody who reaches either port
-  write as anybody, change the broker's quorum past every check the operator's
-  route makes, or put words in front of a running agent under anybody's name.
-  Each request is bound to an id and a deadline inside its signature, so one
+  asks another to CARRY OUT, and every reply, on every channel that carries
+  one: a node without `data` asking a data node's estate service to write (the
+  data node writes as the actor the request names), any node asking a broker
+  member to remove a voter from the metadata group (the member does it through
+  its own system account, changing the quorum every election runs on), a
+  person's note to a running turn (the running node offers it as the person it
+  names), a seat's holder asking the node a `direct` or `container` box is on
+  to read it back (that host reads the box and pauses it, as the collection it
+  is part of does), a box's tool call relayed to the node holding its session
+  (that node runs it as whoever the call's token names, and its answer goes
+  back to the box as that node's), and a request about a person's Dashboard
+  Assistant turn running on another node (the running node hands the turn
+  over, or stops it, for the person the request names). Unsigned, each would
+  let anybody who reaches either port write as anybody, change the broker's
+  quorum past every check the operator's route makes, put words in front of a
+  running agent under anybody's name, have a run's box read back and paused,
+  call a running seat's tools as that seat, or stop anybody's assistant turn. So is the live relay, which only reads but whose
+  answers a data node whose own copy is out of service pushes to its
+  dashboards as a sound peer's committed chat messages and datastore
+  documents: unsigned, anybody on either port could show words in a room, or
+  values in a shared table, under anybody's name. So are the frames a node
+  broadcasts for its peers to show: who is in a room, and a Dashboard
+  Assistant turn as it streams, which is also encrypted under the keyring
+  because it carries the person's conversation. Each request is bound to an id
+  and a deadline inside its signature, so one
   captured off the wire is not carried out twice. A frame under a key the
   receiver does not hold is not applied, or not run; one that fails under a key
   it holds is refused and logged. Signing authenticates and does not encrypt:
@@ -321,11 +337,11 @@ A few things worth knowing when deploying Crewlet:
   answer to a parked coding run and a person's note to a running one, which
   the run's record carries sealed under the keyring and which nothing hands to
   a model until it opens — and the scatters that
-  only READ — history, search, a seat's memory, a sandbox's tail — are not
-  signed. Keep both ports on a private network. The decision is
+  only answer the question their asker put — history, search, a seat's
+  memory, a sandbox's tail — are not signed. Keep both ports on a private network. The decision is
   [ADR-0031](adr/0031-every-state-log-record-is-signed.md), and the note's
   [ADR-0067](adr/0067-a-note-to-a-coding-run-waits-sealed-on-its-record.md).
-- **Removing a person erases their values from every node's rows — and not
+- **Removing a person erases their values from every data node's rows — and not
   from the identity log or a backup until those let go of them.** A person's
   name, address and second-factor seed are sealed under the fleet keyring,
   bound to them, before any record carrying them is published. Removing them
@@ -360,7 +376,7 @@ A few things worth knowing when deploying Crewlet:
   `jane.doe`), so after a removal the address's local part is usually still
   readable. If a person's login has to be erasable, do not derive it from a
   personal address: give them one that names nothing about them. See
-  [Removing somebody erases what is theirs from every node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
+  [Removing somebody erases what is theirs from every data node's rows](docs/concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows).
 - **Personal data in configuration revisions.** Every node keeps its own copy
   of every company-config revision it has ever met, in an append-only table
   that is in every backup of that node. A human seat's `email` and `contact`

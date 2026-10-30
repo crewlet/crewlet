@@ -16,15 +16,20 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/api/stream"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/period"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -50,7 +55,9 @@ import (
 // one, so a running company showed an empty dashboard for ever. Every
 // component's own tests passed.
 
-// dial opens a socket on the path the dashboard's LiveSocket dials.
+// dial opens a socket on the path the dashboard's LiveSocket dials, as the
+// deployment's own token — a script, acting as itself, which is shown no chat;
+// [dialAs] is a person's tab.
 func (n *node) dial(t *testing.T) *websocket.Conn {
 	t.Helper()
 	target := "ws" + strings.TrimPrefix(n.server.URL, "http") + "/ws/stream"
@@ -97,6 +104,12 @@ type frame struct {
 	rows []map[string]any
 	// body is a `tokens`, `health` or `snapshot` frame's data.
 	body map[string]any
+	// chat is a chat change frame's data (every chat push kind but the
+	// two below), presence a `chat_presence` frame's and read a
+	// `chat_cursor_moved` frame's.
+	chat     stream.ChatChange
+	presence stream.ChatPresence
+	read     coord.PersonChatRead
 }
 
 // decodeFrame reads one frame's envelope. A frame that does not decode keeps
@@ -125,6 +138,14 @@ func decodeFrame(raw []byte) frame {
 		f.decoded = json.Unmarshal(env.Data, &f.rows) == nil
 	case "tokens", "health", "snapshot":
 		f.decoded = json.Unmarshal(env.Data, &f.body) == nil
+	case string(stream.KindChatPresence):
+		f.decoded = json.Unmarshal(env.Data, &f.presence) == nil
+	case string(stream.KindChatCursorMoved):
+		f.decoded = json.Unmarshal(env.Data, &f.read) == nil
+	default:
+		if slices.Contains(stream.ChatPushKinds(), stream.Kind(env.Kind)) {
+			f.decoded = json.Unmarshal(env.Data, &f.chat) == nil
+		}
 	}
 	return f
 }
@@ -362,6 +383,44 @@ func (c *capture) phaseRecords(t *testing.T) []map[string]any {
 		if f.kind == "event" && f.decoded && f.eventType == "agent_phase_completed" &&
 			f.payload != nil {
 			out = append(out, f.payload)
+		}
+	}
+	return out
+}
+
+// chatChanges reports every committed chat record a frame announced in one
+// room, in arrival order.
+func (c *capture) chatChanges(room string) []stream.ChatChange {
+	var out []stream.ChatChange
+	for _, f := range c.snapshot() {
+		if f.decoded && f.chat.ChannelID == room {
+			out = append(out, f.chat)
+		}
+	}
+	return out
+}
+
+// sawPresence reports whether any presence frame presented, in one room, a
+// member match accepts: the room whole as the socket joined it, or a change.
+func (c *capture) sawPresence(room string, match func(presence.Member) bool) bool {
+	for _, f := range c.snapshot() {
+		if f.kind != string(stream.KindChatPresence) || !f.decoded ||
+			f.presence.ChannelID != room {
+			continue
+		}
+		if slices.ContainsFunc(f.presence.Upsert, match) {
+			return true
+		}
+	}
+	return false
+}
+
+// chatReads reports every read state a frame carried, in order.
+func (c *capture) chatReads() []coord.PersonChatRead {
+	var out []coord.PersonChatRead
+	for _, f := range c.snapshot() {
+		if f.kind == string(stream.KindChatCursorMoved) && f.decoded {
+			out = append(out, f.read)
 		}
 	}
 	return out
@@ -949,18 +1008,6 @@ const (
 	replayTimeout = 60 * time.Second
 )
 
-// actCapture is one `/operator/act` exchange as the replay receives it: the
-// tool and arguments the dashboard would send, the operation key it would send
-// them under in the `Idempotency-Key` header, and the engine's answer, status
-// and body byte for byte.
-type actCapture struct {
-	Tool   string         `json:"tool"`
-	Args   map[string]any `json:"args"`
-	OpID   string         `json:"op_id"`
-	Status int            `json:"status"`
-	Body   string         `json:"body"`
-}
-
 // captureAct makes one real write as a person signed in to the identity
 // estate, through the route the dashboard writes through, and returns the
 // exchange for the replay.
@@ -982,77 +1029,397 @@ type actCapture struct {
 //
 // A PIN, because it wakes nobody: the capture has already ended, and a write
 // that routed a notice would start a turn the test then tears down under.
-func captureAct(t *testing.T, n *node, b *browser) []byte {
+func captureAct(t *testing.T, n *node, b *browser) actCapture {
 	t.Helper()
-	// WHO THE SESSION IS, and that the node offers them the write: the
-	// viewer names the act transport's verbs from the same surface that
-	// serves it.
-	status, viewer := b.send(n, http.MethodGet, "/viewer", nil)
-	handle, _ := viewer["handle"].(string)
-	acts, _ := viewer["acts"].([]any)
-	if status != http.StatusOK || handle != janeSeat {
-		t.Fatalf("the session reads as %d %v, want %s at seat %s", status, viewer,
-			janeLogin, janeSeat)
+	const tool = "set_pins"
+	who := viewerOf(t, n, b, tool)
+	if who.Handle != janeSeat {
+		t.Fatalf("the session acts as seat %q, want %s at %s", who.Handle, janeLogin, janeSeat)
 	}
-	exchange := actCapture{
-		Tool: "set_pins",
-		Args: map[string]any{"favorites": map[string]any{
-			"add": []any{map[string]any{"kind": "project", "id": "ENG"}},
-		}},
-		// A UUIDv7, which is what the dashboard's `act` mints: the key
-		// carries the instant its operation began, which is what a node
-		// judges a retry by.
-		OpID: uuid.Must(uuid.NewV7()).String(),
-	}
-	if !slices.Contains(acts, any(exchange.Tool)) {
-		t.Fatalf("the viewer does not offer %s to %s (acts %v)", exchange.Tool,
-			janeLogin, acts)
-	}
-
-	var raw []byte
-	exchange.Status, raw = b.sendRaw(n, http.MethodPost, "/operator/act/"+exchange.Tool,
-		exchange.OpID, map[string]any{"args": exchange.Args})
-	exchange.Body = string(raw)
-	var answer struct {
-		Outcome  string `json:"outcome"`
-		Position string `json:"position"`
-	}
-	if exchange.Status != http.StatusOK || json.Unmarshal(raw, &answer) != nil {
-		t.Fatalf("%s's %s was not answered: %d %s", janeLogin, exchange.Tool,
-			exchange.Status, raw)
-	}
-	if answer.Outcome != "applied" && answer.Outcome != "pending" {
-		t.Fatalf("%s's %s came to %q, want applied or pending: %s", janeLogin,
-			exchange.Tool, answer.Outcome, raw)
-	}
-	if _, err := statelog.ParsePosition(answer.Position); err != nil {
-		t.Fatalf("the act answer's position is not one a read accepts back: %v", err)
-	}
+	exchange := b.act(n, tool, map[string]any{"favorites": map[string]any{
+		"add": []any{map[string]any{"kind": "project", "id": "ENG"}},
+	}})
+	// NOT WAITED FOR HERE: the floor is the claim, so the read below is what
+	// has to wait on it.
+	answer := answerOf(t, exchange)
+	positionOf(t, answer)
 
 	// THE READ AT THE FLOOR: served at `session`, and holding the write.
-	query := url.Values{"read_level": {"session"}, "min_position": {answer.Position}}
-	status, raw = b.sendRaw(n, http.MethodGet,
-		"/worklet/people/"+url.PathEscape(handle)+"?"+query.Encode(), "", nil)
-	var person struct {
+	query := url.Values{"read_level": {"session"}, "min_position": {*answer.Position}}
+	status, raw := b.sendRaw(n, http.MethodGet,
+		"/worklet/people/"+url.PathEscape(who.Handle)+"?"+query.Encode(), "", nil)
+	var record struct {
 		Level     string             `json:"read_level"`
 		Favorites []worklet.Favorite `json:"favorites"`
 	}
-	if status != http.StatusOK || json.Unmarshal(raw, &person) != nil {
+	if status != http.StatusOK || json.Unmarshal(raw, &record) != nil {
 		t.Fatalf("a read at the act's floor was not served: %d %s", status, raw)
 	}
-	if person.Level != "session" {
-		t.Errorf("a read at the act's floor was served at %q, want session", person.Level)
+	if record.Level != "session" {
+		t.Errorf("a read at the act's floor was served at %q, want session", record.Level)
 	}
-	if !slices.Contains(person.Favorites, worklet.Favorite{Kind: "project", ID: "ENG"}) {
+	if !slices.Contains(record.Favorites, worklet.Favorite{Kind: "project", ID: "ENG"}) {
 		t.Errorf("a read at the act's floor does not hold the write: favorites %v",
-			person.Favorites)
+			record.Favorites)
+	}
+	return exchange
+}
+
+// viewer is what `/viewer` answers a person: the seat they act as, and the
+// act transport's verbs the node offers them.
+type viewer struct {
+	Handle string   `json:"handle"`
+	Acts   []string `json:"acts"`
+}
+
+// viewerOf asks the node who b is signed in as, failing the case unless it
+// names a seat and offers every tool the case is about to press: the viewer
+// names the act transport's verbs from the same surface that serves them.
+func viewerOf(t *testing.T, n *node, b *browser, tools ...string) viewer {
+	t.Helper()
+	status, raw := b.sendRaw(n, http.MethodGet, "/viewer", "", nil)
+	var who viewer
+	if status != http.StatusOK || json.Unmarshal(raw, &who) != nil || who.Handle == "" {
+		t.Fatalf("the session names no seat: %d %s", status, raw)
+	}
+	for _, tool := range tools {
+		if !slices.Contains(who.Acts, tool) {
+			t.Fatalf("the viewer does not offer %s to %s (acts %v)", tool, who.Handle,
+				who.Acts)
+		}
+	}
+	return who
+}
+
+// chatCapture is what the founder's tab did in the company's own chat while
+// the frames were captured, which the replay holds the client's store to.
+//
+// NOTHING IN IT IS READ FROM THE FRAMES. What the engine minted is read from
+// what it answered or holds — the room's id from the create's receipt, the
+// person from `/viewer`, a message's id from its post's receipt or the room's
+// transcript, the numbering from that transcript, the last record's position
+// from the prune's answer — and everything else is what this capture did,
+// written down as it did it. So a frame that said the wrong thing is caught
+// by the comparison rather than copied into the expectation.
+type chatCapture struct {
+	// Room is the room the founder made and talked in, and Person and Seat
+	// are the founder's seat and the agent seat that answered there.
+	Room   string `json:"room"`
+	Person string `json:"person"`
+	Seat   string `json:"seat"`
+
+	// Seq is the room's highest `channel_seq`, as the engine minted it.
+	Seq int64 `json:"seq"`
+
+	// Changes is every record the room took while the frames were
+	// captured, each the gesture this capture made, written down as it
+	// made it: its op, the message it named, who made it — the founder as
+	// the human seat a person writes as ([chatlet.AuthorHuman]), through the
+	// act transport and the prune route alike, or the seat as an agent —
+	// and the thread a post was said in. The one thing read back is a
+	// posted message's id, which only the engine can mint: from the post's
+	// receipt, or for the seat's answer from the room's transcript.
+	//
+	// STATED RATHER THAN READ BACK, on purpose: an author or a thread the
+	// write path recorded wrongly is in what the engine answers and holds
+	// as well as on the frame, so read back from either it would be the
+	// expectation the frame is held to, and the comparison would pass.
+	Changes []chatRecord `json:"changes"`
+
+	// Newest is where the room's last record sits on the log: what the
+	// client's per-room high-water mark has to end at.
+	Newest statelog.Position `json:"newest"`
+
+	// Cursor is the packed position the founder marked the room read
+	// through.
+	Cursor int64 `json:"cursor"`
+}
+
+// chatRecord is one record a room took: its kind, the message it names (none
+// for a record about the room itself), who made it and as what, and the
+// thread a post was said in. The JSON names are the frame's own
+// ([stream.ChatChange]), so each side reads the other's without a mapping.
+type chatRecord struct {
+	Op         chatlet.OpKind     `json:"op"`
+	MessageID  string             `json:"message_id,omitempty"`
+	Author     string             `json:"author"`
+	AuthorKind chatlet.AuthorKind `json:"author_kind"`
+	ThreadRoot string             `json:"thread_root,omitempty"`
+}
+
+// recordOf is the record a frame announced, in [chatRecord]'s terms.
+func recordOf(change stream.ChatChange) chatRecord {
+	return chatRecord{
+		Op: change.Op, MessageID: change.MessageID, Author: change.Author,
+		AuthorKind: change.AuthorKind, ThreadRoot: change.ThreadRoot,
+	}
+}
+
+// captureChat has the founder use the company's own chat from the captured
+// tab, the way its chat screen does — every write through the act transport
+// or the human write surface, the room looked at with the socket's one
+// client-to-server frame — while a seat answers there, and returns its
+// account of it ([chatCapture]) with the exchange whose floor the replay holds
+// the client to.
+//
+// EVERY CHAT PUSH KIND IS ON THE CAPTURE BEFORE IT RETURNS, checked against
+// the engine's own list ([stream.ChatPushKinds]) rather than one written
+// here, so a kind the engine adds is a capture that stops passing until this
+// produces it — and the replay then holds the client to dispatching it. A
+// kind the capture never carries is a kind the replay cannot certify.
+//
+// AND EVERY FRAME NAMES THE RECORD IT ANNOUNCES: its op, the message, the
+// author and their kind, and a post's thread — held here against the
+// capture's account in both directions, and by the replay against the store
+// the client filed them in. A frame that named the wrong message makes a
+// screen re-read the wrong range of a room, and only a comparison per frame
+// can see it: the room's messages taken together are named by its posts
+// alone.
+func captureChat(t *testing.T, n *node, founder *browser, conn *websocket.Conn,
+	frames *capture) (chatCapture, actCapture) {
+
+	t.Helper()
+	who := viewerOf(t, n, founder,
+		chatlet.CreateChannelTool, chatlet.PostMessageTool, chatlet.ReactToMessageTool,
+		chatlet.ReplyInThreadTool, chatlet.EditMessageTool, chatlet.DeleteMessageTool,
+		chatlet.MarkChatReadTool, chatlet.LeaveChannelTool)
+	const seat = "ceo"
+	out := chatCapture{Person: who.Handle, Seat: seat}
+	// BY THE FOUNDER, AS A PERSON WRITES: the human seat their session
+	// resolves to.
+	by := func(op chatlet.OpKind, message, thread string) chatRecord {
+		return chatRecord{Op: op, MessageID: message, Author: who.Handle,
+			AuthorKind: chatlet.AuthorHuman, ThreadRoot: thread}
 	}
 
-	out, err := json.Marshal(exchange)
-	if err != nil {
-		t.Fatalf("encoding the act capture: %v", err)
+	// A ROOM, made from the tab with the seat in it.
+	made := openRoomAs(t, n, founder, map[string]any{
+		"channel": "launch", "kind": string(chatlet.KindPublic),
+		"topic": "what ships on Thursday", "members": []any{seat},
+	})
+	out.Room = made.Channel
+	out.Changes = append(out.Changes, by(chatlet.OpCreate, "", ""))
+	// LOOKED AT, as the room's screen does when it opens: the chat room's
+	// `presence` frame, which asks nothing and joins the tab to the room's
+	// presence.
+	focusOn(t, conn, made.Channel)
+
+	// SAID, through the composer's route — the exchange the replay holds
+	// the client's floor to, so it is read at that floor here first, NOT
+	// waited for: the read is what has to wait on it.
+	said := founder.act(n, chatlet.PostMessageTool, map[string]any{
+		"channel": made.Channel, "body": "The launch checklist is on the wiki.",
+	})
+	saidAnswer := answerOf(t, said)
+	positionOf(t, saidAnswer)
+	first := receiptOf[chatPostReceipt](t, saidAnswer).MessageID
+	out.Changes = append(out.Changes, by(chatlet.OpPost, first, ""))
+	query := url.Values{"read_level": {"session"}, "min_position": {*saidAnswer.Position}}
+	status, raw := founder.sendRaw(n, http.MethodGet,
+		"/chatlet/channels/"+url.PathEscape(made.Channel)+"/messages?"+query.Encode(), "", nil)
+	var page chatlet.Transcript
+	if status != http.StatusOK || json.Unmarshal(raw, &page) != nil {
+		t.Fatalf("a read of the room at the post's floor was not served: %d %s", status, raw)
 	}
-	return out
+	if page.Level != statelog.ReadSession {
+		t.Errorf("a read of the room at the post's floor was served at %q, want session",
+			page.Level)
+	}
+	if !slices.ContainsFunc(page.Messages, func(v chatlet.MessageView) bool {
+		return v.Message.ID == first
+	}) {
+		t.Errorf("a read of the room at the post's floor does not hold the post: %v",
+			bodies(page))
+	}
+
+	// ACKNOWLEDGED, with the message's reaction button — the dashboard's
+	// own press, an act like every other.
+	founder.acted(n, chatlet.ReactToMessageTool, map[string]any{
+		"channel": made.Channel, "message_id": first, "emoji": ":eyes:",
+	})
+	out.Changes = append(out.Changes, by(chatlet.OpReact, first, ""))
+
+	// ASKED, IN THE MESSAGE'S THREAD, and the seat answers there: woken by
+	// a thread reply, it claims to have answered, is refused for having said
+	// nothing, replies in the thread — HELD on that round until the room's
+	// presence has shown it working, which is only true while its turn runs
+	// ([chatScript.hold]) — and submits citing the reply. Three rounds,
+	// which is the golden company's cap, so the turn ends on its own
+	// submission rather than on the rescue path.
+	hold := make(chan struct{})
+	var once sync.Once
+	release := func() { once.Do(func() { close(hold) }) }
+	t.Cleanup(release)
+	const answer = "Yes: Thursday, once the checklist is signed off."
+	n.model.script(&chatScript{channel: made.Channel, thread: first, answer: answer, hold: hold})
+	t.Cleanup(func() { n.model.script(nil) })
+	asked := receiptOf[chatPostReceipt](t, founder.acted(n, chatlet.ReplyInThreadTool,
+		map[string]any{
+			"channel": made.Channel, "reply_to": first,
+			"body": "@ceo is the launch still on for Thursday?",
+		}))
+	// IN THE THREAD IT WAS SAID IN, as the capture said it — never the
+	// receipt's thread_root, which is copied from the very message the
+	// record and its frame carry, so read back it would agree with a reply
+	// the write path filed under the wrong thread, or under none. The
+	// receipt is checked here as well, so a mis-threaded reply is named
+	// where it happened rather than only where its frame stops matching.
+	if asked.ThreadRoot != first {
+		t.Errorf("the founder's reply was filed under %q, not the thread it replied in (%s)",
+			asked.ThreadRoot, first)
+	}
+	out.Changes = append(out.Changes, by(chatlet.OpPost, asked.MessageID, first))
+	waitFor(t, "the room's presence to show the founder looking and the seat at work", func() bool {
+		looking := frames.sawPresence(made.Channel, func(m presence.Member) bool {
+			return m.Seat == who.Handle && m.Kind == iam.ActorHuman
+		})
+		working := frames.sawPresence(made.Channel, func(m presence.Member) bool {
+			return m.Seat == seat && m.Kind == iam.ActorAgent &&
+				m.Activity == presence.Editing && m.Focus.Thread == first
+		})
+		return looking && working
+	}, func() string {
+		return fmt.Sprintf("frames %v; the model saw %v", frames.kinds(t), n.model.seen())
+	})
+	release()
+	var answered chatlet.MessageView
+	waitFor(t, "the seat's answer in the thread", func() bool {
+		room := transcript(t, n, who.Handle, made.Channel)
+		i := slices.IndexFunc(room.Messages, func(v chatlet.MessageView) bool {
+			return v.Message.Author == seat
+		})
+		if i < 0 {
+			return false
+		}
+		answered = room.Messages[i]
+		return true
+	})
+	if answered.Message.ThreadRoot != first {
+		t.Errorf("the seat answered under %q, not in the thread it was asked in (%s)",
+			answered.Message.ThreadRoot, first)
+	}
+	// THE SEAT'S ANSWER AS IT WAS ASKED FOR: by the seat, as an agent, in
+	// the thread — only the id the engine minted is the transcript's.
+	out.Changes = append(out.Changes, chatRecord{Op: chatlet.OpPost,
+		MessageID: answered.Message.ID, Author: seat,
+		AuthorKind: chatlet.AuthorAgent, ThreadRoot: first})
+	// AND ITS TURN DELIVERED: the script served the submission citing the
+	// reply, and the engine took it rather than writing a rescue.
+	waitFor(t, "the seat to submit citing its answer", n.model.chatSubmitted)
+	deliveredThrough(t, n, chatlet.ReplyInThreadTool)
+
+	// CHANGED, TAKEN BACK, READ AND LEFT, each from the tab.
+	founder.acted(n, chatlet.EditMessageTool, map[string]any{
+		"channel": made.Channel, "message_id": first,
+		"body": "The launch checklist is on the wiki, and signed off.",
+	})
+	out.Changes = append(out.Changes, by(chatlet.OpEdit, first, ""))
+	founder.acted(n, chatlet.DeleteMessageTool, map[string]any{
+		"channel": made.Channel, "message_id": first,
+	})
+	out.Changes = append(out.Changes, by(chatlet.OpDelete, first, ""))
+	out.Cursor = answered.Position.Packed()
+	founder.acted(n, chatlet.MarkChatReadTool, map[string]any{
+		"cursors": map[string]any{made.Channel: out.Cursor},
+	})
+	founder.acted(n, chatlet.LeaveChannelTool, map[string]any{"channel": made.Channel})
+	out.Changes = append(out.Changes, by(chatlet.OpMembers, "", ""))
+
+	// THE ROOM'S NUMBERING, read back before the prune takes its rows.
+	for _, view := range transcript(t, n, who.Handle, made.Channel).Messages {
+		out.Seq = max(out.Seq, view.ChannelSeq)
+	}
+
+	// AND PRUNED, through the human write surface's destruction route — the
+	// one record whose frame tells a screen that everything it holds below
+	// an instant is gone, and the last the room takes here.
+	out.Newest = pruneRoom(t, n, founder, made.Channel)
+	out.Changes = append(out.Changes, by(chatlet.OpPrune, "", ""))
+
+	// AND THE TAB WAS TOLD ALL OF IT: a frame for every record, naming what
+	// this capture did, and the founder's own read state.
+	onFrames := func() []chatRecord {
+		var seen []chatRecord
+		for _, change := range frames.chatChanges(made.Channel) {
+			seen = append(seen, recordOf(change))
+		}
+		return seen
+	}
+	waitFor(t, "every chat record and the founder's read state on the socket", func() bool {
+		seen := onFrames()
+		for _, want := range out.Changes {
+			if !slices.Contains(seen, want) {
+				return false
+			}
+		}
+		return slices.ContainsFunc(frames.chatReads(), func(r coord.PersonChatRead) bool {
+			return r.Handle == who.Handle && r.Cursors[made.Channel] == out.Cursor
+		})
+	}, func() string {
+		return fmt.Sprintf("want %+v; the room's frames say %+v", out.Changes, onFrames())
+	})
+	// AND NOTHING ELSE: a frame naming a record the room never took is the
+	// same failure the other way round — a message re-read that was never
+	// touched, under an author who never touched it.
+	for _, got := range onFrames() {
+		if !slices.Contains(out.Changes, got) {
+			t.Errorf("a frame announced %+v, which is no record the room took: %+v",
+				got, out.Changes)
+		}
+	}
+	kinds := frames.kinds(t)
+	for _, kind := range stream.ChatPushKinds() {
+		if !slices.Contains(kinds, string(kind)) {
+			t.Errorf("the capture carries no %s frame, so the replay cannot hold the "+
+				"client to reading one", kind)
+		}
+	}
+	for _, change := range frames.chatChanges(made.Channel) {
+		if change.ChannelSeq > out.Seq {
+			t.Errorf("a %s frame names channel_seq %d in a room the engine numbered to %d",
+				change.Op, change.ChannelSeq, out.Seq)
+		}
+	}
+	return out, said
+}
+
+// pruneRoom prunes a room through `POST /chatlet/channels/{id}/prune` as the
+// person b is signed in as — an administrator, with the proof of identity the
+// sign-in just made, which is the step-up the route asks — with everything
+// said in it so far before the cutoff, and returns where the prune landed once
+// this node has applied it.
+//
+// THE CUTOFF TO THE NANOSECOND, because a prune takes what was stored BEFORE
+// it and the room's last messages were said within this second: RFC 3339
+// trimmed to whole seconds would leave them standing. The route echoes the
+// value back in `?confirm=`, as an operator has to, and the request carries an
+// operation key of its own, as every write on that surface does.
+func pruneRoom(t *testing.T, n *node, b *browser, channelID string) statelog.Position {
+	t.Helper()
+	cutoff := time.Now().UTC().Format(time.RFC3339Nano)
+	query := url.Values{"cutoff": {cutoff}, "confirm": {cutoff}}
+	status, raw := b.sendRaw(n, http.MethodPost,
+		"/chatlet/channels/"+url.PathEscape(channelID)+"/prune?"+query.Encode(),
+		statelog.NewOpID(time.Now(), ""), nil)
+	var pruned struct {
+		Outcome  statelog.Outcome `json:"outcome"`
+		Position *string          `json:"position"`
+	}
+	if (status != http.StatusOK && status != http.StatusAccepted) ||
+		json.Unmarshal(raw, &pruned) != nil || pruned.Position == nil {
+		t.Fatalf("the prune of %s was not answered with a position: %d %s", channelID, status, raw)
+	}
+	if pruned.Outcome != statelog.OutcomeApplied && pruned.Outcome != statelog.OutcomePending {
+		t.Fatalf("the prune of %s came to %q: %s", channelID, pruned.Outcome, raw)
+	}
+	at, err := statelog.ParsePosition(*pruned.Position)
+	if err != nil {
+		t.Fatalf("the prune of %s answered a position a read cannot take back: %v", channelID, err)
+	}
+	if err := n.engine.WaitCommitted(t.Context(), at); err != nil {
+		t.Fatalf("waiting for the prune of %s: %v", channelID, err)
+	}
+	return at
 }
 
 func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
@@ -1096,10 +1463,18 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// company runs MID-DAY ON ITS OWN CLOCK, so the refusal waited for below
 	// is stamped in the day it is read back in ([middayZone]).
 	//
-	// AND A PERSON WHO CAN WRITE: a password sign-in on this node, bound to
-	// the founder's seat by the invitation that enrolled her, so the capture
-	// can end with a real `/operator/act` answer — the one the dashboard's
-	// session floor is raised from.
+	// AND A PERSON WHO CAN WRITE, WHOSE TAB THE CAPTURE IS: a password
+	// sign-in on this node, bound to the founder's seat by the invitation
+	// that enrolled her, so the capture carries real `/operator/act` answers
+	// — the ones the dashboard's session floor is raised from — and is taken
+	// on a person's socket, the only kind the company's own chat is pushed
+	// to, every chat frame being decided per recipient seat. She holds
+	// ADMIN, which is every permission there is, so the one tab is sent
+	// every kind of frame a tab can be: the activity feed an administrator
+	// reads, the inbox the tracker's holders are told of, and the chat. One
+	// tab is one person, as on the dashboard: two sockets would be two frame
+	// streams with no order between them for the one store the replay
+	// feeds.
 	//
 	// AND THE EXECUTOR'S FLOOR OFF ([withoutExecutorFloor]): the CFO's
 	// ceiling is below it, which validation refuses, since no run of that
@@ -1115,14 +1490,16 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	setCompanyCeilings(t, n, map[period.Period]int{period.Day: 100_000_000})
 	setSeatCeilings(t, n, "cfo", map[period.Period]int{period.Day: 100})
 	zone := companyMidday(t, n.engine)
-	jane := newBrowser(t)
-	signIn(t, n, jane)
+	admin := jane
+	admin.grants = []iam.Grant{iam.GrantAdmin}
+	tab := newBrowser(t)
+	signInAs(t, n, tab, admin)
 
 	waitFor(t, "the seats to be claimed", func() bool {
 		held := n.engine.Node().Host().Held()
 		return slices.Contains(held, "ceo") && slices.Contains(held, "cfo")
 	})
-	conn := n.dial(t)
+	conn := dialAs(t, n, tab)
 	frames := &capture{}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -1150,6 +1527,24 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	// turn row and live row now keys its link on.
 	task := newTask("ENG", "Summarise how the week went")
 	task.Assignee = "ceo"
+	// AND ANSWERED ON THE ITEM, which is what an assignment owes: the
+	// engine reads a task wake as somebody waiting on a tool, so the
+	// endpoint's default — `delivered` citing nothing, honest for the
+	// unaddressed wakes it serves — is refused here until the rounds run
+	// out and the turn ends on an outcome the engine wrote. The seat
+	// comments on the item and submits citing the comment, which is how a
+	// real assignee closes the loop. Queued BEFORE the item is filed,
+	// because its wake can reach the executor before the create returns,
+	// and naming the item by the id this test minted, its key being the
+	// tracker's to assign.
+	const summary = "Three PRs merged, one incident, zero regressions."
+	n.model.callOnExecute(builtin.CommentOnWorkTool, map[string]any{
+		"item": task.ID, "body": summary,
+	})
+	n.model.callOnExecute(runner.SubmitWorkTool, map[string]any{
+		"outcome": string(turn.OutcomeDelivered), "summary": summary,
+		"deliveries": []any{builtin.CommentOnWorkTool},
+	})
 	// WITH ITS WAKE, built the way every create surface builds one: a
 	// record carrying no notification is a change nobody asked to hear about.
 	wake := worklet.Wake{Kind: worklet.ChangeCreated, After: task}.Notify(nil)
@@ -1171,11 +1566,19 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 		return fmt.Sprintf("events %v; live calls' items %v; filed %s (%s); model saw %v",
 			frames.eventTypes(t), items, filed.Key, filed.Outcome, n.model.seen())
 	})
+	// AND THE COMPANY'S TURN DELIVERED, on its own submission citing the
+	// comment rather than on the rescue path.
+	deliveredThrough(t, n, builtin.CommentOnWorkTool)
 	// The meters are published on engine.BudgetReportInterval, so one
 	// carrying the refusal lands within an interval of it at the latest.
 	waitFor(t, "a budget push carrying the refusal", func() bool {
 		return frames.sawRefusal(t, cfoID)
 	})
+
+	// AND THE COMPANY'S OWN CHAT, used from the tab while a seat answers
+	// in it — after both turns, so the seat's chat turn is the only one
+	// running and the waits above counted only theirs.
+	talked, posted := captureChat(t, n, tab, conn, frames)
 	cancel()
 
 	// --- what the frames say, before the client reads them ------------- //
@@ -1231,8 +1634,21 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 			"severity (%v) on a company that has never taken a backup", alarms)
 	}
 
-	// --- a write, and the floor it raises ------------------------------- //
-	answer := captureAct(t, n, jane)
+	// --- two writes, and the floors they raise ------------------------- //
+	// ON TWO LOGS: a pin on the tracker's, made after the capture, and the
+	// founder's first message on chat's, made during it. Each names the
+	// questions that read its log, which the replay holds the floor to.
+	pinned := captureAct(t, n, tab)
+	pinned.Reads = []string{"work_person", "work_items"}
+	posted.Reads = []string{"chat_messages", "chat_channels"}
+	answers, err := json.Marshal([]actCapture{pinned, posted})
+	if err != nil {
+		t.Fatalf("encoding the act captures: %v", err)
+	}
+	chatted, err := json.Marshal(talked)
+	if err != nil {
+		t.Fatalf("encoding the chat capture: %v", err)
+	}
 
 	// The RAW bytes, as strings, in arrival order. Not re-encoded: the
 	// client must be fed what the server wrote, or the replay certifies
@@ -1256,10 +1672,14 @@ func TestTheDashboardClientCanReadWhatThisServerSends(t *testing.T) {
 	runCtx, runCancel := context.WithTimeout(t.Context(), replayTimeout)
 	defer runCancel()
 	actPath := filepath.Join(t.TempDir(), "act.json")
-	if err := os.WriteFile(actPath, answer, 0o600); err != nil {
-		t.Fatalf("writing the act answer: %v", err)
+	if err := os.WriteFile(actPath, answers, 0o600); err != nil {
+		t.Fatalf("writing the act answers: %v", err)
 	}
-	cmd := exec.CommandContext(runCtx, node, replayScript, path, actPath)
+	chatPath := filepath.Join(t.TempDir(), "chat.json")
+	if err := os.WriteFile(chatPath, chatted, 0o600); err != nil {
+		t.Fatalf("writing the chat capture: %v", err)
+	}
+	cmd := exec.CommandContext(runCtx, node, replayScript, path, actPath, chatPath)
 	cmd.Env = append(os.Environ(), dashboardEnv+"="+tree)
 	out, err := cmd.CombinedOutput()
 	if runCtx.Err() != nil {

@@ -16,6 +16,7 @@ import { AssistantControlContext, type AssistantControl } from "../assistant/con
 import { ProjectSwitcherProvider } from "../header/ProjectSwitcher.tsx";
 import { forgetAnswersForTest } from "./answer.ts";
 import { ANSWER_IDLE_MS, destinationHits } from "./hits.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import { COLLEAGUE_QUERY_MAX, SEARCH_QUERY_MAX } from "~/contract/wire.ts";
 import { Router, href } from "../router.tsx";
 import { DESTINATIONS } from "../nav.ts";
@@ -51,6 +52,7 @@ const JANE: ViewerState = {
   admin: true,
   worklet: true,
   doclet: true,
+  chatlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -65,6 +67,7 @@ const JANE: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatVendors: [],
 };
 
 const ANONYMOUS: ViewerState = {
@@ -74,6 +77,7 @@ const ANONYMOUS: ViewerState = {
   admin: false,
   worklet: false,
   doclet: false,
+  chatlet: false,
   handle: "",
   owner: "",
   name: "",
@@ -345,6 +349,69 @@ describe("scopes and sigils", () => {
     expect(screen.getByText("Teams")).toBeDefined();
     expect(screen.getByText("Platform")).toBeDefined();
     expect(screen.getByText("SWE")).toBeDefined();
+  });
+});
+
+// A DESTINATION SAYS WHAT OPENS IT BEFORE A PRESS, read from the navigation's
+// own table: Chatlet is the Chatlet app's, so a reader holding Worklet and
+// Doclet but not Chatlet is told which access to ask for — and a reader
+// holding it is told nothing. Mutation: drop the row's `grants` and the first
+// case goes red; lock on the table's grants whatever the reader holds and the
+// second does.
+describe("a destination's lock", () => {
+  const WITHOUT_CHATLET: ViewerState = {
+    ...JANE,
+    grants: ["worklet", "doclet"],
+    admin: false,
+    chatlet: false,
+  };
+
+  test.each([
+    ["without Chatlet", WITHOUT_CHATLET, true],
+    [
+      "holding Chatlet",
+      { ...WITHOUT_CHATLET, grants: ["worklet", "doclet", "chatlet"], chatlet: true },
+      false,
+    ],
+  ])("Chatlet's lock, to a reader %s", async (_, viewer, locked) => {
+    const p = mount({ viewer });
+    await p.type("chat");
+    expect(/· needs Chatlet access$/.test(p.row(/^Chatlet$/).textContent ?? "")).toBe(locked);
+  });
+
+  // A SECTION IS LOCKED BY ITS WORKSPACE FIRST, as the frame refuses it: a
+  // reader who cannot open Chatlet cannot open its Mentions, and one who cannot
+  // open Doclet is told Doclet before Agent diaries' own Admin. Read
+  // off a section's own list, every section of a workspace that names the
+  // app — Worklet's, My work's, Chatlet's — was offered with no lock at all, and
+  // the press opened onto the refusal. Mutation: lock by the section's own
+  // grants alone and the Mentions and Asked of me rows go red.
+  test.each([
+    { term: "mentions", label: /^Mentions$/, viewer: WITHOUT_CHATLET, needs: "Chatlet" },
+    { term: "search chat", label: /^Search chat$/, viewer: WITHOUT_CHATLET, needs: "Chatlet" },
+    {
+      term: "asked of me",
+      label: /^Asked of me$/,
+      viewer: { ...WITHOUT_CHATLET, grants: ["doclet"] },
+      needs: "Worklet",
+    },
+    {
+      term: "diaries",
+      label: /^Agent diaries$/,
+      viewer: { ...WITHOUT_CHATLET, grants: ["worklet"] },
+      needs: "Doclet",
+    },
+    { term: "diaries", label: /^Agent diaries$/, viewer: WITHOUT_CHATLET, needs: "Admin" },
+  ])("$term is locked naming $needs access where the reader lacks it", async (c) => {
+    const p = mount({ viewer: c.viewer });
+    await p.type(c.term);
+    expect(p.row(c.label).textContent).toMatch(new RegExp(`· needs ${c.needs} access$`));
+  });
+
+  test("a section whose workspace and own access the reader holds is not locked", async () => {
+    const p = mount({ viewer: { ...WITHOUT_CHATLET, grants: ["chatlet"], chatlet: true } });
+    await p.type("mentions");
+    expect(p.row(/^Mentions$/).textContent).not.toMatch(/needs/);
   });
 });
 
@@ -675,6 +742,38 @@ describe("the knowledge answer", () => {
       .closest(".palette-answer")!;
     expect(lead.textContent).toMatch(/tokens/);
     expect(lead.textContent).not.toMatch(/[$€£¥]|USD|cost|price/i);
+  });
+
+  // A REFUSAL IS TOLD IN THE ENGINE'S OWN WORDS where it has them: the act
+  // route answers a refusal's `detail` only in a person's words (ADR-0060),
+  // and a spent budget's says whose ceiling it was and that nothing was sent,
+  // which the dashboard's one sentence for the class cannot.
+  test("a refused question is told in the engine's words", async () => {
+    vi.useFakeTimers();
+    const said =
+      "The company's token budget for this window is spent, so nothing was sent. It comes back when the window resets, or as soon as the ceiling is raised.";
+    engine((tool) =>
+      tool === "answer_knowledge"
+        ? json(
+            {
+              error: "budget_exhausted",
+              message:
+                "The token budget for this window is spent, so nothing was spent on this. Raise it, or wait for the window to turn over.",
+              detail: said,
+              remedy: { setting: "company_token_budget" },
+              tool,
+              op_id: "op-1",
+            },
+            409,
+          )
+        : json({ error: "not_found", detail: "no" }, 404),
+    );
+    const p = mount();
+    await p.type(QUESTION);
+    await settle(ANSWER_IDLE_MS);
+    await settle(0);
+    expect(screen.getByText(said)).toBeDefined();
+    expect(screen.queryByText(ACT_ERRORS.budget_exhausted)).toBeNull();
   });
 
   test("a new term abandons the question before it, which is never drawn", async () => {
@@ -1430,17 +1529,21 @@ describe("a screen found by what it holds", () => {
   // A LABEL STILL WINS: a screen called what was typed is never pushed under
   // one that merely holds the word. "s" starts two of Account's words
   // ("sessions", "security"), which a flat ranking scored ahead of every label
-  // with an "s" in its middle — Tasks, Projects, Agents.
+  // with an "s" in its middle — Tasks, Projects, Agents. Chatlet holds it only
+  // in its words too ("messages", "rooms"), so every screen found that way is
+  // ranked after every label that has one.
   test("every label match ranks above a keyword match, however good", () => {
     const nav = { to: vi.fn() } as unknown as Parameters<typeof destinationHits>[1];
     const hits = destinationHits("s", nav, Infinity, null, {
       tracker: true,
       knowledge: true,
+      chat: true,
     }).map((h) => h.label);
     // THE LABEL MATCHES COME FIRST, then the screens only a keyword found
-    // ("Account"), and never one after the other.
+    // ("Account", "Chatlet"), and never one after the other.
     const firstKeyword = hits.findIndex((label) => !label.toLowerCase().includes("s"));
-    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account"]));
+    expect(firstKeyword).toBeGreaterThan(0);
+    expect(hits.slice(firstKeyword)).toEqual(expect.arrayContaining(["Account", "Chatlet"]));
     for (const label of hits.slice(firstKeyword)) expect(label.toLowerCase()).not.toContain("s");
     for (const label of hits.slice(0, firstKeyword)) expect(label.toLowerCase()).toContain("s");
     expect(hits).toContain("Tasks");
@@ -1452,7 +1555,7 @@ describe("a screen found by what it holds", () => {
   test("a reader holding only Worklet opens Settings on Models, unlocked", () => {
     const to = vi.fn();
     const nav = { to } as unknown as Parameters<typeof destinationHits>[1];
-    const runs = { tracker: true, knowledge: true };
+    const runs = { tracker: true, knowledge: true, chat: true };
     const settings = destinationHits(
       "settings",
       nav,

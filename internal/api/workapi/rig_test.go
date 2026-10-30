@@ -15,14 +15,20 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/caveat"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
+	queuememory "github.com/crewlet/crewlet/internal/queue/memory"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -285,6 +291,16 @@ func (b *bound) MoveTaskToProject(_ context.Context, opID, _, target string,
 	return b.w.answer(opID)
 }
 
+// Depend is a dependency gesture, answered as every write here is.
+func (b *bound) Depend(_ context.Context, opID string, _ worklet.DependencyChange,
+	_ worklet.Leads) (worklet.DependencyResult, error) {
+
+	b.w.mu.Lock()
+	defer b.w.mu.Unlock()
+	res, err := b.w.answer(opID)
+	return worklet.DependencyResult{WriteResult: res}, err
+}
+
 // PlaceTask is a board drag: the card, the neighbour it was dropped beside
 // and the lane, as the tool resolved them. The order step answers as every
 // write here does; the lane step wrote nothing unless the drag named one.
@@ -479,6 +495,7 @@ type rig struct {
 	reader *reader
 	writes *writes
 	kb     *kb
+	rooms  *rooms
 	dir    directory
 	audit  *auditLog
 }
@@ -492,7 +509,8 @@ func newRig(t *testing.T, c authz.Chart) *rig {
 func newRigWith(t *testing.T, c authz.Chart, dir directory) *rig {
 	t.Helper()
 	r := &rig{t: t, mux: http.NewServeMux(), reader: newReader(),
-		writes: &writes{}, kb: newKB(), dir: dir, audit: &auditLog{}}
+		writes: &writes{}, kb: newKB(), rooms: &rooms{}, dir: dir,
+		audit: &auditLog{}}
 	svc, err := workapi.New(r.options(c))
 	if err != nil || svc == nil {
 		t.Fatalf("New: %v (%v)", err, svc)
@@ -516,6 +534,15 @@ func (r *rig) options(c authz.Chart) workapi.Options {
 // one engine's halves and one chart value — auditing into the rig's log.
 func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *operator.Server {
 	r.t.Helper()
+	// THE SEAT CONTROLS operator.New requires, over an in-memory fleet and
+	// queue nobody else reads, a company with no chart, a steer channel under
+	// a key no node holds and run records no turn has: no case here calls one.
+	fleet, queue := coordmemory.NewFleet(), queuememory.New()
+	wire, err := signedask.New[steer.Request, steer.Reply](steer.Channel,
+		statelog.OneKey("k1", "the work surface cases' seat-control key material"))
+	if err != nil {
+		r.t.Fatalf("the steer channel: %v", err)
+	}
 	s, err := operator.New(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			h, up := halves()
@@ -523,11 +550,28 @@ func (r *rig) operator(c authz.Chart, halves func() (workapi.Halves, bool)) *ope
 		},
 		Authorize: builtin.Decide(c),
 		Audit:     r.audit,
+		Runs: builtin.RunDeps{Desk: sandbox.AnswerDesk{
+			Pending: sandbox.NewCoordStore(fleet), Queue: queue}},
+		Pauses: builtin.SeatPauseDeps{Pauses: fleet, Announce: queue,
+			Org: func() *org.Organization { return nil }},
+		Steer: builtin.SteerDeps{Asker: queue, Wire: wire, Runs: noRunRecords{}},
 	})
 	if err != nil {
 		r.t.Fatalf("operator.New: %v", err)
 	}
 	return s
+}
+
+// noRunRecords is the run records the rig's steer control files a note on: a
+// fleet in which no turn has launched its coding run.
+type noRunRecords struct{}
+
+func (noRunRecords) Seat(context.Context, string) (builtin.RunSeat, bool, error) {
+	return builtin.RunSeat{}, false, nil
+}
+
+func (noRunRecords) File(context.Context, string, steer.Note) (builtin.RunFiled, error) {
+	return builtin.RunFiled{}, errors.New("no turn here has a run record to file a note on")
 }
 
 // auditLog records every runtime audit record the surface publishes.
@@ -583,6 +627,9 @@ func (r *rig) halves() workapi.Halves {
 			Placer: func(a builtin.Actor) builtin.WorkPlacer {
 				return r.writes.as(a)
 			},
+			Dependencies: func(a builtin.Actor) builtin.WorkDepender {
+				return r.writes.as(a)
+			},
 			Holders: r.dir,
 		},
 		Pages: builtin.PageDeps{Reader: r.kb, Writer: r.kb},
@@ -590,6 +637,7 @@ func (r *rig) halves() workapi.Halves {
 			return r.writes.as(a)
 		},
 		PageStore: r.kb,
+		ChatStore: r.rooms,
 	}
 }
 

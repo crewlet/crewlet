@@ -10,8 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/words"
 
 	"github.com/google/uuid"
 )
@@ -118,7 +120,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 	state, ok := s.state(company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
-			"hint": "one of " + kindList(),
+			"hint": "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}
@@ -133,7 +135,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		if len(body) > 0 {
 			if err := decode(body, &req); err != nil {
 				httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-					map[string]string{"detail": err.Error()})
+					map[string]string{"detail": plainjson.Unreadable("the body", err)})
 				return
 			}
 		}

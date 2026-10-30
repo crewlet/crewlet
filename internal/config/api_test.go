@@ -3,11 +3,13 @@ package config
 import (
 	"encoding/base64"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // serving is a Tier A that binds a port and satisfies every rule that comes
@@ -273,7 +275,17 @@ func TestATokenMustStateWhatItMayDo(t *testing.T) {
 		t.Parallel()
 		b := serving()
 		b.API.Auth.Tokens[0].Grants = nil
-		refuses(t, b, "List the permissions this token gets")
+		refuses(t, b, "List the permissions this token gets, any of "+words.Or(iam.AllGrants))
+	})
+	// A NAME NOBODY KNOWS IS TOLD EVERY ONE IT COULD BE, as a sentence says
+	// them: the refusal printed Go's slice, `[admin worklet doclet …]`,
+	// to whoever runs `crewlet validate` and to every /config write.
+	// Mutation: print iam.AllGrants with %v and this fails.
+	t.Run("a name this build does not know", func(t *testing.T) {
+		t.Parallel()
+		b := serving()
+		b.API.Auth.Tokens[0].Grants = []iam.Grant{"swarm"}
+		refuses(t, b, iam.NotAGrant("swarm"))
 	})
 }
 
@@ -371,6 +383,29 @@ func TestAnUnknownGrantIsRefusedNamingTheSet(t *testing.T) {
 				t.Errorf("%q: the refusal does not name %q: %v", name, g, err)
 			}
 		}
+	}
+}
+
+// THE SCHEMA SAYS WHAT A TOKEN MAY CARRY, every permission there is.
+//
+// The field's `desc` is the sentence an operator's editor shows beside
+// `grants`, and a struct tag cannot be built from [iam.AllGrants], so it is a
+// copy — the one that went on naming three permissions after chat made four.
+// Held here in order, as the vocabulary declares them. Mutation: drop `chatlet`
+// from the tag and this goes red.
+func TestATokensGrantsDescriptionNamesEveryPermission(t *testing.T) {
+	t.Parallel()
+	field, ok := reflect.TypeFor[APIToken]().FieldByName("Grants")
+	if !ok {
+		t.Fatal("APIToken has no Grants field")
+	}
+	names := make([]string, 0, len(iam.AllGrants))
+	for _, g := range iam.AllGrants {
+		names = append(names, string(g))
+	}
+	if want := strings.Join(names, ", "); !strings.Contains(field.Tag.Get("desc"), want) {
+		t.Errorf("api.auth.tokens[].grants is described %q, which does not name %q",
+			field.Tag.Get("desc"), want)
 	}
 }
 

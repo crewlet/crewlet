@@ -2,8 +2,11 @@ package worklet_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -110,4 +113,31 @@ func TestAnUnblockedNoticeStillReachesTheActorsOwnSeat(t *testing.T) {
 	if got := routed[0].Metadata[worklet.MetaVia]; got != string(worklet.ReasonUnblocked) {
 		t.Errorf("the notice was routed via %q, want %q", got, worklet.ReasonUnblocked)
 	}
+	// AND THE SPINE DELIVERS WHAT THE ROUTER KEPT. The copy names its actor
+	// under the one key every parser stamps, so the self-action guard sees
+	// a notice to the person who caused it — and lets it through because
+	// the prompt reads the reason this copy carries.
+	if got := routed[0].Metadata[notify.ActorField]; got != "jane-founder" {
+		t.Fatalf("the copy names its actor as %q, want the seat that wrote it", got)
+	}
+	reg := firstPartyRegistry(t, "jane-founder")
+	seat, _ := reg.ByHandle("jane-founder")
+	prompts := notify.NewPrompts(worklet.Prompt{})
+	if ok, why := notify.Deliverable(prompts, reg, routed[0].Inbound, seat); !ok {
+		t.Errorf("the spine dropped the unblocked notice to its actor (%s)", why)
+	}
+}
+
+// firstPartyRegistry is [registry] answering the tracker's source by the
+// handle its ids are, as the engine's own registry does.
+func firstPartyRegistry(t *testing.T, handles ...string) *notify.Registry {
+	t.Helper()
+	o := &org.Organization{Name: "nimbus"}
+	for _, handle := range handles {
+		o.Roles = append(o.Roles, &org.Role{
+			Name: strings.ToUpper(handle), DeclaredHandle: handle,
+		})
+	}
+	o.Normalize()
+	return notify.NewRegistry(o, nil, worklet.Source)
 }

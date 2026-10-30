@@ -68,21 +68,27 @@ func (w *Writer) AddAsset(ctx context.Context, c Call, in AssetInput) (Asset, Wr
 				return statelog.Decision{}, fmt.Errorf("artifactsdomain: count %s's assets: %w", id, err)
 			}
 			if count >= artifacts.MaxAssetsPerArtifact {
-				return statelog.Decision{}, fmt.Errorf("%w: artifact %s holds %d assets, the "+
-					"most an asset store keeps", ErrInvalid, id, count)
+				return statelog.Decision{}, fmt.Errorf("%w: %s: this artifact holds %d "+
+					"assets, the most an asset store keeps", ErrInvalid, id, count)
 			}
 			if bytes+in.Object.Size > artifacts.MaxAssetBytesPerArtifact {
-				return statelog.Decision{}, fmt.Errorf("%w: artifact %s's assets would hold "+
-					"%d bytes and an asset store keeps at most %d", ErrInvalid, id,
-					bytes+in.Object.Size, artifacts.MaxAssetBytesPerArtifact)
+				// IN A PERSON'S UNIT, the limit and nothing they have
+				// to divide: "would hold 1073741825 bytes, and at most
+				// 1073741824" said the same in two numbers.
+				return statelog.Decision{}, fmt.Errorf("%w: %s: this asset would take "+
+					"this artifact's assets over %s, the most they can hold", ErrInvalid,
+					id, objstore.SizeWords(artifacts.MaxAssetBytesPerArtifact))
 			}
 			elsewhere, err := namedElsewhere(ctx, tx, "", in.Object.Key)
 			if err != nil {
 				return statelog.Decision{}, err
 			}
 			if elsewhere {
-				return statelog.Decision{}, fmt.Errorf("%w: object %s is already named by "+
-					"another row; upload the asset's bytes again", ErrInvalid, in.Object.Key)
+				// NOT THE OBJECT'S KEY, which the store minted for the
+				// upload and nobody reading this chose.
+				return statelog.Decision{}, fmt.Errorf("%w: %s: the upload this asset "+
+					"names is already used by another file, so upload its bytes again",
+					ErrInvalid, id)
 			}
 			if err := checkQuota(ctx, tx, c.Authority.Limits, 0, in.Object.Size); err != nil {
 				return statelog.Decision{}, err
@@ -149,8 +155,10 @@ func (w *Writer) RemoveAsset(ctx context.Context, c Call, id artifacts.ID, asset
 				return statelog.Decision{}, err
 			}
 			if len(live) == 0 {
-				return statelog.Decision{}, fmt.Errorf("%w: artifact %s holds no asset %s",
-					ErrNotFound, id, asset)
+				// THE ASSET BY THE ID ITS CALLER NAMED IT BY, the one
+				// argument a removal takes.
+				return statelog.Decision{}, fmt.Errorf("%w: %s: this artifact holds no "+
+					"asset %s", ErrNotFound, id, asset)
 			}
 			return w.decision(stamp, c, subject, OpRemove, scope, opID,
 				StatusPayload{V: baseRecordVersion}, at)

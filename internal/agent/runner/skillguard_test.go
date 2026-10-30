@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -236,7 +237,7 @@ func TestARequiredSkillOnAnActivatedMCPToolIsEnforced(t *testing.T) {
 	pub := newCapture()
 	req := guardedLaunch(t, pub, tools.Origin("slack"), 1)
 	play(t, req, run{calls: []llm.ToolCall{
-		call(t, runner.ActivateTool, `{"name":"slack_post"}`),
+		call(t, toolname.Activate, `{"name":"slack_post"}`),
 		call(t, "slack_post", `{"text":"hi"}`),
 	}})
 	if !strings.Contains(req.System, "`chat-conventions` (required") {

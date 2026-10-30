@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Prompt is what a change to a task asks of the seat it reached.
@@ -216,7 +217,26 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 // closed a blocker learns from this that the task it was blocking is now
 // workable, which is a CONSEQUENCE of their own write rather than a repeat of
 // it. Every other change here is something the actor already knows.
-func (Prompt) WakesActor(via string) bool { return Reason(via).WakesActor() }
+//
+// READ OFF THE ROUTING REASON this recipient's copy carries ([MetaVia]), never
+// the event type: the unblocked notice to the actor and every other copy of the
+// same status change share one event type (`status`), and only the reason the
+// parser stamped per recipient tells them apart — the reason [Route] already
+// let through by the same rule ([Reason.WakesActor]).
+func (Prompt) WakesActor(n notify.Inbound) bool {
+	return Reason(n.Metadata[MetaVia]).WakesActor()
+}
+
+// Provenance implements [notify.Prompt]: what the parser stated — the comment,
+// the description or the change note the body is, by the change's author
+// ([notify.StatedHosted]) — and, for a wake built without the parser, the
+// surface the change kind produces. HOSTED, because only company principals
+// write the engine's own tracker: a change whose record names nobody is read
+// as a colleague's, as every other door this text comes through reads it
+// ([provenance.TrustForHosted]).
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	return notify.StatedHosted(n, parties, ExcerptSource(ChangeKind(n.EventType)))
+}
 
 // DigestBody implements [notify.Prompt]: comments keep their text, field and
 // status changes collapse to their lead.
@@ -356,6 +376,17 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 		b.WriteString("A task you are named on changed.")
 	}
 	promptHeader(b, n, parties)
+	// A COMMENT IS QUOTED WHATEVER BROUGHT IT HERE. The four reasons above
+	// are ABOUT something somebody said, but a remark reaches a task's
+	// assignee, reporter and watchers too, and to them the change IS the
+	// remark: [promptChanged] leaves a comment's body to this opener, and
+	// [Prompt.RequiresRecon] reports a comment wake as carrying its text —
+	// so a copy that rendered only "a comment was added" sent its seat to
+	// read the task for words the trigger was built to hand it.
+	switch ChangeKind(n.EventType) {
+	case ChangeComment, ChangeCommentEdited:
+		quoted = true
+	}
 	if !quoted {
 		return
 	}
@@ -451,8 +482,8 @@ func promptAskedDecision(b *strings.Builder, meta map[string]string, d decision.
 		Choice: choice, Body: "<why, in a sentence or two>",
 	}
 	b.WriteString("\nAnswer with ONE call to `" + CommentOnWorkTool + "`, " +
-		"naming the option you choose by its id in `choice` (one of: " +
-		strings.Join(d.OptionIDs(), ", ") + "):\n\n" +
+		"naming the option you choose by its id in `choice` (one of " +
+		words.Or(d.OptionIDs()) + "):\n\n" +
 		"```json\n" + jsonText(call) + "\n```\n\n" +
 		"If none of the options is right, answer without `choice` and say in " +
 		"`body` what you would do instead — that is an answer too. The asker " +
@@ -788,8 +819,8 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 	if ChangeKind(meta[MetaChangeKind]) == ChangePurged {
 		// A DIFFERENT INSTRUCTION FROM A REMOVAL, because the remedies
 		// differ: a removed task is in the trash and `restore_task`
-		// brings it back, and a purged one is gone from every node with
-		// no gesture that returns it. Telling a lead to "record any
+		// brings it back, and a purged one is gone from every data node
+		// with no gesture that returns it. Telling a lead to "record any
 		// progress worth keeping" is right in both; telling them the
 		// task can come back is right in only one.
 		b.WriteString("\n## How to handle this" +

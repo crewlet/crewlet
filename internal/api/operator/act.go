@@ -19,8 +19,10 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/modelnote"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // ActPattern is the route the act transport is mounted at: ONE catalogue tool
@@ -84,9 +86,10 @@ const MaxActBody = 2*doclet.MaxBody + 64<<10
 var ActTransportCodes = []httpjson.Code{
 	// The request guard's: nobody, an identity this node could not read, a
 	// seat the chart no longer holds, a session that may only enrol a
-	// second factor.
+	// second factor, and a request made for a reader the credential is not.
 	httpjson.CodeInvalidToken, httpjson.CodeIdentityUnavailable,
 	httpjson.CodeSeatUnavailable, httpjson.CodeSecondFactorEnrolmentRequired,
+	httpjson.CodeReaderChanged,
 	// The cross-site write gate's.
 	httpjson.CodeCSRFOrigin,
 	// The authority table's, through the one refusal mapping.
@@ -141,8 +144,11 @@ type ActAnswer struct {
 // `Idempotency-Key`, which every surface that takes one reads it from — so a
 // retry is one script whichever route it wrote to, and the key is held to one
 // grammar and scoped by one rule.
+//
+// THE ARGUMENTS ARE HELD RAW and read by the one decode every transport into
+// a tool shares ([toolargs.Decode]), never by this envelope's decoder.
 type actRequest struct {
-	Args map[string]any `json:"args"`
+	Args json.RawMessage `json:"args"`
 }
 
 // Acts names the tools the act transport would serve this principal: the
@@ -233,7 +239,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		httpjson.Refuse(w, err)
 		return
 	}
-	req, err := decodeAct(raw)
+	args, err := decodeAct(raw)
 	if err != nil {
 		log.InfoContext(r.Context(), "operator_act_body_refused", "tool", name,
 			"error", err.Error())
@@ -249,10 +255,6 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	args := req.Args
-	if args == nil {
-		args = map[string]any{}
-	}
 	if !NoOperationArg(args) {
 		log.InfoContext(r.Context(), "operator_act_body_refused", "tool", name,
 			"error", "the arguments name "+OperationArg)
@@ -266,8 +268,9 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		AuditRefusal(r.Context(), s.audit, transport, name, key, false)
 		log.WarnContext(r.Context(), "operator_act_assist_refused", append(logged,
 			"detail", refusal)...)
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			authz.RefusalDetail(authz.ReasonAssistRefused, nil))
+		status, code, fields := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonAssistRefused})
+		httpjson.FailWithFields(w, status, code, fields)
 		return
 	}
 	// THROUGH THE DISPATCH, which publishes the call's runtime audit
@@ -335,23 +338,33 @@ func RefuseOperationArg(w http.ResponseWriter, tool string) {
 }
 
 // decodeAct reads the body as exactly one JSON object naming only the field the
-// transport takes.
+// transport takes, and answers the tool's arguments it carries — never nil.
 //
 // A KEY THIS TRANSPORT DOES NOT READ IS REFUSED rather than ignored: a client
 // naming its operation in the body (`op_id`) rather than in the
 // Idempotency-Key header would otherwise send every write believing it named
 // an operation it did not, and its retry would be a second write.
-func decodeAct(raw []byte) (actRequest, error) {
+//
+// THE ARGUMENTS' NUMBERS ARRIVE AS json.Number ([toolargs.Decode]), as
+// they do on every other path into these tools. Decoded by this envelope's
+// own decoder they were float64s, so an integer past 2^53 — a vendor's
+// 19-digit id, a whole-number custom-field value — was rounded before any tool
+// saw it, and a person's press recorded a value they never sent.
+func decodeAct(raw []byte) (map[string]any, error) {
 	var req actRequest
 	switch err := httpjson.DecodeStrict(raw, &req); {
 	case errors.Is(err, httpjson.ErrTrailingData):
-		return actRequest{}, err
+		return nil, errors.New(plainjson.Unreadable("the body", plainjson.ErrTrailing))
 	case err != nil:
-		return actRequest{}, fmt.Errorf("the body must be one JSON object "+
-			"{\"args\": {…}}, with the operation in the %s header: %w",
-			opkey.Header, err)
+		return nil, fmt.Errorf("%s. Send one JSON object, {\"args\": {…}}, "+
+			"with the operation in the %s header",
+			plainjson.Unreadable("the body", err), opkey.Header)
 	}
-	return req, nil
+	args, err := toolargs.Decode(req.Args)
+	if err != nil {
+		return nil, errors.New(plainjson.Unreadable(`"args" in the body`, err))
+	}
+	return args, nil
 }
 
 // receiptOf is a successful call's answer: the tool's own, with the outcome and
@@ -397,7 +410,8 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 // PersonsReceipt is a tool call that landed, as every surface answering a
 // PERSON answers it (ADR-0060): the tool's receipt with every key that holds
 // its model's words taken off ([builtin.ModelOnlyKeys]: its caveats under
-// `warnings`, and a partial outcome's sentence under its own key), the rest
+// `warnings`, a partial outcome's sentence under its own key, and the
+// `provenance` envelope a fenced answer carries for its model), the rest
 // as the tool wrote it, and its caveats in a person's words, always a list. The act route and the
 // human write surface both answer through it, so neither can come to hand a
 // person what the other strips.
@@ -406,9 +420,15 @@ func receiptOf(name string, result tools.Result) ActAnswer {
 // write answers one, so this is a tool that changed shape, and what it said
 // instead is written for a model. It is logged here, under the tool's name,
 // and never answered; the caller says what the write came to without it.
+//
+// THE WORDS OTHER PRINCIPALS WROTE, AS THEY WERE STORED: where the tool wrote
+// its answer for a person apart ([tools.Result.PersonReceipt]), that is the
+// receipt answered, never Output, whose fences, escapes and envelope are a
+// model's framing of those words (ADR-0040). Read off Output, a room's topic
+// reached a person between a fence's two lines.
 func PersonsReceipt(tool string, result tools.Result) (json.RawMessage, []caveat.Shown, bool) {
 	caveats := caveat.ForPeople(result.Caveats)
-	receipt, readable := builtin.ForPerson(result.Output)
+	receipt, readable := builtin.ForPerson(result)
 	if !readable {
 		log.Warn("operator_receipt_unreadable", "tool", tool, "output", result.Output)
 		return nil, caveats, false
@@ -426,6 +446,21 @@ func FailTool(w http.ResponseWriter, r *http.Request, result tools.Result, key s
 	about httpjson.Detail) {
 
 	Fail(w, result.Cause, result.PersonRefusal, key, about)
+	modelnote.Tell(r.Context(), result.Output)
+}
+
+// FailToolIfMatched is [FailTool] for a call whose version the request stated
+// in its If-Match HEADER, which the route folded into the tool's version: a
+// stale version is HTTP's failed precondition ([FailIfMatched]), every other
+// refusal is FailTool's answer, and the tool's sentence is told to the model
+// that made the call as FailTool tells it. ONE FUNCTION for both halves, so a
+// route that folds the header cannot answer its status and forget the model:
+// the header moves the status of a stale version, and nothing about who hears
+// which words.
+func FailToolIfMatched(w http.ResponseWriter, r *http.Request, result tools.Result,
+	key string, about httpjson.Detail) {
+
+	FailIfMatched(w, result.Cause, result.PersonRefusal, key, about)
 	modelnote.Tell(r.Context(), result.Output)
 }
 

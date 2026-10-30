@@ -15,17 +15,15 @@ import (
 // number the store is held to, not the package that chose it).
 const productionSeatTTL = 45 * time.Second
 
-// THE WALKS AND THE BULK ADMISSION RUN ON THE FLEET'S OWN COORDINATION STORE,
-// at the seat lease TTL a fleet really opens it with.
+// THE WALKS RUN ON THE FLEET'S OWN COORDINATION STORE, at the seat lease TTL a
+// fleet really opens it with.
 //
 // Every other case takes its claims from the in-memory twin, which keeps any
 // deadline it is asked for. The embedded KV store a fleet runs held every
 // lease outside the duties to its seat lease bucket's age, so at the shipped
 // 45 seconds the walks' 60-second claim was refused: every cross-project move
 // and every merge on every `embedded-kv` fleet failed before its first append
-// with an error naming a TTL, and a bulk edit's admission failed OPEN, so the
-// fleet-wide bound on bulk edits was silently gone. Nothing single-node could
-// see it.
+// with an error naming a TTL. Nothing single-node could see it.
 //
 // The store is the engine's own construction — the coordination KV over the
 // broker's own JetStream client — so a claim lands where a fleet's does.
@@ -82,25 +80,5 @@ func TestCrossProjectMoveAndMergeRunOnEmbeddedKVCoordination(t *testing.T) {
 	}
 	if lease := claimOf(t, r, worklet.MergeClaim("dup")); lease != nil {
 		t.Errorf("the finished merge still holds %s: %+v", worklet.MergeClaim("dup"), lease)
-	}
-
-	// THE BULK ADMISSION, at the largest bulk a call carries before the
-	// applier's drain is measured: twice its projected apply time at the
-	// one-row-a-second floor, which is well past the seat TTL. It must be a
-	// lease the store HOLDS, because one it refused is admitted anyway —
-	// the admission fails open — and a fleet with no bulk bound looks
-	// exactly like one whose bulks never collide.
-	release, err := r.writer.Admit(t.Context(), worklet.MaxBulkTasks)
-	if err != nil {
-		t.Fatalf("admit a bulk of %d tasks: %v", worklet.MaxBulkTasks, err)
-	}
-	if lease := claimOf(t, r, worklet.BulkClaim()); lease == nil {
-		t.Errorf("a bulk of %d tasks was admitted with no lease held on %s: the store "+
-			"refused the admission's TTL and the bulk was waved through unbounded",
-			worklet.MaxBulkTasks, worklet.BulkClaim())
-	}
-	release()
-	if lease := claimOf(t, r, worklet.BulkClaim()); lease != nil {
-		t.Errorf("the released bulk admission is still held: %+v", lease)
 	}
 }

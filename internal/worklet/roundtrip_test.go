@@ -234,16 +234,13 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 }
 
 // writerClaiming is this harness's writer — its publisher, its estate, its
-// recorder, its actor and its authored clock — taking its walk claims from
-// claims. The recorder is the publisher's, as a node's writer and publisher
-// share the process's one, so what the writer counts is readable beside what
-// the framework does.
+// actor and its authored clock — taking its walk claims from claims.
 func (r *roundTrip) writerClaiming(claims coord.Backend) *worklet.Writer {
 	r.t.Helper()
 	writer, err := worklet.NewWriter(worklet.WriterDeps{
 		Publisher: r.publisher, DB: r.db.Reader(), NodeID: r.nodeID,
-		Claims: claims, Metrics: r.metrics,
-		Actor: "ana", ActorKind: worklet.AuthorHuman,
+		Claims: claims,
+		Actor:  "ana", ActorKind: worklet.AuthorHuman,
 		Now: func() time.Time { return r.at },
 	})
 	if err != nil {
@@ -710,24 +707,56 @@ func TestASnapshotCarriesTheCheckpointItsRowsAreAt(t *testing.T) {
 	}
 }
 
-// A CREATE FOR A NAME ALREADY TAKEN IS REFUSED FROM THE GUARDING ROW.
+// A CREATE WHOSE TASK IS ALREADY FILED IS ANSWERED FROM THE GUARDING ROW.
 //
-// Established from THIS NODE'S OWN ROW rather than from the broker, because a
-// task below the trim floor has no record left on the log to prove it existed
-// — and the broker's own claim on that subject is exactly what a trim removes.
-func TestASecondCreateIsRefusedFromTheGuardingRow(t *testing.T) {
+// The task's id names the create — the builtin derives it from the create's
+// operation as the work began — so a create meeting a task already under it is
+// that create made before: a rebased re-run, whose operation the ledger does
+// not hold. It is answered with that task, under the key it holds, with no
+// number minted and nothing published. Established from THIS NODE'S OWN ROW
+// rather than from the broker, because a task below the trim floor has no
+// record left on the log to prove it existed — and the broker's own claim on
+// that subject is exactly what a trim removes. It was refused `ErrExists`
+// after a number had been spent, telling the re-run its own item could not be
+// filed.
+func TestACreateWhoseTaskIsFiledIsAnsweredFromTheGuardingRow(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
-	if _, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil); err != nil {
+	first, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil)
+	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	r.drain()
-	_, err := r.writer.CreateTask(t.Context(), "op-2", newTask("t-1"), nil)
-	if err == nil {
-		t.Fatal("a second create for the same task was accepted")
+	end := r.logEnd(t)
+	again, err := r.writer.CreateTask(t.Context(), "op-2", newTask("t-1"), nil)
+	if err != nil || again.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the create made again = (%s, %v), want applied", again.Outcome, err)
 	}
-	if !errors.Is(err, statelog.ErrExists) {
-		t.Fatalf("the refusal is %v, not the one a caller handles", err)
+	if again.Key != first.Key || again.Key == "" {
+		t.Errorf("the create made again answered key %q, want the task's own %q",
+			again.Key, first.Key)
+	}
+	if now := r.logEnd(t); now != end {
+		t.Errorf("the create made again published %d record(s) — a number "+
+			"minted, or a second task", now-end)
+	}
+}
+
+// AND WHERE THE TASK IS FILED BETWEEN THE MINT AND THE TASK'S APPEND, the task
+// step answers it the same way: the guarding row says the create was made, so
+// the number this attempt took is a gap and the answer is the task's own.
+func TestATaskFiledAfterItsMintIsAnsweredFromItsRow(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	first, err := r.writer.CreateTask(t.Context(), "op-1", newTask("t-1"), nil)
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	got, err := r.writer.FileTaskAt(t.Context(), "op-2", newTask("t-1"), 99)
+	if err != nil || got.Outcome != statelog.OutcomeApplied || got.Key != first.Key {
+		t.Fatalf("the task step over a filed task = (%s key %q, %v), want applied "+
+			"under %q", got.Outcome, got.Key, err, first.Key)
 	}
 }
 

@@ -61,7 +61,9 @@ type surface struct {
 	defs   []llm.ToolDef
 	// names resolves the arguments a tool declares as naming a seat, a
 	// unit, a project or a space ([catalog.Tool.Names]), through the turn's
-	// own grant, before a read is sent or a write is previewed.
+	// own grant, before a read is sent or a write is previewed, and holds
+	// the call to its schema in the same pass, every fault of both in one
+	// refusal ([catalog.Resolver.Prepare]).
 	names *catalog.Resolver
 
 	mu sync.Mutex
@@ -193,7 +195,7 @@ func (s *surface) recordRefusal(ctx context.Context, tool catalog.Tool, args map
 	summary, reason string) string {
 
 	message := redact.Secrets(reason)
-	step := s.t.stepStart(tool, args, nil, "")
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	s.t.stepEnd(ctx, step, wire.StepRefused, summary, &wire.Refusal{Code: cards.CodeInvalidCall,
 		Message: message}, 0, 0)
 	return message
@@ -201,11 +203,11 @@ func (s *surface) recordRefusal(ctx context.Context, tool catalog.Tool, args map
 
 // read sends one read tool's request and shapes its answer.
 func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
-	resolved, err := s.names.Resolve(ctx, tool, args)
+	prepared, err := s.names.Prepare(ctx, tool, args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
 	}
-	args = resolved
+	args = prepared
 	req, err := tool.Request(args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not sent", err), nil
@@ -216,7 +218,7 @@ func (s *surface) read(ctx context.Context, tool catalog.Tool, args map[string]a
 	}
 	route, _ := tool.RouteOf(req)
 	shown, _ := tool.StepRequest(req)
-	step := s.t.stepStart(tool, args, shown, patternOf(route))
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), shown, patternOf(route))
 	resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, req)
 	if err != nil {
 		return s.unsent(ctx, step, tool, route, err)
@@ -295,13 +297,16 @@ func (s *surface) remember(key, model string) {
 	s.reads[key] = model
 }
 
-// cardOptions are what a read's card is told beyond its answer: each seat's
-// name, from the seat directory the turn reads through its own grant, read
-// only when a card has a seat to name; and the company's clock, which every
-// instant the model reads is said on.
+// cardOptions are what a read's card and a step's label are told beyond the
+// answer: each seat's name, from the seat directory the turn reads through its
+// own grant, read only when a card has a seat to name; each chat room as the
+// turn says it, read only when a call names one by its id; and the company's
+// clock, which every instant the model reads is said on.
 func (s *surface) cardOptions(ctx context.Context) cards.Options {
 	o := cards.Options{SeatName: func(handle string) (string, bool) {
 		return s.names.SeatName(ctx, handle)
+	}, Room: func(ref string) (cards.Room, bool) {
+		return s.names.Room(ctx, ref)
 	}}
 	if c, _ := s.t.svc.company(); c != nil {
 		o.Zone = c.Location()
@@ -319,7 +324,7 @@ func (s *surface) docs(ctx context.Context, tool catalog.Tool, args map[string]a
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not found", err), nil
 	}
-	step := s.t.stepStart(tool, args, nil, "")
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	s.t.stepEnd(ctx, step, wire.StepDone, "Looked up", nil, 0, len(answer))
 	return toolloop.ToolResult{Output: provenance.Neutralise(s.t.boundary, answer)}, nil
 }
@@ -360,15 +365,12 @@ func (s *surface) propose(ctx context.Context, tool catalog.Tool, args map[strin
 		}
 		immediate = action.Confirm == wire.ConfirmNone
 	}
-	resolved, err := s.names.Resolve(ctx, tool, args)
+	prepared, err := s.names.Prepare(ctx, tool, args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
 	}
-	args = resolved
-	if err = tool.Check(args); err != nil {
-		return s.refuseBefore(ctx, tool, args, "Not proposed", err), nil
-	}
-	step := s.t.stepStart(tool, args, nil, "")
+	args = prepared
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	// A PREVIEW'S READ is decoded and diffed, never handed to the model, so
 	// it reads to the preview's bound rather than a step's.
 	read := func(ctx context.Context, r exec.Request) (exec.Response, error) {
@@ -515,14 +517,11 @@ func (t *turn) draft(tool catalog.Tool, scope wire.ProposalScope, preview propos
 // and a refusal and an absence are both "not permitted", never told apart), or
 // by their grants for a screen that names no record.
 func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[string]any) (toolloop.ToolResult, error) {
-	resolved, err := s.names.Resolve(ctx, tool, args)
+	prepared, err := s.names.Prepare(ctx, tool, args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
 	}
-	args = resolved
-	if err = tool.Check(args); err != nil {
-		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
-	}
+	args = prepared
 	link, probe, err := catalog.Open(args)
 	if err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not opened", err), nil
@@ -536,7 +535,7 @@ func (s *surface) navigate(ctx context.Context, tool catalog.Tool, args map[stri
 			request, pattern = shown, patternOf(route)
 		}
 	}
-	step := s.t.stepStart(tool, args, request, pattern)
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), request, pattern)
 	permitted, status, size := cards.MayOpen(link.Screen, s.t.person), 0, 0
 	if probe != nil {
 		resp, err := s.t.svc.dispatcher.Do(ctx, s.t.read, *probe)
@@ -613,11 +612,12 @@ func appNames(apps []iam.Grant) []string {
 	return out
 }
 
-// outsideTrusts are the trusts a read's answer is written by somebody the
-// company cannot vouch for under: a proposal made after one names its source
-// (D25).
-var outsideTrusts = map[provenance.Trust]bool{
-	provenance.TrustExternal: true, provenance.TrustPage: true,
+// outsideTrust reports whether a read's answer was fenced at a trust that says
+// somebody the company cannot vouch for wrote it: a proposal made after one
+// names its source (D25). A comparison and never a decision: the answer's
+// trust was decided where it was fenced.
+func outsideTrust(trust provenance.Trust) bool {
+	return trust == provenance.TrustExternal || trust == provenance.TrustPage
 }
 
 // refusalSummary is a refused step's outcome in a few words.

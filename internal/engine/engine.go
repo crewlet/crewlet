@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
@@ -281,7 +282,8 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		// prompt renders leaves out exactly the people its tools do — and
 		// the chain the roster's ${VAR} contact ids resolve through.
 		Seat: prompts.Seat{Org: c.Org, Role: role, Env: c.contacts,
-			Withheld: in.Turn.Context.WithholdsContacts},
+			Withheld: in.Turn.Context.WithholdsContacts,
+			Chatlet:  c.Config.ChatBackendFor() == config.ChatChatlet},
 		Registry: reg,
 		Models:   c.Models,
 		// THE PROCESS'S, threaded per turn like the publisher: the epoch is
@@ -332,7 +334,7 @@ func (c *Company) RunnerFor(handle string, reg *tools.Registry, in RunnerInput) 
 		Reply:        in.Reply,
 		Conversation: in.Conversation,
 		Skills:       in.Skills,
-		SkipNames:    MetaToolNames(),
+		SkipNames:    toolname.Discovery(),
 		Publisher:    in.Publisher,
 		Turn:         in.Turn,
 		// The working indicator's phase hook, threaded per turn like the
@@ -475,7 +477,7 @@ func (c *Company) TurnSettings(deadline time.Time) turn.Settings {
 	return turn.Settings{
 		MaxIterations:        te.MaxIterations,
 		DelegationDepthLimit: te.DelegationDepthLimit,
-		SkipNames:            MetaToolNames(),
+		SkipNames:            toolname.Discovery(),
 		Deadline:             deadline,
 	}
 }
@@ -488,13 +490,4 @@ func wallClockDeadline(started time.Time, capSeconds int) time.Time {
 		return time.Time{}
 	}
 	return started.Add(time.Duration(capSeconds) * time.Second).UTC()
-}
-
-// MetaToolNames are the tools the ledger filters out.
-//
-// A meta-tool is never a delivery, so in a record whose only job is "what
-// already happened that matters" it is pure noise. Named here rather than in
-// the ledger because the ledger imports nothing from crewlet, deliberately.
-func MetaToolNames() []string {
-	return []string{"activate_tool", "list_mcp_server_tools"}
 }

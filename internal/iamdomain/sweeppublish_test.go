@@ -227,7 +227,7 @@ func TestAZeroHorizonIsRefused(t *testing.T) {
 
 // sweeper is this rig's writer acting as the node, with its clock at `now`.
 func (r *writeRig) sweeper(now time.Time) *iamdomain.Writer {
-	w := r.writer.As(principalNamed("node-a", iam.KindMachine, []iam.Grant{iam.GrantAdmin}))
+	w := r.writer.As(principalNamed("node-a", iamdomain.NodeKind, []iam.Grant{iam.GrantAdmin}))
 	w.Now = func() time.Time { return now }
 	return w
 }

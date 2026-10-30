@@ -5,13 +5,21 @@ import (
 	"sync"
 )
 
-// watcher is one open watch: an unbounded queue a writer appends to under the
-// fleet's lock and never waits on, and a goroutine that hands it on ([serve]).
+// watcher is one open watch on the twin, for any record family: an unbounded
+// queue a writer appends to under the fleet's lock and never waits on, and a
+// goroutine that hands it on ([watcher.serve]).
 //
 // UNBOUNDED, because the alternative is a writer that blocks on a slow reader
 // while holding the lock every other call in the twin takes. What a watch
-// carries is the changes to a handful of records — the seat pauses, one run —
-// which a reader consumes promptly.
+// carries is the changes to a small set of records — a handful of seat
+// pauses, one run, a read state per human seat — which a reader consumes
+// promptly.
+//
+// ONE type for every family, for the KV backend's reason (its watch.go): the
+// ordering guarantee is the same everywhere — the snapshot and the
+// registration happen under ONE lock, so a write lands either before the
+// snapshot and is in it, or after the registration and is delivered as a
+// change — and two copies of it are two places to get that wrong.
 type watcher[U any] struct {
 	mu      sync.Mutex
 	pending []U

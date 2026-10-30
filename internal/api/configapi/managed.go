@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A MANAGED COMPANY DOCUMENT — ADR-0030.
@@ -105,13 +106,13 @@ func (e *ManagedError) Hint() string {
 		"node's config file and restart."
 }
 
-// tokensPhrase names token ids as tokens: "the token gitops", "one of the
-// tokens gitops, ci".
+// tokensPhrase names token ids as tokens: `the token "gitops"`, `one of the
+// tokens "gitops" or "ci"`.
 func tokensPhrase(ids []string) string {
 	if len(ids) == 1 {
-		return "the token " + ids[0]
+		return "the token " + words.Or(ids)
 	}
-	return "one of the tokens " + strings.Join(ids, ", ")
+	return "one of the tokens " + words.Or(ids)
 }
 
 // Authorize reports whether by may change the company document, as a

@@ -956,7 +956,7 @@ func (b *Bridge) Miss(token string) (runID, reason string) {
 	case b.held(sub) != nil:
 		return sub.run, ""
 	case current != nil:
-		return sub.run, "this node holds a DIFFERENT job's session for that run — " +
+		return sub.run, "this node holds a DIFFERENT job's session for that run: " +
 			"the run was relaunched and this token names the superseded job, " +
 			"which is a box that outlived the run it was started for"
 	case b.fleet.Load() == nil:
@@ -1378,6 +1378,11 @@ const (
 	stoppedNote = "This run's tools are closed and this call was not run. " +
 		"End your turn now."
 
+	// unrunNote answers a call the seat's surface could not run at all,
+	// because the turn the run belongs to was torn down under it.
+	unrunNote = "This call was not run, because the turn this coding run belongs " +
+		"to has ended. End your turn now."
+
 	// failedInsideNote answers the call that broke inside the engine.
 	failedInsideNote = "This call failed inside the engine, and this run's tools are " +
 		"now closed. End your turn now."
@@ -1455,9 +1460,14 @@ func (o *binding) Call(in toolsession.Call) toolsession.Result {
 		// The surface returns an error only for a call that could not run
 		// at all — nothing was recorded on it, and nothing is here: the
 		// call did not happen as far as any record says.
+		//
+		// IN WORDS OF ITS OWN, never the error's: the caller is the coding
+		// agent in the box, a model, and the error is a Go error's text
+		// ("toolloop: context canceled") it can do nothing with. The error
+		// goes to this node's log.
 		log.ErrorContext(o.ctx, "mcp_bridge_dispatch_failed",
 			"run_id", s.RunID, "seat", s.Handle, "tool", in.Name, "error", err)
-		return refused(fmt.Sprintf("This call could not be run: %v", err))
+		return refused(unrunNote)
 	case res.Suspend:
 		// A SUSPEND CANNOT CROSS THIS BOUNDARY. It parks a tool loop with
 		// the call unanswered so the conversation can be persisted and

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -396,5 +397,84 @@ func TestABriefRefusedInTheTurnsLastRoundIsFinal(t *testing.T) {
 	}
 	if reason, _ := ended[0]["reason"].(string); !strings.Contains(reason, "about is 366") {
 		t.Errorf("the turn's end gives reason %q, want the last refusal's", reason)
+	}
+}
+
+// A BRIEF ROW MAY CITE A CHAT ROOM, the record a question asked of the person
+// in chat waits in: by its id, or by its name with its "#", which the engine
+// resolves to the id through the room's own read, and each row opens the
+// room's screen. A room the person may not read is dropped as any record
+// they may not open is. Before a room was a citable kind, a brief on
+// Chatlet's mentions could cite neither room, and said nothing needed the
+// person while two asks waited on them.
+//
+// Mutation: drop the room from the citable kinds, or resolve no room name,
+// and a row is refused or dropped.
+func TestABriefRowMayCiteAChatRoom(t *testing.T) {
+	t.Parallel()
+	const launch, release, secret = "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31",
+		"0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e32", "0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e33"
+	room := func(id, name string) exec.Response {
+		body, _ := json.Marshal(map[string]any{"channel": map[string]any{"id": id,
+			"kind": "public", "name": name}})
+		return exec.Response{Status: http.StatusOK, Body: body}
+	}
+	mentions, _ := json.Marshal(map[string]any{"mentions": []any{
+		map[string]any{"channel_id": launch, "channel_name": "launch", "channel_kind": "public",
+			"author": "ada", "excerpt": "@grace can you approve the launch copy?",
+			"message_id": "m1", "at": "2026-10-26T09:00:00Z"},
+		map[string]any{"channel_id": release, "channel_name": "release",
+			"channel_kind": "public", "author": "ada", "excerpt": "@grace ship Friday or hold?",
+			"message_id": "m2", "at": "2026-10-26T09:05:00Z"},
+		map[string]any{"channel_id": secret, "channel_name": "secret", "channel_kind": "private",
+			"author": "ada", "excerpt": "@grace a word?", "message_id": "m3",
+			"at": "2026-10-26T09:10:00Z"}}})
+	handler := assistanttest.Routes(map[string]exec.Response{
+		"GET /chatlet/mentions":            {Status: http.StatusOK, Body: mentions},
+		"GET /chatlet/channels/" + launch:  room(launch, "launch"),
+		"GET /chatlet/channels/%23release": room(release, "release"),
+		"GET /chatlet/channels/" + release: room(release, "release"),
+	})
+	need := func(id, do string) map[string]any {
+		return map[string]any{"ref_kind": "room", "ref_id": id, "do": do, "tone": "warning",
+			"action": "open"}
+	}
+	f := assistanttest.NewRig(t, evals.RigOptions{
+		Tools:   []catalog.Tool{assistanttest.Tool(t, "list_chat_mentions")},
+		Handler: handler, Rounds: []evals.Round{
+			evals.Call("c1", "list_chat_mentions", map[string]any{}),
+			evals.Call("c2", catalog.AnswerBriefTool, map[string]any{
+				"about": "Two asks wait on you in chat.",
+				"needs": []any{need(launch, "Answer Ada in #launch: approve the launch copy?"),
+					need("#release", "Answer Ada in #release: ship Friday or hold?"),
+					need(secret, "Answer Ada in #secret")}})}})
+	mentionsPage := &wire.PageContext{Screen: "chatlet-mentions", Title: "Chatlet › Mentions",
+		Params: map[string]string{}, Query: map[string]string{}, Resources: []wire.Resource{},
+		SourceRevision: "mentions@1", Accepts: []string{}}
+	accepted, err := f.Brief("rooms", "Brief me on this page", mentionsPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := evals.Last(f.Follow(accepted.TurnID, 0), wire.EventCard)
+	if card == nil || card.Card.Card.Brief == nil {
+		t.Fatal("no brief card was drawn")
+	}
+	brief := card.Card.Card.Brief
+	var opened []string
+	for _, n := range brief.Needs {
+		if n.Ref.Kind != wire.ResourceRoom || n.Action == nil || n.Action.Link == nil ||
+			n.Action.Label != "Open the room" {
+			t.Errorf("a room's row is %+v", n)
+			continue
+		}
+		opened = append(opened, n.Ref.ID+" "+n.Action.Link.Href)
+	}
+	want := []string{launch + " #/chatlet/" + launch, release + " #/chatlet/" + release}
+	if fmt.Sprint(opened) != fmt.Sprint(want) {
+		t.Errorf("the rows open %q, want %q: the room by its id, the room by its name, and "+
+			"not the room the person may not read", opened, want)
+	}
+	if got := brief.Verdict(); got != "2 things need you" {
+		t.Errorf("the brief says %q", got)
 	}
 }

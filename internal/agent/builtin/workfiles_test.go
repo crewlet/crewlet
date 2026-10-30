@@ -48,7 +48,8 @@ func (f *fakeFiles) Files(_ context.Context, q worklet.FileQuery) (worklet.FileL
 	for _, file := range f.files {
 		if !file.Removed() && file.Project == q.Project {
 			out.Files = append(out.Files, worklet.FileRow{Project: file.Project, Path: file.Path,
-				Size: file.Size, Version: file.Version})
+				Size: file.Size, Version: file.Version,
+				CreatedBy: file.CreatedBy, UpdatedBy: file.UpdatedBy})
 		}
 	}
 	out.Complete, out.Level = true, q.Freshness.Level
@@ -117,6 +118,9 @@ type fakeObjects struct {
 
 	// corrupt makes every read answer the store's corruption sentinel.
 	corrupt bool
+
+	// putErr, when set, is every put's failure.
+	putErr error
 }
 
 func newFakeObjects() *fakeObjects { return &fakeObjects{objects: map[objstore.Key][]byte{}} }
@@ -124,6 +128,9 @@ func newFakeObjects() *fakeObjects { return &fakeObjects{objects: map[objstore.K
 func (o *fakeObjects) Put(_ context.Context, r io.Reader, limit int64,
 	_ objstore.PutMeta) (objstore.Object, error) {
 
+	if o.putErr != nil {
+		return objstore.Object{}, o.putErr
+	}
 	data, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return objstore.Object{}, err
@@ -331,6 +338,34 @@ func TestAMissingFileIsNamedAndAFailedReadIsNot(t *testing.T) {
 	}
 }
 
+// A PATH THE TRACKER REFUSES IS TOLD IN THE TRACKER'S WORDS, without the
+// "worklet:" its error opens with: the read, write and remove tools printed the
+// path refusal whole, so a model read the package's name in front of what to
+// change.
+//
+// Mutation: print NormalizeFilePath's error with %v again in any of the three
+// tools and its row goes red.
+func TestAPathTheTrackerRefusesIsToldInItsWords(t *testing.T) {
+	t.Parallel()
+	files, objects := newFakeFiles(), newFakeObjects()
+	reg := workRegistry(t, fileDeps(files, objects))
+	for tool, args := range map[string]map[string]any{
+		worklet.ReadProjectFileTool:   {"path": "reports//q3.md"},
+		worklet.WriteProjectFileTool:  {"path": "reports//q3.md", "content": "# Q3"},
+		worklet.RemoveProjectFileTool: {"path": "reports//q3.md"},
+	} {
+		got := callWork(t, reg, tool, args)
+		switch {
+		case !got.Failed:
+			t.Errorf("%s took a path with an empty folder in it: %s", tool, got.Output)
+		case !strings.Contains(got.Output, "empty folder"):
+			t.Errorf("%s does not say what is wrong with the path: %s", tool, got.Output)
+		case strings.Contains(got.Output, "worklet:"):
+			t.Errorf("%s tells a model the package's name: %s", tool, got.Output)
+		}
+	}
+}
+
 // A LIVE FILE NAMING NO OBJECT IS THE ENGINE'S FAULT, NOT A FILE THAT IS GONE:
 // the applier refuses to write one, so a read that meets one says the content
 // cannot be returned and a retry will not help — internal_error, never
@@ -413,7 +448,9 @@ func TestWritingTheSameContentAgainStoresNothing(t *testing.T) {
 
 // AN UPLOAD TOO OLD TO RECORD IS ONE THE SAME CALL FIXES: the call uploads the
 // content anew, under a fresh key — so the seat is told to make it again,
-// rather than that the write failed.
+// rather than that the write failed. Its class is the upload's state, a
+// conflict, as the artifacts' stale upload and the file route's own 409 are:
+// no wait changes it.
 func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
 	t.Parallel()
 	files, objects := newFakeFiles(), newFakeObjects()
@@ -422,7 +459,7 @@ func TestAnUploadTooOldToRecordIsMadeAgain(t *testing.T) {
 	got := callWork(t, reg, worklet.WriteProjectFileTool, map[string]any{
 		"path": "r.md", "content": "late",
 	})
-	if !got.Failed || tools.RefusalOf(got) != tools.RefusalUnavailable ||
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalConflict ||
 		!strings.Contains(got.Output, "Make the same call again") {
 		t.Fatalf("a stale upload answered %s (refusal %q)", got.Output, tools.RefusalOf(got))
 	}
@@ -473,5 +510,43 @@ func TestAFileIsRemovedByItsProjectsLeadOnly(t *testing.T) {
 				t.Errorf("the refusal carries %v, not the authority's own answer", got.Cause)
 			}
 		})
+	}
+}
+
+// A FULL STORE IS NO WRITE TO TRY AGAIN SHORTLY: no retry lands until somebody
+// makes room, so the model is told to stop and say so, where every failed put
+// told it to try again shortly — a store that did not answer still is, and a
+// failure the store classed as neither is a fault of the node, as every other
+// surface storing a file answers it (it was "try again shortly" here and a
+// fault on the artifact tools). Mutation: drop the full store's arm, or answer
+// a fault as a condition, and its row fails.
+func TestAFullStoreIsNoWriteToTryAgain(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct {
+		err        error
+		class      tools.Refusal
+		says, nots string
+	}{
+		"a full store": {fmt.Errorf("objstore: store the object: %w", objstore.ErrFull),
+			tools.RefusalUnavailable, "Don't try again", "Try again shortly"},
+		"a store that did not answer": {fmt.Errorf("objstore: store the object: %w: %w",
+			objstore.ErrUnanswered, errors.New("nats: timeout")),
+			tools.RefusalUnavailable, "Try again shortly", "Don't try again"},
+		"a fault": {errors.New("objstore: the backend stored x after 3 bytes, before the " +
+			"content ended"), tools.RefusalInternalError, "not something trying again clears",
+			"Try again shortly"},
+	} {
+		files, objects := newFakeFiles(), newFakeObjects()
+		objects.putErr = c.err
+		got := callWork(t, workRegistry(t, fileDeps(files, objects)),
+			worklet.WriteProjectFileTool, map[string]any{"path": "a.md", "content": "x"})
+		if !got.Failed || tools.RefusalOf(got) != c.class ||
+			!strings.Contains(got.Output, c.says) || strings.Contains(got.Output, c.nots) {
+			t.Errorf("%s: answered %s %q, want %s saying %q", name,
+				tools.RefusalOf(got), got.Output, c.class, c.says)
+		}
+		if strings.Contains(got.Output, "nats") || strings.Contains(got.Output, "3 bytes") {
+			t.Errorf("%s: told a model its error's own text: %q", name, got.Output)
+		}
 	}
 }

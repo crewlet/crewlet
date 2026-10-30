@@ -94,7 +94,7 @@ func TestARestoredReanchorOverRecordsWrittenAfterTheRestoreAsksTheOperator(t *te
 func appendOwnGeneration(t *testing.T, e *Engine) uint64 {
 	t.Helper()
 	running := e.core.Load().log.Domain(worklet.Domain{}.Name())
-	in, _, err := e.reanchorInputs(t.Context(), running)
+	in, err := e.reanchorInputs(t.Context(), running)
 	if err != nil {
 		t.Fatalf("reanchorInputs: %v", err)
 	}

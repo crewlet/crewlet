@@ -220,6 +220,15 @@ func TestAReadmissionIsRefusedBelowTheFloor(t *testing.T) {
 						"node cannot compare is not a fault in the node", err,
 						statelog.ErrUnavailable)
 				}
+				// AND IT SAYS WHICH LOG, so the engine can tell the
+				// operator where this node is behind and send them to a
+				// node that isn't, rather than answer a fault.
+				var behind *statelog.ReanchorNotApplied
+				if !errors.As(err, &behind) || behind.Domain != "tracker" ||
+					behind.Reported != 3 || behind.Runs != 2 {
+					t.Fatalf("err = %#v, want the tracker named as re-anchored "+
+						"past this node, 3 against 2", err)
+				}
 				return
 			case tc.refused == "":
 				if err != nil {

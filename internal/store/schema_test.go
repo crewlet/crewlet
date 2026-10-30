@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"database/sql"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/search"
@@ -27,16 +29,13 @@ import (
 //
 // # Why this lives in internal/store rather than beside each domain
 //
-// Seven of the eight registered domains reach it through [statelogtest.Run],
-// which runs the same check as one of its four suites. The IAM domain cannot:
-// that suite also runs the apply cases, and a domain has no applier on the
-// change that declares it — the engine's boot check refuses a register entry
-// with a nil applier, so a registration cannot land before its applier. The
-// check itself needs only a migrated estate and a declaration, and the
-// migrated estate is this package's. Running all eight here also makes
+// Every registered domain reaches it through [statelogtest.Run] as well,
+// which runs the same check as one of its four suites, but the check itself
+// needs only a migrated estate and a declaration, and the migrated estate is
+// this package's. Running all nine here also makes
 // the walk two-sided: a domain whose tables stopped being created at all would
 // fail here rather than quietly stop being certified — the two COMPACTED
-// domains (the vectors and each node's usage) included, whose ledgerless
+// domains (the vectors and each data node's usage) included, whose ledgerless
 // declarations are the ones a migration is likeliest to get wrong unnoticed.
 func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	t.Parallel()
@@ -45,6 +44,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 		worklet.Domain{}, doclet.Domain{}, iamdomain.Domain{},
 		search.Domain{}, usage.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
 		assistantdomain.Domain{},
+		chatlet.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -99,6 +99,8 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 		domain statelog.Domain
 	}{
 		{"iam_", iamdomain.Domain{}},
+		{"assistant_", assistantdomain.Domain{}},
+		{"chat_", chatlet.Domain{}},
 	} {
 		t.Run(tc.domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -209,78 +211,66 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	}
 }
 
-// THE DIRECTORY'S LOOKUPS SEARCH AN INDEX, AND NEVER SCAN THE PEOPLE.
+// THE DIRECTORY'S INDEXES ARE DECLARED, AS ITS STATEMENTS NEED THEM.
 //
-// A sign-in resolves a login or an address blind to its row, and every
-// directory decision asks whether anybody else holds the value it is about to
-// give — each a query with a BOUND value. An index over those two columns that
-// is PARTIAL, over the rows whose value is not empty, is one a bound value
-// cannot be proved to satisfy: measured on this driver, both lookups were then
-// a SCAN of every person, so the estate ships plain ones. The plan is read as
-// the driver reports it, for the shapes the directory runs — its uniqueness
-// check and the sign-in's sighting.
+// What each statement over the people, the invitations and the trail plans as
+// is internal/iamdomain's plan gate (TestTheDirectoryStatementsArePlanned),
+// which plans the package's own named statements — this case used to plan
+// copies of them, and the copies had drifted from the statements they stood
+// for. What is left here is the half that is the SCHEMA's: that the migrations
+// declare each index on its table, in its columns, and that the three lookups
+// are PLAIN while the bindings' index is PARTIAL — a partial index over the
+// non-empty rows is one a bound value cannot be proved to satisfy, and the
+// bindings' listing is the one read whose own predicate is the partial
+// index's.
 //
-// The listing of every binding is the other direction: a non-empty `seat_id`
-// IS the seat's partial index's predicate, so it walks that index — the bound
-// people, in seat order — where without it the read is every person plus a
-// sort, on every seat listing and every party-registry rebuild.
-//
-// AN OPEN INVITATION HOLDS ITS ADDRESS AND ITS SEAT, so every directory
-// decision that takes either asks the invitations too, with a bound value —
-// a seek on the address's index or the seat's (migration 0042), which is
-// plain for the people's reason — and the seat listing walks the OPEN
-// invitations' partial index (0041's) and sorts what it finds: the
-// outstanding invitations only, never every one that ever named a seat.
-//
-// Mutation: make the login and address indexes partial over their non-empty
-// rows and those rows read `SCAN iam_people`; drop `iam_people_seat_claim_idx`
-// and the listing does; drop `iam_invites_seat_idx` and the seat hold scans
-// the invitations; drop `iam_invites_open_idx` and the invitation listing
-// does.
-func TestTheDirectoryLookupsSearchAnIndex(t *testing.T) {
+// Mutation: make `iam_people_login_idx` partial over its non-empty rows, or
+// drop 0069's re-keyed `iam_history_person_idx`, and the case names the index.
+func TestTheDirectoryIndexesAreDeclared(t *testing.T) {
 	t.Parallel()
 	db := migratedEstate(t)
-	for _, tc := range []struct {
-		query string
-		args  []any
-		want  string
+	for name, want := range map[string]struct {
+		table, columns string
+		partial        bool
 	}{
-		{`SELECT id FROM iam_people WHERE login = ? AND id <> ? LIMIT 1`,
-			[]any{"jane.doe", "p1"}, "SEARCH iam_people USING INDEX iam_people_login_idx"},
-		{`SELECT id FROM iam_people WHERE email_blind = ? AND id <> ? LIMIT 1`,
-			[]any{"blind", "p1"}, "SEARCH iam_people USING INDEX iam_people_email_idx"},
-		{`SELECT id FROM iam_people WHERE seat_id = ? AND id <> ? LIMIT 1`,
-			[]any{"founder", "p1"}, "SEARCH iam_people USING INDEX iam_people_seat_lookup_idx"},
-		{`SELECT id, stage, login, seat_id, document FROM iam_people
-		   WHERE login = ? LIMIT 2`,
-			[]any{"jane.doe"}, "SEARCH iam_people USING INDEX iam_people_login_idx"},
-		// SeatClaims' and SeatHolders' shape: every bound person, by seat.
-		{`SELECT id, kind, login, stage, seat_id FROM iam_people
-		   WHERE seat_id != '' ORDER BY seat_id, id`,
-			nil, "SCAN iam_people USING INDEX iam_people_seat_claim_idx"},
-		// heldByInvitation's two shapes: an open invitation on an address,
-		// and on a seat.
-		{`SELECT id FROM iam_invites
-		   WHERE email_blind = ? AND redeemed_at = 0
-		     AND expires_at > ? AND seat_id <> ''
-		   ORDER BY created_at DESC LIMIT 1`,
-			[]any{"blind", 1}, "SEARCH iam_invites USING INDEX iam_invites_email_idx"},
-		{`SELECT id FROM iam_invites
-		   WHERE seat_id = ? AND redeemed_at = 0
-		     AND expires_at > ? AND seat_id <> ''
-		   ORDER BY created_at DESC LIMIT 1`,
-			[]any{"founder", 1}, "SEARCH iam_invites USING INDEX iam_invites_seat_idx"},
-		// SeatClaims' other half: every open invitation onto a seat.
-		{`SELECT id, seat_id, email_sealed, invited_by, created_at, expires_at
-		    FROM iam_invites
-		   WHERE redeemed_at = 0 AND expires_at > ? AND seat_id <> ''
-		   ORDER BY seat_id, created_at DESC, id`,
-			[]any{1}, "SCAN iam_invites USING INDEX iam_invites_open_idx"},
+		"iam_people_login_idx":       {"iam_people", "(login)", false},
+		"iam_people_email_idx":       {"iam_people", "(email_blind)", false},
+		"iam_people_seat_lookup_idx": {"iam_people", "(seat_id)", false},
+		"iam_people_seat_claim_idx":  {"iam_people", "(seat_id, id)", true},
+		"iam_people_stage_idx":       {"iam_people", "(stage, id)", false},
+		"iam_people_kind_idx":        {"iam_people", "(kind)", false},
+		"iam_invites_email_idx":      {"iam_invites", "(email_blind, created_at DESC)", false},
+		"iam_invites_seat_idx":       {"iam_invites", "(seat_id, created_at DESC)", false},
+		"iam_invites_open_idx":       {"iam_invites", "(bucket, expires_at)", true},
+		"iam_invites_spent_idx":      {"iam_invites", "(bucket, redeemed_at)", true},
+		"iam_history_person_idx":     {"iam_history", "(person_id, version)", false},
+		"iam_history_object_idx":     {"iam_history", "(object_kind, object_id, broker_at DESC)", false},
+		"iam_history_version_idx":    {"iam_history", "(version)", false},
+		"iam_history_class_idx":      {"iam_history", "(class, broker_at)", false},
+		"iam_history_sweep_idx":      {"iam_history", "(bucket, class, version)", false},
 	} {
-		plan := planOf(t, db, tc.query, tc.args...)
-		if !strings.Contains(plan, tc.want) {
-			t.Errorf("%s\nplans as %q, want %q — a directory read that scans "+
-				"reads every person in the company", tc.query, plan, tc.want)
+		var table, ddl string
+		if err := db.Read(t.Context(), func(tx *sql.Tx) error {
+			return tx.QueryRowContext(t.Context(),
+				`SELECT tbl_name, sql FROM sqlite_master
+				 WHERE type = 'index' AND name = ?`, name).Scan(&table, &ddl)
+		}); err != nil {
+			t.Errorf("read the declaration of %s: %v — the directory's "+
+				"statements read through it", name, err)
+			continue
+		}
+		columns := ddl[strings.Index(ddl, "("):]
+		where := strings.Contains(strings.ToUpper(columns), " WHERE ")
+		if where {
+			columns = columns[:strings.Index(strings.ToUpper(columns), " WHERE ")]
+		}
+		switch {
+		case table != want.table:
+			t.Errorf("%s is on %s, want %s", name, table, want.table)
+		case strings.TrimSpace(columns) != want.columns:
+			t.Errorf("%s is over %s, want %s", name, columns, want.columns)
+		case where != want.partial:
+			t.Errorf("%s: partial is %v, want %v:\n%s", name, where, want.partial, ddl)
 		}
 	}
 }

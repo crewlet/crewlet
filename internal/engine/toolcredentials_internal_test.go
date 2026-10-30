@@ -846,6 +846,22 @@ func (l *engineLogs) records(msg, seat string) []map[string]any {
 	return out
 }
 
+// about is every line written so far whose message is msg and whose key
+// holds value: [engineLogs.records] for a line about something other than a
+// seat, such as a node.
+func (l *engineLogs) about(msg, key, value string) []map[string]any {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(l.buf.String()), "\n") {
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) == nil && rec["msg"] == msg && rec[key] == value {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 // captureEngineLogs adds a JSON destination to the process's logger for the
 // rest of the test. A PROCESS-WIDE CHANGE, so only a test that does not run in
 // parallel may make it.
@@ -1095,7 +1111,11 @@ roles:
 			"the supervision that retries it", held)
 	}
 	// AS A PEER READS IT, off the heartbeat, which bounds the sentence.
-	sent, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: e.nodeStatus(ctx).Meta()})
+	status, err := e.nodeStatus(ctx)
+	if err != nil {
+		t.Fatalf("node status: %v", err)
+	}
+	sent, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
 	rows := sent.MCP
 	if len(rows) != 1 || rows[0].Server != "search" || rows[0].Failed != 1 ||
 		rows[0].Waiting != 0 || rows[0].Started != 0 {

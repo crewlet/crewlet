@@ -135,9 +135,11 @@ func (s *Service) GetSeats(w http.ResponseWriter, r *http.Request) {
 		// THE CREATE-INVITE-MOVE HELPER IS ADMIN'S, as all three gestures
 		// are: a vacancy list is where an administrator puts somebody, and
 		// told to anybody else it is a list of which seats an invitation
-		// is out for.
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			authz.RefusalDetail(authz.ReasonNoGrant, []iam.Grant{iam.GrantAdmin}))
+		// is out for. Answered as the authority table answers a missing
+		// permission ([authz.RefusalFields]).
+		status, code, detail := authz.RefusalFields(authz.Decision{
+			Reason: authz.ReasonNoGrant, Grants: []iam.Grant{iam.GrantAdmin}})
+		httpjson.FailWithFields(w, status, code, detail)
 		return
 	}
 	seats, running := s.seats.HumanSeats()

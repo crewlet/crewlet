@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
@@ -20,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/github"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -218,7 +220,7 @@ func newAppFlow(s *Service, cipher secrets.Cipher, spent StateClaims) *AppFlow {
 // this service began.
 func (s *Service) AppFlow() *AppFlow { return s.appFlow }
 
-// spend records a state as used, and reports whether this caller may use it.
+// spend records a state as used, and reports whether it already was.
 //
 // KEYED ON THE DIGEST, never the token: the fleet's registry is shared state
 // and the state IS the credential on this route, so writing it there would
@@ -227,20 +229,55 @@ func (s *Service) AppFlow() *AppFlow { return s.appFlow }
 // The claim outlives the token deliberately — taken at the TTL the state was
 // minted for, measured from the moment it is spent — so a token cannot be
 // replayed at any point while it would still open.
-func (f *AppFlow) spend(ctx context.Context, state string) error {
+//
+// USED IS ITS OWN ANSWER, not a refusal folded in with a forged or expired
+// link: the commonest second presentation is the person's own browser asking
+// for the page that finished the creation again (a refresh, or Back from
+// GitHub's install page), and what it is told depends on whether that
+// creation left the agent its app ([AppFlow.usedLink]).
+func (f *AppFlow) spend(ctx context.Context, state string) (used bool, err error) {
 	digest := sha256.Sum256([]byte(state))
 	key := "github-app-state:" + hex.EncodeToString(digest[:])
 	first, err := f.spent.Claim(ctx, key, manifestTTL, f.service.now())
 	if err != nil {
 		// CLOSED. See [StateClaims]: a registry that could not answer has
 		// not told us this state is unspent.
-		return fmt.Errorf("%w: this engine could not check whether the link "+
-			"had already been used: %w", ErrStateRefused, err)
+		return false, appFailed(stopLinkUnchecked, fmt.Errorf("%w: this engine could not check "+
+			"whether the link had already been used: %w", ErrStateRefused, err))
 	}
-	if !first {
-		return ErrStateRefused
+	return !first, nil
+}
+
+// usedLink is what a link presented again after it was spent is told.
+//
+// THE AGENT'S OWN RECORD DECIDES IT. A link is spent before GitHub's code is
+// exchanged, so a spent link says nothing about how its creation ended: the
+// agent the link names either has an app (the creation finished, or an
+// earlier one did) and nothing is left to do, or it has none, which is a
+// creation that stopped or one still finishing. Told "start again" either
+// way, as it was, a person who refreshed the page that had just finished the
+// creation read "not created" and made the agent a second app.
+//
+// A COMPANY THIS NODE CANNOT READ is the agent with no app as far as this
+// answer goes, which is the answer that sends nobody to make a second app
+// straight away: it says to give the agent's app a minute to show first.
+func (f *AppFlow) usedLink(ctx context.Context, handle string) error {
+	refused := fmt.Errorf("%w: it was already used", ErrStateRefused)
+	fc, err := f.service.readCompany(ctx)
+	if err != nil {
+		log.WarnContext(ctx, "github_app_used_link_unread", "seat", handle, "error", err)
+		return appFailed(stopLinkUsed, refused)
 	}
-	return nil
+	if hasApp(seatByHandle(fc.roster, handle)) {
+		return appFailed(stopLinkUsedDone, refused)
+	}
+	return appFailed(stopLinkUsed, refused)
+}
+
+// hasApp reports whether seat records a GitHub App of its own.
+func hasApp(seat *org.Role) bool {
+	return seat != nil && seat.GitHub != nil &&
+		(seat.GitHub.AppID != 0 || strings.TrimSpace(seat.GitHub.AppSlug) != "")
 }
 
 // beginApp serves POST /setup/integrations/github/app.
@@ -282,7 +319,8 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		Seat string `json:"seat"`
 	}
 	if err = json.Unmarshal(body, &in); err != nil {
-		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{"hint": err.Error()})
+		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
+			map[string]string{"detail": plainjson.Unreadable("the body", err)})
 		return
 	}
 	handle := strings.TrimSpace(in.Seat)
@@ -363,6 +401,185 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 var ErrStateRefused = errors.New(
 	"setupapi: this app-creation link is not one this engine issued, or it has expired")
 
+// AppFailure is an app creation this request did not finish, with what the
+// person GitHub sent back to this engine is told about it.
+//
+// THE PAGE THAT TELLS THEM IS THE WEBHOOK EDGE'S, and it printed this error's
+// own text: "setupapi: this app-creation link is not one this engine issued",
+// a seal's failure naming the secret it was writing, the config surface's
+// refusal naming a token. Only this flow knows which step stopped, and so
+// what the person can do about it (start again, delete an app GitHub made
+// before starting again, look again in a minute, or nothing at all), whether
+// an app now exists at GitHub, and whose failure it was, so it says all three
+// here ([appStop]).
+// The error beneath is the log's, and errors.Is and errors.As still reach
+// every sentinel and type in it.
+type AppFailure struct {
+	stop appStop
+	err  error
+}
+
+func (f *AppFailure) Error() string { return f.err.Error() }
+func (f *AppFailure) Unwrap() error { return f.err }
+
+// Told is what happened and what to do about it, for the person.
+func (f *AppFailure) Told() string { return f.stop.told }
+
+// Status is the HTTP status the return page answers with ([appStop.status]).
+func (f *AppFailure) Status() int { return f.stop.status }
+
+// Created reports whether GitHub had handed the app over when the creation
+// stopped, which is what the page's heading says: an app exists at GitHub
+// once it has, whatever stopped after.
+func (f *AppFailure) Created() bool { return f.stop.created }
+
+// Heading is the page's heading for this stop, which the agent's handle
+// follows, where the stop words its own, and empty where [AppFailure.Created]
+// decides it. A stop whose outcome isn't known yet has its own, because "App
+// created, but not finished" over it would tell the person the agent has no
+// app when it may already be running one.
+func (f *AppFailure) Heading() string { return f.stop.heading }
+
+// Done reports a request that finished nothing because nothing was left to
+// finish: a link presented again whose agent has its app.
+func (f *AppFailure) Done() bool { return f.stop.done }
+
+// appFailed is err, told to the person as stop says.
+func appFailed(stop appStop, err error) error {
+	return &AppFailure{stop: stop, err: err}
+}
+
+// appStop is one step an app creation can stop at, as the person GitHub sends
+// back is told about it.
+//
+// THE STEP DECIDES THE REMEDY. Before GitHub hands the app over, nothing
+// exists and the person starts again; once it has, the key and the webhook
+// secret exist only in what GitHub sent this one time, so an app Crewlet
+// could not keep is deleted before starting again rather than left beside a
+// second one.
+//
+// AND THE STATUS, by whose the failure is: 400 for the link or GitHub's code,
+// the same 409, 404 and 403 the begin route answers for a company it has not
+// got, an agent it no longer has and a document managed elsewhere, 502 for
+// GitHub not finishing the exchange, and 500 for Crewlet not finishing what
+// it was handed. Never 503: that promises this request may succeed if it is
+// sent again, and a link is spent before anything that can fail for a while,
+// so the same request is answered "already used", by what the agent it names
+// has ([AppFlow.usedLink]); what clears a condition here is that answer or a
+// new creation, which the sentence says. A 400 on every stop, as it was,
+// filed a key Crewlet failed to save under the person's mistake.
+type appStop struct {
+	told   string
+	status int
+	// created is GitHub having handed the app over: see [AppFailure.Created].
+	created bool
+	// done is a request with nothing left to do: see [AppFailure.Done].
+	done bool
+	// heading is the stop's own heading, where created's would claim what
+	// isn't known: see [AppFailure.Heading].
+	heading string
+}
+
+const startAgain = "Start again from Company › Integrations."
+
+var (
+	stopLinkRefused = appStop{status: http.StatusBadRequest,
+		told: "This link has expired, or it isn't one Crewlet made. " + startAgain}
+	stopLinkUsed = appStop{status: http.StatusBadRequest,
+		told: "This link was already used. Give the agent's app a minute to show in " +
+			"Company › Integrations. If it doesn't, delete the app on GitHub if it's " +
+			"there, then start again from Company › Integrations."}
+	stopLinkUsedDone = appStop{status: http.StatusOK, done: true,
+		told: "This link was already used, and this agent has its app, so there's " +
+			"nothing more to do here."}
+	stopLinkUnchecked = appStop{status: http.StatusInternalServerError,
+		told: "Crewlet couldn't check this link just now, so it didn't use it. " + startAgain}
+	stopNoCompany = appStop{status: http.StatusConflict,
+		told: "Crewlet has no company set up yet, so there's no agent to give this app " +
+			"to. Set the company up, then start again from Company › Integrations."}
+	stopCompanyUnread = appStop{status: http.StatusInternalServerError,
+		told: "Crewlet couldn't read the company's settings just now. Wait a moment, " +
+			"then start again from Company › Integrations."}
+	stopCompanyUnreadable = appStop{status: http.StatusInternalServerError,
+		told: "Crewlet can't read the company's settings, so the app wasn't created. " +
+			"Ask an admin to check Crewlet's logs, then start again from " +
+			"Company › Integrations."}
+	stopManaged = appStop{status: http.StatusForbidden,
+		told: "This company's settings are managed outside Crewlet, so the app wasn't " +
+			"created here. Ask whoever manages them to add it."}
+	stopCodeSpent = appStop{status: http.StatusBadRequest,
+		told: "GitHub's code for this app was already used or has expired. If the app " +
+			"shows up on GitHub, delete it there. Then start again from " +
+			"Company › Integrations."}
+	stopNotFinished = appStop{status: http.StatusBadGateway,
+		told: "GitHub didn't finish creating the app. If it shows up on GitHub anyway, " +
+			"delete it there. Then start again from Company › Integrations."}
+	stopKeyLost = appStop{status: http.StatusInternalServerError, created: true,
+		told: "GitHub created the app, but Crewlet couldn't save its key, and GitHub " +
+			"won't send it again. Delete the app on GitHub, then start again from " +
+			"Company › Integrations."}
+	stopHookLost = appStop{status: http.StatusInternalServerError, created: true,
+		told: "GitHub created the app and Crewlet saved its key, but couldn't save the " +
+			"secret GitHub signs its deliveries with, and GitHub won't send that again. " +
+			"Delete the app on GitHub, then start again from Company › Integrations."}
+	stopNotRecorded = appStop{status: http.StatusInternalServerError, created: true,
+		told: "GitHub created the app and Crewlet saved its key, but couldn't add the " +
+			"app to this agent. Delete the app on GitHub, then start again from " +
+			"Company › Integrations."}
+
+	// stopUnconfirmed is a record of the app on the agent that was STORED,
+	// whose activation the coordination store didn't answer, and which the
+	// agent's record, read back once, doesn't show or couldn't be read for
+	// ([AppFlow.unconfirmed]). That write may already be the company (ADR-0057:
+	// never "nothing was written", whichever surface the write came through),
+	// so it is not stopNotRecorded, whose "delete the app" sent a person to
+	// delete the app the agent was already running. What settles it is the
+	// agent's record a minute on, which a refresh of this page reads
+	// ([AppFlow.usedLink]) and Company › Integrations shows.
+	//
+	// 500 BY THIS PAGE'S OWN RULE, not the 503 the config surface answers the
+	// same outcome with. The coordination store is Crewlet's, and a 503
+	// promises the request may succeed if it is sent again: the config
+	// surface's client sends its read again, but what this page's person sends
+	// again is a spent link, which runs nothing and is answered by the agent's
+	// record.
+	stopUnconfirmed = appStop{status: http.StatusInternalServerError, created: true,
+		heading: "App created, confirming it was added to",
+		told: "GitHub created the app and Crewlet saved its key, but whether the app was " +
+			"added to this agent isn't known yet. Refresh this page in a minute to find " +
+			"out, or check the agent in Company › Integrations: delete the app on GitHub " +
+			"and start again only if it still shows Create app on GitHub."}
+)
+
+// stopNoSeat is where a creation stops when the agent the link named is no
+// longer one of the company's: the handle is the one the person chose to
+// begin.
+func stopNoSeat(handle string) appStop {
+	return appStop{status: http.StatusNotFound, told: fmt.Sprintf("The company has no "+
+		"agent %s any more, so the app wasn't created. If that's a mistake, add the "+
+		"agent back, then start again from Company › Integrations.", handle)}
+}
+
+// createdApp names the app GitHub handed over, for the log of a creation that
+// stopped after it: the person is told to delete it, and the admin they ask
+// finds it by these. Never its key or its secret.
+func createdApp(app *github.CreatedApp) string {
+	return fmt.Sprintf("GitHub app %d (%s, %s)", app.ID, app.Slug, app.HTMLURL)
+}
+
+// companyUnread is where a creation stops when the company could not be read
+// to find its agent: a condition a wait clears, told to wait, and anything
+// else (a revision this node's keyring does not open, one that builds no
+// organization) told to ask an admin, because no wait changes it. Classed by
+// the setup routes' own rule ([Service.companyFor]), so the same failure is not a
+// wait on one surface and a fault on the other.
+func companyUnread(err error) appStop {
+	if _, condition := builtin.ConditionSentence(err); condition {
+		return stopCompanyUnread
+	}
+	return stopCompanyUnreadable
+}
+
 // Complete finishes an app creation from GitHub's redirect.
 //
 // THE SEAL COMES FIRST, and everything else follows it. GitHub returns the
@@ -372,7 +589,7 @@ var ErrStateRefused = errors.New(
 func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, error) {
 	opened, err := f.openState(state)
 	if err != nil {
-		return "", err
+		return "", appFailed(stopLinkRefused, err)
 	}
 	handle := opened.Seat
 	// SPENT HERE, BEFORE THE EXCHANGE, which is what makes [ErrStateRefused]
@@ -389,16 +606,25 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	// manifest code is itself one-time, so a conversion that fails needs a
 	// fresh code and therefore a fresh creation either way. Spending first
 	// means a replay cannot race a slow exchange.
-	if err = f.spend(ctx, state); err != nil {
+	used, err := f.spend(ctx, state)
+	if err != nil {
 		return handle, err
+	}
+	if used {
+		return handle, f.usedLink(ctx, handle)
 	}
 	s := f.service
 	fc, err := s.readCompany(ctx)
-	if errors.Is(err, configapi.ErrNoActiveRevision) || (err == nil && seatByHandle(fc.roster, handle) == nil) {
-		return handle, fmt.Errorf("setupapi: this company has no agent seat %q", handle)
-	}
-	if err != nil {
-		return handle, fmt.Errorf("setupapi: read the company the app is for: %w", err)
+	switch {
+	case errors.Is(err, configapi.ErrNoActiveRevision):
+		return handle, appFailed(stopNoCompany, fmt.Errorf("setupapi: no company is "+
+			"configured, so it has no agent seat %q", handle))
+	case err != nil:
+		return handle, appFailed(companyUnread(err), fmt.Errorf("setupapi: read the "+
+			"company the app is for: %w", err))
+	case seatByHandle(fc.roster, handle) == nil:
+		return handle, appFailed(stopNoSeat(handle), fmt.Errorf("setupapi: this "+
+			"company has no agent seat %q", handle))
 	}
 	company := fc.company
 	// ASKED AGAIN BEFORE THE EXCHANGE, which is the last moment a refusal
@@ -409,7 +635,7 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	// carries no credential of its own and its writes are that party's.
 	by := opened.party()
 	if err = s.config.Authorize(by); err != nil {
-		return handle, err
+		return handle, appFailed(stopManaged, err)
 	}
 
 	// DETACHED FROM THE BROWSER, which is the same move [Service.runPass]
@@ -424,8 +650,17 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	defer cancel()
 
 	app, err := github.ExchangeManifest(ctx, f.service.apiBaseOf(company), code)
-	if err != nil {
-		return handle, err
+	switch {
+	case errors.Is(err, github.ErrCodeSpent):
+		// GitHub may have made the app all the same (a code converted
+		// elsewhere, or one that expired after the person confirmed), so
+		// the person is told to look here too.
+		return handle, appFailed(stopCodeSpent, err)
+	case err != nil:
+		// GitHub may have made the app and lost its answer on the way
+		// back, which nothing here can tell from one it never made: the
+		// person is told to look.
+		return handle, appFailed(stopNotFinished, err)
 	}
 
 	// SEALED BEFORE ANYTHING ELSE CAN FAIL. See the note above: these two
@@ -440,12 +675,19 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 	// THE BEGINNER'S, both writes: the key's row and the seat's record name
 	// who began the creation and the credential they began it through.
 	if err := s.secrets.Set(ctx, keyVar, app.PEM, authorOf(by), secrets.SourceSetup, now); err != nil {
-		return handle, fmt.Errorf("setupapi: seal the app key for %s: %w", handle, err)
+		return handle, appFailed(stopKeyLost, fmt.Errorf("setupapi: seal the key of %s "+
+			"for %s: %w", createdApp(app), handle, err))
 	}
 	sealedHook := strings.TrimSpace(app.WebhookSecret) != ""
 	if sealedHook {
 		if err := s.secrets.Set(ctx, hookVar, app.WebhookSecret, authorOf(by), secrets.SourceSetup, now); err != nil {
-			return handle, fmt.Errorf("setupapi: seal the webhook secret for %s: %w", handle, err)
+			// THE KEY IS SEALED AND THE SECRET IS NOT, which GitHub signs
+			// every delivery of this app with: the app cannot be used, and
+			// it is deleted and made again like one whose key was lost.
+			// Told as its own step, because the person reads which value
+			// went missing and the key did not.
+			return handle, appFailed(stopHookLost, fmt.Errorf("setupapi: seal the "+
+				"webhook secret of %s for %s: %w", createdApp(app), handle, err))
 		}
 	}
 
@@ -460,9 +702,61 @@ func (f *AppFlow) Complete(ctx context.Context, code, state string) (string, err
 		hookRef = "${" + hookVar + "}"
 	}
 	if err := s.recordSeatApp(ctx, handle, app, keyVar, hookRef, by); err != nil {
-		return handle, err
+		var unanswered *configapi.ActivationUnknownError
+		if errors.As(err, &unanswered) {
+			// STORED, AND ITS ACTIVATION UNANSWERED: the record may already
+			// be the company's, so it is never told as one that was not made.
+			return handle, f.unconfirmed(ctx, handle, app, unanswered.Stored, err)
+		}
+		// DELETED AND MADE AGAIN, the one remedy a person can carry out
+		// alone: the app's fields on a seat are the engine's to write, and
+		// a second creation beside this app would leave it orphaned at
+		// GitHub with its key under the name the second one's overwrites.
+		// The log names the app, so whoever is asked can find it. Only
+		// where nothing landed: a seat that couldn't be read, a write
+		// refused, or one that lost its race and was kept inert.
+		return handle, appFailed(stopNotRecorded, fmt.Errorf("setupapi: %s, whose key "+
+			"is sealed: %w", createdApp(app), err))
 	}
 	return handle, nil
+}
+
+// unconfirmed is how a creation ends whose record on the agent was stored and
+// whose activation the coordination store didn't answer
+// ([configapi.ActivationUnknownError]): by the agent's record, read back once.
+//
+// READ HERE, BEFORE THE PERSON IS TOLD ANYTHING. An activation whose answer
+// was lost may have landed (a store between raft leaders answers again within
+// an election), and this runs detached ([completeDeadline]), so one more read
+// of the fleet's company costs a moment and spares the person a page that
+// can't say. An agent that records this app is the creation finished, and is
+// answered as any other. Anything else, a read that failed or a pointer still
+// on the revision the write was built on, is [stopUnconfirmed], since a late
+// landing is still possible.
+//
+// THE SEAT DECIDES, NOT THE POINTER: a write built on the stored revision
+// carries the app too, and the pointer then names that one instead.
+func (f *AppFlow) unconfirmed(ctx context.Context, handle string, app *github.CreatedApp,
+	stored string, err error) error {
+
+	fc, readErr := f.service.readCompany(ctx)
+	if readErr == nil && recordsApp(seatByHandle(fc.roster, handle), app.ID) {
+		log.InfoContext(ctx, "github_app_record_confirmed", "seat", handle,
+			"revision", stored, "app", app.ID, "detail", "the record's activation went "+
+				"unanswered, and the agent's record has the app")
+		return nil
+	}
+	if readErr != nil {
+		err = fmt.Errorf("%w; the agent couldn't be read back: %w", err, readErr)
+	}
+	return appFailed(stopUnconfirmed, fmt.Errorf("setupapi: %s, whose key is sealed: %w",
+		createdApp(app), err))
+}
+
+// recordsApp reports whether seat records the GitHub App with this id: the
+// one this creation made, rather than any app the seat has.
+func recordsApp(seat *org.Role, id int64) bool {
+	return id != 0 && seat != nil && seat.GitHub != nil && seat.GitHub.AppID == id
 }
 
 // recordSeatApp writes the app onto the seat, through the entity route.

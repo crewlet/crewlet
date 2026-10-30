@@ -14,7 +14,7 @@ import (
 // repeats an earlier attempt's write collapses onto the first copy only under
 // the same id — a rule that always rebased is red on those rows. Past it the
 // attempt's own instant, because an id minted at an instant the sweep has
-// passed, whose row is gone, is answered `unknown` on every node and never
+// passed, whose row is gone, is answered `unknown` on every data node and never
 // published — a rule that never rebased is red on those. And INSIDE THE
 // RETENTION'S LAST DAY it rebases too: an attempt judged there goes on deciding
 // writes, and a sweep in the next quarter hour moves past the instant while it

@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // HOW A CANDIDATE CREDENTIAL IS NAMED TO THE PERSON WHO PASTED IT: what it
@@ -151,21 +152,19 @@ func strayProblem(noun, value string) string {
 		}
 		counts[kind]++
 	}
-	parts := make([]string, 0, len(kinds))
+	parts := make([]words.Said, 0, len(kinds))
 	for _, kind := range kinds {
-		parts = append(parts, plural(counts[kind], "1 "+kind, strconv.Itoa(counts[kind])+" "+kind+"s"))
+		parts = append(parts, words.Said(plural(counts[kind], "1 "+kind, strconv.Itoa(counts[kind])+" "+kind+"s")))
 	}
-	const shown = 3
-	positions := make([]string, 0, shown)
-	for _, s := range stray[:min(len(stray), shown)] {
-		positions = append(positions, strconv.Itoa(s.at))
+	positions := make([]int, 0, len(stray))
+	for _, s := range stray {
+		positions = append(positions, s.at)
 	}
-	where := plural(len(stray), "character ", "characters ") + joinWords(positions)
-	if len(stray) > shown {
-		where = "characters " + strings.Join(positions, ", ") + fmt.Sprintf(" and %d more", len(stray)-shown)
-	}
+	// THE FIRST THREE POSITIONS and how many more, since a value pasted with a
+	// space between every word would otherwise list every one of them.
+	where := plural(len(stray), "character ", "characters ") + words.AndMore(positions, 3)
 	return fmt.Sprintf("This %s contains %s (%s). %s %s is one unbroken line, so copy it again "+
-		"or remove %s.", noun, joinWords(parts), where, capitalised(article(noun)), noun,
+		"or remove %s.", noun, words.And(parts), where, capitalised(article(noun)), noun,
 		plural(len(stray), "it", "them"))
 }
 
@@ -180,17 +179,6 @@ func strayKind(r rune) string {
 		return "space"
 	}
 	return "invisible character"
-}
-
-// joinWords is items in a sentence: "a", "a and b", "a, b and c".
-func joinWords(items []string) string {
-	switch len(items) {
-	case 0:
-		return ""
-	case 1:
-		return items[0]
-	}
-	return strings.Join(items[:len(items)-1], ", ") + " and " + items[len(items)-1]
 }
 
 // capitalised is word with its first letter upper-cased.

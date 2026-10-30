@@ -67,8 +67,8 @@ type SandboxTails interface {
 // sandboxTail answers `sandbox_tail{turn_id, launch_id}`: the tail of that
 // launch while it runs, `launching` while its box is being made, `not_running`
 // with the record's own status once it is not, `box_paused` for a running
-// record whose box is paused, or the owning node NAMED where it did not answer
-// (`owner_silent`).
+// record whose box is paused, `box_gone` for one whose box is gone for good,
+// or the owning node NAMED where it did not answer (`owner_silent`).
 //
 // BOTH IDS ARE REQUIRED. A run is one execution of a turn and a turn can launch
 // more than one job; a request naming only the turn would show whichever job
@@ -162,7 +162,7 @@ func (s Sources) mayTail(ctx context.Context, turnID string) (gone bool, err err
 		return false, fmt.Errorf("%w: this node cannot decide %s yet: %w",
 			ErrUnavailable, authz.ActionAuditRead, company.Err)
 	case s.Sandbox == nil:
-		return false, refused("sandbox_tail", company)
+		return false, NewRefusal("sandbox_tail", company)
 	}
 	first := authz.Decide(ctx, principal, authz.ActionSeatTrailRead, authz.Object{
 		Kind: authz.KindPerson, ID: turnID, Owner: unresolvedRunSeat, Unresolved: true,
@@ -176,7 +176,7 @@ func (s Sources) mayTail(ctx context.Context, turnID string) (gone bool, err err
 		return false, fmt.Errorf("%w: this node cannot decide %s yet: %w",
 			ErrUnavailable, authz.ActionSeatTrailRead, first.Err)
 	default:
-		return false, refused("sandbox_tail", first)
+		return false, NewRefusal("sandbox_tail", first)
 	}
 	run, found, err := s.Sandbox.Get(ctx, turnID)
 	switch {

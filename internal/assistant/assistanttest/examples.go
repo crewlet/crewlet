@@ -4,7 +4,9 @@ import "testing"
 
 // exampleValues are the values a tool's required arguments are filled with by
 // name: each of the shape its name asks for, so a request built from them is
-// one the route would parse.
+// one the route would parse. A name two tools take in two shapes (a share's
+// `to` is one audience, a direct message's is a list of handles) is filled
+// only where the value fits the schema, and by its type everywhere else.
 var exampleValues = map[string]any{
 	"item":         "ENG-42",
 	"page":         RecordID,
@@ -24,6 +26,10 @@ var exampleValues = map[string]any{
 	"mission":      "Help friends share costs fairly.",
 	"vision":       "Settling up takes seconds.",
 	"policies":     []any{"Miles is the final authority."},
+	"channel":      RecordID,
+	"message_id":   RecordID,
+	"reply_to":     RecordID,
+	"members":      []any{map[string]any{"handle": "pm"}},
 	"seat":         "qa",
 	"tokens":       float64(1500000),
 }
@@ -37,13 +43,13 @@ func ExampleArgs(t testing.TB, params map[string]any) map[string]any {
 	props, _ := params["properties"].(map[string]any)
 	out := map[string]any{}
 	for name := range props {
-		if v, ok := exampleValues[name]; ok {
+		if v, ok := exampleValues[name]; ok && fits(v, props[name]) {
 			out[name] = v
 		}
 	}
 	required, _ := params["required"].([]string)
 	for _, name := range required {
-		if v, ok := exampleValues[name]; ok {
+		if v, ok := exampleValues[name]; ok && fits(v, props[name]) {
 			out[name] = v
 			continue
 		}
@@ -65,4 +71,23 @@ func ExampleArgs(t testing.TB, params map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+// fits reports whether v is of the type the JSON Schema prop declares.
+func fits(v, prop any) bool {
+	schema, _ := prop.(map[string]any)
+	kind, _ := schema["type"].(string)
+	switch v.(type) {
+	case string:
+		return kind == "string"
+	case float64:
+		return kind == "integer" || kind == "number"
+	case bool:
+		return kind == "boolean"
+	case []any:
+		return kind == "array"
+	case map[string]any:
+		return kind == "object"
+	}
+	return false
 }

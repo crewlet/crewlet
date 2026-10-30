@@ -24,12 +24,15 @@ import {
   LogRow,
   sharedTrimStatus,
   MaintenanceBanner,
+  MaintenanceBanners,
   NodePositions,
   ServedLevelBanner,
   SnapshotsCard,
   Tombstone,
+  UnreadWindowsBanner,
 } from "./Retention.tsx";
 import { Router } from "~/app/router.tsx";
+import { engineAlarm, ENGINE_ALARMS_NOW } from "~/test/retentionAlarms.ts";
 import type {
   RetentionAlarm,
   RetentionDomain,
@@ -257,9 +260,11 @@ test("a log's gate reserve is drawn beside its headroom, and only where it keeps
 
 // --- maintenance, which was visible on no screen at all -------------------
 
-// MAINTENANCE STOPS EVERY PUBLISHER ON EVERY NODE, and an operator watching a
-// company go completely quiet had nothing to look at that said why. The alarm
-// that names it only fires after an hour.
+// A WINDOW HOLDS THE WHOLE FLEET, and an operator watching a company go quiet
+// had nothing to look at that said why. The alarm that names it only fires
+// after an hour. Only a node in service draws this screen, so the banner says
+// what holds the fleet, never that publishing has stopped, which was false of
+// the node drawing it. Mutation: say "publishing is paused" again.
 test("an open capacity operation is rendered as an outage in progress", () => {
   render(
     <MaintenanceBanner
@@ -278,7 +283,106 @@ test("an open capacity operation is rendered as an outage in progress", () => {
     />,
   );
   expect(screen.getByRole("alert").className).toContain("danger");
-  expect(screen.getByText(/Waiting on node-b, node-c/)).toBeTruthy();
+  expect(screen.getByText(/Waiting on node-b and node-c\./)).toBeTruthy();
+  expect(screen.getByRole("alert").textContent).toContain(
+    "no node starts in service until it closes",
+  );
+  expect(screen.getByRole("alert").textContent).not.toMatch(/publishing is paused/);
+});
+
+// WHAT THE NODE COULDN'T READ IS SAID AS THAT, never drawn as a list. The
+// acknowledgements and the admissions are read beside each window, and an
+// unreadable register drawn as an empty list read as nobody owing anything:
+// "Waiting on its operator" over a window that may be waiting on every node.
+// Mutation: draw the lists whatever the flags say, and the operator line
+// comes back.
+test("a window whose acknowledgements or admissions couldn't be read says so", () => {
+  render(
+    <MaintenanceBanner
+      op={{
+        stream: "CREWLET_TRACKER_LOG",
+        operation_id: "op-1",
+        phase: "opened",
+        attempt: 1,
+        target_max_bytes: 2_000_000_000,
+        original_max_bytes: 1_000_000_000,
+        since: new Date(Date.now() - 60_000).toISOString(),
+        acks_unread: true,
+        admissions_unread: true,
+      }}
+      now={Date.now()}
+    />,
+  );
+  const text = screen.getByRole("alert").textContent ?? "";
+  expect(text).toContain("Couldn’t read whether an admission is holding it.");
+  expect(text).toContain("Couldn’t read which nodes have restarted for it");
+  expect(text).not.toMatch(/Waiting on/);
+});
+
+// EVERY OPEN WINDOW GETS ITS OWN BANNER. A window is per log and two can be
+// open at once, each waiting on its own nodes; one banner for the oldest hid
+// what the other was waiting on. Mutation: draw the first window alone and the
+// pages log's banner is missing.
+test("every open capacity window is drawn with what it waits on", () => {
+  const since = new Date(Date.now() - 60_000).toISOString();
+  render(
+    <MaintenanceBanners
+      windows={[
+        {
+          stream: "CREWLET_TRACKER_LOG",
+          operation_id: "op-1",
+          phase: "sealing",
+          attempt: 1,
+          target_max_bytes: 2_000_000_000,
+          original_max_bytes: 1_000_000_000,
+          since,
+          participants_missing: ["node-b"],
+        },
+        {
+          stream: "CREWLET_PAGES_LOG",
+          operation_id: "op-2",
+          phase: "sealing",
+          attempt: 1,
+          target_max_bytes: 2_000_000_000,
+          original_max_bytes: 1_000_000_000,
+          since,
+          participants_missing: ["node-c"],
+        },
+      ]}
+      now={Date.now()}
+    />,
+  );
+  const banners = screen.getAllByRole("alert");
+  expect(banners).toHaveLength(2);
+  expect(within(banners[0]!).getByText(/Maintenance on CREWLET_TRACKER_LOG/)).toBeTruthy();
+  expect(within(banners[0]!).getByText(/Waiting on node-b/)).toBeTruthy();
+  expect(within(banners[1]!).getByText(/Maintenance on CREWLET_PAGES_LOG/)).toBeTruthy();
+  expect(within(banners[1]!).getByText(/Waiting on node-c/)).toBeTruthy();
+});
+
+// A WINDOW HELD BY AN ADMISSION SAYS SO, ahead of who it waits on. Every node
+// can have restarted and the window still wait on one node's stale admission,
+// which no participant owes, and such a window is not waiting on its operator.
+test("a window held by an admission names it and not its operator", () => {
+  render(
+    <MaintenanceBanner
+      op={{
+        stream: "CREWLET_TRACKER",
+        operation_id: "op-1",
+        phase: "opened",
+        attempt: 1,
+        target_max_bytes: 2_000_000_000,
+        original_max_bytes: 1_000_000_000,
+        since: new Date(Date.now() - 60_000).toISOString(),
+        admissions_blocking: ["node-c"],
+      }}
+      now={Date.now()}
+    />,
+  );
+  expect(
+    screen.getByText(/Held by an admission from node-c: nothing is sent while it stands/),
+  ).toBeTruthy();
+  expect(screen.queryByText(/Waiting on its operator/)).toBeNull();
 });
 
 // NOBODY OUTSTANDING IS NOT PROGRESS — it is the operation waiting on whoever
@@ -301,6 +405,66 @@ test("an operation with nobody outstanding says it is waiting on its operator", 
   );
   expect(screen.getByText("Waiting on its operator.")).toBeTruthy();
   expect(screen.queryByText(/^Waiting on (?!its operator\.$)/)).toBeNull();
+});
+
+// A BLOCKED WINDOW SAYS WHY IN THE NODE'S WORDS, AND WHO ABANDONED IT, ONCE.
+// The banner printed the block's code (`abandoned_by_operator`), which told a
+// person nothing they could act on, and dropped who abandoned the window,
+// whose decision it is still carrying out. Who opened it and who abandoned it
+// each read with their credential, and nobody is named twice or inside
+// parentheses inside parentheses. Mutation: draw `op.blocked`, drop the
+// abandoning party, or wrap the opener in parentheses again, and this goes red.
+test("a blocked window says why in words and who abandoned it", () => {
+  const { container } = render(
+    <MaintenanceBanner
+      op={{
+        stream: "CREWLET_TRACKER_LOG",
+        operation_id: "op-1",
+        phase: "sealing",
+        attempt: 1,
+        target_max_bytes: 2_000_000_000,
+        original_max_bytes: 1_000_000_000,
+        since: new Date(Date.now() - 60_000).toISOString(),
+        by: "sre@example.com",
+        operator_id: "pat:0191",
+        blocked: "abandoned_by_operator",
+        blocked_detail: "This window was abandoned, so it's no longer trying to reach 1.9 GiB.",
+        abandoned_by: { by: "ana.admin", operator_id: "pat:0192" },
+      }}
+      now={Date.now()}
+    />,
+  );
+  const text = container.textContent ?? "";
+  expect(text).toContain("This window was abandoned");
+  expect(text).toContain("Abandoned by ana.admin (through pat:0192).");
+  expect(text.split("ana.admin").length - 1).toBe(1);
+  expect(text).toContain(", run by sre@example.com (through pat:0191). Resizing");
+  expect(text).not.toContain("((");
+  expect(text).not.toContain("abandoned_by_operator");
+});
+
+// A WINDOW THE NODE COULDN'T READ IS SAID, AND NAMED. Left out, a log whose
+// window the coordination read couldn't answer drew no banner, which reads as a
+// log with no window open during exactly the outage that stops the read.
+// Mutation: render nothing for it and the first half goes red; render it for
+// an empty list and the second does.
+test("a capacity window the node couldn't read is named, never drawn as none", () => {
+  render(
+    <UnreadWindowsBanner
+      streams={["CREWLET_CHAT_LOG", "CREWLET_PAGES_LOG", "CREWLET_TRACKER_LOG"]}
+    />,
+  );
+  // THE ANSWERING NODE IS IN SERVICE, so the banner says what a restart would
+  // meet rather than that publishing may be paused. One list style with the
+  // CLI. Mutation: say "publishing may be paused" again.
+  const said = screen.getByText(
+    /Couldn’t read whether a capacity window is open on CREWLET_CHAT_LOG, CREWLET_PAGES_LOG and CREWLET_TRACKER_LOG\./,
+  ).textContent;
+  expect(said).toContain("A data node restarted now won’t start in service until it can read it.");
+  expect(said).not.toMatch(/publishing/);
+  cleanup();
+  const { container } = render(<UnreadWindowsBanner streams={[]} />);
+  expect(container.textContent).toBe("");
 });
 
 // A DOCUMENT THAT CANNOT CLAIM AN AGE SAYS SO, and one that can says nothing.
@@ -333,14 +497,18 @@ test("an answer served at stale renders no banner at all", () => {
   expect(missing.container.textContent).toBe("");
 });
 
-const alarm = (over: Partial<RetentionAlarm>): RetentionAlarm => ({
-  kind: "backup_age",
-  detail: "no verified backup has been recorded, and the policy asks for one every 24h",
-  remedy: "Run `crewlet backup` against any node.",
+/**
+ * A `trim_blocked` or `log_headroom` alarm a case shapes for itself. The backup
+ * alarm is never typed here: every case drawing one reads the engine's own
+ * rendering (`~/test/retentionAlarms.ts`).
+ */
+const alarm = (over: Partial<RetentionAlarm> & Pick<RetentionAlarm, "kind">): RetentionAlarm => ({
+  detail: "",
+  remedy: "The term holding each log names what to fix.",
   ...over,
 });
 
-const NOW = Date.parse("2031-04-02T03:14:00Z");
+const NOW = ENGINE_ALARMS_NOW;
 const HELD_SINCE = "2031-03-31T05:14:00Z"; // 46h before NOW
 
 /** The engine's `trim_blocked` sentence for a log keeping `kept` records past its window. */
@@ -350,32 +518,29 @@ const keeping = (kept: number) =>
 // ONE CAUSE IS ONE ALARM. A company with no backup was drawn as a banner per
 // log, a `trim_blocked` per log and a backup alarm: five problems for one.
 // The logs one term holds are one line under the alarm whose remedy covers
-// them, dated by the one held longest — and each still says what it keeps
-// past its window, which is why it is listed at all and which no date says.
+// them, dated by the one held longest — and each still says its own backup's
+// measurement and what it keeps past its window, which is why it is listed at
+// all and which no date says.
 test("an alarm is drawn once, with the logs it holds as one line and each log's own count", () => {
-  const kept: Record<string, number> = { tracker: 1200, vectors: 40, pages: 7, usage: 310 };
-  const { container } = render(
-    <AlarmItem
-      alarm={alarm({
-        domains: Object.entries(kept).map(([domain, n]) => ({
-          domain,
-          detail: keeping(n),
-          term: "backup_floor" as const,
-          since: HELD_SINCE,
-        })),
-      })}
-      now={NOW}
-    />,
-  );
+  const backup = engineAlarm("held");
+  const domains = backup.domains ?? [];
+  const { container } = render(<AlarmItem alarm={backup} now={NOW} />);
   const text = container.textContent ?? "";
   expect(screen.getByText("Backup age")).toBeTruthy();
+  // THE HEADLINE IS THE MOST PRESSING LOG'S OWN MEASUREMENT, as a sentence.
   expect(text).toContain(
-    "No verified backup has been recorded, and the policy asks for one every 24h.",
+    "No verified backup of this log has been recorded, and the policy asks for one every 24h; " +
+      "the trim has not advanced for 46h",
   );
   expect(text.match(/Trim held by/g)).toHaveLength(1);
-  expect(text).toContain("Trim held by the backup on tracker, vectors, pages and usage, for 46h.");
-  for (const [domain, n] of Object.entries(kept)) {
-    expect(text).toContain(`${domain}: ${keeping(n)}`);
+  const names = domains.flatMap((d) => d.domains);
+  expect(text).toContain(
+    `Trim held by the backup on ${names.slice(0, -1).join(", ")} and ${names.at(-1)}, for 46h.`,
+  );
+  // EACH LOG SAYS ITS OWN COUNT, and no two say the same one.
+  expect(new Set(domains.map((d) => d.detail)).size).toBe(domains.length);
+  for (const d of domains) {
+    expect(text).toContain(`${d.domains.join(", ")}: ${d.detail}`);
   }
   // EACH LOG IS A WAY TO ITS OWN PAGE, wherever it is named.
   const links = screen.getAllByRole("link", { name: "pages" });
@@ -397,8 +562,8 @@ test("a trim blocked on two logs says each log's count, not only the lead's", ()
         kind: "trim_blocked",
         detail: keeping(1200),
         domains: [
-          { domain: "tracker", detail: keeping(1200), term: "applied", since: HELD_SINCE },
-          { domain: "pages", detail: keeping(7), term: "applied", since: HELD_SINCE },
+          { domains: ["tracker"], detail: keeping(1200), term: "applied", since: HELD_SINCE },
+          { domains: ["pages"], detail: keeping(7), term: "applied", since: HELD_SINCE },
         ],
       })}
       now={NOW}
@@ -418,7 +583,9 @@ test("a trim blocked on one log says its count once", () => {
       alarm={alarm({
         kind: "trim_blocked",
         detail: keeping(1200),
-        domains: [{ domain: "tracker", detail: keeping(1200), term: "applied", since: HELD_SINCE }],
+        domains: [
+          { domains: ["tracker"], detail: keeping(1200), term: "applied", since: HELD_SINCE },
+        ],
       })}
       now={NOW}
     />,
@@ -429,13 +596,44 @@ test("a trim blocked on one log says its count once", () => {
   expect(text).toContain("for 46h.");
 });
 
+// ONE LOG'S STALE COPY IS THE BACKUP ALARM'S WHOLE MEASUREMENT, folded into
+// the headline as any single log's is: the log is named beside it, and no
+// held trim is drawn for a hold that has not yet lasted past the window.
+test("a backup alarm on one log says that log's measurement once, beside it", () => {
+  const { container } = render(<AlarmItem alarm={engineAlarm("stale")} now={NOW} />);
+  const text = container.textContent ?? "";
+  expect(text.match(/30h old/g)).toHaveLength(1);
+  expect(text).toContain("tracker: The newest verified backup of this log is 30h old");
+  expect(screen.getByRole("link", { name: "tracker" })).toBeTruthy();
+  expect(text).not.toContain("Trim held by");
+});
+
+// A YOUNG FLEET'S MISSING BACKUP IS SAID ONCE, NAMING EVERY LOG. The engine
+// measures it in the same words on each log and carries it once, naming them,
+// so the panel draws one sentence with the logs beside it — it drew the
+// headline and then that sentence once per log, one fact said six times.
+test("a measurement taken alike on every log is said once, naming them all", () => {
+  const backup = engineAlarm("young");
+  const names = (backup.domains ?? []).flatMap((d) => d.domains);
+  expect(names.length).toBeGreaterThan(1);
+  const { container } = render(<AlarmItem alarm={backup} now={NOW} />);
+  const text = container.textContent ?? "";
+  expect(text.match(/o verified backup of this log has been recorded/g)).toHaveLength(1);
+  expect(text).toContain(
+    `${names.slice(0, -1).join(", ")} and ${names.at(-1)}: No verified backup of this log`,
+  );
+  for (const name of names) {
+    expect(screen.getByRole("link", { name })).toBeTruthy();
+  }
+});
+
 // A SINGLE LOG WHOSE MEASUREMENT IS THE ALARM'S IS FOLDED INTO IT, as the CLI
 // folds it: drawn as both the headline and a line, one sentence read twice.
 test("a single log's measurement is said once, with the log beside it", () => {
   const detail = "3% of the log's byte ceiling for ordinary writes is left";
   const { container } = render(
     <AlarmItem
-      alarm={alarm({ kind: "log_headroom", detail, domains: [{ domain: "vectors", detail }] })}
+      alarm={alarm({ kind: "log_headroom", detail, domains: [{ domains: ["vectors"], detail }] })}
       now={NOW}
     />,
   );
@@ -449,7 +647,10 @@ test("a single log's measurement is said once, with the log beside it", () => {
 // screen. Mutation: draw an alarm as a Callout and the first query finds one.
 test("an alarm is a row of the alarms card, with no button the page bar already offers", () => {
   const { container } = render(
-    <AlarmList alarms={[alarm({}), alarm({ kind: "trim_blocked" })]} now={NOW} />,
+    <AlarmList
+      alarms={[engineAlarm("held"), engineAlarm("held_beside_a_blocked_trim", "trim_blocked")]}
+      now={NOW}
+    />,
   );
   expect(container.querySelector(".crewlet-callout")).toBeNull();
   const rows = container.querySelectorAll(".alarm-rows > .alarm-row");

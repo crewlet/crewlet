@@ -16,10 +16,11 @@
 #                 -company examples/nimbus.company.yaml
 #
 # THERE ARE NO EXTERNAL SERVICES HERE.  The stream is a NATS JetStream
-# server embedded in this process and the store is one local file, so a
-# single binary in an empty directory is a working company — no broker to
-# operate, no database to provision, nothing to point a DSN at.  Both
-# slots take an external address when a deployment outgrows that; see
+# server embedded in this process and the store is two local files (the
+# node's own and the replicated estate beside it), so a single binary in
+# an empty directory is a working company — no broker to operate, no
+# database to provision, nothing to point a DSN at.  The stream takes an
+# external address when a deployment outgrows that; see
 # docs/guides/deployment.md and docs/guides/fleet.md.
 #
 # Restart-only Tier A fields only:
@@ -262,7 +263,7 @@ api:
         # Generate one with `crewlet secrets keygen`.
         token: "${CREWLET_API_TOKEN_FOUNDER}"
         # What this credential may do: `admin`, `worklet`, `doclet`,
-        # `artifacts`.
+        # `artifacts`, `chatlet`.
         # Required and non-empty: a credential's blast radius is stated
         # where it is pinned, never inferred.  This one is the founder's,
         # so it is admin, which includes every app.  A pipeline that only

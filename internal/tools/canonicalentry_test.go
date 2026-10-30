@@ -105,6 +105,38 @@ func TestARetrySpeltAnotherWayIsTheSameWrite(t *testing.T) {
 	}
 }
 
+// A NULL IS THE CALL WITHOUT IT (ADR-0059): the entry leaves a null out before
+// the run's call log, the repeat count and the tool read the call, so a retry
+// that sends an argument as null and one that leaves it out are one write.
+// Read as sent, the null made a different digest, so the second call took a
+// fresh operation id and wrote again. Both entries, as above.
+//
+// Mutation: hand a null on to the call log and the tool, and the two calls
+// write two operations.
+func TestANullIsTheSameWriteAsNoArgument(t *testing.T) {
+	t.Parallel()
+	for _, admitted := range []bool{false, true} {
+		tool := &opTool{}
+		s := opSurface(t, tool)
+		for _, raw := range []string{`{"item": "GP-12", "status": null}`, `{"item": "GP-12"}`} {
+			call := llm.ToolCall{Name: "set_status", Arguments: decodeArgs(t, raw)}
+			var err error
+			if admitted {
+				_, err = s.Admit(call.Name, call.Arguments)(context.Background(), call)
+			} else {
+				_, err = s.Execute(context.Background(), call)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if len(tool.writes) != 1 {
+			t.Errorf("admitted %v: a call and the same call with a null wrote %d operations, "+
+				"want 1: %v", admitted, len(tool.writes), tool.writes)
+		}
+	}
+}
+
 // targetTool refuses on its policy, and names its refusals' target by a value
 // a closed set holds: the kind of thing it writes.
 type targetTool struct{ policyTool }

@@ -209,10 +209,7 @@ exec) exit "$(cat "$dir/kill")" ;;
 *) exit 0 ;;
 esac
 `, dir, container, container)
-	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	waitExecutable(t, path)
+	writeExecutable(t, path, script)
 	return path, dir
 }
 

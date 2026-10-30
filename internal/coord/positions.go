@@ -126,8 +126,8 @@ type DomainPosition struct {
 // A second domain costs a MAP ENTRY here. The alternative — a bucket per
 // domain — costs a bucket, its retention decision, its replica count and a
 // place in every sweep, for a fact that is always read together anyway: the
-// trim asks "what has every node applied", and it asks it about every domain
-// at once.
+// trim asks "what has every data node applied", and it asks it about every
+// domain at once.
 type NodePositions struct {
 	NodeID        string    `json:"node_id"`
 	At            time.Time `json:"at"`
@@ -181,6 +181,11 @@ type NodePositions struct {
 // judgement about a node that has never reported anything. A removal verb
 // stood here with no caller, and a register that offers one invites wiring it
 // into the eviction.
+//
+// What bounds the register is the set of node ids a deployment has ever
+// configured: one row per id, replaced wholesale by that node's own
+// heartbeat, so a machine rebuilt under its old id writes over its old row
+// and only an id that is retired for good leaves one behind.
 type PositionRegister interface {
 	// PutPositions writes this node's row, replacing it wholesale.
 	//
@@ -209,7 +214,7 @@ type PositionRegister interface {
 // window's: [MaintenanceKey], whose existence IS the exclusion,
 // [AdmissionKey], which is one node's positive record that it intends to
 // publish, and [MaintenanceAckKey], which is one participant's evidence that
-// its process restarted. The eighth is [SeatPauseKey], a person's decision
+// its process restarted for one log's window. The eighth is [SeatPauseKey], a person's decision
 // that a seat stops taking work, which an age would lift on a timer nobody
 // set. The last two are a model entry's: [ModelRetryKey], a person's request
 // to stop sitting it out, which ages out of meaning by its own stamp, and
@@ -228,6 +233,13 @@ type PositionRegister interface {
 // tidy: a hold decoded as a positions row is a node id of "" with a domains
 // map of zero values, which the trim reads as a node that has applied nothing
 // and pins the floor at zero for ever.
+//
+// The chat read state wants the same retention and is deliberately NOT a
+// ninth class: it is the busiest record the fleet writes, and as a class here
+// every person's flush would be ordered through the one raft group, and every
+// chat screen's read answered by the one leader, that serve the trim's inputs
+// and the capacity window. [ChatReads] has a bucket of its own for that (see
+// chatread.go's "Why a bucket of its own").
 func PositionKey(nodeID string) string { return DocumentKey("node", nodeID) }
 
 // Validate reports why a row cannot be written.

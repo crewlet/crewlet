@@ -191,12 +191,24 @@ func (a Admission) call(origin artifacts.WriteOrigin, limits artifacts.Limits, k
 // at most that write, the one every stamped decision accepts.
 var decisionRead = statelog.Freshness{Level: statelog.DefaultReadLevel(statelog.SurfaceDashboard)}
 
-// now is the instant a decision is taken at.
+// now is this gate's clock.
 func (g Gate) now() time.Time {
 	if g.Now != nil {
 		return g.Now()
 	}
 	return time.Now().UTC()
+}
+
+// decidedAt is the instant a decision about this request is taken at: the one
+// its route was decided at ([authz.RouteInstant]), because every check of one
+// request is judged at one instant — a purge the route admitted on a fresh
+// proof is not refused as stale once its row has been read — or this gate's
+// clock for a call no route decided, a tool's.
+func (g Gate) decidedAt(ctx context.Context) time.Time {
+	if at, ok := authz.RouteInstant(ctx); ok {
+		return at
+	}
+	return g.now()
 }
 
 // limits is the plan quotas in force.
@@ -250,7 +262,7 @@ func (g Gate) Decide(ctx context.Context, p iam.Principal, action authz.Action,
 	head artifactsdomain.Head) (Admission, error) {
 
 	object := g.object(head)
-	now := g.now()
+	now := g.decidedAt(ctx)
 	d := authz.Decide(ctx, p, action, object, g.Chart, now)
 	switch {
 	case d.Unknown():

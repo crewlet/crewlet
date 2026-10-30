@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // ExecutorHeader is the executor's contract: decide and act in one pass, then
@@ -39,15 +40,15 @@ import (
 const ExecutorHeader = "\n## Your turn" +
 	"\nDecide what to do about the task below and do it, in this one pass. " +
 	"Use tool calls for every action — writing about an action does not " +
-	"perform it. End by calling `submit_work` exactly once, reporting what " +
+	"perform it. End by calling `" + toolname.SubmitWork + "` exactly once, reporting what " +
 	"you actually did, unless you park on a person's answer as your standing " +
 	"instructions describe." +
 	"\n" +
 	"\n**Finish the arc in this pass:** read, decide, then call the tool " +
 	"that delivers — the reply, the comment, the status change, the create. " +
 	"A turn that gathers data and stops has delivered nothing. If a tool you " +
-	"need is not among your tools, discover it (`list_mcp_server_tools`, then " +
-	"`activate_tool`) before reporting that you cannot act." +
+	"need is not among your tools, discover it (`" + toolname.ListMCPServerTools +
+	"`, then `" + toolname.Activate + "`) before reporting that you cannot act." +
 	"\n" +
 	"\n**Stay reachable on the channel the trigger arrived on**, even when " +
 	"the work lives on another system: filing the ticket is the work, and " +
@@ -232,7 +233,7 @@ func BuildExecutor(seat Seat, in ExecutorInput) Prompt {
 	// THE LIST ALONE: what a worker is, what it may not do and that it
 	// answers inside this turn is `delegate`'s own description, which
 	// reaches the model with the tool on every round.
-	if in.Workers != "" && slices.Contains(in.AvailableTools, "delegate") {
+	if in.Workers != "" && slices.Contains(in.AvailableTools, toolname.Delegate) {
 		b.Heading("workers", "\n## Your workers", in.Workers)
 	}
 

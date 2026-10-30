@@ -3,10 +3,14 @@ package engine
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -236,5 +240,26 @@ func TestAFeedThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 				t.Errorf("the refusal does not say which domain or why: %v", err)
 			}
 		})
+	}
+}
+
+// A FEED RECORD CARRIES ITS DELIVERY'S PLACE AND THE BROKER'S INSTANT FOR IT.
+//
+// The position, the stream and the generation are what a woken seat reads no
+// older than; the stored instant is what the wake is timed from (wake
+// latency). Each is read off the delivery or the envelope every build reads,
+// never off a clock or a field the domain's own decoder fills.
+//
+// Mutation: drop the stored instant, and no wake is ever timed.
+func TestAFeedRecordCarriesItsDeliverysPlaceAndInstant(t *testing.T) {
+	t.Parallel()
+	stored := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
+	got := feedRecord("CREWLET_TRACKER_LOG", statelog.Envelope{OpID: "op-1", Gen: 3},
+		[]byte(`{"v":1}`), &jetstream.DomainDelivery{Subject: "crewlet.tracker.log.task.t1",
+			Seq: 42, StoredAt: stored})
+	want := changefeed.Record{ID: "op-1", Position: 42, Stream: "CREWLET_TRACKER_LOG", Gen: 3,
+		Key: "crewlet.tracker.log.task.t1", StoredAt: stored, Payload: []byte(`{"v":1}`)}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the feed read %+v, want %+v", got, want)
 	}
 }

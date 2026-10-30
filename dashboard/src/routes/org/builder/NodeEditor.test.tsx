@@ -1003,6 +1003,7 @@ describe("who holds a person's seat", () => {
     project: "",
     config_writer: true,
     config_managed_by: [],
+    chat_vendors: [],
   });
   const seats = vi.fn((input: RequestInfo | URL) =>
     Promise.resolve(
@@ -1298,7 +1299,7 @@ describe("problems", () => {
     const unit = checkWithProblems(keyedState(fixtureCompany()), [
       problemAt(
         ["units", 0, "mcp_env", "tracker", "TOKEN"],
-        "units[0].mcp_env.tracker.TOKEN: names no secret",
+        "units[0].mcp_env.worklet.TOKEN: names no secret",
       ),
     ]);
     edit(unit, "unit:engineering");

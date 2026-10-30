@@ -85,7 +85,8 @@ func (f *fakeKB) List(_ context.Context, _ doclet.Filter,
 		return doclet.Listing{}, f.readErr
 	}
 	return doclet.Listing{
-		Pages:    []doclet.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title}},
+		Pages: []doclet.Summary{{ID: f.page.Page.ID, Title: f.page.Page.Title,
+			Author: f.page.Page.Author, Labels: f.page.Page.Labels}},
 		Level:    fresh.Level,
 		Complete: true,
 	}, nil
@@ -830,6 +831,51 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 	}
 }
 
+// A PAGE REMARK CARRIES THE CALL'S OWN ARGUMENTS in its operation key, so a
+// call that named the page another way is another call. The repeat count
+// compares the arguments as typed and the store's parts are what the call
+// resolved to, so without the digest "ok" on p1, the same again, "ok" on "p1 "
+// (trimmed to p1), "other" on p1 and "ok" on p1 once more gave the last call
+// the third one's key: it was answered with that comment's success and
+// nothing was written. Held end to end over the real store in internal/doclet
+// (TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage).
+//
+// Mutation: drop the digest from callOpKey's identity and keys[4] equals
+// keys[2].
+func TestAPageRemarkNamedAnotherWayIsAnotherCall(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	turn := workTurn(t)
+	turn.Calls = turnctx.NewCallLog()
+	surface := tools.NewSurface("execute", reg.Snapshot(),
+		[]string{builtin.CommentOnPageTool}).ForTurn(turn)
+	for _, call := range [][2]string{{"p1", "ok"}, {"p1", "ok"}, {"p1 ", "ok"},
+		{"p1", "other"}, {"p1", "ok"}} {
+		res, err := surface.Execute(t.Context(), llm.ToolCall{
+			Name: builtin.CommentOnPageTool, Arguments: map[string]any{"page": call[0], "body": call[1]},
+		})
+		if err != nil || res.Failed {
+			t.Fatalf("comment %q on %q = (%+v, %v)", call[1], call[0], res, err)
+		}
+	}
+	keys := kb.keys
+	if len(keys) != 5 {
+		t.Fatalf("five remarks reached the store as %d", len(keys))
+	}
+	if keys[1] != keys[0] {
+		t.Errorf("a remark repeated with nothing between carried key %q after %q", keys[1], keys[0])
+	}
+	if keys[2] == keys[0] {
+		t.Errorf("a remark naming the page another way carried the first one's key %q", keys[0])
+	}
+	if keys[4] == keys[2] {
+		t.Errorf("\"ok\" on p1 after other calls carried key %q, the one the call "+
+			"naming \"p1 \" carried — it is that comment's retry and writes nothing "+
+			"(keys %v)", keys[4], keys)
+	}
+}
+
 // A PAGE WRITE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS DONE.
 //
 // Every page tool answered with an id and a revision whatever the write's
@@ -1039,5 +1085,25 @@ func TestSavePageRefusesAWatchThatIsNotABoolean(t *testing.T) {
 	}
 	if len(kb.saved) != 1 || kb.saved[0].Watch == nil || *kb.saved[0].Watch {
 		t.Fatalf("the unwatch reached the store as %+v", kb.saved)
+	}
+}
+
+// A RENAME IS TO THE TITLE THE CHECK READS (ADR-0059): one reader per declared
+// type, so a string argument is read by argString, which writes a number as
+// JSON writes it. The rename read its title with fmt.Sprint, a reader of its
+// own, which writes a float by `%g`.
+//
+// Mutation: read the title with fmt.Sprint again and the rename is to "1e+06".
+func TestARenameIsToTheTitleTheCheckReads(t *testing.T) {
+	t.Parallel()
+	kb := newFakeKB()
+	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
+	if got := callWork(t, reg, builtin.SavePageTool, map[string]any{
+		"page": "p1", "base_version": 4, "title": 1000000.0,
+	}); got.Failed {
+		t.Fatalf("the rename failed: %s", got.Output)
+	}
+	if len(kb.renames) != 1 || kb.renames[0].title != "1000000" {
+		t.Errorf("the title 1000000 renamed the page as %+v, want \"1000000\"", kb.renames)
 	}
 }

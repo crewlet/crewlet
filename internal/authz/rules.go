@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The verbs this engine authorizes.
@@ -37,7 +38,7 @@ const (
 	ActionPageRead      Action = "get_page"
 	ActionPageList      Action = "list_pages"
 	ActionKnowledgeRead Action = "search_knowledge"
-	ActionColleagueRead Action = "lookup_colleague"
+	ActionColleagueRead Action = toolname.LookupColleague
 	// A PROJECT'S FILES are its work's output — reports, specs, notes —
 	// so reading one is reading the board, asked of the PROJECT the file
 	// is kept in (the object is that project, by its key).
@@ -46,22 +47,22 @@ const (
 
 	// --- the caller's own working state ----------------------------- //
 	ActionSkillUse      Action = "use_skill"
-	ActionSkillLoad     Action = "load_tool_skill"
+	ActionSkillLoad     Action = toolname.LoadToolSkill
 	ActionSkillRefine   Action = "refine_skill"
 	ActionEpisodesQuery Action = "query_episodes"
 	ActionMemoryRefresh Action = "refresh_memory"
-	ActionMemoryPersist Action = "reflect_and_persist"
-	ActionOnboardedMark Action = "mark_onboarded"
+	ActionMemoryPersist Action = toolname.ReflectAndPersist
+	ActionOnboardedMark Action = toolname.MarkOnboarded
 
 	// --- a colleague's ordinary work -------------------------------- //
 	//
 	// AN ASK IS AN AGENT'S, and the only one in this block: a seat whose
 	// role offers it puts a question to a colleague seat, spending that
 	// seat's turn — see [rule.seatOnly].
-	ActionColleagueAsk Action = "a2a_ask"
-	ActionWorkCreate   Action = "create_work_item"
+	ActionColleagueAsk Action = toolname.A2AAsk
+	ActionWorkCreate   Action = toolname.CreateWorkItem
 	ActionWorkUpdate   Action = "update_work_item"
-	ActionWorkComment  Action = "comment_on_work_item"
+	ActionWorkComment  Action = toolname.CommentOnWorkItem
 	ActionWorkMerge    Action = "merge_work_item"
 	ActionPageCreate   Action = "write_page"
 	ActionPageSave     Action = "save_page"
@@ -112,7 +113,7 @@ const (
 	ActionWorkPlace Action = "place_work_item"
 
 	// --- a container's own policy ----------------------------------- //
-	ActionProjectWrite   Action = "write_project"
+	ActionProjectWrite   Action = toolname.WriteProject
 	ActionCatalogueWrite Action = "write_work_catalogue"
 	ActionPageRename     Action = "pages.rename"
 
@@ -143,6 +144,12 @@ const (
 	// --- beyond recovery -------------------------------------------- //
 	ActionWorkPurge Action = "work.purge"
 	ActionPagePurge Action = "pages.purge"
+	// A ROOM'S MESSAGES DESTROYED, and its horizon set. DOTTED, because no
+	// tool is named for any of the three: each is a route of the human
+	// write surface, said in nobody's voice in the room (internal/chatlet).
+	ActionChatErase     Action = "chat.erase"
+	ActionChatPrune     Action = "chat.prune"
+	ActionChatRetention Action = "chat.channel.retention"
 
 	// --- what somebody wrote ---------------------------------------- //
 	ActionPageCommentEdit   Action = "pages.comment.edit"
@@ -185,6 +192,41 @@ const (
 	// it runs on the auxiliary model of the seat the asker is bound to and
 	// a seat has search_knowledge and a model of its own.
 	ActionKnowledgeAnswer Action = "answer_knowledge"
+
+	// --- using the chat ---------------------------------------------- //
+	//
+	// THE NINE A SEAT HOLDS, and a person's surface serves too: reading a
+	// room, finding what was said, saying something, reacting, moving one's
+	// own membership. Named after the tools, which internal/chatlet declares.
+	ActionChatList   Action = "list_channels"
+	ActionChatRead   Action = "read_channel"
+	ActionChatSearch Action = toolname.SearchMessages
+	ActionChatPost   Action = "post_message"
+	ActionChatReply  Action = "reply_in_thread"
+	ActionChatDirect Action = toolname.SendDM
+	ActionChatReact  Action = "react_to_message"
+	ActionChatJoin   Action = "join_channel"
+	ActionChatLeave  Action = "leave_channel"
+
+	// --- a person's chat gestures ------------------------------------ //
+	//
+	// THE SEVEN NO SEAT IS GIVEN, each for the reason internal/chatlet writes
+	// beside its name: a room and its membership are furniture a company
+	// arranges, a seat corrects what it said by saying the correction, and
+	// a read cursor is a person's attention.
+	ActionChatCreate  Action = "create_channel"
+	ActionChatOpenDM  Action = "open_dm"
+	ActionChatUpdate  Action = "update_channel"
+	ActionChatMembers Action = "set_channel_members"
+	ActionChatEdit    Action = "edit_message"
+	ActionChatDelete  Action = "delete_message"
+	ActionChatMark    Action = "mark_chat_read"
+	// ActionChatArchive is archiving a room, or opening it again: asked
+	// from inside `update_channel` once the stored room is read, because
+	// who may is the room's creator, its unit's lead or admin — and both
+	// halves of that are on the row, never in the arguments. DOTTED, because
+	// no tool is named for it.
+	ActionChatArchive Action = "chat.channel.archive"
 
 	// --- the company's own controls --------------------------------- //
 	ActionConfigRead  Action = "config.read"
@@ -312,7 +354,7 @@ const (
 	// THE DASHBOARD SOURCE CATALOGUE is the engine's own vocabulary, read
 	// before a board exists, so it is everybody's: what a source ANSWERS is
 	// decided as each board's viewer, never by who listed it.
-	ActionDashboardSources Action = "list_dashboard_sources"
+	ActionDashboardSources Action = toolname.ListDashboardSources
 	// THE FORMAT REFERENCE is the engine's own vocabulary too: the exact
 	// shape of a kind's index (`brand.json`, `deck.json`), read before an
 	// artifact of it exists, holding no row of any domain.
@@ -326,7 +368,7 @@ const (
 	// assistant could not read what the person could.
 	ActionDashboardSourceRead Action = "artifacts.source.read"
 	// AUTHORING, each asking the `artifacts` app beside the role.
-	ActionArtifactCreate  Action = "create_artifact"
+	ActionArtifactCreate  Action = toolname.CreateArtifact
 	ActionArtifactPublish Action = "publish_artifact"
 	ActionArtifactUpdate  Action = "update_artifact"
 	ActionArtifactAsset   Action = "upload_artifact_asset"
@@ -519,8 +561,8 @@ type rule struct {
 	class Class
 
 	// app is the app this verb belongs to ([iam.GrantWorklet],
-	// [iam.GrantDoclet], [iam.GrantArtifacts]), or empty for a verb that
-	// belongs to none. It is
+	// [iam.GrantDoclet], [iam.GrantArtifacts], [iam.GrantChatlet]), or empty
+	// for a verb that belongs to none. It is
 	// the requirement of [ClassApp] and [ClassAppOrAsked], and it is ANDED
 	// onto every relation class ([withApp]): a project's lead who does not
 	// use Worklet does not set its policy, and a comment's author who no
@@ -535,6 +577,19 @@ type rule struct {
 	// app was decided somewhere else.
 	app iam.Grant
 
+	// anyOf is the apps a [ClassAnyApp] row admits on, any ONE of them, and
+	// the set its refusal names. Empty on every other class, and a walk
+	// holds both halves: a ClassAnyApp row names at least two apps and no
+	// other row names any.
+	//
+	// ON THE ROW AND NEVER "EVERY APP". The class used to iterate [iam.Apps],
+	// which was right only while every app was something its one verb
+	// searches: with chat declared, a gesture answered from the pages and
+	// the board admitted a holder of chat alone to a search of nothing, and
+	// told everybody it refused that chat would do. Which apps a gesture
+	// draws on is a fact about that gesture, so the row says it.
+	anyOf []iam.Grant
+
 	// humanOnly marks a verb NO AGENT may take, whatever its class would
 	// allow — purging a task beyond recovery, taking a project out of
 	// circulation, writing the chart. It is a fact about the VERB rather
@@ -546,6 +601,17 @@ type rule struct {
 	// CHECKED BEFORE THE CLASS, so an agent holding the permission is told
 	// it is a seat rather than that it lacks a capability it plainly has.
 	humanOnly bool
+
+	// irreversible marks a verb NOTHING UNDOES: a purge, an erase of chat
+	// messages, a prune of a room's past, and a room's horizon, which is a
+	// prune on a delay. A fact about the VERB, beside humanOnly, and read by
+	// whatever shows the gesture to a person before they make it (the
+	// Dashboard Assistant's card marks it destructive and says it cannot be
+	// undone): a route's method cannot say it, since a purge is a POST and
+	// a horizon a PUT, and the row is where "a recent proof, since nothing
+	// undoes it" was already decided. A walk holds every such row to a
+	// recent proof. Decides nothing in [Decide].
+	irreversible bool
 
 	// seatOnly is humanOnly's MIRROR: a verb ONLY AN AGENT SEAT may take —
 	// putting a question to a colleague seat — with no permission asked at
@@ -563,6 +629,29 @@ type rule struct {
 	// ask for a permission that would change nothing. A walk refuses a row
 	// that is both.
 	seatOnly bool
+
+	// seated marks a verb made AS A SEAT: what it writes is attributed to a
+	// seat handle, or what it reads is answered for one, so a principal
+	// acting as itself — a Tier A token, a service account the identity
+	// directory binds to no seat, the development principal — cannot take
+	// it, whatever it holds. A person always acts as their human seat
+	// (ADR-0032) and an agent as its own, so neither is ever refused it.
+	//
+	// A FACT ABOUT THE VERB, beside humanOnly and seatOnly, and for their
+	// reason: the class weighs permissions and relations, and no
+	// permission gives a credential a seat to speak or be answered as.
+	// Left to each tool, the refusal came after the table had already
+	// admitted the call — so a person's surface asking the table what to
+	// offer (internal/agent/builtin's Admits) offered every such verb to
+	// an unbound credential, and every press of it was refused.
+	//
+	// CHECKED AFTER seatOnly and BEFORE THE CLASS: an unbound credential
+	// holding admin is told it has no seat ([ReasonUnseated]) rather than
+	// a grant it already has, and the refusal names no permission. A walk
+	// refuses a row that is both seat-only and seated — a seat-only verb
+	// is a seat's already, so the second mark would read as a decision
+	// nobody made.
+	seated bool
 
 	// presence is which arms need a PERSON at the keyboard — see
 	// [Presence] — refused to a request that presented a machine token.
@@ -834,16 +923,96 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 
 	// A QUESTION ANSWERED FROM WHAT THE COMPANY WROTE DOWN draws on
-	// whichever apps the asker uses: the tool searches the pages only for a
-	// knowledge holder and the board only for a tracker holder, so either
-	// app admits and a caller with neither has nothing it could search. And
+	// whichever of its two apps the asker uses: the tool searches the pages
+	// only for a knowledge holder and the board only for a tracker holder,
+	// so either app admits and a caller with neither has nothing it could
+	// search — whatever else they hold. And
 	// a person's alone: it runs on the auxiliary model of the seat the
 	// asker holds, and a seat has search_knowledge and a model of its own.
-	// The tool itself refuses a principal no seat binds — a Tier A token's
-	// session or a service account, never a person, who holds a human seat
-	// for as long as they are here (ADR-0032) — naming why.
-	ActionKnowledgeAnswer: {class: ClassAnyApp, humanOnly: true, recency: iam.RecencyAny,
+	// And SEATED: a principal no seat binds — a Tier A token's session or a
+	// service account, never a person, who holds a human seat for as long
+	// as they are here (ADR-0032) — has no seat whose model to answer on
+	// and nobody the spend is charged for.
+	ActionKnowledgeAnswer: {class: ClassAnyApp,
+		anyOf:     []iam.Grant{iam.GrantWorklet, iam.GrantDoclet},
+		humanOnly: true, seated: true, recency: iam.RecencyAny, assist: AssistApprove},
+
+	// --- using the chat ---------------------------------------------- //
+	//
+	// THE APP IS THE WHOLE RULE for using chat, as it is for the tracker's
+	// and the knowledge base's own blocks above. WHICH ROOM is the chat
+	// domain's: a read of a room the caller may not read answers NOT FOUND
+	// (internal/chatlet's Visible — never a refusal that confirms the room
+	// exists), and a write to one is refused inside the write's own
+	// snapshot, which is the state log's one write authority. A room's
+	// membership is a replicated row and not a relation of the chart, so a
+	// relation here would be read in another transaction.
+	//
+	// EVERY CHAT ROW IS SEATED ([rule.seated]): a room renders a speaker by
+	// seat, its membership is seats and a direct conversation's identity is
+	// their handles, so a credential acting as itself has no seat to speak,
+	// be a member or be shown the rooms as. A pipeline that should post is
+	// given a human seat and its credential bound to it.
+	ActionChatList: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionChatRead: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionChatSearch: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistRead},
+	ActionChatPost: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
+	ActionChatReply: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionChatDirect: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionChatReact: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	// A SEAT MOVES ITS OWN MEMBERSHIP and nobody else's — the tools take no
+	// handle, and the write path refuses any other — so the app is the rule.
+	ActionChatJoin: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+	ActionChatLeave: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
+		assist: AssistApprove},
+
+	// --- a person's chat gestures ------------------------------------ //
+	//
+	// HUMAN-ONLY, each for a fact about the verb (internal/chatlet's
+	// vocabulary says which): a seat that made rooms as a side effect of
+	// its work would leave a sidebar nobody chose, and one that rewrote
+	// what it said would leave a record the next turn reads as having
+	// always said it. A room's settings and its whole membership are any
+	// member's who can reach it — the store refuses whoever cannot — and
+	// its ARCHIVE is not: see [ActionChatArchive].
+	ActionChatCreate: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatOpenDM: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatUpdate: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatMembers: {class: ClassApp, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// A MESSAGE IS ITS AUTHOR'S, or admin's — the comment precedent: the
+	// class answers "may you touch this remark", and the WRITER refuses
+	// anybody but the author an EDIT, because an edit puts words in
+	// somebody's mouth where a delete only takes them down. Admin's delete
+	// is MODERATION, and it is decided on the unread message, so a
+	// moderator takes down what was said in a room they are not in without
+	// reading it ([ClassAuthored]).
+	ActionChatEdit: {class: ClassAuthored, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	ActionChatDelete: {class: ClassAuthored, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// A READ CURSOR IS ONE'S OWN RECORD, as an inbox's marks are, and the
+	// tool takes no handle, so the record is always the caller's own — kept
+	// under their SEAT ([iam.RecordOwner]), whose next holder inherits it.
+	ActionChatMark: {class: ClassOwnRecord, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
+	// ARCHIVING A ROOM CLOSES THE CONVERSATION for everybody in it, so it is
+	// a TIDY rather than anybody's: the room's creator, the lead of the unit
+	// a unit's room belongs to or of a unit above it, or admin. Never an
+	// agent's, as no room setting is.
+	ActionChatArchive: {class: ClassTidy, app: iam.GrantChatlet, humanOnly: true, seated: true,
+		recency: iam.RecencyAny, assist: AssistApprove},
 
 	// --- everybody's overview ---------------------------------------- //
 	//
@@ -878,8 +1047,8 @@ var rules = map[Action]rule{
 	// what it works on is ([ActionPrioritiesSet]) — and never any reader's.
 	// HUMAN-ONLY on top: a seat that could pause a colleague, resume
 	// itself, steer another's turn or answer its own run's question would
-	// be overruling the people who run it. No app: a lead who uses neither
-	// app still runs their team.
+	// be overruling the people who run it. No app: a lead who uses no app
+	// still runs their team.
 	ActionSeatPause: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
 		assist: AssistApprove},
 	ActionSeatResume: {class: ClassOwnOrLead, humanOnly: true, recency: iam.RecencyAny,
@@ -926,10 +1095,30 @@ var rules = map[Action]rule{
 	// it, so it is the one tidy an author does not take for themselves —
 	// trash and restore are theirs — and it asks the step-up window as
 	// every other irreversible gesture does.
-	ActionWorkPurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp,
-		assist: AssistApprove},
-	ActionPagePurge: {class: ClassAdmin, humanOnly: true, recency: iam.RecencyStepUp,
-		assist: AssistApprove},
+	ActionWorkPurge: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionPagePurge: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	// A CHAT DESTRUCTION IS A PURGE'S: admin's, a person's or a credential's
+	// — never an agent's, which could erase the evidence of what it said —
+	// and a recent proof's, since nothing undoes it. An erase and a prune
+	// destroy what people wrote; a room's retention is a prune on a delay,
+	// so setting a shorter one is the same decision taken in advance.
+	//
+	// NOT SEATED, unlike every other chat verb: none of the three is said in
+	// a room, so the store records whoever made it under their own name —
+	// an administrator's pipeline token included — and none READS the room
+	// it destroys from, which is what lets an administrator who is in no
+	// private room take a credential pasted into one out of it without being
+	// shown what else was said there. Which room exists is the store's to
+	// answer; a destruction of a room the store does not hold destroys
+	// nothing and says so.
+	ActionChatErase: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionChatPrune: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
+	ActionChatRetention: {class: ClassAdmin, humanOnly: true, irreversible: true,
+		recency: iam.RecencyStepUp, assist: AssistApprove},
 
 	// --- the org chart ------------------------------------------------- //
 	//
@@ -1105,7 +1294,7 @@ var rules = map[Action]rule{
 		assist: AssistApprove},
 	// A PURGE IS ADMIN'S, A PERSON'S AND A RECENT PROOF'S, as every other
 	// purge is: nothing undoes it.
-	ActionArtifactPurge: {class: ClassAdmin, humanOnly: true,
+	ActionArtifactPurge: {class: ClassAdmin, humanOnly: true, irreversible: true,
 		presence: PresenceRequired, recency: iam.RecencyStepUp, assist: AssistApprove},
 	// OWNERSHIP MOVES BY A PERSON'S GESTURE, never a token's and never a
 	// seat's: an agent handing its work to itself, or a pipeline moving
@@ -1188,20 +1377,33 @@ var rules = map[Action]rule{
 // RecencyOf reports how recent a proof a verb asks for, and whether the table
 // knows the verb at all.
 //
-// EXPORTED FOR THE WALKS and for a caller that has to SAY what a refusal it
-// did not make would have needed, on [ClassOf]'s terms: a caller that read
-// this and decided for itself would be the second implementation this
-// package exists to remove. Use [Decide].
+// EXPORTED FOR THE WALKS, for a caller that has to SAY what a refusal it
+// did not make would have needed, on [ClassOf]'s terms, and for a
+// registration that refuses a verb its transport could not refuse in its own
+// words (internal/api/queries' postures): a caller that read this and decided
+// for itself would be the second implementation this package exists to
+// remove. Use [Decide].
 func RecencyOf(a Action) (iam.Recency, bool) {
 	r, ok := rules[a]
 	return r.recency, ok
+}
+
+// IrreversibleOf reports whether nothing undoes a verb ([rule.irreversible]),
+// and whether the table knows the verb at all.
+//
+// EXPORTED FOR WHAT SHOWS A GESTURE TO A PERSON before they make it (the
+// Dashboard Assistant's card), on [RecencyOf]'s terms: it says what the
+// gesture is, and decides nothing.
+func IrreversibleOf(a Action) (bool, bool) {
+	r, ok := rules[a]
+	return r.irreversible, ok
 }
 
 // SelfRecencyOf reports the proof a verb asks of its SELF arm where that
 // differs from [RecencyOf]'s, and empty where the row asks one window of
 // everybody — see [rule.selfRecency].
 //
-// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+// EXPORTED on [RecencyOf]'s terms. Use [Decide].
 func SelfRecencyOf(a Action) (iam.Recency, bool) {
 	r, ok := rules[a]
 	return r.selfRecency, ok
@@ -1210,7 +1412,7 @@ func SelfRecencyOf(a Action) (iam.Recency, bool) {
 // PresenceOf reports which arms of a verb need a person present, and whether
 // the table knows the verb at all — see [Presence].
 //
-// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+// EXPORTED on [RecencyOf]'s terms. Use [Decide].
 func PresenceOf(a Action) (Presence, bool) {
 	r, ok := rules[a]
 	return r.presence, ok
@@ -1231,6 +1433,18 @@ func PresenceOf(a Action) (Presence, bool) {
 func AppOf(a Action) (iam.Grant, bool) {
 	r, ok := rules[a]
 	return r.app, ok
+}
+
+// AnyOf reports the apps a [ClassAnyApp] verb admits on, any one of them —
+// see [rule.anyOf] — and whether the table knows the verb at all. Nil for
+// every other class.
+//
+// EXPORTED FOR THE WALKS, and for a caller that has to NAME the set a refusal
+// it did not make would have named, on [ClassOf]'s terms. A copy, so no
+// caller edits the row. Use [Decide].
+func AnyOf(a Action) ([]iam.Grant, bool) {
+	r, ok := rules[a]
+	return slices.Clone(r.anyOf), ok
 }
 
 // HumanOnlyOf reports whether NO AGENT may take a verb — see [rule.humanOnly]
@@ -1392,6 +1606,15 @@ var assistantNever = map[Action]neverEntry{
 	ActionArtifactReady: {"render telemetry an open frame reports; a grant renders nothing, " +
 		"so its report would falsify the service objective", tellReady},
 	ActionColleagueAsk: {"an agent seat's own verb, which no person takes", tellSeat},
+}
+
+// SeatedOf reports whether a verb is made AS A SEAT — see [rule.seated] — and
+// whether the table knows the verb at all.
+//
+// EXPORTED FOR THE WALKS, on [RecencyOf]'s terms. Use [Decide].
+func SeatedOf(a Action) (bool, bool) {
+	r, ok := rules[a]
+	return r.seated, ok
 }
 
 // Actions is every verb this build authorizes, sorted, for the walks that ask

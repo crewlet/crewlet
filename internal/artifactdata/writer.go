@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE DATASTORE WRITE PATH: one record per write, published to the store's
@@ -35,7 +36,7 @@ import (
 // batch past its bounds, a person value naming no seat the running chart
 // holds, this node's write budget spent) and what is permanent (a store its
 // artifact's purge removed). Everything else (schema, rules, guards, caps,
-// limits) is the applier's, in log order, so every node reaches one verdict.
+// limits) is the applier's, in log order, so every data node reaches one verdict.
 //
 // A schema change is ARBITRATED: decided in a snapshot of the schema it
 // replaces, refused early when the snapshot already refuses it, and judged
@@ -174,17 +175,17 @@ func validCall(c Call) error {
 	case strings.TrimSpace(a.Actor.Name) == "":
 		return fmt.Errorf("%w: the call names no actor: every record names who wrote it", ErrInvalid)
 	case !a.Actor.Kind.Valid():
-		return fmt.Errorf("%w: actor kind %q is not one of %v", ErrInvalid, a.Actor.Kind, iam.ActorKinds)
+		return fmt.Errorf("%w: actor kind %q is not one of %s", ErrInvalid, a.Actor.Kind, words.Or(iam.ActorKinds))
 	case a.Role != "" && !a.Role.Valid():
-		return fmt.Errorf("%w: role %q is not one of %v", ErrInvalid, a.Role, artifacts.Roles)
+		return fmt.Errorf("%w: role %q is not one of %s", ErrInvalid, a.Role, words.Or(artifacts.Roles))
 	case a.Origin != "" && !a.Origin.Valid():
-		return fmt.Errorf("%w: origin %q is not one of %v", ErrInvalid, a.Origin, artifacts.WriteOrigins)
+		return fmt.Errorf("%w: origin %q is not one of %s", ErrInvalid, a.Origin, words.Or(artifacts.WriteOrigins))
 	}
 	return nil
 }
 
 // stampedCall refuses a write whose authority the applier would refuse on
-// every node: no role, or no datastore limits.
+// every data node: no role, or no datastore limits.
 func stampedCall(c Call) error {
 	if err := validCall(c); err != nil {
 		return err
@@ -250,6 +251,22 @@ func (w *Writer) decision(stamp statelog.Stamp, c Call, subject Subject, op OpKi
 	return statelog.Decision{Payload: encoded}, nil
 }
 
+// published is a store write's publish answer in this domain's terms: a write
+// the deletion gate dropped is a purged store ([ErrGone]), as the decide says
+// when it is the one that finds the marker.
+//
+// THE GATE FINDS IT WHEN THE PURGE LANDED AHEAD OF THE RECORD, after the decide
+// passed: the framework states that as one of its conditions, which the
+// datastore API answered `503` "try again" and a tool "try again shortly",
+// about a store nothing will ever write again.
+func published(id artifacts.ID, err error) error {
+	var refused *statelog.Unavailable
+	if errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted {
+		return fmt.Errorf("%w: %s", ErrGone, id)
+	}
+	return err
+}
+
 // request is one write's framework request on a store's subject.
 func request(id artifacts.ID, opID string, pattern statelog.Pattern,
 	decide func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error)) statelog.Request {
@@ -302,7 +319,7 @@ func (w *Writer) write(ctx context.Context, c Call, id artifacts.ID, in artifact
 			return w.decision(stamp, c, StoreSubject(id), OpWrite, opID, payload)
 		}))
 	if err != nil {
-		return WriteResult{Result: res}, err
+		return WriteResult{Result: res}, published(id, err)
 	}
 	return w.verdict(ctx, c, id, opID, res)
 }
@@ -621,7 +638,7 @@ func (w *Writer) undo(ctx context.Context, c Call, id artifacts.ID, seq int64) (
 			return w.decision(stamp, c, StoreSubject(id), OpUndo, opID, payload)
 		}))
 	if err != nil {
-		return WriteResult{Result: res}, err
+		return WriteResult{Result: res}, published(id, err)
 	}
 	return w.verdict(ctx, c, id, opID, res)
 }
@@ -635,7 +652,12 @@ func (w *Writer) inverse(ctx context.Context, c Call, id artifacts.ID, seq int64
 			return err
 		}
 		if !present {
-			return fmt.Errorf("%w: %s holds no write %d", ErrNotFound, id, seq)
+			// THE ARTIFACT'S ID FOR THE LOG, right after the sentinel,
+			// where [Sentence] cuts it: a person reads the sentence alone,
+			// about the artifact they are looking at. "No such document"
+			// would be the wrong noun, since no store exists at all.
+			return fmt.Errorf("%w: %s: this artifact's data has no write %d to undo",
+				ErrNotFound, id, seq)
 		}
 		var (
 			op, verdict, actor, changes string
@@ -802,13 +824,25 @@ func (w *Writer) Configure(ctx context.Context, c Call, id artifacts.ID,
 			}
 			return w.decision(stamp, c, StoreSubject(id), OpConfigure, opID, payload)
 		}))
-	if errors.Is(err, statelog.ErrConflict) {
-		return WriteResult{Result: res}, fmt.Errorf("%w: %s: %w", ErrConflict, id, err)
-	}
 	if err != nil {
-		return WriteResult{Result: res}, err
+		return WriteResult{Result: res}, configured(id, err)
 	}
 	return w.verdict(ctx, c, id, opID, res)
+}
+
+// configured is a schema change's publish answer in this domain's terms: one
+// that lost its race on the store too many times is [ErrConflict], and any
+// other is a store write's ([published]).
+//
+// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the subject the
+// race was lost on, and not the store's id either: a caller that printed this
+// error would show a person a broker path and an id they never chose. The
+// operation the answer carries is what a log line finds the store by.
+func configured(id artifacts.ID, err error) error {
+	if errors.Is(err, statelog.ErrConflict) {
+		return fmt.Errorf("%w: %w", ErrConflict, statelog.ErrConflict)
+	}
+	return published(id, err)
 }
 
 // configRefusal is a schema change's decide-time refusal in the caller's terms.

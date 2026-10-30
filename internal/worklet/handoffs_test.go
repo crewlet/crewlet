@@ -98,6 +98,87 @@ func TestAssigneeHistoryCarriesReassignmentsAfter(t *testing.T) {
 	}
 }
 
+// THE RE-DERIVATION WALKS EACH TASK WHOLE, whatever order the log interleaved
+// them in.
+//
+// A row whose record states no count CARRIES the one the row before it left,
+// so the walk is right only while each task's rows arrive together and in log
+// order: a run of one task's rows read on its own starts from zero, and a
+// carrying row in it takes the zero. One task cannot tell, and neither can
+// rows that each state their own count. Two tasks whose hand-offs and quiet
+// edits alternate in the log can.
+func TestTheHandOffRederivationWalksEachTaskWhole(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	first := r.createTask("the first")
+	second := r.createTask("the second")
+
+	agent := r.writer.As("eng", worklet.AuthorAgent, worklet.Provenance{TurnID: "turn-1"})
+	write := func(opID, id string, patch worklet.TaskPatch, kind worklet.ChangeKind) {
+		t.Helper()
+		if _, err := agent.UpdateTask(t.Context(), opID, id, "ENG", worklet.NoIfMatch,
+			patch, kind, nil); err != nil {
+			t.Fatalf("%s on %s: %v", opID, id, err)
+		}
+		r.drain()
+	}
+	hand := func(opID, id, to string) {
+		t.Helper()
+		write(opID, id, worklet.TaskPatch{Assignee: &to}, worklet.ChangeAssignee)
+	}
+	// AN AGENT'S EDIT OF ANYTHING ELSE states no count — only a person's
+	// touch resets one — so its row carries the hand-off before it.
+	edit := func(opID, id string) {
+		t.Helper()
+		write(opID, id, worklet.TaskPatch{Title: ptr(opID)}, worklet.ChangeFields)
+	}
+	hand("op-1", first.ID, "ops")
+	hand("op-2", second.ID, "ops")
+	edit("op-3", first.ID)
+	edit("op-4", second.ID)
+	hand("op-5", first.ID, "qa")
+	edit("op-6", second.ID)
+	edit("op-7", first.ID)
+
+	maintained := map[string]string{}
+	for _, id := range []string{first.ID, second.ID} {
+		_, all := handOffsOnHistory(t, r, id)
+		maintained[id] = counts(all)
+	}
+	if maintained[first.ID] != "[0 1 1 2 2]" || maintained[second.ID] != "[0 1 1 1]" {
+		t.Fatalf("the apply maintained %s and %s, want [0 1 1 2 2] and [0 1 1 1]",
+			maintained[first.ID], maintained[second.ID])
+	}
+	if err := r.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(),
+			`UPDATE tracker_history SET reassignments = NULL`); err != nil {
+			return err
+		}
+		_, err := r.applier.Rederive(t.Context(), tx, statelog.ApplyOptions{})
+		return err
+	}); err != nil {
+		t.Fatalf("re-derive: %v", err)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		if _, all := handOffsOnHistory(t, r, id); counts(all) != maintained[id] {
+			t.Errorf("%s re-derives to %s and the apply maintained %s — the walk "+
+				"did not read the task's rows together and in log order",
+				id, counts(all), maintained[id])
+		}
+	}
+}
+
+// counts spells each row's hand-off count, an absent one as nil.
+func counts(rows []*int) string {
+	out := make([]any, len(rows))
+	for i, n := range rows {
+		if n != nil {
+			out[i] = *n
+		}
+	}
+	return fmt.Sprint(out)
+}
+
 // AN ASSIGNMENT'S REASON IS THE HAND-OFF ROW'S EXCERPT — the line the history
 // row stores and the wake renders — so the item's history shows "assigned it
 // to ops — <why>" beside the count, with no field of its own on the record.

@@ -517,9 +517,12 @@ func (e *Engine) seatPass(ctx context.Context, s *seatChildren, retryNow bool) b
 	started, retry := bringUp(ctx, s, specs, retryNow)
 	outcomes = append(outcomes, started...)
 	// A TOKEN GITHUB WOULD NOT ISSUE IS RETRIED like a child that would not
-	// start: it is GitHub's answer this time, not a step a person owes, so
-	// waiting for a revision or a seal would wait for nothing. And a token
-	// that WAS issued is renewed before it runs short ([Engine.armRenewal]).
+	// start: it is GitHub's answer this time, not the integration's record,
+	// so waiting for a revision or a seal would wait for nothing. A mint
+	// GitHub did not answer passes by itself, and one it refused waits on a
+	// person's step on the agent's app ([mintPasses]), which the retry
+	// notices once it is taken. And a token that WAS issued is renewed
+	// before it runs short ([Engine.armRenewal]).
 	if token != nil && token.unissued(token.name) != "" {
 		retry = true
 	}

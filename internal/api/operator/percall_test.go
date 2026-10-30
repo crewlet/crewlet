@@ -297,3 +297,42 @@ func TestAnArgumentTheToolDoesNotReadIsRefusedOverMCP(t *testing.T) {
 			"by name", res.IsError, out.String())
 	}
 }
+
+// ARGUMENTS THAT DO NOT DECODE ARE TOLD IN WORDS, AFTER THE TOOL'S NAME: the
+// assistant was answered "operator: list_work_items: bad arguments: the
+// arguments are not a JSON object: json: cannot unmarshal array into Go value
+// of type map[string]interface {}" — this package's name and the decoder's
+// Go. Mutation: put either back and this goes red.
+func TestAnAssistantsArgumentsThatDoNotDecodeAreToldInWords(t *testing.T) {
+	t.Parallel()
+	dir := &directory{people: map[string]iam.Principal{
+		"ops": machine("token:ops", iam.GrantWorklet),
+	}}
+	server := operatorServer(t, dir)
+	sess := connectAs(t, server.URL+operator.MCPPath, "ops")
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+		Name: worklet.ListWorkItemsTool, Arguments: []int{1},
+	})
+	said := ""
+	switch {
+	case err != nil:
+		said = err.Error()
+	case res != nil:
+		for _, c := range res.Content {
+			if text, ok := c.(*mcp.TextContent); ok {
+				said += text.Text
+			}
+		}
+	}
+	want := worklet.ListWorkItemsTool + ": the arguments object is a list where an object belongs"
+	if !strings.Contains(said, want) {
+		t.Errorf("the assistant is told %q, want it to carry %q", said, want)
+	}
+	for _, goWords := range []string{"operator:", "json:", "Go value"} {
+		if strings.Contains(said, goWords) {
+			t.Errorf("the assistant is told %q, which carries %q", said, goWords)
+		}
+	}
+}

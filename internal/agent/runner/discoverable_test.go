@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -119,7 +120,7 @@ func TestTheReviewNamesOnlyTheToolsTheSeatHolds(t *testing.T) {
 	}
 	asker := func(t *testing.T, reg *tools.Registry) {
 		t.Helper()
-		if err := reg.Register(stubTool{name: runner.A2AAskTool}, tools.OriginBuiltin); err != nil {
+		if err := reg.Register(stubTool{name: toolname.A2AAsk}, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register: %v", err)
 		}
 	}
@@ -129,23 +130,5 @@ func TestTheReviewNamesOnlyTheToolsTheSeatHolds(t *testing.T) {
 	}
 	if held := review(t, buildOpts{register: asker}); !strings.Contains(held, "`a2a_ask`") {
 		t.Error("a seat holding a2a_ask was not told the next round can use it")
-	}
-}
-
-// THE RUNNER'S NAMES FOR THE BUILTINS ARE THE BUILTINS' OWN. The runner names
-// the few it builds surfaces and gates prompt rules on rather than importing
-// the package that registers them; a rename there would silently empty the
-// onboarding surface or ungate a review rule here, so the names are held to
-// each other.
-func TestTheRunnerNamesTheBuiltinsItDependsOn(t *testing.T) {
-	t.Parallel()
-	for runnerName, builtinName := range map[string]string{
-		runner.ReflectAndPersistTool: builtin.ReflectAndPersistTool,
-		runner.MarkOnboardedTool:     builtin.MarkOnboardedTool,
-		runner.A2AAskTool:            builtin.A2AAskTool,
-	} {
-		if runnerName != builtinName {
-			t.Errorf("the runner names %q, the builtin registers %q", runnerName, builtinName)
-		}
 	}
 }

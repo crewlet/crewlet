@@ -28,7 +28,10 @@ and says the same to a person as a caveat of its own code
 (`dependencies_not_recorded`, `move_unfinished` or `move_waiting`,
 `subtree_unfinished`, `datastore_pending`). Those keys are model-only
 (`builtin.ModelOnlyKeys`), and every surface answering a person takes them off
-the receipt (`builtin.ForPerson`), as it takes off `warnings`.
+the receipt (`builtin.ForPerson`), as it takes off `warnings`. So is the
+`provenance` envelope a fenced answer carries beside the words it labels: its
+trust and its note tell a model how far to believe them, and the fields
+themselves stay on the receipt.
 
 **Each surface reads its own phrasing.** A builtin tool's answer carries the
 model's words under one top-level `warnings` list, written only by
@@ -142,7 +145,13 @@ arms); the page tools and Doclet's refusals, the tool-less page verbs among
 them; the artifact tools' remaining arms (an edit that does not apply, content
 and upload refusals, a turn's publish quota, sources, folders, sharing) and
 the artifact data tools; the run, pause, steer and knowledge-answer tools;
-and memory, delegation and sandbox tools a person's assistant can reach. The
+Chatlet's tools and a person's chat gestures (an argument past its grammar or
+its cap, a gesture the room's rule refuses its caller, an archived room, a
+message carrying all the emoji it may, a name another room holds, a room this
+node cannot serve yet, and the read-state flush's mute cap and a room both
+muted and unmuted) and the human write surface's chat verbs (an erase, a
+prune and a room's own horizon); and memory, delegation and sandbox tools a
+person's assistant can reach. The
 authority table's refusal already answers values a screen words itself
 (`reason`, `grants`) and needs none.
 
@@ -159,8 +168,9 @@ shipped surface is owed.
 
 **Remedies for the limits a person cannot change from the dashboard** are not
 part of this record. The artifact and datastore storage quotas
-(`ArtifactQuotaReached`, `data_quota`) and the per-node write, read and check
-budgets are Tier A, set in each node's own file by whoever runs the nodes, and
+(`ArtifactQuotaReached`, and the datastore's `quota_exceeded`) and the
+per-node write, read and check budgets are Tier A, set in each node's own file
+by whoever runs the nodes, and
 no dashboard screen edits them, so a link would open a page with nothing to
 change on it. Their refusals keep their words; a remedy is added with the
 setting's first editor.

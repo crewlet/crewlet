@@ -212,7 +212,15 @@ func TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere(t *testing.T) {
 func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 	t.Parallel()
 	outsiders := mustEnvelopes(statelog.OneKey("k1", "not the fleet's material"))
+	_, replyDomain := fleetEnvelopes.channel.Domains()
+	fleetReplies, err := statelog.NewSigner(replyDomain, fleetRing)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, forge := range map[string]func(sealed []byte) []byte{
+		"the fleet's, in a shape this build cannot decode": func([]byte) []byte {
+			return fleetReplies.Seal([]byte(`{"node":"data-x","request":7}`))
+		},
 		"not signed by the fleet": func(sealed []byte) []byte {
 			return outsiders.sealReply(reply{Node: "data-x", Request: opened(sealed).ID,
 				Result: json.RawMessage(`{"TotalHint":99}`)})
@@ -254,6 +262,15 @@ func TestAReplyTheRouterCannotBelieveIsNoAnswer(t *testing.T) {
 			if !errors.Is(err, ErrOutcomeUnknown) {
 				t.Fatalf("a once-write answered by a reply nobody can believe = %v, want "+
 					"ErrOutcomeUnknown", err)
+			}
+			// NOR IS A REPEATABLE WRITE'S "did not run": the node took the
+			// request and may have run it, so with no other node to ask
+			// the write is unknown rather than unserved.
+			_, err = f.client.WriterAs(swe).CreateTask(t.Context(), "op-x",
+				worklet.Task{Project: "ENG"}, nil)
+			if !errors.Is(err, ErrOutcomeUnknown) || errors.As(err, &unserved) {
+				t.Fatalf("a repeatable write answered by a reply nobody can believe = "+
+					"%v, want ErrOutcomeUnknown", err)
 			}
 			f.placement.mu.Lock()
 			defer f.placement.mu.Unlock()

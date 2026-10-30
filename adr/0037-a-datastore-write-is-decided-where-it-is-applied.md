@@ -28,7 +28,7 @@ so the datastore uses a third, named one, `statelog.PatternSequenced`:
   caps and the stamped limits. A batch is all or nothing, and the verdict
   (`applied`, `conflict`, `invalid`, `forbidden`, `quota`, `gone`) is written
   for every record, skipped ones included. Because it is a pure function in
-  log order, every node reaches the same verdict, and the writer learns its
+  log order, every data node reaches the same verdict, and the writer learns its
   own by reading its applied rows back by operation id.
 
 **Whatever needs IAM or the org chart is decided at the API and stamped into
@@ -37,7 +37,7 @@ path admitted them, the actor and its kind (a person or an agent), the plan
 quotas in force on the deciding node, the surface the write came through and
 the work item the turn was charged to. The applier enforces the stamp. **It
 never reads another domain**: the identity and artifacts logs apply at their
-own pace on each node, so a verdict that read them would differ between nodes
+own pace on each data node, so a verdict that read them would differ between nodes
 that had applied them to different points.
 
 Datastore writes are HTTP requests with an `Idempotency-Key`, as every write

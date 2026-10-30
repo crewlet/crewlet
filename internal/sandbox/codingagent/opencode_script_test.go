@@ -5,10 +5,12 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -22,7 +24,12 @@ import (
 //
 //   - `serve` prints where it listens and the password it minted, then serves
 //     until it is stopped — and, given OPENCODE_PASSWORD or
-//     OPENCODE_SERVER_PASSWORD, takes that as its password and prints none;
+//     OPENCODE_SERVER_PASSWORD, takes that as its password and prints none.
+//     It KEEPS ITS PASSWORD BEFORE IT SAYS ANYTHING, as a server holds the one
+//     it minted before printing it: kept after, a script that read the
+//     printed lines on a loaded runner presented the password to a fake that
+//     had not yet written down what to check it against, was refused, and
+//     the case read the refused run as a login never refreshed;
 //   - every call to the server is refused unless it presents the server's
 //     password, read as 2.0.32's client reads it: OPENCODE_PASSWORD, and
 //     OPENCODE_SERVER_PASSWORD only where that is unset;
@@ -69,7 +76,9 @@ authed() {
   echo "Error: Server at http://127.0.0.1:4242 rejected the password" >&2; exit 1
 }
 case "$1" in
---version) echo "${FAKE_VERSION:-opencode v2.0.32}" ;;
+--version)
+  [ -z "${FAKE_VERSION_FAIL:-}" ] || { echo "$FAKE_VERSION_FAIL" >&2; exit 3; }
+  echo "${FAKE_VERSION:-opencode v2.0.32}" ;;
 auth)
   case "$2" in
   import) cat > "$d/imported"; cp "$d/imported" "$d/db" ;;
@@ -89,10 +98,11 @@ serve)
     echo "server listening on http://127.0.0.1:4242"
     exec sleep 60
   fi
-  pw=${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}}
-  echo "server listening on http://127.0.0.1:4242"
-  if [ -z "$pw" ] && [ "${FAKE_SERVE:-}" != listen-only ]; then pw=pw-secret; echo "server password $pw"; fi
+  pw=${OPENCODE_PASSWORD:-${OPENCODE_SERVER_PASSWORD:-}} minted=
+  if [ -z "$pw" ] && [ "${FAKE_SERVE:-}" != listen-only ]; then pw=pw-secret minted=1; fi
   printf '%s' "$pw" > "$d/server-password"
+  echo "server listening on http://127.0.0.1:4242"
+  [ -z "$minted" ] || echo "server password $pw"
   exec sleep 60 ;;
 api)
   authed
@@ -171,11 +181,35 @@ type scriptRun struct {
 	document, brief string
 }
 
+// signalsDeliverable gives every script this file starts the default action
+// for SIGHUP and SIGINT, however the test binary itself was started.
+//
+// A signal ignored when a process starts is ignored in everything it execs,
+// and a non-interactive sh may not trap one it was started ignoring: POSIX
+// says so, and dash, bash and busybox ash all comply. So a suite run under
+// nohup (SIGHUP) or as a background job of a script (SIGINT) handed every
+// script a signal it could neither trap nor die of, and the cases about that
+// signal failed on how the runner was started rather than on the script:
+// under nohup each hangup case waited out its whole bound.
+//
+// Go hands an ignored SIGHUP or SIGINT on to the processes it starts, and
+// resets every signal it HANDLES to the default in them, so asking os/signal
+// for the two is what gives them back. Only where they are ignored: a handler
+// on one that is not would stop an interrupt ending the test binary.
+var signalsDeliverable = sync.OnceFunc(func() {
+	for _, sig := range []os.Signal{syscall.SIGHUP, syscall.SIGINT} {
+		if signal.Ignored(sig) {
+			signal.Notify(make(chan os.Signal, 1), sig)
+		}
+	}
+})
+
 // startScript starts the script under a real sh — o.shell, the sh on PATH
 // where that is unset — the way the wrapper does: the brief on stdin, stdout
 // the event stream.
 func startScript(t *testing.T, o scriptOpts) *scriptJob {
 	t.Helper()
+	signalsDeliverable()
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	bin := filepath.Join(dir, "bin")
@@ -231,6 +265,32 @@ func runScript(t *testing.T, o scriptOpts) scriptRun {
 	return startScript(t, o).wait()
 }
 
+// startPieces runs body, pieces of a run's script put together by a case,
+// under sh as [startScript] runs the whole: in a process group of its own,
+// behind the shell's prelude, so the same waits and checks read it.
+func startPieces(t *testing.T, sh boxShell, body string) *scriptJob {
+	t.Helper()
+	signalsDeliverable()
+	dir := t.TempDir()
+	argv := sh.argv
+	if len(argv) == 0 {
+		argv = []string{"sh"}
+	}
+	j := &scriptJob{t: t, dir: dir, home: dir, paths: codingagent.Paths{Home: dir}, exited: make(chan error, 1)}
+	args := append(append([]string{}, argv[1:]...), "-c", sh.prelude+body)
+	j.cmd = exec.Command(argv[0], args...) //nolint:gosec // the pieces under test
+	j.cmd.Dir = dir
+	j.cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "FAKE_DIR=" + dir}
+	j.cmd.Stdout, j.cmd.Stderr = &j.stdout, &j.stderr
+	j.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := j.cmd.Start(); err != nil {
+		t.Fatalf("starting the pieces: %v", err)
+	}
+	go func() { j.exited <- j.cmd.Wait() }()
+	t.Cleanup(func() { _ = syscall.Kill(-j.cmd.Process.Pid, syscall.SIGKILL) })
+	return j
+}
+
 // signal sends sig to the script's whole process group, as a teardown does.
 func (j *scriptJob) signal(sig syscall.Signal) {
 	j.t.Helper()
@@ -240,11 +300,24 @@ func (j *scriptJob) signal(sig syscall.Signal) {
 }
 
 // await polls until cond holds, failing the case after ten seconds — the
-// script's own steps take milliseconds against the fake.
+// script's own steps take milliseconds against the fake — or AT ONCE when the
+// script has exited without it holding: nothing an exited script left behind
+// will change, and a case that waited out its bound reported a script that
+// stopped at its first line as one that was slow.
 func (j *scriptJob) await(what string, cond func() bool) {
 	j.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for !cond() {
+		select {
+		case err := <-j.exited:
+			j.exited <- err
+			if cond() {
+				return
+			}
+			j.t.Fatalf("the script exited (%v) before %s; calls:\n%s\nstderr:\n%s", err, what,
+				strings.Join(j.calls(), "\n"), j.stderr.String())
+		default:
+		}
 		if time.Now().After(deadline) {
 			j.t.Fatalf("waited 10s for %s; calls:\n%s\nstderr:\n%s", what,
 				strings.Join(j.calls(), "\n"), j.stderrSoFar())
@@ -1141,7 +1214,13 @@ sleep() { __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids";
 	ended := map[string]bool{}
 	reaped := 0
 	for _, line := range strings.Split(strings.TrimSpace(readIn(t, run.dir, "pids")), "\n") {
-		verb, operand, _ := strings.Cut(line, " ")
+		// THE PID IS THE LAST WORD, after any signal a kill names: the
+		// sleep is ended with `kill -9`.
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			t.Fatalf("an unreadable record %q", line)
+		}
+		verb, operand := fields[0], fields[len(fields)-1]
 		switch {
 		case verb == "end":
 			ended[operand] = true
@@ -1155,6 +1234,159 @@ sleep() { __p=$(exec sh -c 'echo $PPID'); echo "start $__p" >> "$FAKE_DIR/pids";
 	if reaped == 0 {
 		t.Fatal("the exporter reaped no sleep before it was stopped, so nothing was tested")
 	}
+}
+
+// AN EXPORTER STOPPED AS IT STARTS GOES AT ONCE, under every sh a box can
+// have, and leaves nothing behind. It is forked while the script traps
+// SIGTERM, and a SIGTERM that reaches it before it has run lands on the
+// script's handler, which dash clears as the subshell begins: the stop is
+// dropped, so unsync tells it again until it goes.
+//
+// TWENTY EXPORTERS, ONE AFTER ANOTHER, each stopped straight after its fork,
+// because whether one stop is lost depends on whether the fork ran first: one
+// at a time, every stop is lost under dash, but with this case's shells
+// running beside each other a fork often runs first, so a single exporter
+// stopped once passed two runs in three with the repeat removed. Twenty make
+// a lost stop all but certain under dash on every run.
+//
+// The stop wait is stretched to a minute, so a stop that was lost and waited
+// out cannot pass for a prompt one.
+//
+// Mutation: tell the exporter once (drop unsync's second operand), and the
+// dash cases wait out the minute.
+func TestAnExporterStoppedAsItStartsGoesAtOnce(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startPieces(t, sh, "trap 'exit 143' TERM\nkeep() { :; }\n"+
+			codingagent.OpenCodeStops(stretchedStop)+"n=0\nwhile [ \"$n\" -lt 20 ]; do\n"+
+			codingagent.OpenCodeExporter(time.Hour, "sync")+" &\nxpid=$!\nunsync\n"+
+			"n=$((n+1))\ndone\n")
+		run := j.waitWithin(promptEnd, "a stop sent as the exporter started was lost and waited out")
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		j.assertGroupGone()
+	})
+}
+
+// A STOP AS THE EXPORTER STARTS ITS SLEEP LEAVES NO SLEEP. Between starting a
+// sleep in the background and holding its pid the exporter has nothing it
+// could kill, so a SIGTERM there is kept until it does. Acted on at once, the
+// trap found no pid and left the sleep in the job's group for the rest of its
+// interval. No signal from outside can be timed into that window, so the
+// exporter here signals itself in it, once, from inside its own text.
+//
+// Mutation: act on the stop at once (drop the trap's test of w), and the
+// hour's sleep is still running after the exporter has gone.
+func TestAStopAsTheExporterStartsItsSleepLeavesNoSleep(t *testing.T) {
+	t.Parallel()
+	exporter := codingagent.OpenCodeExporter(time.Hour, "sync")
+	for _, cut := range []struct{ old, new string }{
+		{"( ", `( me=$(exec sh -c 'echo $PPID'); `},
+		{"sleep 3600 & ", `sleep 3600 & [ -z "$me" ] || { kill -TERM "$me"; me=; }; `},
+	} {
+		if n := strings.Count(exporter, cut.old); n != 1 {
+			t.Fatalf("the exporter holds %q %d times, want once:\n%s", cut.old, n, exporter)
+		}
+		exporter = strings.Replace(exporter, cut.old, cut.new, 1)
+	}
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startPieces(t, sh, "keep() { :; }\n"+exporter+" &\nwait $!\n")
+		run := j.waitWithin(promptEnd, "an exporter that stopped itself did not go")
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		j.assertGroupGone()
+	})
+}
+
+// A STOPPED EXPORT LEAVES NO COPY OF THE LOGIN. The exporter is stopped part
+// way through an export, and the stop is acted on as the export ends, before
+// keep has moved it over the document: the file it was writing is dropped
+// with it, so the box holds the login in one place, the document, which is
+// the one place a teardown writes back by its rule.
+//
+// Mutation: leave the exporter's file when it goes, and the box keeps a
+// second copy beside the document.
+func TestAStoppedExportLeavesNoCopyOfTheLogin(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startScript(t, scriptOpts{
+			shell: sh,
+			login: seededLogin,
+			env:   []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_EXPORT_SLEEP=1", "FAKE_RUN_UNTIL=released"},
+			times: &codingagent.OpenCodeTimes{Sync: 10 * time.Millisecond},
+		})
+		j.await("the exporter part way through an export", func() bool {
+			_, err := os.Stat(filepath.Join(j.dir, "exporting"))
+			return err == nil
+		})
+		if err := os.WriteFile(filepath.Join(j.dir, "released"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run := j.wait()
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		if run.document != refreshedLogin {
+			t.Errorf("the box's login is %q, want the refreshed export", run.document)
+		}
+		// Besides the document, the directory holds only the run's
+		// configuration ([scriptConfig]), as WriteConfig would have left it.
+		doc, config := j.paths.CredentialDocument(), j.paths.OpenCodeConfig()
+		entries, err := os.ReadDir(filepath.Dir(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.Name() != filepath.Base(doc) && e.Name() != filepath.Base(config) {
+				t.Errorf("the run left %s beside the box's login", e.Name())
+			}
+		}
+	})
+}
+
+// AN EXPORT THE STOP OUTLASTS LEAVES NO COPY EITHER. An exporter in an export
+// longer than the stop's bound never hears the stop: end kills it, which runs
+// no trap, so the file it was writing is unsync's to drop.
+//
+// Mutation: leave the drop to the exporter's own trap, and the box keeps the
+// copy beside the document.
+func TestAnExportTheStopOutlastsLeavesNoCopy(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		j := startScript(t, scriptOpts{
+			shell: sh,
+			login: seededLogin,
+			env: []string{"FAKE_REFRESH=" + refreshedLogin, "FAKE_EXPORT_SLEEP=5",
+				"FAKE_RUN_UNTIL=released"},
+			times: &codingagent.OpenCodeTimes{Sync: 10 * time.Millisecond,
+				Stop: 300 * time.Millisecond},
+		})
+		j.await("the exporter part way through an export", func() bool {
+			_, err := os.Stat(filepath.Join(j.dir, "exporting"))
+			return err == nil
+		})
+		if err := os.WriteFile(filepath.Join(j.dir, "released"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		run := j.wait()
+		if run.code != 0 {
+			t.Fatalf("exit %d:\n%s", run.code, run.stderr)
+		}
+		// Besides the document, the directory holds only the run's
+		// configuration ([scriptConfig]), as WriteConfig would have left it.
+		doc, config := j.paths.CredentialDocument(), j.paths.OpenCodeConfig()
+		entries, err := os.ReadDir(filepath.Dir(doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if e.Name() != filepath.Base(doc) && e.Name() != filepath.Base(config) {
+				t.Errorf("the run left %s beside the box's login", e.Name())
+			}
+		}
+	})
 }
 
 // A SIGNALLED RUN EXPORTS ITS LOGIN BEFORE IT GOES, beside a server that is
@@ -1211,6 +1443,34 @@ func TestASignalledRunExportsItsLoginBeforeItGoes(t *testing.T) {
 				assertServerStopped(t, run.dir)
 				j.assertGroupGone()
 			})
+		}
+	})
+}
+
+// AN OPENCODE THAT IS THERE BUT FAILS IS NOT CALLED MISSING. The script said
+// "no opencode on the box PATH" whenever `opencode --version` failed, so a
+// binary that was installed but could not start, or crashed on --version, was
+// told to be installed, and what it failed with was dropped. That stderr is
+// the run's transcript when nothing else was written.
+//
+// Mutation: answer a failing --version with the PATH sentence, or drop its
+// stderr, and the first row goes red; answer absence with the failure's, and
+// the second does.
+func TestAnOpenCodeThatFailsIsToldFromOneThatIsMissing(t *testing.T) {
+	t.Parallel()
+	forEachShell(t, func(t *testing.T, sh boxShell) {
+		failing := runScript(t, scriptOpts{shell: sh,
+			env: []string{"FAKE_VERSION_FAIL=opencode: libstdc++ not found"}})
+		if failing.code == 0 || strings.Contains(failing.stderr, "no opencode on the box PATH") ||
+			!strings.Contains(failing.stderr, "opencode --version failed with exit 3") ||
+			!strings.Contains(failing.stderr, "libstdc++ not found") {
+			t.Errorf("an opencode that failed --version said (exit %d):\n%s", failing.code,
+				failing.stderr)
+		}
+		missing := runScript(t, scriptOpts{shell: sh, env: []string{"PATH=/usr/bin:/bin"}})
+		if missing.code != 127 || !strings.Contains(missing.stderr, "no opencode on the box PATH") ||
+			strings.Contains(missing.stderr, "--version failed") {
+			t.Errorf("a box with no opencode said (exit %d):\n%s", missing.code, missing.stderr)
 		}
 	})
 }

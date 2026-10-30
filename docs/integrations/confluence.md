@@ -6,7 +6,7 @@ Crewlet integrates with Confluence bidirectionally: agents read and write Conflu
 > The engine ships its own, Doclet (`knowledge.backend: doclet`, which is what a
 > company that says nothing gets), with every page a record on the engine's
 > own pages log, applied on every data node, and searched by keyword over
-> each node's own BM25 index (and by meaning as well where
+> each data node's own BM25 index (and by meaning as well where
 > `knowledge.vectors` is on, the default for a company with an embeddings
 > provider). Set `knowledge.backend: confluence` (or declare this block,
 > which derives it) to run Confluence instead. It buys one thing Doclet

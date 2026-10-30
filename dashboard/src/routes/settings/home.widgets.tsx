@@ -25,7 +25,6 @@ import {
   WrenchGlyph,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState } from "~/components/common.tsx";
 import { DIRECTORY_READ, useHumanSeats } from "~/components/people.tsx";
 import { alarmKindTitle, alarmsLink } from "~/lib/alarms.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -45,11 +44,17 @@ import { MODELS_POLL_MS } from "~/routes/settings/models/data.ts";
 import { HEALTH, product } from "~/routes/settings/models/words.ts";
 import {
   FINDING_WORDS,
-  type DirectoryFinding,
+  type DirectoryCheck,
   type DirectoryRow,
 } from "~/routes/settings/Access.tsx";
 import { FINDING_KINDS } from "~/contract/identity.ts";
-import { WidgetCard, WidgetNote, defineWidgets } from "~/routes/home/board/kit.tsx";
+import {
+  WidgetCard,
+  WidgetNote,
+  WidgetQuery,
+  defineWidgets,
+  gapsOf,
+} from "~/routes/home/board/kit.tsx";
 
 /** The rows a widget lists before it says how many more its page holds. */
 const ROWS = 4;
@@ -76,16 +81,18 @@ function Backups() {
   // THE ALARMS ARE THE RETENTION REPORT'S, decided on admin as the page asks it.
   const retention = useRetentionReport(viewer.admin);
   const newest = backups.data?.points.find((p) => p.newest);
-  const failed = backups.data?.history.filter((r) => r.outcome === "failed").length ?? 0;
+  const history = backups.data?.history ?? [];
+  const failed = history.filter((r) => r.outcome === "failed").length;
   const alarms = retention.data?.alarms ?? [];
   const link = alarmsLink();
   return (
     <WidgetCard title="Backups" from="settings-backups">
-      <QueryState
+      <WidgetQuery
         error={backups.error}
         refusal={backups.refusal}
         detail={backups.detail ?? undefined}
         loading={backups.loading && !backups.data}
+        gaps={gapsOf([backups.data])}
       >
         <StatGroup flush columns={3} className="home-admin-stats">
           <StatCard
@@ -93,7 +100,13 @@ function Backups() {
             value={newest ? relTime(newest.taken_at, now) : EMPTY_VALUE}
             sub={newest ? (newest.verified ? "verified" : "not verified") : "none yet"}
           />
-          <StatCard label="Failed runs" value={failed} sub="in the recent history" />
+          {/* COUNTED OVER THE PAGE THE HISTORY HOLDS, and said to be: past it
+              the count is of the newest runs, as the Backups page says. */}
+          <StatCard
+            label="Failed runs"
+            value={failed}
+            sub={backups.data?.more ? `in the newest ${history.length}` : "in the recent history"}
+          />
           <StatCard
             label="Alarms"
             value={retention.data ? alarms.length : EMPTY_VALUE}
@@ -113,7 +126,7 @@ function Backups() {
             ))}
           </List>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -135,7 +148,14 @@ function Nodes() {
   const stranded = data?.unplaceable ?? [];
   return (
     <WidgetCard title="Nodes" from="settings-nodes">
-      <QueryState error={fleet.error} refusal={fleet.refusal} loading={fleet.loading && !data}>
+      <WidgetQuery
+        error={fleet.error}
+        refusal={fleet.refusal}
+        loading={fleet.loading && !data}
+        // NOTHING TO READ A GAP FROM: the fleet's answer carries no flag
+        // saying what it could not account for.
+        gaps={[]}
+      >
         <StatGroup flush columns={3} className="home-admin-stats">
           <StatCard label="Live nodes" value={nodes.length} sub="holding a lease" />
           <StatCard
@@ -171,7 +191,7 @@ function Nodes() {
             ))}
           </List>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -203,10 +223,13 @@ function Integrations() {
   const working = states.length - owed.length;
   return (
     <WidgetCard title="Integrations" from="integrations">
-      <QueryState
+      <WidgetQuery
         error={read.error}
         refusal={read.refusal}
         loading={read.loading && !read.data}
+        // THE ANSWER'S COVERAGE IS ITS TRAFFIC COUNTS', which this card does
+        // not draw: whether a tool is connected and working is no fleet read.
+        gaps={[]}
         empty={
           read.data && states.length === 0
             ? { title: "No tools connected", hint: "Connect one from Integrations." }
@@ -233,7 +256,7 @@ function Integrations() {
             {working > 0 && <WidgetNote>{`${plural(working, "other tool")} working.`}</WidgetNote>}
           </>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -252,10 +275,11 @@ function McpServers() {
   const failing = servers.filter((s) => s.state !== "running").length;
   return (
     <WidgetCard title="MCP servers" from="settings-mcp-tools">
-      <QueryState
+      <WidgetQuery
         error={status.error}
         refusal={status.refusal}
         loading={status.loading && !status.data}
+        gaps={[]}
         empty={
           status.data && servers.length === 0
             ? { title: "No MCP servers yet", hint: "Add one to give agents more tools." }
@@ -280,7 +304,7 @@ function McpServers() {
         {failing === 0 && servers.length > 0 && (
           <WidgetNote>{`${plural(servers.length, "server")}, all running.`}</WidgetNote>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -302,10 +326,11 @@ function Models() {
   const stopped = entries.filter((e) => e.health !== "ready" && e.health !== "untested").length;
   return (
     <WidgetCard title="Models" from="settings">
-      <QueryState
+      <WidgetQuery
         error={models.error}
         refusal={models.refusal}
         loading={models.loading}
+        gaps={[]}
         empty={
           !models.loading && !models.error && entries.length === 0
             ? { title: "No models yet", hint: "Add one under Settings, Models." }
@@ -338,7 +363,7 @@ function Models() {
         {stopped === 0 && unused === 0 && entries.length > 0 && (
           <WidgetNote>{`${plural(entries.length, "model")}, each ready and in use.`}</WidgetNote>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -381,10 +406,11 @@ function Secrets() {
   const newest = [...rows].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
   return (
     <WidgetCard title="Secrets" from="settings-secrets">
-      <QueryState
+      <WidgetQuery
         error={read.code}
         refusal={read.refusal}
         loading={read.loading && !read.data}
+        gaps={[]}
         empty={
           read.data && rows.length === 0
             ? { title: "No secrets stored", hint: "Store one from Secrets." }
@@ -420,7 +446,7 @@ function Secrets() {
             <More total={unused.length} to={["settings", "secrets"]} />
           </>
         )}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -437,10 +463,11 @@ function Configuration() {
   const behind = nodes.filter((n) => fleet.data && offRevision(fleet.data, n));
   return (
     <WidgetCard title="Configuration" from="settings-config">
-      <QueryState
+      <WidgetQuery
         error={audit.error}
         refusal={audit.refusal}
         loading={audit.loading && !audit.data}
+        gaps={[]}
         empty={
           audit.data && revisions.length === 0
             ? { title: "No configuration yet", hint: "Import one with crewlet config import." }
@@ -476,7 +503,7 @@ function Configuration() {
             </ListItem>
           ))}
         </List>
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
@@ -520,10 +547,13 @@ function AuditLog() {
   const failed = config.error ? config : runtime.error ? runtime : null;
   return (
     <WidgetCard title="Audit log" from="settings-audit">
-      <QueryState
+      <WidgetQuery
         error={failed?.error ?? null}
         refusal={failed?.refusal ?? null}
         loading={(config.loading && !config.data) || (runtime.loading && !runtime.data)}
+        // THE RUNTIME HALF IS A FLEET READ, so a node that did not answer is
+        // a change that may be missing; the revisions are one replicated table.
+        gaps={gapsOf([runtime.data])}
         empty={
           changes.length === 0
             ? { title: "No changes recorded", hint: "Changes people make appear here." }
@@ -541,17 +571,12 @@ function AuditLog() {
             </ListItem>
           ))}
         </List>
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }
 
 // ---- People ---------------------------------------------------------------------------------
-
-interface DirectoryCheck {
-  findings: DirectoryFinding[] | null;
-  people_with_admin: number;
-}
 
 const findingWords = (kind: string) =>
   (FINDING_KINDS as readonly string[]).includes(kind)
@@ -579,12 +604,22 @@ function PeopleWidget() {
   const active = people.filter((p) => p.stage === "active").length;
   const invited = (seats.data ?? []).filter((s) => !s.holder && s.invitation).length;
   const findings = check.data?.findings ?? [];
+  // A BINDING THIS NODE COULD NOT CHECK is "could not say", which the
+  // directory's own page says as well, never "no access problems found".
+  const unchecked = check.data?.bindings_unchecked ?? 0;
   return (
     <WidgetCard title="People" from="settings-people">
-      <QueryState
+      <WidgetQuery
         error={directory.code}
         refusal={directory.refusal}
         loading={directory.loading && !directory.data}
+        gaps={
+          unchecked > 0
+            ? [
+                `${plural(unchecked, "binding")} couldn’t be checked just now, so this may be incomplete.`,
+              ]
+            : []
+        }
       >
         <StatGroup flush columns={3} className="home-admin-stats">
           <StatCard
@@ -605,7 +640,9 @@ function PeopleWidget() {
         </StatGroup>
         {check.data &&
           (findings.length === 0 ? (
-            <WidgetNote>No access problems found.</WidgetNote>
+            unchecked > 0 ? null : (
+              <WidgetNote>No access problems found.</WidgetNote>
+            )
           ) : (
             <>
               <List className="home-admin-list">
@@ -627,7 +664,7 @@ function PeopleWidget() {
               <More total={findings.length} to={["settings", "people"]} />
             </>
           ))}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }

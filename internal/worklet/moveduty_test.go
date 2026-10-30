@@ -212,7 +212,7 @@ func TestAMoveRefusesASubtreeWithATaskInTheTrash(t *testing.T) {
 			end := r.logEnd(t)
 			_, err := r.writer.MoveTaskToProject(t.Context(),
 				statelog.NewOpID(time.Now(), "move"), "m-root", "OPS", nil)
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
+			if err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.want) {
 				t.Fatalf("the move = %v, want a refusal saying %q", err, tc.want)
 			}
 			if got := r.logEnd(t); got != end {
@@ -332,10 +332,10 @@ func TestAMoveOnALaggingNodeTakesItsMarkDown(t *testing.T) {
 // A SUBTASK LEFT IN ANOTHER PROJECT THAN ITS ROOT IS IN THE ATTENTION QUEUE,
 // and leaves it when the walk carries it.
 //
-// The flag shipped with the schema — a column, a filter value and a share of
-// the attention index — and nothing ever set it, so `flag=inconsistent_project`
-// answered nothing on every company, including one holding the split subtree
-// a stopped move leaves behind.
+// The flag shipped with the schema — a column and a filter value — and nothing
+// ever set it, so `flag=inconsistent_project` answered nothing on every
+// company, including one holding the split subtree a stopped move leaves
+// behind.
 func TestASubtaskOutsideItsRootsProjectIsFlagged(t *testing.T) {
 	t.Parallel()
 	r := moveFixture(t, "m-kid-a", "m-kid-b")

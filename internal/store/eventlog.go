@@ -148,6 +148,16 @@ type EventRecord struct {
 	// same name. A copy of the tag, as the promoted column is.
 	AgentID string `json:"agent_id,omitempty"`
 
+	// Node is the node that PUBLISHED the event — the envelope's origin
+	// (events.Event.Node), which is where the work it describes ran — and
+	// NOT the node whose store the row was read from. The two were one until
+	// custody (ADR-0025): a node without the `data` role keeps no event log,
+	// and the data node that keeps its events holds rows it never
+	// published. So a reader asking where something happened asks the row,
+	// never the store that answered. Empty only on a row no node published
+	// (a test harness's queue). node/0054.
+	Node string `json:"node,omitempty"`
+
 	// Payload is the full serialized event. Nil on a listing — see above.
 	Payload json.RawMessage `json:"payload,omitempty"`
 
@@ -410,8 +420,8 @@ func (q ListQuery) at() time.Time { return askedAt(q.At) }
 // that are one: an answer assembled from several reads — a turn's rows, its
 // count, its ending and its traces — floored each read at its own reading of
 // the clock, so a row crossing the floor between them made the count come
-// back short of the rows beside it; and a fleet asks every node one
-// question, so every node must floor it at the ASKER'S instant or the merged
+// back short of the rows beside it; and a fleet asks every data node one
+// question, so every one must floor it at the ASKER'S instant or the merged
 // answer is a union of different windows, each node's as of its own clock.
 //
 // A READ GROUPING ITS ROWS BY A COLUMN SELECTS THEM IN A DERIVED TABLE —
@@ -490,9 +500,9 @@ INSERT INTO crewlet_events (
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, provider_key, work_item,
-	calls, spend_stage, answered_by
+	calls, spend_stage, answered_by, node
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -654,6 +664,10 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// WHO ANSWERED, off the `answered_by` tag, for the reason
 		// work_item is a copy of its own. See schema/0053.
 		tags["answered_by"],
+		// WHO PUBLISHED IT, off the record rather than off this node:
+		// a custody keeper writes rows another node published. See
+		// node/0054.
+		rec.Node,
 	); err != nil {
 		return err
 	}
@@ -769,7 +783,7 @@ func partiesOf(tags map[string]string, seats SeatResolver) []string {
 // listColumns is every column a listing reads. `payload` is absent
 // deliberately — see EventRecord.Payload.
 const listColumns = `event_time, event_id, event_type, source, category,
-	summary, actor, trace_id, span_id, parent_span_id, tags, work_key`
+	summary, actor, trace_id, span_id, parent_span_id, tags, work_key, node`
 
 // qualifiedListColumns names the same columns on the log's own table.
 //
@@ -808,12 +822,12 @@ func qualifiedListColumns(joined bool) string {
 // `at` is the instant the question is asked at, and the HISTORY FLOOR sits
 // [EventHistory] before it. A PARAMETER rather than a clock this function
 // reads, because one answer compiles it more than once — the axis's bars and
-// its facet counts — and a fleet asks every node one question: read here,
+// its facet counts — and a fleet asks every data node one question: read here,
 // each compilation floored its rows at its own instant, so the counts beside
 // one axis described different sets, and a node answering a scatter a second
 // after the asker pinned its window dropped that second's rows from a bar the
-// answer said it covered. The caller reads the clock once (or takes the
-// instant its query pinned) and hands the same one to every half.
+// answer said it covered. The caller reads the clock once (or takes the instant
+// its query pinned) and hands the same one to every half.
 func (q ListQuery) predicate(at time.Time) (from string, where []string, args []any, col func(string) string) {
 	// The RelatedAgent filter is a JOIN rather than another WHERE clause,
 	// because "involves this agent" is one fact spread over five places on
@@ -1202,6 +1216,60 @@ func turnTracesSQL(turnID string, at time.Time) (string, []any) {
 		[]any{turnID, EncodeTime(askedAt(at).Add(-EventHistory))}
 }
 
+// TurnNodes is every node that published any of one turn's rows this log
+// holds, sorted: where the turn RAN, as far as this log knows.
+//
+// ASKED OF THE ROWS, NEVER OF THE STORE THAT ANSWERED: a data node keeps the
+// events of a node without `data` in custody (ADR-0025), so "this log holds
+// the turn" no longer says "the turn ran here" — the turn page named the
+// custody keeper as the node a turn ran on, and an operator reading that host's
+// logs found nothing of it. And ASKED RATHER THAN DERIVED FROM A CAPPED READ,
+// for [EventLog.TurnTraces]' reason: a turn resumed on another node after a
+// restart has rows of both, and the middle a capped read drops can hold the
+// rows of one of them.
+//
+// A DISTINCT walk of the turn's own range of the (turn_id, event_time,
+// event_id) index, bounded by the history window, through a derived table for
+// the reason [turnTracesSQL] gives. A row with no origin (a test harness's) is
+// left out rather than named as a node called "".
+func (l *EventLog) TurnNodes(ctx context.Context, turnID string, at time.Time) ([]string, error) {
+	return l.live().TurnNodes(ctx, turnID, at)
+}
+
+// TurnNodes is [EventLog.TurnNodes] read at this snapshot.
+func (s EventSnapshot) TurnNodes(ctx context.Context, turnID string, at time.Time) ([]string, error) {
+	query, args := turnNodesSQL(turnID, at)
+	rows, err := s.q.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("store: read the nodes of turn %s: %w", turnID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := []string{}
+	for rows.Next() {
+		var node string
+		if err := rows.Scan(&node); err != nil {
+			return nil, fmt.Errorf("store: scan the nodes of turn %s: %w", turnID, err)
+		}
+		out = append(out, node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: read the nodes of turn %s: %w", turnID, err)
+	}
+	return out, nil
+}
+
+// turnNodesSQL is the statement [EventLog.TurnNodes] runs and its arguments,
+// a function of its own so its plan can be read back for exactly the statement
+// that runs (TestEveryGroupedReadSeeksItsFiltersIndex).
+func turnNodesSQL(turnID string, at time.Time) (string, []any) {
+	return "SELECT DISTINCT node FROM (" +
+			"SELECT node FROM crewlet_events " +
+			"WHERE turn_id = ? AND event_time >= ?) " +
+			"WHERE node != '' ORDER BY node ASC",
+		[]any{turnID, EncodeTime(askedAt(at).Add(-EventHistory))}
+}
+
 // TurnTrace is one trace a turn touched and when it first did.
 //
 // THE INSTANT TRAVELS WITH THE ID because the order is a property of every log
@@ -1477,7 +1545,7 @@ func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string,
 		var tagJSON, payload string
 		dest := []any{&micros, &rec.ID, &rec.Type, &rec.Source,
 			&rec.Category, &rec.Summary, &rec.Actor, &rec.TraceID,
-			&rec.SpanID, &rec.ParentSpanID, &tagJSON, &rec.WorkKey}
+			&rec.SpanID, &rec.ParentSpanID, &tagJSON, &rec.WorkKey, &rec.Node}
 		if withPayload {
 			dest = append(dest, &payload)
 		}

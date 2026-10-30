@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/org"
@@ -46,7 +47,7 @@ func TestAPersonsWriteSuppressesTheirOwnWake(t *testing.T) {
 	moved.Status = worklet.StatusInProgress
 	notify := worklet.Wake{Kind: worklet.ChangeStatus, Before: task,
 		After: moved}.Notify(nil)
-	candidates := worklet.Candidates(notify, false)
+	candidates := worklet.Candidates(notify)
 
 	woken := func(actor string) bool {
 		for _, c := range worklet.Route(candidates, nil, actor) {
@@ -221,5 +222,47 @@ func TestAWriteWithNobodyBehindItIsRefused(t *testing.T) {
 	if actor, err := builtin.PrincipalActor(resolved, nil); err != nil ||
 		actor.Handle != "token:ops" {
 		t.Errorf("a resolved token writes as %+v (%v)", actor, err)
+	}
+}
+
+// A CHAT WRITE IS ATTRIBUTED AS EVERY OTHER DOMAIN'S, AND NEVER AS THE ENGINE.
+//
+// One person under two names across the histories an audit reads side by side
+// is two people, so a chat write carries the name and the credential a work
+// record and a page record carry: a bound person their seat, as a person; a
+// service account's token its login, as an operator, through the token. And
+// the engine's own principal is REFUSED although chat has a word for it: that
+// kind is the engine narrating a room from its own records, and a tool call
+// made as it would put a narration where a speaker belongs.
+//
+// Mutation: admit [chatlet.AuthorSystem] in ChatActorOf and the engine's call is
+// attributed; record the login rather than the seat and the person's is.
+func TestAChatWriteIsAttributedAsEveryOtherDomainsAndNeverAsTheEngine(t *testing.T) {
+	t.Parallel()
+	const token = "0192f00d-0000-7000-8000-00000000000b"
+	via := iam.MachineTokenName(token)
+	person := boundPerson("sarah.chen", "sarah", iam.GrantChatlet)
+	person.Via = via
+	service := iam.Principal{ID: uuid.New(), Login: "svc:ci", Kind: iam.KindMachine,
+		Stage: iam.StageActive, Via: via}
+	for name, c := range map[string]struct {
+		p    iam.Principal
+		kind chatlet.AuthorKind
+	}{
+		"a person bound to a seat": {person, chatlet.AuthorHuman},
+		"a service account":        {service, chatlet.AuthorOperator},
+	} {
+		got, err := builtin.ChatActorOf(c.p)
+		work := builtin.ActorOf(c.p)
+		if err != nil || got.Handle != work.Handle || got.Kind != c.kind ||
+			got.OperatorID != work.OperatorID {
+			t.Errorf("%s: a chat write is attributed as %+v (%v), a work record "+
+				"as %q through %q, want the same as %s", name, got, err,
+				work.Handle, work.OperatorID, c.kind)
+		}
+	}
+	engine := iam.Principal{Kind: iam.KindEngine, Login: "node-7", Stage: iam.StageActive}
+	if got, err := builtin.ChatActorOf(engine); err == nil {
+		t.Errorf("the engine's own principal is attributed a chat write as %+v", got)
 	}
 }

@@ -3,6 +3,7 @@ package iamapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -171,31 +172,58 @@ func TestAnUnknownMintSaysToMintAgain(t *testing.T) {
 	}
 }
 
-// WHAT THE DOMAIN REFUSES IS ANSWERED FOR WHAT IT IS: an authority refusal is
-// 403 and a malformed request is 400, never the 500 an unclassified error is.
+// WHAT THE DOMAIN REFUSES IS ANSWERED FOR WHAT IT IS: a refusal a permission
+// lifts is 403 `unauthorized`, one the mint's own rule makes is 403
+// `forbidden`, and a malformed request is 400 — never the 500 an unclassified
+// error is. A person's token asked for by an administrator is the second kind:
+// it was answered `unauthorized`, whose sentence sent an administrator to ask
+// an administrator for access.
 func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name string
-		err  error
-		want int
+		name   string
+		err    error
+		status int
+		code   httpjson.Code
+		detail string
 	}{
-		{"a grant the owner does not hold",
-			fmt.Errorf("%w: admin is not among [worklet]",
-				iamdomain.ErrRefused), http.StatusForbidden},
+		{"a grant the owner does not hold", &iamdomain.Refusal{
+			Grants: []iam.Grant{}, Err: errors.New("a token can only have what " +
+				"its owner has, and its owner doesn't have admin"),
+			About: "the owner holds worklet"},
+			http.StatusForbidden, httpjson.CodeForbidden,
+			"A token can only have what its owner has, and its owner doesn't have admin."},
+		{"a person's token asked for by an administrator", &iamdomain.Refusal{
+			Grants: []iam.Grant{}, Err: errors.New("only they can create " +
+				"their own access tokens"), About: "owner " + alice.String()},
+			http.StatusForbidden, httpjson.CodeForbidden,
+			"Only they can create their own access tokens."},
+		{"a service account's token asked for without admin", &iamdomain.Refusal{
+			Grants: []iam.Grant{iam.GrantAdmin},
+			Err:    errors.New("creating a token for a service account needs admin")},
+			http.StatusForbidden, httpjson.CodeUnauthorized,
+			"Creating a token for a service account needs admin."},
+		// THE SENTINEL A VALUE'S REFUSAL OPENS WITH IS CUT, as every other
+		// value refusal of the directory's is ([iamdomain.Sentence]).
+		// Mutation: answer err.Error() again and this row goes red.
 		{"an expiry already past", fmt.Errorf("%w: the expiry has passed",
-			iamdomain.ErrInvalidToken), http.StatusBadRequest},
+			iamdomain.ErrInvalidToken), http.StatusBadRequest,
+			httpjson.CodeInvalidBody, "The expiry has passed."},
 	} {
 		r := newRig(t)
 		r.writer.err = tc.err
 		got := r.as(administrator(), http.MethodPost,
 			"/iam/credentials?person="+alice.String(), map[string]any{})
-		if got.status != tc.want {
-			t.Errorf("%s answered %d, want %d (body %v)", tc.name, got.status,
-				tc.want, got.body)
+		if got.status != tc.status || got.body["error"] != string(tc.code) {
+			t.Errorf("%s answered %d %v, want %d %s", tc.name, got.status,
+				got.body, tc.status, tc.code)
 		}
 		if got.body["token"] != nil {
 			t.Errorf("%s answered a token value", tc.name)
+		}
+		if got.body["detail"] != tc.detail {
+			t.Errorf("%s: the detail is %q, want %q", tc.name, got.body["detail"],
+				tc.detail)
 		}
 	}
 }
@@ -208,10 +236,10 @@ func TestAMintTheDomainRefusesIsAnsweredForWhatItIs(t *testing.T) {
 // admin minting for a service account that holds admin reaches the domain
 // asking for exactly that — the owner the route names, the minter the caller,
 // the permissions as typed — and the answer names them. An OMITTED list
-// reaches it as nil, which the domain reads as everything the owner holds;
-// `[]` as an empty set, a token that reads the overview alone; and a name this
-// build does not know is refused `400` naming the set before the owner is read
-// or the domain asked.
+// reaches it as nil, which the domain reads as everything the owner holds that
+// the minting party may confer; `[]` as an empty set, a token that reads the
+// overview alone; and a name this build does not know is refused `400` naming
+// the set before the owner is read or the domain asked.
 //
 // Mutation: default an omitted list here rather than in the domain and the
 // nil case goes red; forward an unknown name and the writer is asked.

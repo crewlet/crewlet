@@ -1,8 +1,7 @@
 package topics
 
-import "github.com/google/uuid"
-
-// THE ARTIFACTS SUBJECTS: two state logs and the presence channel.
+// THE ARTIFACTS SUBJECTS: two state logs. An artifact's room crosses the fleet
+// on the presence channel every kind of room shares (presence.go).
 //
 // TWO LOGS, NOT ONE, because a publish is a human-scale event and a datastore
 // write is a click: on one log the two would share one pinned writer, one
@@ -36,16 +35,6 @@ const (
 
 	// ArtifactDataLogWildcard is the subject space the stream is created with.
 	ArtifactDataLogWildcard = ArtifactDataLogPrefix + ".>"
-
-	// ArtifactPresencePrefix prefixes the EPHEMERAL presence channel: core
-	// publish and subscribe, never a stream, so a heartbeat is never stored.
-	// It is not under either log's prefix, so neither stream can capture it.
-	ArtifactPresencePrefix = "crewlet.artifacts.presence"
-
-	// ArtifactPresenceAsk is where a node that gains its first watcher of
-	// an artifact asks its peers for the roster they hold, once, rather
-	// than waiting a rebroadcast interval to learn who is already there.
-	ArtifactPresenceAsk = ArtifactPresencePrefix + ".ask"
 )
 
 // ArtifactsLogSubject is the subject one artifacts record is published on.
@@ -66,14 +55,4 @@ func ArtifactDataLogSubject(kind, id string) string {
 // ArtifactDataLogPath is [ArtifactDataLogSubject]'s inverse.
 func ArtifactDataLogPath(subject string) (kind, id string, ok bool) {
 	return LogPath(ArtifactDataLogPrefix, subject)
-}
-
-// ArtifactPresenceSubject is the presence channel of one artifact.
-//
-// A [uuid.UUID] rather than a string, for the reason every builder here takes
-// one: an artifact's id is the only token a subject may carry for it, and a
-// label or a title passed in its place must be a compile error rather than a
-// channel nobody listens on.
-func ArtifactPresenceSubject(artifact uuid.UUID) string {
-	return ArtifactPresencePrefix + "." + artifact.String()
 }

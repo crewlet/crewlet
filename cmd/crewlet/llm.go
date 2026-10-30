@@ -52,7 +52,7 @@ import (
 // was assumed. The web probe asks it to fetch a URL, because web is the one
 // local tool every profile keeps ON and a vendor's sandbox flag can cut it
 // without saying so.
-const llmUsage = `crewlet llm — the coding CLIs every model runs through: logins,
+const llmUsage = `crewlet llm: the coding CLIs every model runs through, their logins,
 health and tokens
 
 Usage:
@@ -85,7 +85,14 @@ Flags:
   -print-token   Write a captured token to stdout instead of the store (login only)
 `
 
-func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) error {
+// runLLM dispatches `crewlet llm`.
+//
+// STDIN IS AN ARGUMENT for every subcommand that reads it — a token or a
+// password `login` is handed, the prompts of a vendor's own login, and the
+// bundle `import` restores — as it is for `crewlet iam`, so a suite can pipe
+// one in and drive the write each of them ends in rather than swapping the
+// process's own os.Stdin under every other test.
+func runLLM(environ config.Source, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
 		fmt.Fprintf(stdout, llmUsage, defaultCompanyPath, defaultBootstrapPath)
@@ -122,7 +129,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	secretStore := fs.Bool("secret-store", false,
 		"write the bundle into the encrypted secret store (export only)")
 	noSmoke := fs.Bool("no-smoke", false,
-		"skip the real completions — the tool call and both isolation probes (doctor only)")
+		"skip the real completions: the tool call and both isolation probes (doctor only)")
 	printToken := fs.Bool("print-token", false,
 		"write a captured token to stdout instead of storing it (login only)")
 	if err := fs.Parse(rest); err != nil {
@@ -167,7 +174,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 			fromHost: *fromHost, captureToken: *captureToken,
 			tokenStdin: *tokenStdin, username: *username, passwordStdin: *passwordStdin,
 			companySecrets: companySecrets, companyPath: *companyPath,
-			printToken: *printToken, stdin: os.Stdin,
+			printToken: *printToken, stdin: stdin,
 		}, stdout, stderr)
 	case "status":
 		p, err := oneProvider(providers, key)
@@ -200,7 +207,7 @@ func runLLM(environ config.Source, args []string, stdout, stderr io.Writer) erro
 	case "export":
 		return exportLLM(ctx, providers, key, *secretStore, companySecrets, stdout)
 	case "import":
-		return importLLM(ctx, providers, key, *companyPath, companySecrets, os.Stdin, stdout)
+		return importLLM(ctx, providers, key, *companyPath, companySecrets, stdin, stdout)
 	}
 	return nil
 }
@@ -303,7 +310,7 @@ func llmEntries(company *config.Company, sub, key, companyPath string) ([]string
 	switch {
 	case len(order) == 0:
 		return nil, fmt.Errorf(
-			"%s declares no providers.llm entries — see "+
+			"%s declares no providers.llm entries. See "+
 				"docs/concepts/llm-backends.md for the config block",
 			companyPath)
 	case sub == "list" || (sub == "doctor" && key == ""):
@@ -514,7 +521,7 @@ func (b bundleFailure) Render(w io.Writer) {
 	// is refused wherever the company has more than one entry, so the remedy
 	// printed under one of them was a command that asks which.
 	fmt.Fprintf(w, "  - its configured credential bundle did not restore, so the engine would run it "+
-		"signed out — export the bundle again (`crewlet llm export %s`): %v\n", b.key, b.err)
+		"signed out. Export the bundle again (`crewlet llm export %s`): %v\n", b.key, b.err)
 }
 
 func unbuilt(key string, err error) func(context.Context, bool) diagnosis {
@@ -801,7 +808,7 @@ func refuseUnreadToken(p *cliagent.Provider, key string, req loginRequest) error
 	}
 	return fmt.Errorf(
 		"%s runs under auth.mode inherit-env, which %s, so a stored token would reach nothing, "+
-			"and none was minted or stored. Instead, %s — or set auth.mode: subscription, "+
+			"and none was minted or stored. Instead, %s, or set auth.mode: subscription, "+
 			"which reads a stored token",
 		key, sign.Reads, instead)
 }
@@ -822,8 +829,8 @@ func refuseAPIKeyToken(p *cliagent.Provider, key string, sign cliagent.ModeSignI
 	switch {
 	case tokenVar == "":
 		return fmt.Errorf(
-			"%s runs under auth.mode api-key, which hands the CLI no headless token — and the %q "+
-				"profile names no token_env to hand one in — so a token would reach nothing, and "+
+			"%s runs under auth.mode api-key, which hands the CLI no headless token, and the %q "+
+				"profile names no token_env to hand one in, so a token would reach nothing, and "+
 				"none was minted or stored. The mode %s: %s",
 			key, p.Agent(), sign.Reads, sign.Supply)
 	case !p.TokenCanBeStored():
@@ -839,7 +846,7 @@ func refuseAPIKeyToken(p *cliagent.Provider, key string, sign cliagent.ModeSignI
 	return fmt.Errorf(
 		"%s runs under auth.mode api-key, which removes %s from the CLI's environment, so a "+
 			"headless token would reach nothing, and none was minted or stored. The mode %s: "+
-			"%s — or set auth.mode: subscription to sign it in with a token",
+			"%s, or set auth.mode: subscription to sign it in with a token",
 		key, tokenVar, sign.Reads, sign.Supply)
 }
 
@@ -904,7 +911,7 @@ func exportLLM(ctx context.Context, providers []cliAgentProvider, key string, to
 		return fmt.Errorf("%w: %s's credential bundle is %d bytes once packed, and the store "+
 			"keeps a value of at most %d (%d KiB), so nothing was stored. Export it to stdout "+
 			"instead (`crewlet llm export %s`, without -secret-store), keep it in your own "+
-			"secret manager and pipe it to `crewlet llm import %s` on each host — or sign %s "+
+			"secret manager and pipe it to `crewlet llm import %s` on each host, or sign %s "+
 			"in on each host with `crewlet llm login %s`",
 			secrets.ErrValueTooLarge, key, len(bundle), secrets.MaxValueBytes,
 			secrets.MaxValueBytes>>10, key, key, key, key)
@@ -1003,7 +1010,7 @@ func importLLM(ctx context.Context, providers []cliAgentProvider, key, companyPa
 	present := func() error {
 		return fmt.Errorf(
 			"%s already has a login in %s, and restoring over it would replace "+
-				"a fresher refresh token with an older one — log it out first "+
+				"a fresher refresh token with an older one. Log it out first "+
 				"(`crewlet llm logout %s`) if you mean to replace it",
 			key, p.Workspace().CredentialsDir(), key)
 	}
@@ -1027,7 +1034,7 @@ func importLLM(ctx context.Context, providers []cliAgentProvider, key, companyPa
 	if len(raw) > maxBundleBytes {
 		return fmt.Errorf(
 			"the bundle on stdin exceeds %d bytes, which is far larger than any "+
-				"real credential directory — check what is on the other side of "+
+				"real credential directory. Check what is on the other side of "+
 				"the pipe (`crewlet llm export %s` produces one)",
 			maxBundleBytes, key)
 	}

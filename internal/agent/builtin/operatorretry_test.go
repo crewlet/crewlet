@@ -129,10 +129,10 @@ func TestAnOperatorsCreateBroughtBackIsTheSameCreate(t *testing.T) {
 	}
 }
 
-// A COMMENT AND A NEW VIEW ARE IDENTIFIED BY THE CALL TOO. Each is a row whose
-// id is the subject its create arbitrates on, so an id minted per call made
-// the call brought back a second comment and a second view whatever its
-// operation id said.
+// A COMMENT AND A NEW VIEW ARE IDENTIFIED BY THE CALL TOO. Each is a row
+// keyed by its id — the subject a view's create arbitrates on, and the row a
+// comment's post creates — so an id minted per call made the call brought
+// back a second comment and a second view whatever its operation id said.
 func TestAnOperatorsCommentAndViewBroughtBackAreTheSameObject(t *testing.T) {
 	t.Parallel()
 	t.Run("comment", func(t *testing.T) {

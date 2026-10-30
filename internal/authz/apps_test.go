@@ -13,8 +13,8 @@ import (
 //
 // An app no row names is a permission an administrator can tick on somebody's
 // row that opens nothing at all, which reads to that person as a broken
-// screen. Walked from [iam.Apps] rather than from the table, so a third app
-// added to the vocabulary fails here until a verb belongs to it — and a row
+// screen. Walked from [iam.Apps] rather than from the table, so an app added
+// to the vocabulary fails here until a verb belongs to it — and a row
 // that is SEAT-ONLY does not count, because no person ever takes it.
 // Mutation: drop the knowledge app from every page row and this goes red.
 func TestEveryAppIsNamedByARow(t *testing.T) {
@@ -75,6 +75,11 @@ func TestEveryAppRowAdmitsAHolderAndRefusesANonHolder(t *testing.T) {
 			// AN ARTIFACT THE CTO OWNS, which holds every role.
 			object = authz.Object{Kind: authz.KindArtifact, Owner: "cto"}
 		}
+		// A UNIT'S ROOM the CTO leads the unit of, and a message they said.
+		if app == iam.GrantChatlet {
+			object = authz.Object{Kind: authz.KindChannel, Owner: "cto", Author: "cto",
+				Container: "sre"}
+		}
 		holder := authz.Decide(t.Context(), personLeading("cto", app), a, object,
 			nimbus(), decidedAt)
 		if holder.Unknown() || !holder.Allowed {
@@ -91,6 +96,83 @@ func TestEveryAppRowAdmitsAHolderAndRefusesANonHolder(t *testing.T) {
 	}
 	if walked == 0 {
 		t.Fatal("no row names an app, so this walk certifies nothing")
+	}
+}
+
+// AN ANY-APP ROW NAMES ITS OWN SET OF APPS, AND NO OTHER ROW NAMES ONE.
+//
+// [authz.ClassAnyApp] admits on any ONE of its row's apps ([authz.AnyOf]) and
+// on nothing else, so a holder of an app the gesture draws nothing from is
+// refused, and the refusal names exactly the set. Every such row names at
+// least two apps — one would be [authz.ClassApp] spelt another way — each a
+// real app, none twice; and a row of any other class names none, since no
+// other class reads it and a set there would be a decision nobody consults.
+// Walked as a person bound to a seat, so a seated row is decided on its class.
+//
+// THE OUTSIDE-THE-SET HALF is the case the class used to get wrong, iterating
+// [iam.Apps]: chat is an app no any-app row draws on, and that reading admitted
+// a holder of chat alone to a search of the tracker and the knowledge base — a
+// search of nothing they may read. The walk fails if no app falls outside
+// every set, because the half is then vacuous and certifies nothing.
+// Mutation: decide the class over iam.Apps again, and the chat holder goes
+// red.
+func TestAnAnyAppRowNamesItsOwnSetOfApps(t *testing.T) {
+	t.Parallel()
+	walked, outside := 0, 0
+	for _, a := range authz.Actions() {
+		class, _ := authz.ClassOf(a)
+		set, known := authz.AnyOf(a)
+		if !known {
+			t.Fatalf("AnyOf does not know %s, which the table has a row for", a)
+		}
+		if class != authz.ClassAnyApp {
+			if len(set) != 0 {
+				t.Errorf("%s is decided by %s and names the any-app set %v, "+
+					"which nothing reads", a, class, set)
+			}
+			continue
+		}
+		walked++
+		if len(set) < 2 {
+			t.Errorf("%s is any-app over %v: fewer than two apps is one app "+
+				"spelt another way", a, set)
+		}
+		for i, app := range set {
+			if !app.IsApp() || slices.Contains(set[:i], app) {
+				t.Errorf("%s names %q in its set %v, which is not one more app",
+					a, app, set)
+			}
+		}
+		object := authz.Object{Kind: authz.KindCompany}
+		nobody := authz.Decide(t.Context(), personLeading("sam"), a, object,
+			nimbus(), decidedAt)
+		if nobody.Allowed || nobody.Reason != authz.ReasonNoGrant ||
+			!slices.Equal(nobody.Grants, set) {
+			t.Errorf("%s: a caller holding nothing decided %+v, want refused "+
+				"naming exactly %v", a, nobody, set)
+		}
+		for _, app := range iam.Apps {
+			d := authz.Decide(t.Context(), personLeading("sam", app), a, object,
+				nimbus(), decidedAt)
+			want := slices.Contains(set, app)
+			if !want {
+				outside++
+			}
+			if d.Allowed != want {
+				t.Errorf("%s: a caller holding %s alone decided %+v, want "+
+					"admitted = %t (the set is %v)", a, app, d, want, set)
+			}
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no row is any-app, so this walk certifies nothing")
+	}
+	if outside == 0 {
+		t.Fatal("every app is in every any-app row's set, so the half that " +
+			"refuses an app outside it certifies nothing")
+	}
+	if _, known := authz.AnyOf("no.such.verb"); known {
+		t.Error("AnyOf knows a verb the table has no row for")
 	}
 }
 
@@ -178,6 +260,9 @@ func TestAnAuthorTidiesOnlyWithTheApp(t *testing.T) {
 			Container: "PLATFORM", Author: "sre"}, iam.GrantWorklet},
 		{authz.ActionWorkRestore, authz.Object{Kind: authz.KindTask,
 			Container: "PLATFORM", Author: "sre"}, iam.GrantWorklet},
+		// A ROOM'S CREATOR archives it, whoever leads its unit.
+		{authz.ActionChatArchive, authz.Object{Kind: authz.KindChannel,
+			Container: "sre", Author: "sre"}, iam.GrantChatlet},
 	} {
 		with := authz.Decide(t.Context(), personLeading("sre", c.app), c.action,
 			c.object, nimbus(), decidedAt)
@@ -223,8 +308,11 @@ func TestAnUnresolvedTidyAsksForTheRow(t *testing.T) {
 		walked++
 		app, _ := authz.AppOf(a)
 		object := authz.Object{Kind: authz.KindTask, Unresolved: true}
-		if app == iam.GrantDoclet {
+		switch app {
+		case iam.GrantDoclet:
 			object.Kind = authz.KindPage
+		case iam.GrantChatlet:
+			object.Kind = authz.KindChannel
 		}
 		holder := authz.Decide(t.Context(), personLeading("cto", app), a, object,
 			nimbus(), decidedAt)
@@ -237,7 +325,9 @@ func TestAnUnresolvedTidyAsksForTheRow(t *testing.T) {
 		if without.Unknown() || without.Allowed {
 			t.Errorf("%s: a caller without %s decided %+v, want refused", a, app, without)
 		}
-		admin := authz.Decide(t.Context(), person("ops.admin", iam.GrantAdmin), a,
+		// BOUND TO A SEAT, as every person is, so a row made as one is
+		// decided on its class.
+		admin := authz.Decide(t.Context(), personLeading("ops-admin", iam.GrantAdmin), a,
 			object, nimbus(), decidedAt)
 		if !admin.Allowed {
 			t.Errorf("%s: admin decided %+v, want admitted", a, admin)
@@ -245,6 +335,66 @@ func TestAnUnresolvedTidyAsksForTheRow(t *testing.T) {
 	}
 	if walked == 0 {
 		t.Fatal("no tidy or destructive row exists, so this walk certifies nothing")
+	}
+}
+
+// AN UNREAD REMARK IS ADMIN'S, OR READ AND DECIDED AGAIN.
+//
+// An authored verb asked before anybody has read the remark — a person's
+// surface asking what to offer, a moderator about to take a message down in a
+// room they are not in — names no author. Admin is admitted there and then:
+// the admin path needs no author, and a moderator who had to read a private
+// room's message to learn who wrote it could not delete it at all. A caller
+// holding the app is told to read the remark and decide again on its author
+// ([authz.ErrUnresolved]); one without it is refused naming the app before
+// anything is read; and an author left empty on a remark somebody DID read is
+// still unnamed. Walked over every AUTHORED row. Mutation: drop the unresolved
+// arm and the holder is refused unnamed, so no person's surface offers an
+// edit, and admin is refused a moderation it may make.
+func TestAnUnreadRemarkIsAdminsOrReadFirst(t *testing.T) {
+	t.Parallel()
+	walked := 0
+	for _, a := range authz.Actions() {
+		if class, _ := authz.ClassOf(a); class != authz.ClassAuthored {
+			continue
+		}
+		walked++
+		app, _ := authz.AppOf(a)
+		kind := authz.KindTask
+		switch app {
+		case iam.GrantDoclet:
+			kind = authz.KindPage
+		case iam.GrantChatlet:
+			kind = authz.KindMessage
+		}
+		unread := authz.Object{Kind: kind, Unresolved: true}
+		holder := authz.Decide(t.Context(), personLeading("sam", app), a, unread,
+			nimbus(), decidedAt)
+		if !errors.Is(holder.Err, authz.ErrUnresolved) {
+			t.Errorf("%s: a holder of %s on a remark nobody has read decided %+v, "+
+				"want told to read it", a, app, holder)
+		}
+		without := authz.Decide(t.Context(), personLeading("sam"), a, unread,
+			nimbus(), decidedAt)
+		if without.Unknown() || without.Allowed ||
+			!slices.Equal(without.Grants, []iam.Grant{app}) {
+			t.Errorf("%s: a caller without %s decided %+v, want refused naming it",
+				a, app, without)
+		}
+		admin := authz.Decide(t.Context(), personLeading("ops-admin", iam.GrantAdmin), a,
+			unread, nimbus(), decidedAt)
+		if !admin.Allowed || admin.Reason != authz.ReasonGrant {
+			t.Errorf("%s: admin on an unread remark decided %+v, want admitted", a, admin)
+		}
+		read := authz.Decide(t.Context(), personLeading("sam", app), a,
+			authz.Object{Kind: kind}, nimbus(), decidedAt)
+		if read.Allowed || read.Reason != authz.ReasonUnnamed {
+			t.Errorf("%s: a remark read and naming no author decided %+v, want "+
+				"unnamed", a, read)
+		}
+	}
+	if walked == 0 {
+		t.Fatal("no authored row exists, so this walk certifies nothing")
 	}
 }
 
@@ -277,6 +427,7 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 			person("jane.doe", iam.GrantWorklet),
 			person("jane.doe", iam.GrantDoclet),
 			person("jane.doe", iam.GrantArtifacts),
+			person("jane.doe", iam.GrantChatlet),
 			person("jane.doe", iam.GrantAdmin),
 		} {
 			want := k != authz.KindArtifact && k != authz.KindArtifactFolder &&
@@ -303,6 +454,7 @@ func TestShowsFollowsTheKindsApp(t *testing.T) {
 		authz.KindView: iam.GrantWorklet, authz.KindPage: iam.GrantDoclet,
 		authz.KindContainer: iam.GrantDoclet, authz.KindPerson: "",
 		authz.KindUnit: "", authz.KindCompany: "", authz.KindArtifact: "",
+		authz.KindChannel: iam.GrantChatlet, authz.KindMessage: iam.GrantChatlet,
 	} {
 		if got := authz.AppFor(k); got != want {
 			t.Errorf("AppFor(%s) = %q, want %q", k, got, want)
@@ -343,6 +495,10 @@ func TestAChartThatCannotAnswerCannotAdmitACallerWithoutTheApp(t *testing.T) {
 				object = authz.Object{Kind: authz.KindPage, Owner: "sre", Author: "sre",
 					Container: "RUNBOOKS", Unresolved: unresolved}
 			}
+			if app == iam.GrantChatlet {
+				object = authz.Object{Kind: authz.KindChannel, Owner: "sre", Author: "sre",
+					Container: "sre", Unresolved: unresolved}
+			}
 			d := authz.Decide(t.Context(), personLeading("cto"), a, object, down, decidedAt)
 			walked++
 			if unresolved && class == authz.ClassAppOrAsked && errors.Is(d.Err, authz.ErrUnresolved) {
@@ -378,6 +534,9 @@ func TestAChartThatCannotAnswerCannotAdmitACallerWithoutTheApp(t *testing.T) {
 		{"a project's shared view", authz.ActionViewSave,
 			authz.Object{Kind: authz.KindView, Container: "PLATFORM",
 				ContainerKind: authz.KindProject}, iam.GrantWorklet},
+		{"a unit's room", authz.ActionChatArchive,
+			authz.Object{Kind: authz.KindChannel, Author: "sre", Container: "sre"},
+			iam.GrantChatlet},
 	} {
 		without := authz.Decide(t.Context(), personLeading("cto"), c.action, c.object, down,
 			decidedAt)

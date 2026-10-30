@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -313,7 +314,7 @@ func TestAFreshRunIsToldWhereTheWorkIs(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			text := tc.asked.Reseed()
+			text := tc.asked.Reseed(provenance.NewBoundary())
 			for _, want := range tc.want {
 				if !strings.Contains(text, want) {
 					t.Errorf("the brief does not say %q:\n%s", want, text)

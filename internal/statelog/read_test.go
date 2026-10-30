@@ -663,7 +663,7 @@ func TestALinearizableReadWaitsForThePositionItsBarrierEstablished(t *testing.T)
 // A NODE THAT NEVER REACHES THE TARGET REFUSES `behind`, WITH A DERIVED HINT.
 //
 // A flat hint is wrong in both directions on the same fleet: too early on a
-// node grinding through a bulk apply, too late on one that caught up in
+// node grinding through a long backlog, too late on one that caught up in
 // milliseconds. The hint divides the lag by the drain this node has actually
 // been observed at.
 func TestAReadThatCannotReachItsTargetRefusesWithADerivedHint(t *testing.T) {

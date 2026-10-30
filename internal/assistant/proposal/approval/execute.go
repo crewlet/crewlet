@@ -86,14 +86,16 @@ func (a *Approver) settle(ctx context.Context, d decider, p assistantdomain.Prop
 			move.RefusalCode = out.failure.Refusal.Code
 		}
 	}
-	if _, err := a.move(ctx, d.call(step), p.ID, move); err != nil {
+	c := d.call(step)
+	if _, err := a.move(ctx, c, p.ID, move); err != nil {
 		// The write's own outcome stands; its settlement record is what is
 		// missing, and the proposal reads as unknown until a Retry, whose
-		// operation the ledger answers with this write.
+		// operation the ledger answers with this write. So whatever kept the
+		// record out, the approval's outcome is one nobody can confirm.
 		a.d.Grants.Revoke(read.ID())
 		log.WarnContext(ctx, "assistant_proposal_settlement_not_recorded",
 			"proposal", p.ID, "state", string(out.state), "error", err)
-		return wire.ProposalAnswer{}, err
+		return wire.ProposalAnswer{}, unsettled(c.OpID, err)
 	}
 	card := proposal.CardAt(p, out.state, out.receipt, out.failure)
 	if out.state == wire.ProposalUnknown {

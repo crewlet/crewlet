@@ -69,14 +69,14 @@ func TestTheHeartbeatCarriesTheLatestProbeAndAnApplyProbesAgain(t *testing.T) {
 	e.startRunnerProbe(t.Context())
 	t.Cleanup(e.stopRunnerProbe)
 	<-probed
-	if got := e.nodeStatus(t.Context()).Runners; got == nil || got.Direct.State != coord.RunnerUnconfigured {
+	if got := beatOf(t, e).Runners; got == nil || got.Direct.State != coord.RunnerUnconfigured {
 		t.Fatalf("the beat carries %+v, want the boot probe's answer", got)
 	}
 	e.kickRunnerProbe()
 	<-probed
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		if got := e.nodeStatus(t.Context()).Runners; got != nil && got.Direct.State == coord.RunnerReady {
+		if got := beatOf(t, e).Runners; got != nil && got.Direct.State == coord.RunnerReady {
 			return
 		}
 		if time.Now().After(deadline) {

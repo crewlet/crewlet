@@ -83,3 +83,46 @@ func TestTheEnginesNoticesStayOutsideTheThreadsFence(t *testing.T) {
 		t.Fatalf("a thread of one colleague is not labelled theirs:\n%s", text)
 	}
 }
+
+// A SENDER NOBODY CAN NAME IS READ BY WHO HOSTS THE THREAD (ADR-0040): on a
+// vendor's chat an outside party's, whose words nothing vouches for, and on
+// the engine's own a colleague's — only company principals send there — so a
+// Chatlet thread reads alike in this block and as the wake it came from. The
+// two cases are the same messages; only the transcript's word on who hosts it
+// differs.
+//
+// Mutation: fence the block with [provenance.LabelFor] whatever the transcript
+// says and the Chatlet case reads `external`.
+func TestAThreadsUnnamedSenderIsReadByWhoHostsIt(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name   string
+		hosted bool
+		want   string
+	}{
+		{"a vendor's chat", false, "source=chat_thread trust=external authors=human:ana,external]"},
+		{"the engine's own chat", true, "source=chat_thread trust=colleague authors=human:ana]"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			b := provenance.NewBoundary()
+			source := &threads{hosted: c.hosted, messages: []notify.Message{
+				said("U-ana", "the billing job failed overnight"),
+				{SenderID: "gone-seat", Text: "it was the cron"},
+			}}
+			r := threadRequest(t)
+			r.Boundary = b
+			text := fetch(t, prefetch.Sources{
+				Threads: source,
+				Parties: parties{"slack:U-ana": {Handle: "ana", Name: "Ana Ruiz", Human: true}},
+			}, r).ThreadContext
+			open := strings.Index(text, "[untrusted:"+string(b)+" ")
+			if open < 0 {
+				t.Fatalf("the thread is not fenced:\n%s", text)
+			}
+			if opening := text[open : open+strings.Index(text[open:], "\n")]; !strings.HasSuffix(opening, c.want) {
+				t.Fatalf("opening line = %q, want it to end %q", opening, c.want)
+			}
+		})
+	}
+}

@@ -274,6 +274,52 @@ sequenceDiagram
     GH->>CL: GET /webhooks/github-app?installed=senior-engineer
 ```
 
+### When a creation doesn't finish
+
+The page GitHub returns you to says what went wrong and what to do, and the
+step that stopped decides which. Crewlet's log has the detail, as
+`github_app_create_failed`.
+
+| What stopped | What the page tells you to do |
+|---|---|
+| The link expired or isn't one Crewlet made, or Crewlet couldn't check it | Start again from Company › Integrations |
+| The link was already used, and the agent has its app | Nothing: the creation is done, and the install button is still there |
+| The link was already used, and the agent has no app yet | Give the app a minute to show in Company › Integrations. If it doesn't, delete it on GitHub if it's there, then start again |
+| No company is set up | Set the company up, then start again |
+| The company's settings couldn't be read just now | Wait a moment, then start again |
+| The company's settings can't be read at all | Ask an admin to check Crewlet's logs, then start again |
+| The agent is no longer one of the company's | Add it back, then start again |
+| The company's settings are managed outside Crewlet | Ask whoever manages them to add the app |
+| GitHub's code was already used or expired | If the app shows up on GitHub, delete it there, then start again |
+| GitHub didn't finish creating the app | If it shows up on GitHub anyway, delete it there, then start again |
+| GitHub created the app but its key couldn't be saved | Delete the app on GitHub, then start again: GitHub never sends the key twice |
+| The key was saved but the app's webhook secret couldn't be | Delete the app on GitHub, then start again: GitHub never sends the secret twice either |
+| The key was saved but the app couldn't be added to the agent | Delete the app on GitHub, then start again |
+| The key was saved, but whether the app was added to the agent isn't known yet | Refresh the page in a minute to find out, or check the agent in Company › Integrations: delete the app on GitHub and start again only if it still shows Create app on GitHub |
+
+A link is spent the moment it's used, so refreshing the page, or coming Back to
+it from GitHub's install page, runs nothing: the page then looks at the agent
+the link names, which is the two "already used" rows. Once GitHub has created
+the app, the page's heading says so ("App created, but not finished") rather
+than "App not created", and the log line names the app (its id, slug and
+address, never its key) so whoever is asked can find the one to delete. Its
+status says whose the stop was: see
+[`GET /webhooks/github-app`](../reference/api-endpoints.md#get-webhooksgithub-app).
+
+Adding the app to the agent is a change to the company's settings, and the
+coordination store can take that change and lose its answer, so the change may
+be in place although Crewlet wasn't told. The page reads the agent back once
+before it says anything: an agent that has the app gets the ordinary "App
+created" page, and otherwise the page is headed "App created, confirming it
+was added to" and says the outcome isn't known yet, never that the app wasn't
+added. A refresh a minute later answers it from the agent's record, as one of
+the "already used" rows.
+
+A cancellation at GitHub, or any other refusal it sends back, is said in the
+page's own words. GitHub's description is logged as `github_app_create_refused`
+and never printed, because anyone can send a browser to this page with any text
+in its address.
+
 ### The card catches up immediately, not on a cadence
 
 An agent's App is **private**, so GitHub sends this engine nothing when you install it — there is no webhook for it to arrive on, and the reconcile loop is what finds the installation, by listing the App's own installations with the App's own key.
@@ -611,7 +657,8 @@ as the agent's own app.
 | The seat's app | What a value naming the token does |
 |---|---|
 | Not created, not installed, or its key does not resolve | **Waits.** The variable is the GitHub integration's to issue, so a tool server naming it is held back as waiting for the app's installation (or as stopped until a person acts, by what the seat-app pass last recorded), and a coding run starts without it, said as `sandbox_env_unresolved`: its environment lacks the token, and a setup file whose whole body is the token is not written. The reconcile records the installation within a tick of it, which applies a revision, and every read runs again; a running job's token file is written by the first poll after the app can issue a token, and the wait before that is said once for the job (`sandbox_token_waiting`) |
-| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) or cannot be reached | **Fails, with GitHub's reason**, and is retried on the restart schedule — 15 seconds, doubling to 5 minutes. The engine holds GitHub's answer for each wait and every reader of the installation meets it until the wait ends, so a refusal that lasts until a person acts at GitHub costs one request a wait, not one per read; a key sealed in place of a revoked one is asked about at once. The seat's tool servers are passed again on that schedule, a running job's token file is written by the first poll after GitHub issues a token, and a coding run's environment carries one from the seat's next launch after that. A running job says the refusal once for each reason GitHub gives (`sandbox_token_refresh_failed`): a job that holds a token keeps it until it expires, and a job launched without one is told so, and that the first poll after GitHub issues a token writes it |
+| Installed, and GitHub refuses the mint (a suspended installation, a revoked key, an installation that has not approved a permission the seat asks for) | **Fails, with GitHub's reason**, and keeps failing until somebody fixes the agent's app — its key, its installation or the permissions it asks for — which is what the failure says, rather than that the token is asked for again. GitHub is still asked on the restart schedule — 15 seconds, doubling to 5 minutes — so the first ask after the fix issues it. The engine holds GitHub's answer for each wait and every reader of the installation meets it until the wait ends, so a refusal that lasts until a person acts at GitHub costs one request a wait, not one per read; a key sealed in place of a revoked one is asked about at once. The seat's tool servers are passed again on that schedule, a running job's token file is written by the first poll after GitHub issues a token, and a coding run's environment carries one from the seat's next launch after that. A running job says the refusal once for each reason GitHub gives (`sandbox_token_refresh_failed`): a job that holds a token keeps it until it expires, and a job launched without one is told so, and that the first poll after GitHub issues a token writes it |
+| Installed, and GitHub can't be reached or answers that it can't issue one just now (408, its rate limit, a 5xx) | **Fails, with GitHub's reason**, and says the token is asked for again, which it is: on the same restart schedule, its answer held for each wait as a refusal's is, so the first ask after GitHub answers issues it, and a running job says the failure as it says a refusal |
 | `integrations.github` is off | **Nothing will issue it**, and it is reported as a variable nothing sets |
 
 ### Running locally, with no public address

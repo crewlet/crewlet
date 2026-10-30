@@ -157,7 +157,7 @@ type FleetState struct {
 	// `crewlet.alarm.active` gauge and wrote the alarm log lines, never a
 	// second one. ONE ENTRY PER KIND, however many logs a per-log kind
 	// stands on, because the count is how many problems an operator has to
-	// look at and one cause on four logs is one of them, as the gauge
+	// look at and one cause on several logs is one of them, as the gauge
 	// beside it says ([statelog.Alarm.Domains]). Nil is "no evaluation has
 	// run" (mid-boot, or a node running no state log), which is the
 	// opposite of an empty slice: the real claim that nothing is firing.

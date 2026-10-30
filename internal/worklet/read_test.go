@@ -1,8 +1,11 @@
 package worklet_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -398,35 +401,93 @@ func TestARemovedTaskIsOutOfEveryOrdinaryAnswer(t *testing.T) {
 	}
 }
 
-// THE THREE TAG MODES ANSWER THREE DIFFERENT QUESTIONS.
+// THE THREE TAG MODES ANSWER THREE DIFFERENT QUESTIONS, AT EITHER SCOPE.
 //
-// `all:` is a COUNT rather than a membership — a task carrying two of three is
-// not a match, and an IN test cannot say so, which is the one of the three
-// that reads correctly while being wrong.
+// `all:` is every membership at once — a task carrying two of three is not a
+// match, which is the one of the three that reads correctly while being wrong.
+// And each is asked of a project and of the whole company, because the two are
+// read from the tag rows differently ([worklet.Query] compiles a project's
+// filter to that project's tag rows): a task in another project carrying the
+// same tags is in the company's answer and never in the project's.
 func TestTheTagModesAreThreeDifferentQuestions(t *testing.T) {
 	t.Parallel()
 	h := newReadHarness(t)
 	h.seed("both", func(task *worklet.Task) { task.Tags = []string{"api", "v2"} })
 	h.seed("one", func(task *worklet.Task) { task.Tags = []string{"api"} })
 	h.seed("none", nil)
+	h.seed("elsewhere", func(task *worklet.Task) {
+		task.Project, task.Key = "OPS", "OPS-1"
+		task.Tags = []string{"api", "v2"}
+	})
 
 	for name, tc := range map[string]struct {
-		filter string
-		want   []string
+		filter                string
+		inProject, everywhere []string
 	}{
-		"any matches either":          {"any:api,v2", []string{"both", "one"}},
-		"all matches only both":       {"all:api,v2", []string{"both"}},
-		"none matches neither":        {"none:api,v2", []string{"none"}},
-		"a bare list defaults to any": {"api,v2", []string{"both", "one"}},
+		"any matches either": {"any:api,v2", []string{"both", "one"},
+			[]string{"both", "elsewhere", "one"}},
+		"all matches only both": {"all:api,v2", []string{"both"},
+			[]string{"both", "elsewhere"}},
+		"none matches neither": {"none:api,v2", []string{"none"},
+			[]string{"none"}},
+		"a bare list defaults to any": {"api,v2", []string{"both", "one"},
+			[]string{"both", "elsewhere", "one"}},
+		"one tag": {"v2", []string{"both"}, []string{"both", "elsewhere"}},
+		// THE SPELLING A PERSON OR A MODEL TYPES — a label, not the slug
+		// the rows hold — finds the same work.
+		"a label finds its slug": {"all:API,V2", []string{"both"},
+			[]string{"both", "elsewhere"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			got := ids(h.ask(map[string]any{
-				"container": "project:ENG", "tag": tc.filter,
-			}))
-			if len(got) != len(tc.want) {
-				t.Fatalf("tag=%s answered %v, want %v", tc.filter, got, tc.want)
+			for container, want := range map[string][]string{
+				"project:ENG": tc.inProject, "workspace": tc.everywhere,
+			} {
+				got := ids(h.ask(map[string]any{
+					"container": container, "tag": tc.filter,
+				}))
+				slices.Sort(got)
+				if !slices.Equal(got, want) {
+					t.Errorf("tag=%s in %s answered %v, want %v", tc.filter,
+						container, got, want)
+				}
 			}
 		})
+	}
+}
+
+// A LONG TAG LIST IS ANSWERED, NOT REFUSED.
+//
+// `all:` was one `t.id IN (…)` per slug ANDed together, an expression a level
+// deeper for every slug, and this engine refuses one past a hundred levels — so
+// a list of ninety-odd tags failed the read rather than answering it. A list
+// that long is longer than any task can carry ([worklet.MaxTagsPerTask]), so
+// `all:` of it answers nothing, and `any:` and `none:` of the same list answer
+// as they do for two tags, at either scope and in either subtask mode.
+func TestALongTagListIsAnsweredRatherThanRefused(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	h.seed("tagged", func(task *worklet.Task) { task.Tags = []string{"api", "v2"} })
+	h.seed("bare", nil)
+	tags := []string{"api", "v2"}
+	for i := len(tags); i < 3*worklet.MaxTagsPerTask; i++ {
+		tags = append(tags, fmt.Sprintf("tag-%03d", i))
+	}
+	list := strings.Join(tags, ",")
+	for mode, want := range map[string][]string{
+		"all:": nil, "any:": {"tagged"}, "none:": {"bare"},
+	} {
+		for _, container := range []string{"project:ENG", "workspace"} {
+			for _, subtasks := range []string{"collapsed", "separate"} {
+				got := ids(h.ask(map[string]any{
+					"container": container, "tag": mode + list, "subtasks": subtasks,
+				}))
+				slices.Sort(got)
+				if !slices.Equal(got, want) {
+					t.Errorf("tag=%s of %d tags in %s (%s) answered %v, want %v",
+						mode, len(tags), container, subtasks, got, want)
+				}
+			}
+		}
 	}
 }
 
@@ -539,6 +600,25 @@ func TestACursorFromAnotherOrderIsRefused(t *testing.T) {
 	}
 }
 
+// A CURSOR WHOSE ROW HAS NO ID NAMES NO ROW, and is refused rather than
+// resumed.
+//
+// Every order ends in the task's id, which is never NULL, so the cursor's last
+// key is what makes it a place at all. Without one there is no arm past it —
+// "after nothing" is the empty set of arms — and resumed, a page would answer
+// nothing with no cursor and no error, which reads as the listing's end.
+func TestACursorThatNamesNoRowIsRefused(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	cursor := base64.RawURLEncoding.EncodeToString(
+		[]byte(`{"k":["a0",null],"o":"t.rank, t.id"}`))
+	if err := r.askErr(map[string]any{"container": "project:ENG",
+		"cursor": cursor}); err == nil || !strings.Contains(err.Error(), "names no row") {
+		t.Fatalf("a cursor with no id was answered (err %v), want a refusal "+
+			"saying it names no row", err)
+	}
+}
+
 // AND A CURSOR FROM ANOTHER ORDER OF THE SAME LENGTH IS REFUSED TOO.
 //
 // The arity check above passes for any two orders of equal width, and the
@@ -615,23 +695,11 @@ func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 	}
 
 	for _, sort := range []string{"due", "-due", "f.effort", "-f.effort"} {
+		params := map[string]any{"container": "project:ENG", "sort": sort}
+		paged := pageThrough(t, r, params, 2)
 		seen := map[string]int{}
-		cursor := ""
-		for page := 0; page < total+2; page++ {
-			params := map[string]any{
-				"container": "project:ENG", "sort": sort, "limit": "2",
-			}
-			if cursor != "" {
-				params["cursor"] = cursor
-			}
-			answer := r.ask(params)
-			for _, row := range answer.Rows {
-				seen[row.ID]++
-			}
-			if answer.NextCursor == "" {
-				break
-			}
-			cursor = answer.NextCursor
+		for _, id := range paged {
+			seen[id]++
 		}
 		if len(seen) != total {
 			t.Errorf("paging by %s returned %d distinct tasks of %d — a "+
@@ -643,7 +711,156 @@ func TestPagingANullableOrderReturnsEveryRowExactlyOnce(t *testing.T) {
 				t.Errorf("paging by %s returned %s %d times", sort, id, times)
 			}
 		}
+		// AND IN THE ORDER ONE READ DRAWS: a resume that read the NULL tail
+		// before the values beyond the cursor returns every row once and
+		// puts the undated ones in the middle of the list.
+		if whole := ids(r.ask(withKey(params, "limit", "100"))); !slices.Equal(paged, whole) {
+			t.Errorf("paging by %s answers\n%v\nwhere one read answers\n%v",
+				sort, paged, whole)
+		}
 	}
+}
+
+// PAGING AN ORDER RETURNS EVERY ROW ONCE, IN THE ORDER ONE READ DRAWS.
+//
+// A later page resumes after the last row of the one before it, as the arms
+// of the order read in turn ([keyset]): the rows tied with that row on every
+// column and later by id, then those tied on all but the last, and so on out
+// to the rows past it on the first column. A tie arm that dropped its id bound
+// repeats the rows the page before already returned, one that was left out
+// skips the rest of the tie, and arms read out of turn put a page's rows out
+// of order — each only for a caller who pages, and only where a boundary falls
+// INSIDE a tie, which a fixture of distinct values never reaches.
+//
+// So the fixture is ties ([tiedCompany]), read in every order of
+// [tiedOrders] two and three rows at a time, so a boundary falls inside a tie
+// and at its end, and the pages concatenated must be one read's answer
+// exactly.
+func TestPagingAnOrderReturnsEveryRowOnceInItsOrder(t *testing.T) {
+	t.Parallel()
+	r := tiedCompany(t)
+	for name, params := range tiedOrders {
+		t.Run(name, func(t *testing.T) {
+			whole := ids(r.ask(withKey(params, "limit", "100")))
+			if len(whole) < 4 {
+				t.Fatalf("one read answers %v, too few rows for a page "+
+					"boundary to fall inside anything", whole)
+			}
+			for _, size := range []int{2, 3} {
+				if paged := pageThrough(t, r, params, size); !slices.Equal(paged, whole) {
+					t.Errorf("paging %d at a time answers\n%v\nwhere one read "+
+						"answers\n%v", size, paged, whole)
+				}
+			}
+		})
+	}
+}
+
+// tiedOrders is every order [tiedCompany] is read in by the cases that walk
+// an order through its ties: a board's own, the update order in a project and
+// the company's, spend in both, mixed-direction orders of several columns, an
+// order no index serves, and the trash in every subtask mode and by removal.
+var tiedOrders = map[string]map[string]any{
+	"the board":               {"container": "project:ENG"},
+	"recently updated":        {"container": "project:ENG", "sort": "-updated"},
+	"by spend":                {"container": "project:ENG", "sort": "-spend_tokens"},
+	"by priority then update": {"container": "project:ENG", "sort": "priority,-updated"},
+	"by due then title":       {"container": "project:ENG", "sort": "-due,title"},
+	"by title":                {"container": "project:ENG", "sort": "title"},
+	"the workspace":           {},
+	"by spend everywhere":     {"sort": "-spend_tokens"},
+	"the trash":               {"container": "project:ENG", "removed": "true"},
+	"the trash, flat":         {"container": "project:ENG", "removed": "true", "subtasks": "separate"},
+	"the trash everywhere":    {"removed": "true", "subtasks": "separate"},
+	"the trash by removal":    {"removed": "true", "sort": "removed", "subtasks": "separate"},
+}
+
+// tiedCompany is a project whose tasks tie on almost every column an order
+// can sort by: one instant every write is stamped with, spend that is zero for
+// all but two tasks, a handful of priorities, due dates with repeats and none
+// at all, and titles with repeats — and in the trash, a subtree removed at one
+// instant beside a task removed alone.
+func tiedCompany(t *testing.T) *roundTrip {
+	t.Helper()
+	r := newRoundTrip(t)
+	priorities := []worklet.Priority{worklet.PriorityHigh, worklet.PriorityNormal,
+		worklet.PriorityNormal, worklet.PriorityLow}
+	for i := range 9 {
+		task := newTask(fmt.Sprintf("t-%d", i))
+		task.Key = ""
+		task.Priority = priorities[i%len(priorities)]
+		task.Title = []string{"alpha", "beta", "alpha"}[i%3]
+		if i%3 != 0 {
+			due := wednesday.Add(time.Duration(i%2) * 24 * time.Hour)
+			task.DueAt = &due
+		}
+		if _, err := r.writer.CreateTask(t.Context(), fmt.Sprintf("op-%d", i),
+			task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	for i, id := range []string{"t-3", "t-6"} {
+		if _, err := r.writer.RecordTurn(t.Context(), fmt.Sprintf("turn/run-%d/dispatch", i),
+			worklet.TurnRecord{
+				Task: id, Seat: "dev", TurnID: fmt.Sprintf("run-%d", i),
+				Trigger: "work_item", Outcome: "done", Phases: []string{"execute"},
+				Spend: worklet.TurnSpend{Turns: 1, Input: 900, Output: 100},
+			}); err != nil {
+			t.Fatalf("RecordTurn: %v", err)
+		}
+		r.drain()
+	}
+	// THE TRASH: a subtree removed together, at one instant, and a task
+	// removed alone.
+	seedTree(t, r, "t-root", "t-kid", worklet.StatusTodo, worklet.StatusTodo)
+	kid := newTask("t-kid2")
+	kid.Key = ""
+	root := "t-root"
+	kid.Parent, kid.Depth = &root, 1
+	if _, err := r.writer.CreateTask(t.Context(), "op-kid2", kid, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	lone := newTask("t-lone")
+	lone.Key = ""
+	if _, err := r.writer.CreateTask(t.Context(), "op-lone", lone, nil); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.RemoveTask(t.Context(), "op-out", "t-root", "ENG",
+		true, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+	if _, err := r.writer.RemoveTask(t.Context(), "op-lone-out", "t-lone", "ENG",
+		false, nil); err != nil {
+		t.Fatalf("RemoveTask: %v", err)
+	}
+	r.drain()
+	return r
+}
+
+// pageThrough reads a query to its end a page of size rows at a time and
+// answers every row in the order the pages returned them.
+func pageThrough(t *testing.T, r *roundTrip, params map[string]any, size int) []string {
+	t.Helper()
+	var out []string
+	cursor := ""
+	for range 100 {
+		page := withKey(params, "limit", strconv.Itoa(size))
+		if cursor != "" {
+			page = withKey(page, "cursor", cursor)
+		}
+		answer := r.ask(page)
+		out = append(out, ids(answer)...)
+		if answer.NextCursor == "" {
+			return out
+		}
+		cursor = answer.NextCursor
+	}
+	t.Fatalf("a hundred pages of %d and still a cursor: %v", size, out)
+	return nil
 }
 
 // A DISJUNCTION ANSWERS WHAT THE SAME PREDICATE ANSWERS WRITTEN FLAT.
@@ -798,5 +1015,111 @@ func TestARowCarriesItsType(t *testing.T) {
 	column := groupOf(t, board, "bug")
 	if len(column.Rows) != 1 || column.Rows[0].Type != "bug" {
 		t.Errorf("the bug column carries %+v, want one row typed bug", column.Rows)
+	}
+}
+
+// A FILTER ON A PERSON FINDS THE WORK THE PERSON IS ON, AND NOTHING ELSE —
+// read from the person's own rows rather than by probing every task, at both
+// scopes and in both subtask modes, and answering what the probe answered: a
+// flat listing every task the person is on, a collapsed one the roots they
+// are on with their subtrees.
+func TestAPersonFilterFindsTheWorkThePersonIsOn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"a", "b", "c"} {
+		filedTask(t, r, id)
+	}
+	parent := "c"
+	sub := newTask("s")
+	sub.Key, sub.Parent = "ENG-s", &parent
+	if _, err := r.writer.CreateTask(t.Context(), "op-s", sub, nil); err != nil {
+		t.Fatalf("CreateTask s: %v", err)
+	}
+	r.drain()
+	for _, write := range []struct {
+		id    string
+		patch worklet.TaskPatch
+		kind  worklet.ChangeKind
+	}{
+		{"a", worklet.TaskPatch{Collaborators: &[]string{"ana"}}, worklet.ChangeCollaborators},
+		{"s", worklet.TaskPatch{Collaborators: &[]string{"ana"}}, worklet.ChangeCollaborators},
+		{"b", worklet.TaskPatch{Watchers: &[]string{"ana", "bob"}}, worklet.ChangeWatchers},
+		{"c", worklet.TaskPatch{Watchers: &[]string{"bob"}}, worklet.ChangeWatchers},
+	} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-"+write.id+string(write.kind),
+			write.id, "ENG", worklet.NoIfMatch, write.patch, write.kind, nil); err != nil {
+			t.Fatalf("UpdateTask %s: %v", write.id, err)
+		}
+		r.drain()
+	}
+	for _, scope := range []map[string]any{{}, {"container": "project:ENG"}} {
+		for _, c := range []struct {
+			params map[string]any
+			want   []string
+		}{
+			{map[string]any{"collaborator": "ana", "subtasks": "separate"}, []string{"a", "s"}},
+			{map[string]any{"collaborator": "ana"}, []string{"a"}},
+			{map[string]any{"watcher": "ana"}, []string{"b"}},
+			{map[string]any{"watcher": "ana,bob", "subtasks": "separate"}, []string{"b", "c"}},
+			{map[string]any{"watcher": "carol"}, []string{}},
+		} {
+			params := map[string]any{}
+			for key, value := range scope {
+				params[key] = value
+			}
+			for key, value := range c.params {
+				params[key] = value
+			}
+			got := ids(r.ask(params))
+			slices.Sort(got)
+			if !slices.Equal(got, c.want) {
+				t.Errorf("%v found %v, want %v", params, got, c.want)
+			}
+		}
+	}
+}
+
+// A LINKED PAGE'S FILTER IS THE TASKS THAT LINK THAT PAGE, read off the page's
+// own edges.
+//
+// The filter is answered from the reverse edge — the tasks whose relations
+// name the page as their other end — so it must be exactly those tasks, at a
+// project and at the workspace, flat and with subtasks rolled up, and a task
+// linking another page, or another task, is not one.
+func TestALinkedPageFilterIsTheTasksLinkingThePage(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"t-a", "t-b", "t-c", "t-d"} {
+		task := newTask(id)
+		task.Key = ""
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask: %v", err)
+		}
+		r.drain()
+	}
+	r.relate("t-a", "s-1", worklet.RelationPage)
+	r.relate("t-c", "s-1", worklet.RelationPage)
+	r.relate("t-b", "s-2", worklet.RelationPage)
+	// AN EDGE OF ANOTHER KIND, which links a task rather than a page.
+	r.relate("t-d", "t-a", worklet.RelationLinked)
+
+	for name, params := range map[string]map[string]any{
+		"in a project":         {"container": "project:ENG", "linked_page": "s-1"},
+		"at the workspace":     {"linked_page": "s-1"},
+		"flat":                 {"linked_page": "s-1", "subtasks": "separate"},
+		"of a page none links": {"linked_page": "s-9"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			want := []string{"t-a", "t-c"}
+			if params["linked_page"] == "s-9" {
+				want = []string{}
+			}
+			got := ids(r.ask(withKey(params, "sort", "title")))
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Errorf("linked_page=%v answers %v, want %v", params["linked_page"],
+					got, want)
+			}
+		})
 	}
 }

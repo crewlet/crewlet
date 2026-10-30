@@ -170,7 +170,7 @@ func (s *surface) deep(ctx context.Context, tool catalog.Tool, args map[string]a
 	if err := s.t.svc.deepAvailable(ctx); err != nil {
 		return s.refuseBefore(ctx, tool, args, "Not available", err), nil
 	}
-	step := s.t.stepStart(tool, args, nil, "")
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	return s.t.runDeep(ctx, deepCall{step: step, goal: goal, brief: deepBrief(goal, plan, s.t.deep.attachments, s.t.page, s.t.boundary),
 		prior: parkedDeep{Step: step.Index, Label: step.Label, Goal: goal, StartedAt: step.started.UTC()}})
 }
@@ -313,7 +313,7 @@ func (t *turn) runDeep(ctx context.Context, dc deepCall) (toolloop.ToolResult, e
 	t.svc.deep.Discard(context.WithoutCancel(ctx), outcome.Box)
 	state, stepState, summary, reason := deepEnding(outcome, len(files))
 	run.end(state, stepState, summary, reason)
-	t.tainted(catalog.Tool{Fence: true, Source: provenance.SourceDeepWork}, provenance.TrustExternal)
+	t.tainted(catalog.Tool{Fence: true, Source: deepReport.Source}, deepReport.Trust)
 	return toolloop.ToolResult{Output: deepAnswer(t.boundary, outcome, files, notes),
 		Failed: state != wire.DeepFinished, Cause: deepCause(outcome)}, nil
 }
@@ -373,10 +373,16 @@ func deepEnding(o DeepOutcome, files int) (wire.DeepState, wire.StepState, strin
 	return wire.DeepFailed, wire.StepFailed, "Did not finish", redact.Secrets(reason)
 }
 
+// deepReport is the label a run's report is read under, decided once for the
+// fence the model reads it in and for the taint every proposal after it
+// carries: a coding CLI's own words, written after it read pages and files
+// nobody in the company wrote (ADR-0054), which nobody in the company vouches
+// for.
+var deepReport = provenance.Label{Source: provenance.SourceDeepWork, Trust: provenance.TrustExternal}
+
 // deepAnswer is what the model reads of a run that did not park: how it ended,
-// its report fenced as the run's own (a CLI's words after it read pages nobody
-// in the company wrote), and the files it delivered by id, which a later
-// proposal names to put one into Crewlet.
+// its report fenced as the run's own ([deepReport]), and the files it
+// delivered by id, which a later proposal names to put one into Crewlet.
 func deepAnswer(b provenance.Boundary, o DeepOutcome, files []wire.FileRef, notes []string) string {
 	var out strings.Builder
 	switch o.End {
@@ -396,8 +402,7 @@ func deepAnswer(b provenance.Boundary, o DeepOutcome, files []wire.FileRef, note
 		if len(report) > ModelResultBytes {
 			report = textcut.Within(report, ModelResultBytes)
 		}
-		out.WriteString(" Its report:\n" + provenance.Fence(b, provenance.SourceDeepWork,
-			provenance.TrustExternal, nil, report))
+		out.WriteString(" Its report:\n" + deepReport.Fence(b, report))
 	}
 	if len(files) > 0 {
 		out.WriteString("\nFiles it delivered, shown to the person to download:")
@@ -433,9 +438,7 @@ func (t *turn) deliver(ctx context.Context, runID string, delivered []DeepFile) 
 			Conversation: t.conversation, Turn: t.id, Origin: wire.FileDelivered,
 			Name: name, MediaType: mediaType, Content: f.Content})
 		if err != nil {
-			t.svc.log.ErrorContext(ctx, "assistant_deep_file_unkept", "turn", t.id,
-				"error", redact.Secrets(err.Error()))
-			notes = append(notes, "Not delivered: "+name+" could not be kept.")
+			notes = append(notes, t.unkept(ctx, name, err))
 			continue
 		}
 		refs = append(refs, ref)
@@ -444,6 +447,22 @@ func (t *turn) deliver(ctx context.Context, runID string, delivered []DeepFile) 
 		t.emitCard(ctx, wire.Card{Type: wire.CardFile, File: &wire.FileCard{Files: refs}}, nil)
 	}
 	return refs, notes
+}
+
+// unkept is the note the model reads of a delivered file the store did not
+// keep: the condition that kept it out, in the words a model is told it in
+// ([Unkept]), or for a fault of the node only that it was not kept, whose
+// reason is the log's.
+func (t *turn) unkept(ctx context.Context, name string, err error) string {
+	var condition *Unkept
+	if errors.As(err, &condition) {
+		t.svc.log.WarnContext(ctx, "assistant_deep_file_unkept", "turn", t.id,
+			"error", redact.Secrets(err.Error()))
+		return "Not delivered: " + name + ", because " + condition.Said + "."
+	}
+	t.svc.log.ErrorContext(ctx, "assistant_deep_file_unkept", "turn", t.id,
+		"error", redact.Secrets(err.Error()))
+	return "Not delivered: " + name + " could not be kept."
 }
 
 // deepInputs are the question's attachments as a new run is handed them. A
@@ -846,7 +865,7 @@ func (s *Service) attachmentsOf(ctx context.Context, ts TurnStart) ([]StoredFile
 		case errors.Is(err, ErrNotFound):
 			return nil, invalid("attachment %s is no file of this conversation: upload it again", id)
 		case err != nil:
-			return nil, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+			return nil, fmt.Errorf("assistant: attachment %s: %w", id, err)
 		case f.Origin != wire.FileAttached || !slices.Contains(wire.AttachmentMediaTypes, f.MediaType):
 			return nil, invalid("attachment %s is not an image the person attached", id)
 		}

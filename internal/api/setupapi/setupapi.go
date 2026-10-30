@@ -84,9 +84,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
@@ -101,10 +103,12 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("api.setup")
@@ -152,7 +156,7 @@ const RetryBusy = disconnectRetryFor
 // mistake as a deliberate answer.
 type Options struct {
 	// Config is the write path, the same one PATCH /config drives, and the
-	// read of the company every route describes ([Service.fleetCompany]).
+	// read of the company every route describes ([Service.readCompany]).
 	Config *configapi.Service
 
 	// Secrets seals a submitted credential, under the keyring every node
@@ -175,12 +179,12 @@ type Options struct {
 	// serves — and once there are two listeners, the person's answers 404
 	// for every one of them.
 	//
-	// A PLAIN STRING AND NOT A FUNCTION, unlike Company above, because it
-	// is Tier A: it cannot change under a running process, so a surface
-	// reading it twice in one request cannot get two answers. It used to
-	// be a Tier B field read through Resolve, which is why every caller
-	// below carried the resolver and had to decide what to do with a
-	// reference that resolved to nothing.
+	// A PLAIN STRING AND NOT A FUNCTION, because it is Tier A: it cannot
+	// change under a running process, so a surface reading it twice in one
+	// request cannot get two answers. It used to be a Tier B field read
+	// through Resolve, which is why every caller below carried the resolver
+	// and had to decide what to do with a reference that resolved to
+	// nothing.
 	//
 	// Empty is a deployment with no such address, which every gesture that
 	// would hand one to a vendor refuses by name.
@@ -357,24 +361,32 @@ func (s *Service) Routes(mux authz.Mux) error {
 			failures = append(failures, err)
 		}
 	}
+	// EVERY POST HERE IS THE CONNECT VERB, and says what it does, which its
+	// method does not ([authz.Effect]).
+	post := func(pattern string, does authz.Effect, h http.HandlerFunc) {
+		p := authz.Policy{Action: authz.ActionSetupConnect, Effect: does}
+		if err := router.Handle(pattern, p, h); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	mount("GET /setup/integrations", authz.ActionSetupRead, s.list)
 	mount("GET /setup/integrations/{kind}", authz.ActionSetupRead, s.one)
-	mount("POST /setup/integrations/{kind}/inputs", authz.ActionSetupConnect, s.inputs)
+	post("POST /setup/integrations/{kind}/inputs", authz.EffectRewrites, s.inputs)
 	mount("DELETE /setup/integrations/{kind}", authz.ActionSetupConnect, s.disconnect)
 	// A TYPED CREDENTIAL CHECKED AT ITS VENDOR, and nothing stored. The
 	// connect verb, because it spends a credential at a vendor on a
 	// person's hand; see verify.go for why it asks nothing more.
-	mount("POST /setup/integrations/{kind}/verify", authz.ActionSetupConnect, s.verify)
+	post("POST /setup/integrations/{kind}/verify", authz.EffectReads, s.verify)
 	// The two that RUN something at the third-party app, and the read that follows
 	// one. See pass.go for why check and provision are one function. BOTH
 	// are the connect verb: a check writes nothing at the app, and it is
 	// still a pass run against the company's own credentials at a person's
 	// hand — the gesture of whoever connected it, not of a reader.
-	mount("POST /setup/integrations/{kind}/provision", authz.ActionSetupConnect, s.provision)
-	mount("POST /setup/integrations/{kind}/check", authz.ActionSetupConnect, s.check)
+	post("POST /setup/integrations/{kind}/provision", authz.EffectRewrites, s.provision)
+	post("POST /setup/integrations/{kind}/check", authz.EffectReads, s.check)
 	// ONE AGENT'S OWN APP. Not a company-wide connect: a GitHub App is one
 	// bot identity, so an app per agent is the only way each acts as itself.
-	mount("POST /setup/integrations/github/app", authz.ActionSetupConnect, s.beginApp)
+	post("POST /setup/integrations/github/app", authz.EffectCreates, s.beginApp)
 	mount("GET /setup/integrations/{kind}/runs/{id}", authz.ActionSetupRead, s.runByID)
 	// The LISTING, which is what makes the route above reachable at all:
 	// nothing could name a run id, so one pass was readable only by the
@@ -745,6 +757,10 @@ func (s *Service) companyFor(w http.ResponseWriter, r *http.Request, hint string
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
 			httpjson.Detail{"reason": "the fleet's activation could not be read " +
 				"from the coordination store"})
+	case operator.AnswerCondition(r.Context(), w, log, "setup_company_unavailable", err, nil):
+		// ANY OTHER CONDITION OF THE NODE (a store busy or closed, a request
+		// out of time) is told as one, in a person's words, never as the
+		// engine having broken: the config surface's own rule.
 	default:
 		log.ErrorContext(r.Context(), "setup_company_unread", "error", err.Error())
 		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
@@ -811,7 +827,7 @@ func (s *Service) one(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
 			"detail": "this build serves no setup for " + string(kind),
-			"hint":   "one of " + kindList(),
+			"hint":   "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}
@@ -2024,14 +2040,6 @@ func inboundPath(kind integration.Kind) string {
 	}
 }
 
-func kindList() string {
-	names := make([]string, 0, len(integration.Kinds))
-	for _, k := range integration.Kinds {
-		names = append(names, string(k))
-	}
-	return strings.Join(names, ", ")
-}
-
 // inputs serves POST /setup/integrations/{kind}/inputs.
 func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	kind := integration.Kind(r.PathValue("kind"))
@@ -2043,7 +2051,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	state, ok := s.stateFor(r.Context(), company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
-			"hint": "one of " + kindList(),
+			"hint": "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}
@@ -2067,7 +2075,7 @@ func (s *Service) inputs(w http.ResponseWriter, r *http.Request) {
 	//nolint:govet // shadow: scoped to this block; see .golangci.yml
 	if err := decode(body, &req); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-			"detail": err.Error(),
+			"detail": plainjson.Unreadable("the body", err),
 		})
 		return
 	}
@@ -2230,7 +2238,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	state, ok := s.stateFor(r.Context(), company, fc.roster, kind)
 	if !ok {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeUnknownKind, map[string]string{
-			"hint": "one of " + kindList(),
+			"hint": "one of " + words.Or(integration.Kinds),
 		})
 		return
 	}
@@ -2258,7 +2266,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
 		if err := decode(body, &req); err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-				map[string]string{"detail": err.Error()})
+				map[string]string{"detail": plainjson.Unreadable("the body", err)})
 			return
 		}
 	}
@@ -2284,15 +2292,7 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	if !req.Force {
 		if err := s.markDisconnecting(r.Context(), kind, req.RemoveSeats,
 			attributionOf(r)); err != nil {
-			// TRANSIENT SAID AS TRANSIENT. Both answers are 503 — the
-			// request can be repeated and may then work — but only this
-			// one is a race the caller should sit out and retry, and a
-			// caller cannot tell them apart from the status alone.
-			code, after := httpjson.CodeUnavailable, authz.RetryUndecidedSeconds
-			if errors.Is(err, errSurfaceBusy) {
-				code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
-			}
-			httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": err.Error()})
+			refuseDisconnect(w, r, kind, err)
 			return
 		}
 		log.InfoContext(r.Context(), "setup_disconnect_requested",
@@ -2313,11 +2313,17 @@ func (s *Service) disconnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	patch := []byte(`{"integrations":{"` + string(kind) + `":null}}`)
+	// THE BASE IS THE HEADER, the one write here whose base is: a disconnect
+	// that loses its race lost a precondition its request stated, which is
+	// refused 412 ([configapi.RacedError.Status]), where every other write
+	// here states its base as the body's `if_match` and loses as 409.
+	ifMatch := strings.TrimSpace(r.Header.Get("If-Match"))
 	applied, err := s.config.Apply(r.Context(), configapi.ApplyRequest{
 		Patch:   patch,
 		Summary: "disconnect " + string(kind),
 		By:      attributionOf(r),
-		Expect:  strings.TrimSpace(r.Header.Get("If-Match")),
+		Expect:  ifMatch,
+		Stated:  ifMatch != "",
 	})
 	if err != nil {
 		s.refuse(w, r, err, setup.Result{})
@@ -2405,7 +2411,9 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		// the config surface names them: a revision that lost its activation
 		// is in the history of the node that stored it and of no other.
 		maps.Copy(extra, configapi.KeptRevision(raced))
-		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeRevisionAdvanced, extra)
+		// 412 WHERE THE REQUEST'S IF-MATCH WAS THE BASE (a disconnect's),
+		// 409 where its base was a body field: the config surface's one rule.
+		httpjson.FailWithFields(w, raced.Status(), httpjson.CodeRevisionAdvanced, extra)
 	case errors.As(err, &invalid):
 		// THE CONFIG SURFACE'S OWN STRUCTURE, located problems and the
 		// derived hierarchy, so a screen placing a refusal on the field it
@@ -2435,6 +2443,13 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		log.WarnContext(r.Context(), "setup_write_unknown", "revision", unanswered.Stored,
 			"error", err.Error(), "secrets", strings.Join(partial.Secrets, ","))
 		configapi.RefuseActivationUnknown(w, unanswered, sealed)
+	case configapi.RefuseUnreadableWith(w, err, sealed):
+		// A REVISION THIS NODE CANNOT OPEN, met by the write's own read of
+		// the fleet's company inside the config surface's apply (a
+		// disconnect with no If-Match racing a pointer move, say): the
+		// config surface's own 409, by where the revision came from, with
+		// what was sealed before it, never the 500 that says the engine
+		// broke.
 	case errors.As(err, &seal) && errors.Is(seal.Err, coord.ErrUnavailable):
 		// A CREDENTIAL'S OWN WRITE UNANSWERED, ahead of the arm below, which
 		// it would otherwise reach: the fleet's secret store is a
@@ -2480,6 +2495,13 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
 			with(httpjson.Detail{"reason": "the fleet's activation could not be read " +
 				"from the coordination store"}))
+	case operator.AnswerCondition(r.Context(), w, log, "setup_write_unavailable", err, sealed,
+		"secrets", strings.Join(partial.Secrets, ",")):
+		// ANY OTHER CONDITION OF THE NODE — a store too busy to take the
+		// revision, one closed for a snapshot, a request out of time — is
+		// the config surface's own `503` in a person's words, with what was
+		// sealed before it beside them: never "the engine broke", and never
+		// "nothing was written".
 	default:
 		// THE DETAIL GOES TO THE LOG, never to the caller: a third-party app's own
 		// refusal can quote the config value it was given, which on a
@@ -2516,6 +2538,48 @@ type disconnectRequest struct {
 	// saying they will remove what the third-party app holds themselves, so the
 	// answer names what was left behind.
 	Force bool `json:"force"`
+}
+
+// refuseDisconnect answers a disconnect this node could not record: `503`
+// where the same request may then work, and `500` for a failure no condition
+// claims, which is this node's own fault and which no wait clears.
+//
+// TRANSIENT SAID AS TRANSIENT: a concurrent pass holding the surface is
+// `surface_busy` under its own short wait, because only that one is a race the
+// caller should sit out and retry, and a caller cannot tell it from the rest by
+// the status alone.
+//
+// IN WORDS FOR A PERSON, the error to the log: the detail was the error, so a
+// disconnect the coordination store could not take read "setupapi: this node
+// could not take slack to record the disconnect: " and the store's own
+// transport error, its hosts and ports. A condition is told in its own
+// sentence ([builtin.ConditionSentence]) under its own hint, which is none
+// where no wait clears it.
+func refuseDisconnect(w http.ResponseWriter, r *http.Request, kind integration.Kind, err error) {
+	code := httpjson.CodeUnavailable
+	var after int
+	var said string
+	switch condition, isCondition := builtin.ConditionSentence(err); {
+	case errors.Is(err, errSurfaceBusy):
+		code, after = httpjson.CodeSurfaceBusy, httpjson.RetrySeconds(RetryBusy)
+		said = "This integration is being set up right now, so the " +
+			"disconnect didn't start. Try again in a moment."
+	case isCondition:
+		said = condition
+		after = httpjson.RetrySeconds(builtin.RetryAfter(err,
+			time.Duration(authz.RetryUndecidedSeconds)*time.Second))
+	default:
+		// A FAILURE NO CONDITION CLAIMS is this node's own fault, which no
+		// wait clears: it was a 503 telling a person to try again in a
+		// moment.
+		log.ErrorContext(r.Context(), "setup_disconnect_failed",
+			"integration", kind, "error", err.Error())
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
+		return
+	}
+	log.WarnContext(r.Context(), "setup_disconnect_unrecorded",
+		"integration", kind, "error", err.Error())
+	httpjson.UnavailableWith(w, code, after, httpjson.Detail{"detail": said})
 }
 
 // errSurfaceBusy is [Service.markDisconnecting] refused by a concurrent

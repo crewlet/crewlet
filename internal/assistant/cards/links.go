@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // screen is one dashboard screen an open in app link may name: its address
@@ -68,6 +69,9 @@ var links = map[string]screen{
 	"doclet":           {address: "#/doclet", app: iam.GrantDoclet, label: "Doclet"},
 	"container":        {address: "#/doclet/{CONTAINER}", app: iam.GrantDoclet},
 	"page":             {address: "#/doclet/pages/{id}", app: iam.GrantDoclet, noun: "page"},
+	"chatlet":          {address: "#/chatlet/{id}", app: iam.GrantChatlet, noun: "room"},
+	"chatlet-mentions": {address: "#/chatlet/mentions", app: iam.GrantChatlet, label: "Mentions"},
+	"chatlet-search":   {address: "#/chatlet/search", app: iam.GrantChatlet, label: "Search chat"},
 	"artifacts":        {address: "#/artifacts", label: "Artifacts"},
 	"artifact":         {address: "#/artifacts/{id}", noun: "artifact"},
 	"spend":            {address: "#/settings/spend", label: "Token spend"},
@@ -135,8 +139,8 @@ var ErrNoLink = errors.New("cards: no such link")
 func Link(name string, params map[string]string, label string) (wire.Link, error) {
 	s, ok := links[name]
 	if !ok {
-		return wire.Link{}, fmt.Errorf("%w: the screen %q is not one of %v", ErrNoLink, name,
-			Screens())
+		return wire.Link{}, fmt.Errorf("%w: the screen %q is not one of %s", ErrNoLink, name,
+			words.Or(Screens()))
 	}
 	used := map[string]bool{}
 	segments := strings.Split(s.address, "/")
@@ -182,13 +186,15 @@ func Link(name string, params map[string]string, label string) (wire.Link, error
 // parameters that screen does not take.
 func checkOpen(o *Open) error {
 	if _, ok := links[o.Screen]; !ok {
-		return fmt.Errorf("%w: the screen %q is not one of %v", ErrNoLink, o.Screen, Screens())
+		return fmt.Errorf("%w: the screen %q is not one of %s", ErrNoLink, o.Screen,
+			words.Or(Screens()))
 	}
 	want := ScreenParams(o.Screen)
 	got := slices.Sorted(maps.Keys(o.Params))
 	slices.Sort(want)
 	if !slices.Equal(want, got) {
-		return fmt.Errorf("%w: %s takes %v, and the spec names %v", ErrNoLink, o.Screen, want, got)
+		return fmt.Errorf("%w: %s takes %s, and the spec names %s", ErrNoLink, o.Screen,
+			words.And(want), words.And(got))
 	}
 	return nil
 }

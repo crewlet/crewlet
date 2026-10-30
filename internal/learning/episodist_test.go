@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
@@ -257,7 +258,7 @@ func TestAFailedTurnIsStillRecorded(t *testing.T) {
 func TestASelfPersistedTurnIsStillRecorded(t *testing.T) {
 	t.Parallel()
 	turn := epTurn()
-	turn.Event.AllToolNames = []string{learning.ReflectTool}
+	turn.Event.AllToolNames = []string{toolname.ReflectAndPersist}
 	if reason := episodist(t, episodes(t)).Skip(turn); reason != "" {
 		t.Fatalf("skipped a self-persisted turn: %s", reason)
 	}

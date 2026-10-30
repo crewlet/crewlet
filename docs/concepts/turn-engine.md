@@ -89,7 +89,7 @@ Whether a turn OWES an answer is derived by the engine at dispatch, from the tri
 | `tool` | An assignment, or a notification the source's own routing marks as an ask — a direct message, a personal mention | The answer only exists if a tool put it there |
 | `engine` | A colleague asked over A2A | There is no tool to call: the engine replies on the channel the ask opened, with the turn's answer, once the turn ends, and closes it. The segment that parks on its executor's run answers nothing; the frame that ends the turn does — the resumed segment that collects the run and settles the review, or the close a person's stop of the run makes — off the ask the launch wrote onto the run's record. A run **lost** under its parked turn (its box gone or unreadable, its suspension never recorded, its tail abandoned by a node that died, its seat retired) ends the turn with no frame of it left, so the run's ending answers instead, as one of its steps on whichever node finishes it: the reply says the coding run was lost, with the reason and the sentence its `sandbox_run_failed` announced. A turn that ends without parking (stopped at the delegation depth cap, or broken or stopped at or before its executor's launch) is answered by its dispatch, and its reply says it could not answer |
 
-A source's reading of its own routing is [`notify.Prompt.Addressed`](../index.md#integrations) — a tracker answers from its routing reason (assigned, mentioned), a chat backend from the channel type and whether the seat was named. The conservative answer is FALSE: a seat wrongly told nobody is waiting keeps the freedom to stay silent, while one wrongly told somebody is must post on every broadcast it observes. A coalesced trigger takes the STRONGEST obligation of its constituents — a merge must not be able to launder an ask.
+A source's reading of its own routing is [`notify.Prompt.Addressed`](../index.md#integrations) — a tracker answers from its routing reason (assigned, mentioned), a chat backend from the rule it declares (`notify.AddressRule`): a direct conversation, or the seat named in the message or in the thread it is in — never a thread it merely spoke in. The conservative answer is FALSE: a seat wrongly told nobody is waiting keeps the freedom to stay silent, while one wrongly told somebody is must post on every broadcast it observes. A coalesced trigger takes the STRONGEST obligation of its constituents — a merge must not be able to launder an ask.
 
 **There is no fourth value, and no default.** A turn started without one is refused before any phase runs, because none of the three is a safe reading of "the caller did not say": permissive exempts a turn that owes somebody an answer, strict loops every unaddressed turn to exhaustion. That refusal exists because the omission shipped — the dispatch path derived the obligation correctly, handed it to the runner, and dropped it before the loop, so the decode-time check below stayed armed while **both** of the engine-side gates were skipped on every non-sandbox turn. Nothing about the result said so: the turn simply had no delivery gate.
 
@@ -103,13 +103,13 @@ The turn engine checks the executor's account against its own record three times
 
 **All three read the whole turn's record, not the current round's** (`turn.Record`: every call the closed rounds made, then this round's). The obligation is the turn's: somebody waiting is answered once, and a round the reviewer sends back for something else does not un-answer them. The [prior-work ledger](#prior-work-ledger-across-self_iterate-rounds) tells every later round exactly that — an earlier round's successful write already ran, do not issue it again — so a check reading the round alone demanded the one thing the round was forbidden to do. That shipped: a seat answered a founder's comment on a work item with a comment of its own; its reviewer sent the round back to re-read the item first; the second round re-read it, cited the comment, and had that citation refused eleven times as "nothing delivered" until its round cap ran out; the reviewer's `done` was overturned for the same reason; and the third round, told to find the tool that delivers on `work` through MCP discovery, posted the same acknowledgement in a chat channel — which could never count — and the turn ended on the iteration cap, recorded as failed for having answered in its first round. An earlier round's delivery is now citable in a later round's `deliveries`, and the ledger's header says so. Whether a later round *also* owed a delivery — a correction the first answer needs — is a judgement about the work, which is the reviewer's; the review prompt says the engine's check covers every round so a reviewer does not read a round with no write of its own as a turn that reached nobody. The one thing that still reads the last round alone is `Result.Delivered`, because its question — does the person waiting know how the turn *ended* — is a different one (see [what a conversation entry holds](conversation-sessions.md#what-an-entry-holds)).
 
-**Every refusal ends by naming how to deliver where the asker is** (`turn.Remedy`). On the engine's own surfaces — `work` for the tracker, `page` for the knowledge base — that is the first-party tools that deliver there (`comment_on_work_item`, `update_work_item`, …), which the executor holds from its first round and which no discovery call lists. On a vendor's surface it is the MCP server of the same name, through `list_mcp_server_tools` and `activate_tool`. Only where the asker's surface cannot be named does it fall back to the general instruction. It used to send every seat to discovery, which is the misdirection in the incident above.
+**Every refusal ends by naming how to deliver where the asker is** (`turn.Remedy`). On the engine's own surfaces — `work` for the tracker, `page` for the knowledge base, `chat` for the engine's own chat — that is the first-party tools that deliver there (`comment_on_work_item`, `update_work_item`, `reply_in_thread`, …), which the executor holds from its first round and which no discovery call lists. On a vendor's surface it is the MCP server of the same name, through `list_mcp_server_tools` and `activate_tool`. Only where the asker's surface cannot be named does it fall back to the general instruction. It used to send every seat to discovery, which is the misdirection in the incident above.
 
-**What counts as a delivery, and where it lands** is one rule, applied everywhere. A tool delivers (`turn.Deliverable`) when it is **MCP-served and not positively annotated read-only**, or when it is a **first-party tool the engine registered as one that reaches somebody**: Worklet's writes and Doclet's do, `reflect_and_persist` and `use_skill` do not, and the flag is set at registration rather than derived from annotations, because a diary write and a work-item comment are annotated identically. "Not a known read" is POSITIVE: an unannotated MCP tool counts as a possible delivery, which is the fail-closed direction, since the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md). Only SUCCESSFUL calls count: a failed post did not post, and counting it would close the check on exactly the turn that needs to iterate.
+**What counts as a delivery, and where it lands** is one rule, applied everywhere. A tool delivers (`turn.Deliverable`) when it is **MCP-served and not positively annotated read-only**, or when it is a **first-party tool the engine registered as one that reaches somebody**: Worklet's writes, Doclet's and Chatlet's three posting tools (`post_message`, `reply_in_thread`, `send_dm`) do, `reflect_and_persist` and `use_skill` do not, and the flag is set at registration rather than derived from annotations, because a diary write and a work-item comment are annotated identically. Each one is **scoped to its own source** (below), so a chat post does not discharge an obligation the tracker raised: the tools are first-party either way, and "this turn wrote something somewhere" is not the question the gate asks. A **reaction is not a delivery** and is deliberately not registered as one — it wakes nobody and obliges nothing, so if an emoji counted, every addressed turn could close itself out with a thumb. "Not a known read" is POSITIVE: an unannotated MCP tool counts as a possible delivery, which is the fail-closed direction, since the alternative exempts every tool a server forgot to [annotate](tool-capabilities.md). Only SUCCESSFUL calls count: a failed post did not post, and counting it would close the check on exactly the turn that needs to iterate.
 
-Each delivering tool also declares **which surface it reaches**: an MCP tool's is its own server (`mattermost`, `slack`, `github`), and an engine builtin's is the change feed's own source: `work` for Worklet, `page` for Doclet. Those are the same names an inbound notification reports its source under, and the gate compares the two, because "did this turn reach anybody" and "did the person waiting get told" are different questions, and only the second one matters to the asker. Asking the first is how a founder's Mattermost DM was closed out by a row in the tracker: the seat filed a work item instead of answering, every check passed, and the thread's last message stayed a clarification question the founder had already been answered out from under.
+Each delivering tool also declares **which surface it reaches**: an MCP tool's is its own server (`mattermost`, `slack`, `github`), and an engine builtin's is the change feed's own source: `work` for Worklet, `page` for Doclet, `chat` for Chatlet. Those are the same names an inbound notification reports its source under, and the gate compares the two, because "did this turn reach anybody" and "did the person waiting get told" are different questions, and only the second one matters to the asker. Asking the first is how a founder's Mattermost DM was closed out by a row in the tracker: the seat filed a work item instead of answering, every check passed, and the thread's last message stayed a clarification question the founder had already been answered out from under.
 
-**A notification may owe a surface other than its own source.** The answer to a [decision](../guides/worklet.md#asking-for-a-decision) whose asker promised to report the outcome in a chat channel arrives from Worklet (`work`), and on its source alone a comment on the item would close the turn. So the asker's copy carries `owes` (the chat surface the decision's `inform` named), and the obligation is raised on that surface instead: the turn is sent back until a tool on `slack` or `mattermost` has run, whether or not Worklet read the wake as addressed. Only the asker's copy owes it, and a merge of wakes carries it through; Worklet partitions an owing wake apart from the rest of the item's conversation, so one turn never owes two surfaces.
+**A notification may owe a surface other than its own source.** The answer to a [decision](../guides/worklet.md#asking-for-a-decision) whose asker promised to report the outcome in a chat channel arrives from Worklet (`work`), and on its source alone a comment on the item would close the turn. So the asker's copy carries `owes` (the chat surface the decision's `inform` named), and the obligation is raised on that surface instead: the turn is sent back until a tool on `slack`, `mattermost` or the engine's own `chat` has run, whether or not Worklet read the wake as addressed. Only the asker's copy owes it, and a merge of wakes carries it through; Worklet partitions an owing wake apart from the rest of the item's conversation, so one turn never owes two surfaces.
 
 The surface check **narrows only where it can**, and the two fallbacks are the design rather than leniency:
 
@@ -267,6 +267,7 @@ A turn can also end `failed` without the reviewer choosing it. Every failed turn
 | A panic, in a phase or around one | `turn.guard_breach` with `unhandled_exception` | `unhandled_exception` |
 | The token budget refused a charge | `budget_exhausted` | `budget_exhausted` |
 | Every member of the provider chain failed retryably | `llm_unavailable`, with the chain it tried | the last member's kind (`rate_limit`, `server`, …) |
+| An executor whose [box](llm-backends.md#the-executors-run-in-a-box) couldn't be started | none | `sandbox_` and the class its backend gave the failure (`sandbox_configuration`, `sandbox_setup_unavailable`, `sandbox_provider_unavailable`, …; see [When a run does not start](code-sandbox.md#when-a-run-does-not-start)) |
 | Any other broken phase | none | the provider's classified kind where there is one, else `error` |
 
 The `error_kind` on the turn's summary is the **same classifier** the failed phase's record uses (`runner.ErrorKind`), so the two records of one failure name it alike. It used to read `error` for every cause but a guard, while the phase record beside it said `auth` or `rate_limit`.
@@ -439,6 +440,15 @@ decides:
 Extensions chain: when an extended run exhausts again, the judge fires
 once more, up to the configured ceiling. Token budget cascade still
 bounds the whole thing economically; the ceiling is a sanity check.
+
+**The judge reads the ask's foreign words fenced, and its reason reaches
+the seat defused.** The turn's ask it is shown carries other people's words
+under the turn's [fence](agent-runtime.md#text-somebody-else-wrote) token;
+the judge reads them moved onto a token minted for its call, with every
+other line of its evidence escaped and the standing sentence in its prompt,
+so a message telling it to grant fifty rounds is read as that message. Its
+one-sentence reason is written into the pass's conversation with the nudge,
+escaped under the turn's token.
 
 **A phase that submitted on its last round is finished, not exhausted.**
 Exhaustion means the budget ran out with the model still *asking for
@@ -853,7 +863,15 @@ sequenceDiagram
   seat it is, and the note is decided on that seat before it is offered. A
   probe nobody answers is `unavailable`, never a refusal: no answer says nothing
   about whose turn it was. An anchor that does not open decides nothing, and
-  the note is refused `unavailable` with the reason.
+  the note is refused `unavailable` under no wait, the tool's sentence saying
+  why. One sealed under a key the asking node does not hold is the fleet's
+  nodes not holding the same keys, the condition a note the running node
+  cannot verify is too, and the sentence says only that an administrator needs
+  to give the fleet's nodes the same keys. That sentence is the calling
+  assistant's; a person steering from the dashboard is answered in the
+  refusal's code alone (ADR-0060). The keys that node holds are in its log
+  (`steer_seat_key_unknown`, `held_keys`), where whoever administers the
+  keyring reads them.
 - **One node answers a scatter.** Every node serves the subject and the note
   names the turn; the node running it is the only one that can answer, so
   nothing has to know where a turn runs. It keeps answering `closed` (the
@@ -965,6 +983,14 @@ one wiring rather than two. On Slack the wording comes from per-phase pools
 that `integrations.slack.status_phrases` can replace. See
 [Slack § Working Status](../integrations/slack.md#working-status-is-thinking)
 and [Mattermost § Working status](../integrations/mattermost.md#working-status).
+On the engine's [own chat](chatlet.md) the setting is `chat.chatlet.typing_status`,
+with the same two values and the same default, and the indicator is shown in
+the room on the dashboard: it is raised on the node running the turn as the
+seat's member of the room's [presence](chatlet.md#presence-typing-and-the-working-indicator),
+never written to the log, because it is true for minutes and worthless the
+moment the turn ends. Every node raises it for its own seats, including a node
+that serves no HTTP API, and the room's presence carries it to whichever node
+holds the sockets looking at the room. Its wording is the default phrase pools.
 
 ---
 
@@ -1006,23 +1032,31 @@ describes **one execution** keys on the run: the phase records, the live view,
 a [detached sandbox run](code-sandbox.md) and its MCP bridge session.
 
 Those derived ids name the **call** as well as the work: the unit of work, the
-verb, the item, and a digest of the tool call's own arguments. So a re-run that
-makes the same call writes once, while two different calls in one turn — an
-item moved to `in_progress` and later to `done`, two comments on one item —
-are two writes. Each id also carries **how many different calls to the same
-tool the run made before it**, so a call made again after a different one is a
-new write: an item moved to `in_progress`, then `done`, then back to
-`in_progress` ends `in_progress`, where the third move used to be answered as
-the first one's retry and the item stayed `done`. A call repeated with nothing
-different in between — an executor that asks twice, a retry after `unknown` —
-keeps its count and stays one write. Each id also carries **when the unit of
+tool, the verb, the item, and a digest of the tool call's own arguments. So a
+re-run that makes the same call writes once, while two different calls in one
+turn — an item moved to `in_progress` and later to `done`, two comments on one
+item, one write two tools each make with the same arguments — are two writes.
+Every id a call's writes carry is derived from **one key per call**, the same
+for the tracker, the knowledge base and chat, digest included, so one object
+named two ways — a page by its id and by `ENG/Runbook`, a room by its id and by
+its name — is two different calls, to the digest and to the count below
+alike. Each id also carries **how many different calls to the same tool the
+run made before it**, so a call made again after a different one is a new
+write: an item moved to `in_progress`, then `done`, then back to `in_progress`
+ends `in_progress`, where the third move used to be answered as the first
+one's retry and the item stayed `done`.
+Where two tools write one state in opposite directions — `join_channel` and
+`leave_channel` on a chat room's membership — the count is kept across the
+pair, so a join after a leave is a new write rather than the first join's
+retry. A call repeated with nothing different in between — an executor that
+asks twice, a retry after `unknown` — keeps its count and stays one write. Each id also carries **when the unit of
 work began** (the earliest trigger it was derived from), which a re-run
 reproduces exactly; that instant is what lets a node whose operation ledger may
 have lost the first run's row since answer a re-run `unknown` rather than apply
 it twice (see
 [Replication](../guides/replication.md#what-a-retry-is-judged-by-the-instant-its-operation-was-minted)).
-A wake Worklet or Doclet produces is stamped with the
-instant of the change it announces rather than the moment it was delivered, so
+A wake Worklet, Doclet or Chatlet produces is stamped
+with the instant of the change it announces rather than the moment it was delivered, so
 every copy of it — a change-feed redelivery, a delivery retried after a failed
 publish — carries the same instant as well as the same id, and a re-run woken
 by a later copy derives the first run's ids.
@@ -1052,15 +1086,21 @@ judged when it starts and goes on deciding writes while it runs, and a day is
 far more than one attempt's rounds. What the rebase costs is the collapse
 across the line: an attempt judged just short of it and a retry judged just past
 it write under two instants, so a write the first made and the second repeats
-is written twice — the cheaper failure by far against every write lost. The
-ordinary turn pays nothing for any of this: the coordination store is read only
-by an attempt whose start is past the line, since no earlier attempt can have
-rebased before it. An attempt that needs the store and cannot read it does not
-run; its delivery is handed back and retried.
+is written twice — the cheaper failure by far against every write lost. A
+comment on a work item, an item `create_work_item` files and a view
+`save_work_view` creates are spared that: each one's id is the key of its own
+row rather than an operation, and is derived as the work began even in a
+rebased attempt, so what the first attempt posted, filed or saved is found by
+its id and answered from its row rather than made again beside it — an answer,
+an edit or an unwatch since then stands, nobody is woken twice, and no second
+item takes a second key. The ordinary turn pays nothing for any of this: the
+coordination store is read only by an attempt whose start is past the line,
+since no earlier attempt can have rebased before it. An attempt that needs the
+store and cannot read it does not run; its delivery is handed back and retried.
 
 **A re-run is recognised call for call, and only when its calls are the same.**
-Everything a derived id is made of — the work, the verb, the item, the
-arguments, the count — is something a re-run reproduces only by making the
+Everything a derived id is made of — the work, the tool, the verb, the item,
+the arguments, the count — is something a re-run reproduces only by making the
 same calls, with the same arguments, in the same order. The model behind a
 re-run is sampled again, and where it words a title or a comment differently,
 that call is a different write: the re-run files a second item or posts a

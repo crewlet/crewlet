@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet iam` — the company's identity directory from a terminal.
@@ -99,17 +100,16 @@ Usage:
                     [-before POSITION]                 Show the identity audit trail
 
 Flags:
-  -config PATH   The node config file naming the node to reach (default %q)
+  -config PATH   The node config file naming the node to reach (default %[1]q)
   -api URL       The running node's API; default is its own api.host:port
-  -json          Print the raw answer rather than a table
+  -json          Print the node's answer as JSON rather than a table
   -reason TEXT   Saved with the change for the audit trail
-  -idempotency-key OP
-                 Retry a write whose outcome was unknown, as the same operation
-  -grants G,...  On invite, create, grant and token: admin, worklet, doclet
-                 or artifacts, comma-separated, or none (overview only).
-                 admin includes every app. Defaults: worklet and doclet for
-                 people, the owner's permissions for a token. Required for a
-                 service account
+  -op-id OP      Retry a write whose outcome was unknown, as the same operation
+  -grants G,...  On invite, create, grant and token: any of
+                 %[2]s, separated by commas,
+                 or none (overview only). admin includes every app. Defaults:
+                 %[3]s for people; for a token, the owner's
+                 permissions you may give. Required for a service account
   -seat SEAT     On invite and create: the vacant human seat they'll hold
                  ("iam seats -unheld" lists them). Required for people,
                  optional for service accounts
@@ -117,21 +117,25 @@ Flags:
                  invitation is open)
 
 Every write prints its outcome: "applied" (this node has it) or "pending"
-(saved, not here yet). If the outcome is unknown, run the same command again
-with -idempotency-key <op id> from the error. Don't start fresh, or it runs
+(saved, not here yet). If the outcome is unknown, is one this build can't read
+(then nothing of the answer is printed), or the node never answered, run the
+same command again with -op-id <op id> from the error: every write that takes
+-op-id is sent under one made before it asks. Don't start fresh, or it runs
 twice. If the node can't confirm it, retry through another node with -api.
+A token or a reset link takes no -op-id, since its route reads no key: if its
+outcome is unknown or unreadable, its value isn't printed, and running it
+again makes a new one.
 
 A person always holds one human seat. They're invited or created onto a
 vacant one, "iam bind" moves them, and "iam remove" frees it. "iam unbind" is
 only for service accounts, which can hold one seat or none.
 
 "iam create" prints a password link, shown once and good for a week. The
-person uses it to set their first password. Retry with -idempotency-key
-<op id> to see the same link, or use "iam reset-password" if it stopped
-working.
+person uses it to set their first password. Retry with -op-id <op id> to see
+the same link, or use "iam reset-password" if it stopped working.
 
 Set CREWLET_API_TOKEN to authenticate. Every iam command needs it, reads
-included.
+included, except "iam token -login", which signs you in and reads none.
 
 A link from "iam reset-password" lets the person set a new password once. It
 signs them out everywhere, ends their tokens, and doesn't sign them in. Their
@@ -157,7 +161,7 @@ accounts only. Changes made with a token are recorded as its owner's.
 func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	if sub == "" || sub == "help" {
-		fmt.Fprintf(stdout, iamUsage, defaultBootstrapPath)
+		fmt.Fprint(stdout, iamHelp())
 		return flag.ErrHelp
 	}
 	// THE SUBJECT COMES OFF BEFORE THE FLAGS, for `crewlet secrets`'
@@ -172,13 +176,13 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	fs.SetOutput(stderr)
 	bootstrapPath := fs.String("config", defaultBootstrapPath,
 		"node config file: the node this command reaches")
-	apiURL := fs.String("api", "",
+	apiURL := nodeAPIFlag(fs,
 		"the running node's API; default is the api.host:port in -config")
-	asJSON := fs.Bool("json", false, "print the raw answer")
+	asJSON := fs.Bool("json", false, "print the node's answer as JSON")
 	reason := fs.String("reason", "", "recorded on the change")
 	grants := fs.String("grants", "",
-		iamGrantWords()+", comma-separated, or `none`. admin "+
-			"includes every app. If left out: every app on invite and a "+
+		"any of "+iamGrantWords()+", separated by commas, or `none`. admin includes "+
+			"every app. If left out: every app on invite and a "+
 			"person's create, the owner's permissions on token. Required on a "+
 			"service account's create")
 	stage := fs.String("stage", "", "only people at this stage")
@@ -201,7 +205,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	after := fs.String("after", "", "start the next page after this id")
 	before := fs.Uint64("before", 0, "end the next page before this POSITION")
 	at := fs.String("at", "", "an RFC 3339 instant, resolved to a position once")
-	key := fs.String("idempotency-key", "",
+	key := opIDFlag(fs,
 		"retry a write whose outcome was unknown: the op id its answer named")
 	seat := fs.String("seat", "",
 		"the vacant human seat to put them on (required on invite "+
@@ -226,14 +230,24 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	if strings.TrimSpace(*key) != "" && !iamKeyed[sub] {
 		return iamUnkeyed(sub)
 	}
-	// A KEY IS THE OP ID AN EARLIER ANSWER NAMED, held to the rule every
-	// surface holds a caller's operation id to ([statelog.CheckCallerOpID])
-	// before anything is read or sent, and sent as given: the node refuses
-	// any other `400 op_id_invalid`, and refused here the error names this
-	// command's flag rather than a header it composed.
-	if *key != "" {
-		if err := statelog.CheckCallerOpID(*key); err != nil {
-			return fmt.Errorf("-idempotency-key: %w", err)
+	// A KEYED WRITE'S OPERATION IS MINTED HERE, BEFORE IT ASKS, as every
+	// keyed write this binary makes mints its own ([operationFor]) — or it
+	// is the op id an earlier answer named, held to the node's rule before
+	// anything is read or sent. A write whose answer never came may well
+	// have landed, and the key it was sent under is the only handle on it:
+	// left to the node to mint, it was lost with the answer, so the only
+	// retry an operator could run was a fresh operation — a second
+	// invitation, or a create the first attempt's person refuses.
+	//
+	// ONE VALUE NAMES THE WRITE for both halves that finish it — the client,
+	// for an answer that never came ([iamClient.unanswered]), and the
+	// printer, for a 2xx whose outcome leaves it open ([iamPrinter.settled])
+	// — so the retries the two prescribe are one.
+	write := keyedWrite{gesture: sub}
+	if iamKeyed[sub] {
+		var err error
+		if write.operation, err = operationFor(sub, *key); err != nil {
+			return err
 		}
 	}
 	// -seat IS invite's AND create's — the seat somebody new takes — and
@@ -305,7 +319,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		return fmt.Errorf("read %s: %w", *bootstrapPath, err)
 	}
 	ctx := context.Background()
-	out := &iamPrinter{w: stdout, raw: *asJSON}
+	out := &iamPrinter{w: stdout, raw: *asJSON, write: write,
+		what: strings.TrimSpace(sub + " " + subject)}
 	if sub == "token" && strings.TrimSpace(*login) != "" {
 		// YOUR OWN TOKEN, which only your own session may mint: this
 		// signs in for the one request and never reads
@@ -318,7 +333,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	if err != nil {
 		return err
 	}
-	client.key, client.keyed = *key, iamKeyed[sub]
+	client.write, client.keyed = write, iamKeyed[sub]
 
 	switch sub {
 	case "people":
@@ -408,8 +423,8 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 	case "grant":
 		body := granted.body()
 		if len(body) == 0 {
-			return errors.New("say what to give with -grants: admin, worklet, " +
-				"doclet or artifacts, comma-separated, or none")
+			return fmt.Errorf("say what to give with -grants: any of %s, "+
+				"separated by commas, or none", iamGrantWords())
 		}
 		body["reason"] = *reason
 		return out.written(client.patch(ctx, "/iam/people/"+subject, body))
@@ -468,7 +483,7 @@ func runIAM(environ config.Source, args []string, stdin io.Reader, stdout, stder
 		answer, err := client.get(ctx, "/iam/audit", query)
 		return out.audit(query, answer, err)
 	}
-	fmt.Fprintf(stdout, iamUsage, defaultBootstrapPath)
+	fmt.Fprint(stdout, iamHelp())
 	return fmt.Errorf("unknown subcommand %q", sub)
 }
 
@@ -534,7 +549,7 @@ func iamNewcomer(sub, kind, email, login, seat string, granted bool) error {
 			}
 			if !granted {
 				return fmt.Errorf("name what the service account gets with "+
-					"-grants: %s (comma-separated), or none", iamGrantWords())
+					"-grants: any of %s, separated by commas, or none", iamGrantWords())
 			}
 		case "", iam.KindPerson:
 			if strings.TrimSpace(email) == "" {
@@ -569,19 +584,22 @@ var iamKeyed = map[string]bool{
 	"invalidate-all": true, "cancel-invite": true,
 }
 
-// iamUnkeyed refuses -idempotency-key on a subcommand whose route reads none,
+// iamUnkeyed refuses -op-id on a subcommand whose route reads none,
 // saying what to do instead: sent anyway, the key would be ignored and the
 // operator told nothing, which is the one outcome worse than the refusal.
+//
+// It is also how a mint or a reset link whose answer leaves it open ends
+// ([iamPrinter.settled]): why no key can retry one is why it is run again.
 func iamUnkeyed(sub string) error {
 	switch sub {
 	case "token":
-		return errors.New("token doesn't take -idempotency-key. Just run it " +
+		return errors.New("token doesn't take -op-id. Just run it " +
 			"again")
 	case "reset-password":
-		return errors.New("reset-password doesn't take -idempotency-key. Run " +
+		return errors.New("reset-password doesn't take -op-id. Run " +
 			"it again, and the new link replaces the old one")
 	}
-	return fmt.Errorf("-idempotency-key is for retrying writes, and `iam %s` "+
+	return fmt.Errorf("-op-id is for retrying writes, and `iam %s` "+
 		"doesn't write anything", sub)
 }
 
@@ -707,13 +725,13 @@ func iamGrants(flagged string) (iamGrantList, error) {
 				"list the permissions")
 		case !g.Valid():
 			return iamGrantList{}, fmt.Errorf("-grants: %q isn't a permission. "+
-				"Use %s, comma-separated, or none", g, iamGrantWords())
+				"Use any of %s, separated by commas, or none", g, iamGrantWords())
 		}
 		named = append(named, g)
 	}
 	if len(named) == 0 {
-		return iamGrantList{}, fmt.Errorf("-grants is empty. Use %s, "+
-			"comma-separated, or none", iamGrantWords())
+		return iamGrantList{}, fmt.Errorf("-grants is empty. Use any of %s, "+
+			"separated by commas, or none", iamGrantWords())
 	}
 	expanded := iam.Expand(named)
 	out := make([]iam.Grant, 0, len(iam.AllGrants))
@@ -725,20 +743,38 @@ func iamGrants(flagged string) (iamGrantList, error) {
 	return iamGrantList{grants: out, given: true}, nil
 }
 
-// iamGrantWords is the vocabulary a refusal names, read off [iam.AllGrants]
-// so a permission a later build adds is named here without anybody
-// remembering this sentence exists.
-func iamGrantWords() string {
-	words := make([]string, 0, len(iam.AllGrants))
-	for _, g := range iam.AllGrants {
-		words = append(words, string(g))
-	}
-	return strings.Join(words, ", ")
+// iamGrantWords is the vocabulary the help and every refusal name, read off
+// [iam.AllGrants] so a permission a later build adds is named here without
+// anybody remembering these sentences exist. EVERY sentence this command
+// prints that lists the permissions takes it — the usage, the flag's own help
+// and each refusal — because a list typed into one of them is the copy that
+// goes on naming three permissions after there are four;
+// TestTheCLINeverSpellsTheGrantListByHand reads the source for one.
+//
+// THE NAMES THE FLAG TAKES, said as a sentence says a set ([words.Or]: each
+// quoted as the value beside it is, the last joined with "or"), and the
+// sentence around it says how they are joined: it read "Use admin, worklet,
+// doclet, artifacts, chatlet, comma-separated, or none", where
+// "comma-separated" was one more member of the list.
+func iamGrantWords() string { return words.Or(iam.AllGrants) }
+
+// iamAppWords is the APPS among them ([iam.Apps]), which is what a person's
+// invitation or create carries when -grants is left out — read off the same
+// list, for the same reason, and joined with "and", since it is every one of
+// them.
+func iamAppWords() string { return words.And(iam.Apps) }
+
+// iamHelp is [iamUsage] with its blanks filled: the default config path, and
+// the permission and app vocabularies, which are the engine's own lists rather
+// than words typed into the text.
+func iamHelp() string {
+	return fmt.Sprintf(iamUsage, defaultBootstrapPath, iamGrantWords(), iamAppWords())
 }
 
 // iamTokenBody is a mint's request: what the token carries, what it is called
 // and how long it lasts — the same whoever the owner is. A list not given
-// sends no `grants`, which the node reads as everything the owner holds.
+// sends no `grants`, which the node reads as everything the owner holds that
+// the minting session may confer.
 func iamTokenBody(granted iamGrantList, label string, days int) map[string]any {
 	body := granted.body()
 	body["label"] = label
@@ -756,14 +792,17 @@ type iamClient struct {
 	token string
 	http  *http.Client
 
-	// key is the operation a write RETRIES — the op id an unknown answer
-	// named — sent as the Idempotency-Key on every write this command
-	// makes, and never on a read.
-	key string
+	// write is the command's write: its gesture, which names it in a
+	// sentence ("invite", "grant"), and the operation it is sent under —
+	// minted before it asks, or the op id an earlier answer named
+	// ([operationFor]) — sent as the Idempotency-Key on every write this
+	// command makes, and never on a read. The operation is empty on a
+	// command whose route reads none.
+	write keyedWrite
 
 	// keyed is whether the route this command writes to reads a key at all
 	// ([iamKeyed]). Only where it does is a refusal's retry spelled as
-	// -idempotency-key: a mint reads none, and was told to retry with a
+	// -op-id: a mint reads none, and was told to retry with a
 	// flag this command refuses on it.
 	keyed bool
 }
@@ -829,8 +868,8 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.key != "" && method != http.MethodGet {
-		req.Header.Set(opkey.Header, c.key)
+	if c.write.operation != "" && method != http.MethodGet {
+		req.Header.Set(opkey.Header, c.write.operation)
 	}
 	// NO ORIGIN, deliberately. The node's cross-site check admits a
 	// BEARER with none — a browser cannot make one travel — and refuses a
@@ -840,19 +879,41 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	// it made to a deployment behind a proxy was refused as cross-site.
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("reach %s: %w", target, err)
+		return nil, c.unanswered(method, fmt.Errorf("reach %s: %w", target, err))
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, iamMaxAnswer))
 	if err != nil {
-		return nil, fmt.Errorf("read the answer from %s: %w", target, err)
+		return nil, c.unanswered(method,
+			fmt.Errorf("read the answer from %s: %w", target, err))
 	}
 	var answer map[string]any
-	_ = json.Unmarshal(raw, &answer)
+	_ = decodeAnswer(raw, &answer)
 	if resp.StatusCode >= 400 {
-		return answer, iamRefusal(resp.StatusCode, resp.Header, answer, raw, c.keyed)
+		refusal := iamRefusal(resp.StatusCode, resp.Header, answer, raw, c.keyed)
+		if engineCode(resp.Header, raw) == "" {
+			// NOT THE NODE'S OWN ANSWER — no engine code under the engine's
+			// mark, so something in front of it answered, most often a
+			// proxy's read timeout — and the node may still have done what
+			// was asked ([notTheNode]).
+			return answer, c.unanswered(method, refusal)
+		}
+		return answer, refusal
 	}
 	return answer, nil
+}
+
+// unanswered is err for a request whose outcome the node never told this
+// command: for a keyed write, with the one safe retry — the same command under
+// the operation it was sent with — because the write may have landed after the
+// answer was lost, and unchanged for a read or a write whose route reads no
+// key.
+func (c *iamClient) unanswered(method string, err error) error {
+	if !c.keyed || c.write.operation == "" || method == http.MethodGet {
+		return err
+	}
+	return fmt.Errorf("%w\n\nThe node did not answer, so whether the %s landed is "+
+		"unknown: %s", err, c.write.gesture, c.write.retry())
 }
 
 // personID is the person a subject names: an id as it is, and a login resolved
@@ -934,7 +995,7 @@ const iamMaxAnswer = 8 << 20
 //
 // keyed is whether the command's route reads a key. One that does not — a
 // mint — is retried as a new write, which the node's own sentence says, so
-// the op id is named for the trail and no -idempotency-key is prescribed.
+// the op id is named for the trail and no -op-id is prescribed.
 //
 // header is the answer's. One without the engine's mark ([ownBody]) is read
 // for none of its fields, whatever its body says, and what stood in front of
@@ -950,10 +1011,7 @@ func iamRefusal(status int, header http.Header, answer map[string]any, raw []byt
 		return errors.New(msg)
 	}
 	code, _ := answer["error"].(string)
-	detail, _ := answer["detail"].(string)
-	if detail == "" {
-		detail, _ = answer["message"].(string)
-	}
+	detail := answerWords(answer).said()
 	var said string
 	switch {
 	case code != "" && detail != "":
@@ -988,13 +1046,13 @@ func iamRefusal(status int, header http.Header, answer map[string]any, raw []byt
 			// to prescribe, here again, was a loop.
 			said += "\nthis node can't confirm it yet. Check whether it saved, " +
 				"or retry on another node with -api <that node> " +
-				"-idempotency-key " + op + ". Don't use a new key"
+				"-op-id " + op + ". Don't use a new id"
 		default:
 			// THE SAME OPERATION, whichever 503 this is: an outcome
 			// nobody could establish is answered from whatever of it
 			// landed, and a refusal that wrote nothing runs under the
 			// same key as it would have under a fresh one.
-			said += "\nretry with -idempotency-key " + op + ". A new key " +
+			said += "\nretry with -op-id " + op + ". A new id " +
 				"would make it a second change"
 		}
 	}
@@ -1038,15 +1096,58 @@ func iamRemedy(code string, answer map[string]any) string {
 type iamPrinter struct {
 	w   io.Writer
 	raw bool
+
+	// write is the command's own write, which a write's answer is judged
+	// against before anything of it is printed ([iamPrinter.settled]) — its
+	// operation empty for a write whose route reads no key, a mint and a
+	// reset link — and what names it in a sentence: "suspend p-1",
+	// "invalidate-all".
+	write keyedWrite
+	what  string
 }
 
-func (p *iamPrinter) dump(answer map[string]any) error {
-	encoded, err := json.MarshalIndent(answer, "", "  ")
-	if err != nil {
-		return err
+// settled is nil for a write's 2xx answer whose outcome says where the write
+// stands — applied, or pending — and for any other the error that finishes it.
+//
+// A 2xx CAN LEAVE THE OUTCOME OPEN. The node answers its own `unknown` 503,
+// which [iamRefusal] reads; but a node newer than this command may answer, 2xx,
+// an outcome this build cannot read, and that was printed as `outcome "x"` and
+// exited zero — so a script read a write nobody here could vouch for as one
+// that landed. It FAILS, as every keyed write's open outcome does
+// ([keyedWrite.confirmed]), naming the retry under the operation the command
+// sent.
+//
+// A MINT OR A RESET LINK IS RUN AGAIN INSTEAD, as the node's own unknown for
+// either says: their routes read no key, so there is no operation to retry
+// under, and this command refuses -op-id on both ([iamUnkeyed] says why). The
+// op id the answer names is said for the trail.
+//
+// BEFORE ANYTHING OF THE ANSWER IS PRINTED, under -json too: the node hands
+// out no invitation, first password link, reset link or token for a write
+// nobody can confirm — a link would answer 410 the first time somebody
+// followed it — so neither does this, and the retry under -op-id hands back
+// the very link an invitation's or a create's first attempt issued. A document
+// printed beside a failure is one a script reads before it reads the exit
+// status.
+func (p *iamPrinter) settled(answer map[string]any) error {
+	outcome := str(answer["outcome"])
+	if p.write.operation != "" {
+		return p.write.confirmed(p.what, outcome)
 	}
-	fmt.Fprintln(p.w, string(encoded))
-	return nil
+	said := unconfirmed(outcome)
+	if said == "" {
+		return nil
+	}
+	return fmt.Errorf("%s: %s. The node could not confirm the write, so what it "+
+		"answered is not shown (op %s): %w", p.what, said, dash(str(answer["op_id"])),
+		iamUnkeyed(p.write.gesture))
+}
+
+// dump is -json: the answer as the node gave it, every field and every number
+// as it came — [iamClient.call] decodes through [decodeAnswer] — with its text
+// as written.
+func (p *iamPrinter) dump(answer map[string]any) error {
+	return printJSON(p.w, answer)
 }
 
 func (p *iamPrinter) people(asked url.Values, answer map[string]any, err error) error {
@@ -1214,10 +1315,11 @@ func (p *iamPrinter) check(answer map[string]any, err error) error {
 	// qualifies everything below it: "nothing to report" from a node that
 	// runs no company yet is not a directory with no dangling binding, it
 	// is one nobody could check.
-	if unchecked, _ := answer["bindings_unchecked"].(float64); unchecked > 0 {
-		fmt.Fprintf(p.w, "%d seat binding(s) couldn't be checked. This "+
+	if unchecked := str(answer["bindings_unchecked"]); unchecked != "" &&
+		unchecked != "0" {
+		fmt.Fprintf(p.w, "%s seat binding(s) couldn't be checked. This "+
 			"node hasn't loaded the company yet, so try another node.\n",
-			int(unchecked))
+			unchecked)
 	}
 	if len(rows) == 0 {
 		fmt.Fprintf(p.w, "no problems found, as of %s\n",
@@ -1276,16 +1378,28 @@ func (p *iamPrinter) audit(asked url.Values, answer map[string]any, err error) e
 	return nil
 }
 
-// invite prints the link ONCE, which is the only time it exists.
+// invite prints the link ONCE, which is the only time it exists — and none for
+// an invitation nobody can confirm ([iamPrinter.settled]).
+//
+// AND WHERE THE ISSUE STANDS, as every write here says ([iamPrinter.outcome]):
+// it printed the link alone, so an invitation this node had made durable and
+// NOT applied — a 202, whose link opens only where the record has been applied
+// — read exactly like one the next read here shows. The link is printed on
+// `pending` too, for a create's reason: the record is durable, and the link
+// opens on every node that has applied it.
 func (p *iamPrinter) invite(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {
 		return p.dump(answer)
 	}
-	fmt.Fprintf(p.w, "invitation %s\n%s\n\n", str(answer["id"]),
-		str(answer["url"]))
+	fmt.Fprintf(p.w, "invitation %s\n", str(answer["id"]))
+	p.outcome(answer)
+	fmt.Fprintf(p.w, "%s\n\n", str(answer["url"]))
 	fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
 	fmt.Fprintln(p.w, "This link is shown once. Send it to them "+
 		"yourself; Crewlet doesn't send email.")
@@ -1449,16 +1563,23 @@ func seatInvitation(invitation map[string]any) string {
 	return id
 }
 
-// reset prints a reset link ONCE, for the invitation's reason.
+// reset prints a reset link ONCE, for the invitation's reason, and where the
+// issue stands, as every write here says ([iamPrinter.outcome]) — on `pending`
+// too, since the record is durable and the link opens wherever it has been
+// applied. An issue nobody can confirm prints nothing ([iamPrinter.settled]).
 func (p *iamPrinter) reset(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {
 		return p.dump(answer)
 	}
-	fmt.Fprintf(p.w, "password reset for %s\n%s\n\n", str(answer["id"]),
-		str(answer["url"]))
+	fmt.Fprintf(p.w, "password reset for %s\n", str(answer["id"]))
+	p.outcome(answer)
+	fmt.Fprintf(p.w, "%s\n\n", str(answer["url"]))
 	fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
 	fmt.Fprintln(p.w, "This link is shown once. It sets a new password "+
 		"and signs them out everywhere. Send it to them yourself (Crewlet "+
@@ -1466,9 +1587,19 @@ func (p *iamPrinter) reset(answer map[string]any, err error) error {
 	return nil
 }
 
-// token prints the value ONCE, for the same reason.
+// token prints the value ONCE, for the same reason, and where the mint stands —
+// on `pending` too: the record is durable, and a node that has not applied it
+// yet answers a request carrying the token 503, that it cannot say yet, rather
+// than refusing it. A mint nobody can confirm prints nothing
+// ([iamPrinter.settled]), as the node's own unknown hands out no value.
+//
+// THE VALUE STAYS THE FIRST LINE, alone, so whatever reads it from this
+// command's output takes the line it always took.
 func (p *iamPrinter) token(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {
@@ -1477,6 +1608,7 @@ func (p *iamPrinter) token(answer map[string]any, err error) error {
 	fmt.Fprintf(p.w, "%s\n\n", str(answer["token"]))
 	fmt.Fprintf(p.w, "token %s for %s, expires %s\n", str(answer["id"]),
 		str(answer["person"]), stamp(answer["expires_at"]))
+	p.outcome(answer)
 	fmt.Fprintf(p.w, "carries %s\n", dash(joinAny(answer["grants"])))
 	fmt.Fprintln(p.w, "This token is shown once. Use it as "+
 		apiTokenEnv+" or in an `Authorization: Bearer` header.")
@@ -1487,6 +1619,9 @@ func (p *iamPrinter) token(answer map[string]any, err error) error {
 // than "done".
 func (p *iamPrinter) written(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {
@@ -1506,18 +1641,13 @@ func (p *iamPrinter) written(answer map[string]any, err error) error {
 //
 // READ OFF THE ANSWER'S `outcome`, never off the status: it printed "applied"
 // for every 2xx, so a write the node had made durable and NOT applied — a 202,
-// whose read here does not show it yet — was reported as applied. The third
-// value never reaches here; it is a 503, and [iamRefusal] says it.
+// whose read here does not show it yet — was reported as applied. Only the two
+// outcomes that say where a write stands reach here: the third is a 503, which
+// [iamRefusal] says, and a 2xx carrying any other has already failed
+// ([iamPrinter.settled]).
 func (p *iamPrinter) outcome(answer map[string]any) {
-	position, op := dash(str(answer["position"])), dash(str(answer["op_id"]))
-	switch outcome := str(answer["outcome"]); outcome {
-	case "applied", "pending":
-		fmt.Fprintf(p.w, "%s at %s (op %s)\n", outcome, position, op)
-	default:
-		// AN OUTCOME THIS BUILD CANNOT NAME is printed as what it is,
-		// never promoted to "applied" — that was the bug.
-		fmt.Fprintf(p.w, "outcome %q at %s (op %s)\n", outcome, position, op)
-	}
+	fmt.Fprintf(p.w, "%s at %s (op %s)\n", str(answer["outcome"]),
+		dash(str(answer["position"])), dash(str(answer["op_id"])))
 }
 
 // created prints a create: who was created, under which login and on which
@@ -1525,15 +1655,20 @@ func (p *iamPrinter) outcome(answer map[string]any) {
 // ONCE, which is the only time this command shows it.
 //
 // THE LINK IS PRINTED ON `pending` TOO: the record is durable, and the link
-// opens on every node that has applied it — this one within moments.
+// opens on every node that has applied it — this one within moments. And on
+// nothing else: a create nobody can confirm prints nothing of itself
+// ([iamPrinter.settled]).
 //
 // THE NODE'S SENTENCE BESIDE THE LINK IS NOT PRINTED, because it names the
-// retry as a header: the one this command sends is -idempotency-key, and a
+// retry as a header: the flag this command takes is -op-id, and a
 // create retried under it hands back this same link. Where the link no longer
 // opens — a retry after it was spent, revoked or aged out — the node says so
 // and this names the command that issues another.
 func (p *iamPrinter) created(answer map[string]any, err error) error {
 	if err != nil {
+		return err
+	}
+	if err := p.settled(answer); err != nil {
 		return err
 	}
 	if p.raw {
@@ -1553,7 +1688,7 @@ func (p *iamPrinter) created(answer map[string]any, err error) error {
 		fmt.Fprintf(p.w, "expires %s\n", stamp(answer["expires_at"]))
 		fmt.Fprintf(p.w, "This link is shown once. Send it to them yourself "+
 			"(Crewlet doesn't send email). Run this again with "+
-			"-idempotency-key %s to show the same link.\n",
+			"-op-id %s to show the same link.\n",
 			dash(str(answer["op_id"])))
 	case iam.Kind(str(answer["kind"])) == iam.KindMachine:
 		fmt.Fprintf(p.w, "create its access token with `crewlet iam token -person %s`\n", id)
@@ -1573,6 +1708,8 @@ func str(v any) string {
 	switch held := v.(type) {
 	case string:
 		return held
+	case json.Number:
+		return held.String()
 	case float64:
 		return strconv.FormatFloat(held, 'f', -1, 64)
 	case bool:

@@ -30,6 +30,7 @@ import type { ViewerState } from "~/lib/viewer.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 import type { TokenSeries, WorkFlowAnswer } from "~/protocol/index.ts";
+import { PARTIAL_FIGURE, gapsOf } from "./board/kit.tsx";
 import {
   budgetCaption,
   completedIn,
@@ -222,13 +223,17 @@ function WaitingTile({
       value={`${waiting.count.toLocaleString()}${waiting.floor ? "+" : ""}`}
       trend={review}
       sub={
-        // NO SECOND "NOTHING": the figure says 0, and the greeting says it in
-        // words. The line is for what the figure cannot carry.
-        waiting.count > 0 && waiting.oldestAt
-          ? `Oldest waiting ${waitedFor(waiting.oldestAt, now)}`
-          : undefined
+        // OVER AN ANSWER THAT COULD NOT ACCOUNT FOR EVERYTHING the figure may
+        // be wrong, and the line says so. NO SECOND "NOTHING" otherwise: the
+        // figure says 0, and the greeting says it in words. The line is for
+        // what the figure cannot carry.
+        waiting.partial
+          ? PARTIAL_FIGURE
+          : waiting.count > 0 && waiting.oldestAt
+            ? `Oldest waiting ${waitedFor(waiting.oldestAt, now)}`
+            : undefined
       }
-      subTone={waiting.count > 0 ? "warning" : undefined}
+      subTone={waiting.partial || waiting.count > 0 ? "warning" : undefined}
     />
   );
 }
@@ -252,13 +257,15 @@ function InProgressTile({ flow, locked }: { flow: QueryResult<WorkFlowAnswer>; l
   const earlier = points.length > WEEK ? points[points.length - 1 - WEEK]!.active : null;
   const delta = deltaWords(current, earlier, false);
   const trouble = troubleParts(data.now);
+  const partial = gapsOf([data]).length > 0;
   return (
     <StatCard
       label="Tasks in progress"
       value={current.toLocaleString()}
       trend={<Sparkline values={points.slice(-14).map((p) => p.active)} current />}
       delta={delta ? { value: delta, polarity: "neutral" } : undefined}
-      sub={<Parts parts={inProgressParts(delta !== null, trouble)} />}
+      sub={partial ? PARTIAL_FIGURE : <Parts parts={inProgressParts(delta !== null, trouble)} />}
+      subTone={partial ? "warning" : undefined}
     />
   );
 }
@@ -281,6 +288,7 @@ function CompletedTile({
   const { current, previous } = completedIn(data.points, range.days);
   const delta = deltaWords(current, previous, true);
   const shown = Math.max(range.days, 14);
+  const partial = gapsOf([data]).length > 0;
   return (
     <StatCard
       label={label}
@@ -294,7 +302,8 @@ function CompletedTile({
             }
           : undefined
       }
-      sub={delta ? `vs ${range.previous}` : undefined}
+      sub={partial ? PARTIAL_FIGURE : delta ? `vs ${range.previous}` : undefined}
+      subTone={partial ? "warning" : undefined}
     />
   );
 }

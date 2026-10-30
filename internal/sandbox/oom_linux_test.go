@@ -93,9 +93,7 @@ func TestAConfinedBoxIsRaisedBeforeItsConfinementStarts(t *testing.T) {
 	helper := filepath.Join(dir, "confine-helper")
 	script := "#!/bin/sh\ncat /proc/self/oom_score_adj > '" + reported + "'\n" +
 		"while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n"
-	if err := os.WriteFile(helper, []byte(script), 0o700); err != nil {
-		t.Fatal(err)
-	}
+	writeExecutable(t, helper, script)
 	direct.confine = &boxConfine{
 		host:  &HostConfinement{Mechanism: MechanismLandlock, helper: helper},
 		rules: confineRules{write: direct.Home()},

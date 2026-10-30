@@ -169,6 +169,30 @@ func TestAnImportRefusedWhileTheFleetCannotBeReadSaysToRetry(t *testing.T) {
 	}
 }
 
+// ANY OTHER CONDITION OF THE NODE IS TOLD IN THE NODE'S WORDS, never as a
+// leader election: a store too busy to take the revision answers 503 with its
+// own sentence for a person, which says whether waiting clears it, and the
+// election sentence sent an operator waiting for one that was not coming.
+// Mutation: drop the case and the detail is lost behind the election.
+func TestAnImportRefusedForAnotherConditionSaysTheNodesWords(t *testing.T) {
+	t.Parallel()
+	client := answering(t, http.StatusServiceUnavailable, []byte(`{"error": "unavailable", `+
+		`"message": "The engine cannot serve this right now.", `+
+		`"detail": "This node was too busy to take this in time. Try again in a moment."}`))
+	_, _, err := client.Import(t.Context(), []byte("name: Acme\n"), "import")
+	if err == nil {
+		t.Fatal("a refused import was reported as a write")
+	}
+	for _, want := range []string{"nothing was written", "too busy to take this in time"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "leader election") {
+		t.Errorf("%q blames a leader election for a node that was busy", err)
+	}
+}
+
 // AN IMPORT THE NODE STORED AND COULD NOT ACTIVATE IS NEVER SAID TO HAVE
 // WRITTEN NOTHING. The revision is stored before the pointer moves, and a
 // publish whose answer was lost may have moved it: told "nothing was written",

@@ -343,6 +343,14 @@ type DiagnoseOptions struct {
 	// refused.
 	BridgeURL string
 
+	// HostHome is the directory a login this machine already holds is looked
+	// for under ([Provider.HostLogin]); empty is the user's own home, which is
+	// what an operator's `crewlet llm doctor` reads. A suite names an empty
+	// directory, so the report it judges never depends on whether the machine
+	// running it has a CLI signed in. It is not [DiagnoseOptions.Home], which
+	// moves the diagnosis itself off the entry's sign-in.
+	HostHome string
+
 	// Values are candidate credential values, by the variable the CLI is
 	// handed each under: the profile's token_env or api_key_env, or a name
 	// the entry's env sets. Each takes the place of what the entry resolved
@@ -551,7 +559,7 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 					"login is written again"
 			}
 		}
-		d.HostLogin = p.HostLogin(ctx, "")
+		d.HostLogin = p.HostLogin(ctx, opts.HostHome)
 	}
 	if loggedOutErr != nil {
 		c.fail(CheckSignIn, llm.KindFatal.String(), fmt.Sprintf("whether the entry was logged out cannot be "+

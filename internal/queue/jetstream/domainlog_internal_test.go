@@ -908,9 +908,10 @@ func (f *firstReadJS) CreateConsumer(_ context.Context, _ string,
 // One request on the provisioning budget — two minutes on a fleet — made for
 // every consumer that disagreed with its checkpoint in any way. A request the
 // metadata group dropped stalled its domain for all of it with nothing in the
-// log, three domains' worth spent more than the ceiling their consumers share,
-// and the commonest disagreement a busy restart leaves — deliveries in flight
-// for the process that stopped — is one no first sequence can change.
+// log, one per domain spent more than the ceiling every domain's consumer
+// shares, and the commonest disagreement a busy restart leaves — deliveries
+// in flight for the process that stopped — is one no first sequence can
+// change.
 //
 // # The two stagings
 //

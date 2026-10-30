@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -38,18 +39,18 @@ func TestTheExecutorCannotReachThePhaseScopedTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot, err := tools.NewRegistry().Snapshot().
-		With(tools.Entry{Tool: stubTool(MarkOnboardedTool), Origin: tools.OriginBuiltin})
+		With(tools.Entry{Tool: stubTool(toolname.MarkOnboarded), Origin: tools.OriginBuiltin})
 	if err != nil {
 		t.Fatal(err)
 	}
 	universe := r.executorUniverse(snapshot)
-	if _, held := universe.Lookup(MarkOnboardedTool); held {
+	if _, held := universe.Lookup(toolname.MarkOnboarded); held {
 		t.Error("mark_onboarded is in the executor's snapshot, one activation away")
 	}
-	if strings.Contains(universe.Discoverable(nil), MarkOnboardedTool) {
+	if strings.Contains(universe.Discoverable(nil), toolname.MarkOnboarded) {
 		t.Error("the executor's catalogue lists mark_onboarded")
 	}
-	if slices.Contains(executorActive(universe), MarkOnboardedTool) {
+	if slices.Contains(executorActive(universe), toolname.MarkOnboarded) {
 		t.Error("the executor's run is offered mark_onboarded")
 	}
 }
@@ -163,7 +164,7 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 		t.Fatalf("PutPage: %v", err)
 	}
 	reg := tools.NewRegistry()
-	for _, name := range []string{"slack_post", skills.LoaderTool} {
+	for _, name := range []string{"slack_post", toolname.LoadToolSkill} {
 		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register %s: %v", name, err)
 		}
@@ -174,7 +175,7 @@ func TestASkillGuardNeedsItsLoaderActive(t *testing.T) {
 	if g := r.guardFor(phase.Execute, 1, inactive, nil); g.guard != nil {
 		t.Error("a guard was armed over a loader the phase never activated")
 	}
-	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{skills.LoaderTool})
+	active := tools.NewSurface(phase.Execute.String(), reg.Snapshot(), []string{toolname.LoadToolSkill})
 	if g := r.guardFor(phase.Execute, 1, active, nil); g.guard == nil {
 		t.Error("no guard was armed although the loader is active and slack_post is in the universe")
 	}
@@ -210,7 +211,7 @@ func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 		}
 	}
 	reg := tools.NewRegistry()
-	for _, name := range []string{"slack_post", skills.LoaderTool} {
+	for _, name := range []string{"slack_post", toolname.LoadToolSkill} {
 		if err := reg.Register(stubTool(name), tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register %s: %v", name, err)
 		}
@@ -226,13 +227,13 @@ func TestACollectedRunsGuardHoldsWhatTheRunLoaded(t *testing.T) {
 		Resume: &Resume{
 			State: execstate.State{
 				Version: execstate.Version, Round: 1,
-				ActiveTools:  []string{"slack_post", skills.LoaderTool},
+				ActiveTools:  []string{"slack_post", toolname.LoadToolSkill},
 				LoadedSkills: []string{"release-notes"},
 			},
 			Bridged: []BridgedCall{
-				{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "chat-conventions"},
+				{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "chat-conventions"},
 					Result: "Always thread your reply."}, Seq: 1},
-				{Call: ledger.Call{Name: skills.LoaderTool, Args: map[string]any{"key": "standups"},
+				{Call: ledger.Call{Name: toolname.LoadToolSkill, Args: map[string]any{"key": "standups"},
 					Result: "no such skill", Failed: true}, Seq: 2},
 				{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"channel": "C1"},
 					Result: "posted"}, Seq: 3},

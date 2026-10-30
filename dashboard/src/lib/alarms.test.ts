@@ -85,18 +85,23 @@ describe("the logs an alarm stands on", () => {
     const lines = alarmLogLines({
       domains: [
         {
-          domain: "tracker",
+          domains: ["tracker"],
           detail: kept(1200),
           term: "backup_floor",
           since: "2031-04-02T01:00:00Z",
         },
         {
-          domain: "vectors",
+          domains: ["vectors"],
           detail: kept(40),
           term: "backup_floor",
           since: "2031-04-01T22:00:00Z",
         },
-        { domain: "pages", detail: kept(7), term: "backup_floor", since: "2031-04-02T02:00:00Z" },
+        {
+          domains: ["pages"],
+          detail: kept(7),
+          term: "backup_floor",
+          since: "2031-04-02T02:00:00Z",
+        },
       ],
     });
     expect(lines).toEqual([
@@ -119,9 +124,9 @@ describe("the logs an alarm stands on", () => {
   test("logs held by different terms keep a line each, in the report's order", () => {
     const lines = alarmLogLines({
       domains: [
-        { domain: "tracker", detail: "", term: "applied", since: "2031-04-02T01:00:00Z" },
-        { domain: "pages", detail: "", term: "feed_ack_floor", since: "2031-04-02T03:00:00Z" },
-        { domain: "usage", detail: "", term: "applied", since: "2031-04-02T00:00:00Z" },
+        { domains: ["tracker"], detail: "", term: "applied", since: "2031-04-02T01:00:00Z" },
+        { domains: ["pages"], detail: "", term: "feed_ack_floor", since: "2031-04-02T03:00:00Z" },
+        { domains: ["usage"], detail: "", term: "applied", since: "2031-04-02T00:00:00Z" },
       ],
     });
     expect(lines.map((l) => [l.term, l.domains])).toEqual([
@@ -140,8 +145,8 @@ describe("the logs an alarm stands on", () => {
     expect(
       alarmLogLines({
         domains: [
-          { domain: "vectors", detail: "3% of the log's byte ceiling is left" },
-          { domain: "usage", detail: "8% of the log's byte ceiling is left" },
+          { domains: ["vectors"], detail: "3% of the log's byte ceiling is left" },
+          { domains: ["usage"], detail: "8% of the log's byte ceiling is left" },
         ],
       }),
     ).toEqual([
@@ -150,5 +155,23 @@ describe("the logs an alarm stands on", () => {
     ]);
     // A node-wide alarm stands on no log at all.
     expect(alarmLogLines({})).toEqual([]);
+  });
+
+  // A MEASUREMENT THE ENGINE TOOK ALIKE ON SEVERAL LOGS is one line naming
+  // them, as it arrives: a young fleet's missing backup, on every log, was a
+  // line per log under a headline that already said it.
+  test("a measurement carried for several logs is one line naming them", () => {
+    const missing = "no verified backup of this log has been recorded";
+    expect(
+      alarmLogLines({
+        domains: [
+          { domains: ["tracker", "pages", "usage"], detail: missing },
+          { domains: ["iam"], detail: "the newest verified backup of this log is 30h old" },
+        ],
+      }),
+    ).toEqual([
+      { domains: ["tracker", "pages", "usage"], detail: missing },
+      { domains: ["iam"], detail: "the newest verified backup of this log is 30h old" },
+    ]);
   });
 });

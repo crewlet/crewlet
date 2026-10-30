@@ -26,7 +26,7 @@
 //     not merely idle — it raises everyone else's share.
 //
 // A caller may lease under a class of its own as well — the tracker's walk
-// claims are `move:`, `merge:` and `bulk:` — and every such class is held to
+// claims are `move:` and `merge:` — and every such class is held to
 // the same ceiling a duty is, never to the seat lease TTL: only a seat and a
 // presence lease run on the seat heartbeat ([HeldToSeatTTL]).
 //
@@ -166,6 +166,19 @@
 //     case. It is also why the positions register is an AGELESS bucket, which
 //     is the exact inversion of the presence bucket beside it, whose whole
 //     purpose is that a node that stops reporting vanishes.
+//
+// # A person's own record here is their SEAT's
+//
+// One record in this store is a PERSON'S rather than the company's or a
+// node's: their chat read state — the cursors, mutes and do-not-disturb of
+// [ChatReads]. It is keyed by the name iam.RecordOwner gives a principal's own
+// record, which for everybody chat admits is the human seat they act as, so
+// it follows the rule every personal record follows (ADR-0032): it belongs to
+// the SEAT, and the seat's next holder inherits it — the person themselves
+// once reinstated, or a successor once they are moved to another seat or
+// removed — exactly as the seat's tracker inbox, pins and personal views pass.
+// It ends when the seat leaves the company, never when its holder does; see
+// chatread.go for why neither a person id nor an agent id is the key.
 package coord
 
 import (
@@ -263,6 +276,20 @@ func ProtocolGateCounts(resource string) bool {
 // failure a backend did not wrap for a fact.
 var ErrUnavailable = errors.New("coordination store unavailable")
 
+// ErrWriteUnknown marks an [ErrUnavailable] that came AFTER a write was sent:
+// the store's answer to it was lost, so the write may have landed.
+//
+// A WRITE'S OWN THIRD ANSWER, and it exists for the methods that read before
+// they write. A caller of a plain compare-and-set knows its one call was the
+// write, so any error there is unknown and needs no marker; a caller of a
+// read-modify-write cannot tell a read that failed — after which nothing was
+// written — from a put whose reply never came, and the two ask opposite
+// things of it: one is "nothing changed, ask again", the other "it may have
+// changed, look before saying it did not". A method that marks this says so
+// in its contract ([ChatReads] does), and every error such a method returns
+// WITHOUT it changed nothing.
+var ErrWriteUnknown = errors.New("coord: the write was sent and its answer was lost")
+
 // ErrClaimInFlight is a claim answered while another claim of the same
 // resource BY THE SAME OWNER is still minting its fencing epoch: neither a
 // grant nor a refusal is true yet, and the sibling is one store round trip
@@ -299,7 +326,7 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 
 // MaxDutyTTL is the longest TTL any lease outside seats and presence may be
 // claimed with — a fleet duty (a `worker:` resource), a tracker walk's claim,
-// a bulk admission, any class a caller leases under a name of its own — and
+// any class a caller leases under a name of its own — and
 // the TTL every backend must be able to honour for one, whatever TTL it runs
 // its seat leases on. Named for the duty that sizes it.
 //
@@ -311,9 +338,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // tick runs from ten seconds (the scheduler) to an hour (the learning passes),
 // so a duty TTL has to outlive several of its own ticks or it moves to a peer
 // on ordinary jitter. A caller's claim is the same kind of lease: the tracker
-// sizes a walk's claim from the walk's own heartbeat and a bulk admission from
-// the rows it projects, and neither has anything to do with how fast a dead
-// node's seats should move.
+// sizes a walk's claim from the walk's own heartbeat, which has nothing to do
+// with how fast a dead node's seats should move.
 //
 // The embedded KV backend fixes a lease's expiry as its BUCKET's age, so it
 // can only honour TTLs up to the bucket it writes into. For as long as duties
@@ -326,8 +352,8 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // the duties out fixed exactly the duties: every other class stayed in the
 // seat lease bucket, so the tracker's 60-second walk claim was refused on the
 // same fleets — every cross-project move and every merge failed before its
-// first append, and a large bulk edit's admission failed open — and the twin
-// hid that too, because the ceiling it enforced was the duties' alone.
+// first append — and the twin hid that too, because the ceiling it enforced
+// was the duties' alone.
 //
 // So the ceiling is stated HERE, for every class [HeldToSeatTTL] leaves out,
 // every backend enforces it through [CheckLeaseTTL], and a TTL the embedded KV
@@ -343,11 +369,11 @@ var ErrTTLTooLong = errors.New("coord: ttl exceeds what the store can honour")
 // "one missed tick must not move the duty" ratio every other duty follows. An
 // engine test asserts that this is exactly the longest duty TTL, so the number
 // cannot drift away from the duty that justifies it; every other lease it
-// bounds is far shorter (the tracker's longest, a bulk admission at its
-// largest, asks for about two minutes). Raising it is safe on a running fleet
-// (the KV backend only ever raises its duty bucket's age); lowering it leaves
-// an existing bucket older than it needs to be, which costs nothing, because
-// no record there is judged by the bucket's age.
+// bounds is far shorter (the tracker's longest, a walk's claim, asks for a
+// minute). Raising it is safe on a running fleet (the KV backend only ever
+// raises its duty bucket's age); lowering it leaves an existing bucket older
+// than it needs to be, which costs nothing, because no record there is judged
+// by the bucket's age.
 //
 // It is also the removal-marker horizon, [MarkerRetention], by definition
 // rather than by coincidence: no operation that read a record before it was

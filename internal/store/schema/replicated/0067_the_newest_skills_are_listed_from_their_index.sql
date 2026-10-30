@@ -1,0 +1,41 @@
+-- The tool-skill pages are listed newest first from an index of their own.
+--
+-- # pages_skills_newest_idx
+--
+-- Agent skills and Home's Agent skills widget list the skills by when they
+-- changed, and the only listing there was ran in the knowledge base's own
+-- order — container, title, id — a window at a time. So "newest" was a sort
+-- of whichever window a title order held: past fifty skills the widget called
+-- its window the newest, and the Skills page's Updated column sorted the rows
+-- it had loaded rather than the catalogue. The pages listing now takes
+-- `order=newest` beside `skills=true` (`OrderNewest`, `listRowsStatement` in
+-- internal/doclet/read.go), read from this index.
+--
+-- The skill flag is not on the head: it is this build's parse of the body,
+-- a DIVERGENT row of its own (0005 says why), so no index on `pages_heads`
+-- can hold "skills, newest first". Driven from the heads' change order the
+-- listing would read every page the company changed lately to find the few
+-- that are skills. So the order is held where the flag is: partial on the
+-- flag the statement states verbatim (`k.skill = 1`), so every row in it is
+-- a skill, in (updated_at, page_id), the order walked backwards, and the
+-- listing's LIMIT stops the walk at a window. The listing reads the skill
+-- rows first across a CROSS JOIN, because joined plainly the planner drove on
+-- the heads and sorted.
+--
+-- # pages_skills.at becomes pages_skills.updated_at
+--
+-- The column was the broker instant of the apply that derived the row, read
+-- by nothing. Every apply that moves a head's `updated_at` derives the row in
+-- the same transaction (`writeHead`, and a rename's own write), so the
+-- applier now writes the HEAD's `updated_at` here and the column is named for
+-- it: the copy the index orders by, and the instant the listing reports. A
+-- row written before this already holds that instant, since the head and the
+-- row were each stamped with the one apply's broker instant. Kept on the
+-- divergent row for this index, which is the reader 0064 found missing when
+-- it dropped the row's copy of the container.
+--
+-- 0005 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- that applied it would never see the change.
+ALTER TABLE pages_skills RENAME COLUMN at TO updated_at;
+CREATE INDEX pages_skills_newest_idx ON pages_skills (updated_at, page_id)
+    WHERE skill = 1;                                                            -- the tool skills, newest first

@@ -6,7 +6,7 @@ survivable without one.
 
 The short version: **`crewlet backup` takes a verified copy of a running
 node**, without stopping it. It goes through the engine because it has to —
-the store file is locked to that process and the embedded broker binds no
+the store's files are locked to that process and the embedded broker binds no
 socket, so nothing outside the engine can read either estate. The cold
 runbook further down remains the belt to that braces.
 
@@ -33,8 +33,9 @@ memory included, to a directory the caller names operates the deployment
 rather than reading the company.
 
 The path is on the **engine's host**, not yours — this writes files where the
-node runs and downloads nothing. Any node produces one, whatever its roles:
-every node holds its own store and, on the embedded topology, its own broker.
+node runs and downloads nothing. Any node that serves the API produces one —
+which is every node with `ingress`, and so a data node: it holds both of its
+store's files and, on the embedded topology, its own broker.
 A node that dialled an **external** NATS cluster is the exception, and it says
 so: its copy carries the store estates alone, and the stream half is backed up
 at the cluster (`nats account backup`) from the same moment.
@@ -46,9 +47,9 @@ A deployment's durable state lives in six places:
 | Estate | Where | What it holds |
 |---|---|---|
 | **The node's own store file** | `store.path`, with its `-wal` sidecar | The seat's memory — diary, episodes, counterparty profiles, synthesized skills, onboarding markers, the [conversation ledger](../concepts/conversation-sessions.md) — which is also [replicated onto the stream](../concepts/seat-ownership.md#a-seats-memory-follows-it), so this file is a cache of it rather than its only copy; and, held here **only**: the audit event log (30 days), scheduled-run history, the company-config revision history, the [secret store's](../concepts/secret-store.md) bootstrap rows, and this node's own record of any snapshot it has adopted |
-| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md) and every node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day)), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
+| **The replicated estate** | `store.replicated_path`, with its `-wal` sidecar | Everything a state log's applier derives from the fleet's own records (Worklet, Doclet's pages, the embeddings that search them, the [identity directory](../concepts/identity-and-access.md), every data node's [daily usage](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day), the artifacts and their datastores, the Dashboard Assistant's conversations and the engine's own chat), together with the checkpoint that says how far this node has applied. Derivable by replay **only while the log still holds the records**: past the trim floor, a node with no copy of this file adopts a peer's snapshot instead |
 | **The object store** | `store.objects`: the `OBJ_crewlet_files` stream on the broker's members (`nats`, the default), or an S3-compatible bucket (`s3`) | The bytes of the company's [files](../concepts/object-store.md), one object per upload. **One store the whole fleet shares**, not a directory of any node's: on `nats` a stream like any other, on `s3` somebody else's bucket. The rows naming the files are in the replicated estate |
-| **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, the sealed credentials |
+| **The stream estate** | `stream.store_dir` per embedded member, or the external NATS cluster | Agent mailboxes (unacked in-flight work), the shared event and config streams, one ordered **log per state-log domain** — which is the record of truth the file above is derived from — and every [coordination](../concepts/coordination.md) KV bucket: seat, presence and duty leases and fencing epochs, the activation pointer with the current company payload, the completion ledger, delivery dedupe, budget counters, scheduled-fire claims, detached sandbox-run records, each human seat's chat read state, the sealed credentials |
 | **Tier A, on disk** | `crewlet.yaml` and the environment it reads | The keyring (`CREWLET_SECRET_KEY_*`) — the sole root of trust for everything sealed — plus API tokens and any NATS credential/TLS files |
 | **LLM CLI homes** | Each `providers.llm` entry's state directory on the engine host (`state_dir`, or one per key under `CREWLET_LLM_CLI_HOME`), each CLI's files under `<state_dir>/<agent>` | The coding CLIs' logins and per-seat homes (a login is portable via `crewlet llm export`) |
 
@@ -122,6 +123,19 @@ What is worth knowing about it:
   a surprise on the worst day of the deployment's life; the digest is what
   tells a copy that was truncated in transit from one that was bad when it was
   made. Each is self-contained: no `-wal` travels with it.
+- **`VACUUM INTO` needs a writable temporary directory.** The database engine
+  builds the copy on a connection of its own, which keeps a temporary database
+  in a new directory under `TURSO_TMPDIR`, `SQLITE_TMPDIR` or `TMPDIR` (the
+  first one set, else `/tmp`), and sorts a large index into another under
+  `TMPDIR`. It removes both when the copy ends, so what a process killed in
+  the middle of a copy leaves there is that copy's directories and nothing
+  else. A backup and the
+  [snapshot](retention.md#snapshots) every data
+  node takes for its peers are the only things the store writes there: every
+  connection the engine opens keeps its temporary storage in memory (see
+  [Deployment](deployment.md#the-store)). A node whose temporary directory is
+  missing or read-only fails every backup and every snapshot, and the error
+  names the variable and the directory it holds.
 - **A node is two databases, and a backup carries both.** The node estate holds
   the audit log, memory, the config revisions and the secret bootstrap; the
   replicated estate holds everything a state log's applier writes. They are
@@ -130,14 +144,14 @@ What is worth knowing about it:
   of its secret store. Restoring one without the other gives a company whose
   halves are from different moments. The replicated estate is something the
   node **holds** — every node with the `data` role holds it from the moment it
-  starts, whether or not its company runs Worklet or Doclet,
-  because the rows its log derived stay on disk either way, and the backup
-  copies what the node holds rather than whatever happens to be open. An
+  starts, whether or not its company runs Worklet, Doclet
+  or Chatlet, because the rows its log derived stay on disk either way, and the
+  backup copies what the node holds rather than whatever happens to be open. An
   estate the node holds that is closed at that instant (an adoption
   replacing its file, or one whose reopen failed) **refuses the backup, naming
   it**, rather than writing a manifest without it; take it again once the node
-  reports the estate serving. A node without `data` holds none and backs up
-  its own file alone.
+  reports the estate serving. A node without `data` holds none, and is never
+  asked for a backup: the route is `ingress`'s, which requires `data`.
 - **The objects come from the object store, not from this node's disk.** On
   `nats` they are already a stream — `OBJ_crewlet_files` — and the stream
   snapshot the backup takes anyway carries them, so no object is copied on its
@@ -181,6 +195,17 @@ What is worth knowing about it:
 - **Streams are enumerated, not listed.** A namespace stream is created on
   first publish and a coordination bucket's name depends on a configurable
   prefix, so what gets captured is what is actually there.
+- **A stream is copied with its consumers, and one that ends mid-copy costs a
+  retake, not the backup.** The broker copies a stream's consumers — every
+  seat's delivery position — before its messages, and abandons the snapshot
+  when one of them has ended by the time it reads it. A working engine ends
+  consumers constantly: every listing of a coordination bucket is a consumer
+  that lives as long as the listing. So when the broker names a consumer it
+  no longer holds, that stream is snapshotted again (`backup_stream_retaken`),
+  five attempts in all: losing all five means something is churning that
+  stream's consumers far faster than the engine does, and the backup fails
+  naming the consumer. Every other abandoned snapshot fails the backup at
+  once.
 - **Every estate or none.** A failure anywhere leaves the directory without a
   manifest. A backup missing an estate is not a partial backup, it is an
   unrestorable one: the store alone loses every lease, ledger and credential;
@@ -260,12 +285,17 @@ copy when it has one. The copy can take minutes on a large store; closing the
 dialog does not stop it, and the outcome arrives as a notice either way.
 
 The same screen shows what the fleet has backed up
-([`GET /backups`](../reference/api-endpoints.md#get-backups)): each owner's
-newest copy — its directory, size, reach and whether the trim counts it, with
-the one the trim reads marked **newest** — and the **backup history**, every
-backup a person asked any node for over the event log's 30 days, failures
-included and each with the host that holds it. The register keeps only each
-owner's newest point, so the history is where a failed night shows.
+([`GET /backups`](../reference/api-endpoints.md#get-backups)): each node's
+newest copy and the operator's newest acknowledgement of each log — its
+directory, size, reach and whether the trim counts it, with every point some
+log's trim reads marked **newest** — and the **backup history**, every backup a
+person asked any node for over the event log's 30 days, failures included and
+each with the host that holds it. The register keeps only each node's newest
+point and each log's newest acknowledgement, so the history is where a failed
+night shows. A node you [evict](retention.md#eviction) loses its point once the
+eviction has taken effect on every log: its copy sits on a host the fleet has
+let go, so no log is trimmed against it and the screen stops listing it. The
+directory itself is untouched — it is yours to keep or delete.
 
 ### One node, or every node?
 
@@ -284,27 +314,40 @@ peers hold too.
 
 A node is **two** database files, and they answer differently.
 
-The **replicated estate** is a copy of state every data node holds: the tracker's
-projects, tasks, comments and history, the knowledge base's pages and
+The **replicated estate** is a copy of state every data node holds: the
+tracker's projects, tasks, comments and history, the knowledge base's pages and
 revisions, the vectors search reads, the org chart's units and seats, the
-identity directory's people, credentials and sessions, and every node's usage
-history — each derived from its
-own ordered log by an applier that runs identically everywhere. Any healthy node's copy of it is the
+identity directory's people, credentials and sessions, every data node's
+usage history, the artifacts and their datastores, the Dashboard Assistant's
+conversations and the company's own chat — its rooms, who is in them, and
+every message — each derived from its own ordered log by an applier that runs
+identically on every data node. Any healthy data node's copy of it is the
 company's, in the same sense the stream estate is.
 
 The **node estate** is that node's alone, and what only lives there is what
-only *that node* did: its audit event log, its scheduled-run history, its share
-of the config revision history. Those exist nowhere else and no peer's backup
-contains them.
+only *that node* did: its audit event log (and, on a data node, the events it
+keeps in [custody](deployment.md#custody-the-rows-of-a-node-without-data) for
+the nodes without `data`), its scheduled-run history, its share of the config
+revision history. Those exist nowhere else and no peer's backup contains them.
+A node without `data` keeps none of them: its node estate is scratch, deleted
+at every boot, and each of its events is in the data node keeping it.
 
 So:
 
-- **For the company's state — one node is enough.** Everything a restore needs
-  to bring the company back is on the stream estate and the replicated estate,
-  and a single node's backup captures both.
-- **For the complete audit trail — take one per node**, on the same schedule,
-  and keep them together. The event log is per-node history with no second
-  copy, so a fleet-wide audit trail is the union of every node's.
+- **For the company's state — one data node is enough.** Everything a restore
+  needs to bring the company back is on the stream estate and the replicated
+  estate, and a single data node's backup captures both. Every backup is a
+  data node's: `crewlet backup` asks a node's API, only a node with `ingress`
+  serves one, and `ingress` requires `data`.
+- **For the complete audit trail — take one per data node**, on the same
+  schedule, and keep them together. The event log is per-node history with no
+  second copy, so a fleet-wide audit trail is the union of every data node's.
+  A node without `data` keeps no event log of its own: each of its events is
+  kept in exactly one data node's
+  ([custody](deployment.md#custody-the-rows-of-a-node-without-data)), so that
+  node's backup is where it is. A data node that does not run `ingress` serves
+  no API for `crewlet backup` to ask, so its audit trail is backed up only if
+  it runs `ingress` too.
 
 There is no fleet-wide barrier and deliberately no attempt at one: each node's
 copy is its own moment, and the estate that has to be internally consistent —
@@ -348,24 +391,29 @@ table and move it once you have that number.
 is what the trim reads, and it is deliberately not derived from the schedule:
 a company that never backs up never trims, loudly and by design, so the engine
 has to know what "recent enough" means to *you* rather than inferring it from
-how often a cron happened to fire. The age itself is read from the newest
-complete **manifest** on disk rather than from a counter the engine keeps —
-a counter records that a process believed it took a backup, and the disk
-records that one exists. They differ in exactly the cases the alarm is for — a
-copy taken and then deleted, a volume never mounted, a schedule pointing at a
-path nobody ships from — and in every one of them the counter says the fleet is
-protected. It is published as `crewlet.backup.age`, by the node that holds the
-artefact, because that is the only process whose disk the manifests are on; a
+how often a cron happened to fire. The age the trim and the `backup_age` alarm
+read is the **register's**: per log, the newest verified backup your policy
+counts — the announcement described below, or under `backup_floor: operator`
+your acknowledgement of that log — aged from when the copy was taken, because
+the node holding the trim duty can never see a directory on another host.
+[`crewlet.backup.age`](../reference/metrics.md) answers a different question.
+It is published by the node that took the copy, from that node's newest
+complete **manifest** on disk, because that is the only process whose disk the
+manifests are on: the register records that a copy was announced, and the disk
+records that it still exists. They differ in exactly the cases worth catching —
+a copy taken and then deleted, a volume never mounted, a schedule pointing at a
+path nobody ships from — and in every one of them the register, and so the
+trim and the alarm, still count the copy while the gauge reports it gone. A
 node that has never taken one publishes nothing rather than a zero, since zero
 is the freshest backup imaginable.
 
 **The backup interval IS the recovery point for history below the trim
 floor.** Above that floor the log holds every record on R replicas and every
-node holds the applied rows, so losing a node loses nothing. Below it the log
-holds nothing, and each node's own database file is the only copy of that
-history — N of them, independent, none replicated. A schedule of six hours is
-therefore a six-hour RPO for that half of the company's past, and no replica
-count changes it. See [Retention](retention.md).
+data node holds the applied rows, so losing a node loses nothing. Below it the
+log holds nothing, and each data node's replicated estate is the only copy of
+that history — one per data node, independent, none replicated. A schedule of
+six hours is therefore a six-hour RPO for that half of the company's past, and
+no replica count changes it. See [Retention](retention.md).
 
 **A finished backup announces itself to the fleet.** When the manifest is
 written, the taker publishes what the copy reaches — per stream, with the
@@ -535,7 +583,7 @@ fresh `stream.store_dir` on a node started for that purpose. Then:
   empty store gets the same protection, for the day it is running in and for
   a day a redelivered custody batch names. What the restored log lost is not
   recovered: a figure the fleet held more of counts the node's new rows only
-  once the node's own count passes it. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
+  once the node's own count passes it. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
 - **Config converges on its own.** The current revision's payload rides the
   coordination store beside the activation pointer, so a node restored with a
   stale store picks up the live revision; `crewlet config export` from any
@@ -628,8 +676,8 @@ carries, so everybody signing in again once lets them straight back:
   the one they held, and a service account unbound since is bound again.
 
 The restored estate cannot list any of these: its own trail
-([`crewlet iam audit`](../reference/cli.md#crewlet-iam)) and every node's event
-log stop at the moment the artefact was taken, exactly like the rows they
+([`crewlet iam audit`](../reference/cli.md#crewlet-iam)) and every data node's
+event log stop at the moment the artefact was taken, exactly like the rows they
 describe. So re-apply each one from a record kept **outside** the estate — your
 own off-boarding and access-change records, or the engine's logs if you ship
 them off the host — with `crewlet iam remove`, `suspend`, `grant`, `bind`
@@ -652,11 +700,11 @@ schedule. Somebody removed after it was taken is the first case above, and the
 reason a backup is what an erasure has to outlast: until every backup taken
 before the trim passed a removed person's records is deleted, the person can be
 read — and restored — from it by whoever holds the keyring. See
-[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows).
+[what a removal reaches](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows).
 
 ## What not to do
 
-- **Do not copy the store file while the engine runs.** A live WAL database
+- **Do not copy the store's files while the engine runs.** A live WAL database
   copied mid-write is a torn copy; the engine's exclusive lock and the
   driver's one-process rule exist precisely because there is no safe second
   opener. `crewlet backup` is the supported way to copy a running node,
@@ -676,8 +724,8 @@ read — and restored — from it by whoever holds the keyring. See
 ## Filesystem snapshots — the other online option
 
 An **atomic** volume or filesystem snapshot (LVM, ZFS, btrfs, EBS) that
-captures the store file, its `-wal`, and `stream.store_dir` at one instant is
-a crash image: restoring it recovers exactly as if the node had lost power at
+captures both of the store's files (`store.path` and `store.replicated_path`),
+each with its `-wal`, and `stream.store_dir` at one instant is a crash image: restoring it recovers exactly as if the node had lost power at
 that moment — WAL replay on the store, unacked work redelivered from the
 mailboxes. A non-atomic copy of a live tree is **not** this, and gets no such
 guarantee.

@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // What happened to the company's pages, and what one revision actually said.
@@ -18,11 +20,14 @@ import (
 //
 // `pages_history` has one row per change since the domain landed — the kind,
 // who made it, whether it was quiet, an excerpt, and the TURN that made it —
-// and the schema ships two indexes naming readers that were never written:
-// `pages_history_page_idx` "one page's activity" and `pages_history_created_idx`
-// "the company-wide digest". Nothing read a single row of either. A wiki that
-// recorded every edit, replicated it, snapshotted it, and offered no way to
-// ask what had changed.
+// and the schema shipped two indexes naming readers that were never written:
+// "one page's activity" and "the company-wide digest". Nothing read a single
+// row through either. A wiki that recorded every edit, replicated it,
+// snapshotted it, and offered no way to ask what had changed. The feed below
+// is both readers, and it reads in LOG order: the company's history through
+// `pages_history_version_idx`, one page's through `pages_history_page_idx`
+// (replicated 0063), while the digest's index on `created_at` went at
+// replicated 0064 with nothing ever having read it.
 //
 // # And a revision list without bodies is not a history
 //
@@ -166,7 +171,7 @@ func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivit
 	for _, kind := range q.ActorKinds {
 		if !kind.Valid() {
 			return PageActivity{}, fmt.Errorf("doclet: %q is not an author kind; "+
-				"the three are %v", kind, AuthorKinds())
+				"the three are %s", kind, words.And(AuthorKinds()))
 		}
 	}
 	limit := q.Limit
@@ -202,68 +207,11 @@ func (r *Reader) Activity(ctx context.Context, q PageActivityQuery) (PageActivit
 }
 
 // readPageActivity reads one page of the change feed.
-//
-// THE JOIN IS LEFT, for the reason the tracker's inbox gives about the same
-// shape: a history entry outlives the page it names — a purge destroys the
-// head and the entries are what say it ever existed — and a feed that dropped
-// those rows would lose exactly the changes somebody is looking for.
 func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 	limit int) ([]PageChange, string, error) {
 
-	where := []string{"1 = 1"}
-	var args []any
-	if q.Page != "" {
-		where = append(where, "h.page_id = ?")
-		args = append(args, q.Page)
-	}
-	if q.Container != "" {
-		where = append(where, "p.container = ?")
-		args = append(args, ContainerKey(q.Container))
-	}
-	if len(q.Kinds) > 0 {
-		marks := make([]string, len(q.Kinds))
-		for i, kind := range q.Kinds {
-			marks[i] = "?"
-			args = append(args, string(kind))
-		}
-		where = append(where, "h.kind IN ("+strings.Join(marks, ",")+")")
-	}
-	if len(q.ActorKinds) > 0 {
-		// `(actor_kind, version DESC)` — migration 0012 — which is the
-		// feed's own order, so one kind is a range on the index rather
-		// than a sort over every page change the company has made.
-		marks := make([]string, len(q.ActorKinds))
-		for i, kind := range q.ActorKinds {
-			marks[i] = "?"
-			args = append(args, string(kind))
-		}
-		where = append(where, "h.actor_kind IN ("+strings.Join(marks, ",")+")")
-	}
-	if actor := strings.TrimSpace(q.Actor); actor != "" {
-		where = append(where, "h.actor = ?")
-		args = append(args, actor)
-	}
-	if q.Since > 0 {
-		where = append(where, "h.version > ?")
-		args = append(args, int64(q.Since))
-	}
-	if q.Cursor > 0 {
-		// STRICTLY BEFORE: the feed is newest-first, so the cursor names
-		// the last row of the previous page.
-		where = append(where, "h.version < ?")
-		args = append(args, int64(q.Cursor))
-	}
-	args = append(args, limit+1)
-
-	rows, err := tx.QueryContext(ctx, `
-		SELECT h.id, h.page_id, h.kind, h.actor, h.actor_kind, h.operator_id,
-		       h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
-		       h.version, COALESCE(p.title, ''), COALESCE(p.container, '')
-		  FROM pages_history h
-		  LEFT JOIN pages_heads p ON p.id = h.page_id
-		 WHERE `+strings.Join(where, " AND ")+`
-		 ORDER BY h.version DESC
-		 LIMIT ?`, args...)
+	statement, args := pageActivityStatement(compilePageActivity(q), limit+1)
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("doclet: read the change feed: %w", err)
 	}
@@ -306,6 +254,123 @@ func readPageActivity(ctx context.Context, tx *sql.Tx, q PageActivityQuery,
 	return out, next, nil
 }
 
+// pageActivityPredicate is the feed's compiled filter: the clauses every
+// change must meet with their arguments, and the author kinds it is narrowed
+// to, which [pageActivityStatement] reads one arm at a time.
+type pageActivityPredicate struct {
+	where      []string
+	args       []any
+	actorKinds []any
+}
+
+// compilePageActivity turns the query into a predicate.
+func compilePageActivity(q PageActivityQuery) pageActivityPredicate {
+	var p pageActivityPredicate
+	add := func(clause string, values ...any) {
+		p.where = append(p.where, clause)
+		p.args = append(p.args, values...)
+	}
+	if q.Page != "" {
+		add("h.page_id = ?", q.Page)
+	}
+	if q.Container != "" {
+		add("p.container = ?", ContainerKey(q.Container))
+	}
+	if len(q.Kinds) > 0 {
+		marks := make([]string, len(q.Kinds))
+		values := make([]any, len(q.Kinds))
+		for i, kind := range q.Kinds {
+			marks[i], values[i] = "?", string(kind)
+		}
+		add("h.kind IN ("+strings.Join(marks, ",")+")", values...)
+	}
+	// THE AUTHOR KINDS ARE THE STATEMENT'S ARMS, not a clause — see
+	// [pageActivityStatement]. Each kind once, or its changes would be on
+	// the page twice.
+	for _, kind := range q.ActorKinds {
+		if !slices.Contains(p.actorKinds, any(string(kind))) {
+			p.actorKinds = append(p.actorKinds, string(kind))
+		}
+	}
+	if actor := strings.TrimSpace(q.Actor); actor != "" {
+		add("h.actor = ?", actor)
+	}
+	if q.Since > 0 {
+		add("h.version > ?", int64(q.Since))
+	}
+	if q.Cursor > 0 {
+		// STRICTLY BEFORE: the feed is newest-first, so the cursor names
+		// the last row of the previous page.
+		add("h.version < ?", int64(q.Cursor))
+	}
+	return p
+}
+
+// pageActivityStatement is the feed's one statement over a predicate, reading
+// `rows` changes, and its arguments — named so the plan test explains exactly
+// what the reader issues.
+//
+// THE JOIN IS LEFT, for the reason the tracker's inbox gives about the same
+// shape: a history entry outlives the page it names — a purge destroys the
+// head and the entries are what say it ever existed — and a feed that dropped
+// those rows would lose exactly the changes somebody is looking for.
+//
+// # The audit is ONE ARM PER AUTHOR KIND, merged
+//
+// `pages_history_actor_kind_version_idx` is `(actor_kind, version DESC)`, the
+// feed's own order, so ONE kind is a range on it that a LIMIT stops after a
+// page. A set of kinds written `actor_kind IN (…)` is not: this engine seeks
+// each value and sorts everything the seeks found, which for the audit screen's
+// `operator,human` was every page change any person or token had ever made, on
+// every load, and a one-value IN plans the same way. So each kind is its own
+// arm, sought in order and limited to a page, and the arms are merged under the
+// page's own order and limit — the one sort is over at most one page per kind.
+// Each arm carries the join too, because the container is a term of the head.
+func pageActivityStatement(p pageActivityPredicate, rows int) (string, []any) {
+	arm := func(extra ...string) string {
+		where := append(append([]string{"1 = 1"}, p.where...), extra...)
+		return `
+		SELECT ` + pageChangeColumns + `
+		  FROM pages_history h
+		  LEFT JOIN pages_heads p ON p.id = h.page_id
+		 WHERE ` + strings.Join(where, " AND ") + `
+		 ORDER BY h.version DESC
+		 LIMIT ?`
+	}
+	switch len(p.actorKinds) {
+	case 0:
+		return arm(), append(append([]any{}, p.args...), rows)
+	case 1:
+		return arm("h.actor_kind = ?"),
+			append(append(append([]any{}, p.args...), p.actorKinds[0]), rows)
+	}
+	arms := make([]string, len(p.actorKinds))
+	var args []any
+	for i, kind := range p.actorKinds {
+		arms[i] = "SELECT * FROM (" + arm("h.actor_kind = ?") + ")"
+		args = append(append(append(args, p.args...), kind), rows)
+	}
+	// THE MERGED ROWS ARE NAMED `h`, and the head's two columns by the
+	// names every arm gave them, so the merge reads the same columns an arm
+	// returns — and orders by the change's version, as an arm does.
+	return `
+		SELECT h.id, h.page_id, h.kind, h.actor, h.actor_kind, h.operator_id,
+		       h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
+		       h.version, h.title, h.container
+		  FROM (` + strings.Join(arms, `
+		 UNION ALL `) + `) h
+		 ORDER BY h.version DESC
+		 LIMIT ?`, append(args, rows)
+}
+
+// pageChangeColumns is every column a change is read with — the change's own
+// under `h` and its head's title and container under `p`, absent for a page
+// since purged.
+const pageChangeColumns = `h.id, h.page_id, h.kind, h.actor, h.actor_kind, h.operator_id,
+		       h.comment_id, h.excerpt, h.turn_id, h.quiet, h.created_at,
+		       h.version, COALESCE(p.title, '') AS title,
+		       COALESCE(p.container, '') AS container`
+
 // Revision answers one saved version of one page, body included.
 //
 // THE BODY IS THE POINT. The page detail already carries revision SUMMARIES —
@@ -346,10 +411,7 @@ func (r *Reader) Revision(ctx context.Context, pageID string, version int,
 	held := false
 	_, err := r.log.Read(ctx, fresh.Query(ReadScope(""), false), func(tx *sql.Tx) error {
 		var at int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT title, body, message, author, created_at
-			  FROM pages_revisions
-			 WHERE page_id = ? AND edit_version = ?`, pageID, version).
+		err := tx.QueryRowContext(ctx, revisionStatement, pageID, version).
 			Scan(&out.Title, &out.Body, &out.Message, &out.Author, &at)
 		switch {
 		case errors.Is(err, sql.ErrNoRows):

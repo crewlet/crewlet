@@ -30,6 +30,7 @@ import { useAgents, useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatPath } from "~/lib/seats.ts";
 import { projectPath } from "~/lib/work.ts";
 import { censusLine } from "./Projects.tsx";
+import { PARTIAL_FIGURE, gapsOf } from "./board/kit.tsx";
 
 const keyOf = (path: readonly string[]): string => path.join("/");
 
@@ -41,67 +42,80 @@ interface Facts {
   figure?: ReactNode;
 }
 
-/** What is true of each pinned thing now, read from what the page already holds. */
-function useFacts(): (star: Star) => Facts {
+/**
+ * What is true of one pinned thing now: read from what the page already holds,
+ * and a pinned project read BY ITS KEY.
+ *
+ * A PINNED PROJECT IS ASKED FOR ITSELF (`work_project`), as its own page asks.
+ * It was looked up in the first fifty of the company's projects, so a pin on
+ * a project past them drew no census at all, as though the engine knew
+ * nothing about it. A board holds a handful of pins, so asking for each is a
+ * handful of reads of one row each.
+ */
+function useFacts(star: Star): Facts {
   const org = useOrg();
   const index = useMemo(() => indexOrg(org), [org]);
   const agents = useAgents();
   const viewer = useViewer();
   const ask = useServicesAsk();
-  const projects = useQuery(
-    "work_projects",
-    { limit: 50 },
-    { enabled: viewer.worklet && ask.tracker },
-  );
-  return (star) => {
-    const route = resolve(star.path);
-    const glyph = (name: Workspace | "") => {
-      const Glyph = glyphFor(workspaceRow(name)?.icon ?? "pin");
-      return Glyph ? <Glyph size="md" /> : null;
-    };
-    if (!route.resolved) return { kind: "Page", leading: glyph("") };
-    switch (route.screen) {
-      case "seat": {
-        const seat = index.byHandle.get(route.handle);
-        const agent = agents.find((a) => a.handle === route.handle);
-        return {
-          kind: seat?.kind === "human" ? "Person" : "Agent",
-          leading: (
-            <SeatAvatar
-              name={seat?.name ?? star.label}
-              size="sm"
-              kind={seat?.kind === "human" ? "human" : "agent"}
-              avatar={seat?.avatar ?? null}
-            />
-          ),
-          meta: seat?.unit?.name ?? "Reports to nobody",
-          // The state where a project's figure goes, so the name keeps its width.
-          figure: seat?.kind === "human" ? undefined : <StateBadge agent={agent} />,
-        };
-      }
-      case "project": {
-        const row = projects.data?.projects?.find((p) => p.key === route.key);
-        if (!row) return { kind: "Project", leading: glyph("worklet") };
-        const { todo, active, done } = row.task_counts;
-        const whole = todo + active + done;
-        return {
-          kind: "Project",
-          leading: glyph("worklet"),
-          meta: whole === 0 ? "No work yet" : censusLine(done, active, todo),
-          figure: whole > 0 ? `${Math.round((done / whole) * 100)}%` : undefined,
-        };
-      }
-      case "item":
-        return { kind: "Task", leading: glyph("worklet"), meta: route.id };
-      case "page":
-        return { kind: "Page", leading: glyph("doclet") };
-      default:
-        return {
-          kind: workspaceRow(route.workspace)?.label ?? "Page",
-          leading: glyph(route.workspace),
-        };
-    }
+  const route = resolve(star.path);
+  const projectKey = route.resolved && route.screen === "project" ? route.key : "";
+  const project = useQuery("work_project", projectKey ? { key: projectKey } : undefined, {
+    enabled: projectKey !== "" && viewer.worklet && ask.tracker,
+  });
+  const glyph = (name: Workspace | "") => {
+    const Glyph = glyphFor(workspaceRow(name)?.icon ?? "pin");
+    return Glyph ? <Glyph size="md" /> : null;
   };
+  if (!route.resolved) return { kind: "Page", leading: glyph("") };
+  switch (route.screen) {
+    case "seat": {
+      const seat = index.byHandle.get(route.handle);
+      const agent = agents.find((a) => a.handle === route.handle);
+      return {
+        kind: seat?.kind === "human" ? "Person" : "Agent",
+        leading: (
+          <SeatAvatar
+            name={seat?.name ?? star.label}
+            size="sm"
+            kind={seat?.kind === "human" ? "human" : "agent"}
+            avatar={seat?.avatar ?? null}
+          />
+        ),
+        meta: seat?.unit?.name ?? "Reports to nobody",
+        // The state where a project's figure goes, so the name keeps its width.
+        figure: seat?.kind === "human" ? undefined : <StateBadge agent={agent} />,
+      };
+    }
+    case "project": {
+      const row = project.data;
+      if (!row) return { kind: "Project", leading: glyph("worklet") };
+      const { todo, active, done } = row.task_counts;
+      const whole = todo + active + done;
+      // A CENSUS OVER RECORDS THIS BUILD COULD NOT READ MAY BE WRONG, and
+      // the tile says so in place of the census it would have drawn.
+      const partial = gapsOf([row]).length > 0;
+      return {
+        kind: "Project",
+        leading: glyph("worklet"),
+        meta: partial
+          ? PARTIAL_FIGURE
+          : whole === 0
+            ? "No work yet"
+            : censusLine(done, active, todo),
+        figure: whole > 0 && !partial ? `${Math.round((done / whole) * 100)}%` : undefined,
+      };
+    }
+    case "item":
+      return { kind: "Task", leading: glyph("worklet"), meta: route.id };
+    case "page":
+      return { kind: "Page", leading: glyph("doclet") };
+    default:
+      return {
+        kind: workspaceRow(route.workspace)?.label ?? "Page",
+        leading: glyph(route.workspace),
+      };
+  }
 }
 
 /** What to offer when nothing is pinned: places this reader went, and the company's agents and projects. */
@@ -139,7 +153,6 @@ export function PinnedShelf() {
   // until it runs it again.
   const runs = useServicesRun();
   const pins = useStarred().filter((s) => pathShown(s.path, runs));
-  const facts = useFacts();
   const toggle = useToggleStar();
   const suggestions = useSuggestions(pins);
   return (
@@ -185,25 +198,30 @@ export function PinnedShelf() {
         </div>
       ) : (
         <ul className="home-pinned-grid" aria-label="Pinned">
-          {pins.map((star) => {
-            const f = facts(star);
-            return (
-              <li key={keyOf(star.path)}>
-                <PinTile
-                  title={star.label}
-                  href={href(star.path)}
-                  kind={f.kind}
-                  meta={f.meta}
-                  leading={f.leading}
-                  status={f.status}
-                  figure={f.figure}
-                  onUnpin={() => toggle(star)}
-                />
-              </li>
-            );
-          })}
+          {pins.map((star) => (
+            <li key={keyOf(star.path)}>
+              <Pin star={star} onUnpin={() => toggle(star)} />
+            </li>
+          ))}
         </ul>
       )}
     </Card>
+  );
+}
+
+/** One pin, with what is true of it now. */
+function Pin({ star, onUnpin }: { star: Star; onUnpin: () => void }) {
+  const f = useFacts(star);
+  return (
+    <PinTile
+      title={star.label}
+      href={href(star.path)}
+      kind={f.kind}
+      meta={f.meta}
+      leading={f.leading}
+      status={f.status}
+      figure={f.figure}
+      onUnpin={onUnpin}
+    />
   );
 }

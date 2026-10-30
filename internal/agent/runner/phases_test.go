@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -105,7 +106,7 @@ func phaseOffering(offered []string) string {
 	switch {
 	case slices.Contains(offered, runner.SubmitReviewTool):
 		return "review"
-	case slices.Contains(offered, runner.MarkOnboardedTool):
+	case slices.Contains(offered, toolname.MarkOnboarded):
 		return "onboarding"
 	default:
 		// Nothing else runs a CLI through the engine's loop on a seat's
@@ -247,7 +248,7 @@ func activate(name string) llm.ToolCall {
 
 // activating is [activate] as a response of an engine-driven phase.
 func activating(name string) llmtest.Response {
-	return calling(llmtest.Call{Name: runner.ActivateTool, Args: `{"name":"` + name + `"}`})
+	return calling(llmtest.Call{Name: toolname.Activate, Args: `{"name":"` + name + `"}`})
 }
 
 // deliver is the ordinary delivery a run makes: discover, call, report.
@@ -329,6 +330,10 @@ type buildOpts struct {
 	steer runner.SteerSource
 	// subagent arms delegate on the executor's surface.
 	subagent *runner.SubagentConfig
+	// ask is the tool the executor's run asks a person through, which the
+	// engine hands the runner from outside the seat's registry
+	// ([runner.Config.Ask]). Nil offers none.
+	ask runner.RunAsk
 
 	// calls, when set, is the run's call log, on a turn context the
 	// surfaces are bound to — for the cases about what a run has called.
@@ -426,6 +431,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		OnPhase:      opts.onPhase,
 		Steer:        opts.steer,
 		Subagent:     opts.subagent,
+		Ask:          opts.ask,
 		Turn:         runTurn,
 		Budget:       opts.budget,
 		Compact:      opts.compact,
@@ -600,14 +606,14 @@ func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 	launcher := &playLauncher{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{launcher: launcher, register: func(t *testing.T, reg *tools.Registry) {
-			if err := reg.Register(stubTool{name: runner.MarkOnboardedTool}, tools.OriginBuiltin); err != nil {
+			if err := reg.Register(stubTool{name: toolname.MarkOnboarded}, tools.OriginBuiltin); err != nil {
 				t.Fatalf("Register: %v", err)
 			}
 		}})
 	if _, _, err := r.Execute(context.Background(), 1, "", nil); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if slices.Contains(toolNames(launcher.last(t).Surface.ToolDefs()), runner.MarkOnboardedTool) {
+	if slices.Contains(toolNames(launcher.last(t).Surface.ToolDefs()), toolname.MarkOnboarded) {
 		t.Error("the executor's run was offered mark_onboarded")
 	}
 }

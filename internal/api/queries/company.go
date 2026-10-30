@@ -14,10 +14,12 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/schedule"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The questions answered from the epoch: what the company DECLARES, which is a
@@ -907,8 +909,8 @@ func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat, err
 	}
 	seat, ok := memorySeat(s.organization(), handle)
 	if !ok {
-		return memread.Seat{}, fmt.Errorf("%w: no agent seat answers to %q — "+
-			"a seat's trail is an agent's, and a person keeps none here",
+		return memread.Seat{}, fmt.Errorf("%w: no agent seat answers to %q. "+
+			"A seat's trail is an agent's, and a person keeps none here",
 			ErrNotFound, asked)
 	}
 	return seat, nil
@@ -922,16 +924,25 @@ func (s Sources) trailSeat(ctx context.Context, asked string) (memread.Seat, err
 // `id` is the seat's handle, or a person's login; `limit` pages
 // every collection (at most [memread.PageLimit]); a profile's summary asks for
 // one, since the totals and the latest reflection travel whatever the page.
+// `skills_order` is the order the skills are read in before their page is
+// cut ([learning.SkillOrders], newest first when absent), so a screen sorting
+// them by use is handed the most used rather than sorting the newest.
 func (s Sources) agentMemory(ctx context.Context, p Params) (any, error) {
 	id := strings.TrimSpace(p.String("id"))
 	if id == "" {
 		return nil, fmt.Errorf("%w: agent_memory needs an id", ErrBadParams)
 	}
+	order := learning.SkillOrder(strings.TrimSpace(p.String("skills_order")))
+	if !order.Valid() {
+		return nil, fmt.Errorf("%w: agent_memory reads a seat's skills in one of %s, "+
+			"not %q", ErrBadParams, words.Or(learning.SkillOrders()), order)
+	}
 	seat, err := s.trailSeat(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	memory, err := s.Memory.Memory(ctx, seat, p.Int("limit", 0))
+	memory, err := s.Memory.Memory(ctx, seat,
+		memread.MemoryQuery{Limit: p.Int("limit", 0), Skills: order})
 	if err != nil {
 		return nil, err
 	}
@@ -1003,7 +1014,7 @@ func (s Sources) memoryOverview(ctx context.Context, _ Params) (any, error) {
 			switch {
 			case d.Unknown():
 				return nil, fmt.Errorf("%w: this node cannot yet decide whose "+
-					"memory the caller may read — %s on %s: %w", ErrUnavailable,
+					"memory the caller may read (%s on %s): %w", ErrUnavailable,
 					authz.ActionSeatTrailRead, seat.Handle, d.Err)
 			case d.Allowed:
 				seats = append(seats, seat)

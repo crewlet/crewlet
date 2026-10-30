@@ -37,7 +37,10 @@ import {
 import type { HumanSeat } from "~/contract/identity.ts";
 import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
+import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import type { OrgServices } from "~/contract/services.ts";
+import { withDerived } from "~/test/org.ts";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
@@ -140,9 +143,48 @@ function mount(node: React.ReactNode) {
   const socket = new LiveSocket(store);
   render(
     <ClientContext.Provider value={{ store, socket }}>
-      <Router>{node}</Router>
+      <ViewerProvider>
+        <Router>{node}</Router>
+      </ViewerProvider>
     </ClientContext.Provider>,
   );
+}
+
+/**
+ * The reach note as an admin granting access reads it, on a company whose
+ * chat is `chat` (the org projection's `services`): the one fact about the
+ * company it reads.
+ */
+async function reach(node: React.ReactNode, chat: OrgServices["chat"]) {
+  const viewer = {
+    login: "ada.admin",
+    owner: "ada",
+    handle: "ada",
+    name: "Ada",
+    kind: "human",
+    grants: ["admin"],
+    acts: [],
+    project: "",
+    config_writer: true,
+    config_managed_by: [],
+    chat_vendors: [],
+  };
+  const store = new Store();
+  store.setConnected(true);
+  store.applyOrg(
+    withDerived({
+      name: "Acme",
+      roles: [],
+      services: { tracker: "worklet", knowledge: "doclet", chat },
+    }),
+  );
+  const socket = { query: vi.fn(async (what: string) => (what === "viewer" ? viewer : {})) };
+  render(
+    <ClientContext.Provider value={{ store, socket } as never}>
+      <ViewerProvider>{node}</ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await settle();
 }
 
 /** A seat's holding as its page draws it, over the real listing hook — which
@@ -327,7 +369,9 @@ describe("a seat's holding", () => {
       await settle();
       expect(eng.reads("/iam/seats")).toBeGreaterThan(before);
       if (refused)
-        expect(screen.getByText("Couldn’t load this on this node. Try another node.")).toBeTruthy();
+        expect(
+          screen.getByText("Couldn’t load this here, and waiting won’t change that."),
+        ).toBeTruthy();
       expect(screen.getAllByRole("dialog")).toHaveLength(1);
       expect(
         screen.getByText("https://crewlet.example.com/dashboard#/reset/c-first.s3cret"),
@@ -377,7 +421,7 @@ describe("an invitation onto a seat", () => {
     expect(dialog.textContent).toMatch(/The seat is held until they join\./);
     // EVERY APP IS PRE-TICKED AND ADMIN IS NOT: a person invited works in
     // every app unless somebody says otherwise.
-    for (const app of ["Worklet", "Doclet", "Artifacts"]) {
+    for (const app of ["Worklet", "Doclet", "Artifacts", "Chatlet"]) {
       expect(within(dialog).getByRole("checkbox", { name: app })).toHaveProperty("checked", true);
     }
     expect(within(dialog).getByRole("checkbox", { name: "Admin" })).toHaveProperty(
@@ -395,7 +439,7 @@ describe("an invitation onto a seat", () => {
     expect(sent?.key).toMatch(UUID7);
     expect(sent?.body).toEqual({
       email: "dee@example.com",
-      grants: ["worklet", "artifacts"],
+      grants: ["worklet", "artifacts", "chatlet"],
       seat: "sam",
     });
     expect(
@@ -419,6 +463,8 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Doclet" }));
     expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
     fireEvent.click(within(dialog).getByRole("checkbox", { name: "Artifacts" }));
+    expect(within(dialog).queryByText(/^Overview only:/)).toBeNull();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: "Chatlet" }));
     expect(within(dialog).getByText(/^Overview only:/)).toBeTruthy();
     expect(within(dialog).queryByText(/Without Worklet/)).toBeNull();
   });
@@ -483,7 +529,7 @@ describe("an invitation onto a seat", () => {
     const [first, second] = eng.writes();
     expect(second?.body).toEqual({
       email: "jane@example.com",
-      grants: ["worklet", "doclet", "artifacts"],
+      grants: ["worklet", "doclet", "artifacts", "chatlet"],
       seat: "sam",
     });
     expect(second?.key).toMatch(UUID7);
@@ -499,7 +545,7 @@ describe("an invitation onto a seat", () => {
         json(403, {
           error: "unauthorized",
           message:
-            "You don’t have the access this needs (Admin, Worklet or Doclet). Ask an admin for it.",
+            "You don’t have the access this needs (Admin, Worklet, Doclet or Chatlet). Ask an admin for it.",
           reason: "directory",
           grants: ["admin"],
         }),
@@ -512,7 +558,7 @@ describe("an invitation onto a seat", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
     const alert = within(dialog).getByRole("alert");
-    expect(alert.textContent).not.toMatch(/Admin, Worklet or Doclet/);
+    expect(alert.textContent).not.toMatch(/Admin, Worklet, Doclet or Chatlet/);
     expect(alert.textContent).toMatch(/You need Admin access for this\./);
     fireEvent.click(within(dialog).getByRole("button", { name: "Invite" }));
     await settle();
@@ -560,7 +606,7 @@ describe("a person created on a seat", () => {
       kind: "person",
       seat: "sam",
       email: "dee.ray@example.com",
-      grants: ["worklet", "doclet", "artifacts"],
+      grants: ["worklet", "doclet", "artifacts", "chatlet"],
     });
     expect(within(dialog).getByText("dee.ray")).toBeTruthy();
     expect(dialog.textContent).toMatch(/dee\.ray is now Sam Support/);
@@ -598,7 +644,7 @@ describe("a person created on a seat", () => {
         email: "dee.ray@example.com",
         login: "dee.ray",
         name: "Dee Ray",
-        grants: ["worklet", "doclet", "artifacts"],
+        grants: ["worklet", "doclet", "artifacts", "chatlet"],
       },
     ]);
   });
@@ -781,12 +827,14 @@ describe("the access picker", () => {
     expect(box("Doclet").disabled).toBe(true);
     expect(box("Artifacts").checked).toBe(true);
     expect(box("Artifacts").disabled).toBe(true);
-    expect(screen.getAllByText("Included with Admin.")).toHaveLength(3);
-    expect(value()).toBe("admin,worklet,doclet,artifacts");
+    expect(box("Chatlet").checked).toBe(true);
+    expect(box("Chatlet").disabled).toBe(true);
+    expect(screen.getAllByText("Included with Admin.")).toHaveLength(4);
+    expect(value()).toBe("admin,worklet,doclet,artifacts,chatlet");
     fireEvent.click(box("Admin"));
     expect(box("Worklet").disabled).toBe(false);
     expect(box("Worklet").checked).toBe(true);
-    expect(value()).toBe("worklet,doclet,artifacts");
+    expect(value()).toBe("worklet,doclet,artifacts,chatlet");
   });
 
   // A ROW STORED AS ADMIN ALONE keeps its apps when Admin is taken away.
@@ -794,7 +842,7 @@ describe("the access picker", () => {
     render(<Picker initial={["admin"]} held={ADMIN} />);
     expect(box("Worklet").checked).toBe(true);
     fireEvent.click(box("Admin"));
-    expect(value()).toBe("worklet,doclet,artifacts");
+    expect(value()).toBe("worklet,doclet,artifacts,chatlet");
   });
 
   test("a permission the writer does not hold is offered disabled, with why", () => {
@@ -807,10 +855,32 @@ describe("the access picker", () => {
 });
 
 // WHAT A PERSON WILL MISS, said to the reader about themselves as well.
-test("the reach note speaks to the reader about their own access", () => {
-  render(<AppReachNote grants={["doclet"]} you />);
+test("the reach note speaks to the reader about their own access", async () => {
+  await reach(<AppReachNote grants={["doclet"]} you />, "chatlet");
   expect(screen.getByText(/agents can’t send you work/)).toBeTruthy();
   cleanup();
-  render(<AppReachNote grants={["admin"]} you />);
+  await reach(<AppReachNote grants={["admin"]} you />, "chatlet");
   expect(document.body.textContent).toBe("");
 });
+
+// WITHOUT CHATLET, WHAT AGENTS SAY NEVER REACHES THEM, on a company running
+// Chatlet, and only there: on a vendor's the conversation is the
+// vendor's. The tracker's note comes first where both are missing.
+// Mutation: drop the services check and the vendor row goes red; drop the
+// chat note and the chatlet row does.
+test.each([
+  ["chatlet", true],
+  ["vendor", false],
+  ["none", false],
+] as const)(
+  "on a company whose chat is %j, a person without Chatlet is told so: %s",
+  async (backend, said) => {
+    await reach(<AppReachNote grants={["worklet"]} />, backend);
+    expect(/Without Chatlet, what agents say to them/.test(document.body.textContent ?? "")).toBe(
+      said,
+    );
+    cleanup();
+    await reach(<AppReachNote grants={["doclet"]} />, backend);
+    expect(document.body.textContent).toMatch(/Without Worklet/);
+  },
+);

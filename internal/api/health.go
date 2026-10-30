@@ -204,7 +204,7 @@ type Health struct {
 	// It is the number an alert reads: see [RuntimeState.Unproven]. It was
 	// computed by the seat host and documented as this field while nothing
 	// served it, so the only evidence of a seat out of service for a week
-	// was a log line re-raised every twenty heartbeats.
+	// was a log line re-raised every five minutes.
 	UnprovenSeconds map[string]float64 `json:"unproven_seconds,omitempty"`
 
 	// Identity is whether this company has its first person —

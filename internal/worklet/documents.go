@@ -287,16 +287,24 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, project, after stri
 	// again and stopped again: a merge with one subtask in the trash could
 	// never finish. It stays under the parent it had, which is where a
 	// restore finds it.
-	rows, err := tx.QueryContext(ctx, `
-		SELECT document, version, 0 FROM tracker_tasks
-		WHERE parent_id = ? AND project_key = ? AND id > ? AND removed_at IS NULL
-		ORDER BY id LIMIT ?`, parent, project, after, limit)
+	rows, err := tx.QueryContext(ctx, childBatchStatement, parent, project, after, limit)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the children of %s: %w", parent, err)
 	}
 	defer rows.Close()
 	return scanSubtree(rows, parent)
 }
+
+// childBatchStatement is [readChildBatch]'s read, named for the plan test.
+//
+// IT NAMES THE INDEX OF THE TREE (replicated 0058), because the planner
+// otherwise seeks the project, which every child the walk carries is in, and
+// sorts the project's whole board by id to take one batch of a parent's
+// children.
+const childBatchStatement = `
+		SELECT document, version, 0 FROM tracker_tasks INDEXED BY ` + parentIndex + `
+		WHERE parent_id = ? AND project_key = ? AND id > ? AND removed_at IS NULL
+		ORDER BY id LIMIT ?`
 
 // readSubtree is every descendant of a root task, ORDERED BY (depth, id).
 //
@@ -314,22 +322,46 @@ func readChildBatch(ctx context.Context, tx *sql.Tx, parent, project, after stri
 // is what gives that; the id breaks the tie so every node, and every re-run,
 // walks one subtree in one order.
 func readSubtree(ctx context.Context, tx *sql.Tx, root string) ([]Task, error) {
-	rows, err := tx.QueryContext(ctx, `
-		WITH RECURSIVE descendants(id, depth) AS (
-			SELECT id, 0 FROM tracker_tasks WHERE parent_id = ?
-			UNION ALL
-			SELECT t.id, d.depth + 1
-			FROM tracker_tasks t JOIN descendants d ON t.parent_id = d.id
-		)
-		SELECT t.document, t.version, d.depth
-		FROM descendants d JOIN tracker_tasks t ON t.id = d.id
-		ORDER BY d.depth, t.id`, root)
+	rows, err := tx.QueryContext(ctx, subtreeStatement, root, root, root)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the subtree under %s: %w", root, err)
 	}
 	defer rows.Close()
 	return scanSubtree(rows, root)
 }
+
+// subtreeStatement is [readSubtree]'s read, named for the plan test: each level
+// of the tree is a seek on the parent (replicated 0058).
+//
+// # Why the walk stops at its own root
+//
+// Because the tree can be a CYCLE. Two re-parents on two subjects — A under B
+// on one node, B under A on another — are both accepted by the broker, and the
+// applier applies both and flags the cycle rather than stall the log (see
+// apply_closure.go), so the rows a walk reads can loop. Followed down the
+// parent pointers, the walk from A reached B, then A again, then B, for ever:
+// measured, the statement never returned, ran straight past its context's
+// deadline, and held the move, the removal or the restore that asked for it —
+// and its transaction — until the process went.
+//
+// The root is the only task the walk can come back to. Every task has ONE
+// parent, so a task outside a cycle is never reached from inside it, and a
+// walk that starts outside one never enters it: the descendants of anything
+// in a cycle are the cycle's other members and the trees hanging from them,
+// and the one way back is the root itself. So the walk never steps onto the
+// root — at the first level too, for a task left as its own parent — and what
+// it returns is the subtree, with every task in it once.
+const subtreeStatement = `
+		WITH RECURSIVE descendants(id, depth) AS (
+			SELECT id, 0 FROM tracker_tasks WHERE parent_id = ? AND id <> ?
+			UNION ALL
+			SELECT t.id, d.depth + 1
+			FROM tracker_tasks t JOIN descendants d ON t.parent_id = d.id
+			WHERE t.id <> ?
+		)
+		SELECT t.document, t.version, d.depth
+		FROM descendants d JOIN tracker_tasks t ON t.id = d.id
+		ORDER BY d.depth, t.id`
 
 // scanSubtree decodes a subtree read's rows.
 func scanSubtree(rows *sql.Rows, root string) ([]Task, error) {

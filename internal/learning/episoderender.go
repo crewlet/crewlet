@@ -2,12 +2,14 @@ package learning
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 
 	"github.com/crewlet/crewlet/internal/compact"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // EpisodeAccountBytes bounds what a prompt a reader sees carries of one past
@@ -116,8 +118,83 @@ func episodeAccount(ctx context.Context, ep Episode, fit compact.Bound, bytes in
 // SHOWN BESIDE THE LABEL, never in its place: the label is the waking event's
 // one line, and a seat that read it as the question it was asked learned
 // nothing of what it was asked.
+//
+// A REWRITE OF AN ASK IS STILL ITS WRITERS' WORDS: the rewrite reads the ask
+// under the label it was asked with ([Episode.AskProvenance]), and what comes
+// back is fenced under that same label wherever it is shown ([RenderPastTurn]).
 func episodeAsk(ctx context.Context, ep Episode, fit compact.Bound, bytes int) string {
+	if ep.AskProvenance != nil {
+		fit = fit.Labelled(*ep.AskProvenance)
+	}
 	return episodeLine(ctx, fit, compact.KindTask, ep, ep.Ask, bytes)
+}
+
+// RenderPastTurn is one recalled turn as a model reads it: THE ONE RENDERING of
+// a past turn into a model's text, for the turn-start "## Similar prior work"
+// block, the episode summary model's input and `query_episodes` alike, so all
+// three present one turn one way (ADR-0040). past is what [PastTurns] made of
+// its ask and account; b is the token the reader's fences carry — the turn's
+// for a seat, one minted for the call for an auxiliary model.
+//
+// A RAW TURN is when it started, the label of what woke it, how it ended and
+// the tools it called, what it was asked and what it did. WHAT IT WAS ASKED IS
+// SOMEBODY ELSE'S WORDS on most turns, so it sits inside a fence of b under the
+// label it was asked with ([Episode.AskProvenance]) — a stranger's message
+// from a month ago is not the seat's own memory because the seat recalled it —
+// and is neutralised where it was the company's or the seat's own (a
+// schedule's task). Everything else on the line is the engine's label or the
+// seat's own account, and is neutralised, so nothing on it opens or closes a
+// fence. A turn with no label, no ask and no account renders nothing.
+//
+// A COMPACTED ROW stands for a cluster of turns, so it is the pattern, how many
+// turns it stands for and how many of them ended done, and what varied — its
+// summary's own words, neutralised. It keeps no ask.
+func RenderPastTurn(b provenance.Boundary, ep Episode, past PastTurn) string {
+	var out strings.Builder
+	if ep.Kind == KindCompacted {
+		count := max(ep.Count, 1)
+		fmt.Fprintf(&out, "- %s to %s — %d turns like this: %s\n",
+			ep.StartedAt.Format(time.DateOnly), ep.EndedAt.Format(time.DateOnly), count,
+			provenance.Neutralise(b, flatten(ep.CommonTaskPattern)))
+		if ep.ReviewOutcome != "" {
+			fmt.Fprintf(&out, "  outcome: %s (%d of %d done)\n",
+				provenance.Neutralise(b, ep.ReviewOutcome), ep.DoneCount(), count)
+		}
+		if notable := flatten(ep.NotablePatterns); notable != "" {
+			fmt.Fprintf(&out, "  what varied: %s\n", provenance.Neutralise(b, notable))
+		}
+		return strings.TrimRight(out.String(), "\n")
+	}
+	label := flatten(ep.TaskSummary)
+	if label == "" && past.Ask == "" && past.Account == "" {
+		return ""
+	}
+	out.WriteString("- ")
+	if !ep.StartedAt.IsZero() {
+		out.WriteString(ep.StartedAt.UTC().Format(time.RFC3339) + " — ")
+	}
+	out.WriteString("woken by: " + provenance.Neutralise(b, orElse(label, "(not recorded)")))
+	var notes []string
+	if ep.ReviewOutcome != "" {
+		notes = append(notes, "outcome: "+ep.ReviewOutcome)
+	}
+	if len(ep.ToolSequence) > 0 {
+		notes = append(notes, "tools: "+strings.Join(ep.ToolSequence, " → "))
+	}
+	if len(notes) > 0 {
+		out.WriteString(" (" + provenance.Neutralise(b, strings.Join(notes, "; ")) + ")")
+	}
+	switch {
+	case past.Ask == "":
+	case ep.AskProvenance != nil:
+		out.WriteString("\n  asked:\n" + ep.AskProvenance.Fence(b, past.Ask))
+	default:
+		out.WriteString("\n  asked: " + provenance.Neutralise(b, past.Ask))
+	}
+	if past.Account != "" {
+		out.WriteString("\n  what it did: " + provenance.Neutralise(b, past.Account))
+	}
+	return out.String()
 }
 
 // episodeLine is one of a past turn's texts on one line, within bytes, its

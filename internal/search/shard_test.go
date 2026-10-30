@@ -238,9 +238,9 @@ func TestBothEstatesAgreeOnADocumentsBucket(t *testing.T) {
 //
 // The vector scan is a SEPARATE statement in a separate estate, and it is the
 // one the fan-out exists for: the lexical index is a node's own, while the
-// vectors are replicated, so every node holds every vector and stage one reads
-// all of them. A predicate the lexical half has and this half does not is a
-// fan-out that divides the cheap scan and leaves the expensive one whole.
+// vectors are replicated, so every data node holds every vector and stage one
+// reads all of them. A predicate the lexical half has and this half does not is
+// a fan-out that divides the cheap scan and leaves the expensive one whole.
 func TestTheCandidatePoolIsNarrowedByTheAssignment(t *testing.T) {
 	t.Parallel()
 	db, dim, model := seedVectors(t, 300)
@@ -436,9 +436,9 @@ func TestAQueryNamingNoRankerIsRefused(t *testing.T) {
 // same document would score differently depending on how the fleet happened to
 // be divided, and no merge across the slices could put it back.
 //
-// It costs nothing to hold, and that is the point: every node holds the whole
-// corpus, so the statistics come off its complete tables whatever range the
-// scan read. A design that divided STORAGE could not borrow this.
+// It costs nothing to hold, and that is the point: every data node holds the
+// whole corpus, so the statistics come off its complete tables whatever range
+// the scan read. A design that divided STORAGE could not borrow this.
 func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

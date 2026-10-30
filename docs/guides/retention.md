@@ -31,7 +31,7 @@ Five figures per domain, and no others:
 |---|---|
 | `bytes` | what the log holds now |
 | `max_bytes` | the ceiling the **broker** is enforcing |
-| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's and the identity estate's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
+| `reserve_bytes` | on every log that claims identity — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, the Dashboard Assistant's and chat's — the top of that ceiling kept for gate records; see [the gate reserve](#the-gate-reserve) |
 | `headroom_fraction` | how much of the ceiling **ordinary writes** are held to is unused: `max_bytes` less `reserve_bytes` |
 | `bytes_per_day` | what the log took in over the trailing day (`PER DAY` in the table) |
 
@@ -68,12 +68,13 @@ number, and a node that has just restarted measures on its first tick.
 It is deliberately absent — and the alarm silent — in three places, and absent
 is not zero:
 
-- **A compacted log**, which is the vector log. Its size follows how many
-  subjects it holds rather than how long it has been written, and a full
-  re-embedding — the one excursion this system is designed for — republishes
-  every vector in a day while replacing what the log held rather than adding
-  to it. Holding its ceiling against a week of that day would page for a log
-  that is not growing.
+- **A compacted log** — the vector log and the usage log, each keeping one
+  message per subject. Its size follows how many subjects it holds rather
+  than how long it has been written, and a full re-embedding — the one
+  excursion this system is designed for — republishes every vector in a day
+  while replacing what the log held rather than adding to it. Holding the
+  vector log's ceiling against a week of that day would page for a log that
+  is not growing.
 - **A log in its first two days** — a fresh deployment, or one re-anchored
   under a running fleet. Its first day is the one a company imports into, and
   a day extrapolated from an import is an alarm for a log that settles an
@@ -99,14 +100,18 @@ alarm list is in [Alarms](../reference/alarms.md).
 
 **An alarm is one per kind, however many logs it stands on.** A condition
 that is a property of a log (`log_headroom`, `log_ceiling_short`,
-`trim_blocked`, `deferred_old`, `floor_unknown`, `census_drift`) lists every
-log it stands on in its `domains`, each with that log's own measurement, so
-four held logs are one `trim_blocked` on the health count, the gauge and the
-dashboard rather than four; `crewlet retention status` prints them under the
-alarm, one log in its headline and several as a line each. The `alarm_raised`
-and `alarm_cleared` log lines are still written per log, carrying it as
-`domain`, so a second log joining an alarm that is already up, and the first
-one leaving it while the second stands, are each said with their own start.
+`backup_age`, `trim_blocked`, `deferred_old`, `floor_unknown`, `census_drift`)
+lists every log it stands on in its `domains`, each with that log's own
+measurement — and a measurement taken in the same words on several logs no term
+holds once, naming them, so a fleet with no backup yet says so once for every
+log — so four held logs are one `trim_blocked` on the health count, the
+gauge and the dashboard rather than four; `crewlet retention status` prints
+them under the alarm, one measurement in its headline and several as a line
+each. The
+`alarm_raised` and `alarm_cleared` log lines are still written per log,
+carrying it as `domain`, so a second log joining an alarm that is already up,
+and the first one leaving it while the second stands, are each said with their
+own start.
 
 ## The six terms
 
@@ -149,13 +154,13 @@ for as long as the copy runs.
 estate it holds. Every node still evaluates its own alarms on every tick,
 whatever duty it holds.
 
-`feed_ack_floor` is the acknowledgement floor of the durable consumer that each
+`feed_ack_floor` is the acknowledgement floor of the durable consumer that a
 log's own change feed opens — the feed's **group** `crewlet-tracker-feed` on
-`CREWLET_TRACKER_LOG`, and its group `crewlet-pages-feed` on
-`CREWLET_PAGES_LOG` — because a record that feed has not acknowledged is one
-nobody has been woken for yet. So a feed that has stopped holds back its own
-log and no other, and `blocked_by: feed_ack_floor` on a domain names that
-domain's feed.
+`CREWLET_TRACKER_LOG`, its group `crewlet-pages-feed` on `CREWLET_PAGES_LOG`,
+and its group `crewlet-chat-feed` on `CREWLET_CHAT_LOG` — because a record that
+feed has not acknowledged is one nobody has been woken for yet. So a feed that
+has stopped holds back its own log and no other, and `blocked_by:
+feed_ack_floor` on a domain names that domain's feed.
 
 A group name is not the broker's consumer name. The durable consumer is named
 from the group **and** the stream, as `<group>__<stream>__<digest>` — for
@@ -166,7 +171,8 @@ the group name alone finds nothing.
 A term that **could not be read** blocks, exactly as one that permits nothing
 does. A term nobody could read is not a term that is satisfied, and treating it
 as satisfied is how a trim advances past a node that could not report. A term
-this domain does not **have** — the vector log, the identity estate's and the
+this domain does not **have** — the vector log, the identity estate's, the
+artifacts log's, the artifact datastore's, the Dashboard Assistant's and the
 usage log's have no wake feed — is `n/a`
 rather than zero, which is a different thing again. And a term that was
 read and **binds nothing** — no hold is pinning the log, or a solo fleet takes
@@ -203,9 +209,10 @@ when both of these hold:
   log and an empty one stay silent however long the block has lasted.
 
 Its detail names the log, the blocking term and up to how many records it is
-keeping — exactly that many on a strict log, at most that many on the vectors'
-compacted one, whose superseded records are already gone; the term's row in
-`crewlet retention status` says what it has and what it wants.
+keeping — exactly that many on a strict log, at most that many on a
+compacted one (the vector log or the usage log), whose superseded records are
+already gone; the term's row in `crewlet retention status` says what it has
+and what it wants.
 
 ### `min_age` is a floor on trimming, and therefore a *lower bound* on retention
 
@@ -249,26 +256,46 @@ Two policies decide which copies count:
   crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000
   ```
 
-  Under this policy the trim does not advance until that acknowledgement has
-  been given at least once, and `crewlet validate` warns about it on every
-  node that holds data — the nodes that run the trim — as each of those nodes
-  does on every start, in a `config_advisory` line. A node without `data`
-  runs no trim and reads none of `stream.tracker_retention`, so it is not
-  warned.
+  An acknowledgement names ONE stream and is kept per stream: acknowledging
+  the next log leaves the last one's acknowledgement standing. Under this
+  policy every log is trimmed only as far as an acknowledgement of that log
+  says, so the procedure is one acknowledgement per log. A log never
+  acknowledged is never trimmed: the ordered logs, `CREWLET_TRACKER_LOG`,
+  `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_ARTIFACTS_LOG`,
+  `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG` and `CREWLET_CHAT_LOG`,
+  each grow until their own ceiling refuses writes — a full identity log
+  refuses every sign-in, a full assistant log every question the assistant is
+  asked, and a full chat log every message — while the two compacted logs,
+  `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
+  records out on the broker whatever the trim decides; their trim and its
+  alarms wait on an acknowledgement just the same.
+  `crewlet validate` warns about this policy on every node that holds data —
+  the nodes that run the trim — as each of those nodes does on every start, in
+  a `config_advisory` line. A node without `data` runs no trim and reads none
+  of `stream.tracker_retention`, so it is not warned.
 
-The **backup-age alarm** (`backup_age`) ages the same point the trim reads,
-under the same policy: under `operator` a node's nightly copies are fresh
-while the trim waits on an acknowledgement, and the alarm fires on the missing
+Each log's trim reads **the newest counted backup that covers that log**:
+under `engine`, a node's copy that leaves a log out does not stand in for it,
+and an older copy of another node's that covers it does. The **backup-age
+alarm** (`backup_age`) ages the same point per log, under the same policy:
+under `operator` a node's nightly copies are fresh while each trim waits on
+its acknowledgement, and the alarm fires on each log's own missing or stale
 acknowledgement rather than staying green beside a log that cannot be trimmed.
-It names every log whose trim the backup term has held for longer than that
-log's `min_age` replay window plus a trim tick while the log keeps records older
-than the window — exactly the logs that would otherwise raise `trim_blocked`
-([above](#a-blocked-trim-is-ordinary-until-it-has-kept-something)) — and those
-logs raise no `trim_blocked` of their own: the backup is the one thing to do
-about all of them. A log the backup term has held for less than that, or that
+It is one alarm naming every such log, leading with the one whose backup is
+missing or oldest. A log it names whose trim the backup term has held for longer
+than that log's `min_age` replay window plus a trim tick, while the log keeps
+records older than the window — exactly a log that would otherwise raise
+`trim_blocked` ([above](#a-blocked-trim-is-ordinary-until-it-has-kept-something))
+— raises no `trim_blocked` of its own: its entry under `backup_age` carries the
+term, the instant the trim stopped and what the hold is keeping, because the
+backup is the one thing to do about it. A hold younger than that, or one that
 keeps nothing past the window, is listed under no alarm; `crewlet retention
-status` still shows its block from the first tick. **Settings › Backups &
-retention** marks that point **counted · newest**.
+status` still shows its block from the first tick. And a log the backup term
+holds while its own backup is inside the policy (a copy taken on an earlier
+generation of the log) stays under `trim_blocked`, since nothing else names it.
+The retention report carries each log's point as that domain's `backup_at`, and
+**Settings › Backups & retention** marks every point some log's trim reads
+**counted · newest**.
 
 An **unverified** copy satisfies neither. A file that exists and was never
 opened is not a backup, and deleting the log's only copy of a record against
@@ -405,7 +432,9 @@ thirty-second retry within a minute. The register row naming a new artefact is
 published as soon as it is taken, not on the position heartbeat's next beat.
 Its manifest names every log it carries: a joiner refuses an
 artefact naming a log it does not run, or missing one it does, before a byte
-moves. Artefacts live in `store.snapshot_dir` itself.
+moves. Artefacts live in `store.snapshot_dir` itself. The copy is taken with
+`VACUUM INTO`, as a backup's is, so it needs a writable temporary directory
+while it runs (see [Deployment](deployment.md#the-store)).
 
 ```
 crewlet retention snapshots
@@ -478,7 +507,7 @@ answer rather than a silence:
 | `ahead_of_log` | this node's checkpoint is past the log's end, so its rows are keyed to a sequence space the stream no longer has |
 | `log_diverged` | the log holds, at this node's checkpoint, another record than the one it consumed there — a broker restored from an older copy and written past these rows — so they are a history the log does not continue |
 | `recent` | the newest artefact is younger than `snapshot_interval` **and names every domain this node runs, at the generation this node is on**; a young artefact short of a domain is replaced at once (`statelog_snapshot_recent_but_short`), because no joiner can adopt it — see [Running a Fleet](fleet.md#draining-and-rolling-upgrades). And see below |
-| `failed` | the copy was attempted and errored; the engine log carries the error |
+| `failed` | the copy was attempted and errored; the engine log carries the error. A temporary directory the node can't write is one cause, and the error names the variable and the directory |
 
 `recent` is the one reason a healthy node reaches, and it is therefore **not**
 published: a node whose newest artefact is inside the interval is a node that
@@ -617,11 +646,13 @@ See [Replication](replication.md#what-a-retry-is-judged-by-the-instant-its-opera
 
 ### A node a peer re-anchored past
 
-When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) the
-tracker's or the knowledge base's log, it opens the next generation from its
-own rows — and every other node's rows are then a history the log no longer
-continues from. Nothing on the log can bring them level, so each of those nodes
-adopts a snapshot from a node in the new generation, **on its own**:
+When one node [re-anchors](#re-anchoring-a-recreated-or-restored-log) a log
+that claims identity — the tracker's, the knowledge base's, the identity
+estate's, the artifacts log's, the artifact datastore's, the Dashboard
+Assistant's or chat's — it opens the next generation from its own rows, and
+every other node's rows are then a history the log no longer continues from. Nothing on the log can bring them
+level, so each of those nodes adopts a snapshot from a node in the new
+generation, **on its own**:
 
 - It learns of the new generation from the re-anchoring node's position row,
   which that node publishes the moment the reanchor completes, on its next
@@ -641,8 +672,9 @@ adopts a snapshot from a node in the new generation, **on its own**:
   it can donate as soon as its gate allows. Until some node in the new
   generation holds an artefact, the others ask again on the doubling interval.
 
-The vectors are exempt: each node re-anchors its own copy, so a peer ahead there
-is a recovery in progress rather than a history this node has lost.
+The vectors and the usage days are exempt, as every log that claims no identity
+is: each data node re-anchors its own copy, so a peer ahead there is a recovery
+in progress rather than a history this node has lost.
 
 **If the node that re-anchored is gone for good** — decommissioned, or its disk
 lost, before any peer adopted from it — nothing can donate the new generation:
@@ -664,9 +696,9 @@ crewlet retention reanchor -stream CREWLET_TRACKER_LOG
    only after step 2.
 2. From then on an evicted node's position row — and any trim floor it
    published — counts toward neither the generation the fleet is on nor the
-   reanchor guards. Every node reads the peer's standing off the log itself,
-   since a stranded node's applier never reaches the eviction record; so the
-   nodes stop asking for a donor at the peer's generation.
+   reanchor guards. Every data node reads the peer's standing off the log
+   itself, since a stranded node's applier never reaches the eviction record; so
+   the nodes stop asking for a donor at the peer's generation.
 3. **Re-anchor the most caught-up remaining node.** `reanchor` names the
    `abandoned` case: the log is the one these rows are keyed to and still holds
    everything they are missing, but it continues in a generation only the
@@ -728,16 +760,29 @@ evicted node's row — and any trim floor it published — counts toward neither
 the generation the fleet is on nor a reanchor's guards, which is how a fleet
 stranded by a node that re-anchored and then vanished is released ([a node a
 peer re-anchored past](#a-node-a-peer-re-anchored-past)). The row itself
-stays: a readmission is judged by it.
+stays, for the life of the deployment: a readmission is judged by it, and a
+node id can be readmitted whenever it is evicted, so nothing removes it. The
+register therefore holds one row per node id the deployment has ever
+configured — a machine rebuilt under its old id writes over its old row, and
+only an id retired for good leaves one behind. The node's **backup** does not
+stay: once the eviction has taken effect on every log that counts nodes, the
+trim's next tick forgets the node's newest backup point, so under
+`backup_floor: engine` no log
+is trimmed against a copy on a host the fleet has let go, and
+[`GET /backups`](../reference/api-endpoints.md#get-backups) stops listing it.
+A log that copy alone covered blocks on the `backup_floor` term, and raises
+`backup_age`, until a live node backs up; a node readmitted later records its
+next backup afresh.
 
 The trim counts nodes **per log**, so an eviction is a record on every log it
 counts nodes on — every log that claims identity: the tracker's, the knowledge
-base's and the identity estate's. (The vector log and the
+base's, the identity estate's, the artifacts log's, the artifact datastore's,
+the Dashboard Assistant's and chat's. (The vector log and the
 usage log count nothing and get none: a node behind on the vectors is a
 coverage figure, and an evicted node's usage is still what its seats did.) Every
 node running the state log can make the gesture, whichever backends the
 company uses: every data node runs every one of those logs, and a company on an
-external tracker still runs all three.
+external tracker or a vendor's chat still runs every one of them.
 
 **The node you run the gesture on writes every log itself**: every data node
 holds the whole estate, so one gesture on any data node reaches every log. A
@@ -764,8 +809,11 @@ alphanumeric first, then letters, digits, `.`, `_` or `-`, at most 64
 characters) is refused before anything is judged.
 
 Past the judgement the record goes to every log at once, and each answers on
-its own line — the tracker's log, the pages log and the identity estate's — with the [three-valued outcome](replication.md#a-write-has-three-outcomes)
-every write has — `applied`, `pending` or `unknown` — or `not written` with the
+its own line — the tracker's log, the pages log, the identity estate's, the
+artifacts log, the artifact datastore's, the Dashboard Assistant's and chat's —
+with the
+[three-valued outcome](replication.md#a-write-has-three-outcomes) every write
+has — `applied`, `pending` or `unknown` — or `not written` with the
 reason that stopped that log. A log that answered holds its record whatever
 the others did, and the gesture runs to its end **whatever happens to the
 command**: once the first record is about to be written the node finishes the
@@ -806,7 +854,7 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   ordinary writes does not refuse an eviction at all.
 - `evicted` — the node you ran it on is itself evicted and writes nothing: run
   the gesture, under the same `-op-id`, through a node the fleet still counts
-  (`-url`). Where the answer names a **position**, the gesture's record on that
+  (`-api`). Where the answer names a **position**, the gesture's record on that
   log landed and applies nowhere, and it holds the operation id there for the
   log's duplicate window (two minutes) from when it landed: the same `-op-id`
   sent sooner — through any node — is collapsed onto that record and answered
@@ -818,7 +866,7 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   applies nowhere. It holds the operation id for the log's duplicate window
   (two minutes) from when it landed: once that has passed, run the gesture,
   under the same `-op-id`, through a node on the log's current generation
-  (`-url`).
+  (`-api`).
 - **Another node's copy** — `evicted`, `overtaken` or `abandoned`,
   with a hint naming another node as the writer of the record at that position.
   The `-op-id` you sent had already been written under by that node — you ran
@@ -835,7 +883,7 @@ restarted, and the first id would answer `superseded` to anyone finishing it.
   ledger's sweep reached it. The node
   published nothing and answers the same gesture the same way every time, so
   it is not offered as a retry: run it, under the same `-op-id`, through a node
-  whose ledger reaches back that far (`-url`). The dashboard says the same and
+  whose ledger reaches back that far (`-api`). The dashboard says the same and
   sends you to another node's dashboard.
 - `wrong_stream` — the log was rebuilt under this node:
   [re-anchor it](#re-anchoring-a-recreated-or-restored-log) first, then run the
@@ -950,7 +998,7 @@ the log has already lost or is licensed to lose.
 
 The comparison is the one the node's own [write fence](#the-trim-floor) makes,
 made once for every log before any is written: its last published position
-in each of the three logs, against the higher of each log's published floor and
+in each of those logs, against the higher of each log's published floor and
 its first surviving sequence. A node that has never published a position is
 judged as holding nothing. Nothing is written to any log on a refusal, and the node needs nothing from you but time: start it if it
 is not running, and it [catches up on its own](#the-join-runbook) — replaying
@@ -985,8 +1033,10 @@ A single record larger than its log takes is a different refusal,
 changes it. Every log declares the largest record it publishes — 8 MiB less
 4 KiB on the tracker's, the knowledge base's, the vector changelog's and the
 usage log's, which is the largest the embedded broker's 8 MiB messages carry
-once a record is signed, 128 KiB on the identity
-estate's — and a record past it is refused before it is sent; the stream's
+once a record is signed, 128 KiB on the identity estate's, 2 MiB on the
+artifacts log's, 1 MiB plus 64 KiB on the artifact datastore's, 2 MiB on the
+Dashboard Assistant's and 512 KiB on chat's — and a record past it is refused
+before it is sent; the stream's
 own `max_msg_size` is that declaration plus 4 KiB for what a stored record
 carries beside it, so the broker holds a peer on another build to it too. Two
 more limits can refuse a record, and the detail says which it was: the file store's per-record limit,
@@ -1007,12 +1057,29 @@ API are unaffected. See [Read consistency](consistency.md).
 
 The **usage log** refuses the same way, and what it costs is different: no read
 appends to it, so nothing a seat does is refused — what stops is the
-replication of each node's days. Every data node keeps re-deriving its day and
-retrying on every tick, nothing is lost from any node's own event log, and the
-`log_headroom` alarm names the domain (`log_headroom on usage`) long before the ceiling. Its
-size is a count of node-days rather than a rate — one message per (node, day,
-seat or schedule) for 181 days — so a log that fills has outgrown its census:
-raise `stream.usage_log_max_bytes` as below.
+replication of each data node's days. Every data node keeps re-deriving its
+day and retrying on every tick, nothing is lost from any data node's own event
+log, and the `log_headroom` alarm names the domain (`log_headroom on usage`)
+long before the ceiling. Its size is a count of node-days rather than a rate —
+one message per (node, day, seat, schedule or person) for 181 days — so a log
+that fills has outgrown its census: raise `stream.usage_log_max_bytes` as
+below.
+
+The **chat log** refuses the same way, a sixteenth short of its ceiling
+([its gate reserve](#the-gate-reserve)), and on this log what is refused is a
+message somebody typed: every post, reply,
+DM, edit, delete, reaction and room change is refused `log_full`, from a seat
+and from a person alike. A seat's chat reads are `linearizable` and go with
+them, so a seat woken in a room can neither read the thread nor answer there. A
+person's message is refused rather than lost — the dashboard's composer keeps
+it, with the engine's sentence and a Retry — and the dashboard's reads, at
+`stale`, keep answering. The prune is refused too, and would free nothing if it
+ran: it deletes rows, not log records, so only the trim frees this log. Its
+ceiling does not follow `stream.tracker_log_max_bytes`, so a fleet sized for a
+long blocked trim on the tracker's log reaches this one first: raise
+`stream.chat_log_max_bytes` as below, or clear whatever `blocked_by` names;
+`log_headroom` names the domain (`log_headroom on chat`) long before the
+ceiling.
 
 The refusal carries **no retry hint**, deliberately: the only thing that frees
 a byte is a fifteen-minute gated job, and the log is full precisely because
@@ -1028,8 +1095,10 @@ evict`](#eviction) — is itself a record on that log, so a
 log that refused it like any other append could never be emptied: the
 eviction was refused, run again, and refused again.
 
-So on the three logs that carry gate records — every log that claims identity:
-the tracker's, the knowledge base's and the identity estate's — **ordinary writes are refused at a soft ceiling** below the
+So on the logs that carry gate records — every log that claims identity:
+the tracker's, the knowledge base's, the identity estate's, the artifacts log's,
+the artifact datastore's, the Dashboard Assistant's and chat's — **ordinary
+writes are refused at a soft ceiling** below the
 broker's, and the top of the ceiling — the **gate reserve**, `reserve_bytes`
 in `crewlet retention status` — takes only the records that install or lift a
 gate: an eviction and the readmission that inverts it. A log full for
@@ -1067,7 +1136,10 @@ So the reserve is the larger of two terms:
 |---|---|---|---|---|
 | tracker, knowledge base | 8 MiB less 4 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | identity estate | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+| artifacts | 2 MiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 | artifact datastore | 1 MiB plus 64 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
+| Dashboard Assistant | 2 MiB | 64 MiB | about 15 MiB (the fleet term) | about 49 MiB |
+| chat | 512 KiB | 1 GiB | 64 MiB (a sixteenth) | 960 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
 the reserve holds once every node counts its own.
@@ -1081,7 +1153,9 @@ soft ceiling left, is there so that never happens.
 
 A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.tracker_vectors_max_bytes`, `stream.pages_log_max_bytes`,
-`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`) is not a live
+`stream.iam_log_max_bytes`, `stream.usage_log_max_bytes`,
+`stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
+`stream.assistant_log_max_bytes`, `stream.chat_log_max_bytes`) is not a live
 setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
@@ -1091,13 +1165,14 @@ maintenance window**, and the reason is not caution:
 - A resize is decided against the usage the log is at, and a publisher makes
   that a moving quantity. The verb decides it before the window opens: a
   target whose soft ceiling — the target less its
-  [gate reserve](#the-gate-reserve), on the three identity logs; the whole
+  [gate reserve](#the-gate-reserve), on the logs that claim identity; the whole
   target on the vector changelog and the usage log — is at or below what the
   log already holds is refused, naming both and the least target that would
   do, because that ceiling would refuse every ordinary append the moment it
   applied. So is a target under the floor Tier A holds that log's field to — a
-  gibibyte on the tracker's, the knowledge base's and the vector changelog's,
-  64 MiB on the identity estate's and the usage log's —
+  gibibyte on the tracker's, the knowledge base's, the vector changelog's, the
+  artifacts log's, the artifact datastore's and chat's, 64 MiB on the identity
+  estate's, the usage log's and the Dashboard Assistant's —
   naming the field. Anything else is fair, including a target under the
   current ceiling, which is how a log created larger than its budget gives
   the reservation back.
@@ -1129,9 +1204,16 @@ crewlet run -mode seal
 # 4. from any one of them
 crewlet retention set-capacity CREWLET_TRACKER_LOG 8589934592 -confirm 8589934592
 
-# 5. every node, back to service
+# 5. once every log's window is closed, every node, back to service
 crewlet run
 ```
+
+Resizing more than one log takes the same three restarts: run step 2 for each
+log before the seal restart and step 4 for each after it. Each log has its own
+window, and each window is sealed by its own acknowledgements. A node won't
+start in service while any log has a window open, so the verb that closes a
+window says to restart in service only once none is: otherwise it names every
+window still open with the command that finishes it.
 
 ### The three modes
 
@@ -1149,9 +1231,15 @@ acknowledgement could never establish about itself.
 A node in either maintenance mode **keeps its presence lease** — the process is
 running, and `crewlet fleet broker list`, the fleet view and the participant set
 below all read it — while it claims **no seat** and hands **no writer** to any
-surface: the operator's MCP endpoint offers only its search tool, the purge
-route is not served, the chart's projects and containers are applied at the
-next normal boot, and a stateless node's writes are answered "not here". Its
+surface: the operator's MCP endpoint serves none of the tracker's, the
+knowledge base's or chat's room tools, reads included, and what it keeps
+appends to no state log — the knowledge search and its answers, the
+coordination store's gestures (pausing and resuming a seat, steering a running
+turn, answering a parked run) and, on Chatlet, a person's own read state
+(`mark_chat_read`), so a screen attached to the node can still clear a badge.
+The purge route and chat's erase, prune and horizon routes are not served, the
+chart's projects and containers are applied at the next normal boot, and a
+stateless node's writes are answered "not here". Its
 reads are still served — every level but `linearizable`, which proves the
 log's end by appending a barrier to it and is refused
 [`maintenance`](consistency.md#the-fourteen-refusals). The operator gestures
@@ -1191,6 +1279,31 @@ A **leaf** or a client of an external cluster that holds no data is not asked:
 its broker queues nothing, and its seats publish through a data node, which is.
 Each node's broker kind is on `crewlet fleet broker list`.
 
+Each of them records which process it restarted as the moment it boots into
+either mode, once for every log. Where a log has a window open, that record
+**acknowledges** the window and its attempt. Where it has none yet, which is
+the ordinary case for the first restart, it names no window, and the baseline
+still reads it, so the fleet restarts into `maintenance` once, before you run
+the verb, and the verb then goes ahead. Each log's records are its own, so a
+window on one log is never answered by a restart recorded for another. The
+seal takes only an acknowledgement a node made by booting into `seal` while
+this window's attempt was open, so a restart from before the window never
+stands in for one.
+
+The set is read when the window opens and **again right before every request
+is sent**, and each read only adds to the last. A window can wait at `opened`,
+or at `baselined` once its coordinator has stopped, for a while, so a node that
+came up in the meantime is asked too, and a node the window already named stays
+named until it acknowledges or you exclude it.
+
+The same write records which process each participant is running as the
+request leaves, and that is what the seal compares against: it takes a node's
+acknowledgement only from a later process. A coordinator that resumes a window
+already baselined records it again before its own request leaves. So a node
+restarted while the window waited, into `seal` or not, was running as that
+request left, and it has to restart once more before the seal holds. Run the
+`seal` restart after the verb has answered from `maintenance`, not before.
+
 ### What excludes a publisher
 
 On the default embedded topology, **nothing outside these processes can reach
@@ -1203,10 +1316,56 @@ else holds a connection to it. `set-capacity` refuses there unless you pass
 check that quietly proved nothing would be worse than the refusal.
 
 A node that boots into `normal` mode writes an **admission** before it starts
-anything, then re-reads the operation and withdraws if one is open. A
-coordinator refuses to take the exclusion while any admission is held. Either
-order is then safe: a node that slipped between a check and its own start has
-left a durable record, where a silence would have let the coordinator proceed.
+anything, then re-reads the operation and withdraws if one is open, refusing to
+start and naming the mode to restart it in: `maintenance` while the window is
+at `opened`, and `seal` from `baselined` on, since a request may be
+outstanding from then and the fleet's next restart is the seal's. The
+coordinator does the same the other way round: it writes the operation first,
+then reads the admissions, and sends no request while any is held. Either order
+is then safe: of the two records, whichever lands second has its writer read
+the first, so either the node finds the window and doesn't start, or the
+window finds the node and waits.
+
+What the window does about an admission depends on whether the process that
+wrote it is **running**, which the fleet's presence says: a running process
+renews its node's presence lease in every mode.
+
+- **Running** (it holds its node's presence): it may be publishing, so the
+  window is **closed again** as soon as it opens, nothing is sent, and the verb
+  is refused naming the node. Restart it with `-mode maintenance` and run the
+  verb again. A window left open over it would refuse every node that started
+  in service meanwhile and tell it to restart into maintenance mode, taking a
+  serving node out of service. The same happens when the admissions can't be
+  read.
+- **Not running** (nobody holds its node's presence): a node that stopped
+  without giving its admission back. The window stays at `opened`, which has
+  sent nothing for this attempt, and its first request is refused naming the
+  node, the restart and the exclusion for it. While it waits it refuses every
+  node that starts in service, so the refusal also names the abandonment that
+  closes it.
+- **Replaced** (another process of the node holds its presence): the process
+  the admission names is gone, and the window withdraws the admission itself,
+  logging `admission_superseded`. That is the node restarted into maintenance
+  mode before its crashed process's lease had lapsed.
+
+An admission names the process that wrote it, and it never expires. A node
+gives its own back when it stops cleanly, after its publishers have drained. A
+process that crashed never does, so a node's **next boot into a maintenance
+mode**, the first step of every window, withdraws the admission its last
+process left before it starts anything, and logs `admission_superseded`
+naming it. It does that only once the fleet's presence shows the old process
+isn't running: its presence lease has lapsed, or another process of the node
+holds it. A process that still holds the node's presence may still be
+publishing, so a second process started under a live node's id leaves its
+admission alone and logs `admission_not_superseded`. (A boot in service needs
+no such step: a data node's own admission replaces the old one, and a node
+without `data` publishes nothing.) So a node that crashed in service only has
+to be restarted with the window's `-mode`. Restarted within the coordination
+lease TTL (`coordination.lease_ttl_seconds`) of the crash, its boot still sees
+the crashed process's lease and leaves the admission, and the window withdraws
+it once the restarted process holds the node's presence. A node that will
+never boot again is **excluded** instead (below): the exclusion withdraws its
+admission, and it is the one way past a dead node's.
 
 ### Where it stands, and what is holding it
 
@@ -1214,26 +1373,60 @@ left a durable record, where a silence would have let the coordinator proceed.
 crewlet retention maintenance status -stream CREWLET_TRACKER_LOG
 ```
 
-One page: the operation and its phase and attempt, every participant's
-baselined incarnation against what it acknowledged as, which acknowledgements
-are missing, any unresolved write attempt, and any admission still blocking
-activation.
+One page: the operation and its phase and attempt, the process each participant
+was running as the newest request left against what it acknowledged as, any
+unresolved request and when it was sent, and what the window's next step is
+waiting on, with the commands that run next in full. At `opened` the next step
+is the baseline, so the page names the participants with no restart into a
+maintenance mode recorded and any admission still stopping the window's first
+request. From the baseline on it names what the seal is waiting for instead.
+With no window open on a node in a maintenance mode, it names any node still
+holding an admission, so you know before you open one.
 
 **You do not have to go looking for it.** While an operation is open, both
 `crewlet retention status` and **Settings › Backups & retention** lead with
-it — the stream, the phase, the attempt, how long it has been open, who ran
-the verb, and who is still outstanding — because every number underneath describes a fleet in which
-nothing is running, and a blocked trim read without knowing that sends you
-after the wrong thing. **No acknowledgement outstanding is not progress**: it
-means the operation is waiting on its operator, and both surfaces say so
-rather than printing an empty list.
+it: the stream, the phase, the attempt, how long it has been open, who ran the
+verb, any admission holding it at `opened`, who is still outstanding, and,
+where it needs a person, why in words and who abandoned it. While it is open
+the fleet is held (no node starts in service, and a node restarted for it
+publishes nothing), and a blocked trim read without knowing that sends you
+after the wrong thing. Only a node in service answers either surface, so
+neither says that nothing is publishing. With windows open on more than one
+log, each gets its own, the oldest first. At `opened`, outstanding means no restart into a
+maintenance mode recorded; from the baseline to the seal, every node the seal
+still waits on: one with no acknowledgement from `seal`, or one still the
+process that was running when the request left. Once the window has sealed,
+nobody is outstanding: the verify and the release wait on no node. **Nothing
+outstanding is not progress**: unless an admission holds the window, it means
+the operation is waiting on its operator, and both surfaces say so rather than
+printing an empty list.
+
+**A window the node couldn't read is said, never left out.** The read that
+answers is a coordination read, and the outage that fails it is exactly when
+somebody opens this to ask why the company has gone quiet. So each log whose
+window the answering node couldn't read is named as that (the report's
+`maintenance_unread`, a line on the CLI page, a banner on the screen) and is
+never shown as a log with no window. So is what holds an open window: when the
+acknowledgements or the admissions couldn't be read, both surfaces say so
+rather than naming every node, or nobody. The answering node is in service
+itself, since only one in service answers this; a data node's own boot reads
+the same register and won't start in service while it can't read a log's
+window, for the same reason. The `maintenance_open` alarm judges such a log on
+what the node last read of it: a window it last read open stays up **as old as
+it was when that read answered**, its detail saying when that was and that the
+window can't be finished or abandoned through this node until it can read it
+again, and a log it never read a window on raises nothing. So a blip never
+clears the alarm and never raises one: a window last read at 59 minutes stays
+under the hour however long the blip lasts. The node logs
+`capacity_window_unreadable` with the reason when its reads of a log start
+failing, and `capacity_window_readable` when they stop.
 
 Two gestures act on what it shows:
 
 | | |
 |---|---|
-| `crewlet retention maintenance exclude -stream NAME -node ID -confirm ID` | Your assertion that a participant's **process is stopped** and holds no outstanding request. The only thing that waives an acknowledgement — an eviction does not, because that is about whose records apply and this is about whose process is running. |
-| `crewlet retention maintenance abandon -stream NAME -confirm OPERATION-ID` | Changes what the operation is trying to reach; **never** the barrier it must cross. From `opened` it clears outright, because no request was ever issued. From anywhere else it still enters the seal: a paused coordinator's request is outstanding whether or not a person has read a status page. |
+| `crewlet retention maintenance exclude -stream NAME -node ID -confirm ID` | Your assertion that a participant's **process is stopped** and holds no outstanding request. The only thing that waives an acknowledgement — an eviction does not, because that is about whose records apply and this is about whose process is running. It also withdraws the node's admission, and an excluded node's admission no longer stops the window, so this is how a fleet gets past a node that crashed and will never boot again. Any node can be excluded, whether or not it is a participant. |
+| `crewlet retention maintenance abandon -stream NAME -confirm OPERATION-ID` | Changes what the operation is trying to reach; **never** the barrier it must cross. The node checks the confirmation against the operation that is open before it changes anything, and refuses one naming another. From `opened` it clears outright, because no request was ever issued. From anywhere else it still enters the seal: a paused coordinator's request is outstanding whether or not a person has read a status page. Once the seal holds, `set-capacity` run again closes the window at whatever ceiling the log has then, and sends nothing more. |
 
 Both are recorded on the window with who made them — the status prints each
 excluded participant as `excluded by` its author and the credential they used,
@@ -1248,10 +1441,41 @@ tell an unapplied request from a changed mind. Repeat the number in `-confirm`
 and it is fixed for the life of the operation; to choose a different one,
 abandon and open a new one.
 
+If the ceiling reads back as anything but the target right after the request,
+the verb sends no other request and says what it read. That request may still
+land, so it stays for the `seal` restart to retire, and the verify then checks
+the ceiling again.
+
 A mismatch at verify is a **numbered attempt**, not a re-apply: every node is
 in `seal` mode, which refuses configuration writes, so there is nowhere legal
 for a re-apply to run. Three attempts, then the operation reports blocked and
 waits for you.
+
+**A window that needs a person says why in words.** The operation carries a
+code for scripts, `blocked` (`abandoned_by_operator` or
+`capacity_operation_unsealed`), and every surface shows the sentence beside it
+instead, `blocked_detail`: what blocked the window and what clears it, with
+every command as the CLI takes it. Who abandoned it is printed beside the
+sentence, with the credential they used, rather than in it.
+
+- An **abandoned** window closes at whatever ceiling the log has, and what
+  closes it is its seal: abandoning puts a window back at `sealing` from
+  wherever it was, so the sentence reads the acknowledgements rather than the
+  phase. If the seal already holds (a window abandoned after it sealed, its
+  fleet still in `seal` mode), one `crewlet retention set-capacity <log>
+  <target bytes> -confirm <target bytes>` closes it, with no restart. Otherwise
+  it names every node still to restart with `crewlet run -mode seal`.
+- A window **out of attempts** gets no further request from Crewlet: after the
+  third failed verify, `set-capacity` is blocked again every time it runs. It
+  says what the broker still reports, and that abandoning it (`crewlet
+  retention maintenance abandon -stream <log> -confirm <operation id>`) and then
+  running `set-capacity` from a node in `seal` mode closes it at that ceiling.
+  If the log still needs the target, find out why the broker won't take it
+  before you open a new window for it. The verb's own refusal says the same
+  sentence.
+
+Each code has its sentence, held by a test, so a later code can't reach a
+screen raw.
 
 ## Re-anchoring a recreated or restored log
 
@@ -1324,8 +1548,8 @@ it rather than waiting for that batch.
 copy's age sees a log that is its own history, so nothing about its own log
 refuses it — yet every write it makes after the restore is one the restored
 reanchor of a newer node would apply nowhere, acknowledged to a caller who then
-loses it. So every node reads the positions register on its heartbeat, and a
-peer on the same stream, in the same generation and not evicted, whose position
+loses it. So every data node reads the positions register on its heartbeat,
+and a peer on the same stream, in the same generation and not evicted, whose position
 is past the log's end — confirmed against the log, which must not hold the
 record there — or whose row says `log_diverged`, stops this node's **writes**
 of that domain: each refuses `log_truncated`, naming the peer, and the node
@@ -1481,11 +1705,13 @@ still holds every record the rows are missing — and the verb refuses it as
 having nothing to re-anchor.
 
 **It moves one log.** Each domain — the tracker, the knowledge base, the
-identity estate, the vectors — has its own stream and its own generation, and a reanchor moves only
-the one you named: that domain's checkpoint goes to the next generation, where
-its case puts it, keyed to the live instant. Every other domain keeps its
-checkpoint, its generation and its stream exactly as they were. If more than
-one log was rebuilt, re-anchor each of them.
+identity estate, the vectors, the usage days, the artifacts, their datastore,
+the Dashboard Assistant's conversations and chat — has its own stream and its
+own generation, and a reanchor moves only the one you named: that domain's
+checkpoint goes to the next generation, where its case puts it, keyed to the
+live instant. Every other domain keeps its checkpoint, its generation and its
+stream exactly as they were. If more than one log was rebuilt, re-anchor each
+of them.
 
 **It needs no restart.** The domain's apply loop is paused for the length of
 the transition and resumed on the adopted stream when it completes: its reads
@@ -1496,8 +1722,11 @@ In order, it: checks the confirmation against the live stream; refuses while
 the fleet guards below say so, and on a node evicted from that domain; appends
 the domain's own generation record to the adopted stream (every log that
 claims identity keeps one, applied as `tracker_log_generations`,
-`pages_log_generations` and `iam_log_generations`;
-the vectors keep none); reads the stream's instant
+`pages_log_generations`, `iam_log_generations`, `artifacts_log_generations`,
+`artifactdata_log_generations`, `assistant_log_generations` and
+`chat_log_generations`; the vectors and the usage
+days keep none, because they claim no identity a second opening could
+violate); reads the stream's instant
 again, refusing if it was rebuilt again meanwhile; moves this node's consumer;
 and commits the checkpoint. Every step before the checkpoint can be repeated,
 so a reanchor that failed part-way is finished by running it again: it derives
@@ -1516,7 +1745,8 @@ and each of them adopts a snapshot from a node in the new generation on its
 own ([a node a peer re-anchored past](#a-node-a-peer-re-anchored-past)).
 
 For every log that keeps a generation record — the tracker's, the knowledge
-base's and the identity estate's — it refuses while any peer
+base's, the identity estate's, the artifacts log's, the artifact datastore's,
+the Dashboard Assistant's and chat's — it refuses while any peer
 has already re-anchored the stream — a peer at a later generation of it — naming the peer:
 that peer's rows are the fleet's history in the new generation, and a second
 reanchor from another node's rows would open the same generation over a
@@ -1536,11 +1766,34 @@ its position, the creation instant of the stream its rows are keyed to and the
 broker's instant for its checkpoint's record, so a peer still on the lost
 stream, or past a restored log's end, is compared with this node and one that
 came up on the rebuilt stream with no rows is not: it is further along nothing
-a reanchor discards. A refusal names the peer that is further along. `-force` overrides the
-most-caught-up rule for the case where the fleet cannot be asked, and never the
-first. The
-vectors are exempt from both: their coverage legitimately differs node to node,
-so every node re-anchors its own copy.
+a reanchor discards. A refusal names the peer that is further along. `-force`
+overrides the most-caught-up rule for the case where the fleet cannot be asked,
+and never the first. The vectors and the usage days are exempt from both, and
+every data node re-anchors its own copy of each: the vectors' coverage
+legitimately differs node to node, and each data node's usage days are written
+by that node alone.
+
+**A reanchor of the usage log is followed by every data node publishing every
+day again.** A restored usage log is followed from its end like any other, so
+the node that re-anchors it never applies what the data nodes published after
+the restore and before the reanchor — a late turn of yesterday, a custody batch
+settled onto an older day — and a day published there and not moved since
+would stay at its pre-restore value on that node for the 181 days the history
+keeps it. So each data node watches the usage log's generation on every data
+node in the positions register, and when one rises past what it last answered,
+it publishes every day its own event log still holds again (30 days back), under
+operation ids no earlier copy carries, so the broker's two-minute duplicate
+window cannot collapse an unchanged day onto the copy the reanchor skipped. The
+re-anchoring node does the same as soon as its usage applier resumes, and every
+other data node within a heartbeat and a publish tick (`usage_republish_started`,
+then `usage_republish_settled` once every day has landed; the generations it
+answered are kept in its own `usage_republished` row, so a node down while a
+peer re-anchored answers the rise when it starts; a data node's very first start
+logs the pair once too, its `detail` naming no reanchor, because its row records
+no pass yet). A day the tail held that is
+now more than the event log's 30 days old is not derived again, so re-anchor a
+restored usage log within that window of the restore. Re-anchor each data node's
+copy in turn: each reanchor is a rise the others answer again.
 
 **And one generation is only ever opened once.** Two nodes that re-anchor the
 same log at the same moment — each before the other's position row says so, or
@@ -1553,27 +1806,23 @@ first. A reanchor that failed part-way still finishes when it is run again,
 because the record it finds there is its own.
 
 **It moves that log and nothing else.** The new cursor, the generation and the
-reset are all computed from the one recreated stream, so the reanchor moves
+reset are all computed from the one stream you named, so the reanchor moves
 that domain's cursor alone; it used to move every domain's, to a position in
 the tracker's sequence space that none of their own logs has. And it records
-who ran it: the generation record every data node applies into its audit row names
-the operator and the credential they used, where it named the node that served
-the request.
+who ran it: on a log that keeps a generation record, the record every data node
+applies into its audit row names the operator and the credential they used,
+where it named the node that served the request; on the vector changelog and
+the usage log, which keep none, the serving node's `reanchored` line names
+them.
 
-**Today that log is Worklet's**, `CREWLET_TRACKER_LOG`. A reanchor is
-three steps only the log's own domain can take (reset its rows' versions,
-publish its generation record, write its audit row), and Doclet,
-the identity estate, the vectors and the usage log have none of
-their own yet, so naming one of their logs is refused before anything moves.
-It used to run Worklet's steps for them, resetting Worklet's rows for a
-log that was not Worklet's. Recover one of those logs by adopting the snapshot of a
-peer hydrated on the live stream, or from a backup.
-
-> **The verb could not have completed before this build.** Its reset named
-> three tracker tables with no `version` column and failed on the first, and
-> past that it handed the framework a store handle that answered "not open"
-> when the cursor was moved. Nothing moved in either case, so no estate was
-> left half re-anchored.
+**Every log can be re-anchored, by its own domain.** What a reanchor writes
+beside the checkpoint is the domain's to say: a log that claims identity
+(Worklet's, Doclet's, the identity estate's, the artifacts log's, the artifact
+datastore's, the Dashboard Assistant's and Chatlet's) appends its own generation
+record, which is the audit row above and the first-writer-wins between two
+operators, while the vectors and the usage days declare that they keep none. A
+domain that cannot say is refused when the node boots, never when an operator
+first names its log.
 
 ## Proving a restore
 
@@ -1611,8 +1860,9 @@ runbook nobody read.
 Three different things:
 
 - **Removing** a task hides it. The rows stay; a restore brings it back.
-- **Deleting** writes a marker. Every node drops every record about that task,
-  for ever — which is what stops a redelivery months later resurrecting it.
+- **Deleting** writes a marker. Every data node drops every record about that
+  task, for ever — which is what stops a redelivery months later resurrecting
+  it.
 - **Purging** removes the rows, on every data node as each one reaches the record.
 
 ```
@@ -1644,8 +1894,8 @@ reason is the entire account of what used to be at that key. A purge is an
 session asks for a recent proof first), never an agent and never the engine — because nothing else can be asked to confirm it.
 
 It answers the same three-valued outcome every write here has. `pending` means
-the record is on the log and each node's rows go as it reaches them; do not run
-it again. `unknown` is the one to retry, and the printed operation id goes back
+the record is on the log and each data node's rows go as it reaches them; do
+not run it again. `unknown` is the one to retry, and the printed operation id goes back
 in `-op-id` so the retry cannot append a second purge of a task the first one
 may already have destroyed — and when it did, the retry answers `applied`, at
 the first purge's position, rather than finding the task gone and refusing.
@@ -1715,25 +1965,33 @@ their revision, and a backup when the backup is deleted.
 There is no tiering here, and the absence is a decision rather than an
 omission.
 
-Every node holds the whole corpus in one SQL database. A task filed three years
-ago is read at the same cost as one filed this morning, is searched by the same
-index, and is replicated exactly as many times. The log in front of it is
-trimmed; the tables are not.
+Every data node holds the whole corpus in one SQL database. A task filed three
+years ago is read at the same cost as one filed this morning, is searched by the
+same index, and is replicated exactly as many times. The log in front of it is
+trimmed; the tables are not — bar the usage history, the Dashboard Assistant's
+conversations and the chat transcript, which keep a horizon of their own, and
+the bookkeeping tables each node sweeps, all below.
 
 That is what makes the storage forecast a function of how much a company has
 ever done rather than of how much it is doing — and it is why the numbers below
 are worth reading before the fleet is large.
 
-The **usage history** is the one replicated table set with a horizon of its
-own: each node's company days — spend, turns, page reads, schedule fires — are
-kept **181 days**, which is a ninety-day window, the ninety days it is compared
-with, and the day a moved clock can touch. Nothing sweeps them: every record for
-a day deletes the rows older than that day minus 181 in the same transaction
-that writes it, on every node, and the stream's own age bound forgets the same
-days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-nodes-day).
+Three replicated table sets keep a horizon of their own. The **usage history**
+is one: each data node's company days — spend, turns, page reads, schedule
+fires — are kept **181 days**, which is a ninety-day window, the ninety days it
+is compared with, and the day a moved clock can touch. Nothing sweeps them:
+every record for a day deletes the rows older than that day minus 181 in the
+same transaction that writes it, on every data node, and the stream's own age
+bound forgets the same days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
+The Dashboard Assistant's conversations are another: a conversation nobody has
+touched for the company's `assistant.retention_days`, 30 days by default, is
+purged by the trash reaper through a record every data node applies (see
+[Running the Dashboard Assistant](assistant.md#retention-and-erasure)).
+The chat transcript is the third, and its horizon is the company's to set: see
+[the chat transcript's horizon](#the-chat-transcripts-horizon) below.
 
 Two tables are the exception, and both are swept **per node** rather than once
-across the fleet — each node applies the log into its own copy, so a fleet
+across the fleet — each data node applies the log into its own copy, so a fleet
 singleton would tidy one node and let the table grow for ever on every other,
 which looks exactly like a sweep that works to whoever checks the node it ran
 on.
@@ -1822,11 +2080,11 @@ vouched for over the month (see
 
 ### A removed person's values stay on the identity log until the trim
 
-A removal erases every sealed value of the person's from every node's rows in
+A removal erases every sealed value of the person's from every data node's rows in
 the transaction that removes them — their name, their address and any second
 factor's seed, from their own rows, from an invitation addressed to them and
 from the trail rows that outlive them (see [Identity and
-Access](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-nodes-rows)).
+Access](../concepts/identity-and-access.md#removing-somebody-erases-what-is-theirs-from-every-data-nodes-rows)).
 What it cannot rewrite is the **log**: the records that wrote those values stay
 on `CREWLET_IAM_LOG`, sealed under the fleet keyring, until the trim passes
 them — never before `min_age`, and later for as long as any of the six terms
@@ -1835,10 +2093,11 @@ snapshot.
 
 So the trim is part of an erasure, and a blocked one is an erasure that has not
 finished: the identity log named by an alarm holding its trim — under
-`trim_blocked`, or under `backup_age` while the backup term is what holds it,
-since that alarm lists the logs it holds and those raise no `trim_blocked` of
-their own ([the backup term](#a-company-that-never-backs-up-never-trims)) — is
-also the answer to "is that person's name still on disk". The remedy is the
+`trim_blocked`, or under `backup_age` with the `backup_floor` term on its
+entry, where the backup term holds it while the identity log's own backup is
+missing or stale, since a hold folded there raises no `trim_blocked` of its own
+([the backup term](#a-company-that-never-backs-up-never-trims)) — is also the
+answer to "is that person's name still on disk". The remedy is the
 term's own — a backup that never left the host, a pin nobody released — and
 never a shorter `min_age` for its own sake, which only moves when a record
 *may* go.
@@ -1866,12 +2125,52 @@ that is running and finding nothing from one that was never armed.
 A person's **inbox** — one row per routed change per recipient — is swept at
 `tracker.worklet.inbox_retention_days`, **365 days** by default and settable
 between 30 and 3650, and changed live: the sweep reads it off the running
-company at every tick, as the applier does at every batch. It is the one
-horizon here that deletes something a person reads, and it deletes a *pointer* rather than the thing pointed at: the history
+company at every tick, as the applier does at every batch. It deletes
+something a person reads, and it deletes a *pointer* rather than the thing pointed at: the history
 row behind every notice is never swept, so "what was I told about in 2024" is
 still a `work_activity` question at any age. A month is the floor because below
 it an inbox stops being one — somebody away for four weeks would come back to
 nothing.
+
+### The chat transcript's horizon
+
+The chat transcript is a different kind again. The tables above are swept per
+node, each by its own maintenance worker, because each is that node's own
+bookkeeping. The transcript is neither bookkeeping nor this node's: it is
+replicated content, so it is not swept at all — it is **pruned by a record**,
+one more change on the chat log that every data node applies like any other.
+A message is also the only copy of what somebody said, so
+`chat.chatlet.message_retention_days` — **365 days** by default, settable
+between 30 and 3650, and **`0` to keep everything for ever** — is a policy
+decision rather than a bookkeeping one. `0` reads the opposite way here from
+`tracker.worklet.inbox_retention_days`, where it means "take the default": an
+inbox row is derived from history that answers for ever, and a message is not
+derived from anything.
+
+The prune is a record rather than a local delete, and that is forced rather
+than stylistic. A message's instant is the BROKER's, stamped when the record
+was stored, so one fleet-singleton duty (`chat-prune`) publishing one cutoff
+is what makes every data node delete exactly the same rows; nodes each reading
+their own clock would diverge by whatever their clocks disagree by,
+permanently, with no read that repairs it. A room may carry a horizon of its
+own, which beats the company's — set by an administrator on the human write
+surface ([`PUT /chatlet/channels/{channel_id}/retention`](../reference/api-endpoints.md#a-chat-erase-prune-or-horizon),
+or [`crewlet chatlet retention`](../reference/cli.md#crewlet-chatlet)). Each node's
+chat keyword index follows the same range afterwards, because a forward-only
+walk cannot see a row that vanished. See [Chatlet § Retention](../concepts/chatlet.md#retention).
+
+The horizon the duty prunes by is the company's as the fleet runs it: the
+`message_retention_days` of the revision the fleet's activation pointer names,
+read only on a node that runs that very revision. A node serving any other,
+because it refused the fleet's revision, booted on an offline import the fleet
+has not taken, or has not yet applied a revision activated a moment ago,
+neither publishes a cutoff nor claims the duty, and logs
+`chat_prune_declined` naming the activation it serves and the fleet's epoch;
+a peer that runs the fleet's revision takes the duty once the lease lapses.
+So a node falling behind makes a horizon late, never early, which is the
+direction a prune can afford: an hour missed is pruned on the next tick, and
+a message pruned by a horizon the company has since raised cannot be brought
+back.
 
 ## The storage forecast
 
@@ -1883,40 +2182,92 @@ a day, 3 000 turns a day, 50 projects):
 | replicated store, per node | 9.7 GB | 26.6 GB | 43.8 GB |
 | snapshot volume at ×4.2 | 40.8 GB | 111.8 GB | 183.9 GB |
 
-The log itself, on a healthily-trimming fleet, holds **about 156 MB** — the
-`min_age` window's worth of records, not a year's. `blocked_by` is the field
-that says whether this fleet is one that trims; if it is set, the log is
-growing without bound and the forecast above does not apply to it.
+**Chat is forecast separately, and it is the reason the horizon exists.** At
+the declared census of 20 000 messages a day, a year is 7.3 M message rows;
+at the row-and-index width this schema carries that is roughly **7 GB per
+data node, per year** — comparable to everything else the reference company
+writes in its first year put together. Under the default 365-day horizon that
+figure is a STEADY STATE rather than a slope: the prune removes about as much as
+the company writes, on every data node, in every snapshot and in every join
+transfer. With `message_retention_days: 0` it is a slope, and a company choosing
+that should size the snapshot volume for it. This is a DERIVED number over a
+declared census — change the census and it changes proportionally.
+
+The mutation log itself, on a healthily-trimming fleet, holds **about 156 MB**
+— the `min_age` window's worth of records, not a year's — and the chat log
+about 230 MB at the census (a week at its 32 MB a day). `blocked_by` is the field that says whether this
+fleet is one that trims; if it is set on a log, that log is growing without
+bound and the forecast above does not apply to it.
 
 The read barriers add about **639 MB a year** to the log's throughput, which is
 inside the ceiling by a factor of five at year five. That figure is a term in
 the log's own size, so it is printed with its derivation rather than assumed:
 it comes from an assumed 125 linearizable reads a day per agent seat, which is
-12 500 for the reference company's 100 seats. The
-[`census_drift`](../reference/alarms.md) alarm holds every log to that
-assumption: each log is expected to take 125 reads a day per agent seat (a
-company with none is counted as one), plus what the engine reads on its own —
-the object store's collector, one in the fleet, pins the tracker's log 25 times
-a day (24 collections and one audit) — and the alarm fires on the log furthest
-past twice its census.
+12 500 for the reference company's 100 seats, at about 140 bytes a barrier.
+
+**Each log's read rate is its domain's own declaration.** A barrier lands on the
+log of the domain the read is about, so the engine's register states, per
+domain, how many linearizable reads a day each agent seat puts on its log, and a
+domain that grants `linearizable` cannot be registered without stating it. The
+tracker's, the knowledge base's, the artifacts log's and the artifact
+datastore's logs each declare **125**: a seat's tools read all four at
+`linearizable`, and the census says how many reads a company makes rather than
+how they split between them, so each declares all of them. Chat's log declares
+**120** of its own — the four chat reads each of a seat's thirty turns a day is
+declared to make, every one at the seat's own level — so its ceiling,
+`stream.chat_log_max_bytes`, carries a barrier term of 120 × 100 × 365 × 140 B,
+about 613 MB a year at the reference company. The
+identity estate's log declares **none**: no read of it takes a barrier, because
+every identity answer is a node's own rows with their lag beside them, and a
+session a node has not applied yet is waited for at the position its bearer
+states. So its ceiling, `stream.iam_log_max_bytes`, has no barrier term — its
+512 MiB default is sized from sessions, and the barrier half of the arithmetic
+at its definition is 0 × 100 × 365 × 140 B. It was held to the tracker's and
+the knowledge base's 125 a day per seat before the rate was declared per domain: a census its ceiling
+was never sized for, which at the reference company is about 639 MB a year of
+barriers it would have had to hold against a 512 MiB ceiling, and which
+`census_drift` would have measured it against while it took none. The
+Dashboard Assistant's log declares **none** as well: no seat reads it, and a
+person reads their own conversation through the node their own writes waited
+on, so its one barrier is the collector's pin below, counted as the engine's
+own.
+
+The [`census_drift`](../reference/alarms.md) alarm holds every log to its own
+census: its domain's rate per agent seat (a company with none is counted as
+one), plus what the engine reads on its own — the object store's collector, one
+in the fleet, pins the log of every domain whose rows name a file 25 times a day
+(24 collections and one audit) — and the alarm names every log past twice its census, a log whose
+domain declares none on its first barrier, each with the Tier A field that sets
+that log's own ceiling — `stream.tracker_log_max_bytes` on the mutation log,
+`stream.chat_log_max_bytes` on chat's, `stream.iam_log_max_bytes` on the
+identity estate's: every read past the census
+is a barrier record on that log, so it is that field's sizing the extra reads
+have outgrown, whatever else the field is sized from.
 The rate is the log's, counted where every data node applies it, and each barrier is
 counted in the hour it was **committed**: a node back from days away, or
 adopting a snapshot a day old, replays days of barriers in minutes, and they
 count toward the day they happened in rather than toward today.
 
-Two excursions are designed for and do not alarm:
+Two excursions are designed for and do not alarm on a volume sized for them:
 
 1. **A full re-embedding.** A width change republishes every vector, which at
    year five bottoms the vector log's headroom at about 51 % at the 16 GiB a
-   64 GiB volume asks for — about 43 % at the 13.8 GiB it is created with
-   once the one budget scales every log to fit the broker there — and at about
-   88 % at the 64 GiB a volume of about 290 GiB or more gets. The alarm threshold is
-   10 %, clear of each. The corpus is the company's whole history — about
-   17 MB per agent seat per year — so a larger or older company sets
-   `stream.tracker_vectors_max_bytes` at about twice it: 34 MB per agent seat
-   per year of history.
-2. **A bulk gesture.** One maximal bulk update is 16 seconds of applier
-   occupancy on every peer; see [Replication](replication.md).
+   64 GiB volume asks for, and at about 88 % at the 64 GiB a volume of about
+   662 GiB or more gets. The alarm threshold is 10 %, clear of each. But the
+   one budget scales every log to fit the broker, and a 64 GiB volume creates
+   the log at 5.4 GiB, too small to hold that re-embedding at all: below about
+   100 GiB free, set `stream.tracker_vectors_max_bytes` to at least 9 GiB. That
+   is also why an unset chat log asks for a sixteenth of the free space rather
+   than its whole 8 GiB on a small volume: every derived ask is scaled into the
+   one budget in proportion, so what the chat log asks for comes out of the
+   vector changelog's room. The
+   corpus is the company's whole history — about 17 MB per agent seat per
+   year — so a larger or older company sets `stream.tracker_vectors_max_bytes`
+   at about twice it: 34 MB per agent seat per year of history.
+2. **A burst.** A cross-project move re-keys a subtree of up to 1 000 tasks,
+   one record each, and every 2 000 rows its records write is about a second
+   of applier occupancy on every data node; see
+   [Replication](replication.md#the-burst-degradation-priced).
 
 ## The recovery-operations profile
 
@@ -1945,8 +2296,10 @@ which:
   deliverable time, the quantisation recall, the fsync rates. These came off a
   benchmark.
 - **DERIVED** — the join projections, the storage forecast, the barrier's
-  annual bytes. These are arithmetic over measured inputs and a stated corpus.
-  Change the corpus and they change.
+  annual bytes, and the chat transcript's 7 GB a node a year. These are
+  arithmetic over measured inputs and a stated corpus. Change the corpus and
+  they change — the chat figure in particular is linear in the declared
+  census, and a company that talks twice as much pays twice as much for it.
 - **PROJECTED** — the supported search corpus at your concurrency, and the
   under-load search capacity. These need a benchmark on your hardware, and
   until it runs they are estimates with a stated basis rather than facts.

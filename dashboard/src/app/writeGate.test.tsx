@@ -149,6 +149,40 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "who may ask, and telling an anonymous or unbound one what would let them",
     suite: "app/palette/Palette.test.tsx",
   },
+  "routes/chatlet/Room.tsx": {
+    why:
+      "a room's Join, Leave and Mute, and a message's Edit, Delete and reactions — the " +
+      "room's own refusal said once above the transcript, each control held by its own tool",
+    suite: "routes/chatlet/Access.test.tsx",
+  },
+  "routes/chatlet/outbox.ts": {
+    why:
+      "a message said in a room or a thread, and its retry under the same operation key — " +
+      "the composer that sends it is held with the browser's reason",
+    suite: "routes/chatlet/Access.test.tsx",
+  },
+  "routes/chatlet/cursor.ts": {
+    why:
+      "the read cursor, flushed in the background as the reader reads — no control, so " +
+      "a reader who cannot act is sent nothing at all",
+    suite: "routes/chatlet/Access.test.tsx",
+  },
+  "routes/chatlet/StartRoom.tsx": {
+    why: "the New room dialog's Create (create_channel)",
+    suite: "routes/chatlet/Access.test.tsx",
+  },
+  "routes/chatlet/StartDirect.tsx": {
+    why: "the New direct message dialog's Open (open_dm)",
+    suite: "routes/chatlet/Access.test.tsx",
+  },
+  "routes/chatlet/RoomSettings.tsx": {
+    why: "a room's topic and purpose, saved from its Topic dialog (update_channel)",
+    suite: "routes/chatlet/Access.test.tsx",
+  },
+  "routes/chatlet/Browse.tsx": {
+    why: "the Find a room dialog's Join on each room the reader is not in (join_channel)",
+    suite: "routes/chatlet/Access.test.tsx",
+  },
 };
 
 /** How each control of `components/writes.tsx` is mounted, and the name it is found by. */
@@ -213,6 +247,7 @@ const NOBODY: ViewerState = {
   admin: false,
   worklet: false,
   doclet: false,
+  chatlet: false,
   handle: "",
   owner: "",
   name: "",
@@ -227,6 +262,7 @@ const NOBODY: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatVendors: [],
 };
 
 const READERS: readonly {
@@ -260,6 +296,7 @@ const READERS: readonly {
       admin: true,
       worklet: true,
       doclet: true,
+      chatlet: true,
       handle: "jane",
       owner: "jane",
       name: "Jane Founder",
@@ -278,6 +315,7 @@ const READERS: readonly {
       admin: true,
       worklet: true,
       doclet: true,
+      chatlet: true,
       handle: "jane",
       owner: "jane",
       name: "Jane Founder",

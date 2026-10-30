@@ -119,6 +119,9 @@ function refusalWords(refusal: ConfigRefusal, stage: "check" | "save"): string {
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "starting":
       return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
+    case "unavailable":
+      // CERTAIN, like a drain's: the engine refused before writing, and a wait clears it.
+      return `Nothing was stored${refusal.detail ? `: ${refusal.detail}` : "."} Try again in a moment.`;
     case "unsettled":
       return stage === "check"
         ? `${unsettledSentence(refusal)} Nothing was stored. Check the change again.`

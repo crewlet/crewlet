@@ -1,8 +1,11 @@
 package doclet_test
 
 import (
+	"cmp"
 	"errors"
+	"fmt"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -438,6 +441,53 @@ func TestThePageFeedNarrowsByWhoWasWriting(t *testing.T) {
 	}
 }
 
+// AN AUDIT OF SEVERAL KINDS IS ONE FEED, PAGED IN THE LOG'S ORDER.
+//
+// Each author kind is read as its own arm and the arms are merged, so the
+// claim is about the merge: across pages, every change of every kind named
+// comes back exactly once, newest first, with the kinds interleaved as the log
+// interleaved them — never one kind's page and then the other's, which is what
+// a merge that dropped its own order or limit would answer — and a kind named
+// twice is read once.
+func TestAPageAuditOfSeveralKindsIsOneFeedInTheLogsOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	operator := doclet.Actor{Handle: "ops-1", Kind: doclet.AuthorOperator}
+	for i, writer := range []doclet.Actor{operator, author("jane"), operator,
+		author("jane"), operator} {
+		r.write(writer, doclet.NewPage{Title: fmt.Sprintf("Page %d", i), Body: "prose"})
+		r.drain()
+	}
+	var want []uint64
+	for _, change := range r.activity(doclet.PageActivityQuery{}).Changes {
+		want = append(want, change.LogSeq)
+	}
+	if len(want) < 5 {
+		t.Fatalf("the feed has %d changes, want at least the five creates", len(want))
+	}
+	audit := doclet.PageActivityQuery{Limit: 2, ActorKinds: []doclet.AuthorKind{
+		doclet.AuthorOperator, doclet.AuthorHuman, doclet.AuthorOperator}}
+	var got []uint64
+	for range want {
+		answer := r.activity(audit)
+		for _, change := range answer.Changes {
+			got = append(got, change.LogSeq)
+		}
+		if answer.NextCursor == "" {
+			break
+		}
+		cursor, err := strconv.ParseUint(answer.NextCursor, 10, 64)
+		if err != nil {
+			t.Fatalf("the cursor %q is not a position: %v", answer.NextCursor, err)
+		}
+		audit.Cursor = cursor
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the audit paged as %v, want %v — every change once, newest "+
+			"first, as the log made them", got, want)
+	}
+}
+
 // A REVISION IS A BODY, and the detail's summaries could only ever say that
 // one existed.
 //
@@ -612,5 +662,327 @@ func TestASaveExcerptIsItsMessageAndNothingElse(t *testing.T) {
 	// Newest first.
 	if want := []string{"raise the grace", ""}; !slices.Equal(saves, want) {
 		t.Fatalf("save excerpts = %q, want %q", saves, want)
+	}
+}
+
+// PAGING A LISTING RETURNS EVERY PAGE ONCE, IN ITS ORDER.
+//
+// A later window is read as the arms of the order strictly after the row its
+// cursor names — the title held equal with the id past it, then every title
+// past it, then every container past it — each read in turn until the window
+// is full, so a "Load more" sees every page exactly once only while those arms
+// partition what follows the cursor and are read nearest first. Each listing
+// here is read whole and then one, two and three pages at a time, so a window
+// stops at every row of it: at the boundary between two containers in the
+// workspace, beside a title another container also holds, past a trashed page
+// a listing of the live ones leaves out, inside a tree level, and inside a
+// listing a label or a watcher narrows, which is read from the filter's own
+// rows and sorted rather than walked in the order's index.
+//
+// Mutation: drop the id bound from the resume's first arm, and the row a
+// window stopped on is read again at the top of the next; read the arms
+// shallowest first, and the windows come back out of order.
+func TestPagingAListingReturnsEveryPageOnceInItsOrder(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	retired := r.write(author("jane"), doclet.NewPage{Title: "Retired", Body: "prose"})
+	if _, err := r.store.Trash(t.Context(), author("jane"), retired.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	r.drain()
+	// LABELLED ACROSS EVERY LEVEL AND CONTAINER, so the listings a label
+	// narrows have rows to page through on either side of a boundary.
+	runbook := []string{"runbook"}
+	for _, title := range []string{"Alpha", "Oncall", "Zeta", "Runbook"} {
+		page := doclet.NewPage{Title: title, Body: "prose"}
+		if title != "Oncall" {
+			page.Labels = runbook
+		}
+		r.write(author("jane"), page)
+	}
+	handbook := r.write(author("jane"), doclet.NewPage{Title: "Handbook", Body: "index"})
+	for _, title := range []string{"Travel", "Expenses", "Leave"} {
+		page := doclet.NewPage{Title: title, Body: "prose", ParentID: handbook.Page.ID}
+		if title == "Travel" {
+			page.Labels = runbook
+		}
+		r.write(author("jane"), page)
+	}
+	for _, title := range []string{"Deploys", "Alpha"} {
+		r.write(author("jane"), doclet.NewPage{Container: "OPS", Title: title,
+			Body: "prose", Labels: runbook})
+	}
+	r.write(author("jane"), doclet.NewPage{Container: "PROD", Title: "Roadmap", Body: "prose"})
+
+	live := []doclet.Status{doclet.StatusPublished, doclet.StatusDraft}
+	for name, f := range map[string]doclet.Filter{
+		"the workspace":       {},
+		"one container":       {Container: "ENG"},
+		"its live pages":      {Container: "ENG", Status: live},
+		"its top level":       {Container: "ENG", Roots: true},
+		"one page's children": {ParentID: handbook.Page.ID},
+		// READ FROM THE FILTER'S OWN ROWS AND SORTED, so the windows are
+		// sorts of those rows rather than walks of the order's index, and
+		// the arms must page them all the same.
+		"a label's pages":                 {Label: "runbook"},
+		"a label's live pages in a space": {Container: "ENG", Label: "runbook", Status: live},
+		"one person's watched pages":      {Watcher: "jane", Status: live},
+	} {
+		t.Run(name, func(t *testing.T) {
+			whole := f
+			whole.Limit = doclet.MaxLimit
+			all := r.list(whole)
+			if all.After != "" || len(all.Pages) < 3 {
+				t.Fatalf("the whole listing is %d pages with a next window %q — "+
+					"the fixture must fit one window and give three to page through",
+					len(all.Pages), all.After)
+			}
+			if !slices.IsSortedFunc(all.Pages, inListingOrder) {
+				t.Fatalf("the whole listing is %v, which is not in the listing's "+
+					"order of container, title and id", placement(all.Pages))
+			}
+			for size := 1; size <= 3; size++ {
+				window := f
+				window.Limit = size
+				var paged []doclet.Summary
+				for range len(all.Pages) + 1 {
+					got := r.list(window)
+					paged = append(paged, got.Pages...)
+					if got.After == "" {
+						break
+					}
+					window.After = got.After
+				}
+				if !slices.Equal(placement(paged), placement(all.Pages)) {
+					t.Errorf("paged %d at a time the listing reads\n%v\nwant\n%v",
+						size, placement(paged), placement(all.Pages))
+				}
+			}
+		})
+	}
+}
+
+// inListingOrder orders two rows as every listing is ordered: container, then
+// title, then id, each by its bytes.
+func inListingOrder(a, b doclet.Summary) int {
+	return cmp.Or(cmp.Compare(a.Container, b.Container), cmp.Compare(a.Title, b.Title),
+		cmp.Compare(a.ID, b.ID))
+}
+
+// placement is each row's place in the order, readably.
+func placement(rows []doclet.Summary) []string {
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = row.Container + "/" + row.Title + "/" + row.ID
+	}
+	return out
+}
+
+// A LISTING'S CHILD COUNT FOLLOWS ITS NARROWING, PARENT BY PARENT.
+//
+// Each row of a listing counts the pages directly under it that the SAME
+// listing would show: its status and skill narrowing applied to the children,
+// and nothing else. The count is read for a whole window of rows at once, so
+// it must also keep each parent's children apart. Here two parents and a leaf
+// share one window of the workspace, one parent holding a live child, a
+// trashed one and a tool skill, and the counts are read under no narrowing,
+// under a listing of the live pages, and under each skill narrowing.
+//
+// Mutation: drop the narrowing from the count, and the trashed child is
+// counted under the live listing and the skill under the ordinary one; count
+// by the child's own id rather than its parent's, and every count is zero.
+func TestAListingsChildCountFollowsItsNarrowing(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	runbooks := r.write(author("jane"), doclet.NewPage{Title: "Runbooks", Body: "index"})
+	r.write(author("jane"), doclet.NewPage{
+		Title: "Provisioner", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	gone := r.write(author("jane"), doclet.NewPage{
+		Title: "Retired", Body: "prose", ParentID: runbooks.Page.ID,
+	})
+	r.write(author("jane"), doclet.NewPage{
+		Title: "Deploying", Body: skillBody, ParentID: runbooks.Page.ID,
+	})
+	if _, err := r.store.Trash(t.Context(), author("jane"), gone.Page.ID); err != nil {
+		t.Fatalf("Trash: %v", err)
+	}
+	handbook := r.write(author("jane"), doclet.NewPage{Title: "Handbook", Body: "index"})
+	r.write(author("jane"), doclet.NewPage{
+		Title: "Travel", Body: "prose", ParentID: handbook.Page.ID,
+	})
+	leaf := r.write(author("jane"), doclet.NewPage{Title: "Glossary", Body: "prose"})
+	r.drain()
+
+	skills, ordinary := true, false
+	live := []doclet.Status{doclet.StatusPublished, doclet.StatusDraft}
+	for name, c := range map[string]struct {
+		f    doclet.Filter
+		want map[string]int
+	}{
+		"no narrowing": {doclet.Filter{Roots: true},
+			map[string]int{runbooks.Page.ID: 3, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the live pages": {doclet.Filter{Roots: true, Status: live},
+			map[string]int{runbooks.Page.ID: 2, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the ordinary pages": {doclet.Filter{Roots: true, Skills: &ordinary},
+			map[string]int{runbooks.Page.ID: 2, handbook.Page.ID: 1, leaf.Page.ID: 0}},
+		"the tool skills": {doclet.Filter{ParentID: runbooks.Page.ID, Skills: &skills},
+			map[string]int{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := map[string]int{}
+			for _, p := range r.list(c.f).Pages {
+				if _, ok := c.want[p.ID]; ok || p.Children != 0 {
+					got[p.ID] = p.Children
+				}
+			}
+			for id, n := range c.want {
+				if got[id] != n {
+					t.Errorf("%s counts %d children, want %d (every count %v)",
+						id, got[id], n, got)
+				}
+			}
+			for id, n := range got {
+				if _, ok := c.want[id]; !ok {
+					t.Errorf("%s, a page with no children, counts %d", id, n)
+				}
+			}
+		})
+	}
+}
+
+// THE NEWEST SKILLS ARE LISTED BY WHEN THEY CHANGED, ACROSS EVERY WINDOW.
+//
+// Agent skills and Home's Agent skills widget list the tool skills newest
+// first. The only listing there was ran in the knowledge base's own order —
+// container, title, id — so "newest" was a sort of whichever window that
+// order held: past one window of skills the newest could be one no window
+// drawn had loaded. A newest-first listing is now read in that order itself
+// ([doclet.OrderNewest]), from the skill rows' own index, and paged by a cursor
+// in it. Here the skill whose title sorts first is the one saved last, a
+// rename moves another to the front, an ordinary page changed after every
+// skill is no row of it, and each window size pages the whole listing back
+// in the same order. And the instant each row reports is its HEAD's, which
+// the skill row copies on every apply that moves it.
+//
+// Mutation: order the newest listing by title again, and Alpha is listed
+// last; write the skill row's instant from anything but the head's, and a
+// row reports another instant than the page; drop the id from the cursor's
+// arm, and a window repeats the row the last one stopped on.
+func TestTheNewestSkillsAreListedByWhenTheyChanged(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	written := map[string]doclet.Written{}
+	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta"} {
+		written[title] = r.write(author("jane"), doclet.NewPage{Title: title, Body: skillBody})
+	}
+	written["Oncall"] = r.write(author("jane"), doclet.NewPage{
+		Container: "OPS", Title: "Oncall", Body: skillBody,
+	})
+	if _, err := r.store.Rename(t.Context(), author("jane"), written["Charlie"].Page.ID,
+		"Charlie renamed", false); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	r.drain()
+	if _, err := r.store.SavePage(t.Context(), author("jane"), written["Alpha"].Page.ID,
+		doclet.Save{BaseVersion: 1, Body: ptr(skillBody + "\nSay so in the channel.")}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	r.drain()
+	r.write(author("jane"), doclet.NewPage{Title: "Echo", Body: "prose, changed after every skill"})
+
+	skills := true
+	newest := doclet.Filter{Skills: &skills, Status: []doclet.Status{doclet.StatusPublished},
+		Order: doclet.OrderNewest, Limit: doclet.MaxLimit}
+	all := r.list(newest)
+	want := []string{"Alpha", "Charlie renamed", "Oncall", "Delta", "Bravo"}
+	if got := titles(all); !slices.Equal(got, want) || all.Total != len(want) || all.After != "" {
+		t.Fatalf("the newest skills are %v (total %d, next %q), want %v in one "+
+			"window", got, all.Total, all.After, want)
+	}
+	byTitle := doclet.Filter{Skills: &skills, Status: newest.Status, Limit: doclet.MaxLimit}
+	heads := map[string]doclet.Summary{}
+	for _, row := range r.list(byTitle).Pages {
+		heads[row.ID] = row
+	}
+	for _, row := range all.Pages {
+		if head := heads[row.ID]; !row.Updated.Equal(head.Updated) || row.Updated.IsZero() {
+			t.Errorf("%s is listed newest first as changed at %v, and its head says %v",
+				row.Title, row.Updated, head.Updated)
+		}
+	}
+
+	for size := 1; size <= 3; size++ {
+		window := newest
+		window.Limit = size
+		var paged []string
+		for range len(want) + 1 {
+			got := r.list(window)
+			paged = append(paged, titles(got)...)
+			if got.Total != len(want) {
+				t.Errorf("a window of %d says total %d, want %d", size, got.Total, len(want))
+			}
+			if got.After == "" {
+				break
+			}
+			window.After = got.After
+		}
+		if !slices.Equal(paged, want) {
+			t.Errorf("paged %d at a time the newest skills are %v, want %v", size, paged, want)
+		}
+	}
+}
+
+// A NEWEST-FIRST LISTING IS SERVED FOR THE SKILLS ALONE, AND ITS CURSOR IN NO
+// OTHER ORDER.
+//
+// The order is held by the skill rows' own index, so over any other listing it
+// would sort everything that listing matches to return a window: refused,
+// naming what it is served for, rather than served slowly. And a cursor is a
+// place in ONE order, so a title listing's cursor handed to a newest-first one
+// — or the reverse — is refused rather than read as a place it does not name.
+//
+// Mutation: serve the newest order without the skill narrowing, and the
+// refusal is a listing; drop the order from the cursor, and either listing
+// resumes from a place in the other's.
+func TestANewestListingIsServedForTheSkillsAlone(t *testing.T) {
+	t.Parallel()
+	r, _ := hooked(t)
+	for _, title := range []string{"Alpha", "Bravo", "Charlie"} {
+		r.write(author("jane"), doclet.NewPage{Title: title, Body: skillBody})
+	}
+	skills, ordinary := true, false
+	fresh := statelog.Freshness{Level: statelog.ReadSession}
+	for name, f := range map[string]doclet.Filter{
+		"every page":         {Order: doclet.OrderNewest},
+		"the ordinary pages": {Order: doclet.OrderNewest, Skills: &ordinary},
+	} {
+		if _, err := r.reader.List(t.Context(), f, fresh); !errors.Is(err, doclet.ErrUnservedOrder) {
+			t.Errorf("%s newest first answers %v, want %v", name, err, doclet.ErrUnservedOrder)
+		}
+	}
+	if _, err := r.reader.List(t.Context(), doclet.Filter{Order: "oldest"}, fresh); err == nil {
+		t.Error("a listing in an order this build does not read was served")
+	}
+
+	byTitle := doclet.Filter{Skills: &skills, Limit: 1}
+	newest := doclet.Filter{Skills: &skills, Limit: 1, Order: doclet.OrderNewest}
+	titleCursor, newestCursor := r.list(byTitle).After, r.list(newest).After
+	if titleCursor == "" || newestCursor == "" {
+		t.Fatal("a window of one of three skills minted no cursor")
+	}
+	byTitle.After, newest.After = newestCursor, titleCursor
+	for name, f := range map[string]doclet.Filter{
+		"a title listing from a newest cursor": byTitle,
+		"a newest listing from a title cursor": newest,
+	} {
+		if _, err := r.reader.List(t.Context(), f, fresh); !errors.Is(err, doclet.ErrBadCursor) {
+			t.Errorf("%s answers %v, want %v", name, err, doclet.ErrBadCursor)
+		}
+	}
+	for _, order := range doclet.ListOrders() {
+		if !order.Valid() {
+			t.Errorf("%q is listed as an order this build reads and is not valid", order)
+		}
 	}
 }

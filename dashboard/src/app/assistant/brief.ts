@@ -26,6 +26,7 @@ const NOUN_WORDS: Record<AssistantRecordNoun, string> = {
   page: "page",
   turn: "turn",
   run: "coding run",
+  room: "room",
 };
 
 /** What a record of each kind is called, where the screen named no noun for it. */
@@ -41,6 +42,7 @@ const KIND_WORDS: Record<AssistantResourceRef["kind"], string> = {
   run: "coding run",
   schedule: "schedule",
   view: "view",
+  room: "room",
 };
 
 /** What a selected record is called: the screen's noun, or its kind's. */

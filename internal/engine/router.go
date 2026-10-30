@@ -16,13 +16,13 @@ import (
 
 // THE ESTATE'S ROUTER, ON EVERY NODE.
 //
-// Every seat tool on every node reaches the tracker and the knowledge base
-// through one [estate.Router]: a data node holds the whole estate and answers
-// its own seats' calls from its own copy — with its floors enforced exactly as
-// a remote data node enforces them — while a node without `data` holds nothing
-// and asks for everything. A tool cannot tell which, and must not: a tool that
-// behaved differently on the two kinds of node would be two tools, and only
-// one of them tested.
+// Every seat tool on every node reaches the tracker, the knowledge base and
+// chat through one [estate.Router]: a data node holds the whole estate and
+// answers its own seats' calls from its own copy — with its floors enforced
+// exactly as a remote data node enforces them — while a node without `data`
+// holds nothing and asks for everything. A tool cannot tell which, and must
+// not: a tool that behaved differently on the two kinds of node would be two
+// tools, and only one of them tested.
 //
 // # Who holds the estate, as this node routes it
 //
@@ -406,19 +406,28 @@ func (e *Engine) estateBackend(c *core, n *native) estate.Backend {
 	if n.searcher != nil {
 		b.Knowledge = n.searcher
 	}
-	writer, store := e.writeSide()
-	if writer != nil {
+	if n.chatReader != nil {
+		b.Chat = n.chatReader
+	}
+	if n.chatIndex != nil {
+		b.ChatSearch = n.chatIndex
+	}
+	w := e.writeSide()
+	if w.tracker != nil {
 		b.Writer = func(a estate.Actor) estate.TrackerWriter {
 			// A NIL INTERFACE, never a typed nil: the server reads nil
 			// as "the tracker refused to act as this party".
-			if w := writer.As(a.Handle, a.Kind, a.Provenance); w != nil {
-				return w
+			if tw := w.tracker.As(a.Handle, a.Kind, a.Provenance); tw != nil {
+				return tw
 			}
 			return nil
 		}
 	}
-	if store != nil {
-		b.PageWriter = store
+	if w.pages != nil {
+		b.PageWriter = w.pages
+	}
+	if w.chat != nil {
+		b.ChatWriter = w.chat
 	}
 	return b
 }

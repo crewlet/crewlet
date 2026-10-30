@@ -198,24 +198,37 @@ func (f *moveFanout[M]) tell(moved []M) {
 	}
 }
 
+// listening reports whether anything is registered to hear this domain's
+// batches: what the live relay's follower asks before it follows a peer
+// ([Engine.liveListening]).
+func (f *moveFanout[M]) listening() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.listeners) > 0
+}
+
 // OnArtifactsMoved registers what this node does when a committed artifacts
 // batch moved artifacts (a new version, a narrowing, a trash, a purge), and
 // answers the function that unregisters it.
 //
-// fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE, with the next batch waiting
-// behind it, so it must not block: signal and do the work elsewhere. EVERY DATA
-// NODE APPLIES EVERY RECORD, and every node that serves the artifact origin or
-// a socket is a data node, so each hears every movement from its own applier
-// and nothing is forwarded between nodes. A movement of kind
+// fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE, or the live relay
+// follower's, with the next batch waiting behind it, so it must not block:
+// signal and do the work elsewhere. EVERY DATA NODE APPLIES EVERY RECORD, and
+// every node that serves the artifact origin or a socket is a data node, so
+// each hears every movement from its own applier while its copy serves, and a
+// sound peer's, relayed, while it does not (liverelay.go). A movement of kind
 // [artifactsdomain.MoveReset] names no artifact: everything this node decided
-// from its artifact rows may have moved.
+// from its artifact rows may have moved, which is also what every switch of
+// the relay's source is ([Engine.liveGap]).
 func (e *Engine) OnArtifactsMoved(fn func([]artifactsdomain.Moved)) (stop func()) {
 	return e.artifactsListeners.add(fn)
 }
 
-// artifactsMoved is what the artifacts applier calls after a committed batch.
+// artifactsMoved is what the artifacts applier calls after a committed batch:
+// announced to this node's listeners and kept for its relay followers, one
+// source at a time ([Engine.announce]).
 func (e *Engine) artifactsMoved(moved []artifactsdomain.Moved) {
-	e.artifactsListeners.tell(moved)
+	e.announce(liveBatch{Artifacts: moved})
 }
 
 // OnArtifactDataMoved registers what this node does when a committed datastore
@@ -223,19 +236,22 @@ func (e *Engine) artifactsMoved(moved []artifactsdomain.Moved) {
 // socket hub, which shapes each delta per reader by the collection's read rule
 // and the row's creator the movement carries.
 //
-// fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE and must not block, for
-// [Engine.OnArtifactsMoved]'s reason. A movement with [artifactdata.Moved.Reset]
-// names no store: everything this node decided from datastore rows may have
-// moved.
+// fn IS CALLED ON THE APPLY LOOP'S OWN GOROUTINE, or the live relay
+// follower's, and must not block, for [Engine.OnArtifactsMoved]'s reason, and
+// it hears the same one source at a time. A movement with
+// [artifactdata.Moved.Reset] names no store: everything this node decided from
+// datastore rows may have moved.
 func (e *Engine) OnArtifactDataMoved(fn func([]artifactdata.Moved)) (stop func()) {
 	return e.artifactDataListeners.add(fn)
 }
 
 // artifactDataMoved is what the datastore applier calls after a committed
-// batch. It also samples the company's datastore footprint onto this node's
-// recorder, from the rows the batch just committed.
+// batch: announced like [Engine.artifactsMoved]. It also samples the company's
+// datastore footprint onto this node's recorder, from the rows the batch just
+// committed, whichever source its listeners hear: the footprint is this node's
+// own rows, and its gauge says so.
 func (e *Engine) artifactDataMoved(moved []artifactdata.Moved) {
-	e.artifactDataListeners.tell(moved)
+	e.announce(liveBatch{ArtifactData: moved})
 	e.sampleDataFootprint()
 }
 

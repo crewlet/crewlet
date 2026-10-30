@@ -1,12 +1,13 @@
 package worklet_test
 
 import (
-	"database/sql"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -91,7 +92,7 @@ func TestTheBlockersAssigneeIsToldSomebodyWaits(t *testing.T) {
 		if len(notify.Snapshot.Dependents) == 0 {
 			continue
 		}
-		for _, candidate := range worklet.Candidates(notify, false) {
+		for _, candidate := range worklet.Candidates(notify) {
 			if candidate.Handle == "bo" && candidate.Reason == worklet.ReasonBlocking {
 				told = true
 			}
@@ -273,6 +274,60 @@ func TestAMirrorThatCanNeverLandIsStampedFinal(t *testing.T) {
 	if len(found.Rows) != 1 {
 		t.Errorf("flag=one_sided_final answered %d rows, want the one a person "+
 			"has to resolve", len(found.Rows))
+	}
+}
+
+// THE ONE-SIDED SCAN COUNTS EACH BLOCKER'S OWN DEPENDENTS.
+//
+// How many dependents a blocker already lists is what makes an edge whose
+// mirror it lacks permanently one-sided at [worklet.MaxDependents], so the
+// count is a decision rather than a decoration. The scan reads it for its
+// batch in one grouped read of the batch's blockers rather than per edge, so
+// each edge must be handed its OWN blocker's count — two blockers holding
+// different numbers of dependents, each with an edge missing from its mirror,
+// tell a count filed under the wrong task, or under nobody, from the right one.
+//
+// Mutation: file the counts under each edge's dependent rather than its
+// blocker, or drop the fill, and both edges read zero.
+func TestTheOneSidedScanCountsEachBlockersDependents(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"blka", "blkb", "d1", "d2", "d3", "halfa", "halfb"} {
+		filedTask(t, r, id)
+	}
+	// TWO MIRRORED DEPENDENTS ON ONE BLOCKER AND ONE ON THE OTHER, through
+	// the whole gesture.
+	for i, edge := range [][2]string{{"d1", "blka"}, {"d2", "blka"}, {"d3", "blkb"}} {
+		if _, err := r.writer.Depend(t.Context(), "op-dep-"+itoa(i), worklet.DependencyChange{
+			Task: edge[0], Project: "ENG", WaitingOnAdd: []string{edge[1]},
+		}, fixedLeads{}); err != nil {
+			t.Fatalf("Depend %s on %s: %v", edge[0], edge[1], err)
+		}
+		r.drain()
+	}
+	// AND ONE AUTHORED HALF ON EACH, whose mirror never landed.
+	for _, edge := range [][2]string{{"halfa", "blka"}, {"halfb", "blkb"}} {
+		if _, err := r.writer.UpdateTask(t.Context(), "op-half-"+edge[0], edge[0], "ENG",
+			worklet.NoIfMatch, worklet.TaskPatch{Relate: &worklet.RelationIntent{
+				Add: []worklet.Relation{{Kind: worklet.RelationWaitingOn, Other: edge[1]}},
+			}}, worklet.ChangeRelations, nil); err != nil {
+			t.Fatalf("write the authored half of %s: %v", edge[0], err)
+		}
+		r.drain()
+	}
+
+	edges, err := worklet.ScanOneSided(t.Context(), r.db.Reader(), wednesday.AddDate(1, 0, 0), 16)
+	if err != nil {
+		t.Fatalf("ScanOneSided: %v", err)
+	}
+	got := map[string]int{}
+	for _, edge := range edges {
+		got[edge.Dependent+"->"+edge.Blocker] = edge.BlockerDependents
+	}
+	want := map[string]int{"halfa->blka": 2, "halfb->blkb": 1}
+	if !maps.Equal(got, want) {
+		t.Errorf("the scan answered %v, want each one-sided edge with its own "+
+			"blocker's listed dependents %v", got, want)
 	}
 }
 
@@ -505,37 +560,18 @@ func TestADependencyAnswersAtItsLastCommit(t *testing.T) {
 // matches a partial index by SYNTACTIC implication. `ask = ?` does not imply
 // `ask <> ”` to it, because a bound parameter could be the empty string, so
 // the query states the literal term as well and reads a seekable range rather
-// than every comment on the task.
+// than every comment on the task. The statement planned is the one the
+// inference runs, with its arguments bound as it binds them: a copy planned
+// here stayed green with the term deleted from the real one.
+//
+// Mutation: delete the non-empty ask term from the inference's statement and
+// the plan stops naming the open-asks index.
 func TestTheOpenAskInferenceIsIndexServed(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 
-	var plan string
-	if err := r.db.Read(t.Context(), func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(t.Context(), `
-			EXPLAIN QUERY PLAN
-			SELECT id, author, substr(body, 1, 120)
-			FROM tracker_comments
-			WHERE task_id = 't' AND ask = 'a' AND ask <> '' AND resolved = 0
-			  AND answered_by IS NULL AND removed = 0
-			ORDER BY created_at, id
-			LIMIT 6`)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = rows.Close() }()
-		for rows.Next() {
-			var a, b, c int
-			var detail string
-			if err := rows.Scan(&a, &b, &c, &detail); err != nil {
-				return err
-			}
-			plan += detail + " "
-		}
-		return rows.Err()
-	}); err != nil {
-		t.Fatalf("explain the ask inference: %v", err)
-	}
+	plan := strings.Join(storetest.Plan(t, r.db, worklet.OpenAsksStatement,
+		[]any{"t", "a", worklet.MaxOpenAsksNamed + 1}), "\n")
 	if !strings.Contains(plan, "tracker_comments_open_asks_idx") {
 		t.Errorf("the plan is %q and does not name the open-asks index — every "+
 			"comment on a task would pay for the length of its own thread",

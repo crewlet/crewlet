@@ -138,7 +138,8 @@ func readSchedule(args map[string]any, now time.Time, loc *time.Location,
 		}
 		anchor, err := period.Resolve(token, now, loc)
 		if err != nil {
-			return out, fmt.Sprintf("%s could not read `%s`: %v", tool, key, err)
+			return out, fmt.Sprintf("%s could not read `%s`: %s", tool, key,
+				worklet.Sentence(err))
 		}
 		at := anchor.At
 		*target = &at

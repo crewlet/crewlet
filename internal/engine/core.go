@@ -378,7 +378,9 @@ func (c *core) shutdown() {
 // acting as the node is what the node itself does: redeeming an invitation
 // into a person who does not exist yet, the duty that sweeps, and the re-seal
 // a keyring rotation moves every person's values with. A person's own sign-in
-// acts as that person.
+// acts as that person. What the node writes for itself names it under its id
+// as the ENGINE ([iamdomain.NodeKind]), so the trail draws it as the system
+// rather than as a credential's login.
 func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 	running := sl.Domain(iamdomain.Domain{}.Name())
 	if running == nil {
@@ -387,7 +389,7 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 			"stream failed to come up")
 	}
 	reader, err := iamdomain.NewReader(iamdomain.ReaderOptions{
-		DB: sl.estate().Reader(), Log: running.reader,
+		DB:        sl.estate().Reader(),
 		Committed: running.runner.Committed,
 		// AND THE LAG, which is what makes the session table's
 		// `stalled` row reachable at all: a node past the stall grace
@@ -427,9 +429,12 @@ func (c *core) openIAM(e *Engine, sl *stateLog, nodeID string) error {
 		// WHAT A LANDED RECORD DECIDED — a grant delta, a session
 		// generation — goes on the node's audit feed from here, since
 		// only the decide holds it. Every surface's [Writer.As] keeps it.
-		Events:    e.authEvents,
+		Events: e.authEvents,
+		// AS THE ENGINE, under the node's id: what this writer authors
+		// for itself is the engine's housekeeping, never a credential's
+		// ([iamdomain.NodeKind]).
 		Actor:     nodeID,
-		ActorKind: iam.KindMachine,
+		ActorKind: iamdomain.NodeKind,
 		// THE NODE IS THE DEPLOYMENT, so it writes as an administrator:
 		// the sweeps and evictions, the re-seal a keyring rotation moves
 		// everybody's values with, and the two writes about people with
@@ -600,14 +605,16 @@ func (e *Engine) NodeGate() *NodeGate {
 //     only once its own copy is established — the same gate, one hop away. A
 //     node whose own copy is WRONG serves nothing ([localEstate.For]), so it
 //     is answered on a sound data node's word, like a node holding no data;
-//     both halves the company runs natively must be served there, since a
-//     seat's tools reach both. And the router's view must have listed the
-//     fleet at least once: a node that must ask a data node is refused by the
-//     router itself when its view cannot name one.
+//     every half the company runs natively — the tracker, the knowledge base
+//     and chat — must be served there, since a seat's tools reach each of
+//     them, and a company whose only native half is chat gates on chat alone
+//     rather than admitting every seat unconditionally. And the router's view
+//     must have listed the fleet at least once: a node that must ask a data
+//     node is refused by the router itself when its view cannot name one.
 //
-// A node running no native half — no company yet, or one on Jira and
-// Confluence — has nothing for the second half to ask, and an engine with
-// neither is trivially hydrated.
+// A node running no native half — no company yet, or one on Jira, Confluence
+// and a vendor's chat — has nothing for the second half to ask, and an engine
+// with neither is trivially hydrated.
 //
 // IT TAKES A CONTEXT because where this node's copy does not serve the answer
 // is a request, and a sweep that is shutting down must not wait on it.
@@ -621,8 +628,8 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 			return false
 		}
 	}
-	runTracker, wiki, ok := e.nativeHalves()
-	if !ok || (!runTracker && !wiki) || e.router == nil {
+	runs, ok := e.nativeHalves()
+	if !ok || !runs.any() || e.router == nil {
 		return true
 	}
 	if e.dataView != nil && e.dataView.ListedAt().IsZero() {
@@ -630,8 +637,9 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 			"detail", "this node's view of the fleet has not listed it yet")
 		return false
 	}
-	trackerServed, pagesServed, err := e.router.Serves(ctx)
-	if err != nil || (runTracker && !trackerServed) || (wiki && !pagesServed) {
+	served, err := e.router.Serves(ctx)
+	if err != nil || (runs.tracker && !served.Tracker) || (runs.wiki && !served.Pages) ||
+		(runs.chat && !served.Chat) {
 		detail := "no copy of the estate admits a seat yet"
 		if err != nil {
 			detail = err.Error()
@@ -679,7 +687,7 @@ func (e *Engine) StateLogHydrated(ctx context.Context) bool {
 // from a cached coordination fact, so no node sheds sooner than any other
 // decider stops trusting the same view — is a node that can no longer say
 // where its seats' calls go, which no copy of its own makes up for; its seats
-// go to a peer that can. A company whose halves are both on a vendor routes
+// go to a peer that can. A company whose halves are all on a vendor routes
 // nothing, and a view that has never listed sheds nothing: admission claims no
 // seat before it does.
 //
@@ -695,8 +703,8 @@ func (e *Engine) SeatsServiceable(ctx context.Context) (bool, string) {
 
 // serviceable is [Engine.SeatsServiceable] at now.
 func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) {
-	runTracker, wiki, ok := e.nativeHalves()
-	if !ok || (!runTracker && !wiki) {
+	runs, ok := e.nativeHalves()
+	if !ok || !runs.any() {
 		return true, ""
 	}
 	if e.local != nil && e.local.servesUnasked(ctx) {
@@ -710,11 +718,9 @@ func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) 
 //
 // # Why the shape is the question and not the mechanism
 //
-// Every loop this node runs is a state-log APPLIER — the wiki's projector, the
-// one loop of another kind, went when the knowledge base became a domain — so
-// every row is a domain's ([ReplicationStatus.Kind] is always `domain`). The
-// type is still shaped by what the fleet view asks rather than by how an
-// applier works, because that is what outlived the projector.
+// Every loop this node runs is a state-log APPLIER, so every row is one
+// domain's. The type is shaped by what the fleet view asks rather than by how
+// an applier works, because the question is what an operator reads.
 //
 // What the fleet view asks is not about the mechanism. It asks "how many of
 // this node's copies of the company's state have caught up" — the question
@@ -726,10 +732,6 @@ func (e *Engine) serviceable(ctx context.Context, now time.Time) (bool, string) 
 type ReplicationStatus struct {
 	// Name is the domain, which is what an operator sees.
 	Name string
-
-	// Kind is the loop's mechanism: `domain` on every row this build
-	// reports, the `projection` rows having gone with the projector.
-	Kind string
 
 	// Ready is this loop's copy being one a seat's
 	// tools may be attached to. It is NOT strict readiness — see
@@ -765,7 +767,9 @@ func (e *Engine) StateLogStatus(ctx context.Context) []ReplicationStatus {
 }
 
 // WaitCommitted blocks until this node's applier for the log a position names
-// has consumed through it.
+// has consumed through it. It returns at once where this node has nothing to
+// wait on: a zero position, a node that applies no log (one holding no data,
+// whose reads are a data node's), or a log this node does not run.
 //
 // THE READ-YOUR-WRITES PRIMITIVE ON THE LOG, and it takes a POSITION rather
 // than a revision because that is what a write answers with: a bucket write

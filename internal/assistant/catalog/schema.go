@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // IdentityArguments are the argument names no assistant tool may declare,
@@ -162,9 +164,9 @@ func (s *schema) checkString(path, str string) error {
 		return fmt.Errorf("%s is not valid UTF-8", path)
 	case len(s.enum) > 0 && !slices.Contains(s.enum, str) &&
 		utf8.RuneCountInString(str) <= enumEcho:
-		return fmt.Errorf("%s is one of %s, not %q", path, strings.Join(s.enum, ", "), str)
+		return fmt.Errorf("%s is one of %s, not %q", path, words.Or(s.enum), str)
 	case len(s.enum) > 0 && !slices.Contains(s.enum, str):
-		return fmt.Errorf("%s is one of %s", path, strings.Join(s.enum, ", "))
+		return fmt.Errorf("%s is one of %s", path, words.Or(s.enum))
 	}
 	return nil
 }
@@ -193,7 +195,7 @@ func (s *schema) objectProblems(path string, v any) []error {
 		p, declared := s.properties[name]
 		if !declared {
 			found = append(found, fmt.Errorf("%s takes no %q; it takes %s", path, name,
-				strings.Join(slices.Sorted(maps.Keys(s.properties)), ", ")))
+				words.And(slices.Sorted(maps.Keys(s.properties)))))
 			continue
 		}
 		found = append(found, p.problems(path+"."+name, obj[name])...)
