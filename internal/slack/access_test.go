@@ -42,10 +42,7 @@ func TestRevokeWithdrawsTheBotToken(t *testing.T) {
 		if (err != nil) != tc.fails || revoked != tc.revoked {
 			t.Errorf("%s: revoked %v, err %v", name, revoked, err)
 		}
-		ws.mu.Lock()
-		token := ws.tokens[len(ws.tokens)-1]
-		ws.mu.Unlock()
-		if token != "xoxb-swe" {
+		if token := lastToken(ws); token != "xoxb-swe" {
 			t.Errorf("%s: revoked with %q, not the seat's own token", name, token)
 		}
 	}
