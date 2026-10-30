@@ -528,15 +528,14 @@ func gitlabLevel(old string) int {
 	return config.GitLabRoleDeveloper
 }
 
-// githubPermissions is a GitHub tier as the permissions it granted, from the
-// tier's own table, kept to the permissions a seat's app may hold.
+// githubPermissions is a GitHub tier as the permissions it granted
+// ([github.TierPermissions], the tier's own table, kept to what a seat's app
+// may hold).
 func githubPermissions(tier string, workflows bool) seataccess.Permissions {
-	parsed, _ := github.ParseTier(tier)
+	held, _ := github.TierPermissions(tier, workflows)
 	out := seataccess.Permissions{}
-	for key, grant := range (github.Access{Tier: parsed, Workflows: workflows}).Permissions() {
-		if slices.Contains(config.GitHubPermissionKeys(), key) {
-			out[key] = seataccess.Access(grant)
-		}
+	for key, level := range held {
+		out[key] = level
 	}
 	return out
 }
