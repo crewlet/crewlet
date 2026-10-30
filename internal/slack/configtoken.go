@@ -108,9 +108,7 @@ func (a *Admin) ConfigToken(
 // retired refresh token, which locks the company out twelve hours later with
 // nothing to say why.
 func EncodeConfigToken(token ConfigToken) (string, error) {
-	encoded, err := json.Marshal(sealedConfigToken{
-		Token: token.Token, RefreshToken: token.RefreshToken, ExpiresAt: token.ExpiresAt,
-	})
+	encoded, err := json.Marshal(sealedConfigToken(token))
 	if err != nil {
 		return "", fmt.Errorf("slack: encode the app-configuration token: %w", err)
 	}
@@ -137,9 +135,7 @@ func DecodeConfigToken(raw string) (ConfigToken, error) {
 			"slack: the sealed app-configuration token is not in the form this " +
 				"engine writes; supply a fresh refresh token from Slack")
 	}
-	return ConfigToken{
-		Token: sealed.Token, RefreshToken: sealed.RefreshToken, ExpiresAt: sealed.ExpiresAt,
-	}, nil
+	return ConfigToken(sealed), nil
 }
 
 // sealedConfigToken is the sealed value's shape.

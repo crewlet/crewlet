@@ -63,8 +63,8 @@ func createApp(ctx context.Context, admin *Admin, configToken, base string, seat
 	}
 	// VALIDATED FIRST, for the reason the CLI does: the create is Tier 1,
 	// and a malformed manifest found by it costs a minute per seat.
-	if err := admin.ValidateManifest(ctx, configToken, manifest, ""); err != nil {
-		return AppCredentials{}, err
+	if validateErr := admin.ValidateManifest(ctx, configToken, manifest, ""); validateErr != nil {
+		return AppCredentials{}, validateErr
 	}
 	created, err := admin.CreateApp(ctx, configToken, manifest)
 	if err != nil {

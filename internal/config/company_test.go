@@ -911,9 +911,9 @@ func TestTheKitVersionVariableIsReserved(t *testing.T) {
 // whole ${VAR} or a literal.
 func TestASlackBlockNeedsNoCredentials(t *testing.T) {
 	t.Parallel()
-	if _, err := ParseCompany([]byte("name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n")); err != nil {
+	if _, err := ParseCompany([]byte("name: Acme\nintegrations:\n  slack: {}\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n")); err != nil {
 		t.Errorf("a Slack block with no credentials was refused: %v", err)
 	}
-	rejects(t, "name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n        bot_token: \"xoxb-${REST}\"\n",
+	rejects(t, "name: Acme\nintegrations:\n  slack: {}\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n        bot_token: \"xoxb-${REST}\"\n",
 		"roles[0].integrations.slack.bot_token")
 }

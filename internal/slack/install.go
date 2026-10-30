@@ -248,8 +248,8 @@ func (i *Installs) spend(ctx context.Context, nonce string) error {
 	if unissued {
 		// THIS CLAIM JUST MADE THE RECORD, so the fleet never minted
 		// the link. It is released again so it stands for nothing.
-		if err := i.opts.Claims.Release(ctx, issuedKey(nonce)); err != nil {
-			return registryDown(err)
+		if releaseErr := i.opts.Claims.Release(ctx, issuedKey(nonce)); releaseErr != nil {
+			return registryDown(releaseErr)
 		}
 		return refusedLink
 	}
