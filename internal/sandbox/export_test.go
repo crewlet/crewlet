@@ -1,6 +1,20 @@
 package sandbox
 
-import "fmt"
+import (
+	"fmt"
+	"testing"
+)
+
+// WriteRuntime is [writeRuntime] for this package's external cases: a
+// stand-in they put on a step's PATH is an executable this suite writes, so
+// it is written and settled by the one writer
+// TestEveryExecutableThisSuiteWritesIsSettled holds every such write to —
+// written any other way, its first exec can fail ETXTBSY under a fork beside
+// it, and the step it stands in for reads as the recipe being wrong.
+func WriteRuntime(t *testing.T, path, body string) {
+	t.Helper()
+	writeRuntime(t, path, body)
+}
 
 // NewContainerBoxAt is a container box whose directory is root, for the file
 // contract suite: a container box's reads and writes happen on the HOST side

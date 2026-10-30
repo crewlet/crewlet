@@ -351,14 +351,13 @@ func sameCalls(t *testing.T, got, want [][]string) {
 // watches puts a stand-in cat in dir, a directory a case puts first on PATH:
 // asked for how many directories the box's user may watch, it answers
 // $STUB_WATCHES, so a case decides what the kernel says whatever kernel runs
-// it; anything else it reads as cat does.
+// it; anything else it reads as cat does. It is written settled
+// ([sandbox.WriteRuntime]), since the recipe execs it at once.
 func watches(t *testing.T, dir string) {
 	t.Helper()
-	script := "#!/bin/sh\nif [ \"$1\" = /proc/sys/fs/inotify/max_user_watches ]; then\n" +
-		"  printf '%s\\n' \"$STUB_WATCHES\"; exit 0\nfi\nexec /bin/cat \"$@\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "cat"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	sandbox.WriteRuntime(t, filepath.Join(dir, "cat"),
+		"if [ \"$1\" = /proc/sys/fs/inotify/max_user_watches ]; then\n"+
+			"  printf '%s\\n' \"$STUB_WATCHES\"; exit 0\nfi\nexec /bin/cat \"$@\"\n")
 }
 
 // A CODING CLONE TURNS GIT'S MONITOR ON WHERE THE BOX CAN KEEP IT, and only
