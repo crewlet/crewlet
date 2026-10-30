@@ -33,7 +33,7 @@ func (d ManifestDiff) NeedsReinstall() bool { return len(d.MissingScopes) > 0 }
 func (d ManifestDiff) Describe() string {
 	var parts []string
 	if len(d.MissingScopes) > 0 {
-		parts = append(parts, "scopes removed at Slack: "+strings.Join(d.MissingScopes, ", "))
+		parts = append(parts, missingScopesSaid+strings.Join(d.MissingScopes, ", "))
 	}
 	if len(d.ExtraScopes) > 0 {
 		parts = append(parts, "scopes added at Slack: "+strings.Join(d.ExtraScopes, ", "))
@@ -43,6 +43,16 @@ func (d ManifestDiff) Describe() string {
 	}
 	return strings.Join(parts, "; ")
 }
+
+// missingScopesSaid opens the part of [ManifestDiff.Describe] that names
+// scopes removed at Slack, which is the one difference a restore cannot
+// finish alone: a bot token carries a scope added back only after a person
+// installs the app again ([driftNeedsReinstall]).
+const missingScopesSaid = "scopes removed at Slack: "
+
+// driftNeedsReinstall reports a drift sentence whose restore needs a
+// reinstall, read back from what [ManifestDiff.Describe] wrote.
+func driftNeedsReinstall(said string) bool { return strings.Contains(said, missingScopesSaid) }
 
 // DiffManifest compares the manifest Slack holds with the one wanted.
 //
