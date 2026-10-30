@@ -38,12 +38,23 @@ export function signInOf(model: ModelView): SignInFacts {
 
 /**
  * Why a call failed, by its kind, in the words of the credential the model
- * signs in with (design QA Minor 19): a key is a key and a token a token.
+ * signs in with (design QA Minor 19): a key is a key and a token a token. An
+ * auth failure the CLI reported of a pasted key or token it never used
+ * (`meaning` "unread") says so, since the vendor did not refuse it.
  */
-export function failureWords(kind: string | undefined, signIn: SignInFacts): string {
+export function failureWords(
+  kind: string | undefined,
+  signIn: SignInFacts,
+  meaning?: CheckLine["meaning"],
+): string {
   const route = signIn.route;
   switch (kind) {
     case "auth": {
+      // ONLY OF A CREDENTIAL THE ENGINE HANDS THE CLI: a host login that
+      // says it is not logged in is not logged in.
+      if (meaning === "unread" && route === "api-key") return "The CLI did not use the API key";
+      if (meaning === "unread" && route === "token")
+        return "The CLI did not use the subscription token";
       if (route === "token" && signIn.expiresAt && Date.parse(signIn.expiresAt) <= Date.now())
         return "The subscription token expired";
       if (route === "api-key") return "The API key was refused";
@@ -88,7 +99,8 @@ export function DoctorLines({
           <span className="models-doctor__detail">
             {!line.ok ? (
               <Text as="span" variant="body">
-                {failureWords(line.kind, signIn)}.{line.remedy ? ` ${line.remedy}` : ""}
+                {failureWords(line.kind, signIn, line.meaning)}.
+                {line.remedy ? ` ${line.remedy}` : ""}
               </Text>
             ) : null}
             {line.detail ? (
