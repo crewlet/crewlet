@@ -2,8 +2,9 @@
  * What the Agents tab says about each lane that the engine's answer does not
  * carry: the product's name, the label the details give the access a seat
  * holds, the sentence a seat that is off reads as, what turning a seat off
- * does there (said in the review, where it is needed), what a seat's scope is
- * called, and whether Crewlet can rotate a seat's credential there.
+ * does there (said in the review, where it is needed), and what a seat's
+ * scope is called. Display words only: what a vendor can do (whether a
+ * credential rotates) is the engine's catalog, sent on `options`.
  *
  * KEYED BY LANE, the integration's own product key, so a vendor's list of
  * levels and names stays the engine's (read live where the vendor has one)
@@ -34,8 +35,6 @@ export interface LaneWords {
   tool: string;
   /** The `mcp_servers` entry a seat's tool is started from, as the warning names it. */
   server: string;
-  /** Whether Crewlet can mint a seat a new credential and revoke the old. */
-  rotatable: boolean;
   /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
   install?: string;
 }
@@ -48,7 +47,6 @@ const GENERIC: LaneWords = {
   remove: "Crewlet removes the account at the vendor.",
   tool: "Its tool server, one per agent",
   server: "vendor",
-  rotatable: false,
 };
 
 export const LANE_WORDS: Record<string, LaneWords> = {
@@ -61,7 +59,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Datadog never erases a user, so removing keeps the account disabled and stops Crewlet tracking it.",
     tool: "Datadog MCP server, one per agent",
     server: "datadog",
-    rotatable: true,
   },
   github: {
     name: "GitHub",
@@ -74,7 +71,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: { noun: "Repositories", singular: "repository", empty: "All installed repositories" },
     tool: "GitHub MCP server, one per agent",
     server: "github",
-    rotatable: false,
   },
   gitlab: {
     name: "GitLab",
@@ -86,7 +82,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: { noun: "Projects", singular: "project", empty: "The whole group" },
     tool: "GitLab MCP server, one per agent",
     server: "gitlab",
-    rotatable: true,
   },
   jira: {
     name: "Jira",
@@ -99,7 +94,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: { noun: "Projects", singular: "project", empty: "No project" },
     tool: "Crewlet's own Jira tools",
     server: "jira",
-    rotatable: true,
   },
   confluence: {
     name: "Confluence",
@@ -112,7 +106,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: { noun: "Spaces", singular: "space", empty: "No space" },
     tool: "Crewlet's own Confluence tools",
     server: "confluence",
-    rotatable: true,
   },
   slack: {
     name: "Slack",
@@ -124,7 +117,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
       "Slack has no API to delete an app, so a person deletes it at Slack under Basic Information.",
     tool: "Slack MCP server, one per agent",
     server: "slack",
-    rotatable: false,
     install: "Install in Slack",
   },
   mattermost: {
@@ -142,7 +134,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     },
     tool: "Crewlet's chat transport",
     server: "mattermost",
-    rotatable: true,
   },
 };
 
