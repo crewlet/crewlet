@@ -210,10 +210,10 @@ func TestAnAppIsCreatedAtItsSeatsPermissions(t *testing.T) {
 		doc  string
 		want any
 	}{
-		"with workflows": {strings.Replace(githubAppsDoc, `"tier": "full_access"`,
-			`"tier": "full_access", "permissions": {"contents": "write", "workflows": "write"}`, 1), "write"},
-		"without": {strings.Replace(githubAppsDoc, `"tier": "full_access"`,
-			`"tier": "full_access", "permissions": {"contents": "write"}`, 1), nil},
+		"with workflows": {strings.Replace(githubAppsDoc, `"app_id": 41`,
+			`"permissions": {"contents": "write", "workflows": "write"}, "app_id": 41`, 1), "write"},
+		"without": {strings.Replace(githubAppsDoc, `"app_id": 41`,
+			`"permissions": {"contents": "write"}, "app_id": 41`, 1), nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -127,7 +127,7 @@ roles:
       labels: {zone: eu}
     project: ENGP
     integrations:
-      mattermost: {enabled: false, bot_token: "${MM_SWE}", username: swe-bot, channel: eng}
+      mattermost: {enabled: false, bot_token: "${MM_SWE}", username: swe-bot}
     sandbox:
       max_turns: 40
       pause_ttl_seconds: 0
@@ -140,8 +140,7 @@ roles:
 	if seat.Handle() != "swe" {
 		t.Fatalf("handle = %q", seat.Handle())
 	}
-	if seat.Mattermost.BotToken != "${MM_SWE}" || seat.Mattermost.Username != "swe-bot" ||
-		seat.Mattermost.Channel != "eng" {
+	if seat.Mattermost.BotToken != "${MM_SWE}" || seat.Mattermost.Username != "swe-bot" {
 		t.Fatalf("mattermost = %+v", seat.Mattermost)
 	}
 	if seat.Project != "ENGP" {

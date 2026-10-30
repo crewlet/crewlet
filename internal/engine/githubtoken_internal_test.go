@@ -153,7 +153,6 @@ roles:
     integrations:
       github:
         enabled: `+state+`
-        tier: review
         app_id: 102
         app_slug: gophrase-planner
         private_key: "${GITHUB_APP_KEY_PLANNER}"
@@ -469,7 +468,6 @@ roles:
     integrations:
       github:
         enabled: true
-        tier: full_access
         repos: [gophrase/backend]
         app_id: 101
         app_slug: gophrase-builder

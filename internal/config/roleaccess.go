@@ -16,9 +16,9 @@ package config
 // variable anything else reads (D4).
 //
 // The vendor vocabularies below are RESTATED rather than imported, because
-// config is the leaf every vendor package depends on (the argument
-// [CodeAccessTiers] makes); each vendor package owns the real catalogue, and a
-// test holds the two to the same set.
+// config is the leaf every vendor package depends on, and importing one would
+// invert that; each vendor package owns the real catalogue, and a test holds
+// the two to the same set.
 
 // SeatAccessOn reports a block's stored setting: on only where it says so.
 //

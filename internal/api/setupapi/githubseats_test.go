@@ -24,9 +24,9 @@ const githubAppsDoc = `{
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "Builder", "handle": "builder", "llm": "zulu",
-     "integrations": {"github": {"enabled": false, "tier": "full_access", "app_id": 41, "app_slug": "acme-builder"}}},
+     "integrations": {"github": {"enabled": false, "app_id": 41, "app_slug": "acme-builder"}}},
     {"name": "Reviewer", "handle": "reviewer", "llm": "zulu",
-     "integrations": {"github": {"enabled": false, "tier": "review", "app_id": 42, "app_slug": "acme-reviewer",
+     "integrations": {"github": {"enabled": false, "app_id": 42, "app_slug": "acme-reviewer",
        "installation_id": 7, "private_key": "${GITHUB_APP_KEY_REVIEWER}"}}},
     {"name": "Stray", "handle": "stray", "llm": "zulu",
      "integrations": {"github": {"enabled": false, "app_id": 43, "app_slug": "acme-stray",
@@ -492,7 +492,7 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu",
-	     "integrations": {"github": {"enabled": true, "tier": "review"}}},
+	     "integrations": {"github": {"enabled": true}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
 	}`)

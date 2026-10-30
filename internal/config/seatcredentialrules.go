@@ -38,28 +38,49 @@ import (
 // ADMISSION RULES like the rest of roleaccessrules.go; the access sync holds
 // the same line again at the vendor (internal/seataccess).
 
-// SeatSealedFields is every value the engine seals per seat for kind, by
-// field, the credential first, as the vendors' catalogs name them; GitHub's
-// APP_TOKEN is the installation token the engine issues at use. RESTATED for
-// the reason [CodeAccessTiers] is: internal/seataccess holds the vendors'
-// catalogs to it.
-func SeatSealedFields(kind string) []string {
+// seatField is one value the engine holds for an agent seat at an
+// integration, by the field name the vendor's catalog gives it.
+type seatField struct {
+	name string
+	// tool is a value a seat's tool server may read; the rest only the
+	// engine reads (a Slack app's signing secret, a GitHub App's key).
+	tool bool
+}
+
+// seatFields is each integration's per-seat values, the credential first,
+// as the vendors' catalogs name them: THE ONE RESTATEMENT of them in config,
+// which every per-kind list here derives from. Config is the leaf every
+// vendor package depends on, so it restates rather than imports, and
+// internal/seataccess holds every registered vendor's catalog to this list.
+func seatFields(kind string) []seatField {
 	switch kind {
 	case "datadog":
-		return []string{"APP_KEY"}
+		return []seatField{{"APP_KEY", true}}
 	case "gitlab":
-		return []string{"TOKEN"}
+		return []seatField{{"TOKEN", true}}
 	case "atlassian":
-		return []string{"TOKEN", "EMAIL"}
+		return []seatField{{"TOKEN", true}, {"EMAIL", true}}
 	case "mattermost":
-		return []string{"BOT_TOKEN"}
+		return []seatField{{"BOT_TOKEN", true}}
 	case "slack":
-		return []string{"BOT_TOKEN", "SIGNING_SECRET", "CLIENT_SECRET", "CLIENT_ID"}
+		return []seatField{{"BOT_TOKEN", true}, {"SIGNING_SECRET", false},
+			{"CLIENT_SECRET", false}, {"CLIENT_ID", false}}
 	case "github":
-		return []string{"APP_KEY", "APP_WEBHOOK_SECRET", "APP_TOKEN"}
+		return []seatField{{"APP_KEY", false}, {"APP_WEBHOOK_SECRET", false}, {"APP_TOKEN", true}}
 	default:
 		return nil
 	}
+}
+
+// SeatSealedFields is every value the engine holds per seat for kind, by
+// field, the credential first ([seatFields]). GitHub's APP_TOKEN is the
+// installation token the engine issues at use.
+func SeatSealedFields(kind string) []string {
+	var out []string
+	for _, f := range seatFields(kind) {
+		out = append(out, f.name)
+	}
+	return out
 }
 
 // documentMode is [Company.SeatCredentialMode] as the document alone can tell

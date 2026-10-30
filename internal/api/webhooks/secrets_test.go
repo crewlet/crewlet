@@ -442,7 +442,6 @@ roles:
     integrations:
       github:
         enabled: false
-        tier: full_access
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -454,7 +453,6 @@ roles:
     integrations:
       github:
         enabled: false
-        tier: review
         app_id: 42
         app_slug: acme-reviewer
   - name: Jane Founder

@@ -387,7 +387,6 @@ roles:
       mattermost:
         enabled: false
         bot_token: "${MM_TOKEN_CEO}"
-        channel: leadership
 `
 
 // `crewlet mattermost provision` IS RETIRED, AND SAYS WHERE ITS WORK WENT.

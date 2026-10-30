@@ -91,6 +91,9 @@ type Sink struct {
 
 	// Forgotten is every name Forget was asked to clear, in order.
 	Forgotten []string
+
+	// FailForget, when set, refuses every Forget and clears nothing.
+	FailForget error
 }
 
 // NewSink is an empty sink.
@@ -114,6 +117,9 @@ func (s *Sink) Discard(context.Context) error { return nil }
 func (s *Sink) Forget(_ context.Context, names ...string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.FailForget != nil {
+		return s.FailForget
+	}
 	for _, name := range names {
 		delete(s.values, name)
 		s.Forgotten = append(s.Forgotten, name)

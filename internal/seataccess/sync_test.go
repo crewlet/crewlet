@@ -256,6 +256,120 @@ func TestSyncRefusesASinkTheCompanyNames(t *testing.T) {
 	}
 }
 
+// A SINK SOMETHING ELSE NAMES REFUSES ONLY THE STEPS THAT SEAL: turning the
+// agent off takes access away and clears nothing another reader holds, so it
+// goes ahead, and the shared name stays sealed for its other reader.
+func TestASharedSinkStillLetsTheSeatBeTurnedOff(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	c := company(&config.RoleDatadog{Enabled: no(), Role: "a"})
+	c.Integrations.Datadog = &config.Datadog{Enabled: true, Provisioning: &config.DatadogProvisioning{
+		AppKey: "${DATADOG_APP_KEY_SRE}",
+	}}
+	h.sync(t, c, nil)
+	if acct := h.v.Account("sre"); acct == nil || acct.Enabled[dd] {
+		t.Fatalf("account = %+v, want it turned off", acct)
+	}
+	if slices.Contains(h.sink.Forgotten, "DATADOG_APP_KEY_SRE") {
+		t.Fatal("the off cleared a name the company block still reads")
+	}
+}
+
+// WHILE A COMPANY CREDENTIAL MAY STILL HOLD THE AGENT'S VALUE (D12), nothing
+// that would stop that value working is taken: the step waits on a person,
+// until the credential is written after the migration found it. Absent the
+// store's answer, the hold stays.
+//
+// Mutation: drop the hold, and turning the agent off cuts the company
+// setting off with it.
+func TestSyncHoldsWhatWouldRetireASharedCredentialUntilItIsReplaced(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	rec := h.record(t)
+	rec.SharedCredential = &seataccess.SharedCredential{Variable: "DATADOG_APP_KEY", RaisedAt: at}
+	if err := h.ledger.Put(t.Context(), rec); err != nil {
+		t.Fatal(err)
+	}
+	off := company(&config.RoleDatadog{Enabled: no(), Role: "a"})
+	syncWith := func(written seataccess.Written) {
+		t.Helper()
+		if _, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+			Vendor: h.v, Open: seataccess.OpenInput{Config: off}, Ledger: h.ledger, Sink: h.sink,
+			Now: func() time.Time { return at }, Written: written,
+		}); err != nil {
+			t.Fatalf("Sync: %v", err)
+		}
+	}
+
+	for name, written := range map[string]seataccess.Written{
+		"no answer": nil,
+		"not since": func(context.Context, string) (time.Time, bool, error) { return at.Add(-time.Hour), true, nil },
+	} {
+		syncWith(written)
+		if acct := h.v.Account("sre"); acct == nil || !acct.Enabled[dd] {
+			t.Fatalf("%s: the account was turned off while the company credential may hold its key", name)
+		}
+		got := h.record(t).Lanes[dd].Sync
+		if got.Outcome != seataccess.OutcomeWaiting || got.Error == nil ||
+			got.Error.Actor != seataccess.ByYou || !strings.Contains(got.Error.Remedy, "DATADOG_APP_KEY") {
+			t.Fatalf("%s: sync = %+v, want a person's step naming the credential to replace", name, got)
+		}
+	}
+
+	syncWith(func(context.Context, string) (time.Time, bool, error) { return at.Add(time.Hour), true, nil })
+	if acct := h.v.Account("sre"); acct == nil || acct.Enabled[dd] {
+		t.Fatalf("account = %+v, want it turned off once the credential was replaced", acct)
+	}
+}
+
+// AN ACCOUNT THE VENDOR SHOWS ON IS RECORDED ACTIVE (D3): turned back on by
+// hand after this engine turned it off, a later off made by hand is a
+// person's, left as it is, never credited to the engine and undone.
+func TestAnAccountShownOnIsRecordedActive(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	on := company(&config.RoleDatadog{Enabled: yes(), Role: "a"})
+	h.sync(t, on, nil)
+	h.sync(t, company(&config.RoleDatadog{Enabled: no(), Role: "a"}), nil)
+	if err := h.v.Mutate("sre", func(a *seataccesstest.Account) { a.Enabled[dd] = true }); err != nil {
+		t.Fatal(err)
+	}
+	h.sync(t, on, nil)
+	if got := h.record(t).Account.State; got != seataccess.AccountActive {
+		t.Fatalf("state = %q, want active once the vendor shows the account on", got)
+	}
+	if err := h.v.Mutate("sre", func(a *seataccesstest.Account) { a.Enabled[dd] = false }); err != nil {
+		t.Fatal(err)
+	}
+	h.sync(t, on, nil)
+	if acct := h.v.Account("sre"); acct.Enabled[dd] {
+		t.Fatal("an off made by hand was undone as if this engine had made it")
+	}
+}
+
+// A RECORD IS CLOSED ONLY ONCE ITS DEAD CREDENTIAL IS CLEARED: a clear that
+// fails leaves the record held, so the next pass clears it again rather than
+// leaving a dead value sealed for good.
+func TestAGoneAccountIsClosedOnlyOnceItsCredentialIsCleared(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	c := company(&config.RoleDatadog{Enabled: no(), Role: "a"})
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	h.v.Delete("sre")
+	h.sink.FailForget = errors.New("store unavailable")
+	h.sync(t, c, nil)
+	if rec := h.record(t); !rec.Held() {
+		t.Fatalf("record = %+v, want it still held after a failed clear", rec.Account)
+	}
+	h.sink.FailForget = nil
+	h.sync(t, c, nil)
+	if !slices.Contains(h.sink.Forgotten, "DATADOG_APP_KEY_SRE") {
+		t.Fatalf("forgotten = %v, want the dead key cleared on the next pass", h.sink.Forgotten)
+	}
+}
+
 // A LEVEL THE VENDOR DOES NOT OFFER IS A FINDING, never a fallback.
 func TestSyncReportsALevelTheVendorDoesNotOffer(t *testing.T) {
 	t.Parallel()

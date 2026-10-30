@@ -29,7 +29,10 @@ func TestADatadogBlockWithNoProvisioningIsReportedAsItsMissingKeys(t *testing.T)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialMissing ||
+	// THE MISSING KEYS LEAD: what keeps the card from reading connected. The
+	// agents' accounts, with no authority here to create them, are reported
+	// as managed outside Crewlet beside it.
+	if len(findings) == 0 || findings[0].Kind != integration.FindingCredentialMissing ||
 		findings[0].Subject != "integrations.datadog.provisioning" {
 		t.Errorf("findings = %+v: want the provisioning block reported missing, which "+
 			"is what keeps the card from reading connected", findings)

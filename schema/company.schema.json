@@ -466,15 +466,6 @@
             "null"
           ]
         },
-        "role": {
-          "description": "Role each agent's service account holds (default Datadog Read Only Role).",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
         "site": {
           "description": "Datadog region hostname, e.g. datadoghq.com.",
           "type": [
@@ -2606,15 +2597,6 @@
             "null"
           ]
         },
-        "tier": {
-          "description": "read_only, review or full_access. Empty means read_only.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
         "webhook_secret": {
           "description": "Reference to this seat's sealed GitHub App webhook secret. Returned by GitHub once.",
           "type": [
@@ -2624,15 +2606,6 @@
             "null"
           ],
           "x-crewlet-secret": true
-        },
-        "workflows": {
-          "description": "full_access only: also grant workflows: write, so the seat can push changes to .github/workflows. Off by default.",
-          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
-          "type": [
-            "boolean",
-            "string",
-            "null"
-          ]
         }
       },
       "type": [
@@ -2778,15 +2751,6 @@
             "null"
           ],
           "x-crewlet-secret": true
-        },
-        "channel": {
-          "description": "Channel this seat's bot is added to at provisioning, on top of provisioning.channels.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
         },
         "channels": {
           "description": "Channels this agent's bot is a member of.",

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -34,15 +35,29 @@ func SeatsOf(c *config.Company) []Seat {
 	}
 	var out []Seat
 	for role := range c.EachRole() {
-		if role.Kind == org.KindHuman || strings.TrimSpace(role.Handle) == "" {
+		// BY THE DERIVED HANDLE, the org model's key and the one every
+		// sealed name is spelled from: a seat that declares none takes its
+		// handle from its name.
+		handle := strings.TrimSpace(role.IdentityKey())
+		if role.Kind == org.KindHuman || handle == "" {
 			continue
 		}
 		out = append(out, Seat{
-			SeatRef: SeatRef{Handle: role.Handle, Name: role.Name},
+			SeatRef: SeatRef{Handle: handle, Name: role.Name},
 			Role:    role,
 		})
 	}
 	return out
+}
+
+// OnAt reports whether the seat is on at any of kind's lanes.
+func (s Seat) OnAt(kind integration.Kind) bool {
+	for _, lane := range LanesOf(kind) {
+		if s.Role.SeatAccessEnabled(string(lane)) {
+			return true
+		}
+	}
+	return false
 }
 
 // DesiredOf is what role's block for lane asks for, and whether the block is

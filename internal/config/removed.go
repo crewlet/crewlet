@@ -43,6 +43,18 @@ var removedKeys = map[string]string{
 	"GitLabProvisioning.token_scopes": "`integrations.gitlab.provisioning.token_scopes` " +
 		"was removed. Remove it; a seat's token scopes follow its GitLab role " +
 		"(read_api and read_repository below Developer, api from Developer up)",
+	"DatadogProvisioning.role": "`integrations.datadog.provisioning.role` was removed. " +
+		"Set each agent's Datadog role on its own seat instead: " +
+		"`roles[].integrations.datadog.role` (a role id from GET /api/v2/roles)",
+	"RoleGitHub.tier": "`roles[].integrations.github.tier` was removed. Set the agent's " +
+		"GitHub App permissions in GitHub's own terms instead: " +
+		"`roles[].integrations.github.permissions` (for example contents: write)",
+	"RoleGitHub.workflows": "`roles[].integrations.github.workflows` was removed. Grant " +
+		"workflow writes as a permission instead: " +
+		"`roles[].integrations.github.permissions.workflows: write`",
+	"RoleMattermost.channel": "`roles[].integrations.mattermost.channel` was removed. List " +
+		"every channel the agent's bot is a member of instead: " +
+		"`roles[].integrations.mattermost.channels`",
 	"HumanContact.crewlet_operator_id": "`contact.crewlet_operator_id` was " +
 		"removed. Remove it, and bind the token to the seat with " +
 		"`crewlet iam create -kind machine -login token:<id> -seat <handle> " +

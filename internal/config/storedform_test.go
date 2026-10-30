@@ -408,10 +408,10 @@ roles:
     kind: human
     contact: {github_login: founder}
     integrations:
-      github: {enabled: false, tier: full_access}
+      github: {enabled: false}
   - name: Builder
     integrations:
-      github: {enabled: false, tier: full_access}
+      github: {enabled: false}
 units:
   - name: Engineering
     roles:
@@ -419,7 +419,7 @@ units:
         kind: human
         contact: {slack_user_id: U0LEAD}
         integrations:
-          github: {enabled: false, tier: review}
+          github: {enabled: false}
 `
 	if _, err := config.ParseCompany([]byte(doc)); err == nil {
 		t.Fatal("a submitted document with a GitHub App on a human seat was accepted")

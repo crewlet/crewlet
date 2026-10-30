@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -118,10 +119,7 @@ func (e *Engine) syncSeatAccess(
 	// records this engine made.
 	if !in.disconnect && company.Config.SeatCredentialMode(string(kind), e.companyManaged) !=
 		config.SeatCredentialEngine {
-		if !company.Config.DeclaresIntegration(string(kind)) {
-			return seataccess.SyncReport{}, integration.ErrNotConfigured
-		}
-		return seataccess.SyncReport{Findings: []integration.Finding{seataccess.ExternalFinding(kind)}}, nil
+		return e.externalSeatAccess(company.Config, kind)
 	}
 	ledger, err := e.SeatAccessLedger()
 	if err != nil {
@@ -209,6 +207,25 @@ func (e *Engine) withSeatAccess(
 	}
 	findings = append(findings, report.Findings...)
 	return append(findings, shared...), nil
+}
+
+// externalSeatAccess is a sync's answer for an integration whose agents'
+// credentials are handed in from outside Crewlet: not configured where the
+// company does not connect it, its unfinished migration where that is still
+// pending (the binding waits on it all the same), nothing where no agent is
+// on there, and otherwise the one advisory that its agents' accounts are
+// managed outside Crewlet.
+func (e *Engine) externalSeatAccess(c *config.Company, kind integration.Kind) (seataccess.SyncReport, error) {
+	var said []integration.Finding
+	switch {
+	case !c.SeatAccessConnected(string(kind)):
+		return seataccess.SyncReport{}, integration.ErrNotConfigured
+	case c.SeatAccessPending(string(kind)):
+		said = append(said, seataccess.UnmigratedFinding(kind, e.seatAccessPendingReason(kind)))
+	case slices.ContainsFunc(seataccess.SeatsOf(c), func(s seataccess.Seat) bool { return s.OnAt(kind) }):
+		said = append(said, seataccess.ExternalFinding(kind))
+	}
+	return seataccess.SyncReport{Findings: said}, nil
 }
 
 // errSeatCredentialOwned is a pass's company half writing a seat's own
@@ -362,11 +379,7 @@ func (e *Engine) seatAccessPlan(c *Company, kind integration.Kind) (*provision.P
 		return plan, nil
 	}
 	for _, seat := range seataccess.SeatsOf(c.Config) {
-		on := false
-		for _, lane := range seataccess.LanesOf(kind) {
-			on = on || seat.Role.SeatAccessEnabled(string(lane))
-		}
-		if !on {
+		if !seat.OnAt(kind) {
 			continue
 		}
 		sinks := seataccess.SinkNames(cat, seat.Handle)
