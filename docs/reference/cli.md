@@ -2956,8 +2956,9 @@ created again. Its OAuth client stayed in the command's ledger
 again (after it is turned off, or for a rotate), copy its `client_id` and
 `client_secret` into the secret store with
 `crewlet secrets set SLACK_CLIENT_ID_<HANDLE>` and
-`crewlet secrets set SLACK_CLIENT_SECRET_<HANDLE>`. See
-[Per-agent access from the Agents tab](../integrations/slack.md#per-agent-access-from-the-agents-tab).
+`crewlet secrets set SLACK_CLIENT_SECRET_<HANDLE>`, each value piped on stdin
+rather than passed with `-value`, then delete `slack-apps.json`. See
+[Upgrading from `crewlet slack provision`](../integrations/slack.md#upgrading-from-crewlet-slack-provision).
 
 ## `crewlet confluence import`
 
