@@ -245,22 +245,25 @@ func TestTheCoverageIsStatedOnAReadyCard(t *testing.T) {
 	}
 	// BOTH HALVES. What is covered alone reads as a complete answer; what is
 	// not alone reads as a fault.
-	for _, want := range []string{"covering", "Not covering", "crewbed"} {
+	for _, want := range []string{"installed on", "none for the rest of crewbed"} {
 		if !strings.Contains(got.Detail, want) {
 			t.Errorf("the sentence does not mention %q:\n%s", want, got.Detail)
 		}
+	}
+	if got.Title == "" {
+		t.Error("the note has no lead for the notes list to set in bold")
 	}
 	// AND ITS REMEDY IS THE TOKEN, NEVER AN INSTALL.
 	//
 	// Installing an agent's app cannot widen this and never will — no App
 	// carries `admin:org_hook` at any permission — so prescribing one is
 	// telling somebody to repeat the thing that did not work. Matched on
-	// the clause after the dash rather than on the word "install", which
-	// appears in the descriptive half ("the repositories your agents' apps
-	// are installed on") perfectly correctly.
-	_, remedy, found := strings.Cut(got.Detail, "—")
-	if !found {
-		t.Fatalf("the sentence offers no remedy clause:\n%s", got.Detail)
+	// the remedy rather than on the word "install", which appears in the
+	// sentence ("the repositories your agents' apps are installed on")
+	// perfectly correctly.
+	remedy := got.Remedy
+	if remedy == "" {
+		t.Fatalf("the note offers no remedy:\n%+v", got)
 	}
 	if !strings.Contains(remedy, "integrations.github.token") {
 		t.Errorf("the remedy does not name the field that widens this:\n%s", remedy)
@@ -308,9 +311,9 @@ func TestTheNamedRepositoryPathIsUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if res.Coverage != "" {
+	if res.Coverage.Kind != "" {
 		t.Errorf("a company with no apps was told its agents' apps cover "+
-			"something: %q", res.Coverage)
+			"something: %+v", res.Coverage)
 	}
 }
 
@@ -350,7 +353,7 @@ func TestTheOldDefaultIsReportedAsCoverageNotAsABlock(t *testing.T) {
 				"and is held out of ready:\n%s", f.Kind, f.Detail)
 		}
 	}
-	if res.Coverage == "" {
+	if res.Coverage.Kind == "" {
 		t.Error("the card says nothing at all about what this company's " +
 			"agents do and do not hear about")
 	}

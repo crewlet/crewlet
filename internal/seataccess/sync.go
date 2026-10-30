@@ -399,8 +399,12 @@ func (s *syncer) unread(ctx context.Context, h string, seat Seat, inDoc bool, re
 	f := failureOf(Step{Verb: VerbObserve}, "", err)
 	if s.in.Sink == nil {
 		// A DRY RUN keeps the last sync's result, and still says the seat
-		// could not be read.
-		s.finding(integration.FindingIdentityFailed, h, "", f)
+		// could not be read: on the integration, since the seat's record
+		// does not carry it.
+		s.report.Findings = append(s.report.Findings, integration.Finding{
+			Kind: integration.FindingIdentityFailed, Subject: h, Detail: f.Said,
+			Remedy: f.Remedy, ActionURL: f.ActionURL,
+		})
 		s.report.Records[h] = rec
 		return nil
 	}
@@ -556,10 +560,13 @@ func (s *syncer) take(
 		if err == nil && res.Waiting != nil {
 			result.Steps = append(result.Steps, StepOutcome{Step: step})
 			result.Outcome = OutcomeWaiting
+			// NO REMEDY: the sentence IS what to do, the action URL is
+			// where, and the tab's own Done is how to say it is done. A
+			// second line saying "take this step, then choose Done" only
+			// restated the two buttons beside it.
 			result.Error = &Failure{
 				Step: step.Verb, Actor: ByYou, ActionURL: firstNonEmpty(res.Waiting.ActionURL, step.ActionURL),
-				Said:   firstNonEmpty(res.Waiting.Detail, step.Text),
-				Remedy: "Take this step at " + LaneName(lane) + ", then choose Done, check again",
+				Said: firstNonEmpty(res.Waiting.Detail, step.Text),
 			}
 			break
 		}
@@ -795,8 +802,12 @@ func (s *syncer) finding(kind integration.FindingKind, h string, lane Lane, f *F
 	if lane != "" {
 		detail = LaneName(lane) + ": " + f.Said
 	}
+	// SEAT, because the seat's own record carries the same failure, which
+	// its agent's row draws with the step's own control; see
+	// [integration.Finding.Seat].
 	s.report.Findings = append(s.report.Findings, integration.Finding{
 		Kind: kind, Subject: h, Detail: detail, Remedy: f.Remedy, ActionURL: f.ActionURL,
+		Seat: true,
 	})
 }
 

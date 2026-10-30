@@ -74,6 +74,15 @@ type SeatApp struct {
 	Key string
 }
 
+// Label is how a sentence names the seat: its name, or its handle where it
+// has none, as [seataccess.SeatRef.Label] does.
+func (s SeatApp) Label() string {
+	if name := strings.TrimSpace(s.Name); name != "" {
+		return name
+	}
+	return s.Handle
+}
+
 // SeatAppOptions is what one pass over the seats needs.
 type SeatAppOptions struct {
 	// APIBase is the REST base, for Enterprise Server.

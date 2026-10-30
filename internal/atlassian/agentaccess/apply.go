@@ -28,7 +28,7 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 	}
 	// REDRAWN WITHOUT OPTIONS: they change a step's words, never which step
 	// sits at an index.
-	drawn := actions(in.Seat, p, in.Step.Op, in.Want, in.Have.Access(), seataccess.Options{})
+	drawn := actions(p, in.Step.Op, in.Want, in.Have.Access(), seataccess.Options{})
 	if in.Step.Index < 0 || in.Step.Index >= len(drawn) {
 		return seataccess.StepResult{}, fmt.Errorf("atlassian: %s has no step %d",
 			in.Step.Op, in.Step.Index)

@@ -68,6 +68,23 @@
   gap: var(--spacing-5);
 }
 
+/* THE NOTES, under the agents: a heading, then one row a note, its sentence
+   over the quieter line saying what would change it. */
+.int-notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.int-notes h3 {
+  margin: 0;
+}
+.int-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
 /* ONE ISSUE A ROW: what is wrong, who owes the next move, and the control
    that makes it. */
 .int-issues,

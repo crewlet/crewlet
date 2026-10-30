@@ -317,19 +317,20 @@ type Result struct {
 
 	// Coverage is what this company's agents hear about, when that is
 	// narrower than the organization and is the arrangement rather than a
-	// fault. Empty when nothing needs saying.
+	// fault. The zero finding when nothing needs saying.
 	//
-	// A SENTENCE ON A WORKING INTEGRATION. It is reported as
+	// A NOTE ON A WORKING INTEGRATION. It is reported as
 	// [integration.FindingCoveragePartial], whose verdict is ready, and the
 	// alternatives were both wrong: an ingress_blocked finding reads as
 	// Action required over agents receiving events perfectly well, and a
 	// note is dropped before anything renders it, so a person learns what
 	// their integration does not see only by noticing its absence.
-	Coverage string
+	Coverage integration.Finding
 
 	// Undeliverable says why GitHub can deliver nothing to this deployment
 	// although it HAS an address: the address is one GitHub cannot reach
-	// ([Deliverable]), which is what a local engine's is. Empty otherwise.
+	// ([Deliverable]), which is what a local engine's is. The zero finding
+	// otherwise.
 	//
 	// AN ADVISORY, NOT A BLOCK. Such a deployment registers no hook, and its
 	// agents' apps are created with their webhooks off ([BuildManifest]),
@@ -338,7 +339,7 @@ type Result struct {
 	// is reported as [integration.FindingCoveragePartial] on a ready card,
 	// saying what does not arrive and what makes it arrive, rather than as
 	// Action required over agents that are working.
-	Undeliverable string
+	Undeliverable integration.Finding
 }
 
 // Routing reports the seats whose inbound events can reach them.
@@ -408,7 +409,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 			// agent's own app has no organization credential by design, so
 			// the pass returns above ever registering anything.
 			Coverage:      coverageFor(opts, nil),
-			Undeliverable: undeliverableReason(opts),
+			Undeliverable: undeliverable(opts),
 			NoIngressKey:  opts.WebhookBaseKey,
 		}, nil
 	}
@@ -431,7 +432,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// and missed the other — see the nil-client return above.
 	res.Coverage = coverageFor(opts, res.Hooks)
 	res.NoIngress = noIngressReason(opts)
-	res.Undeliverable = undeliverableReason(opts)
+	res.Undeliverable = undeliverable(opts)
 	if err == nil {
 		// AND AGAIN AT THE END, because a pass cancelled halfway does not
 		// stop halfway: every read between here and the probe reports its
@@ -605,20 +606,28 @@ func noIngressReason(opts Options) string {
 		"GitHub has an address to deliver to and no event reaches this deployment"
 }
 
-// undeliverableReason says why GitHub can reach this deployment at none of
-// the address it has, or "" when it has none ([noIngressReason]'s case) or
+// undeliverable is the advisory for an address GitHub cannot deliver to: what
+// does not arrive, what still works, and what makes it arrive. The zero
+// finding when the deployment has no address ([noIngressReason]'s case) or
 // one GitHub reaches.
-func undeliverableReason(opts Options) string {
+//
+// THE KEY AND THE ADDRESS IN BACKTICKS, so a reader sets them as the literals
+// they are: the address is a URL nobody should follow, and a renderer that
+// links bare URLs would make it one.
+func undeliverable(opts Options) integration.Finding {
 	base := strings.TrimRight(strings.TrimSpace(opts.WebhookBase), "/")
 	if base == "" || Deliverable(base, enterprise(opts)) {
-		return ""
+		return integration.Finding{}
 	}
 	key := setup.BaseKey(opts.WebhookBaseKey)
-	return key + " is " + base + ", an address GitHub cannot deliver to, so no " +
-		"GitHub event reaches this deployment and no hook is registered. The " +
-		"agents still push, open pull requests and review through their own " +
-		"apps, which are created with their webhooks off; set " + key + " to an " +
-		"address GitHub reaches to hear back from it"
+	return integration.Finding{
+		Kind:    integration.FindingCoveragePartial,
+		Subject: key,
+		Title:   "GitHub can't reach this engine",
+		Detail: "`" + key + "` is `" + base + "`, so no GitHub events arrive. Agents " +
+			"still push, open pull requests and review through their own apps",
+		Remedy: "Set `" + key + "` to a public address to receive events",
+	}
 }
 
 // enterprise reports a company on Enterprise Server rather than github.com,
@@ -704,15 +713,8 @@ type ingress struct {
 	Notes []string
 }
 
-// coverageNote is the sentence a company hears when its agents' own apps are
-// what carry its events.
-//
-// IT NAMES BOTH HALVES. Saying only what is covered reads as a complete
-// answer and leaves somebody surprised by the first repository nobody hears
-// about; saying only what is not reads as a fault. The remedy is the last
-// clause rather than the first, because nothing is broken.
-// coverageFor is the sentence for a company whose events arrive through its
-// agents' OWN apps, or "" when there is nothing to say.
+// coverageFor is the note for a company whose events arrive through its
+// agents' OWN apps, or the zero finding when there is nothing to say.
 //
 // THE TEST IS WHAT IS DELIVERING, not what the config asked for. Nothing
 // organization-wide is carrying events — no org hook, no repository hook —
@@ -727,13 +729,13 @@ type ingress struct {
 // says so elsewhere, through the roster's own "no app of its own" finding.
 // With a hook working, the organization is covered and there is nothing
 // narrower to report.
-func coverageFor(opts Options, hooks []HookState) string {
+func coverageFor(opts Options, hooks []HookState) integration.Finding {
 	if opts.SeatApps == 0 {
-		return ""
+		return integration.Finding{}
 	}
 	for _, h := range hooks {
 		if h.Hooked() {
-			return ""
+			return integration.Finding{}
 		}
 	}
 	var org string
@@ -743,14 +745,31 @@ func coverageFor(opts Options, hooks []HookState) string {
 	return coverageNote(org)
 }
 
-func coverageNote(org string) string {
+// coverageNote is the note a company reads when its agents' own apps are
+// what carry its events.
+//
+// IT NAMES BOTH HALVES. Saying only what is covered reads as a complete
+// answer and leaves somebody surprised by the first repository nobody hears
+// about; saying only what is not reads as a fault.
+//
+// THE REMEDY IS WORDED AS AN OPTION, because nothing is broken: a company
+// that chose this arrangement must not read a decision it already took as
+// work outstanding. And it is the token, never an install, since no app
+// carries `admin:org_hook` at any permission.
+func coverageNote(org string) integration.Finding {
 	where := "the rest of the organization"
 	if org != "" {
 		where = "the rest of " + org
 	}
-	return "covering the repositories your agents' apps are installed on. " +
-		"Not covering " + where + " — supply integrations.github.token to " +
-		"add one organization-wide hook"
+	return integration.Finding{
+		Kind:    integration.FindingCoveragePartial,
+		Subject: "github coverage",
+		Title:   "Events from your agents' repositories only",
+		Detail: "GitHub sends events for the repositories your agents' apps are " +
+			"installed on, and none for " + where,
+		Remedy: "To cover every repository, set `integrations.github.token` and " +
+			"Crewlet adds one organization-wide hook",
+	}
 }
 
 // ensureWebhooks registers the inbound hooks, or converges the ones already

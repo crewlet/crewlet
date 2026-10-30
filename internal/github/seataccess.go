@@ -137,7 +137,7 @@ type Wait struct {
 	// who accepts the request on the installation.
 	Owner bool
 
-	// Detail is the sentence the tab shows.
+	// Detail is the sentence the tab shows: what to do, naming the agent.
 	Detail string
 }
 
@@ -159,10 +159,7 @@ func RaiseWait(webBase, org string, seat SeatApp, want Permissions, obs SeatObse
 			Missing: missing,
 			URL:     PermissionsURL(webBase, org, seat.Slug),
 			Owner:   true,
-			Detail: seat.Handle + "'s app is registered without " + Names(missing) +
-				" at the level this seat is set to. Add " + Names(missing) +
-				" on the app's permissions page; GitHub then asks the organization " +
-				"to accept the change",
+			Detail:  "Add " + Names(missing) + " to " + seat.Label() + "'s app permissions",
 		}
 	}
 	missing := want.Short(obs.Installation.Permissions)
@@ -176,9 +173,8 @@ func RaiseWait(webBase, org string, seat SeatApp, want Permissions, obs SeatObse
 	return &Wait{
 		Missing: missing,
 		URL:     url,
-		Detail: "GitHub is waiting for an organization owner to accept " +
-			Names(missing) + " for " + seat.Handle + "'s app on its installation. " +
-			"Until then GitHub refuses every token this seat asks for",
+		Detail: "Ask an organization owner to accept " + Names(missing) + " for " +
+			seat.Label() + "'s app",
 	}
 }
 

@@ -60,13 +60,13 @@ func (accessVendor) Steps(
 	step := func(verb seataccess.StepVerb, text string) seataccess.Step {
 		return seataccess.Step{Op: op, Verb: verb, By: seataccess.ByCrewlet, Text: text}
 	}
-	mint := step(seataccess.VerbMint, "Mint its access token and seal it as "+sink)
-	retire := step(seataccess.VerbRevoke, "Revoke the access tokens the new one replaces")
+	mint := step(seataccess.VerbMint, "Mint an access token, sealed as "+sink)
+	retire := step(seataccess.VerbRevoke, "Revoke the tokens it replaces")
 	var out []seataccess.Step
 	switch op {
 	case seataccess.OpCreate:
 		out = []seataccess.Step{
-			step(seataccess.VerbCreate, "Create a Mattermost bot for "+seat.Label()),
+			step(seataccess.VerbCreate, "Create a Mattermost bot"),
 			step(seataccess.VerbGrant, "Add it to the team as "+RolesLabel(levelRoles(want.Level))),
 		}
 		if len(want.Scope) > 0 {
@@ -98,19 +98,17 @@ func (accessVendor) Steps(
 		// seat is never left holding nothing that authenticates.
 		out = []seataccess.Step{mint, retire}
 	case seataccess.OpDisable:
-		deactivate := step(seataccess.VerbDisable, "Deactivate its Mattermost bot")
-		deactivate.Note = "Mattermost keeps the bot and everything it posted, so turning it " +
-			"back on needs no person."
+		deactivate := step(seataccess.VerbDisable, "Deactivate its bot")
+		deactivate.Note = "Mattermost keeps the bot and its posts, so turning it back on needs no one."
 		out = []seataccess.Step{deactivate}
 	case seataccess.OpRevoke:
 		out = []seataccess.Step{step(seataccess.VerbRevoke, "Revoke its access tokens and clear "+sink)}
 	case seataccess.OpRemove:
-		remove := step(seataccess.VerbRemove, "Stop managing its deactivated Mattermost bot")
-		remove.Note = "The bot stays deactivated, because deleting it would delete " +
-			"everything it posted."
+		remove := step(seataccess.VerbRemove, "Stop managing its deactivated bot")
+		remove.Note = "The bot stays deactivated, since deleting it would delete its posts."
 		out = []seataccess.Step{remove}
 	case seataccess.OpRotate:
-		mint.Text = "Mint a new access token and seal it as " + sink
+		mint.Text = "Mint a new access token, sealed as " + sink
 		out = []seataccess.Step{mint, retire}
 	default:
 		return nil

@@ -143,6 +143,21 @@ type AccessSync struct {
 	// By is who asked, which the sync records against what it seals and
 	// the ledger rows it writes.
 	By iam.Actor
+
+	// Then runs once the sync has finished, whatever it concluded, while the
+	// integration still reads as syncing: the check route's own pass, which
+	// observes the whole integration again and records what it found
+	// ([Service.recheck]). Nil runs nothing.
+	//
+	// A SYNC ANSWERS FOR THE SEATS IT TOUCHED and records nothing else. The
+	// integration's status row (its issues, its notes, its card's phase) is
+	// written only by a pass, and the pass a save's revision brings forward
+	// loses the surface's lease to the very sync the save started, so the
+	// row stayed as the last pass left it until somebody pressed Check now.
+	// Not taken where the sync never ran (another writer held the surface,
+	// the store could not say, the ask was refused): that writer's own pass
+	// records, or nothing changed.
+	Then func(ctx context.Context)
 }
 
 // SeatAsk is one person's ask on one seat's lane.
@@ -630,7 +645,8 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 		asks = []SeatAsk{{Handle: seat.Handle, Lane: lane, Ask: ask}}
 	}
 	err := s.access.Sync(r.Context(), AccessSync{Kind: kind, Revision: q.Revision,
-		Asks: asks, Handles: []string{seat.Handle}, By: attributionOf(r)})
+		Asks: asks, Handles: []string{seat.Handle}, By: attributionOf(r),
+		Then: s.recheckAfter(kind)})
 	if errors.Is(err, seataccess.ErrStillOn) {
 		// ANOTHER LANE OF THE SAME ACCOUNT IS STILL ON: an Atlassian
 		// account serves Jira and Confluence both, and is removed only once
@@ -713,6 +729,11 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 	log.InfoContext(r.Context(), "setup_access_kept",
 		"kind", q.Kind, "seat", seat.Handle, "lane", lane, "revision", applied.RevisionID,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
+	// A KEEP IS A SAVE, and ends as one does: the sync on the revision it
+	// wrote (which finds the vendor already matching) and then the check, so
+	// the tab and the integration's status read the kept setting.
+	s.startSync(r, AccessSync{Kind: q.Kind, Revision: applied.RevisionID, By: attributionOf(r),
+		Handles: []string{seat.Handle}, AfterSave: true})
 	s.writeSaved(w, r, current, []accessChange{change}, applied.RevisionID)
 }
 
@@ -729,8 +750,10 @@ func offerOf(answer seataccess.Answer, lane seataccess.Lane) seataccess.Options 
 
 // startSync asks the engine to sync after a save, and logs rather than refuses
 // when it cannot: the revision is the company's either way, and the reconcile
-// loop takes it on its next pass.
+// loop takes it on its next pass. The sync ends in the check, as every access
+// sync does ([AccessSync.Then]).
 func (s *Service) startSync(r *http.Request, req AccessSync) {
+	req.Then = s.recheckAfter(req.Kind)
 	if err := s.access.Sync(context.WithoutCancel(r.Context()), req); err != nil {
 		log.WarnContext(r.Context(), "setup_access_sync_deferred",
 			"kind", req.Kind, "revision", req.Revision, "error", err.Error(),

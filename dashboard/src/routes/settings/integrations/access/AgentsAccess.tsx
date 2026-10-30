@@ -49,7 +49,7 @@ import type {
 } from "~/contract/access.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural, relTime } from "~/lib/format.ts";
+import { asSentence, plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import "~/styles/access.css";
@@ -525,7 +525,9 @@ export function AgentsAccess({
         ariaLabel={only ? `Access on ${name}` : `Agents on ${name}`}
         paginated={false}
         showSettings={false}
-        resizable={false}
+        // SIZED TO CONTENT: four short columns spread across a wide pane
+        // read as four facts about nothing in particular.
+        columnSizing="content"
         defaultColumnOrder={order}
         columns={columns}
         rowTone={(row) => toneOf(row.status)}
@@ -821,14 +823,16 @@ function LaneMessage({
     saved.sync?.outcome === "waiting" ||
     (!saved.sync && saved.plan.some((s) => s.by === "you"))
   ) {
-    // A WAIT IS SAID IN THE SYNC'S OWN WORDS: its reason and remedy where the
-    // sync recorded them, else the step it stopped at. The plan is read only
-    // before any sync ran.
+    // A WAIT IS ONE SENTENCE OF WHAT TO DO, in the sync's own words where it
+    // recorded them, else the step it stopped at; the buttons beside it are
+    // where and how to say it is done. The plan is read only before any sync
+    // ran.
     const error = saved.sync?.error;
     const waiting = saved.sync
       ? saved.sync.steps.find((s) => s.by === "you" && !s.done)
       : saved.plan.find((s) => s.by === "you");
-    if (!error && !waiting) return null;
+    const todo = error?.said || waiting?.text;
+    if (!todo) return null;
     const install = laneWords(lane.key).install;
     const where = at(error?.action_url ?? waiting?.action_url);
     body = (
@@ -858,17 +862,7 @@ function LaneMessage({
           </span>
         }
       >
-        {error ? (
-          <>
-            <p>{error.said}</p>
-            <p>{error.remedy}</p>
-          </>
-        ) : (
-          <>
-            <p>{waiting!.text}.</p>
-            {waiting!.note && <p>{waiting!.note}</p>}
-          </>
-        )}
+        <p>{asSentence(todo)}</p>
         {link && <p>Your browser kept the install page from opening in a new tab.</p>}
       </Callout>
     );

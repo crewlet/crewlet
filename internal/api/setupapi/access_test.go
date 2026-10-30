@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -262,6 +264,85 @@ func TestASaveIsOneRevisionThenASync(t *testing.T) {
 	if s.active(t).ID != after.ID {
 		t.Error("a stale save wrote a revision")
 	}
+}
+
+// EVERY ACCESS WRITE ENDS IN THE CHECK.
+//
+// A save, an action at the vendor (here a retry) and a keep each start a sync,
+// and each sync carries the check route's own pass as its follow-up: read-only,
+// with no sink, and recorded through the loop's fold, so the integration's
+// status row holds what the pass found. That row is the integration's issues,
+// notes and card; a sync records none of it, and before this a person pressed
+// Check now to see what their own save had done.
+//
+// Mutation: drop `Then` from any of the three writes, or record nothing in
+// [setupapi.Service] recheck, and a case here fails.
+func TestEveryAccessWriteEndsInTheCheck(t *testing.T) {
+	t.Parallel()
+	s := newAccessSurface(t)
+	s.access.observed = map[string]map[seataccess.Lane]seataccess.Observed{
+		"sre-lead": {seataccess.LaneDatadog: {Exists: true, Enabled: true, Level: "role-ro"}},
+	}
+	note := integration.Finding{Kind: integration.FindingRegistrationOrphaned,
+		Subject: "datadog service accounts", Title: "Service accounts with no seat",
+		Detail: "Crewlet made 1 enabled service account matching no seat"}
+	pass := &recordingPass{kind: integration.KindDatadog, findings: []integration.Finding{note}}
+	status, _ := s.withPass(t, pass)
+	var recorded atomic.Int64
+	status.onSave = func(integration.State) { recorded.Add(1) }
+
+	followed := func(what string) {
+		t.Helper()
+		pass.mu.Lock()
+		before := len(pass.calls)
+		pass.mu.Unlock()
+		saves := recorded.Load()
+		sync := s.access.lastSync(t)
+		if sync.Then == nil {
+			t.Fatalf("%s started a sync with no follow-up", what)
+		}
+		// THE ENGINE RUNS IT once the sync has finished.
+		sync.Then(t.Context())
+		pass.mu.Lock()
+		calls := slices.Clone(pass.calls)
+		pass.mu.Unlock()
+		if len(calls) != before+1 {
+			t.Fatalf("%s: the follow-up ran %d passes, want the check's one", what, len(calls)-before)
+		}
+		if in := calls[len(calls)-1]; in.Sink != nil || in.WebhookBase != fixtureWebhookBase {
+			t.Errorf("%s: the follow-up ran %+v, want the check's read-only pass with the address", what, in)
+		}
+		row, ok := status.get(integration.KindDatadog)
+		if recorded.Load() != saves+1 || !ok || len(row.Findings) != 1 || !row.Findings[0].Same(note) {
+			t.Errorf("%s: the status row holds %+v after %d writes, want what the check found, "+
+				"written once", what, row.Findings, recorded.Load()-saves)
+		}
+	}
+
+	base := s.active(t).ID
+	res := s.do(t, http.MethodPut, "/setup/integrations/datadog/access",
+		`{"seats": {"cto": {"datadog": {"enabled": true, "level": "role-ro"}}}}`,
+		map[string]string{"If-Match": `"` + base + `"`})
+	if res.Code != http.StatusOK {
+		t.Fatalf("PUT = %d: %s", res.Code, res.Body)
+	}
+	followed("a save")
+
+	res = s.do(t, http.MethodPost, "/setup/integrations/datadog/access/seats/sre-lead/datadog/retry", `{}`, nil)
+	if res.Code != http.StatusOK {
+		t.Fatalf("retry = %d: %s", res.Code, res.Body)
+	}
+	followed("a retry")
+
+	res = s.do(t, http.MethodPost, "/setup/integrations/datadog/access/seats/sre-lead/datadog/keep", `{}`,
+		map[string]string{"If-Match": `"` + s.active(t).ID + `"`})
+	if res.Code != http.StatusOK {
+		t.Fatalf("keep = %d: %s", res.Code, res.Body)
+	}
+	if sync := s.access.lastSync(t); !sync.AfterSave || !slices.Equal(sync.Handles, []string{"sre-lead"}) {
+		t.Errorf("the keep's sync = %+v, want the kept seat's, after its revision applies", sync)
+	}
+	followed("a keep")
 }
 
 // A DRAFT NAMES ONLY WHAT THE TAB OFFERS.

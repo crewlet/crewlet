@@ -61,12 +61,8 @@ func (r *Result) Findings() []integration.Finding {
 
 	// AN ADDRESS GITHUB CANNOT REACH IS AN ADVISORY, said once: what does
 	// not arrive, and what makes it arrive. See [Result.Undeliverable].
-	if r.Undeliverable != "" {
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingCoveragePartial,
-			Subject: setup.BaseKey(r.NoIngressKey),
-			Detail:  r.Undeliverable,
-		})
+	if r.Undeliverable.Kind != "" {
+		out = append(out, r.Undeliverable)
 	}
 
 	// AND NO CREDENTIAL TO REGISTER THE HOOK THE COMPANY ASKED FOR.
@@ -96,16 +92,8 @@ func (r *Result) Findings() []integration.Finding {
 	// organization token as the fix — beside a roster asking for apps to be
 	// installed, which can never carry `admin:org_hook`. So the one
 	// instruction on screen could not clear the one warning on screen.
-	if r.Coverage != "" {
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingCoveragePartial,
-			Subject: "github coverage",
-			Detail:  r.Coverage,
-			// NO REMEDY FIELD. The sentence's own last clause is the
-			// remedy, and it is optional — a second line telling somebody
-			// to do something would make a decision they already took
-			// read as work outstanding.
-		})
+	if r.Coverage.Kind != "" {
+		out = append(out, r.Coverage)
 	}
 
 	// AND A TARGET THIS RUN TRIED AND COULD NOT HOOK.

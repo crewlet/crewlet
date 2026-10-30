@@ -163,7 +163,7 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   );
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   expect(
-    await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid."),
+    await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid"),
   ).toBeTruthy();
   expect(calls.plan).toEqual([
     { kind: "datadog", seats: { qa: { datadog: { enabled: true, level: "r-ro" } } } },
@@ -174,6 +174,26 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   // THE SAVE'S ANSWER IS THE TAB AS IT NOW STANDS, drawn rather than read again.
   await waitFor(() => expect(onAnswer).toHaveBeenCalledTimes(1));
   expect(reload).not.toHaveBeenCalled();
+});
+
+// THE REVIEW, SHORT: the change as one line of chips, then the next sync's
+// steps in order, each said with who takes it before its label, its note at a
+// quieter step, and no lead-in sentence above them.
+test("the review says the change as one line and the steps by who takes them", async () => {
+  draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  const steps = await screen.findByRole("list", { name: "What the next sync does at Datadog" });
+  expect(steps.tagName).toBe("OL");
+  expect(
+    within(steps)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent),
+  ).toEqual(["Crewlet: Create the service account crewlet-qa@agents.crewlet.invalid"]);
+  const review = screen.getByRole("region", { name: "QA on Datadog" });
+  expect(review.querySelector(".crewlet-change-list--inline")).toBeTruthy();
+  expect(within(review).getByText("Off").closest(".crewlet-tag")).toBeTruthy();
+  expect(screen.queryByText(/the next sync will:/)).toBeNull();
 });
 
 test("turning a seat off says in the review what that does at the vendor", async () => {
@@ -190,7 +210,7 @@ test("a raise to an administration role warns that saving asks to confirm who yo
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
   // QA turns on at its default role, which the plan does not mark.
-  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid.");
+  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid");
   expect(screen.queryByText(/Saving asks you to confirm it is you/)).toBeNull();
 });
 
@@ -465,7 +485,9 @@ test("an account turned off at the vendor by hand offers Turn back on and Keep o
   expect(screen.getByRole("button", { name: "Keep off" })).toBeTruthy();
 });
 
-test("a wait says the sync's own reason and remedy, and links where the engine says", () => {
+// A WAIT IS ONE SENTENCE OF WHAT TO DO, and the buttons carry the rest: where,
+// and saying it is done. A remedy line restating the buttons is not drawn.
+test("a wait says the one thing to do, and links where the engine says", () => {
   draw(
     datadogAnswer({
       sync: {
@@ -483,8 +505,9 @@ test("a wait says the sync's own reason and remedy, and links where the engine s
     }),
   );
   expect(screen.getByText("The app is waiting for an owner to approve its install.")).toBeTruthy();
-  expect(screen.getByText("An organization owner approves it under Installed apps.")).toBeTruthy();
+  expect(screen.queryByText("An organization owner approves it under Installed apps.")).toBeNull();
   expect(screen.queryByText("Approve it.")).toBeNull();
+  expect(screen.getByRole("button", { name: "Done, check again" })).toBeTruthy();
   expect(screen.getByRole("link", { name: /Open Datadog/ }).getAttribute("href")).toBe(
     "https://example.invalid/approve",
   );
@@ -504,7 +527,7 @@ test("a save refused as stale keeps the draft, reads again and plans again again
   const { reload, redraw } = draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
-  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid.");
+  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid");
   fireEvent.click(screen.getByRole("button", { name: "Save and sync" }));
   expect(await screen.findByText(/Somebody changed these agents/)).toBeTruthy();
   expect(reload).toHaveBeenCalled();

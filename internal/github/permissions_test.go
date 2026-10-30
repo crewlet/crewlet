@@ -194,7 +194,7 @@ func TestDescribeUsesGitHubsNames(t *testing.T) {
 	if got := (github.Permissions{}).Describe(); got != "No access" {
 		t.Errorf("an empty seat reads %q", got)
 	}
-	if got := github.Names([]string{"pull_requests", "metadata", "pages"}); got != "Pull requests, Metadata, pages" {
+	if got := github.Names([]string{"pull_requests", "metadata", "pages"}); got != "Pull requests, Metadata and pages" {
 		t.Errorf("names = %q", got)
 	}
 }

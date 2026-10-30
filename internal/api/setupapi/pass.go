@@ -161,33 +161,8 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		}
 	}
 
-	in := setup.PassInput{
-		Operator: req.OperatorCredential,
-		// THE ADDRESS EVERY RUN GETS, INCLUDING A READ-ONLY ONE.
-		//
-		// This used to be set only on the writing branch, on the reasoning
-		// below that supplying the base IS the permission to register. That
-		// reasoning is right about the PERMISSION and wrong about the FACT:
-		// a vendor reads an empty base as "this deployment has no public
-		// base URL" and reports ingress_blocked against the
-		// address's Tier A key, owed by an admin — and `check`
-		// persists its findings through the same fold the loop uses. So
-		// pressing Check on a perfectly healthy company wrote "every
-		// monitor that fires reaches nobody" into the live status row and
-		// flipped the card to Action required, telling an operator to set a
-		// value that was already set and answering 200.
-		//
-		// The permission is the SINK, which is what it has always actually
-		// been: every vendor gates its registration on having one
-		// (datadog's hook path reports rather than registers, gitlab and
-		// jira refuse outright, confluence and github the same), so a
-		// read-only run holding the address still writes nothing at the
-		// third-party app. What it gains is the ability to say what is
-		// TRUE: the webhook points somewhere else, or there is no address
-		// at all — and, for the second, which Tier A key to set.
-		WebhookBase:    s.webhookBase,
-		WebhookBaseKey: s.webhookBaseKey,
-	}
+	in := s.readOnlyInput()
+	in.Operator = req.OperatorCredential
 	if req.Recreate {
 		in.Recreate = recreateSwitch
 	}
@@ -222,40 +197,24 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		in.By = attributionOf(r)
 	}
 
-	// DETACHED FROM THE REQUEST, then guarded, then bounded — in that order.
-	//
-	// A pass WRITES AT THE VENDOR: it creates accounts, mints tokens and
-	// registers webhooks. Run on the request's own context, a browser tab
-	// closing or a reverse proxy hitting its read timeout cancels it
-	// mid-way, and what is left behind is an account created with no
-	// credential sealed, or a credential sealed with no pointer written.
-	// The next pass then either duplicates the account or reports a
-	// half-finished integration nobody asked for. Nothing about the
-	// operator's connection should decide that.
-	detached := context.WithoutCancel(r.Context())
-
-	// THE GUARD IS TAKEN HERE AND HELD PAST THE RECORD, which is the whole
-	// change: [setup.Runner.Execute] used to take it and give it back the
-	// moment the pass returned, leaving `s.record` below — the write carrying
-	// the phase, the findings and the attempts — outside the lease that is
-	// supposed to make these rows safe to write. A reconcile tick folding a
-	// row it read a moment earlier then put its own copy back over the top.
-	//
-	// The context it returns carries [setup.PassDeadline], measured from the
-	// moment the lease was actually acquired rather than from here, so the
-	// margin inside [setup.LeaseTTL] is the whole minute.
-	ctx, release, held, err := s.passes.Hold(detached, kind)
+	run, err := s.runHeld(r.Context(), kind, in)
+	// THE TRANSIENT CREDENTIAL IS DROPPED THE MOMENT THE PASS RETURNS.
+	// It can create accounts at the third-party app, and the difference between a
+	// one-time grant and a standing power is exactly how long it is held.
+	in.Operator = ""
+	req.OperatorCredential = ""
+	var unread leaseUnread
 	switch {
-	case err != nil:
+	case errors.As(err, &unread):
 		// The pass never started: the lease could not be read, which is
 		// three-valued and is NOT evidence that somebody else is minting.
 		// There is nothing to record, because nothing was observed.
 		log.ErrorContext(r.Context(), "setup_pass_not_started",
-			"integration", kind, "error", err.Error(),
+			"integration", kind, "error", unread.err.Error(),
 			"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 		// UNAVAILABLE AND NOT internal_error: the store could not say, which
 		// is transient, and a client told "internal error" treats it as
-		// terminal. Retried on the undecidable scale — a coordination blip
+		// terminal. Retried on the undecidable scale: a coordination blip
 		// is seconds, not an outage.
 		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds,
 			httpjson.Detail{
@@ -263,41 +222,16 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 					"is already provisioning this integration; try again",
 			})
 		return
-	case !held:
+	case errors.Is(err, errSurfaceHeld):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodePassInFlight, map[string]string{
 			"hint": "another pass for this integration is running; wait for it " +
 				"rather than minting twice",
 		})
 		return
-	}
-	defer release()
-
-	run, err := s.passes.Execute(ctx, kind, in, uuid.NewString())
-	// THE TRANSIENT CREDENTIAL IS DROPPED THE MOMENT THE PASS RETURNS.
-	// It can create accounts at the third-party app, and the difference between a
-	// one-time grant and a standing power is exactly how long it is held.
-	in.Operator = ""
-	req.OperatorCredential = ""
-	if errors.Is(err, setup.ErrNoPass) {
+	case errors.Is(err, setup.ErrNoPass):
 		httpjson.Fail(w, http.StatusConflict, httpjson.CodeNotProvisionable)
 		return
 	}
-
-	// THE STATUS IS WRITTEN WHETHER OR NOT THE PASS SUCCEEDED, through the
-	// fold the loop uses. A pass that failed is a fact about the
-	// integration, and hiding it here would leave the screen showing the
-	// last good answer under a fresh timestamp.
-	//
-	// ON THE DETACHED CONTEXT, not the request's. The pass was detached so a
-	// closing tab could not cancel a vendor write, and recording it on the
-	// request undid exactly half of that: the vendor work landed and was
-	// durable, and the record of it was cancelled with the connection.
-	// Bounded by [setup.RecordDeadline], which is the margin this lease
-	// deliberately keeps behind the pass — detaching removed the only
-	// cancellation this write had.
-	recordCtx, cancelRecord := context.WithTimeout(detached, setup.RecordDeadline)
-	defer cancelRecord()
-	s.record(recordCtx, kind, run, err)
 
 	if err != nil {
 		log.ErrorContext(r.Context(), "setup_pass_failed",
@@ -305,7 +239,7 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 			"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 		httpjson.FailWithFields(w, http.StatusBadGateway,
 			httpjson.CodeVendorRefused, httpjson.Detail{
-				// THE WHOLE RUN, with its findings and attempts — a
+				// THE WHOLE RUN, with its findings and attempts: a
 				// refusal detail is typed JSON rather than text, so
 				// the Findings tab renders the same record it would
 				// have read from the runs route.
@@ -323,6 +257,142 @@ func (s *Service) runPass(w http.ResponseWriter, r *http.Request, readOnly bool)
 		"findings", len(run.Findings),
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	httpjson.Write(w, http.StatusOK, run)
+}
+
+// readOnlyInput is the input every pass starts from, and all a read-only one
+// gets: the address and the key it is read from, and nothing that writes.
+func (s *Service) readOnlyInput() setup.PassInput {
+	return setup.PassInput{
+		// THE ADDRESS EVERY RUN GETS, INCLUDING A READ-ONLY ONE.
+		//
+		// This used to be set only on the writing branch, on the reasoning
+		// below that supplying the base IS the permission to register. That
+		// reasoning is right about the PERMISSION and wrong about the FACT:
+		// a vendor reads an empty base as "this deployment has no public
+		// base URL" and reports ingress_blocked against the
+		// address's Tier A key, owed by an admin, and `check`
+		// persists its findings through the same fold the loop uses. So
+		// pressing Check on a perfectly healthy company wrote "every
+		// monitor that fires reaches nobody" into the live status row and
+		// flipped the card to Action required, telling an operator to set a
+		// value that was already set and answering 200.
+		//
+		// The permission is the SINK, which is what it has always actually
+		// been: every vendor gates its registration on having one
+		// (datadog's hook path reports rather than registers, gitlab and
+		// jira refuse outright, confluence and github the same), so a
+		// read-only run holding the address still writes nothing at the
+		// third-party app. What it gains is the ability to say what is
+		// TRUE: the webhook points somewhere else, or there is no address
+		// at all and, for the second, which Tier A key to set.
+		WebhookBase:    s.webhookBase,
+		WebhookBaseKey: s.webhookBaseKey,
+	}
+}
+
+// errSurfaceHeld is a pass not run because another writer holds the surface.
+var errSurfaceHeld = errors.New("setupapi: another writer holds this integration")
+
+// leaseUnread is a pass not run because the surface's lease could not be
+// read: three-valued, and NOT evidence that somebody else is writing.
+type leaseUnread struct{ err error }
+
+func (e leaseUnread) Error() string { return "setupapi: the lease could not be read: " + e.err.Error() }
+func (e leaseUnread) Unwrap() error { return e.err }
+
+// runHeld runs one pass of kind under the surface's lease and records what it
+// found through the loop's fold: the check and provision routes' pass, and the
+// check every access sync ends in ([Service.recheck]), are one machine.
+//
+// It answers the run and the pass's own error; [errSurfaceHeld] or a
+// [leaseUnread] where no pass ran; and [setup.ErrNoPass] for a kind this build
+// runs none for.
+func (s *Service) runHeld(ctx context.Context, kind integration.Kind, in setup.PassInput) (*setup.Run, error) {
+	// DETACHED FROM THE CALLER, then guarded, then bounded, in that order.
+	//
+	// A pass WRITES AT THE VENDOR: it creates accounts, mints tokens and
+	// registers webhooks. Run on a request's own context, a browser tab
+	// closing or a reverse proxy hitting its read timeout cancels it
+	// mid-way, and what is left behind is an account created with no
+	// credential sealed, or a credential sealed with no pointer written.
+	// The next pass then either duplicates the account or reports a
+	// half-finished integration nobody asked for. Nothing about the
+	// operator's connection should decide that.
+	detached := context.WithoutCancel(ctx)
+
+	// THE GUARD IS TAKEN HERE AND HELD PAST THE RECORD: [setup.Runner.Execute]
+	// used to take it and give it back the moment the pass returned, leaving
+	// `s.record` below (the write carrying the phase, the findings and the
+	// attempts) outside the lease that is supposed to make these rows safe to
+	// write. A reconcile tick folding a row it read a moment earlier then put
+	// its own copy back over the top.
+	//
+	// The context it returns carries [setup.PassDeadline], measured from the
+	// moment the lease was actually acquired rather than from here, so the
+	// margin inside [setup.LeaseTTL] is the whole minute.
+	bounded, release, held, err := s.passes.Hold(detached, kind)
+	switch {
+	case err != nil:
+		return nil, leaseUnread{err: err}
+	case !held:
+		return nil, errSurfaceHeld
+	}
+	defer release()
+
+	run, err := s.passes.Execute(bounded, kind, in, uuid.NewString())
+	in.Operator = ""
+	if errors.Is(err, setup.ErrNoPass) {
+		return nil, err
+	}
+
+	// THE STATUS IS WRITTEN WHETHER OR NOT THE PASS SUCCEEDED, through the
+	// fold the loop uses. A pass that failed is a fact about the
+	// integration, and hiding it here would leave the screen showing the
+	// last good answer under a fresh timestamp.
+	//
+	// ON THE DETACHED CONTEXT, not the caller's. The pass was detached so a
+	// closing tab could not cancel a vendor write, and recording it on the
+	// request undid exactly half of that: the vendor work landed and was
+	// durable, and the record of it was cancelled with the connection.
+	// Bounded by [setup.RecordDeadline], which is the margin this lease
+	// deliberately keeps behind the pass: detaching removed the only
+	// cancellation this write had.
+	recordCtx, cancelRecord := context.WithTimeout(detached, setup.RecordDeadline)
+	defer cancelRecord()
+	s.record(recordCtx, kind, run, err)
+	return run, err
+}
+
+// recheckAfter is the follow-up every access sync carries ([AccessSync.Then]).
+func (s *Service) recheckAfter(kind integration.Kind) func(context.Context) {
+	return func(ctx context.Context) { s.recheck(ctx, kind) }
+}
+
+// recheck is what pressing Check now does, done by the engine once a sync of
+// kind's seats has finished: the read-only pass, recorded through the loop's
+// fold, so the integration's issues, notes and card say what the sync left
+// rather than what the last pass found before it.
+//
+// NOTHING IS ANSWERED, because nobody is waiting on it: the person's write was
+// answered when the sync started, and the tab reads the record this writes.
+// A surface another writer holds is left to that writer, whose own pass
+// records; a kind this build runs no pass for has nothing to look at.
+func (s *Service) recheck(ctx context.Context, kind integration.Kind) {
+	if !s.passes.Serves(kind) {
+		return
+	}
+	run, err := s.runHeld(ctx, kind, s.readOnlyInput())
+	switch {
+	case errors.Is(err, errSurfaceHeld):
+		log.InfoContext(ctx, "setup_access_recheck_deferred", "integration", kind,
+			"detail", "another writer holds this integration, and its own pass records")
+	case err != nil:
+		log.WarnContext(ctx, "setup_access_recheck_failed", "integration", kind,
+			"error", err.Error())
+	default:
+		log.InfoContext(ctx, "setup_access_rechecked", "integration", kind,
+			"run", run.ID, "findings", len(run.Findings))
+	}
 }
 
 // recordEndpoint remembers the address a surface was set up against, for a
