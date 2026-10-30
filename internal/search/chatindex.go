@@ -923,7 +923,7 @@ func (x *ChatIndexer) rangeTerms(ctx context.Context, tx *sql.Tx, room string,
 // destroyed, and reports how many markers it followed.
 //
 // A FORWARD WALK over the markers' positions (replicated 0055) from a durable
-// watermark of its own (node 0055) — the message walk's shape, for the message
+// watermark of its own (node 0056) — the message walk's shape, for the message
 // walk's reason. The markers are never pruned, because a marker is what makes
 // a destruction permanent, so a join that read every one of them on every sweep
 // would take this node's one writer for all of them every two seconds once

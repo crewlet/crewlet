@@ -107,7 +107,7 @@ type Event struct {
 	//
 	// It is WHERE THE WORK RAN, which is why it is on the envelope rather
 	// than on the payloads that happened to need it — and why the event
-	// store keeps it as a column of every row (node/0053) rather than
+	// store keeps it as a column of every row (node/0054) rather than
 	// leaving a reader to infer it from which store answered. Those two
 	// stopped being one fact with custody (ADR-0025): a data node's log
 	// holds what it published AND the events it keeps for a node without

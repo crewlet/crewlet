@@ -375,7 +375,7 @@ CREATE INDEX chat_mentions_prune_idx ON chat_mentions (channel_id, message_at); 
 -- NEVER PRUNED, which is what makes a destruction permanent — and therefore
 -- never read whole. The gate and an erase's own decide name their messages by
 -- id; the search index follows the markers FORWARD over `version`, the erase
--- record's composed position, from a watermark of its own (node 0055), exactly
+-- record's composed position, from a watermark of its own (node 0056), exactly
 -- as it walks the transcript. A follower that read every marker on every sweep
 -- did work that grew with the deployment's age and took the node's one writer
 -- every two seconds once anything had been erased. The position is the

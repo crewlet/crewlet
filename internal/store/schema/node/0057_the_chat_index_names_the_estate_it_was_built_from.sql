@@ -25,6 +25,6 @@
 -- a rebuild; an index that has, and names another instance, is dropped and
 -- walked again.
 --
--- 0055 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- 0056 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
 -- that applied it would never see the change.
 ALTER TABLE chat_index_state ADD COLUMN built_from TEXT NOT NULL DEFAULT '';

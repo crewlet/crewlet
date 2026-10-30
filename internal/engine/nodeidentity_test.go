@@ -112,7 +112,7 @@ func TestAClusteredMemberStartsOnAnEnvironmentSuppliedID(t *testing.T) {
 // TestWhatANodePublishesNamesThatNode pins the other half of a node's name:
 // every event it publishes leaves carrying it as the envelope's `node`, and the
 // row an event store writes for it carries the same — in the payload, and in
-// the row's own `node` column (node/0053).
+// the row's own `node` column (node/0054).
 //
 // The field is the only thing that says where an event HAPPENED. The store a
 // row is read from no longer does: a node without `data` keeps no event log,
