@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The durable state of a detached coding job.
@@ -656,13 +657,12 @@ const MaxBridgeCalls = 200
 
 // The two tools whose calls END an executor's run, as the bridge records them:
 // submitting its work, or asking a person and parking on the answer
-// (ADR-0068). Named here, beside the log that keeps them, because the log's
-// bound keeps them and the bridge's nudge reads them by these names; the
-// runner's submission and the ask tool are named after them (a test in
-// internal/engine holds the runner's to this one).
+// (ADR-0068). Read here, beside the log that keeps them, because the log's
+// bound keeps them and the bridge's nudge reads them by these names; each is
+// declared once, in internal/toolname, beside every other shared tool name.
 const (
-	SubmitWorkTool = "submit_work"
-	AskAndWaitTool = "ask_and_wait"
+	SubmitWorkTool = toolname.SubmitWork
+	AskAndWaitTool = toolname.AskAndWait
 )
 
 // EndsRun reports whether a call to the tool named is one of the two ways an

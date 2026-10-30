@@ -202,7 +202,7 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	launchID := strings.TrimSpace(argString(args, "launch_id"))
 	if launchID == "" {
-		return failed("answer_run needs a `launch_id`: the question you are answering, " +
+		return failed(AnswerRunTool + " needs a `launch_id`: the question you are answering, " +
 			"the run's `launch_id` read with it on the sandbox-runs board."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
