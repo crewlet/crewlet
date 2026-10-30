@@ -138,11 +138,6 @@ export interface SeatRow {
   status: SeatStatus;
   /** Who this agent is at the tool, or what is missing, in the engine's words. */
   detail: string;
-  /**
-   * How much the agent may do there, where the tool grades it: the engine's
-   * own words, and its tier id where the engine has a scale for it.
-   */
-  tier?: { id?: string | undefined; label: string; hint?: string | undefined };
   /** The engine's step for an app the agent needs a person to make. */
   seat?: SetupSeatState;
   /** The surface key the agent's step is taken on (what the app route is keyed on). */
@@ -445,9 +440,6 @@ function seatRowsOf(
       detail: finding?.detail
         ? asSentence(finding.detail)
         : seat.detail || (status === "ready" ? "Set up" : "Nothing set up for this agent yet"),
-      tier: seat.tier_label
-        ? { id: seat.tier, label: seat.tier_label, hint: seat.tier_hint }
-        : undefined,
       seat,
       toolKey: roster?.key,
       finding,
