@@ -76,7 +76,7 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 	case seataccess.OpCreate:
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbCreate, By: seataccess.ByCrewlet,
-			Text: "Create a Datadog service account for " + seatLabel(seat) +
+			Text: "Create a Datadog service account for " + seat.Label() +
 				", holding the role this seat names",
 		}, mint}
 	case seataccess.OpEnable:
@@ -128,13 +128,6 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 		// move, and an op this build does not know takes no step.
 		return nil
 	}
-}
-
-func seatLabel(seat seataccess.SeatRef) string {
-	if strings.TrimSpace(seat.Name) != "" {
-		return seat.Name
-	}
-	return seat.Handle
 }
 
 // Open builds a session from the company's Datadog block.
@@ -235,7 +228,7 @@ func (s *accessSession) Observe(
 	}
 
 	out := seataccess.Observation{}
-	for _, handle := range observedHandles(in) {
+	for _, handle := range in.Handles() {
 		rec, recorded := in.Records[handle]
 		user, found, err := s.find(ctx, handle, rec, recorded, byID, byEmail)
 		if err != nil {
@@ -280,25 +273,6 @@ func (s *accessSession) find(
 	}
 	user, ok := byEmail[strings.ToLower(AccountEmail(s.provisioning, handle))]
 	return user, ok, nil
-}
-
-// observedHandles is every handle a pass observes, the document's first, in a
-// stable order.
-func observedHandles(in seataccess.ObserveInput) []string {
-	var out []string
-	for _, seat := range in.Seats {
-		if !slices.Contains(out, seat.Handle) {
-			out = append(out, seat.Handle)
-		}
-	}
-	var departed []string
-	for handle := range in.Records {
-		if !slices.Contains(out, handle) {
-			departed = append(departed, handle)
-		}
-	}
-	slices.Sort(departed)
-	return append(out, departed...)
 }
 
 // observedOf is one account as the shared plan reads it.

@@ -273,19 +273,6 @@ func (p Permissions) Raises(next Permissions) []string {
 // with the repository's secrets).
 var AdministrationClass = []string{PermissionContents, PermissionWorkflows}
 
-// AdministrationRaises is the administration-class permissions raised to
-// Read and write from p to next, sorted. Non-empty means the change needs a
-// fresh step-up (D10).
-func (p Permissions) AdministrationRaises(next Permissions) []string {
-	var out []string
-	for _, key := range AdministrationClass {
-		if next[key] == LevelWrite && p[key] != LevelWrite {
-			out = append(out, key)
-		}
-	}
-	return out
-}
-
 // Short is what these permissions need and held does not grant, sorted.
 // Metadata is included, because GitHub refuses a token request naming it
 // when the installation does not hold it.

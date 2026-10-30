@@ -65,7 +65,7 @@ func (accessVendor) Steps(
 	switch op {
 	case seataccess.OpCreate:
 		out = []seataccess.Step{
-			step(seataccess.VerbCreate, "Create a Mattermost bot for "+seatLabel(seat)),
+			step(seataccess.VerbCreate, "Create a Mattermost bot for "+seat.Label()),
 			step(seataccess.VerbGrant, "Add it to the team as "+RolesLabel(levelRoles(want.Level))),
 		}
 		if len(want.Scope) > 0 {
@@ -118,13 +118,6 @@ func (accessVendor) Steps(
 		out[i].Index = i
 	}
 	return out
-}
-
-func seatLabel(seat seataccess.SeatRef) string {
-	if strings.TrimSpace(seat.Name) != "" {
-		return seat.Name
-	}
-	return seat.Handle
 }
 
 // levelRoles is a stored level as its role list.
@@ -281,7 +274,7 @@ func (s *accessSession) Observe(
 	ctx context.Context, in seataccess.ObserveInput,
 ) (seataccess.Observation, error) {
 	teamID := s.team.ID
-	handles := observedHandles(in)
+	handles := in.Handles()
 	ids, err := s.botIDs(ctx, handles, in.Records)
 	if err != nil {
 		return nil, err
@@ -387,25 +380,6 @@ func (s *accessSession) managedFor(bot BotAccount) []string {
 	return slices.Clone(bot.Channels)
 }
 
-// observedHandles is every handle a pass observes, the document's first, in a
-// stable order.
-func observedHandles(in seataccess.ObserveInput) []string {
-	var out []string
-	for _, seat := range in.Seats {
-		if !slices.Contains(out, seat.Handle) {
-			out = append(out, seat.Handle)
-		}
-	}
-	var departed []string
-	for handle := range in.Records {
-		if !slices.Contains(out, handle) {
-			departed = append(departed, handle)
-		}
-	}
-	slices.Sort(departed)
-	return append(out, departed...)
-}
-
 // Apply takes one step at Mattermost, chosen by its op and verb.
 func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	teamID := s.team.ID
@@ -485,7 +459,7 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	username := BotUsername(s.cfg.Provisioning, in.Seat.Handle)
 	bot, err := s.client.CreateBot(ctx, username,
-		BotDisplayName(s.cfg.Provisioning, seatLabel(in.Seat)))
+		BotDisplayName(s.cfg.Provisioning, in.Seat.Label()))
 	if err != nil {
 		return seataccess.StepResult{}, s.refused(in, err)
 	}

@@ -109,6 +109,28 @@ type ObserveInput struct {
 	Records map[string]Record
 }
 
+// Handles is every handle a pass reads back, sorted and each once: the
+// document's seats, and every seat the ledger still records.
+func (in ObserveInput) Handles() []string {
+	out := make([]string, 0, len(in.Seats)+len(in.Records))
+	for _, seat := range in.Seats {
+		out = append(out, seat.Handle)
+	}
+	for handle := range in.Records {
+		out = append(out, handle)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// Record is a handle's ledger record, or nil where the ledger holds none.
+func (in ObserveInput) Record(handle string) *Record {
+	if record, ok := in.Records[handle]; ok {
+		return &record
+	}
+	return nil
+}
+
 // Observation is what the vendor holds, by handle then lane.
 type Observation map[string]map[Lane]Observed
 

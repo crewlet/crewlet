@@ -75,7 +75,7 @@ func (vendor) Steps(
 	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
 	want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	name := seatName(seat)
+	name := seat.Label()
 	var steps []seataccess.Step
 	add := func(step seataccess.Step) {
 		step.Op, step.Index = op, len(steps)
@@ -294,8 +294,8 @@ func (s *session) Options(context.Context, seataccess.Lane) (seataccess.Options,
 func (s *session) Observe(ctx context.Context, in seataccess.ObserveInput) (seataccess.Observation, error) {
 	out := seataccess.Observation{}
 	faults := seataccess.SeatFaults{}
-	for _, handle := range observedHandles(in) {
-		record := recordOf(in.Records, handle)
+	for _, handle := range in.Handles() {
+		record := in.Record(handle)
 		seat := s.seatApp(handle, record)
 		obs, err := ObserveSeat(ctx, s.opts, seat)
 		if err != nil {
@@ -745,36 +745,6 @@ func (s *session) refusal(err error, seat SeatApp, verb seataccess.StepVerb) err
 		refusal.ActionURL = InstallURL(s.opts.WebBase, s.opts.Org, seat.Slug)
 	}
 	return refusal
-}
-
-// observedHandles is every seat a pass reads back: the document's, and every
-// one the ledger still records, sorted.
-func observedHandles(in seataccess.ObserveInput) []string {
-	var out []string
-	for _, seat := range in.Seats {
-		out = append(out, seat.Handle)
-	}
-	for handle := range in.Records {
-		out = append(out, handle)
-	}
-	slices.Sort(out)
-	return slices.Compact(out)
-}
-
-// recordOf is a handle's ledger record, or nil.
-func recordOf(records map[string]seataccess.Record, handle string) *seataccess.Record {
-	if record, ok := records[handle]; ok {
-		return &record
-	}
-	return nil
-}
-
-// seatName is how a step names the seat.
-func seatName(seat seataccess.SeatRef) string {
-	if name := strings.TrimSpace(seat.Name); name != "" {
-		return name
-	}
-	return seat.Handle
 }
 
 // scopeText is a scope for a sentence.

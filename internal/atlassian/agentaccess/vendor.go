@@ -215,7 +215,7 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have se
 	case seataccess.OpCreate:
 		return []action{{
 			verb:  seataccess.VerbCreate,
-			text:  "Create an Atlassian service account for " + seatName(seat),
+			text:  "Create an Atlassian service account for " + seat.Label(),
 			note:  "One account serves Jira and Confluence; it is created once.",
 			apply: (*session).create,
 		}, grant, roles, mint, retire}
@@ -279,13 +279,6 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have se
 		}}
 	}
 	return nil
-}
-
-func seatName(seat seataccess.SeatRef) string {
-	if strings.TrimSpace(seat.Name) != "" {
-		return seat.Name
-	}
-	return seat.Handle
 }
 
 // Steps implements [seataccess.Vendor], naming what it can without the
