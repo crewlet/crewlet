@@ -21,6 +21,7 @@ import type { IntegrationsAnswer } from "~/contract/integrations.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import type { SetupListing, SetupToolState } from "~/protocol/types.ts";
 import { withDerived } from "~/test/org.ts";
+import { datadogAnswer } from "./access/fixtures.ts";
 import { Integrations } from "./Directory.tsx";
 import { CONNECT_HINT, DESCRIPTION } from "./home.ts";
 
@@ -161,6 +162,11 @@ function mount(
   setup: { status: number; body: unknown } = { status: 200, body: listing },
   /** The company document the `config` question answers, or none at all. */
   config?: unknown,
+  /**
+   * What the page reads besides the defaults: each access read's answer for a
+   * kind (nobody on it otherwise), and the integrations answer.
+   */
+  extra: { access?: (kind: string) => unknown; integrations?: IntegrationsAnswer } = {},
 ): Mounted {
   const fetched: string[] = [];
   vi.stubGlobal(
@@ -176,13 +182,15 @@ function mount(
       const access = /^\/setup\/integrations\/([^/]+)\/access$/.exec(path);
       if (access && method === "GET") {
         return new Response(
-          JSON.stringify({
-            kind: access[1],
-            revision: "rev-1",
-            syncing: false,
-            options: [],
-            seats: [],
-          }),
+          JSON.stringify(
+            extra.access?.(access[1]!) ?? {
+              kind: access[1],
+              revision: "rev-1",
+              syncing: false,
+              options: [],
+              seats: [],
+            },
+          ),
           { status: 200 },
         );
       }
@@ -196,7 +204,7 @@ function mount(
   (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what) => {
     asked.push(what);
     if (what === "viewer") return Promise.resolve(viewer);
-    if (what === "integrations") return Promise.resolve(answer);
+    if (what === "integrations") return Promise.resolve(extra.integrations ?? answer);
     if (what === "config" && config !== undefined) return Promise.resolve(config);
     if (what === "work_projects") {
       return Promise.resolve({ projects: [], total: 0, census: { active: 0 } });
@@ -415,8 +423,81 @@ test("Check now sits beside the tabs on every tab, and asks the loop to look", a
   expect(screen.getByRole("button", { name: "Check now" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Check now" }));
   await waitFor(() => expect(fetched).toContain("POST /setup/integrations/gitlab/check"));
-  // THE LOOP'S ANSWER IS SAID, as the control used to say it.
-  expect((await screen.findByRole("status")).textContent).toBe("Crewlet is looking now.");
+  // THE BUTTON'S OWN BUSY STATE IS THE ANSWER: nothing is said beside it
+  // unless the loop refused.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Check now" }).getAttribute("aria-busy")).not.toBe(
+      "true",
+    ),
+  );
+  expect(screen.queryByText("Crewlet is looking now.")).toBeNull();
+});
+
+// THE AGENTS TAB COUNTS THE AGENTS THAT ARE ON, once the access answer has
+// said: one of Datadog's three. Mutation: count every agent and it reads 3.
+test("the Agents tab counts the agents that are on", async () => {
+  mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, { access: () => datadogAnswer() });
+  const tab = await screen.findByRole("tab", { name: /Agents/ });
+  await waitFor(() => expect(within(tab).getByText("1")).toBeTruthy());
+  expect(within(tab).queryByText("3")).toBeNull();
+});
+
+// A NOTE SITS UNDER THE AGENTS, its own row led by its title, the sentence
+// with its key and address set as code, and what would change it beneath.
+// Mutation: draw the notes above the table, or drop the lead, and it fails.
+test("a working integration's notes sit under its agents, each led by its title", async () => {
+  const noted: IntegrationsAnswer = {
+    ...answer,
+    integrations: answer.integrations.map((row) =>
+      row.key === "datadog"
+        ? {
+            ...row,
+            reconcile: {
+              phase: "ready",
+              findings: [
+                {
+                  kind: "coverage_partial",
+                  subject: "api.external_url",
+                  title: "Datadog can't reach this engine",
+                  detail: "`api.external_url` is `http://localhost:8200`, so no events arrive",
+                  remedy: "Set `api.external_url` to a public address to receive events",
+                  phase: "ready",
+                },
+              ],
+            },
+          }
+        : row,
+    ),
+  };
+  mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, {
+    access: () => datadogAnswer(),
+    integrations: noted,
+  });
+  const notes = await screen.findByRole("region", { name: "Notes" });
+  const lead = within(notes).getByText("Datadog can't reach this engine.");
+  expect(lead.tagName).toBe("STRONG");
+  expect(within(notes).getByText("http://localhost:8200").tagName).toBe("CODE");
+  expect(within(notes).getByText(/to a public address to receive events\./)).toBeTruthy();
+  const table = await screen.findByRole("table", { name: "Agents on Datadog" });
+  expect(table.compareDocumentPosition(notes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// A SYNC THAT ENDS HAS BEEN CHECKED: the engine looked again before it let the
+// sync end, so the page reads the integration's rows again the moment it does,
+// with nobody pressing Check now. Mutation: drop the re-read and the second
+// integrations question never goes out.
+test("the integration is read again the moment a sync ends", async () => {
+  let syncing = true;
+  const { asked } = mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, {
+    access: () => ({ ...datadogAnswer(), syncing }),
+  });
+  await screen.findByRole("table", { name: "Agents on Datadog" });
+  const before = asked.filter((q) => q === "integrations").length;
+  syncing = false;
+  await waitFor(
+    () => expect(asked.filter((q) => q === "integrations").length).toBeGreaterThan(before),
+    { timeout: 5_000 },
+  );
 });
 
 // THE ADDRESS APPS DELIVER TO, said once at the foot of the home rather than

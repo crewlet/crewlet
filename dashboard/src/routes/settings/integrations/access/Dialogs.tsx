@@ -1,11 +1,13 @@
 /**
  * The Agents tab's dialogs.
  *
- * - THE REVIEW, before a save: per agent, what the draft changes (from and to,
- *   in the vendor's words), what turning an agent off does there, and what the
- *   next sync will do at the vendor because of it, step by step and marked as
- *   Crewlet's or a person's. The plan is the engine's (`POST .../access/plan`),
- *   so the preview and the sync cannot disagree. Where the plan says a save
+ * - THE REVIEW, before a save: per agent, what the draft changes as one line
+ *   of chips ("Deployments: Read-only → Read and write", in the vendor's
+ *   words), what turning an agent off does there, and what the next sync will
+ *   do at the vendor because of it: numbered steps, each a short label with
+ *   its note beneath and the mark of who takes it, Crewlet's or a person's.
+ *   The plan is the engine's (`POST .../access/plan`), so the preview and the
+ *   sync cannot disagree. Where the plan says a save
  *   grants administration access, the review says the save asks for a fresh
  *   confirmation of who you are (D10); the transport asks for it when the
  *   engine refuses.
@@ -20,12 +22,16 @@ import {
   Callout,
   ChangeList,
   DescriptionList,
+  List,
   Modal,
   SegmentedControl,
   Spinner,
-  Tag,
+  Text,
+  VisuallyHidden,
   type ChangeListRow,
 } from "@crewlethq/ui";
+import { CrewletIcon } from "@crewlethq/icons";
+import { UserGlyph } from "@crewlethq/icons/glyphs";
 import type {
   AccessAnswer,
   AccessDesired,
@@ -95,21 +101,39 @@ function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow
   return out;
 }
 
-/** The steps a sync takes, each marked as Crewlet's or a person's. */
-export function Steps({ steps }: { steps: AccessStep[] }) {
+/** Who takes a step, in words: what the mark beside it says to a screen reader. */
+const ACTOR_WORDS = { crewlet: "Crewlet", you: "A person" } as const;
+
+/**
+ * The steps a sync takes, in order: each a short label with its note beneath
+ * at a quieter step, and the mark of who takes it, Crewlet's own or a person.
+ * The mark is said before the label, since a glyph is not a word.
+ */
+export function Steps({ steps, label }: { steps: AccessStep[]; label: string }) {
   return (
-    <ol className="agent-access-plan">
+    <List variant="numbered" density="compact" aria-label={label}>
       {steps.map((s, i) => (
-        <li key={i} className="agent-access-plan-step">
-          <Tag size="xs" variant={s.by === "you" ? "warning" : "neutral"} appearance="outline">
-            {s.by === "you" ? "A person" : "Crewlet"}
-          </Tag>
-          <span>
-            {s.text}.{s.note && <span className="agent-access-plan-note"> {s.note}</span>}
+        <List.Item
+          key={i}
+          leading={
+            <span className="agent-access-actor">
+              {s.by === "you" ? <UserGlyph size="sm" aria-hidden /> : <CrewletIcon aria-hidden />}
+              {/* The row puts its own space after the mark. */}
+              <VisuallyHidden>{`${ACTOR_WORDS[s.by]}:`}</VisuallyHidden>
+            </span>
+          }
+        >
+          <span className="agent-access-step">
+            <Text>{s.text}</Text>
+            {s.note && (
+              <Text variant="caption" tone="secondary">
+                {s.note}
+              </Text>
+            )}
           </span>
-        </li>
+        </List.Item>
       ))}
-    </ol>
+    </List>
   );
 }
 
@@ -177,10 +201,10 @@ export function ReviewDialog({
       size="lg"
       onClose={onClose}
       title={`Review changes to ${name}`}
-      subtitle={`Nothing changes at ${name} until you save. Saving writes one revision of the company document and starts a sync.`}
+      subtitle={`Nothing changes at ${name} until you save.`}
       footerStart={
         people ? (
-          <span className="t-caption">Steps marked A person need somebody at {name}.</span>
+          <span className="t-caption">Steps marked with a person need somebody at {name}.</span>
         ) : undefined
       }
       footer={
@@ -237,14 +261,13 @@ export function ReviewDialog({
                 {seat.name}
                 {lanes.length > 1 ? ` on ${lane.name}` : ""}
               </h3>
-              <ChangeList rows={rows(lane, from, to)} />
+              <ChangeList layout="inline" rows={rows(lane, from, to)} />
               {from.enabled && !to.enabled && <p>{laneWords(lane.key).off}</p>}
-              <p className="t-caption">At {name}, the next sync will:</p>
               {steps ? (
                 steps.length > 0 ? (
-                  <Steps steps={steps} />
+                  <Steps steps={steps} label={`What the next sync does at ${name}`} />
                 ) : (
-                  <p className="t-caption">Nothing. {name} already matches.</p>
+                  <p className="t-caption">Nothing to do. {name} already matches.</p>
                 )
               ) : (
                 <Spinner size="sm" />

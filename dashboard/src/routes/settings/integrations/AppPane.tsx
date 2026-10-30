@@ -7,18 +7,23 @@
  *
  * AGENTS FIRST. What an integration is for is which agents work in it and with
  * what access, so the Agents tab opens by default and carries what used to be
- * an overview of its own: the issues that need a person and the notes the
- * loop left.
+ * an overview of its own: the issues that need a person above the agents, and
+ * the notes the loop left below them. Its label counts the agents that are on.
+ *
+ * A SYNC THAT ENDS HAS BEEN CHECKED. The engine follows every access sync (a
+ * save, an action at the vendor, a keep) with the same read-only pass Check
+ * now runs, inside the sync's own window, so the moment the tab stops reading
+ * as syncing the integration's rows are read again: its issues, notes and
+ * header say what the change left without anybody pressing Check now.
  */
 
-import { useMemo, useState } from "react";
-import { Button, List, Tabs } from "@crewlethq/ui";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button, Tabs } from "@crewlethq/ui";
 import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { asSentence } from "~/lib/format.ts";
 import { SetupForm } from "../SetupForm.tsx";
 import { SetupPasses, SurfaceDeliveries, integrationFacts, seatStepFor } from "./catalogue.tsx";
 import type { Intent, Model, Tool } from "./model.ts";
@@ -28,6 +33,7 @@ import {
   BucketTag,
   DocsLink,
   IssueRow,
+  Notes,
   SettingsSummary,
 } from "./parts.tsx";
 import { useAccess, useOperatorManaged } from "./access/api.ts";
@@ -91,10 +97,20 @@ export function AppPane({
   );
   const [tab, setTab] = useState("agents");
   const [checking, setChecking] = useState(false);
-  const [checked, setChecked] = useState("");
+  const [refused, setRefused] = useState("");
   const access = useAccess(tool.configured ? tool.entry.key : null);
   const data = access.data;
   const readOnly = useOperatorManaged(data);
+
+  // THE ROWS ARE READ AGAIN when a sync ends, since the engine checked the
+  // integration before it let the sync end.
+  const watch = model.watch;
+  const syncing = data?.syncing ?? false;
+  const wasSyncing = useRef(syncing);
+  useEffect(() => {
+    if (wasSyncing.current && !syncing) watch();
+    wasSyncing.current = syncing;
+  }, [syncing, watch]);
 
   // WHAT THE AGENTS TAB SAYS, counted once for the header and the tab's marker.
   const counts = useMemo(() => {
@@ -213,7 +229,8 @@ export function AppPane({
           {
             value: "agents",
             label: "Agents",
-            count: counts?.of ?? tool.seats.length,
+            // THE AGENTS THAT ARE ON, said once the access answer has.
+            ...(counts ? { count: counts.on } : {}),
             ...(tool.issues.length > 0 || (counts?.waiting ?? 0) > 0 || data?.notice
               ? { marker: { tone: "warning" as const, label: "Needs attention" } }
               : {}),
@@ -233,9 +250,9 @@ export function AppPane({
                 if (model.managed) return;
                 setChecking(true);
                 try {
-                  // THE LOOP'S ANSWER IS SAID: a refusal in its own words, or
-                  // that it is looking.
-                  setChecked((await model.check(tool)) || "Crewlet is looking now.");
+                  // A REFUSAL IS SAID in the loop's own words; the button's
+                  // own busy state is the rest of the answer.
+                  setRefused(await model.check(tool));
                 } finally {
                   void access.reload({ quiet: true });
                   setChecking(false);
@@ -247,9 +264,9 @@ export function AppPane({
           )
         }
       />
-      {checked && (
+      {refused && (
         <p className="t-caption" role="status">
-          {checked}
+          {refused}
         </p>
       )}
       {tab === "agents" && (
@@ -260,20 +277,6 @@ export function AppPane({
                 <IssueRow key={issue.key} tool={tool} issue={issue} onFix={setOpen} />
               ))}
             </div>
-          )}
-          {/* ADVISORIES ARE SAID, never raised: the tool works, and what the
-              loop noticed (an access wider than asked) is worth reading once. */}
-          {tool.notes.length > 0 && (
-            <section aria-label="Notes">
-              <h3 className="t-label">Notes</h3>
-              <List variant="plain">
-                {tool.notes.map((n) => (
-                  <List.Item key={`${n.kind}:${n.subject ?? ""}`}>
-                    {asSentence(n.detail || n.kind.replace(/_/g, " "))}
-                  </List.Item>
-                ))}
-              </List>
-            </section>
           )}
           <QueryState
             error={access.code}
@@ -295,6 +298,9 @@ export function AppPane({
               />
             )}
           </QueryState>
+          {/* ADVISORIES ARE SAID, never raised, and under the agents: the
+              tool works, and what the loop noticed is worth reading once. */}
+          <Notes notes={tool.notes} />
         </div>
       )}
       {tab === "activity" && (
