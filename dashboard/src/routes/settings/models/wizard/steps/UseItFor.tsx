@@ -289,7 +289,8 @@ export function UseItFor({
         ...(!assistantOn
           ? {
               disabled: true,
-              disabledReason: "Ask Crewlet is off. Turn it on in Settings, Ask Crewlet first.",
+              disabledReason:
+                "Ask Crewlet is off. Turn it on with assistant.enabled in Settings, Configuration first.",
             }
           : {}),
       };
