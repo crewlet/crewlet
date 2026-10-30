@@ -76,19 +76,78 @@ export function samePermissions(
   return (lane.permissions ?? []).every((p) => (a?.[p.key] ?? "none") === (b?.[p.key] ?? "none"));
 }
 
+/** The ids a level holds: one, or for a lane of sets, each chosen one. */
+export function levelIds(level: string | undefined): string[] {
+  return (level ?? "").split(" ").filter((id) => id !== "");
+}
+
+/**
+ * The level a lane of sets stores for the ids chosen, sorted and
+ * space-separated. Every permission needs the one the vendor requires for
+ * the rest (Confluence's View), so choosing any adds it.
+ */
+export function joinLevels(lane: Lane, ids: string[]): string {
+  const set = new Set(ids);
+  const base = REQUIRED_LEVEL[lane.key];
+  if (base && set.size > 0) set.add(base);
+  return [...set].sort().join(" ");
+}
+
+/** The level every other level of a lane of sets needs, by lane. */
+const REQUIRED_LEVEL: Partial<Record<AccessLaneKey, string>> = { confluence: "read:space" };
+
+const sameLevel = (lane: Lane, a: string | undefined, b: string | undefined) =>
+  lane.multiple
+    ? [...levelIds(a)].sort().join(" ") === [...levelIds(b)].sort().join(" ")
+    : (a ?? "") === (b ?? "");
+
 /** Whether two desired states ask for the same thing. */
 export function sameDesired(lane: Lane, a: AccessDesired, b: AccessDesired): boolean {
   return (
     a.enabled === b.enabled &&
-    (a.level ?? "") === (b.level ?? "") &&
+    sameLevel(lane, a.level, b.level) &&
     samePermissions(lane, a.permissions, b.permissions) &&
     sameScope(a.scope, b.scope)
   );
 }
 
-/** The vendor's exact name for a level. */
+/**
+ * The vendor's exact name for a level; for a lane of sets, the names chosen
+ * in the vendor's order ("View, Add pages"), or "No permissions".
+ */
 export function levelName(lane: Lane, id: string | undefined): string {
+  if (lane.multiple) {
+    const ids = new Set(levelIds(id));
+    if (ids.size === 0) return "No permissions";
+    const known = lane.levels.filter((l) => ids.has(l.id));
+    const unknown = [...ids].filter((x) => !lane.levels.some((l) => l.id === x));
+    return [...known.map((l) => l.name), ...unknown].join(", ");
+  }
   return lane.levels.find((l) => l.id === id)?.name ?? id ?? "None";
+}
+
+/** A set of levels for a table cell: two names in the vendor's order, then a count. */
+export function levelSummary(lane: Lane, level: string | undefined): string {
+  const names = levelName(lane, level).split(", ");
+  return names.length <= 2
+    ? names.join(", ")
+    : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+}
+
+/**
+ * Why a seat's draft on a lane of sets cannot be saved (on, with no
+ * permission at all), or null.
+ */
+export function refusedLevel(lane: Lane, want: AccessDesired): string | null {
+  const words = laneWords(lane.key).noPermissions;
+  if (!lane.multiple || !want.enabled || levelIds(want.level).length > 0) return null;
+  return words?.refused ?? "Choose at least one permission for every agent that is on.";
+}
+
+/** The quiet hint under a seat on a lane of sets that is on with no permission, or null. */
+export function noPermissionsHint(lane: Lane, want: AccessDesired): string | null {
+  if (refusedLevel(lane, want) === null) return null;
+  return laneWords(lane.key).noPermissions?.hint ?? null;
 }
 
 /** "Contents: Read and write, Issues: Read-only", for the permissions held, in GitHub's words. */
