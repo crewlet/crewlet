@@ -30,9 +30,9 @@ import {
   IssueRow,
   SettingsSummary,
 } from "./parts.tsx";
-import { useAccess } from "./access/api.ts";
+import { useAccess, useOperatorManaged } from "./access/api.ts";
 import { AgentsAccess } from "./access/AgentsAccess.tsx";
-import { needsAttention, statusOf } from "./access/logic.ts";
+import { lanesOf, needsAttention, statusOf } from "./access/logic.ts";
 
 /** The tool's one primary action, worded for what it opens. */
 function PrimaryAction({
@@ -93,18 +93,23 @@ export function AppPane({
   const [checking, setChecking] = useState(false);
   const access = useAccess(tool.configured ? tool.entry.key : null);
   const data = access.data;
+  const readOnly = useOperatorManaged();
 
   // WHAT THE AGENTS TAB SAYS, counted once for the header and the tab's marker.
   const counts = useMemo(() => {
     if (!data) return null;
+    const lanes = lanesOf(data);
     let on = 0;
     let waiting = 0;
     for (const seat of data.seats) {
-      if (data.lanes.some((l) => seat.lanes[l.key]?.desired.enabled)) on++;
+      if (lanes.some((l) => seat.lanes[l.key]?.desired.enabled)) on++;
       if (
-        data.lanes.some((l) => {
+        lanes.some((l) => {
           const saved = seat.lanes[l.key];
-          return saved !== undefined && needsAttention(statusOf(l, saved, false, data.syncing));
+          return (
+            saved !== undefined &&
+            needsAttention(statusOf(l, saved, false, data.syncing, seat.departed))
+          );
         })
       )
         waiting++;
@@ -270,6 +275,7 @@ export function AppPane({
                 data={data}
                 reload={() => void access.reload({ quiet: true })}
                 held={held}
+                readOnly={readOnly}
                 avatarOf={model.avatarOf}
                 onReplaceKey={() => setOpen("rotate")}
                 stepFor={(handle) => {

@@ -9,12 +9,13 @@ import { Section } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import { QueryState } from "~/components/common.tsx";
 import { href } from "~/app/router.tsx";
-import { useAccess } from "~/routes/settings/integrations/access/api.ts";
+import { useAccess, useOperatorManaged } from "~/routes/settings/integrations/access/api.ts";
 import { AgentsAccess } from "~/routes/settings/integrations/access/AgentsAccess.tsx";
 import { useIntegrations, type Model, type Tool } from "~/routes/settings/integrations/model.ts";
 
 function IntegrationAccess({ tool, model, handle }: { tool: Tool; model: Model; handle: string }) {
   const access = useAccess(tool.entry.key);
+  const readOnly = useOperatorManaged();
   const held = model.managed ?? (model.admin ? undefined : "Admins change an agent's access.");
   return (
     <Section
@@ -39,6 +40,7 @@ function IntegrationAccess({ tool, model, handle }: { tool: Tool; model: Model; 
             data={access.data}
             reload={() => void access.reload({ quiet: true })}
             held={held}
+            readOnly={readOnly}
             avatarOf={model.avatarOf}
             only={handle}
           />

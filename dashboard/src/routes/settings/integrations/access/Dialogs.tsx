@@ -5,9 +5,10 @@
  *   in the vendor's words), what turning an agent off does there, and what the
  *   next sync will do at the vendor because of it, step by step and marked as
  *   Crewlet's or a person's. The plan is the engine's (`POST .../access/plan`),
- *   so the preview and the sync cannot disagree. A raise to an administration
- *   level says the save asks for a fresh confirmation of who you are (D10);
- *   the transport asks for it when the engine refuses.
+ *   so the preview and the sync cannot disagree. Where the plan says a save
+ *   grants administration access, the review says the save asks for a fresh
+ *   confirmation of who you are (D10); the transport asks for it when the
+ *   engine refuses.
  * - THE REMOVAL of one agent's account, allowed only once it is off (D1).
  * - GITHUB'S PERMISSIONS for one agent, edited into the draft in GitHub's own
  *   words, so the row stays at one size.
@@ -29,17 +30,16 @@ import type {
   AccessAnswer,
   AccessDesired,
   AccessDraft,
-  AccessLane,
   AccessPlanAnswer,
   AccessSeat,
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
 import { accessApi, refusalWords } from "./api.ts";
-import { levelName, raisesToAdmin, scopeWords } from "./logic.ts";
+import { lanesOf, levelName, levelsHeading, scopeWords, type Lane } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
-function rows(lane: AccessLane, from: AccessDesired, to: AccessDesired): ChangeListRow[] {
+function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow[] {
   const out: ChangeListRow[] = [];
   const access = laneWords(lane.key).access;
   if (from.enabled !== to.enabled) {
@@ -57,7 +57,7 @@ function rows(lane: AccessLane, from: AccessDesired, to: AccessDesired): ChangeL
       const held = to.permissions?.[perm.key];
       if (held) out.push({ kind: "fact", label: perm.name, value: GITHUB_ACCESS_NAMES[held] });
     }
-    if (lane.scope_options)
+    if (lane.scope !== undefined)
       out.push({
         kind: "fact",
         label: laneWords(lane.key).scope?.noun ?? "Scope",
@@ -85,7 +85,7 @@ function rows(lane: AccessLane, from: AccessDesired, to: AccessDesired): ChangeL
         to: GITHUB_ACCESS_NAMES[b],
       });
   }
-  if (lane.scope_options && scopeWords(lane, from.scope) !== scopeWords(lane, to.scope)) {
+  if (lane.scope !== undefined && scopeWords(lane, from.scope) !== scopeWords(lane, to.scope)) {
     out.push({
       kind: "changed",
       label: laneWords(lane.key).scope?.noun ?? "Scope",
@@ -148,8 +148,9 @@ export function ReviewDialog({
     };
   }, [kind, draft]);
 
+  const lanes = lanesOf(data);
   const changed = data.seats.flatMap((seat) =>
-    data.lanes
+    lanes
       .filter((lane) => draft[seat.handle]?.[lane.key] && seat.lanes[lane.key])
       .map((lane) => ({
         seat,
@@ -159,7 +160,10 @@ export function ReviewDialog({
       })),
   );
   const people = plan?.plans.some((p) => p.steps.some((s) => s.by === "you")) ?? false;
-  const raises = changed.filter(({ lane, from, to }) => raisesToAdmin(lane, from, to));
+  const raises = changed.filter(
+    ({ seat, lane }) =>
+      plan?.plans.find((p) => p.handle === seat.handle && p.lane === lane.key)?.step_up,
+  );
 
   return (
     <Modal
@@ -187,7 +191,7 @@ export function ReviewDialog({
               setSaving(true);
               setError("");
               try {
-                await accessApi.save(kind, draft, data.revision_id);
+                await accessApi.save(kind, draft, data.revision);
                 onSaved();
               } catch (err) {
                 setError(refusalWords(err));
@@ -206,9 +210,11 @@ export function ReviewDialog({
             {error}
           </Callout>
         )}
-        {raises.length > 0 && (
+        {plan?.step_up && (
           <Callout variant="warning" title="Administration access">
-            {`${raises.map(({ seat }) => seat.name).join(", ")} ${raises.length === 1 ? "gets" : "get"} administration access at ${name}. Saving asks you to confirm it is you.`}
+            {raises.length > 0
+              ? `${raises.map(({ seat }) => seat.name).join(", ")} ${raises.length === 1 ? "gets" : "get"} administration access at ${name}. Saving asks you to confirm it is you.`
+              : `This change grants administration access at ${name}. Saving asks you to confirm it is you.`}
           </Callout>
         )}
         {changed.map(({ seat, lane, from, to }) => {
@@ -223,7 +229,7 @@ export function ReviewDialog({
             >
               <h3 className="t-label">
                 {seat.name}
-                {data.lanes.length > 1 ? ` on ${lane.name}` : ""}
+                {lanes.length > 1 ? ` on ${lane.name}` : ""}
               </h3>
               <ChangeList rows={rows(lane, from, to)} />
               {from.enabled && !to.enabled && <p>{laneWords(lane.key).off}</p>}
@@ -254,7 +260,7 @@ export function RemoveDialog({
 }: {
   name: string;
   seat: AccessSeat;
-  lane: AccessLane;
+  lane: Lane;
   onClose: () => void;
   onRemove: () => Promise<void>;
 }) {
@@ -303,7 +309,7 @@ export function PermissionsDialog({
   onClose,
 }: {
   seat: AccessSeat;
-  lane: AccessLane;
+  lane: Lane;
   want: AccessDesired;
   onChange: (key: string, access: "none" | GitHubAccess) => void;
   onClose: () => void;
@@ -314,7 +320,7 @@ export function PermissionsDialog({
       size="md"
       onClose={onClose}
       title={`${seat.name}'s ${lane.name} permissions`}
-      subtitle={lane.levels_source?.text}
+      subtitle={levelsHeading(lane)}
       footer={
         <Button size="small" variant="primary" onClick={onClose}>
           Done

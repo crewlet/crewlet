@@ -3,29 +3,26 @@
  * answers, what `POST .../access/plan` and `PUT .../access` take, and what a
  * seat action (`POST .../access/seats/{handle}/{lane}/{action}`) answers.
  *
- * IN THE VENDOR'S OWN TERMS. A level is the identifier the vendor's API takes
- * (a Datadog role id, a GitLab `access_level`, a Jira project role id, a
- * Confluence space role id, Mattermost role names) and is drawn under the
- * vendor's exact name, which the engine sends with it: the lists Datadog,
- * Jira and Confluence offer are read live from the vendor, so no list of them
- * lives here. GitHub has no levels; a seat holds GitHub App permissions.
+ * The engine's own shapes (`internal/seataccess`: wire.go, step.go,
+ * seataccess.go, vendor.go), held against them by the setup API's contract
+ * test, which reads these interfaces by name.
  *
- * Held against what the engine sends by the setup API's contract test, which
- * reads these interfaces by name.
+ * IN THE VENDOR'S OWN TERMS. A level is the identifier the vendor's API takes
+ * (a Datadog role id; a GitLab `access_level` such as "30", or
+ * "member_role:<id>"; a Jira project role id; a Confluence space role id, or
+ * sorted "<op>:<target>" permissions; Mattermost roles such as "system_user
+ * system_post_all_public") and is drawn under the vendor's exact name, which
+ * `options` carries. Datadog's, Jira's and Confluence's lists are read live
+ * from the vendor, so no list of them lives here. GitHub has no levels; a
+ * seat holds GitHub App permissions.
  */
 
 /** GitHub's access to one permission. Absent from a map means No access. */
 export type GitHubAccess = "read" | "write";
 
-/** One GitHub App permission a seat can hold, in GitHub's own name. */
-interface AccessPermission {
-  key: string;
-  name: string;
-  /** Workflows is Read and write or nothing. */
-  write_only?: boolean;
-  /** Read and write on it asks for a fresh step-up (Contents, Workflows). */
-  admin_write?: boolean;
-}
+/** One product a seat can be on: Atlassian has two, every other integration one. */
+export type AccessLaneKey =
+  "datadog" | "github" | "gitlab" | "jira" | "confluence" | "slack" | "mattermost";
 
 /** One level a lane offers, as the vendor defines it. */
 interface AccessLevel {
@@ -33,43 +30,35 @@ interface AccessLevel {
   id: string;
   /** The vendor's exact name. */
   name: string;
-  /** What a seat holding it can do, in a few words. */
-  hint?: string;
   /** A role the company defined at the vendor rather than one the vendor ships. */
   custom?: boolean;
-  /** An administration role: raising a seat to it asks for a fresh step-up. */
-  admin?: boolean;
+  /** An administration grant: raising a seat to it asks for a fresh step-up (D10). */
+  administers?: boolean;
 }
 
-/** Where a lane's levels come from: read live from the vendor, or the vendor's fixed set. */
-interface AccessLevelsSource {
-  live: boolean;
-  /** One line, drawn as the access menu's heading. */
-  text: string;
-}
-
-/**
- * One product a seat can be on within an integration: Atlassian has two (Jira
- * and Confluence); every other integration has one, keyed as the integration.
- */
-export interface AccessLane {
+/** One GitHub App permission a seat can hold, in GitHub's own name. */
+interface AccessPermission {
   key: string;
   name: string;
-  /** The vendor's levels in its own order, least access first; empty where it has none. */
-  levels: AccessLevel[];
-  levels_source?: AccessLevelsSource;
+  /** Workflows is Read and write or nothing. */
+  write_only?: boolean;
+  /** Read and write on it is an administration grant (Contents, Workflows). */
+  administers_on_write?: boolean;
+}
+
+/** What one lane offers a seat, in the vendor's own terms. */
+export interface AccessOptions {
+  lane: AccessLaneKey;
+  /** The vendor's levels in its own order, least access first; absent where it has none. */
+  levels?: AccessLevel[];
+  /** Whether the levels were read live from the vendor, rather than its fixed set. */
+  live: boolean;
   /** GitHub only: the permissions a seat's app can hold. */
   permissions?: AccessPermission[];
-  /** Slack only: the bot token scopes every agent's app holds. */
-  scopes?: string[];
   /** What a seat may be scoped to (repositories, projects, spaces, channels), from the company's connection. */
-  scope_options?: string[];
-  /** Whether the engine can rotate a seat's credential here. */
-  rotatable: boolean;
-  /** The `mcp_servers` entry a seat's tool is started from, where the tool is a server. */
-  tool_server?: string;
-  /** Where a person settles what only the vendor can (its user administration). */
-  console_url?: string;
+  scope?: string[];
+  /** Whether a scope entry outside `scope` may be typed. */
+  scope_open?: boolean;
 }
 
 /** What the company document asks for one seat on one lane. */
@@ -80,6 +69,16 @@ export interface AccessDesired {
   scope?: string[];
 }
 
+/** A seat's credential: the engine-owned variable it is sealed in, and when. Never the value. */
+interface AccessCredential {
+  variable: string;
+  /** Further variables the same credential seals (an Atlassian account address, a Slack signing secret). */
+  others?: string[];
+  minted_at: string;
+  /** Who the pass that sealed it ran for; "external" for a credential provided from outside Crewlet. */
+  by?: string;
+}
+
 /** What the vendor showed on the last sync, read back from the engine's account ledger. */
 export interface AccessObserved {
   exists: boolean;
@@ -88,17 +87,19 @@ export interface AccessObserved {
   disabled_by?: "crewlet" | "hand";
   /** The account as the vendor names it. */
   account?: string;
+  account_id?: string;
   level?: string;
   permissions?: Record<string, GitHubAccess>;
+  scope?: string[];
   /** GitHub only: the permissions the app is registered with, which tokens are narrowed from. */
   ceiling?: Record<string, GitHubAccess>;
-  scope?: string[];
-  /** The engine-owned variable the credential is sealed in, and when it was minted. */
-  credential?: { variable: string; minted_at: string };
+  credential?: AccessCredential;
   created_at?: string;
   /** When a sync found the account changed at the vendor by somebody else. */
   changed_by_hand_at?: string;
 }
+
+type AccessOp = "create" | "enable" | "level" | "scope" | "mint" | "disable" | "remove" | "rotate";
 
 type AccessVerb =
   | "create"
@@ -116,20 +117,33 @@ type AccessVerb =
 
 /** One thing a sync does at the vendor, or one thing a person must do there. */
 export interface AccessStep {
+  op: AccessOp;
   verb: AccessVerb;
   /** The step, as one sentence with no closing full stop. */
   text: string;
-  by: "crewlet" | "you";
   note?: string;
-  /** On a sync's record: whether the step was taken. */
-  done?: boolean;
+  by: "crewlet" | "you";
+  /** Where a person takes the step, at the vendor. */
+  action_url?: string;
+  /** The step restores a change somebody made at the vendor by hand. */
+  drift?: boolean;
+}
+
+/** Why a sync stopped: the failed step, the vendor's reason, the remedy, who acts and where. */
+interface AccessFailure {
+  step: AccessVerb;
+  said: string;
+  remedy: string;
+  actor: "crewlet" | "you";
+  action_url?: string;
 }
 
 interface AccessSync {
   at: string;
   outcome: "ok" | "failed" | "waiting";
-  steps: AccessStep[];
-  error?: { said: string; remedy: string; actor: "crewlet" | "you" };
+  /** The steps the sync set out to take, and whether each was taken. */
+  steps: (AccessStep & { done: boolean })[];
+  error?: AccessFailure;
 }
 
 /** Whether the seat can use its credential through a tool right now. */
@@ -142,14 +156,16 @@ export interface AccessSeatLane {
   /** What the next sync does for this lane as the document stands. */
   plan: AccessStep[];
   tool: AccessToolState;
-  /** The engine-owned variable this seat's credential is, or will be, sealed in. */
-  credential_variable: string;
+  /** The desired setting is an administration grant. */
+  administers?: boolean;
 }
 
 export interface AccessSeat {
   handle: string;
   name: string;
-  lanes: Record<string, AccessSeatLane>;
+  /** A seat that left the company document whose account is still in the ledger. */
+  departed?: boolean;
+  lanes: Partial<Record<AccessLaneKey, AccessSeatLane>>;
 }
 
 /** A company-level notice on an integration's Agents tab (the shared-credential repair, D12). */
@@ -164,34 +180,31 @@ interface AccessNotice {
 /** `GET /setup/integrations/{kind}/access`, and the answer to every write below. */
 export interface AccessAnswer {
   kind: string;
-  /** The company document revision this was read at; a save sends it back as `if_match`. */
-  revision_id: string;
+  /** The company document's entity tag; a save sends it back as If-Match. */
+  revision: string;
   syncing: boolean;
   started_at?: string;
   last_sync_at?: string;
   notice?: AccessNotice;
-  lanes: AccessLane[];
+  /** What each lane offers now, for the pickers. */
+  options: AccessOptions[];
   seats: AccessSeat[];
 }
 
 /** A draft: the desired state per seat and lane, only for what changed. */
-export type AccessDraft = Record<string, Record<string, AccessDesired>>;
+export type AccessDraft = Record<string, Partial<Record<AccessLaneKey, AccessDesired>>>;
 
-/** `POST /setup/integrations/{kind}/access/plan`. */
-export interface AccessPlanRequest {
+/** `POST .../access/plan`, and `PUT .../access` with the revision as If-Match. */
+export interface AccessDraftRequest {
   seats: AccessDraft;
 }
 
 export interface AccessPlanAnswer {
   kind: string;
-  revision_id: string;
-  plans: { handle: string; lane: string; steps: AccessStep[] }[];
-}
-
-/** `PUT /setup/integrations/{kind}/access`: one revision of the company document, then a sync. */
-export interface AccessSaveRequest {
-  seats: AccessDraft;
-  if_match: string;
+  revision: string;
+  plans: { handle: string; lane: AccessLaneKey; steps: AccessStep[]; step_up?: boolean }[];
+  /** Saving this draft asks for a fresh step-up (D10). */
+  step_up?: boolean;
 }
 
 /** `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`. */
