@@ -179,7 +179,7 @@ func TestNoTierPermissionIsDroppedByTheMigration(t *testing.T) {
 	t.Parallel()
 	for _, tier := range github.Tiers {
 		for _, workflows := range []bool{false, true} {
-			held := github.Access{Tier: tier, Workflows: workflows}.Permissions()
+			held := tier.Permissions()
 			got, _ := github.TierPermissions(string(tier), workflows)
 			for key, level := range held {
 				if key == "metadata" {

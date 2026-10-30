@@ -641,17 +641,6 @@ type SeatState struct {
 	// first requirement; it was this.
 	Present bool `json:"present"`
 
-	// TierLabel and TierHint are the tier written for a person: its name,
-	// and the one line saying what it grants.
-	//
-	// SENT RATHER THAN DERIVED, because the vocabulary belongs to the
-	// package that builds the manifest and mints the tokens. A screen that
-	// prettified the raw id would be a second, silent statement of what
-	// read_only means, free to drift from the permissions actually asked
-	// for. Empty where the app has no tiers.
-	TierLabel string `json:"tier_label,omitempty"`
-	TierHint  string `json:"tier_hint,omitempty"`
-
 	// Enrolled is a seat this integration is MEANT to cover, whether or not
 	// it holds anything yet.
 	//
@@ -673,10 +662,6 @@ type SeatState struct {
 	// thing the row exists to report: whether this agent can act as itself
 	// on this app.
 	Detail string `json:"detail,omitempty"`
-
-	// Tier is how much this seat may do, where the app has tiers. Empty
-	// where it has none, which is every app but the two code hosts.
-	Tier string `json:"tier,omitempty"`
 
 	// Step is what is outstanding for this seat, and it is a CLOSED SET so
 	// a screen can render it without reading the sentence in Detail:
@@ -877,7 +862,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		})
 		at.Configured = block != nil
 		seats = credentialSeats(roster, s.resolve, at, "Datadog",
-			s.passes.Serves(kind), datadogAccess(block))
+			s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
@@ -1110,7 +1095,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 // operator the half that cannot be acted on: the question is which of their
 // people can work in this app, and only a per-seat answer has it.
 func credentialSeats(roster *org.Organization, resolve func(string) (string, bool),
-	at seatCredentialAt, app string, provisions bool, access ...seatAccess,
+	at seatCredentialAt, app string, provisions bool,
 ) []SeatState {
 	out := []SeatState{}
 	for role := range roster.AllRoles() {
@@ -1122,13 +1107,6 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 			continue
 		}
 		state := SeatState{Handle: seat.Handle(), Name: role.Name, Requirements: []setup.Requirement{}}
-		// HOW MUCH THIS AGENT MAY DO, where the app grades it. Passed in
-		// rather than switched on here, because what grades an agent is
-		// the app's own question: GitHub reads a tier off the seat, and
-		// Datadog reads the role its accounts are created holding.
-		for _, a := range access {
-			state.Tier, state.TierLabel, state.TierHint = a(role)
-		}
 		stored, where := at.Find(role)
 		state.Present = stored != ""
 		state.Secrets = seatSecretNames(at, role, stored)
@@ -1195,27 +1173,6 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 		out = append(out, state)
 	}
 	return out
-}
-
-// seatAccess says how much one seat may do at an app, in the three values a
-// roster renders: the tier this engine speaks, its name, and the line saying
-// what it grants. Empty where the app grades nobody.
-type seatAccess func(role *org.Role) (tier, label, hint string)
-
-// datadogAccess is the role a company's Datadog accounts are created holding.
-//
-// THE SAME FOR EVERY SEAT, which is Datadog's shape here rather than an
-// omission: accounts are created into one role named on the provisioning
-// block. It is still worth saying per seat, because it is the answer to what
-// this agent may do in Datadog and it differs between companies.
-func datadogAccess(cfg *config.Datadog) seatAccess {
-	role := datadog.RoleName(nil)
-	if cfg != nil {
-		role = datadog.RoleName(cfg.Provisioning)
-	}
-	return func(*org.Role) (string, string, string) {
-		return datadog.TierOf(role), datadog.RoleLabel(role), datadog.RoleHint(role)
-	}
 }
 
 // seatCredentialAt is where one app keeps a seat's credential.
@@ -1911,16 +1868,9 @@ func githubSeats(company *config.Company, roster *org.Organization,
 		if !seat.IsAgent() {
 			continue
 		}
-		// THE TIER THE MANIFEST WOULD CARRY, read through the same two
-		// functions the begin route reads it through. A second reading here
-		// would be free to disagree with the app that actually gets created.
-		tier, _ := github.ParseTier(seatTier(role))
 		app := role.GitHub
 		state := SeatState{
 			Handle: seat.Handle(), Name: role.Name,
-			Tier:      string(tier),
-			TierLabel: tier.Label(),
-			TierHint:  tier.Hint(),
 			// A BLOCK IS THE OPT-IN, and it is what the reconcile reads
 			// too: it reports the seats that have one and stays silent
 			// about the rest, so a company running GitHub for three of

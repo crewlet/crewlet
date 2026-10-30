@@ -3454,7 +3454,6 @@ entry answers instead is what is still outstanding for that agent:
   "handle": "builder",
   "name": "Builder",
   "requirements": [],
-  "tier": "full_access",
   "step": "install_app",
   "action_url": "https://github.com/apps/acme-builder/installations/new",
   "present": true,
@@ -3464,10 +3463,10 @@ entry answers instead is what is still outstanding for that agent:
 ```
 
 `step` and `action_url` are the two clicks, described under
-[One agent's own GitHub App](#one-agents-own-github-app). `tier` is the seat's
-access tier, answered before the app exists because it is what the manifest
-asks for, and defaulting to `read_only` on a seat whose configuration is
-silent.
+[One agent's own GitHub App](#one-agents-own-github-app). What the seat may do
+at GitHub is its own permissions, read and changed through
+`GET /setup/integrations/github/access` and `PUT` on the same path, and not
+part of this roster.
 
 **`present`** is whether the seat has an app at all, and **`satisfied`** needs
 that app installed *and* its sealed key readable by this node. A `${VAR}`
@@ -3522,7 +3521,7 @@ curl -X POST https://engine.example.com/setup/integrations/github/app \
 ```json
 {
   "seat": "senior-engineer",
-  "tier": "review",
+  "permissions": {"contents": "read", "issues": "write", "pull_requests": "write"},
   "action_url": "https://github.com/organizations/acme/settings/apps/new",
   "manifest": {"name": "Acme Senior Engineer", "public": false, "...": "..."},
   "state": "<sealed token naming the seat and who began the creation>",
