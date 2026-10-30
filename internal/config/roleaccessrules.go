@@ -131,6 +131,17 @@ func (c *Company) connected(lane string) bool {
 	}
 }
 
+// levelRequired reports whether a seat that is on at kind must name a level.
+//
+// ONLY WHERE THE ENGINE PROVISIONS THE KIND ([Company.documentMode]). An
+// agent whose account or token was made outside Crewlet (D4b) holds whatever
+// access it was given there; the engine binds its credential and grants
+// nothing, so a level would be a setting nothing reads, and requiring one left
+// a migrated company with external seats failing its own admission.
+func (c *Company) levelRequired(kind string) bool {
+	return c.documentMode(kind) == SeatCredentialEngine
+}
+
 // namedContainers is every tracker project and knowledge space the document
 // names, which is the company's reach at Jira and Confluence.
 func (c *Company) namedContainers() (projects, spaces []string) {
@@ -171,7 +182,7 @@ func (c *Company) checkDatadog(p *problems, path Path, b *RoleDatadog) {
 	if b == nil || !SeatAccessOn(b.Enabled) {
 		return
 	}
-	if strings.TrimSpace(b.Role) == "" {
+	if strings.TrimSpace(b.Role) == "" && c.levelRequired("datadog") {
 		p.add(at(path, "role"), ErrMissing,
 			"required while this agent is on: the Datadog role id its service "+
 				"account holds, as GET /api/v2/roles lists it")
@@ -195,7 +206,7 @@ func (c *Company) checkGitLab(p *problems, path Path, b *RoleGitLab) {
 	if b.MemberRoleID < 0 {
 		p.add(at(path, "member_role_id"), ErrOutOfRange, "%d is not a GitLab custom role id", b.MemberRoleID)
 	}
-	if SeatAccessOn(b.Enabled) && b.AccessLevel == 0 && b.MemberRoleID == 0 {
+	if SeatAccessOn(b.Enabled) && b.AccessLevel == 0 && b.MemberRoleID == 0 && c.levelRequired("gitlab") {
 		p.add(at(path, "access_level"), ErrMissing,
 			"required while this agent is on: its GitLab role (access_level) or "+
 				"a custom role (member_role_id)")
@@ -303,7 +314,7 @@ func (c *Company) checkMattermost(p *problems, path Path, b *RoleMattermost) {
 					"[system_user, system_post_all] or [system_admin, system_user]", b.Roles)
 		}
 	}
-	if SeatAccessOn(b.Enabled) && len(b.Roles) == 0 {
+	if SeatAccessOn(b.Enabled) && len(b.Roles) == 0 && c.levelRequired("mattermost") {
 		p.add(at(path, "roles"), ErrMissing,
 			"required while this agent is on: the Mattermost roles its bot holds")
 	}
