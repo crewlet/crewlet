@@ -73,3 +73,23 @@ func TestACredentialGoneAtTheVendorIsReMinted(t *testing.T) {
 		})
 	}
 }
+
+// THE RETIRE AFTER A MINT READS THE MINT'S CREDENTIAL ID, the latest first,
+// and nothing where no earlier step minted one.
+func TestPriorCredentialID(t *testing.T) {
+	t.Parallel()
+	in := seataccess.ApplyInput{Prior: []seataccess.StepResult{
+		{AccountID: "u-1"},
+		{Minted: []seataccess.Minted{{Field: "APP_KEY", CredentialID: "k-1"}}},
+		{Minted: []seataccess.Minted{{Field: "APP_KEY", CredentialID: "k-2"}, {Field: "EMAIL"}}},
+	}}
+	if got := in.PriorCredentialID("APP_KEY"); got != "k-2" {
+		t.Errorf("APP_KEY = %q, want the latest mint", got)
+	}
+	if got := in.PriorCredentialID("EMAIL"); got != "" {
+		t.Errorf("EMAIL = %q, want none: that mint carried no id", got)
+	}
+	if got := (seataccess.ApplyInput{}).PriorCredentialID("APP_KEY"); got != "" {
+		t.Errorf("an op's first step = %q, want none", got)
+	}
+}

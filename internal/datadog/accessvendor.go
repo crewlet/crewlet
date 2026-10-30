@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -172,12 +171,6 @@ type accessSession struct {
 	client       *Client
 	creds        Credentials
 	provisioning *config.DatadogProvisioning
-
-	// minted is the key id this session minted for each seat, by handle.
-	// A rotation's second step needs it: it deletes every other key this
-	// engine minted and never that one, and Datadog gives no other way to
-	// tell them apart. A step that finds none deletes nothing.
-	minted sync.Map
 }
 
 // Options is every role the organization has, managed first in Datadog's own
@@ -396,9 +389,9 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			return s.mint(ctx, in, false)
 		}
 		return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
-			keep, _ := s.minted.Load(in.Seat.Handle)
-			id, _ := keep.(string)
-			_, err := s.client.RetireKeys(ctx, s.creds, account, id)
+			// THE KEY THE FIRST STEP MINTED is kept, and every other key
+			// this engine minted is deleted; with none minted, nothing is.
+			_, err := s.client.RetireKeys(ctx, s.creds, account, in.PriorCredentialID(AppKeyField))
 			return seataccess.StepResult{}, s.refused(in, err)
 		})
 	default:
@@ -477,9 +470,8 @@ func (s *accessSession) mint(
 				revokeErr)
 		}
 		accountID, keyID := account.ID, key.ID
-		s.minted.Store(in.Seat.Handle, keyID)
 		return seataccess.StepResult{Minted: []seataccess.Minted{{
-			Field: AppKeyField, Value: key.Key,
+			Field: AppKeyField, Value: key.Key, CredentialID: keyID,
 			Revoke: func(ctx context.Context) error {
 				return s.client.DeleteAppKey(ctx, s.creds, accountID, keyID)
 			},

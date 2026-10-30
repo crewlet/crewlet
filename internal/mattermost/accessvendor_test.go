@@ -638,7 +638,7 @@ func TestMattermostRemoveKeepsTheBot(t *testing.T) {
 }
 
 // A ROTATION MINTS, THEN REVOKES EVERY OLDER TOKEN THIS ENGINE MINTED AND
-// NEVER THE NEW ONE; without the new one remembered it revokes nothing.
+// NEVER THE NEW ONE; with no mint before it, it revokes nothing.
 func TestMattermostRotate(t *testing.T) {
 	t.Parallel()
 	chat := newAccessChat(t)
@@ -649,14 +649,16 @@ func TestMattermostRotate(t *testing.T) {
 	in := seataccess.ApplyInput{Record: heldBot(bot.id)}
 
 	in.Step = mmStep(t, seataccess.OpRotate, seataccess.VerbRevoke)
-	if _, err := mmApply(t, chat.open(t), in); err == nil {
-		t.Error("a retire with nothing minted in its session was taken")
+	if _, err := mmApply(t, session, in); err == nil {
+		t.Error("a retire with nothing minted before it was taken")
 	}
 	in.Step = mmStep(t, seataccess.OpRotate, seataccess.VerbMint)
-	if _, err := mmApply(t, session, in); err != nil {
-		t.Fatalf("mint: %v", err)
+	minted, err := mmApply(t, session, in)
+	if err != nil || len(minted.Minted) != 1 || minted.Minted[0].CredentialID == "" {
+		t.Fatalf("mint = %+v, %v", minted, err)
 	}
 	in.Step = mmStep(t, seataccess.OpRotate, seataccess.VerbRevoke)
+	in.Prior = []seataccess.StepResult{minted}
 	if _, err := mmApply(t, session, in); err != nil {
 		t.Fatalf("retire: %v", err)
 	}

@@ -662,10 +662,13 @@ func TestDatadogRotate(t *testing.T) {
 
 	in.Step = step(t, seataccess.OpRotate, seataccess.VerbMint)
 	minted, err := apply(t, session, in)
-	if err != nil || len(minted.Minted) != 1 {
+	if err != nil || len(minted.Minted) != 1 || minted.Minted[0].CredentialID == "" {
 		t.Fatalf("mint = %+v, %v", minted, err)
 	}
+	// THE SYNC HANDS THE RETIRE WHAT THE MINT DID, which is how it knows
+	// the key to keep.
 	in.Step = step(t, seataccess.OpRotate, seataccess.VerbRevoke)
+	in.Prior = []seataccess.StepResult{minted}
 	if _, err := apply(t, session, in); err != nil {
 		t.Fatalf("retire: %v", err)
 	}
@@ -675,8 +678,8 @@ func TestDatadogRotate(t *testing.T) {
 	}
 }
 
-// A RETIRE WITH NOTHING MINTED IN THIS SESSION DELETES NOTHING: it cannot tell
-// which key is current, and guessing could delete the one the seat uses.
+// A RETIRE WITH NOTHING MINTED BEFORE IT DELETES NOTHING: it cannot tell which
+// key is current, and guessing could delete the one the seat uses.
 func TestDatadogRetireRefusesWithoutTheNewKey(t *testing.T) {
 	t.Parallel()
 	org := newAccessOrg()
