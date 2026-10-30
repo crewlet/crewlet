@@ -217,11 +217,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nintegrations:\n  mattermost:\n    enabled: true\n    url: https://chat.example.com\n",
 			"integrations.mattermost.team", ErrMissing,
 		},
-		{
-			"an unknown gitlab access level",
-			"name: Acme\nintegrations:\n  gitlab:\n    enabled: true\n    url: https://gitlab.com\n    signing_secret: s\n    provisioning:\n      access_level: owner\n",
-			"integrations.gitlab.provisioning.access_level", ErrUnknownValue,
-		},
 
 		// seats
 		{

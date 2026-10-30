@@ -155,6 +155,7 @@ roles:
     llm: zulu
     integrations:
       github:
+        enabled: false
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 161055374
@@ -281,6 +282,7 @@ roles:
     llm: zulu
     integrations:
       github:
+        enabled: false
         app_id: 42
         app_slug: acme-reviewer
         installation_id: 7

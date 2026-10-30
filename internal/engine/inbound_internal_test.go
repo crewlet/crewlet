@@ -26,6 +26,7 @@ roles:
     handle: ceo
     integrations:
       mattermost:
+        enabled: false
         bot_token: tok-ceo
 integrations:
   mattermost:

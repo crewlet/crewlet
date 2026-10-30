@@ -1,12 +1,10 @@
 package gitlab
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // Naming shared by the provisioning and the engine's reads.
@@ -34,95 +32,7 @@ var CredentialKeys = []string{
 // FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
 const SeatEnv = org.MCPEnvGitLab
 
-// PlanFor is the plan the engine's current call sites read a seat's
-// mcp_env.gitlab variable from: the tool-credential declaration and the
-// setup pass, which hands it to [Reconcile] and [Teardown], both of which
-// ignore it now that seats are per-seat access. It goes when those call sites
-// are retired; nothing in this package provisions from it.
-//
-// # A literal is a note, not a failure
-//
-// A seat whose token is written out rather than referenced is one an
-// operator manages by hand. That is a supported choice — it just cannot be
-// provisioned, because there is no variable to mint into and rewriting the
-// company config from a provisioning run is not this command's job. So it is
-// reported and skipped, and the run continues for the seats that can be.
-func PlanFor(o *org.Organization, cfg *config.GitLab) (*provision.Plan, error) {
-	if cfg == nil || !cfg.Enabled {
-		return nil, fmt.Errorf("gitlab: the company config does not enable gitlab")
-	}
-	if cfg.Provisioning == nil {
-		return nil, fmt.Errorf(
-			"gitlab: integrations.gitlab.provisioning is unset, so there is " +
-				"nothing to reconcile — name at least a group")
-	}
-	plan := &provision.Plan{}
-	for seat := range o.AllRoles() {
-		if !seat.IsAgent() {
-			// A human seat is addressable through its contact block and
-			// holds no tool credential; minting one would create an
-			// account nothing ever authenticates as.
-			continue
-		}
-		handle := seat.Handle()
-		block := seat.MCPEnv[SeatEnv]
-		if len(block) == 0 {
-			continue
-		}
-		key, value := firstCredential(block)
-		if key == "" {
-			continue
-		}
-		name, ok := provision.SoleVar(stripScheme(value))
-		if !ok {
-			// THE NOTE NAMES THE SHAPE, NEVER THE VALUE. It is printed in
-			// a report an operator pastes into a ticket, and the value
-			// here is either a literal credential or a string containing
-			// one.
-			plan.Note("%s: mcp_env.gitlab.%s is %s rather than a whole ${VAR} "+
-				"reference, so there is nowhere to mint a token — point it "+
-				"at a variable, or manage this seat's credential by hand",
-				handle, key, provision.Shape(stripScheme(value)))
-			continue
-		}
-		// NO EMAIL, and that omission is the whole of the fix below.
-		entry := provision.Seat{
-			Handle:   handle,
-			Role:     seat.Name,
-			TokenVar: name,
-		}
-		// THE OVERRIDE THAT NAMES THIS SEAT — see
-		// [config.GitLabProvisioning.OverrideFor].
-		if level, found := cfg.Provisioning.OverrideFor(seat); found {
-			entry.AccessLevel = string(level)
-		}
-		plan.Add(entry)
-	}
-	return plan, nil
-}
-
-// firstCredential finds the key a seat's block carries its token under.
-func firstCredential(block map[string]string) (string, string) {
-	for _, key := range CredentialKeys {
-		if value := strings.TrimSpace(block[key]); value != "" {
-			return key, value
-		}
-	}
-	return "", ""
-}
-
-// stripScheme drops an Authorization scheme so the reference underneath is
-// visible.
-//
-// `Authorization: Bearer ${VAR}` is a whole reference wearing a prefix. The
-// engine strips the same prefix when it reads the value, so a scan that did
-// not would report a config the engine is perfectly happy with as
-// unprovisionable.
-func stripScheme(value string) string {
-	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "Bearer "))
-}
-
-// GITLAB NAMES THE ADDRESS, AND A SEAT PLAN MUST NOT.
+// GITLAB NAMES THE ADDRESS, AND THE ENGINE MUST NOT.
 //
 // A service account was created with a derived `crewlet-<handle>@
 // noreply.crewlet.invalid`, on the reasoning that GitLab requires an address,

@@ -3,9 +3,12 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -69,5 +72,28 @@ func TestWithSeatAccessKeepsTheCompanyAnswerWhereNoVendorIsRegistered(t *testing
 	}
 	if _, err := e.seatAccessPlan(nil, integration.KindJira); !errors.Is(err, integration.ErrNotConfigured) {
 		t.Fatalf("seatAccessPlan with no vendor = %v, want ErrNotConfigured", err)
+	}
+}
+
+// EVERY INTEGRATION THAT MANAGES PER-SEAT ACCESS HAS ITS VENDOR REGISTERED in
+// this build, through the packages the engine imports: one left out would
+// manage nobody's account while its Agents tab offered every seat.
+func TestEveryAccessKindHasARegisteredVendor(t *testing.T) {
+	t.Parallel()
+	for _, kind := range seataccess.Kinds() {
+		vendor, ok := seataccess.Lookup(kind)
+		if !ok {
+			t.Errorf("%s manages per-seat access and no vendor is registered for it", kind)
+			continue
+		}
+		if got := vendor.Catalog().Kind; got != kind {
+			t.Errorf("the %s vendor's catalog names %s", kind, got)
+		}
+		for _, field := range vendor.Catalog().Credentials {
+			if !slices.Contains(config.SeatSealedFields(string(kind)), field) {
+				t.Errorf("%s seals %s, which config.SeatSealedFields does not list, so "+
+					"the document rules would not know it for a seat's own", kind, field)
+			}
+		}
 	}
 }

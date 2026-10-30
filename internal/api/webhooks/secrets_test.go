@@ -66,8 +66,10 @@ roles:
     llm: primary
     integrations:
       mattermost:
+        enabled: false
         bot_token: mm-ceo
       slack:
+        enabled: false
         bot_token: xoxb-1
         signing_secret: ceo-signing
   - name: CTO
@@ -439,6 +441,7 @@ roles:
     llm: primary
     integrations:
       github:
+        enabled: false
         tier: full_access
         app_id: 41
         app_slug: acme-sre-lead
@@ -450,6 +453,7 @@ roles:
     llm: primary
     integrations:
       github:
+        enabled: false
         tier: review
         app_id: 42
         app_slug: acme-reviewer

@@ -1150,18 +1150,16 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 			// credential on a provisioner's behalf the next step is a
 			// person's.
 			//
-			// A SEAT OPTS IN BY NAMING A VARIABLE, which is the one thing
+			// A SEAT OPTS IN BY BEING TURNED ON (D9), which is the one thing
 			// the pass cannot do for it: the plan is built from the seats
-			// whose mcp_env block holds a whole `${VAR}`, because that is
-			// where the minted credential goes and a seat with nowhere to
-			// put one is left alone. So "created on the next sync" was a
-			// promise about a seat no sync would ever look at, and the
-			// card read Connected over an agent that had no account and
-			// was never going to get one.
+			// whose `integrations.<lane>` block says `enabled: true`, and
+			// the engine seals the credential under the seat's own name.
+			// So "created on the next sync" is promised only to a seat a
+			// sync will look at.
 			if provisions {
-				state.Detail = "not on " + app + " yet: name a ${VAR} under " +
-					"this seat's " + at.Address + " and the next sync " +
-					"creates the account and seals it there"
+				state.Detail = "not on " + app + " yet: turn this agent on at " +
+					app + " on the integration's Agents tab, and the next sync " +
+					"creates its account"
 				break
 			}
 			state.Detail = "no " + app + " credential yet, and " + app +

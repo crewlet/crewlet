@@ -536,6 +536,7 @@ roles:
     llm: default
     integrations:
       mattermost:
+        enabled: false
         bot_token: "${MATTERMOST_BOT_CEO}"
 units:
   - name: Engineering
@@ -564,6 +565,7 @@ units:
                 CONFLUENCE_PERSONAL_TOKEN: "${CONFLUENCE_PAT_SWE}"
             integrations:
               mattermost:
+                enabled: false
                 bot_token: "${MATTERMOST_BOT_SWE}"
   - name: Research
     lead: ceo

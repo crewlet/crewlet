@@ -52,14 +52,13 @@ func (c *Company) organization() (*org.Organization, *identityIndex) {
 	}
 	o.Normalize()
 	c.bindSeatTools(o)
+	c.bindSeatCredentials(o)
 	return o, index
 }
 
-// DanglingRefs reports every reference this revision resolves to nothing:
-// the organization's own ([org.Organization.DanglingRefs]: a unit's lead, a
-// root seat's unit, a manages entry) followed by the ones only the whole
-// document can see, which today is a GitLab access level keyed by a handle
-// no seat answers to ([Company.DanglingSettingsRefs]).
+// DanglingRefs reports every reference this revision resolves to nothing
+// ([org.Organization.DanglingRefs]: a unit's lead, a root seat's unit, a
+// manages entry).
 //
 // They are NOT validation failures, which is why they are a separate call
 // rather than part of [Company.Validate]. Live config management bootstraps
@@ -67,67 +66,7 @@ func (c *Company) organization() (*org.Organization, *identityIndex) {
 // leads it, and every reader already treats a dangling lead as no lead.
 // Refusing the revision would make the intermediate state unreachable;
 // reporting it is what an operator needs.
-//
-// SPLIT BY WHAT EACH LAYER CAN SEE. The org package does not import config
-// and its model carries no integrations, so a reference out of the
-// integrations block cannot be checked there; it is checked here, against
-// the same normalized organization, so both halves agree on which seats
-// exist.
 func (c *Company) DanglingRefs() []org.DanglingRef {
 	o, _ := c.organization()
-	return append(o.DanglingRefs(), c.DanglingSettingsRefs(o)...)
-}
-
-// AccessLevelsSetting is where the per-handle GitLab overrides live in the
-// document, which is what a dangling key reports as its source.
-const AccessLevelsSetting = "integrations.gitlab.provisioning.access_levels"
-
-// DanglingSettingsRefs reports each GitLab access level override whose key is
-// no seat's handle in o, in sorted key order.
-//
-// A stale key is worse than inert. The override is looked up by handle when
-// a seat's service account is provisioned ([GitLabProvisioning.OverrideFor]),
-// so the entry left behind by a removed seat silently grants its level
-// (maintainer, typically) to the next seat given the same handle. The
-// document is checked whether or not GitLab is enabled, because re-enabling
-// it is exactly when the stale grant would take effect.
-//
-// Any seat counts, human seats included. A key naming a human seat does
-// nothing while the seat is human (provisioning creates accounts for agent
-// seats only), but it names a seat the operator can see in the document, and
-// a handle that is held cannot be taken by a new seat, since handles are
-// unique. The grant this check exists to catch is the one waiting on a
-// handle NOBODY holds.
-func (c *Company) DanglingSettingsRefs(o *org.Organization) []org.DanglingRef {
-	gitlab := c.Integrations.GitLab
-	if gitlab == nil || gitlab.Provisioning == nil || len(gitlab.Provisioning.AccessLevels) == 0 {
-		return nil
-	}
-	handles := make(map[string]struct{})
-	for r := range o.AllRoles() {
-		handles[r.Handle()] = struct{}{}
-	}
-	var out []org.DanglingRef
-	for _, handle := range sortedKeys(gitlab.Provisioning.AccessLevels) {
-		if _, found := handles[handle]; !found {
-			out = append(out, org.DanglingRef{
-				Kind: org.RefGitLabAccessLevel, From: AccessLevelsSetting, To: handle,
-			})
-		}
-	}
-	return out
-}
-
-// OverrideFor is the access level integrations.gitlab.provisioning's
-// `access_levels` gives seat, reporting false when no key names it.
-//
-// BY THE SEAT'S HANDLE, which is its identity: a handle is minted when the
-// seat is first written and no edit moves it, so a key that names a seat goes
-// on naming that seat.
-func (p *GitLabProvisioning) OverrideFor(seat *org.Role) (GitLabAccessLevel, bool) {
-	if p == nil || seat == nil {
-		return "", false
-	}
-	level, keyed := p.AccessLevels[seat.Handle()]
-	return level, keyed
+	return o.DanglingRefs()
 }

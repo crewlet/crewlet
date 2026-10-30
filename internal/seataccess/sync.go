@@ -327,6 +327,11 @@ func (s *syncer) adopt(rec *Record, want map[Lane]Desired, have map[Lane]Observe
 			if cred.Variable == "" {
 				cred.Variable = SinkName(s.kind, s.cat.Credentials[0], rec.Handle)
 			}
+			if cred.Source == "" {
+				// SEALED OUTSIDE THE SYNC, BY THE ENGINE all the same (a
+				// manifest route, an install landing): minted, not handed in.
+				cred.Source = CredentialMinted
+			}
 			rec.Credential = &cred
 		}
 	}
@@ -545,7 +550,9 @@ func (s *syncer) seal(ctx context.Context, handle string, minted []Minted) (*Cre
 		return nil, nil
 	}
 	sinks := SinkNames(s.cat, handle)
-	cred := &Credential{Variable: sinks[s.cat.Credentials[0]], MintedAt: s.now, By: s.in.By}
+	cred := &Credential{
+		Variable: sinks[s.cat.Credentials[0]], MintedAt: s.now, By: s.in.By, Source: CredentialMinted,
+	}
 	for _, field := range s.cat.Credentials[1:] {
 		cred.Others = append(cred.Others, sinks[field])
 	}

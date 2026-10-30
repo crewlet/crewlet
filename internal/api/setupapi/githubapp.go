@@ -506,6 +506,13 @@ func (s *Service) recordSeatApp(
 	// be a day after the first. Zero is the state the screen reports as
 	// "installed nowhere yet", which is a thing an operator can act on.
 	block["installation_id"] = 0
+	// CREATING AN AGENT'S APP TURNS IT ON AT GITHUB (D9's explicit opt-in),
+	// unless the block already says either way: every seat block states
+	// `enabled`, and creating an app never turns back on an agent somebody
+	// turned off.
+	if _, stated := block["enabled"]; !stated {
+		block["enabled"] = true
+	}
 	integrations["github"] = block
 	role["integrations"] = integrations
 

@@ -466,6 +466,7 @@ roles:
     llm: main
     integrations:
       mattermost:
+        enabled: false
         bot_token: "${MM_TOKEN_CEO}"
         channel: leadership
 `

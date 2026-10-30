@@ -947,30 +947,6 @@
     "GitLabProvisioning": {
       "additionalProperties": false,
       "properties": {
-        "access_level": {
-          "description": "Default membership level.",
-          "enum": [
-            "developer",
-            "maintainer",
-            "",
-            null
-          ]
-        },
-        "access_levels": {
-          "additionalProperties": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ]
-          },
-          "description": "Per-handle membership overrides.",
-          "type": [
-            "object",
-            "null"
-          ]
-        },
         "admin_token": {
           "description": "Personal access token with the full api scope, belonging to a group owner. Creates and removes the service accounts.",
           "type": [
@@ -1013,21 +989,6 @@
         },
         "projects": {
           "description": "Extra projects to join and hook.",
-          "items": {
-            "type": [
-              "string",
-              "number",
-              "boolean",
-              "null"
-            ]
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "token_scopes": {
-          "description": "Scopes minted on each service-account token.",
           "items": {
             "type": [
               "string",

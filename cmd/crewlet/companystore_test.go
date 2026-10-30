@@ -147,8 +147,10 @@ roles:
         GITLAB_TOKEN: "${GITLAB_TOKEN_CEO}"
     integrations:
       mattermost:
+        enabled: false
         bot_token: "${MM_TOKEN_CEO}"
       slack:
+        enabled: false
         bot_token: "${SLACK_BOT_TOKEN_CEO}"
         signing_secret: "${SLACK_SIGNING_SECRET_CEO}"
 `
