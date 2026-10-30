@@ -254,6 +254,12 @@ type Options struct {
 	// is open on every node.
 	StateClaims StateClaims
 
+	// Access is the engine's per-seat access: each agent seat's setting,
+	// account and last sync on every integration that manages one account
+	// per agent, the plan a draft would take, and the sync a save starts.
+	// What the Agents tab's routes answer from ([Access]).
+	Access Access
+
 	// Now is injectable so a test can pin a secret row's timestamp.
 	Now func() time.Time
 }
@@ -271,11 +277,13 @@ type Service struct {
 	slackApps func() map[string]string
 	secrets   setup.Secrets
 	passes    *setup.Runner
-	probes    map[integration.Kind]setup.Probe
-	sink      sinkFactory
-	status    Status
-	clock     func() time.Time
-	appFlow   *AppFlow
+	// access is the engine's per-seat access. See [Options.Access].
+	access  Access
+	probes  map[integration.Kind]setup.Probe
+	sink    sinkFactory
+	status  Status
+	clock   func() time.Time
+	appFlow *AppFlow
 
 	// guard decides every route, and the credential write a route asks
 	// for on top of its own. No chart: not one verb here asks a relation.
@@ -300,6 +308,7 @@ func New(opts Options) (*Service, error) {
 		{"SlackApps", opts.SlackApps == nil},
 		{"StateCipher", opts.StateCipher == nil},
 		{"StateClaims", opts.StateClaims == nil},
+		{"Access", opts.Access == nil},
 		{"WebhookBaseKey", opts.WebhookBaseKey == ""},
 	} {
 		if field.absent {
@@ -332,6 +341,7 @@ func New(opts Options) (*Service, error) {
 		webhookBaseKey: opts.WebhookBaseKey,
 		secrets:        opts.Secrets,
 		passes:         opts.Passes,
+		access:         opts.Access,
 		probes:         maps.Clone(opts.Probes),
 		sink:           opts.Sink,
 		status:         opts.Status,
@@ -392,6 +402,33 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// nothing could name a run id, so one pass was readable only by the
 	// caller that had just started it.
 	mount("GET /setup/integrations/{kind}/runs", authz.ActionSetupRead, s.runs)
+	// WHAT EACH AGENT MAY DO ON ONE INTEGRATION: see access.go. The read and
+	// the plan are the read verb, the plan being a read sent as a POST
+	// because a draft is a body. The save is its own verb, which carries no
+	// credential and so is one a person's assistant may prepare, and it
+	// answers `dry_run=true` as its check (ADR-0055). The seat actions are
+	// the connect verb: a rotate seals a credential, and a remove takes an
+	// account away at the vendor.
+	mount("GET /setup/integrations/{kind}/access", authz.ActionSetupRead, s.accessRead)
+	// THE PLAN IS A READ sent as a POST, so it keeps the read verb and says
+	// it reads.
+	if err := router.Handle("POST /setup/integrations/{kind}/access/plan",
+		authz.Policy{Action: authz.ActionSetupRead, Effect: authz.EffectReads},
+		http.HandlerFunc(s.accessPlan)); err != nil {
+		failures = append(failures, err)
+	}
+	if err := router.Handle("PUT /setup/integrations/{kind}/access", accessSavePolicy(),
+		http.HandlerFunc(s.accessSave)); err != nil {
+		failures = append(failures, err)
+	}
+	// A SEAT ACTION ACTS ON THE ACCOUNT ITS PATH NAMES at the vendor (a
+	// rotate, a remove, a restore), so it rewrites.
+	post("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}",
+		authz.EffectRewrites, s.accessAct)
+	// A SLACK APP'S INSTALL LINK, minted on request and never stored: the one
+	// seat action that answers something other than the tab.
+	post("POST /setup/integrations/slack/access/seats/{handle}/{lane}/install",
+		authz.EffectCreates, s.accessInstall)
 	return errors.Join(failures...)
 }
 
@@ -433,6 +470,9 @@ func (c configWriter) Apply(
 ) (string, int64, error) {
 	applied, err := c.svc.Apply(ctx, configapi.ApplyRequest{
 		Patch: patch, Summary: summary, By: by, Expect: expect,
+		// THE SETUP SURFACE'S OWN WRITE: what it records (an app GitHub
+		// created, a site Atlassian named) is the engine's to write.
+		Engine: true,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
@@ -476,7 +516,7 @@ func (c configWriter) SetSeat(
 ) (string, int64, error) {
 	applied, err := c.svc.ApplyEntity(ctx, configapi.ApplyEntityRequest{
 		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by,
-		Expect: expect,
+		Expect: expect, Engine: true,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
@@ -576,8 +616,8 @@ type SeatState struct {
 	// created from, ready to paste, for an app whose seats a person has to
 	// build by hand.
 	//
-	// THE ENGINE'S OWN, byte for byte the one `crewlet slack provision`
-	// pushes: the scopes, the events and this seat's request URL are what
+	// THE ENGINE'S OWN, byte for byte the one the reconcile loop creates
+	// apps from: the scopes, the events and this seat's request URL are what
 	// make an app the engine can actually use, and every one of them is a
 	// decision that lives in Go. Told to build the app themselves, an
 	// operator was being asked to reproduce seventeen scopes and five event
@@ -621,17 +661,6 @@ type SeatState struct {
 	// first requirement; it was this.
 	Present bool `json:"present"`
 
-	// TierLabel and TierHint are the tier written for a person: its name,
-	// and the one line saying what it grants.
-	//
-	// SENT RATHER THAN DERIVED, because the vocabulary belongs to the
-	// package that builds the manifest and mints the tokens. A screen that
-	// prettified the raw id would be a second, silent statement of what
-	// read_only means, free to drift from the permissions actually asked
-	// for. Empty where the app has no tiers.
-	TierLabel string `json:"tier_label,omitempty"`
-	TierHint  string `json:"tier_hint,omitempty"`
-
 	// Enrolled is a seat this integration is MEANT to cover, whether or not
 	// it holds anything yet.
 	//
@@ -653,10 +682,6 @@ type SeatState struct {
 	// thing the row exists to report: whether this agent can act as itself
 	// on this app.
 	Detail string `json:"detail,omitempty"`
-
-	// Tier is how much this seat may do, where the app has tiers. Empty
-	// where it has none, which is every app but the two code hosts.
-	Tier string `json:"tier,omitempty"`
 
 	// Step is what is outstanding for this seat, and it is a CLOSED SET so
 	// a screen can render it without reading the sentence in Detail:
@@ -860,8 +885,10 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 			return datadog.AccountEmail(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(roster, s.resolve, at, "Datadog",
-			s.passes.Serves(kind), datadogAccess(block))
+		// NO ROLE ON THE ROW: each seat names its own Datadog role, by id,
+		// and the integration's Agents tab shows it under Datadog's own
+		// name from the organization's live role list.
+		seats = credentialSeats(roster, s.resolve, at, "Datadog", s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
@@ -964,7 +991,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// a seat, because every agent has its own Slack app.
 		block := company.Integrations.Slack
 		summary = slack.Summary()
-		reqs = slack.CompanyRequirements(block)
+		reqs = slack.CompanyRequirements(block, s.resolve)
 		seats = slackSeats(roster, s.resolve, s.apps(), s.webhookBase, s.webhookBaseKey)
 		managePath = slack.ManagePath()
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
@@ -1094,7 +1121,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 // operator the half that cannot be acted on: the question is which of their
 // people can work in this app, and only a per-seat answer has it.
 func credentialSeats(roster *org.Organization, resolve func(string) (string, bool),
-	at seatCredentialAt, app string, provisions bool, access ...seatAccess,
+	at seatCredentialAt, app string, provisions bool,
 ) []SeatState {
 	out := []SeatState{}
 	for role := range roster.AllRoles() {
@@ -1106,13 +1133,6 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 			continue
 		}
 		state := SeatState{Handle: seat.Handle(), Name: role.Name, Requirements: []setup.Requirement{}}
-		// HOW MUCH THIS AGENT MAY DO, where the app grades it. Passed in
-		// rather than switched on here, because what grades an agent is
-		// the app's own question: GitHub reads a tier off the seat, and
-		// Datadog reads the role its accounts are created holding.
-		for _, a := range access {
-			state.Tier, state.TierLabel, state.TierHint = a(role)
-		}
 		stored, where := at.Find(role)
 		state.Present = stored != ""
 		state.Secrets = seatSecretNames(at, role, stored)
@@ -1134,18 +1154,16 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 			// credential on a provisioner's behalf the next step is a
 			// person's.
 			//
-			// A SEAT OPTS IN BY NAMING A VARIABLE, which is the one thing
+			// A SEAT OPTS IN BY BEING TURNED ON (D9), which is the one thing
 			// the pass cannot do for it: the plan is built from the seats
-			// whose mcp_env block holds a whole `${VAR}`, because that is
-			// where the minted credential goes and a seat with nowhere to
-			// put one is left alone. So "created on the next sync" was a
-			// promise about a seat no sync would ever look at, and the
-			// card read Connected over an agent that had no account and
-			// was never going to get one.
+			// whose `integrations.<lane>` block says `enabled: true`, and
+			// the engine seals the credential under the seat's own name.
+			// So "created on the next sync" is promised only to a seat a
+			// sync will look at.
 			if provisions {
-				state.Detail = "not on " + app + " yet: name a ${VAR} under " +
-					"this seat's " + at.Address + " and the next sync " +
-					"creates the account and seals it there"
+				state.Detail = "not on " + app + " yet: turn this agent on at " +
+					app + " on the integration's Agents tab, and the next sync " +
+					"creates its account"
 				break
 			}
 			state.Detail = "no " + app + " credential yet, and " + app +
@@ -1181,27 +1199,6 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 		out = append(out, state)
 	}
 	return out
-}
-
-// seatAccess says how much one seat may do at an app, in the three values a
-// roster renders: the tier this engine speaks, its name, and the line saying
-// what it grants. Empty where the app grades nobody.
-type seatAccess func(role *org.Role) (tier, label, hint string)
-
-// datadogAccess is the role a company's Datadog accounts are created holding.
-//
-// THE SAME FOR EVERY SEAT, which is Datadog's shape here rather than an
-// omission: accounts are created into one role named on the provisioning
-// block. It is still worth saying per seat, because it is the answer to what
-// this agent may do in Datadog and it differs between companies.
-func datadogAccess(cfg *config.Datadog) seatAccess {
-	role := datadog.RoleName(nil)
-	if cfg != nil {
-		role = datadog.RoleName(cfg.Provisioning)
-	}
-	return func(*org.Role) (string, string, string) {
-		return datadog.TierOf(role), datadog.RoleLabel(role), datadog.RoleHint(role)
-	}
 }
 
 // seatCredentialAt is where one app keeps a seat's credential.
@@ -1538,12 +1535,18 @@ func seatSecretNames(at seatCredentialAt, role *org.Role, stored string) []strin
 // function here passes values through rather than expanding them.
 func atlassianAt(product atlassian.Product) seatCredentialAt {
 	return seatCredentialAt{
+		// THE SEAT'S CREDENTIAL AS THE PRODUCTS READ IT ([atlassian.CredentialOf]):
+		// the engine's own sealed names first, then a credential handed in
+		// through `mcp_env`, whose address is the one this names.
 		Find: func(role *org.Role) (stored, where string) {
-			cred, at := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
-			if at == "" {
+			cred := atlassian.CredentialOf(product, role, verbatim)
+			if cred.Token == "" {
 				return "", ""
 			}
-			return cred.Token, "mcp_env." + at
+			if _, at := atlassian.CredentialAt(product, role.MCPEnv, verbatim); at != "" {
+				return cred.Token, "mcp_env." + at
+			}
+			return cred.Token, "the engine's sealed credential"
 		},
 		// THE SHARED BLOCK is what a form tells an operator to write: a
 		// provisioned seat's credential lands there, and the two
@@ -1553,7 +1556,7 @@ func atlassianAt(product atlassian.Product) seatCredentialAt {
 		// creation and its products authenticate base64(address:token), so
 		// the pass seals both and a disconnect orphans both.
 		Vars: func(role *org.Role) []string {
-			cred, _ := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
+			cred := atlassian.CredentialOf(product, role, verbatim)
 			return []string{cred.Token, atlassian.SeatEmail(role.MCPEnv)}
 		},
 	}
@@ -1891,16 +1894,9 @@ func githubSeats(company *config.Company, roster *org.Organization,
 		if !seat.IsAgent() {
 			continue
 		}
-		// THE TIER THE MANIFEST WOULD CARRY, read through the same two
-		// functions the begin route reads it through. A second reading here
-		// would be free to disagree with the app that actually gets created.
-		tier, _ := github.ParseTier(seatTier(role))
 		app := role.GitHub
 		state := SeatState{
 			Handle: seat.Handle(), Name: role.Name,
-			Tier:      string(tier),
-			TierLabel: tier.Label(),
-			TierHint:  tier.Hint(),
 			// A BLOCK IS THE OPT-IN, and it is what the reconcile reads
 			// too: it reports the seats that have one and stays silent
 			// about the rest, so a company running GitHub for three of
@@ -2362,6 +2358,7 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	var managed *configapi.ManagedError
 	var unanswered *configapi.ActivationUnknownError
 	var seal *setup.SealError
+	var entity *configapi.EntityError
 	// THE NAMES SEALED BEFORE THE WRITE FAILED, on every answer to a write
 	// that failed after its first credential was sealed — a lost race, a
 	// document the sealed values leave invalid, an unanswered store, a reload
@@ -2435,6 +2432,18 @@ func (s *Service) refuse(w http.ResponseWriter, r *http.Request, err error, part
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeNoActiveRevision, with(httpjson.Detail{
 			"hint": "import a company configuration first",
+		}))
+	case errors.As(err, &entity) && errors.Is(err, configapi.ErrNoSuchEntity):
+		// THE SEAT LEFT THE DOCUMENT between the read the write was judged
+		// on and the write: nothing was written.
+		httpjson.FailWithFields(w, http.StatusNotFound, httpjson.CodeNoSuchSeat, with(httpjson.Detail{
+			"detail": entity.Err.Error(),
+			"hint":   "the seat is no longer in the company; read the setup state again",
+		}))
+	case errors.As(err, &entity):
+		// A SEAT EDIT THE DOCUMENT CANNOT HOLD, as the caller sent it.
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidInput, with(httpjson.Detail{
+			"detail": entity.Err.Error(),
 		}))
 	case errors.As(err, &unanswered):
 		// STORED, AND THE ACTIVATION UNANSWERED: the config surface's own

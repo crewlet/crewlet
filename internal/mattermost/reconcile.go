@@ -4,55 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
-
-	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Result is what one reconcile did, for the report.
+// Result is what one pass over the company's half of Mattermost found.
 type Result struct {
-	// Decommissioned names the bots this run disabled.
-	Decommissioned []string
-
-	Created []string
 	// Renamed names the bots whose display name was brought back in line
 	// with the company document.
 	Renamed []string
-	// Enabled names the bots a previous disconnect had disabled and this
-	// run turned back on. Said out loud because it is the difference
-	// between a reconnect that works and one that reports ready over an
-	// agent that cannot sign in.
-	Enabled []string
-
-	// Deactivated names the bots that are OFF and were not turned off by
-	// this engine, which it leaves exactly as it found them.
-	//
-	// Its own list because it is the opposite outcome to Enabled and has
-	// the opposite owner: somebody deactivated this agent at Mattermost on
-	// purpose, so the pass reports it and does not fight the gesture. See
-	// [Client.DisconnectedDescription] for how the two are told apart, and
-	// why "disabled" alone could not be.
-	Deactivated []string
-	Rotated     []string
-	// Kept names the seats whose existing token was left alone — the
-	// SUCCESSFUL outcome of a re-run, said out loud because a silent
-	// report reads as a run that did nothing.
-	Kept []string
-	// Joined maps a seat to the channels it was added to, which is the
-	// part an operator most needs to see: a bot hears only what it has
-	// joined, so a seat with an empty list is one that will never wake.
-	Joined map[string][]string
 
 	// NotAdmin is the sentence naming a provisioning account this run
 	// CONFIRMED holds no system_admin role. Empty when it holds one, and
-	// empty when this run could not ask — "cannot tell" must never report
+	// empty when this run could not ask: "cannot tell" must never report
 	// the same as "confirmed wrong". See [preflight].
 	NotAdmin string
 	// Disabled names the instance settings this run read as an explicit
@@ -61,19 +28,9 @@ type Result struct {
 	Disabled []DisabledSetting
 
 	Notes []string
-
-	// Recorded counts the tokens this run wrote to the sink.
-	//
-	// A COUNT rather than the names, as GitLab's is: the names are the
-	// variables holding live credentials, and this number's only job is
-	// deciding whether the report tells the operator what still has to
-	// happen for those values to reach a running engine. Zero is a re-run
-	// that minted nothing, and telling that operator to reload anything is
-	// noise they learn to skip past.
-	Recorded int
 }
 
-// Options are one reconcile's inputs.
+// Options are one pass's inputs.
 type Options struct {
 	// Client talks to the instance as a system administrator.
 	Client *Client
@@ -81,407 +38,135 @@ type Options struct {
 	// Config is the company's mattermost block.
 	Config *config.Mattermost
 
-	// Org is the company, for the per-seat channel each role names.
+	// Org is the company, whose agent seats' display names the pass keeps
+	// in step with their bots.
 	Org *org.Organization
 
-	Plan *provision.Plan
-	Sink provision.TokenSink
+	// Managed is each agent seat's bot this engine manages, by the seat's
+	// handle: the bot user id the access sync's ledger records. Only these
+	// bots are renamed; a bot under a seat's username that the ledger does
+	// not record is somebody else's, and its name is left as it is.
+	Managed map[string]string
 
-	// Rotate forces a fresh token for every bot, including bots whose
-	// current one still works.
-	//
-	// # Why it is a flag rather than what a run does
-	//
-	// Mattermost returns an access token's value once, so a provisioner
-	// cannot check that what it recorded last time still matches. The
-	// tempting answer is to mint every run — and that is an outage: the
-	// engine is running with the OLD value, and rotating revokes the
-	// credential every bot's websocket is currently authenticated with.
-	// An operator adding a tenth seat would take the other nine down,
-	// from a command whose whole promise is that it is safe to re-run.
-	Rotate bool
-
-	// Decommission disables managed bot accounts whose seats have left the
-	// company document, matching the flag GitLab already has.
-	//
-	// DISABLE, never delete: a deleted bot takes its posts with it, so this
-	// would silently rewrite the history of every channel the seat spoke
-	// in. A disabled bot keeps what it said and can say nothing more.
-	Decommission bool
-
-	// Only narrows the PROVISIONING loop to these handles. Empty does every
-	// seat.
-	//
-	// It deliberately does NOT narrow what Decommission keeps. Filtering the
-	// plan itself would be the obvious implementation and it is a footgun:
-	// `-handles ceo -decommission` would read every other seat as departed
-	// and disable the whole company. The keep-set is always the full plan.
-	Only []string
+	// ReadOnly is a check: the pass reads and reports, and renames no bot.
+	ReadOnly bool
 }
 
-// Reconcile runs one pass.
+// Reconcile runs one pass over the company's half of Mattermost: it checks
+// that the instance will let this engine provision (the preflight), and keeps
+// each agent's bot display name in step with the company document.
 //
-// A RE-RUN IS SAFE AND QUIET: a bot that exists is found rather than
-// re-created, a channel it is in is left alone, and a token that still
-// works is not replaced. See [Options.Rotate] for why the last of those is
-// the default rather than the flag.
+// IT CREATES, CHANGES AND DEACTIVATES NO BOT: each agent's own bot is the
+// per-seat access sync's ([seataccess.Vendor], accessvendor.go), which reads
+// every bot back on each pass. So a provisioning token that lost system_admin,
+// or bot accounts switched off at the instance, is said here, in the setting
+// an administrator has to change, before the sync's writes fail with a 403
+// that names an endpoint.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
-	// A CANCELLED PASS HAS OBSERVED NOTHING, and it has to say so BEFORE
-	// the return below that answers without looking: an empty plan is
-	// decided from the arguments alone, so a cancelled pass took that
-	// branch and reported a converged surface it never read. The reconcile loop treats "no
-	// findings, no error" as ready and trusts it for a full settled
-	// interval, so a node shutting down mid-pass recorded every
-	// integration as healthy on its way out and the next node to hold
-	// the duty believed it.
-	//
-	// An empty plan is not a rare shape either: a company that enables
-	// the mattermost block before any seat carries a whole ${VAR} bot
-	// token has one on every pass.
+	// A CANCELLED PASS HAS OBSERVED NOTHING, and it says so here rather than
+	// by happening to make a network call first: the reconcile loop treats
+	// "no findings, no error" as ready and trusts it for a full settled
+	// interval, so a node shutting down mid-pass would record Mattermost as
+	// healthy on its way out.
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("mattermost: %w", err)
 	}
 	if opts.Client == nil {
 		return nil, errors.New("mattermost: no client")
 	}
-	// REFUSED RATHER THAN DEREFERENCED. Both are read without a nil check
-	// further down — the team off the config, the seat's own channel off
-	// the org — and a panic in a pass is not the same failure as an
-	// error: the reconcile worker is a fleet singleton, so a nil here
-	// takes the node down where an error is a fault the loop retries and
-	// reports.
+	// REFUSED RATHER THAN DEREFERENCED: the reconcile worker is a fleet
+	// singleton, so a nil here would take the node down where an error is
+	// a fault the loop retries and reports.
 	if opts.Config == nil {
 		return nil, errors.New("mattermost: no company mattermost block")
 	}
 	if opts.Org == nil {
 		return nil, errors.New(
-			"mattermost: no organization — a bot is joined to the channel its " +
-				"own seat names, so the company is not optional here")
-	}
-	if opts.Sink == nil {
-		// THE COMMAND LINE'S CASE, and it stays a refusal: a run with
-		// nowhere to put what it mints would create live credentials and
-		// print none of them, which is the worst outcome available.
-		return nil, provision.ErrNoSink
-	}
-	if opts.Plan == nil || opts.Plan.Empty() {
-		return &Result{Notes: notesOf(opts.Plan)}, nil
+			"mattermost: no organization, so there are no agent seats to name bots after")
 	}
 
-	team, found, err := opts.Client.TeamByName(ctx, opts.Config.Team)
-	if err != nil {
-		// No separate auth probe here either, so this first call carries
-		// the refusal.
-		return nil, fmt.Errorf("mattermost: resolve team %q: %w", opts.Config.Team,
-			integration.Reject(err, Status(err)))
-	}
-	if !found {
-		return nil, fmt.Errorf(
-			"mattermost: no team %q on this instance — channels are "+
-				"team-scoped, so the bots have nowhere to be placed",
-			opts.Config.Team)
-	}
-
-	// THE PREFLIGHT, before a single write.
-	//
-	// Every failure it catches otherwise surfaces as a 403 on the FIRST bot
-	// creation — after the team lookup has succeeded, so the run looks like
-	// it was working — and the message names an endpoint rather than the
-	// setting an administrator has to change. Checked, not assumed, because
-	// all three are invisible from the config.
-	//
 	// NAMED `pre` rather than `preflight`, which would shadow the type: the
-	// struct it hands back is what carries this to BOTH readers — the notes
-	// the command line prints and the findings the reconcile loop reads.
+	// struct it hands back is what carries this to both readers, the notes
+	// and the findings the reconcile loop reads.
 	pre := checkPreflight(ctx, opts)
-
-	// THE NOTES ARE COLLECTED AT THE END, not copied here: the run adds
-	// its own — a channel that does not exist, a bot that joined nothing
-	// — and a snapshot taken now would silently drop every one of them.
-	res := &Result{Joined: map[string][]string{}}
-	minted := map[string]mintedToken{}
-
-	// ONE bot listing per run, shared by the rename check and the
-	// decommission pass. The display name lives on the BOT record and not
-	// on its user, so without this the comparison has nothing true to read
-	// — and per-seat fetches would be a call each for a value one list
-	// already carries.
-	managed := map[string]Bot{}
-	if bots, err := opts.Client.Bots(ctx); err != nil {
-		res.Notes = append(res.Notes, fmt.Sprintf(
-			"could not list bots, so display names are not checked this run: %v", err))
-	} else {
-		for _, bot := range bots {
-			managed[strings.ToLower(bot.Username)] = bot
-		}
-	}
-
-	only := map[string]bool{}
-	for _, handle := range opts.Only {
-		only[handle] = true
-	}
-	for _, seat := range opts.Plan.Seats {
-		if len(only) > 0 && !only[seat.Handle] {
-			continue
-		}
-		username := BotUsername(opts.Config.Provisioning, seat.Handle)
-		user, exists, err := opts.Client.BotByUsername(ctx, username)
-		if err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
-		}
-		// A DISABLED BOT THIS ENGINE TURNED OFF IS TURNED BACK ON, and one
-		// somebody else turned off is REPORTED.
-		//
-		// The teardown disables rather than deletes so an agent keeps its
-		// history, which means the account is still here to be found:
-		// without the re-enable the pass joins it, mints it a token,
-		// reports ready, and every socket that token opens is refused
-		// because the account is deactivated.
-		//
-		// WHICH OF THE TWO DISABLED IT is the part that was missing. This
-		// re-enabled either, unconditionally, so an administrator who
-		// deactivated an agent at Mattermost had that reversed on the next
-		// tick — the engine fighting a person's gesture for ever, which is
-		// precisely the risk datadog's marker was added to avoid and which
-		// this had no way even to see. The marker
-		// ([Client.DisconnectedDescription]) is written by the teardown
-		// before it disables, and read here.
-		//
-		// ASKED ONLY OF A DEACTIVATED SEAT, so a converged pass makes no
-		// extra call: the bot's own record is a second request, and the
-		// question it answers has no meaning for a bot that is running.
-		if exists && user.DeleteAt != 0 {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			record, err := opts.Client.BotRecord(ctx, user.ID)
-			if err != nil {
-				return nil, rollback(ctx, opts, minted, fmt.Errorf(
-					"mattermost: %s: read whether this engine disabled the bot: %w",
-					seat.Handle, err))
-			}
-			if strings.TrimSpace(record.Description) != DisconnectedDescription {
-				// SOMEBODY ELSE'S DECISION. Reported and left alone, on
-				// the same terms datadog reports one: a deliberate act at
-				// the instance, which a pass that reversed it would undo
-				// on every tick.
-				res.Deactivated = append(res.Deactivated, seat.Handle)
-				continue
-			}
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			if err := opts.Client.EnableBot(ctx, user.ID); err != nil {
-				return nil, rollback(ctx, opts, minted, fmt.Errorf(
-					"mattermost: %s: re-enable the bot a disconnect disabled: %w",
-					seat.Handle, err))
-			}
-			// AND THE MARKER GOES WITH IT, or a live bot still described
-			// as disconnected would be re-enabled again on every pass.
-			// Best effort: the bot is back, which is what the seat needed,
-			// and a description that could not be cleared costs one
-			// no-op enable next tick rather than the agent.
-			if err := opts.Client.ClearDisconnected(ctx, user.ID); err != nil {
-				res.Notes = append(res.Notes, fmt.Sprintf(
-					"%s is enabled again and its bot description still reads "+
-						"%q, which this engine will try to clear on the next "+
-						"pass: %v", seat.Handle, DisconnectedDescription, err))
-			}
-			res.Enabled = append(res.Enabled, seat.Handle)
-		}
-		if !exists {
-			//nolint:govet // shadow: scoped to this block; see .golangci.yml
-			bot, err := opts.Client.CreateBot(ctx, username,
-				BotDisplayName(opts.Config.Provisioning, seat.Role))
-			if err != nil {
-				return nil, rollback(ctx, opts, minted,
-					fmt.Errorf("mattermost: %s: create bot: %w", seat.Handle, err))
-			}
-			user = User{ID: bot.UserID, Username: bot.Username}
-			res.Created = append(res.Created, seat.Handle)
-		} else if want := BotDisplayName(opts.Config.Provisioning, seat.Role); want != "" {
-			// A RENAMED ROLE REACHES THE BOT. Provisioning is a reconcile,
-			// and a create-only display name means the roster in Mattermost
-			// drifts from the org chart it mirrors, with no way back but
-			// editing every bot by hand.
-			//
-			// COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which is what
-			// `known` is for. The bot record is the only thing carrying the
-			// current display name, so a listing that failed does not know
-			// the name is already right — and as a plain map lookup, which
-			// is what this was, a missing entry reads as an EMPTY display
-			// name. An unreachable /bots therefore became a PUT on every
-			// seat on every pass, rewriting names that were already correct,
-			// from the same run whose note says display names are not
-			// checked this time.
-			if current, known := managed[strings.ToLower(username)]; known &&
-				current.DisplayName != want {
-				//nolint:govet // shadow: scoped to this block; see .golangci.yml
-				if err := opts.Client.PatchBot(ctx, user.ID, want); err != nil {
-					res.Notes = append(res.Notes, fmt.Sprintf(
-						"%s: could not update the bot's display name to %q: %v",
-						seat.Handle, want, err))
-				} else {
-					res.Renamed = append(res.Renamed, seat.Handle)
-				}
-			}
-		}
-
-		// READ BEFORE JOINING, and the same rule governs the channels
-		// below. AddTeamMember tolerates a duplicate, and that tolerance
-		// made an unconditional POST look free — it is not. This pass is
-		// what the reconcile loop runs every few minutes for the life of
-		// the deployment, so an unconditional join is a membership write
-		// to somebody's instance for ever on a company that needs
-		// nothing.
-		//
-		// A MEMBERSHIP THIS RUN CANNOT READ IS JOINED ANYWAY, which is
-		// the opposite of how the token check treats "cannot tell" and
-		// deliberately so: re-minting a credential destroys one that
-		// works, where a duplicate join is a no-op the server itself
-		// absorbs. The cost of the wrong guess is asymmetric here, and a
-		// seat left out of the team is an agent that sees no channel at
-		// all.
-		inTeam, err := opts.Client.TeamMember(ctx, team.ID, user.ID)
-		if err != nil {
-			opts.Plan.Note("%s: could not read whether the bot is already in "+
-				"team %q, so it was joined again rather than left out: %v",
-				seat.Handle, opts.Config.Team, err)
-			inTeam = false
-		}
-		if !inTeam {
-			if err = opts.Client.AddTeamMember(ctx, team.ID, user.ID); err != nil {
-				return nil, rollback(ctx, opts, minted,
-					fmt.Errorf("mattermost: %s: join team: %w", seat.Handle, err))
-			}
-		}
-		joined, err := joinChannels(ctx, opts, team.ID, user.ID, seat.Handle)
-		if err != nil {
-			return nil, rollback(ctx, opts, minted, err)
-		}
-		res.Joined[seat.Handle] = joined
-		if len(joined) == 0 {
-			// SAID OUT LOUD. A bot receives only what its channels
-			// deliver, so one in no channel is an agent that never wakes
-			// — and nothing about the account looks wrong.
-			res.Notes = append(res.Notes, fmt.Sprintf(
-				"%s joined no channel, so it will never receive a message: "+
-					"name channels under integrations.mattermost.provisioning "+
-					"or on the seat itself", seat.Handle))
-		}
-
-		created := slices.Contains(res.Created, seat.Handle)
-		verdict, held := provision.VerdictRejected, true
-		if !created && !opts.Rotate {
-			verdict, held, err = credentialFor(ctx, opts, user.ID, seat)
-			if err != nil {
-				return nil, rollback(ctx, opts, minted,
-					fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
-			}
-		}
-		switch verdict {
-		case provision.VerdictSelf:
-			res.Kept = append(res.Kept, seat.Handle)
-			continue
-		case provision.VerdictOther:
-			// A COPY-PASTED VARIABLE. Minting over it hands this seat a
-			// second identity while the other keeps authenticating as
-			// one account from two places, and nothing reports it.
-			return nil, rollback(ctx, opts, minted, fmt.Errorf(
-				"mattermost: %s: %s holds a token that authenticates as a "+
-					"different account — give this seat its own variable",
-				seat.Handle, seat.TokenVar))
-		case provision.VerdictUnknown:
-			// LEFT EXACTLY AS IT WAS. Re-minting on "cannot tell"
-			// destroys a token that works; the recovery for one that
-			// does not is a -rotate away.
-			res.Kept = append(res.Kept, seat.Handle)
-			res.Notes = append(res.Notes, fmt.Sprintf(
-				"%s: could not check whether the token in %s still works, so "+
-					"it was left alone — re-run with -rotate if this seat is "+
-					"failing to authenticate", seat.Handle, seat.TokenVar))
-			continue
-		}
-
-		token, err := opts.Client.CreateAccessToken(ctx, user.ID, TokenDescription(seat.Handle))
-		if err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("mattermost: %s: mint token: %w", seat.Handle, err))
-		}
-		minted[seat.Handle] = mintedToken{
-			userID: user.ID, tokenID: token.ID, createdBot: created,
-		}
-		if err = opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("mattermost: %s: record %s: %w",
-					seat.Handle, seat.TokenVar, err))
-		}
-		res.Recorded++
-		res.Rotated = append(res.Rotated, seat.Handle)
-		if created {
-			continue
-		}
-		// RETIRED AFTER THE RECORD, and only this tool's own: an
-		// administrator may have minted a token on this bot by hand.
-		retired, err := opts.Client.RevokeMinted(ctx, user.ID,
-			TokenDescription(seat.Handle), token.ID)
-		if err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("mattermost: %s: %w", seat.Handle, err))
-		}
-		if !held && retired > 0 {
-			// THE SURPRISING CASE, and the only one that earns a note:
-			// the operator asked for nothing, but the variable was empty
-			// on this machine while a live token existed on the account.
-			res.Notes = append(res.Notes, fmt.Sprintf(
-				"%s: the bot held a working token but %s did not, so a fresh "+
-					"one was minted and the old one retired — a running engine "+
-					"holding the old value is refused until it reads the new "+
-					"one, at the step this run's Next: line names",
-				seat.Handle, seat.TokenVar))
-		}
-	}
-
-	if err := opts.Sink.Flush(ctx); err != nil {
-		return nil, rollback(ctx, opts, minted, err)
-	}
-
-	// AFTER the flush, deliberately. Decommissioning touches accounts this
-	// run did not mint for, so it must not be able to roll back credentials
-	// that are already recorded and already in use.
-	if opts.Decommission {
-		disabled, notes := decommission(ctx, opts, managed)
-		res.Decommissioned = disabled
-		res.Notes = append(res.Notes, notes...)
-	}
-
-	// CONCAT rather than append: notesOf hands back the PLAN's own slice,
-	// and appending to it writes into the plan's spare capacity — so the
-	// Result a caller is holding shares a backing array with a plan that
-	// is still being written to. The next Plan.Note then overwrites a
-	// note in a report somebody has already been given.
-	res.Notes = slices.Concat(notesOf(opts.Plan), pre.notes(), res.Notes)
-
-	// AND TO THE LOOP, not only to the terminal. The reconcile loop reads
-	// [Result.Findings] and nothing else, so an instance this pass has
-	// already proved it cannot write to has to say so in the shared
-	// vocabulary or it is reported ready. See [preflight].
+	res := &Result{}
+	listBots(ctx, opts, res)
+	res.Notes = slices.Concat(pre.notes(), res.Notes)
 	res.NotAdmin, res.Disabled = pre.notAdmin, pre.disabled
 	return res, nil
 }
 
-// preflight is what this run learned about the instance before its first
-// write, in the shape BOTH readers of it need.
+// listBots reads the instance's bots once per run and sweeps the renames. The
+// display name lives on the BOT record and not on its user, so without this
+// the comparison has nothing true to read, and per-seat fetches would be a
+// call each for a value one list already carries. A listing that fails is a
+// note, and no name is compared against it.
+func listBots(ctx context.Context, opts Options, res *Result) {
+	bots, err := opts.Client.Bots(ctx)
+	if err != nil {
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"could not list bots, so display names are not checked this run: %v", err))
+		return
+	}
+	byID := make(map[string]Bot, len(bots))
+	for _, bot := range bots {
+		byID[bot.UserID] = bot
+	}
+	renameBots(ctx, opts, byID, res)
+}
+
+// renameBots brings every agent seat's bot display name in line with the
+// company document.
 //
-// There are two, and they are not the same reader. `crewlet mattermost
-// provision` prints [Result.Notes] to whoever ran it, and the reconcile loop
-// reads [Result.Findings] and NOTHING ELSE — engine.mattermostPass returns
-// `res.Findings()` and drops the notes on the floor. So a preflight that
-// spoke only in notes told the operator at the terminal that this credential
-// cannot write, and told the loop that Mattermost was ready: a company whose
-// administrator token has lost its role reports READY for ever, and the first
-// thing anybody learns is that adding the tenth seat fails.
+// A RENAMED ROLE REACHES THE BOT. A create-only display name means the roster
+// in Mattermost drifts from the org chart it mirrors, with no way back but
+// editing every bot by hand. It sweeps the document's agent seats, and of
+// those only the bots the access sync's ledger records ([Options.Managed]),
+// found by user id so a bot renamed at Mattermost is still found.
 //
-// ONE SENTENCE PER FINDING, built once here and used for both, because this
-// text was already the operator's whole explanation and two spellings of it
-// would drift the moment one of them was edited.
+// COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which the caller guarantees
+// by calling this only when one did: the bot record is the only thing carrying
+// the current display name, so a missing entry would otherwise read as an
+// empty name and rewrite every bot on every pass.
+func renameBots(ctx context.Context, opts Options, byID map[string]Bot, res *Result) {
+	for seat := range opts.Org.AllRoles() {
+		if !seat.IsAgent() {
+			continue
+		}
+		id, held := opts.Managed[seat.Handle()]
+		if !held {
+			continue
+		}
+		want := BotDisplayName(opts.Config.Provisioning, seat.Name)
+		bot, known := byID[id]
+		if want == "" || !known || bot.DisplayName == want {
+			continue
+		}
+		if opts.ReadOnly {
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s's bot is named %q and the company document names it %q; the "+
+					"next pass renames it", seat.Handle(), bot.DisplayName, want))
+			continue
+		}
+		if err := opts.Client.PatchBot(ctx, bot.UserID, want); err != nil {
+			res.Notes = append(res.Notes, fmt.Sprintf(
+				"%s: could not update the bot's display name to %q: %v",
+				seat.Handle(), want, err))
+			continue
+		}
+		res.Renamed = append(res.Renamed, seat.Handle())
+	}
+}
+
+// preflight is what this run learned about the instance, in the shape BOTH
+// readers of it need: the notes, and [Result.Findings], which is all the
+// reconcile loop reads. A preflight that spoke only in notes would tell the
+// loop that Mattermost was ready while the provisioning token could not
+// write, and the first anybody would learn of it is a seat that fails to
+// turn on.
+//
+// ONE SENTENCE PER FINDING, built once here and used for both, so two
+// spellings of it cannot drift.
 type preflight struct {
 	// unreadable is the account this run could not ask about.
 	//
@@ -522,7 +207,7 @@ func (d DisabledSetting) Detail() string {
 			"administrator has to enable it in the System Console", d.Key, d.Stops)
 }
 
-// notes is what the command line prints, in the order it always printed them.
+// notes is the preflight's caveats, in the order they are checked.
 func (p preflight) notes() []string {
 	var out []string
 	if p.unreadable != "" {
@@ -578,84 +263,6 @@ func checkPreflight(ctx context.Context, opts Options) preflight {
 	return out
 }
 
-// decommission disables managed bots whose seats have left the config.
-//
-// Matched by the SAME username prefix the run mints under, so an account a
-// person created by hand is never touched — the prefix is the only thing that
-// makes a bot "managed", and widening the match would let this disable
-// somebody's own integration.
-func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]string, []string) {
-	prefix := strings.ToLower(BotUsername(opts.Config.Provisioning, ""))
-	if prefix == "" {
-		// Without a prefix every bot on the instance is a candidate, which
-		// is precisely the run an operator cannot undo.
-		return nil, []string{"decommission skipped: this config has no bot " +
-			"username prefix, so there is nothing that safely identifies a " +
-			"managed account"}
-	}
-	keep := make(map[string]bool, len(opts.Plan.Seats))
-	for _, seat := range opts.Plan.Seats {
-		keep[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Handle))] = true
-	}
-	var disabled, notes []string
-	// SORTED, because managed is a MAP and this loop's output is what the
-	// command line prints. Ranged over the map, two -decommission runs
-	// over one unchanged company printed the same departed seats in
-	// different orders, so an operator diffing two runs saw a change
-	// neither run made and could not tell a re-run from a new sweep.
-	//
-	// It used to matter twice over: [Result.Findings] turned this same
-	// slice straight into one finding per departed seat, and an order that
-	// moved made the reconcile loop see the surface change on every pass.
-	// That mapping is gone — a successful decommission is not outstanding
-	// work — and the printed order is reason enough on its own.
-	for _, username := range slices.Sorted(maps.Keys(managed)) {
-		bot := managed[username]
-		if !strings.HasPrefix(username, prefix) || keep[username] {
-			continue
-		}
-		// ITS CREDENTIAL FIRST, for the reason [Teardown] gives: a
-		// disabled account keeps its username and its tokens, so a
-		// departed seat whose token was left live is an agent that
-		// starts working again the moment anybody re-enables the bot.
-		// Keyed on the HANDLE inside the username, because that is what
-		// the token was minted under and the plan no longer names this
-		// seat at all: this name was built by a previous pass of this same
-		// function, so what is left after the prefix is exactly what it
-		// derived the account from.
-		handle := strings.TrimPrefix(username, prefix)
-		if _, err := opts.Client.RevokeMinted(ctx, bot.UserID,
-			TokenDescription(handle), ""); err != nil {
-			notes = append(notes, fmt.Sprintf(
-				"%s matches the managed prefix and its tokens could not be "+
-					"revoked, so it was left enabled rather than disabled "+
-					"holding a live credential: %v", bot.Username, err))
-			continue
-		}
-		// MARKED BEFORE IT IS DISABLED, the same rule the teardown
-		// follows and for the same reason: "disabled" is an ambiguous bit,
-		// and a bot this engine turned off with nothing recording that is
-		// one it can never bring back. Written first, so a run interrupted
-		// between the two leaves a marked, live bot.
-		if err := opts.Client.MarkDisconnected(ctx, bot.UserID); err != nil {
-			notes = append(notes, fmt.Sprintf(
-				"%s matches the managed prefix and this engine could not "+
-					"record that it is decommissioning it, so it was left "+
-					"enabled rather than disabled with no provenance: %v",
-				bot.Username, err))
-			continue
-		}
-		if err := opts.Client.DisableBot(ctx, bot.UserID); err != nil {
-			notes = append(notes, fmt.Sprintf(
-				"%s matches the managed prefix and could not be disabled: %v",
-				bot.Username, err))
-			continue
-		}
-		disabled = append(disabled, bot.Username)
-	}
-	return disabled, notes
-}
-
 // orNone renders an empty role list readably.
 func orNone(s string) string {
 	if strings.TrimSpace(s) == "" {
@@ -664,199 +271,13 @@ func orNone(s string) string {
 	return s
 }
 
-// mintedToken is one credential this run created, as its rollback needs it.
-type mintedToken struct {
-	userID  string
-	tokenID string
-	// createdBot says the bot is this run's, which decides HOW the
-	// rollback undoes it: everything on an account nothing else ever
-	// minted on, versus exactly the one token on one that already
-	// existed.
-	createdBot bool
-}
-
-// TokenDescription is the description this tool mints under.
+// TokenDescription is the description every token this engine mints for a
+// seat carries.
 //
-// It is the ONLY thing distinguishing a token this tool owns from one an
-// administrator created by hand, and both the keep-or-mint decision and the
-// retire step key on it.
+// It is the ONLY thing distinguishing a token this engine owns from one an
+// administrator created by hand: whether a bot still holds the seat's
+// credential, which tokens a rotation retires, and which tokens turning a
+// seat off revokes.
 func TokenDescription(handle string) string {
 	return "crewlet-" + handle
-}
-
-// credentialFor decides whether this bot already has a working token.
-//
-// # It PROVES it, rather than inferring it
-//
-// The weaker test — "the variable has a value and the account has some
-// token" — reads as provisioned in exactly the case that matters: an
-// operator who restored an older env file has a stale value sitting beside
-// a live token that is not it, and the bot then authenticates with nothing,
-// on every run, forever. So the run takes the value the variable actually
-// holds and asks the server who it is.
-func credentialFor(ctx context.Context, opts Options, userID string, seat provision.Seat) (provision.Verdict, bool, error) {
-	value, held, err := opts.Sink.Value(ctx, seat.TokenVar)
-	if err != nil {
-		// UNREADABLE IS NOT ABSENT. Treating it as absent would rotate
-		// every live credential in the company because a store blinked.
-		return provision.VerdictUnknown, false, fmt.Errorf(
-			"cannot read %s, and guessing would either rotate a live token or "+
-				"leave a seat with none: %w", seat.TokenVar, err)
-	}
-	if !held {
-		return provision.VerdictRejected, false, nil
-	}
-	return opts.Client.verify(ctx, value, userID), true, nil
-}
-
-// verify asks the server who a token authenticates as.
-func (c *Client) verify(ctx context.Context, value, wantID string) provision.Verdict {
-	probe, err := NewClient(ClientOptions{URL: c.base, Token: value, HTTP: c.http})
-	if err != nil {
-		return provision.VerdictRejected
-	}
-	var who User
-	_, err = probe.request(ctx, http.MethodGet, "/users/me", nil, &who, true)
-	switch {
-	case err == nil && who.ID == wantID:
-		return provision.VerdictSelf
-	case err == nil:
-		return provision.VerdictOther
-	case isStatus(err, http.StatusUnauthorized), isStatus(err, http.StatusForbidden):
-		return provision.VerdictRejected
-	default:
-		// A 5xx or a dropped connection. NOT a rejection: re-minting on
-		// "cannot tell" destroys a token that works.
-		return provision.VerdictUnknown
-	}
-}
-
-// joinChannels adds a bot to the company-wide channels plus its own.
-//
-// A CHANNEL THAT DOES NOT EXIST IS A NOTE, NOT A FAILURE. Half a fleet of
-// bots joined and the run aborted is a worse state than every bot joined to
-// the channels that do exist and a line saying which did not — especially
-// since the usual cause is a typo an operator fixes in seconds.
-func joinChannels(ctx context.Context, opts Options, teamID, userID, handle string) ([]string, error) {
-	wanted := map[string]struct{}{}
-	if p := opts.Config.Provisioning; p != nil {
-		for _, name := range p.Channels {
-			wanted[strings.TrimSpace(name)] = struct{}{}
-		}
-	}
-	if seat := opts.Org.AgentSeatByHandle(handle); seat != nil {
-		if own := strings.TrimSpace(seat.Mattermost.Channel); own != "" {
-			wanted[own] = struct{}{}
-		}
-	}
-	delete(wanted, "")
-
-	names := slices.Sorted(maps.Keys(wanted))
-
-	// WHAT THIS BOT IS ALREADY IN, read ONCE for the whole seat.
-	//
-	// AddChannelMember tolerates a duplicate, which made an unconditional
-	// join per wanted channel look free. It is not: this pass is what the
-	// reconcile loop runs every few minutes for the life of the
-	// deployment, so on a company that needs nothing every one of those
-	// requests is a write to somebody's instance. The tolerance stays as
-	// the backstop it should always have been — the window between this
-	// read and the join below, and two writers racing.
-	//
-	// One listing also replaces a name lookup AND a join per channel, so
-	// the steady state is strictly fewer requests rather than merely
-	// fewer writes.
-	//
-	// A LISTING THAT FAILS IS AN EMPTY SET, not a failure: every name
-	// then takes the resolve-and-join path below, which is exactly what
-	// this pass did before the read existed. A duplicate join is a no-op
-	// the server absorbs; a channel left unjoined is an agent that never
-	// wakes.
-	member := map[string]struct{}{}
-	if channels, err := opts.Client.Channels(ctx, userID, teamID); err != nil {
-		opts.Plan.Note("%s: could not read which channels the bot is already "+
-			"in, so each one was joined again rather than skipped: %v", handle, err)
-	} else {
-		for _, channel := range channels {
-			member[channel.Name] = struct{}{}
-		}
-	}
-
-	var joined []string
-	for _, name := range names {
-		if _, in := member[name]; in {
-			// ALREADY IN IT IS STILL JOINED. Joined is what an operator
-			// reads to see which channels a seat can hear — not a list of
-			// what this run changed — so a converged company must not
-			// report a fleet of bots joined to nothing.
-			joined = append(joined, name)
-			continue
-		}
-		channel, err := opts.Client.ChannelByName(ctx, teamID, name)
-		if err != nil {
-			if isStatus(err, http.StatusNotFound) {
-				opts.noteMissingChannel(handle, name)
-				continue
-			}
-			return nil, fmt.Errorf("mattermost: %s: resolve channel %q: %w",
-				handle, name, err)
-		}
-		if err := opts.Client.AddChannelMember(ctx, channel.ID, userID); err != nil {
-			return nil, fmt.Errorf("mattermost: %s: join %q: %w", handle, name, err)
-		}
-		joined = append(joined, name)
-	}
-	return joined, nil
-}
-
-// noteMissingChannel records a channel that is not there.
-//
-// On the PLAN rather than the result, because the plan is what both the dry
-// run and the real run print — so the same missing channel is reported the
-// same way whether or not anything was touched.
-func (o Options) noteMissingChannel(handle, name string) {
-	o.Plan.Note("%s: no channel %q in team %q, so it was not joined — check "+
-		"the slug (the URL name, not the display name)", handle, name, o.Config.Team)
-}
-
-// rollback revokes what this run minted and clears what it recorded.
-func rollback(ctx context.Context, opts Options, minted map[string]mintedToken, cause error) error {
-	if len(minted) == 0 {
-		return cause
-	}
-	// DETACHED: the failure is often a cancelled context, and a rollback
-	// that inherited it would do nothing while every minted token stays
-	// live.
-	ctx = context.WithoutCancel(ctx)
-	var problems []string
-	for handle, m := range minted {
-		var err error
-		if m.createdBot {
-			// Nothing else has ever minted on a bot this run made, so
-			// taking everything takes exactly what this run caused.
-			err = opts.Client.RevokeTokens(ctx, m.userID)
-		} else {
-			err = opts.Client.RevokeToken(ctx, m.tokenID)
-		}
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s: %v", handle, err))
-		}
-	}
-	if err := opts.Sink.Discard(ctx); err != nil {
-		problems = append(problems, err.Error())
-	}
-	if len(problems) == 0 {
-		return fmt.Errorf("%w (the %d token(s) this run minted were revoked)",
-			cause, len(minted))
-	}
-	return fmt.Errorf("%w\n\nAND THE CLEANUP DID NOT FINISH — these credentials "+
-		"may still be live and must be revoked by hand:\n  %s",
-		cause, strings.Join(problems, "\n  "))
-}
-
-func notesOf(p *provision.Plan) []string {
-	if p == nil {
-		return nil
-	}
-	return p.Notes
 }

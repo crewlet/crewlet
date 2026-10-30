@@ -71,6 +71,7 @@ roles:
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: "${TOK}"
     schedules:
       - name: standup
@@ -2368,10 +2369,12 @@ units:
         llm: zulu
         integrations:
           mattermost:
+            enabled: false
             bot_token: "${MM}"
           slack:
-            bot_token: "${BOT}"
-            signing_secret: "${SIG}"
+            enabled: false
+            bot_token: "${SLACK_BOT_TOKEN_SWE}"
+            signing_secret: "${SLACK_SIGNING_SECRET_SWE}"
     children:
       - name: Platform
         roles:
@@ -2380,6 +2383,7 @@ units:
             llm: zulu
             integrations:
               mattermost:
+                enabled: false
                 bot_token: "${MM2}"
 `
 	cfg, err := config.ParseCompany([]byte(doc))

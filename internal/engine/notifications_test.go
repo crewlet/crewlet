@@ -104,6 +104,7 @@ func TestAMattermostPersonIsTheSeatTheirUsernameNames(t *testing.T) {
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: ${MM_CEO_TOKEN}`, 1), `      slack_user_id: U0FOUNDER`, `      slack_user_id: U0FOUNDER
       mattermost_user_id: `+username, 1) + `
 integrations:
@@ -193,6 +194,7 @@ func TestAnUnreachableChatBackendDoesNotStopTheCompany(t *testing.T) {
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: ${MM_CEO_TOKEN}`, 1) + `
 integrations:
   mattermost:
@@ -275,6 +277,7 @@ func TestEveryIntegrationResolvesItsAddress(t *testing.T) {
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: ${MM_CEO_TOKEN}`, 1) + `
 integrations:
   mattermost:
@@ -329,6 +332,7 @@ func TestAnUnresolvedChatAddressIsRefusedByName(t *testing.T) {
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: ${MM_CEO_TOKEN}`, 1) + `
 integrations:
   mattermost:
@@ -471,6 +475,7 @@ func TestAConfiguredHostedChatSurfaceActuallyRoutes(t *testing.T) {
     llm: zulu
     integrations:
       slack:
+        enabled: false
         bot_token: ${SLACK_CEO_TOKEN}
         signing_secret: ${SLACK_CEO_SIGNING}`, 1) + `
 integrations:

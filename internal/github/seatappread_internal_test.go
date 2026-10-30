@@ -11,26 +11,23 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
-	"github.com/crewlet/crewlet/internal/integration"
 )
 
 // A SLOW GITHUB IS NOT A TORN-DOWN PASS, and only the CONTEXT can tell them
 // apart.
 //
-// [ReconcileSeatApps] abandons the whole roster when this pass is over, and
+// [AdoptSeatApps] abandons the whole roster when this pass is over, and
 // leaves one seat exactly as it was when GitHub could not answer. Those are
 // opposite reactions to what looks like one condition, and the guard that
-// chooses between them tests `ctx.Err() != nil` — never the error a call came
+// chooses between them tests `ctx.Err() != nil`, never the error a call came
 // back with.
 //
 // The distinction is not theoretical, which is what this file is here to
 // keep true. net/http gives a [http.Client.Timeout] a `context.DeadlineExceeded`
 // of its own, under a parent context that is perfectly alive, so a guard
 // written as `errors.Is(err, context.DeadlineExceeded)` fires on every slow
-// GitHub — and the seat below, whose app has never been installed, is then
-// silently dropped from the report instead of being told about. The card
-// reads Connected over an agent that can do nothing.
+// GitHub, and every pass then fails over somebody's API being merely slow,
+// leaving each seat's record as stale as the slowness lasts.
 //
 // # It is an internal test because the timeout has to be real
 //
@@ -115,38 +112,20 @@ func TestAClientTimeoutIsNotReadAsATornDownPass(t *testing.T) {
 			"rather than the timeout one")
 	}
 
-	res, err := ReconcileSeatApps(ctx, SeatAppOptions{
+	// A TIMEOUT IS NOT EVIDENCE: nothing is recorded or forgotten on it.
+	write := func(what string) {
+		t.Errorf("a read GitHub never answered was taken as evidence: %s", what)
+	}
+	err := AdoptSeatApps(ctx, SeatAppOptions{
 		APIBase: server.URL, WebBase: server.URL, Org: "acme",
-		Seats: []SeatApp{{
-			Handle: "eng-lead", AppID: 11, Slug: "acme-eng-lead",
-			Key: key, Tier: TierReadOnly,
-		}},
+		Seats:  []SeatApp{{Handle: "eng-lead", AppID: 11, Slug: "acme-eng-lead", Key: key}},
 		Client: func(int64, string, string) (*AppClient, error) { return client, nil },
+		Record: func(context.Context, string, int64) error { write("record"); return nil },
+		Forget: func(context.Context, string) error { write("forget"); return nil },
 	})
 	if err != nil {
-		t.Fatalf("a slow GitHub failed the whole pass: %v — the loop reads that "+
-			"as a fault to retry, and every seat this pass could have reported "+
-			"on goes unreported while somebody's API is merely slow: %v", err, res)
-	}
-
-	// AND THE SEAT IS STILL REPORTED. Nothing has installed this app —
-	// that is a fact the COMPANY DOCUMENT holds, not one GitHub has to
-	// confirm — so a read that failed changes nothing about it. Under a
-	// guard keyed on the error rather than on the context this finding
-	// disappears, and the card reports Connected over an agent that sees no
-	// repository at all.
-	if len(res.Findings) != 1 ||
-		res.Findings[0].Kind != integration.FindingApprovalRequired ||
-		res.Findings[0].Subject != "eng-lead" {
-		t.Fatalf("a seat with no installation recorded was reported as %+v, want "+
-			"one approval_required on eng-lead", res.Findings)
-	}
-	if res.Findings[0].ActionURL == "" {
-		t.Error("the finding names no install link, so the person it is owed by " +
-			"is told what is wrong and not where to go")
-	}
-	if len(res.Ready) != 0 {
-		t.Errorf("a seat whose installation could not be read was reported ready: %v",
-			res.Ready)
+		t.Fatalf("a slow GitHub failed the whole pass: %v; the loop reads that "+
+			"as a fault to retry, and every seat's record stays stale while "+
+			"somebody's API is merely slow", err)
 	}
 }

@@ -17,8 +17,8 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
@@ -155,6 +155,7 @@ roles:
     llm: zulu
     integrations:
       github:
+        enabled: false
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 161055374
@@ -247,21 +248,18 @@ func TestAGitHubDisconnectThatCannotRecordTheUninstallHolds(t *testing.T) {
 	}
 }
 
-// THE PASS REPORTS THE AGENTS THAT HAVE NO APP AT ALL.
+// AN AGENT WITH NO APP IS OFF AT GITHUB, AND THE PASS SAYS NOTHING ABOUT IT
+// (D9).
 //
-// The engine builds its seat list from the seats carrying an
-// `integrations.github` block, because that block is where an app's id, slug
-// and key are recorded — so a seat that has never had one is absent from the
-// pass's input and github's "no app" arm cannot be reached for it. Measured
-// on a live connect: `phase: ready`, `findings: []`, one agent, no app, and
-// the seat's own row three screens away saying it acts as nobody.
-//
-// APPROVAL_REQUIRED, because the engine can never create an app: it is a form
-// POST from a page carrying a person's own GitHub session.
-func TestTheGitHubPassReportsAgentsWithNoAppOfTheirOwn(t *testing.T) {
+// A new agent seat is off on every integration until somebody turns it on, so
+// an agent carrying no `integrations.github` block, or one switched off, is
+// not a fault: reporting each as acting as nobody would read, on a company of
+// many agents and one GitHub agent, as a problem with every other agent. What
+// an agent that IS on still needs (a person creating its app) is the access
+// sync's step for that seat.
+func TestTheGitHubPassSaysNothingAboutAnAgentThatIsOff(t *testing.T) {
 	t.Parallel()
-	pemKey := testAppKey(t)
-	doc := fmt.Sprintf(`
+	doc := `
 name: Acme
 providers:
   sandbox: {fake: true}
@@ -280,23 +278,20 @@ roles:
     handle: reviewer
     llm: zulu
     integrations:
-      github:
-        app_id: 42
-        app_slug: acme-reviewer
-        installation_id: 7
-        private_key: |
-%s
+      github: {enabled: false}
   - name: Jane Founder
     handle: founder
     kind: human
     contact:
       github_login: jane
-`, indent(pemKey, "          "))
+`
 	cfg, err := config.ParseCompany([]byte(doc))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	e := &Engine{}
+	// A FLEET STORE, which every engine [New] builds has: the pass's access
+	// sync reads the seat access ledger kept there.
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
 	company, err := NewCompanyWith(cfg, e.resolver())
 	if err != nil {
 		t.Fatalf("company: %v", err)
@@ -314,32 +309,15 @@ roles:
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	var got *integration.Finding
-	for i, f := range findings {
-		// MATCHED ON THE STABLE HALF. "of their own" is the plural form
-		// and this company has one such seat, which now names the agent
-		// rather than counting it — so the clause the two share is what
-		// picks the finding out.
-		if f.Kind == integration.FindingApprovalRequired &&
-			strings.Contains(f.Detail, "no GitHub App of it") {
-			got = &findings[i]
+	for _, f := range findings {
+		for _, off := range []string{"sre-lead", "reviewer", "founder"} {
+			if f.Subject == off || slices.Contains(f.Subjects, off) ||
+				strings.Contains(f.Detail, off) {
+				t.Errorf("the pass reported %s, which is off at GitHub: %+v", off, f)
+			}
 		}
-	}
-	if got == nil {
-		t.Fatalf("findings = %v: an agent with no app of its own was reported "+
-			"as nothing, so the card reads Connected over an agent that can "+
-			"do nothing", findings)
-	}
-	if !strings.Contains(got.Detail, "sre-lead") {
-		t.Errorf("the finding does not name the agent:\n%s", got.Detail)
-	}
-	// NOT THE SEAT THAT HAS ONE, and not the person: a human seat has its
-	// own GitHub account, so creating an app for one would be a second
-	// identity for somebody who already has one.
-	for _, wrong := range []string{"reviewer", "founder"} {
-		if strings.Contains(got.Detail, wrong) ||
-			slices.Contains(got.Subjects, wrong) {
-			t.Errorf("the finding names %s:\n%s / %v", wrong, got.Detail, got.Subjects)
+		if strings.Contains(f.Detail, "no GitHub App of it") {
+			t.Errorf("the pass reported agents with no app as a fault: %+v", f)
 		}
 	}
 }

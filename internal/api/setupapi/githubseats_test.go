@@ -24,13 +24,13 @@ const githubAppsDoc = `{
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "Builder", "handle": "builder", "llm": "zulu",
-     "integrations": {"github": {"tier": "full_access", "app_id": 41, "app_slug": "acme-builder"}}},
+     "integrations": {"github": {"enabled": false, "app_id": 41, "app_slug": "acme-builder"}}},
     {"name": "Reviewer", "handle": "reviewer", "llm": "zulu",
-     "integrations": {"github": {"tier": "review", "app_id": 42, "app_slug": "acme-reviewer",
-       "installation_id": 7, "private_key": "${REVIEWER_GITHUB_APP_KEY}"}}},
+     "integrations": {"github": {"enabled": false, "app_id": 42, "app_slug": "acme-reviewer",
+       "installation_id": 7, "private_key": "${GITHUB_APP_KEY_REVIEWER}"}}},
     {"name": "Stray", "handle": "stray", "llm": "zulu",
-     "integrations": {"github": {"app_id": 43, "app_slug": "acme-stray",
-       "installation_id": 8, "private_key": "${STRAY_GITHUB_APP_KEY}"}}},
+     "integrations": {"github": {"enabled": false, "app_id": 43, "app_slug": "acme-stray",
+       "installation_id": 8, "private_key": "${GITHUB_APP_KEY_STRAY}"}}},
     {"name": "Jane Founder", "handle": "founder", "kind": "human",
      "contact": {"github_login": "jane"}}
   ]
@@ -40,7 +40,7 @@ const githubAppsDoc = `{
 func (s *surface) seedGitHubApps(t *testing.T) {
 	t.Helper()
 	s.seedDocument(t, githubAppsDoc)
-	if err := s.vault.Set(t.Context(), "REVIEWER_GITHUB_APP_KEY",
+	if err := s.vault.Set(t.Context(), "GITHUB_APP_KEY_REVIEWER",
 		"-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n-----END RSA PRIVATE KEY-----",
 		testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
@@ -101,11 +101,12 @@ func TestTheGitHubRosterNamesTheStepEachAgentIsWaitingOn(t *testing.T) {
 		t.Errorf("a seat with no app reports present=%v satisfied=%v",
 			fresh["present"], fresh["satisfied"])
 	}
-	// THE TIER IS ANSWERED BEFORE THE APP EXISTS, because it is what the
-	// manifest will be built with. Silence is read_only, which is the least
-	// this engine hands out.
-	if fresh["tier"] != "read_only" {
-		t.Errorf("a seat that says nothing about its tier reports %v", fresh["tier"])
+	// NO TIER: a seat's access is GitHub's own permissions, read from the
+	// access tab, and the retired tier vocabulary is not on the wire.
+	for _, retired := range []string{"tier", "tier_label", "tier_hint"} {
+		if v, sent := fresh[retired]; sent {
+			t.Errorf("the roster still sends %s=%v", retired, v)
+		}
 	}
 
 	// CREATED AND INSTALLED NOWHERE: install it, and the engine can address
@@ -134,9 +135,6 @@ func TestTheGitHubRosterNamesTheStepEachAgentIsWaitingOn(t *testing.T) {
 	if half["present"] != true || half["satisfied"] != false {
 		t.Errorf("a created but uninstalled app reports present=%v satisfied=%v",
 			half["present"], half["satisfied"])
-	}
-	if half["tier"] != "full_access" {
-		t.Errorf("tier = %v, want the one the manifest would carry", half["tier"])
 	}
 
 	// FINISHED: no step, and nothing for the screen to offer.
@@ -169,7 +167,7 @@ func TestASeatWhoseAppKeyDoesNotResolveIsNotSatisfied(t *testing.T) {
 			"which is the one state that looks configured while nothing works")
 	}
 	detail, _ := stray["detail"].(string)
-	if !strings.Contains(detail, "${STRAY_GITHUB_APP_KEY}") {
+	if !strings.Contains(detail, "${GITHUB_APP_KEY_STRAY}") {
 		t.Errorf("detail = %q, and it does not name the variable to set", detail)
 	}
 	// AND THE ONE THAT DID RESOLVE SAYS SO WITHOUT CARRYING THE KEY.
@@ -496,7 +494,7 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu",
-	     "integrations": {"github": {"tier": "review"}}},
+	     "integrations": {"github": {"enabled": true}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
 	}`)
@@ -579,78 +577,6 @@ func TestAGitHubCardMissingACompanyAnswerStillHasABoxToFill(t *testing.T) {
 	if state["form_complete"] != false {
 		t.Errorf("form_complete = %v, and the webhook secret resolves to nothing",
 			state["form_complete"])
-	}
-}
-
-// DATADOG'S SEATS SAY HOW MUCH THEY MAY DO, in the same words as everyone
-// else's.
-//
-// Datadog grades an account by putting it in a ROLE, and every account this
-// engine creates goes into the one named on the provisioning block. That is
-// still the answer to what an agent may do there, and it differs between
-// companies, so the roster carries it exactly as a code host's tier is
-// carried: a tag on the name rather than a second status beside it.
-func TestADatadogSeatCarriesTheRoleItsAccountHolds(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	s.seedDocument(t, `{
-	  "name": "Acme",
-	  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
-	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
-	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
-	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Datadog Standard Role"}}},
-	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
-	}`)
-
-	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
-	rows, _ := state["seats"].([]any)
-	if len(rows) == 0 {
-		t.Fatal("datadog lists no seats")
-	}
-	seat, _ := rows[0].(map[string]any)
-	// THE ENGINE'S OWN VOCABULARY, so an agent's Datadog access reads
-	// beside its GitHub access rather than in a second grammar.
-	if seat["tier"] != "review" {
-		t.Errorf("the standard role reads as tier %v", seat["tier"])
-	}
-	// AND DATADOG'S PREFIX AND SUFFIX DROPPED. "Datadog Standard Role" on a
-	// row that has already said which app it is about is noise.
-	if seat["tier_label"] != "Standard" {
-		t.Errorf("the role renders as %v", seat["tier_label"])
-	}
-	if hint, _ := seat["tier_hint"].(string); !strings.Contains(hint, "monitors") {
-		t.Errorf("the role's hint is %q, and it does not say what it grants", hint)
-	}
-}
-
-// A ROLE AN ORGANIZATION MADE IS PASSED THROUGH WHOLE.
-//
-// Datadog's roles are whatever its admins have made, so there is no closed
-// set: shortening somebody's own name is how a reader stops recognising it,
-// and claiming a tier for it would be this engine inventing how much a role
-// it has never seen grants.
-func TestACustomDatadogRoleKeepsItsOwnName(t *testing.T) {
-	t.Parallel()
-	s := newSurface(t)
-	s.seedDocument(t, `{
-	  "name": "Acme",
-	  "providers": {"sandbox": {"fake": true}, "llm": {"zulu": {"model": "claude-sonnet-5"}}},
-	  "integrations": {"datadog": {"enabled": true, "route_to": "sre-lead",
-	    "webhook_token": "EXAMPLEDATADOGTOKEN0000000",
-	    "provisioning": {"api_key": "dd-api", "app_key": "dd-app", "site": "datadoghq.com", "role": "Acme On-Call"}}},
-	  "roles": [{"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"}]
-	}`)
-
-	state := decode(t, s.do(t, http.MethodGet, "/setup/integrations/datadog", "", nil))
-	rows, _ := state["seats"].([]any)
-	seat, _ := rows[0].(map[string]any)
-	if seat["tier_label"] != "Acme On-Call" {
-		t.Errorf("the custom role renders as %v", seat["tier_label"])
-	}
-	// NO TIER, because this engine has never seen the role and has no
-	// basis for saying how much it grants. The screen draws it neutral.
-	if tier, listed := seat["tier"]; listed && tier != "" {
-		t.Errorf("a role this engine does not know was graded as %v", tier)
 	}
 }
 

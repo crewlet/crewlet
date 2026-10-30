@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -30,7 +31,7 @@ import (
 // internal/confluence, and a third in internal/atlassian. One Atlassian account
 // authenticates both products, so that was one question answered three ways,
 // and they disagreed: a seat holding `mcp_env.atlassian.JIRA_API_TOKEN`, which
-// is the spelling atlassian.PlanFor's own note tells operators to write, read
+// is the spelling the old Atlassian provisioning note told operators to write, read
 // as ready to Jira and as having no credential at all to Confluence, for ever.
 //
 // The reader moved to internal/atlassian because that package owns the
@@ -51,12 +52,12 @@ func ProjectsOf(o *org.Organization) []string {
 	}
 	seen := map[string]bool{}
 	for u := range o.AllUnits() {
-		if key := org.NormalizeScope(u.Project); key != "" {
+		if key := config.JiraProjectKey(u.Project); key != "" {
 			seen[key] = true
 		}
 	}
 	for seat := range o.AllRoles() {
-		if key := org.NormalizeScope(seat.Project); key != "" {
+		if key := config.JiraProjectKey(seat.Project); key != "" {
 			seen[key] = true
 		}
 	}

@@ -278,6 +278,10 @@ seat_paused                # a person paused a seat (paused_by,
 seat_resumed               # the pause was lifted (resumed_by,
                            # resumed_by_kind, operator_id, and the paused_by,
                            # paused_by_kind and paused_at it ended)
+seat_access_drift_restored # an access sync put a seat's level or scope at a
+                           # vendor back to what the document asks after
+                           # somebody changed it there (integration, lane,
+                           # agent_handle, before, after, restored_at)
 
 # not stored: a seat acquired or released by this node. Live-only, because
 # placement moves seats on every rebalance; they drive the live projection

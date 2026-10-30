@@ -180,6 +180,7 @@ func mattermostCompany(url string) func(doc string) string {
 			"    url: "+url+"\n    team: acme\nroles:\n", 1)
 		return strings.Replace(doc, ceoSeat,
 			ceoSeat+"    integrations:\n      mattermost:\n"+
+				"        enabled: true\n"+
 				"        bot_token: \"${CREWLET_TEST_MM_TOKEN}\"\n", 1)
 	}
 }

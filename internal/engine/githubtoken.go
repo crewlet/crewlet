@@ -204,7 +204,9 @@ func (e *Engine) seatResolver(
 	ctx context.Context, c *Company, seat *org.Role, life time.Duration,
 ) (*config.Resolver, *seatToken) {
 	base := e.resolver()
-	if c == nil || seat == nil || !seat.IsAgent() || seat.GitHub == nil {
+	// AN OFF SEAT IS ISSUED NOTHING (D1): its installation is suspended,
+	// and a token minted before the suspension landed must not be handed on.
+	if c == nil || seat == nil || !seat.IsAgent() || seat.GitHub == nil || !seat.GitHub.Enabled {
 		return base, nil
 	}
 	api, ok := githubIssuing(c, base)

@@ -368,6 +368,27 @@ const (
 	// pass. The one TRANSIENT refusal on `/setup`, so it is a 503 with a
 	// Retry-After and a client repeats it.
 	CodeSurfaceBusy Code = "surface_busy"
+
+	// CodeNoSeatAccess is an integration with no per-agent access to set:
+	// one this build connects and manages no account per agent on, or Jira
+	// and Confluence asked for by their own names, whose agents hold one
+	// Atlassian account each and are set on `atlassian`.
+	CodeNoSeatAccess Code = "no_seat_access"
+	// CodeAccessNotOffered is an agent's access the vendor does not offer on
+	// that integration: a level, a permission or a scope outside what the
+	// vendor lists now. The detail names the lane, the value and what is
+	// offered.
+	CodeAccessNotOffered Code = "access_not_offered"
+	// CodeSeatStillOn is an agent's account asked to be removed while the
+	// agent is still on there. Remove is allowed only once it is off.
+	CodeSeatStillOn Code = "seat_still_on"
+	// CodeCredentialExternal is a rotation asked of a credential handed in
+	// from outside Crewlet, which the engine binds and never writes.
+	CodeCredentialExternal Code = "credential_external"
+	// CodeAccessExternal is a remove or a turn back on asked of an agent's
+	// account that is managed outside Crewlet, which the engine does not
+	// change.
+	CodeAccessExternal Code = "access_external"
 )
 
 // The configuration set: `/config`'s refusals, and the ones `/setup` shares
@@ -1441,6 +1462,16 @@ var codes = map[Code]string{
 		"saved. The detail names the value and what it may be.",
 	CodeSurfaceBusy: "Something else is writing to this integration right now. " +
 		"Try again in a moment; nothing was changed.",
+	CodeNoSeatAccess: "This integration has no access to set per agent. The " +
+		"detail names the integrations that do.",
+	CodeAccessNotOffered: "That access is not one the vendor offers on this " +
+		"integration, so nothing was saved. The detail names what it offers.",
+	CodeSeatStillOn: "Turn the agent off on this integration before removing " +
+		"its account. Nothing was removed.",
+	CodeCredentialExternal: "This credential was provided from outside Crewlet, so " +
+		"Crewlet does not rotate it. Rotate it where it was issued.",
+	CodeAccessExternal: "This agent's account is managed outside Crewlet, so Crewlet " +
+		"does not remove it or turn it back on. Change it at the vendor.",
 
 	CodeNoActiveRevision: "No company is active on this node yet. Import one " +
 		"first. The detail says how.",

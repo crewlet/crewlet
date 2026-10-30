@@ -6,19 +6,19 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Keeping each agent's own GitHub App in line with the company.
+// Keeping the document's record of each agent's own GitHub App in step with
+// GitHub.
 //
-// # What this pass can and cannot do
+// # What this half can and cannot do
 //
 // It CREATES NOTHING. An app is created by a person POSTing a manifest from a
 // browser, and installed by a person too, so the two acts this integration
-// depends on are outside any loop. What the loop can do is everything after
-// them: find the installation, check that what it holds still matches the
-// tier the seat is set to, and notice when somebody has uninstalled it.
+// depends on are outside any loop. What the loop does here is record what
+// those acts left behind: the installation a person made, an installation
+// GitHub no longer has, an app somebody deleted. What each agent may do, and
+// every finding about an agent, is the access sync's ([vendor]).
 //
 // # The installation is read back, never assumed
 //
@@ -39,26 +39,26 @@ import (
 //
 // # A cancelled pass is not a failed read
 //
-// That rule is right for a timeout and a 5xx — GitHub was asked and could not
-// say — and it is wrong for a cancellation, which means this pass never asked
-// at all. Left alone under the same arm, a seat that is genuinely fine
-// produced no finding and no error, and this pass could not report a fault if
-// it wanted to: it returned nil unconditionally. So a node draining recorded
-// every seat as ready on its way out, and the next node to hold the duty
-// trusted that for a full settled interval. A pass whose context is done
-// RAISES, and the caller decides — which for the loop means retrying rather
-// than believing.
+// That rule is right for a timeout and a 5xx (GitHub was asked and could not
+// say) and wrong for a cancellation, which means this pass never asked at
+// all. A pass whose context is done RAISES, and the caller decides, which for
+// the loop means retrying rather than believing.
 
 // SeatApp is one agent's own app, as the company document holds it.
 type SeatApp struct {
 	Handle string
 	Name   string
-	Tier   Tier
-	Repos  []string
 
-	// Workflows is the seat's opt-in to `workflows: write`, which only full
-	// access carries ([Access]).
-	Workflows bool
+	// Permissions are what this seat's tokens carry, in GitHub's terms
+	// ([Permissions.Token] adds Metadata). The app is registered at these
+	// (D5), so a raise past them waits for its owner.
+	Permissions Permissions
+	Repos       []string
+
+	// Off is a seat switched off on GitHub: its installation is suspended
+	// by the access sync and it is issued no token. Its record is still kept
+	// in step, so a teardown reaches its suspended installation by id.
+	Off bool
 
 	// AppID and Slug are the app GitHub created. Zero means the operator
 	// has not created one yet, which is a step rather than a fault.
@@ -72,11 +72,6 @@ type SeatApp struct {
 	// names a variable nothing answers, which is a different fault from
 	// naming none.
 	Key string
-}
-
-// Access is what this seat's tokens may do.
-func (s SeatApp) Access() Access {
-	return Access{Tier: s.Tier, Workflows: s.Workflows}
 }
 
 // SeatAppOptions is what one pass over the seats needs.
@@ -95,18 +90,6 @@ type SeatAppOptions struct {
 
 	// Seats are the agents to reconcile.
 	Seats []SeatApp
-
-	// Unrecorded names the agents that carry no `integrations.github` block
-	// at all, which [Seats] cannot hold: the block is where an app's id,
-	// slug and key are recorded, so a seat that has never had one has no
-	// [SeatApp] to put in the list.
-	//
-	// ONE OWNER FOR "NO APP". They are reported together with the seats in
-	// [Seats] whose block records no app, as the one finding
-	// [SeatsWithNoApp] makes. Reported apart, a seat carrying an empty block
-	// was named by the caller's roster walk and by this pass both, so one
-	// agent was told twice to do the same thing.
-	Unrecorded []string
 
 	// Record persists an installation this pass discovered, or clears one
 	// it found gone. Nil is a DRY RUN: the pass reads and reports and
@@ -135,340 +118,54 @@ type SeatAppOptions struct {
 	Client func(appID int64, pem, apiBase string) (*AppClient, error)
 }
 
-// SeatAppResult is what one pass concluded.
-type SeatAppResult struct {
-	// Ready is the seats whose app is installed and whose token can be
-	// minted, which is the only state an agent can act from.
-	Ready []string
-
-	// Adopted is the seats whose installation this pass discovered.
-	Adopted []string
-
-	// Forgotten is the seats whose stale app record this pass cleared,
-	// because GitHub no longer has the app it named.
-	Forgotten []string
-
-	// Findings is what is outstanding, per seat.
-	Findings []integration.Finding
-}
-
-// SeatsWithNoApp is the one finding for the agent seats that have no app
-// record at all, or nil when every agent has one.
+// AdoptSeatApps keeps the document's record of each seat's app in step with
+// GitHub, and reports nothing: what a seat still owes is the access sync's to
+// say ([seataccess.Sync] through this package's vendor).
 //
-// # Why these are reported together and the rest are reported one by one
+// THE DOCUMENT WRITES THE TOKEN ISSUER DEPENDS ON, and only those. An
+// installation a person made since the last pass is recorded on the seat, an
+// installation GitHub no longer has is cleared, and an app GitHub no longer
+// has is forgotten, so the issuer never mints against an id GitHub has
+// forgotten. Off seats are kept in step too: a disconnect uninstalls their
+// suspended installations by the recorded id.
 //
-// [ReconcileSeatApps] walks the seats that HAVE an app and says what is
-// outstanding on each, because each is a different act: install this one,
-// re-create that one. A seat with no app at all is the same act for every one
-// of them (a person creates it from GitHub's page under Company ›
-// Integrations), so N of those is one sentence, not N findings, and a fifty-agent company that has just
-// connected does not get fifty rows saying the same thing.
-//
-// # And why they are reported at all
-//
-// They were invisible. The engine builds its seat list from the seats
-// carrying an `integrations.github` block, because that block is where an
-// app's id, slug and key are recorded, so a seat that has never had one was
-// absent from the pass's input and produced no finding. The engine now names
-// those as [SeatAppOptions.Unrecorded], and [ReconcileSeatApps] reports them
-// with the seats whose block records no app, in this one finding. Measured on a live connect: a company
-// with one agent, no app, `phase: ready`, `findings: []`, and a seat row
-// three screens away saying "no app of its own yet, so this agent acts as
-// nobody on GitHub".
-//
-// APPROVAL_REQUIRED, on the same reasoning the arm below gives: the engine
-// can do nothing until a person acts at GitHub, so a card reading "Setting up
-// agents" would wait for an act nobody is performing.
-func SeatsWithNoApp(handles []string) *integration.Finding {
-	if len(handles) == 0 {
+// A DRY RUN (Record or Forget nil) writes nothing and does nothing. A read
+// GitHub could not answer leaves the seat as it was; a write the store
+// refused is returned, joined with the rest, after every seat is tried.
+func AdoptSeatApps(ctx context.Context, opts SeatAppOptions) error {
+	if opts.Record == nil || opts.Forget == nil {
 		return nil
 	}
-	seat := handles[0]
-	// THE ONE CASE NAMES ITS AGENT AND THE MANY CASE COUNTS THEM, because
-	// "1 agent(s) have no GitHub App" is wrong in three ways at once: the
-	// parenthesis reads as machine output where a person is being asked to
-	// act, the verb does not agree, and the handle it is about is a metre
-	// further down the card when there is room for it right here.
-	detail := seat + " has no GitHub App of its own, so nothing it does on " +
-		"GitHub is its own"
-	if len(handles) > 1 {
-		detail = integration.Count(len(handles), "agent") +
-			" have no GitHub App of their own, so nothing they do on GitHub " +
-			"is theirs"
-	}
-	return &integration.Finding{
-		Kind:    integration.FindingApprovalRequired,
-		Subject: "agents without an app",
-		Detail:  detail,
-		// NOT "from the Integrations screen", which is the screen this is
-		// rendered on, beside that agent's own Create button.
-		Remedy: "Create one per agent. GitHub offers no API for it, so a " +
-			"person clicking is the only thing that can.",
-		Subjects: handles,
-	}
-}
-
-// ReconcileSeatApps brings every agent's own app in line.
-//
-// The result is returned WITH an error rather than instead of it: the seats
-// already walked are what this pass established, and a caller printing a
-// partial report is better served by them than by nil. The loop discards them
-// and retries, which is what a fault means there.
-func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult, error) {
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
-	out := &SeatAppResult{Findings: []integration.Finding{}}
-	noApp := slices.Clone(opts.Unrecorded)
+	var failures []error
 	for _, seat := range opts.Seats {
-		// CHECKED BEFORE THE SEAT, not only after its read. The two arms
-		// below that conclude before any call — no app, no key — read the
-		// DOCUMENT rather than GitHub, so a pass torn down between seats
-		// would keep walking the roster and answer confidently about a
-		// GitHub it had stopped talking to.
 		if err := interrupted(ctx); err != nil {
-			return out, err
+			return err
 		}
-		// A STEP, NOT A FAULT, and the wording says so: nobody has done
-		// anything wrong, there is a click outstanding. Gathered rather than
-		// reported here, because it is the same act for every such agent and
-		// [SeatsWithNoApp] says it once for all of them.
-		if seat.AppID == 0 {
-			noApp = append(noApp, seat.Handle)
+		if seat.AppID == 0 || strings.TrimSpace(seat.Key) == "" {
 			continue
 		}
-		if err := out.reconcileSeat(ctx, opts, seat, build); err != nil {
-			return out, err
+		client, err := opts.client(seat)
+		if err != nil {
+			// A KEY THIS ENGINE CANNOT READ is the access sync's to
+			// report; there is nothing here to keep in step.
+			continue
+		}
+		installation, _, err := installationFor(ctx, opts, seat, client)
+		var notRecorded *errNotRecorded
+		switch {
+		case errors.As(err, &notRecorded):
+			failures = append(failures, errors.New(notRecorded.detail(seat.Handle)))
+		case notFound(err) || (err == nil && installation == nil):
+			if exists, existsErr := client.Exists(ctx); existsErr == nil && !exists {
+				if forgetErr := opts.Forget(ctx, seat.Handle); forgetErr != nil {
+					failures = append(failures, fmt.Errorf(
+						"github: clear %s's record of an app GitHub no longer has: %w",
+						seat.Handle, forgetErr))
+				}
+			}
 		}
 	}
-	slices.Sort(noApp)
-	if missing := SeatsWithNoApp(slices.Compact(noApp)); missing != nil {
-		out.Findings = append(out.Findings, *missing)
-	}
-	return out, nil
-}
-
-// reconcileSeat reports one seat, and returns an error only for a fault that
-// invalidates the whole pass rather than one seat's own state — which today
-// is exactly one thing: a context that is done. Everything a seat can be
-// wrong about is a finding, because that is what an operator acts on.
-func (r *SeatAppResult) reconcileSeat(
-	ctx context.Context, opts SeatAppOptions, seat SeatApp,
-	build func(int64, string, string) (*AppClient, error),
-) error {
-	// A SEAT WITH NO APP NEVER GETS HERE: [ReconcileSeatApps] gathers those
-	// into one finding before calling, so every seat this reads has an app.
-	if strings.TrimSpace(seat.Key) == "" {
-		// THE KEY IS GONE AND CANNOT BE REISSUED. GitHub hands it over
-		// once, at creation, so this is not a credential to re-enter: the
-		// app has to be created again.
-		r.Findings = append(r.Findings, integration.Finding{
-			Kind:    integration.FindingCredentialMissing,
-			Subject: seat.Handle,
-			Detail: "the private key for " + seat.Handle + "'s app did not resolve, " +
-				"and GitHub issues it once: delete the app at GitHub and create it again",
-		})
-		return nil
-	}
-
-	client, err := build(seat.AppID, seat.Key, opts.APIBase)
-	if err != nil {
-		r.Findings = append(r.Findings, integration.Finding{
-			Kind:    integration.FindingCredentialRejected,
-			Subject: seat.Handle,
-			Detail:  "the app key for " + seat.Handle + " could not be read: " + err.Error(),
-		})
-		// THE ERROR IS THE FINDING'S CONTENT, not the pass's outcome, which
-		// is what nilerr cannot see. A key this engine cannot parse is a
-		// thing one SEAT's operator has to fix, and the report above says
-		// so; returned instead, it would abandon the roster and fail the
-		// whole surface over one seat's malformed credential.
-		//nolint:nilerr // reported as a per-seat finding; see the report above
-		return nil
-	}
-
-	installation, adopted, err := r.installationFor(ctx, opts, seat, client)
-
-	// GONE, NOT MERELY UNINSTALLED, and the two call for opposite things.
-	// Both answer 404 from the installation endpoints, so the app's own
-	// identity is asked for before an operator is sent anywhere: an app
-	// installed nowhere needs installing, an app somebody deleted needs
-	// creating again, and the install link for a deleted app is one GitHub
-	// itself 404s.
-	//
-	// Asked only where there is a 404 to explain, so the ordinary pass
-	// makes no extra call.
-	if notFound(err) || (err == nil && installation == nil) {
-		if exists, existsErr := client.Exists(ctx); existsErr == nil && !exists {
-			r.forget(ctx, opts, seat)
-			return nil
-		}
-	}
-
-	var notRecorded *errNotRecorded
-	switch {
-	case ctx.Err() != nil:
-		// FIRST, AND AHEAD OF EVERY OTHER READING OF err, because this one
-		// is not about the seat at all: the pass is being torn down, so
-		// nothing below it is a statement about the operator's world. It
-		// is checked on a SUCCESSFUL read too — the walk is abandoned
-		// either way, and a last seat marked Ready out of a roster that
-		// was never finished is the same false "converged" in miniature.
-		//
-		// [interrupted] says why the CONTEXT is the test rather than the
-		// error: net/http gives a client timeout context.DeadlineExceeded
-		// as well, and a timeout is precisely the case the arm below
-		// exists to leave alone.
-		return interrupted(ctx)
-	case errors.As(err, &notRecorded):
-		// FOUND AND NOT WRITTEN DOWN. The click has been made; what
-		// failed is this engine's own write, so nothing an operator does
-		// at GitHub changes it and the install link would be wrong
-		// advice. Degraded and owed by an admin, because a store that
-		// keeps refusing this write is a fault somebody has to look at —
-		// and until it lands, every pass re-reads the same installation
-		// and the seat mints no token.
-		r.Findings = append(r.Findings, integration.Finding{
-			Kind:    integration.FindingIdentityFailed,
-			Subject: seat.Handle,
-			Detail:  notRecorded.detail(seat.Handle),
-		})
-		return nil
-	case err != nil && seat.InstallationID != 0:
-		// LEFT ALONE, and only where the document already claims an
-		// installation. See the package note: a failed read is not
-		// evidence that anything was undone, and saying otherwise sends
-		// an operator to redo a click nobody reversed.
-		//
-		// A CANCELLATION NEVER REACHES HERE — the arm above takes it —
-		// because "GitHub could not say" and "this pass never asked" are
-		// opposite facts that used to share this branch, and the second
-		// one leaving no finding and no error is how a draining node
-		// reported a whole roster as ready.
-		return nil
-	case err != nil, installation == nil:
-		// NOT INSTALLED IS A FACT THE DOCUMENT HOLDS, not one GitHub has
-		// to confirm. A seat with no installation recorded has a click
-		// outstanding whether or not GitHub can be reached, and staying
-		// silent about it because a read failed left the card reporting
-		// Connected over an agent that could do nothing.
-		r.Findings = append(r.Findings, integration.Finding{
-			Kind:      integration.FindingApprovalRequired,
-			Subject:   seat.Handle,
-			ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
-			Detail: seat.Handle + "'s app exists and nothing has installed it, so it " +
-				"sees no repository: install it on " + orgLabel(opts.Org),
-		})
-		// Same shape as the key branch above: the outstanding click is
-		// reported to the person who can make it, and a read GitHub
-		// refused is not a reason to fail the pass over.
-		//nolint:nilerr // reported as a per-seat finding; see the report above
-		return nil
-	}
-	if adopted {
-		r.Adopted = append(r.Adopted, seat.Handle)
-	}
-
-	if installation.Suspended() {
-		r.Findings = append(r.Findings, integration.Finding{
-			Kind:      integration.FindingApprovalRequired,
-			Subject:   seat.Handle,
-			ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
-			Detail: seat.Handle + "'s installation is suspended, so every token it " +
-				"mints is refused: unsuspend it at GitHub",
-		})
-		return nil
-	}
-
-	// WHAT IT HOLDS, against what the tier asks for. The manifest asked
-	// for one thing and a person approved another: a manifest can be
-	// edited before it is submitted, and an installation widened after.
-	if excess := Excess(installation.Permissions); len(excess) > 0 {
-		r.Findings = append(r.Findings, integration.Finding{
-			Kind:    integration.FindingGrantExcess,
-			Subject: seat.Handle,
-			Detail: seat.Handle + "'s app holds " + strings.Join(excess, ", ") +
-				", which no tier asks for and which is how an agent would widen " +
-				"its own access. Its tokens never carry these, and the grant is " +
-				"still worth removing at GitHub",
-		})
-	}
-	if short := Shortfall(seat.Access(), installation.Permissions); len(short) > 0 {
-		r.Findings = append(r.Findings, grantShort(opts, seat, short))
-		return nil
-	}
-	r.Ready = append(r.Ready, seat.Handle)
-	return nil
-}
-
-// grantShort is the finding for a seat whose installation holds less than its
-// access asks for.
-//
-// EVERY TOKEN IS REFUSED, not only the calls needing what is missing: GitHub
-// refuses a token request that names a permission the installation does not
-// hold, so the seat acts on GitHub not at all until the grant is widened.
-//
-// THE WORKFLOWS OPT-IN IS TOLD APART, because it is the one shortfall a
-// company causes on its own: it is set on a seat whose app already exists, and
-// a manifest is read only at creation. Widening it starts on the app's
-// permissions page rather than on its installation, and takes two people's
-// steps, so the finding names both.
-func grantShort(opts SeatAppOptions, seat SeatApp, short []string) integration.Finding {
-	finding := integration.Finding{
-		Kind:      integration.FindingGrantShort,
-		Subject:   seat.Handle,
-		ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
-		Detail: seat.Handle + " is set to " + seat.Tier.Label() + " and its app " +
-			"lacks " + strings.Join(short, ", ") + ", so GitHub refuses every " +
-			"token this seat asks for until the installation holds them",
-	}
-	if slices.Equal(short, []string{PermissionWorkflows}) {
-		finding.ActionURL = PermissionsURL(opts.WebBase, opts.Org, seat.Slug)
-		finding.Detail = seat.Handle + " opts in to workflow writes and its app's " +
-			"installation does not hold workflows, so GitHub refuses every token " +
-			"this seat asks for until it does. An app created before the opt-in " +
-			"gains it only when its owner adds Workflows (read and write) on the " +
-			"app's permissions page and the organization then approves the " +
-			"request on the installation"
-	}
-	return finding
-}
-
-// forget reports an app GitHub no longer has, and clears the record naming it.
-//
-// THE FINDING IS THE SAME ONE A SEAT WITH NO APP GETS, because that is the
-// state this seat is now in: it names an app that does not exist, so nothing
-// it does on GitHub is its own. The action URL is empty for the same reason
-// it is empty there (an app is created by a form POST from a page carrying
-// the operator's own session, not by following a link), and the actor is the
-// person at GitHub, because the engine cannot create an app for anybody.
-func (r *SeatAppResult) forget(ctx context.Context, opts SeatAppOptions, seat SeatApp) {
-	detail := seat.Handle + "'s GitHub App no longer exists at GitHub, so nothing " +
-		"it does there is its own: create one from GitHub's Agents tab under Company › Integrations"
-	if opts.Forget != nil {
-		if err := opts.Forget(ctx, seat.Handle); err != nil {
-			// REPORTED, NOT SWALLOWED, and the finding still says the
-			// app is gone: the write is what makes the other surfaces
-			// agree, and failing it leaves them naming a step that
-			// cannot be taken until the next pass.
-			r.Findings = append(r.Findings, integration.Finding{
-				Kind:    integration.FindingApprovalRequired,
-				Subject: seat.Handle,
-				Detail: detail + " (the stale record could not be cleared: " +
-					err.Error() + ")",
-			})
-			return
-		}
-		r.Forgotten = append(r.Forgotten, seat.Handle)
-	}
-	r.Findings = append(r.Findings, integration.Finding{
-		Kind:    integration.FindingApprovalRequired,
-		Subject: seat.Handle,
-		Detail:  detail,
-	})
+	return errors.Join(failures...)
 }
 
 // notFound reports GitHub answering 404, which is the only status that can
@@ -485,13 +182,10 @@ func notFound(err error) bool {
 // for "GitHub could not say".
 //
 // A FOURTH THING CAN GO WRONG and it is not any of those: the installation is
-// found and cannot be WRITTEN DOWN. That used to arrive here as a plain error,
-// indistinguishable from a failed read, and for a seat with nothing recorded
-// yet the caller then reported "'s app exists and nothing has installed it" —
-// a sentence that is false about the one fact this pass established, sending
-// an operator to redo a click nobody reversed while the real failure was
-// logged nowhere at all. [errNotRecorded] keeps it apart.
-func (r *SeatAppResult) installationFor(
+// found and cannot be WRITTEN DOWN. Read as a failed read, that would tell an
+// operator to redo a click nobody reversed while the real failure, this
+// engine's own write, went unreported. [errNotRecorded] keeps it apart.
+func installationFor(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp, client *AppClient,
 ) (*Installation, bool, error) {
 	if seat.InstallationID != 0 {
@@ -553,7 +247,7 @@ func (r *SeatAppResult) installationFor(
 
 // errNotRecorded is a discovery this pass could not write down.
 //
-// The installation IS at GitHub — this pass read it — and what failed was
+// The installation IS at GitHub (this pass read it), and what failed was
 // persisting WHICH one. That is neither "GitHub could not say" nor "there is
 // none", and collapsing it into either produces a sentence that contradicts
 // what the pass just established.
@@ -569,8 +263,8 @@ func (e *errNotRecorded) Error() string { return e.err.Error() }
 func (e *errNotRecorded) Unwrap() error { return e.err }
 
 // detail is the sentence an operator reads, and it says which write failed
-// rather than what the pass found — the finding is about this engine, not
-// about GitHub.
+// rather than what the pass found: the failure is this engine's, not
+// GitHub's.
 func (e *errNotRecorded) detail(handle string) string {
 	if e.id == 0 {
 		return handle + "'s app was uninstalled at GitHub and this engine could " +
@@ -585,9 +279,9 @@ func (e *errNotRecorded) detail(handle string) string {
 
 // TokenFor mints the credential one seat acts with.
 //
-// SCOPED TO THE TIER at mint time, which is where the tier stops being a word
-// in a document: the app may hold more than the tier asks for, and the token
-// carries only what the tier lists.
+// SCOPED TO THE SEAT'S PERMISSIONS at mint time, which is where they stop
+// being words in a document: the app may hold more than the seat asks for,
+// and the token carries only what the seat lists.
 func TokenFor(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp,
 ) (*InstallationToken, error) {
@@ -596,17 +290,11 @@ func TokenFor(
 			"github: %s has no installed app, so there is nothing to mint against",
 			seat.Handle)
 	}
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
-	client, err := build(seat.AppID, seat.Key, opts.APIBase)
+	client, err := opts.client(seat)
 	if err != nil {
 		return nil, err
 	}
-	return client.MintToken(ctx, seat.InstallationID, seat.Access(), seat.Repos)
+	return client.MintToken(ctx, seat.InstallationID, seat.Permissions, seat.Repos)
 }
 
 // UninstallSeat removes one agent's installation, which is what actually
@@ -616,13 +304,7 @@ func UninstallSeat(ctx context.Context, opts SeatAppOptions, seat SeatApp) error
 	if seat.AppID == 0 || seat.InstallationID == 0 {
 		return nil
 	}
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
-	client, err := build(seat.AppID, seat.Key, opts.APIBase)
+	client, err := opts.client(seat)
 	if err != nil {
 		return err
 	}
@@ -635,6 +317,21 @@ func UninstallSeat(ctx context.Context, opts SeatAppOptions, seat SeatApp) error
 		return nil
 	}
 	return err
+}
+
+// builder is [SeatAppOptions.Client], or the real constructor when it is nil.
+func (o SeatAppOptions) builder() func(int64, string, string) (*AppClient, error) {
+	if o.Client != nil {
+		return o.Client
+	}
+	return func(appID int64, pem, apiBase string) (*AppClient, error) {
+		return NewAppClient(appID, pem, apiBase, nil)
+	}
+}
+
+// client builds the app client one seat acts through.
+func (o SeatAppOptions) client(seat SeatApp) (*AppClient, error) {
+	return o.builder()(seat.AppID, seat.Key, o.APIBase)
 }
 
 // orgLabel names the account an app is installed on, for a sentence.

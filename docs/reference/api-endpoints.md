@@ -445,7 +445,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
-| `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
+| `GET` | `/webhooks/slack-oauth` | OAuth install landing: finishes an install the Agents tab began |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
 | `POST` | `/webhooks/github/{handle}` | The same route addressed to one seat, which is where that seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) delivers |
 | `GET` | `/webhooks/github-app` | Landing page for the per-agent GitHub App flow: converts the one-time creation code, or reports an install (see [below](#get-webhooksgithub-app)) |
@@ -1941,7 +1941,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 ```
 
 - **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` key it is about, empty when neither), plus `from` and `to` as display text. Three kinds:
-  - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key), `manages` (one `manages` entry — a seat handle or a unit key — at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
+  - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key) or `manages` (one `manages` entry, a seat handle or a unit key, at the index it was written).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company a newer peer admitted under other rules answers with one, one beside each entity the violation names.
   - `advisory`: something valid and worth knowing — a human seat with no account on the Mattermost or Slack workspace the company talks on, which nobody can @-mention there; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies. Every node also logs each one when it applies the revision, as a [`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing) line, so the answer is not the only place it is said.
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
@@ -2444,6 +2444,9 @@ changed. Every node serving the API serves them, because every node opens the fl
 | `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `admin` |
 | `POST /setup/integrations/{kind}/inputs`, `POST /setup/integrations/{kind}/verify`, `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `admin` |
 | `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `admin`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
+| `GET /setup/integrations/{kind}/access`, `POST /setup/integrations/{kind}/access/plan` | `admin` (`setup.read`): the plan writes nothing, so it asks for no proof |
+| `PUT /setup/integrations/{kind}/access` | `admin` (`setup.access.write`) and a proof inside `step_up`. A save that raises an agent to an administration role at the vendor also asks `setup.access.raise`, which needs a **person present**: a machine token is refused `403 token_refused` |
+| `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`, `POST /setup/integrations/slack/access/seats/{handle}/{lane}/install` | `admin` (`setup.connect`) and a proof inside `step_up`; `rotate` also asks `secrets.write`, since it seals a fresh credential; `keep` writes the document as a save does, so it also asks `setup.access.write`, and `setup.access.raise` where what it keeps is an administration role |
 
 **Connecting is `admin`'s and nothing more.** `/setup` performs no write of
 its own — a credential goes through the store `/secrets` serves — so connecting
@@ -2463,6 +2466,11 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `POST` | `/setup/integrations/{kind}/check` | Run the same pass read-only, to see whether something fixed at the third-party app took |
 | `GET` | `/setup/integrations/{kind}/runs` | The passes THIS NODE remembers for one surface, newest first, ten at a time. A pass is executed by whichever node held the surface's lease and is remembered in that node's own process, so the answer carries `scope` saying as much — an empty list on a fleet where another node ran the pass is an honest answer to a question the reader did not mean to ask. It exists because nothing could name a run id: the route below answered one pass and was reachable only by a caller that had just started it |
 | `GET` | `/setup/integrations/{kind}/runs/{id}` | One pass, as the node that executed it remembers it |
+| `GET` | `/setup/integrations/{kind}/access` | Every agent seat on one integration: what the document asks (`desired`), what the vendor showed on the last sync (`observed`), the last sync, the plan the next sync takes, and whether the agent's tool is live; what each lane offers now; and the integration's notice. The revision it was read at is `revision` and the `ETag`. See [Each agent's access to an integration](#each-agents-access-to-an-integration) |
+| `POST` | `/setup/integrations/{kind}/access/plan` | What a draft would do at the vendor, step by step, writing nothing |
+| `PUT` | `/setup/integrations/{kind}/access` | Save a draft as one revision of the company document, held to the revision the tab was read at, then start the sync. `?dry_run=true` answers the plan and the warnings and writes nothing |
+| `POST` | `/setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}` | One action on one agent's account: `rotate`, `remove` (only once the agent is off), `keep` (write the vendor's setting into the document), `restore`, `retry` or `done` |
+| `POST` | `/setup/integrations/slack/access/seats/{handle}/{lane}/install` | A fresh, single-use link a person follows to approve one agent's Slack app install, while the app waits for it. `{"url": "..."}`, `Cache-Control: no-store`, never stored and never part of a read |
 | `GET` | `/secrets` | Every stored name with its `key_id`, `updated_at`, `updated_by` (the author), `updated_by_kind`, `operator_id` (the credential it was stored through, empty where none made the write) and `source` (the write path that stored it, in that path's own word: `api` for `PUT /secrets/{name}` whoever calls it, `setup` for an integration's setup, `provision` for a provisioning pass, and `cli` or `llm-login` for a `crewlet` command's own write to the fleet's store with its node's engine stopped (`crewlet secrets set`, and `crewlet llm`'s captured token or exported bundle), where a provisioner's `-secret-store` run made that way records `provision`; see [the secret store](../concepts/secret-store.md#the-design)); `engine_keys`, a count of the engine's own keys, `{"total": N, "by_key": {"<key id>": n}}`, naming none of them; and `identity_values`, the identity estate's sealed values counted the same way, `{"people": {"<key id>": n}, "invitations": {"<key id>": n}}` (a person's name, address and second-factor seed, and the address of every invitation still redeemable), or `null` on a node that runs no identity estate; and `assistant_values`, the Dashboard Assistant's sealed values counted the same way (a file a conversation keeps counted by the key its content is sealed under in the object store), `{"values": {"<key id>": n}}`, which no rekey moves (each leaves with its conversation), or `null` on a node that runs no assistant estate. **Never a value**. A rekey keeps each row's `updated_*` and `source`: it re-seals a value it did not choose, so the row goes on saying who stored it |
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
@@ -3719,12 +3727,12 @@ renders a form from, so leaving out a seat with no app yet would leave an
 operator no way to give it one. Human seats are excluded, because a person's
 Slack account is not something this engine holds a token for.
 
-**It does not create the apps.** That goes through Slack's app-manifest API,
-which authenticates with a configuration token Slack issues only by hand and
-which an organisation may decline to allow at all, so
-[`crewlet slack provision`](cli.md) remains the automated path where those
-tokens are available. What this surface does is make a hand-created app usable
-without one: it takes the two values Slack shows on the app's own page and
+**Without an app configuration token it does not create the apps.** That goes
+through Slack's app-manifest API, which authenticates with a configuration
+token Slack issues only by hand and which an organisation may decline to allow
+at all. With one (the `app_config_token` field), the reconcile loop creates
+and keeps every agent's app. Without one, this surface makes a hand-created
+app usable: it takes the two values Slack shows on the app's own page and
 seals them.
 
 #### GitHub: the app the engine writes
@@ -3740,7 +3748,6 @@ entry answers instead is what is still outstanding for that agent:
   "handle": "builder",
   "name": "Builder",
   "requirements": [],
-  "tier": "full_access",
   "step": "install_app",
   "action_url": "https://github.com/apps/acme-builder/installations/new",
   "present": true,
@@ -3750,10 +3757,10 @@ entry answers instead is what is still outstanding for that agent:
 ```
 
 `step` and `action_url` are the two clicks, described under
-[One agent's own GitHub App](#one-agents-own-github-app). `tier` is the seat's
-access tier, answered before the app exists because it is what the manifest
-asks for, and defaulting to `read_only` on a seat whose configuration is
-silent.
+[One agent's own GitHub App](#one-agents-own-github-app). What the seat may do
+at GitHub is its own permissions, read and changed through
+`GET /setup/integrations/{kind}/access` (with `github` as the kind) and `PUT`
+on the same path, and not part of this roster.
 
 **`present`** is whether the seat has an app at all, and **`satisfied`** needs
 that app installed *and* its sealed key readable by this node. A `${VAR}`
@@ -3808,7 +3815,7 @@ curl -X POST https://engine.example.com/setup/integrations/github/app \
 ```json
 {
   "seat": "senior-engineer",
-  "tier": "review",
+  "permissions": {"contents": "read", "issues": "write", "pull_requests": "write"},
   "action_url": "https://github.com/organizations/acme/settings/apps/new",
   "manifest": {"name": "Acme Senior Engineer", "public": false, "...": "..."},
   "state": "<sealed token naming the seat and who began the creation>",
@@ -3915,14 +3922,227 @@ an error or of GitHub's response body, because that body carries the app's
 private key. Every answer carries `Cache-Control: no-store`.
 
 **The roster says what is outstanding.** A seat entry in a tool's `seats` array
-carries three more fields where a per-seat app has tiers and clicks: `tier` is
-the seat's access tier, `step` is what is left as a closed set of `create_app`
-and `install_app`, and `action_url` is where a person goes to do it. Two steps
+carries two more fields where a per-seat app has clicks: `step` is what is
+left as a closed set of `create_app` and `install_app`, and `action_url` is
+where a person goes to do it. What the seat may do at GitHub is not on the
+roster; it is the seat's own permissions, on the integration's access route. Two steps
 rather than one, because they are two acts minutes or days apart and an
 operator who has done the first needs to be told the second is left rather than
 shown the same button. `action_url` is **empty for `create_app`**, and that is
 not an omission: an app is created by POSTing a manifest, not by following a
 link, so the dashboard asks the begin route above for one and submits a form.
+
+### Each agent's access to an integration
+
+Every integration the engine creates an account per agent on (Slack,
+Mattermost, Atlassian for Jira and Confluence, GitHub, GitLab and Datadog)
+has an Agents tab, and these four routes are what it reads and writes. Each
+agent seat's setting lives in the company document under
+`roles[].integrations.<lane>`, in the vendor's own terms: whether the agent is
+on there, its role or level as the identifier the vendor's API takes (a
+Datadog role id, a GitLab access level, a Jira project role id), GitHub's
+permissions, and the scope it is narrowed to. A lane is the block's key:
+`atlassian` has two, `jira` and `confluence`, over one account per agent, and
+every other integration has one named after itself. Jira and Confluence asked
+for by their own names answer `404 no_seat_access`.
+
+The agent's credential is never in the document and never in a request. The
+engine seals it under a name it derives for the seat (`DATADOG_APP_KEY_SRE`,
+`GITLAB_TOKEN_SRE`), binds it to the integration's tool server itself, and
+answers the name and when it was minted, never the value.
+
+**`GET /setup/integrations/{kind}/access`** answers the tab:
+
+```json
+{
+  "kind": "datadog",
+  "revision": "01J9...",
+  "syncing": false,
+  "last_sync_at": "2026-10-29T17:02:11Z",
+  "options": [{"lane": "datadog", "live": true, "levels": [
+    {"id": "4f0e2b3c-...", "name": "Datadog Read Only Role"},
+    {"id": "7d1a9e44-...", "name": "Datadog Admin Role", "administers": true}]}],
+  "seats": [{"handle": "sre", "name": "SRE", "lanes": {"datadog": {
+    "desired": {"enabled": true, "level": "7d1a9e44-..."},
+    "observed": {"exists": true, "enabled": true, "level": "7d1a9e44-...",
+      "account": "crewlet-sre@agents.crewlet.invalid",
+      "credential": {"variable": "DATADOG_APP_KEY_SRE", "minted_at": "2026-10-29T17:02:10Z"}},
+    "sync": {"at": "2026-10-29T17:02:11Z", "outcome": "ok", "steps": []},
+    "plan": [], "tool": "live", "administers": true}}}]
+}
+```
+
+`revision` is the company revision the answer was read at, and the `ETag` is
+the same value quoted. An entry of `options` whose vendor did not answer just
+now carries no levels: which of its levels administers is unknown, so a
+turn-on or a change of level on that lane asks the step-up a raise does, and
+the next read asks the vendor again. Each entry of `options` also says whether a person can
+ask for a credential on that lane to be rotated (`rotatable`), and carries
+`"managed": "external"` where the engine does not provision the integration
+for the company, which is wherever it does not hold the authority that creates
+an agent's account: Datadog, GitLab or Mattermost without a `provisioning`
+block, Jira and Confluence on Data Center or without the Atlassian organization
+key, GitHub without `provisioning` or on a document only the operator writes
+(the engine records each agent's app in the document), and Slack without
+`integrations.slack.app_config_token`, the token the engine creates agents'
+apps with. On such a lane a seat's switch still binds its
+tool to the credential handed in from outside Crewlet, its access is managed
+where that credential was issued, and its `observed.credential` names the
+variable the seat holds with `"source": "external"`. A credential Crewlet
+minted says `"source": "minted"`. Where the operator writes the company
+document (`api.auth.company_writers`), the answer carries
+`"managed_by": "operator"` and the tab is read-only: a save and `keep` are
+refused `403 config_managed`, naming the Seat object as the place to change
+the agent's access. A seat the document no longer has whose account the
+engine still records is listed with `"departed": true`, and only `remove`
+applies to it. `notice` carries a company-level warning, such as the one the
+migration raises when an agent's credential was kept in a variable something
+else also names (a company setting, a unit's shared credentials or another
+agent): the integration's own
+[`credential_shared`](../concepts/integration-reconcile.md#what-a-pass-reports)
+finding, drawn on the tab until the variable is written again.
+
+A lane has a `plan` only where the sync takes steps on it: an integration the
+engine provisions, once its migration onto per-seat access has finished. On a
+lane managed outside Crewlet, and on an integration still waiting on its
+migration, `plan` is empty and a draft's plan lists no steps.
+
+**`POST /setup/integrations/{kind}/access/plan`** takes a draft and answers
+what saving it would do at the vendor, writing nothing. It is the same plan
+the sync takes its steps from, so a preview cannot promise what a sync will
+not do:
+
+```bash
+curl -X POST https://engine.example.com/setup/integrations/datadog/access/plan \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"seats": {"qa": {"datadog": {"enabled": true, "level": "4f0e2b3c-..."}}}}'
+```
+
+```json
+{"kind": "datadog", "revision": "01J9...", "step_up": false,
+ "plans": [{"handle": "qa", "lane": "datadog", "steps": [
+   {"op": "create", "verb": "create", "text": "Create crewlet-qa@agents.crewlet.invalid with Datadog Read Only Role", "by": "crewlet"},
+   {"op": "create", "verb": "mint", "text": "Mint its application key into DATADOG_APP_KEY_QA", "by": "crewlet"}]}]}
+```
+
+A draft names each seat by handle and each lane by its key, and a seat or lane
+it leaves out keeps its setting. Its fields are `enabled`, `level`,
+`permissions` (GitHub only, each `read` or `write`) and `scope`; any other
+field is refused `400 invalid_body`, so a body cannot name a variable. A
+person's seat or a seat the company does not hold is `404 no_such_seat`; a
+lane the integration does not grant, or a level, permission or scope entry the
+vendor does not offer now, is `400 access_not_offered` with the lane, the value
+and what is offered. A live-listed level (a Datadog role, a Jira project role)
+is judged only when the vendor answered just now; otherwise the sync reports
+an id it does not hold as a finding. A GitLab project is within reach only
+inside the group the company's connection joins agents to, so where the
+connection lists no projects, a project outside that group is
+`400 access_not_offered` too.
+
+**`PUT /setup/integrations/{kind}/access`** saves the same body as one revision
+of the company document and starts the sync for that integration. Send the
+tab's `revision` back as `If-Match` (or as `revision` in the body); a save on
+a revision the fleet has left is `409 revision_advanced` and writes nothing.
+The revision records the caller as its author and a history line naming what
+changed (`agents' access on datadog: turn on QA Engineer on datadog`), with an
+optional `summary` after it. The answer is the tab, as `GET` answers it, with
+`syncing` while the sync runs; where the tab cannot be read again just after a
+save landed, the answer is the tab as read before the save, at the revision the
+save wrote, with the saved settings in place, rather than an error for a save
+that landed. A seat removed from the document between the tab's read and the
+save is `404 no_such_seat`, and nothing is written. A save made while a sync runs is not refused: it
+lands, and a sync follows. `?dry_run=true` answers the plan, `step_up` and the
+`warnings` the revision would introduce, and stores nothing (see
+[Dry runs](#dry-runs)).
+
+A save that raises an agent to an administration role at the vendor (Datadog
+Admin Role, GitLab Maintainer or Owner, Jira Administrators, Confluence Admin,
+Mattermost System Admin, or GitHub Read and write on Contents or Workflows)
+asks for a person present and a fresh proof inside `step_up`: a machine token
+is refused `403 token_refused`, and a stale proof `403 step_up_required`. The
+plan's `step_up` says so before the save. Keeping a role an agent already holds
+and lowering one never ask. Where the vendor's levels could not be read, a
+turn-on or a change of level asks as a raise does. An integration still
+waiting on its migration asks it as well: the saved setting is the one the sync
+applies once the migration finishes.
+
+The same rule holds on every other write of the company document by a person
+or a token: `PUT` and `PATCH /config`, a seat's `PUT /config/roles/{id}` and a
+revert. Each compares the revision it replaces with the one it proposes, and
+one that raises an agent's access is refused for a machine token
+(`403 token_refused`) or a stale proof (`403 step_up_required`), naming each
+raise in `raises` (`kind`, `handle`, `lane`) and storing nothing. A dry run of
+it is answered, since it writes nothing, and a document the operator writes is
+judged by the operator's own authority instead.
+
+Turning an agent off disables its account at the vendor and keeps it, so its
+history keeps its author and turning it back on needs no person (except
+Slack's install). Nothing a document edit does removes an account.
+
+**`POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`**
+acts on one agent's account, and answers the tab:
+
+| Action | Does |
+|---|---|
+| `rotate` | Mints a new credential, seals it under the agent's name, and revokes the old one. Asks `secrets.write` too. A credential handed in from outside Crewlet is refused `409 credential_external`: it is rotated where it was issued |
+| `remove` | Removes the account at the vendor, where the vendor allows it, and stops the engine tracking it. Only once the agent is off on this lane: `409 seat_still_on` otherwise. On a lane managed outside Crewlet it is `409 access_external`: the account is removed at the vendor |
+| `keep` | Writes what the vendor shows into the document as a new revision, in the vendor's own terms: after a role or scope was changed at the vendor ("Keep the vendor's setting"), or after the account was turned off there ("Keep off", which keeps the role the document names for when it is turned back on). Nothing is restored. Asks `setup.access.write`, and `setup.access.raise` where the role kept is an administration role. A Datadog account holding several roles is refused `409 invalid_input`, since an agent holds one |
+| `restore` | Turns back on an account somebody turned off at the vendor, which no sync does unasked, or restores a changed role now rather than on the next pass. On a lane managed outside Crewlet it is `409 access_external` |
+| `retry` | Runs the sync again after a vendor refusal was settled |
+| `done` | Reads the vendor again after a person took a step there (a GitHub App's creation or permission request, a Slack install) |
+
+Every action but `keep` is carried by a sync, and one asked while a sync of the
+same integration runs is `409 pass_in_flight`.
+
+**`POST /setup/integrations/slack/access/seats/{handle}/{lane}/install`**
+answers `{"url": "https://slack.com/oauth/v2/authorize?..."}`: a link signed for
+the agent's own app, recorded as issued and spent by the install it completes,
+so it works once and only for a short while. It is minted only while the
+agent is on in Slack and its app waits for a person to approve the install
+(`409 invalid_input` otherwise), never stored, never logged and never part of
+`GET`. It writes nothing to the company document, so it is offered where the
+operator writes the document too.
+
+#### Moving a company onto per-seat access
+
+A company document written before per-seat access said an agent was on at a
+vendor by naming a `${VAR}` where the vendor's provisioning looked for one, and
+said what it could do once for the whole company (`provisioning.role`,
+`access_level`, a GitHub `tier`). On its first start the engine migrates the
+document, one integration at a time, in one revision attributed to
+`seat access migration`: each agent seat states `enabled` per integration,
+judged on the credentials it named itself and the ones its unit's `mcp_env`
+shares with it, as the earlier engine read them. An agent whose account exists
+keeps the role or level the vendor shows for it; only an agent with no account
+yet takes the company's role, in the vendor's own terms (a Datadog role is
+looked up at Datadog by name). A Datadog account holding several roles is not
+guessed at: Datadog waits, naming the agent, until the account holds one role
+or a person saves the one it keeps. A Jira or Confluence agent with no role of
+its own keeps product access only (no project or space role, which is all the
+earlier engine granted), a Mattermost bot's channels are written out, each
+credential the engine minted is re-sealed under the agent's own name, every
+account the engine made for an agent it had on is recorded, and the retired
+fields are removed. A credential is never sealed over one the agent already
+holds under its own name, and GitHub's installation tokens, which the engine
+issues at use, are never moved. A credential that named a variable something
+else also names (a company setting, a unit's shared credentials or another
+agent) is never moved: the agent gets a new one from its next sync, and the
+Agents tab warns that the shared credential must be replaced until it is. A
+unit's shared key for a tool server the engine now binds itself is removed from
+the unit.
+
+The document lists the integrations it has moved in `seat_access_migrated`,
+and the access sync for an integration acts on no agent until it is listed. An
+integration whose vendor does not answer stays unlisted, with its seats exactly
+as they were, and the engine tries again every minute. Its access pass reports
+an `identity_missing` finding that names the integration, says its access
+migration has not finished, and gives the reason the last attempt gave (for
+example, that the lookup of Datadog's role failed); the log's
+`seat_access_migration_pending` line carries the same reason. An integration
+the company does not connect is not waiting on the migration and reports
+nothing. Reverting to a
+revision written before the migration closes the gate again, and the next
+attempt migrates that document.
 
 ### One tool, several surfaces
 
@@ -10348,7 +10568,7 @@ Receives Slack Events API payloads for a specific agent (identified by handle). 
 
 ### `GET /webhooks/slack-oauth`
 
-The OAuth install landing page for [`crewlet slack provision`](../integrations/slack.md). Every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt, naming the agent only where `state` can be a seat's handle, and showing the code only where it can be one Slack sent (letters, digits, dots, dashes and underscores, at most 255 characters): anything else is answered as no code, `400`, and logged as `slack_oauth_code_malformed`. A refusal from Slack is said in the page's own words (the install was cancelled, for `access_denied`, or Slack didn't approve it) and its code is logged as `slack_oauth_refused`, never printed. Its remedy follows the path the install took: an install begun from `crewlet slack provision` carries a `state`, and the page says to run the command again; one begun from the app's own settings in Slack carries none, and the page says to go back there and install it again. Every answer carries `Cache-Control: no-store`. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
+The OAuth install landing every agent's Slack app redirects to. An install begun with **Install** on the Slack integration's Agents tab carries a `state` the engine signed (the seat, its app, a single-use nonce and a 15-minute expiry): the page verifies and spends it, exchanges the `code` for the bot token, refuses a token that belongs to another agent's app, and seals it under the seat's own name. A link used twice, edited or expired is refused with what to do instead, and neither the code nor the token is ever shown. An install made from the app's own settings page carries no state, and the page says where to copy the bot token. A link from the retired `crewlet slack provision` is answered `410` with where installs are made now. A refusal Slack sends back is said in the page's own words (the install was cancelled, or Slack didn't approve it) and its code is logged as `slack_oauth_refused`, never shown; no answer is cached (`Cache-Control: no-store`). Unauthenticated by design, since a browser redirect carries no engine credential. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
 
 ### `/webhooks/github`
 

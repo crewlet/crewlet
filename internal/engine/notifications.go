@@ -887,8 +887,9 @@ func (e *Engine) startMattermost(ctx context.Context, c *Company, cfg *config.Ma
 	// delivers it, and every other node drops it.
 	seats := mattermost.SeatsFrom(c.Org, e.resolver().LookupOK)
 	if len(seats) == 0 {
-		// Enabled with no provisioned seats is a company mid-setup, not
-		// a failure: `crewlet mattermost provision` has not run yet.
+		// Enabled with no seat holding a bot token is a company mid-setup,
+		// not a failure: no agent has been turned on in the Mattermost
+		// integration's Agents tab yet, or the sync has not sealed a token.
 		log.InfoContext(ctx, "mattermost_enabled_with_no_seats", "url", url)
 		return nil, nil
 	}
