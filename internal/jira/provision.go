@@ -30,7 +30,7 @@ import (
 // internal/confluence, and a third in internal/atlassian. One Atlassian account
 // authenticates both products, so that was one question answered three ways,
 // and they disagreed: a seat holding `mcp_env.atlassian.JIRA_API_TOKEN`, which
-// is the spelling atlassian.PlanFor's own note tells operators to write, read
+// is the spelling the old Atlassian provisioning note told operators to write, read
 // as ready to Jira and as having no credential at all to Confluence, for ever.
 //
 // The reader moved to internal/atlassian because that package owns the
