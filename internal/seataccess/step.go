@@ -37,9 +37,15 @@ const (
 	// OpMint seals a credential for an account that is on and holds none.
 	OpMint Op = "mint"
 
-	// OpDisable is off (D1): the account is disabled at the vendor, its
-	// credential revoked and its sealed value cleared, and the account kept.
+	// OpDisable is off on one lane (D1): the account is disabled at the
+	// vendor (or, at Atlassian, the lane's product access removed) and kept.
 	OpDisable Op = "disable"
+
+	// OpRevoke revokes the account's credential at the vendor and clears its
+	// sealed value, once every lane of the kind is off. Planned once per
+	// account, after the last lane's disable, so a kind with two products
+	// keeps its token while either is on.
+	OpRevoke Op = "revoke"
 
 	// OpRemove is the separate, confirmed removal, allowed only when the seat
 	// is off. Never from a document edit or a timer.
@@ -53,7 +59,7 @@ const (
 // Valid reports whether o is an op this build knows.
 func (o Op) Valid() bool {
 	return slices.Contains([]Op{
-		OpCreate, OpEnable, OpLevel, OpScope, OpMint, OpDisable, OpRemove, OpRotate,
+		OpCreate, OpEnable, OpLevel, OpScope, OpMint, OpDisable, OpRevoke, OpRemove, OpRotate,
 	}, o)
 }
 
@@ -147,6 +153,11 @@ type Ask struct {
 	// Reenable turns back on an account somebody disabled at the vendor
 	// ("Turn back on"), which no pass does unasked (D3).
 	Reenable bool
+
+	// Lane is the lane the person asked on. Reenable applies to it alone,
+	// and to every lane where it is empty. Rotate and Remove act on the
+	// ACCOUNT, which every lane of a kind shares, so they are taken once.
+	Lane Lane
 }
 
 // Zero reports an ask for nothing.

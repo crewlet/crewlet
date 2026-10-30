@@ -177,11 +177,6 @@ type Catalog struct {
 	// GitHub. Each is sealed under [SinkName](Kind, field, handle).
 	Credentials []string
 
-	// Tool binds a seat's credential to the company's tool server for this
-	// kind (D15). Nil where the engine's own tools read the credential
-	// directly (Atlassian, Mattermost).
-	Tool *ToolBinding
-
 	// Lanes are the lanes this kind grants, each with what it offers.
 	Lanes []LaneSpec
 }
@@ -288,31 +283,6 @@ type Level struct {
 	// Mattermost System Admin. DERIVED by the vendor from its own facts,
 	// never stored in the document.
 	Administers bool `json:"administers,omitempty"`
-}
-
-// ToolBinding is how a seat's own credential reaches the company's tool
-// server for a kind (D15): the engine adds each key to the seat's environment
-// for that server, so no document names the credential.
-type ToolBinding struct {
-	// Server is the `mcp_servers` entry the binding applies to, by name.
-	Server string
-
-	// Keys are the credential's keys at that server.
-	Keys []BoundKey
-}
-
-// BoundKey is one credential field and the key a server reads it under.
-type BoundKey struct {
-	// Field is the credential's field ([Catalog.Credentials]), or a token
-	// the engine issues at use (GitHub's `APP_TOKEN`).
-	Field string
-
-	// Env is the variable a stdio server reads, Header the header an http
-	// server reads, and Prefix what precedes the value in the header
-	// (`Bearer `).
-	Env    string
-	Header string
-	Prefix string
 }
 
 // ToolState is whether a seat can use its credential through a tool right now.
