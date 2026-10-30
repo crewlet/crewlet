@@ -31,10 +31,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A CODING BOX'S GIT, MEASURED (ADR-0063): what the two clone recipes cost
-// a box and the git node it clones from (BenchmarkBoxClone), what the box's
-// own git costs once its checkout is made and which of git's box-side
-// settings earn a place in the engine's box git environment
+// A CODING BOX'S GIT, MEASURED (ADR-0063): what the two clone recipes that
+// fetch cost a box and the git node it clones from (BenchmarkBoxClone), what
+// the box's own git costs once its checkout is made and which of git's
+// box-side settings earn a place in the engine's box git environment
 // (BenchmarkBoxWorktree), and what a box borrowing a node's copy would save
 // (BenchmarkBoxDissociate). Every box here is a box as the engine makes one:
 // a run launched on the fleet's run store given the repository, its token
@@ -84,9 +84,9 @@ func boxCone(cone, dir string) []string {
 // one directory names.
 const historyDir = "d000"
 
-// BenchmarkBoxClone is WHAT THE TWO RECIPES COST: a box given the repository
-// by sandbox.CloneRecipe, timed from the step's start to its checked-out
-// tree, on a warm node, a fresh box an operation.
+// BenchmarkBoxClone is WHAT THE TWO RECIPES THAT FETCH COST: a box given the
+// repository by sandbox.CloneRecipe, timed from the step's start to its
+// checked-out tree, on a warm node, a fresh box an operation.
 //
 //   - size=100MB|1GB is the history (boxSizes; 1GB only under
 //     CREWLET_BENCH_LARGE), built once for every arm under it;
@@ -94,8 +94,13 @@ const historyDir = "d000"
 //     first on PATH, the image's, and the client floor's own build (2.40.4),
 //     the oldest git a box may run — a template's git is the operator's —
 //     at 100MB;
-//   - recipe=coding|single-sha is sandbox.ClonePurpose: a blobless clone at
-//     the tip on the run's branch, or one commit at depth one;
+//   - recipe=coding|single-sha is sandbox.ClonePurpose, each recipe given the
+//     repository its purpose takes (boxRepoFor): a blobless clone at the tip
+//     on the run's branch, or a check's one commit at depth one. The third
+//     purpose, sandbox.CloneBorrowed, is no arm: it fetches nothing — the box
+//     reads a git node's own copy, mounted into it — so the node answers it
+//     none of what an arm reports, and what a borrow saves a box is
+//     BenchmarkBoxDissociate's question;
 //   - cone=none|one-dir checks out the whole tree or the history's first
 //     directory.
 //
@@ -127,9 +132,12 @@ func BenchmarkBoxClone(b *testing.B) {
 					}
 					box := newBenchBox(b, f, rows, git)
 					for _, purpose := range sandbox.ClonePurposes() {
+						if purpose == sandbox.CloneBorrowed {
+							continue
+						}
 						for _, cone := range []string{"none", "one-dir"} {
 							b.Run(fmt.Sprintf("recipe=%s/cone=%s", purpose, cone), func(b *testing.B) {
-								repo := boxRepo(rows, tip, boxCone(cone, historyDir))
+								repo := boxRepoFor(rows, tip, boxCone(cone, historyDir), purpose)
 								boxClones(b, f, p, box, repo, purpose)
 							})
 						}
@@ -673,9 +681,10 @@ func packCount(b *testing.B, dir string) int {
 //
 // — at size=100MB and, under CREWLET_BENCH_LARGE, 1GB, reporting beside the
 // wall time sent-MB, the node's server-cpu-ms and box-cpu-ms, the box's own
-// git (the repack's included). Nothing here is adopted: a box holds no copy
-// of the node's to borrow (sandbox.CloneRecipe), and a borrowed copy is M5's
-// to design for its check boxes on the node, from this figure.
+// git (the repack's included). Nothing here is adopted: a coding box holds no
+// copy of the node's to borrow (sandbox.CloneRecipe), and a check's box on a
+// git node, which can be lent one, reads it in place for its run and never
+// copies it (sandbox.CloneBorrowed).
 func BenchmarkBoxDissociate(b *testing.B) {
 	codetest.Quiet(b)
 	for _, size := range boxSizes {
@@ -830,6 +839,18 @@ func appendConfig(b *testing.B, env []string, pairs ...string) []string {
 func boxRepo(rows codetest.Rows, tip string, cone []string) sandbox.RunRepo {
 	return sandbox.RunRepo{Repo: codetest.RepoName, RepoID: rows.Repo.ID, Base: tip, Branch: boxBranch,
 		Access: sandbox.RepoWrite, Paths: cone}
+}
+
+// boxRepoFor is the repository a box is given for purpose, in the shape
+// sandbox.RunRepo.ValidateFor holds that purpose's to: a coding run's
+// (boxRepo), or a check's — its one commit at tip, on no branch, to read —
+// since a value a purpose does not read is refused rather than ignored.
+func boxRepoFor(rows codetest.Rows, tip string, cone []string, purpose sandbox.ClonePurpose) sandbox.RunRepo {
+	repo := boxRepo(rows, tip, cone)
+	if purpose == sandbox.CloneSingleSHA {
+		repo.Branch, repo.Access = "", sandbox.RepoRead
+	}
+	return repo
 }
 
 // boxHistory is a gittest.History of size bytes on f's git node, pushed by p a
