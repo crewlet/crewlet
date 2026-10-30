@@ -876,8 +876,10 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 			return datadog.AccountEmail(block.Provisioning, handle)
 		})
 		at.Configured = block != nil
-		seats = credentialSeats(roster, s.resolve, at, "Datadog",
-			s.passes.Serves(kind), datadogAccess(block))
+		// NO ROLE ON THE ROW: each seat names its own Datadog role, by id,
+		// and the integration's Agents tab shows it under Datadog's own
+		// name from the organization's live role list.
+		seats = credentialSeats(roster, s.resolve, at, "Datadog", s.passes.Serves(kind))
 		configured = block != nil
 		enabled = block != nil && block.Enabled
 	case integration.KindGitHub:
@@ -1201,22 +1203,6 @@ func credentialSeats(roster *org.Organization, resolve func(string) (string, boo
 // roster renders: the tier this engine speaks, its name, and the line saying
 // what it grants. Empty where the app grades nobody.
 type seatAccess func(role *org.Role) (tier, label, hint string)
-
-// datadogAccess is the role a company's Datadog accounts are created holding.
-//
-// THE SAME FOR EVERY SEAT, which is Datadog's shape here rather than an
-// omission: accounts are created into one role named on the provisioning
-// block. It is still worth saying per seat, because it is the answer to what
-// this agent may do in Datadog and it differs between companies.
-func datadogAccess(cfg *config.Datadog) seatAccess {
-	role := datadog.RoleName(nil)
-	if cfg != nil {
-		role = datadog.RoleName(cfg.Provisioning)
-	}
-	return func(*org.Role) (string, string, string) {
-		return datadog.TierOf(role), datadog.RoleLabel(role), datadog.RoleHint(role)
-	}
-}
 
 // seatCredentialAt is where one app keeps a seat's credential.
 //
