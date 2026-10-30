@@ -140,6 +140,7 @@ roles:
         Authorization: "Bearer ${GITHUB_APP_TOKEN_PLANNER}"
     integrations:
       github:
+        enabled: true
         tier: full_access
         repos: [gophrase/backend]
         app_id: 101
@@ -154,6 +155,7 @@ roles:
         Authorization: "Bearer ${GITHUB_APP_TOKEN_PLANNER}"
     integrations:
       github:
+        enabled: true
         tier: review
         app_id: 102
         app_slug: gophrase-planner
@@ -468,6 +470,7 @@ roles:
         GITHUB_TOKEN: "${GITHUB_APP_TOKEN_BUILDER}"
     integrations:
       github:
+        enabled: true
         tier: full_access
         repos: [gophrase/backend]
         app_id: 101

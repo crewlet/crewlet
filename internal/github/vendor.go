@@ -167,7 +167,7 @@ func levelSteps(want seataccess.Desired, have seataccess.Observed, add func(seat
 	if len(raised) == 0 {
 		return
 	}
-	if beyond := wanted.Short(Permissions(have.Ceiling).Strings()); len(beyond) > 0 {
+	if beyond := wanted.Short(Permissions(have.Ceiling).Token()); len(beyond) > 0 {
 		// GRANT, NOT APPROVE: the app's owner widens the registration,
 		// which Apply tells from the organization's acceptance by verb.
 		add(seataccess.Step{
@@ -377,7 +377,9 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 	case seataccess.OpCreate:
 		return s.applyCreate(ctx, in, seat)
 	case seataccess.OpEnable:
-		obs, err := s.observe(ctx, seat, false)
+		// READ AGAIN: back on is decided by the installation as it is now,
+		// and this pass may have suspended it since it was observed.
+		obs, err := s.observe(ctx, seat, true)
 		if err != nil {
 			return seataccess.StepResult{}, err
 		}

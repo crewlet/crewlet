@@ -490,7 +490,7 @@ func TestAManifestGitHubCannotDeliverToHasNoWebhook(t *testing.T) {
 		DeliveryOff: true,
 		RedirectURL: "http://localhost:8200/webhooks/github-app",
 		SetupURL:    "http://localhost:8200/webhooks/github-app?installed=pm",
-		Permissions:      tierPerms("review", false),
+		Permissions: tierPerms("review", false),
 	})
 	// GitHub refuses an unreachable hook, active or not, and events with
 	// no hook, so a local engine's app carries neither.

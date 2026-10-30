@@ -16,7 +16,8 @@ Three surfaces, and they are deliberately separate:
   `role.mcp_env.github`. This is how an agent reads, reviews and tracks.
 - **Identity.** One GitHub App per agent, in `role.integrations.github`. An app
   carries exactly one bot identity, so each agent has its own, created and
-  installed from the dashboard and bounded by an access tier. The agent acts
+  installed from the dashboard and bounded by the GitHub App permissions set on
+  the integration's Agents tab. The agent acts
   as that app everywhere through one token the engine issues it,
   `${GITHUB_APP_TOKEN_<HANDLE>}`. See
   [One GitHub App per agent](#one-github-app-per-agent) and
@@ -322,7 +323,7 @@ Together the page is normally correct by the time you switch back to it. If it i
 | `redirect_url` | `<webhook address>/webhooks/github-app` |
 | `setup_url` | `<webhook address>/webhooks/github-app?installed=<handle>` |
 | `default_events` | `issues`, `issue_comment`, `pull_request`, `pull_request_review`, `pull_request_review_comment` |
-| `default_permissions` | The seat's tier, below, plus `workflows: write` where the seat [opts in to workflow writes](#workflow-writes-an-opt-in-for-full-access) |
+| `default_permissions` | The seat's [permissions](#access-in-githubs-own-terms), plus `metadata: read`, and nothing wider |
 
 `<webhook address>` is the one above: the public listener's
 `api.public.external_url` where `api.public` is set — the return and the
@@ -338,86 +339,75 @@ organization or repository hook the
 [provisioning pass](#provisioning--crewlet-github-provision) registers rather
 than through the seat's own app.
 
-### The three access tiers
+### Access in GitHub's own terms
 
-A seat's tier is the one field in this block a person writes, and it decides
-two things: the permissions the app is created with, and the permissions every
-token minted for that app carries.
+GitHub has no roles for an app. It has permissions, each at **No access**,
+**Read-only** or **Read and write**, so that is what a seat stores and what the
+Agents tab offers, under GitHub's names:
 
-| Tier | What it grants | GitHub permissions |
+| Permission (key) | Levels offered | What it is for |
 |---|---|---|
-| `read_only` (the default) | Reads code and issues, changes nothing. | `metadata:read`, `contents:read`, `issues:read`, `pull_requests:read`, `checks:read`, `actions:read`, `deployments:read` |
-| `review` | Reads the code and writes **about** it: issues, comments, reviews. | `metadata:read`, `contents:read`, `issues:write`, `pull_requests:write`, `checks:read`, `actions:read`, `deployments:read` |
-| `full_access` | Branches, commits, pull requests, issues and checks. No administration. | `metadata:read`, `contents:write`, `issues:write`, `pull_requests:write`, `checks:write`, `actions:read`, `deployments:read` |
+| Contents (`contents`) | Read-only, Read and write | Reading code; Read and write pushes branches and commits |
+| Issues (`issues`) | Read-only, Read and write | Reading and writing issues and their comments |
+| Pull requests (`pull_requests`) | Read-only, Read and write | Reading, opening and reviewing pull requests |
+| Checks (`checks`) | Read-only, Read and write | Reading check runs; Read and write reports them |
+| Actions (`actions`) | Read-only, Read and write | Reading workflow runs and job logs; Read and write re-runs, cancels and dispatches them |
+| Workflows (`workflows`) | Read and write | Pushing a change to a file under `.github/workflows` |
 
-- **Empty means `read_only`.** A seat nobody has thought about yet should have
-  to ask for more rather than already hold it.
-- **`review` keeps `contents` at read on purpose**, so a reviewer cannot change
-  what it is reviewing.
-- **`metadata: read` is on every tier**, because GitHub requires it for almost
-  every read: without it a token cannot resolve a repository at all.
-- **Each tier is an allow list.** GitHub's token endpoint takes the permissions
-  to grant, so anything absent from a tier is simply not on the token. There is
-  no catalogue to subtract from and therefore nothing to forget.
-- **A typo is refused, not guessed at.** `tier: reviw` fails config validation
-  naming the field, and a reader that takes the value anyway falls back to
-  `read_only` rather than to something wider. A hyphen is not a typo:
-  `full-access` and `full_access` are the same tier.
-- **`actions: read` is on every tier, and `actions: write` is on none.** Read
-  is what lets an agent list a pull request's workflow runs and read a failed
-  job's log, which is most of what fixing a red check takes. Write re-runs,
-  cancels and dispatches workflows, a deploy among them, and merging and
-  releasing stay a person's acts.
+- **A permission left out is No access.** `metadata: read` is added to every
+  app and every token, because GitHub requires it to resolve a repository.
+- **The app is registered at exactly these (D5).** The manifest a person
+  submits asks for the seat's permissions and nothing wider, so a leaked app key
+  reaches only what the seat may do.
+- **Narrowing applies on the next token.** Every token is minted with the seat's
+  permissions and repositories, so lowering a level or removing a repository
+  needs nothing at GitHub.
+- **A raise past the registration waits for two people.** The app's owner adds
+  the permission on the app's permissions page, and GitHub then asks an
+  organization owner to accept it on the installation. The Agents tab shows the
+  step that is waiting with its link; **Done, check again** reads GitHub again.
+  Until the installation holds a permission the seat asks for, GitHub refuses
+  every token the seat requests.
+- **Read and write on Contents or Workflows is an administration grant.**
+  Raising a seat to either needs a fresh step-up from the person saving it
+  (D10).
+- **Workflows needs Contents (Read and write).** A workflow change is a push,
+  and GitHub refuses a push from a token that cannot write contents, so the
+  document refuses the pair half set. The same grant lets the agent's branch
+  run a workflow it rewrote with the secrets the repository hands its runs, so
+  pair it with branch protection on the default and release branches and keep
+  deployment credentials in environment-scoped secrets.
+- **Seats migrated from tiers** keep what their tier granted, permission by
+  permission: `read_only` holds Contents, Issues, Pull requests, Checks and
+  Actions at Read-only; `review` raises Issues and Pull requests to Read and
+  write; `full_access` raises Contents and Checks too, plus Workflows where the
+  seat had opted in. Deployments (Read-only), which every tier carried, is not
+  offered and is no longer asked for.
 
-### Workflow writes, an opt-in for full access
+### On, off and remove
 
-GitHub refuses any push whose commits add, change or delete a file under
-`.github/workflows` unless the token carries `workflows: write`, whatever else
-it holds. No tier carries it. A `full_access` seat that has to change CI opts
-in on its own block:
+`enabled` is stored on the seat's block, and a seat is off until it is turned
+on (D9).
 
-```yaml
-roles:
-  - name: Platform Engineer
-    integrations:
-      github:
-        tier: full_access
-        workflows: true           # off unless written; refused on every other tier
-```
+| Action | What happens at GitHub |
+|---|---|
+| Turn on, first time | A person creates the app from the prepared manifest and installs it. The engine seals the app's key and webhook secret when GitHub returns them. |
+| Turn off | The engine suspends the seat's installation as the app. The app, its key and the installation are kept, and every token is refused from that moment. |
+| Turn back on | The engine lifts the suspension. Nobody has to act at GitHub. |
+| Remove (only when off) | The engine uninstalls the app. A person deletes the app registration from its settings (GitHub has no API for it), and once GitHub reports it deleted the engine clears the sealed key and webhook secret. |
+| Rotate | Not offered: tokens last an hour and are never stored. |
 
-- **Only `full_access`.** Config validation refuses `workflows: true` on a
-  `read_only` or `review` seat (or one with no tier), naming the field: a seat
-  that cannot push code has nothing to push a workflow with. The engine asks
-  the tier again when it mints, so a document that skipped validation still
-  cannot hand the grant to a seat below full access.
-- **The risk.** The same grant lets the agent's branch run a workflow it
-  rewrote. A workflow triggered by a push to that branch runs the branch's own
-  copy of the file, with the secrets the repository hands its runs, so an
-  opted-in seat can reach any repository or organization secret a workflow on
-  an unprotected branch can read. Pair it with **branch protection** (required
-  reviews on the default branch and on release branches, so a modified
-  workflow reaches nothing that deploys until a person merges it) and
-  **environment-scoped secrets** (deployment credentials in an environment with
-  required reviewers or a branch policy, never repository-wide), so what a
-  branch can run with is what you would hand an unreviewed branch anyway.
-- **Asked for at creation.** An app created for a seat that already opts in is
-  created with `workflows: write` in its manifest.
-- **An app created before the opt-in does not hold it.** A manifest is read
-  once, so GitHub only adds the permission when the app's owner adds
-  **Workflows: Read and write** on the app's permissions page and the
-  organization then approves the request on the installation. Until the
-  installation holds it, GitHub refuses every token the seat asks for, since a
-  token request naming a permission the installation was not granted mints
-  nothing. The card reports it as a `grant_short` finding on that seat, linked
-  to the app's permissions page. To change an existing seat with no gap, widen
-  the app at GitHub and approve it first, then set `workflows: true`: an
-  installation holding the permission before the seat asks for it is not a
-  finding.
+An installation suspended or uninstalled by somebody at GitHub is never turned
+back on automatically, in case it was incident response (D3): the Agents tab
+offers **Turn back on** or **Keep off**. Each pass reads the app's registration
+and installation back, so a permission an owner removed at GitHub shows as a
+waiting step rather than silently failing tokens.
 
-### What no tier grants
+### What no seat is granted
 
-None of the three asks for any of these, so no token this engine mints carries
-one. Each is a way out of the tier rather than a step up within it:
+None of these is offered, so no app is registered with one and no token this
+engine mints carries one. Each is a way out of a seat's limits rather than a
+step up within them:
 administration (deleting a repository, dropping branch protection), secrets and
 variables (every credential the repository holds), and membership and
 organization settings (how an agent would widen its own access).
@@ -430,9 +420,9 @@ organization settings (how an agent would widen its own access).
 **What an app holds is a different question from what a token carries.** A
 manifest can be edited in the browser before it is submitted, and an
 installation can be widened by a person afterwards; neither is the engine's to
-decide. What is the engine's is the mint: a token is issued with the tier's own
-permission list and nothing else, so a `read_only` seat still cannot write on
-an installation that could. Where the seat names `repos`, the token is narrowed
+decide. What is the engine's is the mint: a token is issued with the seat's own
+permissions and nothing else, so a Read-only seat still cannot write on an
+installation that could. Where the seat names `repos`, the token is narrowed
 to those as well, and an empty list means every repository the installation
 covers, which is what the operator chose when they installed it.
 
@@ -446,9 +436,12 @@ roles:
   - name: Senior Engineer
     integrations:
       github:
-        tier: review              # read_only (default) | review | full_access
+        enabled: true             # off until turned on; off suspends the installation
+        permissions:              # GitHub App permissions; a key left out is No access
+          contents: read
+          issues: write
+          pull_requests: write
         repos: [acme/api]         # empty means every repository the installation covers
-        # workflows: true         # full_access only; see Workflow writes above
         # Written by the engine, never typed in:
         app_id: 1234567
         app_slug: acme-senior-engineer
@@ -457,7 +450,8 @@ roles:
         webhook_secret: "${GITHUB_APP_WEBHOOK_SECRET_SENIOR_ENGINEER}"
 ```
 
-`tier`, `repos` and `workflows` are the fields a person writes. `app_id`, `app_slug`,
+`enabled`, `permissions` and `repos` are the fields a person writes, from the
+integration's Agents tab. `app_id`, `app_slug`,
 `private_key` and `webhook_secret` are written when the app is created, and the slug is what the
 bot login derives from, so it is what an `@mention` of this agent resolves
 through. `installation_id` is written as `0` at that moment, because creating
@@ -555,7 +549,8 @@ roles:
             .config/crewlet/github-token: "${GITHUB_APP_TOKEN_SENIOR_ENGINEER}"
     integrations:
       github:
-        tier: full_access
+        enabled: true
+        permissions: { contents: write, issues: write, pull_requests: write, checks: write, actions: read }
         repos: [acme/api]
 ```
 
@@ -575,10 +570,10 @@ at warning, on every launch.
   variable is not set; a shared server never sees any of them. An app's
   identity stays with the agent it was created for, by construction
   ([ADR-0058](https://github.com/crewlet/crewlet/blob/main/adr/0058-a-seats-github-app-token-is-issued-at-use-and-read-only-by-that-seat.md)).
-- **Scoped at mint time.** The token carries the seat's tier's permissions
-  (and `workflows: write` where the seat opts in) and nothing else, narrowed to
-  the seat's `repos` where it names any. A `review`
-  seat's token cannot push, whatever the installation allows.
+- **Scoped at mint time.** The token carries the seat's permissions (and
+  `metadata: read`) and nothing else, narrowed to the seat's `repos` where it
+  names any. A seat at Contents Read-only cannot push, whatever the
+  installation allows. A seat that is off is issued no token.
 - **Never sealed, never logged.** The token lives in the engine's memory, one
   per installation and scope, and is minted again by any node that holds the
   app's key. It is not written to the secret store, to a revision, to a log
@@ -764,11 +759,11 @@ and ready.
   carry the name that was asked for. That is why the install link is built from
   the slug the conversion returned rather than from the name that was
   requested.
-- **Permissions are frozen at creation.** Raising a seat's tier or opting it in
-  to workflow writes afterwards means editing the app's permissions at GitHub,
-  where every installation has to approve the change before it takes effect,
-  and GitHub refuses the seat's tokens until it has. Choosing the tier and the
-  opt-in before the app is created is the cheap moment to get them right.
+- **Permissions are fixed at creation.** Raising a seat past what its app is
+  registered with means its owner editing the app's permissions at GitHub, and
+  an organization owner accepting the change on the installation, and GitHub
+  refuses the seat's tokens until both have. Setting a seat's permissions
+  before the app is created is the cheap moment to get them right.
 - **The creation code is single use and lives one hour.** A code that has been
   converted or has expired is reported as exactly that, and the flow starts
   again from the begin route. The engine's own state is shorter still, at 15
@@ -953,8 +948,8 @@ wrong behaviour anyway, and the call sits on the inbound consumer's hot path.
 
 **They are read through the agents' own apps.** An agent that acts as itself
 already holds a credential that can answer: its app is installed on the
-repositories it works in, and every tier grants `issues:read` and
-`pull_requests:read`. The first installed seat whose token mints is asked, and
+repositories it works in, and a seat holding Issues and Pull requests at
+Read-only or more can read a thread's participants. The first installed seat whose token mints is asked, and
 the next is tried when one refuses, which is what keeps the answer available
 while an operator is mid-rollout. Tokens are cached per installation for the
 hour GitHub issues them for, because this is the inbound hot path.

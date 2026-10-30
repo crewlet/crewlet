@@ -60,6 +60,12 @@ type SeatApp struct {
 	Permissions Permissions
 	Repos       []string
 
+	// Off is a seat switched off on GitHub (D1): its installation is
+	// suspended by the access sync, it is issued no token, and the seat-app
+	// reconcile leaves it alone, since a suspension this engine made is not
+	// a finding. A teardown still reaches it.
+	Off bool
+
 	// AppID and Slug are the app GitHub created. Zero means the operator
 	// has not created one yet, which is a step rather than a fault.
 	AppID int64
@@ -226,6 +232,9 @@ func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult
 		// anything wrong, there is a click outstanding. Gathered rather than
 		// reported here, because it is the same act for every such agent and
 		// [SeatsWithNoApp] says it once for all of them.
+		if seat.Off {
+			continue
+		}
 		if seat.AppID == 0 {
 			noApp = append(noApp, seat.Handle)
 			continue

@@ -103,7 +103,7 @@ func TestStepsPerOp(t *testing.T) {
 		"a sealed key mints nothing": {op: seataccess.OpMint,
 			have: seataccess.Observed{Credential: &seataccess.Credential{Variable: "GITHUB_APP_KEY_SRE"}}},
 		"off keeps the key": {op: seataccess.OpRevoke},
-		"off suspends":               {op: seataccess.OpDisable, out: []drawn{{seataccess.VerbDisable, crewlet}}},
+		"off suspends":      {op: seataccess.OpDisable, out: []drawn{{seataccess.VerbDisable, crewlet}}},
 		"remove ends with a person": {op: seataccess.OpRemove, out: []drawn{
 			{seataccess.VerbRemove, crewlet}, {seataccess.VerbRemove, you}}},
 		"nothing to rotate": {op: seataccess.OpRotate},
@@ -298,6 +298,9 @@ func TestOffSuspendsAndBackOnUnsuspends(t *testing.T) {
 	if err != nil || !res.Disabled {
 		t.Fatalf("off: %+v, %v", res, err)
 	}
+	// GitHub now reports the installation suspended, which back on reads.
+	w.gh.on("GET /app/installations/7", 200, `{"id":7,"account":{"login":"acme"},"repository_selection":"all",
+		"suspended_at":"2026-10-29T10:00:00Z","permissions":{"contents":"read","issues":"write"}}`)
 	if _, err := apply(t, s, seataccess.OpEnable, 0, seataccess.Desired{Enabled: true}, nil); err != nil {
 		t.Fatalf("back on: %v", err)
 	}
@@ -489,5 +492,23 @@ func TestOpenWithoutGitHubIsNotConfigured(t *testing.T) {
 	_, err := vendor.Open(t.Context(), seataccess.OpenInput{Config: &config.Company{}})
 	if !errors.Is(err, integration.ErrNotConfigured) {
 		t.Errorf("open answered %v", err)
+	}
+}
+
+// AN OFF SEAT IS THE ACCESS SYNC'S: the seat-app reconcile reports nothing
+// about the suspension this engine made, and the issuer hands it no token.
+func TestAnOffSeatIsLeftToTheAccessSync(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	seat := github.SeatApp{
+		Handle: "sre", AppID: 41, Slug: "acme-sre", InstallationID: 7, Key: pem, Off: true,
+		Permissions: tierPerms("read_only", false),
+	}
+	res, err := github.ReconcileSeatApps(t.Context(), github.SeatAppOptions{Seats: []github.SeatApp{seat}})
+	if err != nil || len(res.Findings) != 0 || len(res.Ready) != 0 {
+		t.Errorf("an off seat: findings %v, ready %v, %v", kinds(res.Findings), res.Ready, err)
+	}
+	if _, err := (&github.Issuer{}).Token(t.Context(), github.SeatAppOptions{}, seat, github.ToolTokenLife); !errors.Is(err, github.ErrSeatOff) {
+		t.Errorf("an off seat was issued %v", err)
 	}
 }

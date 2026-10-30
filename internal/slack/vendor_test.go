@@ -64,8 +64,8 @@ func TestSlackStepsPerOp(t *testing.T) {
 		have seataccess.Observed
 		out  []drawn
 	}{
-		"create then install":   {op: seataccess.OpCreate, out: []drawn{{seataccess.VerbCreate, crewlet}, {seataccess.VerbApprove, you}}},
-		"back on is an install": {op: seataccess.OpEnable, out: []drawn{{seataccess.VerbApprove, you}}},
+		"create then install":        {op: seataccess.OpCreate, out: []drawn{{seataccess.VerbCreate, crewlet}, {seataccess.VerbApprove, you}}},
+		"back on is an install":      {op: seataccess.OpEnable, out: []drawn{{seataccess.VerbApprove, you}}},
 		"a lost token is an install": {op: seataccess.OpMint, out: []drawn{{seataccess.VerbApprove, you}}},
 		"a sealed token mints nothing": {op: seataccess.OpMint,
 			have: seataccess.Observed{Credential: &seataccess.Credential{Variable: "SLACK_BOT_TOKEN_SWE"}}},
@@ -491,4 +491,25 @@ func lastToken(ws *workspace) string {
 		return ""
 	}
 	return ws.tokens[len(ws.tokens)-1]
+}
+
+// A SEAT THAT IS ON READS THE ENGINE'S NAMES, and one that is off has no
+// Slack identity, so its revoked token is never read (D4, D1).
+func TestTheTransportReadsTheEngineNamedToken(t *testing.T) {
+	t.Parallel()
+	on, off := true, false
+	cfg := &config.Company{Name: "acme", Roles: []config.Role{
+		{Name: "Engineer", Handle: "swe", Integrations: config.RoleIntegrations{Slack: &config.RoleSlack{Enabled: &on}}},
+		{Name: "Designer", Handle: "designer", Integrations: config.RoleIntegrations{Slack: &config.RoleSlack{Enabled: &off}}},
+	}}
+	o, err := cfg.Organization()
+	if err != nil {
+		t.Fatal(err)
+	}
+	seats := slack.SeatsFrom(o, func(name string) (string, bool) {
+		return map[string]string{"SLACK_BOT_TOKEN_SWE": "xoxb-swe", "SLACK_BOT_TOKEN_DESIGNER": "xoxb-old"}[name], true
+	})
+	if len(seats) != 1 || seats[0].Handle != "swe" || seats[0].Token != "xoxb-swe" {
+		t.Errorf("transport seats = %+v", seats)
+	}
 }

@@ -306,9 +306,7 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 		return out
 	}
 	for seat := range company.Org.AllRoles() {
-		// AN OFF SEAT HAS NO APP TO RECONCILE OR READ THROUGH: its
-		// installation is suspended (D1), which the access sync owns.
-		if !seat.IsAgent() || seat.GitHub == nil || !seat.GitHub.Enabled {
+		if !seat.IsAgent() || seat.GitHub == nil {
 			continue
 		}
 		out = append(out, githubSeatApp(seat, env))
@@ -324,7 +322,7 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 func githubSeatApp(seat *org.Role, env *config.Resolver) github.SeatApp {
 	app := seat.GitHub
 	return github.SeatApp{
-		Handle: seat.Handle(), Name: seat.Name,
+		Handle: seat.Handle(), Name: seat.Name, Off: !app.Enabled,
 		Permissions: github.PermissionsOf(app.Permissions), Repos: app.Repos,
 		AppID: app.AppID, Slug: app.AppSlug,
 		InstallationID: app.InstallationID,

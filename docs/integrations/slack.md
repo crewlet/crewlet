@@ -32,6 +32,43 @@ app is a copy, a paste into Slack's **From an app manifest** flow, an install,
 and the two values pasted back. See the [manual setup](#manual-setup) for the
 same steps done entirely by hand.
 
+### Per-agent access from the Agents tab
+
+Each agent is turned on or off on the integration's **Agents** tab, and the
+engine keeps its app in line on every pass. Slack has no roles: an agent's app
+holds the bot scopes in [its manifest](#bot-scopes-and-events), shown on the tab
+read-only, and it reads and posts wherever it is invited. Nothing else is set
+per agent.
+
+**The engine creates the apps** once an app-configuration token is sealed for
+the company. Enter its refresh token once; the engine seals the token pair as
+one value, `SLACK_APP_CONFIG_TOKEN`, and rotates it before it expires, saving
+each new pair before using it, because Slack's refresh token works once. The
+install stays a person's click: the tab shows a waiting step with **Install**,
+which sends you to Slack's approval page, and the engine seals the bot token
+when Slack sends you back.
+
+| Action | What happens at Slack |
+|---|---|
+| Turn on, first time | The engine creates the app from its manifest and seals its client secret and signing secret (served once, so an app that cannot be sealed is deleted again). A person approves the install. |
+| Turn off | The engine revokes the bot token (`auth.revoke`). The app and its OAuth client are kept. |
+| Turn back on | A person approves the install again; Slack issues a bot token only to an install. |
+| Rotate | The engine revokes the bot token, and a person approves a reinstall, which issues a new one. |
+| Remove (only when off) | The engine deletes the app (`apps.manifest.delete`) and clears every value sealed for it. Without a configuration token, the tab links to the app's page to delete it by hand. |
+
+A scope or setting changed in Slack's console is restored from the engine's
+manifest on the next pass and reported; a scope added back reaches the bot
+token only after a person approves a reinstall. A bot token revoked or an app
+uninstalled by somebody at Slack is never reinstalled automatically, in case it
+was incident response: the tab offers **Turn back on** or **Keep off**.
+
+**The engine names every value.** A seat's values are sealed as
+`SLACK_BOT_TOKEN_<HANDLE>`, `SLACK_SIGNING_SECRET_<HANDLE>`,
+`SLACK_CLIENT_SECRET_<HANDLE>` and `SLACK_CLIENT_ID_<HANDLE>`. The transport and
+the seat's Slack tool server are both given the one bot token, so the two
+cannot drift apart, and no document edit can point a seat's token at another
+variable.
+
 ### Disconnecting
 
 Disconnect removes `integrations.slack` from the company document, which
