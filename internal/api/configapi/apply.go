@@ -9,6 +9,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -430,6 +431,13 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if d.authored && !d.engine && !s.Managed() {
 		if refused := config.RefuseEngineWritten(b.prior, company); refused != nil {
 			return nil, &ValidationError{Err: refused, Derived: derived}
+		}
+	}
+	// A RAISE IS A PERSON'S (raise.go), asked of a request's write once its
+	// rules hold, since judging it may ask a vendor what it offers.
+	if d.principal != nil && !s.Managed() && !authz.Checking(ctx) {
+		if err := s.admitRaises(ctx, *d.principal, b, company); err != nil {
+			return nil, err
 		}
 	}
 	// AFTER THE RULES, because a document that is refused anyway takes no
