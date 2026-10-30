@@ -423,10 +423,18 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 				Remedy: "Choose a role for that list on the integration's Agents tab, or clear the list",
 			}, nil
 		}
+		if required, missing := opts.MissingRequired(d.Level); missing {
+			return &Failure{
+				Step: VerbGrant, Actor: ByYou,
+				Said: fmt.Sprintf("%s grants nothing else without %s, and this agent's "+
+					"access leaves it out", LaneName(lane), required.Name),
+				Remedy: fmt.Sprintf("Add %s to its access on the integration's Agents tab", required.Name),
+			}, nil
+		}
 	}
-	if spec.Scoped && !opts.ScopeOpen {
+	if spec.Scoped {
 		for _, entry := range d.Scope {
-			if !slices.Contains(opts.Scope, entry) {
+			if !opts.Reaches(entry) {
 				return &Failure{
 					Step: VerbScope, Actor: ByYou,
 					Said:   fmt.Sprintf("%s is outside what the company's %s connection reaches", entry, LaneName(lane)),
@@ -765,7 +773,7 @@ func observedFor(lanes []Lane, got map[Lane]Observed, rec Record, now time.Time)
 				o.DisabledBy = DisabledByHand
 			}
 		}
-		if o.Enabled && applied != nil && applied.Enabled && !applied.SameAccess(o.Access()) {
+		if o.Enabled && applied != nil && applied.Enabled && !applied.NormalizedFor(lane).SameAccess(o.Access()) {
 			o.ChangedByHandAt = prior.Observed.ChangedByHandAt
 			if o.ChangedByHandAt.IsZero() {
 				o.ChangedByHandAt = now

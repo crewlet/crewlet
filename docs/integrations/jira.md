@@ -243,6 +243,9 @@ roles:
         projects: [GOP]        # empty: every project the company names
 ```
 
+Project keys are compared as Jira matches them, in any case: `gop` is `GOP`,
+within the company's reach and never read as a change.
+
 | What the seat holds | How the engine applies it |
 |---|---|
 | Product access | One grant per product, the same for every agent: Jira's product member role on the site. What an agent may do comes from the role below and each project's permission scheme. |

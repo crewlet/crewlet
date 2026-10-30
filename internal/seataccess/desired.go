@@ -103,7 +103,7 @@ func DesiredOf(role *config.Role, lane Lane) (Desired, bool) {
 	default:
 		return Desired{}, false
 	}
-	return d.Normalized(), true
+	return d.NormalizedFor(lane), true
 }
 
 // SetDesired writes d into role's block for lane, creating the block where it
@@ -114,7 +114,7 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 	if role == nil {
 		return fmt.Errorf("seataccess: no seat to write the %s setting into", lane)
 	}
-	d = d.Normalized()
+	d = d.NormalizedFor(lane)
 	on := d.Enabled
 	in := &role.Integrations
 	switch lane {
