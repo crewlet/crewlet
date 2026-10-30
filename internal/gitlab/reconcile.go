@@ -168,12 +168,6 @@ type Options struct {
 	// Now is the clock the token-expiry warning is judged by. Nil takes the
 	// wall clock.
 	Now func() time.Time
-
-	// Plan and Mode are IGNORED. They are kept only so the engine's current
-	// call sites compile until they are retired: seats are per-seat access
-	// ([Vendor]), which reads the mode from the document itself.
-	Plan *provision.Plan
-	Mode Mode
 }
 
 // Reconcile runs one pass.
