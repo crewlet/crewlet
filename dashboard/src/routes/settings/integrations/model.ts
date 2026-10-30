@@ -169,6 +169,12 @@ export interface Issue {
   /** What it is about, as the engine names each: an agent's handle, an address, a project. */
   subjects: string[];
   surface: string;
+  /**
+   * An agent's own wait or refusal, which its row on the Agents tab draws
+   * with the step's own control; the app's page leaves it there, and the
+   * home lists it as something waiting on you.
+   */
+  seat?: boolean;
 }
 
 export interface Tool {
@@ -303,6 +309,12 @@ const KIND_WORDS: Record<string, string> = {
  * a seat's handle there, and also a config path or a phrase ("agents without
  * an app"), so the agents an issue names are its `subjects` where it lists
  * them and its subject where that is a seat on the chart.
+ *
+ * A FIX IS OFFERED ONLY WHERE ONE CONTROL HERE ANSWERS THE KIND: a key to
+ * replace or add. A wait on a person has its control on the agent's own row
+ * (the engine marks it `seat`), and one at the vendor its link; "Create app"
+ * was offered for every GitHub wait, a permission to accept included, and
+ * opened the settings form.
  */
 function issuesOf(
   entry: Entry,
@@ -320,13 +332,6 @@ function issuesOf(
       if (ROTATE_FINDINGS.has(f.kind)) fix = { label: "Replace key", intent: "rotate" };
       else if (f.kind === "credential_missing" && !f.subject)
         fix = { label: "Add the key", intent: "continue" };
-      else if (f.kind === "approval_required" && entry.key === "github")
-        fix = {
-          label: (f.subjects?.length ?? 1) > 1 ? "Create apps" : "Create app",
-          intent: "agents",
-        };
-      else if ((f.kind === "approval_required" || f.kind === "identity_missing") && owner === "you")
-        fix = { label: "Open setup", intent: "agents" };
       out.push({
         key: `${p.surface.key}:${f.kind}:${f.subject ?? ""}`,
         kind: f.kind,
@@ -347,6 +352,7 @@ function issuesOf(
         external: f.action_url ? { label: `Open ${entry.name}`, href: f.action_url } : undefined,
         subjects: f.subjects ?? (f.subject && isSeat(f.subject) ? [f.subject] : []),
         surface: p.surface.name,
+        ...(f.seat ? { seat: true } : {}),
       });
     }
   }

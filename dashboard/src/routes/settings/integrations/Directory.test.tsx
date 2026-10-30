@@ -442,6 +442,45 @@ test("the Agents tab counts the agents that are on", async () => {
   expect(within(tab).queryByText("3")).toBeNull();
 });
 
+// AN AGENT'S OWN WAIT IS SAID ON ITS ROW, with the step's own control, and not
+// again above the table as the integration's: the engine marks it `seat`. The
+// tab still says something needs attention. Mutation: list every finding
+// above the table and the wait is drawn twice.
+test("an agent's own wait is left to its row, not listed above the agents", async () => {
+  const waiting: IntegrationsAnswer = {
+    ...answer,
+    integrations: answer.integrations.map((row) =>
+      row.key === "datadog"
+        ? {
+            ...row,
+            reconcile: {
+              phase: "awaiting_admin",
+              actor: "admin",
+              findings: [
+                {
+                  kind: "approval_required",
+                  subject: "sre",
+                  detail: "Datadog: Ask an administrator to approve SRE's role",
+                  phase: "awaiting_admin",
+                  seat: true,
+                },
+              ],
+            },
+          }
+        : row,
+    ),
+  };
+  mount(ADMIN, "datadog", BUILT_IN, undefined, undefined, {
+    access: () => datadogAnswer(),
+    integrations: waiting,
+  });
+  const tab = await screen.findByRole("tab", { name: /Agents/ });
+  await waitFor(() => expect(tab.querySelector(".crewlet-tabs__marker--warning")).not.toBeNull());
+  await screen.findByRole("table", { name: "Agents on Datadog" });
+  expect(document.querySelector(".int-issue")).toBeNull();
+  expect(screen.queryByText(/approve SRE's role/)).toBeNull();
+});
+
 // A NOTE SITS UNDER THE AGENTS, its own row led by its title, the sentence
 // with its key and address set as code, and what would change it beneath.
 // Mutation: draw the notes above the table, or drop the lead, and it fails.

@@ -210,10 +210,12 @@ export function AppPane({
     .map((s) => s.key);
   const held = accessHold(model.managed, model.admin, readOnly);
   // THE SHARED-KEY NOTICE IS SAID ONCE: the access answer's, with its repair,
-  // rather than again as the loop's finding.
-  const issues = data?.notice
-    ? tool.issues.filter((i) => i.kind !== "credential_shared")
-    : tool.issues;
+  // rather than again as the loop's finding. AND AN AGENT'S OWN WAIT IS SAID
+  // ON ITS ROW, with the step's own control, so the list above the agents
+  // holds what is wrong with the integration itself.
+  const issues = tool.issues.filter(
+    (i) => !i.seat && !(data?.notice && i.kind === "credential_shared"),
+  );
   // ONLY WHERE A PASS RUNS: a tool whose accounts are made by hand has no
   // loop to ask, so the control would only ever be refused.
   const provisioned = tool.sections.some((s) => s.tool.can_provision);
