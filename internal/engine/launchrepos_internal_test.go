@@ -774,3 +774,53 @@ func TestALaunchHoldsEveryScratchRepositoryItGrants(t *testing.T) {
 		t.Errorf("a refused launch holds %s, a scratch repository the seat may not read", secret.ID)
 	}
 }
+
+// EVERY REF A LAUNCH RESOLVES IS HELD ON ITS ROW (M3-decisions M3-O61,
+// M3-O64): a native executor on ENG-42 launches on web, whose
+// seats/swe/ENG-42 an earlier turn pushed, and parks; answered, the resumed
+// executor relaunches on api alone — the row's grants are replaced and no
+// longer name web — and the row still holds web's branch, beside api's, which
+// does not exist yet and is held with no read; the default branch each launch
+// resolved, main, is no seat's and holds nothing. The code host's reader
+// answers both branches held from the row, with no turn running.
+//
+// Mutation: resolveRunRepos skipping HoldRef → web's key is absent after the
+// relaunch, red.
+func TestEveryRefALaunchResolvesIsHeldOnItsRow(t *testing.T) {
+	t.Parallel()
+	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
+	web := project("web", "Engineering", code.VisibilityCompany)
+	api := project("api", "Engineering", code.VisibilityCompany)
+	const branch = "refs/heads/seats/swe/ENG-42"
+	rig.host.add(web, map[string]string{"refs/heads/main": mainHead, branch: seatHead})
+	rig.host.add(api, map[string]string{"refs/heads/main": mainHead})
+	item := &types.WorkItem{Backend: types.WorkNative, ID: "task-42", Key: "ENG-42"}
+
+	turn := rig.turn(t, "swe", item)
+	first, err := rig.launch(t, turn, builtin.RepoRequest{Repo: web.Name})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	resumed := &turnctx.Turn{RunID: turn.RunID, Seat: turn.Seat, Org: rig.c.Org, Lookups: turnctx.NewLookups(),
+		Holds: rig.e.rowHolds(first), WorkItem: item}
+	again, err := rig.launch(t, resumed, builtin.RepoRequest{Repo: api.Name})
+	if err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	webKey, apiKey := code.RefHoldKey(web.ID, branch), code.RefHoldKey(api.ID, branch)
+	if len(again.Repos) != 1 || again.Repos[0].RepoID != api.ID {
+		t.Fatalf("the relaunch's row grants %+v, want api alone", again.Repos)
+	}
+	if !slices.Contains(again.CodeHolds, webKey) || !slices.Contains(again.CodeHolds, apiKey) {
+		t.Errorf("the relaunch's row holds %v, want web's %s (the first launch's) and api's (the relaunch's)",
+			again.CodeHolds, branch)
+	}
+	for _, repo := range []code.RepoRef{web, api} {
+		if slices.Contains(again.CodeHolds, code.RefHoldKey(repo.ID, "refs/heads/main")) {
+			t.Errorf("the row holds %s's main, which no seat's branch is", repo.Name)
+		}
+	}
+	if held := liveHolds(t, rig.pending, &runningTurns{}, webKey, apiKey); !held[webKey] || !held[apiKey] {
+		t.Errorf("the parked run's branches read %v, want both held from its row", held)
+	}
+}

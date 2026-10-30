@@ -280,6 +280,60 @@ func (a admission) boxFloor() (BoxRunRef, statelog.Position, bool) {
 	return a.box.Ref, a.box.Floor, true
 }
 
+// holdRefs holds, on a CODING BOX'S run's row, every seat's branch its push
+// names that the run does not hold yet — cmds, the push's commands as the
+// grant and the protections judged them, those refused left out (pre), since
+// they move nothing and are proposed nowhere — in ONE write (Runs.Hold),
+// BEFORE receive-pack runs, anything is stored or the push is proposed. A box
+// pushes as its RUN, not as a turn: what it pushed is what its parked run
+// depends on, so the branch is held for as long as the run's row exists, as a
+// branch its turn read or wrote is (code.RefHoldKey). Nothing for a person's
+// push, nor for a ref no seat's branch ([code.Holdable]), nor for one the
+// row already holds — so every later push of a branch its run holds costs the
+// run store nothing — and the keys it holds join the admission's copy of the
+// row, so a second run of the push over a rebuilt incarnation holds nothing
+// again.
+//
+// Why at the push and not from its rows: every box push row names its run,
+// but holding from them would be a second mechanism — a read of every unended
+// run's pushes by whoever reads the holds — beside the row's union the
+// launch's grants need anyway.
+func (a admission) holdRefs(ctx context.Context, runs Runs, cmds []parsedCommand,
+	pre map[string]answered) error {
+
+	if a.box == nil {
+		return nil
+	}
+	var (
+		keys []string
+		want = map[string]bool{}
+	)
+	for _, c := range cmds {
+		if _, refused := pre[c.Ref]; refused || !code.Holdable(c.Ref) {
+			continue
+		}
+		// A REF NAMED TWICE — which only a hand-built client sends, and the
+		// proposal refuses — is one key.
+		if key := code.RefHoldKey(a.repo.ID, c.Ref); !a.box.Holds[key] && !want[key] {
+			want[key] = true
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if err := runs.Hold(ctx, a.box.Ref, keys); err != nil {
+		return err
+	}
+	if a.box.Holds == nil {
+		a.box.Holds = make(map[string]bool, len(keys))
+	}
+	for _, key := range keys {
+		a.box.Holds[key] = true
+	}
+	return nil
+}
+
 // engineCommitter is the address a commit in this request's pack may be
 // committed as only where the repository already holds it
 // (landing.EngineCommitter): for a CODING BOX the engine's own, as s names it

@@ -63,6 +63,19 @@ type Runs interface {
 	// error is a node that has not yet read the pauses: UNKNOWN, never "not
 	// stopped".
 	Stopped(ctx context.Context, seat string) (by string, err error)
+	// Hold adds keys — each a seat branch's code.RefHoldKey — to the holds
+	// of ref's run (its row's code holds, the turn's that launched it), all
+	// in one write, BEFORE the push that names them is proposed: what a box
+	// pushed is what its parked run depends on. The holds are the TURN'S,
+	// unioned across its launches, so ref's launch is not compared: a
+	// launch superseded since the admission leaves the key held by the turn
+	// that launched it, which keeps a branch longer, the safe direction. A
+	// row that is gone or whose ending is decided is nil, no write and no
+	// error — a run that has ended depends on nothing.
+	// sandbox.ErrCodeHoldsFull is the row at its bound, nothing written; any
+	// other error is the store unreachable, UNKNOWN, and the push is refused
+	// rather than sent unheld.
+	Hold(ctx context.Context, ref BoxRunRef, keys []string) error
 }
 
 // BoxRun is one coding run as the host judges a box by it.
@@ -88,6 +101,14 @@ type BoxRun struct {
 	// holds them: the host fits each to the code domain's bound where it
 	// stamps a push (admission.principal).
 	Provenance code.RunProvenance
+	// Holds are the row's code holds as admission read them, a set: the
+	// keys of what the run's turn holds, each a key this build may not
+	// decode — so a box's push holds only the seat branches it names that
+	// are not among them already ([admission.holdRefs]), and every later
+	// push of a branch its run holds costs the run store nothing. A set
+	// because a push names up to code.MaxCommandsPerPush refs against up to
+	// sandbox.MaxCodeHolds keys.
+	Holds map[string]bool
 }
 
 // BoxGrant is one repository a run was given.

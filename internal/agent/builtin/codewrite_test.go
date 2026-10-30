@@ -887,7 +887,7 @@ func TestEveryCodeWriteRefusalIsInAnExistingClass(t *testing.T) {
 		code.LifecycleNotPermitted: tools.RefusalForbidden, code.LifecycleConfigManaged: tools.RefusalForbidden,
 		code.LifecycleNameTaken: tools.RefusalExists, code.LifecycleScratchLimit: tools.RefusalForbidden,
 		code.LifecycleRepoLimit: tools.RefusalForbidden, code.LifecycleRepoDeleted: tools.RefusalNotFound,
-		code.LifecycleStale: tools.RefusalStaleVersion,
+		code.LifecycleStale: tools.RefusalStaleVersion, code.LifecycleRefDeleted: tools.RefusalNotFound,
 	}
 	for _, refusal := range code.LifecycleRefusals() {
 		writer := &codeWrites{life: func(code.LifecycleRequest) (code.LifecycleResult, error) {
@@ -1077,12 +1077,15 @@ func TestEveryCodeToolHoldsItsScratchRepositoryBeforeItsRequest(t *testing.T) {
 		})
 	}
 
-	// A PROJECT REPOSITORY TAKES NO HOLD, and an operator holds nothing.
+	// A PROJECT REPOSITORY TAKES NO HOLD of its own — the seat's branch the
+	// write names is held by its key (TestEveryCodeToolHoldsTheSeatRefs-
+	// ItNamesBeforeItsRequest), never by the repository's id — and an
+	// operator holds nothing.
 	turn := writerTurn(t)
 	callWrite(t, everyGrant(), codeRegistry(t, writeDeps(newCodeHost(), &codeWrites{})), turn,
 		builtin.CodeCommitFilesTool, commitArgs("x"))
-	if held := turn.Holds.IDs(); len(held) != 0 {
-		t.Errorf("a write to a project repository held %v", held)
+	if held := turn.Holds.IDs(); slices.Contains(held, siteID) {
+		t.Errorf("a write to a project repository held the repository: %v", held)
 	}
 }
 

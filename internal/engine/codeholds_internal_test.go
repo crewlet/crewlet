@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/queue"
@@ -57,11 +58,16 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 		t.Fatal("the node attached no seat in 10s, so no seat holder would be asked")
 	}
 
-	// A PARKED RUN'S ROW, holding A, and a row a newer build wrote at a
-	// status this build does not know, holding C — each of a seat this
-	// company does not place, so no recovery of this node's seats reads them.
+	// A PARKED RUN'S ROW, holding A and a seat's branch, and a row a newer
+	// build wrote at a status this build does not know, holding C — each of a
+	// seat this company does not place, so no recovery of this node's seats
+	// reads them. A key is opaque to the reader: a seat branch's
+	// (code.RefHoldKey) is read as a repository's is.
+	refA := code.RefHoldKey("0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e", "refs/heads/seats/elsewhere/a")
+	refB := code.RefHoldKey("0192f6c1-6a7e-7c1b-9d4e-3f8a2b1c0d9e", "refs/heads/seats/elsewhere/b")
 	for _, row := range []sandbox.PendingRun{
-		{TurnID: "run-a", AgentHandle: "elsewhere", Status: sandbox.StatusAwaiting, CodeHolds: []string{"repo-a"}},
+		{TurnID: "run-a", AgentHandle: "elsewhere", Status: sandbox.StatusAwaiting,
+			CodeHolds: []string{"repo-a", refA}},
 		{TurnID: "run-c", AgentHandle: "elsewhere", Status: "rehearsing", CodeHolds: []string{"repo-c"}},
 	} {
 		raw, err := json.Marshal(row)
@@ -72,20 +78,25 @@ func TestCodeHoldsReadsRowsAndEverySeatHolder(t *testing.T) {
 			t.Fatalf("seed %s's row: %v %v", row.TurnID, created, err)
 		}
 	}
-	// A RUNNING TURN OF THIS SEAT HOLDER, holding B in its memory.
+	// A RUNNING TURN OF THIS SEAT HOLDER, holding B and a seat's branch in its
+	// memory.
 	running := turnctx.NewHolds(nil)
-	if _, err := running.Take(t.Context(), "repo-b"); err != nil {
-		t.Fatal(err)
+	for _, key := range []string{"repo-b", refB} {
+		if _, err := running.Take(t.Context(), key); err != nil {
+			t.Fatal(err)
+		}
 	}
 	done := e.turnHolds.running(running)
 	defer done()
 
-	got, err := e.codeHolds(t.Context(), []string{"repo-a", "repo-b", "repo-c", "repo-d"})
+	got, err := e.codeHolds(t.Context(), []string{"repo-a", "repo-b", "repo-c", "repo-d", refA, refB})
 	if err != nil {
 		t.Fatalf("codeHolds: %v", err)
 	}
-	if !got["repo-a"] || !got["repo-b"] || !got["repo-c"] || got["repo-d"] || len(got) != 3 {
-		t.Fatalf("held %v, want repo-a (a row), repo-b (a running turn) and repo-c (a newer build's row)", got)
+	if !got["repo-a"] || !got["repo-b"] || !got["repo-c"] || got["repo-d"] || !got[refA] || !got[refB] ||
+		len(got) != 5 {
+		t.Fatalf("held %v, want repo-a and a branch (a row), repo-b and a branch (a running turn) and repo-c "+
+			"(a newer build's row)", got)
 	}
 
 	// A TURN THAT RETURNED holds nothing in memory any more.

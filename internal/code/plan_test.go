@@ -461,6 +461,12 @@ func registeredStatements() map[string]statement {
 		"rename repo":      {renameRepoSQL, []any{"web", 1, 1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"release redirect": {releaseRedirectSQL, []any{"token", "repo-1", 1}, []string{nameKey + " (token=?)"}},
 		"hold":             {holdSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
+		// A SEAT BRANCH'S HOLD: its decide's read of the ref and its apply's
+		// mark, each one row by code_refs' key, and the repository's version
+		// by its own.
+		"ref hold":         {refHoldSQL, []any{"repo-1", "refs/heads/seats/dev/x"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
+		"ref held":         {refHeldSQL, []any{1, "repo-1", "refs/heads/seats/dev/x"}, []string{refsKey + " (repo_id=? AND ref=?)"}},
+		"ref hold version": {refHoldVersionSQL, []any{1, "repo-1"}, []string{repoKey + " (id=?)"}},
 		// THE RETENTION'S TWO NEW LISTINGS, keyset pages over their partial
 		// indexes in the index's order: the redirects whose window ended,
 		// and the active scratch repositories idle past the cutoff.

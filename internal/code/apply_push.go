@@ -160,7 +160,11 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	}
 
 	var (
-		final       = map[string]string{}
+		final = map[string]string{}
+		// setBy is, beside each ref's final target, the principal of the
+		// entry whose ok command last set it in the record's order — the
+		// writer whose push the ref's row names a seat for ([seatOf]).
+		setBy       = map[string]Principal{}
 		pushRows    []PushEntry
 		packRows    []PackRef
 		packKinds   []PackKind
@@ -184,6 +188,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 				dropped[d] = true
 				drops = append(drops, d)
 			}
+			setBy[c.Ref] = e.Principal
 			if c.New == ZeroOID {
 				final[c.Ref] = ""
 				continue
@@ -261,11 +266,16 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 		}
 		kept = append(kept, ref)
 	}
+	// EVERY ROW NAMES THE SEAT THAT SET IT IN ITS OWN NAMESPACE, or none
+	// ([seatOf]) — and never its held_position, which a hold alone writes, so
+	// a push leaves the mark of the last hold on the ref where it was.
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
-		`INSERT INTO code_refs (repo_id, ref, target, position, at) VALUES `, `(?, ?, ?, ?, ?)`,
-		`ON CONFLICT (repo_id, ref) DO UPDATE SET target = excluded.target, position = excluded.position, at = excluded.at`,
+		`INSERT INTO code_refs (repo_id, ref, target, position, at, seat) VALUES `, `(?, ?, ?, ?, ?, ?)`,
+		`ON CONFLICT (repo_id, ref) DO UPDATE SET target = excluded.target, position = excluded.position, `+
+			`at = excluded.at, seat = excluded.seat`,
 		len(kept), func(i int) []any {
-			return []any{p.RepoID, kept[i], final[kept[i]], at.packed, at.at()}
+			ref := kept[i]
+			return []any{p.RepoID, ref, final[ref], at.packed, at.at(), seatOf(setBy[ref], ref, final[ref])}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the refs at %s: %w", at.position, err)
 	}
@@ -1202,6 +1212,25 @@ func pushesWithin(ctx context.Context, tx *sql.Tx, bytes int64, stop func(int64)
 		weighed += width
 	}
 	return ids, weighed, false, rows.Err()
+}
+
+// seatOf is the seat a ref's row names (code_refs.seat) once p's push set it
+// to target: the pushing seat where an AGENT principal — its coding box, or an
+// engine write in its turn — set the ref INSIDE ITS OWN NAMESPACE
+// ([SeatNamespace]), and "" for every other write: a person's or a token's
+// push, a deletion (a tombstone names nobody), and a seat's push outside its
+// own namespace — a branch it was granted, never its own to lose.
+//
+// BY THE PRINCIPAL'S KIND, NEVER BY ITS SEAT: since every person holds a human
+// seat (ADR-0032), a person's principal names their seat too (an operator with
+// Seat set, as the code host's admission builds it), and a person pushing
+// under refs/heads/seats/<their handle>/ is no seat's push of its own branch.
+func seatOf(p Principal, ref, target string) string {
+	if target == "" || p.Kind != PrincipalAgent || p.Seat == "" ||
+		!strings.HasPrefix(ref, SeatNamespace(p.Seat)) {
+		return ""
+	}
+	return p.Seat
 }
 
 // refsNamed is what the repository holds of each of refs — its target, empty

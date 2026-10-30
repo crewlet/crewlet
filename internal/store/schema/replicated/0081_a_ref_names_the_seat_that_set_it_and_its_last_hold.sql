@@ -1,0 +1,31 @@
+-- A ref names the seat that set it, and its last hold.
+--
+-- code_refs.seat is the seat whose push — from its coding box, or an engine
+-- write in its turn — last set the ref INSIDE THAT SEAT'S OWN NAMESPACE
+-- (refs/heads/seats/<handle>/…, code.SeatNamespace), written by the push apply
+-- (code.seatOf) from the principal of the entry that last set the ref in the
+-- record's order, and '' after every other writer: a person's or a token's
+-- push — a person's principal names the human seat they hold, and is no seat's
+-- push for it — a deletion, and a seat's push outside its own namespace. Only
+-- such a ref is a seat's to lose: a tag, a person's branch, a release branch,
+-- and a seat's branch a person pushed last never carry one. The default exists
+-- because SQLite requires one for a NOT NULL column added to a table; the
+-- apply writes the column on every row it upserts.
+--
+-- code_refs.held_position is the composed position of the last HOLD record
+-- naming the ref (code.Hold with a Ref): a live turn's hold on a seat's branch
+-- it read or wrote unset for code.RefHoldRecordAfter or more, recorded on the
+-- one subject every push to its repository arbitrates on, so that a deletion
+-- of the branch listed before the turn's read is ordered against it PER REF.
+-- Written only by a hold's apply, and never by a push's upsert, which names
+-- target, position, at and seat alone — so a later push leaves it. 0 is
+-- "never held", a value no record has: SQLite stores the integer 0 in the
+-- record header alone, so a row never held costs one header byte.
+--
+-- NO INDEX: a hold's decide and apply reach the ref by code_refs' key, and the
+-- mark is an integer, so nothing that measures a ref row's bytes changes.
+--
+-- Class: code_refs stays reproducible: both columns are written only from the
+-- records the applier applies.
+ALTER TABLE code_refs ADD COLUMN seat TEXT NOT NULL DEFAULT '';
+ALTER TABLE code_refs ADD COLUMN held_position INTEGER NOT NULL DEFAULT 0;

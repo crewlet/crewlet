@@ -389,6 +389,12 @@ func (s *Server) receiveOver(ctx context.Context, w http.ResponseWriter, r *http
 		s.syncFailed(w, r, adm.name, ferr)
 		return received{answered: true}
 	}
+	// A BOX'S RUN HOLDS EVERY SEAT BRANCH IT PUSHES, on the run's row, before
+	// anything of the push is received, stored or proposed (holdRefs).
+	if err := adm.holdRefs(ctx, s.o.Boxes.Runs, sec.Commands, pre); err != nil {
+		s.boxHoldFailed(w, r, adm, err)
+		return received{answered: true}
+	}
 
 	// 4–5 THE PUSH'S IDENTITY AND ITS SCRATCH.
 	pushID := uuid.Must(uuid.NewV7()).String()

@@ -176,3 +176,52 @@ func TestATurnPastItsHoldBoundIsRefused(t *testing.T) {
 		t.Errorf("a Take on no holds = %v, want ErrNoHolds — a request reaching a repository unheld", err)
 	}
 }
+
+// ONLY A TAKEN KEY IS CONFIRMED, AND NO CONFIRMATION IS WRITTEN (M3-decisions
+// M3-O65). A seam confirms a key once its Take is done and the hold is
+// ordered, so the turn's later calls send nothing more for it: a key the set
+// does not hold cannot have been ordered by a Take, and is not marked; a key
+// whose seam failed after its Take is unmarked again; and the mark is the
+// process's own, so a set built from a row's keys — a resumed turn, a bridged
+// run's session — confirms none of them, and no mark ever reaches the row
+// through the writer.
+//
+// Mutations: NewHolds confirming its seed → red; Confirm writing through the
+// writer → red; Confirm accepting a key not in the set → red.
+func TestOnlyATakenKeyIsConfirmedAndNoneIsWritten(t *testing.T) {
+	t.Parallel()
+	w := &rowWriter{}
+	h := turnctx.NewHolds([]string{"seeded"})
+	h.Attach(w.write)
+	if h.Confirmed("seeded") {
+		t.Error("a key the set was seeded with reads confirmed: a resumed turn would send nothing for it")
+	}
+	if h.Confirm("untaken") || h.Confirmed("untaken") {
+		t.Error("a key nothing took was confirmed")
+	}
+	if _, err := h.Take(t.Context(), "taken"); err != nil {
+		t.Fatalf("take: %v", err)
+	}
+	written := len(w.held())
+	if !h.Confirm("taken") || !h.Confirmed("taken") {
+		t.Fatal("a taken key did not confirm")
+	}
+	if h.Confirm("seeded"); !h.Confirmed("seeded") {
+		t.Error("a seeded key the set holds did not confirm")
+	}
+	h.Unconfirm("taken")
+	if h.Confirmed("taken") {
+		t.Error("an unconfirmed key still reads confirmed")
+	}
+	if got := w.held(); len(got) != written {
+		t.Errorf("confirming wrote %v to the row: a mark is the process's own", got[written:])
+	}
+	if !slices.Equal(h.IDs(), []string{"seeded", "taken"}) {
+		t.Errorf("the set is %v after the marks moved, want [seeded taken]", h.IDs())
+	}
+	var none *turnctx.Holds
+	if none.Confirm("taken") || none.Confirmed("taken") {
+		t.Error("a nil set confirmed a key")
+	}
+	none.Unconfirm("taken")
+}

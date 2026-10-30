@@ -419,6 +419,16 @@ const (
 	// margin guards a read in flight.
 	PruneGrace = 14 * 24 * time.Hour
 
+	// RefExpiry is a SEAT BRANCH'S IDLE WINDOW: how long a branch a seat set
+	// in its own namespace (code_refs.seat, [SeatNamespace]) goes unset
+	// before it counts as idle — TWO WEEKS, Q4 as approved: past the trim's
+	// default min_age (a week) and a working fortnight, so a branch nobody
+	// pushed across a person's holiday is not idle yet. A live turn's hold on
+	// a seat's branch is RECORDED once the branch has gone unset nearly this
+	// long ([RefHoldRecordAfter], defined from it), and held in the turn's
+	// memory or on its run row alone before then.
+	RefExpiry = 14 * 24 * time.Hour
+
 	// MaxDescriptionBytes is config.CodeMaxDescriptionBytes: a repository
 	// description is one paragraph, riding every settings record and every
 	// listing row.

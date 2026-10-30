@@ -2187,14 +2187,14 @@ func (r *Reader) repo(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster
 	if err != nil {
 		return err
 	}
-	head, _, _, err := liveRefIn(ctx, tx, id, branchPrefix+v.ref.DefaultBranch)
+	head, _, err := liveRefIn(ctx, tx, id, branchPrefix+v.ref.DefaultBranch)
 	if err != nil {
 		return fmt.Errorf("code: read %s's head: %w", name, err)
 	}
 	// THE COUNTS ARE THE ROW'S, kept by the applier as it moves the refs:
 	// counted here they were a walk of every ref the namespace holds,
 	// tombstones included, on every detail read.
-	summary := v.summary(head)
+	summary := v.summary(head.OID)
 	summary.Access = g.Access.String()
 	out.Repo = &RepoDetail{RepoSummary: summary,
 		Branches: v.branches, Tags: v.tags, Tombstones: v.tombstones,
@@ -3070,12 +3070,12 @@ func (r *Reader) ResolveRef(ctx context.Context, q RefQuery) (RefAnswer, error) 
 // zero ResolvedRef where it holds none of them.
 func firstLiveIn(ctx context.Context, tx *sql.Tx, id string, names []string) (ResolvedRef, error) {
 	for _, name := range names {
-		oid, moved, found, err := liveRefIn(ctx, tx, id, name)
+		resolved, found, err := liveRefIn(ctx, tx, id, name)
 		switch {
 		case err != nil:
 			return ResolvedRef{}, err
 		case found:
-			return ResolvedRef{Ref: name, OID: oid, Moved: moved}, nil
+			return resolved, nil
 		}
 	}
 	return ResolvedRef{}, nil
@@ -3106,21 +3106,23 @@ func refNames(ref string) ([]string, error) {
 }
 
 // liveRefIn is repository id's live ref by its whole name, read in tx: the
-// object it names, and the position of the record that last moved it — its
-// row's, which every move of the ref writes (apply_push.go) — or false where
-// no live ref has the name.
-func liveRefIn(ctx context.Context, tx *sql.Tx, id, ref string) (string, statelog.Position, bool, error) {
+// object it names, the position of the record that last moved it — its row's,
+// which every move of the ref writes (apply_push.go) — that record's broker
+// instant and the seat that set it in its own namespace ([seatOf]), all in one
+// lookup of the ref's key; or false where no live ref has the name.
+func liveRefIn(ctx context.Context, tx *sql.Tx, id, ref string) (ResolvedRef, bool, error) {
 	var (
-		oid   string
-		moved int64
+		out       = ResolvedRef{Ref: ref}
+		moved, at int64
 	)
-	switch err := tx.QueryRowContext(ctx, liveRefSQL, id, ref).Scan(&oid, &moved); {
+	switch err := tx.QueryRowContext(ctx, liveRefSQL, id, ref).Scan(&out.OID, &moved, &at, &out.Seat); {
 	case errors.Is(err, sql.ErrNoRows):
-		return "", statelog.Position{}, false, nil
+		return ResolvedRef{}, false, nil
 	case err != nil:
-		return "", statelog.Position{}, false, err
+		return ResolvedRef{}, false, err
 	}
-	return oid, unpacked(moved), true, nil
+	out.Moved, out.At = unpacked(moved), store.DecodeTime(at)
+	return out, true, nil
 }
 
 // mayReadIn refuses an asker that may not read repository id — or the seat it
@@ -3458,10 +3460,10 @@ const (
 	// repoGrantSQL is what a grant reads of one repository's row, and its
 	// status ([grantRefIn]).
 	repoGrantSQL = `SELECT name, status, owner_kind, owner, visibility FROM code_repos WHERE id = ?`
-	// liveRefSQL is one live ref's target and the position it last moved at,
-	// by its whole name: a repository's head, and a ref a RefQuery names
-	// (liveRefIn).
-	liveRefSQL = `SELECT target, position FROM code_refs INDEXED BY ` + refsKey + `
+	// liveRefSQL is one live ref's target, the position it last moved at, that
+	// move's instant and the seat that set it, by its whole name: a
+	// repository's head, and a ref a RefQuery names (liveRefIn).
+	liveRefSQL = `SELECT target, position, at, seat FROM code_refs INDEXED BY ` + refsKey + `
 		WHERE repo_id = ? AND ref = ? AND target != ''`
 	// refsUnderSQL is a page of the live refs between two names, by name —
 	// over the live refs' partial index, its predicate verbatim

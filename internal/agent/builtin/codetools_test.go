@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -94,6 +95,11 @@ type codeHost struct {
 	// answered, outside the host's lock — so a case can read what the asking
 	// turn held when the question arrived.
 	before func(what string)
+	// seats and ats are, for a ref a case gives them, the seat that set it in
+	// its own namespace and when — what a resolve answers beside its oid, and
+	// what a turn's hold on a seat's branch decides its record from.
+	seats map[string]string
+	ats   map[string]time.Time
 
 	reads    []code.ReadQuery
 	resolves []code.RefQuery
@@ -221,7 +227,8 @@ func (h *codeHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswe
 			strings.Join(names, " or "))}
 		for _, name := range names {
 			if oid, ok := h.refs[name]; ok {
-				resolved = code.ResolvedRef{Name: asked, Ref: name, OID: oid, Moved: h.movedAt(name)}
+				resolved = code.ResolvedRef{Name: asked, Ref: name, OID: oid, Moved: h.movedAt(name),
+					Seat: h.seats[name], At: h.ats[name]}
 				break
 			}
 		}

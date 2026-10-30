@@ -278,6 +278,58 @@ func move(ref, old, new string) Command {
 	return Command{Ref: ref, Old: old, New: new, Result: ResultOK}
 }
 
+// A REF ROW NAMES THE SEAT THAT SET IT IN ITS NAMESPACE, and nobody else: a
+// seat's push — its box's, or an engine write in its turn — that sets a ref
+// inside refs/heads/seats/<its handle>/ writes the seat on the ref's row, and
+// every other write leaves it empty — the same seat's push to main, a person's
+// push of the seat's branch, a deletion, and a person whose principal names
+// their own human seat pushing under that seat's namespace. A record judges
+// each ref by the entry that set it LAST in the record's order, as its target
+// is the last one set.
+//
+// Mutations: drop the namespace test from seatOf → main names the seat, red;
+// key on the principal's seat rather than its kind → the person's own-seat
+// row names swe, red.
+func TestARefRowNamesTheSeatThatSetItInItsNamespace(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	e.apply(create(t, "repo-a", "a"))
+	as := func(p Principal, via PushVia, id string, cmds ...Command) PushEntry {
+		entry := pushEntry(id, cmds...)
+		entry.Principal, entry.Via = p, via
+		return entry
+	}
+	seat := func(handle string) Principal { return Principal{Kind: PrincipalAgent, Seat: handle} }
+	person := Principal{Kind: PrincipalOperator, OperatorID: "pat:swe", Seat: "swe"}
+	e.apply(pushOf(t, "repo-a",
+		as(seat("dev"), ViaGit, "p1", move("refs/heads/seats/dev/x", ZeroOID, oid("x")),
+			move("refs/heads/main", ZeroOID, oid("main")), move("refs/heads/seats/dev/gone", ZeroOID, oid("g")),
+			move("refs/heads/seats/dev/taken", ZeroOID, oid("t"))),
+		as(seat("dev"), ViaEngine, "p2", move("refs/heads/seats/dev/written", ZeroOID, oid("w"))),
+		as(person, ViaGit, "p3", move("refs/heads/seats/swe/own", ZeroOID, oid("own"))),
+		as(seat("swe"), ViaGit, "p4", move("refs/heads/seats/swe/y", ZeroOID, oid("y1"))),
+		as(person, ViaGit, "p5", move("refs/heads/seats/swe/y", oid("y1"), oid("y2")))))
+	e.apply(pushOf(t, "repo-a",
+		as(person, ViaGit, "p6", move("refs/heads/seats/dev/taken", oid("t"), oid("t2"))),
+		as(seat("dev"), ViaGit, "p7", move("refs/heads/seats/dev/gone", oid("g"), ZeroOID))))
+	for ref, want := range map[string]string{
+		"refs/heads/seats/dev/x":       "dev",
+		"refs/heads/seats/dev/written": "dev",
+		"refs/heads/main":              "",
+		"refs/heads/seats/dev/taken":   "",
+		"refs/heads/seats/dev/gone":    "",
+		"refs/heads/seats/swe/own":     "",
+		"refs/heads/seats/swe/y":       "",
+	} {
+		if got := e.str(`SELECT seat FROM code_refs WHERE repo_id = 'repo-a' AND ref = ?`, ref); got != want {
+			t.Errorf("%s names seat %q, want %q", ref, got, want)
+		}
+	}
+	if seatOf(seat("dev"), "refs/heads/seats/devops/x", oid("x")) != "" {
+		t.Error("a seat's push into another seat's namespace that its handle prefixes names the seat")
+	}
+}
+
 // A RECORD ON ONE REPOSITORY'S SUBJECT CHANGES ONLY THAT REPOSITORY: the
 // subject is the arbitration unit, so a payload naming another repository is
 // an error, never an apply to it.

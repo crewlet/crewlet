@@ -475,16 +475,18 @@ const MaxBridgeCalls = 200
 // MaxHolds, the most one turn may hold, so a turn's whole set always fits its
 // row — this package imports neither the engine's turn context nor anything
 // that does, and the engine's TestATurnHoldsWhatItsRowMay holds the two
-// equal. A key is a repository's id (39 bytes on the row, quoted and with its
-// comma), so the field is at most about 39 KiB on a row that already carries
-// the whole suspended conversation.
+// equal. A key is a scratch repository's id (39 bytes on the row, quoted and
+// with its comma) or a seat branch's key (72 — the code host's fixed-width
+// RefHoldKey), so the field is at most about 72 KiB on a row that already
+// carries the whole suspended conversation.
 const MaxCodeHolds = 1024
 
 // ErrCodeHoldsFull refuses a write that would take a row's
 // [PendingRun.CodeHolds] past [MaxCodeHolds], with nothing written: the
 // request that wanted the hold is refused naming the bound, never sent
 // unheld.
-var ErrCodeHoldsFull = errors.New("sandbox: the run already holds the most repositories one run may (1 024)")
+var ErrCodeHoldsFull = errors.New("sandbox: the run already holds the most repositories and branches one run " +
+	"may (1 024)")
 
 // PendingRun is one detached job's durable state, keyed by its kick-off turn.
 //
@@ -848,12 +850,14 @@ type PendingRun struct {
 	// skips is a log that lies about what the run did.
 	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
 
-	// CodeHolds are the hold KEYS of what this run's turn holds from the code
-	// host's expiry (internal/agent/turnctx's Holds): the seat's scratch
-	// repositories it named, by id — keys this package carries and never
-	// decodes. Every one the turn named before its first launch, every one
-	// it names while the row exists (a bridged call's, a resumed executor's),
-	// each written BEFORE the request that named it ([PendingStore.AddCodeHolds]).
+	// CodeHolds are the hold KEYS of what this run's turn holds
+	// (internal/agent/turnctx's Holds): the seat's scratch repositories it
+	// named, by id, held from the code host's expiry, and the seats' branches
+	// it read, wrote or launched on — and its box pushed — each by the code
+	// host's ref key — keys this package carries and never decodes. Every one the turn named
+	// before its first launch, every one it names while the row exists (a
+	// bridged call's, a resumed executor's, a box push's), each written
+	// BEFORE the request that named it ([PendingStore.AddCodeHolds]).
 	//
 	// UNIONED, NEVER REPLACED — unlike everything else a launch resets: a
 	// relaunch keeps every earlier hold, because the turn may still depend on

@@ -370,7 +370,14 @@ const twoClocks = 2 * objstore.AssumedClockSkew
 // set (config.CodeScratchIdleDaysFloor days). Otherwise a pass already deciding
 // could expire a repository a turn has just named and not recorded.
 //
-// Mutation: HoldRecordAfter at 23 h — red.
+// A SEAT'S BRANCH BY THE SAME ARGUMENT (M3-decisions M3-O61, M3-O64): a hold on
+// one is recorded only where the branch has gone unset
+// code.RefHoldRecordAfter or more, so the threshold and two clocks'
+// disagreement must not reach code.RefExpiry, the idle window it is defined
+// from.
+//
+// Mutations: HoldRecordAfter at 23 h — red; RefHoldRecordAfter at RefExpiry
+// less one hour — red.
 func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 	t.Parallel()
 	shortest := 24 * time.Hour * time.Duration(config.CodeScratchIdleDaysFloor)
@@ -379,6 +386,12 @@ func TestAHoldRecordCoversEveryPassInFlight(t *testing.T) {
 			"clock up to %v (twice objstore.AssumedClockSkew) off the pass's, %v in all, past the shortest "+
 			"idle time a pass expires at (%v): a pass in flight could expire a repository a turn holds",
 			code.HoldRecordAfter, twoClocks, reach, shortest)
+	}
+	if reach := code.RefHoldRecordAfter + twoClocks; reach > code.RefExpiry {
+		t.Errorf("an unrecorded hold may be taken on a seat's branch unset up to %v (code.RefHoldRecordAfter) "+
+			"by a clock up to %v (twice objstore.AssumedClockSkew) off the pass's, %v in all, past the idle "+
+			"window it is defined from (code.RefExpiry, %v): a deletion listed in flight could take a branch a "+
+			"turn holds", code.RefHoldRecordAfter, twoClocks, reach, code.RefExpiry)
 	}
 }
 

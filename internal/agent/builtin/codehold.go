@@ -54,10 +54,30 @@ import (
 // refused before it reads anything. Decided at the turn's own read of the
 // repository ([code.LifecycleRequest.Seen]), so a data node behind that read
 // never answers it from older rows.
+//
+// # A seat's branch, by the same rule
+//
+// A seat's branch — a ref under refs/heads/seats/<handle>/, the only refs whose
+// row names the seat that set it — is held the same way, through its own seam
+// ([HoldRef]) and its own key ([code.RefHoldKey]) in the same set and on the
+// same row: every ref a turn READS through a code tool, every branch it
+// WRITES, whether or not the write moves it, and every ref a coding run's
+// launch resolves. A read moves no ref, and a write that moves nothing appends
+// no record, so neither orders itself against a deletion of the branch; so a
+// hold on a branch unset [code.RefHoldRecordAfter] or more is RECORDED, as an
+// idle scratch repository's is, and decided at the turn's read of the ref.
+//
+// # Confirmed once a turn
+//
+// A seam that took a hold having READ what it holds, and found it ordered —
+// no record needed, or the record applied — CONFIRMS its key in the turn's
+// set ([turnctx.Holds.Confirm], M3-decisions M3-O65), and sends nothing more
+// for it in this turn and process: a write naming a branch the turn's read
+// already confirmed reads nothing more before it is sent ([CodeDeps.branch]).
 
-// CodeHolder records a turn's hold on a scratch repository's subject: the
-// routed `code.lifecycle`, declared here by its consumer (estate.CodeSeam
-// satisfies it).
+// CodeHolder records a turn's hold — on a scratch repository, or on a seat's
+// branch — on the repository's subject: the routed `code.lifecycle`, declared
+// here by its consumer (estate.CodeSeam satisfies it).
 type CodeHolder interface {
 	Lifecycle(ctx context.Context, r code.LifecycleRequest) (code.LifecycleResult, error)
 }
@@ -87,6 +107,15 @@ type CodeHolder interface {
 // no hold and sends nothing ([CodeDeps.repoRead]), so a turn pays at most one
 // record round trip per scratch repository it names.
 //
+// CONFIRMED ONCE A TURN AND PROCESS (M3-decisions M3-O65), so a resolution
+// made again — the turn's lookups forgotten — sends nothing either: a key the
+// turn has confirmed answers nil at once, with no Take and no record. HoldRepo
+// confirms the repository's id when it returns nil having been handed a READ
+// of it (a resolution's RepoRef, its Position set), its Take done, and either
+// no record needed (archived, or active within [code.HoldRecordAfter]) or the
+// record applied; a create's hold, on an id no row was read for, confirms
+// nothing. Every error after the Take clears the mark.
+//
 // Every error refuses the request, which then reads and writes nothing: a
 // hold the set or the run row refused ([turnctx.ErrHoldsFull],
 // [sandbox.ErrCodeHoldsFull], a row gone or ending); a record refused — the
@@ -106,13 +135,29 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 		// one is a wiring that names nobody to hold for.
 		return nil
 	}
-	if _, err := turn.Holding().Take(ctx, repo.ID); err != nil {
+	holds := turn.Holding()
+	if holds.Confirmed(repo.ID) {
+		// CONFIRMED IN THIS TURN AND PROCESS (M3-decisions M3-O65): its Take
+		// and its order are done, and nothing more is sent.
+		return nil
+	}
+	if _, err := holds.Take(ctx, repo.ID); err != nil {
 		return fmt.Errorf("builtin: hold scratch repository %s for turn %s: %w", repo.Name, turn.RunID, err)
 	}
+	// A READ OF THE REPOSITORY is what a hold is confirmed from: a
+	// resolution's RepoRef, at the position it was read at. A create's hold,
+	// on the id its decide will derive, read no row — nothing could have
+	// listed what does not exist yet — so it confirms nothing, and the turn's
+	// next read of the repository confirms it.
+	read := !repo.Position.IsZero()
 	if repo.Status != code.RepoStatusActive || wallClock(now).Sub(repo.LastActivityAt) < code.HoldRecordAfter {
+		if read {
+			holds.Confirm(repo.ID)
+		}
 		return nil
 	}
 	if holder == nil {
+		holds.Unconfirm(repo.ID)
 		return errNoHolder
 	}
 	res, err := holder.Lifecycle(ctx, code.LifecycleRequest{
@@ -121,18 +166,137 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 	})
 	switch {
 	case err != nil:
+		holds.Unconfirm(repo.ID)
 		return fmt.Errorf("builtin: record turn %s's hold on scratch repository %s: %w", turn.RunID, repo.Name, err)
 	case res.Refusal != "":
+		holds.Unconfirm(repo.ID)
 		return res.Err()
 	case res.Outcome != statelog.OutcomeApplied && res.Outcome != statelog.OutcomePending:
+		holds.Unconfirm(repo.ID)
 		return fmt.Errorf("%w: the code host answered turn %s's hold on scratch repository %s with outcome %q",
 			errHoldUnconfirmed, turn.RunID, repo.Name, res.Outcome)
 	}
 	// APPLIED OR PENDING: the record is durable on the repository's subject,
 	// so the broker has ordered it against the expiry's delete whichever
 	// node applies the two.
+	holds.Confirm(repo.ID)
 	return nil
 }
+
+// HoldRef takes turn's hold on ref of repo BEFORE the request that depends on
+// what ref names is sent — a git read of the commit it resolved to, a write
+// proposed against it, a launch's clone of it. THE SEAM FOR A REF, as
+// [HoldRepo] is for a repository, and the rule it keeps is one: a request
+// that depends on what a seat's branch names is sent only after HoldRef has
+// answered for it. Its callers are the ONE ref read of this package
+// ([CodeDeps.refsOf], under every ref a code tool resolves and every ref a
+// coding run's launch does), a write tool's branch ([CodeDeps.branch]) and the
+// launch's branch that does not exist yet ([CodeDeps.ResolveRunRepos]) — and
+// nothing else in a turn names a ref (TestOnlyTheSeamResolvesARefForATurn,
+// TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest).
+//
+// A ref [code.Holdable] refuses — main, a tag, a person's branch — keeps
+// nothing and takes no hold, and an operator's call, which has no turn, holds
+// nothing; a turn built outside the engine, which keeps no holds, is refused
+// rather than sent through a seat's branch unheld ([turnctx.ErrNoHolds]).
+//
+// The key ([code.RefHoldKey]) goes into the turn's [turnctx.Holds] — written
+// first to its run row where the turn has one. Then, where seen — the ref's
+// row as the turn's read answered it, at the checkpoint read — is a SEAT'S
+// branch (seen.Seat set) last set at least [code.RefHoldRecordAfter] before
+// now, the clock read AFTER the hold was taken, the hold is RECORDED on the
+// repository's subject: a lifecycle request of kind hold naming the ref,
+// decided at the position the turn read it at, as one operation per run and
+// key ([holdOpID]). seen is nil only for a ref that does not exist yet — a
+// branch a write creates, or a run's branch its box will create — which no
+// deletion can have listed: the write or the push that makes it sets it now.
+//
+// CONFIRMED ONCE A TURN AND PROCESS (M3-decisions M3-O65): a key the turn has
+// confirmed answers nil at once and sends nothing — no Take, no record. HoldRef
+// confirms the key when it returns nil having been handed seen, its Take done,
+// and either no record needed or the record applied; with seen nil it confirms
+// nothing, and the turn's next read of the ref confirms it. Every error after
+// the Take clears the key's mark.
+//
+// Every error refuses the request, which then reads and writes nothing
+// through the ref: a hold the set or the run row refused ([turnctx.ErrHoldsFull],
+// [sandbox.ErrCodeHoldsFull], a row gone or ending); a record refused — the
+// ref deleted after the turn read it ([refDeletedError], naming the commit the
+// read answered so the branch can be restored at it), the repository deleted
+// ([code.ErrRepoNotFound]) or not readable by the seat ([code.ErrNotPermitted]);
+// a record nothing served or whose outcome is unknown.
+func HoldRef(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor Actor, repo code.RepoRef,
+	ref string, seen *code.ResolvedRef, read statelog.Position, now func() time.Time) error {
+
+	if turn == nil || !code.Holdable(ref) {
+		return nil
+	}
+	seat := CodeAskerOf(actor)
+	if seat.Kind != code.PrincipalAgent {
+		// A TURN IS A SEAT'S, as HoldRepo says.
+		return nil
+	}
+	key := code.RefHoldKey(repo.ID, ref)
+	holds := turn.Holding()
+	if holds.Confirmed(key) {
+		return nil
+	}
+	if _, err := holds.Take(ctx, key); err != nil {
+		return fmt.Errorf("builtin: hold %s of %s for turn %s: %w", ref, repo.Name, turn.RunID, err)
+	}
+	if seen == nil {
+		return nil
+	}
+	if seen.Seat == "" || wallClock(now).Sub(seen.At) < code.RefHoldRecordAfter {
+		// NO RECORD NEEDED: a branch no seat set is no seat's to lose, and
+		// one set within the threshold is later than the cutoff of any
+		// deletion's listing in flight at this Take.
+		holds.Confirm(key)
+		return nil
+	}
+	if holder == nil {
+		holds.Unconfirm(key)
+		return errNoHolder
+	}
+	res, err := holder.Lifecycle(ctx, code.LifecycleRequest{
+		Kind: code.LifecycleHold, OpID: holdOpID(turn, key), Actor: seat,
+		RepoID: repo.ID, TurnID: turn.RunID, Ref: ref, Seen: read,
+	})
+	switch {
+	case err != nil:
+		holds.Unconfirm(key)
+		return fmt.Errorf("builtin: record turn %s's hold on %s of %s: %w", turn.RunID, ref, repo.Name, err)
+	case res.Refusal == code.LifecycleRefDeleted:
+		holds.Unconfirm(key)
+		return &refDeletedError{ref: ref, oid: seen.OID, err: res.Err()}
+	case res.Refusal != "":
+		holds.Unconfirm(key)
+		return res.Err()
+	case res.Outcome != statelog.OutcomeApplied && res.Outcome != statelog.OutcomePending:
+		holds.Unconfirm(key)
+		return fmt.Errorf("%w: the code host answered turn %s's hold on %s of %s with outcome %q",
+			errHoldUnconfirmed, turn.RunID, ref, repo.Name, res.Outcome)
+	}
+	// APPLIED OR PENDING: durable on the repository's subject, so the broker
+	// has ordered it against any deletion of the ref.
+	holds.Confirm(key)
+	return nil
+}
+
+// refDeletedError is a hold on a seat's branch the code host answered
+// ref_deleted: the branch was deleted after the turn read it at oid, so the
+// request that depended on it is refused before it reads or writes anything,
+// and the answer names the commit to restore the branch at.
+type refDeletedError struct {
+	ref, oid string
+	err      error
+}
+
+func (e *refDeletedError) Error() string {
+	return fmt.Sprintf("builtin: %s was deleted after this turn read it at %s: %v", e.ref, e.oid, e.err)
+}
+
+func (e *refDeletedError) Unwrap() error { return e.err }
 
 // errHoldUnconfirmed is a hold record whose outcome the turn could not learn.
 // NOT the tool contract's unknown outcome (ErrOutcomeUnknown): the record is
@@ -148,9 +312,12 @@ var errHoldUnconfirmed = errors.New("builtin: the code host could not confirm th
 var errNoHolder = errors.New("builtin: this surface records no hold on a scratch repository " +
 	"(CodeDeps.Holder is nil)")
 
-// holdOpID is the operation a turn's hold record on a repository is: ONE PER
-// RUN AND REPOSITORY, so the same hold asked again in the run is one record,
-// and the ledger answers the repeat.
+// holdOpID is the operation a turn's hold record is: ONE PER RUN AND KEY — a
+// scratch repository's id, or a seat branch's [code.RefHoldKey] — so the same
+// hold asked again in the run is one record, and the ledger answers the
+// repeat. A ref's key is fixed-width, so the id is at most 111 bytes (36, a
+// dot, "hold-" and 69), inside statelog.MaxCallerOpIDBytes however long the
+// ref.
 //
 // THE RUN, NEVER THE UNIT OF WORK a write's operation is seeded from
 // ([Actor.OperationSeed]): a turn redelivered after a crash runs again under a
@@ -158,8 +325,8 @@ var errNoHolder = errors.New("builtin: this surface records no hold on a scratch
 // would be answered from the FIRST run's record by the ledger — `applied`, at
 // a position every pass begun since that record is past, so the re-run's hold
 // would be ordered against no pass in flight at its own Take, which is the
-// one thing a record is for. Named after the repository, so two repositories
-// one run holds are two operations.
+// one thing a record is for. Named after the key, so two repositories or two
+// branches one run holds are two operations.
 //
 // MINTED WHERE THE RUN'S OWN DERIVED IDS ARE ([runIdentity]): at the run's
 // start, which its id carries (run ids are time-ordered), so the ledger judges
@@ -168,17 +335,18 @@ var errNoHolder = errors.New("builtin: this surface records no hold on a scratch
 // ([turnctx.Turn.RebasedTo]), at the rebase. A turn resumed longer after its
 // run began than the operation ledger remembers (statelog.OpsRetention, the
 // code log's too) finds every repository it holds idle past
-// [code.HoldRecordAfter], so it records its hold on each one it names again;
-// minted at the run's start, before what every node's ledger has swept, each
-// record is answered `unknown` on every node for good ([statelog.MintAt]'s
-// reason), and every call the resumed turn makes about the repository is
-// refused, the same call made again asking the same record. Minted at the
-// rebase, a rebased attempt's record is a second record of the run's hold,
-// which is what it must be: the first record's row is gone, and the passes it
-// orders against are the ones in flight at THIS attempt's Take.
-func holdOpID(turn *turnctx.Turn, repoID string) string {
+// [code.HoldRecordAfter], and every seat branch it holds set longer ago than
+// [code.RefHoldRecordAfter], so it records its hold on each one it names
+// again; minted at the run's start, before what every node's ledger has
+// swept, each record is answered `unknown` on every node for good
+// ([statelog.MintAt]'s reason), and every call the resumed turn makes about
+// the key is refused, the same call made again asking the same record. Minted
+// at the rebase, a rebased attempt's record is a second record of the run's
+// hold, which is what it must be: the first record's row is gone, and the
+// passes it orders against are the ones in flight at THIS attempt's Take.
+func holdOpID(turn *turnctx.Turn, key string) string {
 	run := runIdentity(turn)
-	return statelog.DeriveOpID(run.OperationSince(), "hold-"+repoID, holdOpNamespace, run.TurnID, repoID)
+	return statelog.DeriveOpID(run.OperationSince(), "hold-"+key, holdOpNamespace, run.TurnID, key)
 }
 
 // holdOpNamespace keeps a hold record's operation from colliding with one any
@@ -200,7 +368,7 @@ func holdFailure(ctx context.Context, tool string, repo code.RepoRef, err error)
 	switch {
 	case errors.Is(err, turnctx.ErrHoldsFull), errors.Is(err, sandbox.ErrCodeHoldsFull):
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s did not run: this turn already holds "+
-			"the most scratch repositories one turn may (%d), and it reaches a scratch repository only "+
+			"the most repositories and branches one turn may (%d), and it reaches a scratch repository only "+
 			"while it holds it, so nothing was sent about %s. Finish this work in a later turn.", tool,
 			turnctx.MaxHolds, repo.Name))
 	case errors.Is(err, code.ErrRepoNotFound), errors.Is(err, code.ErrNotPermitted):
@@ -221,4 +389,42 @@ func holdFailure(ctx context.Context, tool string, repo code.RepoRef, err error)
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s could not keep scratch repository %s from expiring while "+
 		"this turn uses it, so it sent nothing about it: %s.", tool, repo.Name, faultSaid))
+}
+
+// refHoldFailure explains a call refused because its turn's hold on ref of repo
+// could not be taken or recorded ([HoldRef]): nothing that depends on the ref
+// was sent. Each refusal takes the class its kind of failure already has
+// ([HoldRepo]'s, and the code tools' own): the branch deleted after the turn
+// read it is not_found, as a deleted repository is; a hold the code host could
+// not confirm is unavailable; a turn at its bound is forbidden.
+func refHoldFailure(ctx context.Context, tool string, repo code.RepoRef, ref string, err error) tools.Result {
+	var deleted *refDeletedError
+	switch {
+	case errors.As(err, &deleted):
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s did not run: %s of repository %s was "+
+			"deleted after this turn read it at %s, so nothing was sent about it. Restore it with %s at %s if "+
+			"the work on it is still needed.", tool, ref, repo.Name, deleted.oid, CodeCreateBranchTool,
+			deleted.oid))
+	case errors.Is(err, turnctx.ErrHoldsFull), errors.Is(err, sandbox.ErrCodeHoldsFull):
+		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s did not run: this turn already holds "+
+			"the most repositories and branches one turn may (%d), and it reaches a seat's branch only while it "+
+			"holds it, so nothing was sent about %s. Finish this work in a later turn.", tool, turnctx.MaxHolds,
+			ref))
+	case errors.Is(err, code.ErrRepoNotFound), errors.Is(err, code.ErrNotPermitted):
+		// THE DOMAIN'S OWN ANSWER to the hold, in its own words.
+		return codeFailure(ctx, tool, repo.Name, err)
+	case errors.Is(err, turnctx.ErrNoHolds), errors.Is(err, errNoHolder):
+		return faulted(ctx, tool, err, fmt.Sprintf("%s could not hold %s of repository %s for this turn, so "+
+			"it sent nothing about it: %s.", tool, ref, repo.Name, faultSaid))
+	}
+	if why, ok := Condition(err); ok || errors.Is(err, errHoldUnconfirmed) || errors.Is(err, code.ErrNotServing) {
+		if !ok {
+			why = "the record of this turn's hold did not reach the code log in time"
+		}
+		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not run: the code host could not "+
+			"confirm this turn's hold on %s of repository %s (%s), so nothing was sent about it. Make the same "+
+			"call again.", tool, ref, repo.Name, why))
+	}
+	return faulted(ctx, tool, err, fmt.Sprintf("%s could not hold %s of repository %s for this turn, so it "+
+		"sent nothing about it: %s.", tool, ref, repo.Name, faultSaid))
 }

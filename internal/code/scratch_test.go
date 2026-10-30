@@ -439,9 +439,10 @@ func TestAHoldRecordCostsTheLogOneSmallRecord(t *testing.T) {
 	}
 }
 
-// holdRecordBytes is the most one hold record takes the code log as the
-// engine writes one, the figure internal/tracker's codeHoldRecordBytes weighs
-// a hold at. 896 BYTES: the longest measures 865 here, at the harness's clock
+// holdRecordBytes is the most one hold record of a scratch repository takes
+// the code log as the engine writes one, the figure internal/tracker's
+// codeHoldRecordBytes weighs such a hold at (a seat branch's is
+// refHoldRecordBytes). 896 BYTES: the longest measures 865 here, at the harness's clock
 // — an authored instant with no fractional second — and the log's first
 // generation, whose envelope carries none; a running node's instant prints up
 // to ten bytes more and a generation printed whole seventeen

@@ -20,8 +20,9 @@ import (
 
 // THE REPOSITORY LIFECYCLE AS TOOLS: what a person, a unit's lead and a seat
 // may make, rename, change, archive, delete and restore through a tool — and a
-// live turn's hold on a scratch repository — each ONE request decided by
-// [Store.Lifecycle] on any data node, in ONE snapshot of its subject.
+// live turn's hold on a scratch repository or a seat's branch — each ONE
+// request decided by [Store.Lifecycle] on any data node, in ONE snapshot of
+// its subject.
 //
 // # A change, never a whole
 //
@@ -79,8 +80,10 @@ const (
 	// ([loosenings]).
 	LifecycleProtect LifecycleKind = "protect"
 	// LifecycleHold is a live turn's hold on a scratch repository idle
-	// [HoldRecordAfter] or more ([Hold]) — no tool's: the one seam a turn's
-	// code tools reach a repository through asks it before the request.
+	// [HoldRecordAfter] or more, or on a seat's branch unset
+	// [RefHoldRecordAfter] or more ([Hold], its Ref) — no tool's: the one seam
+	// a turn's code tools reach a repository or a ref through asks it before
+	// the request.
 	LifecycleHold LifecycleKind = "hold"
 )
 
@@ -119,12 +122,18 @@ const (
 	// LifecycleStale: the repository moved between the decide and its apply —
 	// a rename another rename beat to the repository.
 	LifecycleStale LifecycleRefusal = "stale"
+	// LifecycleRefDeleted: the seat's branch a hold names is absent or a
+	// tombstone at the decide's snapshot, which is at or past the turn's read
+	// of it ([LifecycleRequest.Seen]) — so it was deleted after the turn read
+	// it. A hold's alone: the turn's request is refused before it reads or
+	// writes anything through the branch.
+	LifecycleRefDeleted LifecycleRefusal = "ref_deleted"
 )
 
 // LifecycleRefusals is the closed set, in this order.
 func LifecycleRefusals() []LifecycleRefusal {
 	return []LifecycleRefusal{LifecycleNotPermitted, LifecycleConfigManaged, LifecycleNameTaken,
-		LifecycleScratchLimit, LifecycleRepoLimit, LifecycleRepoDeleted, LifecycleStale}
+		LifecycleScratchLimit, LifecycleRepoLimit, LifecycleRepoDeleted, LifecycleStale, LifecycleRefDeleted}
 }
 
 // Valid reports a refusal this build knows.
@@ -161,9 +170,21 @@ type LifecycleRequest struct {
 	// TurnID is a hold's, and only a hold's: the turn taking it, recorded on
 	// its [Hold] so a reader of the log can say whose hold ordered an expiry.
 	TurnID string `json:"turn_id,omitempty"`
+	// Ref is a hold's, and only a hold's, and optional: the seat's branch the
+	// turn holds ([Holdable]), whose row the decide reads — or "" for a hold
+	// on the scratch repository itself.
+	//
+	// A request is no record, so this field takes no versionedFields row of
+	// its own ([Hold.Ref] names the one the record takes); it crosses the
+	// estate's wire to whichever data node decides it under the code
+	// domain's stated condition — no build carrying the domain has run
+	// without it, none of the domain being on main — so every node asked it
+	// reads it.
+	Ref string `json:"ref,omitempty"`
 	// Seen is a hold's, and only a hold's: the position the turn's read of
 	// what it holds answered at — the repository's resolution
-	// ([RepoRef.Position]). The hold is decided at or past it (the publish's
+	// ([RepoRef.Position]), or for a ref the resolve that answered it
+	// ([RefAnswer.Position]). The hold is decided at or past it (the publish's
 	// session floor, as the committer decides a batch at its pushes' Seen),
 	// so its refusals are never answered from rows older than what the turn
 	// has just read: the router may ask a data node behind that read, since
@@ -388,7 +409,8 @@ type LifecycleResult struct {
 // Err is the answer as an error: nil for one that is not a refusal, and
 // otherwise one wrapping the refusal's sentinel — [ErrConfigManaged] for
 // config_managed, [ErrNotPermitted] for not_permitted, [ErrRepoNotFound] for
-// repo_deleted (the repository is gone to anything the request could ask) and
+// repo_deleted (the repository is gone to anything the request could ask),
+// [ErrRefNotFound] for ref_deleted (the branch a hold names is) and
 // [ErrInvalid] for the rest, each a request another node judging the same rows
 // refuses alike — so a caller that answers in errors keeps each one's identity
 // across the estate's wire.
@@ -403,6 +425,8 @@ func (r LifecycleResult) Err() error {
 		sentinel = ErrNotPermitted
 	case LifecycleRepoDeleted:
 		sentinel = ErrRepoNotFound
+	case LifecycleRefDeleted:
+		sentinel = ErrRefNotFound
 	default:
 		sentinel = ErrInvalid
 	}
@@ -461,7 +485,7 @@ func (r LifecycleRequest) invalid() string {
 	has := map[string]bool{
 		"repo_id": r.RepoID != "", "name": r.Name != "", "create": r.Create != nil,
 		"change": r.Change != nil, "protect": r.Protect != nil, "reason": r.Reason != "",
-		"turn_id": r.TurnID != "", "seen": !r.Seen.IsZero(),
+		"turn_id": r.TurnID != "", "seen": !r.Seen.IsZero(), "ref": r.Ref != "",
 	}
 	want := map[LifecycleKind][]string{
 		LifecycleCreate:    {"name", "create"},
@@ -472,14 +496,15 @@ func (r LifecycleRequest) invalid() string {
 		LifecycleDelete:    {"repo_id", "reason"},
 		LifecycleRestore:   {"repo_id"},
 		LifecycleProtect:   {"repo_id", "protect"},
-		LifecycleHold:      {"repo_id", "turn_id", "seen"},
+		LifecycleHold:      {"repo_id", "turn_id", "seen", "ref"},
 	}[r.Kind]
 	for _, field := range []string{"repo_id", "name", "create", "change", "protect", "reason", "turn_id",
-		"seen"} {
-		// A delete's reason is optional; every other field its kind names is
-		// required.
+		"seen", "ref"} {
+		// A delete's reason and a hold's ref are optional; every other field
+		// its kind names is required.
+		optional := (r.Kind == LifecycleDelete && field == "reason") || (r.Kind == LifecycleHold && field == "ref")
 		switch named := slices.Contains(want, field); {
-		case named && !has[field] && !(r.Kind == LifecycleDelete && field == "reason"):
+		case named && !has[field] && !optional:
 			return fmt.Sprintf("%s: a %s request names it", field, r.Kind)
 		case !named && has[field]:
 			return fmt.Sprintf("%s: a %s request carries none", field, r.Kind)
@@ -563,6 +588,13 @@ func (r LifecycleRequest) invalid() string {
 			strings.ContainsFunc(r.TurnID, unicode.IsControl):
 			return fmt.Sprintf("turn_id: at most %d bytes of valid UTF-8 with no control character",
 				MaxProvenanceBytes)
+		case r.Ref != "" && !ValidRef(r.Ref):
+			return fmt.Sprintf("ref: %q is not a ref", r.Ref)
+		case r.Ref != "" && !Holdable(r.Ref):
+			// ONLY A SEAT'S BRANCH IS HELD: no other ref's row names a seat,
+			// so a hold on one would keep nothing and record for nothing.
+			return fmt.Sprintf("ref: %q is no seat's branch (%s<handle>/…), and only a seat's branch is "+
+				"held", r.Ref, SeatNamespaceRoot)
 		}
 	}
 	return ""
@@ -1224,7 +1256,15 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 					return statelog.Decision{}, err
 				}
 			}
-			payload, op, err := s.decideOnRepo(req, v.ref, rules, owners, roster, &d)
+			var (
+				payload any
+				op      OpKind
+			)
+			if req.Kind == LifecycleHold {
+				payload, op, err = decideHold(ctx, tx, req, v.ref, roster, &d)
+			} else {
+				payload, op, err = s.decideOnRepo(req, v.ref, rules, owners, roster, &d)
+			}
 			if err != nil || payload == nil {
 				return statelog.Decision{}, err
 			}
@@ -1242,16 +1282,14 @@ func (s *Store) lifecycleRepo(ctx context.Context, req LifecycleRequest, roster 
 	return s.lifecycleAnswer(ctx, req, req.RepoID, result, err, d, nil)
 }
 
-// decideOnRepo is the decide of a kind on the repository's own subject, from
-// its row v, its rules whole and its path owners: the record's payload and op,
+// decideOnRepo is the decide of a kind on the repository's own subject but a
+// hold's ([decideHold]), from its row v, its rules whole and its path owners:
+// the record's payload and op,
 // or nil where the request is refused (d says why) or writes nothing. An error
 // is the request's own fault.
 func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection, owners []PathOwner,
 	roster Roster, d *lifecycleDecision) (any, OpKind, error) {
 
-	if req.Kind == LifecycleHold {
-		return decideHold(req, v, roster, d)
-	}
 	// A DELETED REPOSITORY IS A DELETE'S AND A RESTORE'S TO ANSWER: the one
 	// answers it from the row, the other brings it back. Every other kind is
 	// refused on it as on one being purged.
@@ -1369,13 +1407,29 @@ func (s *Store) decideOnRepo(req LifecycleRequest, v RepoRef, rules []Protection
 	return SettingsRecord{RepoID: v.ID, Settings: next}, OpSettings, nil
 }
 
-// decideHold is a hold's decide: a record on an active scratch repository the
-// seat may read, nothing on a project or an archived one (neither expires
-// while so, and the scratch expiry refuses on any record past its page, an
-// unarchive's included, so there is nothing to order), and repo_deleted for one
-// deleted, being purged or purged — the turn's request is then refused before
-// it reads anything.
-func decideHold(req LifecycleRequest, v RepoRef, roster Roster, d *lifecycleDecision) (any, OpKind, error) {
+// decideHold is a hold's decide, in tx: repo_deleted for a repository deleted,
+// being purged or purged, and not_permitted for one the seat may not read —
+// the turn's request is then refused before it reads anything — and then by
+// what it holds:
+//
+//   - THE SCRATCH REPOSITORY ITSELF (no Ref): a record on an active one,
+//     nothing on a project or an archived one — neither expires while so,
+//     and the scratch expiry refuses on any record past its page, an
+//     unarchive's included, so there is nothing to order;
+//   - A SEAT'S BRANCH (Ref), its row read by its key: ref_deleted where it is
+//     absent or a tombstone — this snapshot is at or past the turn's read of
+//     it, so it was deleted after that read; nothing where no seat set it
+//     (code_refs.seat empty), since only a branch a seat set in its own
+//     namespace is a seat's to lose, and a record would contend for nothing
+//     with every push on the repository's subject; and otherwise a record, in
+//     a repository of EITHER kind, ACTIVE OR ARCHIVED — an archived
+//     repository's status can change and change back between a deletion's
+//     listing and its decide, which then judges the ref alone, so the per-ref
+//     mark this record moves is the one order such a deletion reads, whatever
+//     the status was when the turn read it.
+func decideHold(ctx context.Context, tx *sql.Tx, req LifecycleRequest, v RepoRef, roster Roster,
+	d *lifecycleDecision) (any, OpKind, error) {
+
 	switch v.Status {
 	case RepoStatusDeleted, RepoStatusPurging:
 		d.refuse(LifecycleRepoDeleted, "%s", RepoGone{ID: v.ID, Name: v.Name, Status: v.Status,
@@ -1386,11 +1440,31 @@ func decideHold(req LifecycleRequest, v RepoRef, roster Roster, d *lifecycleDeci
 		d.refuse(LifecycleNotPermitted, "%s", why)
 		return nil, "", nil
 	}
-	if v.Kind != RepoScratch || v.Status != RepoStatusActive {
+	if req.Ref == "" {
+		if v.Kind != RepoScratch || v.Status != RepoStatusActive {
+			return nil, "", nil
+		}
+		return Hold{RepoID: v.ID, TurnID: req.TurnID}, OpHold, nil
+	}
+	var target, seat string
+	err := tx.QueryRowContext(ctx, refHoldSQL, v.ID, req.Ref).Scan(&target, &seat)
+	switch {
+	case errors.Is(err, sql.ErrNoRows) || (err == nil && target == ""):
+		d.refuse(LifecycleRefDeleted, "%s is no live ref of %s: it was deleted after this turn read it", req.Ref,
+			v.Name)
+		return nil, "", nil
+	case err != nil:
+		return nil, "", fmt.Errorf("code: read %s of %s for a hold: %w", req.Ref, v.Name, err)
+	case seat == "":
 		return nil, "", nil
 	}
-	return Hold{RepoID: v.ID, TurnID: req.TurnID}, OpHold, nil
+	return Hold{RepoID: v.ID, TurnID: req.TurnID, Ref: req.Ref}, OpHold, nil
 }
+
+// refHoldSQL is what a hold of a seat's branch reads of the ref's row, by
+// code_refs' key: its target — empty for a tombstone — and the seat that set
+// it ([seatOf]).
+const refHoldSQL = `SELECT target, seat FROM code_refs INDEXED BY ` + refsKey + ` WHERE repo_id = ? AND ref = ?`
 
 // toolRepoRefusal records, in d, the refusal every kind on an existing
 // repository shares — config_managed for one code.repos declares, and

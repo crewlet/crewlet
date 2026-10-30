@@ -162,10 +162,10 @@ func codeLogOp(day []codeLogTerm, op code.OpKind) codeLogTerm {
 	return sum
 }
 
-// codeHoldRecordBytes is the most one hold record takes the code log as the
-// engine writes one — a turn's run id, an operation id at
-// statelog.MaxCallerOpIDBytes and a seat handle at iam.MaxLogin — measured as
-// the day measures a push, by the log's growth: internal/code's
+// codeHoldRecordBytes is the most one hold record of a scratch repository
+// takes the code log as the engine writes one — a turn's run id, an operation
+// id at statelog.MaxCallerOpIDBytes and a seat handle at iam.MaxLogin —
+// measured as the day measures a push, by the log's growth: internal/code's
 // TestAHoldRecordCostsTheLogOneSmallRecord measures 865 bytes and holds a hold
 // at most this (its holdRecordBytes, which says what the rest covers). The
 // hold's reason in codeLogNegligible weighs the turns' holds by it.
@@ -209,7 +209,12 @@ var codeLogNegligible = map[code.OpKind]string{
 		"its code log's crewlet.statelog.log.bytes_per_day. The window is that long because " +
 		"code.HoldRecordAfter is idle_days' floor, not the idle_days in force; pricing the rate " +
 		"needs a figure from a running company's tool calls, which nobody has, as codeLogManagers " +
-		"says of a seat's scratch creates",
+		"says of a seat's scratch creates. The op's other record is a live turn's hold on a SEAT'S " +
+		"BRANCH no push has set for code.RefHoldRecordAfter (334 h) or more: one for each turn that " +
+		"names such a branch, at its first touch of it — a turn coming back to work left two weeks — " +
+		"its frame, with the longest ref, at most internal/code's refHoldRecordBytes. The reference " +
+		"company's day, whose pushes keep the branches its runs work on moving, records none of " +
+		"these either, and they are left out on the same case",
 	code.OpPurgePart: "a deleted repository's rows go in bounded parts once it is past its " +
 		"retention: once a repository",
 	code.OpPurge:    "a deleted repository's last part: once a repository",

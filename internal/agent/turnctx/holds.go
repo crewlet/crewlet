@@ -7,10 +7,18 @@ import (
 	"sync"
 )
 
-// Holds is what a turn has named that an expiry could take from under it — the
-// scratch repositories it reached, by id — and where the turn's hold on each
-// is kept. A key is OPAQUE here: this package never decodes one, so whatever
-// later kinds of hold a turn takes ride the same set, row and reader.
+// Holds is what a turn has named that the code host could delete from under it
+// on nobody's request — the scratch repositories it reached, by id, which
+// expire idle, and the seats' branches it read, wrote or launched on, each by
+// its code.RefHoldKey — and where the turn's hold on each is kept. A key is
+// OPAQUE here: this package never decodes one, so every kind of hold a turn
+// takes rides the same set, row and reader.
+//
+// CONFIRMED ONCE A TURN AND PROCESS: beside the set, which keys THIS PROCESS
+// has confirmed for the turn ([Holds.Confirm]) — a seam took the hold here
+// having read what it holds, and found it ordered against every deletion in
+// flight at that Take — so a confirmed key's seam sends nothing more for the
+// rest of the turn. In memory only (see [Holds.Confirmed] for why).
 //
 // TAKEN BEFORE THE REQUEST: whatever takes a hold — the code tools' one seam,
 // which every request a turn makes about a repository passes — takes it here
@@ -47,6 +55,9 @@ type Holds struct {
 	// keys is the set, in the order each was first taken, and has its index.
 	keys []string
 	has  map[string]bool
+	// confirmed is the keys of the set this process has confirmed
+	// ([Holds.Confirm]): never written to the row, never seeded.
+	confirmed map[string]bool
 	// write is the attached writer — a compare-and-set of new keys onto the
 	// turn's run row — or nil where the turn has no row (yet).
 	write func(ctx context.Context, keys []string) error
@@ -55,19 +66,26 @@ type Holds struct {
 	sealed chan struct{}
 }
 
-// MaxHolds bounds one turn's set: a Take past it is refused, naming the bound,
-// and never a hold dropped. It is above config.CodeScratchMaxPerSeatCeiling
+// MaxHolds bounds one turn's set — its scratch repositories' and its seat
+// branches' keys together: a Take past it is refused, naming the bound, and
+// never a hold dropped. It is above config.CodeScratchMaxPerSeatCeiling
 // (1 000), so a turn working through every scratch repository its seat may own
-// is never refused for their number. On a run row a key is at most 39 bytes
-// (a quoted id and its comma), so the set is at most about 39 KiB on a row
-// that already carries the whole suspended conversation.
-// sandbox.MaxCodeHolds is the same number (this package and that one import
-// neither, and engine's TestATurnHoldsWhatItsRowMay holds the two equal).
+// is never refused for their number alone; such a turn meets it past 24 seat
+// branches besides, and one naming no scratch repository past 1 024 seat
+// branches — a JUDGMENT CALL (M3-decisions M3-O61): a turn naming that many is
+// past anything a turn's work needs, and is refused naming the bound rather
+// than holding a row past what a run row should carry. On a run row a key is
+// at most 72 bytes (a ref's key, 69, quoted and with its comma; a
+// repository's id 39), so the set is at most about 72 KiB on a row that
+// already carries the whole suspended conversation. sandbox.MaxCodeHolds is
+// the same number (this package and that one import neither, and engine's
+// TestATurnHoldsWhatItsRowMay holds the two equal).
 const MaxHolds = 1024
 
 // ErrHoldsFull is a Take past [MaxHolds]: the request is refused, naming the
 // bound.
-var ErrHoldsFull = errors.New("turnctx: this turn already holds the most repositories one turn may (1 024)")
+var ErrHoldsFull = errors.New("turnctx: this turn already holds the most repositories and branches one " +
+	"turn may (1 024)")
 
 // ErrNoHolds is a Take on a nil *Holds: a turn built outside the engine, which
 // keeps no hold anywhere an expiry asks.
@@ -253,4 +271,59 @@ func (h *Holds) IDs() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.keys)
+}
+
+// Confirmed reports whether THIS PROCESS has confirmed the turn's hold on key:
+// a seam (internal/agent/builtin's HoldRef and HoldRepo) took it here and
+// found, from a read of what it holds, the hold ordered against every deletion
+// in flight at that Take — no record needed, or the record applied. A
+// confirmed key's seam sends nothing more for the rest of the turn: every
+// later reader of the holds sees the key, since a set only grows, and every
+// earlier one was ordered by the confirmation (M3-decisions M3-O65).
+//
+// IN MEMORY ONLY: never on the run row, which carries keys taken unconfirmed
+// too — a hold with no read, a hold whose record failed after its Take — so it
+// could vouch for a confirmation only through a field every confirmation
+// writes, a coordination write per key to save one read per resumed turn.
+// So [NewHolds] confirms none of its seed, and a resumed turn, or the same
+// turn in any other process, confirms again.
+func (h *Holds) Confirmed(key string) bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.confirmed[key]
+}
+
+// Confirm marks key confirmed and answers true; a key not in the set is not
+// marked, and answers false — a hold nothing took cannot have been ordered by
+// its Take. It writes nothing through the writer [Holds.Attach] installed.
+func (h *Holds) Confirm(key string) bool {
+	if h == nil {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.has[key] {
+		return false
+	}
+	if h.confirmed == nil {
+		h.confirmed = map[string]bool{}
+	}
+	h.confirmed[key] = true
+	return true
+}
+
+// Unconfirm clears key's mark: its seam ended in an error after its Take — a
+// record refused, answered unknown or unserved — so a mark another call of the
+// same turn set meanwhile (two delegated workers at once) never outlives the
+// failure. That costs at most one more read, the safe direction.
+func (h *Holds) Unconfirm(key string) {
+	if h == nil {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.confirmed, key)
 }

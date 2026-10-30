@@ -3,14 +3,18 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"maps"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/host"
+	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -265,5 +269,60 @@ func TestBoxRunsReadsAnUnreadableFloorAsNone(t *testing.T) {
 	}
 	if got, _, _ := b.Run(t.Context(), turn); got.Floor != codeAt(5) {
 		t.Errorf("the raised floor reads %s, want %s", got.Floor, codeAt(5))
+	}
+}
+
+// BOX RUNS HOLD ON THE ROW (M3-decisions M3-O61): a box's push holds the seat
+// branches it names on its run's row — joined to the row's code holds, the
+// set the run's turn's holds are written to and the code host's retention
+// reads — and the admission reads them back with the row, so a later push of
+// a branch the run holds asks nothing. A row that is gone, or whose ending is
+// decided, holds nothing new and is NO ERROR — a run that has ended depends on
+// nothing — and a row at its bound refuses the hold, nothing written.
+//
+// Mutation: answer AddCodeHolds' false (no live row) as an error → the gone
+// row's hold fails, red.
+func TestBoxRunsHoldsOnTheRow(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	pending := sandbox.NewCoordStore(coordmemory.NewFleet())
+	b := boxRuns{pending: pending, log: slog.Default()}
+	turn := uuid.Must(uuid.NewV7()).String()
+	run, err := pending.BeginLaunch(ctx, sandbox.PendingRun{TurnID: turn, AgentHandle: "swe", AgentID: "a-1",
+		Role: "SWE", CodingAgent: "claude-code", TaskDescription: "fix the flake", Reply: "tool",
+		CreatedAt: time.Now().UTC()}, sandbox.Fence{})
+	if err != nil {
+		t.Fatalf("begin the launch: %v", err)
+	}
+	launch := run.LaunchID
+	asSet := func(keys []string) map[string]bool {
+		out := map[string]bool{}
+		for _, k := range keys {
+			out[k] = true
+		}
+		return out
+	}
+	repo := uuid.NewString()
+	keys := []string{code.RefHoldKey(repo, "refs/heads/seats/swe/a"), code.RefHoldKey(repo, "refs/heads/seats/swe/b")}
+	if err := b.Hold(ctx, host.BoxRunRef{TurnID: turn, LaunchID: launch}, keys); err != nil {
+		t.Fatalf("a hold on a live row: %v", err)
+	}
+	if got, found, err := b.Run(ctx, turn); err != nil || !found || !maps.Equal(got.Holds, asSet(keys)) {
+		t.Errorf("the row reads holds %v (%v, %v), want %v", got.Holds, found, err, keys)
+	}
+	if err := b.Hold(ctx, host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: launch},
+		keys); err != nil {
+		t.Errorf("a hold on a row that is gone = %v, want no error: a run that has ended depends on nothing", err)
+	}
+	full := make([]string, sandbox.MaxCodeHolds)
+	for i := range full {
+		full[i] = code.RefHoldKey(repo, fmt.Sprintf("refs/heads/seats/swe/%d", i))
+	}
+	if err := b.Hold(ctx, host.BoxRunRef{TurnID: turn, LaunchID: launch}, full); !errors.Is(err,
+		sandbox.ErrCodeHoldsFull) {
+		t.Errorf("a hold past the row's bound = %v, want ErrCodeHoldsFull", err)
+	}
+	if got, _, _ := b.Run(ctx, turn); !maps.Equal(got.Holds, asSet(keys)) {
+		t.Errorf("a refused hold left the row holding %d keys, want the %d it held", len(got.Holds), len(keys))
 	}
 }

@@ -196,6 +196,22 @@ func TestTheBoundsFitTheReadAndPurgeBudgets(t *testing.T) {
 		t.Errorf("two maximal pushes encode to %d bytes, past MaxRecordBytes (%d)", len(body),
 			code.MaxRecordBytes)
 	}
+	// AND A HOLD OF A SEAT'S BRANCH AT ITS LONGEST: a turn's id at the
+	// provenance bound and a ref at MaxRefNameBytes of a byte JSON escapes
+	// six-fold — the widest a hold record carries, which the code suite's one
+	// push payload a subject kind does not (its decode and apply are
+	// TestARefHoldMovesNoClock's).
+	branch := code.SeatNamespace("dev")
+	hold, err := json.Marshal(code.Hold{RepoID: strings.Repeat("r", 36),
+		TurnID: strings.Repeat("<", code.MaxProvenanceBytes),
+		Ref:    branch + strings.Repeat("<", code.MaxRefNameBytes-len(branch))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hold) > code.MaxRecordBytes {
+		t.Errorf("the widest hold of a seat's branch encodes to %d bytes, past MaxRecordBytes (%d)", len(hold),
+			code.MaxRecordBytes)
+	}
 
 	// A PAGE LEAVES ITS REPLY ROOM: half the estate's reply ceiling, so the
 	// envelope and the repository row always fit beside a full page.

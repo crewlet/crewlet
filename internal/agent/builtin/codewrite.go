@@ -387,6 +387,11 @@ func (t *codeBranchWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal := t.resolve(ctx, turn, c, repo, &w, revs); refusal != nil {
 		return *refusal, nil
 	}
+	// THE BRANCH'S HOLD, before the write is sent: a write naming its head
+	// is held as a read is, and a branch it creates with no read.
+	if refusal := t.deps.branch(ctx, turn, tool, c, repo, w.Ref, w.ExpectedHead != ""); refusal != nil {
+		return *refusal, nil
+	}
 	w.RepoID, w.Principal, w.Fresh = repo.ID, writer(ctx, turn, c), t.deps.writeFresh(turn, c, repo)
 	w.OpID = opIDFor(actor, tool, codeWriteVerb, repo.ID, args)
 	if err := w.Validate(); err != nil {
@@ -1171,7 +1176,9 @@ func lifecycleRefused(tool, repo string, res code.LifecycleResult) tools.Result 
 	switch res.Refusal {
 	case code.LifecycleNameTaken:
 		return refusedBy(tools.RefusalExists, cause, said)
-	case code.LifecycleRepoDeleted:
+	case code.LifecycleRepoDeleted, code.LifecycleRefDeleted:
+		// GONE: the repository, or — a hold's alone — the seat's branch
+		// it names.
 		return refusedBy(tools.RefusalNotFound, cause, said)
 	case code.LifecycleStale:
 		return refusedBy(tools.RefusalStaleVersion, cause, said+fmt.Sprintf(" Read it again with %s.",

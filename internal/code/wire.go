@@ -726,6 +726,22 @@ type ResolvedRef struct {
 	// every push still sits below it and a floor there would make a git
 	// node sync for nothing.
 	Moved statelog.Position `json:"moved,omitzero"`
+	// At and Seat are the ref's row's broker instant of its last move and the
+	// seat that set it inside its own namespace ("" for none, [seatOf]), read
+	// in the one lookup that answers OID: what a turn's hold on a seat's
+	// branch decides from whether to record itself ([RefHoldRecordAfter]),
+	// from the same read whose position the hold is decided at.
+	//
+	// AN ESTATE ANSWER'S FIELDS, NOT A RECORD'S, so they take no
+	// versionedFields row. AS A STATED CONDITION, as [LifecycleResult.Rule]'s:
+	// no build that carries the code domain has run without them — none of
+	// the domain is on main. A build that predated them would answer every
+	// ref seat-less, and a hold decided from that answer would record
+	// nothing; so were such a build ever to run beside this one, a hold would
+	// read the ref's row in its own decide rather than ride fields such a
+	// build leaves out.
+	At   time.Time `json:"at,omitzero"`
+	Seat string    `json:"seat,omitempty"`
 	// Missing is, for a name no live ref holds, the sentence that says so,
 	// naming every ref tried: what [RefAnswer.Err] refuses it with.
 	Missing string `json:"missing,omitempty"`

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 
@@ -61,6 +62,10 @@ func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, err
 		Floor:  b.floorOf(run),
 		Provenance: code.RunProvenance{TurnID: run.TurnID, RunID: run.LaunchID, Model: run.Launch.Model,
 			CodingAgent: run.CodingAgent},
+		Holds: make(map[string]bool, len(run.CodeHolds)),
+	}
+	for _, key := range run.CodeHolds {
+		out.Holds[key] = true
 	}
 	if run.WorkItem != nil {
 		out.Provenance.WorkBackend, out.Provenance.WorkKey = string(run.WorkItem.Backend), run.WorkItem.Key
@@ -136,6 +141,25 @@ func holds(floor, pos statelog.Position) bool {
 // Stopped is who stopped seat, as this node's pause watch holds it (stoppedBy).
 func (b boxRuns) Stopped(ctx context.Context, seat string) (string, error) {
 	return b.stopped(ctx, seat)
+}
+
+// Hold joins keys — the seat branches a box's push names — to the code holds
+// on ref's run's row, in one compare-and-set (sandbox.PendingStore's
+// AddCodeHolds), unioned with what the row holds as a launch's are: the same
+// set its turn's holds are written to, which the code host's retention reads
+// whole. Keyed by the run's TURN alone, since the holds are the turn's,
+// unioned across its launches. A row that is gone or whose ending is decided
+// holds nothing new and is NO ERROR — a run that has ended depends on
+// nothing, and the box's push is a late one — where a turn's hold on such a
+// row refuses its request (holdWriter): a turn's request is its own, while a
+// box's push outlives what its run will ever read again.
+// sandbox.ErrCodeHoldsFull is the row at its bound, nothing written; any other
+// error is the store unreachable.
+func (b boxRuns) Hold(ctx context.Context, ref host.BoxRunRef, keys []string) error {
+	if _, err := b.pending.AddCodeHolds(ctx, ref.TurnID, keys); err != nil {
+		return fmt.Errorf("engine: hold %d seat branches on run %s: %w", len(keys), ref.TurnID, err)
+	}
+	return nil
 }
 
 // errForeignFloor is a code floor on another log than the code log's.

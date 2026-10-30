@@ -57,9 +57,9 @@ func (seatChart) Within(unit, ancestor string) bool {
 // seat's push under: seatChart, on UTC's.
 var onTheChart = SeatRules{Roster: seatChart{}, Zone: time.UTC}
 
-// seatOf is the principal of seat handle's push, with the run the engine
+// seatPusher is the principal of seat handle's push, with the run the engine
 // stamps on it.
-func seatOf(handle string) Principal {
+func seatPusher(handle string) Principal {
 	return Principal{Kind: PrincipalAgent, Seat: handle,
 		Run: RunProvenance{TurnID: "0192f00d-0000-7000-8000-000000000001", WorkBackend: "native", WorkKey: "ENG-7"}}
 }
@@ -124,12 +124,12 @@ func TestTheDecideRefusesWhatTheGrantRefuses(t *testing.T) {
 		// ok is the commands the grant admits, by their place in commands.
 		ok []int
 	}{
-		{"a full_access seat of the owning unit", seatOf("dev"), VisibilityCompany, []int{0, 1, 3, 5, 7}},
-		{"a read_only seat of the owning unit", seatOf("reader"), VisibilityCompany, nil},
-		{"a full_access seat outside a company repository's unit", seatOf("outsider"), VisibilityCompany,
+		{"a full_access seat of the owning unit", seatPusher("dev"), VisibilityCompany, []int{0, 1, 3, 5, 7}},
+		{"a read_only seat of the owning unit", seatPusher("reader"), VisibilityCompany, nil},
+		{"a full_access seat outside a company repository's unit", seatPusher("outsider"), VisibilityCompany,
 			[]int{5}},
-		{"a full_access seat outside a unit repository's unit", seatOf("outsider"), VisibilityUnit, nil},
-		{"the owning unit's lead", seatOf("eng-lead"), VisibilityCompany, []int{0, 1, 2, 3, 4, 5, 6, 7}},
+		{"a full_access seat outside a unit repository's unit", seatPusher("outsider"), VisibilityUnit, nil},
+		{"the owning unit's lead", seatPusher("eng-lead"), VisibilityCompany, []int{0, 1, 2, 3, 4, 5, 6, 7}},
 		{"a person", founderOf, VisibilityUnit, []int{0, 1, 2, 3, 4, 5, 6, 7}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,9 +205,9 @@ func TestASeatOutsideTheUnitFillsAtMostHalfARepository(t *testing.T) {
 			creates int
 			ok      int
 		}{
-			{"a seat outside the owning unit", seatOf("outsider"), 2, 1},
+			{"a seat outside the owning unit", seatPusher("outsider"), 2, 1},
 			{"a person", founderOf, 2, 2},
-			{"a seat of the owning unit", seatOf("dev"), 2, 2},
+			{"a seat of the owning unit", seatPusher("dev"), 2, 2},
 		} {
 			e := decideEstate(t)
 			half := MaxRefsPerRepo / OutsideSeatShare
@@ -239,9 +239,9 @@ func TestASeatOutsideTheUnitFillsAtMostHalfARepository(t *testing.T) {
 			p    Principal
 			land bool
 		}{
-			{"a seat outside the owning unit", seatOf("outsider"), false},
+			{"a seat outside the owning unit", seatPusher("outsider"), false},
 			{"a person", founderOf, true},
-			{"a seat of the owning unit", seatOf("dev"), true},
+			{"a seat of the owning unit", seatPusher("dev"), true},
 		} {
 			e := decideEstate(t)
 			e.exec(`UPDATE code_repos SET live_bytes = ? WHERE id = ?`, half-1<<20, decideRepo)
@@ -278,11 +278,11 @@ func TestPersonsRefusesASeatsDirectPush(t *testing.T) {
 		detail string
 	}{
 		{"a person on main", founderOf, cmd("refs/heads/main", oid("A"), oid("B")), "", ""},
-		{"a seat on main", seatOf("dev"), cmd("refs/heads/main", oid("A"), oid("B")), RefusalProtectedDirect,
+		{"a seat on main", seatPusher("dev"), cmd("refs/heads/main", oid("A"), oid("B")), RefusalProtectedDirect,
 			"takes a person's push only (protection refs/heads/main: direct_push persons)"},
 		{"a person on a frozen ref", founderOf, cmd("refs/heads/locked", ZeroOID, oid("L")), RefusalProtectedDirect,
 			"takes no direct push (protection refs/heads/locked: direct_push none)"},
-		{"a seat on a frozen ref", seatOf("dev"), cmd("refs/heads/locked", ZeroOID, oid("L")),
+		{"a seat on a frozen ref", seatPusher("dev"), cmd("refs/heads/locked", ZeroOID, oid("L")),
 			RefusalProtectedDirect, "takes no direct push (protection refs/heads/locked: direct_push none)"},
 	} {
 		e := decideEstate(t)
@@ -313,12 +313,12 @@ func TestASeatPastItsQuotaIsRefusedUnrecorded(t *testing.T) {
 	limits := DefaultLimits()
 	limits.PushesPerSeatDay = 3
 	e.exec(`INSERT INTO code_seat_days (seat, day, pushes) VALUES ('dev', '2031-04-02', 2)`)
-	first := pushBy(seatOf("dev"), cmd("refs/heads/seats/dev/one", ZeroOID, oid("1")))
-	other := pushBy(seatOf("outsider"), cmd("refs/heads/seats/outsider/four", ZeroOID, oid("4")))
+	first := pushBy(seatPusher("dev"), cmd("refs/heads/seats/dev/one", ZeroOID, oid("1")))
+	other := pushBy(seatPusher("outsider"), cmd("refs/heads/seats/outsider/four", ZeroOID, oid("4")))
 	person := pushBy(founderOf, cmd("refs/heads/five", ZeroOID, oid("5")))
 	entries, answers := decideSeats(t, e, limits, first,
-		pushBy(seatOf("dev"), cmd("refs/heads/seats/dev/two", ZeroOID, oid("2"))),
-		pushBy(seatOf("dev"), cmd("refs/heads/seats/dev/three", ZeroOID, oid("3")),
+		pushBy(seatPusher("dev"), cmd("refs/heads/seats/dev/two", ZeroOID, oid("2"))),
+		pushBy(seatPusher("dev"), cmd("refs/heads/seats/dev/three", ZeroOID, oid("3")),
 			cmd("refs/heads/seats/dev/three-b", ZeroOID, oid("3b"))),
 		other, person)
 	if got := answers[0]; !got.inRecord || got.commands[0].Result != ResultOK {
@@ -395,7 +395,7 @@ func TestTheQuotaDayIsTheCompanysDay(t *testing.T) {
 	push := func(at time.Time, name string) (PushEntry, decided) {
 		t.Helper()
 		entries, answers, err := decideErr(e, decideRepo, limits, DefaultDeletedRetention, seats, at, &verdicts{},
-			pushBy(seatOf("dev"), cmd(SeatNamespace("dev")+name, ZeroOID, oid(name))))
+			pushBy(seatPusher("dev"), cmd(SeatNamespace("dev")+name, ZeroOID, oid(name))))
 		if err != nil {
 			t.Fatalf("decide %s: %v", name, err)
 		}
@@ -453,7 +453,7 @@ func TestTheQuotaHoldsForACommitterBehindMidnight(t *testing.T) {
 	ahead := behind.Add(2 * time.Second)                     // Y: the 3rd
 	push := func(repo string, at time.Time, name string) decided {
 		t.Helper()
-		p := pushBy(seatOf("dev"), cmd(SeatNamespace("dev")+name, ZeroOID, oid(name)))
+		p := pushBy(seatPusher("dev"), cmd(SeatNamespace("dev")+name, ZeroOID, oid(name)))
 		p.RepoID = repo
 		entries, answers, err := decideErr(e, repo, limits, DefaultDeletedRetention, onTheChart, at, &verdicts{}, p)
 		if err != nil {
@@ -500,7 +500,7 @@ func TestASeatsPushIsNeverDecidedWithNoChart(t *testing.T) {
 	e := decideEstate(t)
 	_, _, err := decideErr(e, decideRepo, DefaultLimits(), DefaultDeletedRetention, SeatRules{}, decideAt,
 		&verdicts{}, pushBy(founderOf, cmd("refs/heads/new", ZeroOID, oid("N"))),
-		pushBy(seatOf("dev"), cmd(SeatNamespace("dev")+"x", ZeroOID, oid("X"))))
+		pushBy(seatPusher("dev"), cmd(SeatNamespace("dev")+"x", ZeroOID, oid("X"))))
 	if err == nil || !strings.Contains(err.Error(), "no chart") {
 		t.Fatalf("a seat's push decided with no chart: %v, want the decide's refusal of its caller's bug", err)
 	}
@@ -531,7 +531,7 @@ func TestTheSeatCounterIsAFunctionOfTheLog(t *testing.T) {
 	t.Parallel()
 	seatPush := func(id, day string) PushEntry {
 		e := pushEntry(id, move("refs/heads/seats/dev/"+id, ZeroOID, oid(id)))
-		e.Principal, e.Via, e.Day = seatOf("dev"), ViaEngine, day
+		e.Principal, e.Via, e.Day = seatPusher("dev"), ViaEngine, day
 		return e
 	}
 	records := []built{

@@ -3,10 +3,12 @@ package codetest
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -59,7 +61,8 @@ func NewCheckTokens(t testing.TB) *host.CheckTokens {
 // FixtureRuns is the fleet's coding runs' rows, in memory: the [host.Runs]
 // every git node of a fleet admits a box by. A case launches a run on it
 // (Launch), ends, relaunches or removes it, stops its seat, and makes the
-// store fail — and reads back every floor raise the hosts made (Raises).
+// store fail — and reads back every floor raise the hosts made (Raises) and
+// every hold of the seat branches a box pushed (Holds, Held).
 type FixtureRuns struct {
 	tokens *host.BoxTokens
 
@@ -73,9 +76,20 @@ type FixtureRuns struct {
 	failing error
 	raises  []Raise
 	onRaise func(Raise) error
+	// holds is every Hold a host asked, in order; onHold is told each as it
+	// is asked, before it is written, and fails it where it answers an error.
+	holds  []HoldCall
+	onHold func(HoldCall) error
 	// reads counts Run's calls: a request refused before its run is read
 	// costs the store nothing.
 	reads int
+}
+
+// HoldCall is one hold a host asked of the run store: the run it named and
+// the keys.
+type HoldCall struct {
+	Ref  host.BoxRunRef
+	Keys []string
 }
 
 // Raise is one floor raise a host asked of the run store.
@@ -224,6 +238,7 @@ func (r *FixtureRuns) Run(_ context.Context, turnID string) (host.BoxRun, bool, 
 	}
 	out := *run
 	out.Repos = append([]host.BoxGrant(nil), run.Repos...)
+	out.Holds = maps.Clone(run.Holds)
 	return out, true, nil
 }
 
@@ -255,6 +270,70 @@ func (r *FixtureRuns) RaiseFloor(_ context.Context, ref host.BoxRunRef, pos stat
 	}
 	if before, err := run.Floor.Before(pos); err == nil && before {
 		run.Floor = pos
+	}
+	return nil
+}
+
+// OnHold is told every hold as it is asked, before it is written — a case's
+// window onto WHEN a host holds, against what the push it holds for has done
+// by then — and fails that hold where it answers an error
+// (sandbox.ErrCodeHoldsFull for a row at its bound).
+func (r *FixtureRuns) OnHold(fn func(HoldCall) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onHold = fn
+}
+
+// Holds is every hold the fleet's hosts asked, in order.
+func (r *FixtureRuns) Holds() []HoldCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]HoldCall, len(r.holds))
+	for i, h := range r.holds {
+		out[i] = HoldCall{Ref: h.Ref, Keys: slices.Clone(h.Keys)}
+	}
+	return out
+}
+
+// Held is ref's run's holds as its row holds them.
+func (r *FixtureRuns) Held(ref host.BoxRunRef) map[string]bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run, ok := r.runs[ref.TurnID]; ok {
+		return maps.Clone(run.Holds)
+	}
+	return nil
+}
+
+// Hold joins keys to ref's run's holds (host.Runs), recording the call: by the
+// run's turn, whose holds they are whichever of its launches asked; a row gone
+// or whose job has left its box holds nothing new and answers nil, as the run
+// store does for a row whose ending is decided.
+func (r *FixtureRuns) Hold(_ context.Context, ref host.BoxRunRef, keys []string) error {
+	call := HoldCall{Ref: ref, Keys: slices.Clone(keys)}
+	r.mu.Lock()
+	hook, failing := r.onHold, r.failing
+	r.mu.Unlock()
+	if hook != nil {
+		if err := hook(call); err != nil {
+			return err
+		}
+	}
+	if failing != nil {
+		return failing
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.holds = append(r.holds, call)
+	run, ok := r.runs[ref.TurnID]
+	if !ok || !run.Live {
+		return nil
+	}
+	if run.Holds == nil {
+		run.Holds = map[string]bool{}
+	}
+	for _, key := range keys {
+		run.Holds[key] = true
 	}
 	return nil
 }

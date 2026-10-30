@@ -32,6 +32,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/runtoken"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -778,6 +779,83 @@ func TestABoxPushRaisesItsFloorAndIsNotAudited(t *testing.T) {
 	}
 }
 
+// A BOX'S PUSH HOLDS EVERY SEAT BRANCH IT PUSHES (M3-decisions M3-O61): a box
+// pushes as its run, not as a turn, so before anything of its push is stored
+// or proposed, the seat branches it names that its run's row does not hold
+// yet are held there, in one write — here its own namespace's `b`, never
+// granted, beside `a`, its granted branch, which the row holds already. A
+// person's push holds nothing. A hold the run store refuses for the row's
+// bound is 403 holds_full, and one it could not write 503 holds_unwritten —
+// each with nothing stored and the branch not moved.
+//
+// Mutations: skip adm.holdRefs → b's key is never held, red; hold after the
+// proposal → b has landed when the hold is asked, red.
+func TestABoxPushHoldsEverySeatBranchItPushes(t *testing.T) {
+	t.Parallel()
+	var lines logs
+	c, _ := boxCase(t, codetest.SoloOptions{Logger: lines.logger()})
+	runs := c.Fleet.Runs()
+	repoID := c.Rows().Repo.ID
+	ns := code.SeatNamespace(codetest.FixtureAlice)
+	a, b := ns+"a", ns+"b"
+	ref, box := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
+	if err := runs.Hold(c.Ctx, ref, []string{code.RefHoldKey(repoID, a)}); err != nil {
+		t.Fatalf("hold the run's granted branch: %v", err)
+	}
+	before := len(runs.Holds())
+	runs.OnHold(func(h codetest.HoldCall) error {
+		if _, landed := c.Rows().Refs[b]; landed {
+			t.Errorf("the hold of %v was asked after %s landed: the push was proposed unheld", h.Keys, b)
+		}
+		return nil
+	})
+	clone := box.Clone(c.BoxURL(0))
+	box.Commit(clone, map[string]string{"a.txt": "a\n"}, "a")
+	if res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:"+a, "HEAD:"+b); res.Err != nil {
+		t.Fatalf("the box's push: %s", res)
+	}
+	runs.OnHold(nil)
+	got := runs.Holds()[before:]
+	if len(got) != 1 || !slices.Equal(got[0].Keys, []string{code.RefHoldKey(repoID, b)}) ||
+		got[0].Ref != ref {
+		t.Fatalf("the push asked the holds %+v, want one naming only %s's key, on its run", got, b)
+	}
+	if held := runs.Held(ref); !held[code.RefHoldKey(repoID, b)] {
+		t.Errorf("the run's row holds %v after the push, want %s's key", held, b)
+	}
+
+	// A PERSON'S PUSH HOLDS NOTHING.
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Clone(c.URL(0))
+	c.MustPush(p, work, "HEAD:"+ns+"c")
+	if n := len(runs.Holds()); n != before+1 {
+		t.Errorf("a person's push asked %d holds of the run store", n-before-1)
+	}
+
+	// A HOLD REFUSED: the push is answered, and nothing of it lands.
+	for _, refusal := range []struct {
+		err    error
+		msg    string
+		reason string
+	}{
+		{sandbox.ErrCodeHoldsFull, "code_box_refused", "holds_full"},
+		{errors.New("the coordination store is gone"), "code_box_unavailable", "holds_unwritten"},
+	} {
+		branch := ns + refusal.reason
+		runs.OnHold(func(codetest.HoldCall) error { return refusal.err })
+		if res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:"+branch); res.Err == nil {
+			t.Errorf("a push whose hold the run store refused (%v) answered ok: %s", refusal.err, res)
+		}
+		if _, landed := c.Rows().Refs[branch]; landed {
+			t.Errorf("%s landed though its hold was refused", branch)
+		}
+		if n := len(boxLines(&lines, refusal.msg, `"reason":"`+refusal.reason+`"`)); n != 1 {
+			t.Errorf("logged %s reason=%s %d times, want once", refusal.msg, refusal.reason, n)
+		}
+	}
+	runs.OnHold(nil)
+}
+
 // A BOX'S PUSH NAMES ITS RUN: its row's principal is the run's seat as an
 // agent, stamped with the run — its turn, its launch, its work item, its
 // model and its coding agent — received over git.
@@ -1156,7 +1234,7 @@ func TestNothingAfterAdmissionAsksWhichAdmitterRan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accessors := []string{"admitBox", "principal", "share", "refs", "boxFloor"}
+	accessors := []string{"admitBox", "principal", "share", "refs", "boxFloor", "holdRefs"}
 	fset := token.NewFileSet()
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {

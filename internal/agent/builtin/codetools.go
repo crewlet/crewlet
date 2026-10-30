@@ -652,9 +652,10 @@ func forget(turn *turnctx.Turn, asker code.Principal, repo code.RepoRef) {
 // in the code host's own sentence, every such name named. Its read is THE ONE
 // code.RefQuery in this package ([CodeDeps.refsOf]): code_resolve's `ref`
 // calls it directly, [CodeDeps.resolveRevs] for every revision of a call that
-// is not an id, and a coding run's launch every ref it resolves
-// ([CodeDeps.ResolveRunRepos]) — and so the one place a call's caller and
-// ceiling are stamped on a resolve.
+// is not an id, a write's branch ([CodeDeps.branch]) and a coding run's launch
+// every ref it resolves ([CodeDeps.ResolveRunRepos]) — and so the one place a
+// call's caller and ceiling are stamped on a resolve, and the turn's hold on
+// every seat's branch it answers is taken ([HoldRef]).
 func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo code.RepoRef, names ...string) ([]code.ResolvedRef, statelog.Position, *tools.Result) {
 
@@ -671,10 +672,17 @@ func (d CodeDeps) resolveRef(ctx context.Context, turn *turnctx.Turn, tool strin
 
 // refsOf is [CodeDeps.resolveRef]'s read, ANSWERING a name no live ref holds
 // beside the rest ([code.ResolvedRef.Missing]) rather than refusing the call:
-// for the one caller to which a missing ref is an answer — a coding run's
-// launch, whose own branch may not exist yet ([CodeDeps.ResolveRunRepos]).
-// The repository the answer names is the one the turn resolved, or the call is
+// for the callers to which a missing ref is an answer — a coding run's launch,
+// whose own branch may not exist yet ([CodeDeps.ResolveRunRepos]), and a
+// write's branch, which its own head compare answers ([CodeDeps.branch]). The
+// repository the answer names is the one the turn resolved, or the call is
 // refused ([CodeDeps.sameRepo]).
+//
+// AND THE TURN'S HOLD on every seat's branch it resolved ([HoldRef]), taken
+// here — after the read whose answer a hold is decided from, and before the
+// answer goes back to whatever sends a request through it — so no caller can
+// read a ref for a turn and forget its hold. A hold that fails refuses the
+// call with nothing sent.
 func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo code.RepoRef, names ...string) (code.RefAnswer, *tools.Result) {
 
@@ -694,7 +702,59 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 		return code.RefAnswer{}, &r
 	}
 	noteRefsRead(turn, repo.ID, answer.Refs)
+	for i := range answer.Refs {
+		resolved := &answer.Refs[i]
+		if resolved.Missing != "" {
+			continue
+		}
+		if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, resolved.Ref, resolved, answer.Position,
+			d.Now); err != nil {
+			r := refHoldFailure(ctx, tool, repo, resolved.Ref, err)
+			return code.RefAnswer{}, &r
+		}
+	}
 	return answer, nil
+}
+
+// branch holds ref — the branch a write tool's call names, refs/heads/ and its
+// `branch` — for turn BEFORE the write is sent ([HoldRef]): THE ONE PLACE a
+// write's branch is held, which every engine write calls before its GitWrite.
+// A WRITE IS HELD AS A READ IS, because only a write that MOVES the branch is
+// ordered against a deletion of it by its own head compare: one that moves
+// nothing — refused, a revert or a pick that conflicts, a no-op — appends no
+// record. So a write naming the branch's head (existing: its expected_head
+// given) resolves it through the one ref read ([CodeDeps.refsOf]), which holds
+// it with the answer, as a read is held — and a branch the resolve finds
+// missing, or one the write CREATES, is held with no read: no deletion can
+// have listed what does not exist, and the write sets it now.
+//
+// RESOLVED ONLY WHERE A HOLD WOULD BE TAKEN AND IS NOT YET CONFIRMED
+// (M3-decisions M3-O65): a turn's call, by a seat, on a branch
+// [code.Holdable] admits, whose key the turn has not confirmed. Every other
+// write — an operator's, one on a branch outside refs/heads/seats/, one on a
+// branch this turn's read already confirmed — reads nothing here; its own
+// head compare decides it, unchanged.
+func (d CodeDeps) branch(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller, repo code.RepoRef,
+	ref string, existing bool) *tools.Result {
+
+	if turn == nil || c.asker.Kind != code.PrincipalAgent || !code.Holdable(ref) ||
+		turn.Holding().Confirmed(code.RefHoldKey(repo.ID, ref)) {
+		return nil
+	}
+	if existing {
+		answer, refusal := d.refsOf(ctx, turn, tool, c, repo, ref)
+		if refusal != nil {
+			return refusal
+		}
+		if answer.Refs[0].Missing == "" {
+			return nil
+		}
+	}
+	if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, ref, nil, statelog.Position{}, d.Now); err != nil {
+		r := refHoldFailure(ctx, tool, repo, ref, err)
+		return &r
+	}
+	return nil
 }
 
 // refsReadKey keys, in a turn's lookups, how far the refs the turn resolved on

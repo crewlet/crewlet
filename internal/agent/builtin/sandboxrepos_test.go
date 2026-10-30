@@ -21,11 +21,14 @@ func maintains(asker code.Principal, repo code.RepoRef) code.Grant {
 }
 
 // launchTurn is agent-cto's turn as a launch is made in one: a run id that is
-// a UUID, as every turn's is, which the run's own branch is named by.
+// a UUID, as every turn's is, which the run's own branch is named by, and the
+// holds every engine-built turn keeps — a launch holds the run's own branch
+// on them before anything durable of it exists.
 func launchTurn(t *testing.T) *turnctx.Turn {
 	t.Helper()
 	turn := codeTurn(t)
 	turn.RunID = "0190d8f0-1111-7000-8000-0123456789ab"
+	turn.Holds = turnctx.NewHolds(nil)
 	return turn
 }
 

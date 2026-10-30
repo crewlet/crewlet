@@ -28,7 +28,8 @@ import (
 // repository by the one resolution of a `repo` argument ([CodeDeps.repo],
 // which takes the turn's hold on a scratch repository AFTER the read that
 // judged the seat's grant, so a seat that may not read a repository holds
-// nothing of it), every ref by the one ref query ([CodeDeps.refsOf]), a base
+// nothing of it), every ref by the one ref query ([CodeDeps.refsOf], which
+// takes the turn's hold on every seat's branch it answers), a base
 // named by its id by the one read by object id ([CodeDeps.gitRead]), and all
 // of them as the caller the code tools read as — decided again for whoever
 // woke the turn ([CodeDeps.callerOn] on the code host's read verb), so a box
@@ -66,7 +67,9 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 //  2. the branch: the request's, or [code.SeatBranch] of the seat, the
 //     turn's work item's key and the turn — held to [gitref.ValidBranch];
 //  3. ONE ref query for the branch, a base named as a ref, and — where no
-//     base is named — the default branch;
+//     base is named — the default branch, the turn's hold taken on every
+//     seat's branch among them ([HoldRef]) and on the run's own branch where
+//     it does not exist yet, before anything durable of the launch exists;
 //  4. the access: `write` asked must pass the seat's grant's ref rule for
 //     the branch (and the repository must not be archived), `read` is read,
 //     and none asked is write where `write` would pass, else read;
@@ -175,6 +178,19 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		return sandbox.RunRepo{}, statelog.Position{}, &r
 	}
 	head := answer.Refs[0]
+	if head.Missing != "" {
+		// THE RUN'S OWN BRANCH, NOT THERE YET: held with no read, as a branch
+		// a write creates is — no deletion can have listed it, and the box's
+		// first push sets it. Every ref the read answered is held already
+		// (CodeDeps.refsOf), so every ref a launch resolves is on the turn's
+		// set before BeginLaunch writes that set on the run's row, and a
+		// relaunch, which replaces the row's grants, keeps them held.
+		if err := HoldRef(ctx, turn, d.Holder, c.actor, repo, names[0], nil, statelog.Position{},
+			d.Now); err != nil {
+			r := refHoldFailure(ctx, tool, repo, names[0], err)
+			return sandbox.RunRepo{}, statelog.Position{}, &r
+		}
+	}
 
 	access, refusal := runAccess(req, branch, head, current, grant(c.asker, current))
 	if refusal != nil {

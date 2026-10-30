@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/gitref"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -107,6 +108,17 @@ import (
 // its push row, which names its run (code.RunProvenance.RunID), and a box's
 // refusal by its log line. Its fetch of a `visibility: unit` repository is a
 // read like any other, recorded under its seat (fetched).
+//
+// # A box's push holds what it pushes
+//
+// Every seat's branch a box's push names, as judged, is held on its run's row
+// before anything of the push is received, stored or proposed
+// (admission.holdRefs): what the box pushed is what its parked run depends on.
+// A row at its bound is 403 holds_full, and a run store that cannot be written
+// 503 holds_unwritten — never the push sent unheld. A box's FETCH holds
+// nothing: under protocol v2 its wants are object ids and `ls-refs` lists by
+// prefix, so no request names a ref the box depends on; its checkout is its
+// launch's grant, held at the launch.
 
 // The box's challenges, each a sentence of the box's own credential: what to
 // present, never an API token.
@@ -359,6 +371,24 @@ func (b boxRefusal) attrs(reason string) []any {
 	}
 	return []any{"reason", reason, "turn_id", b.ref.TurnID, "launch_id", b.ref.LaunchID, "seat", b.seat,
 		"repo", b.name, "path", b.r.URL.Path}
+}
+
+// boxHoldFailed answers a coding box's push whose run's hold on the seat
+// branches it names could not be written (admission.holdRefs), with nothing
+// received, stored or proposed: 403 holds_full where the run's row holds the
+// most keys one run may — the push would land a branch its parked run
+// depends on unheld — and otherwise 503 holds_unwritten, the run store
+// unreachable and the hold UNKNOWN, never "held": the box's retry may reach a
+// node that can write it.
+func (s *Server) boxHoldFailed(w http.ResponseWriter, r *http.Request, adm admission, err error) {
+	ref, _, _ := adm.boxFloor()
+	b := boxRefusal{s: s, w: w, r: r, ref: ref, seat: adm.principal().Seat, name: adm.name}
+	if errors.Is(err, sandbox.ErrCodeHoldsFull) {
+		b.refuse("holds_full", fmt.Sprintf("this run already holds the most repositories and branches one "+
+			"run may (%d); nothing of this push was stored", sandbox.MaxCodeHolds))
+		return
+	}
+	b.unavailable("holds_unwritten", "the run store could not be written here: "+sentence(err.Error()))
 }
 
 // raiseFloor raises the run a box's request was admitted for to pos — the

@@ -118,20 +118,48 @@ func (a *Applier) applyReleaseName(ctx context.Context, tx *sql.Tx, at applyCont
 	return int(n), nil
 }
 
-// applyHold moves an active scratch repository's version to the hold's
-// position, and NOTHING else — never its idle clock, nor its last push: a hold
-// is not activity, and the idle clock the scratch expiry reads stays the
-// repository's pushes, renames, settings changes and restores. What the
-// version buys is the order: an expiry that listed the repository before this
-// record refuses it ([Store.ExpireScratch]). A row gone, archived or not
-// active applies as nothing.
+// applyHold applies a live turn's hold, and moves NOTHING that says the
+// repository or the branch was used: never an idle clock, nor a last push — a
+// hold is not activity, and the idle clock the scratch expiry reads stays the
+// repository's pushes, renames, settings changes and restores.
+//
+//   - A HOLD ON THE SCRATCH REPOSITORY moves an active scratch repository's
+//     version to the hold's position: what the version buys is the order, an
+//     expiry that listed the repository before this record refusing it
+//     ([Store.ExpireScratch]). A row gone, archived or not active applies as
+//     nothing.
+//   - A HOLD ON A SEAT'S BRANCH moves the ref's held_position to the hold's
+//     position — the per-ref mark a deletion listed before it is ordered by —
+//     and the repository's version, which every record on its subject moves
+//     (the replay guard reads it), active or archived alike. Never the ref's
+//     `at` (its idle clock), its `position` (the cursor every cache's delta
+//     reads: a hold changes no ref a cache holds), its seat or its target. A
+//     ref row gone, a tombstone or seat-less is left as it is, and a deleted
+//     or purging repository moves nothing: the decide refused each, and a
+//     record only a newer build forms is applied as safely.
 func (a *Applier) applyHold(ctx context.Context, tx *sql.Tx, at applyContext, p Hold) (int, error) {
-	res, err := tx.ExecContext(ctx, holdSQL, at.packed, p.RepoID)
-	if err != nil {
-		return 0, fmt.Errorf("code: record turn %s's hold on %s at %s: %w", p.TurnID, p.RepoID, at.position, err)
+	if p.Ref == "" {
+		res, err := tx.ExecContext(ctx, holdSQL, at.packed, p.RepoID)
+		if err != nil {
+			return 0, fmt.Errorf("code: record turn %s's hold on %s at %s: %w", p.TurnID, p.RepoID, at.position,
+				err)
+		}
+		n, _ := res.RowsAffected()
+		return int(n), nil
 	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
+	held, err := tx.ExecContext(ctx, refHeldSQL, at.packed, p.RepoID, p.Ref)
+	if err != nil {
+		return 0, fmt.Errorf("code: record turn %s's hold on %s of %s at %s: %w", p.TurnID, p.Ref, p.RepoID,
+			at.position, err)
+	}
+	moved, err := tx.ExecContext(ctx, refHoldVersionSQL, at.packed, p.RepoID)
+	if err != nil {
+		return 0, fmt.Errorf("code: move %s's version to turn %s's hold on %s at %s: %w", p.RepoID, p.TurnID, p.Ref,
+			at.position, err)
+	}
+	refs, _ := held.RowsAffected()
+	repos, _ := moved.RowsAffected()
+	return int(refs + repos), nil
 }
 
 // The statements of the lifecycle's applies, each registered in plan_test.go.
@@ -149,6 +177,12 @@ const (
 	// releaseRedirectSQL frees an old name whose redirect ended by ?3.
 	releaseRedirectSQL = `DELETE FROM code_names WHERE token = ? AND repo_id = ?
 		AND redirect_until IS NOT NULL AND redirect_until <= ?`
-	// holdSQL is a hold's whole apply.
+	// holdSQL is a scratch repository's hold's whole apply.
 	holdSQL = `UPDATE code_repos SET version = ? WHERE id = ? AND kind = 'scratch' AND status = 'active'`
+	// refHeldSQL and refHoldVersionSQL are a seat branch's hold's apply: the
+	// ref's mark, by code_refs' key, on a live row a seat set; and the
+	// repository's version, active or archived.
+	refHeldSQL = `UPDATE code_refs INDEXED BY ` + refsKey + ` SET held_position = ?
+		WHERE repo_id = ? AND ref = ? AND target != '' AND seat != ''`
+	refHoldVersionSQL = `UPDATE code_repos SET version = ? WHERE id = ? AND status IN ('active', 'archived')`
 )

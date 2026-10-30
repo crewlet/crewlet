@@ -758,14 +758,16 @@ type ReleaseName struct {
 // comparison with each node's clock would not.
 const RedirectWindow = 30 * 24 * time.Hour
 
-// Hold is a LIVE TURN'S HOLD on a scratch repository, recorded on its subject
-// so that an expiry pass which read the live turns' holds before this one
-// existed is ordered against it: the broker arbitrates the two on the one
-// subject `repo.<id>`, so whichever lands second decides from the first
-// ([Store.ExpireScratch] refuses a repository with a record past the page it
-// listed; a hold decided after the delete answers repo_deleted). Its apply
-// moves the repository's version and NOTHING else — never its idle clock, which
-// only activity moves ([Retention]).
+// Hold is a LIVE TURN'S HOLD on a scratch repository, or on one seat's branch
+// of any repository (Ref), recorded on the repository's subject so that a
+// deletion listed before the turn's read of it is ordered against it: the
+// broker arbitrates the two on the one subject `repo.<id>`, so whichever lands
+// second decides from the first ([Store.ExpireScratch] refuses a repository
+// with a record past the page it listed; a hold decided after the deletion
+// answers repo_deleted, or for a ref ref_deleted). Its apply moves the
+// repository's version — and a ref hold's, the ref's held_position — and
+// NOTHING else: never an idle clock, which only activity moves ([Retention]),
+// nor a ref's own `at`, `position`, seat or target ([RefHoldKey]'s file).
 //
 // BASE FORMAT, AS A STATED CONDITION, as [Rename] states it; once a build
 // without it has run, it takes {Name: "RecordEnvelope.Op hold", Since: 2, Path:
@@ -777,6 +779,19 @@ type Hold struct {
 	// MaxProvenanceBytes, so a reader of the log can say whose hold ordered an
 	// expiry.
 	TurnID string `json:"turn_id"`
+	// Ref is the seat's branch the turn holds — a ref [Holdable] admits — or
+	// "" for a hold on the scratch repository itself.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as the op itself is: no build that
+	// carries the code domain has run without this field — none of the domain
+	// is on main, so no image and no release holds it. Once a build without it
+	// has run, it takes {Name: "Hold.Ref", Since: 2, Op: "hold", Path:
+	// []string{"mutation", "ref"}} in versionedFields, with RecordVersion at
+	// 2 and a Carrying record in the statelogtest candidate: an older build
+	// would otherwise apply a ref hold as a hold on the scratch repository,
+	// moving no ref's held_position, and a deletion listed before the turn's
+	// read would not be ordered against it.
+	Ref string `json:"ref,omitempty"`
 }
 
 // HoldRecordAfter is how long a scratch repository must have been idle before

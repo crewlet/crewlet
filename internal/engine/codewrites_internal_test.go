@@ -33,21 +33,36 @@ import (
 // reader the code-retention pass asks which repositories a live turn holds.
 
 // codeWriteHost is the routed code host as the code tools see it: its
-// repositories by name, every engine write and lifecycle request it is asked,
-// each landed or applied.
+// repositories by name, the refs a case gives them, every engine write and
+// lifecycle request it is asked, each landed or applied — and every question,
+// in order (events).
 type codeWriteHost struct {
-	mu         sync.Mutex
-	repos      map[string]code.RepoRef
+	mu    sync.Mutex
+	repos map[string]code.RepoRef
+	// refs are a repository's refs by its name, each whole ref's oid: a
+	// resolve answers one set an hour ago, by the seat whose namespace holds
+	// it.
+	refs       map[string]map[string]string
 	writes     []code.EngineWrite
 	lifecycles []code.LifecycleRequest
+	// events is every question asked — resolve_ref, git_write, lifecycle —
+	// in the order it came.
+	events []string
 }
 
 func newCodeWriteHost(repos ...code.RepoRef) *codeWriteHost {
-	h := &codeWriteHost{repos: map[string]code.RepoRef{}}
+	h := &codeWriteHost{repos: map[string]code.RepoRef{}, refs: map[string]map[string]string{}}
 	for _, r := range repos {
 		h.repos[r.Name] = r
 	}
 	return h
+}
+
+// asked is every question the host was asked, in order.
+func (h *codeWriteHost) asked() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.events)
 }
 
 func (h *codeWriteHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, error) {
@@ -61,8 +76,30 @@ func (h *codeWriteHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnsw
 		Position: repo.Position, Level: q.Fresh.Level}, nil
 }
 
-func (h *codeWriteHost) ResolveRef(context.Context, code.RefQuery) (code.RefAnswer, error) {
-	return code.RefAnswer{}, code.ErrRefNotFound
+func (h *codeWriteHost) ResolveRef(_ context.Context, q code.RefQuery) (code.RefAnswer, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.events = append(h.events, "resolve_ref")
+	repo, ok := h.repos[q.Repo]
+	if !ok {
+		return code.RefAnswer{}, fmt.Errorf("%w: %s", code.ErrRepoNotFound, q.Repo)
+	}
+	out := code.RefAnswer{Repo: repo, Position: codeLogAt(10)}
+	for _, asked := range q.Refs {
+		whole := asked
+		if !strings.HasPrefix(whole, "refs/") {
+			whole = "refs/heads/" + asked
+		}
+		oid, ok := h.refs[q.Repo][whole]
+		if !ok {
+			out.Refs = append(out.Refs, code.ResolvedRef{Name: asked, Missing: "no live " + whole})
+			continue
+		}
+		seat, _, _ := strings.Cut(strings.TrimPrefix(whole, code.SeatNamespaceRoot), "/")
+		out.Refs = append(out.Refs, code.ResolvedRef{Name: asked, Ref: whole, OID: oid, Moved: codeLogAt(8),
+			At: time.Now().Add(-time.Hour), Seat: seat})
+	}
+	return out, nil
 }
 
 func (h *codeWriteHost) GitRead(context.Context, code.GitQuery) (code.GitAnswer, error) {
@@ -75,6 +112,7 @@ func (h *codeWriteHost) GitWrite(_ context.Context, w code.EngineWrite) (code.En
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.writes = append(h.writes, w)
+	h.events = append(h.events, "git_write")
 	commit := strings.Repeat("d", 40)
 	return code.EngineWriteResult{Outcome: statelog.OutcomeApplied, Commit: commit, PushID: code.WritePushID(w.OpID),
 		Position: codeLogAt(20), Command: code.Command{Ref: w.Ref, Old: w.ExpectedHead, New: commit,
@@ -85,6 +123,7 @@ func (h *codeWriteHost) Lifecycle(_ context.Context, r code.LifecycleRequest) (c
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.lifecycles = append(h.lifecycles, r)
+	h.events = append(h.events, "lifecycle:"+string(r.Kind))
 	return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(21)}, nil
 }
 
@@ -99,8 +138,8 @@ func (h *codeWriteHost) Converse(context.Context, code.ConversationWrite) (code.
 	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: codeLogAt(23)}, nil
 }
 
-// asked is the engine writes the host was asked, copied under its lock.
-func (h *codeWriteHost) asked() []code.EngineWrite {
+// writesAsked is the engine writes the host was asked, copied under its lock.
+func (h *codeWriteHost) writesAsked() []code.EngineWrite {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return slices.Clone(h.writes)
@@ -230,7 +269,7 @@ func TestABridgedCodeWriteNamesItsLaunchsModel(t *testing.T) {
 			Lookups: turnctx.NewLookups(), Holds: turnctx.NewHolds(nil)}
 		run := launchBridgedOn(t, c.company, turn, codeTool(t, host, builtin.CodeCommitFilesTool))
 		run.bridgedCall(t, builtin.CodeCommitFilesTool, commitTo("site"))
-		writes := host.asked()
+		writes := host.writesAsked()
 		if len(writes) != 1 {
 			t.Fatalf("%d writes reached the code host, want 1", len(writes))
 		}
@@ -269,6 +308,108 @@ func TestABridgedRunHoldsTheScratchRepositoryItWrote(t *testing.T) {
 	// THE NODE RESTARTS: no running turn, no bridge session — the row alone.
 	if held := liveHolds(t, run.pending, &runningTurns{}, scratch.ID); !held[scratch.ID] {
 		t.Errorf("a restarted node answers scratch repository %s unheld under the parked run", scratch.ID)
+	}
+}
+
+// webOf is the project repository web, the engineering unit's, its default
+// branch main.
+func webOf() code.RepoRef {
+	return code.RepoRef{ID: uuid.NewString(), Name: "web", Status: code.RepoStatusActive,
+		ManagedBy: code.ManagedConfig, Kind: code.RepoProject, Owner: code.Owner{Kind: code.OwnerUnit,
+			Ref: "eng"}, Visibility: code.VisibilityCompany, DefaultBranch: "main", Position: codeLogAt(9)}
+}
+
+// commitOn is a commit of one file onto repo's branch — at head where head is
+// given, and creating the branch where it is not.
+func commitOn(repo, branch, head string) map[string]any {
+	args := map[string]any{"repo": repo, "branch": branch, "message": "Take notes",
+		"files": []any{map[string]any{"op": "put", "path": "NOTES.md", "content": "notes"}}}
+	if head != "" {
+		args["expected_head"] = head
+	}
+	return args
+}
+
+// A BRIDGED RUN'S BRANCH HOLD OUTLIVES ITS NODE (M3-decisions M3-O64): an
+// agent-mode run's bridged code_commit_files creates a seat's branch on a
+// project repository — a branch no launch granted — and the turn's hold on it
+// is on the run's row before the write is sent, so a node that restarts under
+// the parked run, its bridge session and every hold in its memory gone, still
+// answers the branch held, from the row.
+//
+// Mutation: CodeDeps.branch skipping HoldRef → the branch's key is on no row,
+// red.
+func TestABridgedRunsBranchHoldOutlivesItsNode(t *testing.T) {
+	t.Parallel()
+	c, seat := splitLoginCompany(t, "api", "codex")
+	web := webOf()
+	host := newCodeWriteHost(web)
+	turn := &turnctx.Turn{RunID: statelog.NewOpID(time.Now(), ""), Seat: seat,
+		Lookups: turnctx.NewLookups(), Holds: turnctx.NewHolds(nil)}
+	run := launchBridgedOn(t, c, turn, codeTool(t, host, builtin.CodeCommitFilesTool))
+	branch := code.SeatNamespace(seat.Handle()) + "notes"
+	run.bridgedCall(t, builtin.CodeCommitFilesTool, commitOn(web.Name, strings.TrimPrefix(branch, "refs/heads/"), ""))
+	key := code.RefHoldKey(web.ID, branch)
+	if row := run.row(t, turn.RunID); !slices.Contains(row.CodeHolds, key) {
+		t.Fatalf("the run's row holds %v, want %s's key %s, which its bridged write created", row.CodeHolds, branch,
+			key)
+	}
+	// THE NODE RESTARTS: no running turn, no bridge session — the row alone.
+	if held := liveHolds(t, run.pending, &runningTurns{}, key); !held[key] {
+		t.Errorf("a restarted node answers %s unheld under the parked run", branch)
+	}
+}
+
+// A RESUMED TURN RESOLVES ITS BRANCH AGAIN (M3-decisions M3-O65): a native
+// executor writes a seat's branch twice at its head — one resolve, before the
+// first write, which confirms its hold — launches run_sandbox and suspends;
+// the resumed executor, its holds built from the row, holds the branch's key
+// and confirms none, so its write resolves the branch once more, before it.
+//
+// Mutation: NewHolds confirming its seed, or the mark riding the row → the
+// resumed write resolves nothing, red.
+func TestAResumedTurnResolvesItsBranchAgain(t *testing.T) {
+	t.Parallel()
+	c := specCompany(t, runEnvDoc)
+	e, _ := codeWorkRig(t, c)
+	e.secretsMu.Lock()
+	e.installSecrets(map[string]string{"SWE_GITLAB_TOKEN": "glpat-swe"})
+	e.secretsMu.Unlock()
+	seat := c.Org.AgentSeatByHandle("swe")
+	web := webOf()
+	host := newCodeWriteHost(web)
+	branch := code.SeatNamespace(seat.Handle()) + "x"
+	head := strings.Repeat("d", 40)
+	host.refs[web.Name] = map[string]string{branch: head}
+	commit := codeTool(t, host, builtin.CodeCommitFilesTool).(tools.SeatCallable)
+	args := commitOn(web.Name, strings.TrimPrefix(branch, "refs/heads/"), head)
+
+	turn := &turnctx.Turn{RunID: statelog.NewOpID(time.Now(), ""), Seat: seat, Org: c.Org,
+		Lookups: turnctx.NewLookups(), Holds: turnctx.NewHolds(nil)}
+	for range 2 {
+		if got, err := commit.CallForTurn(t.Context(), turn, args); err != nil || got.Failed {
+			t.Fatalf("the executor's write answered %v %q", err, got.Output)
+		}
+	}
+	if got := host.asked(); !slices.Equal(got, []string{"resolve_ref", "git_write", "git_write"}) {
+		t.Fatalf("the executor's two writes asked %v, want one resolve, before the first", got)
+	}
+	if _, err := (&launcher{engine: e}).Launch(t.Context(), turn,
+		builtin.SandboxRequest{Brief: "fix the failing test"}); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	row, found, err := e.sandbox.Load().pending.Get(t.Context(), turn.RunID)
+	if err != nil || !found || !slices.Contains(row.CodeHolds, code.RefHoldKey(web.ID, branch)) {
+		t.Fatalf("the launched run's row holds %v (found %v, %v), want %s's key", row.CodeHolds, found, err, branch)
+	}
+	resumed := &turnctx.Turn{RunID: turn.RunID, Seat: seat, Org: c.Org, Lookups: turnctx.NewLookups(),
+		Holds: e.rowHolds(row)}
+	mark := len(host.asked())
+	if got, err := commit.CallForTurn(t.Context(), resumed, args); err != nil || got.Failed {
+		t.Fatalf("the resumed executor's write answered %v %q", err, got.Output)
+	}
+	if got := host.asked()[mark:]; !slices.Equal(got, []string{"resolve_ref", "git_write"}) {
+		t.Errorf("the resumed executor's write asked %v, want the branch resolved again, before it", got)
 	}
 }
 

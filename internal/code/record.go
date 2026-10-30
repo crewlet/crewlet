@@ -194,8 +194,9 @@ const (
 	// BASE FORMAT, AS A STATED CONDITION: see [ReleaseName]. It is no gate.
 	OpReleaseName OpKind = "release_name"
 
-	// OpHold is a live turn's hold on a scratch repository, on the
-	// repository's own subject, ordered against its expiry ([Hold]).
+	// OpHold is a live turn's hold on a scratch repository, or on one seat's
+	// branch of any repository, on the repository's own subject, ordered
+	// against a deletion of what it holds ([Hold]).
 	//
 	// BASE FORMAT, AS A STATED CONDITION: see [Hold]. It is no gate.
 	OpHold OpKind = "hold"
