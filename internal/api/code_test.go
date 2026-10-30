@@ -786,7 +786,7 @@ var boxCodeRequests = []struct{ method, path string }{
 // aCheckRef is one attempt of a check, as its box is given repository web.
 func aCheckRef() host.CheckRunRef {
 	return host.CheckRunRef{Repo: "web", Attempt: code.CheckKey{RepoID: uuid.NewString(),
-		OID: strings.Repeat("ab", 20), Name: "lint.go", Attempt: 2}}
+		OID: strings.Repeat("ab", 20), Target: "refs/heads/main", Name: "lint.go", Attempt: 2}}
 }
 
 // AN UNSERVED BOX ROUTE ANSWERS A CHECK'S TOKEN AS IT ANSWERS A RUN'S. A node

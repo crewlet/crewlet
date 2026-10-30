@@ -745,7 +745,7 @@ type Reading struct {
 	// more than that many, the count then the bound;
 	// CodeChecksBacklogOldest is the longest wait among those counted and
 	// CodeChecksBacklogCheck that attempt, by its repository's name, its
-	// commit, its check and its attempt.
+	// commit, the branch it is checked for, its check and its attempt.
 	//
 	// MEASURED FROM THE ROWS by every data node, never by a runner: a fleet
 	// whose every git node is gone runs no check at all, and is the case the

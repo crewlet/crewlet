@@ -58,12 +58,15 @@ import (
 //
 // # Its decide: attempt arithmetic and the claim
 //
-//   - An attempt is QUEUED only after the one before it ended: the home's
-//     dispatch is a commit's first attempt, and its requeue the next after an
-//     attempt its infrastructure ended ([CheckReason.Requeued]) while that
-//     attempt is below [AutoRequeueAttempts]; no attempt passes
-//     [MaxCheckAttempts]; an attempt already queued is answered from its row,
-//     unchanged, so a home's second dispatch of a head queues nothing.
+//   - An attempt is QUEUED only after the one before it ended — the attempts
+//     of one check of one commit FOR ONE TARGET BRANCH, its key's ([CheckKey]):
+//     the home's dispatch is a commit's first attempt for its target, and its
+//     requeue the next after an attempt its infrastructure ended
+//     ([CheckReason.Requeued]) while that attempt is below
+//     [AutoRequeueAttempts]; no attempt passes [MaxCheckAttempts]; an attempt
+//     already queued is answered from its row, unchanged, so a home's second
+//     dispatch of a head for its target queues nothing — and its dispatch for
+//     another target queues that target's own.
 //   - A CLAIM is refused `claimed`, naming the holder, where another runner
 //     holds the attempt or it has ended; the holder's own claim asked again is
 //     unchanged, and its later record naming the box is decided as the box's
@@ -600,7 +603,8 @@ func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention ti
 		return decideDispatched(ctx, tx, *r.Dispatched, d)
 	}
 	named := func(k CheckKey) string {
-		return fmt.Sprintf("attempt %d of check %s of %s on %s", k.Attempt, k.Name, k.OID, repo.name)
+		return fmt.Sprintf("attempt %d of check %s of %s for %s on %s", k.Attempt, k.Name, k.OID, k.Target,
+			repo.name)
 	}
 	row, held, err := checkRowIn(ctx, tx, key)
 	if err != nil {
@@ -644,7 +648,7 @@ func decideQueued(ctx context.Context, tx *sql.Tx, q CheckQueued, d checksDecisi
 		return checksDecision{}, fmt.Errorf("code: %s holds no queue — no writer records an attempt it did "+
 			"not queue", named(q.CheckKey))
 	}
-	latest, found, err := latestCheckIn(ctx, tx, q.RepoID, q.OID, q.Name)
+	latest, found, err := latestCheckIn(ctx, tx, q.CheckKey)
 	if err != nil {
 		return checksDecision{}, err
 	}

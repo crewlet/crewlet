@@ -1595,9 +1595,9 @@ type CheckRow struct {
 	Revision    int    `json:"revision,omitempty"`
 	CandidateID string `json:"candidate_id,omitempty"`
 	EntryID     string `json:"entry_id,omitempty"`
-	// Target is the branch the commit is checked for, Base what its diff is
-	// read against, and DefsOID the checks file its definition came from.
-	Target  string `json:"target,omitempty"`
+	// Base is what its diff is read against, and DefsOID the checks file its
+	// definition came from — the file of the branch it is checked for, its
+	// key's Target.
 	Base    string `json:"base,omitempty"`
 	DefsOID string `json:"defs_oid,omitempty"`
 	// Required reports a check the target's protection requires; RunIn and
@@ -1649,14 +1649,18 @@ type CheckDetail struct {
 // commit's, or names the one attempt a `check` read is of — each on the
 // repository the read names ([ReadQuery.Repo]).
 type CheckQuery struct {
-	// Change is a change's number on the repository: its attempts, of every
-	// commit it was checked at. A `checks` read's alone.
+	// Change is a change's number on the repository: the attempts that judge
+	// it — its head's, checked for its target — or, beside OID, that commit's
+	// checked for its target. A `checks` read's alone.
 	Change int64 `json:"change,omitempty"`
-	// OID is a commit's whole id: its attempts — of the change Change names,
-	// where it names one — and the commit a `check` read's attempt is of.
+	// OID is a commit's whole id: its attempts — checked for every target,
+	// or for the target of the change Change names — and the commit a
+	// `check` read's attempt is of.
 	OID string `json:"oid,omitempty"`
-	// Name and Attempt are the one attempt a `check` read is of, REQUIRED
+	// Target, Name and Attempt are the one attempt a `check` read is of —
+	// the branch it was checked for, the check and the attempt — REQUIRED
 	// there and refused on a `checks` read.
+	Target  string `json:"target,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Attempt int    `json:"attempt,omitempty"`
 	// Since bounds a `checks` read of EVERY repository — the window, which

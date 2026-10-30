@@ -194,14 +194,14 @@ func TestTwoNodesQueueOneCheck(t *testing.T) {
 	for _, m := range members {
 		before[m] = c.Appends(m)
 	}
-	key := code.CheckKey{RepoID: repo, OID: "1111111111111111111111111111111111111111", Name: "unit", Attempt: 1}
+	key := code.CheckKey{RepoID: repo, OID: "1111111111111111111111111111111111111111", Target: "refs/heads/main", Name: "unit", Attempt: 1}
 	askers := members[:2]
 	results := make([]code.ChecksResult, len(askers))
 	errs := make([]error, len(askers))
 	var wg sync.WaitGroup
 	for i, m := range askers {
 		req := code.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_dispatch"),
-			Queued: &code.CheckQueued{CheckKey: key, Purpose: code.PurposeTip, Target: "refs/heads/main",
+			Queued: &code.CheckQueued{CheckKey: key, Purpose: code.PurposeTip,
 				Def:    &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600},
 				Reason: code.QueueDispatch, QueuedAt: time.Now().UTC()}}
 		wg.Go(func() { results[i], errs[i] = c.member(t, m).router.Load().Code().Checks(t.Context(), req) })

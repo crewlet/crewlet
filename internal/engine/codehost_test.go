@@ -208,7 +208,7 @@ func TestAGitNodeVerifiesABoxsTokenWithOrWithoutItsHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	check := host.CheckRunRef{Repo: "web", Attempt: code.CheckKey{RepoID: uuid.NewString(),
-		OID: strings.Repeat("ab", 20), Name: "unit", Attempt: 1}}
+		OID: strings.Repeat("ab", 20), Target: "refs/heads/main", Name: "unit", Attempt: 1}}
 	strangerChecks, err := host.NewCheckTokens(runtoken.OneKey("k", "another fleet's key"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1089,15 +1089,15 @@ func TestTheBacklogAlarmBorrowsEachChecksTimeout(t *testing.T) {
 		res, err := seam.Checks(t.Context(), code.ChecksRequest{
 			OpID: statelog.NewOpID(time.Now(), "code_check_dispatch"),
 			Queued: &code.CheckQueued{CheckKey: code.CheckKey{RepoID: web,
-				OID: "1111111111111111111111111111111111111111", Name: c.name, Attempt: 1},
-				Purpose: code.PurposeTip, Target: "refs/heads/main",
-				Def:    &code.CheckDef{Name: c.name, Run: "make " + c.name, TimeoutSeconds: c.timeout},
-				Reason: code.QueueDispatch, QueuedAt: queued}})
+				OID: "1111111111111111111111111111111111111111", Target: "refs/heads/main", Name: c.name, Attempt: 1},
+				Purpose: code.PurposeTip,
+				Def:     &code.CheckDef{Name: c.name, Run: "make " + c.name, TimeoutSeconds: c.timeout},
+				Reason:  code.QueueDispatch, QueuedAt: queued}})
 		if err != nil || res.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("queue %s: (%+v, %v), want applied", c.name, res, err)
 		}
 	}
-	const lint = "web@111111111111: lint (attempt 1)"
+	const lint = "web@111111111111 for main: lint (attempt 1)"
 	reading := engine.CodeReadingForTest(t.Context(), e)
 	if reading.CodeChecksBacklog != 1 || reading.CodeChecksBacklogCheck != lint ||
 		reading.CodeChecksBacklogOldest < 2*time.Minute {

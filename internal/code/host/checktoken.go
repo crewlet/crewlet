@@ -27,7 +27,8 @@ const CheckUser = "check"
 // repository the box was given.
 type CheckRunRef struct {
 	// Attempt is the attempt's key — the code_checks row's: its repository
-	// by id, the commit checked, the check's name and the attempt's number.
+	// by id, the commit checked, the branch it is checked for, the check's
+	// name and the attempt's number.
 	Attempt code.CheckKey
 	// Repo is the repository's name the box was given — its clone URL's and
 	// its API's — which a request is matched by BEFORE anything of the code
@@ -51,12 +52,14 @@ const (
 	checkSubjectSep = "~"
 )
 
-// checkSubjectEncoding spells the two NAMES a subject carries. A check's name
-// may hold a `.` (config.ValidCodeCheckName) and so may a seat's scratch
-// repository's (gitref.ScratchName), and a `.` is a token's own separator: a
-// subject holding one is a token runtoken refuses and internal/redact does not
-// know by its shape. Base64url, unpadded, is the alphabet runtoken's own
-// signatures are written in, which holds neither a `.` nor the subject's `~`.
+// checkSubjectEncoding spells the three NAMES a subject carries: the target
+// branch, the check and the repository. A check's name may hold a `.`
+// (config.ValidCodeCheckName) and so may a seat's scratch repository's
+// (gitref.ScratchName) and a branch's ref, and a `.` is a token's own
+// separator: a subject holding one is a token runtoken refuses and
+// internal/redact does not know by its shape. Base64url, unpadded, is the
+// alphabet runtoken's own signatures are written in, which holds neither a
+// `.` nor the subject's `~`.
 var checkSubjectEncoding = base64.RawURLEncoding
 
 // CheckTokens mints and verifies a check's box's credential. Safe for
@@ -78,8 +81,9 @@ func NewCheckTokens(m runtoken.Material, now func() time.Time) (*CheckTokens, er
 // Mint is a token for ref, valid for timeout — the check's own, as its runner
 // holds it — and code.CheckBoxGrace past it, the box's setup: a BACKSTOP, the
 // attempt's row the authority, which refuses the box the moment the attempt
-// ends. Its subject is "chk~<repo id>~<commit>~<attempt>~<check>~<repository>",
-// the two names base64url.
+// ends. Its subject is
+// "chk~<repo id>~<commit>~<attempt>~<target>~<check>~<repository>", the three
+// names base64url.
 //
 // A ref no attempt has — a key code.CheckKey.Validate refuses, a name no
 // repository takes — or a timeout no check runs for (none, or past
@@ -98,7 +102,8 @@ func (t *CheckTokens) Mint(ref CheckRunRef, timeout time.Duration) string {
 		return ""
 	}
 	subject := strings.Join([]string{checkSubjectTag, ref.Attempt.RepoID, ref.Attempt.OID,
-		strconv.Itoa(ref.Attempt.Attempt), checkSubjectEncoding.EncodeToString([]byte(ref.Attempt.Name)),
+		strconv.Itoa(ref.Attempt.Attempt), checkSubjectEncoding.EncodeToString([]byte(ref.Attempt.Target)),
+		checkSubjectEncoding.EncodeToString([]byte(ref.Attempt.Name)),
 		checkSubjectEncoding.EncodeToString([]byte(ref.Repo))}, checkSubjectSep)
 	return t.signer.Mint(subject, timeout+code.CheckBoxGrace)
 }
@@ -112,20 +117,21 @@ func (t *CheckTokens) Verify(token string) (CheckRunRef, bool) {
 		return CheckRunRef{}, false
 	}
 	parts := strings.Split(subject, checkSubjectSep)
-	if len(parts) != 6 || parts[0] != checkSubjectTag {
+	if len(parts) != 7 || parts[0] != checkSubjectTag {
 		return CheckRunRef{}, false
 	}
 	attempt, err := strconv.Atoi(parts[3])
 	if err != nil || strconv.Itoa(attempt) != parts[3] {
 		return CheckRunRef{}, false
 	}
-	name, nerr := checkSubjectEncoding.DecodeString(parts[4])
-	repo, rerr := checkSubjectEncoding.DecodeString(parts[5])
-	if nerr != nil || rerr != nil {
+	target, terr := checkSubjectEncoding.DecodeString(parts[4])
+	name, nerr := checkSubjectEncoding.DecodeString(parts[5])
+	repo, rerr := checkSubjectEncoding.DecodeString(parts[6])
+	if terr != nil || nerr != nil || rerr != nil {
 		return CheckRunRef{}, false
 	}
-	ref := CheckRunRef{Attempt: code.CheckKey{RepoID: parts[1], OID: parts[2], Name: string(name),
-		Attempt: attempt}, Repo: string(repo)}
+	ref := CheckRunRef{Attempt: code.CheckKey{RepoID: parts[1], OID: parts[2], Target: string(target),
+		Name: string(name), Attempt: attempt}, Repo: string(repo)}
 	if invalidCheckRef(ref) != "" {
 		return CheckRunRef{}, false
 	}

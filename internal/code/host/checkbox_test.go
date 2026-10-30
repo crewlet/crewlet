@@ -34,7 +34,7 @@ func checkTokens(t *testing.T, m runtoken.Material, now func() time.Time) *host.
 // aCheck is attempt of check name of oid on repository id, its box given the
 // repository named repo.
 func aCheck(id, repo, oid, name string, attempt int) host.CheckRunRef {
-	return host.CheckRunRef{Repo: repo, Attempt: code.CheckKey{RepoID: id, OID: oid, Name: name,
+	return host.CheckRunRef{Repo: repo, Attempt: code.CheckKey{RepoID: id, OID: oid, Target: "refs/heads/main", Name: name,
 		Attempt: attempt}}
 }
 
@@ -192,7 +192,7 @@ func TestTheCheckAPIAdmitsACheckTokenAsItsGitDoes(t *testing.T) {
 	c, head := boxCase(t, codetest.SoloOptions{})
 	rows := c.Rows()
 	f := c.Fleet.(*codetest.SoloFleet)
-	key := code.CheckKey{RepoID: rows.Repo.ID, OID: head, Name: "unit", Attempt: 1}
+	key := code.CheckKey{RepoID: rows.Repo.ID, OID: head, Target: "refs/heads/main", Name: "unit", Attempt: 1}
 	queueCheck(t, f, key)
 	token := codetest.NewCheckTokens(t).Mint(host.CheckRunRef{Attempt: key, Repo: codetest.RepoName}, time.Minute)
 	live, _ := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
@@ -251,7 +251,7 @@ func queueCheck(t *testing.T, f *codetest.SoloFleet, key code.CheckKey) {
 	served := f.Data().Served()
 	for _, req := range []code.ChecksRequest{
 		{OpID: statelog.NewOpID(time.Now(), "code_check_queue"), Queued: &code.CheckQueued{CheckKey: key,
-			Purpose: code.PurposeTip, Target: "refs/heads/main", Reason: code.QueueDispatch, QueuedAt: time.Now(),
+			Purpose: code.PurposeTip, Reason: code.QueueDispatch, QueuedAt: time.Now(),
 			Def: &code.CheckDef{Name: key.Name, Run: "make test", TimeoutSeconds: 600}}},
 		{OpID: statelog.NewOpID(time.Now(), "code_check_claim"), Started: &code.CheckStarted{CheckKey: key,
 			Runner: "git-a", Placement: code.PlacementContainer, StartedAt: time.Now()}},
@@ -296,7 +296,7 @@ func TestACheckTokenAdmitsOneRepositoryToRead(t *testing.T) {
 	rec := &recording{}
 	c, f, head := unitCase(t, codetest.SoloOptions{Logger: lines.logger(), Shape: codetest.Shape{WrapEstate: rec.wrap}})
 	rows := c.Rows()
-	key := code.CheckKey{RepoID: rows.Repo.ID, OID: head, Name: "lint.go", Attempt: 1}
+	key := code.CheckKey{RepoID: rows.Repo.ID, OID: head, Target: "refs/heads/main", Name: "lint.go", Attempt: 1}
 	queueCheck(t, f, key)
 	tokens := codetest.NewCheckTokens(t)
 	token := tokens.Mint(host.CheckRunRef{Attempt: key, Repo: codetest.RepoName}, 10*time.Minute)

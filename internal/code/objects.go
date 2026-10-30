@@ -76,7 +76,7 @@ var LayerReferences = objstore.ReferenceTable{
 var CheckLogReferences = objstore.ReferenceTable{
 	Domain: Domain{}.Name(), Table: "code_check_logs",
 	Key: "object", Hash: "hash", Size: "size",
-	Owner:    []string{"repo_id", "commit_oid", "name", "attempt"},
+	Owner:    []string{"repo_id", "commit_oid", "target_ref", "name", "attempt"},
 	Standing: objstore.Required,
 	Log:      Domain{}.Stream().Name,
 	Deferred: Domain{}.DeferredTable(),
@@ -103,8 +103,8 @@ var CheckLogReferences = objstore.ReferenceTable{
 // one that may write a log row is [objstore.ErrRecordUnreadable].
 //
 // THE ROW IS SPELLED IN THE ORDER [CheckLogReferences] LISTS ITS OWNER COLUMNS
-// — repo_id, commit_oid, name, attempt — through [objstore.JoinOwner], as the
-// walk of the table spells it.
+// — repo_id, commit_oid, target_ref, name, attempt — through
+// [objstore.JoinOwner], as the walk of the table spells it.
 func checkLogRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	env, err := DecodeEnvelope(payload)
 	if err != nil {
@@ -137,7 +137,7 @@ func checkLogRecordReferences(payload []byte) ([]objstore.RecordReference, error
 		return nil, nil
 	}
 	return []objstore.RecordReference{{
-		NamedBy: objstore.JoinOwner(f.RepoID, f.OID, f.Name, strconv.Itoa(f.Attempt)),
+		NamedBy: objstore.JoinOwner(f.RepoID, f.OID, f.Target, f.Name, strconv.Itoa(f.Attempt)),
 		Object:  f.Log.Content(), Names: true,
 	}}, nil
 }

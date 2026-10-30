@@ -21,7 +21,7 @@ const checkRepo = "0190f3c4-0000-7000-8000-0000000000c1"
 
 // checkKeyOf is attempt n of the named check of the cases' one commit.
 func checkKeyOf(name string, attempt int) CheckKey {
-	return CheckKey{RepoID: checkRepo, OID: oid("checked"), Name: name, Attempt: attempt}
+	return CheckKey{RepoID: checkRepo, OID: oid("checked"), Target: "refs/heads/main", Name: name, Attempt: attempt}
 }
 
 // checkRec is a record of op on the cases' repository's checks subject.
@@ -32,7 +32,7 @@ func checkRec(t testing.TB, op OpKind, payload any) built {
 // queuedRec queues key at the instant at, for a change's head.
 func queuedRec(t testing.TB, key CheckKey, at time.Time) built {
 	return checkRec(t, OpCheckQueued, CheckQueued{
-		CheckKey: key, Purpose: PurposeTip, Target: "refs/heads/main", Reason: QueueDispatch,
+		CheckKey: key, Purpose: PurposeTip, Reason: QueueDispatch,
 		Def:      &CheckDef{Name: key.Name, Run: "make test", TimeoutSeconds: 600},
 		QueuedAt: at,
 	})
@@ -336,7 +336,7 @@ func TestTheChecksHorizonIsPerRepo(t *testing.T) {
 	e.apply(create(t, other, "other"))
 	old := applyClock.Add(-CheckHistory - 24*time.Hour)
 	stale, waiting := checkKeyOf("unit", 1), checkKeyOf("lint", 1)
-	othersKey := CheckKey{RepoID: other, OID: oid("checked"), Name: "unit", Attempt: 1}
+	othersKey := CheckKey{RepoID: other, OID: oid("checked"), Target: "refs/heads/main", Name: "unit", Attempt: 1}
 	// ENDED A MONTH AND A DAY AGO, each applied at its own old instant so
 	// its own horizon spares it — the other repository's an hour earlier
 	// still, so it is the oldest of all, and a horizon read across
@@ -345,7 +345,7 @@ func TestTheChecksHorizonIsPerRepo(t *testing.T) {
 	e.apply(queuedRec(t, stale, old).at(old), queuedRec(t, waiting, old).at(old),
 		endedRec(t, stale, CheckStateFailed, CheckReasonExit, old, logOf("stale-log")).at(old),
 		rec(t, ChecksSubject(other), OpCheckQueued, Scope{ChecksPath(other)}, CheckQueued{
-			CheckKey: othersKey, Purpose: PurposeTip, Target: "refs/heads/main", Reason: QueueDispatch,
+			CheckKey: othersKey, Purpose: PurposeTip, Reason: QueueDispatch,
 			Def: &CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600}, QueuedAt: older,
 		}).at(older),
 		rec(t, ChecksSubject(other), OpCheckFinished, Scope{ChecksPath(other)}, CheckFinished{
@@ -394,7 +394,7 @@ func TestASweepPastItsOwnInstantIsRefused(t *testing.T) {
 func TestAChecksRecordNamesItsOwnRepository(t *testing.T) {
 	t.Parallel()
 	e := openChecksEstate(t)
-	stray := CheckKey{RepoID: "0190f3c4-0000-7000-8000-0000000000c9", OID: oid("checked"), Name: "unit",
+	stray := CheckKey{RepoID: "0190f3c4-0000-7000-8000-0000000000c9", OID: oid("checked"), Target: "refs/heads/main", Name: "unit",
 		Attempt: 1}
 	if err := e.applyErr(queuedRec(t, stray, applyClock)); err == nil ||
 		!strings.Contains(err.Error(), "may write only that repository's checks") {
@@ -452,8 +452,8 @@ func TestAPurgePartIsBoundedByWhatItsChecksWeigh(t *testing.T) {
 func TestEveryOrderOfACheckRecordsJoinsToOne(t *testing.T) {
 	t.Parallel()
 	parts := []checkPart{
-		{queue: &checkQueue{purpose: "head", target: "refs/heads/main", def: `{"name":"unit"}`, position: 10}},
-		{queue: &checkQueue{purpose: "head", target: "refs/heads/other", def: `{"name":"unit"}`, position: 11}},
+		{queue: &checkQueue{purpose: "head", defsOID: oid("defs-1"), def: `{"name":"unit"}`, position: 10}},
+		{queue: &checkQueue{purpose: "head", defsOID: oid("defs-2"), def: `{"name":"unit"}`, position: 11}},
 		{run: &checkRun{runner: "node-b", placement: "container", startedAt: 5}},
 		{run: &checkRun{runner: "node-b", placement: "container", box: "box-b", borrowed: true, startedAt: 5}},
 		{run: &checkRun{runner: "node-a", placement: "e2b", startedAt: 6}},

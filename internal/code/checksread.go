@@ -3,6 +3,7 @@ package code
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,18 +24,20 @@ import (
 //
 //   - `checks` ([ReadChecks]) lists attempts, held to the asker's grant: one
 //     repository's, newest ended first and every attempt not yet ended after
-//     them (code_checks_finished_idx, read backwards); one change's of it, by
-//     commit, name and attempt (code_checks_change_idx), or one commit's
-//     (code_checks' key); or the WINDOW — no repository named — every
-//     repository's attempts that ended at or after a moment, newest ended
-//     first (code_checks_recent_idx), each kept only where its repository is
-//     one the asker reads, so a page is the rows it READ and may be short, as
-//     a listing of changes across repositories is.
+//     them (code_checks_finished_idx, read backwards); one change's of it —
+//     its head's, or a commit it names, CHECKED FOR ITS TARGET — by name and
+//     attempt, or one commit's for every target (both code_checks' key); or
+//     the WINDOW — no repository named — every repository's attempts that
+//     ended at or after a moment, newest ended first (code_checks_recent_idx),
+//     each kept only where its repository is one the asker reads, so a page
+//     is the rows it READ and may be short, as a listing of changes across
+//     repositories is.
 //   - `check` ([ReadCheck]) is one attempt whole: the row, the definition it
 //     ran under, its tail, the failures its ending named, and the log a
 //     failed run kept.
 //   - `checks_due` ([ReadChecksDue]) is the home's: the live changes whose head
-//     commit no attempt of any check has been queued at (dueCheckWork's doc).
+//     no dispatch for its target names its target's checks file, and the
+//     targets due a reading of it again (dueCheckWork's doc).
 //   - `check_box` ([ReadCheckBox]) is a check's box's admission's: the one
 //     attempt its token names, by its key (code_checks' own), as its row
 //     stands — the engine's own read, held to no grant, since the box is no
@@ -89,7 +92,8 @@ func scanCheck(scan func(...any) error, more ...any) (CheckRow, error) {
 // checkRowIn is the attempt at key in tx, as a listing reads it; false where
 // the repository holds none.
 func checkRowIn(ctx context.Context, tx *sql.Tx, key CheckKey) (CheckRow, bool, error) {
-	r, err := scanCheck(tx.QueryRowContext(ctx, checkRowSQL, key.RepoID, key.OID, key.Name, key.Attempt).Scan)
+	r, err := scanCheck(tx.QueryRowContext(ctx, checkRowSQL, key.RepoID, key.OID, key.Target, key.Name,
+		key.Attempt).Scan)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return CheckRow{}, false, nil
@@ -99,15 +103,17 @@ func checkRowIn(ctx context.Context, tx *sql.Tx, key CheckKey) (CheckRow, bool, 
 	return r, true, nil
 }
 
-// latestCheckIn is the latest attempt of check name of commit oid in tx — the
-// one the next attempt follows — and false where the repository holds none.
-func latestCheckIn(ctx context.Context, tx *sql.Tx, repoID, oid, name string) (CheckRow, bool, error) {
-	r, err := scanCheck(tx.QueryRowContext(ctx, latestCheckSQL, repoID, oid, name).Scan)
+// latestCheckIn is the latest attempt in tx of key's check of its commit for
+// its target — the one the next attempt follows, whatever key's own attempt —
+// and false where the repository holds none.
+func latestCheckIn(ctx context.Context, tx *sql.Tx, key CheckKey) (CheckRow, bool, error) {
+	r, err := scanCheck(tx.QueryRowContext(ctx, latestCheckSQL, key.RepoID, key.OID, key.Target, key.Name).Scan)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return CheckRow{}, false, nil
 	case err != nil:
-		return CheckRow{}, false, fmt.Errorf("code: read the latest attempt of check %s of %s: %w", name, oid, err)
+		return CheckRow{}, false, fmt.Errorf("code: read the latest attempt of check %s of %s for %s: %w",
+			key.Name, key.OID, key.Target, err)
 	}
 	return r, true, nil
 }
@@ -175,6 +181,9 @@ func (q ReadQuery) validateChecks() error {
 			return refused("limit", "one attempt is read whole, never paged")
 		case !gitref.ValidOID(c.OID) || c.OID == ZeroOID:
 			return refused("checks.oid", fmt.Sprintf("%q is not a commit's whole id", c.OID))
+		case !strings.HasPrefix(c.Target, "refs/heads/") || !ValidRef(c.Target):
+			return refused("checks.target", fmt.Sprintf("%q is not a branch's ref: an attempt is of a commit "+
+				"checked for a branch", c.Target))
 		case !config.ValidCodeCheckName(c.Name):
 			return refused("checks.name", fmt.Sprintf("%q is not a check name", c.Name))
 		case c.Attempt < 1 || c.Attempt > MaxCheckAttempts:
@@ -187,6 +196,9 @@ func (q ReadQuery) validateChecks() error {
 		return nil
 	}
 	switch {
+	case c.Target != "":
+		return refused("checks.target", "a listing of checks names no branch: a change's are those checked "+
+			"for its own target, and a commit's those checked for every branch it was; a check read names one")
 	case c.Name != "" || c.Attempt != 0:
 		return refused("checks.name", "a listing of checks names no attempt; a check read reads one")
 	case c.Change < 0:
@@ -335,37 +347,36 @@ func (r *Reader) checks(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if !found {
 			return fmt.Errorf("%w: %s", ErrChangeNotFound, ChangeRef(repo.ref.Name, c.Change))
 		}
+		// THE ATTEMPTS THAT JUDGE THE CHANGE: its head's — or the commit it
+		// names — checked for ITS target, read on code_checks' key, whichever
+		// change's dispatch queued them; never a listing by the change, which
+		// a head another change into the same branch shares would read empty.
+		oid := change.head
 		if c.OID != "" {
-			name, attempt, ok := cutNameAttempt(q.Cursor)
-			if !ok {
-				return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
-			}
-			rows, err = tx.QueryContext(ctx, checksOfChangeCommitSQL, change.id, c.OID, name, attempt, limit)
-			cursor = func(row CheckRow) string { return nameAttemptCursor(row) }
-		} else {
-			oid, name, attempt, ok := cutCommitCursor(q.Cursor)
-			if !ok {
-				return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
-			}
-			rows, err = tx.QueryContext(ctx, checksOfChangeSQL, change.id, oid, name, attempt, limit)
-			cursor = func(row CheckRow) string { return row.OID + "/" + nameAttemptCursor(row) }
+			oid = c.OID
 		}
-	case c.OID != "":
 		name, attempt, ok := cutNameAttempt(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
-		rows, err = tx.QueryContext(ctx, checksOfCommitSQL, repo.ref.ID, c.OID, name, attempt, limit)
+		rows, err = tx.QueryContext(ctx, checksOfTargetSQL, repo.ref.ID, oid, change.target, name, attempt, limit)
 		cursor = func(row CheckRow) string { return nameAttemptCursor(row) }
+	case c.OID != "":
+		target, name, attempt, ok := cutTargetCursor(q.Cursor)
+		if !ok {
+			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
+		}
+		rows, err = tx.QueryContext(ctx, checksOfCommitSQL, repo.ref.ID, c.OID, target, name, attempt, limit)
+		cursor = targetCursor
 	case q.Cursor == "":
 		rows, err = tx.QueryContext(ctx, checksOfRepoSQL, repo.ref.ID, limit)
 		cursor = endedCursor
 	default:
-		at, oid, name, attempt, ok := cutEndedCursor(q.Cursor)
+		at, oid, target, name, attempt, ok := cutEndedCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
-		rows, err = tx.QueryContext(ctx, checksOfRepoAfterSQL, repo.ref.ID, at, oid, name, attempt, limit)
+		rows, err = tx.QueryContext(ctx, checksOfRepoAfterSQL, repo.ref.ID, at, oid, target, name, attempt, limit)
 		cursor = endedCursor
 	}
 	if err != nil {
@@ -397,11 +408,11 @@ func (r *Reader) checksWindow(ctx context.Context, tx *sql.Tx, q ReadQuery, c Ch
 	if q.Cursor == "" {
 		rows, err = tx.QueryContext(ctx, checksWindowSQL, since, limit)
 	} else {
-		at, repo, oid, name, attempt, ok := cutWindowCursor(q.Cursor)
+		at, repo, oid, target, name, attempt, ok := cutWindowCursor(q.Cursor)
 		if !ok {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
-		rows, err = tx.QueryContext(ctx, checksWindowAfterSQL, since, at, repo, oid, name, attempt, limit)
+		rows, err = tx.QueryContext(ctx, checksWindowAfterSQL, since, at, repo, oid, target, name, attempt, limit)
 	}
 	if err != nil {
 		return fmt.Errorf("code: list the checks of every repository: %w", err)
@@ -468,17 +479,18 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 	if err != nil {
 		return err
 	}
-	key := CheckKey{RepoID: repo.ref.ID, OID: q.Checks.OID, Name: q.Checks.Name, Attempt: q.Checks.Attempt}
+	key := CheckKey{RepoID: repo.ref.ID, OID: q.Checks.OID, Target: q.Checks.Target, Name: q.Checks.Name,
+		Attempt: q.Checks.Attempt}
 	var (
 		d                   CheckDetail
 		def, failures, tail string
 	)
-	d.CheckRow, err = scanCheck(tx.QueryRowContext(ctx, checkWholeSQL, key.RepoID, key.OID, key.Name,
+	d.CheckRow, err = scanCheck(tx.QueryRowContext(ctx, checkWholeSQL, key.RepoID, key.OID, key.Target, key.Name,
 		key.Attempt).Scan, &def, &failures, &tail)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return fmt.Errorf("%w: %s holds no attempt %d of check %s of %s", ErrCheckNotFound, repo.ref.Name,
-			key.Attempt, key.Name, key.OID)
+		return fmt.Errorf("%w: %s holds no attempt %d of check %s of %s for %s", ErrCheckNotFound,
+			repo.ref.Name, key.Attempt, key.Name, key.OID, key.Target)
 	case err != nil:
 		return fmt.Errorf("code: read check %s of %s: %w", key.Name, key.OID, err)
 	}
@@ -498,7 +510,8 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 		object, hash string
 		size         int64
 	)
-	switch err := tx.QueryRowContext(ctx, checkLogSQL, key.RepoID, key.OID, key.Name, key.Attempt).Scan(&object,
+	switch err := tx.QueryRowContext(ctx, checkLogSQL, key.RepoID, key.OID, key.Target, key.Name,
+		key.Attempt).Scan(&object,
 		&hash, &size); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
@@ -729,7 +742,7 @@ func checksBacklogIn(ctx context.Context, tx *sql.Tx, now time.Time) (ChecksBack
 			key      CheckKey
 			queuedAt int64
 		)
-		if err := rows.Scan(&key.RepoID, &key.OID, &key.Name, &key.Attempt, &queuedAt); err != nil {
+		if err := rows.Scan(&key.RepoID, &key.OID, &key.Target, &key.Name, &key.Attempt, &queuedAt); err != nil {
 			return ChecksBacklog{}, err
 		}
 		out.Behind++
@@ -750,16 +763,24 @@ func checksBacklogIn(ctx context.Context, tx *sql.Tx, now time.Time) (ChecksBack
 	if len(commit) > 12 {
 		commit = commit[:12]
 	}
-	out.Check = fmt.Sprintf("%s@%s: %s (attempt %d)", name, commit, oldest.Name, oldest.Attempt)
+	// THE BRANCH IT IS CHECKED FOR is part of the attempt's name, as of its
+	// key: one commit checked for two branches is two attempts.
+	out.Check = fmt.Sprintf("%s@%s for %s: %s (attempt %d)", name, commit,
+		strings.TrimPrefix(oldest.Target, "refs/heads/"), oldest.Name, oldest.Attempt)
 	return out, nil
 }
 
 // THE CURSORS, each a row's place in its listing's order, "/"-separated — no
 // part of one holds a "/": a commit is hex, a check's name is
-// [config.ValidCodeCheckName]'s alphabet, a repository's id a UUID and an
-// instant digits.
+// [config.ValidCodeCheckName]'s alphabet, a repository's id a UUID, an instant
+// digits, and a target branch — a ref, which holds "/" — is written in
+// unpadded base64url ([cursorTarget]), whose alphabet holds none.
 
-// nameAttemptCursor is a row's place among one commit's attempts.
+// cursorTarget spells a target branch in a cursor.
+var cursorTarget = base64.RawURLEncoding
+
+// nameAttemptCursor is a row's place among one commit's attempts for one
+// target.
 func nameAttemptCursor(row CheckRow) string { return row.Name + "/" + strconv.Itoa(row.Attempt) }
 
 // cutNameAttempt reads a [nameAttemptCursor]; "" is a first page's.
@@ -775,120 +796,135 @@ func cutNameAttempt(s string) (string, int, bool) {
 	return name, attempt, true
 }
 
-// cutCommitCursor reads a change's listing's cursor, "<commit>/<name>/<attempt>";
-// "" is a first page's.
-func cutCommitCursor(s string) (string, string, int, bool) {
+// targetCursor is a row's place among one commit's attempts for every target:
+// "<target>/<name>/<attempt>".
+func targetCursor(row CheckRow) string {
+	return cursorTarget.EncodeToString([]byte(row.Target)) + "/" + nameAttemptCursor(row)
+}
+
+// cutTargetCursor reads a [targetCursor]; "" is a first page's.
+func cutTargetCursor(s string) (string, string, int, bool) {
 	if s == "" {
 		return "", "", 0, true
 	}
-	oid, rest, ok := strings.Cut(s, "/")
-	if !ok || !gitref.ValidOID(oid) {
+	head, rest, ok := strings.Cut(s, "/")
+	target, err := cursorTarget.DecodeString(head)
+	if !ok || err != nil || !ValidRef(string(target)) {
 		return "", "", 0, false
 	}
 	name, attempt, ok := cutNameAttempt(rest)
-	return oid, name, attempt, ok && rest != ""
+	return string(target), name, attempt, ok && rest != ""
 }
 
 // endedCursor is a row's place in a repository's listing, newest ended first:
-// "<finished_at>/<commit>/<name>/<attempt>", an attempt not yet ended at 0.
+// "<finished_at>/<commit>/<target>/<name>/<attempt>", an attempt not yet ended
+// at 0.
 func endedCursor(row CheckRow) string {
 	at := int64(0)
 	if !row.FinishedAt.IsZero() {
 		at = store.EncodeTime(row.FinishedAt)
 	}
-	return strconv.FormatInt(at, 10) + "/" + row.OID + "/" + nameAttemptCursor(row)
+	return strconv.FormatInt(at, 10) + "/" + row.OID + "/" + targetCursor(row)
 }
 
 // cutEndedCursor reads an [endedCursor].
-func cutEndedCursor(s string) (int64, string, string, int, bool) {
+func cutEndedCursor(s string) (int64, string, string, string, int, bool) {
 	head, rest, ok := strings.Cut(s, "/")
 	at, err := strconv.ParseInt(head, 10, 64)
 	if !ok || err != nil || at < 0 {
-		return 0, "", "", 0, false
+		return 0, "", "", "", 0, false
 	}
-	oid, name, attempt, ok := cutCommitCursor(rest)
-	return at, oid, name, attempt, ok && rest != ""
+	oid, rest, ok := strings.Cut(rest, "/")
+	if !ok || !gitref.ValidOID(oid) {
+		return 0, "", "", "", 0, false
+	}
+	target, name, attempt, ok := cutTargetCursor(rest)
+	return at, oid, target, name, attempt, ok && rest != ""
 }
 
 // windowCursor is a row's place in the window, newest ended first:
-// "<finished_at>/<repo>/<commit>/<name>/<attempt>".
+// "<finished_at>/<repo>/<commit>/<target>/<name>/<attempt>".
 func windowCursor(row CheckRow) string {
 	return strconv.FormatInt(store.EncodeTime(row.FinishedAt), 10) + "/" + row.RepoID + "/" + row.OID + "/" +
-		nameAttemptCursor(row)
+		targetCursor(row)
 }
 
 // cutWindowCursor reads a [windowCursor].
-func cutWindowCursor(s string) (int64, string, string, string, int, bool) {
+func cutWindowCursor(s string) (int64, string, string, string, string, int, bool) {
 	head, rest, ok := strings.Cut(s, "/")
 	at, err := strconv.ParseInt(head, 10, 64)
 	if !ok || err != nil || at < 1 || at == math.MaxInt64 {
-		return 0, "", "", "", 0, false
+		return 0, "", "", "", "", 0, false
 	}
 	repo, rest, ok := strings.Cut(rest, "/")
 	if !ok || !canonicalUUID(repo) {
-		return 0, "", "", "", 0, false
+		return 0, "", "", "", "", 0, false
 	}
-	oid, name, attempt, ok := cutCommitCursor(rest)
-	return at, repo, oid, name, attempt, ok && rest != ""
+	oid, rest, ok := strings.Cut(rest, "/")
+	if !ok || !gitref.ValidOID(oid) {
+		return 0, "", "", "", "", 0, false
+	}
+	target, name, attempt, ok := cutTargetCursor(rest)
+	return at, repo, oid, target, name, attempt, ok && rest != ""
 }
 
 // The reads of a repository's checks, each registered in plan_test.go, so the
 // pinned driver's planner is held to the key each is written for: one attempt
 // by code_checks' key, whole or as a listing reads it; the latest attempt of
-// one check of one commit, the key read backwards from its (repository,
-// commit, name) prefix; one commit's attempts after a (name, attempt) on the
-// key; one change's after a (commit, name, attempt), or one commit of its
-// after a (name, attempt), on code_checks_change_idx; a repository's newest
-// ended first, from the top or after a place, on code_checks_finished_idx
-// read backwards; and the window's, on code_checks_recent_idx read backwards
-// above its moment. Each keyset's >= beside its OR is what keeps the index's
-// range seek (planner.go).
+// one check of one commit for one target, the key read backwards from its
+// (repository, commit, target, name) prefix; one commit's attempts for every
+// target after a (target, name, attempt) on the key, or for one target after
+// a (name, attempt) — what a change's attempts are; a repository's newest
+// ended first, from the top or after a place, on code_checks_finished_idx read
+// backwards; and the window's, on code_checks_recent_idx read backwards above
+// its moment. Each keyset's >= beside its OR is what keeps the index's range
+// seek (planner.go).
 const (
 	checkRowSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
-		WHERE repo_id = ? AND commit_oid = ? AND name = ? AND attempt = ?`
+		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
 	checkWholeSQL = `SELECT ` + checkColumns + `, def, failures, tail FROM code_checks INDEXED BY ` + checksKey + `
-		WHERE repo_id = ? AND commit_oid = ? AND name = ? AND attempt = ?`
+		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
 	checkLogSQL = `SELECT object, hash, size FROM code_check_logs
-		WHERE repo_id = ? AND commit_oid = ? AND name = ? AND attempt = ?`
+		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
 	latestCheckSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
-		WHERE repo_id = ? AND commit_oid = ? AND name = ? ORDER BY attempt DESC LIMIT 1`
+		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? ORDER BY attempt DESC LIMIT 1`
 	checksOfCommitSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
-		WHERE repo_id = ?1 AND commit_oid = ?2 AND name >= ?3 AND (name > ?3 OR attempt > ?4)
-		ORDER BY name, attempt LIMIT ?5`
-	checksOfChangeSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY code_checks_change_idx
-		WHERE change_id = ?1 AND commit_oid >= ?2
-			AND (commit_oid > ?2 OR name > ?3 OR (name = ?3 AND attempt > ?4))
-		ORDER BY commit_oid, name, attempt LIMIT ?5`
-	checksOfChangeCommitSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY code_checks_change_idx
-		WHERE change_id = ?1 AND commit_oid = ?2 AND name >= ?3 AND (name > ?3 OR attempt > ?4)
-		ORDER BY name, attempt LIMIT ?5`
+		WHERE repo_id = ?1 AND commit_oid = ?2 AND target_ref >= ?3
+			AND (target_ref > ?3 OR name > ?4 OR (name = ?4 AND attempt > ?5))
+		ORDER BY target_ref, name, attempt LIMIT ?6`
+	checksOfTargetSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksKey + `
+		WHERE repo_id = ?1 AND commit_oid = ?2 AND target_ref = ?3 AND name >= ?4 AND (name > ?4 OR attempt > ?5)
+		ORDER BY name, attempt LIMIT ?6`
 	checksOfRepoSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksEndedKey + `
 		WHERE repo_id = ?1
-		ORDER BY finished_at DESC, commit_oid DESC, name DESC, attempt DESC LIMIT ?2`
+		ORDER BY finished_at DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC LIMIT ?2`
 	checksOfRepoAfterSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY ` + checksEndedKey + `
 		WHERE repo_id = ?1 AND finished_at <= ?2
-			AND (finished_at < ?2 OR commit_oid < ?3 OR (commit_oid = ?3 AND (name < ?4
-				OR (name = ?4 AND attempt < ?5))))
-		ORDER BY finished_at DESC, commit_oid DESC, name DESC, attempt DESC LIMIT ?6`
+			AND (finished_at < ?2 OR commit_oid < ?3 OR (commit_oid = ?3 AND (target_ref < ?4
+				OR (target_ref = ?4 AND (name < ?5 OR (name = ?5 AND attempt < ?6))))))
+		ORDER BY finished_at DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC LIMIT ?7`
 	checksWindowSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY code_checks_recent_idx
 		WHERE finished_at > 0 AND finished_at >= ?1
-		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, name DESC, attempt DESC LIMIT ?2`
+		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC
+		LIMIT ?2`
 	checksWindowAfterSQL = `SELECT ` + checkColumns + ` FROM code_checks INDEXED BY code_checks_recent_idx
 		WHERE finished_at > 0 AND finished_at >= ?1 AND finished_at <= ?2
 			AND (finished_at < ?2 OR repo_id < ?3 OR (repo_id = ?3 AND (commit_oid < ?4
-				OR (commit_oid = ?4 AND (name < ?5 OR (name = ?5 AND attempt < ?6))))))
-		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, name DESC, attempt DESC LIMIT ?7`
+				OR (commit_oid = ?4 AND (target_ref < ?5 OR (target_ref = ?5 AND (name < ?6
+					OR (name = ?6 AND attempt < ?7))))))))
+		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, target_ref DESC, name DESC, attempt DESC
+		LIMIT ?8`
 	// THE BACKLOG'S WALK: the queued attempts overdue by ?1, in the order
 	// they fell overdue, on code_checks_overdue_idx — its partial predicate
 	// repeated verbatim, and its range what the seek reads; each kept only
 	// where its repository is one a runner may still claim it in (active or
 	// archived), tested by the repository's key.
-	checksBacklogSQL = `SELECT k.repo_id, k.commit_oid, k.name, k.attempt, k.queued_at
+	checksBacklogSQL = `SELECT k.repo_id, k.commit_oid, k.target_ref, k.name, k.attempt, k.queued_at
 		FROM code_checks AS k INDEXED BY code_checks_overdue_idx
 		WHERE k.state = 'queued' AND k.overdue_at > 0 AND k.overdue_at < ?1
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = k.repo_id
 				AND r.status IN ('active', 'archived'))
-		ORDER BY k.overdue_at, k.repo_id, k.commit_oid, k.name, k.attempt LIMIT ?2`
+		ORDER BY k.overdue_at, k.repo_id, k.commit_oid, k.target_ref, k.name, k.attempt LIMIT ?2`
 	// THE HOME'S LISTING, changes_due's two statements with the facts' test
 	// replaced by the dispatch's: a head is due while no dispatch of it for
 	// its target names the checks file its target's row holds — one seek of

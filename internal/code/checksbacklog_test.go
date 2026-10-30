@@ -16,7 +16,7 @@ import (
 // timeout seconds to run.
 func queuedWithTimeout(t testing.TB, key CheckKey, timeout int, at time.Time) built {
 	return checkRec(t, OpCheckQueued, CheckQueued{
-		CheckKey: key, Purpose: PurposeTip, Target: "refs/heads/main", Reason: QueueDispatch,
+		CheckKey: key, Purpose: PurposeTip, Reason: QueueDispatch,
 		Def:      &CheckDef{Name: key.Name, Run: "make " + key.Name, TimeoutSeconds: timeout},
 		QueuedAt: at,
 	})
@@ -52,14 +52,14 @@ func TestTheBacklogFindsAnOverdueCheckBehindLongerOnes(t *testing.T) {
 	t.Parallel()
 	e := openChecksEstate(t)
 	for i := range BacklogScan + 1 {
-		e.apply(queuedWithTimeout(t, CheckKey{RepoID: checkRepo, OID: oid(fmt.Sprintf("long-%d", i)), Name: "unit",
-			Attempt: 1}, 3_000, applyClock))
+		e.apply(queuedWithTimeout(t, CheckKey{RepoID: checkRepo, OID: oid(fmt.Sprintf("long-%d", i)),
+			Target: "refs/heads/main", Name: "unit", Attempt: 1}, 3_000, applyClock))
 	}
-	lint := CheckKey{RepoID: checkRepo, OID: oid("short"), Name: "lint", Attempt: 1}
+	lint := CheckKey{RepoID: checkRepo, OID: oid("short"), Target: "refs/heads/main", Name: "lint", Attempt: 1}
 	e.apply(queuedWithTimeout(t, lint, 60, applyClock.Add(time.Minute)))
 
 	want := ChecksBacklog{Behind: 1, Oldest: 9 * time.Minute,
-		Check: "checked@" + lint.OID[:12] + ": lint (attempt 1)"}
+		Check: "checked@" + lint.OID[:12] + " for main: lint (attempt 1)"}
 	if got := e.backlog(applyClock.Add(10 * time.Minute)); got != want {
 		t.Fatalf("ten minutes on, behind %d attempts of a fifty-minute check, the backlog is %+v, want the "+
 			"lint's one attempt %+v", BacklogScan+1, got, want)
@@ -88,7 +88,7 @@ func TestTheBacklogFindsAnOverdueCheckBehindLongerOnes(t *testing.T) {
 func TestTheBacklogLeavesADeletedRepositorysChecksOut(t *testing.T) {
 	t.Parallel()
 	e := openChecksEstate(t)
-	lint := CheckKey{RepoID: checkRepo, OID: oid("short"), Name: "lint", Attempt: 1}
+	lint := CheckKey{RepoID: checkRepo, OID: oid("short"), Target: "refs/heads/main", Name: "lint", Attempt: 1}
 	e.apply(queuedWithTimeout(t, lint, 60, applyClock))
 	later := applyClock.Add(2 * time.Hour)
 	archived := settingsFor("")

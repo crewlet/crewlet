@@ -471,11 +471,26 @@ func (r CheckReason) Ends(s CheckState) bool {
 	return false
 }
 
-// CheckKey names one attempt of one check of one commit — a check row's key.
+// CheckKey names one attempt of one check of one commit FOR ONE TARGET BRANCH
+// — a check row's key.
+//
+// THE TARGET IS THE KEY'S: what a check of a commit measures is the
+// definition its target's checks file gives it — the file read at the
+// target's tip, never the commit's own, so no change narrows the checks that
+// judge it — and its target's protection is what requires it. One commit is
+// checked for two targets as two checks: a head another change into another
+// branch shares, a tip of one branch that a change into another names as its
+// head. Keyed by the commit alone, the second target's dispatch found the
+// first's attempts and queued nothing — its own file's definition never ran,
+// and its change's checks read empty — and a change into a branch whose file
+// defined a check trivially could pass, for every change sharing its head,
+// the check a stricter branch requires.
 type CheckKey struct {
 	RepoID string `json:"repo_id"`
 	// OID is the commit checked, in 40 hex digits.
 	OID string `json:"oid"`
+	// Target is the branch the commit is checked for, as a ref.
+	Target string `json:"target"`
 	// Name is the check's name in its file ([config.ValidCodeCheckName]).
 	Name string `json:"name"`
 	// Attempt counts from 1.
@@ -484,8 +499,9 @@ type CheckKey struct {
 
 // Validate refuses a key no attempt is named by ([ErrInvalid], naming the
 // field): a repository id that is not a UUID in its canonical spelling, a
-// commit that is not one's whole id, a name no check takes, an attempt
-// outside 1 to [MaxCheckAttempts]. EXPORTED for the one key read off the
+// commit that is not one's whole id, a target that is not a branch's ref, a
+// name no check takes, an attempt outside 1 to [MaxCheckAttempts]. EXPORTED
+// for the one key read off the
 // wire outside a record: the one a check's box's token names
 // (internal/code/host's CheckTokens), held to the rule every record's key is.
 func (k CheckKey) Validate() error { return k.validateAs("") }
@@ -499,6 +515,8 @@ func (k CheckKey) validateAs(prefix string) error {
 		return checkField(prefix+"repo_id", "%q is not a UUID in its canonical lowercase spelling", k.RepoID)
 	case !gitref.ValidOID(k.OID) || k.OID == ZeroOID:
 		return checkField(prefix+"oid", "%q is not a commit's whole id", k.OID)
+	case !strings.HasPrefix(k.Target, "refs/heads/") || !ValidRef(k.Target):
+		return checkField(prefix+"target", "%q is not a branch's ref", k.Target)
 	case !config.ValidCodeCheckName(k.Name):
 		return checkField(prefix+"name", "%q is not a check name", k.Name)
 	case k.Attempt < 1 || k.Attempt > MaxCheckAttempts:
@@ -528,8 +546,6 @@ type CheckQueued struct {
 	// candidate's check measures.
 	CandidateID string `json:"candidate_id,omitempty"`
 	EntryID     string `json:"entry_id,omitempty"`
-	// Target is the branch the commit is checked for, as a ref.
-	Target string `json:"target"`
 	// Base is the commit the check's diff is read against — what an
 	// API-first check asks the API about — "" for none.
 	Base string `json:"base,omitempty"`
@@ -573,8 +589,6 @@ func (q CheckQueued) Validate() error {
 		return checkField("revision", "a revision is a head check's alone")
 	case len(q.CandidateID) > MaxProvenanceBytes || len(q.EntryID) > MaxProvenanceBytes:
 		return checkField("candidate_id", "a queue's ids are at most %d bytes", MaxProvenanceBytes)
-	case !strings.HasPrefix(q.Target, "refs/heads/") || !ValidRef(q.Target):
-		return checkField("target", "%q is not a branch's ref", q.Target)
 	case q.Base != "" && (!gitref.ValidOID(q.Base) || q.Base == ZeroOID):
 		return checkField("base", "%q is not a commit's whole id", q.Base)
 	case q.DefsOID != "" && (!gitref.ValidOID(q.DefsOID) || q.DefsOID == ZeroOID):

@@ -1647,12 +1647,20 @@ told from — or reads it as one under `-tier checks`
 
 ### What the log records of a check
 
-Each **attempt** of each check of each commit is a row on the code log —
-`code_checks`, keyed by the repository, the commit, the check's name and the
-attempt — written by records on a subject of the repository's **checks**
+Each **attempt** of each check of each commit, for each branch it is checked
+for, is a row on the code log — `code_checks`, keyed by the repository, the
+commit, the **target** branch, the check's name and the attempt — written by
+records on a subject of the repository's **checks**
 (`crewlet.code.log.checks.<repo>`), never on its repository's own: a check's
 records share nothing with the repository's pushes, and decided in its
 [committer](#the-committer)'s queue they would wait behind their batches.
+
+The target is part of what an attempt is: a commit is checked by its target's
+checks file and required by its target's protection, so one commit checked
+for two branches — a head two changes into two branches share, a tip of one
+branch a change into another names as its head — is two sets of attempts,
+each run under its own branch's definitions. Two changes into one branch with
+one head share theirs: the same commit, judged by the same file.
 
 | Record | What it says |
 |---|---|
@@ -1800,13 +1808,15 @@ A repository's checks are read through `code.read`, held to the reader's
 grant on the repository as every other read of it is:
 
 - **`checks`**: one repository's attempts, newest ended first and every
-  attempt not yet ended after them; one change's, by commit, name and attempt;
-  one commit's; or — naming no repository — every repository's the reader may
-  read whose attempts ended since a moment, newest ended first. Each is a page
-  of at most 200 attempts (50 unless asked), resuming exactly where the page
-  before ended;
-- **`check`**: one attempt whole — its row, the definition it ran under, the
-  last of its output, the failures its ending named and its kept log;
+  attempt not yet ended after them; one change's — the attempts that judge
+  it: its head's, or a commit it names, checked for its own target, by name
+  and attempt; one commit's, for every branch it was checked for; or — naming
+  no repository — every repository's the reader may read whose attempts ended
+  since a moment, newest ended first. Each is a page of at most 200 attempts
+  (50 unless asked), resuming exactly where the page before ended;
+- **`check`**: one attempt whole, named by its commit, its target branch, its
+  check and its number — its row, the definition it ran under, the last of
+  its output, the failures its ending named and its kept log;
 - **`checks_due`**: the engine's own, which no person or seat may make — the
   work the repository's home polls for: the live changes whose head has no
   **dispatch** for its target naming the checks file the target's reading

@@ -15,19 +15,20 @@ import (
 // in two writes rather than one a row.
 func (n *node) seedEndedLogged(repoID string, at time.Time, count int) {
 	n.t.Helper()
-	ended := store.EncodeTime(at)
+	ended, overdue := store.EncodeTime(at), store.EncodeTime(at.Add(600*time.Second))
 	n.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
-		INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose, change_id,
-			revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds,
+		INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
+			revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds,
 			reason, runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
-			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, url,
-			summary, def, failures, tail)
-		SELECT ?, printf('%040d', i), 'unit', 1, 'failed', 'tip', '', 0, '', '', 'refs/heads/main', '', '', 0,
-			'', 600, 'exit', 'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 1, 0, 1, 2, 6, '', 'failed', '',
+			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
+			url, summary, def, failures, tail)
+		SELECT ?, printf('%040d', i), 'refs/heads/main', 'unit', 1, 'failed', 'tip', '', 0, '', '', '', '', 0,
+			'', 600, 'exit', 'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 1, 0, 1, 2, 6, ?, '', 'failed', '',
 			'', '' FROM k`,
-		count, repoID, ended, ended, ended)
-	n.exec(`INSERT INTO code_check_logs (repo_id, commit_oid, name, attempt, object, hash, size)
-		SELECT repo_id, commit_oid, name, attempt, 'logs/' || commit_oid, 'sha256:' || commit_oid, 4096
+		count, repoID, ended, ended, ended, overdue)
+	n.exec(`INSERT INTO code_check_logs (repo_id, commit_oid, target_ref, name, attempt, object, hash, size)
+		SELECT repo_id, commit_oid, target_ref, name, attempt, 'logs/' || commit_oid, 'sha256:' || commit_oid,
+			4096
 		FROM code_checks WHERE repo_id = ?`, repoID)
 }
 

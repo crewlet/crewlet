@@ -54,15 +54,15 @@ func (n *node) publishCheck(repo string, op code.OpKind, payload any) (statelog.
 func (n *node) seedEnded(repoID string, at time.Time, count int) {
 	n.t.Helper()
 	for i := range count {
-		n.exec(`INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose, change_id,
-			revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
-			runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
-			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, url,
-			summary, def, failures, tail)
-			VALUES (?, ?, ?, 1, 'passed', 'tip', '', 0, '', '', 'refs/heads/main', '', '', 0, '', 600, 'exit',
-				'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, '', 'ok', '', '', '')`,
+		n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose,
+			change_id, revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds,
+			reason, runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
+			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
+			url, summary, def, failures, tail)
+			VALUES (?, ?, 'refs/heads/main', ?, 1, 'passed', 'tip', '', 0, '', '', '', '', 0, '', 600, 'exit',
+				'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', 'ok', '', '', '')`,
 			repoID, oidOf(fmt.Sprint(repoID, at.UnixNano(), i)), fmt.Sprintf("check-%d", i), store.EncodeTime(at),
-			store.EncodeTime(at), store.EncodeTime(at))
+			store.EncodeTime(at), store.EncodeTime(at), store.EncodeTime(at.Add(600*time.Second)))
 	}
 }
 
@@ -153,10 +153,10 @@ func TestAnActiveRepositorysChecksAreLeftToItsEndings(t *testing.T) {
 	end := func(name string, at time.Time) {
 		t.Helper()
 		n.storedAt = func(uint64, time.Time) time.Time { return at }
-		key := code.CheckKey{RepoID: repo, OID: oidOf(name), Name: name, Attempt: 1}
+		key := code.CheckKey{RepoID: repo, OID: oidOf(name), Target: mainRef, Name: name, Attempt: 1}
 		exit := 0
 		if _, err := n.publishCheck(repo, code.OpCheckQueued, code.CheckQueued{CheckKey: key,
-			Purpose: code.PurposeTip, Target: "refs/heads/main", Reason: code.QueueDispatch,
+			Purpose: code.PurposeTip, Reason: code.QueueDispatch,
 			Def: &code.CheckDef{Name: name, Run: "make test", TimeoutSeconds: 600}, QueuedAt: at}); err != nil {
 			t.Fatalf("queue %s: %v", name, err)
 		}
@@ -205,10 +205,10 @@ func TestAPurgedRepositorysCheckWritesNothing(t *testing.T) {
 	n := newNode(t)
 	n.ensure("web", described("web"), t1)
 	repo := n.mustID("web")
-	key := code.CheckKey{RepoID: repo, OID: oidOf("head"), Name: "unit", Attempt: 1}
+	key := code.CheckKey{RepoID: repo, OID: oidOf("head"), Target: mainRef, Name: "unit", Attempt: 1}
 	def := &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600}
 	if _, err := n.publishCheck(repo, code.OpCheckQueued, code.CheckQueued{CheckKey: key,
-		Purpose: code.PurposeTip, Target: "refs/heads/main", Reason: code.QueueDispatch, Def: def,
+		Purpose: code.PurposeTip, Reason: code.QueueDispatch, Def: def,
 		QueuedAt: harnessAt}); err != nil {
 		t.Fatalf("queue a check: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestACheckLogIsNamedByTheEndingThatKeepsOne(t *testing.T) {
 	t.Parallel()
 	records := code.CheckLogReferences.Records
 	const repo = "0190f3c4-0000-7000-8000-0000000000c1"
-	key := code.CheckKey{RepoID: repo, OID: oidOf("head"), Name: "unit", Attempt: 2}
+	key := code.CheckKey{RepoID: repo, OID: oidOf("head"), Target: mainRef, Name: "unit", Attempt: 2}
 	log := &code.CheckLog{Object: keyOf("log"), Hash: objstore.HashOf([]byte("log")), Size: 3}
 	exit := 1
 	ending := func(l *code.CheckLog) []byte {
@@ -296,7 +296,7 @@ func TestACheckLogIsNamedByTheEndingThatKeepsOne(t *testing.T) {
 		}, Mutation: body})
 	}
 	got, err := records(ending(log))
-	want := []objstore.RecordReference{{NamedBy: objstore.JoinOwner(repo, key.OID, "unit", "2"),
+	want := []objstore.RecordReference{{NamedBy: objstore.JoinOwner(repo, key.OID, key.Target, "unit", "2"),
 		Object: log.Content(), Names: true}}
 	if err != nil || !slices.Equal(got, want) {
 		t.Fatalf("an ending keeping a log names %+v, %v; want its attempt's row naming the log: %+v", got, err, want)
@@ -366,14 +366,17 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 	for i := range code.MaxCheckEnv {
 		def.Env = append(def.Env, fmt.Sprintf("V%02d_", i)+strings.Repeat("A", code.MaxCheckEnvNameBytes-4))
 	}
-	key := code.CheckKey{RepoID: repo, OID: oidOf("head"), Name: def.Name, Attempt: code.MaxCheckAttempts}
+	// THE LONGEST TARGET a ref may be, in the key every record of the
+	// attempt carries.
+	key := code.CheckKey{RepoID: repo, OID: oidOf("head"),
+		Target: "refs/heads/" + strings.Repeat("b", code.MaxRefNameBytes-len("refs/heads/")), Name: def.Name,
+		Attempt: code.MaxCheckAttempts}
 	person := &code.Principal{Kind: code.PrincipalOperator, OperatorID: strings.Repeat("o", 64),
 		Seat: strings.Repeat("s", 64)}
 	queued := code.CheckQueued{CheckKey: key, Purpose: code.PurposeHead,
 		ChangeID: "0190f3c4-0000-7000-8000-00000000c0c0", Revision: 1 << 30,
 		CandidateID: wide(code.MaxProvenanceBytes), EntryID: wide(code.MaxProvenanceBytes),
-		Target: "refs/heads/" + strings.Repeat("b", code.MaxRefNameBytes-len("refs/heads/")),
-		Base:   oidOf("base"), DefsOID: oidOf("defs"), Def: &def, Required: true, Reason: code.QueueRerun,
+		Base: oidOf("base"), DefsOID: oidOf("defs"), Def: &def, Required: true, Reason: code.QueueRerun,
 		By: person, QueuedAt: harnessAt}
 	exit := 1
 	var failures []code.CheckFailure

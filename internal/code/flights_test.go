@@ -65,7 +65,7 @@ func TestAChecksWriteBeyondItsBoundsIsAnsweredBusyAtOnce(t *testing.T) {
 	})
 	code.SetChecksWriterBounds(w, 3, 4)
 	key := func(repo, name string) code.CheckKey {
-		return code.CheckKey{RepoID: repo, OID: oidOf("B"), Name: name, Attempt: 1}
+		return code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: name, Attempt: 1}
 	}
 	publish := func(k code.CheckKey) <-chan answerOf[code.ChecksResult] {
 		out := make(chan answerOf[code.ChecksResult], 1)

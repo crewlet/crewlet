@@ -751,7 +751,7 @@ func widestCheck(tb testing.TB, key CheckKey, at time.Time) (CheckQueued, CheckF
 	for i := range MaxCheckEnv {
 		def.Env = append(def.Env, fmt.Sprintf("V%02d_", i)+strings.Repeat("A", MaxCheckEnvNameBytes-4))
 	}
-	queued := CheckQueued{CheckKey: key, Purpose: PurposeTip, Target: "refs/heads/main", Reason: QueueDispatch,
+	queued := CheckQueued{CheckKey: key, Purpose: PurposeTip, Reason: QueueDispatch,
 		Def: &def, QueuedAt: at}
 	var failures []CheckFailure
 	for i := 0; ; i++ {
@@ -785,19 +785,20 @@ func widestCheck(tb testing.TB, key CheckKey, at time.Time) (CheckQueued, CheckF
 func (e *estate) seedPastTheHorizon(repo string, at time.Time) {
 	e.t.Helper()
 	n := CheckHorizonRows + 1
-	ended := store.EncodeTime(at)
+	ended, overdue := store.EncodeTime(at), store.EncodeTime(at.Add(600*time.Second))
 	e.exec(`WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < ?)
-		INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose, change_id,
-			revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds,
+		INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
+			revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds,
 			reason, runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
-			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, url,
-			summary, def, failures, tail)
-		SELECT ?, printf('%040d', i), 'unit', 1, 'failed', 'tip', '', 0, '', '', 'refs/heads/main', '', '', 0,
-			'container', 600, 'exit', 'node-a', 'container', 'box', 0, '', ?, ?, ?, 1000, 1, 0, 1, 2, 76, '',
+			duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
+			url, summary, def, failures, tail)
+		SELECT ?, printf('%040d', i), 'refs/heads/main', 'unit', 1, 'failed', 'tip', '', 0, '', '', '', '', 0,
+			'container', 600, 'exit', 'node-a', 'container', 'box', 0, '', ?, ?, ?, 1000, 1, 0, 1, 2, 76, ?, '',
 			'1 test failed', '{"name":"unit","run":"make test","timeout_seconds":600}', '', '--- FAIL' FROM k`,
-		n, repo, ended, ended, ended)
-	e.exec(`INSERT INTO code_check_logs (repo_id, commit_oid, name, attempt, object, hash, size)
-		SELECT repo_id, commit_oid, name, attempt, 'logs/' || commit_oid, 'sha256:' || commit_oid, 4096
+		n, repo, ended, ended, ended, overdue)
+	e.exec(`INSERT INTO code_check_logs (repo_id, commit_oid, target_ref, name, attempt, object, hash, size)
+		SELECT repo_id, commit_oid, target_ref, name, attempt, 'logs/' || commit_oid, 'sha256:' || commit_oid,
+			4096
 		FROM code_checks WHERE repo_id = ?`, repo)
 }
 
@@ -830,7 +831,7 @@ func BenchmarkApplyACheckRecord(b *testing.B) {
 	old := applyClock.Add(-CheckHistory - time.Hour)
 	// width is what a row of the widest attempt weighs, and through how many
 	// of them a horizon's bytes reach CheckHorizonBytes.
-	probe := CheckKey{RepoID: checkRepo, OID: oid("probe"), Name: "probe", Attempt: 1}
+	probe := CheckKey{RepoID: checkRepo, OID: oid("probe"), Target: "refs/heads/main", Name: "probe", Attempt: 1}
 	pq, pf := widestCheck(b, probe, applyClock)
 	pe, err := finishedPart(pf, applyContext{})
 	if err != nil {
@@ -854,7 +855,7 @@ func BenchmarkApplyACheckRecord(b *testing.B) {
 		{"ending+wide", false, func(b *testing.B, e *estate, repo string) int {
 			subject, scope := ChecksSubject(repo), Scope{ChecksPath(repo)}
 			for i := range through + 1 {
-				key := CheckKey{RepoID: repo, OID: oid(fmt.Sprint("old", i)), Name: "wide", Attempt: 1}
+				key := CheckKey{RepoID: repo, OID: oid(fmt.Sprint("old", i)), Target: "refs/heads/main", Name: "wide", Attempt: 1}
 				q, f := widestCheck(b, key, old)
 				e.apply(rec(b, subject, OpCheckQueued, scope, q).at(old),
 					rec(b, subject, OpCheckFinished, scope, f).at(old))
@@ -873,7 +874,7 @@ func BenchmarkApplyACheckRecord(b *testing.B) {
 				e.apply(create(b, repo, fmt.Sprintf("r%06d", i)))
 				removed := arm.past(b, e, repo)
 				held := e.num(`SELECT COUNT(*) FROM code_checks WHERE repo_id = ?`, repo)
-				key := CheckKey{RepoID: repo, OID: oid("checked"), Name: "unit", Attempt: 1}
+				key := CheckKey{RepoID: repo, OID: oid("checked"), Target: "refs/heads/main", Name: "unit", Attempt: 1}
 				queued, ended := widestCheck(b, key, applyClock)
 				subject, scope := ChecksSubject(repo), Scope{ChecksPath(repo)}
 				e.apply(rec(b, subject, OpCheckQueued, scope, queued))

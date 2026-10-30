@@ -214,16 +214,17 @@ func TestEveryAlarmFiresOnItsConditionAndOnNothingElse(t *testing.T) {
 		"queued checks past their own timeouts": {
 			statelog.KindCodeChecksBacklog,
 			statelog.Reading{CodeChecksBacklog: 2, CodeChecksBacklogOldest: 2 * time.Hour,
-				CodeChecksBacklogCheck: "web@111111111111: unit (attempt 1)"},
+				CodeChecksBacklogCheck: "web@111111111111 for main: unit (attempt 1)"},
 			"2 queued check attempt(s) have waited for a runner longer than their own timeout — the " +
-				"longest of those counted, web@111111111111: unit (attempt 1), for 2h",
+				"longest of those counted, web@111111111111 for main: unit (attempt 1), for 2h",
 		},
 		"more queued checks past their own timeouts than a reading counts": {
 			statelog.KindCodeChecksBacklog,
 			statelog.Reading{CodeChecksBacklog: 1024, CodeChecksBacklogMore: true,
-				CodeChecksBacklogOldest: 3 * time.Hour, CodeChecksBacklogCheck: "web@111111111111: lint (attempt 2)"},
+				CodeChecksBacklogOldest: 3 * time.Hour,
+				CodeChecksBacklogCheck:  "web@111111111111 for main: lint (attempt 2)"},
 			"more than 1024 queued check attempt(s) have waited for a runner longer than their own timeout — " +
-				"the longest of those counted, web@111111111111: lint (attempt 2), for 3h",
+				"the longest of those counted, web@111111111111 for main: lint (attempt 2), for 3h",
 		},
 		"a service objective burning its budget": {
 			statelog.KindObjectiveBurn,

@@ -964,36 +964,35 @@ func registeredStatements() map[string]statement {
 		// a covering read of code_checks_finished_idx and deleted in its
 		// order, their logs through them; the final purge's two; and the
 		// retention duty's listing, one row an instant and a repository.
-		"check row":            {readCheckSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
-		"drop check log":       {dropCheckLogSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
+		"check row":            {readCheckSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"drop check log":       {dropCheckLogSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
 		"checks oldest":        {checksOldestSQL, []any{"repo-1", 1, 1000, CheckHorizonRows + 1}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)"}},
-		"delete oldest logs":   {deleteOldestCheckLogsSQL, []any{"repo-1", 1, 1000, CheckHorizonRows}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)", checkLogsKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"delete oldest logs":   {deleteOldestCheckLogsSQL, []any{"repo-1", 1, 1000, CheckHorizonRows}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)", checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"delete oldest checks": {deleteOldestChecksSQL, []any{"repo-1", 1, 1000, CheckHorizonRows}, []string{"COVERING INDEX " + checksEndedKey + " (repo_id=? AND finished_at>=? AND finished_at<?)", "INTEGER PRIMARY KEY (rowid=?)"}},
 		"purge all check logs": {purgeAllCheckLogsSQL, []any{"repo-1"}, []string{checkLogsKey + " (repo_id=?)"}},
 		"purge all checks":     {purgeAllChecksSQL, []any{"repo-1"}, []string{checksKey + " (repo_id=?)"}},
 		"checks due":           {checksDueSQL, []any{1000, -1, -1, "", 100}, []string{"COVERING INDEX code_checks_recent_idx (finished_at>=? AND finished_at<?)"}},
 		// A REPOSITORY'S CHECKS, READ (checksread.go): one attempt by the
 		// key, as a listing reads it, whole, and its log by the logs' key;
-		// the latest attempt of one check of one commit, the key's prefix
-		// read backwards; a commit's attempts after a (name, attempt) on the
-		// key; a change's after a (commit, name, attempt), or a commit of
-		// it after a (name, attempt), on code_checks_change_idx; a
+		// the latest attempt of one check of one commit for one target, the
+		// key's prefix read backwards; a commit's attempts for every target
+		// after a (target, name, attempt) on the key, and for one target —
+		// a change's — after a (name, attempt) on the key; a
 		// repository's newest ended first, from the top or after a place, on
 		// code_checks_finished_idx; the window's above its moment, on
 		// code_checks_recent_idx; and the home's due work — the due
 		// listing's statements, a head tested by its dispatch's key and its
 		// target's, and a target's reading by its key.
-		"check listed":          {checkRowSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
-		"check whole":           {checkWholeSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
-		"check log":             {checkLogSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
-		"latest check":          {latestCheckSQL, []any{"repo-1", oid("c"), "unit"}, []string{checksKey + " (repo_id=? AND commit_oid=? AND name=?)"}},
-		"checks of a commit":    {checksOfCommitSQL, []any{"repo-1", oid("c"), "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND name>=?)"}},
-		"checks of a change":    {checksOfChangeSQL, []any{"repo-1-change-000001", "", "", 0, 50}, []string{"code_checks_change_idx (change_id=? AND commit_oid>=?)"}},
-		"checks of its commit":  {checksOfChangeCommitSQL, []any{"repo-1-change-000001", oid("c"), "", 0, 50}, []string{"code_checks_change_idx (change_id=? AND commit_oid=? AND name>=?)"}},
+		"check listed":          {checkRowSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"check whole":           {checkWholeSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"check log":             {checkLogSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"latest check":          {latestCheckSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit"}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=?)"}},
+		"checks of a commit":    {checksOfCommitSQL, []any{"repo-1", oid("c"), "", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref>=?)"}},
+		"checks of a target":    {checksOfTargetSQL, []any{"repo-1", oid("c"), "refs/heads/main", "", 0, 50}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name>=?)"}},
 		"checks of a repo":      {checksOfRepoSQL, []any{"repo-1", 50}, []string{checksEndedKey + " (repo_id=?)"}},
-		"checks of a repo next": {checksOfRepoAfterSQL, []any{"repo-1", 1000, oid("c"), "unit", 1, 50}, []string{checksEndedKey + " (repo_id=? AND finished_at<=?)"}},
+		"checks of a repo next": {checksOfRepoAfterSQL, []any{"repo-1", 1000, oid("c"), "refs/heads/main", "unit", 1, 50}, []string{checksEndedKey + " (repo_id=? AND finished_at<=?)"}},
 		"checks window":         {checksWindowSQL, []any{1, 50}, []string{"code_checks_recent_idx (finished_at>=?)"}},
-		"checks window next":    {checksWindowAfterSQL, []any{1, 1000, "repo-1", oid("c"), "unit", 1, 50}, []string{"code_checks_recent_idx (finished_at<=? AND finished_at>=?)"}},
+		"checks window next":    {checksWindowAfterSQL, []any{1, 1000, "repo-1", oid("c"), "refs/heads/main", "unit", 1, 50}, []string{"code_checks_recent_idx (finished_at<=? AND finished_at>=?)"}},
 		"due check repositories": {dueCheckReposSQL, []any{"", MaxSnapshotItems, 1000},
 			[]string{"code_changes_open_idx (repo_id>?)", refsKey + " (repo_id=? AND ref=?)",
 				checkDispatchesKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
@@ -1181,19 +1180,21 @@ func claimedReads() map[string]statement {
 		"code_repos_expunge_due_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_expunge_due_idx
 			WHERE status IN ('active', 'archived') AND expunged_at <= ? ORDER BY expunged_at, id LIMIT ?`,
 			[]any{2, MaxSnapshotItems}, []string{"code_repos_expunge_due_idx (expunged_at<=?)"}},
-		// THE CHECKS' INDEXES THEIR LATER READERS SEEK (replicated 0075): the
-		// home's sweep of a repository's running checks by runner, the running
-		// state repeated as the index is partial on it; and a runner's claim
-		// walk, the queued attempts oldest queued first, the queued state
-		// likewise repeated and the >= what keeps its range seek. A change's
-		// checks are read by checksread.go's `checks` listing, and the overdue
-		// ones by the backlog's walk (replicated 0080), both registered above.
-		"code_checks_running_idx": {`SELECT commit_oid, name, attempt, runner_node FROM code_checks
+		// THE CHECKS' INDEXES THEIR LATER READERS SEEK (replicated 0075, keyed
+		// by the branch a commit is checked for in 0082): the home's sweep of
+		// a repository's running checks by runner, each by its whole key, the
+		// running state repeated as the index is partial on it; and a
+		// runner's claim walk, the queued attempts oldest queued first, the
+		// queued state likewise repeated and the >= what keeps its range
+		// seek. A change's checks are read on code_checks' key by
+		// checksread.go's `checks` listing, and the overdue ones by the
+		// backlog's walk (replicated 0080), both registered above.
+		"code_checks_running_idx": {`SELECT commit_oid, target_ref, name, attempt, runner_node FROM code_checks
 			INDEXED BY code_checks_running_idx WHERE repo_id = ? AND state = 'running'`,
 			[]any{"repo-1"}, []string{"code_checks_running_idx (repo_id=?)"}},
-		"code_checks_queued_idx": {`SELECT repo_id, commit_oid, name, attempt FROM code_checks
+		"code_checks_queued_idx": {`SELECT repo_id, commit_oid, target_ref, name, attempt FROM code_checks
 			INDEXED BY code_checks_queued_idx WHERE state = 'queued' AND queued_at >= ?
-			ORDER BY queued_at, repo_id, commit_oid, name, attempt LIMIT ?`,
+			ORDER BY queued_at, repo_id, commit_oid, target_ref, name, attempt LIMIT ?`,
 			[]any{0, MaxSnapshotItems}, []string{"code_checks_queued_idx (queued_at>=?)"}},
 		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0079):
 		// the indexed repositories in name order, a keyset page at a time —

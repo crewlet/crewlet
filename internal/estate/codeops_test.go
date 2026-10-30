@@ -405,7 +405,7 @@ func TestACheckRecordIsPublishedByADataNode(t *testing.T) {
 	claim := func(repo string, i int) code.ChecksRequest {
 		return code.ChecksRequest{OpID: fmt.Sprintf("019a0c2e-0000-7000-8000-%012d.code_check_claim", i),
 			Started: &code.CheckStarted{CheckKey: code.CheckKey{RepoID: repo,
-				OID: "1111111111111111111111111111111111111111", Name: "unit", Attempt: 1},
+				OID: "1111111111111111111111111111111111111111", Target: "refs/heads/main", Name: "unit", Attempt: 1},
 				Runner: "git-1", Placement: code.PlacementContainer,
 				StartedAt: time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)}}
 	}
@@ -810,9 +810,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				ResolvedPosition: at, Position: at}},
 			// A PAGE OF CHECKS AND ONE ATTEMPT WHOLE, every field of each.
 			Checks: []code.CheckRow{{CheckKey: code.CheckKey{RepoID: ref.ID,
-				OID: "6666666666666666666666666666666666666666", Name: "unit", Attempt: 2},
+				OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "unit", Attempt: 2},
 				State: code.CheckStateFailed, Purpose: code.PurposeCandidate, ChangeID: "change-1", Revision: 3,
-				CandidateID: "cand-1", EntryID: "entry-1", Target: "refs/heads/main",
+				CandidateID: "cand-1", EntryID: "entry-1",
 				Base: "7777777777777777777777777777777777777777", DefsOID: "8888888888888888888888888888888888888888",
 				Required: true, RunIn: code.CellE2B, TimeoutSeconds: 600, Reason: code.CheckReasonTimedOut,
 				Runner: "git-a", Placement: code.PlacementE2B, Box: "box-7", Borrowed: true, Reporter: "founder",
@@ -820,7 +820,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				ExitCode: new(137), Summary: "timed out", FailuresOmitted: 2, URL: "https://ci.example.com/1",
 				Queued: at, Finished: at}},
 			Check: &code.CheckDetail{CheckRow: code.CheckRow{CheckKey: code.CheckKey{RepoID: ref.ID,
-				OID: "6666666666666666666666666666666666666666", Name: "lint", Attempt: 1},
+				OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "lint", Attempt: 1},
 				State: code.CheckStatePassed}, Def: &code.CheckDef{Name: "lint", Run: "make lint",
 				TimeoutSeconds: 60}, Tail: "ok", Failures: []code.CheckFailure{{Path: "a.go", Line: 3,
 				TestID: "lint/a", Message: "unused"}},
@@ -1059,13 +1059,13 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 	// A REPOSITORY'S CHECK WRITES, every field of each — an attempt queued
 	// with its definition whole, a claim and its holder's naming of the box,
 	// an ending with its failures and log — and every field of the answer.
-	attempt := code.CheckKey{RepoID: ref.ID, OID: "6666666666666666666666666666666666666666", Name: "unit",
+	attempt := code.CheckKey{RepoID: ref.ID, OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main", Name: "unit",
 		Attempt: 2}
 	exit := 1
 	for name, req := range map[string]code.ChecksRequest{
 		"an attempt queued": {Queued: &code.CheckQueued{CheckKey: attempt, Purpose: code.PurposeHead,
 			ChangeID: item.ChangeID, Revision: 3, CandidateID: "cand-1", EntryID: "entry-1",
-			Target: "refs/heads/main", Base: "7777777777777777777777777777777777777777",
+			Base:    "7777777777777777777777777777777777777777",
 			DefsOID: "8888888888888888888888888888888888888888",
 			Def: &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600, Paths: []string{"**/*.go"},
 				Report: code.CheckReport{JUnit: "out/junit.xml", SARIF: "out/lint.sarif"}, RunIn: code.CellContainer,
@@ -1086,7 +1086,7 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Refusal: code.CheckRefusalClaimed, Detail: "attempt 2 of check unit is held by runner git-b",
 			Holder: "git-b", Position: at, Row: &code.CheckRow{CheckKey: attempt, State: code.CheckStateRunning,
 				Purpose: code.PurposeHead, ChangeID: item.ChangeID, Revision: 3, CandidateID: "cand-1",
-				EntryID: "entry-1", Target: "refs/heads/main", Base: "7777777777777777777777777777777777777777",
+				EntryID: "entry-1", Base: "7777777777777777777777777777777777777777",
 				DefsOID: "8888888888888888888888888888888888888888", Required: true, RunIn: code.CellContainer,
 				TimeoutSeconds: 600, Reason: code.CheckReasonExit, Runner: "git-b",
 				Placement: code.PlacementContainer, Box: "box-8", Borrowed: true, Reporter: "founder",
@@ -1182,8 +1182,9 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Kind: code.ReadChecks, Checks: &code.CheckQuery{Since: created}, Limit: 50,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadCheck, Repo: "app",
-			Checks: &code.CheckQuery{OID: "6666666666666666666666666666666666666666", Name: "unit", Attempt: 2},
-			Fresh:  statelog.Freshness{Level: statelog.ReadLinearizable}},
+			Checks: &code.CheckQuery{OID: "6666666666666666666666666666666666666666", Target: "refs/heads/main",
+				Name: "unit", Attempt: 2},
+			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
 		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RefreshBefore: created}, Cursor: ref.ID,
 			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RepoID: ref.ID, RefreshBefore: created},

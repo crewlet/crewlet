@@ -275,11 +275,13 @@
 //
 // What a repository's `.crewlet/checks.yaml` defines (checksfile.go:
 // ParseChecks, one strict grammar for every reader) is MEASURED on commits,
-// and what became of each attempt of each check of each commit is
-// code_checks — with code_check_logs, the log a failed run kept, a Required
-// object reference (CheckLogReferences) — written by records on the
-// repository's CHECKS subject ([KindChecks], checks.<repo>, scope
-// [ChecksPath]) and by no record on its repository's (checks.go): queued,
+// and what became of each attempt of each check of each commit, FOR EACH
+// BRANCH it is checked for — the branch whose file defines the check and
+// whose protection requires it, so one commit checked for two branches is two
+// checks ([CheckKey]) — is code_checks — with code_check_logs, the log a
+// failed run kept, a Required object reference (CheckLogReferences) — written
+// by records on the repository's CHECKS subject ([KindChecks], checks.<repo>,
+// scope [ChecksPath]) and by no record on its repository's (checks.go): queued,
 // started, finished, swept and dispatched ([CheckOps]) — the last the
 // home's record of a target's checks file read at its tip and the change
 // heads it dispatched under it, which code_check_targets and

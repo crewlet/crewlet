@@ -108,10 +108,10 @@ func applyChecksSweep(ctx context.Context, tx *sql.Tx, at applyContext, s Checks
 // checkQueue is a row's QUEUE, as the queuing record with the lowest position
 // set it ([checkRow]).
 type checkQueue struct {
-	purpose, changeID, candidateID, entryID, target, base, defsOID, runIn, def string
-	revision, timeoutSeconds                                                   int64
-	required                                                                   bool
-	queuedAt, position                                                         int64
+	purpose, changeID, candidateID, entryID, base, defsOID, runIn, def string
+	revision, timeoutSeconds                                           int64
+	required                                                           bool
+	queuedAt, position                                                 int64
 }
 
 // overdueAt is the instant, in the store's microseconds, the queue's attempt
@@ -158,7 +158,7 @@ type checkPart struct {
 func queuedPart(q CheckQueued, at applyContext) checkPart {
 	part := checkPart{queue: &checkQueue{
 		purpose: string(q.Purpose), changeID: q.ChangeID, revision: int64(q.Revision),
-		candidateID: q.CandidateID, entryID: q.EntryID, target: q.Target, base: q.Base, defsOID: q.DefsOID,
+		candidateID: q.CandidateID, entryID: q.EntryID, base: q.Base, defsOID: q.DefsOID,
 		required: q.Required, queuedAt: store.EncodeTime(q.QueuedAt), position: at.packed,
 	}}
 	if q.Def != nil {
@@ -343,7 +343,7 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 	}
 	q, r, e := row.queue, row.run, row.ending
 	if _, err = tx.ExecContext(ctx, writeCheckSQL, key.RepoID, key.OID, key.Name, key.Attempt,
-		string(row.state()), q.purpose, q.changeID, q.revision, q.candidateID, q.entryID, q.target, q.base,
+		string(row.state()), q.purpose, q.changeID, q.revision, q.candidateID, q.entryID, key.Target, q.base,
 		q.defsOID, q.required, q.runIn, q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, r.borrowed,
 		e.reporter, q.queuedAt, r.startedAt, e.finishedAt, e.durationMs, e.exitCode, e.failuresOmitted,
 		q.position, e.position, row.rowBytes(), q.overdueAt(), e.url, e.summary, q.def, e.failures,
@@ -362,7 +362,7 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 // none, so the row is dropped and, for an ending that kept a log, written. It
 // answers the rows it deleted and wrote.
 func writeEndingLog(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, l *CheckLog) (int, error) {
-	res, err := tx.ExecContext(ctx, dropCheckLogSQL, key.RepoID, key.OID, key.Name, key.Attempt)
+	res, err := tx.ExecContext(ctx, dropCheckLogSQL, key.RepoID, key.OID, key.Target, key.Name, key.Attempt)
 	if err != nil {
 		return 0, fmt.Errorf("code: drop check %s of %s's log at %s: %w", key.Name, key.OID, at.position, err)
 	}
@@ -370,7 +370,7 @@ func writeEndingLog(ctx context.Context, tx *sql.Tx, at applyContext, key CheckK
 	if l == nil {
 		return int(dropped), nil
 	}
-	if _, err = tx.ExecContext(ctx, writeCheckLogSQL, key.RepoID, key.OID, key.Name, key.Attempt,
+	if _, err = tx.ExecContext(ctx, writeCheckLogSQL, key.RepoID, key.OID, key.Target, key.Name, key.Attempt,
 		l.Object.String(), string(l.Hash), l.Size); err != nil {
 		return 0, fmt.Errorf("code: write check %s of %s's log at %s: %w", key.Name, key.OID, at.position, err)
 	}
@@ -383,8 +383,8 @@ func writeEndingLog(ctx context.Context, tx *sql.Tx, at applyContext, key CheckK
 func readCheckRow(ctx context.Context, tx *sql.Tx, key CheckKey) (checkRow, bool, error) {
 	r := checkRow{key: key}
 	q, run, e := &r.queue, &r.run, &r.ending
-	err := tx.QueryRowContext(ctx, readCheckSQL, key.RepoID, key.OID, key.Name, key.Attempt).Scan(
-		&e.state, &q.purpose, &q.changeID, &q.revision, &q.candidateID, &q.entryID, &q.target, &q.base,
+	err := tx.QueryRowContext(ctx, readCheckSQL, key.RepoID, key.OID, key.Target, key.Name, key.Attempt).Scan(
+		&e.state, &q.purpose, &q.changeID, &q.revision, &q.candidateID, &q.entryID, &q.base,
 		&q.defsOID, &q.required, &q.runIn, &q.timeoutSeconds, &e.reason, &run.runner, &run.placement, &run.box,
 		&run.borrowed, &e.reporter, &q.queuedAt, &run.startedAt, &e.finishedAt, &e.durationMs, &e.exitCode,
 		&e.failuresOmitted, &q.position, &e.position, &e.url, &e.summary, &q.def, &e.failures, &e.tail)
@@ -435,9 +435,9 @@ func checksEndedBefore(ctx context.Context, tx *sql.Tx, repoID string, lo, hi in
 		if take == maxRows || (take > 0 && weighed >= maxBytes) {
 			return take, weighed, true, nil
 		}
-		var commit, name string
+		var commit, target, name string
 		var attempt, width int64
-		if err := rows.Scan(&commit, &name, &attempt, &width); err != nil {
+		if err := rows.Scan(&commit, &target, &name, &attempt, &width); err != nil {
 			return 0, 0, false, err
 		}
 		take++
@@ -488,21 +488,21 @@ func purgeChecks(ctx context.Context, tx *sql.Tx, repoID string, budget int, wei
 // held to the key each is written for.
 const (
 	// checksKey is code_checks' PRIMARY KEY index, (repo_id, commit_oid,
-	// name, attempt), which shares its leading column with
+	// target_ref, name, attempt), which shares its leading column with
 	// code_checks_finished_idx and code_checks_running_idx: a read of one row
 	// NAMES it (planner.go).
 	checksKey = "sqlite_autoindex_code_checks_1"
 	// checksEndedKey is code_checks_finished_idx, (repo_id, finished_at,
-	// commit_oid, name, attempt, row_bytes): a repository's rows in the one
-	// order every node removes them in, carrying what each weighs.
+	// commit_oid, target_ref, name, attempt, row_bytes): a repository's rows
+	// in the one order every node removes them in, carrying what each weighs.
 	checksEndedKey = "code_checks_finished_idx"
 
-	readCheckSQL = `SELECT state, purpose, change_id, revision, candidate_id, entry_id, target_ref, base_oid,
+	readCheckSQL = `SELECT state, purpose, change_id, revision, candidate_id, entry_id, base_oid,
 		defs_oid, required, run_in, timeout_seconds, reason, runner_node, placement, box_handle, borrowed,
 		reporter, queued_at, started_at, finished_at, duration_ms, exit_code, failures_omitted,
 		queued_position, finished_position, url, summary, def, failures, tail
 		FROM code_checks INDEXED BY ` + checksKey + `
-		WHERE repo_id = ? AND commit_oid = ? AND name = ? AND attempt = ?`
+		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
 	// writeCheckSQL writes a row whole, the join's: every column the join
 	// computed, over whatever the row held — overdue_at derived from its
 	// queue (checkQueue.overdueAt).
@@ -513,10 +513,10 @@ const (
 			finished_position, row_bytes, overdue_at, url, summary, def, failures, tail)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?)
-		ON CONFLICT (repo_id, commit_oid, name, attempt) DO UPDATE SET
+		ON CONFLICT (repo_id, commit_oid, target_ref, name, attempt) DO UPDATE SET
 			state = excluded.state, purpose = excluded.purpose, change_id = excluded.change_id,
 			revision = excluded.revision, candidate_id = excluded.candidate_id, entry_id = excluded.entry_id,
-			target_ref = excluded.target_ref, base_oid = excluded.base_oid, defs_oid = excluded.defs_oid,
+			base_oid = excluded.base_oid, defs_oid = excluded.defs_oid,
 			required = excluded.required, run_in = excluded.run_in, timeout_seconds = excluded.timeout_seconds,
 			reason = excluded.reason, runner_node = excluded.runner_node, placement = excluded.placement,
 			box_handle = excluded.box_handle, borrowed = excluded.borrowed, reporter = excluded.reporter,
@@ -528,31 +528,32 @@ const (
 			summary = excluded.summary,
 			def = excluded.def, failures = excluded.failures, tail = excluded.tail`
 	dropCheckLogSQL = `DELETE FROM code_check_logs
-		WHERE repo_id = ? AND commit_oid = ? AND name = ? AND attempt = ?`
-	writeCheckLogSQL = `INSERT INTO code_check_logs (repo_id, commit_oid, name, attempt, object, hash, size)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`
+		WHERE repo_id = ? AND commit_oid = ? AND target_ref = ? AND name = ? AND attempt = ?`
+	writeCheckLogSQL = `INSERT INTO code_check_logs (repo_id, commit_oid, target_ref, name, attempt, object, hash,
+			size)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 	// checksOldestSQL is a repository's rows whose finished_at is in [?2, ?3)
 	// in the removal's order, with what each weighs — a covering read of
 	// checksEndedKey, so weighing a row never reads it.
-	checksOldestSQL = `SELECT commit_oid, name, attempt, row_bytes
+	checksOldestSQL = `SELECT commit_oid, target_ref, name, attempt, row_bytes
 		FROM code_checks INDEXED BY ` + checksEndedKey + `
 		WHERE repo_id = ?1 AND finished_at >= ?2 AND finished_at < ?3
-		ORDER BY finished_at, commit_oid, name, attempt LIMIT ?4`
+		ORDER BY finished_at, commit_oid, target_ref, name, attempt LIMIT ?4`
 	// deleteOldestCheckLogsSQL and deleteOldestChecksSQL delete the first ?4
 	// of those rows: the logs through the rows they belong to, each by its
 	// key, then the rows — the rowid idiom, so they are the rows the order
 	// reaches first and no more.
 	deleteOldestCheckLogsSQL = `DELETE FROM code_check_logs WHERE rowid IN (SELECT l.rowid
-		FROM (SELECT commit_oid, name, attempt FROM code_checks INDEXED BY ` + checksEndedKey + `
+		FROM (SELECT commit_oid, target_ref, name, attempt FROM code_checks INDEXED BY ` + checksEndedKey + `
 			WHERE repo_id = ?1 AND finished_at >= ?2 AND finished_at < ?3
-			ORDER BY finished_at, commit_oid, name, attempt LIMIT ?4) AS c
+			ORDER BY finished_at, commit_oid, target_ref, name, attempt LIMIT ?4) AS c
 		CROSS JOIN code_check_logs AS l
-		WHERE l.repo_id = ?1 AND l.commit_oid = c.commit_oid AND l.name = c.name
-			AND l.attempt = c.attempt)`
+		WHERE l.repo_id = ?1 AND l.commit_oid = c.commit_oid AND l.target_ref = c.target_ref
+			AND l.name = c.name AND l.attempt = c.attempt)`
 	deleteOldestChecksSQL = `DELETE FROM code_checks WHERE rowid IN (SELECT rowid
 		FROM code_checks INDEXED BY ` + checksEndedKey + `
 		WHERE repo_id = ?1 AND finished_at >= ?2 AND finished_at < ?3
-		ORDER BY finished_at, commit_oid, name, attempt LIMIT ?4)`
+		ORDER BY finished_at, commit_oid, target_ref, name, attempt LIMIT ?4)`
 	// THE FINAL PURGE'S, each of a repository's whole set: its logs, then
 	// its rows.
 	purgeAllCheckLogsSQL = `DELETE FROM code_check_logs WHERE repo_id = ?`

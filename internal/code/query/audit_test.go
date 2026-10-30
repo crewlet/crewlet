@@ -114,7 +114,7 @@ func TestAReadMadeForACheckIsTheEnginesOwn(t *testing.T) {
 	repo := x.repo(codetest.RepoName)
 	rec := &fetches{}
 	s := x.server(0, query.Options{Roster: company, Fetched: rec.record})
-	attempt := code.CheckKey{RepoID: repo, OID: head, Name: "unit", Attempt: 1}
+	attempt := code.CheckKey{RepoID: repo, OID: head, Target: "refs/heads/main", Name: "unit", Attempt: 1}
 	forCheck := func(rev string) code.GitQuery {
 		return code.GitQuery{Kind: code.GitTree, RepoID: repo, Home: true, Check: &attempt,
 			Tree: &code.TreeQuery{Rev: rev}}

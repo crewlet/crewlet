@@ -243,6 +243,7 @@ func (c CompactionCandidate) encodedBytes() int {
 func (r CheckRow) encodedBytes() int {
 	n := 2 + field("repo_id", stringBytes(r.RepoID), true) +
 		field("oid", stringBytes(r.OID), false) +
+		field("target", stringBytes(r.Target), false) +
 		field("name", stringBytes(r.Name), false) +
 		field("attempt", intBytes(int64(r.Attempt)), false) +
 		field("state", stringBytes(string(r.State)), false)
@@ -261,8 +262,7 @@ func (r CheckRow) encodedBytes() int {
 	for _, s := range []struct {
 		key, value string
 	}{
-		{"candidate_id", r.CandidateID}, {"entry_id", r.EntryID}, {"target", r.Target}, {"base", r.Base},
-		{"defs_oid", r.DefsOID},
+		{"candidate_id", r.CandidateID}, {"entry_id", r.EntryID}, {"base", r.Base}, {"defs_oid", r.DefsOID},
 	} {
 		if s.value != "" {
 			n += field(s.key, stringBytes(s.value), false)
