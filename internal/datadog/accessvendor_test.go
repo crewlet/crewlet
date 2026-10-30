@@ -213,7 +213,7 @@ func (o *accessOrg) serve(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/v2/service_accounts" && r.Method == http.MethodPost:
 		var body struct {
 			Data struct {
-				Attributes struct{ Email, Name string } `json:"attributes"`
+				Attributes    struct{ Email, Name string } `json:"attributes"`
 				Relationships struct {
 					Roles struct {
 						Data []struct{ ID string } `json:"data"`
@@ -312,9 +312,9 @@ func held(id string) *seataccess.Record {
 	}
 }
 
-// THE CATALOG BINDS THE SEAT'S KEY TO DATADOG'S MCP SERVER under the header
-// that server reads (D15), seals one credential, and offers live roles with
-// no scope.
+// THE CATALOG SEALS ONE CREDENTIAL and offers live roles with no scope, and
+// the engine's binding table puts that credential on Datadog's MCP server
+// under the header the server reads (D15).
 func TestTheDatadogCatalog(t *testing.T) {
 	t.Parallel()
 	vendor, ok := seataccess.Lookup(integration.KindDatadog)
@@ -325,16 +325,19 @@ func TestTheDatadogCatalog(t *testing.T) {
 	if !slices.Equal(cat.Credentials, []string{datadog.AppKeyField}) {
 		t.Errorf("credentials = %q", cat.Credentials)
 	}
-	if cat.Tool == nil || cat.Tool.Server != "datadog" || len(cat.Tool.Keys) != 1 ||
-		cat.Tool.Keys[0].Header != "DD_APPLICATION_KEY" || cat.Tool.Keys[0].Field != datadog.AppKeyField {
-		t.Errorf("tool = %+v, want the key under DD_APPLICATION_KEY on the datadog server", cat.Tool)
-	}
 	lane, ok := cat.Lane(seataccess.LaneDatadog)
 	if !ok || !lane.Levels || !lane.LiveLevels || lane.Scoped || !lane.Rotatable {
 		t.Errorf("lane = %+v", lane)
 	}
-	if !slices.Contains(datadog.CredentialKeys, "DD_APPLICATION_KEY") {
-		t.Error("the header the tool reads is not a recognised credential key")
+	tool := seataccess.ToolFor(seataccess.LaneDatadog)
+	if tool == nil || tool.Server != "datadog" || len(tool.Keys) != 1 ||
+		tool.Keys[0].Field != datadog.AppKeyField || tool.Keys[0].Header != "DD_APPLICATION_KEY" {
+		t.Fatalf("tool = %+v, want the key under DD_APPLICATION_KEY on the datadog server", tool)
+	}
+	// THE HEADER THE TOOL READS IS A RECOGNISED CREDENTIAL KEY, so the
+	// document rules refuse it in a seat's mcp_env and the migration finds it.
+	if !slices.Contains(datadog.CredentialKeys, tool.Keys[0].Header) {
+		t.Errorf("CredentialKeys %q lacks the tool's header %q", datadog.CredentialKeys, tool.Keys[0].Header)
 	}
 	if got := seataccess.SinkName(integration.KindDatadog, datadog.AppKeyField, "sre"); got !=
 		"DATADOG_APP_KEY_SRE" {
@@ -352,7 +355,8 @@ func TestDatadogStepsPerOp(t *testing.T) {
 		seataccess.OpEnable:  {seataccess.VerbEnable, seataccess.VerbMint},
 		seataccess.OpLevel:   {seataccess.VerbRerole},
 		seataccess.OpMint:    {seataccess.VerbMint},
-		seataccess.OpDisable: {seataccess.VerbRevoke, seataccess.VerbDisable},
+		seataccess.OpDisable: {seataccess.VerbDisable},
+		seataccess.OpRevoke:  {seataccess.VerbRevoke},
 		seataccess.OpRemove:  {seataccess.VerbRemove},
 		seataccess.OpRotate:  {seataccess.VerbMint, seataccess.VerbRevoke},
 		seataccess.OpScope:   nil,
@@ -441,12 +445,11 @@ func TestDatadogObserveReadsEveryAccountBack(t *testing.T) {
 	}
 	lane := func(handle string) seataccess.Observed { return obs[handle][seataccess.LaneDatadog] }
 	if got := lane("sre"); !got.Exists || !got.Enabled || got.Level != adminRole ||
-		got.AccountID != recorded.id || got.Credential == nil {
+		got.AccountID != recorded.id {
 		t.Errorf("sre = %+v", got)
 	}
-	if got := lane("oncall"); got.AccountID != adopted.id || got.Level != roRole+" "+stdRole ||
-		got.Credential != nil {
-		t.Errorf("oncall = %+v, want adopted, holding both roles, no key", got)
+	if got := lane("oncall"); got.AccountID != adopted.id || got.Level != roRole+" "+stdRole {
+		t.Errorf("oncall = %+v, want adopted, holding both roles", got)
 	}
 	if got := lane("dba"); got.Enabled || got.DisabledBy != seataccess.DisabledByHand {
 		t.Errorf("dba = %+v, want disabled by hand", got)
@@ -572,9 +575,9 @@ func TestDatadogLevelHoldsExactlyTheSeatsRole(t *testing.T) {
 	}
 }
 
-// OFF REVOKES EVERY KEY AND HANDS THE SYNC THE FIELD TO CLEAR, then marks and
-// disables the account, which Datadog keeps (D1). Back on enables it, clears
-// the marker and mints a fresh key.
+// OFF MARKS AND DISABLES THE ACCOUNT, which Datadog keeps (D1), and the revoke
+// that follows deletes every key and hands the sync the field to clear. Back
+// on enables it, clears the marker and mints a fresh key.
 func TestDatadogOffAndBackOn(t *testing.T) {
 	t.Parallel()
 	org := newAccessOrg()
@@ -584,14 +587,6 @@ func TestDatadogOffAndBackOn(t *testing.T) {
 	session := org.open(t)
 	in := seataccess.ApplyInput{Want: seataccess.Desired{Level: roRole}, Record: held(account.id)}
 
-	in.Step = step(t, seataccess.OpDisable, seataccess.VerbRevoke)
-	revoked, err := apply(t, session, in)
-	if err != nil || !slices.Equal(revoked.Revoked, []string{datadog.AppKeyField}) {
-		t.Fatalf("revoke = %+v, %v", revoked, err)
-	}
-	if keys := org.keyIDs(account.id); len(keys) != 0 {
-		t.Errorf("keys left live on an account turned off: %q", keys)
-	}
 	in.Step = step(t, seataccess.OpDisable, seataccess.VerbDisable)
 	disabled, err := apply(t, session, in)
 	if err != nil || !disabled.Disabled {
@@ -599,6 +594,14 @@ func TestDatadogOffAndBackOn(t *testing.T) {
 	}
 	if got := org.user(account.id); !got.disabled || got.title != datadog.DisconnectedTitle {
 		t.Errorf("account = %+v, want disabled and marked as this engine's off", got)
+	}
+	in.Step = step(t, seataccess.OpRevoke, seataccess.VerbRevoke)
+	revoked, err := apply(t, session, in)
+	if err != nil || !slices.Equal(revoked.Revoked, []string{datadog.AppKeyField}) {
+		t.Fatalf("revoke = %+v, %v", revoked, err)
+	}
+	if keys := org.keyIDs(account.id); len(keys) != 0 {
+		t.Errorf("keys left live on an account turned off: %q", keys)
 	}
 
 	in.Want.Enabled = true

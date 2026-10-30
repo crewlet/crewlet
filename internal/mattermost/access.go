@@ -94,28 +94,6 @@ func RoleOptions() []RoleOption {
 // least a bot can hold and still read the channels it is in.
 func DefaultRoles() []string { return slices.Clone(roleOptions[0].Roles) }
 
-// CanonicalLevel is a role list as the seat's access level: the option's roles
-// in the document's order, joined by a space, which is the id the Agents tab
-// offers it under. An empty list is [DefaultRoles].
-func CanonicalLevel(roles []string) (string, error) {
-	canonical, err := CanonicalRoles(roles)
-	if err != nil {
-		return "", err
-	}
-	return strings.Join(canonical, " "), nil
-}
-
-// LevelOf is the level an account's roles read as: the option's id where they
-// are one of the four, and the roles as Mattermost spells them otherwise (an
-// account changed by hand to something this engine does not offer, which is
-// drift the pass restores).
-func LevelOf(roles []string) string {
-	if option, ok := optionOf(roles); ok && len(normalizeRoles(roles)) > 0 {
-		return strings.Join(option.Roles, " ")
-	}
-	return strings.Join(normalizeRoles(roles), " ")
-}
-
 // ErrUnknownRoles is a role list that is not one of the four Mattermost
 // options.
 var ErrUnknownRoles = errors.New("mattermost: not a role list Mattermost offers a bot")

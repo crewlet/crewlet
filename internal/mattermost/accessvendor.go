@@ -36,8 +36,9 @@ type accessVendor struct{}
 
 func (accessVendor) Kind() integration.Kind { return integration.KindMattermost }
 
-// Catalog has no tool binding: the engine's own chat transport reads the
-// seat's token directly, so there is no server to bind it to.
+// Catalog is Mattermost's per-seat offer. There is no tool binding: the
+// engine's own chat transport reads the seat's token directly, so there is no
+// server to bind it to ([config.SeatToolBindings]).
 func (accessVendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindMattermost,
@@ -96,9 +97,9 @@ func (accessVendor) Steps(
 		deactivate := step(seataccess.VerbDisable, "Deactivate its Mattermost bot")
 		deactivate.Note = "Mattermost keeps the bot and everything it posted, so turning it " +
 			"back on needs no person."
-		out = []seataccess.Step{
-			step(seataccess.VerbRevoke, "Revoke its access tokens and clear "+sink), deactivate,
-		}
+		out = []seataccess.Step{deactivate}
+	case seataccess.OpRevoke:
+		out = []seataccess.Step{step(seataccess.VerbRevoke, "Revoke its access tokens and clear "+sink)}
 	case seataccess.OpRemove:
 		remove := step(seataccess.VerbRemove, "Stop managing its deactivated Mattermost bot")
 		remove.Note = "The bot stays deactivated, because deleting it would delete " +
@@ -191,14 +192,19 @@ func (accessVendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess
 	if err != nil {
 		return nil, err
 	}
-	return &accessSession{client: client, cfg: cfg, memo: newStepMemo()}, nil
+	return &accessSession{client: client, cfg: cfg}, nil
 }
 
 // accessSession is one pass's connection to Mattermost.
 type accessSession struct {
 	client *Client
 	cfg    *config.Mattermost
-	memo   *stepMemo
+
+	// minted is the token id this session minted for each seat, by handle.
+	// A rotation's second step needs it: it revokes every other token this
+	// engine minted and never that one, and Mattermost lists no creation
+	// time to tell them apart. A step that finds none revokes nothing.
+	minted sync.Map
 
 	teamOnce sync.Once
 	team     Team
@@ -335,7 +341,7 @@ func (s *accessSession) observedOf(
 	out := seataccess.Observed{
 		Exists: true, Enabled: !bot.Deactivated,
 		Account: "@" + bot.Username, AccountID: bot.ID,
-		Level: LevelOf(bot.Roles), Scope: s.scopeOf(bot),
+		Level: seataccess.MattermostLevel(bot.Roles), Scope: s.scopeOf(bot),
 	}
 	if bot.Deactivated {
 		// THIS ENGINE'S OFF, by either record of it: the ledger, or the
@@ -345,9 +351,6 @@ func (s *accessSession) observedOf(
 			rec.Account.State == seataccess.AccountDisabled) {
 			out.DisabledBy = seataccess.DisabledByCrewlet
 		}
-	}
-	if len(bot.MintedTokens(handle)) > 0 {
-		out.Credential = &seataccess.Credential{}
 	}
 	if recorded && rec.Account != nil {
 		out.CreatedAt = rec.Account.CreatedAt
@@ -433,16 +436,15 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		case seataccess.OpScope:
 			return seataccess.StepResult{}, s.scope(ctx, in, teamID, bot)
 		case seataccess.OpDisable:
-			if in.Step.Verb == seataccess.VerbRevoke {
-				if _, err := s.client.RevokeEngineTokens(ctx, bot, in.Seat.Handle); err != nil {
-					return seataccess.StepResult{}, s.refused(in, err)
-				}
-				return seataccess.StepResult{Revoked: []string{BotTokenField}}, nil
-			}
 			if err := s.client.Deactivate(ctx, bot); err != nil {
 				return seataccess.StepResult{}, s.refused(in, err)
 			}
 			return seataccess.StepResult{Disabled: true}, nil
+		case seataccess.OpRevoke:
+			if _, err := s.client.RevokeEngineTokens(ctx, bot, in.Seat.Handle); err != nil {
+				return seataccess.StepResult{}, s.refused(in, err)
+			}
+			return seataccess.StepResult{Revoked: []string{BotTokenField}}, nil
 		case seataccess.OpRemove:
 			// NOTHING IS DELETED AT MATTERMOST: deleting a bot deletes
 			// everything it posted. Off is checked again here rather
@@ -459,7 +461,9 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			if in.Step.Verb == seataccess.VerbMint {
 				return s.mint(ctx, in, bot, false)
 			}
-			_, err := s.client.RetireTokens(ctx, bot, in.Seat.Handle, s.memo.minted(in.Seat.Handle))
+			keep, _ := s.minted.Load(in.Seat.Handle)
+			id, _ := keep.(string)
+			_, err := s.client.RetireTokens(ctx, bot, in.Seat.Handle, id)
 			return seataccess.StepResult{}, s.refused(in, err)
 		default:
 			return seataccess.StepResult{}, fmt.Errorf("mattermost: no step for %q", in.Step.Op)
@@ -475,7 +479,6 @@ func (s *accessSession) create(ctx context.Context, in seataccess.ApplyInput) (s
 	if err != nil {
 		return seataccess.StepResult{}, s.refused(in, err)
 	}
-	s.memo.account(in.Seat.Handle, bot.UserID)
 	return seataccess.StepResult{AccountID: bot.UserID, Account: "@" + bot.Username}, nil
 }
 
@@ -535,7 +538,7 @@ func (s *accessSession) mint(
 	if err != nil {
 		return seataccess.StepResult{}, s.refused(in, err)
 	}
-	s.memo.mint(in.Seat.Handle, token.ID)
+	s.minted.Store(in.Seat.Handle, token.ID)
 	tokenID := token.ID
 	return seataccess.StepResult{Minted: []seataccess.Minted{{
 		Field: BotTokenField, Value: token.Value,
@@ -545,11 +548,18 @@ func (s *accessSession) mint(
 
 // withBot reads the step's bot fresh and runs fn on it, or answers Gone where
 // Mattermost no longer has it.
+//
+// The bot is the ledger's, which the sync updates as soon as a create
+// returns, so a create's later steps reach the bot the create made; one the
+// pass adopted rather than created is the one it observed.
 func (s *accessSession) withBot(
 	ctx context.Context, in seataccess.ApplyInput, teamID string,
 	fn func(BotAccount) (seataccess.StepResult, error),
 ) (seataccess.StepResult, error) {
-	id := s.memo.accountOf(in)
+	id := in.Have.AccountID
+	if in.Record != nil && in.Record.Held() {
+		id = in.Record.Account.ID
+	}
 	if id == "" {
 		return seataccess.StepResult{}, fmt.Errorf(
 			"mattermost: %s has no bot to %s", in.Seat.Handle, in.Step.Verb)
