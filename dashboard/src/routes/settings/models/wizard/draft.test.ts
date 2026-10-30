@@ -14,6 +14,7 @@ import type { CompanyDocument, ConfigProblem } from "~/protocol/types.ts";
 import type { ModelView } from "../data.ts";
 import {
   baseOf,
+  credentialValues,
   distinctProblems,
   draftOf,
   draftProblems,
@@ -215,5 +216,19 @@ describe("problems", () => {
     expect(stepOf({ segments: ["values", "ANTHROPIC_API_KEY"] }, "k")).toBe("signin");
     expect(stepOf({ segments: ["roles", 0, "llm"] }, "k")).toBe("assign");
     expect(stepOf({ segments: ["providers", "llm", "k", "run_in"] }, "k")).toBe("runs");
+  });
+});
+
+describe("a pasted credential", () => {
+  // A terminal that wraps `claude setup-token` output turns the break into
+  // spaces when it is copied, and Claude Code then ignores the whole token.
+  test("is sent without the whitespace and invisible characters a copy adds", () => {
+    expect(credentialValues(draft({ credential: " sk-ant-api03-sec  ret\n\u200b-AA\t " }))).toEqual(
+      { ANTHROPIC_API_KEY_SONNET_KEY: "sk-ant-api03-secret-AA" },
+    );
+  });
+
+  test("of only whitespace keeps what is stored", () => {
+    expect(credentialValues(draft({ credential: " \n " }))).toEqual({});
   });
 });

@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -404,8 +405,8 @@ func TestACredentialIsTestedBeforeItIsStored(t *testing.T) {
 	}
 	segs, message := problemAt(t, body)
 	if segs != `["values","ANTHROPIC_API_KEY_SONNET"]` ||
-		!strings.Contains(message, "401 invalid x-api-key") ||
-		!strings.Contains(message, "Nothing was stored, and the current credential still signs the model in") {
+		message != "The vendor refused this API key: it is wrong, expired, or revoked. Paste a current one. "+
+			"Nothing was stored, and the model still uses its current API key." {
 		t.Errorf("problem at %s: %q", segs, message)
 	}
 	if len(r.secrets.rows) != 0 || len(r.config.reloads) != 0 {
@@ -1118,5 +1119,93 @@ func TestACreatesRetryIsRefusedByTheRouteBeforeTheStore(t *testing.T) {
 	}
 	if got := r.secrets.rows["GATEWAY_KEY"]; !got.sealed.Equal(row.sealed) {
 		t.Errorf("the stale row was re-sealed: %+v", got)
+	}
+}
+
+// A VALUE WITH A SPACE OR AN INVISIBLE CHARACTER INSIDE IS REFUSED AT THE
+// VALUE, BEFORE ANY CLI RUNS. A terminal that wraps `claude setup-token`
+// output turns the break into spaces when it is copied, and Claude Code then
+// ignores the token and says it is not logged in, which read as a refusal to
+// log in again. The whitespace around a value is only trimmed.
+func TestAValueWithStrayCharactersIsRefusedBeforeItsTest(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	for _, tc := range []struct {
+		name, value, want string
+	}{
+		{"a wrapped token", `sk-ant-oat01-abc  def-AA`,
+			"This token contains 2 spaces (characters 17 and 18). A token is one unbroken line, " +
+				"so copy it again or remove them."},
+		{"a line break", `sk-ant-oat01-abc\ndef-AA`,
+			"This token contains 1 line break (character 17). A token is one unbroken line, " +
+				"so copy it again or remove it."},
+		{"a zero-width space", `sk-ant-oat01-abc\u200bdef-AA`,
+			"This token contains 1 invisible character (character 17)."},
+		{"many", `sk-ant-oat01- a b c d e`,
+			"This token contains 5 spaces (characters 14, 16, 18 and 2 more)."},
+	} {
+		code, body := r.do(t, http.MethodPut, "/llm/providers/default/credential",
+			`{"values": {"CLAUDE_CODE_OAUTH_TOKEN": "`+tc.value+`"}}`, nil)
+		segs, message := problemAt(t, body)
+		if code != http.StatusUnprocessableEntity || segs != `["values","CLAUDE_CODE_OAUTH_TOKEN"]` ||
+			!strings.HasPrefix(message, tc.want) {
+			t.Errorf("%s = %d at %s: %q, want it to open %q", tc.name, code, segs, message, tc.want)
+		}
+	}
+	code, body := r.do(t, http.MethodPut, "/llm/providers/sonnet/credential",
+		`{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-abc def"}}`, nil)
+	if _, message := problemAt(t, body); code != http.StatusUnprocessableEntity ||
+		!strings.HasPrefix(message, "This API key contains 1 space (character 17). An API key is one unbroken line") {
+		t.Errorf("a key with a space = %d: %q", code, message)
+	}
+	if len(r.engine.checks) != 0 {
+		t.Fatalf("a value with stray characters was tested %d times", len(r.engine.checks))
+	}
+
+	if code, body := r.do(t, http.MethodPut, "/llm/providers/default/credential?dry_run=true",
+		`{"values": {"CLAUDE_CODE_OAUTH_TOKEN": "  sk-ant-oat01-abc-def-AA\n"}}`, nil); code != http.StatusOK {
+		t.Fatalf("a token with whitespace around it = %d %v", code, body)
+	}
+	if got := r.engine.checks[0].values["CLAUDE_CODE_OAUTH_TOKEN"]; got != "sk-ant-oat01-abc-def-AA" {
+		t.Errorf("the test was handed %q, want the token trimmed", got)
+	}
+}
+
+// A REFUSED TEST SAYS WHAT THE CLI'S WORDS MEANT, never the CLI's own advice:
+// a token the CLI never used is named as one the vendor never saw, a refused
+// one with the command that makes a new one, and neither vouches for the
+// stored credential, which may have expired or met its limit.
+func TestARefusedTestSaysWhatItMeant(t *testing.T) {
+	t.Parallel()
+	r := newRig(t)
+	failed := func(meaning cliprofile.AuthMeaning) llmapi.Check {
+		return llmapi.Check{At: clock, Node: "node-a", Failure: "auth",
+			Said: "Not logged in · Please run /login",
+			Lines: []cliagent.Check{{Name: cliagent.CheckSmoke, Kind: "auth", Meaning: meaning,
+				Detail: "failed: auth: Not logged in · Please run /login"}}}
+	}
+	for meaning, want := range map[cliprofile.AuthMeaning]string{
+		cliprofile.AuthUnread: "Claude Code did not use this token, so the vendor never saw it. Copy the " +
+			"whole token again as one unbroken line starting with sk-ant-oat01-. Nothing was stored, " +
+			"and the model still uses its current token.",
+		cliprofile.AuthRefused: "The vendor refused this token: it is wrong, expired, or revoked. Make a " +
+			"new one with claude setup-token and paste it here. Nothing was stored, and the model " +
+			"still uses its current token.",
+	} {
+		r.engine.check = failed(meaning)
+		code, body := r.do(t, http.MethodPut, "/llm/providers/default/credential",
+			`{"values": {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-abc-def-AA"}}`, nil)
+		if _, message := problemAt(t, body); code != http.StatusUnprocessableEntity ||
+			body["error"] != "credential_rejected" || message != want || body["detail"] != want {
+			t.Errorf("%s = %d %v: %q", meaning, code, body["error"], message)
+		}
+		check, _ := body["check"].(map[string]any)
+		lines, _ := check["lines"].([]any)
+		if len(lines) != 1 || lines[0].(map[string]any)["meaning"] != string(meaning) {
+			t.Errorf("%s: the check's line carries %v", meaning, lines)
+		}
+	}
+	if len(r.secrets.rows) != 0 {
+		t.Errorf("a refused token was stored: %v", r.secrets.rows)
 	}
 }

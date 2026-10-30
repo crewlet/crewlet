@@ -225,6 +225,10 @@ type Check struct {
 	// Remedy is the check's problems, each saying what is wrong and what
 	// to change, one per line. Empty when OK.
 	Remedy string
+	// Meaning is, on an auth failure, what the CLI's own words say about the
+	// credential it was handed ([cliprofile.Profile.AuthMeaning]): refused by
+	// the vendor, or never used. Empty on any other line.
+	Meaning cliprofile.AuthMeaning
 
 	// problems are the sentences Remedy joins, kept apart for Problems,
 	// where each is an item of its own.
@@ -643,6 +647,11 @@ func (p *Provider) diagnose(ctx context.Context, opts DiagnoseOptions, refused [
 		}
 	}
 	c.finish(&d)
+	for i := range d.Checks {
+		if d.Checks[i].Kind == llm.KindAuth.String() {
+			d.Checks[i].Meaning = p.profile.AuthMeaning(d.Checks[i].Remedy)
+		}
+	}
 	return d
 }
 

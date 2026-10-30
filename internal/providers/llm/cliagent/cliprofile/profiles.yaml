@@ -523,9 +523,16 @@ claude-code:
   # "Failed to authenticate" opens what `-p` prints for a refused token
   # ("Failed to authenticate. API Error: 401 OAuth access token is
   # invalid.", measured on 2.1.312).
+  #
+  # "Not logged in" is listed before "Please run /login" for its meaning
+  # only: with CLAUDE_CODE_OAUTH_TOKEN set, 2.1.312 says it when it did not
+  # use the token at all (one with a space inside, as a terminal wraps
+  # `claude setup-token` output, measured), so the vendor never saw it.
   auth_markers:
     - sentinel: "Invalid API key"
     - sentinel: "OAuth token has been revoked"
+    - sentinel: "Not logged in"
+      meaning: unread
     - sentinel: "Please run /login"
     - sentinel: "Failed to authenticate"
   model_aliases:
