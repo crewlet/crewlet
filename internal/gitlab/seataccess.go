@@ -160,7 +160,7 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 		// tokens must not outlive the one sealed now.
 		return []action{{
 			verb:  seataccess.VerbCreate,
-			text:  "Create a GitLab service account for " + seatName(seat),
+			text:  "Create a GitLab service account for " + seat.Label(),
 			apply: (*session).create,
 		}, grant, mint, retire}
 	case seataccess.OpEnable:
@@ -264,13 +264,6 @@ func scopeChange(have, want []string, role string) string {
 		return "Bring its memberships to " + strings.Join(want, ", ")
 	}
 	return strings.Join(parts, "; ")
-}
-
-func seatName(seat seataccess.SeatRef) string {
-	if strings.TrimSpace(seat.Name) != "" {
-		return seat.Name
-	}
-	return seat.Handle
 }
 
 // Steps implements [seataccess.Vendor], naming what it can without the
@@ -573,9 +566,9 @@ func (s *session) create(ctx context.Context, in seataccess.ApplyInput) (seatacc
 	}
 	if !found {
 		if s.mode.Or() == ModeInstance {
-			user, err = s.client.CreateInstanceServiceAccount(ctx, seatName(in.Seat), username)
+			user, err = s.client.CreateInstanceServiceAccount(ctx, in.Seat.Label(), username)
 		} else {
-			user, err = s.client.CreateServiceAccount(ctx, s.group.ID, seatName(in.Seat), username)
+			user, err = s.client.CreateServiceAccount(ctx, s.group.ID, in.Seat.Label(), username)
 		}
 		if err != nil {
 			if nameReserved(err) {

@@ -39,16 +39,6 @@ func SeatVar(handle, field string) string {
 	return seataccess.SinkName(integration.KindSlack, field, handle)
 }
 
-// SeatVars is every variable one seat's app is sealed under, for a removal
-// that clears them all.
-func SeatVars(handle string) []string {
-	return []string{
-		SeatVar(handle, FieldBotToken),
-		SeatVar(handle, FieldSigningSecret),
-		SeatVar(handle, FieldClientSecret),
-	}
-}
-
 // ConfigTokenVar is the company variable the app-configuration token pair is
 // sealed under, as one value ([EncodeConfigToken] says why one).
 const ConfigTokenVar = "SLACK_APP_CONFIG_TOKEN"

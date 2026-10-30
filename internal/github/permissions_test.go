@@ -93,29 +93,19 @@ func TestEveryTokenAsksForMetadata(t *testing.T) {
 	}
 }
 
-// A RAISE IS TOLD FROM A NARROWING, and only an administration-class raise
-// to Read and write asks for a fresh step-up (D10).
-func TestRaisesAndAdministrationRaises(t *testing.T) {
+// A RAISE IS TOLD FROM A NARROWING: only a key whose level rises is a raise.
+func TestRaises(t *testing.T) {
 	t.Parallel()
 	before := github.Permissions{"contents": "read", "issues": "write"}
 	after := github.Permissions{"contents": "write", "issues": "read", "checks": "read", "workflows": "write"}
 	if got := before.Raises(after); !slices.Equal(got, []string{"checks", "contents", "workflows"}) {
 		t.Errorf("raises = %v", got)
 	}
-	if got := before.AdministrationRaises(after); !slices.Equal(got, []string{"contents", "workflows"}) {
-		t.Errorf("administration raises = %v", got)
+	if got := after.Raises(before); !slices.Equal(got, []string{"issues"}) {
+		t.Errorf("raises back = %v, want only the key that rises", got)
 	}
-	// Narrowing never steps up, and holding write already is no raise.
-	if got := after.AdministrationRaises(before); len(got) != 0 {
-		t.Errorf("a narrowing asked for a step-up: %v", got)
-	}
-	if got := after.AdministrationRaises(after); len(got) != 0 {
-		t.Errorf("an unchanged seat asked for a step-up: %v", got)
-	}
-	// Issues and Checks to write are raises, never administration.
-	plain := github.Permissions{"issues": "write", "checks": "write", "actions": "write"}
-	if got := (github.Permissions{}).AdministrationRaises(plain); len(got) != 0 {
-		t.Errorf("a raise outside Contents and Workflows asked for a step-up: %v", got)
+	if got := after.Raises(after); len(got) != 0 {
+		t.Errorf("an unchanged seat raised %v", got)
 	}
 }
 

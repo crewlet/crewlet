@@ -371,3 +371,12 @@ type SeatRef struct {
 	Handle string `json:"handle"`
 	Name   string `json:"name"`
 }
+
+// Label is how a step names the seat: its name, or its handle where it has
+// none.
+func (s SeatRef) Label() string {
+	if name := strings.TrimSpace(s.Name); name != "" {
+		return name
+	}
+	return s.Handle
+}

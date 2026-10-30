@@ -190,10 +190,13 @@ func TestSeatVarsAreEngineNamed(t *testing.T) {
 	if got := slack.SeatVar("senior-engineer", slack.FieldBotToken); got != "SLACK_BOT_TOKEN_SENIOR_ENGINEER" {
 		t.Errorf("bot token var = %q", got)
 	}
-	if got := slack.SeatVars("sre"); !slices.Equal(got, []string{
-		"SLACK_BOT_TOKEN_SRE", "SLACK_SIGNING_SECRET_SRE", "SLACK_CLIENT_SECRET_SRE",
-	}) {
-		t.Errorf("seat vars = %v", got)
+	for field, want := range map[string]string{
+		slack.FieldSigningSecret: "SLACK_SIGNING_SECRET_SRE",
+		slack.FieldClientSecret:  "SLACK_CLIENT_SECRET_SRE",
+	} {
+		if got := slack.SeatVar("sre", field); got != want {
+			t.Errorf("%s var = %q, want %q", field, got, want)
+		}
 	}
 }
 
