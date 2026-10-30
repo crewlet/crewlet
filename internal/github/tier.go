@@ -9,10 +9,9 @@ import (
 //
 // RETIRED: a seat now stores GitHub's own permissions ([Permissions]), and
 // nothing grants by tier. What remains here is what the migration reads
-// ([TierPermissions]) and what a roster written before it still shows: the
-// closed set, its labels, and each tier's permission list. [Denied] and
-// [Excess] are not about tiers at all and are kept here beside the lists they
-// were written against.
+// ([TierPermissions]): the closed set and each tier's permission list.
+// [Denied] and [Excess] are not about tiers at all and are kept here beside
+// the lists they were written against.
 
 // Tier is how much of a repository an agent may do.
 type Tier string
@@ -61,39 +60,6 @@ func ParseTier(raw string) (Tier, bool) {
 	}
 }
 
-// Label is the tier as a person writes it.
-func (t Tier) Label() string {
-	switch t {
-	case TierReadOnly:
-		// HYPHENATED, which is the control plane's spelling and so the
-		// one on the roster this screen is the counterpart of. The
-		// tier-picker in the console writes "Read only"; the pill beside
-		// an agent's name writes "Read-only", and two engines labelling
-		// one agent differently is what a reader notices first.
-		return "Read-only"
-	case TierReview:
-		return "Review"
-	case TierFullAccess:
-		return "Full access"
-	default:
-		return string(t)
-	}
-}
-
-// Hint is the one line a form puts under the tier, matching the console's.
-func (t Tier) Hint() string {
-	switch t {
-	case TierReadOnly:
-		return "Reads code and issues, changes nothing."
-	case TierReview:
-		return "Reads code and writes about it: issues, comments, reviews."
-	case TierFullAccess:
-		return "Branches, commits, pull requests, issues and checks. No administration."
-	default:
-		return ""
-	}
-}
-
 // Permissions is what this tier asks for on an installation token, in
 // GitHub's own permission keys and levels.
 //
@@ -112,8 +78,8 @@ func (t Tier) Hint() string {
 // here, never an agent's.
 //
 // `workflows` is on no tier. It is what lets a push change a file under
-// `.github/workflows`, and a full-access seat opts in to it on its own
-// ([Access]).
+// `.github/workflows`, and a full-access seat opted in to it on its own
+// ([TierPermissions]).
 func (t Tier) Permissions() map[string]string {
 	switch t {
 	case TierReview:
@@ -149,48 +115,6 @@ func (t Tier) Permissions() map[string]string {
 			"deployments":   "read",
 		}
 	}
-}
-
-// Access is what one seat's tokens may do: its tier, and the one grant no
-// tier carries by itself.
-//
-// WORKFLOWS ARE AN OPT-IN AND NOT A TIER, because GitHub refuses any push
-// whose commits touch `.github/workflows` from a token without it, whatever
-// else the token holds, and the same grant is what lets an agent's branch run
-// a workflow it rewrote. A modified workflow runs on that branch with
-// whatever secrets the repository hands its runs, so it is a decision about
-// the repository's secrets as much as about its code, and a company takes it
-// per seat rather than inheriting it with a tier.
-//
-// Only full access carries it. Validation refuses the opt-in on any other
-// tier, and [Access.WritesWorkflows] asks the tier again, so a document a
-// validator never saw still cannot hand workflow writes to a seat that cannot
-// write code.
-type Access struct {
-	Tier Tier
-
-	// Workflows is the seat's opt-in to `workflows: write`.
-	Workflows bool
-}
-
-// WritesWorkflows reports whether this access carries `workflows: write`:
-// opted in, and at full access.
-func (a Access) WritesWorkflows() bool {
-	return a.Workflows && a.Tier == TierFullAccess
-}
-
-// Permissions is what this access asks for: the tier's own list, and
-// `workflows: write` where [Access.WritesWorkflows] holds.
-//
-// ONE LIST FOR EVERY ASKER. The manifest an app is created from, the token
-// minted for it and the installation it is checked against all read this, so
-// an app created for an opted-in seat holds exactly what its tokens ask for.
-func (a Access) Permissions() map[string]string {
-	perms := a.Tier.Permissions()
-	if a.WritesWorkflows() {
-		perms[PermissionWorkflows] = "write"
-	}
-	return perms
 }
 
 // Denied is what an agent's app must never hold, at any tier.
