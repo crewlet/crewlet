@@ -1739,7 +1739,11 @@ by the node that wrote it, as a `code_check_finished` event in that node's
 which would record it once a node — naming the attempt, what it was for, how
 it ended and where it ran. It is kept out of the activity feed: every push of
 every change ends each check its file defines, faster than a person reads a
-feed, and an attempt's ending is read where it is asked.
+feed, and an attempt's ending is read where it is asked. An ending that
+**replaces** one the row already kept — a runner that was only slow, ending its
+attempt after the home declared it lost — is announced naming the ending it
+replaced (`replaces`), and counted under it: a correction of the attempt's
+ending, never a second one, so each attempt is counted once.
 
 A queued attempt that waits for a runner longer than its **own**
 `timeout_seconds` raises `code_checks_backlog` ([alarms](../reference/alarms.md))
@@ -1758,7 +1762,8 @@ purge to remove them, and no runner was ever going to claim them.
 
 The writer counts what it decided on three instruments: the attempts it
 queued (`crewlet.code.checks.queued`, by purpose), the endings the rows kept
-(`crewlet.code.checks.finished`, by state and placement) and every claim's
+(`crewlet.code.checks.finished`, by state, placement and the ending each
+replaced — `none` for an attempt's first) and every claim's
 outcome (`crewlet.code.checks.claims`) — `claimed` is git nodes racing for one
 attempt, each losing a box it never made, and `lost` above zero is two nodes
 writing one repository's checks at once ([metrics](../reference/metrics.md)).

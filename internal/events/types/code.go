@@ -192,6 +192,21 @@ func (e CodeFetched) SummaryFor(actor string) string {
 // data node runs. An ending the row did not keep — a later infrastructure
 // ending beside a measurement, an ending asked again — is announced by none.
 //
+// # A replaced ending is a correction, never a second ending
+//
+// The row keeps ONE ending, and a later record may replace the one it kept: a
+// measurement replaces an infrastructure ending — a runner that was only slow
+// ends its attempt passed after the home's sweep of dead runners errored it
+// runner_lost — and an earlier ending replaces a later one of its kind, which
+// two writers of one repository across a failover can each record. The
+// replacing ending is announced too, naming in Replaces the ending it
+// replaced, so a day FILES IT AS A CORRECTION — the attempt moves from
+// Replaces to State — and counts each attempt once, under the ending its row
+// keeps. Replaces is the ending the replacing record's writer read on the row
+// when it decided; a failover's two writers recording the attempt's first
+// ending at once each read none, which is the one replacement announced
+// without it.
+//
 // # Why an event, beside the row
 //
 // The row is the attempt's state, replicated, and kept CheckHistory; the event
@@ -237,6 +252,12 @@ type CodeCheckFinished struct {
 	// DurationMs is how long its run took, 0 for none.
 	Required   bool  `json:"required,omitempty"`
 	DurationMs int64 `json:"duration_ms,omitempty"`
+
+	// Replaces is the ending this one REPLACED on the attempt's row — its
+	// state, as its writer read it — and empty for the attempt's first
+	// ending: an event naming one is a correction, never a second ending
+	// (see the type's doc).
+	Replaces string `json:"replaces,omitempty"`
 }
 
 // EventType is the "code_check_finished" wire type.
@@ -253,6 +274,9 @@ func (e CodeCheckFinished) SummaryFor(actor string) string {
 		" " + e.State
 	if e.Reason != "" {
 		what += " (" + e.Reason + ")"
+	}
+	if e.Replaces != "" {
+		what += ", replacing its " + e.Replaces + " ending"
 	}
 	return lead(actor, what)
 }

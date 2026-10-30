@@ -776,15 +776,22 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: CodeChecksFinished, Kind: KindCounter, Unit: UnitCount,
-			Attributes: []string{"state", "placement"},
-			Shows: "Attempts of checks that ended, as their rows keep the ending " +
-				"— counted once, by the node whose checks writer published it — " +
-				"by `state` (`passed`, `failed`, `errored`, `cancelled`, " +
-				"`skipped`) and `placement` (`container`, `e2b`, `external`, or " +
-				"`none` for one no runner claimed). An ending the row did not " +
-				"keep — a later infrastructure ending beside a measurement — is " +
-				"not counted. `errored` climbing on one placement is that " +
-				"placement's cells failing the checks they run.",
+			Attributes: []string{"state", "placement", "replaced"},
+			Shows: "Endings of attempts of checks, as their rows keep the ending " +
+				"— each counted once, by the node whose checks writer published " +
+				"it — by `state` (`passed`, `failed`, `errored`, `cancelled`, " +
+				"`skipped`), `placement` (`container`, `e2b`, `external`, or " +
+				"`none` for one no runner claimed) and `replaced`: `none` for an " +
+				"attempt's first ending, and otherwise the ending this one " +
+				"REPLACED on its row — a measurement after an infrastructure " +
+				"ending, a slow runner's exit after its attempt was errored " +
+				"`runner_lost` — so the attempts that ended are the count under " +
+				"`replaced=none` and the rest are corrections of them, never " +
+				"second endings. An ending the row did not keep — a later " +
+				"infrastructure ending beside a measurement — is not counted. " +
+				"`errored` climbing on one placement is that placement's cells " +
+				"failing the checks they run; `replaced=errored` climbing is " +
+				"runners declared lost that were only slow.",
 		},
 		{
 			Name: CodeChecksClaims, Kind: KindCounter, Unit: UnitCount,

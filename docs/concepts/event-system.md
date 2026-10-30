@@ -426,7 +426,11 @@ code_check_finished        # one attempt of a check of a commit ENDED, as
                            # whether the target requires it, and how long it
                            # ran. Published ONCE, by the data node whose
                            # checks writer wrote the ending, on its apply —
-                           # never by an applier. STORED AND NOT FED
+                           # never by an applier. An ending that REPLACED one
+                           # the row kept (a slow runner's exit after its
+                           # attempt was errored runner_lost) names it in
+                           # `replaces`: a correction of that ending, never
+                           # the attempt's second. STORED AND NOT FED
                            # (code-host.md, "Who records a check")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —

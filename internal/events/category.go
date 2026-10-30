@@ -500,13 +500,15 @@ var unfed = map[string]string{
 		"the code host's readers route and `code_repo_readers`, summed across " +
 		"the fleet from the usage domain these rows are derived into",
 	"code_check_finished": "COUNTED, NOT WATCHED: one record per attempt of a " +
-		"check that ended, and every push of every change ends each check its " +
-		"repository's checks file defines — a busy company's faster than a " +
-		"person reads a feed, pushing the turns, failures and deliveries a " +
-		"reader watches out of a ring that holds the whole company's last few " +
-		"hundred events. An attempt's ending is read where it is asked — the " +
-		"change's checks, the repository's — from its row on the code log; " +
-		"these rows are what a node's day counts",
+		"check that ended (a second only as the correction of an ending its " +
+		"row replaced, naming that ending), and every push of every change " +
+		"ends each check its repository's checks file defines — a busy " +
+		"company's faster than a person reads a feed, pushing the turns, " +
+		"failures and deliveries a reader watches out of a ring that holds " +
+		"the whole company's last few hundred events. An attempt's ending is " +
+		"read where it is asked — the change's checks, the repository's — " +
+		"from its row on the code log; these rows are what a node's day " +
+		"counts",
 }
 
 // liveOnly is the subset of [excluded] that still drives the live projection.

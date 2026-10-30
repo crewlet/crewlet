@@ -82,6 +82,15 @@ import (
 // day of usage counts a check from. Never by an applier, which every data node
 // runs: the event would be counted once a node.
 //
+// AN ENDING THAT REPLACES ONE THE ROW KEPT — a measurement after an
+// infrastructure ending, a slow runner's exit after the home's sweep errored
+// its attempt runner_lost — is announced naming the ending it replaced
+// (Replaces), and counted under it rather than as the attempt's first: the
+// first was announced and counted when it applied, and the row keeps one
+// ending, so a day files the second as a CORRECTION and the attempt is counted
+// once. Unmarked, every such attempt was two endings in a day and in
+// crewlet.code.checks.finished.
+//
 // # The publish is the writer's
 //
 // A write's publish runs under the writer's own lifetime and one CommitBudget,
@@ -539,7 +548,14 @@ func (w *ChecksWriter) write(r ChecksRequest) (ChecksResult, error, checksLanded
 	switch res.Outcome {
 	case statelog.OutcomeApplied:
 		if !res.Position.IsZero() {
-			return w.applied(ctx, r, res)
+			// AN ENDING THE ROW ALREADY KEPT, which this one's decide chose
+			// to replace — a measurement over an infrastructure ending — is
+			// what the announcement names it a correction of.
+			var replacing CheckState
+			if decided && r.Finished != nil && last.row != nil && !last.row.Finished.IsZero() {
+				replacing = last.row.State
+			}
+			return w.applied(ctx, r, res, replacing)
 		}
 		// NOTHING WAS APPENDED: the decide refused the write or found it
 		// unchanged, and its last round says which.
@@ -767,9 +783,11 @@ func decideFinished(f CheckFinished, d checksDecision, held bool, named func(Che
 // purged under it — logged at ERROR and answered unknown, never applied. The
 // record is this call's own unless the ledger collapsed the call onto an
 // earlier landing, and an ending the row KEEPS of its own is the one this node
-// announces.
-func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelog.Result) (ChecksResult, error,
-	checksLanded) {
+// announces — naming the ending it replaced, where its decide read one on the
+// row (replacing), so the announcement is a correction of that one and never
+// a second ending of the attempt.
+func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelog.Result,
+	replacing CheckState) (ChecksResult, error, checksLanded) {
 
 	key, at := r.Key(), res.Position
 	var (
@@ -827,7 +845,7 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 		own.ending = &types.CodeCheckFinished{RepoID: key.RepoID, RepoName: repoName, OID: key.OID,
 			Name: key.Name, Attempt: key.Attempt, Purpose: string(row.Purpose), State: string(row.State),
 			Reason: string(row.Reason), Placement: string(row.Placement), ChangeID: row.ChangeID,
-			Target: row.Target, Required: row.Required, DurationMs: row.DurationMs}
+			Target: row.Target, Required: row.Required, DurationMs: row.DurationMs, Replaces: string(replacing)}
 	}
 	return out, nil, own
 }
@@ -904,12 +922,18 @@ func (w *ChecksWriter) count(r ChecksRequest, res ChecksResult, err error, own c
 		w.metrics.Add(metrics.CodeChecksQueued, 1, metrics.Attrs{"purpose": string(r.Queued.Purpose)})
 	}
 	if own.ending != nil {
-		placement := string(res.Row.Placement)
+		placement, replaced := string(res.Row.Placement), own.ending.Replaces
 		if placement == "" {
 			placement = "none"
 		}
+		if replaced == "" {
+			// AN ATTEMPT'S FIRST ENDING; a replacement is counted apart,
+			// under the ending it replaced, so the attempts that ended are
+			// counted once.
+			replaced = "none"
+		}
 		w.metrics.Add(metrics.CodeChecksFinished, 1, metrics.Attrs{"state": string(res.Row.State),
-			"placement": placement})
+			"placement": placement, "replaced": replaced})
 	}
 }
 

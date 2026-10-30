@@ -3,6 +3,7 @@ package code_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -85,14 +86,17 @@ func checkOn(repo string, attempt int) code.CheckKey {
 	return code.CheckKey{RepoID: repo, OID: oidOf("B"), Name: "unit", Attempt: attempt}
 }
 
-// unitDef is the definition every case queues its attempts under.
-var unitDef = &code.CheckDef{Name: "unit", Run: "make test", TimeoutSeconds: 600}
+// defOf is the definition every case queues an attempt of the check named
+// name under: given ten minutes to run.
+func defOf(name string) *code.CheckDef {
+	return &code.CheckDef{Name: name, Run: "make " + name, TimeoutSeconds: 600}
+}
 
 // queueing asks for attempt key queued for reason, under an operation id of
 // its own.
 func queueing(key code.CheckKey, reason code.QueueReason) code.ChecksRequest {
 	return code.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_queue"),
-		Queued: &code.CheckQueued{CheckKey: key, Purpose: code.PurposeTip, Target: mainRef, Def: unitDef,
+		Queued: &code.CheckQueued{CheckKey: key, Purpose: code.PurposeTip, Target: mainRef, Def: defOf(key.Name),
 			Reason: reason, QueuedAt: harnessAt}}
 }
 
@@ -315,10 +319,16 @@ func TestAChecksWriterDecidesOnlyTheEnginesOwnRecords(t *testing.T) {
 // infrastructure ending after a measurement — appends nothing and announces
 // nothing; and a retry under the same operation id, collapsed onto the record
 // that landed, announces nothing again — nor counts the attempt it queued or
-// the ending it set a second time.
+// the ending it set a second time. A measurement that REPLACES an
+// infrastructure ending the row kept — a slow runner's exit after its attempt
+// was errored runner_lost — is announced naming the ending it replaced, and
+// counted under it rather than as the attempt's first ending, so a day files
+// it as a correction and the attempt is one ending.
 //
-// Mutation: count a collapsed retry's record as the call's own, and the
-// dispatch asked again counts its attempt twice — red.
+// Mutations: count a collapsed retry's record as the call's own, and the
+// dispatch asked again counts its attempt twice — red; announce a
+// replacement as the attempt's first ending, and lint's pass names nothing
+// replaced and is counted a second ending — red.
 func TestAnEndingIsAnnouncedOnceByItsWriter(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -355,18 +365,60 @@ func TestAnEndingIsAnnouncedOnceByItsWriter(t *testing.T) {
 	if counter.appended.Load() != appended {
 		t.Fatal("an ending the row does not keep, or a write asked again, appended a record")
 	}
+
+	// A MEASUREMENT AFTER AN INFRASTRUCTURE ENDING replaces it — a runner
+	// that was only slow, ending its attempt after the home's sweep errored
+	// it runner_lost — and is announced as a correction of it, naming the
+	// ending it replaced, never as the attempt's second ending.
+	lint := code.CheckKey{RepoID: repo, OID: oidOf("B"), Name: "lint", Attempt: 1}
+	for _, req := range []code.ChecksRequest{queueing(lint, code.QueueDispatch), claiming(lint, "git-a", "")} {
+		res, err := w.Publish(t.Context(), req)
+		requireChecked(t, "lint's attempt", res, err)
+	}
+	res, err = w.Publish(t.Context(), ending(lint, code.CheckStateErrored, code.CheckReasonRunnerLost))
+	requireChecked(t, "lint's lost runner", res, err)
+	res, err = w.Publish(t.Context(), ending(lint, code.CheckStatePassed, code.CheckReasonExit))
+	requireChecked(t, "lint's exit after it", res, err)
+	waitAnnounced(t, stream, 3)
+
 	// THE STOP WAITS FOR EVERY ANNOUNCEMENT IN FLIGHT, so what the stream
 	// holds after it is all the writer ever announced.
 	w.Stop(t.Context())
-	if all := stream.all(); len(all) != 1 {
-		t.Fatalf("the attempt's ending was announced %d times, want once", len(all))
+	all := stream.all()
+	if len(all) != 3 {
+		t.Fatalf("the writer announced %d endings, want unit's failure, lint's lost runner and lint's pass", len(all))
 	}
-	if got := readingOf(rec, metrics.CodeChecksFinished, metrics.Attrs{"state": "failed",
-		"placement": "container"}).Total; got != 1 {
-		t.Fatalf("crewlet.code.checks.finished{state=failed,placement=container} = %v, want 1", got)
+	// EACH ANNOUNCEMENT NAMES WHAT IT REPLACED, read by its state: an
+	// announcement is published after its write's answer, so two writes'
+	// may reach the stream in either order.
+	replaces := map[string]string{}
+	for _, ev := range all {
+		e, ok := ev.Data.(*types.CodeCheckFinished)
+		if !ok {
+			t.Fatalf("the writer announced a %T", ev.Data)
+		}
+		replaces[e.Name+" "+e.State] = e.Replaces
 	}
-	if got := readingOf(rec, metrics.CodeChecksQueued, metrics.Attrs{"purpose": "tip"}).Total; got != 1 {
-		t.Fatalf("crewlet.code.checks.queued{purpose=tip} = %v after a dispatch and its retry, want 1", got)
+	want := map[string]string{"unit failed": "", "lint errored": "", "lint passed": "errored"}
+	if !maps.Equal(replaces, want) {
+		t.Fatalf("the endings were announced replacing %v, want %v: lint's pass a correction of its lost "+
+			"runner, and every first ending replacing none", replaces, want)
+	}
+	for _, c := range []struct {
+		attrs metrics.Attrs
+		want  uint64
+	}{
+		{metrics.Attrs{"state": "failed", "placement": "container", "replaced": "none"}, 1},
+		{metrics.Attrs{"state": "errored", "placement": "container", "replaced": "none"}, 1},
+		{metrics.Attrs{"state": "passed", "placement": "container", "replaced": "errored"}, 1},
+		{metrics.Attrs{"state": "passed", "placement": "container", "replaced": "none"}, 0},
+	} {
+		if got := readingOf(rec, metrics.CodeChecksFinished, c.attrs).Total; got != c.want {
+			t.Errorf("crewlet.code.checks.finished%v = %v, want %v", c.attrs, got, c.want)
+		}
+	}
+	if got := readingOf(rec, metrics.CodeChecksQueued, metrics.Attrs{"purpose": "tip"}).Total; got != 2 {
+		t.Fatalf("crewlet.code.checks.queued{purpose=tip} = %v after two dispatches and a retry, want 2", got)
 	}
 }
 
