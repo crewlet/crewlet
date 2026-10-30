@@ -474,7 +474,7 @@ func TestACheckpointPastTheLogsEndRefusesTheNodesWrites(t *testing.T) {
 	// is cleared as a reading reaching the checkpoint would clear it, so what
 	// refuses this write is the zero fence's own read of the log, within the
 	// call.
-	running.runner.ObserveEnd(statelog.Position{}, ahead)
+	running.runner.ObserveEnd(statelog.Stance{}, ahead)
 	if err := running.runner.StreamIdentity(); err != nil {
 		t.Fatalf("the verdict did not clear for the zero case: %v", err)
 	}

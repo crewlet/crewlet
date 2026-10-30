@@ -1304,10 +1304,11 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 	//
 	// THE ONE PAIRING READ END-FIRST, and sound anyway: nothing writes the
 	// checkpoint row between the two reads — the boot's join has finished
-	// before any domain is started, and no applier runs yet — and on a
-	// healthy log the row was committed under an end at least as high as the
-	// one read now, because the end only grows.
-	s.observeEnd(ctx, domain.Name(), runner, at, stats.LastSeq)
+	// before any domain is started, and no applier runs yet, so nothing has
+	// been reached past it either — and on a healthy log the row was
+	// committed under an end at least as high as the one read now, because
+	// the end only grows.
+	s.observeEnd(ctx, domain.Name(), runner, runner.Stance(), stats.LastSeq)
 	// AND WHETHER THE LOG STILL HOLDS, at that checkpoint, THE RECORD THE ROW
 	// NAMES — for the same reason and at the same moment. A restored broker
 	// that was written past this node's rows before it booted ends at or past
@@ -1925,14 +1926,14 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 	runner *statelog.Runner) func(context.Context) (statelog.LogEnds, error) {
 
 	return func(ctx context.Context) (statelog.LogEnds, error) {
-		// THE CHECKPOINT BEFORE THE READ, which is the only order in which
-		// the pair can say anything — see [statelog.Runner.ObserveEnd].
-		at := runner.Committed()
+		// WHERE THE RUNNER STANDS BEFORE THE READ, which is the only order in
+		// which the pair can say anything — see [statelog.Runner.ObserveEnd].
+		stance := runner.Stance()
 		stats, err := l.Stats(ctx)
 		if err != nil {
 			return statelog.LogEnds{}, fmt.Errorf("engine: read the log's ends: %w", err)
 		}
-		s.observeStream(ctx, domain, runner, at, stats)
+		s.observeStream(ctx, domain, runner, stance, stats)
 		return statelog.LogEnds{First: stats.FirstSeq, Last: stats.LastSeq}, nil
 	}
 }
@@ -2017,8 +2018,9 @@ func (s *stateLog) readmissionBound(ctx context.Context, running *runningLog,
 }
 
 // observeStream hands one live reading of a domain log's state to its runner —
-// the creation instant, and the end paired with the checkpoint at, which the
-// caller read BEFORE it asked the broker — and names what the reading changed.
+// the creation instant, and the end paired with where the runner stood
+// ([statelog.Runner.Stance]), which the caller read BEFORE it asked the broker
+// — and names what the reading changed.
 //
 // ONE PLACE FOR EVERY READER, the position heartbeat and the zero fence,
 // because whichever reads the log first is the one that establishes a finding
@@ -2026,7 +2028,7 @@ func (s *stateLog) readmissionBound(ctx context.Context, running *runningLog,
 // once, by whoever got there, rather than by the heartbeat alone and never when
 // the fence was first.
 func (s *stateLog) observeStream(ctx context.Context, domain string,
-	runner *statelog.Runner, at statelog.Position, stats jetstream.LogStats) {
+	runner *statelog.Runner, at statelog.Stance, stats jetstream.LogStats) {
 
 	if runner.ObserveStream(stats.CreatedAt) {
 		log.ErrorContext(ctx, "statelog_stream_recreated",
@@ -2044,7 +2046,9 @@ func (s *stateLog) observeStream(ctx context.Context, domain string,
 }
 
 // observeEnd hands one reading of a domain log's end to its runner, paired
-// with the checkpoint read before it, and names both transitions.
+// with where it stood before the read — its checkpoint, and the barriers its
+// loop reached past it, which an end below them sends back to the broker
+// unapplied ([statelog.Runner.ObserveEnd]) — and names both transitions.
 //
 // BOTH, and the second is the one that would otherwise be silent. Past the end
 // is logged as the error it is. The end reaching the checkpoint again is either
@@ -2055,14 +2059,14 @@ func (s *stateLog) observeStream(ctx context.Context, domain string,
 // ([statelog.Runner.VerifyCheckpoint]) — so the second is `statelog_log_diverged`
 // and a refusal that does not lift, never a node carrying on.
 func (s *stateLog) observeEnd(ctx context.Context, domain string,
-	runner *statelog.Runner, at statelog.Position, last uint64) {
+	runner *statelog.Runner, at statelog.Stance, last uint64) {
 
 	established, reached := runner.ObserveEnd(at, last)
 	switch {
 	case established:
 		log.ErrorContext(ctx, "statelog_ahead_of_log",
 			"node", s.nodeID, "domain", domain,
-			"checkpoint", at.Seq, "last_seq", last,
+			"checkpoint", at.At.Seq, "last_seq", last,
 			"detail", "this node's checkpoint is past the log's end, so its rows "+
 				"hold records at sequences the log has never issued — a stream "+
 				"rebuilt under it, or a broker restored from a copy older than "+
@@ -4648,7 +4652,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			// than that a record landed between the two reads. It is
 			// what fence 0 refuses an ordinary write on, on a node whose
 			// broker came back from an older copy with its instant.
-			s.observeStream(ctx, name, running.runner, at, stats)
+			s.observeStream(ctx, name, running.runner, stance, stats)
 			// AND WHETHER THE LOG STILL HOLDS, at this node's checkpoint,
 			// THE RECORD IT CONSUMED THERE. The loop asks before it applies
 			// past the checkpoint after every moment that could have

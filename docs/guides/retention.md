@@ -1481,8 +1481,15 @@ refusal does **not** lift on its own: a member that has not caught up answers
 that it holds no record at a sequence, never with another one. The node finds
 it the same way when it **boots** on a log already written past its rows — its
 checkpoint is then not past the end at all, and the record is the only thing
-that shows it — and when a broker is restored under it while it runs. It is
-compared for equality, so no clock is ever ordered against another.
+that shows it — and when a broker is restored under it while it runs. Then
+whatever the node held past its checkpoint when it met the restore — a failed
+fetch, or the log's end read below what it held — goes back to the broker
+unapplied first (`statelog_apply_unwound`): linearizable reads' barriers it had
+reached and not yet committed, records waiting above a hole or for the next
+transaction. So the record compared is the one its last commit left at the
+checkpoint, and nothing the old history delivered is applied after the
+restore. It is compared for equality, so no clock is ever ordered against
+another.
 
 A checkpoint a reanchor placed where the log held no record — below a rebuilt
 stream's first record, or at a sequence the log skipped — names nothing, and

@@ -138,6 +138,15 @@ type probeFetch struct {
 	acked   map[uint64]int
 	fetches int
 
+	// released counts the deliveries the loop handed back unconsumed, by
+	// sequence ([statelog.Message.Release]), and redeliver is what the broker
+	// owes the next fetch for them: the record its log holds at each such
+	// sequence NOW — another one, where a restore replaced it — ahead of
+	// what it has not yet delivered, as a broker answers a negative
+	// acknowledgement.
+	released  map[uint64]int
+	redeliver []statelog.Message
+
 	// log is every record offered, by sequence — a later offer at a
 	// sequence REPLACES the earlier one, which is what a broker restored
 	// from an older copy and written past a node's rows looks like from
@@ -162,6 +171,20 @@ type probeFetch struct {
 	// that comes back has to arrive in a LATER fetch, while the loop still
 	// holds a higher one in the same run.
 	after map[int]func()
+
+	// atHook runs once, after the next read of the log by position has
+	// read its record ([probeFetch.At]): how a case lands something between
+	// a verification's read of the record at the checkpoint and what the
+	// runner then does with what it read.
+	atHook func()
+}
+
+// afterAt schedules hook to run once, after the next read of the log by
+// position.
+func (f *probeFetch) afterAt(hook func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.atHook = hook
 }
 
 // afterFetch schedules a hook to run once the nth fetch has answered.
@@ -175,7 +198,8 @@ func (f *probeFetch) afterFetch(n int, hook func()) {
 }
 
 func newProbeFetch() *probeFetch {
-	return &probeFetch{acked: map[uint64]int{}, log: map[uint64]statelog.Message{}}
+	return &probeFetch{acked: map[uint64]int{}, released: map[uint64]int{},
+		log: map[uint64]statelog.Message{}}
 }
 
 // probeStoredAt is the broker instant the probe log stamps the record at seq
@@ -211,6 +235,23 @@ func (f *probeFetch) offerStored(seq uint64, storedAt time.Time, env statelog.En
 			f.mu.Lock()
 			defer f.mu.Unlock()
 			f.acked[seq]++
+			return nil
+		},
+		Release: func() error {
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			f.released[seq]++
+			now, held := f.log[seq]
+			if !held {
+				return nil
+			}
+			// ONCE: a record already owed the next fetch is not owed twice.
+			for _, owed := range slices.Concat(f.redeliver, f.queue) {
+				if owed.Seq == seq {
+					return nil
+				}
+			}
+			f.redeliver = append(f.redeliver, now)
 			return nil
 		},
 	}
@@ -256,8 +297,15 @@ func (f *probeFetch) Bounds(context.Context) (uint64, uint64, error) {
 // At is the record the log holds at seq.
 func (f *probeFetch) At(_ context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	m, held := f.log[seq]
+	hook := f.atHook
+	f.atHook = nil
+	f.mu.Unlock()
+	if hook != nil {
+		// OUTSIDE THE LOCK, because a hook stages records and offering one
+		// takes it; what this read answers was read before it ran.
+		hook()
+	}
 	if !held {
 		return "", nil, time.Time{}, false, nil
 	}
@@ -276,6 +324,11 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 			f.failures--
 			f.mu.Unlock()
 			return nil, errors.New("the probe broker did not answer")
+		}
+		// WHAT WAS HANDED BACK COMES FIRST, ahead of what the broker has
+		// not yet delivered.
+		if len(f.redeliver) > 0 {
+			f.queue, f.redeliver = slices.Concat(f.redeliver, f.queue), nil
 		}
 		if deliverable := len(f.queue) - f.withhold; deliverable > 0 {
 			n := min(deliverable, maxMessages)
@@ -305,7 +358,29 @@ func (f *probeFetch) Fetch(ctx context.Context, maxMessages, maxBytes int, wait 
 func (f *probeFetch) Pending(context.Context) (uint64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return uint64(len(f.queue)), nil
+	return uint64(len(f.redeliver) + len(f.queue)), nil
+}
+
+// releaseCount is how many times the delivery at seq was handed back
+// unconsumed.
+func (f *probeFetch) releaseCount(seq uint64) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.released[seq]
+}
+
+// fail makes the broker answer its next n fetches with an error.
+func (f *probeFetch) fail(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failures = n
+}
+
+// failing is how many of the failures fail staged are still to come.
+func (f *probeFetch) failing() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.failures
 }
 
 // fetchCount is how many times the loop asked.
@@ -2330,8 +2405,8 @@ func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testin
 	if err := h.run(3); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	at := h.runner.Committed()
-	unloaded := statelog.Position{Stream: at.Stream, Generation: at.Generation}
+	at := h.runner.Stance()
+	unloaded := statelog.StanceAt(statelog.Position{Stream: at.At.Stream, Generation: at.At.Generation})
 
 	for name, last := range map[string]uint64{
 		"a reading at the end": 3,
@@ -2405,7 +2480,7 @@ func TestACheckpointPastTheEndIsTheRunnersVerdictWhileTheEndStaysBelow(t *testin
 	// A CHECKPOINT THIS RUNNER NO LONGER STANDS AT drops the verdict: the
 	// row is rewritten to a donor's position below the log's end, naming the
 	// log's own record there, as an adoption leaves it, and the loop loads it.
-	if established, _ := h.runner.ObserveEnd(h.runner.Committed(), 2); !established {
+	if established, _ := h.runner.ObserveEnd(h.runner.Stance(), 2); !established {
 		t.Fatal("the verdict was not re-established for the adoption case")
 	}
 	if err := h.estate.Tx(t.Context(), func(tx *sql.Tx) error {
@@ -2446,7 +2521,7 @@ func TestARebuildOutranksACheckpointPastTheEnd(t *testing.T) {
 	if err := h.run(1); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	h.runner.ObserveEnd(h.runner.Committed(), 0)
+	h.runner.ObserveEnd(h.runner.Stance(), 0)
 	h.runner.ObserveStream(born.Add(time.Hour))
 	identity := h.runner.StreamIdentity()
 	if !errors.Is(identity, statelog.ErrStreamRecreated) || errors.Is(identity, statelog.ErrAheadOfLog) {

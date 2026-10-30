@@ -637,6 +637,13 @@ type Record struct {
 	// it would be able to acknowledge a record from inside the transaction
 	// that writes its rows — which the store may roll back and run again.
 	ack func() error
+
+	// release hands this record's delivery back to the broker, which
+	// delivers it again at once ([Message.Release]); nil where the fetcher
+	// has no such call. Unexported for ack's reason: only the apply loop
+	// decides that a record it holds will not be consumed, and only outside
+	// a transaction ([Runner.Run]'s unwind).
+	release func() error
 }
 
 // Applier is a domain's deterministic state machine. ONE per domain, ONE

@@ -42,6 +42,19 @@ type Message struct {
 	// Ack acknowledges this delivery. Called only AFTER the transaction
 	// that consumed it commits, and never inside one.
 	Ack func() error
+
+	// Release hands this delivery back to the broker, which delivers it
+	// again at once. Called instead of Ack on a record the loop will NOT
+	// consume: one it holds from before a moment after which the log may
+	// be another history — a fetch that failed, an end read below what it
+	// holds — and so gives back for the broker as it now is to deliver
+	// again ([Runner.Run]'s unwind). Never inside a transaction.
+	//
+	// NIL FOR NONE, which costs a record given back nothing but its ack
+	// window: the broker redelivers a delivery nobody acknowledged once that
+	// passes. A strict log stands still behind it meanwhile, which is why a
+	// broker that can hand a record back says so here.
+	Release func() error
 }
 
 // Fetcher delivers a domain's records in stream order.
@@ -65,6 +78,14 @@ type Fetcher interface {
 	// bound a pull by both count and bytes, the count is the consumer's
 	// own in-flight ceiling (see [FetchMessages]) and maxMessages is
 	// honoured by that.
+	//
+	// EXCEPT ACROSS A FAILURE: a call that FAILS hands back to the broker
+	// whatever it held for a later one, which the broker then delivers again
+	// as it now is. The loop reads a failed fetch as the moment after which
+	// the log may be another history — a broker restored under a running
+	// node ends its consumer's pulls — and gives back every record it holds
+	// from before it ([Runner.Run]), so a record kept across the failure
+	// would reach it as though delivered after.
 	Fetch(ctx context.Context, maxMessages, maxBytes int, wait time.Duration) ([]Message, error)
 
 	// Pending is how many records this consumer has not yet handed to a
@@ -308,6 +329,16 @@ type RunnerDeps struct {
 // of nothing but such barriers is not committed on the loop either: it goes
 // to the one checkpoint transaction beside it, and the loop goes on decoding.
 //
+// # And what it holds past the checkpoint, it gives back at a doubt
+//
+// Every record between the two positions — and every other record the loop
+// holds and has not committed — was delivered by the broker as it was then. A
+// moment after which the log may be another history (a fetch that failed, an
+// end read below what the loop holds) sends the reached position back to the
+// checkpoint and all of it back to the broker, and the loop verifies the
+// checkpoint's record before it applies past it ([Runner.doubtLocked],
+// [Runner.unwind]).
+//
 // THE APPLIER'S METHODS ARE CALLED BY ONE GOROUTINE AT A TIME — the loop's, or
 // the checkpoint transaction's, never both, because the loop waits for the
 // one in flight before a transaction of its own — so an applier's state needs
@@ -375,11 +406,20 @@ type Runner struct {
 	rows uint64
 	// verify is a verification of the checkpoint's record the loop owes
 	// before it applies anything past it: set when a run starts, when a
-	// fetch fails, and when a reading finds the log ending below the
-	// checkpoint — the three moments after which what follows the
-	// checkpoint on the log may be another history — and cleared by a
-	// verification that settles it ([Runner.verifyBeforeApplying]).
+	// fetch fails, and when a reading finds the log ending below what this
+	// loop holds — the three moments after which what follows the
+	// checkpoint on the log may be another history ([Runner.doubtLocked])
+	// — and cleared by a verification that settles it, by the loop alone
+	// ([Runner.verifyBeforeApplying]).
 	verify bool
+	// doubts counts those moments, so the loop can tell that one happened
+	// since it last trusted what it holds: every record it holds from
+	// before one — in its own hands, in the reorder buffer, waiting beside
+	// it for a checkpoint transaction — is given back to the broker rather
+	// than applied, reached or deduplicated against what the broker
+	// delivers after it ([Runner.Run]'s unwind). A verification settles
+	// only the doubt it was asked under. UNDER mu.
+	doubts uint64
 	// void is what the reanchor that placed the checkpoint made void, read
 	// with it by [Runner.loadCursor]: a record written in a generation it
 	// ABANDONED, and one a restored reanchor OVERTOOK, is consumed and
@@ -704,6 +744,72 @@ func (r *Runner) Reached() Position {
 	return r.reached
 }
 
+// doubtLocked records one moment after which what follows the checkpoint on the
+// log may be ANOTHER HISTORY — a run starting, a fetch failing, a reading of
+// the log's end below what this loop holds — and so everything the loop holds
+// past the checkpoint may be records the log no longer has. Called under mu.
+//
+// THREE THINGS AT ONCE, under the one lock, because each is a way a record
+// from before the moment could reach these rows or a read:
+//
+//   - A verification is OWED ([Runner.verifyBeforeApplying]): nothing past the
+//     checkpoint is applied until the log is found to hold the record the
+//     checkpoint names.
+//   - The REACHED POSITION goes back to the checkpoint: a barrier reached and
+//     not committed is one the log may no longer hold, and a read released on
+//     it would be served without the other history's rows before its own
+//     barrier. It moves again only once the verification has settled.
+//   - The doubt is COUNTED ([Runner.doubts]), which is how the loop learns
+//     that everything it holds is from before it and gives it back, wherever
+//     it holds it — and how a verification asked before it knows that it does
+//     not settle it.
+//
+// What it cannot undo is a transaction already committing: the loop waits for
+// the one beside it before it verifies, so the checkpoint that transaction
+// leaves is the one compared ([Runner.Run]).
+func (r *Runner) doubtLocked() {
+	r.verify = true
+	r.doubts++
+	r.reached = r.cursor
+}
+
+// doubted is how many doubts this runner has recorded ([Runner.doubts]).
+func (r *Runner) doubted() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.doubts
+}
+
+// settledLocked takes a verification that found, at the checkpoint, the record
+// the checkpoint names, asked under doubts — the count of doubts it was asked
+// after ([Runner.doubts]). It clears the verification owed, unless a doubt was
+// recorded since: a moment, while the verification read the log, after which
+// the log may have moved past what it compared, which only a look of its own
+// settles. Called under mu, by the loop's two verifications: its start's, and
+// the one before it applies past the checkpoint ([Runner.verifyBeforeApplying]).
+func (r *Runner) settledLocked(doubts uint64) {
+	if r.doubts == doubts {
+		r.verify = false
+	}
+}
+
+// mayCommitBeside reports whether the checkpoint transaction beside the loop may
+// commit batch now ([checkpoints]): not while a divergence holds, and not while
+// a verification is owed for anything in it past the checkpoint. Such a batch
+// was handed over before a doubt, and the loop settles the doubt itself — with
+// no transaction beside it in flight, against the checkpoint the last one left
+// — giving back what it held from before it, this batch included. A batch of
+// nothing but redeliveries at or below the checkpoint needs no verification
+// and is committed, so its acknowledgements are not held up by one.
+func (r *Runner) mayCommitBeside(batch []Record) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.diverged != nil {
+		return false
+	}
+	return !r.verify || highest(batch, Position{}).Packed() <= r.cursor.Packed()
+}
+
 // reach moves the reached position over what run carries that writes no row
 // ([reachedOver]) and releases every waiter at or below it — on the loop,
 // before any transaction, and whatever that transaction then does: a barrier
@@ -756,17 +862,23 @@ func (r *Runner) reachedThrough(run []Record) bool {
 // against the rows the reading was about: a reanchor, a join or a reload
 // between the reading and the verdict makes it a finding about rows this runner
 // no longer holds ([Runner.ObserveTruncation]).
+//
+// THE REACHED POSITION RIDES WITH IT, unexported, for the one reader that pairs
+// a reading of the log's end with how far this loop got rather than with what
+// it committed ([Runner.ObserveEnd]) — and that pairing, too, is only sound read
+// BEFORE the end. Nothing publishes it.
 type Stance struct {
 	At       Position
 	StoredAt time.Time
 	rows     uint64
+	reached  Position
 }
 
 // Stance reads where this runner stands — see [Stance].
 func (r *Runner) Stance() Stance {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return Stance{At: r.cursor, StoredAt: r.checkpointAt, rows: r.rows}
+	return Stance{At: r.cursor, StoredAt: r.checkpointAt, rows: r.rows, reached: r.reached}
 }
 
 // StreamCreatedAt is the creation instant of the stream this runner's
@@ -950,11 +1062,22 @@ func (r *Runner) RecreationStale(live time.Time) bool {
 }
 
 // ObserveEnd takes one LIVE reading of the log's last sequence, paired with
-// this applier's checkpoint as the caller read it BEFORE it asked the broker,
-// and reports what the reading changed: established is true the one time a
-// reading finds the checkpoint past the end, reached the one time a later
-// reading finds the end at or past the checkpoint an earlier one was
-// established on.
+// where this applier stood as the caller read it BEFORE it asked the broker
+// ([Runner.Stance]), and reports what the reading changed: established is true
+// the one time a reading finds the checkpoint past the end, reached the one
+// time a later reading finds the end at or past the checkpoint an earlier one
+// was established on.
+//
+// # And below the reached position, short of the checkpoint
+//
+// A barrier this loop reached and has not yet committed is a record it holds
+// past the checkpoint ([Runner.Reached]), and an end read below it says the log
+// does not hold that record — a broker restored with its end between the two,
+// or one member's stale view. Neither moves the checkpoint past the end, so it
+// establishes nothing and refuses no write; it owes a verification all the same
+// ([Runner.doubtLocked]), because the barriers past that end are another
+// history's if the log has moved, and its own next records would otherwise be
+// taken for redeliveries of them.
 //
 // # Why the caller pairs them, and in that order
 //
@@ -977,9 +1100,10 @@ func (r *Runner) RecreationStale(live time.Time) bool {
 // it settles before it applies anything past it ([Runner.verifyBeforeApplying]):
 // the same record there is the stale member it looked like, and another is
 // [ErrLogDiverged], which does not clear.
-func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool) {
+func (r *Runner) ObserveEnd(s Stance, last uint64) (established, reached bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	at := s.At
 	if at.Generation < r.cursor.Generation {
 		// A READING FROM BEFORE A REANCHOR, paired with a checkpoint in
 		// the generation this runner has since left. That checkpoint was
@@ -989,12 +1113,17 @@ func (r *Runner) ObserveEnd(at Position, last uint64) (established, reached bool
 		// will never stand at again.
 		return false, false
 	}
+	if pastEnd(s.reached.Seq, last) {
+		// WHATEVER FOLLOWS THE CHECKPOINT NOW may be another history —
+		// the checkpoint itself past the end, below, or only what the loop
+		// reached past it — and the loop gives back what it holds and looks
+		// before it applies anything past it. The reached position is never
+		// below the checkpoint, so a checkpoint past the end is this too.
+		r.doubtLocked()
+	}
 	if pastEnd(at.Seq, last) {
 		established = r.ahead == nil
 		r.ahead = &aheadOfLog{at: at, last: last}
-		// WHATEVER FOLLOWS THE CHECKPOINT NOW may be another history, and
-		// the loop must not apply it before it has looked.
-		r.verify = true
 		return established, false
 	}
 	if r.ahead == nil {
@@ -1352,17 +1481,26 @@ func compareCheckpoint(ctx context.Context, log CheckpointLog, at Position,
 // another history is one of three moments — a run starting (a boot is when a
 // node meets a restored broker), a fetch failing (a broker restored under a
 // running node takes its consumer with it), or a reading finding the log
-// ending below the checkpoint — and each leaves [Runner.verify] set, so the
-// loop asks exactly once after each, before the first record it would apply.
+// ending below what this loop holds — and each leaves [Runner.verify] set, so
+// the loop asks exactly once after each, before the first record it would
+// apply ([Runner.doubtLocked]).
 //
 // A log that does not reach the checkpoint although the run holds a record
 // past it is two readings from members that disagree: the verification is left
 // owed and the run retried, never applied on the guess. A divergence STOPS the
 // loop — nothing past the checkpoint of rows the log diverged from may be
 // applied — and so does one the heartbeat established while this loop ran.
+//
+// THE LOOP'S ALONE, asked with no checkpoint transaction beside it in flight
+// and nothing held from before the doubt it settles ([Runner.Run]), so the
+// checkpoint it compares is the one every record the loop then applies
+// follows. It settles only the doubt it was asked under ([Runner.doubts]): one
+// recorded while it read the log is a moment after which the run in hand may
+// itself be another history's, owed a look of its own once the loop has given
+// that run back.
 func (r *Runner) verifyBeforeApplying(ctx context.Context, run []Record) error {
 	r.mu.Lock()
-	owed, cursor, diverged := r.verify, r.cursor, r.diverged
+	owed, cursor, diverged, doubts := r.verify, r.cursor, r.diverged, r.doubts
 	r.mu.Unlock()
 	if diverged == nil && (!owed || topRecord(run).Position.Packed() <= cursor.Packed()) {
 		return nil
@@ -1377,7 +1515,7 @@ func (r *Runner) verifyBeforeApplying(ctx context.Context, run []Record) error {
 	switch check {
 	case checkpointSettled:
 		r.mu.Lock()
-		r.verify = false
+		r.settledLocked(doubts)
 		r.mu.Unlock()
 		return nil
 	case checkpointUnreached:
@@ -1865,6 +2003,12 @@ func (r *Runner) Run(ctx context.Context) error {
 	var tail []Record
 	var buffer reorderBuffer
 	var pause time.Duration
+	// TRUSTED is the doubt ([Runner.doubts]) everything this loop holds was
+	// delivered under. Each step below that can wait — the transaction beside
+	// it, a fetch, a verification — compares it with the runner's count after,
+	// and a doubt recorded meanwhile sends what it holds back to the broker
+	// through the unwind at the top rather than on into a transaction.
+	var trusted uint64
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1915,19 +2059,53 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.recovered(ctx)
 			pause = 0
 		}
+		// A DOUBT SINCE THIS LOOP LAST TRUSTED WHAT IT HOLDS — a fetch that
+		// failed, an end read below what it holds, a run starting — and
+		// everything it holds goes back to the broker: what its own hands,
+		// the reorder buffer and the transaction beside it hold past the
+		// checkpoint was delivered before a moment after which the log may
+		// be another history. Kept, it was applied past a verification that
+		// compared only the checkpoint, and deduplicated against the other
+		// history's records at the same sequences — barriers committed
+		// beside the loop from the old history became the base the new one
+		// was admitted against, and rows from both histories committed in
+		// one copy, which nothing could tell apart afterwards. Given back,
+		// the broker as it now is delivers its own records again, and the
+		// checkpoint the verification compares is the one the transaction
+		// beside the loop left ([Runner.unwind]).
+		if doubts := r.doubted(); doubts != trusted {
+			failed := r.unwind(ctx, beside, tail, &buffer)
+			tail, trusted = nil, doubts
+			if failed != nil {
+				if stopped := r.faulted(ctx, failed); stopped != nil {
+					return stopped
+				}
+				pause = r.backOff(ctx, pause)
+				continue
+			}
+		}
 		run, level, err := r.nextRun(ctx, tail, &buffer)
 		if err != nil {
 			// A FETCH THAT FAILED may be a broker restored under this
-			// running node, which takes the consumer with it: whatever
-			// is delivered past the checkpoint after it is verified
-			// first ([Runner.verifyBeforeApplying]).
+			// running node, which takes the consumer with it: what the loop
+			// holds goes back ([Runner.doubtLocked]) — the run it was
+			// filling with it, which nextRun hands back for that — and
+			// whatever is delivered past the checkpoint after it is
+			// verified first ([Runner.verifyBeforeApplying]).
 			r.mu.Lock()
-			r.verify = true
+			r.doubtLocked()
 			r.mu.Unlock()
+			tail = run
 			if stopped := r.faulted(ctx, err); stopped != nil {
 				return stopped
 			}
 			pause = r.backOff(ctx, pause)
+			continue
+		}
+		if r.doubted() != trusted {
+			// A DOUBT WHILE THE RUN WAS FETCHED: it is given back with the
+			// rest, at the top.
+			tail = run
 			continue
 		}
 		if len(run) == 0 {
@@ -1964,6 +2142,13 @@ func (r *Runner) Run(ctx context.Context) error {
 			pause = r.backOff(ctx, pause)
 			continue
 		}
+		if r.doubted() != trusted {
+			// A DOUBT WHILE THE CHECKPOINT WAS VERIFIED, which settled
+			// nothing for it: the run is given back, and the next one
+			// verified under the doubt it is delivered after.
+			tail = run
+			continue
+		}
 		// THE RUN IS REACHED as far as it carries barriers next in the log,
 		// now that what follows the checkpoint has been verified to be this
 		// node's history — the step [Runner.nextRun] skips while a
@@ -1998,6 +2183,13 @@ func (r *Runner) Run(ctx context.Context) error {
 			}
 			tail = run
 			pause = r.backOff(ctx, pause)
+			continue
+		}
+		if r.doubted() != trusted {
+			// A DOUBT WHILE THE LOOP WAITED for the transaction beside it,
+			// which can be a stalled fsync's seconds: the run and what that
+			// transaction had not taken are given back with the rest.
+			tail = run
 			continue
 		}
 		consumed, err := r.applyRun(ctx, w, run)
@@ -2057,6 +2249,13 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 		}
 		return nil, err
 	}
+	// THE DOUBT THE LOAD RECORDED is the one the comparison below is asked
+	// under, and the only one it settles ([Runner.settledLocked]): the
+	// heartbeat beside this start can read the log's end below the checkpoint
+	// after the comparison has read the record there — a broker restored that
+	// moment — and a start that cleared that doubt too let the loop apply the
+	// restored log past the checkpoint without ever looking at it again.
+	doubts := r.doubted()
 	// AND THE RECORD THE CHECKPOINT NAMES, before this run can apply
 	// anything past it — at once rather than when the first such record
 	// arrives, because a log written EXACTLY to this checkpoint delivers
@@ -2080,7 +2279,7 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 	r.mu.Lock()
 	verdict := r.diverged
 	if verdict == nil && check == checkpointSettled {
-		r.verify = false
+		r.settledLocked(doubts)
 	}
 	r.mu.Unlock()
 	switch {
@@ -2238,19 +2437,18 @@ func (r *Runner) loadCursor(ctx context.Context) error {
 			// [Runner.checkpointAt].
 			r.cursor, r.checkpointAt = at, row.storedAt
 		}
-		// AND THE REACHED POSITION AT IT, never left where a previous run
-		// put it: a barrier that run reached and never committed is
-		// unacknowledged and comes back, and the rows this load is of may
-		// not be the ones it was reached over at all — an adoption replaces
-		// them.
-		r.reached = r.cursor
 		r.rows++
 		// A RUN THAT STARTS OWES A VERIFICATION of that record before it
 		// applies past it: a boot is exactly when a node meets a broker
 		// restored from an older copy, and one already written past this
 		// checkpoint looks, by its end, like the history these rows came
-		// from ([Runner.verifyBeforeApplying]).
-		r.verify = true
+		// from ([Runner.verifyBeforeApplying]). AND THE REACHED POSITION
+		// GOES BACK TO IT ([Runner.doubtLocked]), never left where a
+		// previous run put it: a barrier that run reached and never
+		// committed is unacknowledged and comes back, and the rows this
+		// load is of may not be the ones it was reached over at all — an
+		// adoption replaces them.
+		r.doubtLocked()
 		// A VERDICT ABOUT A CHECKPOINT THIS RUNNER NO LONGER STANDS AT is
 		// dropped. The runner is re-run over an adopted snapshot, whose
 		// checkpoint is the donor's — one it applied from the live log —
@@ -2566,6 +2764,9 @@ func (r *Runner) reprocessOne(ctx context.Context, w *store.Writer, rec Record) 
 // is still being filled and before any transaction — except while a
 // verification is owed, which [Runner.Run] settles before it reaches the run
 // itself.
+//
+// AN ERROR COMES BACK WITH THE RUN IT HAD FILLED, the tail included, so the
+// loop holds every record it was handed until it consumes it or gives it back.
 func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuffer) (run []Record, level bool, err error) {
 	run = tail
 	// WHAT THE LAST TRANSACTION LEFT is reached first: a run its budget
@@ -2614,14 +2815,18 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 		}
 		batch, err := r.fetch.Fetch(ctx, FetchMessages, FetchBytes, wait)
 		if err != nil {
+			// THE RUN FILLED SO FAR comes back with the error, for the
+			// loop to give back to the broker ([Runner.Run]): dropped here,
+			// what an earlier fetch of this run delivered was neither
+			// acknowledged nor handed back, a hole for an ack window.
 			if ctx.Err() != nil {
-				return nil, false, ctx.Err()
+				return run, false, ctx.Err()
 			}
-			return nil, false, fmt.Errorf("statelog: fetch from %s: %w", r.spec.Name, err)
+			return run, false, fmt.Errorf("statelog: fetch from %s: %w", r.spec.Name, err)
 		}
 		records, err := r.decode(ctx, batch)
 		if err != nil {
-			return nil, false, err
+			return run, false, err
 		}
 		// CONTIGUOUS FROM THE REACHED POSITION, not the checkpoint: every
 		// record between the two is in this loop's hands already — in the
@@ -2630,7 +2835,7 @@ func (r *Runner) nextRun(ctx context.Context, tail []Record, buffer *reorderBuff
 		// a redelivery of one it holds is passed through to be acknowledged.
 		ready, err := buffer.admit(records, r.Reached(), r.spec.Replay, run)
 		if err != nil {
-			return nil, false, r.stop(ctx, err)
+			return run, false, r.stop(ctx, err)
 		}
 		run = append(run, ready...)
 		r.reach(run)
@@ -2785,6 +2990,7 @@ func (r *Runner) decode(ctx context.Context, batch []Message) ([]Record, error) 
 			StoredAt: m.StoredAt,
 			verdict:  verdict,
 			ack:      m.Ack,
+			release:  m.Release,
 		})
 	}
 	return out, nil

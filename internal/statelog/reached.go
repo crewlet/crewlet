@@ -2,7 +2,6 @@ package statelog
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"sync"
 
@@ -103,8 +102,16 @@ func reachedOver(reached Position, run []Record, arbitrated []string) Position {
 // disk and one per stall on a stalled one. That is the coalescing, and it needs
 // no constant of its own. Or the loop's next transaction with rows carries them
 // ([checkpoints.settle]): the loop waits for the one in flight ONLY before a
-// transaction of its own, so the writer has one writer at a time and the loop
-// goes on decoding meanwhile.
+// transaction of its own — or before it gives back what it holds after a doubt
+// ([Runner.unwind]) — so the writer has one writer at a time and the loop goes
+// on decoding meanwhile.
+//
+// # It verifies nothing
+//
+// What a batch here needs verified the loop verified before it handed the
+// batch over; a doubt since is the loop's to settle, with no transaction here
+// in flight ([Runner.verifyBeforeApplying]), and a batch past the checkpoint
+// waits for that rather than committing under it ([Runner.mayCommitBeside]).
 //
 // # What it never changes
 //
@@ -159,12 +166,14 @@ func (c *checkpoints) offer(ctx context.Context, w *store.Writer, run []Record) 
 }
 
 // drain commits what is pending, one transaction at a time, until nothing is,
-// the loop wants the writer, or a transaction fails.
+// the loop wants the writer, a transaction fails, or a doubt the loop has yet
+// to settle covers what is pending ([Runner.mayCommitBeside]): the loop gives
+// that back itself ([Runner.unwind]).
 func (c *checkpoints) drain(ctx context.Context, w *store.Writer, done chan struct{}) {
 	defer close(done)
 	for {
 		c.mu.Lock()
-		if c.halt || len(c.pending) == 0 {
+		if c.halt || len(c.pending) == 0 || !c.r.mayCommitBeside(c.pending) {
 			c.done = nil
 			c.mu.Unlock()
 			return
@@ -173,7 +182,12 @@ func (c *checkpoints) drain(ctx context.Context, w *store.Writer, done chan stru
 		c.pending = nil
 		c.mu.Unlock()
 
-		consumed, err := c.r.checkpoint(ctx, w, batch)
+		// NO VERIFICATION HERE, deliberately: a batch is handed over only
+		// once the loop has settled any it owed, and one owed since is the
+		// loop's to settle, with this transaction finished — run here, it
+		// read the checkpoint from before the commit in flight and cleared
+		// a doubt the batches it then committed were never compared under.
+		consumed, err := c.r.applyRun(ctx, w, batch)
 
 		c.mu.Lock()
 		// WHAT THE TRANSACTION DID NOT CONSUME — all of it, where it
@@ -248,16 +262,91 @@ func (c *checkpoints) stop() {
 	}
 }
 
-// checkpoint is one transaction beside the loop: the verification the loop owes
-// before it applies past its checkpoint ([Runner.verifyBeforeApplying]), and
-// then the run's apply — exactly what the loop does before a transaction of its
-// own, so a run committed here is held to everything one committed there is.
-func (r *Runner) checkpoint(ctx context.Context, w *store.Writer, run []Record) ([]Record, error) {
-	if err := r.verifyBeforeApplying(ctx, run); err != nil {
-		if errors.Is(err, ErrStopped) {
-			return nil, r.stop(ctx, err)
-		}
-		return nil, err
+// unwind gives back to the broker every record this loop holds past the moment
+// it last trusted the log ([Runner.doubtLocked]) — held, the records in its own
+// hands; the reorder buffer's; and those waiting beside it, once the
+// checkpoint transaction in flight there has returned — and leaves the reached
+// position at the checkpoint that transaction left. It answers that
+// transaction's failure, if it failed, for the loop's regime; its records are
+// given back with the rest.
+//
+// # Why everything, and not only what a verification finds wrong
+//
+// A verification compares ONE record, the checkpoint's, and what it can vouch
+// for is that the log is this node's history UP TO there. The records held past
+// it were delivered before the doubt, and a restored log may hold others at
+// their sequences: kept, they were applied past a verification that never
+// looked at them, and the log's own records at the same sequences were passed
+// through as redeliveries of them and dropped — rows from two histories in one
+// copy, which no later reading can find. Nothing cheaper vouches for them
+// either: the record at the top of what the loop holds proves nothing about
+// one below it from another delivery. So all of it goes back, and the broker,
+// as it now is, delivers its own records again, which the next verification is
+// compared before — at the cost, after a fetch that only blipped, of handing
+// over again what it held.
+//
+// # Why the transaction beside the loop is waited for first
+//
+// It is committing a batch the loop handed over before the doubt, and cannot
+// be called back: the checkpoint it leaves is the one the verification has to
+// compare, or a barrier committed from the old history becomes the base the
+// new one is admitted against. A batch it had not yet taken is given back with
+// the rest, which [Runner.mayCommitBeside] keeps it from taking meanwhile.
+func (r *Runner) unwind(ctx context.Context, beside *checkpoints, held []Record,
+	buffer *reorderBuffer) error {
+
+	taken, failed := beside.settle()
+	back := slices.Concat(taken, held, buffer.held)
+	*buffer = reorderBuffer{}
+	r.mu.Lock()
+	// AT THE CHECKPOINT THE TRANSACTION LEFT, which may have moved it: the
+	// doubt put the reached position back at the checkpoint as it stood, and
+	// a commit since moves both together.
+	r.reached = r.cursor
+	at := r.cursor
+	r.mu.Unlock()
+	if len(back) > 0 {
+		r.logger.InfoContext(ctx, "statelog_apply_unwound",
+			"domain", r.domain.Name(), "stream", r.spec.Name,
+			"position", at.String(), "records", len(back),
+			"detail", "the records this node held past its checkpoint went back to "+
+				"the broker unapplied, because the log may since be another "+
+				"history — a fetch failed, or the log's end was read below what "+
+				"the node held; the broker delivers them again, and the record at "+
+				"the checkpoint is compared with the log's before anything past it "+
+				"is applied")
 	}
-	return r.applyRun(ctx, w, run)
+	r.giveBack(ctx, back)
+	return failed
+}
+
+// giveBack hands each record back to the broker unconsumed ([Message.Release]).
+//
+// A FAILED HAND-BACK IS A REDELIVERY AT THE ACK WINDOW, which the loop waits
+// out behind the hole it leaves on a strict log; worth one line naming how
+// many, never a stop, and never one line a record — a hand-back fails when the
+// connection that just failed a fetch has not come back, and that is every
+// record at once.
+func (r *Runner) giveBack(ctx context.Context, records []Record) {
+	failed := 0
+	var first error
+	var at Position
+	for _, rec := range records {
+		if rec.release == nil {
+			continue
+		}
+		if err := rec.release(); err != nil {
+			if failed++; first == nil {
+				first, at = err, rec.Position
+			}
+		}
+	}
+	if first != nil {
+		r.logger.WarnContext(ctx, "statelog_release_failed",
+			"domain", r.domain.Name(), "stream", r.spec.Name, "records", failed,
+			"position", at.String(), "error", first.Error(),
+			"detail", "records given back to the broker unapplied could not be "+
+				"handed back, so it delivers them again only once their "+
+				"acknowledgement window passes; position is the first of them")
+	}
 }

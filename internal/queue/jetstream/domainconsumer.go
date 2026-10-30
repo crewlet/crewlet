@@ -1065,6 +1065,10 @@ func (c *DomainConsumer) Fetch(ctx context.Context, maxMessages, maxBytes int,
 			StoredAt: meta.Timestamp,
 			Payload:  msg.Data,
 			Ack:      func() error { return msg.Ack() },
+			// A NEGATIVE ACKNOWLEDGEMENT, which the broker answers by
+			// delivering the record again at once, where a delivery
+			// nobody acknowledged waits out the ack window.
+			Release: func() error { return msg.Nak() },
 		})
 	}
 	return out, nil

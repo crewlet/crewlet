@@ -448,8 +448,16 @@
 // So a checkpoint names its record by the broker's instant for it, and the
 // applier verifies it before applying anything past the checkpoint whenever
 // what follows may be another history — at every start, after a failed fetch,
-// after a reading found the end below — and the heartbeat every interval
-// ([Runner.VerifyCheckpoint]): another record there is [ErrLogDiverged], which
+// after a reading found the end below what it holds — and the heartbeat every
+// interval ([Runner.VerifyCheckpoint]). One record vouches for the log only up
+// to itself, so at each such moment the applier first GIVES BACK everything it
+// holds past the checkpoint, unapplied — what is in its hands, its reorder
+// buffer's, the barriers waiting for a checkpoint transaction, after waiting
+// for the one in flight — and the broker as it now is delivers its own records
+// again ([Runner.unwind]): kept, the old history's records were applied past a
+// verification that never looked at them, and the restored log's at their
+// sequences dropped as redeliveries. Another record at the checkpoint is
+// [ErrLogDiverged], which
 // refuses like the rest and, unlike an end, never lifts on a later reading —
 // nor across a restart. The log can lose the record the verdict was found by
 // (an evicted node's checkpoint stops pinning the trim; a stream is purged by

@@ -1410,6 +1410,7 @@ func TestAReanchoredRunnerFollowsTheAdoptedStream(t *testing.T) {
 func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 	t.Helper()
 	old := h.runner.Committed()
+	stance := h.runner.Stance()
 	if !errors.Is(h.runner.StreamIdentity(), statelog.ErrStreamRecreated) {
 		t.Fatalf("before the reanchor the identity is %v, want the rebuild",
 			h.runner.StreamIdentity())
@@ -1452,7 +1453,7 @@ func reanchorTheRunner(t *testing.T, h *applyHarness, born, rebuilt time.Time) {
 	// A READING OF THE END TAKEN AGAINST THE OLD CHECKPOINT says nothing
 	// about the new one: the heartbeat that read the runner before the
 	// reanchor and the log after it must not refuse the adopted stream.
-	if established, _ := h.runner.ObserveEnd(old, 0); established {
+	if established, _ := h.runner.ObserveEnd(stance, 0); established {
 		t.Fatal("a reading paired with the pre-reanchor checkpoint established " +
 			"a verdict, which would refuse every write until the adopted log " +
 			"reached a sequence the node will never stand at again")

@@ -38,6 +38,15 @@ func MeasureVolumesWith(s *Snapshotter, fn func(dir string) (int64, error)) { s.
 // derivation rather than a copy of it.
 func WaitsThrough(at Position) Position { return waitsThrough(at) }
 
+// StanceAt is a runner standing at at, with nothing reached past it, as a
+// reading of the log's end pairs it ([Runner.ObserveEnd]).
+//
+// EXPORTED FOR A TEST because a case about the pairing names positions a
+// runner does not stand at — the zero it reports before its loop loads the
+// row, a checkpoint from before a reanchor — and a stance is otherwise only
+// ever read off a runner.
+func StanceAt(at Position) Stance { return Stance{At: at, reached: at} }
+
 // LogTrackerTo points a tracker's transition lines at a logger a case reads.
 //
 // EXPORTED FOR A TEST because the two lines are half of what a tracker is for
