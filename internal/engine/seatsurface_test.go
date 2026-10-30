@@ -137,6 +137,7 @@ units:
         llm: zulu
         integrations:
           github:
+            enabled: true
             tier: review
             app_id: 42
             app_slug: acme-dev

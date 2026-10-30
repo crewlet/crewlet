@@ -23,6 +23,7 @@ roles:
     llm: primary
     integrations:
       github:
+        enabled: true
         app_id: 41
         app_slug: Acme-SRE-Lead
         installation_id: 7
@@ -32,6 +33,7 @@ roles:
     llm: primary
     integrations:
       github:
+        enabled: true
         tier: review
   - name: Writer
     handle: writer
@@ -135,6 +137,7 @@ roles:
         GITHUB_TOKEN: ghp-old
     integrations:
       github:
+        enabled: true
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -170,6 +173,7 @@ roles:
     llm: primary
     integrations:
       github:
+        enabled: true
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -220,6 +224,7 @@ roles:
         Authorization: "Bearer ${GITHUB_APP_TOKEN_SRE_LEAD}"
     integrations:
       github:
+        enabled: true
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -232,6 +237,7 @@ roles:
         Authorization: "Bearer ${GITHUB_APP_TOKEN_BACKEND_ENGINEER}"
     integrations:
       github:
+        enabled: true
         tier: full_access
 `
 	var lookups atomic.Int32

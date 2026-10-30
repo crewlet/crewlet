@@ -89,7 +89,7 @@ func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 		Seat: "sre-lead", Name: "Acme sre-lead",
 		DeliveryURL: "https://engine.example.com/webhooks/github/sre-lead",
 		RedirectURL: "https://engine.example.com/webhooks/github/app-callback",
-		Permissions:      tierPerms("review", false),
+		Permissions: tierPerms("review", false),
 	})
 	if len(m.DefaultEvents) == 0 {
 		t.Fatal("the manifest subscribes to nothing")

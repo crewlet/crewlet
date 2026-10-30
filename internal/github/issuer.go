@@ -110,6 +110,10 @@ const (
 // reconcile reports on the integration's card ([ReconcileSeatApps]).
 var ErrNotInstalled = errors.New("github: this agent's app is not created and installed yet")
 
+// ErrSeatOff reports a seat switched off on GitHub (D1): it is issued no
+// token until it is turned back on from the integration's Agents tab.
+var ErrSeatOff = errors.New("github: this agent is turned off on GitHub")
+
 // Issuer holds the installation tokens this process has minted, one per
 // installation and scope, and mints again when one runs short.
 //
@@ -206,11 +210,11 @@ func (i *Issuer) now() time.Time {
 	return time.Now().UTC()
 }
 
-// Issuable reports whether seat's app can issue a token at all: created,
+// Issuable reports whether seat's app can issue a token at all: on, created,
 // installed, and holding a key. A seat for which this is false is waiting on
 // a person, never on GitHub.
 func Issuable(seat SeatApp) bool {
-	return seat.AppID != 0 && seat.InstallationID != 0 && strings.TrimSpace(seat.Key) != ""
+	return !seat.Off && seat.AppID != 0 && seat.InstallationID != 0 && strings.TrimSpace(seat.Key) != ""
 }
 
 // Token is a token for seat's app that stays good for at least life, from
@@ -230,6 +234,9 @@ func Issuable(seat SeatApp) bool {
 func (i *Issuer) Token(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp, life time.Duration,
 ) (InstallationToken, error) {
+	if seat.Off {
+		return InstallationToken{}, ErrSeatOff
+	}
 	if !Issuable(seat) {
 		return InstallationToken{}, ErrNotInstalled
 	}
