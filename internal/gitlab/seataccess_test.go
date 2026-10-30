@@ -456,7 +456,7 @@ func TestStepsAreDrawnInGitLabsWordsAndRemintOnlyWhenScopesChange(t *testing.T) 
 		t.Fatalf("create = %v", got)
 	}
 	if !strings.Contains(create[1].Text, "acme/api as Reporter") ||
-		!strings.Contains(create[2].Text, "read_api and read_repository") {
+		!strings.Contains(create[2].Text, `"read_api" and "read_repository"`) {
 		t.Fatalf("create text = %q / %q", create[1].Text, create[2].Text)
 	}
 	raise := v.Steps(sre, seataccess.LaneGitLab, seataccess.OpLevel,

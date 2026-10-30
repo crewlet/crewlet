@@ -206,7 +206,7 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 		result.Revision = written
 	}
 	log.InfoContext(ctx, "seat_access_migrated", "revision", result.Revision,
-		"migrated", fmt.Sprint(plan.Migrated), "moved", result.Moved,
+		"migrated", plan.Migrated, "moved", result.Moved,
 		"notices", result.Notices, "seeded", result.Seeded)
 	return result, nil
 }

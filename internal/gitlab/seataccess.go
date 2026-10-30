@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // GitLab's half of per-seat access (design sections 4 and 5.2, D6).
@@ -105,7 +106,7 @@ func scopesText(id string) string {
 	if err != nil || level == 0 {
 		return "the scopes its role allows"
 	}
-	return strings.Join(ScopesFor(level), " and ")
+	return words.And(ScopesFor(level))
 }
 
 // sameScopesDrawn reports two stored levels whose tokens carry the same
@@ -709,7 +710,7 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 		}
 		if newest, ok := newestOwn(tokens, in.Seat.Handle); ok && SameScopes(newest.Scopes, scopes) {
 			return seataccess.StepResult{Did: "Kept its access token: it already carries " +
-				strings.Join(scopes, " and ") + ", the scopes its new role allows"}, nil
+				words.And(scopes) + ", the scopes its new role allows"}, nil
 		}
 	}
 	group := s.mintGroup()
@@ -745,9 +746,10 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 }
 
 // noExpiry mints at the instance's own default lifetime (a year on
-// GitLab.com, which requires one). Nothing has to renew it on a schedule: a
-// token that lapses stops being a live token of this engine's, the next pass
-// reads the seat as holding no credential, and the plan mints one.
+// GitLab.com, which requires one). The observe renews it: a token inside the
+// renewal window ([renewWithin], 30 days), or one that already lapsed, reads
+// as [seataccess.Observed.CredentialGone], and the plan mints its
+// replacement before the agent loses access.
 var noExpiry time.Time
 
 // newestOwn is the most recent live token this engine minted for a seat.

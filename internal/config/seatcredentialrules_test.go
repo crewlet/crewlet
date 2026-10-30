@@ -98,7 +98,7 @@ roles:
   - {name: SRE, handle: sre, mcp_env: {weather: {KEY: "${WEATHER_KEY}"}}}
   - {name: CTO, handle: cto, mcp_env: {weather: {KEY: "${WEATHER_KEY}"}}}
 `, "roles[1]")
-	if !strings.Contains(err.Error(), "also named by seat sre") {
+	if !strings.Contains(err.Error(), `also named by seat "sre"`) {
 		t.Fatalf("the refusal must name the other seat: %v", err)
 	}
 }

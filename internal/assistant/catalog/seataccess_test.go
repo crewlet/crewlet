@@ -181,7 +181,7 @@ func TestASharedNameIsNeverGuessedAt(t *testing.T) {
 		"two agents": {map[string]any{"handle": "QA Engineer", "integration": "datadog",
 			"enabled": true}, "qa, qa-2"},
 		"two roles": {map[string]any{"handle": "qa", "integration": "datadog",
-			"access": "Datadog Standard Role"}, "role-std, role-std-2"},
+			"access": "Datadog Standard Role"}, `"role-std" or "role-std-2"`},
 	} {
 		err := preview(&accessRoutes{t: t, twins: true}, tc.args)
 		if !errors.Is(err, catalog.ErrInvalidArguments) || !strings.Contains(err.Error(), tc.says) {

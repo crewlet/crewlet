@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // What one agent's GitHub App may do, in GitHub's own terms.
@@ -354,12 +355,9 @@ func catalogueNames() string {
 
 // offered is the levels one permission offers, in GitHub's names.
 func offered(perm Permission) string {
-	labels := []string{LevelLabel(LevelNone)}
+	labels := []words.Said{words.Said(LevelLabel(LevelNone))}
 	for _, level := range perm.Levels {
-		labels = append(labels, LevelLabel(level))
+		labels = append(labels, words.Said(LevelLabel(level)))
 	}
-	if len(labels) == 2 {
-		return labels[0] + " or " + labels[1]
-	}
-	return strings.Join(labels[:len(labels)-1], ", ") + " or " + labels[len(labels)-1]
+	return words.Or(labels)
 }

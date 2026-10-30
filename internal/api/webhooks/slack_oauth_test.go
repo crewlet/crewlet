@@ -70,6 +70,44 @@ func TestTheOAuthLandingSaysWhatWentWrong(t *testing.T) {
 	}
 }
 
+// A CODE THAT CAN'T BE SLACK'S IS NO CODE: with no state, a code is what makes
+// the page say the app was installed, on the dashboard's origin, so a value
+// carried in the query's `code` was told "Approved" whatever it said.
+//
+// Mutation: take the code whatever it is, and the page says "Approved".
+func TestTheOAuthLandingShowsOnlyACodeSlackCouldHaveSent(t *testing.T) {
+	t.Parallel()
+	e := newEdge(t)
+	for _, query := range []string{
+		"code=Your+workspace+is+suspended.+Call+support+at+example.com",
+		"code=%3Cb%3Ehi%3C%2Fb%3E",
+		"code=" + strings.Repeat("a", 256),
+	} {
+		res := getLanding(t, e, query)
+		page := html.UnescapeString(res.Body.String())
+		if res.Code != http.StatusBadRequest {
+			t.Errorf("%.40s: got %d, want 400", query, res.Code)
+		}
+		if strings.Contains(page, "Approved") || strings.Contains(page, "suspended") ||
+			strings.Contains(page, strings.Repeat("a", 256)) {
+			t.Errorf("%.40s: the page took a code Slack couldn't have sent:\n%s", query, page)
+		}
+		if !strings.Contains(page, "didn't send an install code") {
+			t.Errorf("%.40s: the page does not say Slack sent no code:\n%s", query, page)
+		}
+	}
+	// AND ONE IT COULD is the manual install, approved, and never printed.
+	const code = "4724469134.4644010092847.232b4e6d82c333b475fc30f5f5a341c2"
+	res := getLanding(t, e, "code="+code)
+	page := res.Body.String()
+	if res.Code != http.StatusOK || !strings.Contains(page, "Approved") {
+		t.Errorf("a code Slack sends was refused: %d\n%s", res.Code, page)
+	}
+	if strings.Contains(page, code) {
+		t.Error("the page printed the install code")
+	}
+}
+
 func TestTheOAuthLandingReachedDirectlyExplainsItself(t *testing.T) {
 	t.Parallel()
 	e := newEdge(t)

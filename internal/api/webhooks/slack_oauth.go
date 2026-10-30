@@ -98,6 +98,37 @@ const (
 	slackRefused = "Slack didn't approve the install."
 )
 
+// maxSlackCode is the longest `code` this page treats as one Slack sent.
+//
+// Slack documents no length. Its codes are two numeric ids and a hex digest,
+// under a hundred characters, and 255 leaves them room to grow while keeping
+// the page from answering for whatever an address carries.
+const maxSlackCode = 255
+
+// slackCode is the query's `code`, or "" where it can't be one Slack sent:
+// longer than [maxSlackCode], or holding anything but letters, digits, dots,
+// dashes and underscores.
+//
+// A CODE IS WHAT MAKES THE PAGE SAY "Approved", on the dashboard's own origin,
+// and the query is whatever the address that brought the browser here says.
+// Taken as it came, `?code=<anything>` with no state was told the app was
+// installed. A value that can't be a code is no code: the page says Slack
+// sent none, which is true of it.
+func slackCode(raw string) string {
+	if raw == "" || len(raw) > maxSlackCode {
+		return ""
+	}
+	for _, c := range raw {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9',
+			c == '.', c == '-', c == '_':
+		default:
+			return ""
+		}
+	}
+	return raw
+}
+
 // SlackInstaller finishes an install a seat's install link began
 // ([slack.Installs]).
 type SlackInstaller interface {
@@ -150,7 +181,11 @@ func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {
 		view.Reason = "this install link came from crewlet slack provision, which is retired"
 		view.Remedy = "Start the install again with Install on the agent's row in Slack's " +
 			"Agents tab, under Company › Integrations"
-	case view.Code == "":
+	case slackCode(view.Code) == "":
+		if view.Code != "" {
+			log.Warn("slack_oauth_code_malformed", "length", len(view.Code))
+		}
+		view.Code = ""
 		status = http.StatusBadRequest
 	default:
 		view.Heading = "approved"

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/integration"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The vendors this build manages per-seat access through, registered by each
@@ -42,7 +43,8 @@ func Register(v Vendor) {
 		got = append(got, spec.Lane)
 	}
 	if !slices.Equal(want, got) {
-		panic(fmt.Sprintf("seataccess: the %s vendor's catalog lists lanes %v, want %v", kind, got, want))
+		panic(fmt.Sprintf("seataccess: the %s vendor's catalog lists lanes %s, want %s",
+			kind, words.And(got), words.And(want)))
 	}
 	if len(cat.Credentials) == 0 {
 		panic(fmt.Sprintf("seataccess: the %s vendor's catalog names no credential field", kind))

@@ -20,6 +20,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // What each agent seat may do on one integration: the Agents tab's four routes.
@@ -1072,12 +1073,7 @@ func seatOf(answer seataccess.Answer, handle string) (seataccess.SeatAnswer, boo
 
 // laneList names the lanes one integration grants, for a refusal's hint.
 func laneList(kind integration.Kind) string {
-	lanes := seataccess.LanesOf(kind)
-	names := make([]string, 0, len(lanes))
-	for _, lane := range lanes {
-		names = append(names, string(lane))
-	}
-	return strings.Join(names, ", ")
+	return words.Or(seataccess.LanesOf(kind))
 }
 
 func sortedHandles[V any](m map[string]V) []string {
