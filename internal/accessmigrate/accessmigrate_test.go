@@ -110,7 +110,7 @@ func (session) Apply(context.Context, seataccess.ApplyInput) (seataccess.StepRes
 // plan is a migration's plan of root, read from vs.
 func plan(t *testing.T, root map[string]any, vs *vendors) accessmigrate.Migration {
 	t.Helper()
-	facts, err := accessmigrate.Read(t.Context(), root, vs.open, config.NewResolver())
+	facts, err := accessmigrate.Read(t.Context(), root, vs.open, config.NewResolver(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,4 +560,58 @@ func mustJSON(t *testing.T, v any) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// A JIRA AND CONFLUENCE SEAT THAT WAS ON COMES OUT WITH PRODUCT ACCESS ONLY.
+//
+// The engine before per-seat access granted an Atlassian agent the products
+// and no project or space role, so the migration writes exactly that: each
+// lane on, with the empty level, which is the "Product access only" option the
+// Agents tab offers. It invents no role, and the agent's token and address move
+// to the engine's own names. Mutation: copy a role into the lanes, or leave
+// them unwritten, and this fails.
+func TestJiraAndConfluenceSeatsComeOutWithProductAccessOnly(t *testing.T) {
+	t.Parallel()
+	root := gophrase(t)
+	integrations := root["integrations"].(map[string]any)
+	integrations["atlassian"] = map[string]any{"deployment": "cloud", "org_id": "${ATLASSIAN_ORG_ID}",
+		"api_key": "${ATLASSIAN_ORG_KEY}"}
+	integrations["jira"] = map[string]any{"site_url": "https://gophrase.atlassian.net"}
+	integrations["confluence"] = map[string]any{"site_url": "https://gophrase.atlassian.net/wiki"}
+	pm := seat(t, root, "pm")
+	pm["mcp_env"].(map[string]any)["atlassian"] = map[string]any{
+		"JIRA_API_TOKEN": "${PM_ATLASSIAN_TOKEN}", "JIRA_USERNAME": "${PM_ATLASSIAN_EMAIL}"}
+	m := plan(t, root, gophraseVendors())
+	if !slices.Contains(m.Migrated, integration.KindAtlassian) {
+		t.Fatalf("migrated %v, pending %v; want Atlassian migrated", m.Migrated, m.Pending)
+	}
+	for _, lane := range []seataccess.Lane{seataccess.LaneJira, seataccess.LaneConfluence} {
+		if got := m.Seats["pm"][lane]; !got.Enabled || got.Level != "" || len(got.Scope) != 0 {
+			t.Errorf("the PM on %s = %+v, want on with product access only", lane, got)
+		}
+		if got := m.Seats["qa"][lane]; got.Enabled {
+			t.Errorf("the QA engineer on %s = %+v, want off: it held no Atlassian account", lane, got)
+		}
+	}
+	moved := map[string]string{}
+	for _, move := range m.Moves {
+		if move.Kind == integration.KindAtlassian {
+			moved[move.From] = move.To
+		}
+	}
+	if !maps.Equal(moved, map[string]string{"PM_ATLASSIAN_TOKEN": "ATLASSIAN_TOKEN_PM",
+		"PM_ATLASSIAN_EMAIL": "ATLASSIAN_EMAIL_PM"}) {
+		t.Errorf("Atlassian moves = %v, want the token and address under the engine's names", moved)
+	}
+	if _, err := accessmigrate.Apply(root, m); err != nil {
+		t.Fatal(err)
+	}
+	blocks := pm["integrations"].(map[string]any)
+	for _, lane := range []string{"jira", "confluence"} {
+		block, _ := blocks[lane].(map[string]any)
+		if block["enabled"] != true || block["project_role"] != nil || block["space_role"] != nil ||
+			block["operations"] != nil {
+			t.Errorf("the PM's %s block = %v, want it written on, with no role", lane, block)
+		}
+	}
 }

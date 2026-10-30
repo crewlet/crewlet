@@ -4,8 +4,9 @@
  * seat action (`POST .../access/seats/{handle}/{lane}/{action}`) answers.
  *
  * The engine's own shapes (`internal/seataccess`: wire.go, step.go,
- * seataccess.go, vendor.go), held against them by the setup API's contract
- * test, which reads these interfaces by name.
+ * seataccess.go, vendor.go), held against them member by member by
+ * `internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt`, and
+ * the unions by `TestTheDashboardKnowsExactlyTheAccessValues`.
  *
  * IN THE VENDOR'S OWN TERMS. A level is the identifier the vendor's API takes
  * (a Datadog role id; a GitLab `access_level` such as "30", or
@@ -34,6 +35,8 @@ interface AccessLevel {
   custom?: boolean;
   /** An administration grant: raising a seat to it asks for a fresh step-up (D10). */
   administers?: boolean;
+  /** What a seat on it then sees, where the name alone does not say (product access only). */
+  note?: string;
 }
 
 /** One GitHub App permission a seat can hold, in GitHub's own name. */
@@ -61,6 +64,12 @@ export interface AccessOptions {
   scope_open?: boolean;
   /** Whether a person can ask Crewlet to rotate a seat's credential on this lane. */
   rotatable?: boolean;
+  /**
+   * The lane's access is a SET of levels rather than one (Confluence's space
+   * permissions by operation, on a site without space roles): a seat's level
+   * is the chosen ids, sorted and space-separated.
+   */
+  multiple?: boolean;
   /**
    * "external" where the engine does not provision this lane for the company:
    * a seat's switch still binds its tool to the credential, and its access is
@@ -104,6 +113,8 @@ export interface AccessObserved {
   /** GitHub only: the permissions the app is registered with, which tokens are narrowed from. */
   ceiling?: Record<string, GitHubAccess>;
   credential?: AccessCredential;
+  /** The vendor shows the account holds no credential Crewlet minted, so the next sync mints one. */
+  credential_gone?: boolean;
   created_at?: string;
   /** When a sync found the account changed at the vendor by somebody else. */
   changed_by_hand_at?: string;
@@ -139,6 +150,11 @@ export interface AccessStep {
   drift?: boolean;
 }
 
+/** A step on a sync's record, and whether it was taken. */
+interface AccessStepOutcome extends AccessStep {
+  done: boolean;
+}
+
 /** Why a sync stopped: the failed step, the vendor's reason, the remedy, who acts and where. */
 interface AccessFailure {
   step: AccessVerb;
@@ -152,7 +168,7 @@ interface AccessSync {
   at: string;
   outcome: "ok" | "failed" | "waiting";
   /** The steps the sync set out to take, and whether each was taken. */
-  steps: (AccessStep & { done: boolean })[];
+  steps: AccessStepOutcome[];
   error?: AccessFailure;
 }
 
@@ -206,18 +222,27 @@ export interface AccessAnswer {
   seats: AccessSeat[];
 }
 
-/** A draft: the desired state per seat and lane, only for what changed. */
-export type AccessDraft = Record<string, Partial<Record<AccessLaneKey, AccessDesired>>>;
-
-/** `POST .../access/plan`, and `PUT .../access` with the revision as If-Match. */
+/**
+ * `POST .../access/plan`, and `PUT .../access` with the revision as If-Match:
+ * the desired state per seat and lane, only for what changed.
+ */
 export interface AccessDraftRequest {
-  seats: AccessDraft;
+  seats: Record<string, Partial<Record<AccessLaneKey, AccessDesired>>>;
+}
+
+/** What the next sync does for one seat on one lane, as a draft stands. */
+interface AccessSeatPlan {
+  handle: string;
+  lane: AccessLaneKey;
+  steps: AccessStep[];
+  /** This seat's change is an administration grant. */
+  step_up?: boolean;
 }
 
 export interface AccessPlanAnswer {
   kind: string;
   revision: string;
-  plans: { handle: string; lane: AccessLaneKey; steps: AccessStep[]; step_up?: boolean }[];
+  plans: AccessSeatPlan[];
   /** Saving this draft asks for a fresh step-up (D10). */
   step_up?: boolean;
 }

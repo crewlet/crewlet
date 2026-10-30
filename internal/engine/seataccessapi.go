@@ -54,6 +54,9 @@ type SeatAccessAPI struct {
 	// waits for this node to run.
 	fleet func(ctx context.Context) (*config.Company, string, error)
 	rows  SecretRows
+	// managed reports a company document only named systems write
+	// ([config.Company.SeatCredentialMode]).
+	managed func() bool
 	// installLink mints one seat's Slack install link for its app
 	// ([SeatAccessAPI.UseSlackInstalls]); nil where this node mints none.
 	installLink func(ctx context.Context, handle, appID string) (string, error)
@@ -81,10 +84,11 @@ type cachedOffer struct {
 var _ setupapi.Access = (*SeatAccessAPI)(nil)
 
 // SeatAccessAPI builds the access routes' engine half. fleet reads the fleet's
-// company (configapi's FleetCompany) and rows the fleet's secret store.
+// company (configapi's FleetCompany), rows the fleet's secret store, and managed
+// whether only named systems write the company document (configapi's Managed).
 func (e *Engine) SeatAccessAPI(fleet func(ctx context.Context) (*config.Company, string, error),
-	rows SecretRows) *SeatAccessAPI {
-	return &SeatAccessAPI{engine: e, fleet: fleet, rows: rows,
+	rows SecretRows, managed func() bool) *SeatAccessAPI {
+	return &SeatAccessAPI{engine: e, fleet: fleet, rows: rows, managed: managed,
 		running: map[integration.Kind]syncMark{}, offers: map[string]cachedOffer{}}
 }
 
@@ -163,7 +167,8 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		return answer, plan, err
 	}
 	vendor, registered := seataccess.Lookup(q.Kind)
-	provisioned := q.Company.SeatCredentialMode(string(q.Kind)) == config.SeatCredentialEngine
+	provisioned := q.Company.SeatCredentialMode(string(q.Kind), a.managed()) ==
+		config.SeatCredentialEngine
 	answer.Options = a.options(ctx, q, vendor, registered, provisioned)
 	offers := map[seataccess.Lane]seataccess.Options{}
 	for _, o := range answer.Options {
@@ -207,7 +212,8 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		}
 		steps := map[seataccess.Lane][]seataccess.Step{}
 		if registered {
-			if steps, err = seataccess.Plan(vendor, seatInput(seat.SeatRef, next, rec, held)); err != nil {
+			if steps, err = seataccess.Plan(vendor, seatInput(seat.SeatRef, next, rec, held,
+				offers)); err != nil {
 				return answer, plan, err
 			}
 		}
@@ -258,7 +264,7 @@ func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Ven
 	steps := map[seataccess.Lane][]seataccess.Step{}
 	if registered {
 		var err error
-		if steps, err = seataccess.Plan(vendor, seatInput(ref, want, rec, held)); err != nil {
+		if steps, err = seataccess.Plan(vendor, seatInput(ref, want, rec, held, offers)); err != nil {
 			return sa, err
 		}
 	}
@@ -294,11 +300,15 @@ func handedIn(sa *seataccess.SeatAnswer, role *config.Role, kind integration.Kin
 	}
 }
 
-// seatInput is one seat's plan input from its document and its ledger record.
+// seatInput is one seat's plan input from its document and its ledger record,
+// with what each lane offers now, so a step names a live role as the vendor
+// does rather than by its id.
 func seatInput(ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desired,
-	rec seataccess.Record, held bool) seataccess.SeatInput {
+	rec seataccess.Record, held bool,
+	offers map[seataccess.Lane]seataccess.Options) seataccess.SeatInput {
 
-	in := seataccess.SeatInput{Seat: ref, Want: want, Have: map[seataccess.Lane]seataccess.Observed{}}
+	in := seataccess.SeatInput{Seat: ref, Want: want, Have: map[seataccess.Lane]seataccess.Observed{},
+		Options: offers}
 	for lane, lr := range rec.Lanes {
 		in.Have[lane] = lr.Observed
 	}
@@ -631,7 +641,7 @@ func sortedHandles[V any](m map[string]V) []string {
 // engine's own sessions and resolver, the ledger this engine keeps, and the
 // document and the secret store the caller hands in.
 func (e *Engine) MigrateSeatAccess(ctx context.Context, doc accessmigrate.Document,
-	store accessmigrate.Secrets) (accessmigrate.Result, error) {
+	store accessmigrate.Secrets, managed bool) (accessmigrate.Result, error) {
 
 	ledger, err := e.SeatAccessLedger()
 	if err != nil {
@@ -647,7 +657,7 @@ func (e *Engine) MigrateSeatAccess(ctx context.Context, doc accessmigrate.Docume
 			}
 			return vendor.Open(ctx, in)
 		},
-		Env: e.resolver(),
+		Env: e.resolver(), Managed: managed,
 	})
 }
 

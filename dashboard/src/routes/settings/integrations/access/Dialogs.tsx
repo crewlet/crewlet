@@ -29,14 +29,13 @@ import {
 import type {
   AccessAnswer,
   AccessDesired,
-  AccessDraft,
   AccessPlanAnswer,
   AccessSeat,
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
-import { accessApi, refusalWords } from "./api.ts";
-import { lanesOf, levelName, levelsHeading, scopeWords, type Lane } from "./logic.ts";
+import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
+import { lanesOf, levelName, levelsHeading, scopeApplies, scopeWords, type Lane } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
 function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow[] {
@@ -57,7 +56,7 @@ function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow
       const held = to.permissions?.[perm.key];
       if (held) out.push({ kind: "fact", label: perm.name, value: GITHUB_ACCESS_NAMES[held] });
     }
-    if (lane.scope !== undefined)
+    if (scopeApplies(lane, to))
       out.push({
         kind: "fact",
         label: laneWords(lane.key).scope?.noun ?? "Scope",
@@ -66,7 +65,7 @@ function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow
     return out;
   }
   if (!to.enabled) return out;
-  if (lane.levels.length > 0 && from.level !== to.level) {
+  if (lane.levels.length > 0 && (from.level ?? "") !== (to.level ?? "")) {
     out.push({
       kind: "changed",
       label: access,
@@ -85,7 +84,7 @@ function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow
         to: GITHUB_ACCESS_NAMES[b],
       });
   }
-  if (lane.scope !== undefined && scopeWords(lane, from.scope) !== scopeWords(lane, to.scope)) {
+  if (scopeApplies(lane, to) && scopeWords(lane, from.scope) !== scopeWords(lane, to.scope)) {
     out.push({
       kind: "changed",
       label: laneWords(lane.key).scope?.noun ?? "Scope",
