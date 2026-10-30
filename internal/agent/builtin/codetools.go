@@ -717,8 +717,9 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 }
 
 // branch holds ref — the branch a write tool's call names, refs/heads/ and its
-// `branch` — for turn BEFORE the write is sent ([HoldRef]): THE ONE PLACE a
-// write's branch is held, which every engine write calls before its GitWrite.
+// `branch`, or the source branch of the change a suggestions apply commits to —
+// for turn BEFORE the write is sent ([HoldRef]): THE ONE PLACE a write's branch
+// is held, which every engine write calls before its GitWrite.
 // A WRITE IS HELD AS A READ IS, because only a write that MOVES the branch is
 // ordered against a deletion of it by its own head compare: one that moves
 // nothing — refused, a revert or a pick that conflicts, a no-op — appends no

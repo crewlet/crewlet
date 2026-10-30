@@ -167,6 +167,31 @@ var notRefArgs = map[string]string{
 	"auto_revert":        "a merge gate's field",
 	"agents_edit_checks": "a merge gate's field",
 	"op_id":              "an operation's id",
+	"title":              "a change's title",
+	"body":               "a change's or a comment's text",
+	"draft":              "a change's draft state",
+	"work_item":          "the work item a change carries",
+	"reviewers":          "the seats a change asks for review",
+	"withdraw":           "the seats a change no longer asks",
+	"note":               "an ask's or a finding's note",
+	"expected_version":   "a change's version the write is compared with, never a ref",
+	"reopen":             "whether a close reopens; the source it reopens at is the change's, held by the steer",
+	"verdict":            "a review's verdict",
+	"summary":            "a review's summary",
+	"findings":           "findings, raised or named by id: each anchored to a revision the change already holds",
+	"carries":            "earlier findings a review carries, by id",
+	"anchor":             "a comment's place in a revision the change already holds",
+	"thread":             "a comment thread's id",
+	"finding":            "a finding's id",
+	"resolve":            "whether a comment resolves its thread",
+	"resolution":         "a finding's resolution",
+}
+
+// refCallDrops is the arguments a tool's holdingCall row carries that the call
+// leaves out when it names a ref: code_update_change writes ONE thing a call,
+// so its retarget names no title.
+var refCallDrops = map[string][]string{
+	builtin.CodeUpdateChangeTool: {"title"},
 }
 
 // refArgDefault is what a call gives a ref argument it does not name the seat's
@@ -220,6 +245,7 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 				t.Run(name+"/"+arg+map[bool]string{false: "/project", true: "/scratch"}[scratch], func(t *testing.T) {
 					t.Parallel()
 					host := newCodeHost()
+					host.changes = suggestedChange().read
 					if scratch {
 						host = scratchHost(time.Hour)
 					}
@@ -252,6 +278,9 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 					args[arg] = seatBranchShort
 					if arg == "base" {
 						delete(args, "expected_head")
+					}
+					for _, drop := range refCallDrops[name] {
+						delete(args, drop)
 					}
 					got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, name, args)
 					if got.Failed {
@@ -293,6 +322,64 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 	}
 	if _, lifecycles := writer.asked(); len(lifecycles) != 0 {
 		t.Errorf("an operator's read sent %+v", lifecycles)
+	}
+}
+
+// A CHANGE'S WRITE HOLDS THE SEAT BRANCH IT DEPENDS ON: a write that sends
+// what a seat's branch names without naming the branch as an argument — a
+// suggestions apply, which commits onto the change's source, and a reopen,
+// which reopens the change at its source's head — holds the source before the
+// request goes out, as does an open naming a seat's branch as its source. A
+// change whose source is no seat's branch holds nothing.
+//
+// Mutations: drop CodeDeps.branch from the apply, from steer's reopen, or
+// from the open → red.
+func TestAChangeWriteHoldsTheSeatBranchItDependsOn(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, tool string
+		args       map[string]any
+		sent       string
+	}{
+		{name: "apply", tool: builtin.CodeApplySuggestionsTool, args: applyArgs(suggestedA), sent: "git_write"},
+		{name: "reopen", tool: builtin.CodeCloseChangeTool, sent: "change",
+			args: map[string]any{"change": "site!7", "expected_version": 1, "reopen": true}},
+		{name: "open", tool: builtin.CodeOpenChangeTool, sent: "change",
+			args: map[string]any{"repo": "site", "branch": seatBranchShort, "title": "Fix the lab"}},
+	} {
+		for _, seats := range []bool{true, false} {
+			t.Run(c.name+map[bool]string{true: "/seat", false: "/feature"}[seats], func(t *testing.T) {
+				t.Parallel()
+				change := suggestedChange()
+				if seats {
+					change.detail.SourceRef = seatBranch
+				}
+				host := withSeatBranch(newChangeHost(change), "qa", time.Hour)
+				writer, turn := &codeWrites{}, writerTurn(t)
+				var mu sync.Mutex
+				held := map[string]bool{}
+				watch(host, writer, func(what string) {
+					mu.Lock()
+					defer mu.Unlock()
+					held[what] = slices.Contains(turn.Holds.IDs(), seatBranchKey)
+				})
+				got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(host, writer)), turn, c.tool, c.args)
+				if got.Failed {
+					t.Fatalf("%s answered %q", c.tool, got.Output)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				sent, asked := held[c.sent]
+				switch want := seats || c.tool == builtin.CodeOpenChangeTool; {
+				case !asked:
+					t.Fatalf("%s sent no %s", c.tool, c.sent)
+				case want && !sent:
+					t.Errorf("%s sent its %s before the turn held %s", c.tool, c.sent, seatBranch)
+				case !want && slices.Contains(turn.Holds.IDs(), seatBranchKey):
+					t.Errorf("%s on a change whose source is no seat's branch held %s", c.tool, seatBranch)
+				}
+			})
+		}
 	}
 }
 

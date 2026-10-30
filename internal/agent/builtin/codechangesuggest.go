@@ -142,6 +142,14 @@ func (t *codeApplySuggestions) CallForTurn(ctx context.Context, turn *turnctx.Tu
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, cv.g.c.actor, repo.Name, err), nil
 	}
+	// THE SOURCE BRANCH'S HOLD, before the write is sent ([CodeDeps.branch]):
+	// the commit lands on the change's source, which is often a seat's branch,
+	// and an apply that moves nothing — every suggestion outdated — appends no
+	// record a deletion of it would be ordered against. It names the head
+	// (expected_head is required), so it is held as a read is.
+	if refusal := t.deps.branch(ctx, turn, tool, cv.g.c, repo, w.Ref, true); refusal != nil {
+		return *refusal, nil
+	}
 	res, err := t.deps.Writer.GitWrite(ctx, w)
 	if err != nil {
 		return t.deps.failedWrite(ctx, turn, tool, cv.g.c, repo, op, err), nil
