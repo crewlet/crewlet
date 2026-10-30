@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Mattermost's half of per-seat access (design sections 4 and 5.2).
@@ -133,14 +134,14 @@ func channelList(names []string) string {
 
 // scopeText is a scope change as one sentence.
 func scopeText(join, leave []string) string {
-	var parts []string
+	var parts []words.Said
 	if len(join) > 0 {
-		parts = append(parts, "add it to "+channelList(join))
+		parts = append(parts, words.Said("add it to "+channelList(join)))
 	}
 	if len(leave) > 0 {
-		parts = append(parts, "remove it from "+channelList(leave))
+		parts = append(parts, words.Said("remove it from "+channelList(leave)))
 	}
-	text := strings.Join(parts, " and ")
+	text := words.And(parts)
 	return strings.ToUpper(text[:1]) + text[1:]
 }
 

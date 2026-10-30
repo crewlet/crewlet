@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE SEAT'S OWN CREDENTIAL, BOUND TO ITS TOOL BY THE ENGINE (D15).
@@ -277,10 +278,10 @@ func (m *MCPServer) validateSeatCredentials(p *problems, base Path) {
 		switch {
 		case fields == nil:
 			p.add(at(here, "kind"), ErrUnknownValue, "%q is not an integration with a per-seat "+
-				"credential; give one of %s", d.Kind, strings.Join(SeatCredentialKinds(), ", "))
+				"credential; give one of %s", d.Kind, words.Or(SeatCredentialKinds()))
 		case d.Field != "" && !slices.Contains(fields, d.Field):
 			p.add(at(here, "field"), ErrUnknownValue, "%q is not one of %s's seat credentials; "+
-				"give one of %s, or leave it out", d.Field, d.Kind, strings.Join(fields, ", "))
+				"give one of %s, or leave it out", d.Field, d.Kind, words.Or(fields))
 		}
 		if strings.TrimSpace(d.Key) == "" {
 			p.add(at(here, "key"), ErrMissing, "required: the variable or header the server reads it under")

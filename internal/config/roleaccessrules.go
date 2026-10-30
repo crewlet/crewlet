@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE DOCUMENT'S RULES FOR PER-SEAT ACCESS.
@@ -279,7 +280,7 @@ func (c *Company) checkGitHubAccess(p *problems, path Path, b *RoleGitHub) {
 		case !slices.Contains(GitHubPermissionKeys(), key):
 			p.add(here, ErrUnknownValue,
 				"%q is not a GitHub App permission an agent's app holds; give one of %s",
-				key, strings.Join(GitHubPermissionKeys(), ", "))
+				key, words.Or(GitHubPermissionKeys()))
 		case !access.Valid():
 			p.add(here, ErrUnknownValue,
 				"%q is not a GitHub grant; give read or write, or leave the "+
@@ -308,10 +309,13 @@ func (c *Company) checkMattermost(p *problems, path Path, b *RoleMattermost) {
 			return slices.Equal(normalRoleSet(set), held)
 		})
 		if !offered {
+			sets := make([]words.Said, 0, len(MattermostRoleSets()))
+			for _, set := range MattermostRoleSets() {
+				sets = append(sets, roleSetAsWritten(set))
+			}
 			p.add(at(path, "roles"), ErrUnknownValue,
-				"%v is not a set of Mattermost roles this engine offers a bot; give "+
-					"[system_user], [system_user, system_post_all_public], "+
-					"[system_user, system_post_all] or [system_admin, system_user]", b.Roles)
+				"%s is not a set of Mattermost roles this engine offers a bot; give %s",
+				roleSetAsWritten(b.Roles), words.Or(sets))
 		}
 	}
 	if SeatAccessOn(b.Enabled) && len(b.Roles) == 0 && c.levelRequired("mattermost") {
@@ -390,4 +394,11 @@ func sameSet(a, b []string) bool {
 	slices.Sort(a)
 	slices.Sort(b)
 	return slices.Equal(slices.Compact(a), slices.Compact(b))
+}
+
+// roleSetAsWritten is a set of Mattermost roles as the company file writes
+// it, `[system_user, system_post_all]`, which is how a refusal names both the
+// set it was given and the sets it offers.
+func roleSetAsWritten(roles []string) words.Said {
+	return words.Said("[" + strings.Join(roles, ", ") + "]")
 }

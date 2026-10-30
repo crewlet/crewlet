@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // WHERE A SEAT'S CREDENTIAL MAY BE WRITTEN, AND WHO ELSE MAY READ IT.
@@ -207,10 +208,14 @@ func (c *Company) validateSeatCredentials(refs VariableReferences) error {
 				}
 			}
 			if len(others) > 0 {
+				seats := "seat"
+				if len(others) > 1 {
+					seats = "seats"
+				}
 				p.add(path, ErrConflict,
-					"${%s} holds this agent's credential and is also named by seat %s: an "+
+					"${%s} holds this agent's credential and is also named by %s %s: an "+
 						"agent's credential has one reader. Give each agent its own "+
-						"variable", name, strings.Join(others, " and "))
+						"variable", name, seats, words.And(others))
 			}
 		}
 

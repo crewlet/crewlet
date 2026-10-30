@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // WHAT AN AGENT MAY DO AT ONE INTEGRATION, CHANGED THE WAY ITS AGENTS TAB DOES.
@@ -350,10 +351,10 @@ func accessLevel(offer seataccess.Options, named, title string) (string, error) 
 		return ids[0], nil
 	case 0:
 		return "", fmt.Errorf("%w: %s offers no role %q; it offers %s",
-			ErrInvalidArguments, title, named, strings.Join(offered, ", "))
+			ErrInvalidArguments, title, named, words.Or(offered))
 	}
 	return "", fmt.Errorf("%w: %s offers %d roles called %q; name one by its id: %s",
-		ErrInvalidArguments, title, len(ids), named, strings.Join(ids, ", "))
+		ErrInvalidArguments, title, len(ids), named, words.Or(ids))
 }
 
 // redecode reads a decoded answer into a typed one.
