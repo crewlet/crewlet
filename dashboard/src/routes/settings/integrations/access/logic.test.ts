@@ -180,9 +180,28 @@ test("an operator-written document holds only a reader who is not an admin; any 
 
 describe("a lane of sets (Confluence by operation)", () => {
   test("stores the chosen ids sorted, once each, and the empty level as nothing", () => {
-    expect(joinLevels(["read:space", "create:page", "read:space"])).toBe("create:page read:space");
-    expect(joinLevels([""])).toBe("");
-    expect(joinLevels([])).toBe("");
+    expect(joinLevels(CONFLUENCE_LANE, ["read:space", "create:page", "read:space"])).toBe(
+      "create:page read:space",
+    );
+    expect(joinLevels(CONFLUENCE_LANE, [""])).toBe("");
+    expect(joinLevels(CONFLUENCE_LANE, [])).toBe("");
+  });
+
+  test("any choice brings the level the engine requires, and none brings nothing", () => {
+    expect(joinLevels(CONFLUENCE_LANE, ["create:page"])).toBe("create:page read:space");
+    // A LANE THE ENGINE REQUIRES NOTHING OF stores what was chosen.
+    expect(joinLevels({ ...CONFLUENCE_LANE, required_level: undefined }, ["create:page"])).toBe(
+      "create:page",
+    );
+  });
+
+  test("a set without the required level is held, in the engine's words", () => {
+    expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "create:page" })).toBe(
+      "Confluence grants nothing else without View. Add it to the set.",
+    );
+    expect(
+      refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "create:page read:space" }),
+    ).toBeNull();
   });
 
   test("names the set in the vendor's order, and the empty set as product access only", () => {
