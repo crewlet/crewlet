@@ -19,7 +19,10 @@ import (
 // legacyCompanyYAML is a company.yaml written before per-seat access, as a
 // deployment upgraded to this build still carries it: the GitHub tier,
 // Datadog's company-wide role and the single Mattermost channel, each retired
-// and refused by name, and nothing else wrong with it.
+// and refused by name. Read without them it is runnable, and it breaks the
+// per-seat access rules as such a file always does (seat blocks that say
+// nothing of whether they are on, and one Datadog key two seats name in
+// mcp_env), which are admission rules and apply only where it is written.
 const legacyCompanyYAML = `
 name: Legacy
 providers:
@@ -34,26 +37,30 @@ integrations:
       api_key: "${DATADOG_API_KEY}"
       app_key: "${DATADOG_APP_KEY}"
       role: r-1
+mcp_servers:
+  - {name: datadog, transport: http, url: "https://mcp.datadoghq.com/v1/mcp", shared: false}
 units:
   - name: Platform
     roles:
       - name: SRE
         handle: sre
+        mcp_env: {datadog: {DD_APPLICATION_KEY: "${DATADOG_SEAT_KEY}"}}
         integrations:
           github:
-            enabled: false
             tier: full_access
           mattermost:
-            enabled: false
             channel: town-square
+      - name: On-call
+        handle: oncall
+        mcp_env: {datadog: {DD_APPLICATION_KEY: "${DATADOG_SEAT_KEY}"}}
 `
 
 // legacyKeys is each retired key legacyCompanyYAML carries, by its path and
 // line, as the warning names it.
 var legacyKeys = []string{
 	"integrations.datadog.provisioning.role (line 14)",
-	"units[0].roles[0].integrations.github.tier (line 23)",
-	"units[0].roles[0].integrations.mattermost.channel (line 26)",
+	"units[0].roles[0].integrations.github.tier (line 25)",
+	"units[0].roles[0].integrations.mattermost.channel (line 27)",
 }
 
 // legacyFile writes doc as the company.yaml in dir, and answers its path and
@@ -100,8 +107,13 @@ func resolveRunSeed(t *testing.T, importPath string, args ...string) (tierBSeed,
 // fleet, it is refused with the very message it always was: no revision is
 // written in a retired shape.
 //
+// SUCH A FILE ALSO BREAKS THE PER-SEAT ACCESS RULES, which are admission rules
+// and apply only where it is written, so they stop no outranked boot: the
+// fixture carries them as the affected deployment's file did.
+//
 // Mutation: drop the refusal at the head of [importSeed], and the empty store
-// imports the file read without its keys.
+// judges the file read without its keys, refusing it for the per-seat rules
+// rather than with the message it always earned.
 func TestALegacyCompanyFileStartsTheStoredCompanyAndIsRefusedOnlyOnImport(t *testing.T) {
 	t.Parallel()
 	file, refusal := legacyFile(t, t.TempDir(), legacyCompanyYAML)
