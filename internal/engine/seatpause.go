@@ -44,7 +44,11 @@ import (
 //     StopRunning closes it with [turn.ErrStoppedByPerson] at the turn's next
 //     round boundary, and the dispatcher spends the trigger rather than
 //     retrying it. A DETACHED coding run is not fenced — it outlives its turn
-//     by design — but the turn that resumes it is, and ends there.
+//     by design — but the turn that resumes it is, and ends there; and its
+//     WRITES are refused while the stop stands: its box's pushes by the code
+//     host (host.Runs.Stopped) and its bridged calls of tools not proven
+//     read-only by its bridge session (mcpbridge.Session.Stopped), both
+//     through stoppedBy.
 //
 // # Keyed on the seat's ID
 //

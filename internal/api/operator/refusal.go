@@ -82,8 +82,9 @@ type classAnswer struct {
 // BY WHAT THE CALLER DOES NEXT, which is the only thing a status is for: 422
 // for an argument to change, 404 for an object that is not there, 403 for a
 // gesture the domain forbids this caller, 409 for a state the request collided
-// with — re-read it, or (for a spent budget, a full inbox, a run that stopped)
-// change it — 503 for a node that could not serve it, the one class a retry of
+// with — re-read it, or (for a spent budget, a full inbox, a run that stopped,
+// a seat a person paused with its running work stopped) change it — 503 for a
+// node that could not serve it, the one class a retry of
 // the same request can fix, 507 for content the object store had no room for
 // ([crewletmcp.RefusalStoreFull]), which neither the request nor a wait
 // changes and an operator's room does — HTTP's own status for a server that
@@ -104,6 +105,7 @@ var classAnswers = map[crewletmcp.Refusal]classAnswer{
 	crewletmcp.RefusalReassignmentBudget: {http.StatusConflict, httpjson.CodeReassignmentBudget},
 	crewletmcp.RefusalInboxFull:          {http.StatusConflict, httpjson.CodeInboxFull},
 	crewletmcp.RefusalNotRunning:         {http.StatusConflict, httpjson.CodeNotRunning},
+	crewletmcp.RefusalPaused:             {http.StatusConflict, httpjson.CodePaused},
 	crewletmcp.RefusalSteerUnsupported:   {http.StatusConflict, httpjson.CodeSteerUnsupported},
 	crewletmcp.RefusalBudgetExhausted:    {http.StatusConflict, httpjson.CodeBudgetExhausted},
 	crewletmcp.RefusalStoreFull:          {http.StatusInsufficientStorage, httpjson.CodeStoreFull},

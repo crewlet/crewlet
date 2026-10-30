@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -150,6 +151,75 @@ func TestStoppedByIsWhoAskedTheSeatsWorkToStop(t *testing.T) {
 	if by, err := e.stoppedBy(ctx, "nobody-here"); err != nil || by != "" {
 		t.Errorf("a handle the company holds no seat for reads stopped by %q (%v)", by, err)
 	}
+}
+
+// A SEAT'S STOP REACHES BOTH OF A DETACHED RUN'S WRITE EDGES ONE WAY: the code
+// host's view of the runs (codeBoxRuns, which it refuses a box's push by) and
+// the session a launch opens on the tool bridge (agentLauncher.bridgeSession,
+// whose Stopped refuses the run's bridged writes) answer ONE reading of ONE
+// pause record — the person who stopped the seat; "" for a seat not paused,
+// for a pause that did not stop its running work and for a seat resumed; and
+// the same unknown on a node that has not read the pauses — so a box's pushes
+// and its run's bridged writes are refused, and let through again, together.
+//
+// Mutations: open the session with a stop check of its own that answers
+// nobody — the stopped seat's bridged writes read not stopped — red; open it
+// with none, which the bridge refuses — red.
+func TestTheEngineStopsOneWayForBoxAndBridge(t *testing.T) {
+	t.Parallel()
+	// The two edges as the engine builds them: what the code host is
+	// handed (codehost.go) and the session LaunchExecutor opens.
+	edges := func(t *testing.T, e *Engine) (box, bridge func(context.Context, string) (string, error)) {
+		t.Helper()
+		ceo := e.Company().Org.AgentSeatByHandle("ceo")
+		launcher := &agentLauncher{engine: e, turn: &turnctx.Turn{RunID: "run-1", Seat: ceo}, seat: ceo}
+		session := launcher.bridgeSession("", nil, nil)
+		if session.Stopped == nil {
+			t.Fatal("the session a launch opens carries no stop check, and the bridge opens none without one")
+		}
+		return e.codeBoxRuns(slog.Default()).Stopped, session.Stopped
+	}
+	agree := func(t *testing.T, e *Engine, what, want string, wantErr error) {
+		t.Helper()
+		box, bridge := edges(t, e)
+		boxBy, boxErr := box(t.Context(), "ceo")
+		bridgeBy, bridgeErr := bridge(t.Context(), "ceo")
+		if boxBy != want || !errors.Is(boxErr, wantErr) || bridgeBy != want || !errors.Is(bridgeErr, wantErr) {
+			t.Errorf("%s: the code host reads it stopped by %q (%v) and the bridge by %q (%v), want both %q (%v)",
+				what, boxBy, boxErr, bridgeBy, bridgeErr, want, wantErr)
+		}
+	}
+
+	unread, _ := engineOn(t)
+	agree(t, unread, "a node that has not read the pauses", "", errPausesUnread)
+
+	e, _, fleet := pausingEngine(t)
+	ctx := t.Context()
+	agree(t, e, "a seat not paused", "", nil)
+	p := pauseSeat(t, fleet, ceoSeat, false)
+	waitFor(t, "the copy to see the pause", func() bool {
+		_, paused, _ := e.pauseOf(ceoSeat)
+		return paused
+	})
+	agree(t, e, "a pause that did not stop the seat's running work", "", nil)
+	p.StopRunning = true
+	stopped, ok, err := fleet.UpdateSeatPause(ctx, p)
+	if err != nil || !ok {
+		t.Fatalf("UpdateSeatPause = (%v, %v)", ok, err)
+	}
+	waitFor(t, "the copy to see the stop", func() bool {
+		by, _ := e.stoppedBy(ctx, "ceo")
+		return by != ""
+	})
+	agree(t, e, "a stopped seat", "jane", nil)
+	if lifted, err := fleet.DeleteSeatPause(ctx, ceoSeat, stopped.Version); err != nil || !lifted {
+		t.Fatalf("DeleteSeatPause = (%v, %v)", lifted, err)
+	}
+	waitFor(t, "the copy to see the resume", func() bool {
+		_, paused, _ := e.pauseOf(ceoSeat)
+		return !paused
+	})
+	agree(t, e, "a seat resumed", "", nil)
 }
 
 // A FLOOR THIS BUILD CANNOT READ IS NONE: a token that does not parse, or one

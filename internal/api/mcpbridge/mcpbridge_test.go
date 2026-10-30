@@ -110,6 +110,41 @@ func (l *ledger) rows() []tools.Call {
 	return append([]tools.Call(nil), l.calls...)
 }
 
+// stopCheck stands in for the engine's one reading of a seat's stop: who
+// stopped the seat, or what kept the node from telling — and every seat it
+// was asked about, since only a call that may change something asks.
+type stopCheck struct {
+	mu    sync.Mutex
+	by    string
+	err   error
+	asked []string
+}
+
+func (s *stopCheck) stopped(_ context.Context, seat string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.asked = append(s.asked, seat)
+	return s.by, s.err
+}
+
+// set is what the check answers from now on.
+func (s *stopCheck) set(by string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.by, s.err = by, err
+}
+
+func (s *stopCheck) seats() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.asked)
+}
+
+// nobody is a stop check answering that nobody stopped the seat: what every
+// session whose case is not about the stop carries, since [mcpbridge.Bridge.Open]
+// refuses a session with none.
+func nobody(context.Context, string) (string, error) { return "", nil }
+
 // denyGuard refuses one tool, standing in for the required-skill gate.
 type denyGuard struct{ tool, reason string }
 
@@ -180,7 +215,7 @@ func newFixture(t *testing.T, offer ...string) *fixture {
 	f.bridge = bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key")})
 	f.session = &mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger,
+		Surface: f.surface, Ledger: f.ledger, Stopped: nobody,
 	}
 
 	mux := http.NewServeMux()
@@ -386,7 +421,7 @@ func TestNoBaseURLMintsNoEndpointAndHoldsNoSession(t *testing.T) {
 	// Mounted, so the missing base URL is the only reason to refuse.
 	_ = b.Handler()
 	if url := b.Open(&mcpbridge.Session{
-		RunID: "run-1", Surface: emptySurface(),
+		RunID: "run-1", Surface: emptySurface(), Stopped: nobody,
 	}); url != "" {
 		t.Errorf("endpoint = %q, want empty", url)
 	}
@@ -534,6 +569,121 @@ func TestAFailingToolComesBackWithItsReason(t *testing.T) {
 	res := callTool(t, sess, "post_message", map[string]any{})
 	if !res.IsError || text(res) != "the channel is archived" {
 		t.Fatalf("result = %+v / %q", res.IsError, text(res))
+	}
+}
+
+// --- a person's stop -------------------------------------------------------
+
+// A PERSON'S STOP REACHES A DETACHED RUN'S BRIDGED WRITES. A pause that asks
+// a seat's running work to stop ends a native turn at its next round, but a
+// detached run outlives its turn and its bridged calls run on no turn's fence
+// — so an agent-mode run's box went on changing things as the seat, through
+// the seat's own tools, after a person stopped it. Now every call of a tool
+// the surface has not proven read-only asks the session's stop check first,
+// about the seat the call acts as: STOPPED, it is refused as paused, naming
+// who stopped the seat, reaches no tool and is recorded; an unannotated tool
+// is refused the same, since a fence that admits what it cannot classify
+// admits every under-annotated write; UNKNOWN — a node that has not read the
+// pauses — it is refused as unavailable and never run; and NOBODY (which is
+// also what a pause without stop_running answers) lets it run. A read runs
+// throughout and is never asked about.
+//
+// Mutations: skip the check in the handler — the stopped seat's
+// post_message runs — red; fence with !WritesToSharedSurface in place of
+// ReadOnlyProven — the unannotated activate runs — red; ask about reads too —
+// the check is asked more than the writes — red.
+func TestAStoppedSeatsBridgedWritesAreRefused(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, "read_page", "post_message", "activate")
+	stop := &stopCheck{}
+	f.session.Stopped = stop.stopped
+	sess := dial(t, f.open(t))
+
+	stop.set("jane", nil)
+	res := callTool(t, sess, "post_message", map[string]any{"text": "still here"})
+	if !res.IsError || !strings.Contains(text(res), "paused by jane") {
+		t.Fatalf("a stopped seat's write answered (failed %v) %q, want it refused naming who stopped it",
+			res.IsError, text(res))
+	}
+	if seen := f.byName["post_message"].seen(); len(seen) != 0 {
+		t.Fatalf("a stopped seat's write reached its tool: %+v", seen)
+	}
+	if res := callTool(t, sess, "activate", nil); !res.IsError {
+		t.Errorf("a stopped seat's call of a tool nobody annotated ran: %s", text(res))
+	}
+	if res := callTool(t, sess, "read_page", map[string]any{}); res.IsError {
+		t.Errorf("a stopped seat's read was refused: %s", text(res))
+	}
+	if got := f.byName["read_page"].seen(); len(got) != 1 {
+		t.Errorf("a stopped seat's read ran %d times, want 1", len(got))
+	}
+	rows := f.ledger.rows()
+	switch {
+	case len(rows) != 3:
+		t.Fatalf("%d calls recorded, want the two refusals and the read: %+v", len(rows), rows)
+	case rows[0].Name != "post_message" || !rows[0].Failed || rows[0].Refusal() != tools.RefusalPaused ||
+		rows[0].Args["text"] != "still here" || !strings.Contains(rows[0].Output, "paused by jane"):
+		t.Errorf("the refused write is recorded as %+v (class %q), want it failed as paused, with its "+
+			"arguments and sentence", rows[0], string(rows[0].Refusal()))
+	case rows[1].Refusal() != tools.RefusalPaused:
+		t.Errorf("the refused unannotated call is recorded as class %q, want paused", string(rows[1].Refusal()))
+	case rows[2].Name != "read_page" || rows[2].Failed:
+		t.Errorf("the read is recorded as %+v, want it run", rows[2])
+	}
+	if got := stop.seats(); !slices.Equal(got, []string{"dev", "dev"}) {
+		t.Errorf("the stop check was asked about %v, want the run's seat once for each call "+
+			"that may change something and never for the read", got)
+	}
+
+	stop.set("", errors.New("this node has not yet read which seats are paused"))
+	res = callTool(t, sess, "post_message", map[string]any{})
+	if !res.IsError || !strings.Contains(text(res), "could not tell") {
+		t.Fatalf("a write whose stop is unknown answered (failed %v) %q, want it refused as unread",
+			res.IsError, text(res))
+	}
+	if seen := f.byName["post_message"].seen(); len(seen) != 0 {
+		t.Fatalf("a write ran while nobody could tell whether its seat was stopped: %+v", seen)
+	}
+	if rows := f.ledger.rows(); rows[len(rows)-1].Refusal() != tools.RefusalUnavailable {
+		t.Errorf("the write refused while its stop is unknown is recorded as class %q, want unavailable",
+			string(rows[len(rows)-1].Refusal()))
+	}
+	if res := callTool(t, sess, "read_page", map[string]any{}); res.IsError {
+		t.Errorf("a read was refused while the stop is unknown: %s", text(res))
+	}
+
+	stop.set("", nil)
+	if res := callTool(t, sess, "post_message", map[string]any{"text": "resumed"}); res.IsError {
+		t.Fatalf("a write of a seat nobody stopped was refused: %s", text(res))
+	}
+	if seen := f.byName["post_message"].seen(); len(seen) != 1 || seen[0]["text"] != "resumed" {
+		t.Errorf("a write of a seat nobody stopped reached its tool as %+v, want it once", seen)
+	}
+}
+
+// A SESSION NOBODY CAN STOP IS NOT OPENED. Its stop check is all that stands
+// between a person's emergency stop and a detached run's writes, and an
+// absent one would read as "never stopped" — so Open refuses a session without
+// one as it refuses one that cannot dispatch, and opens the same session once
+// it has one, or a bridge that refused everything would pass.
+//
+// Mutation: drop the check from Open — the session opens, and its first write
+// asks a check that is not there — red.
+func TestASessionWithoutAStopCheckIsNotOpened(t *testing.T) {
+	t.Parallel()
+	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
+	// Mounted, so the missing stop check is the only reason to refuse.
+	_ = b.Handler()
+	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}
+	if url := b.Open(session); url != "" {
+		t.Errorf("a session with no stop check was opened at %q", url)
+	}
+	if b.Live() != 0 {
+		t.Errorf("%d sessions live after a session with no stop check was refused", b.Live())
+	}
+	session.Stopped = nobody
+	if url := b.Open(session); url == "" {
+		t.Error("the same session with a stop check was refused")
 	}
 }
 
@@ -690,7 +840,7 @@ func TestReopeningARunReplacesItsEarlierSession(t *testing.T) {
 
 	second := &mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger,
+		Surface: f.surface, Ledger: f.ledger, Stopped: nobody,
 	}
 	url := f.bridge.Open(second)
 	if n := first.Connections(); n != 0 {
@@ -720,7 +870,7 @@ func TestASupersededBoxsTokenNoLongerResolves(t *testing.T) {
 
 	fresh := f.bridge.Open(&mcpbridge.Session{
 		RunID: "run-1", Handle: "dev", Role: "Engineer",
-		Surface: f.surface, Ledger: f.ledger,
+		Surface: f.surface, Ledger: f.ledger, Stopped: nobody,
 	})
 	if fresh == stale {
 		t.Fatal("the relaunched run was handed the superseded box's own URL")
@@ -807,7 +957,9 @@ func literal(v any) string {
 
 // A SESSION THAT CANNOT DISPATCH IS WORSE THAN NONE. Registered, it would
 // answer a box's handshake and then take the process down on its first
-// tools/list — one seat's wiring mistake becoming a fleet node's crash.
+// tools/list — one seat's wiring mistake becoming a fleet node's crash. Each
+// row lacks exactly the one thing it names, a stop check included where the
+// row is not about it, so each is refused for its own reason.
 func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 	t.Parallel()
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
@@ -817,13 +969,13 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 		name    string
 		session *mcpbridge.Session
 	}{
-		{"no run id", &mcpbridge.Session{Handle: "dev", Surface: emptySurface()}},
-		{"no surface", &mcpbridge.Session{RunID: "run-1", Handle: "dev"}},
+		{"no run id", &mcpbridge.Session{Handle: "dev", Surface: emptySurface(), Stopped: nobody}},
+		{"no surface", &mcpbridge.Session{RunID: "run-1", Handle: "dev", Stopped: nobody}},
 		// A SURFACE NO TURN WAS BOUND TO names no seat, and every bridged
 		// call acts as the run's seat — so it would answer the handshake
 		// and then decide nothing it was asked.
 		{"no seat", &mcpbridge.Session{RunID: "run-1", Handle: "dev",
-			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil)}},
+			Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil), Stopped: nobody}},
 		{"nothing at all", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -845,7 +997,7 @@ func TestAnIncompleteSessionIsRefusedRatherThanRegistered(t *testing.T) {
 func TestABridgeNoListenerMountedOpensNoSession(t *testing.T) {
 	t.Parallel()
 	b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "k"), BaseURL: "http://x"})
-	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface()}
+	session := &mcpbridge.Session{RunID: "run-1", Handle: "dev", Surface: emptySurface(), Stopped: nobody}
 	if b.Mounted() {
 		t.Fatal("a bridge nothing mounted reports itself mounted")
 	}
@@ -926,7 +1078,7 @@ func TestAnUnresolvedTokenSaysWhyInTheLogNotTheResponse(t *testing.T) {
 func (f *fixture) token(t *testing.T, runID string) string {
 	t.Helper()
 	url := f.bridge.Open(&mcpbridge.Session{
-		RunID: runID, Handle: "dev", Role: "Engineer", Surface: f.surface,
+		RunID: runID, Handle: "dev", Role: "Engineer", Surface: f.surface, Stopped: nobody,
 	})
 	if url == "" {
 		t.Fatal("no endpoint")

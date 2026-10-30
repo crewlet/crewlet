@@ -93,6 +93,7 @@ export const ACT_ERRORS = {
     "It has been handed between seats too many times. A person has to pick it up now.",
   inbox_full: "Your inbox holds too many marks. Mark everything read up to here first.",
   not_running: "It is not running any more.",
+  paused: "The seat is paused with its running work stopped. Resume it, then try again.",
   steer_unsupported: "That turn cannot take a note: it runs in a coding agent's own loop.",
   budget_exhausted:
     "The token budget for this window is spent. Raise it, or wait for the window to reset.",

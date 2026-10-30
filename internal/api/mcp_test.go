@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -72,6 +73,9 @@ func TestTheBridgeRouteAnswersEveryTransportVerb(t *testing.T) {
 		RunID: "run-1", Handle: "dev", Role: "Dev",
 		Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
 			ForTurn(&turnctx.Turn{RunID: "run-1", Seat: seat}),
+		// A STOP CHECK, as every launch gives its session: the bridge opens
+		// none without one. Nobody stopped this seat.
+		Stopped: func(context.Context, string) (string, error) { return "", nil },
 	})
 	if url == "" {
 		t.Fatal("no endpoint was minted")

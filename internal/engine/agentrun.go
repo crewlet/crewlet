@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools"
 )
 
 // Agent mode's engine half: turning a seat's executor into a detached run of
@@ -129,14 +130,7 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 	// for the segment that resumes from the run to pay — bound to the run's
 	// job by the launch below, before the box that makes them exists.
 	ledger := newBridgeLedger(pending, req.Spend)
-	endpoint := e.bridge.Open(&mcpbridge.Session{
-		RunID:   l.turn.RunID,
-		Handle:  l.turn.Handle(),
-		Role:    l.seat.Name,
-		Model:   model,
-		Surface: req.Surface,
-		Ledger:  ledger,
-	})
+	endpoint := e.bridge.Open(l.bridgeSession(model, req.Surface, ledger))
 	if endpoint == "" {
 		// NO ENDPOINT IS A REFUSAL, not a degraded run. A coding agent
 		// with none of the seat's tools cannot answer anybody, cannot
@@ -198,6 +192,29 @@ func (l *agentLauncher) LaunchExecutor(ctx context.Context, req runner.AgentRunR
 		return err
 	}
 	return nil
+}
+
+// bridgeSession is the session a launch opens for its run on this node's tool
+// bridge: the run's seat, the model its launch points the coding CLI at, the
+// executor's surface and the run's ledger.
+//
+// AND THE SEAT'S STOP, read through stoppedBy — the one reading the code host
+// refuses the run's box's pushes by (codeBoxRuns) — so a person's pause that
+// stops the seat's running work refuses the run's bridged writes as it
+// refuses its box's pushes, and lifting it lets both through again. A detached
+// run is fenced by no turn while its box works, so without it the run went on
+// changing things as the seat through the bridge after a person stopped it.
+func (l *agentLauncher) bridgeSession(model string, surface *tools.Surface,
+	ledger mcpbridge.Ledger) *mcpbridge.Session {
+	return &mcpbridge.Session{
+		RunID:   l.turn.RunID,
+		Handle:  l.turn.Handle(),
+		Role:    l.seat.Name,
+		Model:   model,
+		Surface: surface,
+		Ledger:  ledger,
+		Stopped: l.engine.stoppedBy,
+	}
 }
 
 // errNoBridgeURL is an agent-mode launch on a node with no bridge a box can

@@ -33,7 +33,7 @@ subcommand below is served by it.
 | `crewlet code credential [-token-env NAME] get` | git's credential helper for the code host: answers git with the API token in `$CREWLET_API_TOKEN` as the password, over HTTPS (or plain http to this machine) only, and stores nothing |
 | `crewlet fleet broker list [config] [-json]` | The fleet broker's membership: each live node's broker kind (`member`, `leaf`, `client`, or `unknown` for a kind this build does not know) beside how the JetStream metadata group counts it — read through a member — and, in words, every disagreement: a member gone for good that the group still counts in every election, with the command that removes it. The token takes `admin` |
 | `crewlet fleet broker remove <node> -confirm <node> [-force]`, or `-peer <peer> -confirm <peer>` | Stop the metadata group counting a member that is gone for good, through a live member's system account — by node id, or by the peer id `list` shows for a voter no member can name. Refused while the node holds a live presence lease as a member; `-force` is for a member wedged in a way that still renews it. The token takes `admin` |
-| `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round and refuses its coding boxes' pushes until it is resumed. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
+| `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends the turn it is on at its next round and refuses every change its coding runs make — their boxes' pushes and their calls of its tools that write — until it is resumed. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
 | `crewlet artifacts publish <dir\|file> [-artifact ID] [-op-id ID]` | Publish a directory or a file as a new artifact, or as the next version of one: an upload intent first, then only the files the artifact does not already hold are sent, then the version is published against the head it read |
@@ -1764,8 +1764,11 @@ A paused seat starts no new turn, its incoming mail waits on its inbox in
 order, and its scheduled runs are recorded `skipped_paused` rather than sent.
 The turn it is on finishes first unless `-stop` is given, which ends that turn
 at its next round; a stopped turn is not run again. `-stop` also refuses every
-push a detached coding run of the seat makes from its box until the seat is
-resumed; the run itself runs on, and its box may still fetch. `-reason` is one line
+change a detached coding run of the seat makes until the seat is resumed: a push
+from its box, and a call through the [tool
+bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
+of any of the seat's tools not marked read-only. The run itself runs on: its box
+may still fetch, and its bridged reads still answer. `-reason` is one line
 (at most 500 characters), shown on the seat and in the feed. Pausing a paused
 seat changes nothing — except that `-stop` adds the stop — and resuming a seat
 that is not paused changes nothing. See

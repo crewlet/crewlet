@@ -606,6 +606,10 @@ const (
 	// CodeNotRunning is a run or turn that is not running, or not waiting
 	// for what the call supplies.
 	CodeNotRunning Code = "not_running"
+	// CodePaused is a call that may change something, refused because a
+	// person paused the seat it acts as and asked its running work to stop.
+	// Resuming the seat clears it; trying again sooner does not.
+	CodePaused Code = "paused"
 	// CodeSteerUnsupported is a running turn whose runtime cannot take a
 	// note mid-turn.
 	CodeSteerUnsupported Code = "steer_unsupported"
@@ -1171,6 +1175,8 @@ var codes = map[Code]string{
 	CodeInboxFull: "The inbox holds as many marks as it may. Mark everything " +
 		"up to here read first.",
 	CodeNotRunning: "It is not running any more, or not waiting for this.",
+	CodePaused: "The seat is paused with its running work stopped, so nothing " +
+		"was changed. Resume it, then try again.",
 	CodeSteerUnsupported: "That turn cannot take a note: it runs in a coding " +
 		"agent's own loop.",
 	CodeBudgetExhausted: "The token budget for this window is spent, so " +

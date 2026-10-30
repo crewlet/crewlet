@@ -100,6 +100,17 @@ const (
 	// running, or not waiting for what the call supplies.
 	RefusalNotRunning Refusal = "not_running"
 
+	// RefusalPaused — a person paused the seat the call acts as and asked
+	// its running work to stop, so a call that may change something was not
+	// made: a detached coding run's bridged call of a tool not proven
+	// read-only (internal/api/mcpbridge). Nothing about the call was wrong,
+	// which tells it from [RefusalInvalid]; and neither waiting nor trying
+	// again clears it, which tells it from [RefusalUnavailable]: it clears
+	// when somebody resumes the seat, and the sentence names who stopped it.
+	// A node that cannot tell whether the seat was stopped answers
+	// [RefusalUnavailable], never this and never "not stopped".
+	RefusalPaused Refusal = "paused"
+
 	// RefusalSteerUnsupported — the running turn's runtime cannot take a
 	// note mid-turn.
 	RefusalSteerUnsupported Refusal = "steer_unsupported"
@@ -161,8 +172,9 @@ var Refusals = []Refusal{
 	RefusalInvalid, RefusalNotFound, RefusalForbidden,
 	RefusalStaleVersion, RefusalConflict, RefusalExists,
 	RefusalAlreadyAnswered, RefusalReassignmentBudget, RefusalInboxFull,
-	RefusalNotRunning, RefusalSteerUnsupported, RefusalBudgetExhausted,
-	RefusalStoreFull, RefusalUnavailable, RefusalInternalError,
+	RefusalNotRunning, RefusalPaused, RefusalSteerUnsupported,
+	RefusalBudgetExhausted, RefusalStoreFull, RefusalUnavailable,
+	RefusalInternalError,
 }
 
 // Valid reports whether a class off the wire is one this build knows. The

@@ -43,6 +43,19 @@
 //     has verified, every call is the run's SEAT acting — attached here, per
 //     call, over whatever the request's own context says. See
 //     [Session.actingAs] for why the guard's answer cannot be the one.
+//   - A PERSON'S STOP. A pause that asks a seat's running work to stop ends a
+//     native turn at its next round, on the turn's own fence; a detached run
+//     outlives its turn by design, and its bridged calls run on no turn's
+//     fence. So a session asks [Session.Stopped] before every call of a tool
+//     the surface has not proven read-only, and refuses the call
+//     ([crewletmcp.RefusalPaused]) while a person has stopped the seat: the
+//     run runs on and its reads still answer, and what it may no longer do
+//     is change anything as the seat — the same stop the code host holds the
+//     run's box's pushes to (ADR-0063). It is the one refusal this package
+//     makes of its own, and it is no second idea of what is GRANTED: the
+//     call is granted, and the person who could have ended the turn that
+//     granted it asked for nothing more to change. See
+//     [Session.refuseStopped].
 package mcpbridge
 
 import (
@@ -127,6 +140,26 @@ type Session struct {
 	// surface alone, which is correct for a run whose whole life is one
 	// process — a test, or a host-placement run the engine is watching.
 	Ledger Ledger
+
+	// Stopped is who stopped the seat's running work: the person whose pause
+	// of seat asked its running work to stop, "" for a seat nobody stopped —
+	// not paused, or paused without stopping its running work — and an error
+	// where this node cannot tell (it has not yet read which seats are
+	// paused), which is UNKNOWN and never "not stopped". Asked before every
+	// call of a tool the surface has not proven read-only, with the seat the
+	// call acts as ([Session.refuseStopped]).
+	//
+	// THE ENGINE'S ONE READING of a seat's stop: the same function the code
+	// host refuses the run's box's pushes by, so a box's git and its bridged
+	// calls stop, and resume, together.
+	//
+	// EACH SESSION'S, not the bridge's: the bridge is built before the
+	// engine that watches the pauses exists, and the session is where the
+	// engine and the seat meet. REQUIRED — [Bridge.Open] refuses a session
+	// without one — because an absent check would read as "never stopped":
+	// a detached run changing things as the seat after a person stopped it,
+	// which is the one thing it is here to refuse.
+	Stopped func(ctx context.Context, seat string) (by string, err error)
 
 	// nonce distinguishes THIS session from an earlier one for the same
 	// run. It is half the token's subject, so a token minted for a
@@ -266,10 +299,17 @@ func (b *Bridge) Open(s *Session) string {
 	// was never bound to a turn would answer the box's handshake and then
 	// refuse every gated builtin as undecidable — a run that burns its
 	// budget finding out that nothing it holds can be called.
-	if s.RunID == "" || s.Surface == nil || s.Surface.Turn().Handle() == "" {
+	//
+	// AND SO IS A SESSION NOBODY CAN STOP, on the security half. Its stop
+	// check is all that stands between a person's emergency stop and a
+	// detached run's writes ([Session.Stopped]), and an absent one would
+	// read as "never stopped": the run would go on changing things as the
+	// seat after a person stopped it.
+	if s.RunID == "" || s.Surface == nil || s.Surface.Turn().Handle() == "" || s.Stopped == nil {
 		log.Error("mcp_bridge_session_incomplete",
 			"run_id", s.RunID, "seat", s.Handle, "has_surface", s.Surface != nil,
-			"has_seat", s.Surface != nil && s.Surface.Turn().Handle() != "")
+			"has_seat", s.Surface != nil && s.Surface.Turn().Handle() != "",
+			"has_stop_check", s.Stopped != nil)
 		return ""
 	}
 	if b.base == "" {
@@ -666,7 +706,8 @@ func (s *Session) Connections() int {
 	return n
 }
 
-// handler dispatches one bridged call through the seat's own surface.
+// handler dispatches one bridged call through the seat's own surface, once
+// a person's stop has been asked about it ([Session.refuseStopped]).
 func (s *Session) handler(name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		args, err := decodeArgs(req)
@@ -676,6 +717,13 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			// reliably fixes, and a protocol error tears down the
 			// session it would have fixed them in.
 			return failure(err.Error()), nil
+		}
+
+		// BEFORE THE SURFACE IS ASKED, so a call a person's stop refuses
+		// reaches no tool at all: refused after it, the write would have
+		// happened.
+		if refused := s.refuseStopped(ctx, name, args); refused != nil {
+			return refused, nil
 		}
 
 		// THE MODEL THE CALL WAS MADE ON, set here and nowhere else on this
@@ -715,6 +763,59 @@ func (s *Session) handler(name string) mcp.ToolHandler {
 			Content: []mcp.Content{&mcp.TextContent{Text: res.Output}},
 		}, nil
 	}
+}
+
+// refuseStopped is the answer to a bridged call a person's stop refuses, or
+// nil for one that runs.
+//
+// ONLY A CALL THAT MAY CHANGE SOMETHING IS ASKED ABOUT. A tool the surface
+// has proven read-only — the registry's own record, which carries an MCP
+// tool's advertised hints too — runs as ever: a read changes nothing, and a
+// run winding down may need one. Every other tool, an unannotated one
+// included, is refused while the seat is stopped, because a fence that admits
+// what it cannot classify admits every under-annotated write
+// ([crewletmcp.ReadOnlyProven]).
+//
+// THREE ANSWERS, and the third is not the second: a person stopped the seat
+// ([crewletmcp.RefusalPaused], naming them), nobody did (the call runs), or
+// this node cannot tell — it has not read the pauses yet — which refuses the
+// call as [crewletmcp.RefusalUnavailable], since a retry may find them read
+// and a write run while its stop is unknown is the hole this closes.
+//
+// RECORDED like every answered call, so whoever reviews the run sees that its
+// box tried to change something after it was stopped, and what. Logged at
+// INFO and WARN rather than DEBUG, unlike an unresolved token: only a box
+// holding a token this fleet signed reaches a session, so nobody can write
+// these lines at will.
+func (s *Session) refuseStopped(ctx context.Context, name string, args map[string]any) *mcp.CallToolResult {
+	if crewletmcp.ReadOnlyProven(s.Surface.AnnotationsOf(name)) {
+		return nil
+	}
+	seat := s.Surface.Turn().Handle()
+	by, err := s.Stopped(ctx, seat)
+	var (
+		sentence string
+		cause    error
+	)
+	switch {
+	case err != nil:
+		log.WarnContext(ctx, "mcp_bridge_stop_unread",
+			"run_id", s.RunID, "seat", seat, "tool", name, "error", err)
+		sentence = fmt.Sprintf("This node could not tell whether a person stopped seat %s's running "+
+			"work, so %s was not run. Call it again in a moment.", seat, name)
+		cause = crewletmcp.Classify(crewletmcp.RefusalUnavailable, err)
+	case by != "":
+		log.InfoContext(ctx, "mcp_bridge_call_stopped",
+			"run_id", s.RunID, "seat", seat, "tool", name, "stopped_by", by)
+		sentence = fmt.Sprintf("Seat %s was paused by %s, who asked its running work to stop, so %s "+
+			"was not run: nothing is changed as the seat until it is resumed. Only tools marked "+
+			"read-only still answer.", seat, by, name)
+		cause = crewletmcp.RefusalPaused
+	default:
+		return nil
+	}
+	s.appendCall(ctx, name, args, sentence, true, cause)
+	return failure(sentence)
 }
 
 // actingAs is the context one bridged call runs under: the run's own SEAT,

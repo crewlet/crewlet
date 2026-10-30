@@ -50,6 +50,7 @@ const (
 	RefusalReassignmentBudget = mcp.RefusalReassignmentBudget
 	RefusalInboxFull          = mcp.RefusalInboxFull
 	RefusalNotRunning         = mcp.RefusalNotRunning
+	RefusalPaused             = mcp.RefusalPaused
 	RefusalSteerUnsupported   = mcp.RefusalSteerUnsupported
 	RefusalBudgetExhausted    = mcp.RefusalBudgetExhausted
 	RefusalStoreFull          = mcp.RefusalStoreFull

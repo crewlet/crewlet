@@ -137,6 +137,9 @@ func TestABadBoxURLRefusesTheBoot(t *testing.T) {
 				Surface: tools.NewSurface("execute", tools.NewRegistry().Snapshot(), nil).
 					ForTurn(&turnctx.Turn{RunID: "run-1", Seat: dev,
 						Org: &org.Organization{Name: "Acme", Roles: []*org.Role{dev}}}),
+				// A STOP CHECK, as every launch gives its session: the
+				// bridge opens none without one. Nobody stopped this seat.
+				Stopped: func(context.Context, string) (string, error) { return "", nil },
 			})
 			t.Cleanup(func() { bridge.Close("run-1") })
 			if !strings.HasPrefix(endpoint, want+mcpbridge.PathPrefix) {

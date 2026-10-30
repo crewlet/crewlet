@@ -468,14 +468,19 @@ stateDiagram-v2
   worked and acked, not retried: a person who stopped a turn did not ask for it
   to run again the moment they resume the seat. The turn's completion reads
   `stopped` rather than `failed`, and `agent_turn_stopped` names who stopped it.
-  A detached [coding run](code-sandbox.md) is not fenced — it outlives its turn
-  by design — but the turn that resumes it is, and ends there with the run.
-  What the stop does refuse it is every **write**: its box's pushes to the
-  code host are refused, naming who stopped the seat, until the seat is
-  resumed (see [Coding boxes](code-host.md#coding-boxes)). The run itself runs
-  on, and its box may still fetch: a read changes nothing. A pause without
-  `stop_running` stops new work only, so a running job's pushes land, as a
-  turn in flight finishes.
+  A detached [coding run](code-sandbox.md) keeps running when its seat is
+  paused — it outlives its turn by design — but the turn that resumes it is
+  fenced, and ends there with the run. What the stop does refuse it is every
+  **change** it would make, naming who stopped the seat, until the seat is
+  resumed: a push its box makes to the code host (see
+  [Coding boxes](code-host.md#coding-boxes)), and a call it makes through the
+  [tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)
+  of any of the seat's tools not marked read-only, answered `paused`. The run
+  itself runs on: its box may still fetch, and its bridged reads still answer —
+  a read changes nothing. A node that has not yet read which seats are paused
+  refuses those writes as `unavailable`, never as not stopped. A pause without
+  `stop_running` stops new work only, so a running job's pushes and bridged
+  writes land, as a turn in flight finishes.
 - **Answers wait too.** An answer to a parked coding run, by chat or by turn,
   is held behind the pause like the seat's other mail: resuming a run is work.
   A chat reply already recorded as a run's answer before the pause waits the

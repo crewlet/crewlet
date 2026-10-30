@@ -441,7 +441,20 @@ func launchRig(t *testing.T, c *Company, bridge *mcpbridge.Bridge) (*Engine, *sa
 	}
 	e.useSandbox(pending, coordinator)
 	e.epoch.current.Store(c)
+	pausesReadNone(e)
 	return e, jobs
+}
+
+// pausesReadNone gives e's pause copy the answer a booted node's watch holds
+// once it has read the fleet's pauses and found none, as every node does from
+// boot: a launched run's bridged call of a tool not proven read-only asks it
+// whether a person stopped the seat (agentLauncher.bridgeSession), and a copy
+// that has never been read refuses the call rather than guess. The watch
+// itself is pausingEngine's, over a fleet store this rig does not hold.
+func pausesReadNone(e *Engine) {
+	e.pauses.mu.Lock()
+	defer e.pauses.mu.Unlock()
+	e.pauses.known = true
 }
 
 // A NODE THAT SERVES NO BRIDGE REFUSES AGENT MODE, AND SAYS WHICH SETTING.

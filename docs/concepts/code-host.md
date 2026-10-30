@@ -3349,7 +3349,10 @@ push itself, naming who stopped the seat, until the seat is resumed
 read changes nothing, and a box winding down may need one. A pause without
 `stop_running` stops new work only, so a running job's pushes land. A push
 admitted before the pause landed and decided after it lands, as a push of a run
-that ended between its admission and its decide does.
+that ended between its admission and its decide does. The same stop, read the
+same way, refuses the run's calls of the seat's tools that write through the
+[tool bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box),
+so a stopped seat's run changes nothing by either edge until it is resumed.
 
 **Neither transport takes the other's credential.** On `/box/git/` the guard
 reads no credential at all — a person's token presented as a bearer, a

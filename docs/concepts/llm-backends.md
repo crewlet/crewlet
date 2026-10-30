@@ -1033,7 +1033,12 @@ whole point of a sandbox is that its credentials are not the company's.
 So the box gets exactly one MCP server — on the engine, named `crewlet` —
 and every call comes back out through the *same* `tools.Surface` a native
 loop would call. A tool denied natively is denied there; the skill guard,
-the recording and the failure shape are the ones already tested. That
+the recording and the failure shape are the ones already tested. The one
+refusal the bridge makes of its own is a person's **stop**: the run is on no
+turn's round for a pause's `stop_running` to end, so while one stands every
+call of a tool not marked read-only is refused, `paused`, until the seat is
+resumed ([Code sandbox § The tool
+bridge](code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)). That
 name is **reserved**: an `mcp_servers` entry may not use it, because the
 bridge is written into every agent-mode box's server list under it and
 would replace the entry there. The bridge advertises the seat's *live*

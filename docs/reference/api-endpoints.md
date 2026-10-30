@@ -5254,7 +5254,7 @@ pause, and what waited is delivered first. See
 
 | Tool | Arguments |
 |---|---|
-| `pause_seat` | `handle` — the agent seat; `reason` — one line, at most 500 characters, optional; `stop_running` — also end the turn the seat is on at its next round, and refuse every push a detached coding run of the seat makes from its box until the seat is resumed. A stopped turn is not run again. |
+| `pause_seat` | `handle` — the agent seat; `reason` — one line, at most 500 characters, optional; `stop_running` — also end the turn the seat is on at its next round, and refuse every change a detached coding run of the seat makes — a push from its box, and a call through the [tool bridge](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box) of any of the seat's tools not marked read-only, answered `paused` — until the seat is resumed. A stopped turn is not run again. |
 | `resume_seat` | `handle` |
 
 **Who may**: the seat's holder, whoever leads it, or `admin` — never every reader, since everybody signed in holds a credential.
@@ -5773,7 +5773,7 @@ And the tool's own refusal, carrying the tool's sentence as `detail`:
 | `invalid` | `422` |
 | `not_found` | `404` |
 | `forbidden` | `403` |
-| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `steer_unsupported`, `budget_exhausted` | `409` |
+| `stale_version`, `conflict`, `exists`, `already_answered`, `reassignment_budget`, `inbox_full`, `not_running`, `paused`, `steer_unsupported`, `budget_exhausted` | `409` |
 | `store_full` | `507` — the object store has no room for what the tool would store: nothing was stored or recorded, and **no** `Retry-After`, since the same call is refused the same until an operator makes room |
 | `unavailable` | `503` |
 | `internal_error` | `500` — a fault of the node's own store or code: a fixed sentence, the error itself only in the node's log, and **no** `Retry-After`, since no wait clears it. It is also the answer for a failure that carried no class |

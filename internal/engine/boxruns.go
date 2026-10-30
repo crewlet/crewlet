@@ -31,6 +31,15 @@ type boxRuns struct {
 
 var _ host.Runs = boxRuns{}
 
+// codeBoxRuns is the code host's view of this engine's coding runs: their rows
+// on the fleet's coordination store, and a seat's stop as this node reads it
+// (stoppedBy) — the one reading every bridge session a launch opens carries
+// too (agentLauncher.bridgeSession), so a box's pushes and its run's bridged
+// writes are refused, and let through again, together.
+func (e *Engine) codeBoxRuns(log *slog.Logger) boxRuns {
+	return boxRuns{pending: sandbox.NewCoordStore(e.backends.Fleet), stopped: e.stoppedBy, log: log}
+}
+
 // Run is the row of the run whose turn is turnID, as the host judges a box by
 // it: an error is the store unreachable, never "no run".
 //
@@ -142,10 +151,14 @@ var errForeignFloor = errors.New("engine: a coding run's code floor names a posi
 // never "not stopped". Every node runs the watch from boot, so a git node
 // that serves no seat answers too.
 //
-// The code host refuses a coding box's push on it (host.Runs.Stopped): a
-// detached coding run is deliberately not fenced by a pause — it outlives its
-// turn — so without it a box went on pushing to the company's repositories as
-// the seat after a person stopped the seat "because it was doing damage".
+// The code host refuses a coding box's push on it (host.Runs.Stopped), and
+// the run's bridge session its bridged calls of every tool not proven
+// read-only (mcpbridge.Session.Stopped, set by agentLauncher.bridgeSession):
+// a detached coding run is deliberately not fenced by a pause — it outlives
+// its turn — so without them a box went on pushing to the company's
+// repositories, and calling the seat's tools that write, as the seat after a
+// person stopped the seat "because it was doing damage". ONE function for
+// both edges, so the two are stopped, and let through again, together.
 func (e *Engine) stoppedBy(_ context.Context, handle string) (string, error) {
 	seat, err := e.seatID(handle)
 	if err != nil {
