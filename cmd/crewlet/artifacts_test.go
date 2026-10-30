@@ -125,7 +125,7 @@ func newFakeArtifactsNode(t *testing.T) *fakeArtifactsNode {
 		n.mu.Unlock()
 		answer(w, http.StatusOK, map[string]any{"outcome": "applied"})
 	})
-	n.server = httptest.NewServer(mux)
+	n.server = httptest.NewServer(asEngine(mux))
 	t.Cleanup(n.server.Close)
 	return n
 }

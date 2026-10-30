@@ -33,7 +33,7 @@ type fakeKeyedNode struct {
 func newFakeKeyedNode(t *testing.T) *fakeKeyedNode {
 	t.Helper()
 	n := &fakeKeyedNode{}
-	n.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	n.server = httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n.mu.Lock()
 		n.key, n.path = r.Header.Get(opkey.Header), r.URL.Path
 		status, body, hangUp := n.status, n.body, n.hangUp
@@ -47,7 +47,7 @@ func newFakeKeyedNode(t *testing.T) *fakeKeyedNode {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(body)
-	}))
+	})))
 	t.Cleanup(n.server.Close)
 	return n
 }

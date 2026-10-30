@@ -61,7 +61,7 @@ type fakeChatletNode struct {
 func newFakeChatletNode(t *testing.T, status int, body string) *fakeChatletNode {
 	t.Helper()
 	n := &fakeChatletNode{status: status, body: body}
-	n.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	n.server = httptest.NewServer(asEngine(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw := new(bytes.Buffer)
 		if _, err := raw.ReadFrom(r.Body); err != nil {
 			t.Errorf("reading the request body: %v", err)
@@ -80,7 +80,7 @@ func newFakeChatletNode(t *testing.T, status int, body string) *fakeChatletNode 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
-	}))
+	})))
 	t.Cleanup(n.server.Close)
 	return n
 }
