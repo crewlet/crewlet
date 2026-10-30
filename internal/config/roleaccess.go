@@ -186,33 +186,38 @@ type RoleGitLab struct {
 
 // RoleJira is a seat's access to Jira, through its Atlassian account.
 type RoleJira struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has Jira access. Off removes the product access and keeps the account."`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has Jira access. Off removes its project roles and its token's Jira scopes, and keeps the account."`
 
 	// ProjectRole is a project role id as the site's `GET /rest/api/3/role`
 	// returns it (D8). What the role may do is each project's permission
-	// scheme's, not the seat's.
-	ProjectRole string `yaml:"project_role,omitempty" json:"project_role,omitempty" desc:"Jira project role id (GET /rest/api/3/role)."`
+	// scheme's, not the seat's. Empty is product access only: the account
+	// has Jira and holds no project role, so the site's permission schemes
+	// alone decide what it sees.
+	ProjectRole string `yaml:"project_role,omitempty" json:"project_role,omitempty" desc:"Jira project role id (GET /rest/api/3/role); empty is product access only."`
 
 	// Projects are the project keys the role is held in. Each must be a
-	// project the company document names.
+	// project the company document names, and a list needs a ProjectRole.
 	Projects []string `yaml:"projects,omitempty" json:"projects,omitempty" desc:"Jira project keys this agent holds the role in."`
 }
 
 // RoleConfluence is a seat's access to Confluence, through its Atlassian
 // account.
 type RoleConfluence struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has Confluence access. Off removes the product access and keeps the account."`
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has Confluence access. Off removes its space access and its token's Confluence scopes, and keeps the account."`
 
 	// SpaceRole is a space role id from the site's space roles (role-based
 	// access, a beta at Atlassian).
-	SpaceRole string `yaml:"space_role,omitempty" json:"space_role,omitempty" desc:"Confluence space role id, where the site has role-based access."`
+	SpaceRole string `yaml:"space_role,omitempty" json:"space_role,omitempty" desc:"Confluence space role id, where the site has role-based access; with operations also empty, product access only."`
 
 	// Operations are Confluence's space permissions by operation, as
 	// `<operation>:<target>` (`read:space`, `create:page`), for a site whose
-	// role-based access is off (D8). Exactly one of SpaceRole and Operations.
+	// role-based access is off (D8). At most one of SpaceRole and Operations;
+	// neither is product access only: the account has Confluence, and the
+	// site's and each space's permissions alone decide what it sees.
 	Operations []string `yaml:"operations,omitempty" json:"operations,omitempty" desc:"Confluence space permissions as operation:target, where the site has no space roles."`
 
 	// Spaces are the space keys the role or permissions are held in. Each
-	// must be a space the company document names.
+	// must be a space the company document names, and a list needs a
+	// SpaceRole or Operations.
 	Spaces []string `yaml:"spaces,omitempty" json:"spaces,omitempty" desc:"Confluence space keys this agent holds the role in."`
 }

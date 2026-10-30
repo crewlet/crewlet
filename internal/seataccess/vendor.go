@@ -321,13 +321,20 @@ func (o Options) Level(id string) (Level, int, bool) {
 
 // LevelsOf is the levels a stored level names: the one it is, or each of a
 // [Options.Multiple] set. ok is false where any of them is not offered.
+//
+// THE EMPTY LEVEL IS A LEVEL where the vendor offers one with an empty id
+// (Jira's and Confluence's product access only), on a set lane as on any
+// other: an empty set is that level, not a set of nothing.
 func (o Options) LevelsOf(level string) (out []Level, ok bool) {
+	if strings.TrimSpace(level) == "" {
+		if l, _, found := o.Level(""); found {
+			return []Level{l}, true
+		}
+		return nil, false
+	}
 	ids := []string{level}
 	if o.Multiple {
 		ids = strings.Fields(level)
-	}
-	if len(ids) == 0 {
-		return nil, false
 	}
 	for _, id := range ids {
 		l, _, found := o.Level(id)
@@ -387,6 +394,11 @@ type Level struct {
 	// Mattermost System Admin. DERIVED by the vendor from its own facts,
 	// never stored in the document.
 	Administers bool `json:"administers,omitempty"`
+
+	// Note is the sentence that says what the level means where its name
+	// cannot ("Product access only": the account has the product, and the
+	// site's permission schemes decide what it sees).
+	Note string `json:"note,omitempty"`
 }
 
 // ToolState is whether a seat can use its credential through a tool right now.
