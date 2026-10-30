@@ -757,9 +757,8 @@ func importRules(next, _ *config.Company) error {
 // on; nil reads the patch from req.Patch, which is all a programmatic caller
 // has.
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
-	expect := strings.TrimSpace(req.Expect)
 	return draft{
-		expect: req.Expect, stated: req.Stated && expect != "" && expect != "*",
+		expect: req.Expect, stated: statedPrecondition(req.Stated, req.Expect),
 		requireActive: true, by: req.By, engine: req.Engine,
 		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
@@ -1060,4 +1059,12 @@ func checkedWarnings(p *prepared) []checkedWarning {
 		out = append(out, checkedWarning{Warning: w, Introduced: !p.held[keyOf(w)]})
 	}
 	return out
+}
+
+// statedPrecondition is whether expect is a precondition its request stated:
+// one its If-Match header named, never `*` or nothing, whose lost race is
+// answered 412 ([RacedError.Stated]).
+func statedPrecondition(stated bool, expect string) bool {
+	expect = strings.TrimSpace(expect)
+	return stated && expect != "" && expect != "*"
 }
