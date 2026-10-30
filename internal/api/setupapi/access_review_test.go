@@ -180,3 +180,28 @@ func TestAGitLabProjectOutsideTheGroupIsNotOffered(t *testing.T) {
 		t.Errorf("a project in the group = %d, want 200", res.StatusCode)
 	}
 }
+
+// A KEEP UNDER A STALE IF-MATCH IS A FAILED PRECONDITION, as a save's is: the
+// revision the header named is gone, so the vendor's setting is not written
+// over whatever replaced it. Mutation: drop Stated from keep's write, and the
+// header's lost race answers 409 like an unstated one.
+func TestAKeepUnderAStaleIfMatchIsAFailedPrecondition(t *testing.T) {
+	t.Parallel()
+	s := newAccessSurface(t)
+	keep := "/setup/integrations/datadog/access/seats/sre-lead/datadog/keep"
+	s.access.observed = map[string]map[seataccess.Lane]seataccess.Observed{
+		"sre-lead": {seataccess.LaneDatadog: {Exists: true, Enabled: true, Level: "role-ro"}},
+	}
+	base := s.active(t).ID
+	if res := s.doAs(t, accessPerson(), http.MethodPost, keep, "",
+		map[string]string{"If-Match": `"` + base + `"`}); res.Code != http.StatusOK {
+		t.Fatalf("a keep on the current revision = %d %s", res.Code, res.Body)
+	}
+	stale := s.doAs(t, accessPerson(), http.MethodPost, keep, "",
+		map[string]string{"If-Match": `"` + base + `"`})
+	if stale.Code != http.StatusPreconditionFailed ||
+		decode(t, stale)["error"] != string(httpjson.CodeRevisionAdvanced) {
+		t.Errorf("a keep under a stale If-Match = %d %s, want 412 revision_advanced",
+			stale.Code, stale.Body)
+	}
+}
