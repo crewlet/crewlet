@@ -86,8 +86,8 @@ var companyFields = map[string]classified{
 	// blocks, nothing a reader of the chart draws, and the Agents tab reads
 	// each seat's access through the setup surface.
 	"SeatAccessMigrated": {exposure: exposureGuarded, why: "the engine's migration state over the integration blocks, read by the access pass and the setup surface"},
-	"Roles":                             {exposure: exposurePublic, why: "the tree itself"},
-	"Units":                             {exposure: exposurePublic, why: "the tree itself"},
+	"Roles":              {exposure: exposurePublic, why: "the tree itself"},
+	"Units":              {exposure: exposurePublic, why: "the tree itself"},
 }
 
 // projectionOnly is every OrgProjection field no authored company field
