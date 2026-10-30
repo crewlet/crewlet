@@ -43,6 +43,11 @@ type SeatInput struct {
 
 	// Ask is what a person asked for on this seat, if anything.
 	Ask Ask
+
+	// Options is what each lane offers now, for naming levels in the steps
+	// ([StepsInput.Options]). Optional: a lane with none is drawn with what
+	// the vendor can name without it.
+	Options map[Lane]Options
 }
 
 // Plan is every step the next sync takes for one seat at the vendor, by lane,
@@ -208,7 +213,10 @@ func walk(
 		}
 		var steps []Step
 		for _, p := range ops {
-			got := v.Steps(in.Seat, lane, p.op, want, have)
+			got := drawSteps(v, StepsInput{
+				Seat: in.Seat, Lane: lane, Op: p.op, Want: want, Have: have,
+				Options: in.Options[lane],
+			})
 			for j := range got {
 				got[j].Op, got[j].Index = p.op, j
 				got[j].Drift = got[j].Drift || p.drift

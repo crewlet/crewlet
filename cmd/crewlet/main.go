@@ -51,6 +51,7 @@ import (
 	"github.com/crewlet/crewlet/internal/schedule/sqlledger"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/slack"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/tracing"
@@ -1440,6 +1441,16 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// the third-party app and leaving the block behind.
 	if configSurface != nil {
 		e.UseConfigWriter(engineConfigWriter{surface: configSurface})
+		// THE COMPANY MOVES ONTO PER-SEAT ACCESS before this node starts its
+		// seats, on every node that holds the estate: the first to write
+		// wins the revision's compare-and-set and the rest find nothing left
+		// to do. What makes it safe is not this order but the gate the
+		// revision carries: the access pass for an integration acts on no
+		// seat until the document marks the integration migrated, so a pass
+		// that runs first, or an integration whose vendor did not answer,
+		// changes nothing at any vendor.
+		migrateSeatAccessOnce(ctx, e, configSurface,
+			fleetsecrets.New(e.Backends().Fleet, cipher), log)
 	}
 
 	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
@@ -1495,6 +1506,14 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// that landed mid-boot would apply an epoch to a node that has not
 	// claimed anything yet, which is work with nowhere to go.
 	go reconciler.Run(ctx)
+
+	// AND IT KEEPS LOOKING: an integration left gated because its vendor did
+	// not answer, or one a person connected since, is migrated by a later
+	// attempt.
+	if configSurface != nil {
+		go keepMigratingSeatAccess(ctx, e, configSurface,
+			fleetsecrets.New(e.Backends().Fleet, cipher), log)
+	}
 
 	// A NODE STOPS FOR ONE OF TWO REASONS, and both take the one shutdown
 	// below: a signal, which is somebody else's decision, or the engine
@@ -2129,6 +2148,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	announceUnclaimed(ctx, e.AnyPerson, engine.SeatViewOf(e).HumanSeats,
 		e.IAM().SeatClaims)
 
+	// THE SLACK INSTALL LINKS, signed under the fleet keyring and spent on
+	// the fleet's claim registry, so the node a browser returns to finishes
+	// a link any node minted. Built before the setup surface, which mints
+	// them, and the webhook landing below, which finishes them.
+	slackInstalls, err := e.SlackInstalls(boot.Secrets.TokenMaterial())
+	if err != nil {
+		return nil, err
+	}
+
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.
 	integrationStatus, err := e.IntegrationStore()
@@ -2140,11 +2168,16 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// itself: a credential is sealed by the same store /secrets serves,
 	// and the pointer to it lands through the same merge, validation and
 	// activation PATCH /config performs.
+	fleetStore := fleetsecrets.New(e.Backends().Fleet, cipher)
 	setupSurface, err := setupapi.New(setupapi.Options{
 		Config: configSurface,
 		// The fleet's own store, sealed with the same keyring — the one
 		// every node holds, since Tier A refuses a file without it.
-		Secrets: fleetsecrets.New(e.Backends().Fleet, cipher),
+		Secrets: fleetStore,
+		// WHAT EACH AGENT MAY DO AT EACH VENDOR: the Agents tab's answer,
+		// plan and sync, over the engine's own plan, ledger and lease.
+		Access: e.SeatAccessAPI(configSurface.FleetCompany, fleetStore).
+			UseSlackInstalls(slackInstallLink(slackInstalls), slack.AwaitsInstall),
 		// THIS NODE'S resolution chain, so a requirement can say whether
 		// a ${VAR} actually resolved rather than only whether somebody
 		// wrote one down. That gap is the silent outage the whole
@@ -2560,6 +2593,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Claims:    e.Backends().Fleet,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
+			// AND EACH AGENT'S SLACK INSTALL, finished here when Slack
+			// returns the person's browser: the same object the setup
+			// surface mints install links with.
+			SlackInstalls: slackInstalls,
 		},
 	}
 	// HOW A PERSON BECOMES A PRINCIPAL, the other end of the cookie it
@@ -3505,7 +3542,7 @@ func (w engineConfigWriter) Apply(ctx context.Context, patch []byte, summary str
 	by iam.Actor) error {
 
 	_, err := w.surface.Apply(ctx, configapi.ApplyRequest{
-		Patch: patch, Summary: summary, By: by,
+		Patch: patch, Summary: summary, By: by, Engine: true,
 	})
 	return err
 }
@@ -3538,7 +3575,7 @@ func (w engineConfigWriter) SetSeat(
 	ctx context.Context, handle string, body []byte, summary string, by iam.Actor,
 ) error {
 	_, err := w.surface.ApplyEntity(ctx, configapi.ApplyEntityRequest{
-		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by,
+		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by, Engine: true,
 	})
 	return err
 }

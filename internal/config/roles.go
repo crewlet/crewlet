@@ -407,7 +407,7 @@ type RoleGitHub struct {
 	// terms, each read or write; a permission left out is No access. The
 	// app is registered at these (least privilege, D5), so a raise past
 	// them waits for an owner to accept it at GitHub.
-	Permissions map[string]GitHubAccess `yaml:"permissions,omitempty" json:"permissions,omitempty" desc:"GitHub App permissions (contents, issues, pull_requests, checks, actions, workflows), each read or write; absent is No access."`
+	Permissions map[string]GitHubAccess `yaml:"permissions,omitempty" json:"permissions,omitempty" desc:"GitHub App permissions (contents, issues, pull_requests, checks, actions, deployments, workflows), each read or write; absent is No access."`
 
 	// Tier is how much of a repository this seat may do: read_only,
 	// review or full_access. Empty is read_only, which is the least this
@@ -566,30 +566,16 @@ type RoleSlack struct {
 
 // validate checks a seat's Slack app.
 //
-// THE TWO CREDENTIALS ARE NOT INTERCHANGEABLE and each half fails silently
-// on its own. Without a bot token the seat receives messages it can never
-// answer; without a signing secret its route answers 503 to every delivery
-// while the app's own settings page reports a healthy request URL. So
-// declaring the block at all means declaring both.
+// THE CREDENTIALS ARE NOT REQUIRED (D4): the engine seals a seat's bot token
+// and signing secret under names it derives from the handle, so a block that
+// names neither is the ordinary one. Where a block still names a bot token,
+// it is one whole `${VAR}` or a literal: the transport resolves the token only
+// when it is one whole reference, and anything else would reach Slack as
+// written, braces and all. Which positions a managed seat may name at all is
+// the document's access rules, not this check.
 func (s *RoleSlack) validate(path Path) error {
 	var p problems
-	// The transport reads the token with [envref.Resolve]; the signing
-	// secret is expanded wherever its references sit, so only the token
-	// is held to one whole reference.
 	pointerOrLiteral(&p, at(path, "bot_token"), s.BotToken)
-	if strings.TrimSpace(s.BotToken) == "" {
-		p.add(at(path, "bot_token"), ErrMissing,
-			"required: without it this seat receives messages it cannot "+
-				"answer. `crewlet slack provision` mints one into the ${VAR} "+
-				"this field points at")
-	}
-	if strings.TrimSpace(s.SigningSecret) == "" {
-		p.add(at(path, "signing_secret"), ErrMissing,
-			"required: this seat's /webhooks/slack/<handle> route has nothing "+
-				"to verify a delivery with otherwise and answers 503 to every "+
-				"one, while the app's own settings page reports a healthy "+
-				"request URL")
-	}
 	return p.err()
 }
 
@@ -782,7 +768,15 @@ func (r *Role) Seat() *org.Role {
 	// the first — a fact about a seat that the running seat does not carry
 	// is a fact the running company cannot see.
 	if g := r.Integrations.GitHub; g != nil {
+		var perms map[string]string
+		if len(g.Permissions) > 0 {
+			perms = make(map[string]string, len(g.Permissions))
+			for key, level := range g.Permissions {
+				perms[key] = string(level)
+			}
+		}
 		seat.GitHub = &org.GitHubApp{
+			Enabled: SeatAccessOn(g.Enabled), Permissions: perms,
 			Tier: g.Tier, Repos: append([]string(nil), g.Repos...),
 			Workflows: g.Workflows,
 			AppID:     g.AppID, AppSlug: g.AppSlug,

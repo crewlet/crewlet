@@ -198,21 +198,22 @@ func TestAnAppForAnUnreachableEngineIsCreatedWithItsWebhookOff(t *testing.T) {
 	}
 }
 
-// AN OPTED-IN SEAT'S APP IS CREATED ASKING FOR WORKFLOW WRITES.
+// AN APP IS CREATED AT EXACTLY ITS SEAT'S PERMISSIONS (D5).
 //
 // The manifest is read once, at creation, so the begin route is the cheap
-// moment to ask: an app created without the permission gains it only when its
-// owner adds it at GitHub and the installation approves it. A seat that did
-// not opt in asks for nothing of the kind.
-func TestAnOptedInSeatsAppIsCreatedAskingForWorkflowWrites(t *testing.T) {
+// moment to ask: an app created without a permission gains it only when its
+// owner adds it at GitHub and the installation approves it. A seat that does
+// not hold Workflows asks for nothing of the kind.
+func TestAnAppIsCreatedAtItsSeatsPermissions(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		doc  string
 		want any
 	}{
-		"opted in": {strings.Replace(githubAppsDoc, `"tier": "full_access"`,
-			`"tier": "full_access", "workflows": true`, 1), "write"},
-		"silent": {githubAppsDoc, nil},
+		"with workflows": {strings.Replace(githubAppsDoc, `"tier": "full_access"`,
+			`"tier": "full_access", "permissions": {"contents": "write", "workflows": "write"}`, 1), "write"},
+		"without": {strings.Replace(githubAppsDoc, `"tier": "full_access"`,
+			`"tier": "full_access", "permissions": {"contents": "write"}`, 1), nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -224,8 +225,8 @@ func TestAnOptedInSeatsAppIsCreatedAskingForWorkflowWrites(t *testing.T) {
 			}
 			manifest, _ := decode(t, res)["manifest"].(map[string]any)
 			perms, _ := manifest["default_permissions"].(map[string]any)
-			if perms["contents"] != "write" {
-				t.Fatalf("a full_access app was created with %v", perms)
+			if perms["contents"] != "write" || perms["metadata"] != "read" {
+				t.Fatalf("the app was created with %v", perms)
 			}
 			if got := perms[github.PermissionWorkflows]; got != c.want {
 				t.Errorf("workflows = %v, want %v", got, c.want)

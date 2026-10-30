@@ -140,9 +140,9 @@ func TestAnOrgRuleIsLocatedWhereItWasWritten(t *testing.T) {
 			// its path sits in.
 			name: "a config rule inside a nested seat",
 			doc: "name: Acme\nunits:\n  - name: Eng\n    roles:\n      - name: Dev\n" +
-				"        integrations:\n          slack: {signing_secret: \"${S}\"}\n",
+				"        integrations:\n          slack: {bot_token: \"xoxb-${REST}\"}\n",
 			messageHas: "bot_token",
-			want:       []located{{"units[0].roles[0].integrations.slack.bot_token", "missing", "dev", ""}},
+			want:       []located{{"units[0].roles[0].integrations.slack.bot_token", "shape", "dev", ""}},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

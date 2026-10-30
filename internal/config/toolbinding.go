@@ -66,7 +66,10 @@ type SeatToolBinding struct {
 func SeatToolBindings() []SeatToolBinding {
 	return []SeatToolBinding{
 		{Lane: "slack", Vendor: "slack", Server: "slack", Keys: []SeatToolKey{
-			{Field: "BOT_TOKEN", Env: "SLACK_BOT_TOKEN", Header: "Authorization", Prefix: "Bearer "},
+			// THE VARIABLE THE DOCUMENTED SLACK SERVER READS
+			// (docs/integrations/slack.md); internal/slack holds the two
+			// together in a test.
+			{Field: "BOT_TOKEN", Env: "SLACK_MCP_XOXB_TOKEN", Header: "Authorization", Prefix: "Bearer "},
 		}},
 		{Lane: "github", Vendor: "github", Server: "github", Keys: []SeatToolKey{
 			// The installation token the engine issues at use, never

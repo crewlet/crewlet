@@ -2604,7 +2604,7 @@
               "null"
             ]
           },
-          "description": "GitHub App permissions (contents, issues, pull_requests, checks, actions, workflows), each read or write; absent is No access.",
+          "description": "GitHub App permissions (contents, issues, pull_requests, checks, actions, deployments, workflows), each read or write; absent is No access.",
           "type": [
             "object",
             "null"
@@ -4151,6 +4151,21 @@
     },
     "scheduling": {
       "$ref": "#/$defs/Scheduling"
+    },
+    "seat_access_migrated": {
+      "description": "Integrations whose agent seats state their access per seat. Written by the engine's migration.",
+      "items": {
+        "type": [
+          "string",
+          "number",
+          "boolean",
+          "null"
+        ]
+      },
+      "type": [
+        "array",
+        "null"
+      ]
     },
     "skill_variables": {
       "additionalProperties": {

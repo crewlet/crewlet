@@ -254,6 +254,7 @@ func (s *syncer) seat(
 	var removed bool
 	err := walk(s.in.Vendor, SeatInput{
 		Seat: ref, Want: want, Have: have, Record: &rec, Ask: s.in.Asks[h],
+		Options: s.options,
 	}, func(lane Lane, w Desired, hv Observed, steps []Step) laneEffect {
 		if f := blocked[lane]; f != nil {
 			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeFailed, Error: f})
@@ -363,7 +364,7 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 				Remedy: "Choose its access on the integration's Agents tab",
 			}, nil
 		}
-		if _, _, ok := opts.Level(d.Level); !ok {
+		if _, ok := opts.LevelsOf(d.Level); !ok {
 			return &Failure{
 				Step: VerbGrant, Actor: ByYou,
 				Said:   fmt.Sprintf("%s does not offer the access %q any more", LaneName(lane), d.Level),
