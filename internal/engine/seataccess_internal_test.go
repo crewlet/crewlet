@@ -205,3 +205,48 @@ func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
 		}
 	}
 }
+
+// AN INTEGRATION WHOSE CREDENTIALS ARE HANDED IN IS NEVER SYNCED AT THE VENDOR
+// (D4b): the engine does not hold the authority there, so no agent's account is
+// adopted, turned off or removed. The same company on a deployment the engine
+// writes is synced. GitHub on a managed deployment is the case: its apps are
+// made outside Crewlet whatever the block says.
+//
+// Mutation: drop the mode gate, and the managed deployment's sync reaches the
+// ledger and the vendor.
+func TestAnExternalIntegrationIsNeverSyncedAtTheVendor(t *testing.T) {
+	t.Parallel()
+	company := specCompany(t, `
+name: Acme
+seat_access_migrated: [github]
+providers:
+  sandbox: {fake: true}
+  llm:
+    zulu:
+      model: claude-sonnet-5
+integrations:
+  github:
+    enabled: true
+    webhook_secret: "whsec_Y3Jld2xldC10ZXN0LXNpZ25pbmcta2V5LTMyYnl0ZXM="
+    provisioning: {org: acme}
+roles:
+  - name: Builder
+    handle: builder
+    llm: zulu
+    integrations:
+      github: {enabled: true}
+`)
+	// NO FLEET STORE: a sync that got past the gate would fail reading the
+	// ledger, which is how the test tells the two apart without a vendor.
+	managed := &Engine{companyManaged: true}
+	managed.epoch.current.Store(company)
+	if _, err := managed.syncSeatAccess(t.Context(), integration.KindGitHub, seatSync{}); !errors.Is(err, integration.ErrNotConfigured) {
+		t.Fatalf("a managed deployment's GitHub sync = %v, want it not configured", err)
+	}
+	written := &Engine{}
+	written.epoch.current.Store(company)
+	if _, err := written.syncSeatAccess(t.Context(), integration.KindGitHub, seatSync{}); err == nil ||
+		errors.Is(err, integration.ErrNotConfigured) {
+		t.Fatalf("an engine-written deployment's GitHub sync = %v, want it to reach the ledger", err)
+	}
+}
