@@ -161,6 +161,11 @@ type Migration struct {
 	Moves   []Move
 	Notices []Notice
 
+	// Kept are the credentials a seat already names under the engine's own
+	// name, which move nothing and are recorded as the seat's own where the
+	// name holds a value.
+	Kept []Move
+
 	// Seeds are ledger rows for accounts the engine made before the ledger.
 	Seeds []Seed
 
@@ -214,7 +219,7 @@ func Plan(root map[string]any, facts Facts) (Migration, error) {
 	}
 	var seats []seatRow
 	var failure error
-	eachSeat(root, func(seat map[string]any) {
+	eachSeat(root, func(seat, unit map[string]any) {
 		if failure != nil || isHuman(seat) {
 			return
 		}
@@ -224,7 +229,7 @@ func Plan(root map[string]any, facts Facts) (Migration, error) {
 			return
 		}
 		seats = append(seats, seatRow{seat: seat, handle: handle,
-			found: seatPositions(seat, handle, func(k integration.Kind) bool {
+			found: seatPositions(seat, unit, handle, func(k integration.Kind) bool {
 				return kindConnected(integrations, k)
 			})})
 	})
@@ -292,9 +297,20 @@ func Plan(root map[string]any, facts Facts) (Migration, error) {
 					continue
 				}
 				m.positions = append(m.positions, p)
+				if issuedAtUse(p) {
+					// A TOKEN THE ENGINE ISSUES AT USE (GitHub's, from the
+					// app's sealed key) is never sealed: its position is
+					// dropped or repointed, and its value moves nowhere.
+					continue
+				}
 				to := seataccess.SinkName(p.kind, p.field, row.handle)
 				switch {
 				case p.from == to:
+					kept := Move{Handle: row.handle, Kind: p.kind, Field: p.field,
+						From: p.from, To: to}
+					if !slices.Contains(m.Kept, kept) {
+						m.Kept = append(m.Kept, kept)
+					}
 				case isShared:
 					key := string(p.kind) + "\x00" + p.from
 					n := shared[key]
@@ -313,7 +329,10 @@ func Plan(root map[string]any, facts Facts) (Migration, error) {
 					}
 				}
 			}
-			if provisioned {
+			// ONLY A SEAT THE OLD PLAN INCLUDED, or one a person has
+			// since turned on: an account found by the engine's naming
+			// for any other seat is not one this engine made for it.
+			if provisioned && onBefore(kind, row.seat, row.found) {
 				if seed, ok := seedOf(kind, row.seat, row.handle, facts.Accounts[kind]); ok {
 					m.Seeds = append(m.Seeds, seed)
 				}
@@ -347,7 +366,7 @@ func Apply(root map[string]any, m Migration) (bool, error) {
 		byHandle[p.handle] = append(byHandle[p.handle], p)
 	}
 	var failure error
-	eachSeat(root, func(seat map[string]any) {
+	eachSeat(root, func(seat, unit map[string]any) {
 		if failure != nil || isHuman(seat) {
 			return
 		}
@@ -357,7 +376,7 @@ func Apply(root map[string]any, m Migration) (bool, error) {
 			return
 		}
 		for _, p := range byHandle[handle] {
-			p.apply(seat)
+			p.apply(seat, unit)
 		}
 		lanes := m.Seats[handle]
 		if len(lanes) == 0 {
@@ -479,14 +498,30 @@ func (c *companyAccess) desired(lane seataccess.Lane, seat map[string]any, handl
 	if !d.Enabled || !provisioned {
 		return d, nil
 	}
+	// WHAT THE ACCOUNT HOLDS AT THE VENDOR, where it exists and says (D14):
+	// an agent somebody gave more than the company role at the vendor keeps
+	// it, rather than being moved to the company role by a migration. The
+	// company role is only for a seat with no account yet.
+	observed, held, err := observedAccess(lane, have, text(seat["name"]))
+	if err != nil {
+		return seataccess.Desired{}, err
+	}
 	switch lane {
 	case seataccess.LaneDatadog:
+		if held {
+			d.Level = observed.Level
+			break
+		}
 		id, err := c.datadogRole()
 		if err != nil {
 			return seataccess.Desired{}, err
 		}
 		d.Level = id
 	case seataccess.LaneGitLab:
+		if held {
+			d.Level = observed.Level
+			break
+		}
 		level := c.gitlabDefault
 		if own, ok := c.gitlabBySeat[handle]; ok {
 			level = own
@@ -494,12 +529,24 @@ func (c *companyAccess) desired(lane seataccess.Lane, seat map[string]any, handl
 		d.Level = strconv.Itoa(level)
 	case seataccess.LaneGitHub:
 		d.Permissions = githubPermissions(text(block["tier"]), truthy(block["workflows"]))
+		if held {
+			d.Permissions = observed.Permissions
+		}
 		d.Scope = strings2(block["repos"])
+	case seataccess.LaneJira, seataccess.LaneConfluence:
+		// PRODUCT ACCESS ONLY (the empty level) unless the account holds a
+		// role there already, which is all the old engine granted.
+		if held {
+			d.Level = observed.Level
+		}
 	case seataccess.LaneMattermost:
 		// EVERY BOT THE OLD ENGINE MADE WAS A MEMBER (`system_user`), the one
 		// role it ever gave one: written out, since a bot that is on states
-		// its roles.
+		// its roles. A bot somebody gave more keeps what it holds.
 		d.Level = config.MattermostSystemUser
+		if held {
+			d.Level = observed.Level
+		}
 		// AN EMPTY LIST IS NOW NO CHANNELS, so the channels the old plan put
 		// the bot in are written out: the company's list and the seat's own,
 		// or, where the plan named none, the ones the bot is in today.
@@ -513,6 +560,58 @@ func (c *companyAccess) desired(lane seataccess.Lane, seat map[string]any, handl
 		d.Scope = channels
 	}
 	return d.Normalized(), nil
+}
+
+// observedAccess is what one seat's existing account holds at the vendor, in
+// the terms its document setting takes, and whether there is one to keep: an
+// account the vendor shows, with a level (or GitHub permissions) it reports.
+//
+// A DATADOG ACCOUNT HOLDING SEVERAL ROLES IS NOT GUESSED AT
+// ([seataccess.ErrSeveralRoles]): a seat names one role, and choosing which to
+// keep would take the others away, so the integration waits, naming the agent,
+// until a person leaves the account one role or saves the one it holds.
+func observedAccess(lane seataccess.Lane, have seataccess.Observed,
+	name string) (seataccess.Desired, bool, error) {
+
+	if !have.Exists {
+		return seataccess.Desired{}, false, nil
+	}
+	if lane == seataccess.LaneGitHub {
+		return have.Access(), len(have.Permissions) > 0, nil
+	}
+	level := strings.TrimSpace(have.Level)
+	if lane == seataccess.LaneDatadog && len(strings.Fields(level)) > 1 {
+		return seataccess.Desired{}, false, fmt.Errorf("%s: %w", cmpOr(name, have.Account),
+			seataccess.ErrSeveralRoles)
+	}
+	return seataccess.Desired{Level: level}, level != "", nil
+}
+
+// issuedAtUse reports a position naming a token the engine issues when a tool
+// uses it rather than one it seals: GitHub's installation token, which the
+// engine mints from the app's key for each use and which expires within the
+// hour, so an old value is worth nothing and is never a seat's credential.
+func issuedAtUse(p position) bool {
+	return p.kind == integration.KindGitHub && p.field == "APP_TOKEN"
+}
+
+// onBefore reports a seat that was on at kind before the migration: in the
+// old plan by its rules, or turned on since by a block that says so.
+func onBefore(kind integration.Kind, seat map[string]any, found []position) bool {
+	return slices.ContainsFunc(seataccess.LanesOf(kind), func(lane seataccess.Lane) bool {
+		block := object(object(seat["integrations"])[string(lane)])
+		if has(block, "enabled") {
+			return truthy(block["enabled"])
+		}
+		return wasOn(lane, block, found)
+	})
+}
+
+func cmpOr(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
 }
 
 // wasOn is the old rule for whether a seat was in a vendor's plan: its own
@@ -635,16 +734,17 @@ func countReferences(v any) map[string]int {
 	return out
 }
 
-// eachSeat calls fn on every seat of the stored document: the company's own and
-// every unit's, at any depth.
-func eachSeat(root map[string]any, fn func(map[string]any)) {
+// eachSeat calls fn on every seat of the stored document, the company's own and
+// every unit's at any depth, with the unit it sits in directly (nil at the
+// root), whose shared `mcp_env` its agents inherit.
+func eachSeat(root map[string]any, fn func(seat, unit map[string]any)) {
 	for _, seat := range objects(root["roles"]) {
-		fn(seat)
+		fn(seat, nil)
 	}
 	var visit func(map[string]any)
 	visit = func(unit map[string]any) {
 		for _, seat := range objects(unit["roles"]) {
-			fn(seat)
+			fn(seat, unit)
 		}
 		for _, child := range objects(unit["children"]) {
 			visit(child)
