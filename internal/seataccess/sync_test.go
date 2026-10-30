@@ -335,6 +335,41 @@ func TestSyncAnswersNotConfigured(t *testing.T) {
 	}
 }
 
+// A VENDOR THAT REFUSES THE COMPANY AT OPEN IS ONE FINDING, NOT A FAULT: no
+// seat is observed or changed, and the vendor's reason and remedy reach the
+// integration's status. A vendor that does not answer still fails the sync.
+func TestSyncReportsACompanyTheVendorRefusesAsOneFinding(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.v.OpenErr = &seataccess.Refusal{
+		Said: `Mattermost has no team "eng"`, Remedy: "Create the team, or correct the team name",
+		Actor: seataccess.ByYou, ActionURL: "https://chat.example.com/admin_console/user_management/teams",
+	}
+	report := h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	if len(report.Findings) != 1 {
+		t.Fatalf("findings = %+v, want the one refusal", report.Findings)
+	}
+	f := report.Findings[0]
+	if f.Kind != integration.FindingIdentityFailed || f.Subject != "" ||
+		f.Detail != `Mattermost has no team "eng"` || f.Remedy == "" || f.ActionURL == "" {
+		t.Errorf("finding = %+v, want the vendor's reason, remedy and page on the integration", f)
+	}
+	if len(h.v.Applied) != 0 || len(report.Records) != 0 {
+		t.Errorf("a refused company was synced: applied %v, records %v", h.v.Applied, report.Records)
+	}
+	if _, ok := h.ledger.Record(integration.KindDatadog, "sre"); ok {
+		t.Error("a refused company wrote the ledger")
+	}
+
+	h.v.OpenErr = errors.New("dial tcp: connection refused")
+	_, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: h.v, Open: seataccess.OpenInput{Config: company(nil)}, Ledger: h.ledger, Sink: h.sink,
+	})
+	if err == nil || errors.Is(err, integration.ErrNotConfigured) {
+		t.Fatalf("Sync = %v, want the vendor not answering to fail the sync", err)
+	}
+}
+
 // AN ACCOUNT FROM BEFORE THE LEDGER IS ADOPTED, NEVER DUPLICATED: the seat is
 // on, the vendor shows its account under the engine's naming, and the sync
 // records it and moves it to the document's setting.

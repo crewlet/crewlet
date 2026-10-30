@@ -333,12 +333,20 @@ func Names(keys []string) string {
 // tier permission the catalogue did not offer would be dropped silently, which
 // a test holds never to happen.
 //
+// WORKFLOWS ONLY AT FULL ACCESS. The opt-in was a seat's own and never a
+// tier's, and the earlier engine granted it to a full-access seat alone, so a
+// document a validator never saw that opted a review seat in migrates without
+// it: a seat that could not push code had nothing to push a workflow with.
+//
 // The second result reports a tier this package knew, exactly as
 // [ParseTier]'s does, so the migration can report a typo rather than
 // silently migrate the default.
 func TierPermissions(tier string, workflows bool) (Permissions, bool) {
 	parsed, ok := ParseTier(tier)
-	held := Access{Tier: parsed, Workflows: workflows}.Permissions()
+	held := parsed.Permissions()
+	if workflows && parsed == TierFullAccess {
+		held[PermissionWorkflows] = string(LevelWrite)
+	}
 	out := Permissions{}
 	for _, perm := range SeatPermissions {
 		if level := Level(held[perm.Key]); level != LevelNone {

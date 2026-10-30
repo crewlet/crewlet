@@ -3,12 +3,18 @@ package engine
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/accessmigrate"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -96,6 +102,107 @@ func TestEveryAccessKindHasARegisteredVendor(t *testing.T) {
 				t.Errorf("%s seals %s, which config.SeatSealedFields does not list, so "+
 					"the document rules would not know it for a seat's own", kind, field)
 			}
+		}
+	}
+}
+
+// ONE WRITER PER SEAT CREDENTIAL: a pass's company half that writes an agent's
+// own sealed name is refused, and the pass fails rather than racing the access
+// sync for the same key. A company credential passes through, and a dry run's
+// nil sink stays nil.
+//
+// Mutation: hand the company half the pass's own sink, and the seat's key is
+// written by two writers again.
+func TestAPassHasOneWriterOfASeatsCredential(t *testing.T) {
+	t.Parallel()
+	company := specCompany(t, provisioningDoc(true))
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
+	e.epoch.current.Store(company)
+	sink := newSealingTestSink()
+
+	mintsTheSeats := func(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+		return nil, in.Sink.Record(ctx, "DATADOG_APP_KEY_OPS", "minted-by-the-company-half")
+	}
+	_, err := e.withSeatAccess(t.Context(), integration.KindDatadog, setup.PassInput{Sink: sink}, mintsTheSeats)
+	if !errors.Is(err, errSeatCredentialOwned) || !strings.Contains(err.Error(), "ops") {
+		t.Fatalf("withSeatAccess = %v, want the seat's own credential refused, naming the agent", err)
+	}
+	if v, ok, _ := sink.Value(t.Context(), "DATADOG_APP_KEY_OPS"); ok || v != "" {
+		t.Fatal("the company half sealed the agent's credential")
+	}
+
+	guarded := e.seatCredentialGuard(integration.KindDatadog, sink)
+	if err := guarded.Record(t.Context(), "DATADOG_WEBHOOK_SECRET", "s3cret"); err != nil {
+		t.Fatalf("a company credential was refused: %v", err)
+	}
+	if v, _, _ := sink.Value(t.Context(), "DATADOG_WEBHOOK_SECRET"); v != "s3cret" {
+		t.Error("a company credential did not reach the sink")
+	}
+	if err := guarded.Forget(t.Context(), "DATADOG_APP_KEY_OPS"); !errors.Is(err, errSeatCredentialOwned) {
+		t.Errorf("Forget of a seat's credential = %v, want it refused", err)
+	}
+	if got := e.seatCredentialGuard(integration.KindDatadog, nil); got != nil {
+		t.Errorf("a dry run's nil sink became %T, which reads as permission to write", got)
+	}
+}
+
+// EVERY PASS OF AN INTEGRATION WITH PER-SEAT ACCESS RUNS THROUGH
+// [Engine.withSeatAccess], which is what puts the guard between its company
+// half and the sink. A pass that called its company half directly would be a
+// second writer nobody refuses.
+func TestEveryAccessPassRunsThroughTheSeatAccessWrapper(t *testing.T) {
+	t.Parallel()
+	want := map[string]integration.Kind{}
+	for _, pass := range (&Engine{}).setupPasses() {
+		if _, ok := seataccess.Lookup(pass.Kind()); ok {
+			want[reflect.TypeOf(pass).Elem().Name()] = pass.Kind()
+		}
+	}
+	if len(want) < len(seataccess.Kinds()) {
+		t.Fatalf("passes for %v, fewer than the %d access kinds", want, len(seataccess.Kinds()))
+	}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	fset := token.NewFileSet()
+	wrapped := map[string]bool{}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Name.Name != "Run" || fn.Body == nil {
+				continue
+			}
+			star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			recv, ok := star.X.(*ast.Ident)
+			if !ok {
+				continue
+			}
+			if _, access := want[recv.Name]; !access {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "withSeatAccess" {
+					wrapped[recv.Name] = true
+				}
+				return true
+			})
+		}
+	}
+	for pass, kind := range want {
+		if !wrapped[pass] {
+			t.Errorf("%s (%s) has per-seat access and its Run does not go through "+
+				"withSeatAccess, so its company half writes unguarded", pass, kind)
 		}
 	}
 }
