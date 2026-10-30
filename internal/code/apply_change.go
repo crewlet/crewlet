@@ -99,7 +99,10 @@ func (a *Applier) applyChangeOpen(ctx context.Context, tx *sql.Tx, at applyConte
 // back with one more version at the record's position by the [changeWrite]
 // its op makes ([lifecycleWrite]), which sets what the op moves and nothing
 // else; an edit's body where it sets one, a reopen's revision where its head
-// moved while the change was closed, and the repository's version. A landing
+// moved while the change was closed, and the repository's version. A close, a
+// draft, a retarget and a landing END THE CHANGE'S LIVE QUEUE ENTRY in the
+// same apply, dequeued, naming which ([endLiveEntryOf]): its queue would
+// otherwise land a change that is no longer what was enqueued. A landing
 // merges the change at the tip its home found its head in — `push`, as one
 // whose push set the target to its head is — and applies as nothing where the
 // change is not at the head the home found, which only a record the ledger
@@ -206,6 +209,13 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		}
 		rows++
 	}
+	if state, reason := leavesQueue(payload); reason != "" {
+		ended, err := endLiveEntryOf(ctx, tx, at, changeID, state, reason)
+		if err != nil {
+			return 0, err
+		}
+		rows += ended
+	}
 	if revision != nil {
 		by, kind := revision.By.party()
 		if _, err := tx.ExecContext(ctx, addRevisionSQL, changeID, next.revision, next.head, by, string(kind), "",
@@ -219,6 +229,26 @@ func (a *Applier) applyChangeWrite(ctx context.Context, tx *sql.Tx, at applyCont
 		return 0, fmt.Errorf("code: move %s's version at %s: %w", repoID, at.position, err)
 	}
 	return rows + 1, nil
+}
+
+// leavesQueue is how a write of a change's lifecycle ends its live queue
+// entry, if its queue holds one: a close, a draft — made one, never one made
+// ready — a retarget and a landing each dequeue it, naming which; "" for a
+// write that leaves the change what was enqueued.
+func leavesQueue(payload any) (QueueState, QueueEndReason) {
+	switch p := payload.(type) {
+	case ChangeClose:
+		return QueueDequeued, EndClosed
+	case ChangeDraft:
+		if p.Draft {
+			return QueueDequeued, EndDrafted
+		}
+	case ChangeRetarget:
+		return QueueDequeued, EndRetargeted
+	case ChangeLanded:
+		return QueueDequeued, EndMerged
+	}
+	return "", ""
 }
 
 // lifecycleWrite is what a write of a change's lifecycle names — its
@@ -366,6 +396,38 @@ func (b *changeBook) write(ctx context.Context, tx store.Execer, maxVariables in
 			return []any{w.bodies[i].change, w.bodies[i].body}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the descriptions of the changes opened: %w", err)
+	}
+	// THE MOVED CHANGES LEAVE THEIR QUEUES: a head moved ejects a live
+	// entry, a merge or a close dequeues it — each list one statement a
+	// chunk, a seek of code_queue_change_idx a change.
+	var ejected, merged, closed []string
+	for _, id := range w.touched {
+		if w.opened[id] || !b.queued[id] {
+			continue
+		}
+		switch pushWrite(b.rows[id], false) {
+		case changeMerged:
+			merged = append(merged, id)
+		case changeStateMoved:
+			closed = append(closed, id)
+		default:
+			ejected = append(ejected, id)
+		}
+	}
+	for _, end := range []struct {
+		ids    []string
+		state  QueueState
+		reason QueueEndReason
+	}{
+		{ejected, QueueEjected, EjectHeadMoved}, {merged, QueueDequeued, EndMerged},
+		{closed, QueueDequeued, EndClosed},
+	} {
+		if len(end.ids) == 0 {
+			continue
+		}
+		if err := endEntries(ctx, tx, b.packed, b.at, end.ids, end.state, end.reason); err != nil {
+			return 0, err
+		}
 	}
 	// THE REPOSITORY'S NEXT NUMBER, moved on past every change the record
 	// opened, in the repository's own row — which the record writes anyway,

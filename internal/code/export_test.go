@@ -83,6 +83,10 @@ func SetCommitterClock(c *Committer, clock func() time.Time) { c.clock = clock }
 // pushes. Set before c's first proposal.
 func SetCommitterNodeBytes(c *Committer, n int) { c.nodeBytes = n }
 
+// SetQueueEntries holds c's merge queues to n waiting entries a target, in
+// place of MaxQueueEntries.
+func SetQueueEntries(c *Committer, n int) { c.queueEntries = n }
+
 // CommitterHeld is the bytes of proposals c holds across its repositories.
 func CommitterHeld(c *Committer) int {
 	c.mu.Lock()

@@ -908,6 +908,18 @@ func (c CodeSeam) Change(ctx context.Context, p code.ChangeProposal) (code.Chang
 	return out, err
 }
 
+// Queue asks the repository's committer to decide a write of a target's merge
+// queue, and raises this node's floors past the record it landed in — this
+// node's own write, which its next read of the change and the queue must see
+// on whichever node answers it.
+func (c CodeSeam) Queue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error) {
+	out, err := call(ctx, c.r, opCodeQueue, nil, p)
+	if out.Outcome == statelog.OutcomeApplied || out.Outcome == statelog.OutcomePending {
+		c.wrote(p.RepoID(), out.Position)
+	}
+	return out, err
+}
+
 // Converse asks the repository's committing data node to decide a write of a
 // change's conversation, and raises this node's SESSION floor past the record
 // it landed in — this node's own write, which its next read of the change

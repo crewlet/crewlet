@@ -128,6 +128,9 @@ const (
 	// — a read's asker, a decide's principal — to merge into its target
 	// ([MergeGate.MergeBy], code.merge_by_floor).
 	PreconditionMergeAuthority PreconditionKind = "merge_authority"
+	// PreconditionQueue is a change its target's merge queue holds: computing
+	// while the queue lands it, its place named (queue.go).
+	PreconditionQueue PreconditionKind = "queue"
 )
 
 // PreconditionKinds is the closed set, in the order a readiness lists them:
@@ -139,7 +142,7 @@ const (
 func PreconditionKinds() []PreconditionKind {
 	return []PreconditionKind{PreconditionDraft, PreconditionFacts, PreconditionApproval,
 		PreconditionHumanApproval, PreconditionOwnersApproval, PreconditionBlocker, PreconditionCheck,
-		PreconditionMergeable, PreconditionMergeAuthority}
+		PreconditionMergeable, PreconditionMergeAuthority, PreconditionQueue}
 }
 
 // Valid reports a kind this build knows.

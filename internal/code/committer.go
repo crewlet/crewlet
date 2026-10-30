@@ -167,7 +167,10 @@ import (
 // change's lifecycle and the pushes that move its branches are decided in the
 // order they arrived, by one writer, and contend on one subject. A seat's
 // write of a change is judged from the chart as a seat's push is, and a node
-// that cannot judge one decides none.
+// that cannot judge one decides none. So does every write of a target's MERGE
+// QUEUE ([Committer.ProposeQueue]): an enqueue, decided by the change's merge
+// gate, and a dequeue — so a change's entry, its lifecycle and the pushes that
+// move its head are decided by one writer.
 //
 // # Bounded in count, in bytes and in time
 //
@@ -291,6 +294,9 @@ type Committer struct {
 	// (export_test.go), which holds a round under the rules the formation
 	// before the publish read to forming none there.
 	formedInRound func(formed int)
+	// queueEntries is MaxQueueEntries, and a test's smaller value
+	// (export_test.go).
+	queueEntries int
 
 	// busyWindow is every busy refusal of the last CommitBusyWindow, a
 	// bucket a minute, which [Committer.AlarmReading] reads (busy.go).
@@ -326,21 +332,24 @@ type repoCommitter struct {
 }
 
 // queued is one proposal waiting for its batch: a push's, or a compaction's,
-// an expunge record's or a change's, which wait in the same queue in the same
-// arrival order and are each decided as a batch of their own
+// an expunge record's, a change's or a queue's write, which wait in the same
+// queue in the same arrival order and are each decided as a batch of their own
 // ([Committer.ProposeCompaction], [Committer.ProposeExpunge],
-// [Committer.ProposeChange]).
+// [Committer.ProposeChange], [Committer.ProposeQueue]).
 type queued struct {
-	// p is the push this proposal is; compaction, expunge or change, where
-	// one is set, is the compaction, the expunge record or the write of a
-	// change it is instead, and p then its zero value.
+	// p is the push this proposal is; compaction, expunge, change or
+	// queueWrite, where one is set, is the compaction, the expunge record, the
+	// write of a change or the write of a merge queue it is instead, and p
+	// then its zero value.
 	p          Proposal
 	compaction *CompactionProposal
 	expunge    *ExpungeProposal
 	change     *ChangeProposal
-	// bytes is entryBound(p), or a compaction's, an expunge record's or a
-	// change's encoded payload; rows is rowBound(p), compactDecidedRows of a
-	// compaction or decidedRows of an expunge record or a change.
+	queueWrite *QueueProposal
+	// bytes is entryBound(p), or a compaction's, an expunge record's, a
+	// change's or a queue's write's encoded payload; rows is rowBound(p),
+	// compactDecidedRows of a compaction or decidedRows of an expunge record,
+	// a change or a queue's write.
 	bytes int
 	rows  int
 	// arrived is when the proposal was queued, by the committer's clock;
@@ -376,6 +385,8 @@ func (q *queued) repoID() string {
 		return q.expunge.RepoID()
 	case q.change != nil:
 		return q.change.RepoID()
+	case q.queueWrite != nil:
+		return q.queueWrite.RepoID()
 	}
 	return q.p.RepoID
 }
@@ -386,6 +397,7 @@ const (
 	kindCompaction = "compaction"
 	kindExpunge    = "expunge"
 	kindChange     = "change"
+	kindQueue      = "merge_queue"
 )
 
 // kind is what q is, as the busy count names it.
@@ -397,24 +409,31 @@ func (q *queued) kind() string {
 		return kindExpunge
 	case q.change != nil:
 		return kindChange
+	case q.queueWrite != nil:
+		return kindQueue
 	}
 	return kindPush
 }
 
 // alone reports a proposal decided as a batch of its own — a compaction's, an
-// expunge record's or a change's, each a record of its own op — never
-// gathered with pushes.
-func (q *queued) alone() bool { return q.compaction != nil || q.expunge != nil || q.change != nil }
+// expunge record's, a change's or a queue's write, each a record of its own op
+// — never gathered with pushes.
+func (q *queued) alone() bool {
+	return q.compaction != nil || q.expunge != nil || q.change != nil || q.queueWrite != nil
+}
 
 // judgedByChart reports a proposal whose decide reads the chart — a seat's
-// push, and a seat's write of a change ([PrincipalKind.readsChart]) — which a
-// node behind the company's configuration, or one with no chart yet, never
+// push, a seat's write of a change ([PrincipalKind.readsChart]), and every
+// enqueue and a seat's dequeue ([QueueProposal.JudgesChart]) — which a node
+// behind the company's configuration, or one with no chart yet, never
 // decides. A compaction and an expunge record judge no principal by any
 // chart.
 func (q *queued) judgedByChart() bool {
 	switch {
 	case q.change != nil:
 		return q.change.JudgesChart()
+	case q.queueWrite != nil:
+		return q.queueWrite.JudgesChart()
 	case q.alone():
 		return false
 	}
@@ -431,8 +450,21 @@ func (c *Committer) behindFor(q *queued) string {
 	if !q.judgedByChart() || c.current == nil || c.current() {
 		return ""
 	}
-	return fmt.Sprintf("this node is behind the company's configuration and decides no seat's %s from the "+
-		"chart the fleet replaced; the repository's next committer decides it", q.kind())
+	return fmt.Sprintf("this node is behind the company's configuration and decides no %s from the chart the "+
+		"fleet replaced; the repository's next committer decides it", q.judged())
+}
+
+// judged names q as one of the writes the chart judges, for a node that may
+// judge none: a seat's push or write of a change, an enqueue — whoever asks
+// ([QueueProposal.JudgesChart]) — or a seat's dequeue.
+func (q *queued) judged() string {
+	switch {
+	case q.queueWrite != nil && q.queueWrite.Enqueue != nil:
+		return "enqueue"
+	case q.queueWrite != nil:
+		return "seat's dequeue"
+	}
+	return "seat's " + q.kind()
 }
 
 // again is what q's asker does after a refusal that decided nothing: a person
@@ -445,7 +477,7 @@ func (q *queued) again() string {
 		return "the next pass plans again"
 	case q.expunge != nil:
 		return q.expunge.again()
-	case q.change != nil:
+	case q.change != nil, q.queueWrite != nil:
 		return changeAgain
 	}
 	return "run git push again"
@@ -492,13 +524,15 @@ func (q *queued) shortOfTime(left time.Duration) string {
 }
 
 // answered is one proposal's answer: res a push's, compact a compaction's,
-// expunge an expunge record's, change a change's — or carried, a push its
-// batch decided nothing of, which leads the next batch and is answered there.
+// expunge an expunge record's, change a change's, queue a queue's write's — or
+// carried, a push its batch decided nothing of, which leads the next batch and
+// is answered there.
 type answered struct {
 	res     ProposeResult
 	compact CompactResult
 	expunge ExpungeResult
 	change  ChangeResult
+	queue   QueueResult
 	err     error
 	carried bool
 }
@@ -530,7 +564,7 @@ func NewCommitter(o CommitterOptions) (*Committer, error) {
 	c := &Committer{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, limits: o.Limits, retention: o.Retention,
 		seatRules: o.SeatRules, current: o.Current, now: o.Now, metrics: o.Metrics, log: o.Logger,
-		idle: CommitterIdle, nodeBytes: CommitterNodeBytes, clock: time.Now,
+		idle: CommitterIdle, nodeBytes: CommitterNodeBytes, queueEntries: MaxQueueEntries, clock: time.Now,
 		repos: map[string]*repoCommitter{}, stopping: make(chan struct{}),
 	}
 	if c.now == nil {
@@ -658,6 +692,9 @@ func (c *Committer) busy(q *queued, reason busyReason, refusal string) answered 
 		return answered{expunge: ExpungeResult{Refusal: RefusalBusy, Detail: refusal}}
 	case q.change != nil:
 		return answered{change: ChangeResult{ChangeID: q.change.ChangeID(), Refusal: ChangeRefusalBusy,
+			Detail: refusal}}
+	case q.queueWrite != nil:
+		return answered{queue: QueueResult{EntryID: q.queueWrite.EntryID(), Refusal: MergeRefusalBusy,
 			Detail: refusal}}
 	}
 	return answered{res: ProposeResult{Answer: refuseAll(q.p, RefusalBusy, refusal)}}
@@ -795,6 +832,8 @@ func (c *Committer) run(rc *repoCommitter) {
 			c.expunge(rc.repoID, first)
 		case first.change != nil:
 			c.change(rc.repoID, first)
+		case first.queueWrite != nil:
+			c.queueWrite(rc.repoID, first)
 		default:
 			var batch []*queued
 			batch, carried = c.gather(rc, first, carried)
@@ -1187,14 +1226,14 @@ func changeNumbersIn(ctx context.Context, tx *sql.Tx, repoID string, ids []strin
 	}
 	rows, err := tx.QueryContext(ctx, changeNumbersSQL, repoID, list)
 	if err != nil {
-		return nil, fmt.Errorf("code: read the numbers of the changes a batch's answers name: %w", err)
+		return nil, fmt.Errorf("code: read the numbers of repository %s's changes: %w", repoID, err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var id string
 		var number int64
 		if err := rows.Scan(&id, &number); err != nil {
-			return nil, fmt.Errorf("code: read the numbers of the changes a batch's answers name: %w", err)
+			return nil, fmt.Errorf("code: read the numbers of repository %s's changes: %w", repoID, err)
 		}
 		out[id] = number
 	}

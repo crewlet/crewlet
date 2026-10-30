@@ -571,6 +571,10 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case ChangeLanded:
 		payloadRepo = p.RepoID
+	case Enqueue:
+		payloadRepo = p.RepoID
+	case Dequeue:
+		payloadRepo = p.RepoID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository "+
 			"(the record at %s)", at.record.Op, at.position)
@@ -621,6 +625,10 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	case ChangeEdit, ChangeDraft, ChangeRetarget, ChangeClose, ChangeReopen, ChangeLanded:
 		n, err := a.applyChangeWrite(ctx, tx, at, payload)
 		return a.noticed(ctx, tx, at, id, payload, n, err)
+	case Enqueue:
+		return a.applyEnqueue(ctx, tx, at, p)
+	case Dequeue:
+		return a.applyDequeue(ctx, tx, at, p)
 	}
 	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
 }

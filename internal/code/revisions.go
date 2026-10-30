@@ -45,6 +45,12 @@ import (
 //     owner and first author ([changeBook.open]); the record's later entries
 //     revise, merge or close it as any live change.
 //
+// A CHANGE A RECORD MOVES LEAVES ITS QUEUE: its live queue entry, where its
+// target's queue holds one (queue.go), is EJECTED head_moved by a move of its
+// head — the queue would otherwise test a head nobody enqueued — and DEQUEUED
+// by its merge or its close, in the push's own record, one row an entry, which
+// the book counts with the rest ([changeBook.rowCount]).
+//
 // Every change a record moves counts ONE VERSION and takes the record's
 // position, however many of its entries moved it: a change's version counts
 // the records that changed its row, which a write of its lifecycle states as
@@ -134,6 +140,9 @@ type changeBook struct {
 	// record's head moves can reach: the ones read, and the ones the entries
 	// so far added.
 	authored map[[2]string]bool
+	// queued is every change read that holds a live queue entry, which the
+	// record ends where it moves the change.
+	queued map[string]bool
 	// writes is what the entries so far make the record's apply write.
 	writes bookWrites
 	// trial is what the entry the decide is trying has done to the book so
@@ -254,7 +263,7 @@ func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []Pu
 
 	b := &changeBook{repo: repoID, packed: packed, at: at, rows: map[string]*changeRow{},
 		bySource: map[string]string{}, byTarget: map[string][]string{}, authored: map[[2]string]bool{},
-		writes: noWrites()}
+		queued: map[string]bool{}, writes: noWrites()}
 	var sources []string
 	var pairs [][2]string
 	seenSource, seenPair := map[string]bool{}, map[[2]string]bool{}
@@ -310,7 +319,38 @@ func readChangeBook(ctx context.Context, tx *sql.Tx, repoID string, entries []Pu
 	if err := inChunks(held, func(part [][2]string) error { return b.readAuthors(ctx, tx, part) }); err != nil {
 		return nil, fmt.Errorf("code: read the authors a push's pushers are of the changes it moves: %w", err)
 	}
+	// THE CHANGES THAT HOLD A LIVE QUEUE ENTRY, of those read: a move of
+	// one ends its entry, a row the record writes, counted.
+	ids := make([]string, 0, len(b.rows))
+	for id := range b.rows {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	if err := inChunks(ids, func(part []string) error { return b.readQueued(ctx, tx, part) }); err != nil {
+		return nil, fmt.Errorf("code: read which changes a push moves are queued: %w", err)
+	}
 	return b, nil
+}
+
+// readQueued marks every change of ids that holds a live queue entry.
+func (b *changeBook) readQueued(ctx context.Context, tx *sql.Tx, ids []string) error {
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, queuedChangesSQL, string(encoded))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		b.queued[id] = true
+	}
+	return rows.Err()
 }
 
 // read adds the changes one statement answers for list to the book, each once.
@@ -436,13 +476,25 @@ func (b *changeBook) alone(e PushEntry) (rows, moved int) {
 }
 
 // rowCount is the rows the book's moves make the record's apply write: every
-// change it moved or opened, every revision and every author it added, and
-// the description of every change it opened that carries one. The
-// repository's own row, whose next number an open moves, is the record's
-// already ([recordRows]).
+// change it moved or opened, every revision and every author it added, the
+// description of every change it opened that carries one, and the live queue
+// entry of every change it moved that holds one. The repository's own row,
+// whose next number an open moves, is the record's already ([recordRows]).
 func (b *changeBook) rowCount() int {
 	w := &b.writes
-	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies)
+	return len(w.touched) + len(w.revisions) + len(w.authors) + len(w.bodies) + b.queuedMoved()
+}
+
+// queuedMoved is how many of the changes the book's moves reached hold a live
+// queue entry — none of those it opened, which no queue holds yet.
+func (b *changeBook) queuedMoved() int {
+	n := 0
+	for _, id := range b.writes.touched {
+		if b.queued[id] && !b.writes.opened[id] {
+			n++
+		}
+	}
+	return n
 }
 
 // moved is how many changes the book's moves reached.
@@ -655,4 +707,10 @@ const (
 	heldAuthorsSQL = `SELECT a.change_id, a.author FROM json_each(?) AS j
 		CROSS JOIN code_change_authors AS a
 		WHERE a.change_id = CAST(j.value ->> 0 AS TEXT) AND a.author = CAST(j.value ->> 1 AS TEXT)`
+	// queuedChangesSQL is the changes of a list that hold a LIVE queue
+	// entry, one seek of code_queue_change_idx a change, the live states
+	// spelled as code_queue_live_idx is partial on them.
+	queuedChangesSQL = `SELECT q.change_id FROM json_each(?) AS j
+		CROSS JOIN code_queue AS q INDEXED BY code_queue_change_idx
+		WHERE q.change_id = CAST(j.value AS TEXT) AND q.state IN ('waiting', 'testing')`
 )

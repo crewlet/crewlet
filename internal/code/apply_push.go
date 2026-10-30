@@ -802,8 +802,9 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 // fixed order — its pushes, then its refs, then its packs, then the packs a
 // record retired, then its ref drops, then its changes, each whole: its
 // revisions, its authors, its conversation, its body and then its row
-// ([purgeChanges]) — then its checks, each with its log ([purgeChecks]) — so
-// every node deletes the same rows. THE PART IS THE GUARD: only the row's
+// ([purgeChanges]) — then its checks, each with its log ([purgeChecks]) — then
+// its merge queues' entries, candidates, landings and green rows
+// ([purgeQueues]) — so every node deletes the same rows. THE PART IS THE GUARD: only the row's
 // purge_parts + 1 deletes anything, so a redelivered or stale part deletes
 // nothing more.
 //
@@ -981,6 +982,14 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 			return 0, err
 		}
 		deleted += n
+		budget -= n
+	}
+	if budget > 0 {
+		n, err := purgeQueues(ctx, tx, p.RepoID, budget)
+		if err != nil {
+			return 0, err
+		}
+		deleted += n
 	}
 	if _, err := tx.ExecContext(ctx, purgeCountersSQL, p.Part, gone.live, gone.branches, gone.tags,
 		gone.tombstones, livePacksGone, liveBytesGone, liveObjectsGone, at.packed, p.RepoID); err != nil {
@@ -998,7 +1007,8 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // repository's pushes, refs, packs, retired packs, ref drops, changes'
 // revisions, authors, bodies and rows and their conversations' rows — its
 // reviewers, participants, comments, reviews, findings, revisions' facts and
-// mergeability among them — and its checks and their logs remain AND the
+// mergeability among them — its checks and their logs, and its merge queues'
+// entries, candidates, landings and green rows remain AND the
 // pushes, the bodies, the conversations' text and the checks among them
 // weigh at most PurgePartBytes — a part's own bounds — and it holds at most
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their
@@ -1037,7 +1047,8 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
 		purgeAllFindingsSQL, purgeAllCommentsSQL, purgeAllFindingTextsSQL, purgeAllReviewsSQL,
 		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllMergeabilitySQL, purgeAllConversationsSQL,
-		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL,
+		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL, purgeAllQueueSQL, purgeAllCandidatesSQL,
+		purgeAllLandingsSQL, purgeAllGreenSQL,
 		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)

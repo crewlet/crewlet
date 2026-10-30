@@ -3441,7 +3441,7 @@ func TestAKeyedOpWithNoKeyIsRefused(t *testing.T) {
 func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	t.Parallel()
 	ops := []*opSpec{opCodePropose.spec, opCodeCompact.spec, opCodeExpunge.spec, opCodeChange.spec,
-		opCodeConversation.spec, opCodeChecks.spec, opCodeResolve.spec, opCodeRepoState.spec,
+		opCodeQueue.spec, opCodeConversation.spec, opCodeChecks.spec, opCodeResolve.spec, opCodeRepoState.spec,
 		opCodePushOutcome.spec, opCodeRead.spec, opCodeResolveRef.spec}
 	for _, spec := range ops {
 		if spec.domain != "code" || spec.floorStream != (code.Domain{}).Stream().Name ||
@@ -3483,6 +3483,9 @@ func TestTheCodeOpsCarryTheCodeFloor(t *testing.T) {
 	}
 	if _, err := seam.Change(ctx, code.ChangeProposal{Close: &code.ChangeClose{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("change: %v", err)
+	}
+	if _, err := seam.Queue(ctx, code.QueueProposal{Dequeue: &code.Dequeue{RepoID: "repo-1"}}); err != nil {
+		t.Fatalf("queue: %v", err)
 	}
 	if _, err := seam.Converse(ctx, code.ConversationWrite{Comment: &code.Comment{RepoID: "repo-1"}}); err != nil {
 		t.Fatalf("converse: %v", err)

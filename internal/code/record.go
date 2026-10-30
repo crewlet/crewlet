@@ -400,16 +400,36 @@ const (
 	// checks_sweep", Since: 2, Path: []string{"op"}, Equals:
 	// string(OpChecksSweep)}, with the same companions. It is no gate.
 	OpChecksSweep OpKind = "checks_sweep"
+
+	// OpEnqueue puts a change in its target's merge queue ([Enqueue]), on the
+	// repository's own subject, decided by its committer alone through the
+	// change's merge gate ([Committer.ProposeQueue]).
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// enqueue", Since: 2, Path: []string{"op"}, Equals: string(OpEnqueue)},
+	// with the same companions. It is no gate.
+	OpEnqueue OpKind = "enqueue"
+
+	// OpDequeue takes a live entry out of its target's merge queue at a
+	// principal's ask ([Dequeue]), on the repository's own subject, decided by
+	// its committer alone.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// dequeue", Since: 2, Path: []string{"op"}, Equals: string(OpDequeue)},
+	// with the same companions. It is no gate.
+	OpDequeue OpKind = "dequeue"
 )
 
-// OpKinds are the thirty-eight, in the order they are documented.
+// OpKinds are the forty, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
-	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep,
+	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpEnqueue, OpDequeue,
 }
 
 // CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every

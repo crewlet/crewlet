@@ -66,6 +66,9 @@ import (
 //     asker of a read, the principal of a decide. A person always holds it;
 //     a seat and a credential the gate's merge_by on a protected target, and
 //     a fast-forward of the branch on one no rule protects.
+//   - QUEUE, where the target's merge queue holds the change (queue.go):
+//     COMPUTING, waiting on nobody, its place named — the queue lands it. A
+//     change waiting in a queue is not READY to merge: it is merging.
 //
 // Every approval these count is counted by M4's one rule ([approvalTally]):
 // an eligible reviewer's standing verdict, never an author's, on the head
@@ -268,6 +271,19 @@ type GateFacts struct {
 	// change's stored readiness says is whether it is ready, for whoever
 	// merges it.
 	Merger Principal
+	// Queue is the change's LIVE entry in its target's merge queue and its
+	// place there, nil for none ([PreconditionQueue]).
+	Queue *QueuedFacts
+}
+
+// QueuedFacts is a change's live entry in its target's merge queue as the gate
+// reads it: the entry, where it stands, and its place in its target's queue,
+// from 1.
+type QueuedFacts struct {
+	EntryID   string
+	TargetRef string
+	State     QueueState
+	Place     int
 }
 
 // HeadFacts is what a change's merge gate reads of its head revision's
@@ -397,6 +413,28 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 	}
 	if err := gateChecksIn(ctx, tx, triples, byCommit, required, out); err != nil {
 		return nil, err
+	}
+	// EACH CHANGE'S LIVE QUEUE ENTRY, of every change at once, and the place
+	// of each a queue holds — one count of its target's entries before it,
+	// for the few changes of a page a queue holds.
+	ids := make([]string, len(subjects))
+	for i, s := range subjects {
+		ids[i] = s.row.id
+	}
+	live, err := liveEntriesOf(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i, s := range subjects {
+		e, queued := live[s.row.id]
+		if !queued {
+			continue
+		}
+		place, err := placeIn(ctx, tx, e)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Queue = &QueuedFacts{EntryID: e.EntryID, TargetRef: e.TargetRef, State: e.State, Place: place}
 	}
 	return out, nil
 }
@@ -606,7 +644,24 @@ func JudgeGate(f GateFacts, r GateRules) Readiness {
 	if f.Merger != (Principal{}) {
 		pre = append(pre, g.mergeAuthority())
 	}
+	if f.Queue != nil {
+		pre = append(pre, g.queued())
+	}
 	return j.readiness(pre)
+}
+
+// queued is the queue precondition of a change its target's merge queue holds:
+// COMPUTING, waiting on nobody — the queue lands it — its place and its state
+// named.
+func (g gateJudge) queued() Precondition {
+	q := g.f.Queue
+	doing := "waits"
+	if q.State == QueueTesting {
+		doing = "is being tested"
+	}
+	return Precondition{Kind: PreconditionQueue, State: PreconditionComputing, Detail: fmt.Sprintf(
+		"%s %s at place %d in %s's queue: the queue lands it once its gate holds on what it is merged with",
+		g.ref, doing, q.Place, q.TargetRef)}
 }
 
 // gateJudge is one judgment of a change's merge gate: M4's judgment of its

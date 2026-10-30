@@ -261,6 +261,16 @@
 // requires passed on the head commit, and the merger's authority where a
 // merger is named.
 //
+// A BRANCH WHOSE GATE REQUIRES A CHECK LANDS ITS MERGES THROUGH ITS QUEUE
+// (queue.go): an enqueue, decided by the change's merge gate from one snapshot
+// with its principal as the merger, and a dequeue are records on the
+// REPOSITORY's subject, decided by its committer alone
+// ([Committer.ProposeQueue]) — so a change's entry, its lifecycle and the
+// pushes that move its head have one writer, and every record that leaves the
+// change no longer what was enqueued ends its entry in its own apply: a close,
+// a draft, a retarget and a landing dequeue it, and a push that moves its head
+// ejects it.
+//
 // # A repository's checks are rows on their own subject
 //
 // What a repository's `.crewlet/checks.yaml` defines (checksfile.go:

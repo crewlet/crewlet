@@ -172,8 +172,9 @@ func (s *Store) NameOf(ctx context.Context, id string) string {
 // a part deletes from — the pushes, the refs, the packs, the retired packs, the
 // ref drops, the changes' revisions, authors, bodies and rows, and their
 // conversations' reviewers, participants, findings, comments, finding texts,
-// reviews, revisions' facts, mergeability and rows, and the checks and their
-// logs — is counted at most PurgePartRows + 1 deep (?2, against the repository
+// reviews, revisions' facts, mergeability and rows, the checks and their
+// logs, and the merge queues' entries, candidates, landings and green rows — is
+// counted at most PurgePartRows + 1 deep (?2, against the repository
 // ?1), and beside them what the wide rows among them weigh, summed over the
 // same depth: the push rows' row_bytes from code_pushes_repo_idx, which
 // carries every row's width, the changes' body_bytes from their own narrow
@@ -228,7 +229,11 @@ const (
 			WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_checks INDEXED BY ` + checksEndedKey + `
 			WHERE repo_id = ?1 LIMIT ?2))
-		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_check_logs WHERE repo_id = ?1 LIMIT ?2)),
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_check_logs WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_queue WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_candidates WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_landings WHERE repo_id = ?1 LIMIT ?2))
+		+ (SELECT COUNT(*) FROM (SELECT 1 FROM code_green WHERE repo_id = ?1 LIMIT ?2)),
 		(SELECT COALESCE(SUM(row_bytes), 0) FROM
 			(SELECT row_bytes FROM code_pushes WHERE repo_id = ?1 LIMIT ?2))
 		+ (SELECT COALESCE(SUM(body_bytes), 0) FROM

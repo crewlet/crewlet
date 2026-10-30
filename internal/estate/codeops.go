@@ -31,6 +31,7 @@ type CodeServer interface {
 	ProposeCompaction(ctx context.Context, p code.CompactionProposal) (code.CompactResult, error)
 	ProposeExpunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
 	ProposeChange(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
+	ProposeQueue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
 	PublishChecks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
 	Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error)
@@ -137,6 +138,34 @@ var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
 		return res, ranNothing(err)
 	}).keyedBy(code.ChangeProposal.RepoID).answeredOn(laneProposals).
 	judgesGrant(code.ChangeProposal.JudgesChart)
+
+// opCodeQueue is a write of a target's MERGE QUEUE — an enqueue of a change,
+// decided by its merge gate, or a dequeue of an entry — asked of the
+// repository's COMMITTER exactly as a change's write is: an IDEMPOTENT write
+// keyed by its operation id, which its asker minted once and the domain's
+// operation ledger collapses (an enqueue's entry id is derived from it, so no
+// retry queues a change twice), so an unanswered one is asked of the
+// repository's runner-up with the same id. On the proposals lane, because it
+// waits in the repository's one queue beside its pushes. No actor: the asker
+// travels inside the proposal, checked by its Validate on the node that
+// decides, which records it as who enqueued or dequeued.
+//
+// A WRITE THE CHART JUDGES — every enqueue, whoever asks, since its merge
+// gate counts each approval by who may approve the change, each owner's by
+// the lead chain above it and a seat's merge authority by its grant; and a
+// seat's dequeue, whose grant says whether it may take an entry out — is
+// declared so (code.QueueProposal.JudgesChart, the committer's own rule), and
+// a node behind the company's configuration answers none of it
+// ([op.judgesGrant]), even asked last; a person's dequeue consults no chart.
+var opCodeQueue = define("code.queue", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, p code.QueueProposal) (code.QueueResult, error) {
+		if b.Code == nil {
+			return code.QueueResult{}, errNoHalf
+		}
+		res, err := b.Code.ProposeQueue(ctx, p)
+		return res, ranNothing(err)
+	}).keyedBy(code.QueueProposal.RepoID).answeredOn(laneProposals).
+	judgesGrant(code.QueueProposal.JudgesChart)
 
 // opCodeConversation is a write of a change's CONVERSATION — an ask for review,
 // a comment or a thread's resolution — asked of the repository's COMMITTING
@@ -267,8 +296,13 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // requested; a repository's checks — a change's, a commit's, the
 // repository's newest ended first, or every readable repository's since a
 // moment — and one attempt whole, each held to the grant on its repository;
-// and the change heads a repository's home owes a dispatch of their checks
-// (checks_due). A seat's read on a node that holds no chart is that node's
+// the change heads a repository's home owes a dispatch of their checks
+// (checks_due); the live entries of a repository's merge queues — of one
+// target, or of every readable repository — with their trains, a target's
+// landings above its green and a repository's green rows, each held to the
+// grant on its repository; and the repositories holding a live entry, or one
+// repository's entries, which its home's queue works from (queue_due). A
+// seat's read on a node that holds no chart is that node's
 // code.ErrNotServing — it ran nothing — so the walk asks the next.
 //
 // A SEAT'S READ JUDGES ITS GRANT from the serving node's chart (which
@@ -278,8 +312,8 @@ var opCodePushOutcome = define("code.push_outcome", opRead, codeDomain, false,
 // behind the company's configuration answers none of it ([op.judgesGrant]); a
 // person's or a token's consults no chart, and a `run_pushes` page, an
 // `introduced` page and the `compaction_due`, `publication_due`,
-// `expunge_due`, `changes_due` and `checks_due` listings name no asker at all,
-// so each is answered there as a last resort.
+// `expunge_due`, `changes_due`, `checks_due` and `queue_due` listings name no
+// asker at all, so each is answered there as a last resort.
 var opCodeRead = define("code.read", opRead, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, q code.ReadQuery) (code.ReadAnswer, error) {
 		if b.Code == nil {

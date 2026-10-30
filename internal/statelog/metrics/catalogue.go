@@ -743,6 +743,27 @@ func Catalogue() []Instrument {
 				"cannot judge its seats.",
 		},
 		{
+			Name: CodeQueueProposals, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"op", "outcome"},
+			Shows: "Writes of a target's merge queue this node's committer was " +
+				"asked to decide, by `op` (`enqueue`, a change put in its " +
+				"target's queue through its merge gate, and `dequeue`, an " +
+				"entry taken out at a principal's ask) and what became of each, " +
+				"by `outcome`: `applied`, its record landed and its entry's row " +
+				"says so; `pending` and `unknown`, its record was appended and " +
+				"is not yet known here to have applied; a refusal's own code — " +
+				"`gate_unmet`, `already_queued`, `queue_full`, `no_queue`, " +
+				"`no_auto_revert`, `head_moved`, `stale`, `change_not_open`, " +
+				"`change_draft`, `change_not_found`, `not_queued`, " +
+				"`not_permitted`, `repo_archived`, `repo_deleted`, `busy`, " +
+				"`not_applied`, `unavailable` — which decided nothing; " +
+				"`handed_on`, one this node decided nothing of for a reason " +
+				"about itself, which the estate asks the repository's runner-up; " +
+				"and `failed`, any other error. `gate_unmet` climbing is askers " +
+				"queueing changes before their gate is met; `queue_full`, a " +
+				"queue landing slower than it is fed.",
+		},
+		{
 			Name: CodeChecksQueued, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"purpose"},
 			Shows: "Attempts of checks this node's checks writer queued — each a " +
@@ -828,9 +849,11 @@ func Catalogue() []Instrument {
 				"its next pass; `expunge`, a record of an expunge of a " +
 				"repository's unreachable objects — a person's purge request, " +
 				"which they ask for again, or the begin or the commit its " +
-				"maintainer built, which it plans again at its next pass; and " +
+				"maintainer built, which it plans again at its next pass; " +
 				"`change`, a write of a change's lifecycle, which its asker " +
-				"sends again. `reason` is one of five causes, each pointing at " +
+				"sends again; and `merge_queue`, an enqueue or a dequeue of a " +
+				"target's merge queue, which its asker sends again. `reason` is " +
+				"one of five causes, each pointing at " +
 				"a different remedy. Three are a BACKLOG, which raises " +
 				"`code_commit_busy` on the committer's node: `queue`, a " +
 				"repository taking pushes faster than one node's committer " +

@@ -835,6 +835,25 @@ const (
 	// own rather than a `check` read naming none, so that a principal's read
 	// that forgot its asker is refused rather than answered ungated.
 	ReadCheckBox ReadKind = "check_box"
+	// ReadQueue lists the LIVE entries of merge queues ([QueueRow]), held to
+	// the asker's grant: one repository's in target and queue order — one of
+	// its targets', where [ReadQuery.Target] names one — beside the
+	// candidates of the trains testing its targets ([CandidateRow]); or,
+	// naming no repository, every repository's the asker may read.
+	ReadQueue ReadKind = "queue"
+	// ReadQueueDue is the queue work a repository's HOME git node owes
+	// ([QueueDueQuery]): with no repository, the active repositories holding
+	// a live entry, by id; with one, its live entries in queue order. The
+	// engine's own read, as `changes_due` is.
+	ReadQueueDue ReadKind = "queue_due"
+	// ReadLandings is one protected target's landings above its green
+	// ([LandingRow]), in the order they landed, beside its green row
+	// ([GreenRow]) — held to the asker's grant on its repository.
+	ReadLandings ReadKind = "landings"
+	// ReadGreen is one repository's green rows ([GreenRow]) — each protected
+	// target's newest commit whose required checks passed — or one target's,
+	// held to the asker's grant.
+	ReadGreen ReadKind = "green"
 )
 
 // ReadKinds is the closed set.
@@ -845,12 +864,14 @@ const (
 // take no versionedFields row: `changes` and `change` are the only kinds that
 // read [ReadQuery.Change], State, Owner and Work, `run_pushes` the only one
 // that reads [ReadQuery.RunPushes], `expunge_tips` the only one that reads
-// [ReadQuery.ExpungeTips], and `check_box` the only one that reads
-// [ReadQuery.CheckBox].
+// [ReadQuery.ExpungeTips], `check_box` the only one that reads
+// [ReadQuery.CheckBox], `queue`, `landings` and `green` the only ones that
+// read [ReadQuery.Target], and `queue_due` the only one that reads
+// [ReadQuery.QueueDue].
 func ReadKinds() []ReadKind {
 	return []ReadKind{ReadRepos, ReadRepo, ReadPushes, ReadRunPushes, ReadRefs, ReadChanges, ReadChange,
 		ReadIntroduced, ReadCompactionDue, ReadPublicationDue, ReadExpungeDue, ReadExpungeTips, ReadChangesDue,
-		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox}
+		ReadChecks, ReadCheck, ReadChecksDue, ReadCheckBox, ReadQueue, ReadQueueDue, ReadLandings, ReadGreen}
 }
 
 // Valid reports a kind this build knows.
@@ -1069,6 +1090,16 @@ type ReadQuery struct {
 	// build that predates the kind refuses the read as a kind it does not
 	// know (ErrInvalid) — the scan unread, never answered as no tips.
 	ExpungeTips *ExpungeTipsQuery `json:"expunge_tips,omitempty"`
+	// Target narrows a `queue` read of a repository to one of its branches'
+	// queues, and names the protected branch a `landings` read lists and a
+	// `green` read answers — REQUIRED for landings — a branch a change may
+	// name, beside the repository Repo names; refused on every other kind.
+	// QueueDue is a `queue_due` read's own: REQUIRED for that kind and
+	// refused on every other ([QueueDueQuery]). Estate request fields and no
+	// record's, so they take no versionedFields row: a node of a build that
+	// predates the kinds refuses the read as a kind it does not know.
+	Target   string         `json:"target,omitempty"`
+	QueueDue *QueueDueQuery `json:"queue_due,omitempty"`
 	// MinPacks is a `compaction_due` read's floor — the repositories
 	// holding at least this many live packs — REQUIRED, at least 1, for that
 	// kind and refused on every other.
@@ -1134,7 +1165,16 @@ type ReadAnswer struct {
 	// Tips is a page of an `expunge_tips` read: object ids, each once on the
 	// page, in the order of the drops that name them — an object a later
 	// page names again is one more drop left, which its reader keeps once.
-	Tips     []string           `json:"tips,omitempty"`
+	Tips []string `json:"tips,omitempty"`
+	// Queue is a page of a `queue` or a `queue_due` read's live entries, in
+	// queue order; Trains a `queue` read's candidates of the trains testing
+	// the targets its page reaches; Landings a page of a `landings` read; and
+	// Green the target's green row a `landings` read starts above, or a
+	// `green` read's rows.
+	Queue    []QueueRow         `json:"queue,omitempty"`
+	Trains   []CandidateRow     `json:"trains,omitempty"`
+	Landings []LandingRow       `json:"landings,omitempty"`
+	Green    []GreenRow         `json:"green,omitempty"`
 	Next     string             `json:"next,omitempty"`
 	Position statelog.Position  `json:"position"`
 	Level    statelog.ReadLevel `json:"level"`

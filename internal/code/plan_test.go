@@ -379,7 +379,7 @@ func registeredStatements() map[string]statement {
 		"purge all packs":     {purgeAllPacksSQL, []any{"repo-1"}, []string{packsKey + " (repo_id=?)"}},
 		"remove repo":         {removeRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"repo name":           {repoNameSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
-		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)"}},
+		"remaining":           {remainingSQL, []any{"repo-1", PurgePartRows + 1}, []string{"COVERING INDEX code_pushes_repo_idx (repo_id=?)", refsKey + " (repo_id=?)", packsKey + " (repo_id=?)", retiredKey + " (repo_id=?)", dropsKey + " (repo_id=?)", changesNumberKey + " (repo_id=?)", revisionKey + " (change_id=?)", authorKey + " (change_id=?)", "COVERING INDEX " + bodyKey + " (change_id=?)", reviewerKey + " (change_id=?)", participantKey + " (change_id=?)", "COVERING INDEX code_findings_raiser_idx (change_id=?)", "COVERING INDEX code_comments_thread_idx (change_id=?)", "COVERING INDEX " + findingTextKey + " (change_id=?)", "COVERING INDEX code_reviews_change_idx (change_id=?)", factsKey + " (change_id=?)", mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)", "COVERING INDEX " + checksEndedKey + " (repo_id=?)", checkLogsKey + " (repo_id=?)", "sqlite_autoindex_code_queue_1 (repo_id=?)", "sqlite_autoindex_code_candidates_1 (repo_id=?)", "sqlite_autoindex_code_landings_1 (repo_id=?)", "sqlite_autoindex_code_green_1 (repo_id=?)"}},
 		"claim":               {claimSQL, []any{"token"}, []string{nameKey + " (token=?)"}},
 		"claims":              {claimsSQL, []any{`["token","other"]`}, []string{nameKey + " (token=?)"}},
 		"repos rows":          {reposRowsSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
@@ -702,6 +702,73 @@ func registeredStatements() map[string]statement {
 		// triples, one seek of the checks' key a triple.
 		"gate heads": {gateHeadsSQL, []any{`[["repo-1-change-000001",3],["repo-1-change-000002",1]]`},
 			[]string{"SCAN json_each AS j", factsKey + " (change_id=? AND n=?)"}},
+		// THE MERGE QUEUE (queue.go, apply_queue.go, queueread.go): one entry
+		// by its key; the live entries of a list of changes, driven from the
+		// list, one seek of code_queue_change_idx a change, and which of a
+		// list are queued, the push apply's; a target's waiting entries and
+		// the live ones before an entry, counted over code_queue_live_idx; an
+		// entry ended by its key, a change's live one by
+		// code_queue_change_idx, and a list's, driven from the list; a
+		// target's live entries after a seq, a repository's from the top and
+		// after a place, and every repository's the same way, each in its
+		// index's order; the active repositories holding one, grouped on the
+		// index's leading column; a target's trains by
+		// code_candidates_train_idx; its landings above a place and its
+		// green row by their keys, and a repository's green rows; and a purge
+		// part's bounded deletes and the purge's whole ones, each by its
+		// table's key.
+		"queue entry": {entrySQL, []any{"repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"live entries of changes": {liveEntriesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
+		"queued changes": {queuedChangesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)"}},
+		"waiting entries": {waitingSQL, []any{"repo-1", "refs/heads/main", MaxQueueEntries},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref=?)"}},
+		"an entry's place": {placeSQL, []any{"repo-1", "refs/heads/main", 1000},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref=? AND seq<?)"}},
+		"end an entry": {endEntrySQL, []any{"dequeued", 1, 1000, "asked", "repo-1", "entry-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
+		"end a change's entry": {endChangeEntrySQL, []any{"dequeued", 1, 1000, "closed", "repo-1-change-000001"},
+			[]string{"code_queue_change_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"end changes' entries": {endChangesEntriesSQL, []any{"ejected", 1, 1000, "head_moved",
+			`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", "code_queue_change_idx (change_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"a target's queue": {queueOfTargetSQL, []any{"repo-1", "refs/heads/main", 0, 50},
+			[]string{"code_queue_live_idx (repo_id=? AND target_ref=? AND seq>?)"}},
+		"a repository's queues": {queueOfRepoSQL, []any{"repo-1", 50},
+			[]string{"code_queue_live_idx (repo_id=?)"}},
+		"a repository's queues next": {queueOfRepoAfterSQL, []any{"repo-1", "refs/heads/main", "refs/heads/main",
+			"refs/heads/main", 1000, 50}, []string{"code_queue_live_idx (repo_id=? AND target_ref>=?)"}},
+		"every queue": {queueAllSQL, []any{"", 50}, []string{"code_queue_live_idx (repo_id>=?)"}},
+		"every queue next": {queueAllAfterSQL, []any{"repo-1", "repo-1", "refs/heads/main", "refs/heads/main", 1000,
+			50}, []string{"code_queue_live_idx (repo_id>=?)"}},
+		"queue due repositories": {queueDueReposSQL, []any{"", MaxSnapshotItems},
+			[]string{"code_queue_live_idx (repo_id>?)", repoKey + " (id=?)"}},
+		"a target's trains": {trainsSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"code_candidates_train_idx (repo_id=? AND target_ref=?)"}},
+		"a target's landings": {landingsSQL, []any{"repo-1", "refs/heads/main", 1000, 1000, -1, 200},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=? AND target_ref=? AND position>=?)"}},
+		"a target's green": {greenSQL, []any{"repo-1", "refs/heads/main"},
+			[]string{"sqlite_autoindex_code_green_1 (repo_id=? AND target_ref=?)"}},
+		"a repository's greens": {greensSQL, []any{"repo-1"},
+			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
+		"purge queue entries": {purgeQueueSQL, []any{"repo-1", PurgePartRows},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge candidates": {purgeCandidatesSQL, []any{"repo-1", PurgePartRows},
+			[]string{"sqlite_autoindex_code_candidates_1 (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge landings": {purgeLandingsSQL, []any{"repo-1", PurgePartRows},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge greens": {purgeGreenSQL, []any{"repo-1", PurgePartRows},
+			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)", "INTEGER PRIMARY KEY (rowid=?)"}},
+		"purge all queue entries": {purgeAllQueueSQL, []any{"repo-1"},
+			[]string{"sqlite_autoindex_code_queue_1 (repo_id=?)"}},
+		"purge all candidates": {purgeAllCandidatesSQL, []any{"repo-1"},
+			[]string{"sqlite_autoindex_code_candidates_1 (repo_id=?)"}},
+		"purge all landings": {purgeAllLandingsSQL, []any{"repo-1"},
+			[]string{"sqlite_autoindex_code_landings_1 (repo_id=?)"}},
+		"purge all greens": {purgeAllGreenSQL, []any{"repo-1"},
+			[]string{"sqlite_autoindex_code_green_1 (repo_id=?)"}},
 		"gate checks": {gateChecksSQL, []any{`[["repo-1","` + oid("c") + `","unit"],["repo-1","` + oid("c") +
 			`","lint"]]`}, []string{"SCAN json_each AS j", checksKey + " (repo_id=? AND commit_oid=? AND name=?)"}},
 		"standing blockers": {standingBlockersSQL, []any{"repo-1-change-000001", MaxReadinessBlockers},
@@ -751,8 +818,8 @@ func registeredStatements() map[string]statement {
 		"touched":            {touchedSQL, []any{3000, "repo-1"}, []string{repoKey + " (id=?)"}},
 		// A CHANGE A PUSH OPENS: the repository's next number moved past
 		// the opens of a push record, by its key; and the numbers of the
-		// changes a batch's answers name, driven from their list, one seek
-		// of the changes' key an element.
+		// changes a batch's answers name, or a queue page's entries,
+		// driven from their list, one seek of the changes' key an element.
 		"next change after": {nextChangeAfterSQL, []any{4, "repo-1"}, []string{repoKey + " (id=?)"}},
 		"change numbers": {changeNumbersSQL, []any{"repo-1", `["repo-1-change-000001","repo-1-change-000002"]`},
 			[]string{"SCAN json_each AS j", changeKey + " (id=?)"}},
@@ -1110,6 +1177,19 @@ func claimedReads() map[string]statement {
 		// the walk of a git node that keeps indexes, and of a search across
 		// the company's repositories — its partial predicate repeated
 		// verbatim. Nothing in this build reads a repository by its mode.
+		// THE MERGE QUEUE'S INDEXES THEIR LATER READERS SEEK (replicated
+		// 0081): a repository's ended entries past the queue's horizon, the
+		// queue_sweep's, its partial predicate repeated verbatim; and a
+		// change's landings, a broken landing's authors' and the change
+		// page's. Nothing in this build ends a queue's history or reads a
+		// change's landings.
+		"code_queue_ended_idx": {`SELECT entry_id FROM code_queue INDEXED BY code_queue_ended_idx
+			WHERE repo_id = ? AND state IN ('landed', 'ejected', 'dequeued') AND ended_at < ?
+			ORDER BY ended_at LIMIT ?`, []any{"repo-1", 1000, PurgePartRows},
+			[]string{"code_queue_ended_idx (repo_id=? AND ended_at<?)"}},
+		"code_landings_change_idx": {`SELECT repo_id, target_ref, position, ordinal FROM code_landings
+			INDEXED BY code_landings_change_idx WHERE change_id = ? AND change_id != ''`,
+			[]any{"repo-1-change-000001"}, []string{"code_landings_change_idx (change_id=?)"}},
 		"code_repos_search_idx": {`SELECT id, name FROM code_repos INDEXED BY code_repos_search_idx
 			WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`,
 			[]any{string(SearchIndexed), "", MaxSnapshotItems},

@@ -103,6 +103,21 @@ func (f *fakeNode) ProposeChange(_ context.Context, p code.ChangeProposal) (code
 		Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
+// ProposeQueue is a committer that lands every write of a merge queue it is
+// given at the next position on the code log — or refuses every one with
+// codeErr.
+func (f *fakeNode) ProposeQueue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
+	f.note("code.queue")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.codeErr != nil {
+		return code.QueueResult{}, f.codeErr
+	}
+	f.codeSeq++
+	return code.QueueResult{Outcome: statelog.OutcomeApplied, EntryID: p.EntryID(), State: code.QueueWaiting,
+		Place: 1, Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
+}
+
 // Converse is a change writer that writes every write of a change's
 // conversation it is given at the next position on the code log — or refuses
 // every one with codeErr.
@@ -510,6 +525,7 @@ type codeAnswers struct {
 	compacted code.CompactResult
 	expunged  code.ExpungeResult
 	changed   code.ChangeResult
+	queued    code.QueueResult
 	lifecycle code.LifecycleResult
 	conversed code.ConversationResult
 	checked   code.ChecksResult
@@ -560,6 +576,11 @@ func (d *codeDesk) ProposeExpunge(_ context.Context, p code.ExpungeProposal) (co
 func (d *codeDesk) ProposeChange(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
 	held, err := d.took(p)
 	return held.changed, err
+}
+
+func (d *codeDesk) ProposeQueue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
+	held, err := d.took(p)
+	return held.queued, err
 }
 
 func (d *codeDesk) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
@@ -804,6 +825,29 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 				TimeoutSeconds: 60}, Tail: "ok", Failures: []code.CheckFailure{{Path: "a.go", Line: 3,
 				TestID: "lint/a", Message: "unused"}},
 				Log: &code.CheckLog{Object: objstore.KeyAt(created), Hash: objstore.HashOf([]byte("l")), Size: 9}},
+			// A MERGE QUEUE'S ENTRIES, ITS TRAINS, A TARGET'S LANDINGS AND ITS
+			// GREEN ROW, every field of each.
+			Queue: []code.QueueRow{{RepoID: ref.ID, Repo: "app", EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+				TargetRef: "refs/heads/main", ChangeID: "019a0c2e-0000-7000-8000-0000000000d1", Number: 42,
+				Place: 2, Seq: at, HeadOID: "7777777777777777777777777777777777777777",
+				Method: code.MergeMethodSquash, DeleteSource: true, CloseTask: true, AutoRevert: true,
+				EnqueuedBy: code.Party{Handle: "founder", Kind: code.PartyPerson}, EnqueuedOperator: "op-founder",
+				State: code.QueueTesting, Train: "019a0c2e-0000-7000-8000-0000000000f2",
+				CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
+				CommitOID:   "8888888888888888888888888888888888888888", EnqueuedAt: created}},
+			Trains: []code.CandidateRow{{RepoID: ref.ID, CandidateID: "019a0c2e-0000-7000-8000-0000000000f3",
+				TargetRef: "refs/heads/main", Train: "019a0c2e-0000-7000-8000-0000000000f2", Ordinal: 1,
+				BaseOID: "6666666666666666666666666666666666666666", TipOID: "8888888888888888888888888888888888888888",
+				Entries: []code.CandidateEntry{{EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+					Commit: "8888888888888888888888888888888888888888"}},
+				PackID: "019a0c2e-0000-7000-8000-0000000000f4", State: "testing", Position: at}},
+			Landings: []code.LandingRow{{RepoID: ref.ID, TargetRef: "refs/heads/main", Position: at, Ordinal: 1,
+				Kind: "queue", ChangeID: "019a0c2e-0000-7000-8000-0000000000d1",
+				EntryID: "019a0c2e-0000-7000-8000-0000000000f1", BaseOID: "6666666666666666666666666666666666666666",
+				CommitOID: "8888888888888888888888888888888888888888", EnqueuedBy: "founder", MergedBy: "node-b",
+				Green: true, Broken: true, At: created}},
+			Green: []code.GreenRow{{RepoID: ref.ID, TargetRef: "refs/heads/main",
+				CommitOID: "8888888888888888888888888888888888888888", Position: at, At: created}},
 			Next: "c-2", Position: at, Level: statelog.ReadSession},
 	}}
 	serveDesk(t, f, d)
@@ -912,6 +956,34 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		d.mu.Unlock()
 		if got, err := seam.Change(ctx, p); err != nil || !reflect.DeepEqual(got, d.changed) {
 			t.Errorf("change %s = (%+v, %v), want %+v", name, got, err, d.changed)
+		}
+		if got := d.last(); !reflect.DeepEqual(got, p) {
+			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)
+		}
+	}
+
+	// A MERGE QUEUE'S TWO WRITES, every field of each — the principal the
+	// committer stamps among them, which crosses whole whoever set it — and
+	// every field of the answer, the preconditions a gate_unmet names among
+	// them.
+	for name, p := range map[string]code.QueueProposal{
+		"an enqueue": {Enqueue: &code.Enqueue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+			ChangeID: item.ChangeID, TargetRef: "refs/heads/main",
+			HeadOID: "7777777777777777777777777777777777777777", Method: code.MergeMethodSquash,
+			DeleteSource: true, CloseTask: true, AutoRevert: true, Principal: seat}},
+		"a dequeue": {Dequeue: &code.Dequeue{RepoID: ref.ID, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+			Principal: seat}},
+	} {
+		p.OpID, p.Asker, p.Seen = "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", seat, at
+		d.mu.Lock()
+		d.queued = code.QueueResult{Outcome: statelog.OutcomeApplied, EntryID: "019a0c2e-0000-7000-8000-0000000000f1",
+			State: code.QueueWaiting, Place: 3, Position: at, Refusal: code.MergeRefusalGateUnmet,
+			Detail: "app!42 does not meet refs/heads/main's merge gate: unit failed on 7777777",
+			Unmet: []code.Precondition{{Kind: code.PreconditionCheck, State: code.PreconditionUnmet,
+				WaitsOn: []code.Party{{Handle: "dev", Kind: code.PartyAgent}}, Detail: "unit failed on 7777777"}}}
+		d.mu.Unlock()
+		if got, err := seam.Queue(ctx, p); err != nil || !reflect.DeepEqual(got, d.queued) {
+			t.Errorf("queue %s = (%+v, %v), want %+v", name, got, err, d.queued)
 		}
 		if got := d.last(); !reflect.DeepEqual(got, p) {
 			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)
@@ -1114,6 +1186,13 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 			Fresh:  statelog.Freshness{Level: statelog.ReadLinearizable}},
 		{Kind: code.ReadChecksDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
 		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RepoID: ref.ID}, Cursor: "refs/heads/fix",
+			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
+		// ONE BRANCH'S MERGE QUEUE, and ONE REPOSITORY'S QUEUE WORK ITS HOME
+		// OWES: the target or the due query dropped on the wire would answer
+		// every branch's queue, or the repositories holding one.
+		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadQueue, Repo: "app",
+			Target: "refs/heads/main", Limit: 5, Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}},
+		{Kind: code.ReadQueueDue, QueueDue: &code.QueueDueQuery{RepoID: ref.ID}, Cursor: "c-2",
 			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 	} {
 		if got, err := seam.Read(ctx, q); err != nil || !reflect.DeepEqual(got, d.read) {

@@ -96,6 +96,18 @@ func (s Served) ProposeChange(ctx context.Context, p ChangeProposal) (ChangeResu
 	return s.Committer.ProposeChange(ctx, p)
 }
 
+// ProposeQueue decides one write of a target's merge queue on this node's
+// committer — see [Committer.ProposeQueue] — and, on a node that publishes
+// nothing, refuses it as a push is refused there: the router asks the
+// repository's runner-up with the same operation id.
+func (s Served) ProposeQueue(ctx context.Context, p QueueProposal) (QueueResult, error) {
+	if s.Committer == nil {
+		return QueueResult{}, fmt.Errorf("%w: this node publishes nothing, so it decides "+
+			"no queue's write", ErrNotServing)
+	}
+	return s.Committer.ProposeQueue(ctx, p)
+}
+
 // Converse decides one write of a change's conversation on this node's change
 // writer — see [ChangeWriter.Converse] — and, on a node that publishes
 // nothing, refuses it as a push is refused there: the router asks the

@@ -285,6 +285,17 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"by code_close_change, through the estate's code.change"},
 	code.OpChangeReopen: {payload: reflect.TypeFor[code.ChangeReopen](), how: "a change is " +
 		"reopened by code_close_change, through the estate's code.change"},
+	// A TARGET'S MERGE QUEUE, decided by its repository's committer since the
+	// committer's queue path landed, is appended by no node while nothing asks
+	// for it: code_merge_change, which queues a change into a target with a
+	// queue, and code_dequeue_change are its first writers, through the
+	// estate's code.queue — a record a change merged through a queue, and one
+	// more for each it leaves before landing, which those writers are the ones
+	// to price.
+	code.OpEnqueue: {payload: reflect.TypeFor[code.Enqueue](), how: "a change is queued for its " +
+		"target's landing by code_merge_change, through the estate's code.queue"},
+	code.OpDequeue: {payload: reflect.TypeFor[code.Dequeue](), how: "an entry leaves its queue by " +
+		"code_dequeue_change, through the estate's code.queue"},
 	// A CHANGE'S CONVERSATION, written by the change writer beside each
 	// committer since its subject landed, is appended by no node while
 	// nothing asks for it: the review and comment tools a seat and a person

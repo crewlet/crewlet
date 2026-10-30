@@ -85,9 +85,12 @@ This is the product's current shape, not a configuration choice:
   edits or discusses a change in this release, no route reads one, and no
   change is merged in front of a protected branch. A protection
   rule decides what a push may do to a ref, and nothing else stands in front
-  of one. So a rule's [merge gate](#merge-gates) is recorded and read, and
+  of one. So a rule's [merge gate](#merge-gates) is recorded and read,
   every change into its branch is judged under it ([The merge
-  gate](#the-merge-gate)) — and nothing merges by it yet.
+  gate](#the-merge-gate)), and a change into a branch whose gate requires a
+  check is queued for its landing by its gate ([The merge
+  queue](#the-merge-queue)) — and nothing merges by the gate yet, nor lands
+  from a queue.
 - **Nothing searches a repository's code yet.** Every repository names how it
   is to be searched — `search: indexed` or `grep`
   ([Declaring repositories](#declaring-repositories)) — and the mode is
@@ -4566,8 +4569,8 @@ rules' combination, the strictest of each term:
 
 Its preconditions are [Merge readiness](#merge-readiness)'s and the gate's
 own, each listed only where the gate holds the change to it, in the order a
-change moves through — opened, measured, approved, cleared, checked, merged
-and merged by somebody:
+change moves through — opened, measured, approved, cleared, checked, merged,
+merged by somebody, and landed by its queue:
 
 | Precondition | Listed where | Met when | Waits on, while unmet |
 |---|---|---|---|
@@ -4579,6 +4582,7 @@ and merged by somebody:
 | `check` | The gate requires checks and lands `pre_land`. | Every required check passed — or was skipped, its paths untouched — on the head commit, by its latest attempt, whatever ran it. | Its owner, on a check that failed, errored past the home's requeue or was cancelled. |
 | `mergeable` | Always. | As in [Merge readiness](#merge-readiness). | As there. |
 | `merge_authority` | A merger is named: whoever reads, on a read; the principal, on a decision. | A person; on a protected branch, a principal holding what `merge_by` asks — `writers` write the repository, `maintainers` maintain it, `persons` are persons; on a branch no rule protects, a principal that may push it. | The seat that maintains the repository, where one may merge it. |
+| `queue` | The branch's [merge queue](#the-merge-queue) holds the change. | Never: it is `computing`, naming the change's place, while the queue lands it. | Nobody. |
 
 - **Every approval a term counts is counted by one rule**: an eligible
   reviewer's standing verdict, never an author's, on the head revision or
@@ -4606,6 +4610,70 @@ and merged by somebody:
 - **What a change's home stores is its readiness for whoever merges it**: a
   [mergeability](#mergeability) record judges the gate with no merger, so
   `merge_authority` is a read's alone, judged for whoever reads.
+
+### The merge queue
+
+A branch whose merge gate requires a check is a **queue target**: a change
+merges into it through its **merge queue** — `pre_land`, the queue testing
+each change merged on the branch before it lands, or `post_land`, a lane that
+lands changes ahead of the checks the branch's newest tip then runs ([Merge
+gates](#merge-gates)'s `landing`). A change joins it by an **enqueue**, which
+names the change at the head and on the target its asker was shown, how it
+merges (`merge`, `squash` or `fast_forward`), whether its landing deletes its
+source branch and closes its work item, and — where the gate allows
+`auto_revert` — the enqueuer's consent to a revert of a landing that breaks
+the branch.
+
+An enqueue is a record on the repository's own subject, the one its pushes and
+its changes' lifecycles are on, decided by the repository's
+[committer](#the-committer) alone — so a change's entry, its close and the
+pushes that move its head have one writer, and a change is never both queued
+and closed. **The enqueue is the gate**: it is decided from one snapshot by the
+change's [merge gate](#the-merge-gate), its principal the merger — every
+precondition met but `mergeable`, which the queue's candidate proves on the
+branch it is built on, and on a `post_land` branch no check, whose checks hold
+its tip. Its landing judges the gate again from its own snapshot. **The chart
+judges every enqueue, whoever asks** — who may approve the change, the lead
+chains above the owners it touches, a seat's merge authority — so a node that
+holds no chart yet, or one [behind the company's
+configuration](#a-seats-push), decides no enqueue, and no seat's dequeue, and
+hands it to the repository's next committer.
+
+| Refusal | Why |
+|---|---|
+| `gate_unmet` | The change does not meet its target's gate: the answer names every precondition not met and whom each waits on. |
+| `change_not_open`, `change_draft` | The change is closed or merged, or a draft, which merges nowhere. |
+| `stale`, `head_moved` | The change targets another branch, or its head moved, since its asker read it: read it again. |
+| `no_queue` | The branch's gate requires no check: a change merges into it directly. |
+| `no_auto_revert` | The enqueue consents to a revert, and the branch's gate allows none. |
+| `already_queued` | The change holds a live entry already, naming it. |
+| `queue_full` | The branch's queue holds 1 024 waiting changes: a queue more than a day of its fastest capacity behind is broken, not busy. |
+
+An entry's **place** is its order in its branch's queue. While a queue holds a
+change, its readiness lists a `queue` precondition, `computing` and naming
+the place — the queue lands it, and a change waiting in a queue is merging,
+not ready to merge. `crewlet.code.queue.proposals` counts every enqueue and
+dequeue a node's committer was asked to decide, by what became of each:
+`gate_unmet` climbing is askers queueing changes before their gate is met,
+and `queue_full` a queue landing slower than it is fed.
+
+**An entry leaves its queue with its change.** Its enqueuer, the change's
+owner, a principal that maintains the repository or a person may **dequeue**
+it. And every record that leaves the change no longer what was enqueued ends
+its live entry in its own apply: a close, a draft, a retarget and a landing of
+the change dequeue it, each naming which, and a push that moves its head
+**ejects** it, `head_moved` — the queue would otherwise test a head nobody
+enqueued — or dequeues it where the push merged or closed the change.
+
+Three reads answer a queue to a person or a seat, each held to the asker's
+grant on the repository: `queue`, the live entries of one repository's queues
+— or of one of its branches, or of every repository the asker reads — in
+queue order with their places, beside the trains testing a named
+repository's branches; `landings`, one protected branch's landings above its
+green row; and `green`, each protected branch's newest commit whose required
+checks passed. The repository's home reads a fourth, `queue_due` — the active
+repositories holding a live entry, and one repository's entries — which no
+person or seat may read.
 
 ### Where lines are in another revision
 

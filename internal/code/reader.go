@@ -1482,6 +1482,25 @@ func (r *Reader) Read(ctx context.Context, q ReadQuery) (ReadAnswer, error) {
 		// deferred on them.
 		query = q.checksQuery(fresh)
 		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.checkBox(ctx, tx, q, &out) }
+	case ReadQueue, ReadLandings, ReadGreen:
+		// A SET READ, of the repository it names or of the domain
+		// (queueread.go).
+		query = q.queueQuery(fresh)
+		serve = func(tx *sql.Tx, _ statelog.Position) error {
+			switch q.Kind {
+			case ReadLandings:
+				return r.landings(ctx, tx, q, chart, &out)
+			case ReadGreen:
+				return r.greens(ctx, tx, q, chart, &out)
+			}
+			return r.queueListing(ctx, tx, q, chart, &out)
+		}
+	case ReadQueueDue:
+		// A SET READ, of the domain or of the one repository, as
+		// changes_due's: every record the home asks after it is decided
+		// again by the repository's committer from its own snapshot.
+		query = q.queueQuery(fresh)
+		serve = func(tx *sql.Tx, _ statelog.Position) error { return r.queueDue(ctx, tx, q, &out) }
 	case ReadExpungeTips:
 		// A POINT READ OF THE REPOSITORY, as an `introduced` read is: a
 		// record this node deferred on the repository may carry a drop the
@@ -1539,6 +1558,8 @@ func (q ReadQuery) validate() error {
 		return q.validateExpungeTips()
 	case ReadCheckBox:
 		return q.validateCheckBox()
+	case ReadQueueDue:
+		return q.validateQueueDue()
 	}
 	// WHO ASKS IS NAMED, or nothing is read: an answer is held to the
 	// asker's grant, and an absent asker would be judged as somebody nobody
@@ -1565,6 +1586,12 @@ func (q ReadQuery) validate() error {
 			"attempt's checks", ErrInvalid)
 	case q.CheckBox != nil:
 		return fmt.Errorf("%w: check_box: only a check_box read names an attempt by its key", ErrInvalid)
+	case q.QueueDue != nil:
+		return fmt.Errorf("%w: queue_due: only a queue_due read names the repository its home owes queue work "+
+			"in", ErrInvalid)
+	case q.Target != "" && q.Kind != ReadQueue && q.Kind != ReadLandings && q.Kind != ReadGreen:
+		return fmt.Errorf("%w: target: only a queue, a landings or a green read names a branch's queue",
+			ErrInvalid)
 	case q.ExpungeTips != nil:
 		return fmt.Errorf("%w: expunge_tips: only an expunge_tips read names a repository's ref drops", ErrInvalid)
 	case q.MinPacks != 0:
@@ -1607,7 +1634,8 @@ func (q ReadQuery) validate() error {
 		return fmt.Errorf("%w: part: %q is not one of %v", ErrInvalid, q.Part, ChangeParts())
 	}
 	switch {
-	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "":
+	case q.Kind == ReadRepos, q.Kind == ReadChanges && q.Repo == "", q.Kind == ReadChecks && q.Repo == "",
+		q.Kind == ReadQueue && q.Repo == "":
 	case !ValidName(q.Repo):
 		return fmt.Errorf("%w: repo: %q is not a repository name", ErrInvalid, q.Repo)
 	}
@@ -1633,10 +1661,14 @@ func (q ReadQuery) validate() error {
 		if err := q.validateChecks(); err != nil {
 			return err
 		}
+	case ReadQueue, ReadLandings, ReadGreen:
+		if err := q.validateQueueRead(); err != nil {
+			return err
+		}
 	}
 	bound := map[ReadKind]int{ReadRepos: MaxReposPerPage, ReadPushes: MaxPushesPerPage,
 		ReadRefs: MaxRefsPerPage, ReadChanges: MaxChangesPerPage, ReadChange: q.Part.maxPerPage(),
-		ReadChecks: MaxChecksPerPage}[q.Kind]
+		ReadChecks: MaxChecksPerPage, ReadQueue: MaxQueueRowsPerPage, ReadLandings: MaxLandingsPerPage}[q.Kind]
 	switch {
 	case q.Limit < 0:
 		return fmt.Errorf("%w: limit: %d", ErrInvalid, q.Limit)
@@ -1779,6 +1811,7 @@ func (q ReadQuery) validateRunPushes() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a run_pushes read names its repositories in its run and filters nothing")
@@ -1825,6 +1858,7 @@ func (q ReadQuery) validateCompactionDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a compaction_due read lists every repository at its floor of live "+
@@ -1862,6 +1896,7 @@ func (q ReadQuery) validatePublicationDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "a publication_due read lists every repository holding a pack no "+
@@ -1895,6 +1930,7 @@ func (q ReadQuery) validateExpungeDue() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_due read lists every repository with an expunge open or a "+
@@ -1939,6 +1975,7 @@ func (q ReadQuery) validateExpungeTips() error {
 		{"changes_due", q.ChangesDue != nil}, {"checks", q.Checks != nil},
 		{"checks_due", q.ChecksDue != nil}, {"check_box", q.CheckBox != nil},
 		{"path_owners", q.PathOwners}, {"gates", q.Gates},
+		{"target", q.Target != ""}, {"queue_due", q.QueueDue != nil},
 	} {
 		if f.set {
 			return refused(f.field, "an expunge_tips read lists one repository's ref drops since an instant, a "+

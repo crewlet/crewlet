@@ -76,6 +76,7 @@ const (
 	CodeHostWriteDuration            = "crewlet.code.host.write.duration"
 	CodeHostWrites                   = "crewlet.code.host.writes"
 	CodePublishBytes                 = "crewlet.code.publish.bytes"
+	CodeQueueProposals               = "crewlet.code.queue.proposals"
 	CodePublishDuration              = "crewlet.code.publish.duration"
 	CodePublishRefusals              = "crewlet.code.publish.refusals"
 	CodePublishRuns                  = "crewlet.code.publish.runs"

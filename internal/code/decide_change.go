@@ -264,13 +264,14 @@ func (p ChangeProposal) mentions() []string {
 // decidedRows is the most rows p's record makes its apply touch: an open's
 // change, body, first author, first revision and the repository's row; an
 // edit's change, body and repository; a draft's state's, a retarget's, a
-// close's and a landing's change and repository; a reopen's change, the
-// revision a moved source makes, and the repository.
+// close's and a landing's change, the live queue entry it ends and the
+// repository; a reopen's change, the revision a moved source makes, and the
+// repository.
 func (p ChangeProposal) decidedRows() int {
 	switch {
 	case p.Open != nil:
 		return 5
-	case p.Edit != nil, p.Reopen != nil:
+	case p.Edit != nil, p.Reopen != nil, p.Draft != nil, p.Retarget != nil, p.Close != nil, p.Landed != nil:
 		return 3
 	}
 	return 2
