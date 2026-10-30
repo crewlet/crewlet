@@ -65,7 +65,7 @@ func migrateSeatAccessStep(ctx context.Context, e *engine.Engine, cfg *configapi
 	store *fleetsecrets.Store, log *slog.Logger) {
 
 	result, err := e.MigrateSeatAccess(ctx, migrationDocument{svc: cfg},
-		migrationSecrets{engine: e, store: store})
+		migrationSecrets{engine: e, store: store}, cfg.Managed())
 	var raced *configapi.RacedError
 	switch {
 	case err == nil:
@@ -130,7 +130,7 @@ func slackInstallLink(installs *slack.Installs) func(context.Context, string, st
 		switch {
 		case errors.As(err, &refusal):
 			return "", &setupapi.AccessRefusal{Status: refusal.Status, Reason: refusal.Reason,
-				Remedy: refusal.Remedy}
+				Remedy: refusal.Remedy, RetryAfter: refusal.RetryAfter}
 		case errors.Is(err, slack.ErrNoBaseURL):
 			return "", &setupapi.AccessRefusal{Status: http.StatusConflict, Reason: err.Error(),
 				Remedy: "set the address a vendor reaches this deployment on, and restart"}

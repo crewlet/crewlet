@@ -1574,6 +1574,16 @@
             "null"
           ]
         },
+        "seat_credentials": {
+          "description": "Per-seat credentials this server reads: integration, field, and the variable or header it reads each under. Absent for a server the engine recognises.",
+          "items": {
+            "$ref": "#/$defs/SeatCredential"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "shared": {
           "description": "One shared instance (default), or false for one per seat.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
@@ -2441,7 +2451,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Whether this agent has Confluence access. Off removes the product access and keeps the account.",
+          "description": "Whether this agent has Confluence access. Off removes its space access and its token's Confluence scopes, and keeps the account.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -2465,7 +2475,7 @@
           ]
         },
         "space_role": {
-          "description": "Confluence space role id, where the site has role-based access.",
+          "description": "Confluence space role id, where the site has role-based access; with operations also empty, product access only.",
           "type": [
             "string",
             "number",
@@ -2718,7 +2728,7 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "description": "Whether this agent has Jira access. Off removes the product access and keeps the account.",
+          "description": "Whether this agent has Jira access. Off removes its project roles and its token's Jira scopes, and keeps the account.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -2727,7 +2737,7 @@
           ]
         },
         "project_role": {
-          "description": "Jira project role id (GET /rest/api/3/role).",
+          "description": "Jira project role id (GET /rest/api/3/role); empty is product access only.",
           "type": [
             "string",
             "number",
@@ -3306,6 +3316,68 @@
         "null"
       ]
     },
+    "SeatCredential": {
+      "additionalProperties": false,
+      "properties": {
+        "as": {
+          "description": "env (stdio) or header (http); defaults to the transport's.",
+          "enum": [
+            "env",
+            "header",
+            "",
+            null
+          ]
+        },
+        "field": {
+          "description": "Which seat credential (Atlassian: TOKEN or EMAIL). Empty means the integration's credential.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "key": {
+          "description": "Environment variable (stdio) or header (http) the server reads it under.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Integration whose per-seat credential this server reads.",
+          "enum": [
+            "atlassian",
+            "datadog",
+            "github",
+            "gitlab",
+            "mattermost",
+            "slack",
+            "",
+            null
+          ]
+        },
+        "prefix": {
+          "description": "Text before the value, e.g. \"Bearer \".",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "key"
+      ],
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "SkillCurator": {
       "additionalProperties": false,
       "properties": {
@@ -3531,6 +3603,16 @@
     "Slack": {
       "additionalProperties": false,
       "properties": {
+        "app_config_token": {
+          "description": "Reference to the sealed Slack app-configuration token the engine creates agents' apps with; a whole ${VAR}.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ],
+          "x-crewlet-secret": true
+        },
         "status_phrases": {
           "$ref": "#/$defs/StatusPhrases"
         },

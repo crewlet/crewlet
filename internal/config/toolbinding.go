@@ -2,6 +2,10 @@ package config
 
 import (
 	"maps"
+	"net/url"
+	"path"
+	"slices"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/org"
@@ -9,92 +13,284 @@ import (
 
 // THE SEAT'S OWN CREDENTIAL, BOUND TO ITS TOOL BY THE ENGINE (D15).
 //
-// A seat that is on at an integration with a tool server gets its own sealed
-// credential added to its environment for that server, under the key the
-// server reads: Datadog's remote server reads `DD_APPLICATION_KEY`, the GitLab
-// servers `GITLAB_PERSONAL_ACCESS_TOKEN` or GitLab's `Private-Token` header, and
-// so on. Nothing in the document names the credential, so no writer can point
-// a seat's tool at a variable anything else reads (D4), and the seat's tool
-// works the moment its credential is sealed rather than when somebody
-// remembers to declare it.
+// A seat that is on at an integration gets its own sealed credential added to
+// its environment for every per-seat server that reads that integration's
+// credential, under the key that server reads. Nothing in the document names
+// the credential, so no writer can point a seat's tool at a variable anything
+// else reads (D4), and the tool works the moment the credential is sealed.
 //
-// BOUND WHERE THE ORG MODEL IS BUILT ([Company.organization]), which is the
-// one place every reader of a seat's tool environment takes it from: the
-// engine starting a seat's server, a coding run's box, [MCPServer.Grants] and
-// the org projection. A binding written anywhere later would leave one of them
-// reading the seat without it.
+// # Which key a server reads is the server's, so the server says it
 //
-// THE TABLE IS HERE, in the leaf, because the org model is built here and the
-// vendor packages that own each integration sit above this one; they read it
-// back through internal/seataccess rather than restating it.
+// No fixed key per integration fits every server a company may run: `glab mcp
+// serve` reads GITLAB_TOKEN where another GitLab server reads
+// GITLAB_PERSONAL_ACCESS_TOKEN, and Slack's community server reads
+// SLACK_MCP_XOXB_TOKEN. So an `mcp_servers` entry declares what it reads
+// ([MCPServer.SeatCredentials]), and the table below supplies the declaration
+// for the servers this build recognises by their command or their address
+// ([SeatToolBindings]). A per-seat server named after an integration with
+// neither is reported ([Company.UnboundSeatServers]): it would start, and act
+// as nobody.
+//
+// BOUND WHERE THE ORG MODEL IS BUILT ([Company.organization]), the one place
+// every reader of a seat's tool environment takes it from: the engine starting
+// a seat's server, a coding run's box, [MCPServer.Grants] and the org
+// projection.
 
-// SeatToolKey is one credential field and the key a tool server reads it
-// under.
+// SeatCredential is one seat credential a per-seat server reads, as an
+// `mcp_servers` entry declares it.
+type SeatCredential struct {
+	// Kind is the integration whose seat credential it is.
+	Kind string `yaml:"kind" json:"kind" js:"required;enum=atlassian|datadog|github|gitlab|mattermost|slack" desc:"Integration whose per-seat credential this server reads."`
+
+	// Field is which of the integration's seat credentials: TOKEN or EMAIL
+	// for Atlassian; empty is the integration's credential itself.
+	Field string `yaml:"field,omitempty" json:"field,omitempty" desc:"Which seat credential (Atlassian: TOKEN or EMAIL). Empty means the integration's credential."`
+
+	// Key is the variable (stdio) or header (http) the server reads it under.
+	Key string `yaml:"key" json:"key" js:"required" desc:"Environment variable (stdio) or header (http) the server reads it under."`
+
+	// As says which, and must agree with the transport; empty takes the
+	// transport's.
+	As string `yaml:"as,omitempty" json:"as,omitempty" js:"enum=env|header" desc:"env (stdio) or header (http); defaults to the transport's."`
+
+	// Prefix precedes the value, as `Bearer ` does in an Authorization
+	// header.
+	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" desc:"Text before the value, e.g. \"Bearer \"."`
+}
+
+// seatCredentialFields is each integration's per-seat credential fields, the
+// credential itself first, as the vendors' catalogs name them. RESTATED here
+// for the reason [CodeAccessTiers] is; internal/seataccess holds the vendors
+// to the same lists. GitHub's is the installation token the engine issues at
+// use, never sealed.
+func seatCredentialFields(kind string) []string {
+	switch kind {
+	case "datadog":
+		return []string{"APP_KEY"}
+	case "gitlab":
+		return []string{"TOKEN"}
+	case "atlassian":
+		return []string{"TOKEN", "EMAIL"}
+	case "mattermost", "slack":
+		return []string{"BOT_TOKEN"}
+	case "github":
+		return []string{"APP_TOKEN"}
+	default:
+		return nil
+	}
+}
+
+// SeatCredentialKinds is every integration a server can read a seat
+// credential of.
+func SeatCredentialKinds() []string {
+	return []string{"atlassian", "datadog", "github", "gitlab", "mattermost", "slack"}
+}
+
+// SeatCredentialKind is the integration a seat block's lane belongs to:
+// Atlassian for Jira and Confluence, the lane itself otherwise.
+func SeatCredentialKind(lane string) string {
+	if lane == "jira" || lane == "confluence" {
+		return "atlassian"
+	}
+	return lane
+}
+
+// SeatToolKey is one credential field and the key a recognised server reads it
+// under, by transport.
 type SeatToolKey struct {
-	// Field is the credential's field, which with the vendor and the seat's
-	// handle names the sealed value ([envref.SealedName]).
-	Field string
-
-	// Env is the variable a stdio server reads; Header the header an http
-	// server reads, after Prefix.
+	Field  string
 	Env    string
 	Header string
 	Prefix string
 }
 
-// SeatToolBinding binds one integration's per-seat credential to its tool
-// server.
+// SeatToolBinding is a recognised server's declaration: which integration's
+// seat credential it reads, under which keys.
 type SeatToolBinding struct {
-	// Lane is the seat block that turns the binding on
-	// (`roles[].integrations.<lane>.enabled`).
-	Lane string
-
-	// Vendor is the integration the credential is sealed under.
+	// Vendor is the integration, and Server the name such a server is
+	// conventionally declared under.
 	Vendor string
-
-	// Server is the `mcp_servers` entry, by name, the credential is bound
-	// to. It must be per-seat (`shared: false`): a shared server acts as no
-	// seat.
 	Server string
+	Keys   []SeatToolKey
 
-	Keys []SeatToolKey
+	// match recognises the server by its command or its address.
+	match func(*MCPServer) bool
 }
 
-// SeatToolBindings is every binding this build makes. Jira, Confluence and
-// Mattermost are absent: the engine's own tools and transport read their
-// credentials directly, with no server to start.
+// SeatToolBindings is every server this build recognises, the conventional one
+// per integration first.
 func SeatToolBindings() []SeatToolBinding {
 	return []SeatToolBinding{
-		{Lane: "slack", Vendor: "slack", Server: "slack", Keys: []SeatToolKey{
-			// THE VARIABLE THE DOCUMENTED SLACK SERVER READS
-			// (docs/integrations/slack.md); internal/slack holds the two
-			// together in a test.
-			{Field: "BOT_TOKEN", Env: "SLACK_MCP_XOXB_TOKEN", Header: "Authorization", Prefix: "Bearer "},
+		{Vendor: "datadog", Server: "datadog", match: hostHas("datadoghq.", "ddog-gov."), Keys: []SeatToolKey{
+			// Datadog's remote server. The organization's API key is the
+			// server's own header, the same for every seat.
+			{Field: "APP_KEY", Env: "DD_APPLICATION_KEY", Header: "DD_APPLICATION_KEY"},
 		}},
-		{Lane: "github", Vendor: "github", Server: "github", Keys: []SeatToolKey{
-			// The installation token the engine issues at use, never
-			// sealed (internal/github's Issuer).
+		{Vendor: "github", Server: "github", match: either(hostIs("api.githubcopilot.com"), launches("github-mcp-server")), Keys: []SeatToolKey{
 			{Field: "APP_TOKEN", Env: "GITHUB_PERSONAL_ACCESS_TOKEN", Header: "Authorization", Prefix: "Bearer "},
 		}},
-		{Lane: "gitlab", Vendor: "gitlab", Server: "gitlab", Keys: []SeatToolKey{
+		{Vendor: "gitlab", Server: "gitlab", match: glabServe, Keys: []SeatToolKey{
+			{Field: "TOKEN", Env: "GITLAB_TOKEN", Header: "Private-Token"},
+		}},
+		{Vendor: "gitlab", Server: "gitlab", match: launches("server-gitlab", "gitlab-mcp"), Keys: []SeatToolKey{
 			{Field: "TOKEN", Env: "GITLAB_PERSONAL_ACCESS_TOKEN", Header: "Private-Token"},
 		}},
-		{Lane: "datadog", Vendor: "datadog", Server: "datadog", Keys: []SeatToolKey{
-			// The organization's API key is the server's own header,
-			// the same for every seat; this is the seat's application key.
-			{Field: "APP_KEY", Env: "DD_APPLICATION_KEY", Header: "DD_APPLICATION_KEY"},
+		{Vendor: "slack", Server: "slack", match: launches("slack-mcp-server"), Keys: []SeatToolKey{
+			{Field: "BOT_TOKEN", Env: "SLACK_MCP_XOXB_TOKEN", Header: "Authorization", Prefix: "Bearer "},
+		}},
+		{Vendor: "mattermost", Server: "mattermost", match: launches("mcp-server-mattermost"), Keys: []SeatToolKey{
+			{Field: "BOT_TOKEN", Env: "MATTERMOST_TOKEN"},
+		}},
+		{Vendor: "atlassian", Server: "atlassian", match: launches("mcp-atlassian"), Keys: []SeatToolKey{
+			{Field: "TOKEN", Env: "JIRA_API_TOKEN"}, {Field: "EMAIL", Env: "JIRA_USERNAME"},
+			{Field: "TOKEN", Env: "CONFLUENCE_API_TOKEN"}, {Field: "EMAIL", Env: "CONFLUENCE_USERNAME"},
 		}},
 	}
 }
 
-// SeatToolBindingFor is lane's binding, or false where the lane has none.
+// SeatToolBindingFor is the conventional recognised server for lane's
+// integration, or false where this build recognises none.
 func SeatToolBindingFor(lane string) (SeatToolBinding, bool) {
+	kind := SeatCredentialKind(lane)
 	for _, b := range SeatToolBindings() {
-		if b.Lane == lane {
+		if b.Vendor == kind {
 			return b, true
 		}
 	}
 	return SeatToolBinding{}, false
+}
+
+// launches recognises a stdio server whose command or an argument names one of
+// the packages (`npx -y @korotovsky/slack-mcp-server`, a container image).
+func launches(packages ...string) func(*MCPServer) bool {
+	return func(m *MCPServer) bool {
+		if m.Kind() != TransportStdio {
+			return false
+		}
+		for _, word := range append([]string{m.Command}, m.Args...) {
+			for _, pkg := range packages {
+				if strings.Contains(word, pkg) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+}
+
+// glabServe recognises GitLab's own CLI serving MCP: `glab mcp serve`.
+func glabServe(m *MCPServer) bool {
+	return m.Kind() == TransportStdio && path.Base(m.Command) == "glab" && slices.Contains(m.Args, "mcp")
+}
+
+// hostIs recognises an http server at exactly host.
+func hostIs(host string) func(*MCPServer) bool {
+	return func(m *MCPServer) bool { return m.Kind() == TransportHTTP && hostOf(m.URL) == host }
+}
+
+// hostHas recognises an http server whose host contains one of the parts.
+func hostHas(parts ...string) func(*MCPServer) bool {
+	return func(m *MCPServer) bool {
+		if m.Kind() != TransportHTTP {
+			return false
+		}
+		host := hostOf(m.URL)
+		return slices.ContainsFunc(parts, func(p string) bool { return strings.Contains(host, p) })
+	}
+}
+
+func either(a, b func(*MCPServer) bool) func(*MCPServer) bool {
+	return func(m *MCPServer) bool { return a(m) || b(m) }
+}
+
+func hostOf(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		// A url that does not parse names no host this build recognises;
+		// the server's own rules report the url.
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// BoundSeatKey is one seat credential a server is started with: the
+// integration and field it is, and the key and prefix the server reads it
+// under on its own transport.
+type BoundSeatKey struct {
+	Kind, Field, Key, Prefix string
+}
+
+// SeatBindings is every seat credential this per-seat server reads: what it
+// declares, or what this build recognises it as reading. Empty for a shared
+// server, which acts as no seat.
+func (m *MCPServer) SeatBindings() []BoundSeatKey {
+	if m.IsShared() {
+		return nil
+	}
+	var out []BoundSeatKey
+	if len(m.SeatCredentials) > 0 {
+		for _, d := range m.SeatCredentials {
+			field := d.Field
+			if field == "" {
+				if fields := seatCredentialFields(d.Kind); len(fields) > 0 {
+					field = fields[0]
+				}
+			}
+			out = append(out, BoundSeatKey{Kind: d.Kind, Field: field, Key: d.Key, Prefix: d.Prefix})
+		}
+		return out
+	}
+	for _, b := range SeatToolBindings() {
+		if !b.match(m) {
+			continue
+		}
+		for _, k := range b.Keys {
+			key, prefix := k.Env, ""
+			if m.Kind() == TransportHTTP {
+				key, prefix = k.Header, k.Prefix
+			}
+			if key != "" {
+				out = append(out, BoundSeatKey{Kind: b.Vendor, Field: k.Field, Key: key, Prefix: prefix})
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// validateSeatCredentials checks a server's declared seat credentials.
+func (m *MCPServer) validateSeatCredentials(p *problems, base Path) {
+	if len(m.SeatCredentials) == 0 {
+		return
+	}
+	if m.IsShared() {
+		p.add(base, ErrConflict,
+			"a shared server acts as no seat, so it reads no seat's credential: "+
+				"set shared: false, or remove seat_credentials")
+		return
+	}
+	want := "env"
+	if m.Kind() == TransportHTTP {
+		want = "header"
+	}
+	for i, d := range m.SeatCredentials {
+		here := idx(base, i)
+		fields := seatCredentialFields(d.Kind)
+		switch {
+		case fields == nil:
+			p.add(at(here, "kind"), ErrUnknownValue, "%q is not an integration with a per-seat "+
+				"credential; give one of %s", d.Kind, strings.Join(SeatCredentialKinds(), ", "))
+		case d.Field != "" && !slices.Contains(fields, d.Field):
+			p.add(at(here, "field"), ErrUnknownValue, "%q is not one of %s's seat credentials; "+
+				"give one of %s, or leave it out", d.Field, d.Kind, strings.Join(fields, ", "))
+		}
+		if strings.TrimSpace(d.Key) == "" {
+			p.add(at(here, "key"), ErrMissing, "required: the variable or header the server reads it under")
+		}
+		if d.As != "" && d.As != want {
+			p.add(at(here, "as"), ErrConflict, "this server's transport reads a %s, not a %s", want, d.As)
+		}
+	}
 }
 
 // SeatAccessEnabled reports whether the seat is on at lane: its block is
@@ -104,20 +300,47 @@ func (r *Role) SeatAccessEnabled(lane string) bool {
 	return SeatAccessOn(on)
 }
 
-// PerSeatServer is the company's per-seat server named name, or nil where it
-// declares none or declares it shared.
-func (c *Company) PerSeatServer(name string) *MCPServer {
-	for i := range c.MCPServers {
-		server := &c.MCPServers[i]
-		if server.Name == name && !server.IsShared() {
-			return server
+// seatOnAt reports whether the seat is on at any lane of an integration.
+func (r *Role) seatOnAt(kind string) bool {
+	for _, lane := range SeatAccessLanes() {
+		if SeatCredentialKind(lane) == kind && r.SeatAccessEnabled(lane) {
+			return true
 		}
 	}
-	return nil
+	return false
+}
+
+// SeatServersFor is every per-seat server that reads kind's seat credential.
+func (c *Company) SeatServersFor(kind string) []*MCPServer {
+	var out []*MCPServer
+	for i := range c.MCPServers {
+		server := &c.MCPServers[i]
+		if slices.ContainsFunc(server.SeatBindings(), func(k BoundSeatKey) bool { return k.Kind == kind }) {
+			out = append(out, server)
+		}
+	}
+	return out
+}
+
+// UnboundSeatServers is every per-seat server named after kind or one of its
+// lanes that reads no seat credential: it neither declares seat_credentials
+// nor is a server this build recognises. It would start and act as nobody.
+func (c *Company) UnboundSeatServers(kind string) []string {
+	var out []string
+	for i := range c.MCPServers {
+		server := &c.MCPServers[i]
+		if server.IsShared() || SeatCredentialKind(server.Name) != kind {
+			continue
+		}
+		if len(server.SeatBindings()) == 0 {
+			out = append(out, server.Name)
+		}
+	}
+	return out
 }
 
 // bindSeatTools adds each agent seat's own credential to its environment for
-// every per-seat server an integration it is on binds to. It runs after
+// every per-seat server that reads an integration it is on at. It runs after
 // normalization, so the engine's binding wins over a unit's value for the same
 // key, as a seat's own value always does.
 func (c *Company) bindSeatTools(o *org.Organization) {
@@ -128,13 +351,21 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 		}
 	}
 	for role := range c.EachRole() {
-		seat := seats[role.Handle]
+		// BY THE DERIVED HANDLE, which is the org model's key: a seat that
+		// declares none takes its handle from its name.
+		seat := seats[role.IdentityKey()]
 		if seat == nil {
 			continue
 		}
-		for _, b := range SeatToolBindings() {
-			server := c.PerSeatServer(b.Server)
-			if server == nil || !role.SeatAccessEnabled(b.Lane) {
+		for i := range c.MCPServers {
+			server := &c.MCPServers[i]
+			var bound []BoundSeatKey
+			for _, k := range server.SeatBindings() {
+				if role.seatOnAt(k.Kind) {
+					bound = append(bound, k)
+				}
+			}
+			if len(bound) == 0 {
 				continue
 			}
 			// ONLY WHERE THE ENGINE SEALS THE CREDENTIAL (D4b). A credential
@@ -151,20 +382,15 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 			if block == nil {
 				block = map[string]string{}
 			}
-			for _, key := range b.Keys {
-				ref := "${" + envref.SealedName(b.Vendor, key.Field, seat.Handle()) + "}"
-				name, value := key.Env, ref
-				if server.Kind() == TransportHTTP {
-					name, value = key.Header, key.Prefix+ref
-				}
+			for _, k := range bound {
 				// ONE KEY, whatever case a unit wrote it in: an http
 				// header is one header in any case ([MCPServer.ValueKey]).
 				for held := range block {
-					if server.ValueKey(held) == server.ValueKey(name) {
+					if server.ValueKey(held) == server.ValueKey(k.Key) {
 						delete(block, held)
 					}
 				}
-				block[name] = value
+				block[k.Key] = k.Prefix + "${" + envref.SealedName(k.Kind, k.Field, seat.Handle()) + "}"
 			}
 			env[server.Name] = block
 			seat.MCPEnv = env

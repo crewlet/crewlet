@@ -210,10 +210,14 @@ func (c *Company) checkJira(p *problems, path Path, b *RoleJira, projects []stri
 	if b == nil {
 		return
 	}
-	if SeatAccessOn(b.Enabled) && strings.TrimSpace(b.ProjectRole) == "" {
+	// NO ROLE IS PRODUCT ACCESS ONLY: the account has Jira and the site's
+	// permission schemes decide what it sees. A project list names where a
+	// role is held, so it needs one.
+	if SeatAccessOn(b.Enabled) && strings.TrimSpace(b.ProjectRole) == "" && len(b.Projects) > 0 {
 		p.add(at(path, "project_role"), ErrMissing,
-			"required while this agent is on: the Jira project role id it holds, "+
-				"as the site's GET /rest/api/3/role lists it")
+			"required with a projects list: the Jira project role id it holds in "+
+				"them, as the site's GET /rest/api/3/role lists it. Leave both out "+
+				"for product access only")
 	}
 	withinReach(p, at(path, "projects"), b.Projects, projects, "project",
 		"a unit's or a root seat's `project`")
@@ -229,10 +233,14 @@ func (c *Company) checkConfluence(p *problems, path Path, b *RoleConfluence, spa
 			"a Confluence seat holds a space role or space permissions, not both: "+
 				"remove space_role or operations")
 	}
-	if SeatAccessOn(b.Enabled) && role == "" && len(ops) == 0 {
+	// NEITHER IS PRODUCT ACCESS ONLY: the account has Confluence and the
+	// site's and each space's permissions decide what it sees. A space list
+	// names where access is held, so it needs one.
+	if SeatAccessOn(b.Enabled) && role == "" && len(ops) == 0 && len(b.Spaces) > 0 {
 		p.add(at(path, "space_role"), ErrMissing,
-			"required while this agent is on: its Confluence space role, or its "+
-				"space permissions where the site has no space roles")
+			"required with a spaces list: its Confluence space role in them, or "+
+				"its space permissions where the site has no space roles. Leave "+
+				"all three out for product access only")
 	}
 	for i, op := range ops {
 		operation, target, ok := strings.Cut(strings.TrimSpace(op), ":")

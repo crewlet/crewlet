@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -96,6 +98,11 @@ var ErrNotAwaitingInstall = errors.New("setupapi: this agent's app is not waitin
 type AccessRefusal struct {
 	Status         int
 	Reason, Remedy string
+
+	// RetryAfter is how long to wait where the refusal is transient (a
+	// store the vendor's step needs could not be read): answered as a 503
+	// with a Retry-After, and never set otherwise.
+	RetryAfter time.Duration
 }
 
 func (r *AccessRefusal) Error() string { return r.Reason + " (" + r.Remedy + ")" }
@@ -442,6 +449,11 @@ func (s *Service) accessInstall(w http.ResponseWriter, r *http.Request) {
 				"waits for a person to approve the install",
 		})
 		return
+	case errors.As(err, &refusal) && refusal.RetryAfter > 0:
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			int(math.Ceil(refusal.RetryAfter.Seconds())),
+			httpjson.Detail{"detail": refusal.Reason, "hint": refusal.Remedy})
+		return
 	case errors.As(err, &refusal):
 		httpjson.FailWith(w, refusal.Status, httpjson.CodeInvalidInput, map[string]string{
 			"detail": refusal.Reason, "hint": refusal.Remedy,
@@ -756,7 +768,9 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 	want seataccess.Desired) httpjson.Detail {
 
 	if want.Level != "" && len(o.Levels) > 0 && (o.Live || !liveLevels(kind, lane)) {
-		if _, _, listed := o.Level(want.Level); !listed {
+		// A SET OF LEVELS where the lane takes one (Confluence's space
+		// permissions by operation): every one of them must be offered.
+		if _, listed := o.LevelsOf(want.Level); !listed {
 			offered := make([]string, 0, len(o.Levels))
 			for _, level := range o.Levels {
 				offered = append(offered, level.ID+" ("+level.Name+")")

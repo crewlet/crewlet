@@ -69,6 +69,10 @@ type Deps struct {
 	// Env resolves the document's `${VAR}` references for a vendor session.
 	Env *config.Resolver
 
+	// Managed is a deployment whose company document only named systems
+	// write ([config.Company.SeatCredentialMode]).
+	Managed bool
+
 	Now func() time.Time
 }
 
@@ -129,7 +133,7 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 	if !Needed(root) {
 		return Result{}, nil
 	}
-	facts, err := Read(ctx, root, d.Open, d.Env)
+	facts, err := Read(ctx, root, d.Open, d.Env, d.Managed)
 	if err != nil {
 		return Result{}, err
 	}
@@ -201,10 +205,10 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 // is [Facts.Unavailable], which leaves it gated.
 func Read(ctx context.Context, root map[string]any,
 	open func(context.Context, integration.Kind, seataccess.OpenInput) (seataccess.Session, error),
-	env *config.Resolver) (Facts, error) {
+	env *config.Resolver, managed bool) (Facts, error) {
 
 	facts := Facts{Accounts: map[integration.Kind]seataccess.Observation{},
-		Unavailable: map[integration.Kind]error{}}
+		Unavailable: map[integration.Kind]error{}, Managed: managed}
 	company, err := companyOf(root)
 	if err != nil {
 		return facts, err
@@ -219,7 +223,7 @@ func Read(ctx context.Context, root map[string]any,
 	}
 	sessions := map[integration.Kind]seataccess.Session{}
 	for _, kind := range Unmigrated(root) {
-		if company.SeatCredentialMode(string(kind)) != config.SeatCredentialEngine {
+		if company.SeatCredentialMode(string(kind), managed) != config.SeatCredentialEngine {
 			continue
 		}
 		readCtx, cancel := context.WithTimeout(ctx, vendorDeadline)
