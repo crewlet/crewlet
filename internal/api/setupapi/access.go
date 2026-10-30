@@ -295,7 +295,7 @@ func (s *Service) accessPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !checkDraft(w, kind, current, draft) {
+	if !checkDraft(w, kind, q.Company, current, draft) {
 		return
 	}
 	plan, err := s.access.Plan(r.Context(), q, seataccess.Draft{Seats: draft.Seats})
@@ -325,8 +325,9 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 	}
 	check := authz.IsCheck(r, accessSavePolicy())
 	// A MANAGED DOCUMENT IS REFUSED BEFORE ANYTHING ELSE, as every write
-	// here is: see the package documentation.
-	if !check && !s.mayWriteAccess(w, r) {
+	// here is, and so is its check: a check that answered a plan for a save
+	// that would be refused is the one thing a check must never do.
+	if !s.mayWriteAccess(w, r) {
 		return
 	}
 	q, ok := s.accessQuery(w, r, kind)
@@ -341,7 +342,7 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !checkDraft(w, kind, current, draft) {
+	if !checkDraft(w, kind, q.Company, current, draft) {
 		return
 	}
 	edits, changed := draftEdits(current, draft)
@@ -674,7 +675,13 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 		})
 		return
 	}
-	kept := held.Observed.Access()
+	kept, err := seataccess.KeptAccess(lane, held.Desired, held.Observed)
+	if err != nil {
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+			"detail": seat.Handle + ": " + err.Error(),
+		})
+		return
+	}
 	if seataccess.AsksStepUp(offerOf(current, lane), held.Desired, kept) &&
 		!authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessRaise}) {
 		return
@@ -786,8 +793,8 @@ func readAccessDraft(w http.ResponseWriter, r *http.Request) (accessDraft, bool)
 // from. Where a lane's levels could not be read live, the static list is all
 // there is, and a live-listed id it does not hold is left to the document's
 // rules and the sync's finding rather than refused on a guess.
-func checkDraft(w http.ResponseWriter, kind integration.Kind, current seataccess.Answer,
-	draft accessDraft) bool {
+func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Company,
+	current seataccess.Answer, draft accessDraft) bool {
 
 	if len(draft.Seats) == 0 {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
@@ -817,7 +824,7 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, current seataccess
 					})
 				return false
 			}
-			if refusal := notOffered(kind, lane, offers[lane],
+			if refusal := notOffered(kind, lane, offers[lane], within(company, lane),
 				draft.Seats[handle][lane]); refusal != nil {
 				refusal["seat"] = handle
 				refusal["lane"] = string(lane)
@@ -831,14 +838,16 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, current seataccess
 }
 
 // notOffered is why want is not something o offers on lane, as a refusal's
-// detail, or nil where it is.
+// detail, or nil where it is. under is the path every scope entry must sit
+// under where the connection does not list its reach, empty where any entry
+// the vendor accepts is within it ([within]).
 //
 // A LEVEL IS JUDGED ON WHAT IS LISTED: a fixed set always, and a live-listed
 // one only when it was read live just now. A live-listed lane the vendor did
 // not answer for holds no list to judge by, and an id it does not hold is the
 // document rules' and the sync's finding rather than a refusal on a guess.
 func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Options,
-	want seataccess.Desired) httpjson.Detail {
+	under string, want seataccess.Desired) httpjson.Detail {
 
 	if want.Level != "" && len(o.Levels) > 0 && (o.Live || !liveLevels(kind, lane)) {
 		// A SET OF LEVELS where the lane takes one (Confluence's space
@@ -880,7 +889,28 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 			}
 		}
 	}
+	if o.ScopeOpen && under != "" {
+		prefix := strings.ToLower(strings.Trim(under, "/")) + "/"
+		for _, entry := range want.Scope {
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry)), prefix) {
+				return httpjson.Detail{"detail": fmt.Sprintf("%q is outside %s, the group "+
+					"the company's connection reaches", entry, under)}
+			}
+		}
+	}
 	return nil
+}
+
+// within is the path a lane's scope entries must sit under where its
+// connection does not list its reach: a GitLab project inside the group the
+// company's connection joins agents to, since the engine grants a seat its
+// projects as a member of that group. Empty for every other lane.
+func within(company *config.Company, lane seataccess.Lane) string {
+	if lane != seataccess.LaneGitLab || company == nil || company.Integrations.GitLab == nil ||
+		company.Integrations.GitLab.Provisioning == nil {
+		return ""
+	}
+	return strings.TrimSpace(company.Integrations.GitLab.Provisioning.Group)
 }
 
 // liveLevels reports a lane whose levels the vendor lists live rather than

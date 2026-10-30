@@ -2246,7 +2246,7 @@ changed. Every node serving the API serves them, because every node opens the fl
 | `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `admin`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
 | `GET /setup/integrations/{kind}/access`, `POST /setup/integrations/{kind}/access/plan` | `admin` (`setup.read`): the plan writes nothing, so it asks for no proof |
 | `PUT /setup/integrations/{kind}/access` | `admin` (`setup.access.write`) and a proof inside `step_up`. A save that raises an agent to an administration role at the vendor also asks `setup.access.raise`, which needs a **person present**: a machine token is refused `403 token_refused` |
-| `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`, `POST /setup/integrations/slack/access/seats/{handle}/{lane}/install` | `admin` (`setup.connect`) and a proof inside `step_up`; `rotate` also asks `secrets.write`, since it seals a fresh credential |
+| `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`, `POST /setup/integrations/slack/access/seats/{handle}/{lane}/install` | `admin` (`setup.connect`) and a proof inside `step_up`; `rotate` also asks `secrets.write`, since it seals a fresh credential; `keep` writes the document as a save does, so it also asks `setup.access.write`, and `setup.access.raise` where what it keeps is an administration role |
 
 **Connecting is `admin`'s and nothing more.** `/setup` performs no write of
 its own — a credential goes through the store `/secrets` serves — so connecting
@@ -3656,7 +3656,10 @@ answers the name and when it was minted, never the value.
 ```
 
 `revision` is the company revision the answer was read at, and the `ETag` is
-the same value quoted. Each entry of `options` also says whether a person can
+the same value quoted. An entry of `options` whose vendor did not answer just
+now carries `"unread": true` and no levels: which of its levels administers is
+unknown, so a turn-on or a change of level on that lane asks the step-up a
+raise does, and the next read asks the vendor again. Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration
 for the company, which is wherever it does not hold the authority that creates
@@ -3676,10 +3679,16 @@ refused `403 config_managed`, naming the Seat object as the place to change
 the agent's access. A seat the document no longer has whose account the
 engine still records is listed with `"departed": true`, and only `remove`
 applies to it. `notice` carries a company-level warning, such as the one the
-migration raises when an agent's credential was kept in a variable a company
-setting also uses: the integration's own
+migration raises when an agent's credential was kept in a variable something
+else also names (a company setting, a unit's shared credentials or another
+agent): the integration's own
 [`credential_shared`](../concepts/integration-reconcile.md#what-a-pass-reports)
 finding, drawn on the tab until the variable is written again.
+
+A lane has a `plan` only where the sync takes steps on it: an integration the
+engine provisions, once its migration onto per-seat access has finished. On a
+lane managed outside Crewlet, and on an integration still waiting on its
+migration, `plan` is empty and a draft's plan lists no steps.
 
 **`POST /setup/integrations/{kind}/access/plan`** takes a draft and answers
 what saving it would do at the vendor, writing nothing. It is the same plan
@@ -3708,7 +3717,10 @@ lane the integration does not grant, or a level, permission or scope entry the
 vendor does not offer now, is `400 access_not_offered` with the lane, the value
 and what is offered. A live-listed level (a Datadog role, a Jira project role)
 is judged only when the vendor answered just now; otherwise the sync reports
-an id it does not hold as a finding.
+an id it does not hold as a finding. A GitLab project is within reach only
+inside the group the company's connection joins agents to, so where the
+connection lists no projects, a project outside that group is
+`400 access_not_offered` too.
 
 **`PUT /setup/integrations/{kind}/access`** saves the same body as one revision
 of the company document and starts the sync for that integration. Send the
@@ -3717,7 +3729,11 @@ a revision the fleet has left is `409 revision_advanced` and writes nothing.
 The revision records the caller as its author and a history line naming what
 changed (`agents' access on datadog: turn on QA Engineer on datadog`), with an
 optional `summary` after it. The answer is the tab, as `GET` answers it, with
-`syncing` while the sync runs. A save made while a sync runs is not refused: it
+`syncing` while the sync runs; where the tab cannot be read again just after a
+save landed, the answer is the tab as read before the save, at the revision the
+save wrote, with the saved settings in place, rather than an error for a save
+that landed. A seat removed from the document between the tab's read and the
+save is `404 no_such_seat`, and nothing is written. A save made while a sync runs is not refused: it
 lands, and a sync follows. `?dry_run=true` answers the plan, `step_up` and the
 `warnings` the revision would introduce, and stores nothing (see
 [Dry runs](#dry-runs)).
@@ -3728,7 +3744,19 @@ Mattermost System Admin, or GitHub Read and write on Contents or Workflows)
 asks for a person present and a fresh proof inside `step_up`: a machine token
 is refused `403 token_refused`, and a stale proof `403 step_up_required`. The
 plan's `step_up` says so before the save. Keeping a role an agent already holds
-and lowering one never ask.
+and lowering one never ask. Where the vendor's levels could not be read, a
+turn-on or a change of level asks as a raise does. An integration still
+waiting on its migration asks it as well: the saved setting is the one the sync
+applies once the migration finishes.
+
+The same rule holds on every other write of the company document by a person
+or a token: `PUT` and `PATCH /config`, a seat's `PUT /config/roles/{id}` and a
+revert. Each compares the revision it replaces with the one it proposes, and
+one that raises an agent's access is refused for a machine token
+(`403 token_refused`) or a stale proof (`403 step_up_required`), naming each
+raise in `raises` (`kind`, `handle`, `lane`) and storing nothing. A dry run of
+it is answered, since it writes nothing, and a document the operator writes is
+judged by the operator's own authority instead.
 
 Turning an agent off disables its account at the vendor and keeps it, so its
 history keeps its author and turning it back on needs no person (except
@@ -3740,9 +3768,9 @@ acts on one agent's account, and answers the tab:
 | Action | Does |
 |---|---|
 | `rotate` | Mints a new credential, seals it under the agent's name, and revokes the old one. Asks `secrets.write` too. A credential handed in from outside Crewlet is refused `409 credential_external`: it is rotated where it was issued |
-| `remove` | Removes the account at the vendor, where the vendor allows it, and stops the engine tracking it. Only once the agent is off on this lane: `409 seat_still_on` otherwise |
-| `keep` | Writes what the vendor shows into the document as a new revision: after a role or scope was changed at the vendor ("Keep the vendor's setting"), or after the account was turned off there ("Keep off"). Nothing is restored |
-| `restore` | Turns back on an account somebody turned off at the vendor, which no sync does unasked, or restores a changed role now rather than on the next pass |
+| `remove` | Removes the account at the vendor, where the vendor allows it, and stops the engine tracking it. Only once the agent is off on this lane: `409 seat_still_on` otherwise. On a lane managed outside Crewlet it is `409 access_external`: the account is removed at the vendor |
+| `keep` | Writes what the vendor shows into the document as a new revision, in the vendor's own terms: after a role or scope was changed at the vendor ("Keep the vendor's setting"), or after the account was turned off there ("Keep off", which keeps the role the document names for when it is turned back on). Nothing is restored. Asks `setup.access.write`, and `setup.access.raise` where the role kept is an administration role. A Datadog account holding several roles is refused `409 invalid_input`, since an agent holds one |
+| `restore` | Turns back on an account somebody turned off at the vendor, which no sync does unasked, or restores a changed role now rather than on the next pass. On a lane managed outside Crewlet it is `409 access_external` |
 | `retry` | Runs the sync again after a vendor refusal was settled |
 | `done` | Reads the vendor again after a person took a step there (a GitHub App's creation or permission request, a Slack install) |
 
@@ -3765,15 +3793,26 @@ vendor by naming a `${VAR}` where the vendor's provisioning looked for one, and
 said what it could do once for the whole company (`provisioning.role`,
 `access_level`, a GitHub `tier`). On its first start the engine migrates the
 document, one integration at a time, in one revision attributed to
-`seat access migration`: each agent seat states `enabled` per integration, the
-company's role is copied into each seat in the vendor's own terms (a Datadog
-role is looked up at Datadog by name), a Jira or Confluence agent keeps
-product access only (no project or space role, which is all the earlier engine
-granted), a Mattermost bot's channels are written out, each credential the engine minted is re-sealed under the agent's own name,
-every account the engine made is recorded, and the retired fields are removed.
-A credential that named a variable a company setting also uses is never moved:
-the agent gets a new one from its next sync, and the Agents tab warns that the
-company credential must be replaced until it is.
+`seat access migration`: each agent seat states `enabled` per integration,
+judged on the credentials it named itself and the ones its unit's `mcp_env`
+shares with it, as the earlier engine read them. An agent whose account exists
+keeps the role or level the vendor shows for it; only an agent with no account
+yet takes the company's role, in the vendor's own terms (a Datadog role is
+looked up at Datadog by name). A Datadog account holding several roles is not
+guessed at: Datadog waits, naming the agent, until the account holds one role
+or a person saves the one it keeps. A Jira or Confluence agent with no role of
+its own keeps product access only (no project or space role, which is all the
+earlier engine granted), a Mattermost bot's channels are written out, each
+credential the engine minted is re-sealed under the agent's own name, every
+account the engine made for an agent it had on is recorded, and the retired
+fields are removed. A credential is never sealed over one the agent already
+holds under its own name, and GitHub's installation tokens, which the engine
+issues at use, are never moved. A credential that named a variable something
+else also names (a company setting, a unit's shared credentials or another
+agent) is never moved: the agent gets a new one from its next sync, and the
+Agents tab warns that the shared credential must be replaced until it is. A
+unit's shared key for a tool server the engine now binds itself is removed from
+the unit.
 
 The document lists the integrations it has moved in `seat_access_migrated`,
 and the access sync for an integration acts on no agent until it is listed. An
