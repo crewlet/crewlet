@@ -13,11 +13,16 @@ func TestASeatAccessBlockIsHeldToItsVendorsTerms(t *testing.T) {
 		name, doc, path string
 		kind            error
 	}{
-		{"a seat on at an integration nobody connected", `
+		{"a seat on at Mattermost with no server to post through", `
 name: Acme
 roles:
-  - {name: SRE, handle: sre, integrations: {gitlab: {enabled: true, access_level: 30}}}
-`, "roles[0].integrations.gitlab.enabled", ErrConflict},
+  - {name: SRE, handle: sre, integrations: {mattermost: {enabled: true, roles: [system_user]}}}
+`, "roles[0].integrations.mattermost.enabled", ErrConflict},
+		{"a seat on at Jira with no site", `
+name: Acme
+roles:
+  - {name: SRE, handle: sre, integrations: {jira: {enabled: true, project_role: "10101"}}}
+`, "roles[0].integrations.jira.enabled", ErrConflict},
 		{"a GitLab role GitLab does not have", `
 name: Acme
 roles:
@@ -95,6 +100,9 @@ func TestTheOrgModelBindsASeatsCredentialToItsTool(t *testing.T) {
 	t.Parallel()
 	c := parsedDoc(t, `
 name: Acme
+integrations:
+  datadog: {enabled: true, provisioning: {site: datadoghq.com}}
+  gitlab: {enabled: true, url: "https://gitlab.example.com", provisioning: {group: acme}}
 mcp_servers:
   - {name: datadog, transport: http, url: "https://mcp.datadoghq.com/v1/mcp", shared: false}
   - {name: gitlab, command: gitlab-mcp, shared: false}

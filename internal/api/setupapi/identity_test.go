@@ -26,11 +26,11 @@ const identityDoc = `{
   },
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu",
-     "integrations": {"mattermost": {"bot_token": "${SRE_MM}"}},
+     "integrations": {"mattermost": {"enabled": false, "bot_token": "${MATTERMOST_BOT_TOKEN_SRE_LEAD}"}},
      "mcp_env": {
-       "atlassian": {"JIRA_API_TOKEN": "${SRE_ATLASSIAN}", "JIRA_USERNAME": "${SRE_EMAIL}"},
-       "gitlab": {"GITLAB_TOKEN": "${SRE_GITLAB}"},
-       "datadog": {"DD_APP_KEY": "${SRE_DATADOG}"}
+       "atlassian": {"JIRA_API_TOKEN": "${ATLASSIAN_TOKEN_SRE_LEAD}", "JIRA_USERNAME": "${ATLASSIAN_EMAIL_SRE_LEAD}"},
+       "gitlab": {"GITLAB_TOKEN": "${GITLAB_TOKEN_SRE_LEAD}"},
+       "datadog": {"DD_APP_KEY": "${DATADOG_APP_KEY_SRE_LEAD}"}
      }}
   ]
 }`
@@ -65,11 +65,11 @@ func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 	// a seat that works: a derived name is what the engine WOULD create
 	// rather than proof it did.
 	for name, value := range map[string]string{
-		"SRE_ATLASSIAN": "atl-token",
-		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
-		"SRE_GITLAB":    "gl-token",
-		"SRE_DATADOG":   "dd-key",
-		"SRE_MM":        "mm-token",
+		"ATLASSIAN_TOKEN_SRE_LEAD": "atl-token",
+		"ATLASSIAN_EMAIL_SRE_LEAD":     "crewlet-sre-lead@acme.invalid",
+		"GITLAB_TOKEN_SRE_LEAD":    "gl-token",
+		"DATADOG_APP_KEY_SRE_LEAD":   "dd-key",
+		"MATTERMOST_BOT_TOKEN_SRE_LEAD":        "mm-token",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatal(err)

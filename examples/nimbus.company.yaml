@@ -134,9 +134,10 @@ providers:
   # executor is its coding CLI's own run (OpenCode, the default entry's
   # CLI, with that SAME model and OPENROUTER_API_KEY), in a box from this
   # catalogue; an engineering seat's run implements the work and opens a
-  # merge request under the agent's OWN GitLab identity (the
-  # service-account PAT each seat declares as GITLAB_TOKEN in
-  # role.sandbox.env below — same PAT as its mcp_env.gitlab GITLAB_TOKEN).
+  # merge request under the agent's OWN GitLab identity (the token the
+  # engine mints and seals for the seat as GITLAB_TOKEN_<HANDLE>, which the
+  # seat names as GITLAB_TOKEN in role.sandbox.env below and which the
+  # engine binds to its glab tool server).
   # Here every box is a `direct` box on the engine host, which keeps each
   # run's state apart but does not isolate the host: see the catalogue
   # below.  See docs/concepts/code-sandbox.md and
@@ -500,22 +501,19 @@ integrations:
   # Mattermost has no usable inbound webhook, so nothing has to reach the
   # engine.  This org runs behind NAT with no tunnel and no public URL.
   #
-  # Per-agent bot tokens live on ``role.integrations.mattermost`` below;
-  # the Mattermost MCP *tool* server is the ``mattermost`` entry under
-  # ``mcp_servers``.  The bot accounts and every ${MATTERMOST_TOKEN_*}
-  # secret referenced below are created automatically, with no OAuth click
-  # anywhere:
+  # Each agent's bot is turned on, and given its roles and channels, by
+  # ``role.integrations.mattermost`` below; the engine creates the bot,
+  # seals its token as MATTERMOST_BOT_TOKEN_<HANDLE> and binds it to the
+  # agent's ``mattermost`` tool server.  The server, admin and team come
+  # from the bootstrap, with no OAuth click anywhere:
   #
   #   scripts/mattermost-dev-bootstrap.sh          # server, admin, team
   #   set -a; . ./.env; set +a                     # the URL + admin token it wrote
-  #   crewlet mattermost provision examples/nimbus.company.yaml \
-  #       -env-file .env -config examples/nimbus.config.yaml
   #
-  # The provision loads examples/nimbus.config.yaml, so export the keyring
-  # and the founder token its header names first.  With the engine stopped
-  # the provision reaches the fleet's secret store itself, through this
-  # node's own broker; once the engine runs, it reads the store through it,
-  # with CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER.
+  # then run the engine with the admin token sealed: its reconcile loop
+  # creates each agent's bot as its seat is turned on, and the
+  # integration's Agents tab shows each one.  `crewlet mattermost doctor`
+  # checks the server and the bots against this file.
   #
   # See docs/integrations/mattermost.md.
   #
@@ -539,7 +537,8 @@ integrations:
     url: "${MATTERMOST_URL}"       # e.g. http://localhost:8065 — the bootstrap writes it
     team: nimbus
     typing_status: addressed
-    # Read ONLY by ``crewlet mattermost provision``; the engine ignores it.
+    # The engine provisions each agent's bot from this block; a seat's
+    # roles and channels are on its own ``integrations.mattermost``.
     provisioning:
       username_prefix: ""          # handles are already agent-*, so a prefix would double it
       channels: [town-square, engineering, product]
@@ -570,21 +569,12 @@ integrations:
     # webhook_name: crewlet                          # which hooks on the instance are this deployment's; two deployments need two names
     provisioning:
       group: nimbus-hq                               # top-level group the agent service accounts join
-      # Maintainer, not Developer: GitLab's default protected branch (main)
-      # only lets MAINTAINERS merge — a Developer can push a branch and open
-      # an MR but cannot merge it, so the review→merge loop would stall on a
-      # human.  Maintainer is group-wide here (uniform), so each agent can
-      # technically merge any nimbus-hq project; the "own your repos" policy
-      # above is the behavioural guardrail.  For HARD per-repo scoping
-      # (Maintainer only on owned projects), see docs/integrations/gitlab.md.
-      access_level: maintainer
       projects:                                      # existing Nimbus projects (nimbusflow is created later)
         - nimbus-hq/nimbuscore
         - nimbus-hq/nimbusk0s
         - nimbus-hq/console
         - nimbus-hq/website
       group_webhook: auto                            # one group hook if the plan allows, else per-project
-      token_scopes: [api]
 
 # Which tracker and which knowledge base this company runs.  Nimbus runs
 # Worklet and Doclet: its work items and its pages live in the fleet's own
@@ -627,8 +617,9 @@ knowledge:
 
 # All tool MCP servers live here.  Mattermost and GitLab are
 # ``shared: false`` templates — each agent gets its own stdio instance
-# with credentials from ``role.mcp_env`` env vars (the gitlab server is
-# `glab mcp serve`, keyed on GITLAB_TOKEN).  Tavily is a shared web-search
+# with the agent's own sealed token, which the engine binds under the key
+# each server reads (the gitlab server is `glab mcp serve`, which reads
+# GITLAB_TOKEN).  Tavily is a shared web-search
 # backend the PM and DevRel call (their "use web search" guideline is
 # unenforceable without it; swap for Brave/Exa if preferred).
 #
@@ -638,24 +629,24 @@ knowledge:
 # ``mcp-atlassian`` server here and a per-seat credential in each role's
 # ``mcp_env``; see docs/integrations/jira.md.
 mcp_servers:
-  - name: mattermost                         # per-agent token from role.mcp_env.mattermost
+  - name: mattermost                         # the engine binds each agent's own bot token
     # How an agent SENDS. The websocket fleet is inbound-only, so without
     # this an agent receives a message, reasons about it, and then has no
     # tool to answer with.  Pinned so a rename cannot disarm a skill: the
     # enforced platform-mentions skill triggers on `mattermost_post_message`
     # by name, and an unpinned rename would silently disarm it.
-    # MATTERMOST_TOKEN comes from each role's ``mcp_env.mattermost`` below.
+    # MATTERMOST_TOKEN is each agent's own bot token, bound by the engine.
     shared: false
     command: uvx
     args: ["mcp-server-mattermost==0.6.1"]
     tool_prefix: "mattermost_"
     env:
       MATTERMOST_URL: "${MATTERMOST_URL}"
-  - name: gitlab                             # official glab CLI MCP server; per-agent token via role.mcp_env.gitlab
+  - name: gitlab                             # official glab CLI MCP server; the engine binds each agent's own token
     # `glab mcp serve` (stdio): the engine's MCP bridge spawns one glab
-    # process PER ROLE with that role's GITLAB_TOKEN — so the per-role
-    # mcp_env.gitlab below IS the per-agent identity, and there is no
-    # separate server to run/host.  Requires the `glab` CLI on the PATH of
+    # process PER ROLE with that role's own sealed GitLab token as
+    # GITLAB_TOKEN, so each agent acts as itself and there is no separate
+    # server to run or host.  Requires the `glab` CLI on the PATH of
     # every engine host that runs seats.  The served surface is the full
     # glab command tree (MR approve/diff/notes, issue CRUD, CI, glab_api
     # for anything else).  Alternative: @zereight/mcp-gitlab as a shared
@@ -812,12 +803,11 @@ units:
               - Regularly check in on progress by reviewing the boards and team updates rather than requesting ad-hoc status reports.
               - Store strategic insights, competitive intelligence, and key decisions in your personal knowledge base for future reference.
               - When documenting strategic decisions or company-wide announcements, publish them as pages in the LEAD space so all team members can reference them — the knowledge base is the company's own, so every agent's ``## Relevant knowledge`` search reaches them.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CEO}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_CEO}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
             # Role-scoped recurring work: a weekday-morning backlog review.
             # Fires a TaskAssigned to the CEO's own inbox on the cron.
             schedules:
@@ -867,12 +857,11 @@ units:
               - Before escalating to the CEO, make sure the question is truly strategic (budget, partnerships, major scope changes) rather than a technical call you can make yourself.
               - Regularly review the board to ensure stories are progressing and no work is falling through the cracks.
               - When you need background on a past architecture decision, search the team's pages first before asking the team.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CTO}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_CTO}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
   - name: Product
     id: product
@@ -921,12 +910,11 @@ units:
               - You should then pick up your tasks one by one, update each one's status, and always update your knowledge_base accordingly after finishing the task.
               - For the responsibilities that require up-to-date analysis/comparison/data-gathering/benchmarking, you should use web search tools and deep search tools to get the latest information.
               - When completing market research or competitive analysis, publish the findings as a page and link it from the work item.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_PM}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_PM}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
       - name: Developer Relations
         id: developer-relations
@@ -976,14 +964,16 @@ units:
               - Track the most common GitLab Issues questions in a "FAQ Backlog" page in the PROD project; convert the top items into docs each week.
               - Use Tavily / web search to keep up with adjacent ecosystem launches (Ray releases, vLLM features, KubeRay updates) and flag relevant developments to the PM and AI Systems Engineer.
             mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_DEVREL}"
-              gitlab:                        # env for the glab stdio MCP server
-                GITLAB_TOKEN: "${GITLAB_TOKEN_DEVREL}"
+              gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_DEVREL}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
+              gitlab:
+                enabled: true
+                access_level: 40                # Maintainer: merges to protected main
 
   - name: Engineering
     id: engineering
@@ -1078,15 +1068,12 @@ units:
               - Search the team's pages for existing runbooks and architecture docs before implementing — avoid duplicating documented patterns.
               - If a story you've been assigned actually belongs to the Frontend SWE (UI work) or the AI Systems Engineer (Python framework runtime work), reassign it with a comment rather than implementing outside your projects.
             mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
-              gitlab:                        # env for the glab stdio MCP server
-                GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
+              gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
             # Executor box: this seat's executor is OpenCode's own run,
             # which implements the work item in nimbuscore / nimbusk0s and
             # opens an MR as Agent SWE's own GitLab identity (the
-            # ${GITLAB_TOKEN_SWE} PAT above).  The merge-request
+            # ${GITLAB_TOKEN_AGENT_SWE} token the engine seals for it).  The merge-request
             # review-requested webhook then wakes this seat to review the
             # MR + move the work item.
             sandbox:
@@ -1117,7 +1104,7 @@ units:
               # THIS agent's GitLab identity; the engine itself knows
               # nothing about GitLab.
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_SWE}"
               # Per-seat provisioning (role.sandbox.setup): each step
               # declares files to write, commands to run (a non-zero exit
               # fails the box acquisition), env to merge into the run env,
@@ -1158,7 +1145,9 @@ units:
                     before pushing.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_SWE}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
           - name: Agent Frontend SWE
             handle: agent-frontend-swe
@@ -1194,15 +1183,12 @@ units:
               - For every new page, include empty / loading / error states from the first commit — never ship a happy-path-only UI.
               - When in doubt about visual polish (spacing, copy, iconography), file a question for the PM on the work item rather than guessing.
             mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_FE}"
-              gitlab:                        # env for the glab stdio MCP server
-                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"
+              gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
             # Executor box: this seat's executor is OpenCode's own run,
             # which implements the UI story in console / website and opens
             # an MR as Agent Frontend SWE's own GitLab identity
-            # (${GITLAB_TOKEN_FE}).
+            # (${GITLAB_TOKEN_AGENT_FRONTEND_SWE}).
             sandbox:
               # No `mcp:` scope, deliberately: every box gets the seat's
               # tool bridge, which already serves this seat's LIVE tool set
@@ -1214,7 +1200,7 @@ units:
               # seat itself does not hold.  No code-host server either: the
               # run pushes and opens the MR with git push options.
               env:
-                GITLAB_TOKEN: "${GITLAB_TOKEN_FE}"   # this seat's own PAT, for the git-auth step and the coding agent
+                GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_FRONTEND_SWE}"   # this seat's own PAT, for the git-auth step and the coding agent
               setup:
                 - name: node
                   # console / website are Node repos (React + Vite + TS).
@@ -1244,7 +1230,9 @@ units:
                     empty/loading/error states.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_FE}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
           - name: Agent AI Systems Engineer
             handle: agent-ai-systems-engineer
@@ -1283,10 +1271,7 @@ units:
               - For perf-sensitive code, capture a baseline benchmark in the MR description before optimising; otherwise you are guessing.
               - When you discover a missing primitive in the Nimbus platform (a cluster capability, a console page, a webhook), file a story for the owning role rather than working around it.
             mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_AI}"
-              gitlab:                        # env for the glab stdio MCP server
-                GITLAB_TOKEN: "${GITLAB_TOKEN_AI}"
+              gitlab:                        # the engine binds this agent's own GitLab token
                 GITLAB_HOST: gitlab.com
             # Executor box: this seat's executor is OpenCode's own run —
             # the CLI the default entry drives, so a Python framework change
@@ -1324,7 +1309,9 @@ units:
                     examples/ script with every public-surface change.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_AI}"
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
             # Role-scoped recurring work owned by this engineer — a role
             # schedule (not a unit schedule) is the right home for a task
             # pinned to one person.

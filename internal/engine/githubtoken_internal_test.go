@@ -122,10 +122,6 @@ mcp_servers:
     transport: http
     shared: false
     url: "https://mcp.example.com/"
-  - name: borrowed
-    transport: http
-    shared: false
-    url: "https://mcp.example.com/"
 roles:
   - name: Owner
     handle: owner
@@ -136,8 +132,6 @@ roles:
     mcp_env:
       github:
         Authorization: "Bearer ${GITHUB_APP_TOKEN_BUILDER}"
-      borrowed:
-        Authorization: "Bearer ${GITHUB_APP_TOKEN_PLANNER}"
     integrations:
       github:
         enabled: `+state+`
@@ -181,9 +175,10 @@ func appEngine(t *testing.T, c *Company) *Engine {
 // A SEAT'S APP TOKEN IS ANSWERED BY ITS OWN RESOLUTION AND NO OTHER.
 //
 // An app is one agent's identity. The token is laid in front of the
-// company's sources for that seat's reads alone, so a seat naming another
-// seat's variable names something nothing answers, and the company's chain,
-// which every shared server and every other seat reads, never holds it.
+// company's sources for that seat's reads alone: the document cannot name
+// another seat's variable in a seat (config refuses it), and were one asked
+// for anyway, nothing in this seat's resolution answers it. The company's
+// chain, which every shared server and every other seat reads, never holds it.
 func TestASeatsAppTokenIsAnsweredOnlyByItsOwnResolution(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)

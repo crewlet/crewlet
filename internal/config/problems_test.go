@@ -531,20 +531,11 @@ func TestAParserProblemCarriesItsLineAndNoSegmentsWhenUnplaced(t *testing.T) {
 // A REFERENCE THAT RESOLVES TO NOTHING IS LOCATED WHERE IT WAS WRITTEN: a lead
 // at the unit's `lead`, a unit reference at the seat's `unit`, a manages entry
 // at the index it was written at (normalization rewrites the list, so the
-// normalized position is not it), and an access level at its key.
+// normalized position is not it).
 func TestReferenceWarningsAreLocatedWhereTheyWereWritten(t *testing.T) {
 	t.Parallel()
 	cfg := parsed(t, `
 name: Acme
-integrations:
-  gitlab:
-    enabled: true
-    url: https://gitlab.example.com
-    signing_secret: "${GITLAB_SIGNING_SECRET}"
-    provisioning:
-      group: acme
-      access_levels:
-        former.engineer: maintainer
 roles:
   - name: CEO
     manages: [eng, ghost]
@@ -575,9 +566,6 @@ units:
 		{"lead", "units[0].children[0].lead", "", "Platform", "Platform", "phantom",
 			config.Path{"units", 0, "children", 0, "lead"}},
 		{"manages", "roles[0].manages[1]", "ceo", "", "CEO", "ghost", config.Path{"roles", 0, "manages", 1}},
-		{"gitlab_access_level", "integrations.gitlab.provisioning.access_levels.former.engineer", "", "",
-			"integrations.gitlab.provisioning.access_levels", "former.engineer",
-			config.Path{"integrations", "gitlab", "provisioning", "access_levels", "former.engineer"}},
 	}
 	if !reflect.DeepEqual(got, expected) {
 		t.Errorf("warnings =\n%+v\nwant\n%+v", got, expected)

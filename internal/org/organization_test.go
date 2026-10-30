@@ -243,7 +243,6 @@ func TestADanglingReferenceMessageNamesBothEnds(t *testing.T) {
 		{Kind: RefLead, From: "Engineering", To: "Ghost"},
 		{Kind: RefUnit, From: "Dev", To: "Nowhere"},
 		{Kind: RefManages, From: "CEO", To: "Ghost"},
-		{Kind: RefGitLabAccessLevel, From: "integrations.gitlab.provisioning.access_levels", To: "old-seat"},
 		{Kind: RefKind("future_kind"), From: "somewhere", To: "something"},
 	} {
 		msg := ref.Message()

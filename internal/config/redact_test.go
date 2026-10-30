@@ -75,6 +75,7 @@ roles:
       notion: {NOTION_TOKEN: per-seat-literal}
     integrations:
       mattermost:
+        enabled: false
         bot_token: mm-literal-bot-token
 `
 
@@ -536,8 +537,6 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		"MaxInputTokens": true, "MaxBatchTokens": true,
 		// A deep-work run's cap on what it may spend, counted in tokens.
 		"MaxTokens": true,
-		// Scope NAMES minted onto a token, not the token.
-		"TokenScopes": true,
 	}
 	usedNames := map[string]bool{}
 

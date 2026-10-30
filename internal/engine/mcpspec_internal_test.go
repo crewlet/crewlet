@@ -162,6 +162,7 @@ roles:
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: "${PM_MATTERMOST_TOKEN}"
   - name: Ops
     handle: ops

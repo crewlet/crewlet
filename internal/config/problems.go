@@ -504,10 +504,10 @@ func warningsOf(err error) []Warning {
 // ReferenceWarnings is every reference this revision resolves to nothing
 // ([Company.DanglingRefs]), located in the document: a unit's lead at its
 // `lead`, a root seat's unit at its `unit`, a manages entry at the index it
-// was written at, and a GitLab access level at its key.
+// was written at.
 func (c *Company) ReferenceWarnings() []Warning {
 	o, x := c.organization()
-	refs := append(o.DanglingRefs(), c.DanglingSettingsRefs(o)...)
+	refs := o.DanglingRefs()
 	out := make([]Warning, 0, len(refs))
 	for _, ref := range refs {
 		w := Warning{
@@ -528,8 +528,6 @@ func (c *Company) ReferenceWarnings() []Warning {
 				path = idx(path, i)
 			}
 			w.Seat = ref.Seat.Handle()
-		case ref.Kind == org.RefGitLabAccessLevel:
-			path = entry(field(AccessLevelsSetting), ref.To)
 		}
 		w.Path, w.Segments = path.String(), segmentsOf(path)
 		out = append(out, w)
