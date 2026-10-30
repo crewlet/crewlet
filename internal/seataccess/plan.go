@@ -22,6 +22,10 @@ package seataccess
 //     drift, restored and reported (D2).
 //   - A credential is minted where none is sealed, and rotated when asked,
 //     once per account rather than once per lane.
+//   - Nothing is taken away from an account the ledger does not record: no
+//     disable, revoke, remove or rotate. A seat that is on adopts the
+//     account the vendor shows under the engine's naming rather than
+//     creating a second one.
 
 // SeatInput is one seat at one kind, as a plan reads it.
 type SeatInput struct {
@@ -117,6 +121,12 @@ func walk(
 		minted, rotated, removeDone, revoked bool
 		cred                                 *Credential
 	)
+	// ONLY AN ACCOUNT THE LEDGER RECORDS IS THIS ENGINE'S TO TAKE AWAY. One
+	// the vendor shows under the engine's naming with no ledger row may be
+	// somebody else's, or this engine's from before the ledger: it is never
+	// disabled, revoked, removed or rotated on that evidence. A seat that is
+	// on adopts it first (the sync records it), which is what makes it owned.
+	owned := in.Record != nil && in.Record.Account != nil
 	if in.Record != nil {
 		cred = in.Record.Credential
 	}
@@ -126,6 +136,17 @@ func walk(
 	gone := false
 	for _, lane := range lanes {
 		gone = gone || in.Have[lane].CredentialGone
+	}
+	if cred == nil && !gone {
+		// A CREDENTIAL SEALED OUTSIDE THE SYNC (a GitHub App's key from the
+		// manifest route, a Slack bot token from the install landing) is the
+		// account's all the same, and is never minted over.
+		for _, lane := range lanes {
+			if c := in.Have[lane].Credential; c != nil && in.Have[lane].Exists {
+				cred = c
+				break
+			}
+		}
 	}
 	for i, lane := range lanes {
 		want := in.Want[lane].Normalized()
@@ -153,15 +174,15 @@ func walk(
 		var ops []planned
 		switch {
 		case in.Ask.Remove:
-			if have.Exists && !removeDone {
+			if owned && have.Exists && !removeDone {
 				ops = append(ops, planned{op: OpRemove})
 				removeDone = true
 			}
 		case !want.Enabled:
-			if have.Exists && have.Enabled {
+			if owned && have.Exists && have.Enabled {
 				ops = append(ops, planned{op: OpDisable})
 			}
-			if allOff && i == last && cred != nil && !revoked {
+			if owned && allOff && i == last && cred != nil && !revoked {
 				ops = append(ops, planned{op: OpRevoke})
 				revoked = true
 			}
@@ -180,7 +201,7 @@ func walk(
 				ops = append(ops, planned{op: OpMint})
 				minted = true
 			}
-			if in.Ask.Rotate && !rotated && have.Enabled && cred != nil && !gone {
+			if owned && in.Ask.Rotate && !rotated && have.Enabled && cred != nil && !gone {
 				ops = append(ops, planned{op: OpRotate})
 				rotated = true
 			}
