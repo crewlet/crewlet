@@ -283,7 +283,7 @@ func (r tierRoster) Leads(unit string) []string {
 func (tierRoster) Within(unit, ancestor string) bool { return unit == ancestor && unit != "" }
 
 // THE CODE WRITES ARE WITHHELD EXACTLY WHERE NO GRANT ADMITS ONE: a seat is
-// left the seventeen at every tier that caps it below write and offered them at
+// left the eighteen at every tier that caps it below write and offered them at
 // full_access — held to code.GrantOf both ways at the highest relation the
 // chart can give a seat, on a project its unit owns and leads and on its own
 // scratch repository. A tier they are withheld at pushes to neither and
@@ -310,7 +310,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 	for _, tier := range append(code.Tiers(), "", "admin") {
 		withheld := builtin.CodeWritesWithheld(tier)
 		if len(withheld) != 0 && !slices.Equal(withheld, builtin.CodeWrites()) {
-			t.Errorf("tier %q withholds %v, want all seventeen writes or none", tier, withheld)
+			t.Errorf("tier %q withholds %v, want all eighteen writes or none", tier, withheld)
 		}
 		for _, repo := range repos {
 			g := code.GrantOf(agent, repo, tierRoster{tier: tier})
@@ -954,7 +954,7 @@ func scratchHost(lastActive time.Duration) *codeHost {
 	host.detail.Name, host.detail.Kind = "agent-cto.lab", code.RepoScratch
 	host.detail.ManagedBy, host.detail.Owner = code.ManagedTools, code.Owner{Kind: code.OwnerSeat, Ref: "agent-cto"}
 	host.detail.LastActivityAt = time.Now().Add(-lastActive)
-	change := siteChange()
+	change := suggestedChange()
 	change.repo = host.detail.Name
 	host.changes = change.read
 	return host
@@ -1000,6 +1000,8 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeCommentOnChangeTool: {"repo": repo, "change": 7, "body": "Looks right."},
 		builtin.CodeResolveFindingTool: {"repo": repo, "change": 7, "findings": []any{standingFinding},
 			"resolution": "dismissed"},
+		builtin.CodeApplySuggestionsTool: {"repo": repo, "change": 7, "findings": []any{suggestedA},
+			"expected_head": revHead(3)},
 	}
 	args, ok := rows[name]
 	return args, ok

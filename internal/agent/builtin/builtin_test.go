@@ -355,6 +355,8 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeReviewChangeTool:    true,
 		builtin.CodeCommentOnChangeTool: true,
 		builtin.CodeResolveFindingTool:  true,
+		// AND ITS SUGGESTIONS APPLIED, a commit onto its branch.
+		builtin.CodeApplySuggestionsTool: true,
 
 		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
 		// publishes, which a worker of a granted seat may be handed.

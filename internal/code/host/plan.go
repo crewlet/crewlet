@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"io"
 	"maps"
 	"path"
 	"slices"
@@ -97,12 +98,22 @@ type newBlob struct {
 }
 
 // planEdit is one edit: the file's blob at the parent, read through the edit
-// into its new blob.
+// into its new blob — through its old and new text, or, for an
+// apply_suggestions, through its splices.
 type planEdit struct {
 	blob     *newBlob
 	base     string
 	old, new string
-	stream   *editStream
+	splices  []splice
+	stream   rewriter
+}
+
+// rewriter is a file read through a change to it into its staged new blob —
+// an edit's ([editStream]) or an apply_suggestions' ([spliceStream]) — and
+// closed with the change's refusal of the file as it ended, or none.
+type rewriter interface {
+	io.Writer
+	Close(path string) (code.WriteRefusal, string, error)
 }
 
 // planPut is one put of a file's text.

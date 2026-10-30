@@ -69,13 +69,13 @@ is read, which the node that answers judges both at, and a write's is the
 least access at which the node that decides it may admit the call — the rest
 is the relation that node judges from its own chart, which no access alone
 names (an open's push of its branch, a change's owner steering it). Their
-seventeen writes — `code_commit_files`,
+eighteen writes — `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
 `code_create_repo`, `code_update_repo`, `code_delete_repo`,
 `code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
 `code_update_change` and `code_close_change`, and its conversation's
-`code_request_review`, `code_review_change`, `code_comment_on_change` and
-`code_resolve_finding` — are each `read_only: false`
+`code_request_review`, `code_review_change`, `code_comment_on_change`,
+`code_resolve_finding` and its findings' `code_apply_suggestions` — are each `read_only: false`
 with `open_world: true`: a branch, a repository or a change is a surface every
 colleague reads, so `mcp.WritesToSharedSurface` keeps every one from a worker,
 which would write under its parent's grant; each is registered as a delivery
@@ -93,7 +93,12 @@ describes the tool a model is offered. `code_delete_branch`,
 `code_delete_repo` and `code_resolve_finding` are also `destructive: true`:
 each takes away what somebody else made with nothing the same tool keeps to
 undo it — a finding dismissed is a reviewer's blocker cleared, which no write
-moves back. A seat holding the
+moves back. `code_apply_suggestions` is a commit like `code_commit_files`,
+held to the head its caller read, and the CALLER's: whoever applies a
+review's suggestions becomes an author of the change, whose approval of it
+then counts for nothing, and answers the findings applied `resolved` — an
+author's answer, which leaves a blocker standing for its raiser to judge. A
+seat holding the
 writes is also told, in its executor prompt's `code_writes` section, the one
 choice no description can carry: a small change is committed on the server,
 and anything to build or test belongs in a checkout. The operator-only

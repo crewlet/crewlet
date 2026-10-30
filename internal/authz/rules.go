@@ -171,6 +171,10 @@ const (
 	ActionCodeReviewChange    Action = "code_review_change"
 	ActionCodeCommentOnChange Action = "code_comment_on_change"
 	ActionCodeResolveFinding  Action = "code_resolve_finding"
+	// And its findings' suggestions applied: an engine write onto the
+	// change's branch, judged as every engine write is — the grant's ref rule
+	// and the protections, on the git node and at the committer.
+	ActionCodeApplySuggestions Action = "code_apply_suggestions"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
@@ -806,6 +810,8 @@ var rules = map[Action]rule{
 	ActionCodeReviewChange:    {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeCommentOnChange: {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeResolveFinding:  {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND ITS SUGGESTIONS APPLIED, on code.git's footing as every engine write.
+	ActionCodeApplySuggestions: {class: ClassEverybody, recency: iam.RecencyAny},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

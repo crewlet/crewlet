@@ -1703,13 +1703,13 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the twenty-eight code tools'
+// codeCatalogueBudget is the most bytes the twenty-nine code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
 // (CodeWritesWithheld); every other seat carries the reads alone
 // ([codeReadsCatalogueBudget]).
 //
-// 42 000: measured at 39 603 (~9 901 tokens), so ~6% headroom — a sentence can
+// 43 200: measured at 40 680 (~10 170 tokens), so ~6% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
 // part adds raises this deliberately, with its measured cost). 10 654 → 9 570
 // when the revision grammar, written into each of the six revision arguments,
@@ -1751,8 +1751,11 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // tokens) for code_request_review, code_review_change (2 906 of them: its
 // findings' nine fields, each a name, a type and an enum where it has one),
 // code_comment_on_change and code_resolve_finding, the rules of who may answer
-// what said once in each description.
-const codeCatalogueBudget = 42_000
+// what said once in each description. And 42 000 → 43 200 when
+// code_apply_suggestions joined, deliberately, with its measured cost:
+// 39 603 → 40 680, 1 077 bytes (~269 tokens), what it applies and that the
+// applier becomes an author said once, in its description.
+const codeCatalogueBudget = 43_200
 
 // codeReadsCatalogueBudget is the most bytes the eleven code reads'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
@@ -1765,18 +1768,19 @@ const codeCatalogueBudget = 42_000
 // states — a code read a later part adds raises this deliberately, with its
 // measured cost, as it raises that. The ten writes were the 12 053 bytes
 // (~3 013 tokens) between the two budgets' figures then, and a change's three
-// lifecycle and four conversation writes beside them make the seventeen
-// 22 028 (~5 507 tokens), carried by a full_access seat alone.
+// lifecycle writes, four conversation writes and the apply of its suggestions
+// beside them make the eighteen 23 105 (~5 776 tokens), carried by a
+// full_access seat alone.
 const codeReadsCatalogueBudget = 18_600
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code carries the eleven reads' definitions on every round of every turn, and
-// a seat at full_access the seventeen writes' beside them: a CLI's catalogue
+// a seat at full_access the eighteen writes' beside them: a CLI's catalogue
 // rides in the user text (cliagent.RenderPrompt), so nothing caches them, and
 // each byte is paid again every round. Measured as that catalogue renders them
 // — indented, HTML-escaped, added to a catalogue already holding a tool, so
 // each one's separator and indentation count — the reads alone and all
-// twenty-eight, each held to a budget, so a later description edit is a
+// twenty-nine, each held to a budget, so a later description edit is a
 // decision rather than drift, as the executor prompt's budgets make a sentence
 // one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1804,7 +1808,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		got, budget int
 	}{
 		{"the eleven code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all twenty-eight code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
+		{"all twenty-nine code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {
 		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))

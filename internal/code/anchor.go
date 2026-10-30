@@ -14,9 +14,11 @@ import (
 // statelog.Reanchor, which moves a state log to its next generation.)
 //
 // ONE RULE, read wherever lines are placed: the code host's re-anchoring read
-// (internal/code/query) for a finding shown on a later revision, and whatever
-// builds a commit from a finding's suggestion at the head it applies to, so a
-// suggestion is spliced exactly where a reader was shown its finding.
+// (internal/code/query) for a finding shown on a later revision, and an
+// apply_suggestions' build (internal/code/host) for a finding's suggestion at
+// the head it applies to, so a suggestion is spliced exactly where a reader
+// was shown its finding — the build feeding it one hunk at a time
+// ([Placing]), as a diff streams by.
 
 // Hunk is one hunk of a unified diff as its header gives it: the OldLines
 // lines from OldStart that it replaces, and the NewLines lines from NewStart
@@ -92,30 +94,68 @@ func hunkNumber(s string) (int, bool) {
 // claim that its lines are there. An insertion right above the range or right
 // below it touches none of its lines.
 func Reanchor(hunks []Hunk, start, end int) (int, int, bool) {
-	shift := 0
+	p := PlaceLines(start, end)
 	for _, h := range hunks {
-		if h.OldLines == 0 {
-			// An insertion after old line OldStart: above the range where it
-			// follows a line above it, inside where it follows one of its
-			// lines but the last.
-			switch {
-			case h.OldStart < start:
-				shift += h.NewLines
-				continue
-			case h.OldStart >= end:
-				return start + shift, end + shift, true
-			}
-			return start + shift, end + shift, false
-		}
-		last := h.OldStart + h.OldLines - 1
-		switch {
-		case last < start:
-			shift += h.NewLines - h.OldLines
-		case h.OldStart > end:
-			return start + shift, end + shift, true
-		default:
-			return start + shift, end + shift, false
+		if p.Hunk(h) {
+			break
 		}
 	}
-	return start + shift, end + shift, true
+	return p.Placed()
 }
+
+// Placing is [Reanchor] fed one hunk at a time, IN THE DIFF'S ORDER: the one
+// rule for a reader that streams a diff's hunks and keeps none of them, so
+// what it holds is a placing an anchor, never a hunk a line of the diff — a
+// diff of two large files is millions of hunks, and an anchor is settled by
+// the first hunk at or below it. Reanchor is this over a slice, so the two
+// can never place lines apart.
+type Placing struct {
+	start, end, shift int
+	settled, kept     bool
+}
+
+// PlaceLines starts placing lines start to end (1-based, inclusive) of a file
+// in the file a diff makes of it.
+func PlaceLines(start, end int) Placing { return Placing{start: start, end: end, kept: true} }
+
+// Hunk moves the placing by the diff's next hunk, and reports whether it is
+// settled: a hunk wholly above the range moves it by the lines it added less
+// the lines it removed and leaves it open; one wholly below it settles it
+// where it is, the same lines; and one that replaces, deletes or inserts
+// between any of its lines settles it OUTDATED. A settled placing moves no
+// further, whatever hunks follow.
+func (p *Placing) Hunk(h Hunk) bool {
+	if p.settled {
+		return true
+	}
+	if h.OldLines == 0 {
+		// An insertion after old line OldStart: above the range where it
+		// follows a line above it, inside where it follows one of its lines
+		// but the last.
+		switch {
+		case h.OldStart < p.start:
+			p.shift += h.NewLines
+		case h.OldStart >= p.end:
+			p.settled = true
+		default:
+			p.settled, p.kept = true, false
+		}
+		return p.settled
+	}
+	last := h.OldStart + h.OldLines - 1
+	switch {
+	case last < p.start:
+		p.shift += h.NewLines - h.OldLines
+	case h.OldStart > p.end:
+		p.settled = true
+	default:
+		p.settled, p.kept = true, false
+	}
+	return p.settled
+}
+
+// Placed is where the lines are now, and whether they are still the lines
+// they were — Reanchor's answer, over the hunks fed so far: once the diff has
+// ended, a placing no hunk settled is the same lines, moved by every hunk
+// above them.
+func (p Placing) Placed() (int, int, bool) { return p.start + p.shift, p.end + p.shift, p.kept }

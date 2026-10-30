@@ -127,6 +127,10 @@ var changeToolNeeds = map[string]code.Access{
 	CodeReviewChangeTool:    code.AccessReview,
 	CodeCommentOnChangeTool: code.AccessRead,
 	CodeResolveFindingTool:  code.AccessRead,
+	// An apply pushes the change's source branch — a full_access seat's own
+	// namespace on a repository it reads among them — so read, the push's
+	// rule the git node's and the committer's.
+	CodeApplySuggestionsTool: code.AccessRead,
 }
 
 // The listing's page. A listed change is its row and its readiness in a line,

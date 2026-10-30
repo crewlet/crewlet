@@ -2026,13 +2026,14 @@ func Catalogue() []Instrument {
 			Name: CodeHostWrites, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"kind", "outcome"},
 			Shows: "Every engine write this git node built or answered — a " +
-				"commit, a revert, a cherry-pick, a branch created or deleted " +
-				"through a tool, a seat's or a person's — by `kind` " +
-				"(`commit_files`, `revert`, `cherry_pick`, `create_branch`, " +
-				"`delete_branch`) and `outcome`: `applied`, `pending` and " +
-				"`unknown` as a push's, from its row; `refused`, a refusal of " +
-				"the change or of its push (a conflict, nothing to change, a " +
-				"stale head, a protection, the grant) or a write the call " +
+				"commit, a revert, a cherry-pick, a branch created or deleted, " +
+				"a review's suggestions applied through a tool, a seat's or a " +
+				"person's — by `kind` (`commit_files`, `revert`, `cherry_pick`, " +
+				"`create_branch`, `delete_branch`, `apply_suggestions`) and " +
+				"`outcome`: `applied`, `pending` and `unknown` as a push's, " +
+				"from its row; `refused`, a refusal of the change or of its " +
+				"push (a conflict, nothing to change, a suggestion outdated or " +
+				"overlapping, a stale head, a protection, the grant) or a write the call " +
 				"named wrong; `unready`, this node could not answer in time " +
 				"and another git node was asked; and `failed`, the node's own " +
 				"failure. `unready` climbing is a node behind its syncs or at " +
@@ -2047,8 +2048,9 @@ func Catalogue() []Instrument {
 				"and judging the write on it, the check of where its branch is " +
 				"and of the objects it names among it; `build`, its git — the " +
 				"read of what each path it names and each directory above one " +
-				"is, the lookups of what it changes, its objects, its commit and " +
-				"its pack, under a unit of the seat git-work share; `land`, the " +
+				"is, the lookups of what it changes, an apply's placement of its " +
+				"suggestions, its objects, its commit and its pack, under a unit " +
+				"of the seat git-work share; `land`, the " +
 				"landing every push takes — the upload, the proposal and the " +
 				"wait for its row; and `total`. A `build` tail near ten seconds " +
 				"is changes too wide or too deep for an engine write, answered " +

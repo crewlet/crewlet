@@ -20,7 +20,8 @@ import (
 
 // AN ENGINE WRITE is a change a seat or a person asks of a repository through
 // a tool — files committed, a commit reverted or picked, a branch created or
-// deleted — that the engine BUILDS on the repository's git node, in a scratch
+// deleted, a review's suggestions applied — that the engine BUILDS on the
+// repository's git node, in a scratch
 // beside its cache, and LANDS as a push through the one landing every push
 // takes (internal/code/host's Server.Write, ADR-0062). This package holds what
 // both ends of it import, as it does for a read by object id: the WIRE — the
@@ -45,8 +46,8 @@ import (
 const Source = "code"
 
 // EngineWriteKind is what an engine write builds: a closed set
-// ([EngineWriteKinds]). M4's apply_suggestions and M5's rebase and merge are
-// further kinds of the same write.
+// ([EngineWriteKinds]). M5's rebase and merge are further kinds of the same
+// write.
 type EngineWriteKind string
 
 const (
@@ -62,11 +63,18 @@ const (
 	WriteCreateBranch EngineWriteKind = "create_branch"
 	// WriteDeleteBranch deletes a branch at the head its caller read.
 	WriteDeleteBranch EngineWriteKind = "delete_branch"
+	// WriteApplySuggestions commits findings' suggestions onto a change's
+	// source branch at the head its caller read ([EngineWrite.Suggestions]):
+	// each suggestion's lines placed in the head's file by the one rule a
+	// finding is shown by ([Reanchor]), and the file's lines put in their
+	// place — all of them or none.
+	WriteApplySuggestions EngineWriteKind = "apply_suggestions"
 )
 
 // EngineWriteKinds is the closed set, in the order a reader is told them.
 func EngineWriteKinds() []EngineWriteKind {
-	return []EngineWriteKind{WriteCommitFiles, WriteRevert, WriteCherryPick, WriteCreateBranch, WriteDeleteBranch}
+	return []EngineWriteKind{WriteCommitFiles, WriteRevert, WriteCherryPick, WriteCreateBranch, WriteDeleteBranch,
+		WriteApplySuggestions}
 }
 
 // Valid reports a kind this build knows.
@@ -76,7 +84,7 @@ func (k EngineWriteKind) Valid() bool { return slices.Contains(EngineWriteKinds(
 // signature and a build — rather than only move a ref to a commit the
 // repository holds.
 func (k EngineWriteKind) Commits() bool {
-	return k == WriteCommitFiles || k == WriteRevert || k == WriteCherryPick
+	return k == WriteCommitFiles || k == WriteRevert || k == WriteCherryPick || k == WriteApplySuggestions
 }
 
 // FileOpKind is what one operation of a commit_files does to one path: a
@@ -155,6 +163,9 @@ type EngineWrite struct {
 	// Commit is a revert's or a cherry-pick's subject, and a create_branch's
 	// target.
 	Commit string `json:"commit,omitempty"`
+	// Suggestions are an apply_suggestions' findings' suggestions, 1 to
+	// [MaxSuggestionOps], each finding at most once.
+	Suggestions []SuggestionOp `json:"suggestions,omitempty"`
 	// Home is whether this attempt was asked of the walk's EFFECTIVE HOME —
 	// stamped by the router's keyed git walk on every attempt
 	// ([GitQuery.Home]'s rule), never by a caller — the one node that may
@@ -185,6 +196,27 @@ type FileOp struct {
 	// the executable bit alone), so a link is made by a put.
 	Mode string `json:"mode,omitempty"`
 }
+
+// SuggestionOp is one finding's suggestion as an apply_suggestions carries it:
+// the lines the finding is anchored to — a file of a revision's head, by the
+// blob they were read in, and its lines, 1-based and inclusive — and the text
+// to put in their place, "" deleting them. Its lines are placed in the file at
+// the head the write lands on by [Reanchor], from the diff between that blob
+// and the head's, before anything is put.
+type SuggestionOp struct {
+	FindingID string `json:"finding_id"`
+	Path      string `json:"path"`
+	BlobOID   string `json:"blob_oid"`
+	LineStart int    `json:"line_start"`
+	LineEnd   int    `json:"line_end"`
+	Text      string `json:"text"`
+}
+
+// MaxSuggestionOps is the most suggestions one apply_suggestions carries: a
+// review's findings ([MaxFindingsPerReview]), so the suggestions one review
+// made are applied by one write, and what its build places at once is bounded
+// as a re-anchoring's is ([MaxReanchors]).
+const MaxSuggestionOps = MaxFindingsPerReview
 
 // EngineWriteResult is what an engine write came to.
 type EngineWriteResult struct {
@@ -271,13 +303,23 @@ const (
 	// WriteRejectedObject is an object the build made that the relay's own
 	// check — index-pack --strict, receive.fsckObjects' — refuses.
 	WriteRejectedObject WriteRefusal = "rejected_object"
+	// WriteSuggestionOutdated is an apply_suggestions one of whose findings'
+	// lines changed since they were read — a hunk between the blob they were
+	// read in and the head's touched them, the file is gone or no regular
+	// file at the head, or it holds fewer lines than the finding names — each
+	// such finding named: nothing is applied.
+	WriteSuggestionOutdated WriteRefusal = "suggestion_outdated"
+	// WriteSuggestionOverlap is an apply_suggestions two of whose findings'
+	// lines, placed in the head's file, overlap — every finding in an
+	// overlap named, beside one it overlaps: nothing is applied.
+	WriteSuggestionOverlap WriteRefusal = "suggestion_overlap"
 )
 
 // WriteRefusals is the closed set.
 func WriteRefusals() []WriteRefusal {
 	return []WriteRefusal{WriteConflict, WriteNothingChanged, WriteEditNotFound, WriteEditAmbiguous,
 		WriteEditBinary, WriteEditLineEndings, WritePathConflict, WriteNotFound, WriteNotAFile, WriteMergeCommit,
-		WriteTooLarge, WriteRejectedObject}
+		WriteTooLarge, WriteRejectedObject, WriteSuggestionOutdated, WriteSuggestionOverlap}
 }
 
 // Valid reports a refusal this build knows.
@@ -285,13 +327,14 @@ func (r WriteRefusal) Valid() bool { return slices.Contains(WriteRefusals(), r) 
 
 // The bounds of an engine write.
 const (
-	// MaxCommitPayloadBytes bounds what one write carries: its Files and its
-	// Message together, EACH AS encoding/json SPELLS IT — the encoding every
-	// hop of the write's way sends it in, in which a '<', a '>', a '&' and a
-	// control byte other than a tab, a newline, a carriage return, a backspace
-	// or a form feed take six bytes — for every kind that carries either: a
-	// commit_files' operations and message, and the message a revert or a
-	// cherry-pick gives in place of git's own ([EngineWrite.Validate]). A
+	// MaxCommitPayloadBytes bounds what one write carries: its Files or its
+	// Suggestions and its Message together, EACH AS encoding/json SPELLS IT —
+	// the encoding every hop of the write's way sends it in, in which a '<', a
+	// '>', a '&' and a control byte other than a tab, a newline, a carriage
+	// return, a backspace or a form feed take six bytes — for every kind that
+	// carries any: a commit_files' operations and message, an
+	// apply_suggestions' suggestions and message, and the message a revert or
+	// a cherry-pick gives in place of git's own ([EngineWrite.Validate]). A
 	// MEBIBYTE: an engine write is a doc or a configuration fix, never a
 	// codebase — a change larger than this belongs in a coding box, which
 	// pushes through the relay with no such bound. It is what sizes a write in
@@ -483,12 +526,16 @@ func (w EngineWrite) Validate() error {
 	if err := w.validPayload(); err != nil {
 		return err
 	}
+	if err := w.validSuggestions(); err != nil {
+		return err
+	}
 	return w.validFiles()
 }
 
 // validPayload holds what the write carries to [MaxCommitPayloadBytes]: its
-// operations and its message together, each as encoding/json encodes it, for
-// every kind that carries either — a commit_files' operations and message, and
+// operations or its suggestions and its message together, each as
+// encoding/json encodes it, for every kind that carries any — a commit_files'
+// operations and message, an apply_suggestions' suggestions and message, and
 // a revert's or a cherry-pick's message.
 //
 // MEASURED AS THE WIRE SPELLS IT, NEVER BY THE TEXT'S LENGTH. What a write
@@ -500,13 +547,21 @@ func (w EngineWrite) Validate() error {
 // bounded by nothing here, at up to the transport's whole eight
 // (queue.MaxPayloadBytes): past it the transport refused the request to every
 // peer, while the home's own seat had the same write built in process — an
-// answer that depended on which node asked.
+// answer that depended on which node asked. A suggestion's text is code a
+// reviewer wrote, as full of '<' and '&' as any file's.
 func (w EngineWrite) validPayload() error {
 	n := 0
 	if len(w.Files) > 0 {
 		encoded, err := json.Marshal(w.Files)
 		if err != nil {
 			return fmt.Errorf("%w: files: %w", ErrInvalid, err)
+		}
+		n += len(encoded)
+	}
+	if len(w.Suggestions) > 0 {
+		encoded, err := json.Marshal(w.Suggestions)
+		if err != nil {
+			return fmt.Errorf("%w: suggestions: %w", ErrInvalid, err)
 		}
 		n += len(encoded)
 	}
@@ -524,10 +579,57 @@ func (w EngineWrite) validPayload() error {
 		return fmt.Errorf("%w: files: the change — its operations and its message, as JSON spells them — is %d "+
 			"bytes, past the %d one engine write may carry (code.MaxCommitPayloadBytes); make a change this large "+
 			"in a coding box (run_sandbox)", ErrInvalid, n, MaxCommitPayloadBytes)
+	case len(w.Suggestions) > 0:
+		return fmt.Errorf("%w: suggestions: the change — its suggestions and its message, as JSON spells them — "+
+			"is %d bytes, past the %d one engine write may carry (code.MaxCommitPayloadBytes): apply them in two "+
+			"writes", ErrInvalid, n, MaxCommitPayloadBytes)
 	}
 	return fmt.Errorf("%w: message: it is %d bytes as JSON spells it, past the %d one engine write may carry "+
 		"(code.MaxCommitPayloadBytes); shorten it, or leave it out to take git's own", ErrInvalid, n,
 		MaxCommitPayloadBytes)
+}
+
+// validSuggestions holds an apply_suggestions' suggestions to their shape: 1
+// to [MaxSuggestionOps], each finding at most once, each a finding's id, a
+// path one write may name, the whole id of the blob its lines were read in,
+// its lines from 1 with the last at or past the first, and a text of at most
+// [MaxSuggestionBytes] of valid UTF-8 holding no NUL — their bytes, with the
+// message's, being [EngineWrite.validPayload]'s.
+func (w EngineWrite) validSuggestions() error {
+	if len(w.Suggestions) == 0 {
+		return nil
+	}
+	if len(w.Suggestions) > MaxSuggestionOps {
+		return fmt.Errorf("%w: suggestions: %d, past the %d one write applies (code.MaxSuggestionOps)",
+			ErrInvalid, len(w.Suggestions), MaxSuggestionOps)
+	}
+	named := map[string]int{}
+	for i, s := range w.Suggestions {
+		at := fmt.Sprintf("suggestions[%d]", i)
+		if id, err := uuid.Parse(s.FindingID); err != nil || id.Version() != 7 || id.String() != s.FindingID {
+			return fmt.Errorf("%w: %s.finding_id: %q is not a finding's id, a UUIDv7 in its canonical lowercase "+
+				"spelling", ErrInvalid, at, s.FindingID)
+		}
+		if j, twice := named[s.FindingID]; twice {
+			return fmt.Errorf("%w: %s.finding_id: finding %s is suggestions[%d]'s too: one suggestion a finding",
+				ErrInvalid, at, s.FindingID, j)
+		}
+		named[s.FindingID] = i
+		if err := validWritePath(s.Path); err != nil {
+			return fmt.Errorf("%w: %s.path: %w", ErrInvalid, at, err)
+		}
+		switch {
+		case !gitref.ValidOID(s.BlobOID) || s.BlobOID == ZeroOID:
+			return fmt.Errorf("%w: %s.blob_oid: %q is not a whole object id", ErrInvalid, at, s.BlobOID)
+		case s.LineStart < 1 || s.LineEnd < s.LineStart:
+			return fmt.Errorf("%w: %s: lines %d to %d: a finding's lines count from 1, the last at or past the "+
+				"first", ErrInvalid, at, s.LineStart, s.LineEnd)
+		}
+		if why := textProblem(s.Text, MaxSuggestionBytes, "suggestion"); why != "" {
+			return fmt.Errorf("%w: %s.text: %s", ErrInvalid, at, why)
+		}
+	}
+	return nil
 }
 
 // validKind holds each field to the kind that takes it.
@@ -557,6 +659,7 @@ func (w EngineWrite) validKind() error {
 	commit := field{"commit", w.Commit != ""}
 	message := field{"message", w.Message != ""}
 	files := field{"files", len(w.Files) > 0}
+	suggestions := field{"suggestions", len(w.Suggestions) > 0}
 	switch w.Kind {
 	case WriteCommitFiles:
 		switch {
@@ -570,22 +673,30 @@ func (w EngineWrite) validKind() error {
 		if err := want(files, message); err != nil {
 			return err
 		}
-		return none(commit)
+		return none(commit, suggestions)
 	case WriteRevert, WriteCherryPick:
 		if err := want(commit, head); err != nil {
 			return err
 		}
-		return none(files, base)
+		return none(files, base, suggestions)
 	case WriteCreateBranch:
 		if err := want(commit); err != nil {
 			return err
 		}
-		return none(head, files, base, message)
+		return none(head, files, base, message, suggestions)
+	case WriteApplySuggestions:
+		// ONTO THE HEAD ITS CALLER READ, always: a suggestion is placed in the
+		// file at that head, so an apply that created a branch would place it
+		// in nothing.
+		if err := want(head, message, suggestions); err != nil {
+			return err
+		}
+		return none(commit, files, base)
 	}
 	if err := want(head); err != nil {
 		return err
 	}
-	return none(commit, files, base, message)
+	return none(commit, files, base, message, suggestions)
 }
 
 // validFiles holds a commit_files' operations to their kinds and paths, and

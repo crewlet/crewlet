@@ -206,19 +206,20 @@ func TestAnEngineWritesPushIsItsOperations(t *testing.T) {
 }
 
 // AN ENGINE WRITE'S PAYLOAD IS MEASURED AS THE WIRE SPELLS IT: its operations
-// and its message together, each as encoding/json encodes it — a '<' in six
-// bytes — against code.MaxCommitPayloadBytes, for every kind that carries
-// either. A commit_files whose message of '<' is half the bound as text is
-// refused, as is a revert's or a cherry-pick's message of '<' one character
-// past the bound as JSON spells it; the write exactly at the bound is
-// admitted, whichever kind carries it. Measured by its length, the '<'
-// message of a mebibyte crossed the wire at six, and a revert's message —
-// bounded by nothing — at up to the transport's whole eight.
+// or its suggestions and its message together, each as encoding/json encodes
+// it — a '<' in six bytes — against code.MaxCommitPayloadBytes, for every kind
+// that carries any. A commit_files or an apply_suggestions whose message of
+// '<' is half the bound as text is refused, as is a revert's or a
+// cherry-pick's message of '<' one character past the bound as JSON spells
+// it; the write exactly at the bound is admitted, whichever kind carries it.
+// Measured by its length, the '<' message of a mebibyte crossed the wire at
+// six, and a revert's message — bounded by nothing — at up to the transport's
+// whole eight.
 //
-// Mutations: measure the message by its length — the half-bound '<' message
+// Mutations: measure the message by its length — the half-bound '<' messages
 // and the one-past ones pass, red; bound only a commit_files' payload — the
-// revert's and the cherry-pick's one-past messages pass, red; refuse at the
-// bound — the writes at it are refused, red.
+// revert's, the cherry-pick's and the apply's one-past writes pass, red;
+// refuse at the bound — the writes at it are refused, red.
 func TestAnEngineWritesPayloadIsMeasuredAsTheWireSpellsIt(t *testing.T) {
 	t.Parallel()
 	spelled := func(v any) int {
@@ -240,12 +241,20 @@ func TestAnEngineWritesPayloadIsMeasuredAsTheWireSpellsIt(t *testing.T) {
 		w.Message = message
 		return w
 	}
-	// payload is what the write carries as JSON spells it: the files and the
-	// message the write sets.
+	apply := func(message string) code.EngineWrite {
+		w := anApply()
+		w.Message = message
+		return w
+	}
+	// payload is what the write carries as JSON spells it: the files or the
+	// suggestions and the message the write sets.
 	payload := func(w code.EngineWrite) int {
 		n := 0
 		if len(w.Files) > 0 {
 			n += spelled(w.Files)
+		}
+		if len(w.Suggestions) > 0 {
+			n += spelled(w.Suggestions)
 		}
 		if w.Message != "" {
 			n += spelled(w.Message)
@@ -258,7 +267,7 @@ func TestAnEngineWritesPayloadIsMeasuredAsTheWireSpellsIt(t *testing.T) {
 		n := (room - 2) / 6
 		return lt(n) + strings.Repeat("x", room-2-6*n)
 	}
-	files := spelled(aWrite().Files)
+	files, suggestions := spelled(aWrite().Files), spelled(anApply().Suggestions)
 	sixth := (code.MaxCommitPayloadBytes - 2) / 6
 	for name, tc := range map[string]struct {
 		w       code.EngineWrite
@@ -267,9 +276,11 @@ func TestAnEngineWritesPayloadIsMeasuredAsTheWireSpellsIt(t *testing.T) {
 		"a revert at the bound":                    {pick(code.WriteRevert, fill(code.MaxCommitPayloadBytes)), true},
 		"a cherry-pick at the bound":               {pick(code.WriteCherryPick, fill(code.MaxCommitPayloadBytes)), true},
 		"a commit whose files and message fill it": {commit(fill(code.MaxCommitPayloadBytes - files)), true},
-		"a revert whose message of '<' fits":       {pick(code.WriteRevert, lt(sixth)), false},
-		"a revert taking git's own message":        {pick(code.WriteRevert, ""), false},
-		"a cherry-pick taking git's own message":   {pick(code.WriteCherryPick, ""), false},
+		"an apply whose suggestions and message fill it": {apply(fill(code.MaxCommitPayloadBytes - suggestions)),
+			true},
+		"a revert whose message of '<' fits":     {pick(code.WriteRevert, lt(sixth)), false},
+		"a revert taking git's own message":      {pick(code.WriteRevert, ""), false},
+		"a cherry-pick taking git's own message": {pick(code.WriteCherryPick, ""), false},
 	} {
 		if n := payload(tc.w); n > code.MaxCommitPayloadBytes || tc.atBound && n != code.MaxCommitPayloadBytes {
 			t.Fatalf("%s: the case's premise does not hold — it carries %d bytes as JSON spells them", name, n)
@@ -284,7 +295,11 @@ func TestAnEngineWritesPayloadIsMeasuredAsTheWireSpellsIt(t *testing.T) {
 	}{
 		"a commit whose message of '<' is half the bound as text": {commit(lt(code.MaxCommitPayloadBytes / 2)),
 			"files:"},
-		"a commit one byte past the bound":     {commit(fill(code.MaxCommitPayloadBytes-files) + "x"), "files:"},
+		"a commit one byte past the bound": {commit(fill(code.MaxCommitPayloadBytes-files) + "x"), "files:"},
+		"an apply whose message of '<' is half the bound as text": {apply(lt(code.MaxCommitPayloadBytes / 2)),
+			"suggestions:"},
+		"an apply one byte past the bound": {apply(fill(code.MaxCommitPayloadBytes-suggestions) + "x"),
+			"suggestions:"},
 		"a revert one '<' past the bound":      {pick(code.WriteRevert, lt(sixth+1)), "message:"},
 		"a cherry-pick one '<' past the bound": {pick(code.WriteCherryPick, lt(sixth+1)), "message:"},
 		"a revert one byte past the bound": {pick(code.WriteRevert, fill(code.MaxCommitPayloadBytes)+"x"),

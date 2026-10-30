@@ -5262,7 +5262,8 @@ it.
 ## Engine-built commits
 
 A change a seat or a person makes through a tool — files committed, a commit
-reverted or cherry-picked, a branch created or deleted — is built by the code
+reverted or cherry-picked, a branch created or deleted, a review's suggestions
+applied — is built by the code
 host itself, on a git node holding the repository ([its home](#the-home-git-node)
 first), and lands as a **push**: the same landing a person's `git push` takes
 from its pack on, held to the same rules, one record on the code log, and
@@ -5279,6 +5280,7 @@ code](../guides/tools-and-mcp.md#the-companys-code)).
 | `cherry_pick` | One commit's change onto a branch's head, with the commit's message and `(cherry picked from commit <id>)`, as `git cherry-pick -x` writes it, unless the write gives one. |
 | `create_branch` | A branch at a commit the repository holds. |
 | `delete_branch` | A branch, at the head its caller read. |
+| `apply_suggestions` | Up to 64 findings' [suggestions](#findings) put in place of the lines they are anchored to, on a change's source branch at the head its caller read, as one commit — all of them or none ([A review's suggestions applied](#a-reviews-suggestions-applied)). |
 
 Every write that moves a branch names the head its caller read, so a write
 onto a branch that moved since is refused `stale` rather than land on a
@@ -5440,12 +5442,12 @@ asked through
 ### What a write is refused
 
 A write the request itself gets wrong is refused before anything is read:
-more than 1 000 operations, more than 1 MiB of operations and message — or,
-for a revert or a cherry-pick, of message — as JSON spells them (where `<`,
-`>`, `&` and most control characters take six bytes each, so a message of
-them reaches the bound at a sixth of its length), a path it names more than 64
-components deep, two operations on one path, a message with a NUL byte or text
-git would rewrite, and a new path git or a checkout would refuse or misread —
+more than 1 000 operations, more than 1 MiB of operations or suggestions and
+message — or, for a revert or a cherry-pick, of message — as JSON spells them
+(where `<`, `>`, `&` and most control characters take six bytes each, so a
+message of them reaches the bound at a sixth of its length), a path it names
+more than 64 components deep, two operations on one path, a message with a NUL
+byte or text git would rewrite, and a new path git or a checkout would refuse or misread —
 past 4 096 bytes, a component past 255, an empty, `.` or `..` component, a
 control character, a backslash, a code point HFS+ ignores, `.git` in any
 spelling git reads as one (any case, trailing dots and spaces, an NTFS stream
@@ -5472,12 +5474,44 @@ repository's committer reaches is recorded as any push's is. A refusal of the
 | `merge_commit` | A revert or a cherry-pick of a merge, which needs a mainline: make it in a coding box. |
 | `too_large` | The write's pack is past 4 MiB, or its build ran its ten seconds of git. |
 | `rejected_object` | An object the build made fails `index-pack --strict`; the sentence is git's own first error, naming the object and the check. |
+| `suggestion_outdated` | A suggestion whose finding's lines changed since they were read — a hunk between the blob they were read in and the head's touched them — or whose file is gone or no regular file at the head, or holds fewer lines than it names; every such finding is named, and nothing is applied. |
+| `suggestion_overlap` | Suggestions whose lines, placed in the head's file, overlap; every finding in an overlap is named beside one it overlaps, and nothing is applied. |
+
+### A review's suggestions applied
+
+A finding may carry a **suggestion** — the lines to put in place of its own —
+and `code_apply_suggestions` applies the suggestions of the findings it names,
+on the change's source branch, at the head its caller read, as one engine
+write ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
+
+- **Each suggestion goes where its finding was shown.** Its lines are placed in
+  the head's file by the rule a finding is shown on a later revision by — the
+  diff between the blob its lines were read in and the head's, every hunk above
+  them moving them, one touching them outdating them — through one `git
+  diff-pairs` of every distinct pair of the two blobs, whose hunks are placed
+  as they stream, never held whole. A suggestion read in the head's own blob is
+  where it was read.
+- **All of them or none.** One outdated suggestion, or two that overlap,
+  refuses the write naming each finding, and nothing is committed: nothing a
+  reviewer did not see is put anywhere.
+- **The file is rewritten as it streams**, the lines a suggestion replaces left
+  out and its text put in their place, in one pass over the suggestions in
+  order, and committed as a `commit_files` is; its last line ends with a
+  newline exactly where the head's did.
+- **The commit is the applier's**, its author whoever applied it, so the push
+  that lands it makes the applier an [author](#changes) of the change, whose
+  approval of it then counts for nothing.
+- **Each finding is then answered `resolved`** with the commit, by a second
+  write — a step of the same operation, decided at or past the push's record,
+  where the applier is an author. An answer leaves a blocker standing for its
+  raiser to judge ([Findings](#findings)): applying a suggestion answers a
+  finding, it never clears one.
 
 ### The bounds
 
 | Bound | Value | Why |
 |---|---|---|
-| A write's operations and message | 1 MiB, as JSON spells them | An engine write is a document or a configuration fix, never a codebase: a larger change belongs in a coding box, whose push has no such bound. Measured as it crosses between nodes, because that is what every node holding the write holds. |
+| A write's operations or suggestions and message | 1 MiB, as JSON spells them | An engine write is a document or a configuration fix, never a codebase: a larger change belongs in a coding box, whose push has no such bound. Measured as it crosses between nodes, because that is what every node holding the write holds. |
 | Operations in one `commit_files` | 1 000 | Past every document or configuration change, and — with a path's depth — what bounds the directories one build rewrites: every directory above a path the write names, at most 2 × 1 000 × 63 and the root, since a move names two paths. |
 | A write's pack | 4 MiB | Four payloads' worth: a commit's new files compressed and the directories it touches, each written whole — about 40 bytes an entry, so some 3 MB for a file put into a directory of 100 000. |
 | A write's git | 10 s | Every process of a build together, one read's deadline. |

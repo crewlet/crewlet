@@ -65,6 +65,9 @@ import (
 // directories, deepest first — a parent names its children's new ids, which
 // only the level below's mktree answers — passing every entry the change does
 // not touch through as git reads it (treeEntry.canon); and ONE `commit-tree`.
+// An apply_suggestions is that build over one edit of each file its
+// suggestions rewrite, each file read through its suggestions' splices, once
+// ONE `diff-pairs` has placed them in the head's files (suggest.go).
 // A revert or a cherry-pick reads its two commits in ONE batch, runs ONE
 // `merge-tree --write-tree -z` — whose cost follows the trees' DIFFERENCES,
 // since it skips every subtree the three sides share — and commits the same
@@ -167,6 +170,9 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 	name(w.Base, "commit", "base")
 	for i, f := range w.Files {
 		name(f.BlobOID, "blob", fmt.Sprintf("files[%d].blob_oid", i))
+	}
+	for i, s := range w.Suggestions {
+		name(s.BlobOID, "blob", fmt.Sprintf("suggestions[%d].blob_oid", i))
 	}
 	ids := slices.Sorted(maps.Keys(want))
 	if len(ids) == 0 {
@@ -502,9 +508,12 @@ func (wr *writing) build(ctx context.Context, sc *cache.Scratch, j judgement) (b
 		done   bool
 		err    error
 	)
-	if wr.w.Kind == code.WriteCommitFiles {
+	switch wr.w.Kind {
+	case code.WriteCommitFiles:
 		commit, res, done, err = b.commitFiles(ctx, j)
-	} else {
+	case code.WriteApplySuggestions:
+		commit, res, done, err = b.applySuggestions(ctx, j)
+	default:
 		commit, res, done, err = b.pick(ctx)
 	}
 	if done || err != nil {
@@ -524,18 +533,32 @@ func (b *building) create(kind string) (*os.File, error) {
 }
 
 // commitFiles is a commit_files' build: what its paths are at the parent read,
-// the change planned on them, its edits and touched directories read and
-// staged, its new files written and hashed, its directories written a level
-// at a time, and its commit.
+// and its files committed on them ([building.commitPlan]).
 func (b *building) commitFiles(ctx context.Context, j judgement) (string, code.EngineWriteResult, bool, error) {
-	wr := b.wr
-	paths, err := b.paths(ctx, j.parent)
+	files := b.wr.w.Files
+	paths, err := b.paths(ctx, j.parent, files)
 	if err != nil {
 		return "", code.EngineWriteResult{}, true, err
 	}
-	p, refusal, detail := planFiles(wr.w.Files, j.parent, paths)
+	return b.commitPlan(ctx, j, files, paths, nil)
+}
+
+// commitPlan is a change of files committed on what its paths are at the
+// parent read: the change planned on them, its edits and touched directories
+// read and staged, its new files written and hashed, its directories written
+// a level at a time, and its commit. A commit_files' files are its own; an
+// apply_suggestions' are one edit a file its suggestions rewrite, each read
+// through its splices ([splice]) in place of an edit's old and new text.
+func (b *building) commitPlan(ctx context.Context, j judgement, files []code.FileOp, paths map[string]object,
+	spliced map[string][]splice) (string, code.EngineWriteResult, bool, error) {
+
+	wr := b.wr
+	p, refusal, detail := planFiles(files, j.parent, paths)
 	if refusal != "" {
 		return "", wr.changeRefused(refusal, detail), true, nil
+	}
+	for _, e := range p.edits {
+		e.splices = spliced[e.blob.path]
 	}
 	parent, refusal, detail, err := b.contents(ctx, j, p)
 	switch {
@@ -586,11 +609,11 @@ func (b *building) commitFiles(ctx context.Context, j judgement) (string, code.E
 // to the next git node to run out the same; a build's run out is the
 // change's, too_large, and while it runs it holds its unit of the node's seat
 // git-work share like the rest of the build.
-func (b *building) paths(ctx context.Context, parent string) (map[string]object, error) {
+func (b *building) paths(ctx context.Context, parent string, files []code.FileOp) (map[string]object, error) {
 	if parent == "" {
 		return nil, nil
 	}
-	named := namedPaths(b.wr.w.Files)
+	named := namedPaths(files)
 	left, err := b.wr.budget()
 	if err != nil {
 		return nil, err
@@ -655,7 +678,13 @@ func (b *building) contents(ctx context.Context, j judgement, p *plan) (*commitH
 			if err != nil {
 				return nil, err
 			}
-			e.stream = newEditStream(e.old, e.new, f)
+			// AN EDIT'S TEXT, OR AN APPLY'S SPLICES: either rewrites the file
+			// as it streams through, holding a bounded window of it.
+			if e.splices != nil {
+				e.stream = newSpliceStream(e.splices, f)
+			} else {
+				e.stream = newEditStream(e.old, e.new, f)
+			}
 			return e.stream, nil
 		})
 	}
