@@ -133,15 +133,36 @@ func Requirements(handle string, seat *org.Role, resolve func(string) (string, b
 	return reqs
 }
 
-// CompanyRequirements is what the company-wide Slack block carries.
-//
-// One field, and it is not a credential: whether an agent shows a working
-// indicator while it is thinking. Everything that authenticates is per seat.
-func CompanyRequirements(in *config.Slack) []setup.Requirement {
-	var status string
+// CompanyRequirements is what the company-wide Slack block carries: the
+// app-configuration token the engine creates and keeps every agent's app with
+// (D11), and whether an agent shows a working indicator while it thinks.
+// Everything that authenticates an agent is per seat.
+func CompanyRequirements(in *config.Slack, resolve func(string) (string, bool)) []setup.Requirement {
+	var status, token string
 	if in != nil {
-		status = string(in.TypingStatus)
+		status, token = string(in.TypingStatus), in.AppConfigToken
 	}
+	configToken := setup.Requirement{
+		Field:      "app_config_token",
+		Connect:    true,
+		Label:      "App configuration token",
+		Kind:       setup.KindSecret,
+		ConfigPath: "integrations.slack.app_config_token",
+		// SEALED UNDER THE ONE NAME the engine rotates it under: the pair
+		// Slack answers each rotation with is saved back there as one value
+		// ([EncodeConfigToken]), and the refresh token pasted here is the
+		// first of them.
+		SecretName: ConfigTokenVar,
+		Required:   false,
+		// NOT CHECKED AHEAD: the only way to try a refresh token is to
+		// rotate it, which spends it, so a check would be the first use.
+		CheckNote: "Slack proves it when the next sync rotates it and reads an agent's app.",
+		Help: "The refresh token of an [app configuration token]" +
+			"(https://api.slack.com/reference/manifests#config-tokens). With it, the " +
+			"engine creates each agent's app and keeps it in line, and a person only " +
+			"approves each install. Without it, each app is created by hand.",
+	}
+	configToken.Present, configToken.Resolved, configToken.Stored = setup.Held(token, resolve)
 	req := setup.Requirement{
 		Field:      "typing_status",
 		Label:      "Working indicator",
@@ -157,7 +178,7 @@ func CompanyRequirements(in *config.Slack) []setup.Requirement {
 		Help:    "Whether an agent shows that it is working before it answers.",
 	}
 	req.Present, req.Resolved, req.Stored = setup.Plain(status)
-	return []setup.Requirement{req}
+	return []setup.Requirement{configToken, req}
 }
 
 // statusChoices are the indicator modes, from the config package's own list so
