@@ -161,6 +161,12 @@ type Company struct {
 
 	// Units are the hierarchy, nesting to any depth.
 	Units []Unit `yaml:"units,omitempty" json:"units,omitempty" desc:"The org hierarchy; units nest to any depth."`
+
+	// SeatAccessMigrated are the integrations whose agent seats state their
+	// access per seat ([Company.SeatAccessMigratedFor]). Written by the
+	// engine's migration onto per-seat access, one integration at a time;
+	// the access pass for an integration not listed acts on no seat.
+	SeatAccessMigrated []string `yaml:"seat_access_migrated,omitempty" json:"seat_access_migrated,omitempty" desc:"Integrations whose agent seats state their access per seat. Written by the engine's migration."`
 }
 
 // coalesceWindowMax bounds the inbox linger. See the field's own comment:
