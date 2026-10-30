@@ -132,7 +132,15 @@ type InstallRefusal struct {
 	// Reason is what went wrong, and Remedy what to do about it.
 	Reason string
 	Remedy string
+
+	// RetryAfter is how long to wait before trying again, for a refusal
+	// that clears on its own; zero for one a person has to act on.
+	RetryAfter time.Duration
 }
+
+// registryRetry is how long a person waits before retrying an install the
+// claim registry could not vouch for: long enough for a store blink to pass.
+const registryRetry = 30 * time.Second
 
 func (r *InstallRefusal) Error() string { return "slack: " + r.Reason + ". " + r.Remedy }
 
@@ -266,9 +274,10 @@ func (i *Installs) spend(ctx context.Context, nonce string) error {
 // registryDown is a refusal for a claim registry that could not answer.
 func registryDown(err error) error {
 	return errors.Join(&InstallRefusal{
-		Status: http.StatusServiceUnavailable,
-		Reason: "this engine could not confirm the install link was unused",
-		Remedy: "Try the install again in a moment; if it keeps failing, check the engine's coordination store",
+		Status:     http.StatusServiceUnavailable,
+		Reason:     "this engine could not confirm the install link was unused",
+		Remedy:     "Try the install again in a moment; if it keeps failing, check the engine's coordination store",
+		RetryAfter: registryRetry,
 	}, err)
 }
 
