@@ -328,9 +328,9 @@ func TestEachRunPrintsToTheWriterItWasGiven(t *testing.T) {
 	}
 }
 
-// THE SEATS' OWN TOKENS ARE WHAT THIS RUN MINTS, so it cannot bootstrap
-// itself from them — the refusal says so rather than failing at the first
-// 401.
+// THE PROVISIONING TOKEN IS THE ONE THING THIS RUN CANNOT DERIVE, so a run
+// without it is refused naming the variable, rather than failing at GitLab's
+// first 401.
 func TestARunWithoutAnAdministratorTokenSaysWhy(t *testing.T) {
 	t.Parallel()
 	_, _, err := provisionCmd(t, gitlabCompanyFile(t), "-print")

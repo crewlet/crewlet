@@ -377,18 +377,31 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 		s.options[lane] = opts
 	}
 	if spec.Levels {
-		if d.Level == "" {
+		_, offered := opts.LevelsOf(d.Level)
+		switch {
+		case d.Level == "" && !offered:
+			// AN EMPTY LEVEL IS UNSET, except where the vendor offers it as
+			// a level of its own (product access only).
 			return &Failure{
 				Step: VerbGrant, Actor: ByYou,
 				Said:   fmt.Sprintf("no %s access is set for this agent", LaneName(lane)),
 				Remedy: "Choose its access on the integration's Agents tab",
 			}, nil
-		}
-		if _, ok := opts.LevelsOf(d.Level); !ok {
+		case !offered:
 			return &Failure{
 				Step: VerbGrant, Actor: ByYou,
 				Said:   fmt.Sprintf("%s does not offer the access %q any more", LaneName(lane), d.Level),
 				Remedy: "Choose one it offers on the integration's Agents tab",
+			}, nil
+		case d.Level == "" && len(d.Scope) > 0:
+			// PRODUCT ACCESS ONLY HOLDS NOTHING IN A PROJECT OR SPACE, so a
+			// list beside it has nothing to apply; the document's rules
+			// refuse it on submit and this holds a stored one to the same.
+			return &Failure{
+				Step: VerbScope, Actor: ByYou,
+				Said: fmt.Sprintf("%s's product access only holds no role, so the list %s "+
+					"has nothing to apply", LaneName(lane), strings.Join(d.Scope, ", ")),
+				Remedy: "Choose a role for that list on the integration's Agents tab, or clear the list",
 			}, nil
 		}
 	}

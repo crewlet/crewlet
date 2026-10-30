@@ -16,8 +16,10 @@ import { LayerHost } from "@crewlethq/ui";
 import type { AccessAnswer } from "~/contract/access.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
+  confluenceAnswer,
   datadogAnswer,
   githubAnswer,
+  jiraAnswer,
   mattermostAnswer,
   offLane,
   onLane,
@@ -236,7 +238,7 @@ test("a reader who may not change access gets the reading and no control", () =>
 
 test("GitHub's permissions are edited in GitHub's own words, in a dialog", async () => {
   draw(githubAnswer());
-  fireEvent.click(screen.getByRole("button", { name: "5 permissions" }));
+  fireEvent.click(screen.getByRole("button", { name: "6 permissions" }));
   const dialog = await screen.findByRole("dialog", { name: "QA's GitHub permissions" });
   const contents = within(dialog).getByRole("radiogroup", { name: "QA's Contents permission" });
   fireEvent.click(within(contents).getByRole("radio", { name: "Read and write" }));
@@ -367,4 +369,47 @@ test("Slack's waiting install opens a freshly minted link in a new tab", async (
   expect(tab.opener).toBeNull();
   expect(calls.install).toEqual([{ kind: "slack", handle: "pm", lane: "slack" }]);
   open.mockRestore();
+});
+
+test("Confluence's permissions by operation are a set, summarised in the vendor's names", () => {
+  draw(confluenceAnswer());
+  expect(screen.getByText("View, Add pages")).toBeTruthy();
+  details("PM", "Confluence");
+  const list = document.querySelector<HTMLElement>('dl[aria-label="PM on Confluence"]')!;
+  expect(list.textContent).toContain("View, Add pages");
+});
+
+test("an agent turned on in Confluence with nothing chosen holds product access only, with its note", () => {
+  draw(confluenceAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Confluence" }));
+  expect(
+    screen.getByText(
+      "The account has Confluence and no space role or permission of its own: the site's and each space's permissions decide what it sees.",
+    ),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Review changes" }).getAttribute("aria-disabled"),
+  ).not.toBe("true");
+});
+
+test("product access only with a project list is held at the review, with the reason", () => {
+  const data = jiraAnswer();
+  data.seats[0]!.lanes.jira!.desired = { enabled: false, level: "", scope: ["ENG"] };
+  draw(data);
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Jira" }));
+  const review = screen.getByRole("button", { name: "Review changes" });
+  expect(review.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(review);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("Jira's product access with no project role is a choice of its own, with no projects to pick", () => {
+  draw(jiraAnswer());
+  expect(screen.getByRole("combobox", { name: "PM's Jira access" }).textContent).toContain(
+    "Product access only",
+  );
+  // THE SCOPE PICKER, whatever role its searchable trigger takes.
+  const picker = (name: string) => document.querySelector(`[aria-label="${name}"]`);
+  expect(picker("PM's Jira projects")).toBeNull();
+  expect(picker("QA's Jira projects")).not.toBeNull();
 });

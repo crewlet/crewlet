@@ -39,7 +39,6 @@ import { ChevronDownGlyph, ChevronRightGlyph, KeyGlyph } from "@crewlethq/icons/
 import type {
   AccessAnswer,
   AccessDesired,
-  AccessDraft,
   AccessLaneKey,
   AccessSeat,
   AccessSeatAction,
@@ -50,22 +49,29 @@ import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { accessApi, refusalWords } from "./api.ts";
+import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
 import { PermissionsDialog, RemoveDialog, ReviewDialog } from "./Dialogs.tsx";
 import {
   accessWords,
   availableActions,
   emptyScopeHint,
+  joinLevels,
   lanesOf,
+  levelIds,
   levelName,
   managedOutside,
   MANAGED_OUTSIDE,
   levelsHeading,
+  levelSummary,
   offSentence,
   permissionCount,
   permissionWords,
+  productOnly,
+  productOnlyNote,
   providedExternally,
+  refusedLevel,
   sameDesired,
+  scopeApplies,
   scopeWords,
   statusOf,
   syncValue,
@@ -97,13 +103,18 @@ export interface AgentsAccessProps {
 }
 
 function levelOptions(lane: Lane): SelectOption[] {
-  // WHERE THE LIST COMES FROM is the menu's own heading.
+  // WHERE THE LIST COMES FROM is the menu's own heading; the empty level
+  // (product access only) carries the vendor's note on what it then sees. A
+  // multi-select has no empty row: choosing nothing is that level.
   const group = levelsHeading(lane);
-  return lane.levels.map((l) => ({
-    value: l.id,
-    label: l.custom ? `${l.name} (custom)` : l.name,
-    group,
-  }));
+  return lane.levels
+    .filter((l) => !(lane.multiple && l.id === ""))
+    .map((l) => ({
+      value: l.id,
+      label: l.custom ? `${l.name} (custom)` : l.name,
+      ...(l.note ? { description: l.note } : {}),
+      group,
+    }));
 }
 
 export function AgentsAccess({
@@ -137,11 +148,16 @@ export function AgentsAccess({
     draft[seat.handle]?.[lane] ?? seat.lanes[lane]!.desired;
 
   let changes = 0;
+  // A DRAFT THE ENGINE WOULD REFUSE is held at the review, with its reason.
+  let refused: string | undefined;
   for (const seat of data.seats)
     for (const lane of lanes) {
       const d = draft[seat.handle]?.[lane.key];
       const saved = seat.lanes[lane.key];
-      if (d && saved && !sameDesired(lane, d, saved.desired)) changes++;
+      if (d && saved && !sameDesired(lane, d, saved.desired)) {
+        changes++;
+        refused ??= refusedLevel(lane, d) ?? undefined;
+      }
     }
 
   const change = (seat: AccessSeat, lane: Lane, next: Partial<AccessDesired>) => {
@@ -264,7 +280,7 @@ export function AgentsAccess({
               const want = desiredOf(seat, lane.key);
               const drafted = !sameDesired(lane, want, saved.desired);
               const status = statusOf(lane, saved, drafted, data.syncing, seat.departed);
-              const hint = emptyScopeHint(lane, want);
+              const hint = emptyScopeHint(lane, want) ?? productOnlyNote(lane, want);
               const key = `${seat.handle}:${lane.key}`;
               const expanded = open[key] ?? false;
               const off = !want.enabled;
@@ -323,16 +339,50 @@ export function AgentsAccess({
                             ? permissionCount(lane, want.permissions)
                             : (laneWords(lane.key).fixed ?? levelName(lane, want.level))}
                         </span>
+                      ) : lane.multiple && lane.levels.length > 0 ? (
+                        <Select
+                          size="sm"
+                          width="full"
+                          menuClassName="agent-access-menu"
+                          multiple
+                          ariaLabel={`${seat.name}'s ${lane.name} permissions`}
+                          value={levelIds(want.level)}
+                          options={levelOptions(lane)}
+                          disabled={off || locked || seat.departed}
+                          placeholder={levelName(lane, "")}
+                          onChange={(v) => {
+                            const level = joinLevels(
+                              lane,
+                              (Array.isArray(v) ? v : [v]).map(String),
+                            );
+                            // PRODUCT ACCESS ONLY TAKES NO SCOPE, so choosing it clears one.
+                            change(
+                              seat,
+                              lane,
+                              productOnly(lane, level) ? { level, scope: [] } : { level },
+                            );
+                          }}
+                          renderMultiLabel={(sel) =>
+                            levelSummary(lane, sel.map((x) => String(x.value)).join(" "))
+                          }
+                        />
                       ) : lane.levels.length > 0 ? (
                         <Select
                           size="sm"
                           width="full"
                           menuClassName="agent-access-menu"
                           ariaLabel={`${seat.name}'s ${lane.name} access`}
-                          value={want.level}
+                          value={want.level ?? ""}
                           options={levelOptions(lane)}
                           disabled={off || locked || seat.departed}
-                          onChange={(v) => change(seat, lane, { level: String(v) })}
+                          onChange={(v) => {
+                            const level = String(v);
+                            change(
+                              seat,
+                              lane,
+                              productOnly(lane, level) ? { level, scope: [] } : { level },
+                            );
+                          }}
                         />
                       ) : lane.permissions ? (
                         <Button
@@ -350,11 +400,9 @@ export function AgentsAccess({
                     </span>
                     {scoped && (
                       <span role="cell" className="agent-access-scope">
-                        {managedOutside(lane) ? null : lane.scope !== undefined &&
-                          words.scope &&
-                          readOnly ? (
+                        {!scopeApplies(lane, want) || !words.scope ? null : readOnly ? (
                           <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
-                        ) : lane.scope !== undefined && words.scope ? (
+                        ) : lane.scope ? (
                           <Select
                             size="sm"
                             width="full"
@@ -466,7 +514,14 @@ export function AgentsAccess({
             <Button size="small" variant="ghost" onClick={() => setDraft({})}>
               Discard
             </Button>
-            <Button size="small" variant="primary" onClick={() => setReview(true)}>
+            <Button
+              size="small"
+              variant="primary"
+              disabledReason={refused}
+              onClick={() => {
+                if (!refused) setReview(true);
+              }}
+            >
               Review changes
             </Button>
           </span>

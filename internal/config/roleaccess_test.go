@@ -183,3 +183,36 @@ func parsedDoc(t *testing.T, doc string) *Company {
 	}
 	return c
 }
+
+// PRODUCT ACCESS ONLY: a Jira or Confluence seat that is on with no role and
+// no list is a setting of its own; a list without a role is refused, because
+// the list names where a role is held.
+func TestProductAccessOnlyIsASettingAndAListNeedsARole(t *testing.T) {
+	t.Parallel()
+	const connected = `
+name: Acme
+integrations:
+  atlassian: {org_id: org-1, api_key: "${ATLASSIAN_KEY}"}
+  jira: {url: "https://acme.atlassian.net", email: admin@acme.example, token: "${JIRA_TOKEN}", webhook_secret: "${JIRA_HOOK}"}
+  confluence: {url: "https://acme.atlassian.net/wiki", email: admin@acme.example, token: "${CONF_TOKEN}"}
+units:
+  - name: Ops
+    id: ops
+    project: OPS
+    space: ENG
+    roles:
+`
+	if _, err := ParseCompany([]byte(connected +
+		"      - {name: SRE, handle: sre, integrations: {jira: {enabled: true}, confluence: {enabled: true}}}\n")); err != nil {
+		t.Fatalf("product access only was refused: %v", err)
+	}
+	for _, tc := range []struct{ seat, path string }{
+		{"{jira: {enabled: true, projects: [OPS]}}", "units[0].roles[0].integrations.jira.project_role"},
+		{"{confluence: {enabled: true, spaces: [ENG]}}", "units[0].roles[0].integrations.confluence.space_role"},
+	} {
+		err := rejects(t, connected+"      - {name: SRE, handle: sre, integrations: "+tc.seat+"}\n", tc.path)
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("%s: want ErrMissing, got %v", tc.path, err)
+		}
+	}
+}
