@@ -320,6 +320,7 @@ describe("what a change came to", () => {
           new Response(JSON.stringify(payload), {
             status,
             headers: {
+              ...ENGINE_HEADERS,
               "Content-Type": "application/json",
               ...(retryAfter === undefined ? {} : { "Retry-After": retryAfter }),
             },

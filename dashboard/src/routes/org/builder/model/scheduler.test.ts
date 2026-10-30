@@ -182,7 +182,7 @@ describe("classifyCheck", () => {
           retryAfter: 2,
           fromEngine: true,
         },
-        { status: "unreachable", detail: "try again" },
+        { status: "unchecked", why: "unavailable", answerStatus: 503, detail: "try again" },
       ],
       [
         { status: 503, body: { error: "draining", detail: "restarting" }, fromEngine: true },

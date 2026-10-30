@@ -29,6 +29,7 @@ import { Store, type QueryName } from "~/protocol/index.ts";
 import type { OrgServices } from "~/contract/services.ts";
 import { healthFrame } from "./health.ts";
 import { withDerived } from "./org.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 /** Every chat change the dashboard makes, as the engine serves it to a person. */
 const CHAT_ACTS = [
@@ -161,7 +162,7 @@ export function actEngine(
       if (String(url).endsWith("/auth/session")) {
         return new Response(JSON.stringify(ADA_SESSION), {
           status: 200,
-          headers: { "Content-Type": "application/json" },
+          headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
         });
       }
       const [, tool = ""] = String(url).split("/operator/act/");
@@ -177,6 +178,7 @@ export function actEngine(
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
         headers: {
+          ...ENGINE_HEADERS,
           "Content-Type": "application/json",
           ...(reply.retryAfter === undefined ? {} : { "Retry-After": String(reply.retryAfter) }),
         },

@@ -21,6 +21,7 @@ import { auth } from "./auth.ts";
 import { rest, RestError } from "./rest.ts";
 import { SessionFloors } from "./session.ts";
 import { setTabReader } from "./signin.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 /** The person this tab was read by, and the one the browser's cookie is now. */
 const READER = "018f3a9c-0000-7000-8000-0000000000aa";
@@ -64,7 +65,7 @@ function engine(answer: () => Response = () => json({ person: HOLDER }, 200)): v
 const json = (payload: unknown, status: number) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
   });
 
 beforeEach(() => {

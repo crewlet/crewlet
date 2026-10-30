@@ -148,7 +148,7 @@ test("an upload a condition of the node kept out is said in the engine's words f
   const refuse = (body: Record<string, unknown>) => {
     call.mockImplementation(async (route, ...rest) => {
       if (route === "POST /assistant/conversations/{id}/files") {
-        throw new RestError(503, body, null);
+        throw new RestError(503, body, null, true);
       }
       return original(route, ...rest);
     });

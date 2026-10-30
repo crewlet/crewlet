@@ -152,10 +152,15 @@ test("a refused question is said in the engine's words wherever a fixed one coul
   // THE ASSISTANT'S OWN REASON carries no Retry-After, and its sentence says
   // waiting won't help: no fixed "try again in a moment" is drawn over it.
   const own = sendRefusalOf(
-    new RestError(503, {
-      error: "assistant_unavailable",
-      message: "The assistant can't answer here, and waiting won't change that.",
-    }),
+    new RestError(
+      503,
+      {
+        error: "assistant_unavailable",
+        message: "The assistant can't answer here, and waiting won't change that.",
+      },
+      null,
+      true,
+    ),
   );
   expect(own).toMatchObject({
     sentence: "The assistant can't answer here, and waiting won't change that.",
@@ -168,11 +173,16 @@ test("a refused question is said in the engine's words wherever a fixed one coul
     "There's no room left to save this kind of change. An administrator needs to make room for it.";
   expect(
     sendRefusalOf(
-      new RestError(503, {
-        error: "unavailable",
-        message: "This can't be done here, and waiting won't change that.",
-        detail: full,
-      }),
+      new RestError(
+        503,
+        {
+          error: "unavailable",
+          message: "This can't be done here, and waiting won't change that.",
+          detail: full,
+        },
+        null,
+        true,
+      ),
     ),
   ).toMatchObject({ sentence: full, retryAfterSeconds: null });
   const behind =
@@ -187,6 +197,7 @@ test("a refused question is said in the engine's words wherever a fixed one coul
           detail: behind,
         },
         2,
+        true,
       ),
     ),
   ).toMatchObject({ sentence: behind, retryAfterSeconds: 2 });
@@ -205,6 +216,7 @@ test("a refused question is said in the engine's words wherever a fixed one coul
           op_id: "op-1",
         },
         2,
+        true,
       ),
     ).sentence,
   ).toBe("Can't answer right now. Try again in a moment, or ask another node.");
@@ -217,11 +229,16 @@ test("a decision a condition of the node refused is said in the engine's words f
     "There's no room left to save this kind of change. An administrator needs to make room for it.";
   expect(
     decisionFailure(
-      new RestError(503, {
-        error: "unavailable",
-        message: "This can't be done here, and waiting won't change that.",
-        detail: full,
-      }),
+      new RestError(
+        503,
+        {
+          error: "unavailable",
+          message: "This can't be done here, and waiting won't change that.",
+          detail: full,
+        },
+        null,
+        true,
+      ),
     ),
   ).toEqual({ refusal: { sentence: full, hint: null }, unknown: false });
 
@@ -239,6 +256,7 @@ test("a decision a condition of the node refused is said in the engine's words f
           op_id: "op-1",
         },
         2,
+        true,
       ),
     ).unknown,
   ).toBe(true);
@@ -249,11 +267,16 @@ test("a Clear a condition of the node refused is said in the engine's words for 
     "There's no room left to save this kind of change. An administrator needs to make room for it.";
   expect(
     clearRefusal(
-      new RestError(503, {
-        error: "unavailable",
-        message: "This can't be done here, and waiting won't change that.",
-        detail: full,
-      }),
+      new RestError(
+        503,
+        {
+          error: "unavailable",
+          message: "This can't be done here, and waiting won't change that.",
+          detail: full,
+        },
+        null,
+        true,
+      ),
     ),
   ).toBe(`The conversation could not be cleared. ${full}`);
   expect(clearRefusal(new Error("offline"))).toBe(

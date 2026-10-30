@@ -5,11 +5,12 @@
 
 import { afterEach, expect, test, vi } from "vitest";
 import { keyedWrite } from "./keyedWrite.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 function answer(status: number, body: unknown) {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(JSON.stringify(body), { status })),
+    vi.fn(async () => new Response(JSON.stringify(body), { status, headers: ENGINE_HEADERS })),
   );
 }
 
