@@ -1027,11 +1027,18 @@ func (g gateJudge) mergeAuthority() Precondition {
 		p.Detail = fmt.Sprintf("%s merges into %s, which no rule protects, as it may push it", who, target)
 		return p
 	}
-	need := AccessMaintain
+	// Declared by its type, never as need := AccessMaintain: AccessMaintain
+	// repeats the specification before it (const ( AccessNone Access = iota;
+	// … )), a constant internal/sourcetree/decltype cannot type, and the
+	// cache's writers gate (TestNothingButSyncWritesACache) refuses a value
+	// it cannot type handed to a call it cannot type either, fmt.Sprintf
+	// among them, since it cannot tell it from a gitproc.Cmd.
+	var need Access
 	switch g.rules.MergeBy {
 	case MergeByWriters:
 		need = AccessWrite
 	case MergeByMaintainers:
+		need = AccessMaintain
 	default:
 		// PERSONS, OR A MERGE_BY THIS BUILD DOES NOT KNOW, which ranks past
 		// every one it does (MergeBy.Rank): only a person merges.
