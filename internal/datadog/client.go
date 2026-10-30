@@ -715,6 +715,9 @@ type AppKey struct {
 	// Key is the secret, and Datadog returns it EXACTLY ONCE, on creation.
 	// Every later read answers with the id and the name only.
 	Key string
+	// CreatedAt is when Datadog made the key, which is how a rotation tells
+	// the key it just minted from the ones it replaces.
+	CreatedAt time.Time
 }
 
 // CreateAppKey mints the key one agent authenticates with.
@@ -781,7 +784,8 @@ func (c *Client) ListAppKeys(ctx context.Context, creds Credentials, accountID s
 		Data []struct {
 			ID         string `json:"id"`
 			Attributes struct {
-				Name string `json:"name"`
+				Name      string `json:"name"`
+				CreatedAt string `json:"created_at"`
 			} `json:"attributes"`
 		} `json:"data"`
 	}
@@ -790,7 +794,14 @@ func (c *Client) ListAppKeys(ctx context.Context, creds Credentials, accountID s
 	}
 	out := make([]AppKey, 0, len(body.Data))
 	for _, row := range body.Data {
-		out = append(out, AppKey{ID: row.ID, Name: row.Attributes.Name})
+		// AN UNREADABLE STAMP IS THE ZERO TIME, and the one reader of it
+		// treats zero as "cannot tell": [Client.RetireKeys] refuses to
+		// retire anything rather than guess which key is current.
+		created, err := time.Parse(time.RFC3339Nano, row.Attributes.CreatedAt)
+		if err != nil {
+			created = time.Time{}
+		}
+		out = append(out, AppKey{ID: row.ID, Name: row.Attributes.Name, CreatedAt: created})
 	}
 	return out, nil
 }
