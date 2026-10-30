@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -36,39 +35,12 @@ func cli(t *testing.T, args ...string) (string, string, error) {
 	return cliIn(t, tokenEnviron(cliFixtureToken), args...)
 }
 
-// cliIn is [cli] in the environment a case hands it, and through a Slack no
-// request may reach ([unreachableSlack]).
+// cliIn is [cli] in the environment a case hands it.
 func cliIn(t *testing.T, environ config.Source, args ...string) (string, string, error) {
 	t.Helper()
 	var out, errs bytes.Buffer
-	err := runIn(invocation{environ: environ, slack: unreachableSlack(t)}, args, &out, &errs)
+	err := runIn(invocation{environ: environ}, args, &out, &errs)
 	return out.String(), errs.String(), err
-}
-
-// unreachableSlack is the client a case's run reaches Slack's Web API through:
-// one that fails the case on any request, and sends none.
-//
-// NO CASE TALKS TO slack.com. Slack's address is no document's to name, so
-// without this a run that got past what a case means to stop it at — a
-// refusal that regressed — would make its calls to the real Web API, and the
-// first is the rotation of an app-configuration refresh token, which spends
-// the token it is given. The invocation's environment is the case's own
-// ([operatorCredential]), so no refresh token a developer exports reaches the
-// run either; this keeps one a case passes from reaching Slack.
-func unreachableSlack(t *testing.T) *http.Client {
-	return &http.Client{Transport: slackUnreached{t}}
-}
-
-// slackUnreached is [unreachableSlack]'s transport.
-type slackUnreached struct{ t *testing.T }
-
-// RoundTrip fails the case, and answers with an error rather than a response.
-func (s slackUnreached) RoundTrip(r *http.Request) (*http.Response, error) {
-	if r.Body != nil {
-		_ = r.Body.Close()
-	}
-	s.t.Errorf("a run reached Slack's Web API, which no case may: %s %s", r.Method, r.URL)
-	return nil, errors.New("this suite reaches no Slack")
 }
 
 // tokenEnviron is an invocation environment holding exactly one credential.

@@ -217,11 +217,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nintegrations:\n  mattermost:\n    enabled: true\n    url: https://chat.example.com\n",
 			"integrations.mattermost.team", ErrMissing,
 		},
-		{
-			"an unknown gitlab access level",
-			"name: Acme\nintegrations:\n  gitlab:\n    enabled: true\n    url: https://gitlab.com\n    signing_secret: s\n    provisioning:\n      access_level: owner\n",
-			"integrations.gitlab.provisioning.access_level", ErrUnknownValue,
-		},
 
 		// seats
 		{
@@ -299,20 +294,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"a jira site url that is not a url",
 			"name: Acme\nintegrations:\n  jira: {cloud_id: abc, site_url: acme.example.com, token: t}\n",
 			"integrations.jira.site_url", ErrUnknownValue,
-		},
-		// A per-seat Slack app needs BOTH credentials, and each half fails
-		// silently on its own: without a token the seat receives messages
-		// it cannot answer, without a secret its route answers 503 while
-		// the app's settings page reports a healthy request URL.
-		{
-			"a slack app with no signing secret",
-			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        bot_token: \"${TOK}\"\n",
-			"roles[0].integrations.slack.signing_secret", ErrMissing,
-		},
-		{
-			"a slack app with no bot token",
-			"name: Acme\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        signing_secret: \"${S}\"\n",
-			"roles[0].integrations.slack.bot_token", ErrMissing,
 		},
 		{
 			"a Mattermost username the server would refuse",
@@ -1021,5 +1002,29 @@ func TestTheKitVersionVariableIsReserved(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "newest artifact kit this build embeds") {
 		t.Errorf("the refusal must say where the value comes from; got:\n%v", err)
+	}
+}
+
+// A SEAT'S SLACK BLOCK NAMES NO CREDENTIAL (D4): the engine seals the bot
+// token and the signing secret under names it derives, so a block that is
+// only on or off is valid, and one that still names a token is held to one
+// whole ${VAR} or a literal.
+func TestASlackBlockNeedsNoCredentials(t *testing.T) {
+	t.Parallel()
+	if _, err := ParseCompany([]byte("name: Acme\nintegrations:\n  slack: {}\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n")); err != nil {
+		t.Errorf("a Slack block with no credentials was refused: %v", err)
+	}
+	rejects(t, "name: Acme\nintegrations:\n  slack: {}\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n        bot_token: \"xoxb-${REST}\"\n",
+		"roles[0].integrations.slack.bot_token")
+}
+
+// THE APP-CONFIGURATION TOKEN IS A WHOLE ${VAR}: its refresh token works once,
+// and each rotation is sealed back under the name it points at.
+func TestTheSlackConfigurationTokenIsAReference(t *testing.T) {
+	t.Parallel()
+	rejects(t, "name: Acme\nintegrations:\n  slack: {app_config_token: xoxe-1-literal}\n",
+		"integrations.slack.app_config_token")
+	if _, err := ParseCompany([]byte("name: Acme\nintegrations:\n  slack: {app_config_token: \"${SLACK_APP_CONFIG_TOKEN}\"}\n")); err != nil {
+		t.Errorf("a reference was refused: %v", err)
 	}
 }

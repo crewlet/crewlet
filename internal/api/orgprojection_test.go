@@ -83,8 +83,13 @@ var companyFields = map[string]classified{
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
 	"Workers":                           {exposure: exposureGuarded, why: "operational configuration of the delegate surface"},
 	"Assistant":                         {exposure: exposureGuarded, why: "the Dashboard Assistant's model chain and limits, an operational setting"},
-	"Roles":                             {exposure: exposurePublic, why: "the tree itself"},
-	"Units":                             {exposure: exposurePublic, why: "the tree itself"},
+	// GUARDED, as Integrations is: which integrations the engine has moved
+	// onto per-seat access is the engine's own migration state about those
+	// blocks, nothing a reader of the chart draws, and the Agents tab reads
+	// each seat's access through the setup surface.
+	"SeatAccessMigrated": {exposure: exposureGuarded, why: "the engine's migration state over the integration blocks, read by the access pass and the setup surface"},
+	"Roles":              {exposure: exposurePublic, why: "the tree itself"},
+	"Units":              {exposure: exposurePublic, why: "the tree itself"},
 }
 
 // projectionOnly is every OrgProjection field no authored company field

@@ -1648,6 +1648,7 @@ type Fleet interface {
 	SandboxRuns
 	Secrets
 	Integrations
+	SeatAccess
 	Mailboxes
 	ObjectStores
 	TrashReaps

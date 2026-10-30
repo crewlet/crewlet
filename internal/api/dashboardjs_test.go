@@ -1392,7 +1392,14 @@ const (
 	// the 2.3 MiB the tree measured when this budget was first set, doubled,
 	// is about 4710 KiB. From here the budget holds the tree to what each
 	// change says it costs rather than refusing a bundle that doubled.
-	treeBudget = 4<<20 + 817<<10
+	// Per-seat integration access (each integration's Agents tab and an
+	// agent's Access tab on uilet 0.79.0's DataTable: the table in the
+	// vendor's own terms, the review of the engine's plan, the permissions,
+	// rotate and removal dialogs, their readings and copy, and their
+	// stylesheet) took it from 4912.3 KiB to 4947.1 KiB (+34.8 KiB), each
+	// module once, in one chunk the integrations screen and the agent page
+	// share and the first load does not fetch. 4948 KiB.
+	treeBudget = 4<<20 + 852<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

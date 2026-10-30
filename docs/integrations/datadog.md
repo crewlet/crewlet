@@ -58,8 +58,8 @@ ever told this deployment exists, so the configuration is refused rather than
 reported connected.
 
 The same pair buys one more thing: a **service account per agent seat**, each
-holding a role and its own application key, so an agent reading Datadog does it
-as itself.
+holding the Datadog role the seat names and its own application key, so an
+agent reading Datadog does it as itself.
 
 ```yaml
 integrations:
@@ -71,90 +71,143 @@ integrations:
       site: datadoghq.eu          # checked against Datadog's own regions
       api_key: ${DATADOG_API_KEY} # says which organization
       app_key: ${DATADOG_APP_KEY} # says which user acts
-      role: Datadog Read Only Role
       email_domain: agents.example.invalid
+
+roles:
+  - handle: sre
+    integrations:
+      datadog:
+        enabled: true
+        role: 4f0e2b3c-1a2b-11ef-8e8e-da7ad0900002   # a role id from GET /api/v2/roles
 ```
 
 Both keys are needed together. Datadog refuses a write carrying only the API
 key, with a message that names neither, so the engine asks for the pair or
-neither.
+neither. The user behind the application key needs Datadog's **User Access
+Manage** permission (to create accounts, change their roles and disable them)
+and **Service Account Write** (to mint and delete their keys); Datadog Admin
+Role holds both.
 
-A seat opts in by naming a `${VAR}` in its `mcp_env.datadog` block; a seat with
-nowhere to write a key is left alone rather than reported broken. The account
-is created **already holding** its role, because one that exists for a moment
-without one inherits the organization's default.
+### Each agent's access is a Datadog role
 
-**A key is minted once.** Datadog returns an application key's value exactly
-once, so the pass mints only for a seat holding none. A seat whose account
-already has a key **and whose `${VAR}` is empty** is repaired rather than
-reported: nobody in the company holds that key's value, so the pass deletes it
-and mints a replacement (see [below](#a-key-whose-value-nothing-holds-is-replaced-not-reported)).
-A sink the engine cannot read stops that seat rather than minting, because
-unknown is not "no key" — and that one is reported, since it is a fault on
-this side rather than at Datadog.
+Each agent seat is turned on or off, and given its access, on the integration's
+**Agents** tab (or the agent's own page, which uses the same control). The tab
+writes one revision of the company document, under the seat's
+`roles[].integrations.datadog` block:
 
-The role is **refused rather than defaulted** if the organization does not have
-it: creating accounts under whatever role happened to match would grant an
+| Field | Meaning |
+|---|---|
+| `enabled` | Whether the agent has a Datadog service account at all. Required in every block; a seat with no block is off, and a new agent seat is off until somebody turns it on. |
+| `role` | The id of a role your organization has, exactly as `GET /api/v2/roles` returns it. |
+
+The access picker offers **every role the organization has**, read live from
+Datadog, under Datadog's own names: the three Datadog creates in every
+organization first (`Datadog Read Only Role`, `Datadog Standard Role`,
+`Datadog Admin Role`), then every custom role by name. What a custom role
+grants is set at Datadog, so the tab says so rather than grading it.
+
+Moving a seat to **Datadog Admin Role** manages users, keys and billing, so the
+review warns about it and saving asks for a fresh step-up. Lowering a seat, or
+keeping one where it is, never does.
+
+A role id the organization no longer has (deleted or replaced at Datadog) is
+**a finding on the seat, never a fallback**: the step that needs it stops and
+the tab asks you to choose one of the roles the organization has now.
+Creating an account under whatever role happened to match would grant an
 agent access nobody asked for.
 
-It is shown on each agent's row in Company › Integrations, as the tag a code
-host's tier gets, because it is the same question: how much this agent may do
-there. Datadog's own three are shortened, since "Datadog Standard Role" on a
-row that has already said which app it is about is noise, and mapped onto the
-access words the rest of the engine uses so an agent's Datadog access reads
-beside its GitHub access rather than in a second grammar:
+### What each change does at Datadog
 
-| Role | Shown as | Read as |
-|---|---|---|
-| `Datadog Read Only Role` (the default) | Read-only | `read_only` |
-| `Datadog Standard Role` | Standard | `review` |
-| `Datadog Admin Role` | Admin | `full_access` |
+| You do | Crewlet does at Datadog |
+|---|---|
+| Turn a seat on | Creates `crewlet-<handle>@<email_domain>` as a service account **already holding** the seat's role (one that existed for a moment without a role would inherit the organization's default), then mints its application key and seals it. |
+| Change its role | Adds the account to the new role (`POST /api/v2/roles/{id}/users`), then takes it out of every other role (`DELETE` on the same relation). Adding first means the account is never without a role and never holds more than it held before plus what you asked for. |
+| Turn it off | Records in the account's `title` that this engine turned it off and disables it, then deletes every application key on the account and clears the sealed key. The disable comes first so the agent stops at once; a key delete that fails is retried on every pass until no key is left. Datadog keeps the account and everything it authored. |
+| Turn it back on | Enables the account, clears the marker, and mints and seals a new key. No person is needed. |
+| Remove it (only while off) | Nothing at Datadog: Datadog never deletes a user, so the account stays disabled with its history, and Crewlet stops managing it. Remove is a separate, confirmed action and never follows from editing the document. |
+| Rotate its key | Mints a new key, seals it, then deletes the key it replaced. Only keys this engine minted are deleted; a key somebody put on the account by hand is theirs to remove. A seat given a key because none was sealed for it follows the same order: the new key is sealed before an older one is deleted. |
 
-A role your organization defined keeps its own name and is graded as nothing:
-shortening somebody's own name is how a reader stops recognising it, and this
-engine has no basis for claiming how much a role it has never seen grants.
+### The key is the engine's, and named for the seat
 
-Disconnecting **disables** these accounts when you tick "also remove the
-accounts Crewlet created". Disabled rather than deleted, because deleting a
-Datadog user detaches it from everything it authored.
+The application key is sealed under one name the engine derives for the seat,
+`DATADOG_APP_KEY_<HANDLE>` (for example `DATADOG_APP_KEY_SRE`). The company
+document never names it, and nothing written to the document can point a
+seat's key at any other variable, so a seat's key can no longer overwrite the
+organization's own key. A key is minted, and **if it cannot be sealed it is
+deleted again** at once: Datadog shows an application key's value exactly
+once, so a key that was minted and not sealed would be live and held by
+nobody.
 
-It also **deletes each account's application keys** — the value sealed in that
-seat's `${VAR}` — before disabling it, and records that *this engine* is the one
-disabling it, in Datadog's own `title` field on the account. Both matter:
+### The agent's Datadog tool
 
-- A live key on a disabled account is a credential that **works again the moment
-  anybody re-enables the account**, and the engine now does exactly that (below),
-  so that moment is one button press away rather than hypothetical.
-- **Connecting again re-enables an account this engine disabled**, and only one
-  it disabled. Re-enabling used to be refused outright: undoing a decommission is
-  somebody's decision, and a pass that quietly reversed it would fight that
-  gesture on every tick. That reasoning holds for an account a *person* disabled
-  and not for one Crewlet's own teardown turned off — and with nothing recording
-  which was which, both were the same ambiguous bit and both were refused, so a
-  disconnect-and-reconnect cycle could never complete without manual work. One
-  deployment accumulated about thirty-seven dead accounts that way. An account
-  with no marker is still reported and never touched.
+An account at Datadog is half of an agent's access; the other half is the tool
+it reads Datadog through. Declare Datadog's MCP server once, as a per-seat
+server named `datadog`, carrying the organization's API key:
 
-> The marker lives on the **account** rather than on the surface's status row,
-> because that row is forgotten the moment the disconnect succeeds — destroyed on
-> the success path of the very operation that would write it. A field on the
-> account survives the disconnect, a fleet losing its coordination store, and a
-> restore from backup. Accounts disabled before this shipped carry no marker and
-> stay manual.
+```yaml
+mcp_servers:
+  - name: datadog
+    transport: http
+    shared: false                       # one instance per agent seat that is on
+    url: https://mcp.datadoghq.com/v1/mcp
+    headers:
+      DD_API_KEY: ${DATADOG_API_KEY}    # the organization's API key, the same for every seat
+```
 
-**The marker is written unconditionally, and before the disable.** It used to be
-written inside the same branch as the disable — only when the account was still
-enabled — which made an already-disabled account permanently unrecoverable. Two
-ordinary situations reach one: a disconnect retried after a partial failure, and
-a disconnect over an account somebody had already disabled at Datadog. Either
-way the teardown found `disabled: true`, skipped the whole branch, wrote no
-marker, and reported the seat removed; the next connect then read an unmarked
-disabled account, correctly refused to touch it, and the seat sat at *degraded /
-admin* with no remedy but a hand edit at Datadog. Measured:
-`crewlet-sre-lead@agents.crewlet.invalid`, `disabled: true`, `title: ""`, six
-retry attempts deep. Marking first also means a teardown interrupted between the
-two steps leaves an account **marked but still enabled**, which the next connect
-simply clears — the harmless direction of the same race.
+The engine adds each seat's own key to that seat's instance under
+`DD_APPLICATION_KEY`, the header Datadog's server reads, so no seat block names
+it. The Agents tab reports per seat whether the tool is live, waiting for its
+key, or missing because the company declares no `datadog` server. An admin
+also has to turn on **MCP Access** in Datadog's organization settings, and the
+seat's role needs `mcp_read` (and `mcp_write` for write tools).
+
+### Every pass reads each account back
+
+Each pass reads every account this engine manages, including the account of a
+seat that has since left the document: its roles, whether it is disabled and by
+whom, and whether it still holds a key.
+
+- **A role changed at Datadog** by somebody else is restored to the seat's
+  role and reported as `drift_restored`, with the before and after. The tab
+  offers **Keep the vendor's setting**, which writes Datadog's role into the
+  document instead.
+- **An account somebody else disabled** at Datadog is never turned back on by a
+  pass, in case it was incident response. The tab offers **Turn back on** or
+  **Keep off**. Only an account carrying this engine's own marker is ever
+  re-enabled without being asked.
+- **An account deleted at Datadog** is dropped from the engine's records, and
+  the next pass creates a fresh one if the seat is on.
+- **A seat whose account holds no key** (deleted at Datadog) is given a new one
+  on the next pass. A key this engine minted whose value nothing holds is
+  deleted and replaced rather than reported.
+- **A seat that leaves the document** is treated as off: its account is
+  disabled, kept, and listed on the tab with **Remove**.
+
+A refusal names the step that failed, Datadog's own reason, what to do about
+it and who does it, with a link to the organization's user administration.
+The step is retried on every pass and on **Retry**.
+
+### Disconnecting
+
+Disconnecting **disables** the accounts this engine created when you tick
+"also remove the accounts Crewlet created". Disabled rather than deleted,
+because deleting a Datadog user detaches it from everything it authored. It
+deletes every application key first, then writes the marker, then disables the
+account.
+
+- A live key on a disabled account is a credential that **works again the
+  moment anybody re-enables the account**, so the keys go first.
+- The marker is what lets a reconnect turn the account back on. It lives on the
+  **account** rather than on the integration's status row, because that row is
+  forgotten the moment the disconnect succeeds; a field on the account survives
+  the disconnect, a fleet losing its coordination store, and a restore from
+  backup. Accounts disabled before the marker existed carry none and stay
+  manual.
+- **The marker is written whatever state the account is in, and before the
+  disable**, so a disconnect retried after a partial failure, or one over an
+  account somebody had already disabled, still records that this engine turned
+  it off. An interrupted run leaves an account **marked but still enabled**,
+  which the next connect simply clears.
 
 This is the rule every app that disables rather than deletes follows; see
 [three apps disable rather than delete](../concepts/integration-reconcile.md#three-apps-disable-rather-than-delete-and-one-rule-covers-all-three).
@@ -277,20 +330,15 @@ each one leaving the surface reporting `ready` while alerts went nowhere:
 |---|---|---|
 | No webhook was registered because this deployment has no inbound address | `ingress_blocked` | set the key the finding names: `api.public.external_url` behind a public listener, `api.external_url` otherwise |
 | No webhook was registered because `webhook_token` resolved to nothing | `credential_missing` | set `integrations.datadog.webhook_token` |
-| A seat's service account exists but is **disabled**, with no Crewlet marker | `identity_failed` | re-enable it in Datadog — it was not disabled by this engine |
-| A seat's service account is disabled **by a Crewlet disconnect** | — | the next pass re-enables it |
-| A seat holds a sealed key and its account holds **no application key at all** | — | the next pass mints a replacement and seals it |
-| A seat's account holds an application key and its `${VAR}` is **empty** | — | the next pass deletes that key and mints a replacement |
-| The engine could not read its own secret store for a seat | `identity_failed` | fix the keyring on the engine — this one carries **no** Datadog link, because Datadog is not where it is settled |
 | **Enabled** service accounts at this company's own email domain that match **no seat** | `registration_orphaned` | disable or delete them in Datadog — nothing here touches them, and either one clears the finding |
 
 A finding a person settles **at Datadog** carries a link to the organization's user administration; one the engine owns carries none, because sending somebody to a vendor page over a fault on this side costs them the trip and teaches them the link means nothing.
 
-Two of those are worth knowing about in detail.
+What happens to each agent's own account (an account disabled by hand, a key deleted at Datadog, a role changed by somebody else) is reported per seat on the **Agents** tab rather than as a finding on the card; see [Every pass reads each account back](#every-pass-reads-each-account-back).
 
 #### Accounts this engine made and no longer manages
 
-A live organization accumulates them: a seat removed, a handle changed, an account made by hand at this engine's `.invalid` domain. They are absent from the plan by construction, so no seat's row mentions them and the card read **Connected** over an organization full of them.
+A live organization accumulates them: an account made by hand at this engine's `.invalid` domain, or one made by an engine before it kept a record of the accounts it creates. No seat claims them and no record names them, so no seat's row mentions them and the card read **Connected** over an organization full of them. (A seat that leaves the document is not one of these: its account is recorded, so it is turned off and listed on the Agents tab with **Remove**.)
 
 **Only the enabled ones.** An account that is already disabled has reached the end state this advisory asks for — its remedy is *disable or delete the ones you do not want* — so reporting it asks an operator for work somebody has done. Mostly this engine had done it: a disconnect with account removal **disables** the accounts it removes, so the ordinary reconnect-with-a-smaller-roster cycle turned every correct teardown into a row on the card. That is what one measured pile was: **36 accounts, every one of them disabled and inert**, burying whatever else the card had to say. Skipping them also makes the instruction work — the filter looked only at the address, so an operator who read the note and disabled an account watched the finding come back unchanged on the next tick; now either half of *disable or delete* clears it. The **enabled** orphan is the genuine finding and still reports: that is an identity which can still act, matching nothing any pass will ask for again. Disabled ones are visible where they belong, in Datadog's own user list filtered to disabled — nothing here has anything to add about them.
 
@@ -299,22 +347,6 @@ They are reported in **one** finding, with the addresses in the detail: the deci
 **Nothing removes them.** An account is a colleague at Datadog with history attached, so deleting one because a handle changed is not a decision a timer makes — the same rule a disconnect follows when it declines to delete a company's credentials.
 
 Which accounts count as this engine's is decided in two steps, and the domain alone is not enough: Datadog's user filter is a free-text substring match, so a listing under a real domain carries the company's own people. A **`.invalid`** domain (the default, reserved by [RFC 2606](https://www.rfc-editor.org/rfc/rfc2606) precisely so nothing can deliver there) is conclusive — no person has a mailbox at one. Under any other domain the **`crewlet-` prefix** is the marker, so a service account somebody else created at a domain you own is left alone. The rest of the address is the seat's **handle** (see [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle)), which is immutable — Datadog cannot change an account's address at all. Other prefixes at a `.invalid` domain are deliberately not enumerated: such a list would have to be kept in step with every name anybody gives an account there, and the `.invalid` clause catches them all without naming any.
-
-**An account this engine disabled is re-enabled, and one a person disabled is not.** Disabling is exactly how a disconnect with account removal decommissions an account, so a company that had run that and then reconnected looked fully provisioned while no seat could act. The disconnect writes a marker — the account's `title` becomes `crewlet:disconnected` — *before* it disables, so an interrupted teardown leaves a marked live account rather than an unmarked dead one, and connecting again re-enables only accounts carrying that marker. An account somebody disabled in Datadog's own console is reported and never touched: undoing an operator's explicit decision from a timer is not a decision this loop gets to make.
-
-**A sealed key is checked against the account, not trusted because it is there.** Datadog shows an application key's value exactly once, so nothing can prove the stored string is one of the account's keys. What *can* be proved is the negative: an account holding **no** keys cannot be the owner of whatever is sealed for that seat. The way to reach that state is for the key to be **deleted at Datadog** — by an administrator, or by a teardown that removed the account, after which a value put back by hand points at nothing. (A disconnect that *keeps* the accounts does not touch them at all: it withdraws the webhook and stops, so the key and the sealed value both survive it, consistent with each other. A disconnect that *removes* them revokes the keys and deletes the sealed values together.) The next pass mints a replacement, re-seals it, and logs `datadog_seat_key_replaced`.
-
-Reading the key list is what makes that possible, so it happens on every pass — one request per seat, the same shape Atlassian's own token count has — and it happens **whether or not this run may write**, which is what makes the Check button worth pressing. A check cannot read the sealed store, so it cannot ask whether the stored value is one of the account's keys; it can ask the account, and an account with no key is a seat that cannot act whatever is stored for it. It reports that as `identity_missing`, owed by the **engine**, because the engine's own next provisioning pass is what mints one.
-
-The check stays **three-valued** on the vendor's side: a listing Datadog could not answer changes nothing, because reading a blip as "no keys" would rotate every agent's credential on the loop's timer, which is an outage this engine would have caused itself.
-
-#### A key whose value nothing holds is replaced, not reported
-
-The other direction of the same mismatch — the account has a key and the seat's `${VAR}` is **empty** — means the value is one *nobody in the company has*: an agent authenticates from the `${VAR}`, and Datadog served that key's value once, to a store that no longer carries it. The seat cannot act, and no pass, retry or wait changes that. So a writing pass **deletes that key and mints a replacement**, and the card stays clean.
-
-It used to stop the whole card on *Action required* and tell an operator to "delete the key at Datadog and run this again" — an API call the engine is itself authenticated for, holding the very credentials it listed the key with. Asking a person to perform a write you are authorized for is not a safety property; it is the same write with a worse actor, and it left companies parked on *Action required* over one seat.
-
-Only the keys **this engine minted** are deleted, matched on the name every mint here writes (`crewlet`). That is narrower than what a [disconnect](#giving-each-agent-its-own-datadog-identity) does — a teardown revokes *every* key on the account — and the difference is the goal rather than an inconsistency: a teardown must leave no live credential on a decommissioned account, so a key it cannot attribute is exactly the hazard it exists to remove, while a repair only has to give this seat a working credential and minting is additive. A key somebody else put on the account is left alone and the seat is fixed regardless.
 
 ### The payload template
 

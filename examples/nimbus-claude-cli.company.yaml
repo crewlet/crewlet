@@ -581,24 +581,22 @@ scheduling:
 # has no usable inbound webhook, so nothing has to reach the engine and
 # this company runs behind NAT with no tunnel and no public URL.
 #
-# Per-agent bot tokens live on ``role.integrations.mattermost`` below; the
-# Mattermost MCP *tool* server is the ``mattermost`` entry under
-# ``mcp_servers``.  The bot accounts and every ${MATTERMOST_TOKEN_*}
-# secret referenced below are created automatically, with no OAuth click
-# anywhere:
+# Each agent's bot is turned on, and given its roles and channels, by
+# ``role.integrations.mattermost`` below; the engine creates the bot, seals
+# its token as MATTERMOST_BOT_TOKEN_<HANDLE> and binds it to the agent's
+# ``mattermost`` tool server.  The server, admin and team come from the
+# bootstrap, with no OAuth click anywhere:
 #
 #   scripts/mattermost-dev-bootstrap.sh          # server, admin, team
 #   set -a; . ./.env; set +a                     # the URL + admin token it wrote
-#   crewlet mattermost provision examples/nimbus-claude-cli.company.yaml \
-#       -env-file .env -config examples/nimbus-claude-cli.config.yaml
+#
+# then run the engine with the admin token sealed: its reconcile loop
+# creates each agent's bot as its seat is turned on, and the integration's
+# Agents tab shows each one.  `crewlet mattermost doctor` checks the server
+# and the bots against this file:
+#
 #   crewlet mattermost doctor examples/nimbus-claude-cli.company.yaml \
 #       -config examples/nimbus-claude-cli.config.yaml
-#
-# Both load examples/nimbus-claude-cli.config.yaml, so export the keyring
-# and the founder token this file's header names first.  With the engine
-# stopped both reach the fleet's secret store themselves, through this
-# node's own broker; once the engine runs, they go through it, with
-# CREWLET_API_TOKEN set to $CREWLET_API_TOKEN_FOUNDER.
 #
 # See docs/integrations/mattermost.md.
 #
@@ -625,8 +623,8 @@ integrations:
     url: "${MATTERMOST_URL}"       # e.g. http://localhost:8065 — the bootstrap writes it
     team: nimbus
     typing_status: addressed
-    # Read by the engine's reconcile loop AND ``crewlet mattermost provision``:
-    # every pass names each bot from it and joins it to these channels.
+    # The engine provisions each agent's bot from this block; a seat's
+    # roles and channels are on its own ``integrations.mattermost``.
     provisioning:
       username_prefix: ""          # handles are already agent-*, so a prefix would double it
       channels: [town-square, engineering, product]
@@ -659,7 +657,7 @@ knowledge:
 # send it with — the failure mode where the logs show a complete turn and
 # the channel stays quiet.
 mcp_servers:
-  - name: mattermost                       # per-agent token from role.mcp_env.mattermost
+  - name: mattermost                       # the engine binds each agent's own bot token
     # ``shared: false`` is the identity boundary: the engine spawns one
     # stdio server PER ROLE with that role's own MATTERMOST_TOKEN, so a
     # post lands as that agent.  One shared server would hand every seat
@@ -788,13 +786,11 @@ units:
               - Delegate execution details to the CTO (technical) and PM (product) — focus on strategic alignment, not implementation specifics.
               - Store strategic insights, competitive intelligence, and key decisions with `reflect_and_persist` — but post anything the team needs to the channel too, because your memory is private to you.
               - Use `delegate` with the `recaller` worker when you need to know what was already decided about something, rather than asking the team to repeat themselves.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CEO}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_CEO}"
-                channel: town-square
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
             # Role-scoped recurring work: a weekday-morning read of the
             # room.  Fires a TaskAssigned to the CEO's own inbox on the
             # cron.  In the fully-wired company this reviews overnight
@@ -842,13 +838,11 @@ units:
               - When you make a significant architecture decision, post it to the engineering channel and persist it with `reflect_and_persist` so you can recall it months later.
               - Before escalating to the CEO, make sure the question is truly strategic (budget, partnerships, major scope changes) rather than a technical call you can make yourself.
               - When you need background on a past architecture decision, delegate to the `recaller` worker before asking the team to reconstruct it from memory.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_CTO}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_CTO}"
-                channel: engineering
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
   - name: Product
     id: product
@@ -894,13 +888,11 @@ units:
               - Post conclusions to the product channel where DevRel and the CEO can read them, and persist the ones you will need again with `reflect_and_persist`.
               - When an engineer or the CTO pushes back on scope, engage with the substance in that thread rather than restating the original ask.
               - You have no market-research tool in this company — you have your own knowledge and the team's. Say when you are reasoning from priors rather than from something you looked up, so nobody mistakes one for the other.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_PM}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_PM}"
-                channel: product
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
       - name: Developer Relations
         id: developer-relations
@@ -941,13 +933,11 @@ units:
               - When you hit a doc-blocker, say so in the engineering channel, addressed to the owning engineer, with what you were trying to document and what stopped you.
               - Test a getting-started path yourself before declaring it done — if a step is missing, the tutorial is wrong.
               - Persist the recurring newcomer questions with `reflect_and_persist`; they are the raw material for the next thing you write.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_DEVREL}"
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_DEVREL}"
-                channel: product
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
   - name: Engineering
     id: engineering
@@ -1033,9 +1023,6 @@ units:
               - When you hit a bug or an edge case, name it in the channel and say whether you are absorbing it or it needs its own piece of work — never silently expand scope.
               - Persist decisions, patterns and lessons with `reflect_and_persist` after each piece of work; it is the only place they will survive.
               - If something you were handed actually belongs to the Frontend SWE (UI) or the AI Systems Engineer (framework runtime), say so in the thread and hand it back rather than doing it anyway.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_SWE}"
             # Control-plane work: nimbuscore's Go service and the nimbusk0s worker image.
             # No `sandbox:` block: this seat's executor box reads the
             # engine-wide settings only.  And no `mcp:` scope, deliberately:
@@ -1047,8 +1034,9 @@ units:
             # does not hold.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_SWE}"
-                channel: engineering
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
           - name: Agent Frontend SWE
             handle: agent-frontend-swe
@@ -1080,9 +1068,6 @@ units:
               - For every new page, plan the empty / loading / error states from the start — never a happy path only.
               - When in doubt about visual polish (spacing, copy, iconography), ask the PM in the product channel rather than guessing.
               - Persist the console's conventions and the reasoning behind them with `reflect_and_persist`, so the next page is consistent with the last.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_FE}"
             # Console and website work: React + Vite + TypeScript.
             # No `sandbox:` block: this seat's executor box reads the
             # engine-wide settings only.  And no `mcp:` scope, deliberately:
@@ -1094,8 +1079,9 @@ units:
             # does not hold.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_FE}"
-                channel: engineering
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
 
           - name: Agent AI Systems Engineer
             handle: agent-ai-systems-engineer
@@ -1131,9 +1117,6 @@ units:
               - If you cannot describe a public surface in ten lines, the API is wrong — say so rather than shipping the description you have.
               - When you find a missing primitive in the platform (a cluster capability, a console page), raise it with the owning seat rather than routing around it.
               - Persist the framework's design decisions with `reflect_and_persist` — there is no design-doc space in this company, and your memory is the record.
-            mcp_env:
-              mattermost:
-                MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_AI}"
             # Phase-2 framework work: the Python SDK, runtime and CLI.
             # No `sandbox:` block: this seat's executor box reads the
             # engine-wide settings only.  And no `mcp:` scope, deliberately:
@@ -1145,8 +1128,9 @@ units:
             # does not hold.
             integrations:
               mattermost:
-                bot_token: "${MATTERMOST_TOKEN_AI}"
-                channel: engineering
+                enabled: true
+                roles: [system_user]
+                channels: [town-square, engineering, product]
             # Role-scoped recurring work owned by this engineer — a role
             # schedule (not a unit schedule) is the right home for a task
             # pinned to one person.

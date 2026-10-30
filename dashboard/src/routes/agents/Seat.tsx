@@ -157,6 +157,7 @@ import {
 import type { RowChrome } from "~/components/work.tsx";
 import type { AgentRow } from "~/protocol/index.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { Access } from "./seat/Access.tsx";
 import { Memory } from "./seat/Memory.tsx";
 import { Overview } from "./seat/Overview.tsx";
 import {
@@ -547,6 +548,7 @@ export function SeatScreen({ handle }: { handle: string }) {
               />
             ))}
           {tab === "schedules" && !human && <Schedules seat={seat} now={now} />}
+          {tab === "access" && !human && <Access handle={seat.handle} />}
           {tab === "settings" && <Settings seat={seat} agent={agent} setup={setup} />}
         </div>
       </div>

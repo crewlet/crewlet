@@ -66,8 +66,10 @@ roles:
     llm: primary
     integrations:
       mattermost:
+        enabled: false
         bot_token: mm-ceo
       slack:
+        enabled: false
         bot_token: xoxb-1
         signing_secret: ceo-signing
   - name: CTO
@@ -439,7 +441,7 @@ roles:
     llm: primary
     integrations:
       github:
-        tier: full_access
+        enabled: false
         app_id: 41
         app_slug: acme-sre-lead
         installation_id: 7
@@ -450,7 +452,7 @@ roles:
     llm: primary
     integrations:
       github:
-        tier: review
+        enabled: false
         app_id: 42
         app_slug: acme-reviewer
   - name: Jane Founder

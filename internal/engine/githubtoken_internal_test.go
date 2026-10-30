@@ -127,10 +127,6 @@ mcp_servers:
     transport: http
     shared: false
     url: "https://mcp.example.com/"
-  - name: borrowed
-    transport: http
-    shared: false
-    url: "https://mcp.example.com/"
 roles:
   - name: Owner
     handle: owner
@@ -141,16 +137,18 @@ roles:
     mcp_env:
       github:
         Authorization: "Bearer ${GITHUB_APP_TOKEN_BUILDER}"
-      borrowed:
-        Authorization: "Bearer ${GITHUB_APP_TOKEN_PLANNER}"
     integrations:
       github:
-        tier: full_access
+        enabled: `+state+`
         repos: [gophrase/backend]
         app_id: 101
         app_slug: gophrase-builder
         installation_id: 9001
         private_key: "${GITHUB_APP_KEY_BUILDER}"
+        permissions:
+          contents: write
+          issues: write
+          pull_requests: write
 `+builderGitHub+`  - name: Planner
     handle: planner
     llm: zulu
@@ -159,7 +157,7 @@ roles:
         Authorization: "Bearer ${GITHUB_APP_TOKEN_PLANNER}"
     integrations:
       github:
-        tier: review
+        enabled: `+state+`
         app_id: 102
         app_slug: gophrase-planner
         private_key: "${GITHUB_APP_KEY_PLANNER}"
@@ -181,9 +179,10 @@ func appEngine(t *testing.T, c *Company) *Engine {
 // A SEAT'S APP TOKEN IS ANSWERED BY ITS OWN RESOLUTION AND NO OTHER.
 //
 // An app is one agent's identity. The token is laid in front of the
-// company's sources for that seat's reads alone, so a seat naming another
-// seat's variable names something nothing answers, and the company's chain,
-// which every shared server and every other seat reads, never holds it.
+// company's sources for that seat's reads alone: the document cannot name
+// another seat's variable in a seat (config refuses it), and were one asked
+// for anyway, nothing in this seat's resolution answers it. The company's
+// chain, which every shared server and every other seat reads, never holds it.
 func TestASeatsAppTokenIsAnsweredOnlyByItsOwnResolution(t *testing.T) {
 	t.Parallel()
 	gh := newAppGitHub(t)
@@ -473,7 +472,7 @@ roles:
         GITHUB_TOKEN: "${GITHUB_APP_TOKEN_BUILDER}"
     integrations:
       github:
-        tier: full_access
+        enabled: true
         repos: [gophrase/backend]
         app_id: 101
         app_slug: gophrase-builder
@@ -1057,19 +1056,19 @@ func TestARenewalIsArmedOnlyForAnIssuedToken(t *testing.T) {
 	}
 }
 
-// A SEAT'S OPT-IN TO WORKFLOW WRITES REACHES THE MINT, and its silence does
-// too. The document is the one place the opt-in is written, and a token is
-// the one place GitHub reads it: a seat that opted in and is minted without it
-// has every push touching `.github/workflows` refused, and one that did not
-// opt in must never be handed it.
-func TestASeatsWorkflowsOptInIsWhatItsTokenAsksFor(t *testing.T) {
+// A SEAT'S WORKFLOWS PERMISSION REACHES THE MINT, and its absence does too.
+// The document is the one place it is written, and a token is the one place
+// GitHub reads it: a seat holding it and minted without it has every push
+// touching `.github/workflows` refused, and one that does not hold it must
+// never be handed it.
+func TestASeatsWorkflowsPermissionIsWhatItsTokenAsksFor(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
 		builder string
 		want    string
 	}{
-		"opted in": {"        workflows: true\n", "write"},
-		"silent":   {"", ""},
+		"held":   {"          workflows: write\n", "write"},
+		"absent": {"", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1089,7 +1088,7 @@ func TestASeatsWorkflowsOptInIsWhatItsTokenAsksFor(t *testing.T) {
 				t.Errorf("the mint asked for workflows=%q, want %q", got, c.want)
 			}
 			if got := gh.asked[0]["contents"]; got != "write" {
-				t.Errorf("a full_access mint asked for contents=%q", got)
+				t.Errorf("a Contents (Read and write) mint asked for contents=%q", got)
 			}
 		})
 	}

@@ -79,6 +79,18 @@ func World() map[string]any {
 			"token_budget": map[string]any{"day": 1000000}}),
 		"/config": Entity(`"rev-4"`, map[string]any{"name": "FairSplit",
 			"token_budget": map[string]any{"day": 10000000, "month": 120000000}}),
+		// DATADOG'S AGENTS TAB: the QA engineer off, and the roles the
+		// organization lists, under the company revision's tag.
+		"/setup/integrations/datadog/access": Entity(`"rev-4"`, map[string]any{
+			"kind": "datadog", "revision": "rev-4", "syncing": false,
+			"options": []any{map[string]any{"lane": "datadog", "live": true, "levels": []any{
+				map[string]any{"id": "role-ro", "name": "Datadog Read Only Role"},
+				map[string]any{"id": "role-admin", "name": "Datadog Admin Role",
+					"administers": true}}}},
+			"seats": []any{map[string]any{"handle": "qa", "name": "QA Engineer",
+				"lanes": map[string]any{"datadog": map[string]any{
+					"desired": map[string]any{"enabled": false}, "observed": map[string]any{
+						"exists": false, "enabled": false}, "plan": []any{}, "tool": "off"}}}}}),
 	}
 }
 
@@ -142,6 +154,8 @@ var ProposalArgs = map[string]map[string]any{
 		"removes": []any{"ada"}},
 	"leave_chat_room":  {"channel": RecordID},
 	"set_token_budget": {"seat": "qa", "window": "day", "tokens": float64(1500000)},
+	"set_seat_access": {"handle": "qa", "integration": "datadog", "enabled": true,
+		"access": "Datadog Read Only Role"},
 }
 
 // Answer is what a route answers world's record at r's path: 200 with it, or

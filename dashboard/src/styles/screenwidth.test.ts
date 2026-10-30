@@ -31,6 +31,8 @@ const SRC = fileURLToPath(new URL("..", import.meta.url));
 const STYLES = fileURLToPath(new URL(".", import.meta.url));
 const strip = (css: string) => css.replace(/\/\*[\s\S]*?\*\//g, "");
 const screens = strip(readFileSync(join(STYLES, "screens.css"), "utf8"));
+/** Company › Integrations' own sheet, which its screen loads with it. */
+const integrations = strip(readFileSync(join(STYLES, "integrations.css"), "utf8"));
 
 /** Every top-level block opened by `at` (an at-rule prelude), with its body. */
 function blocks(css: string, at: RegExp): string[] {
@@ -94,13 +96,14 @@ test("Home's figures undo every wider span under the phone's width", () => {
 });
 
 test("the split screens choose their panes by the screen's width", () => {
-  const phone = blocks(screens, /@media \(width < 640px\)/g).join("\n");
+  const sheets = `${screens}\n${integrations}`;
+  const phone = blocks(sheets, /@media \(width < 640px\)/g).join("\n");
   // The window's own rules may let a page scroll as a whole; they never pick
   // a pane, which is the screen's width's to decide.
   for (const selector of [".inbox-panes", ".int-back"]) {
     expect(phone.includes(selector), `${selector} under a window media query`).toBe(false);
   }
-  const page = blocks(screens, /@container page \(width < 640px\)/g).join("\n");
+  const page = blocks(sheets, /@container page \(width < 640px\)/g).join("\n");
   expect(page).toMatch(/\.inbox-panes\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
   expect(page).toMatch(/\.int-back\s*\{[^}]*display:\s*inline-flex/);
 });

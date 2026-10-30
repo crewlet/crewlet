@@ -2,6 +2,7 @@ package datadog
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -355,6 +356,73 @@ type User struct {
 	// a field that already has one. Nothing else sets a job title on a
 	// service account.
 	Title string
+
+	// RoleIDs are the roles the account holds, by id, as Datadog relates
+	// them to the user. Read on every pass because it is what drift is
+	// measured against: a role changed at Datadog by hand is restored to
+	// the seat's document (D2), and that needs the vendor's answer rather
+	// than the engine's memory of what it last wrote.
+	RoleIDs []string
+}
+
+// userRelationships is the part of a user row that names its roles.
+type userRelationships struct {
+	Roles struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		} `json:"data"`
+	} `json:"roles"`
+}
+
+// roleIDs is the role ids a row relates, sorted so two reads of one account
+// compare equal whatever order Datadog served them in.
+func (r userRelationships) roleIDs() []string {
+	out := make([]string, 0, len(r.Roles.Data))
+	for _, role := range r.Roles.Data {
+		if role.ID == "" || (role.Type != "" && role.Type != "roles") {
+			continue
+		}
+		out = append(out, role.ID)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// User reads one account by id, reporting whether it exists.
+//
+// THREE-VALUED, for the reason [Client.Webhook] is: an account that is gone
+// is something the ledger closes and the next pass recreates (design 5.4),
+// and a read that failed is not. Collapsing the two would have a rate-limited
+// pass forget a live account and mint a second identity beside it.
+func (c *Client) User(ctx context.Context, creds Credentials, userID string) (User, bool, error) {
+	if strings.TrimSpace(userID) == "" {
+		return User{}, false, errors.New("datadog: a user read needs an id")
+	}
+	var body struct {
+		Data struct {
+			ID         string `json:"id"`
+			Attributes struct {
+				Email    string `json:"email"`
+				Name     string `json:"name"`
+				Title    string `json:"title"`
+				Disabled bool   `json:"disabled"`
+			} `json:"attributes"`
+			Relationships userRelationships `json:"relationships"`
+		} `json:"data"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/v2/users/"+url.PathEscape(userID), creds, nil, &body)
+	switch {
+	case Status(err) == http.StatusNotFound:
+		return User{}, false, nil
+	case err != nil:
+		return User{}, false, err
+	}
+	return User{
+		ID: body.Data.ID, Email: body.Data.Attributes.Email, Name: body.Data.Attributes.Name,
+		Title: body.Data.Attributes.Title, Disabled: body.Data.Attributes.Disabled,
+		RoleIDs: body.Data.Relationships.roleIDs(),
+	}, true, nil
 }
 
 // DisconnectedTitle marks an account this engine disabled during a teardown.
@@ -395,7 +463,7 @@ func (c *Client) ListServiceAccounts(
 			out = append(out, User{
 				ID: row.ID, Email: row.Attributes.Email,
 				Name: row.Attributes.Name, Disabled: row.Attributes.Disabled,
-				Title: row.Attributes.Title,
+				Title: row.Attributes.Title, RoleIDs: row.Relationships.roleIDs(),
 			})
 		}
 	})
@@ -417,6 +485,7 @@ type usersPage struct {
 			Disabled   bool   `json:"disabled"`
 			ServiceAcc bool   `json:"service_account"`
 		} `json:"attributes"`
+		Relationships userRelationships `json:"relationships"`
 	} `json:"data"`
 	Meta struct {
 		Page struct {
@@ -455,8 +524,14 @@ func (c *Client) walk(
 					"the role name so the filter matches fewer rows",
 				path, listWalkCeiling, listPageSize)
 		}
-		full := fmt.Sprintf("%s?filter=%s&page[size]=%d&page[number]=%d",
-			path, url.QueryEscape(query), listPageSize, page)
+		// NO FILTER AT ALL for an empty query, rather than an empty one:
+		// the role catalogue reads the whole collection, and an empty
+		// `filter=` is a parameter whose meaning nothing here has
+		// established Datadog defines.
+		full := fmt.Sprintf("%s?page[size]=%d&page[number]=%d", path, listPageSize, page)
+		if query != "" {
+			full += "&filter=" + url.QueryEscape(query)
+		}
 		var body usersPage
 		if err := c.do(ctx, http.MethodGet, full, creds, nil, &body); err != nil {
 			return err
@@ -508,6 +583,86 @@ func (c *Client) ListRoles(ctx context.Context, creds Credentials, query string)
 		return nil, err
 	}
 	return out, nil
+}
+
+// Roles reads every role the organization has, managed and custom (D7).
+//
+// THE PICKER'S SOURCE. The Agents tab offers exactly what this returns, under
+// Datadog's own names, so it is read whole rather than filtered: a custom
+// role an admin made yesterday is as much an option as the three Datadog
+// ships. Sorted by name so the picker and the preview render one order.
+func (c *Client) Roles(ctx context.Context, creds Credentials) ([]Role, error) {
+	out, err := c.ListRoles(ctx, creds, "")
+	if err != nil {
+		return nil, err
+	}
+	slices.SortFunc(out, func(a, b Role) int {
+		return cmp.Or(strings.Compare(a.Name, b.Name), strings.Compare(a.ID, b.ID))
+	})
+	return out, nil
+}
+
+// Role reads one role by id, reporting whether the organization still has it.
+//
+// A ROLE DELETED AT DATADOG IS A FINDING, NEVER A FALLBACK (D7). The seat's
+// document stores the id, so the question every pass asks is whether that id
+// still names a role, and the absent answer has to be told apart from a read
+// that failed: one is an admin's decision to report, the other is a blip.
+func (c *Client) Role(ctx context.Context, creds Credentials, roleID string) (Role, bool, error) {
+	if strings.TrimSpace(roleID) == "" {
+		return Role{}, false, errors.New("datadog: a role read needs an id")
+	}
+	var body struct {
+		Data struct {
+			ID         string `json:"id"`
+			Attributes struct {
+				Name string `json:"name"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	err := c.do(ctx, http.MethodGet, "/api/v2/roles/"+url.PathEscape(roleID), creds, nil, &body)
+	switch {
+	case Status(err) == http.StatusNotFound:
+		return Role{}, false, nil
+	case err != nil:
+		return Role{}, false, err
+	}
+	return Role{ID: body.Data.ID, Name: body.Data.Attributes.Name}, true, nil
+}
+
+// AddRoleMember puts an account in a role.
+//
+// `POST /api/v2/roles/{role_id}/users`, Datadog's own relation write, which
+// the organization credential may make when its user holds
+// `user_access_manage`. Repeatable: adding an account already in the role
+// leaves it there.
+func (c *Client) AddRoleMember(ctx context.Context, creds Credentials, roleID, userID string) error {
+	return c.roleMembership(ctx, http.MethodPost, creds, roleID, userID)
+}
+
+// RemoveRoleMember takes an account out of a role.
+//
+// A 404 is success, matching [Client.DeleteAppKey]: an account already out of
+// the role is the state this call asks for, and a restore that is retried
+// after a partial failure must not fail on what the first attempt did.
+func (c *Client) RemoveRoleMember(ctx context.Context, creds Credentials, roleID, userID string) error {
+	err := c.roleMembership(ctx, http.MethodDelete, creds, roleID, userID)
+	if Status(err) == http.StatusNotFound {
+		return nil
+	}
+	return err
+}
+
+// roleMembership is the one shape both relation writes send.
+func (c *Client) roleMembership(
+	ctx context.Context, method string, creds Credentials, roleID, userID string,
+) error {
+	if strings.TrimSpace(roleID) == "" || strings.TrimSpace(userID) == "" {
+		return errors.New("datadog: a role membership change needs a role and a user")
+	}
+	payload := map[string]any{"data": map[string]string{"id": userID, "type": "users"}}
+	return c.do(ctx, method,
+		"/api/v2/roles/"+url.PathEscape(roleID)+"/users", creds, payload, nil)
 }
 
 // CreateServiceAccount provisions one agent's identity ALREADY HOLDING its
@@ -659,6 +814,14 @@ func (c *Client) DisableUser(ctx context.Context, creds Credentials, userID stri
 // state that can never be undone automatically.
 func (c *Client) MarkDisconnected(ctx context.Context, creds Credentials, userID string) error {
 	return c.updateUser(ctx, creds, userID, map[string]any{"title": DisconnectedTitle})
+}
+
+// ClearDisconnected takes the marker off an account, which is what a live
+// account still carrying it needs: the marker says this engine turned the
+// account off, and on a live one it is stale, so a later disable by somebody
+// else would read as this engine's and be undone.
+func (c *Client) ClearDisconnected(ctx context.Context, creds Credentials, userID string) error {
+	return c.updateUser(ctx, creds, userID, map[string]any{"title": ""})
 }
 
 // EnableUser undoes a disable and clears the marker in one request.

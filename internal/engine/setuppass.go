@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"strings"
 	"time"
@@ -18,10 +20,14 @@ import (
 	"github.com/crewlet/crewlet/internal/jira"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
+	"github.com/crewlet/crewlet/internal/seataccess"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/setup"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
+	// THE ATLASSIAN VENDOR registers its per-seat access from its own
+	// package, kept apart from atlassian because jira imports atlassian.
+	_ "github.com/crewlet/crewlet/internal/atlassian/agentaccess"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/datadog"
 )
@@ -60,13 +66,13 @@ import (
 // outbound websocket per seat and verifies no inbound delivery, so its pass
 // creates accounts and registers nothing.
 //
-// Slack stays on the command line. Its apps are created through Slack's
-// app-manifest API, which authenticates with a configuration token Slack
-// issues only by hand and which an organisation may not permit at all, and
-// the record of what was created lives in a local ledger file rather than in
-// the fleet.
+// Slack has a pass for its agents alone. Each agent's app is created through
+// Slack's app-manifest API in the access sync (D11), with the configuration
+// token the company seals, and the install stays a person's click; there is
+// nothing company-wide at Slack for a pass to converge.
 func (e *Engine) setupPasses() []setup.Pass {
 	return []setup.Pass{
+		&slackPass{engine: e},
 		&githubPass{engine: e},
 		&jiraPass{engine: e},
 		&confluencePass{engine: e},
@@ -75,6 +81,32 @@ func (e *Engine) setupPasses() []setup.Pass {
 		&datadogPass{engine: e},
 		&atlassianPass{engine: e},
 	}
+}
+
+// slackPass runs the access sync for every agent's own Slack app.
+//
+// THE COMPANY HAS NOTHING AT SLACK TO CONVERGE: the Request URL is a field a
+// person types into each app's settings ([integration.IngressOperator]), and
+// every app, token and install is one agent's. So its company-level half
+// answers only whether the company runs Slack at all.
+type slackPass struct{ engine *Engine }
+
+func (*slackPass) Kind() integration.Kind { return integration.KindSlack }
+
+// Needs is nil: the app-configuration token is held in the company document.
+func (*slackPass) Needs() *setup.Requirement { return nil }
+
+// Run is the agents' own access ([Engine.withSeatAccess]).
+func (p *slackPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *slackPass) run(context.Context, setup.PassInput) ([]integration.Finding, error) {
+	company := p.engine.Company()
+	if company == nil || company.Config.Integrations.Slack == nil {
+		return nil, integration.ErrNotConfigured
+	}
+	return nil, nil
 }
 
 // atlassianPass creates one Atlassian service account per agent.
@@ -92,7 +124,12 @@ func (*atlassianPass) Kind() integration.Kind { return integration.KindAtlassian
 // every other credential.
 func (*atlassianPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *atlassianPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Atlassian
 	if cfg == nil {
@@ -114,19 +151,16 @@ func (p *atlassianPass) Run(ctx context.Context, in setup.PassInput) ([]integrat
 				"subject and the key as the authority",
 		}}, nil
 	}
-	// THE SEAT PLAN, which is what a seat's child waits for: see [seatMinter].
-	plan, err := p.seatPlan(company)
-	if err != nil {
-		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
-	}
+	// NO SEATS: every agent's account is the access sync's, which runs after
+	// this ([Engine.withSeatAccess]); this converges the company's half.
 	res, err := atlassian.Reconcile(ctx, atlassian.Options{
 		Client: atlassian.NewClient(atlassian.ClientOptions{}),
-		OrgID:  org, Key: key, Plan: plan, Sink: in.Sink,
+		OrgID:  org, Key: key,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: atlassian pass: %w", err)
 	}
-	findings := res.Findings()
+	var findings []integration.Finding
 	if note := p.recordSite(ctx, company, res.Site, in.Sink != nil); note != "" {
 		findings = append(findings, integration.Finding{
 			Kind: integration.FindingGrantShort, Detail: note,
@@ -186,55 +220,10 @@ func (p *atlassianPass) recordSite(
 	return ""
 }
 
-// Teardown deletes the accounts this pass created, when asked.
-//
-// It reports both of the variables each removed seat's credentials live in:
-// Atlassian assigns the account's address at creation and its products
-// authenticate base64(address:token), so a pass seals two values per agent.
-func (p *atlassianPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
-	company := p.engine.Company()
-	cfg := company.Config.Integrations.Atlassian
-	if cfg == nil || !in.RemoveSeats {
-		// Atlassian holds no webhook this engine registered (Cloud events
-		// arrive through the Forge relay), so with the accounts staying
-		// there is nothing to do at all.
-		return provision.Removed{}, nil
-	}
-	env := p.engine.resolver()
-	key := strings.TrimSpace(env.Value(cfg.APIKey))
-	if key == "" {
-		// REFUSED, WHERE THIS REPORTED SUCCESS. Reaching here means the
-		// operator asked for the accounts to be removed and the
-		// organization key did not resolve — so nothing can be removed,
-		// and answering nil says it was.
-		//
-		// [Engine.dropBlock] takes that answer and removes the
-		// `integrations.atlassian` block, which carries the very ${VAR}
-		// pointing at this key. Every service account this engine created
-		// is then orphaned at Atlassian with nothing left in the document
-		// to authenticate a second attempt, while the operator is told
-		// remove_seats succeeded. The credential each of those accounts
-		// holds is still live and still sealed.
-		//
-		// gitlabPass and mattermostPass both refuse here, naming the
-		// credential. Atlassian was the outlier.
-		return provision.Removed{}, fmt.Errorf(
-			"engine: atlassian teardown: the organization key %q resolved to "+
-				"nothing, so the agents' accounts cannot be removed — set that "+
-				"variable, or disconnect without removing accounts and delete "+
-				"them at Atlassian by hand", cfg.APIKey)
-	}
-	plan, err := atlassian.PlanFor(company.Org)
-	if err != nil {
-		return provision.Removed{}, fmt.Errorf("engine: atlassian teardown: %w", err)
-	}
-	return atlassian.Teardown(ctx, atlassian.TeardownOptions{
-		Client: atlassian.NewClient(atlassian.ClientOptions{}),
-		OrgID:  strings.TrimSpace(env.Value(cfg.OrgID)), Key: key, Plan: plan,
-	})
-}
-
-var _ setup.Teardowner = (*atlassianPass)(nil)
+// NO TEARDOWN: Atlassian holds no webhook this engine registered (Cloud events
+// arrive through the Forge relay), and every agent's account is turned off,
+// or removed when asked, by the disconnect's access sync
+// ([Engine.tearDownSeatAccess]) from the account ledger.
 
 // SetupRunner is the pass runner this node serves, or nil on an Engine with
 // no fleet store — one built by hand in a test, since [New] refuses a set of
@@ -407,38 +396,9 @@ func (p *githubPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 	return provision.Removed{}, nil
 }
 
-// Teardown disables the bots this pass created, when asked. Mattermost has no
-// inbound registration to withdraw, so there is nothing to do otherwise.
-func (p *mattermostPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
-	if !in.RemoveSeats {
-		return provision.Removed{}, nil
-	}
-	company := p.engine.Company()
-	cfg := company.Config.Integrations.Mattermost
-	if cfg == nil {
-		return provision.Removed{}, nil
-	}
-	env := p.engine.resolver()
-	admin := mattermostAdminToken(cfg, env, in.Operator)
-	if admin == "" {
-		return provision.Removed{}, fmt.Errorf(
-			"engine: mattermost teardown: no admin token resolved, and the " +
-				"bots' own tokens cannot disable them")
-	}
-	plan, err := mattermost.PlanFor(company.Org, cfg)
-	if err != nil {
-		return provision.Removed{}, fmt.Errorf("engine: mattermost teardown: %w", err)
-	}
-	client, err := mattermost.NewClient(mattermost.ClientOptions{
-		URL: env.Value(cfg.URL), Token: admin,
-	})
-	if err != nil {
-		return provision.Removed{}, fmt.Errorf("engine: mattermost teardown: %w", err)
-	}
-	return mattermost.Teardown(ctx, mattermost.TeardownOptions{
-		Client: client, Config: cfg, Plan: plan, RemoveSeats: in.RemoveSeats,
-	})
-}
+// NO TEARDOWN for Mattermost: it has no inbound registration to withdraw, and
+// every agent's bot is turned off, or removed when asked, by the disconnect's
+// access sync ([Engine.tearDownSeatAccess]) from the account ledger.
 
 // datadogPass adapts datadog.Reconcile to the pass contract.
 //
@@ -455,7 +415,12 @@ func (*datadogPass) Kind() integration.Kind { return integration.KindDatadog }
 // every other credential.
 func (*datadogPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *datadogPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Datadog
 	// DISABLED IS NOT CONFIGURED, the same answer gitlab, github and
@@ -514,13 +479,17 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 				"resolve, and Datadog refuses a write carrying only one",
 		}}, nil
 	}
-	// THE SEAT PLAN, which is what a seat's child waits for: see [seatMinter].
-	plan, err := p.seatPlan(company)
+	// NO SEATS: every agent's account is the access sync's, which runs after
+	// this ([Engine.withSeatAccess]); this converges the company's half.
+	managed, err := p.engine.datadogManaged(ctx, company, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("engine: datadog pass: %w", err)
 	}
 	res, err := datadog.Reconcile(ctx, datadog.Options{
-		Client: client, Config: cfg, Plan: plan, Creds: creds, Sink: in.Sink,
+		Client: client, Config: cfg, Creds: creds, ReadOnly: in.Sink == nil,
+		// THE AGENTS' ACCOUNTS, which the orphan advisory spares: the
+		// ledger's, and the address every document seat's would have.
+		Managed: managed,
 		// THE INBOUND HALF. Supplying the base IS the permission to
 		// register the webhook, on the same terms as every other surface,
 		// and the token is what the definition carries so the route it
@@ -535,7 +504,7 @@ func (p *datadogPass) Run(ctx context.Context, in setup.PassInput) ([]integratio
 	return res.Findings(), nil
 }
 
-// Teardown disables the accounts this pass created, when asked.
+// Teardown withdraws the webhook this pass registered.
 func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (provision.Removed, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Datadog
@@ -547,26 +516,43 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 	if err != nil {
 		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
 	}
-	// THE PLAN IS ONLY THE ACCOUNTS' HALF, so a company whose roster
-	// cannot be planned still has its webhook withdrawn: the definition is
-	// named by the config alone.
-	plan, err := datadog.PlanFor(company.Org, cfg)
-	if err != nil && in.RemoveSeats {
-		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
-	}
-	return datadog.Teardown(ctx, datadog.TeardownOptions{
-		Client: client, Config: cfg, Plan: plan,
+	// THE WEBHOOK ONLY: every agent's account is turned off, or removed
+	// when asked, by the disconnect's access sync before this runs
+	// ([Engine.tearDownSeatAccess]).
+	err = datadog.Teardown(ctx, datadog.TeardownOptions{
+		Client: client, Config: cfg,
 		Creds: datadog.Credentials{
 			APIKey: strings.TrimSpace(env.Value(cfg.Provisioning.APIKey)),
 			AppKey: strings.TrimSpace(env.Value(cfg.Provisioning.AppKey)),
 		},
-		RemoveSeats: in.RemoveSeats,
 		// WHAT PROVES THE DEFINITION IS THIS DEPLOYMENT'S. A Datadog
 		// webhook is addressed by name, and the teardown refuses to
-		// delete one pointing anywhere but here — the same expression
+		// delete one pointing anywhere but here, the same expression
 		// gitlabPass.Teardown passes for the same reason.
 		WebhookBase: p.engine.webhookBase,
 	})
+	if err != nil {
+		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
+	}
+	return provision.Removed{}, nil
+}
+
+// datadogManaged is every Datadog account the access sync manages, which the
+// company-level pass's orphan advisory spares: each account the ledger
+// records, and the address every document seat's account is created under.
+func (e *Engine) datadogManaged(
+	ctx context.Context, company *Company, cfg *config.Datadog,
+) ([]string, error) {
+	held, err := e.seatAccessAccounts(ctx, integration.KindDatadog)
+	if err != nil {
+		return nil, err
+	}
+	out := slices.Collect(maps.Values(held))
+	for _, seat := range seataccess.SeatsOf(company.Config) {
+		out = append(out, datadog.AccountEmail(cfg.Provisioning, seat.Handle))
+	}
+	slices.Sort(out)
+	return out, nil
 }
 
 // SetupSink is the recorder a pass writes minted credentials through.
@@ -640,16 +626,35 @@ type refreshingSink struct {
 	// record it writes; spending it here costs nothing and is the same party.
 	by iam.Actor
 
-	sealed  bool
-	flushed bool
+	// changed is whether a value was sealed or cleared since the last
+	// Flush.
+	//
+	// SINCE THE LAST FLUSH, not since the run began: one pass flushes
+	// twice, once at the end of its vendor's company-level work and once at
+	// the end of its seats' access sync, and a sink that refreshed only on
+	// the first left every credential the second sealed waiting for the
+	// next apply.
+	changed bool
 }
 
 func (s *refreshingSink) Record(ctx context.Context, name, value string) error {
 	if err := s.TokenSink.Record(ctx, name, value); err != nil {
 		return err
 	}
-	s.sealed = true
+	s.changed = true
 	return nil
+}
+
+// Forget implements [provision.TokenSink], and marks the snapshot stale: a
+// value cleared from the store still resolves from the snapshot until it is
+// refreshed, and a seat turned off would go on starting its tool with the
+// credential its off revoked.
+func (s *refreshingSink) Forget(ctx context.Context, names ...string) error {
+	err := s.TokenSink.Forget(ctx, names...)
+	if len(names) > 0 {
+		s.changed = true
+	}
+	return err
 }
 
 func (s *refreshingSink) Flush(ctx context.Context) error {
@@ -657,8 +662,8 @@ func (s *refreshingSink) Flush(ctx context.Context) error {
 	// EVEN ON A FAILED FLUSH, because a write-through sink has already
 	// made its values durable: what failed is the completion, and the
 	// credentials are out there either way.
-	if s.sealed && !s.flushed {
-		s.flushed = true
+	if s.changed {
+		s.changed = false
 		// AND THIS NODE'S SEATS ARE ASKED AT ONCE, before the re-activation
 		// below is so much as requested: a child held back for what was just
 		// sealed starts here without waiting on a write that can fail
@@ -950,7 +955,12 @@ func (*gitlabPass) Kind() integration.Kind { return integration.KindGitLab }
 // [gitlab.AdminCredential] for why it is kept.
 func (*gitlabPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *gitlabPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitLab
 	if cfg == nil || !cfg.Enabled {
@@ -971,11 +981,8 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 				"are what this pass mints, so it cannot bootstrap itself from them",
 		}}, nil
 	}
-	// THE SEAT PLAN, which is what a seat's child waits for: see [seatMinter].
-	plan, err := p.seatPlan(company)
-	if err != nil {
-		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
-	}
+	// NO SEATS: every agent's account is the access sync's, which runs after
+	// this ([Engine.withSeatAccess]); this converges the company's half.
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
 		URL: env.Value(cfg.URL), Token: admin,
 	})
@@ -984,40 +991,15 @@ func (p *gitlabPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	}
 	signingVar, _ := provision.SoleVar(cfg.SigningSecret)
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
-		Client: client, Config: cfg, Plan: plan, Sink: in.Sink,
+		Client: client, Config: cfg, Sink: in.Sink,
 		WebhookBase:      in.WebhookBase,
 		WebhookBaseKey:   in.WebhookBaseKey,
 		SigningSecret:    env.Value(cfg.SigningSecret),
 		SigningSecretVar: signingVar,
-		// ROTATE ONLY WHEN ASKED, and NEVER DECOMMISSION from here.
-		// Rotating revokes the credential every agent is currently
-		// authenticating with, so an operator adding a tenth seat would
-		// take the other nine down; deleting an account because a seat
-		// left the config cannot be told apart from a company mid-edit.
-		// Both stay deliberate gestures on the command line.
+		// ROTATE ONLY WHEN ASKED: a new signing secret re-points the hook
+		// at a key the running engine does not hold yet.
 		Rotate: in.Recreate.Asked(),
-		// WHERE THE ACCOUNTS ARE OWNED, from the company document. It was
-		// absent, so every pass this engine ran assumed the group route —
-		// and against a company provisioned with `-mode instance` it minted
-		// through a group that does not own the account and was refused.
-		Mode: gitlab.Mode(cfg.Provisioning.ModeOrDefault()),
 	})
-	// A NAME GITLAB HAS NOT RELEASED YET IS WORK IN PROGRESS, not a failure
-	// to read the integration.
-	//
-	// GitLab removes a user asynchronously, so a disconnect followed by a
-	// reconnect inside that window finds no account, creates one, and is
-	// refused with "has already been taken". Reported as an error, the card
-	// read "the last pass could not read this integration", which sends an
-	// operator looking for an outage over a state the next tick clears.
-	if errors.Is(err, gitlab.ErrNameReserved) {
-		return []integration.Finding{{
-			Kind: integration.FindingIdentityMissing,
-			Detail: "GitLab is still releasing the name of an account it is " +
-				"deleting, so this seat's account cannot be created yet: " +
-				"the next pass makes it, usually within a minute",
-		}}, nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("engine: gitlab pass: %w", err)
 	}
@@ -1045,25 +1027,17 @@ func (p *gitlabPass) Teardown(ctx context.Context, in setup.TeardownInput) (prov
 			"engine: gitlab teardown: no group Owner token resolved, and the " +
 				"seats' own tokens cannot remove what created them")
 	}
-	plan, err := gitlab.PlanFor(company.Org, cfg)
-	if err != nil {
-		return provision.Removed{}, fmt.Errorf("engine: gitlab teardown: %w", err)
-	}
 	client, err := gitlab.NewClient(gitlab.ClientOptions{
 		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
 		return provision.Removed{}, fmt.Errorf("engine: gitlab teardown: %w", err)
 	}
+	// THE HOOKS ONLY: every agent's account is turned off, or removed when
+	// asked, by the disconnect's access sync before this runs
+	// ([Engine.tearDownSeatAccess]).
 	return gitlab.Teardown(ctx, gitlab.TeardownOptions{
-		Client: client, Config: cfg, Plan: plan,
-		RemoveSeats: in.RemoveSeats,
-		// AND DOWN THE ROUTE THAT OWNS THEM. The group delete answers 404
-		// as success — "unknown or already removed; both are the state the
-		// caller asked for" — so an instance-owned account sent down it
-		// reported itself deleted and stayed live with every credential it
-		// held.
-		Mode: gitlab.Mode(cfg.Provisioning.ModeOrDefault()),
+		Client: client, Config: cfg,
 	})
 }
 
@@ -1076,7 +1050,12 @@ func (*mattermostPass) Kind() integration.Kind { return integration.KindMattermo
 // in the company document.
 func (*mattermostPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *mattermostPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.Mattermost
 	if cfg == nil || !cfg.Enabled {
@@ -1090,36 +1069,43 @@ func (p *mattermostPass) Run(ctx context.Context, in setup.PassInput) ([]integra
 	// is the transport's answer rather than this pass's own ask.
 	people := p.engine.Mattermost().PeopleFindings()
 	env := p.engine.resolver()
-	admin := mattermostAdminToken(cfg, env, in.Operator)
+	admin := mattermost.AdminToken(cfg, env, in.Operator)
 	if admin == "" {
 		return append([]integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "no administrator token resolved, and the bots' own tokens " +
-				"are what this pass mints, so it cannot bootstrap itself from them",
+				"are what the access sync mints, so it cannot bootstrap itself from them",
 		}}, people...), nil
 	}
-	// THE SEAT PLAN, which is what a seat's child waits for: see [seatMinter].
-	// It plans nothing for a company with no provisioning block, so an
-	// administrator token handed in for one run cannot mint bots the company
-	// never asked this pass to make — the setup route refuses that run before
-	// it starts, and this refuses it again where the plan is read.
-	plan, err := p.seatPlan(company)
-	if err != nil {
-		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
+	// ONLY A COMPANY THAT PROVISIONS ITS BOTS: an administrator token handed
+	// in for one run cannot make this pass manage bots the company never
+	// asked it to; the setup route refuses that run before it starts, and
+	// this refuses it again.
+	if cfg.Provisioning == nil {
+		return nil, fmt.Errorf("engine: mattermost pass: %w", integration.ErrNotConfigured)
 	}
+	// NO SEATS: every agent's account is the access sync's, which runs after
+	// this ([Engine.withSeatAccess]); this converges the company's half.
 	client, err := mattermost.NewClient(mattermost.ClientOptions{
 		URL: env.Value(cfg.URL), Token: admin,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
 	}
-	// NO WEBHOOK BASE IS PASSED because there is nowhere to pass it: this
-	// third-party app holds an outbound socket per seat and registers nothing. And
-	// no rotation and no decommissioning, for the reasons GitLab's pass
-	// gives: both take working agents down and both stay deliberate
-	// command-line gestures.
+	// THE COMPANY'S HALF: whether the instance will let this engine
+	// provision, and each bot's display name. No webhook base is passed
+	// because there is nowhere to pass it: this third-party app holds an
+	// outbound socket per seat and registers nothing.
+	managed, err := p.engine.seatAccessAccounts(ctx, integration.KindMattermost)
+	if err != nil {
+		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
+	}
 	res, err := mattermost.Reconcile(ctx, mattermost.Options{
-		Client: client, Config: cfg, Org: company.Org, Plan: plan, Sink: in.Sink,
+		Client: client, Config: cfg, Org: company.Org, ReadOnly: in.Sink == nil,
+		// THE AGENTS' BOTS, the only ones the pass renames: those the
+		// ledger records, so a bot somebody else made under a seat's
+		// username keeps its name.
+		Managed: managed,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
@@ -1137,7 +1123,12 @@ func (*githubPass) Kind() integration.Kind { return integration.KindGitHub }
 // third-party app, it writes with the organization token already in the config.
 func (*githubPass) Needs() *setup.Requirement { return nil }
 
+// Run is the company-level pass, then the agents' own access ([Engine.withSeatAccess]).
 func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
+	return p.engine.withSeatAccess(ctx, p.Kind(), in, p.run)
+}
+
+func (p *githubPass) run(ctx context.Context, in setup.PassInput) ([]integration.Finding, error) {
 	company := p.engine.Company()
 	cfg := company.Config.Integrations.GitHub
 	if cfg == nil || !cfg.Enabled {
@@ -1174,35 +1165,30 @@ func (p *githubPass) Run(ctx context.Context, in setup.PassInput) ([]integration
 	if err != nil {
 		return nil, fmt.Errorf("engine: github pass: %w", err)
 	}
-	findings := res.Findings()
-	// AND THE AGENTS WITH NO BLOCK AT ALL, which the seat list cannot hold:
-	// it is built from the seats carrying an `integrations.github` block,
-	// because that block is where an app's id, slug and key are recorded. So
-	// a seat that has never had one was absent from the pass's input, and a
-	// company with one agent and no app reported ready with an empty finding
-	// list. They go to the seat pass, which reports every agent with no app
-	// once, together. See [github.SeatAppOptions.Unrecorded].
-	unrecorded := p.seatsWithoutBlocks(company)
-	if len(seats) > 0 || len(unrecorded) > 0 {
+	// AND EACH AGENT'S APP KEPT IN STEP with GitHub: an installation a person
+	// made since the last pass is recorded, one GitHub no longer has is
+	// cleared, and a deleted app is forgotten, which is what the token issuer
+	// reads. Off seats are kept in step too, so a disconnect still finds
+	// their suspended installations by id. What each agent may do, and every
+	// finding about an agent, is the access sync's ([Engine.withSeatAccess]);
+	// an agent with no app is simply off (D9).
+	if len(seats) > 0 {
 		apiBase, webBase := cfg.Bases(env.LookupOK)
-		apps, appsErr := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
-			APIBase:    apiBase,
-			WebBase:    webBase,
-			Org:        githubOrg(cfg),
-			Seats:      seats,
-			Unrecorded: unrecorded,
+		if err := github.AdoptSeatApps(ctx, github.SeatAppOptions{
+			APIBase: apiBase,
+			WebBase: webBase,
+			Org:     githubOrg(cfg),
+			Seats:   seats,
 			// A DRY RUN RECORDS NOTHING, which is what a check is: the
 			// sink is the loop's permission to write, and without it the
 			// pass reads and reports.
 			Record: p.recordInstallation(in),
 			Forget: p.forgetApp(in),
-		})
-		if appsErr != nil {
-			return nil, fmt.Errorf("engine: github pass: %w", appsErr)
+		}); err != nil {
+			return nil, fmt.Errorf("engine: github pass: %w", err)
 		}
-		findings = append(findings, apps.Findings...)
 	}
-	return findings, nil
+	return res.Findings(), nil
 }
 
 // seatApps reads every agent's own app out of the CURRENT company document.
@@ -1244,30 +1230,6 @@ func (p *githubPass) forgetApp(in setup.PassInput) func(context.Context, string)
 	}
 }
 
-// seatsWithoutBlocks names this company's agents that carry no
-// `integrations.github` block at all.
-//
-// READ OFF THE COMPANY'S OWN ORG rather than off [Engine.githubSeatApps], which
-// answers the other question: which seats this pass has an app to RECONCILE.
-// A seat with no block is exactly the one that list cannot carry. A seat
-// whose block records no app IS in that list, and the seat pass gathers it
-// itself, so it is not named here as well.
-func (p *githubPass) seatsWithoutBlocks(company *Company) []string {
-	if company == nil {
-		return nil
-	}
-	var missing []string
-	for seat := range company.Org.AllRoles() {
-		// A HUMAN SEAT HAS ITS OWN GITHUB ACCOUNT. Creating an app for a
-		// person would be a second identity for somebody who already has
-		// one.
-		if seat.IsAgent() && seat.GitHub == nil {
-			missing = append(missing, seat.Handle())
-		}
-	}
-	return missing
-}
-
 // githubOrg is the organization these apps are installed on.
 func githubOrg(cfg *config.GitHub) string {
 	if cfg == nil || cfg.Provisioning == nil {
@@ -1290,7 +1252,6 @@ var (
 	_ setup.Teardowner = (*confluencePass)(nil)
 	_ setup.Teardowner = (*githubPass)(nil)
 	_ setup.Teardowner = (*gitlabPass)(nil)
-	_ setup.Teardowner = (*mattermostPass)(nil)
 	_ setup.Teardowner = (*datadogPass)(nil)
 )
 
@@ -1301,18 +1262,6 @@ var (
 // with it before the document carries it, and every other run needs no
 // credential in hand at all.
 func gitlabAdminToken(cfg *config.GitLab, env *config.Resolver, override string) string {
-	if v := strings.TrimSpace(override); v != "" {
-		return v
-	}
-	if cfg == nil || cfg.Provisioning == nil {
-		return ""
-	}
-	return strings.TrimSpace(env.Value(cfg.Provisioning.AdminToken))
-}
-
-// mattermostAdminToken resolves the system-administrator credential, in the
-// same order and for the same reason.
-func mattermostAdminToken(cfg *config.Mattermost, env *config.Resolver, override string) string {
 	if v := strings.TrimSpace(override); v != "" {
 		return v
 	}
@@ -1354,7 +1303,9 @@ func (e *Engine) atlassianCredentialSealed(
 		return nil
 	}
 	plan, err := (&atlassianPass{engine: e}).seatPlan(company)
-	if err != nil {
+	if err != nil || len(plan.Seats) == 0 {
+		// NO SEAT THIS ENGINE PROVISIONS, so no clock: an account made by
+		// hand has no grant of this engine's to be waiting on.
 		return nil
 	}
 	vars := make(map[string]string, len(plan.Seats))

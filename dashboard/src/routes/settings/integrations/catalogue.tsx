@@ -20,7 +20,7 @@
  * claim that the tool is fine.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonLink,
@@ -36,6 +36,7 @@ import {
   TableStatusCell,
   TableTextCell,
   Tag,
+  Tooltip,
   type Tone,
 } from "@crewlethq/ui";
 import {
@@ -57,6 +58,7 @@ import { useNow } from "~/lib/clock.ts";
 import {
   fmtDate,
   fmtDateTime,
+  inTime,
   plural,
   relTime,
   tsKey,
@@ -78,6 +80,7 @@ import {
   type ReconcileFinding,
 } from "~/contract/integrations.ts";
 import type { SetupListing, SetupSeatState, SetupToolState } from "~/protocol/types.ts";
+import type { Model, Tool } from "./model.ts";
 
 // THE TONE VOCABULARY IS uilet's NOW. This screen used to declare its own
 // five-value union beside the one the design system publishes, which is the
@@ -443,61 +446,60 @@ export function integrationFacts(
       : undefined;
   const counted = (pick: (row: IntegrationRow) => number | null | undefined): number | null =>
     traffic.known ? total(present, pick) : null;
+  const coalesced = counted((r) => r.coalesced);
+  // EVERY VALUE IS PLAIN TEXT at the value's size, so the line holds the
+  // labels' size and the values' and nothing else. What the engine merged
+  // into a pending wake rides on Delivered, the count it qualifies.
   return [
     {
       label: "Delivered",
       value: (
-        <TableNumberCell
-          value={counted((r) => r.inbound)}
-          title="Deliveries that reached a seat"
-          format={fmtCount}
-        />
+        <Tooltip
+          content={
+            coalesced === null
+              ? "Deliveries that reached a seat"
+              : `Deliveries that reached a seat. ${fmtCount(coalesced)} more were merged into a pending wake.`
+          }
+        >
+          <span tabIndex={0}>{fmtCount(counted((r) => r.inbound))}</span>
+        </Tooltip>
       ),
       note: covered,
     },
     {
-      // NO NOTE ON THE OTHER TWO, although the same window covers them — the
-      // engine counts the drops and merges over exactly the window
-      // `traffic_since` names, never over a page of its own: a fact line
-      // whose every value carries the same footnote is one nobody reads,
-      // which is what `Fact.note` says about itself. The three counts are
-      // read together and the first one states what they all cover.
+      // NO NOTE ON DROPPED, although the same window covers it: the engine
+      // counts drops over exactly the window `traffic_since` names, and the
+      // first count states what they both cover.
       label: "Dropped",
-      value: (
-        <TableNumberCell
-          value={counted((r) => r.skipped)}
-          title="verified, and turned into work for nobody"
-          format={fmtCount}
-        />
-      ),
-    },
-    {
-      label: "Coalesced",
-      value: (
-        <TableNumberCell
-          value={counted((r) => r.coalesced)}
-          title="Merged into a pending wake"
-          format={fmtCount}
-        />
-      ),
+      value: fmtCount(counted((r) => r.skipped)),
     },
     {
       // THE LOOP'S OWN CLOCK, which is the one thing a card never says: it
-      // reports what the last pass CONCLUDED and never when that was, so a
-      // surface checked a moment ago and one nothing has looked at in an hour
-      // read identically.
-      label: "Last pass",
-      value: (
-        <TableDateCell value={latestOf(present, (r) => r.reconcile?.last_attempt_at)} now={now} />
-      ),
-    },
-    {
-      label: "Next pass",
-      value: (
-        <TableDateCell value={soonestOf(present, (r) => r.reconcile?.next_attempt_at)} now={now} />
+      // reports what the last pass CONCLUDED and never when that was.
+      label: "Sync",
+      value: syncWords(
+        latestOf(present, (r) => r.reconcile?.last_attempt_at),
+        soonestOf(present, (r) => r.reconcile?.next_attempt_at),
+        now,
       ),
     },
   ];
+}
+
+/**
+ * The loop's clock as one value: "30m ago · next in 10m". A next sync whose
+ * time has passed is DUE or OVERDUE, never "ago": a time in the past is not
+ * when the next one is.
+ */
+export function syncWords(last: string | null, next: string | null, now: number): string {
+  const parts = [last ? relTime(last, now) : "Not yet"];
+  if (next) {
+    const until = tsKey(next) - now;
+    if (until > 30_000) parts.push(`next ${inTime(next, now)}`);
+    else if (until > -60_000) parts.push("next due now");
+    else parts.push(`next overdue by ${fmtDuration(Math.round(-until / 60_000) * 60_000)}`);
+  }
+  return parts.join(" · ");
 }
 
 /**
@@ -882,6 +884,29 @@ function postManifest(answer: AppManifest): void {
   document.body.append(form);
   form.submit();
   form.remove();
+}
+
+/**
+ * The gesture a person takes at the vendor for one agent of a tool (GitHub's
+ * create and install), by handle: the one an integration's Agents tab and an
+ * agent's Access tab both draw, or null where the agent has none or the
+ * reader cannot take it.
+ */
+export function seatStepFor(tool: Tool, model: Model): (handle: string) => ReactNode {
+  const rows = new Map(
+    tool.seats.filter((r) => r.seat?.step && r.toolKey).map((r) => [r.handle, r]),
+  );
+  return (handle) => {
+    const row = rows.get(handle);
+    return row?.seat && row.toolKey && !model.guarded ? (
+      <SeatStep
+        app={tool.entry.name}
+        toolKey={row.toolKey}
+        seat={row.seat}
+        managed={model.managed}
+      />
+    ) : null;
+  };
 }
 
 /**

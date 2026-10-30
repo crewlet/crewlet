@@ -15,13 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
-	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/engine"
-	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/observe"
 	"github.com/crewlet/crewlet/internal/org"
 )
@@ -225,26 +223,13 @@ func wireAPI(
 	if err != nil {
 		return fail("secret surface", err)
 	}
-	status, err := e.IntegrationStore()
+	// THE SETUP SURFACE AS cmd/crewlet BUILDS IT, through the one
+	// constructor both call, so a seam it requires cannot be missed here.
+	installs, err := e.SlackInstalls(boot.Secrets.TokenMaterial())
 	if err != nil {
-		return fail("integration status", err)
+		return fail("slack installs", err)
 	}
-	setupSurface, err := setupapi.New(setupapi.Options{
-		Config:  configSurface,
-		Secrets: fleetsecrets.New(backends.Fleet, cipher),
-		Resolve: e.LookupSecret,
-		// WHERE A VENDOR REACHES THIS NODE, from Tier A as cmd/crewlet
-		// reads it, and the key it is read from.
-		WebhookBase:    boot.API.WebhookBase(),
-		WebhookBaseKey: boot.API.WebhookBaseKey(),
-		Passes:         e.SetupRunner(),
-		Probes:         engine.SetupProbes(),
-		Sink:           e.SetupSink,
-		Status:         status,
-		SlackApps:      e.SlackApps,
-		StateCipher:    cipher,
-		StateClaims:    backends.Fleet,
-	})
+	setupSurface, err := api.NewSetupSurface(boot, e, configSurface, cipher, installs)
 	if err != nil {
 		return fail("setup surface", err)
 	}

@@ -79,10 +79,7 @@ import (
 // A provisioning run whose sink is an env file or its own output asks its
 // store which of the names the run can mint into it holds, since the store
 // outranks that sink ([sinkFlags.refuseOutranked]). That is a read of the
-// company's store like any other, by the run's one route, but where it is all
-// the run reads (a Slack run whose sink is no store), the listing is the whole
-// of it, and the route takes the token a listing takes rather than a reveal's
-// ([companyStore.onlyLists]).
+// company's store like any other, by the run's one route.
 //
 // # No Tier A, and no -api
 //
@@ -138,10 +135,6 @@ type companyStore struct {
 	closeTarget func()
 	routeErr    error
 
-	// listsOnly is whether the run reveals nothing through its route and
-	// only asks it which names it holds ([companyStore.onlyLists]).
-	listsOnly bool
-
 	// values is what the run has read through its route, nil until it has
 	// read; saidEnvOnly is whether the environment-only line was printed.
 	values      *storedValues
@@ -191,12 +184,11 @@ func (s *companyStore) route(ctx context.Context) (*secretTarget, error) {
 	if s.boot == nil && s.apiURL == "" {
 		return nil, nil
 	}
-	// A RUN HERE REVEALS — the values a command resolves, and a seat
-	// credential its sink reads back, are the node's break-glass read —
-	// unless all it asks is which names the store holds.
+	// A RUN HERE REVEALS: the values a command resolves, and a seat
+	// credential its sink reads back, are the node's break-glass read.
 	target, closeTarget, err := routeSecretStore(ctx, s.environ, s.boot,
 		s.bootstrapPath, s.apiURL,
-		storeRun{command: s.command, reveals: !s.listsOnly})
+		storeRun{command: s.command, reveals: true})
 	if err != nil {
 		s.routeErr = err
 		return nil, err
@@ -204,16 +196,6 @@ func (s *companyStore) route(ctx context.Context) (*secretTarget, error) {
 	s.target, s.closeTarget = target, closeTarget
 	return target, nil
 }
-
-// onlyLists makes the run one that reveals nothing through its route: all it
-// asks of the store is which names it holds ([companyStore.holding]). Through
-// a node that is the listing, `secrets.list`, which takes admin and no person
-// present — so a machine token serves it, and the route asks for no Tier A
-// token and a refused listing names none ([storeRun.reveals]).
-//
-// CALLED BEFORE ANYTHING DECIDES THE ROUTE, which is decided once: the token a
-// run presents is chosen with it.
-func (s *companyStore) onlyLists() { s.listsOnly = true }
 
 // Close releases whatever the route opened.
 func (s *companyStore) Close() {
@@ -296,11 +278,6 @@ func (s *companyStore) where(target *secretTarget) string {
 // route it took.
 func (s *companyStore) readFailure(target *secretTarget, err error) error {
 	remedy := revealRemedy(err)
-	if s.listsOnly {
-		// A LISTING IS NO REVEAL, so the token a reveal takes is no remedy
-		// for a refused one.
-		remedy = ""
-	}
 	switch {
 	case target.locked != nil:
 		// BOTH FACTS, as a write's refusal gives them: the lock alone reads
@@ -322,13 +299,9 @@ func (s *companyStore) readFailure(target *secretTarget, err error) error {
 
 // sayRoute is the run's first line on a store it read: which way in, and
 // through a node how much it revealed there, or reached directly how much of
-// what the command reads the store holds — or, for a run that only asks which
-// names the store holds, that it reads none of the values.
+// what the command reads the store holds.
 func (s *companyStore) sayRoute(notes io.Writer, target *secretTarget, values *storedValues, asked int) {
 	switch {
-	case target.throughNode && s.listsOnly:
-		fmt.Fprintf(notes, "checking which names the running node at %s holds: this "+
-			"command reads no stored value, so none was revealed.\n", target.node)
 	case target.throughNode && asked == 0:
 		fmt.Fprintf(notes, "resolving ${VAR} through the running node at %s: it holds "+
 			"none of the values this command reads, so none was revealed.\n", target.node)
@@ -340,9 +313,6 @@ func (s *companyStore) sayRoute(notes io.Writer, target *secretTarget, values *s
 		fmt.Fprintf(notes, "resolving ${VAR} through the running node at %s: %d of the "+
 			"%d stored values this command reads revealed there in %s, each logged "+
 			"by name.\n", target.node, values.revealed(), asked, requests(asked))
-	case s.listsOnly:
-		fmt.Fprintf(notes, "checking which names %s holds: this command reads no "+
-			"stored value.\n", target.where)
 	default:
 		// SAID TOO, and naming the broker: a run that reached the store of
 		// a node the operator thought was up, or through the wrong Tier A —

@@ -54,6 +54,12 @@ func TestEveryIfMatchReaderIsAReviewedPrecondition(t *testing.T) {
 			"another If-None-Match, and 409 for a race lost on the revision it never " +
 			"named; TestAnEntitysPreconditionIsTheEntityNotTheDocument and " +
 			"TestARouteThatJudgesNoRevisionLosesItsRaceAsAConflict",
+		"setupapi/access.go:accessSave": "the header is the base, a stated revision " +
+			"([configapi.ApplySeatsRequest.Stated]) whose lost race is 412, where the " +
+			"body's or the read's revision loses as 409; TestASaveIsOneRevisionThenASync",
+		"setupapi/access.go:keepVendorSetting": "the header is the base, stated as on a " +
+			"save: a lost race is 412, the read's revision loses as 409; " +
+			"TestAKeepUnderAStaleIfMatchIsAFailedPrecondition",
 		"setupapi/setupapi.go:disconnect": "the header is the base, a stated revision " +
 			"([configapi.ApplyRequest.Stated]) whose lost race is 412, where a " +
 			"connect's body base loses as 409; " +

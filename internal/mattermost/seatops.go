@@ -1,0 +1,258 @@
+package mattermost
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+)
+
+// The per-seat operations the access pass is built from (design 5.2).
+//
+// Each is one thing done at Mattermost to one bot, with the rule that keeps it
+// safe written beside it, so the access pass and the teardown that reuses them
+// cannot disagree about what turning a bot off means.
+
+// BotAccount is what a pass reads back about one seat's bot, every pass.
+type BotAccount struct {
+	// ID is the bot's user id, which the ledger records.
+	ID       string
+	Username string
+	// Deactivated is the account's own state at Mattermost.
+	Deactivated bool
+	// Marked reports that the bot's description is [DisconnectedDescription]:
+	// this engine's record that it turned the bot off. Read for who
+	// deactivated a bot the ledger does not record ([seataccess.DisabledByOf])
+	// and, on a live bot, as a stale marker to take off.
+	Marked bool
+	// DeactivatedHere reports a deactivated bot carrying the marker.
+	DeactivatedHere bool
+	// Roles are the system roles it holds, normalized.
+	Roles []string
+	// Channels are the team's channels it is a member of, by name, sorted.
+	// Private conversations are not channels in this sense and are left
+	// out: a direct message is a person's, never a scope this engine sets.
+	Channels []string
+	// Tokens are its personal access tokens, without their values.
+	Tokens []Token
+
+	// channelIDs maps a channel name to its id, so leaving one needs no
+	// second lookup.
+	channelIDs map[string]string
+}
+
+// ObserveBot reads one bot, its roles, its channels in the team and its
+// tokens.
+//
+// THE BOT ABSENT IS AN ANSWER (found false, no error): the ledger row is
+// closed and a seat that is on is given a fresh bot (design 5.4).
+func (c *Client) ObserveBot(ctx context.Context, userID, teamID string) (BotAccount, bool, error) {
+	user, found, err := c.UserByID(ctx, userID)
+	if err != nil || !found {
+		return BotAccount{}, found, err
+	}
+	out := BotAccount{
+		ID: user.ID, Username: user.Username, Deactivated: user.DeleteAt != 0,
+		Roles: RolesOf(user), channelIDs: map[string]string{},
+	}
+	// THE MARKER, read of every bot: on a deactivated one it says whether
+	// this engine turned it off, and on a live one it is stale and comes
+	// off before anything else is done to the bot.
+	record, recordErr := c.BotRecord(ctx, user.ID)
+	if recordErr != nil {
+		return BotAccount{}, true, fmt.Errorf(
+			"mattermost: read whether this engine deactivated %s: %w", user.Username, recordErr)
+	}
+	out.Marked = strings.TrimSpace(record.Description) == DisconnectedDescription
+	out.DeactivatedHere = out.Deactivated && out.Marked
+	channels, err := c.Channels(ctx, user.ID, teamID)
+	if err != nil {
+		return BotAccount{}, true, fmt.Errorf(
+			"mattermost: read the channels %s is in: %w", user.Username, err)
+	}
+	for _, channel := range channels {
+		if channel.Direct() || channel.Name == "" {
+			continue
+		}
+		out.channelIDs[channel.Name] = channel.ID
+	}
+	out.Channels = slices.Sorted(maps.Keys(out.channelIDs))
+	if out.Tokens, err = c.Tokens(ctx, user.ID); err != nil {
+		return BotAccount{}, true, fmt.Errorf(
+			"mattermost: read the tokens on %s: %w", user.Username, err)
+	}
+	return out, true, nil
+}
+
+// MintedTokens are the tokens on the bot this engine minted for a seat, by
+// the description every mint here writes.
+func (b BotAccount) MintedTokens(handle string) []Token {
+	var out []Token
+	for _, token := range b.Tokens {
+		if strings.EqualFold(token.Description, TokenDescription(handle)) {
+			out = append(out, token)
+		}
+	}
+	return out
+}
+
+// SetRoles brings a bot's system roles to the seat's, reporting whether it
+// wrote. A bot already holding them is left alone: a converged pass writes
+// nothing to somebody's instance.
+func (c *Client) SetRoles(ctx context.Context, bot BotAccount, want []string) (bool, error) {
+	if SameRoles(bot.Roles, want) {
+		return false, nil
+	}
+	if err := c.UpdateRoles(ctx, bot.ID, want); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ChannelChange is what [Client.SetChannels] did.
+type ChannelChange struct {
+	Joined, Left []string
+	// Missing are channels the seat names that the team does not have,
+	// which is a note rather than a failure: the usual cause is a typo an
+	// operator fixes in seconds.
+	Missing []string
+}
+
+// SetChannels brings a bot's channel membership to the seat's scope.
+//
+// WITHIN THE COMPANY'S LIST AND NOWHERE ELSE. A channel the seat names is
+// joined; a channel the bot is in that the company's list names and the seat
+// does not is left. A channel outside the company's list was never this
+// engine's to manage (a person invited the bot there, or it is a private
+// conversation) and is not touched, so narrowing a seat can never remove a
+// bot from a room nobody asked Crewlet to manage.
+func (c *Client) SetChannels(
+	ctx context.Context, teamID string, bot BotAccount, want, managed []string,
+) (ChannelChange, error) {
+	var out ChannelChange
+	wanted := map[string]bool{}
+	for _, name := range want {
+		if name = strings.TrimSpace(name); name != "" {
+			wanted[name] = true
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(wanted)) {
+		if _, in := bot.channelIDs[name]; in {
+			continue
+		}
+		channel, err := c.ChannelByName(ctx, teamID, name)
+		if isNotFound(err) {
+			out.Missing = append(out.Missing, name)
+			continue
+		}
+		if err != nil {
+			return out, fmt.Errorf("resolve channel %q: %w", name, err)
+		}
+		if err := c.AddChannelMember(ctx, channel.ID, bot.ID); err != nil {
+			return out, fmt.Errorf("join %q: %w", name, err)
+		}
+		out.Joined = append(out.Joined, name)
+	}
+	for _, name := range slices.Sorted(slices.Values(managed)) {
+		id, in := bot.channelIDs[strings.TrimSpace(name)]
+		if !in || wanted[strings.TrimSpace(name)] {
+			continue
+		}
+		if err := c.RemoveChannelMember(ctx, id, bot.ID); err != nil {
+			return out, fmt.Errorf("leave %q: %w", name, err)
+		}
+		out.Left = append(out.Left, strings.TrimSpace(name))
+	}
+	return out, nil
+}
+
+// RevokeEngineTokens revokes every token this engine minted on a bot for a
+// seat, and reports how many. Only this engine's own: an administrator may
+// have minted one by hand, and a deactivated bot's tokens authenticate as
+// nothing anyway.
+func (c *Client) RevokeEngineTokens(ctx context.Context, bot BotAccount, handle string) (int, error) {
+	revoked, err := c.RevokeMinted(ctx, bot.ID, TokenDescription(handle), "")
+	if err != nil {
+		return revoked, fmt.Errorf("revoke the bot's tokens: %w", err)
+	}
+	return revoked, nil
+}
+
+// Deactivate marks a bot as this engine's off and deactivates it.
+//
+// THE MARKER BEFORE THE DEACTIVATION, so an interrupted run leaves a marked,
+// live bot rather than a deactivated one with no provenance (D3). Marked
+// whatever state the bot is in, so one already deactivated by hand is still
+// recorded as this engine's off once the seat's document says off too.
+func (c *Client) Deactivate(ctx context.Context, bot BotAccount) error {
+	if err := c.MarkDisconnected(ctx, bot.ID); err != nil {
+		return fmt.Errorf("record that this engine is turning the bot off: %w", err)
+	}
+	if bot.Deactivated {
+		return nil
+	}
+	if err := c.DisableBot(ctx, bot.ID); err != nil {
+		// THE MARKER COMES OFF AGAIN, or the bot is left live and marked
+		// as this engine's off: a deactivation by somebody else later would
+		// then read as this engine's and be undone (D3). Detached, because
+		// the failure is often the cancellation itself.
+		disableErr := fmt.Errorf("deactivate the bot: %w", err)
+		if clearErr := c.ClearDisconnected(context.WithoutCancel(ctx), bot.ID); clearErr != nil {
+			return errors.Join(disableErr, fmt.Errorf("take the marker off again: %w", clearErr))
+		}
+		return disableErr
+	}
+	return nil
+}
+
+// TurnOff revokes the tokens this engine minted on a bot, then marks and
+// deactivates it: a remove, which leaves the bot unmanaged and so can leave
+// no token behind.
+//
+// THE TOKENS FIRST: a disabled bot keeps its tokens, so one deactivated with
+// a live token is an agent that works again the moment anybody re-enables
+// it. A seat turned off takes the other order, as two steps
+// ([seataccess.OpDisable], then [seataccess.OpRevoke]): the bot stays
+// managed, so a revoke that fails is planned again on the next pass.
+func (c *Client) TurnOff(ctx context.Context, bot BotAccount, handle string) error {
+	if _, err := c.RevokeEngineTokens(ctx, bot, handle); err != nil {
+		return err
+	}
+	return c.Deactivate(ctx, bot)
+}
+
+// TurnOn takes the marker off a bot and reactivates it.
+//
+// THE MARKER FIRST: a run interrupted between the two leaves a deactivated
+// bot with no marker, which the ledger still records as this engine's off,
+// where the other order would leave a live bot marked as off, whose later
+// deactivation by somebody else would read as this engine's and be undone.
+func (c *Client) TurnOn(ctx context.Context, bot BotAccount) error {
+	if err := c.ClearDisconnected(ctx, bot.ID); err != nil {
+		return fmt.Errorf("clear the bot's %q description: %w", DisconnectedDescription, err)
+	}
+	if err := c.EnableBot(ctx, bot.ID); err != nil {
+		return fmt.Errorf("reactivate the bot: %w", err)
+	}
+	return nil
+}
+
+// RetireTokens revokes the tokens this engine minted on a bot other than keep,
+// which is the second half of a mint, an enable that mints and a rotation:
+// keep was minted and sealed by the step before, so the tokens it replaces
+// hold values nothing reads.
+//
+// IT REFUSES RATHER THAN GUESSES. Mattermost lists no creation time for a
+// token, so the one it keeps is named; a keep the bot does not hold means the
+// token just minted is gone, and revoking the others would leave the seat
+// with nothing.
+func (c *Client) RetireTokens(ctx context.Context, bot BotAccount, handle, keep string) (int, error) {
+	held := bot.MintedTokens(handle)
+	if keep == "" || !slices.ContainsFunc(held, func(t Token) bool { return t.ID == keep }) {
+		return 0, errors.New("mattermost: the token the step before minted is not on the bot, " +
+			"so no older token was revoked; rotate the agent's token")
+	}
+	return c.RevokeMinted(ctx, bot.ID, TokenDescription(handle), keep)
+}

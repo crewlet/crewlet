@@ -527,7 +527,6 @@ func TestARoutedStoreThatCannotReachTheNodeSaysBothWhy(t *testing.T) {
 				"member of a cluster"}},
 		{run: storeRun{command: "crewlet secrets unset", offline: true}, wantStop: true},
 		{run: storeRun{command: "crewlet gitlab provision", reveals: true}},
-		{run: storeRun{command: "crewlet slack provision"}},
 		{run: storeRun{command: "crewlet llm login", reveals: true}},
 	} {
 		t.Run(tc.run.command, func(t *testing.T) {
