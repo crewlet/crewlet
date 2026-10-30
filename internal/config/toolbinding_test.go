@@ -135,7 +135,7 @@ func TestTheSeatsCredentialIsBoundToEveryServerThatReadsIt(t *testing.T) {
 		Name: "acme",
 		// THE ENGINE HOLDS SLACK'S CREDENTIALS here (D4b), so the binding is
 		// the name it seals them under.
-		Integrations: config.Integrations{Slack: &config.Slack{}},
+		Integrations: config.Integrations{Slack: &config.Slack{AppConfigToken: "${SLACK_APP_CONFIG_TOKEN}"}},
 		MCPServers:   []config.MCPServer{stdio("chat", "npx", "-y", "slack-mcp-server"), headers},
 		Roles: []config.Role{
 			{Name: "Engineer", Handle: "swe", MCPEnv: map[string]map[string]string{
@@ -211,7 +211,7 @@ func TestAnExternalCredentialIsBoundFromWhereTheSeatNamesIt(t *testing.T) {
 			},
 		}},
 	}
-	if mode := cfg.SeatCredentialMode("mattermost"); mode != config.SeatCredentialExternal {
+	if mode := cfg.SeatCredentialMode("mattermost", false); mode != config.SeatCredentialExternal {
 		t.Fatalf("the fixture's Mattermost is %q, want external", mode)
 	}
 	o, err := cfg.Organization()
