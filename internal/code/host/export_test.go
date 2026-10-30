@@ -254,6 +254,15 @@ func WriteJoiners(s *Server, pushID string) int {
 	return 0
 }
 
+// WritesInFlight is how many writes s is building or landing now: each push
+// id once, however many asks joined it — what a benchmark reads the write
+// lane's slots held by.
+func WritesInFlight(s *Server) int {
+	s.writesMu.Lock()
+	defer s.writesMu.Unlock()
+	return len(s.writes)
+}
+
 // BuildBudget is the git run time s gives an engine write's build
 // (code.WriteBuildDeadline in production).
 func BuildBudget(s *Server) time.Duration { return s.buildBudget }

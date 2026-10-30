@@ -91,7 +91,12 @@ const (
 	// other request of its registration waits behind, so a burst of writes
 	// on the reads' lane would hold the slots every seat's read of every
 	// repository on the node is answered through. It HOLDS at most
-	// [gitWritesHeld] writes at once, and answers the next at once.
+	// [gitWritesHeld] writes at once, and answers the next at once. What
+	// bounds the git a node's writes run is the seat git-work share, never
+	// this lane: BenchmarkEngineWrite's sixty-four writes at once
+	// (internal/code/host) were all in flight with none queued for a slot,
+	// every write past the share's wait answered unready rather than held —
+	// so a write waits on the share or nothing.
 	laneGitWrites lane = "git-writes"
 )
 

@@ -491,3 +491,91 @@ func quantile(sorted []time.Duration, q float64) float64 {
 	rank := max(int(math.Ceil(q*float64(len(sorted)))), 1)
 	return float64(sorted[rank-1]) / float64(time.Millisecond)
 }
+
+// BenchmarkEngineWrite is internal/code/host's BenchmarkEngineWrite where the
+// route a write takes to its repository's home is the production one between
+// members — its route= arms, which one data node cannot have: one seat's
+// commit of one file at a time onto a branch of its own, floored at its last
+// write, asked IN PROCESS AT THE HOME (route=home: the home member's own
+// router, whose walk runs the write on its own git half) and THROUGH ANOTHER
+// MEMBER'S ROUTER (route=router: the walk asks the home over the broker, as a
+// seat's turn on any other node does), each timed from the call a code write
+// tool makes of its member's code host (estate.CodeSeam.GitWrite) to its
+// answer — the push's row applied and its pack adopted — and reported as its
+// p50 and p99. On a cluster every member is a data node and a git node, so
+// the home is the repository's committer too (codetest's F40).
+//
+// FROM THE CODE HOST'S CALL, NOT THE TOOL'S: what the tool adds around its
+// write — its caller, its arguments, the repository's resolution at the log's
+// head — is the host benchmark's, and the same on either route, since every
+// member holds the data copy that resolution reads; what the routes differ by
+// is the walk's hop to the home, which is all this arm is for.
+//
+// The object store is the broker's own bucket (natsobj): an in-process
+// store's figure, as every one this benchmark gives is. The three members
+// share one machine's cores and its one disk, every write fsynced, as
+// BenchmarkCommitChain's do. A SOLO benchmark (internal/solo): it runs alone,
+// and the host's arms, not these, decide the budgets an engine write is held
+// to (estate.GitWriteAttempt's terms).
+func BenchmarkEngineWrite(b *testing.B) {
+	codetest.Quiet(b)
+	c := startClusterOf(b, "nats", js.Config{SyncAlways: true})
+	repo := clusterRepos(b, c, 1)[0]
+	home := c.Committer(repo)
+	routes := []struct{ name, via string }{{"home", home}}
+	for _, m := range c.Members() {
+		if m != home {
+			routes = append(routes, struct{ name, via string }{"router", m})
+			break
+		}
+	}
+	for _, route := range routes {
+		b.Run("route="+route.name, func(b *testing.B) {
+			w := &routedWrites{c: c, repo: repo, via: route.via,
+				ref: "refs/heads/seats/" + codetest.FixtureAlice + "/route-" + route.name,
+				who: code.Principal{Kind: code.PrincipalAgent, Seat: codetest.FixtureAlice, Run: code.RunProvenance{
+					TurnID: statelog.NewOpID(time.Now(), ""), WorkBackend: "native", WorkKey: "ENG-1234",
+					Model: "fixture-model-2031"}}}
+			// THE BRANCH'S ROOT, with the timer stopped: the arm's first
+			// write creates its branch, and every timed one moves it.
+			w.land(b)
+			var took []time.Duration
+			for b.Loop() {
+				start := time.Now()
+				w.land(b)
+				took = append(took, time.Since(start))
+			}
+			slices.Sort(took)
+			b.ReportMetric(quantile(took, 0.50), "p50-ms")
+			b.ReportMetric(quantile(took, 0.99), "p99-ms")
+		})
+	}
+}
+
+// routedWrites is a route= arm's writes: one seat's commits of one file, one
+// at a time, onto its branch of repo, each asked through member via's router.
+type routedWrites struct {
+	c        *cluster
+	repo     string
+	via, ref string
+	who      code.Principal
+	head     string
+	at       statelog.Position
+	n        int
+}
+
+// land is the arm's next write, failing b unless it applied.
+func (r *routedWrites) land(b *testing.B) {
+	b.Helper()
+	r.n++
+	content := fmt.Sprintf("write %d\n", r.n)
+	w := code.EngineWrite{Kind: code.WriteCommitFiles, RepoID: r.repo, Principal: r.who,
+		OpID: statelog.NewOpID(time.Now(), ""), Fresh: statelog.FloorAt(statelog.ReadSession, r.at), Ref: r.ref,
+		ExpectedHead: r.head, Message: fmt.Sprintf("write %d", r.n),
+		Files: []code.FileOp{{Op: code.FileOpPut, Path: "route/f.txt", Content: &content}}}
+	res, err := r.c.GitWriteThrough(b.Context(), r.via, w)
+	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Refusal != "" || res.Commit == "" {
+		b.Fatalf("write %d through %s: %+v %v", r.n, r.via, res, err)
+	}
+	r.head, r.at = res.Commit, res.Position
+}

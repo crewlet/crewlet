@@ -347,9 +347,15 @@ const (
 	// doc or configuration change, and — with MaxTreePathDepth — what bounds
 	// the directories one build rewrites: every directory above a path the
 	// write names, at most 2 × MaxFileOps × (MaxTreePathDepth − 1) and the
-	// root, since a move names two paths. PROVISIONAL (M3-decisions M3-O49):
-	// BenchmarkEngineCommit's largest arm is a hundred files, a tenth of it,
-	// and re-derives it.
+	// root, since a move names two paths. MEASURED (BenchmarkEngineCommit,
+	// internal/code/host's doc.go): a thousand files put at depth six into a
+	// 100 000-file tree build in 0.28–0.52 s at the p50 and 0.37–0.64 s at
+	// the p99 over two runs — a fifteenth of WriteBuildDeadline at the most —
+	// into a pack of 58 KB, so at the depths a write's paths keep the bound
+	// is the payload's and the purpose's, never the build's: a thousand
+	// operations of a kilobyte each are MaxCommitPayloadBytes. A thousand
+	// paths at MaxTreePathDepth itself are the build deadline's to refuse
+	// (MaxTreePathDepth).
 	MaxFileOps = 1_000
 
 	// MaxWritePackBytes bounds the one pack an engine write stores: FOUR
@@ -357,11 +363,13 @@ const (
 	// payload compressed plus the trees it touches, and a revert's or a
 	// cherry-pick's past it is a change for a coding box. The largest new
 	// object a write makes is a touched directory's tree, written whole into
-	// its self-contained pack — about 40 bytes an entry, the 20-byte ids
-	// incompressible, some 3 MB for a put into a directory of 100 000 entries.
-	// PROVISIONAL (M3-decisions M3-O49): BenchmarkEngineCommit reports every
-	// arm's pack bytes and re-derives it; its flat 100 000-entry arm's pack
-	// must stay under it. A proposal of an engine-built push carrying a pack
+	// its self-contained pack, its 20-byte ids incompressible. MEASURED
+	// (BenchmarkEngineCommit's flat arms): a put into a directory of 100 000
+	// entries packs 2 393 208 bytes, 24 an entry where the estimate was 40 —
+	// zlib takes the names, never the ids — and one of 10 000, 240 KB; a
+	// thousand files at depth six, 58 KB. So a directory of some 175 000
+	// entries is the largest one write can touch, and four mebibytes stands.
+	// A proposal of an engine-built push carrying a pack
 	// past it is refused by every committer as one no git node built
 	// (Proposal.Validate).
 	MaxWritePackBytes = 4 << 20
@@ -370,8 +378,10 @@ const (
 	// runs, together, sequentially: ONE READ'S DEADLINE, gitproc.ReadDeadline's
 	// ten seconds, since every build step is a read-lane process of a
 	// bounded local read's size, and BenchmarkEngineCommit's p99 of a hundred
-	// files at depth six in a 100 000-file tree is held to a tenth of it.
-	// This package imports no git process wrapper, so internal/code/host's
+	// files at depth six in a 100 000-file tree is held to a tenth of it:
+	// MEASURED 0.07–0.24 s over two runs, and the dearest build it measures,
+	// one file into a directory of 100 000 entries, 0.68–1.2 s. This package
+	// imports no git process wrapper, so internal/code/host's
 	// TestAWriteBuildIsOneReadsDeadline holds the equality.
 	WriteBuildDeadline = 10 * time.Second
 
@@ -414,7 +424,9 @@ const (
 	// WriteUploadAllowance is what a write's attempt holds for its bundle's
 	// PUT: objstore.MiBPace, one mebibyte at the pace floor every object
 	// transfer is held to. A write's bundle is a few kilobytes in the common
-	// case (BenchmarkEngineWrite); a larger one on a bucket at the floor is
+	// case, and its one PUT a first byte's wait (BenchmarkEngineWrite: a p99
+	// of 221 ms against the S3 fake answering 200 ms late, sixty-four writes
+	// at once, under a hundredth of this); a larger one on a bucket at the floor is
 	// answered busy BEFORE its upload when the caller's deadline cannot hold
 	// it and the proposal after it (internal/code/host's deadline rule), so a
 	// slow bucket costs a refusal, never a PUT nobody proposes.

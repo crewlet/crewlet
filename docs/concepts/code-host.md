@@ -5587,7 +5587,7 @@ write ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
 |---|---|---|
 | A write's operations or suggestions and message | 1 MiB, as JSON spells them | An engine write is a document or a configuration fix, never a codebase: a larger change belongs in a coding box, whose push has no such bound. Measured as it crosses between nodes, because that is what every node holding the write holds. |
 | Operations in one `commit_files` | 1 000 | Past every document or configuration change, and — with a path's depth — what bounds the directories one build rewrites: every directory above a path the write names, at most 2 × 1 000 × 63 and the root, since a move names two paths. |
-| A write's pack | 4 MiB | Four payloads' worth: a commit's new files compressed and the directories it touches, each written whole — about 40 bytes an entry, so some 3 MB for a file put into a directory of 100 000. |
+| A write's pack | 4 MiB | Four payloads' worth: a commit's new files compressed and the directories it touches, each written whole — about 24 bytes an entry, measured, so 2.3 MB for a file put into a directory of 100 000, and a directory of some 175 000 entries the widest one write can touch. |
 | A write's git | 10 s | Every process of a build together, one read's deadline. |
 | A path | 4 096 bytes | Linux's `PATH_MAX`: a path no checkout can create is a tree no client can use. |
 | A path's depth | 64 components | An engine write is a document or a configuration fix, whose paths run from a few components to a couple of dozen even in a deep tree; a deeper change belongs in a coding box. It bounds every cost of a write that grows with depth, which 4 096 bytes alone leave at 2 048 components: the directories its build rewrites, its one `mktree` a level, and its read of what each path it names and each directory above one is, which git walks from the root at a cost growing with the square of the depth — a thousand paths at the bound took 19 s of git, which the build's ten seconds refuse `too_large`. Only the paths a write names are held to it: a repository's own deeper paths are never judged. |
@@ -5598,6 +5598,66 @@ Every write a git node builds or answers is counted
 (`crewlet.code.host.write.duration`, by `kind` and `stage`: `sync`, `build`,
 `land` and `total`) ([Metrics](../reference/metrics.md)), and logged
 `code_write` ([What the node logs](#what-the-node-logs)).
+
+### What an engine write costs
+
+Measured from the call of a code write tool in a seat's turn to the tool's
+answer — which follows the push's applied row and its pack adopted into the
+copy — on one git node whose broker writes every record to disk, in two runs
+of ten writes an arm, the range given. The figures are from **in-process
+object stores** — the in-memory one and an S3 fake answering every request
+100 or 200 ms late — and no real bucket, on two E-cores of an Intel Core
+Ultra 7 265U shared with other work, Go 1.27.2 and git 2.56.0. Two cores give
+the node a read lane of two slots, so the seats' [share](#server-side-reads)
+of it is one unit.
+
+| One write at a time, p50 | In memory | 100 ms first byte | 200 ms first byte |
+|---|---|---|---|
+| `commit_files` of one file | 44–78 ms | 141–197 ms | 239–251 ms |
+| `commit_files` of ten files | 40–79 ms | 139–198 ms | 239–249 ms |
+| `revert` | 35–68 ms | 136–196 ms | 234–270 ms |
+| `create_branch` | 19–43 ms | 18–53 ms | 30–62 ms |
+
+- **Where the time goes.** A one-file commit from memory is 3–5 ms of the
+  tool's own (its arguments and the repository's name), 7–12 ms bringing the
+  copy to the caller's floor, 11–28 ms of build, 9–17 ms for the proposal
+  and its row and about a millisecond adopting the pack. Against a bucket,
+  the one added wait is the bundle's single upload, a first byte's worth.
+- **One upload, no downloads.** Every write that stores a pack makes one PUT,
+  and no write reads anything back from the object store: the node adopts the
+  pack it built. A branch created stores nothing.
+- **Many at once.** Eight writes at once take 0.15–0.5 s at the median;
+  sixty-four at once fill the node's write lane, every one in flight and
+  none queued, and take 1.2–1.8 s at the median and up to 3.7 s at the p99.
+  With a share of one unit, 50–62% of sixty-four writes into one repository
+  waited past the share's two seconds and were answered unready — the
+  tool's signal to ask again — and up to 39% of sixty-four spread over as
+  many repositories. A node with more cores has a wider share.
+- **Far inside the attempt.** The slowest p99 at a 200 ms first byte was
+  2.9 s, a twenty-eighth of the [82 seconds](#which-git-node-builds-a-write)
+  a write may take on one git node, and every stage stayed inside its own
+  budget, so none of them was changed.
+
+The build alone follows the change, never the tree: in a tree of 10 000 files
+and of 100 000, git is asked the same requests, and a commit six directories
+deep builds in 56–89 ms for one file, 33–84 ms for ten, 59–145 ms for a
+hundred and 0.24–0.52 s for the 1 000 operations a write may carry — a
+fifteenth of the build's ten seconds at the p99 — in a pack of 4 KB, 9 KB
+and 58 KB. The one build that grows with what the repository holds is a
+file put into a wide directory, which is written whole: 74–78 ms and 240 KB
+into a directory of 10 000 entries, 0.6–0.85 s and 2.3 MB into one of
+100 000.
+
+**Beside a person's pushes.** A person pushing one commit to the same
+repository every 100 ms took 0.1–0.3 s at the p99 alone and 0.95–1.4 s
+beside sixty-four writes at once. Most of that tail stayed once the writes
+had stopped (1.2–1.5 s against the S3 fake): it is the hundreds of packs a
+burst like this leaves in one repository until its next
+[compaction](#compaction), not the writes running beside the push. What
+remained from memory is CPU: the share keeps the person's scans a read slot,
+and on two cores the writes' landings still take the processor, which no
+slot bounds. A git node expected to take bursts of engine writes beside
+people's pushes wants more than two cores.
 
 ---
 

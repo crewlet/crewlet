@@ -719,10 +719,12 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # cache and what a directory sync costs a file (internal/code/cache), the code
 # domain's applier, decide, reconcile and snapshot reads and what a push's
 # history costs every data node's disk (internal/code), the code host's
-# commit chain on one and three members (internal/code/codecluster), a push,
-# a warm fetch, cold and warm clones and a blobless clone's lazy blame end to
-# end, and a coding box's two clone recipes, its own git in a wide work tree
-# and a copy borrowed from the node (internal/code/host), a seat's reads of a
+# commit chain on one and three members and an engine write's route between
+# them (internal/code/codecluster), a push, a warm fetch, cold and warm
+# clones, a blobless clone's lazy blame, and a seat's engine write from its
+# tool's call to its pack adopted and its build alone, end to end, and a
+# coding box's two clone recipes, its own git in a wide work tree and a copy
+# borrowed from the node (internal/code/host), a seat's reads of a
 # repository by object id on a git node, warm and cold (internal/code/query), the
 # pace a client's connection is held to, on a real connection
 # (internal/api/paced), and what every push pays to start its proc-receive
@@ -785,7 +787,11 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # BenchmarkBoxDissociate) took twelve minutes more at one count of ten
 # operations on two E-cores, and their gigabyte arms twenty at one, the
 # million-file tree's unmeasured (BENCH_TIME=10x, or 1x, each figure says
-# which). A fixture is built once a run whatever BENCH_COUNT says,
+# which); its engine writes' two benchmarks, BenchmarkEngineWrite and
+# BenchmarkEngineCommit, took nine to eleven minutes at BENCH_TIME=10x on two
+# cores, the 100 000-file tree and directory included, and at the default
+# three seconds take several rounds an arm more. A fixture is built once a
+# run whatever BENCH_COUNT says,
 # since go test repeats only a leaf benchmark a count: the gigabyte's is ten
 # minutes and its arms four a count, the tree's eleven and its clones eight.
 # internal/code/cache's published layers' arms came after those runs, and add
@@ -813,7 +819,7 @@ BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= $(if $(filter 1,$(CREWLET_BENCH_LARGE)),24h,8h)
 
-bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes and clones, a coding box's git, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
+bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes, clones and engine writes, a coding box's git, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

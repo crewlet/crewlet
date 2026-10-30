@@ -504,6 +504,21 @@ func (f *SoloFleet) GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswe
 	return r.Code().GitRead(ctx, q)
 }
 
+// Code is the fleet's routed code host — the router [SoloFleet.Write] and
+// [SoloFleet.GitRead] ask through, holding nothing of its own — as a seat's
+// code tools are handed it on such a node (their reads, writes and holds):
+// what a benchmark timing a write from its TOOL'S CALL builds the tools over.
+// The seam is the running router's, so a case that kills or restarts the
+// fleet reads it again afterwards.
+func (f *SoloFleet) Code(t testing.TB) estate.CodeSeam {
+	t.Helper()
+	r := f.router.Load()
+	if r == nil {
+		t.Fatal("codetest: the solo fleet routes nothing while it is killed")
+	}
+	return r.Code()
+}
+
 // soloPlacement is a solo fleet's git nodes as its router's placements read
 // them: every one live for as long as the fleet runs, since a solo fleet's
 // nodes live and die together.

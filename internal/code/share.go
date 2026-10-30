@@ -81,6 +81,17 @@ func (w SeatWork) Valid() bool { return slices.Contains(SeatWorks(), w) }
 // ShareOf is how many units a node whose read lane is slots wide holds: HALF
 // of it, at least one — the other half is what a person's push's scans, a sync
 // round's peel and a fetch's check of its wants wait in.
+//
+// HALF STANDS, MEASURED AGAINST (internal/code/host's BenchmarkEngineWrite,
+// beside=push): on two cores the share is its floor of one unit, and
+// sixty-four engine writes at once still took a person's push to the same
+// repository from 0.1–0.3 s at the p99 to 0.95–1.4 s, past the twice the
+// benchmark holds — yet timed alone once the writes had stopped the push's
+// p99 stayed 1.2–1.5 s against the S3 fake, the packs the writes left
+// rather than the writes, and what remained from memory was the cores' CPU,
+// which a bound on slots does not divide. A narrower share has no unit to
+// give at one, and a wider node's half leaves more slots, not fewer: the
+// figure decides the node's cores, never this fraction.
 func ShareOf(slots int) int { return max(1, slots/2) }
 
 // The outcomes of a take: crewlet.code.seatwork.waits' `outcome`.

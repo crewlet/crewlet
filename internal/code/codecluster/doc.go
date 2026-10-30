@@ -69,6 +69,22 @@
 // meets every thirty-two batches — so the pair runs for as long as the
 // benchmark time asks.
 //
+// # An engine write's route
+//
+// BenchmarkEngineWrite is internal/code/host's benchmark of that name where
+// the route from a write's caller to its repository's home is the production
+// one between members: one seat's commit of one file at a time, asked in
+// process at the home — whose router runs the write on its own git half — and
+// through a member that is not the home, whose router asks the home over the
+// broker (route=home, route=router), each timed from the code host's call a
+// write tool makes to its answer, over the broker's own bucket. It is the one
+// arm of that benchmark a single data node cannot have, and it decides
+// nothing: the host's arms re-derive the budgets an engine write is held to —
+// the tool's own part among them, the same on every member, each holding the
+// data copy its resolution reads — and what the route adds is the broker's
+// hop, which BenchmarkCommitChain prices for a push. A solo package's
+// benchmark runs alone (`make bench` runs every package at -p 1).
+//
 // # Why a package of its own
 //
 // Three members, each embedding a NATS server, in one process form a quorum,

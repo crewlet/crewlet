@@ -675,4 +675,72 @@
 // --dissociate`, 2.59 and 47.8 s (the box's 3.4 and 58 s, the repack
 // --dissociate makes being the whole history, and the node's 3 ms) — so a
 // borrowed copy costs a box several times the clone it saves the node.
+//
+// AN ENGINE WRITE (BenchmarkEngineWrite), from the call of a code write tool
+// a seat's turn makes — the real tool, over the production router, on one git
+// node whose broker fsyncs every write — to the tool's answer, which follows
+// the push's applied row and its pack adopted into the copy. Taken in two
+// runs of ten writes an arm (sixty-four a round where sixty-four are asked
+// at once), the range given, on two E-cores of an Intel Core Ultra 7 265U
+// shared with other work (the machine's load 5–20 of its 14 CPUs), Go
+// 1.27.2, the pool and the clients on the node pin (2.56.0); its read lane
+// two slots, so the seats' share is ONE unit. Every figure is an in-process
+// store's — the in-memory twin (memobj) and the S3 fake answering 100 and
+// 200 ms late — and no real bucket's. One at a time, a commit of one file
+// or of ten is 40–79 ms at the p50 from memory, 139–198 ms from the fake
+// at 100 ms and 239–251 ms at 200; a revert 35–68, 136–196 and 234–270 ms;
+// a branch created, which builds and stores nothing, 18–62 ms. From memory
+// a one-file commit is the tool's own 2.6–4.8 ms (its caller, its arguments
+// and the repository's name resolved at the log's head), the copy's sync
+// 7–12 ms, the build 11–28 ms holding its unit of the share, the proposal
+// and the wait for its row 9–17 ms and the pack's adoption 0.7–1.5 ms;
+// against the fake one PUT, the bundle's, which is the first byte and a
+// few milliseconds (a p99 of 221 ms at the most at 200 ms, however many
+// writes are in flight). Every write that stores a pack makes ONE PUT and
+// no write a GET — its adoption links what it stored. Eight at once are
+// 153–517 ms at the p50 and at most 2.5 s at the p99; sixty-four at once
+// hold the write lane's every slot (sixty-four in flight, none queued for
+// one) and are 1.2–1.8 s at the p50 and 2.4–3.7 s at the p99, the build
+// waiting for the one unit of the share: over one repository 50–62% of
+// them waited past code.GitShareWait and were answered unready, the walk's
+// word for "ask again", and over sixty-four repositories up to 39%; the
+// copy's sync, its p99 at most 1.5 s, comes nearest its own budget there.
+// So the whole write's p99 is at most 2.9 s at a 200 ms first byte, a
+// twenty-eighth of estate.GitWriteAttempt, and its upload's a hundredth of
+// code.WriteUploadAllowance: every term of the attempt measured inside its
+// budget (estate.GitWriteAttempt), none re-derived.
+//
+// A PERSON'S PUSH to the same repository every 100 ms beside sixty-four
+// writes at once is NOT held within twice its p99 alone on these two cores:
+// 0.95–1.4 s at the p99 against 0.1–0.3 s alone (one alone run of the fake
+// at 100 ms read 1.5 s and passed), while its p50 moved from 92–289 ms to
+// 186–361 ms. Timed alone again once the writes had stopped, its p99 stayed
+// at 1.2–1.5 s against the fake: most of that tail is the hundreds of packs
+// the writes left in the one repository, which nothing in the arm compacts,
+// and not the writes beside it. From memory it fell back to 0.29 s, so the
+// rest is the two cores' CPU — sixty-four landings beside the share's one
+// build — which the share, a bound on read-lane slots, does not divide: the
+// person's scans kept their slot. The bound is the benchmark's, and fails
+// it on two cores.
+//
+// AN ENGINE COMMIT'S BUILD ALONE (BenchmarkEngineCommit; the same machine,
+// git and runs) follows the change and never the tree: a commit put along a
+// path six directories deep builds in 56–89 ms at the p50 for one file,
+// 33–84 ms for ten, 59–145 ms for a hundred (a p99 of 0.07–0.24 s, a
+// fortieth of code.WriteBuildDeadline at the most) and 243–522 ms for
+// code.MaxFileOps' thousand (a p99 of 0.26–0.64 s), in a tree of 10 000
+// files and of 100 000, git asked the same requests in either
+// (TestAnEngineCommitReadsNoWholeTree); every directory it touches is
+// written whole into its pack: 1.4 KB for one file at depth one, 4.1 KB at
+// depth six, 9.2 KB for a hundred files and 58 KB for a thousand. The two
+// trees' p50 within a tenth of each other is held of every arm, and on
+// these two shared cores ten of thirteen arms held it when each arm's two
+// trees ran back to back; the rest were 13% apart, the larger tree slower
+// at a thousand files and at one file six deep in both runs, and once the
+// smaller tree slower by 87% — the machine's moment, since the requests are
+// the same. The one cost that follows a directory's ENTRIES is a put into
+// a wide one: 74–78 ms and a pack of 240 KB into a directory of 10 000
+// entries, 0.60–0.85 s (0.68–1.2 s at the p99) and 2 393 208 bytes into one
+// of 100 000 — 24 bytes an entry, the ids incompressible — which is
+// code.MaxWritePackBytes' measure.
 package host
