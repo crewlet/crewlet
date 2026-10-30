@@ -49,7 +49,10 @@ type Fleet struct {
 	runs         map[string]coord.Record
 	secrets      map[string]coord.SecretRecord
 	integrations map[string][]byte
-	mailboxes    map[uuid.UUID]coord.MailboxRecord
+
+	// seatAccess is the seat access ledger, by integration then handle.
+	seatAccess map[string]map[string][]byte
+	mailboxes  map[uuid.UUID]coord.MailboxRecord
 
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one, and objectCollection the collector's last report.
@@ -134,6 +137,7 @@ func NewFleet() *Fleet {
 		runs:         map[string]coord.Record{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
+		seatAccess:   map[string]map[string][]byte{},
 		mailboxes:    map[uuid.UUID]coord.MailboxRecord{},
 		pauses:       map[uuid.UUID]coord.SeatPause{},
 		uploads:      map[string]versioned{},
