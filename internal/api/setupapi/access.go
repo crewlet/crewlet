@@ -366,16 +366,20 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 	// or the answer's own `revision`; the fleet's revision this request
 	// read where the caller named none, so the draft lands on the document
 	// it was judged against or is refused as stale.
-	expect := strings.TrimSpace(r.Header.Get("If-Match"))
+	stated := strings.TrimSpace(r.Header.Get("If-Match"))
+	expect := stated
 	if expect == "" {
 		expect = draft.Revision
 	}
 	if expect == "" {
 		expect = q.Revision
 	}
+	// A HEADER IS A PRECONDITION, a body field the domain's base: a save that
+	// loses to a revision its If-Match named is 412, one built on the body's
+	// or the read's revision is 409 (RFC 9110 §13.1.1).
 	req := configapi.ApplySeatsRequest{
 		Seats: edits, Summary: accessSummary(kind, changed, draft.Summary),
-		By: attributionOf(r), Expect: expect,
+		By: attributionOf(r), Expect: expect, Stated: stated != "",
 	}
 	if check {
 		checked, checkErr := s.config.CheckSeats(r.Context(), req)
@@ -686,7 +690,8 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 		!authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessRaise}) {
 		return
 	}
-	expect := strings.TrimSpace(r.Header.Get("If-Match"))
+	stated := strings.TrimSpace(r.Header.Get("If-Match"))
+	expect := stated
 	if expect == "" {
 		expect = q.Revision
 	}
@@ -698,7 +703,7 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 		}}},
 		Summary: accessSummary(q.Kind, []accessChange{change},
 			"keep the vendor's setting"),
-		By: attributionOf(r), Expect: expect,
+		By: attributionOf(r), Expect: expect, Stated: stated != "",
 	})
 	if err != nil {
 		s.refuse(w, r, err, setup.Result{})
