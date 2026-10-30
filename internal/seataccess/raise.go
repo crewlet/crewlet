@@ -11,11 +11,11 @@ import (
 // Agents tab's save, its `keep` action and every authored write of the
 // company document ask it.
 //
-// FAIL CLOSED. Where the vendor's offer for the lane could not be read
-// ([Options.Unread]), which of its levels administers is unknown, so a turn-on
-// or a change of level is asked a step-up as a raise would be; turning off and
-// changing nothing never are. Where the vendor's offer was read, it is
-// [NeedsStepUp], the vendor's own facts.
+// IT IS [NeedsStepUp], WHICH FAILS CLOSED: a level the offer cannot vouch for
+// (one the vendor does not list, or any level of a lane whose offer could not
+// be read) is a raise where a seat turns on at it or moves to it, so a vendor
+// that did not answer never lets one through. Turning off, lowering and
+// changing nothing never are.
 //
 // A LANE MANAGED OUTSIDE CREWLET IS NEVER A RAISE HERE: the engine grants
 // nothing on it ([ManagedExternal]), so its setting hands out no access.
@@ -23,14 +23,7 @@ func AsksStepUp(opts Options, before, after Desired) bool {
 	if opts.Managed == ManagedExternal {
 		return false
 	}
-	if NeedsStepUp(opts, before, after) {
-		return true
-	}
-	if !opts.Unread || !after.Enabled {
-		return false
-	}
-	before, after = before.Normalized(), after.Normalized()
-	return !before.Enabled || before.Level != after.Level
+	return NeedsStepUp(opts, before.Normalized(), after.Normalized())
 }
 
 // Raise is one agent seat's lane a write raises to an administration grant,
@@ -81,24 +74,24 @@ func RaisesBetween(prior, next *config.Company, offers Offers) []Raise {
 	return out
 }
 
-// UnreadOffers is every lane of kind as an offer nobody could read
-// ([Options.Unread] wherever the lane grants by level), with the static facts
-// its vendor's catalog holds where this build registers one: what
-// [RaisesBetween] judges by when no vendor is asked, failing closed.
+// UnreadOffers is every lane of kind as an offer nobody could read: no levels,
+// so none is vouched for, and the static facts its vendor's catalog holds
+// where this build registers one (GitHub's permissions). What [RaisesBetween]
+// judges by when no vendor is asked, failing closed.
 // external is a company whose credentials for kind are handed in from outside
 // Crewlet ([config.Company.SeatCredentialMode]).
 func UnreadOffers(kind integration.Kind, external bool) map[Lane]Options {
 	vendor, registered := Lookup(kind)
 	out := map[Lane]Options{}
 	for _, lane := range LanesOf(kind) {
-		o := Options{Lane: lane, Unread: true}
+		o := Options{Lane: lane}
 		if registered {
 			if spec, ok := vendor.Catalog().Lane(lane); ok {
-				o.Permissions, o.Unread = spec.Permissions, spec.Levels
+				o.Permissions = spec.Permissions
 			}
 		}
 		if external {
-			o.Managed, o.Unread = ManagedExternal, false
+			o.Managed = ManagedExternal
 		}
 		out[lane] = o
 	}

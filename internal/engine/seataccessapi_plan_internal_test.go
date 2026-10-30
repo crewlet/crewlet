@@ -106,10 +106,10 @@ func TestAPlanIsDrawnOnlyWhereTheSyncTakesSteps(t *testing.T) {
 	}
 }
 
-// AN OFFER THAT COULD NOT BE READ IS MARKED SO, AND NEVER KEPT.
+// AN OFFER THAT COULD NOT BE READ VOUCHES FOR NOTHING, AND IS NEVER KEPT.
 //
-// Datadog's keys are unset, so its vendor cannot be opened: the lane is
-// unread (a turn-on on it asks a step-up) and nothing is cached, so the next
+// Datadog's keys are unset, so its vendor cannot be opened: the lane offers no
+// levels (a turn-on on it asks a step-up) and nothing is cached, so the next
 // read asks again. GitLab managed outside Crewlet needs no vendor, so its
 // offer is whole and is kept. Mutation: cache what failed, and the first case
 // fails.
@@ -124,8 +124,10 @@ func TestAFailedOfferReadIsNeverKept(t *testing.T) {
 	}
 	q := accessCompany(t, integration.KindDatadog, datadogProvisioned, `["datadog"]`)
 	offers := e.seatOffers(t.Context(), q.Kind, q.Company, q.Roster, "rev-failed", false)
-	if len(offers) != 1 || !offers[0].Unread {
-		t.Errorf("an unreadable Datadog offers %+v, want its lane unread", offers)
+	if len(offers) != 1 || len(offers[0].Levels) != 0 || !seataccess.AsksStepUp(offers[0],
+		seataccess.Desired{}, seataccess.Desired{Enabled: true, Level: "role-std"}) {
+		t.Errorf("an unreadable Datadog offers %+v, want no levels, so a turn-on asks a "+
+			"step-up", offers)
 	}
 	if cached(integration.KindDatadog, "rev-failed") {
 		t.Error("an offer that could not be read was cached")
