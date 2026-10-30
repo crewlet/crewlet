@@ -3585,7 +3585,7 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			// No login either way, so a local cell is no remedy here: the
 			// env is, the entry's or the seat's.
 			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; or set %s in this seat's role.sandbox.env", lead, strings.Join(sign.Variables, " or "))}
+				"%s; or set %s in this seat's role.sandbox.env", lead, words.Or(sign.Variables))}
 		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 			// The mode hands the CLI nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.

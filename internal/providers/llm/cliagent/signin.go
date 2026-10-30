@@ -315,7 +315,7 @@ func (p *Provider) ModeSignIn() (ModeSignIn, bool) {
 		return ModeSignIn{
 			Mode: AuthEnv, Variables: slices.Clone(names),
 			Reads: fmt.Sprintf("signs the CLI in with its env alone (one of %s)",
-				strings.Join(names, ", ")),
+				words.Or(names)),
 			Unset: "and its env sets none of them",
 			Supply: fmt.Sprintf("set one in providers.llm.%s.env, with the cloud provider's "+
 				"credentials or the gateway's address beside it", p.key),
