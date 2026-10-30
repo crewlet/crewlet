@@ -285,10 +285,19 @@ func (r WriteRefusal) Valid() bool { return slices.Contains(WriteRefusals(), r) 
 
 // The bounds of an engine write.
 const (
-	// MaxCommitPayloadBytes bounds what one write carries: its encoded Files
-	// and its Message together. A MEBIBYTE: an engine write is a doc or a
-	// configuration fix, never a codebase — a change larger than this belongs
-	// in a coding box, which pushes through the relay with no such bound.
+	// MaxCommitPayloadBytes bounds what one write carries: its Files and its
+	// Message together, EACH AS encoding/json SPELLS IT — the encoding every
+	// hop of the write's way sends it in, in which a '<', a '>', a '&' and a
+	// control byte other than a tab, a newline, a carriage return, a backspace
+	// or a form feed take six bytes — for every kind that carries either: a
+	// commit_files' operations and message, and the message a revert or a
+	// cherry-pick gives in place of git's own ([EngineWrite.Validate]). A
+	// MEBIBYTE: an engine write is a doc or a configuration fix, never a
+	// codebase — a change larger than this belongs in a coding box, which
+	// pushes through the relay with no such bound. It is what sizes a write in
+	// flight: a git node holds each one it builds for a peer through every
+	// wait it makes, in a slot of its writes' lane (internal/estate's
+	// laneGitWrites, which states what a slot holds, measured).
 	MaxCommitPayloadBytes = 1 << 20
 
 	// MaxFileOps is the most operations one commit_files carries: past every
@@ -471,7 +480,54 @@ func (w EngineWrite) Validate() error {
 			return fmt.Errorf("%w: message: it %s", ErrInvalid, why)
 		}
 	}
+	if err := w.validPayload(); err != nil {
+		return err
+	}
 	return w.validFiles()
+}
+
+// validPayload holds what the write carries to [MaxCommitPayloadBytes]: its
+// operations and its message together, each as encoding/json encodes it, for
+// every kind that carries either — a commit_files' operations and message, and
+// a revert's or a cherry-pick's message.
+//
+// MEASURED AS THE WIRE SPELLS IT, NEVER BY THE TEXT'S LENGTH. What a write
+// costs every party holding it is its encoding — the router's request, the git
+// node's slot of its writes' lane — and encoding/json spells a '<', a '>', a
+// '&' and most control bytes in six bytes each (queue.ErrTooLarge states the
+// same of every payload). Counted by its length, a commit_files' message of a
+// mebibyte of '<' crossed at six, and a revert's or a cherry-pick's message,
+// bounded by nothing here, at up to the transport's whole eight
+// (queue.MaxPayloadBytes): past it the transport refused the request to every
+// peer, while the home's own seat had the same write built in process — an
+// answer that depended on which node asked.
+func (w EngineWrite) validPayload() error {
+	n := 0
+	if len(w.Files) > 0 {
+		encoded, err := json.Marshal(w.Files)
+		if err != nil {
+			return fmt.Errorf("%w: files: %w", ErrInvalid, err)
+		}
+		n += len(encoded)
+	}
+	if w.Message != "" {
+		encoded, err := json.Marshal(w.Message)
+		if err != nil {
+			return fmt.Errorf("%w: message: %w", ErrInvalid, err)
+		}
+		n += len(encoded)
+	}
+	switch {
+	case n <= MaxCommitPayloadBytes:
+		return nil
+	case len(w.Files) > 0:
+		return fmt.Errorf("%w: files: the change — its operations and its message, as JSON spells them — is %d "+
+			"bytes, past the %d one engine write may carry (code.MaxCommitPayloadBytes); make a change this large "+
+			"in a coding box (run_sandbox)", ErrInvalid, n, MaxCommitPayloadBytes)
+	}
+	return fmt.Errorf("%w: message: it is %d bytes as JSON spells it, past the %d one engine write may carry "+
+		"(code.MaxCommitPayloadBytes); shorten it, or leave it out to take git's own", ErrInvalid, n,
+		MaxCommitPayloadBytes)
 }
 
 // validKind holds each field to the kind that takes it.
@@ -532,20 +588,12 @@ func (w EngineWrite) validKind() error {
 	return none(commit, files, base, message)
 }
 
-// validFiles holds a commit_files' operations to their kinds and paths, its
-// payload to MaxCommitPayloadBytes, and every path to one operation.
+// validFiles holds a commit_files' operations to their kinds and paths, and
+// every path to one operation — their bytes, with the message's, being
+// [EngineWrite.validPayload]'s.
 func (w EngineWrite) validFiles() error {
 	if len(w.Files) == 0 {
 		return nil
-	}
-	encoded, err := json.Marshal(w.Files)
-	if err != nil {
-		return fmt.Errorf("%w: files: %w", ErrInvalid, err)
-	}
-	if n := len(encoded) + len(w.Message); n > MaxCommitPayloadBytes {
-		return fmt.Errorf("%w: files: the change is %d bytes, past the %d one engine write may carry "+
-			"(code.MaxCommitPayloadBytes); make a change this large in a coding box (run_sandbox)", ErrInvalid, n,
-			MaxCommitPayloadBytes)
 	}
 	named := make(map[string]int, len(w.Files))
 	claim := func(i int, p string) error {

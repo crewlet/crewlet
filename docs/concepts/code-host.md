@@ -5089,15 +5089,18 @@ asked through
 ### What a write is refused
 
 A write the request itself gets wrong is refused before anything is read:
-more than 1 000 operations or more than 1 MiB of them with the message, a path
-it names more than 64 components deep, two operations on one path, a message
-with a NUL byte or text git would rewrite, and a new path git or a checkout
-would refuse or misread — past 4 096 bytes, a component past 255, an empty,
-`.` or `..` component, a control character, a backslash, a code point HFS+
-ignores, `.git` in any spelling git reads as one (any case, trailing dots and
-spaces, an NTFS stream such as `.GIT::$INDEX_ALLOCATION`), and a link named
-`.gitmodules`, `.gitattributes`, `.gitignore` or `.mailmap`, which git refuses
-or ignores. Paths a write does not touch are never judged.
+more than 1 000 operations, more than 1 MiB of operations and message — or,
+for a revert or a cherry-pick, of message — as JSON spells them (where `<`,
+`>`, `&` and most control characters take six bytes each, so a message of
+them reaches the bound at a sixth of its length), a path it names more than 64
+components deep, two operations on one path, a message with a NUL byte or text
+git would rewrite, and a new path git or a checkout would refuse or misread —
+past 4 096 bytes, a component past 255, an empty, `.` or `..` component, a
+control character, a backslash, a code point HFS+ ignores, `.git` in any
+spelling git reads as one (any case, trailing dots and spaces, an NTFS stream
+such as `.GIT::$INDEX_ALLOCATION`), and a link named `.gitmodules`,
+`.gitattributes`, `.gitignore` or `.mailmap`, which git refuses or ignores.
+Paths a write does not touch are never judged.
 
 A refusal of the **push** — `stale`, the grant's `not_permitted`, a
 protection's, `blob_too_large`, `repo_deleted`, `busy` — says what a push's
@@ -5123,7 +5126,7 @@ repository's committer reaches is recorded as any push's is. A refusal of the
 
 | Bound | Value | Why |
 |---|---|---|
-| A write's operations and message | 1 MiB | An engine write is a document or a configuration fix, never a codebase: a larger change belongs in a coding box, whose push has no such bound. |
+| A write's operations and message | 1 MiB, as JSON spells them | An engine write is a document or a configuration fix, never a codebase: a larger change belongs in a coding box, whose push has no such bound. Measured as it crosses between nodes, because that is what every node holding the write holds. |
 | Operations in one `commit_files` | 1 000 | Past every document or configuration change, and — with a path's depth — what bounds the directories one build rewrites: every directory above a path the write names, at most 2 × 1 000 × 63 and the root, since a move names two paths. |
 | A write's pack | 4 MiB | Four payloads' worth: a commit's new files compressed and the directories it touches, each written whole — about 40 bytes an entry, so some 3 MB for a file put into a directory of 100 000. |
 | A write's git | 10 s | Every process of a build together, one read's deadline. |

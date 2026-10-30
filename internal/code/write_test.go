@@ -1,6 +1,7 @@
 package code_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -201,6 +202,98 @@ func TestAnEngineWritesPushIsItsOperations(t *testing.T) {
 	w.OpID = op
 	if got := w.Instant(); !got.Equal(at.Truncate(time.Second)) {
 		t.Errorf("the write's instant is %v, want its operation's second %v", got, at.Truncate(time.Second))
+	}
+}
+
+// AN ENGINE WRITE'S PAYLOAD IS MEASURED AS THE WIRE SPELLS IT: its operations
+// and its message together, each as encoding/json encodes it — a '<' in six
+// bytes — against code.MaxCommitPayloadBytes, for every kind that carries
+// either. A commit_files whose message of '<' is half the bound as text is
+// refused, as is a revert's or a cherry-pick's message of '<' one character
+// past the bound as JSON spells it; the write exactly at the bound is
+// admitted, whichever kind carries it. Measured by its length, the '<'
+// message of a mebibyte crossed the wire at six, and a revert's message —
+// bounded by nothing — at up to the transport's whole eight.
+//
+// Mutations: measure the message by its length — the half-bound '<' message
+// and the one-past ones pass, red; bound only a commit_files' payload — the
+// revert's and the cherry-pick's one-past messages pass, red; refuse at the
+// bound — the writes at it are refused, red.
+func TestAnEngineWritesPayloadIsMeasuredAsTheWireSpellsIt(t *testing.T) {
+	t.Parallel()
+	spelled := func(v any) int {
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(encoded)
+	}
+	// lt is n '<', each six bytes as JSON spells it.
+	lt := func(n int) string { return strings.Repeat("<", n) }
+	pick := func(kind code.EngineWriteKind, message string) code.EngineWrite {
+		return code.EngineWrite{Kind: kind, RepoID: aWrite().RepoID, Principal: aWrite().Principal,
+			OpID: aWrite().OpID, Ref: "refs/heads/main", ExpectedHead: oidOf("H"), Commit: oidOf("C"),
+			Message: message}
+	}
+	commit := func(message string) code.EngineWrite {
+		w := aWrite()
+		w.Message = message
+		return w
+	}
+	// payload is what the write carries as JSON spells it: the files and the
+	// message the write sets.
+	payload := func(w code.EngineWrite) int {
+		n := 0
+		if len(w.Files) > 0 {
+			n += spelled(w.Files)
+		}
+		if w.Message != "" {
+			n += spelled(w.Message)
+		}
+		return n
+	}
+	// fill is a message JSON spells in exactly room bytes: as many '<' as
+	// fit beside its quotes, and the rest in plain bytes.
+	fill := func(room int) string {
+		n := (room - 2) / 6
+		return lt(n) + strings.Repeat("x", room-2-6*n)
+	}
+	files := spelled(aWrite().Files)
+	sixth := (code.MaxCommitPayloadBytes - 2) / 6
+	for name, tc := range map[string]struct {
+		w       code.EngineWrite
+		atBound bool
+	}{
+		"a revert at the bound":                    {pick(code.WriteRevert, fill(code.MaxCommitPayloadBytes)), true},
+		"a cherry-pick at the bound":               {pick(code.WriteCherryPick, fill(code.MaxCommitPayloadBytes)), true},
+		"a commit whose files and message fill it": {commit(fill(code.MaxCommitPayloadBytes - files)), true},
+		"a revert whose message of '<' fits":       {pick(code.WriteRevert, lt(sixth)), false},
+		"a revert taking git's own message":        {pick(code.WriteRevert, ""), false},
+		"a cherry-pick taking git's own message":   {pick(code.WriteCherryPick, ""), false},
+	} {
+		if n := payload(tc.w); n > code.MaxCommitPayloadBytes || tc.atBound && n != code.MaxCommitPayloadBytes {
+			t.Fatalf("%s: the case's premise does not hold — it carries %d bytes as JSON spells them", name, n)
+		}
+		if err := tc.w.Validate(); err != nil {
+			t.Errorf("%s: %v, want it admitted", name, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		w     code.EngineWrite
+		names string
+	}{
+		"a commit whose message of '<' is half the bound as text": {commit(lt(code.MaxCommitPayloadBytes / 2)),
+			"files:"},
+		"a commit one byte past the bound":     {commit(fill(code.MaxCommitPayloadBytes-files) + "x"), "files:"},
+		"a revert one '<' past the bound":      {pick(code.WriteRevert, lt(sixth+1)), "message:"},
+		"a cherry-pick one '<' past the bound": {pick(code.WriteCherryPick, lt(sixth+1)), "message:"},
+		"a revert one byte past the bound": {pick(code.WriteRevert, fill(code.MaxCommitPayloadBytes)+"x"),
+			"message:"},
+	} {
+		err := tc.w.Validate()
+		if !errors.Is(err, code.ErrInvalid) || !strings.Contains(err.Error(), tc.names) {
+			t.Errorf("%s: %v, want ErrInvalid naming %s", name, err, tc.names)
+		}
 	}
 }
 

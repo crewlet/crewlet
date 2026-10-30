@@ -1875,11 +1875,15 @@ func TestAnEngineWriteThatRanNothingMovesOnWithTheSameWrite(t *testing.T) {
 // AN ENGINE WRITE THE ONE RULE REFUSES IS ASKED OF NO GIT NODE: the router that
 // carries a write holds it to code.EngineWrite.Validate, as the tool that asks
 // it and the git node that builds it do, so a malformed write — a branch git
-// refuses, a seat's write naming no turn — is code.ErrInvalid at once, naming
-// the field, and costs no git node a round trip, a sync or a slot of its lane.
+// refuses, a seat's write naming no turn, a payload past its bound as the wire
+// spells it (a revert's message, which nothing else bounds, or a commit's
+// message of '<', each six bytes on the wire) — is code.ErrInvalid at once,
+// naming the field, and costs no git node a round trip, a sync or a slot of
+// its lane.
 //
-// Mutation: carry the write unvalidated — the git node is asked it and builds
-// it, red.
+// Mutations: carry the write unvalidated — the git node is asked it and builds
+// it, red; measure the message by its length (code.EngineWrite.Validate) — the
+// '<' commit and the revert are asked of a git node, red.
 func TestAnEngineWriteTheOneRuleRefusesIsAskedOfNoNode(t *testing.T) {
 	t.Parallel()
 	f := newFleet(t)
@@ -1888,9 +1892,17 @@ func TestAnEngineWriteTheOneRuleRefusesIsAskedOfNoNode(t *testing.T) {
 	badRef.Ref = "refs/heads/a..b"
 	noTurn := seatWriteOf(repoID(4))
 	noTurn.Principal.Run = code.RunProvenance{}
+	longRevert := writeOf(repoID(4))
+	longRevert.Kind, longRevert.Files = code.WriteRevert, nil
+	longRevert.Commit = "2222222222222222222222222222222222222222"
+	longRevert.Message = strings.Repeat("x", code.MaxCommitPayloadBytes)
+	angled := writeOf(repoID(4))
+	angled.Message = strings.Repeat("<", code.MaxCommitPayloadBytes/2)
 	for name, w := range map[string]code.EngineWrite{
-		"a branch git refuses":          badRef,
-		"a seat's write naming no turn": noTurn,
+		"a branch git refuses":                        badRef,
+		"a seat's write naming no turn":               noTurn,
+		"a revert whose message is past the bound":    longRevert,
+		"a commit whose message of '<' is half of it": angled,
 	} {
 		if _, err := f.client.Code().GitWrite(t.Context(), w); !errors.Is(err, code.ErrInvalid) {
 			t.Errorf("%s = %v, want code.ErrInvalid before any git node is asked", name, err)
