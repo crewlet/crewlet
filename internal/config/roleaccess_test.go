@@ -95,7 +95,8 @@ roles:
 }
 
 // THE ENGINE BINDS A SEAT'S OWN CREDENTIAL TO ITS PER-SEAT SERVER (D15), under
-// the key the server reads, and only for a seat that is on.
+// the key the server reads, and only for a seat that is on. Both integrations
+// are ones the engine provisions, so the credential is the one it seals (D4b).
 func TestTheOrgModelBindsASeatsCredentialToItsTool(t *testing.T) {
 	t.Parallel()
 	c := parsedDoc(t, `

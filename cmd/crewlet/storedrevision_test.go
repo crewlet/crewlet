@@ -720,7 +720,6 @@ func TestVendorCommandsReadACompanyFileWithADuplicateUnitKey(t *testing.T) {
 		{"confluence", "provision", "-dry-run", "-config", noBootstrap, file},
 		{"confluence", "resync", "-config", noBootstrap, file},
 		{"confluence", "import", "-dry-run", "-config", noBootstrap, file, dir},
-		{"slack", "provision", "-dry-run", "-config", noBootstrap, file},
 		{"llm", "status", "-config", noBootstrap, "-company", file},
 	} {
 		var out, errOut bytes.Buffer

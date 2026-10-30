@@ -49,6 +49,7 @@ import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import "~/styles/access.css";
 import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
 import { PermissionsDialog, RemoveDialog, ReviewDialog } from "./Dialogs.tsx";
 import {

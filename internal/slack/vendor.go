@@ -302,6 +302,9 @@ func (s *session) Observe(ctx context.Context, in seataccess.ObserveInput) (seat
 // sync reads there.
 func observed(seat SeatApp, obs Observed, record *seataccess.Record) seataccess.Observed {
 	out := seataccess.Observed{AccountID: seat.AppID, Account: obs.BotName}
+	if out.AccountID == "" {
+		out.AccountID = obs.AppID
+	}
 	if record != nil && record.Account != nil {
 		out.CreatedAt = record.Account.CreatedAt
 	}
