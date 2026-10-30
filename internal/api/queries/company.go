@@ -1138,6 +1138,11 @@ func reconcileFindings(findings []integration.Finding) []map[string]any {
 		if f.Remedy != "" {
 			row["remedy"] = f.Remedy
 		}
+		// THE LEAD AN ADVISORY CARRIES, which the notes list sets in bold
+		// ahead of the sentence. Absent on a finding that has none.
+		if f.Title != "" {
+			row["title"] = f.Title
+		}
 		// THE WHOLE LIST, where a finding is about many things and its own
 		// sentence gives only the count. See [integration.Finding.Subjects]:
 		// the detail is the card's status line and is capped, so a finding

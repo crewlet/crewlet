@@ -15,6 +15,13 @@ export interface ReconcileFinding {
   kind: string;
   subject?: string;
   /**
+   * The finding's lead, a few words a list sets in bold ahead of `detail`
+   * ("GitHub can't reach this engine"). Every advisory carries one, which is
+   * what the integration's notes lead with; a finding without one is read by
+   * its sentence alone.
+   */
+  title?: string;
+  /**
    * What is wrong, in one sentence — and only that.
    *
    * What to do about it is `remedy` and which things it is about is

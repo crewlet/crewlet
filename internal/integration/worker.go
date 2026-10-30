@@ -1288,12 +1288,13 @@ func StampRegistration(state *State, current string) []Finding {
 	return []Finding{{
 		Kind:    FindingRegistrationOrphaned,
 		Subject: previous,
+		Title:   "An old registration is still delivering",
 		Detail: fmt.Sprintf(
-			"this engine registered %q and now registers %q, so %q is still "+
-				"there and nothing manages it — it keeps delivering, which is "+
-				"why it was not removed. Repoint anything naming %q at %q, "+
-				"then delete %q at the third-party app",
-			previous, current, previous, previous, current, previous),
+			"this engine registered %q and now registers %q. %q is still "+
+				"there, unmanaged, and keeps delivering, so it was not removed",
+			previous, current, previous),
+		Remedy: fmt.Sprintf("Repoint anything naming %q at %q, then delete %q "+
+			"at the third-party app", previous, current, previous),
 	}}
 }
 

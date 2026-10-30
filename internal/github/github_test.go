@@ -2300,10 +2300,19 @@ func TestAnAddressGitHubCannotReachRegistersNothingAndIsAnAdvisory(t *testing.T)
 		findings[0].Subject != "api.external_url" {
 		t.Fatalf("findings = %+v, want one coverage advisory on api.external_url", findings)
 	}
-	for _, says := range []string{"http://localhost:8200", "push", "webhooks off"} {
+	// A LEAD, THEN WHAT DOES NOT ARRIVE AND WHAT STILL WORKS, then the one
+	// setting that makes it arrive, each in its own field so the notes list
+	// lays them out.
+	if findings[0].Title == "" {
+		t.Error("the advisory has no lead for the notes list to set in bold")
+	}
+	for _, says := range []string{"`http://localhost:8200`", "push"} {
 		if !strings.Contains(findings[0].Detail, says) {
 			t.Errorf("the advisory does not say %q: %s", says, findings[0].Detail)
 		}
+	}
+	if !strings.Contains(findings[0].Remedy, "`api.external_url`") {
+		t.Errorf("the remedy does not name the setting: %q", findings[0].Remedy)
 	}
 	if phase := integration.Classify(findings).Phase; phase != integration.PhaseReady {
 		t.Errorf("the card reads %s, want ready: the agents are working", phase)

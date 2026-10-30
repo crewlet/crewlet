@@ -1225,9 +1225,11 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 					ActionURL: "https://gitlab.example.com/api-gateway/-/project_members",
 					Subjects:  []string{"ceo", "cto"},
 				}, {
-					// The one kind with a date, so `expires_at` is sent.
+					// The one kind with a date, so `expires_at` is sent, and
+					// an advisory, so it carries the lead the notes list sets.
 					Kind:      integration.FindingCredentialExpiring,
 					Subject:   "integrations.gitlab.provisioning.admin_token",
+					Title:     "Admin token expires soon",
 					Detail:    "the group Owner token expires on 2026-10-01",
 					ExpiresAt: pinned.Add(5 * 24 * time.Hour),
 				}},

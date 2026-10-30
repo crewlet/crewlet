@@ -247,7 +247,7 @@ roles:
 		t.Fatalf("a managed deployment's GitHub sync = %v, want it answered without the vendor", err)
 	}
 	if len(report.Findings) != 1 || report.Findings[0].Kind != integration.FindingCoveragePartial ||
-		!strings.Contains(report.Findings[0].Detail, "managed outside Crewlet") || len(report.Records) != 0 {
+		!strings.Contains(report.Findings[0].Title, "managed outside Crewlet") || len(report.Records) != 0 {
 		t.Fatalf("report = %+v, want the one managed-outside finding and no record", report)
 	}
 	written := &Engine{}
