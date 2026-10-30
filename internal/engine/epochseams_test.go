@@ -244,6 +244,8 @@ var classified = map[string]struct {
 		"any reader's"},
 	"query.Options.Git":   {seamNone, "the node's git pool"},
 	"query.Options.Share": {seamNone, "the node's seat git-work share of its read lane"},
+	"query.Options.Resyncs": {seamNone, "the node's buckets of its seats' tools' re-syncs at the " +
+		"code log's head, a fixed rate no revision moves: spent by a read, never configuration it reads"},
 	"query.Options.Roster": {seamGrant, "the chart a seat's read of a repository by object id is " +
 		"judged by on the git node that answers it"},
 	"query.Options.Current": {seamGate, "whether this node serves the company's configuration: a " +
@@ -272,6 +274,9 @@ var classified = map[string]struct {
 		"hold no new commit of, which a box judged against the domain a revision just replaced " +
 		"shares with a box that pushed just before it"},
 	"host.Options.Share": {seamNone, "the node's seat git-work share of its read lane"},
+	"host.Options.Resyncs": {seamNone, "the node's buckets of its seats' tools' re-syncs at the " +
+		"code log's head, the query server's own, a fixed rate no revision moves: spent by an engine " +
+		"write's re-judgement, never configuration it reads"},
 	"host.Options.Current": {seamGate, "whether this node serves the company's configuration: a " +
 		"seat's write behind it is answered unready, behind_config, and built nowhere here, and a " +
 		"coding box answered 503 behind_config"},
