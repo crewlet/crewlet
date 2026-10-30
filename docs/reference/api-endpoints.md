@@ -3658,9 +3658,9 @@ answers the name and when it was minted, never the value.
 
 `revision` is the company revision the answer was read at, and the `ETag` is
 the same value quoted. An entry of `options` whose vendor did not answer just
-now carries `"unread": true` and no levels: which of its levels administers is
-unknown, so a turn-on or a change of level on that lane asks the step-up a
-raise does, and the next read asks the vendor again. Each entry of `options` also says whether a person can
+now carries no levels: which of its levels administers is unknown, so a
+turn-on or a change of level on that lane asks the step-up a raise does, and
+the next read asks the vendor again. Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration
 for the company, which is wherever it does not hold the authority that creates
