@@ -42,3 +42,37 @@ func pluralAre(n int) string {
 	}
 	return "are"
 }
+
+// SeatAccessConnected reports whether the company connects kind's integration
+// at all, which is the only place its seats' access means anything: Jira or
+// Confluence for atlassian, and the integration's own block for every other
+// kind.
+func (c *Company) SeatAccessConnected(kind string) bool {
+	if c == nil {
+		return false
+	}
+	in := c.Integrations
+	switch kind {
+	case "datadog":
+		return in.Datadog != nil
+	case "gitlab":
+		return in.GitLab != nil
+	case "atlassian":
+		return in.Jira != nil || in.Confluence != nil
+	case "mattermost":
+		return in.Mattermost != nil
+	case "github":
+		return in.GitHub != nil
+	case "slack":
+		return in.Slack != nil
+	}
+	return false
+}
+
+// SeatAccessPending reports an integration the company connects whose seats
+// the migration onto per-seat access has not moved yet: the access pass for it
+// waits, and says so. An integration the company does not connect is not
+// waiting on anything.
+func (c *Company) SeatAccessPending(kind string) bool {
+	return c.SeatAccessConnected(kind) && !c.SeatAccessMigratedFor(kind)
+}

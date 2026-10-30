@@ -48,16 +48,12 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			//
 			// It claimed credential_missing once, so a row reporting a
 			// token this engine could not resolve offered the instance
-			// URL as the field that clears it. The repair moved it to
-			// identity_missing — a truer sentence, about a finding this
-			// pass then stopped producing at all: the only thing that
-			// ever raised it was a seat the -decommission sweep had just
-			// disabled, and setting a URL never brought one of those
-			// back. An absent URL does not raise a finding either; it
-			// makes NewClient refuse, so the pass FAULTS rather than
-			// reporting, and there is nothing here for the join to
-			// offer this field against. An empty Blocks says that, where
-			// a kind nothing produces reads as a join somebody checked.
+			// URL as the field that clears it. An absent URL raises no
+			// finding: it makes NewClient refuse, so the pass FAULTS
+			// rather than reporting, and there is nothing here for the
+			// join to offer this field against. An empty Blocks says
+			// that, where a kind nothing produces reads as a join
+			// somebody checked.
 		},
 		{
 			Field:      "team",
@@ -68,8 +64,9 @@ func Requirements(in *config.Mattermost, resolve func(string) (string, bool)) []
 			Required:   true,
 			Help:       "The team slug the agent bots belong to and post in.",
 			// NO BLOCKS EITHER, and for the same reason the URL has
-			// none: without a team PlanFor refuses, so the pass faults
-			// instead of reporting a finding this field could clear.
+			// none: without a team the access sync cannot open, so it
+			// faults instead of reporting a finding this field could
+			// clear.
 		},
 	}
 

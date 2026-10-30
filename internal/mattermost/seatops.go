@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"net/http"
 	"slices"
 	"strings"
 )
@@ -142,7 +141,7 @@ func (c *Client) SetChannels(
 			continue
 		}
 		channel, err := c.ChannelByName(ctx, teamID, name)
-		if isStatus(err, http.StatusNotFound) {
+		if isNotFound(err) {
 			out.Missing = append(out.Missing, name)
 			continue
 		}

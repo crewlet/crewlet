@@ -777,11 +777,6 @@ test("a seat that needs an app of its own gets the button that creates one", () 
   roster(
     seatOf({
       step: "create_app",
-      tier: "read_only",
-      // THE LABEL COMES WITH THE TIER, always: the dashboard is embedded in
-      // the binary that serves it, so the two are never a version apart and
-      // the screen never has to restate a vocabulary Go owns.
-      tier_label: "Read-only",
       detail: "no app of its own yet",
     }),
   );
@@ -804,7 +799,6 @@ test("the manifest reaches the code host as a form the operator's browser sends"
   const manifest = { name: "Crewlet CTO", url: "https://crewlet.ai", public: false };
   stubFetch(sent, {
     seat: "cto",
-    tier: "review",
     action_url: "https://github.com/organizations/acme/settings/apps/new",
     manifest,
     state: "st-1",

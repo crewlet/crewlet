@@ -119,38 +119,39 @@ func TestExcessAndShortfallReadTheInstallationRatherThanTheManifest(t *testing.T
 	}
 }
 
-// WORKFLOW WRITES ARE AN OPT-IN OF FULL ACCESS AND OF NOTHING ELSE.
+// WORKFLOW WRITES WERE AN OPT-IN OF FULL ACCESS AND OF NOTHING ELSE.
 //
 // GitHub refuses a push touching `.github/workflows` without them, and the
 // same grant lets a branch run a workflow it rewrote with the repository's
-// secrets, so no tier carries them by default and a seat that cannot write
-// code cannot be handed them by a document a validator never saw.
+// secrets, so no tier carries them by default and a seat that could not write
+// code migrates without them whatever its document said.
 func TestWorkflowWritesAreAFullAccessOptInOnly(t *testing.T) {
 	t.Parallel()
 	for _, tier := range github.Tiers {
 		if got := tier.Permissions()[github.PermissionWorkflows]; got != "" {
 			t.Errorf("%s carries workflows=%q with nobody opting in", tier, got)
 		}
-		if got := (github.Access{Tier: tier}).Permissions()[github.PermissionWorkflows]; got != "" {
-			t.Errorf("%s without the opt-in carries workflows=%q", tier, got)
+		if got, _ := github.TierPermissions(string(tier), false); got[github.PermissionWorkflows] != github.LevelNone {
+			t.Errorf("%s without the opt-in migrates workflows=%q", tier, got[github.PermissionWorkflows])
 		}
-		opted := github.Access{Tier: tier, Workflows: true}
-		got := opted.Permissions()[github.PermissionWorkflows]
+		opted, _ := github.TierPermissions(string(tier), true)
+		got := opted[github.PermissionWorkflows]
 		switch tier {
 		case github.TierFullAccess:
-			if got != "write" || !opted.WritesWorkflows() {
-				t.Errorf("an opted-in full_access seat carries workflows=%q", got)
+			if got != github.LevelWrite {
+				t.Errorf("an opted-in full_access seat migrates workflows=%q", got)
 			}
 		default:
-			if got != "" || opted.WritesWorkflows() {
-				t.Errorf("an opted-in %s seat carries workflows=%q", tier, got)
+			if got != github.LevelNone {
+				t.Errorf("an opted-in %s seat migrates workflows=%q", tier, got)
 			}
 		}
 		// THE TIER'S OWN LIST IS UNCHANGED by the opt-in, so opting in
 		// adds one grant and widens nothing else.
-		for name, level := range tier.Permissions() {
-			if opted.Permissions()[name] != level {
-				t.Errorf("%s: the opt-in moved %s from %q to %q", tier, name, level, opted.Permissions()[name])
+		plain, _ := github.TierPermissions(string(tier), false)
+		for name, level := range plain {
+			if opted[name] != level {
+				t.Errorf("%s: the opt-in moved %s from %q to %q", tier, name, level, opted[name])
 			}
 		}
 	}
@@ -166,8 +167,8 @@ func TestWorkflowWritesAreAFullAccessOptInOnly(t *testing.T) {
 func TestEveryTierReadsActionsAndNoneWritesThem(t *testing.T) {
 	t.Parallel()
 	for _, tier := range github.Tiers {
-		access := github.Access{Tier: tier, Workflows: true}
-		if got := access.Permissions()["actions"]; got != "read" {
+		held, _ := github.TierPermissions(string(tier), true)
+		if got := held["actions"]; got != github.LevelRead {
 			t.Errorf("%s holds actions=%q, want read", tier, got)
 		}
 	}
