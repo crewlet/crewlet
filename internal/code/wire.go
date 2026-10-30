@@ -2244,6 +2244,16 @@ const (
 	// and the line — and the path, where it was another — it had there: at
 	// most MaxBlameLines lines a read, a page at a time.
 	GitBlame GitReadKind = "blame"
+	// GitChecksFile is the checks file a commit holds — [ChecksFilePath] in
+	// its tree — its object's id and type and, for a file within
+	// [MaxChecksFileBytes], its bytes WHOLE: what a repository's home reads a
+	// change's checks' definitions from, at its target's tip (M5-D15). THE
+	// ENGINE'S OWN READ ([GitReadKind.EnginesOwn]), and one answer always: a
+	// file the parse refuses by its size alone is answered by its size, and
+	// the bytes are exact — never lines cut into pages, nor text a JSON
+	// string would replace an invalid byte of, which the parse must see as
+	// git holds it.
+	GitChecksFile GitReadKind = "checks_file"
 )
 
 // GitReadKinds is the closed set.
@@ -2254,7 +2264,7 @@ const (
 // takes no versionedFields row.
 func GitReadKinds() []GitReadKind {
 	return []GitReadKind{GitTree, GitBlob, GitDiff, GitCompare, GitLandedIn, GitRevisionFacts, GitReanchor,
-		GitInterdiff, GitLog, GitBlame}
+		GitInterdiff, GitLog, GitBlame, GitChecksFile}
 }
 
 // Valid reports a kind this build answers.
@@ -2262,12 +2272,14 @@ func (k GitReadKind) Valid() bool { return slices.Contains(GitReadKinds(), k) }
 
 // EnginesOwn reports a kind THE ENGINE ALONE reads — a revision's facts, which
 // the repository's home git node reads to record them on the change, or to
-// land it — so a read of it names NO asker and no seat it reads for, is held
-// to no grant and is recorded as nobody's read: an asker there would be
-// judged for a read it never made, and a `visibility: unit` repository's
-// readers would be told the engine read it. As the duty listings of the rows
-// are ([ReadQuery]'s `compaction_due`), and for the same reason.
-func (k GitReadKind) EnginesOwn() bool { return k == GitRevisionFacts }
+// land it, and a commit's checks file, which it reads a change's checks'
+// definitions from at its target's tip — so a read of it names NO asker and
+// no seat it reads for, is held to no grant and is recorded as nobody's read:
+// an asker there would be judged for a read it never made, and a
+// `visibility: unit` repository's readers would be told the engine read it.
+// As the duty listings of the rows are ([ReadQuery]'s `compaction_due`), and
+// for the same reason.
+func (k GitReadKind) EnginesOwn() bool { return k == GitRevisionFacts || k == GitChecksFile }
 
 // EnginesOwn reports a read THE ENGINE makes on its own account: one of a kind
 // only it reads ([GitReadKind.EnginesOwn]), or one it makes FOR A CHECK
@@ -2348,6 +2360,17 @@ type GitQuery struct {
 	Interdiff     *InterdiffQuery     `json:"interdiff,omitempty"`
 	Log           *LogQuery           `json:"log,omitempty"`
 	Blame         *BlameQuery         `json:"blame,omitempty"`
+	ChecksFile    *ChecksFileQuery    `json:"checks_file,omitempty"`
+}
+
+// ChecksFileQuery reads the checks file one commit holds ([GitChecksFile]).
+// An estate request's, as every kind's query is ([GitReadKinds]): a git node of
+// a build that predates it refuses the read as one naming no query of its kind
+// (ErrInvalid), and its asker asks the next git node of the order.
+type ChecksFileQuery struct {
+	// Commit is the commit read at, its whole id — a change's target's tip,
+	// as its home read it from the rows.
+	Commit string `json:"commit"`
 }
 
 // TreeQuery lists one tree.
@@ -2727,7 +2750,8 @@ func (q GitQuery) Validate() error {
 	}{{GitTree, q.Tree != nil}, {GitBlob, q.Blob != nil}, {GitDiff, q.Diff != nil},
 		{GitCompare, q.Compare != nil}, {GitLandedIn, q.LandedIn != nil},
 		{GitRevisionFacts, q.RevisionFacts != nil}, {GitReanchor, q.Reanchor != nil},
-		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil}} {
+		{GitInterdiff, q.Interdiff != nil}, {GitLog, q.Log != nil}, {GitBlame, q.Blame != nil},
+		{GitChecksFile, q.ChecksFile != nil}} {
 		switch {
 		case s.kind == q.Kind && !s.present:
 			return fmt.Errorf("%w: %s: a %s read names what it reads", ErrInvalid, s.kind, s.kind)
@@ -2759,6 +2783,8 @@ func (q GitQuery) Validate() error {
 		return q.Log.validate()
 	case GitBlame:
 		return q.Blame.validate()
+	case GitChecksFile:
+		return wholeID("checks_file.commit", q.ChecksFile.Commit, false)
 	}
 	return q.Compare.validate()
 }
@@ -3118,6 +3144,29 @@ type GitAnswer struct {
 	Reanchor      *ReanchorAnswer      `json:"reanchor,omitempty"`
 	Log           *LogAnswer           `json:"log,omitempty"`
 	Blame         *BlameAnswer         `json:"blame,omitempty"`
+	ChecksFile    *ChecksFileAnswer    `json:"checks_file,omitempty"`
+}
+
+// ChecksFileAnswer is what a commit holds at [ChecksFilePath]: nothing (no
+// OID), something that is no file (Type tree, or commit for a submodule), or a
+// file — its id and size, and its bytes whole where it is at most
+// [MaxChecksFileBytes]; a file past that carries none, its size being what
+// [ParseChecks] refuses it by. So at most MaxChecksFileBytes of bytes, which
+// the answer's JSON carries in base64 — some 88 KiB, far inside the estate's
+// reply ([MaxPageBytes]) — and never held to [MaxGitAnswerBytes], the bound a
+// seat's tool answer is cut to, which no seat reads this one through.
+type ChecksFileAnswer struct {
+	// Commit is the commit read at, its whole id.
+	Commit string `json:"commit"`
+	// OID is the object at the path, and Type its type: blob, tree or
+	// commit. Both are empty where the commit holds nothing there.
+	OID  string `json:"oid,omitempty"`
+	Type string `json:"type,omitempty"`
+	// Size is a blob's bytes.
+	Size int64 `json:"size,omitempty"`
+	// Raw is a blob's bytes, whole, where Size is at most
+	// MaxChecksFileBytes; nil otherwise, and for an empty file.
+	Raw []byte `json:"raw,omitempty"`
 }
 
 // LogAnswer is one page of a history: the commits that changed the path (or

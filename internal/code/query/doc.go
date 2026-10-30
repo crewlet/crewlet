@@ -5,9 +5,13 @@
 // file (blame.go) — and of a change's revisions, by the ids their rows record: a
 // revision's facts against its target (facts.go), where lines anchored in one
 // revision are in another (anchor.go), and what a change changed between two
-// revisions (interdiff.go) — real git over a PINNED incarnation of the node's
-// own cache (internal/code/cache), in the READ lane, every answer one page of
-// at most code.MaxGitAnswerBytes of JSON with a cursor where the next begins.
+// revisions (interdiff.go) — and the checks file a commit holds, read whole
+// for the home that queues a change's checks from its target's (checksfile.go)
+// — real git over a PINNED incarnation of the node's own cache
+// (internal/code/cache), in the READ lane, every answer one page of at most
+// code.MaxGitAnswerBytes of JSON with a cursor where the next begins, but a
+// checks file's, which is the engine's alone and one answer of at most
+// code.MaxChecksFileBytes of the file.
 // It runs on git nodes, holds no goroutine of its own, and writes nothing
 // itself — the memo its reads fill is the cache's write, as is the spool a
 // revision's facts write a patch into: a read's processes run on its caller's
@@ -232,8 +236,9 @@
 //
 // # The memo
 //
-// Every page a read's git cuts — but a landed-in read's, a revision's facts'
-// and a re-anchoring's (memoizable says why), and a history's page its budget
+// Every page a read's git cuts — but a landed-in read's, a revision's facts',
+// a re-anchoring's and a checks file's (memoizable says why), and a history's
+// page its budget
 // or its due instant cut short — is kept in the pinned copy's memo (the
 // cache's, cache.MemoBatch), keyed by everything it is a function of, and a
 // read that

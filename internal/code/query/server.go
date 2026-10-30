@@ -770,6 +770,8 @@ func (r *read) answer(ctx context.Context, objs found, at cursor) (code.GitAnswe
 		return r.logRead(ctx, objs, at, m)
 	case code.GitBlame:
 		return r.blameRead(ctx, objs, at, m)
+	case code.GitChecksFile:
+		return r.checksFileRead(ctx, objs)
 	}
 	return r.compareRead(ctx, objs, m)
 }

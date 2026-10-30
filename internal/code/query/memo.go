@@ -175,11 +175,13 @@ func (r *read) memoKey(whole map[string]string, at cursor) cache.MemoKey {
 // kind but a landed-in read, whose answer moves with its target; a revision's
 // facts, asked once a revision and a target by whoever records them, and
 // whose patch-id a node too loaded to finish it omits — an answer no page
-// should keep; and a re-anchoring, a check and one diff of a few blobs, keyed
-// by a list of anchors each caller makes anew.
+// should keep; a re-anchoring, a check and one diff of a few blobs, keyed
+// by a list of anchors each caller makes anew; and a checks file, asked once
+// a target's tip by the home that keeps what it parsed of it — a whole file
+// the memo would hold for nobody else.
 func memoizable(q code.GitQuery) bool {
 	switch q.Kind {
-	case code.GitLandedIn, code.GitRevisionFacts, code.GitReanchor:
+	case code.GitLandedIn, code.GitRevisionFacts, code.GitReanchor, code.GitChecksFile:
 		return false
 	}
 	return true

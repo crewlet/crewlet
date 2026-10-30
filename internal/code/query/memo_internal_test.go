@@ -26,8 +26,9 @@ var (
 	stamped = []string{"RepoID", "Position", "Memo", "PushedBy", "Coverage"}
 	partOf  = map[code.GitReadKind]string{code.GitTree: "Tree", code.GitBlob: "Blob", code.GitDiff: "Diff",
 		code.GitCompare: "Compare", code.GitLandedIn: "LandedIn", code.GitRevisionFacts: "RevisionFacts",
-		code.GitReanchor: "Reanchor", code.GitInterdiff: "Diff", code.GitLog: "Log", code.GitBlame: "Blame"}
-	unkept = []string{"LandedIn", "RevisionFacts", "Reanchor"}
+		code.GitReanchor: "Reanchor", code.GitInterdiff: "Diff", code.GitLog: "Log", code.GitBlame: "Blame",
+		code.GitChecksFile: "ChecksFile"}
+	unkept = []string{"LandedIn", "RevisionFacts", "Reanchor", "ChecksFile"}
 )
 
 // memoized is every kind memoizable answers from the memo.

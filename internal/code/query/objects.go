@@ -96,6 +96,8 @@ func revsOf(q code.GitQuery) []string {
 		revs = []string{q.Log.Rev}
 	case code.GitBlame:
 		revs = []string{q.Blame.Rev}
+	case code.GitChecksFile:
+		revs = []string{q.ChecksFile.Commit}
 	case code.GitReanchor:
 		revs = []string{q.Reanchor.Head}
 		if q.Reanchor.Base != "" {
@@ -139,14 +141,17 @@ func pathOf(q code.GitQuery) string {
 		p, _ = code.GitPath("blob.path", q.Blob.Path, q.Blob.PathB64, true)
 	case code.GitBlame:
 		p, _ = code.GitPath("blame.path", q.Blame.Path, q.Blame.PathB64, false)
+	case code.GitChecksFile:
+		p = code.ChecksFilePath
 	}
 	return p
 }
 
 // lookedUp reports whether a read of q's kind looks its path up in the batch:
-// a tree's, a file's and a blame's.
+// a tree's, a file's, a blame's and a checks file's.
 func lookedUp(q code.GitQuery) bool {
-	return q.Kind == code.GitTree || q.Kind == code.GitBlob || q.Kind == code.GitBlame
+	return q.Kind == code.GitTree || q.Kind == code.GitBlob || q.Kind == code.GitBlame ||
+		q.Kind == code.GitChecksFile
 }
 
 // find is step 7: what every revision and the path name, or the first
