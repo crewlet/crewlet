@@ -189,6 +189,10 @@ type Vendor struct {
 	// NotConfigured makes Open answer integration.ErrNotConfigured.
 	NotConfigured bool
 
+	// OpenErr makes Open fail with it: a [*seataccess.Refusal] for a company
+	// the vendor refuses as configured, any other error for a fault.
+	OpenErr error
+
 	// Opened counts the sessions opened.
 	Opened int
 
@@ -275,6 +279,9 @@ func (v *Vendor) Open(context.Context, seataccess.OpenInput) (seataccess.Session
 	v.mu.Unlock()
 	if v.NotConfigured {
 		return nil, integration.ErrNotConfigured
+	}
+	if v.OpenErr != nil {
+		return nil, v.OpenErr
 	}
 	return v, nil
 }
