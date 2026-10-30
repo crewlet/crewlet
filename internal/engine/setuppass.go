@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 
 	"strings"
@@ -542,20 +543,11 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 func (e *Engine) datadogManaged(
 	ctx context.Context, company *Company, cfg *config.Datadog,
 ) ([]string, error) {
-	ledger, err := e.SeatAccessLedger()
+	held, err := e.seatAccessAccounts(ctx, integration.KindDatadog)
 	if err != nil {
 		return nil, err
 	}
-	records, err := ledger.Records(ctx, integration.KindDatadog)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, rec := range records {
-		if rec.Held() {
-			out = append(out, rec.Account.ID)
-		}
-	}
+	out := slices.Collect(maps.Values(held))
 	for _, seat := range seataccess.SeatsOf(company.Config) {
 		out = append(out, datadog.AccountEmail(cfg.Provisioning, seat.Handle))
 	}
@@ -1104,8 +1096,16 @@ func (p *mattermostPass) run(ctx context.Context, in setup.PassInput) ([]integra
 	// provision, and each bot's display name. No webhook base is passed
 	// because there is nowhere to pass it: this third-party app holds an
 	// outbound socket per seat and registers nothing.
+	managed, err := p.engine.seatAccessAccounts(ctx, integration.KindMattermost)
+	if err != nil {
+		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
+	}
 	res, err := mattermost.Reconcile(ctx, mattermost.Options{
 		Client: client, Config: cfg, Org: company.Org, ReadOnly: in.Sink == nil,
+		// THE AGENTS' BOTS, the only ones the pass renames: those the
+		// ledger records, so a bot somebody else made under a seat's
+		// username keeps its name.
+		Managed: managed,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)

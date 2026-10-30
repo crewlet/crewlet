@@ -122,10 +122,10 @@ agent access nobody asked for.
 |---|---|
 | Turn a seat on | Creates `crewlet-<handle>@<email_domain>` as a service account **already holding** the seat's role (one that existed for a moment without a role would inherit the organization's default), then mints its application key and seals it. |
 | Change its role | Adds the account to the new role (`POST /api/v2/roles/{id}/users`), then takes it out of every other role (`DELETE` on the same relation). Adding first means the account is never without a role and never holds more than it held before plus what you asked for. |
-| Turn it off | Deletes every application key on the account, clears the sealed key, records in the account's `title` that this engine turned it off, and disables it. Datadog keeps the account and everything it authored. |
+| Turn it off | Records in the account's `title` that this engine turned it off and disables it, then deletes every application key on the account and clears the sealed key. The disable comes first so the agent stops at once; a key delete that fails is retried on every pass until no key is left. Datadog keeps the account and everything it authored. |
 | Turn it back on | Enables the account, clears the marker, and mints and seals a new key. No person is needed. |
 | Remove it (only while off) | Nothing at Datadog: Datadog never deletes a user, so the account stays disabled with its history, and Crewlet stops managing it. Remove is a separate, confirmed action and never follows from editing the document. |
-| Rotate its key | Mints a new key, seals it, then deletes the key it replaced. Only keys this engine minted are deleted; a key somebody put on the account by hand is theirs to remove. |
+| Rotate its key | Mints a new key, seals it, then deletes the key it replaced. Only keys this engine minted are deleted; a key somebody put on the account by hand is theirs to remove. A seat given a key because none was sealed for it follows the same order: the new key is sealed before an older one is deleted. |
 
 ### The key is the engine's, and named for the seat
 
@@ -192,8 +192,8 @@ The step is retried on every pass and on **Retry**.
 Disconnecting **disables** the accounts this engine created when you tick
 "also remove the accounts Crewlet created". Disabled rather than deleted,
 because deleting a Datadog user detaches it from everything it authored. It
-follows the same rule as turning a seat off: every application key first, then
-the marker, then the disable.
+deletes every application key first, then writes the marker, then disables the
+account.
 
 - A live key on a disabled account is a credential that **works again the
   moment anybody re-enables the account**, so the keys go first.
