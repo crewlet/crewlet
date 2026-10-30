@@ -1,12 +1,15 @@
 package webhooks_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
+	"github.com/crewlet/crewlet/internal/slack"
 )
 
 func getLanding(t *testing.T, e *edge, query string) *httptest.ResponseRecorder {
@@ -90,5 +93,78 @@ func TestTheOAuthLandingNeedsNoToken(t *testing.T) {
 	*e.secrets = webhooks.Secrets{}
 	if got := getLanding(t, e, "code=abc").Code; got != http.StatusOK {
 		t.Fatalf("got %d — the landing page must not depend on any secret", got)
+	}
+}
+
+// stubInstaller answers one completion.
+type stubInstaller struct {
+	handle string
+	err    error
+	state  string
+	code   string
+}
+
+func (s *stubInstaller) Complete(_ context.Context, state, code string) (string, error) {
+	s.state, s.code = state, code
+	return s.handle, s.err
+}
+
+const signedState = "crewlet_rt1.tag.swe~A0SWE~nonce.4102444800.sig"
+
+// A SIGNED STATE IS FINISHED HERE: the engine completes the install, and the
+// page says so without showing the code.
+func TestTheLandingFinishesASignedInstall(t *testing.T) {
+	t.Parallel()
+	installer := &stubInstaller{handle: "swe"}
+	e := newEdge(t, func(o *webhooks.Options) { o.SlackInstalls = installer })
+	res := getLanding(t, e, "code=code-secret-1&state="+signedState)
+	if res.Code != http.StatusOK {
+		t.Fatalf("got %d", res.Code)
+	}
+	page := res.Body.String()
+	if !strings.Contains(page, "@swe") || !strings.Contains(page, "its bot token") {
+		t.Errorf("the page does not say the install finished: %s", page)
+	}
+	if strings.Contains(page, "code-secret-1") {
+		t.Error("the page shows the code")
+	}
+	if installer.state != signedState || installer.code != "code-secret-1" {
+		t.Errorf("the installer was handed %q, %q", installer.state, installer.code)
+	}
+}
+
+// A REFUSED INSTALL NAMES THE REASON AND THE REMEDY, at the refusal's status,
+// and never the code.
+func TestTheLandingNamesWhyAnInstallWasRefused(t *testing.T) {
+	t.Parallel()
+	installer := &stubInstaller{err: &slack.InstallRefusal{
+		Status: http.StatusConflict, Reason: "that approval belongs to another agent's Slack app",
+		Remedy: "Use Install on the agent's own row",
+	}}
+	e := newEdge(t, func(o *webhooks.Options) { o.SlackInstalls = installer })
+	res := getLanding(t, e, "code=code-secret-2&state="+signedState)
+	page := res.Body.String()
+	if res.Code != http.StatusConflict || !strings.Contains(page, "another agent") ||
+		!strings.Contains(page, "own row") || strings.Contains(page, "code-secret-2") {
+		t.Errorf("got %d: %s", res.Code, page)
+	}
+
+	unwired := newEdge(t)
+	if res := getLanding(t, unwired, "code=x&state="+signedState); res.Code != http.StatusNotImplemented {
+		t.Errorf("an engine with no installer answered %d", res.Code)
+	}
+}
+
+// A REFUSAL THAT CLEARS ON ITS OWN SAYS WHEN.
+func TestARetryableInstallRefusalSaysWhen(t *testing.T) {
+	t.Parallel()
+	installer := &stubInstaller{err: &slack.InstallRefusal{
+		Status: http.StatusServiceUnavailable, Reason: "this engine could not confirm the install link was unused",
+		Remedy: "Try again in a moment", RetryAfter: 30 * time.Second,
+	}}
+	e := newEdge(t, func(o *webhooks.Options) { o.SlackInstalls = installer })
+	res := getLanding(t, e, "code=x&state="+signedState)
+	if res.Header().Get("Retry-After") != "30" {
+		t.Errorf("Retry-After = %q", res.Header().Get("Retry-After"))
 	}
 }

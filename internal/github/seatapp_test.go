@@ -35,7 +35,7 @@ func kinds(findings []integration.Finding) []string {
 func TestASeatWithNoAppReportsTheClickThatIsLeft(t *testing.T) {
 	t.Parallel()
 	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
-		Seats: []github.SeatApp{{Handle: "sre-lead", Tier: github.TierReview}},
+		Seats: []github.SeatApp{{Handle: "sre-lead", Permissions: tierPerms("review", false)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestASeatWithNoAppReportsTheClickThatIsLeft(t *testing.T) {
 func TestEveryAgentWithNoAppIsNamedOnceInOneFinding(t *testing.T) {
 	t.Parallel()
 	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
-		Seats:      []github.SeatApp{{Handle: "sre-lead", Tier: github.TierReview}},
+		Seats:      []github.SeatApp{{Handle: "sre-lead", Permissions: tierPerms("review", false)}},
 		Unrecorded: []string{"swe", "sre-lead"},
 	})
 	if err != nil {
@@ -102,7 +102,7 @@ func TestAnAgentWithNoBlockIsReportedWithNoRoster(t *testing.T) {
 func TestAnUnresolvedKeySaysTheAppMustBeCreatedAgain(t *testing.T) {
 	t.Parallel()
 	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
-		Seats: []github.SeatApp{{Handle: "sre-lead", AppID: 7, Tier: github.TierReview}},
+		Seats: []github.SeatApp{{Handle: "sre-lead", AppID: 7, Permissions: tierPerms("review", false)}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func TestTheInstallationIsComparedAgainstTheTierInBothDirections(t *testing.T) {
 	}
 	// A review seat cannot write what it was set up to write, and GitHub
 	// would only say so by refusing its every token.
-	short := github.Shortfall(github.Access{Tier: github.TierReview}, held)
+	short := tierPerms("review", false).Short(held)
 	if len(short) == 0 {
 		t.Fatal("a review seat on a read-only installation reports no shortfall")
 	}
@@ -219,7 +219,7 @@ func TestAnAppGitHubNoLongerHasIsReportedAsGone(t *testing.T) {
 		APIBase: base, WebBase: "https://github.com", Org: "acme",
 		Seats: []github.SeatApp{{
 			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
-			Key: pem, Tier: github.TierReview,
+			Key: pem, Permissions: tierPerms("review", false),
 		}},
 		Forget: func(_ context.Context, handle string) error {
 			forgotten = handle
@@ -261,7 +261,7 @@ func TestADryRunReportsAGoneAppWithoutClearingIt(t *testing.T) {
 		APIBase: appAt(t, false, "[]"), WebBase: "https://github.com", Org: "acme",
 		Seats: []github.SeatApp{{
 			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
-			Key: pem, Tier: github.TierReview,
+			Key: pem, Permissions: tierPerms("review", false),
 		}},
 	})
 	if err != nil {
@@ -287,7 +287,7 @@ func TestAnAppInstalledNowhereStillAsksForTheInstall(t *testing.T) {
 		APIBase: appAt(t, true, "[]"), WebBase: "https://github.com", Org: "acme",
 		Seats: []github.SeatApp{{
 			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
-			Key: pem, Tier: github.TierReview,
+			Key: pem, Permissions: tierPerms("review", false),
 		}},
 		Forget: func(context.Context, string) error {
 			t.Error("an app that exists had its record cleared")
@@ -325,7 +325,7 @@ func TestAnInstallationThatCannotBeRecordedSaysSo(t *testing.T) {
 		APIBase: base, WebBase: "https://github.com", Org: "acme",
 		Seats: []github.SeatApp{{
 			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
-			Key: pem, Tier: github.TierReview,
+			Key: pem, Permissions: tierPerms("review", false),
 		}},
 		Record: func(context.Context, string, int64) error { return boom },
 	})
@@ -377,7 +377,7 @@ func TestAStaleInstallationThatCannotBeClearedSaysSo(t *testing.T) {
 		APIBase: server.URL, WebBase: "https://github.com", Org: "acme",
 		Seats: []github.SeatApp{{
 			Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead",
-			InstallationID: 99, Key: pem, Tier: github.TierReview,
+			InstallationID: 99, Key: pem, Permissions: tierPerms("review", false),
 		}},
 		Record: func(context.Context, string, int64) error { return boom },
 	})
@@ -427,7 +427,7 @@ func TestAWorkflowsOptInTheAppLacksSendsItsOwnerToThePermissionsPage(t *testing.
 	}
 	seat := github.SeatApp{
 		Handle: "sre-lead", AppID: 7, Slug: "acme-sre-lead", InstallationID: 42,
-		Key: pem, Tier: github.TierFullAccess, Workflows: true,
+		Key: pem, Permissions: tierPerms("full_access", true),
 	}
 	reconcile := func(held map[string]string) *github.SeatAppResult {
 		t.Helper()
@@ -441,7 +441,7 @@ func TestAWorkflowsOptInTheAppLacksSendsItsOwnerToThePermissionsPage(t *testing.
 		return res
 	}
 
-	res := reconcile(github.TierFullAccess.Permissions())
+	res := reconcile(tierPerms("full_access", false).Token())
 	if got := kinds(res.Findings); len(got) != 1 || got[0] != string(integration.FindingGrantShort) {
 		t.Fatalf("findings = %v, want the missing workflows grant", got)
 	}
@@ -458,8 +458,7 @@ func TestAWorkflowsOptInTheAppLacksSendsItsOwnerToThePermissionsPage(t *testing.
 		t.Errorf("a seat GitHub refuses every token for was reported ready: %v", res.Ready)
 	}
 
-	granted := github.TierFullAccess.Permissions()
-	granted[github.PermissionWorkflows] = "write"
+	granted := tierPerms("full_access", true).Token()
 	if res := reconcile(granted); len(res.Findings) != 0 || len(res.Ready) != 1 {
 		t.Errorf("an installation holding the opt-in: findings %v, ready %v", kinds(res.Findings), res.Ready)
 	}

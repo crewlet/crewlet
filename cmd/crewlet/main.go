@@ -2129,6 +2129,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	announceUnclaimed(ctx, e.AnyPerson, engine.SeatViewOf(e).HumanSeats,
 		e.IAM().SeatClaims)
 
+	// THE SLACK INSTALL LINKS, signed under the fleet keyring and spent on
+	// the fleet's claim registry, so the node a browser returns to finishes
+	// a link any node minted. Built before the setup surface, which mints
+	// them, and the webhook landing below, which finishes them.
+	slackInstalls, err := e.SlackInstalls(boot.Secrets.TokenMaterial())
+	if err != nil {
+		return nil, err
+	}
+
 	// The fleet's integration status, which both the reconcile loop and a
 	// pass run from the dashboard write.
 	integrationStatus, err := e.IntegrationStore()
@@ -2560,6 +2569,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Claims:    e.Backends().Fleet,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
+			// AND EACH AGENT'S SLACK INSTALL, finished here when Slack
+			// returns the person's browser: the same object the setup
+			// surface mints install links with.
+			SlackInstalls: slackInstalls,
 		},
 	}
 	// HOW A PERSON BECOMES A PRINCIPAL, the other end of the cookie it

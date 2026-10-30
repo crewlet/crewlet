@@ -307,7 +307,7 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tier, _ := github.ParseTier(seatTier(seat))
+	perms := seatPermissions(seat)
 	base := s.publicBase()
 	if base == "" {
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoExternalURL, map[string]string{
@@ -342,11 +342,13 @@ func (s *Service) beginApp(w http.ResponseWriter, r *http.Request) {
 		DeliveryOff: !deliverable,
 		RedirectURL: base + "/webhooks/github-app",
 		SetupURL:    base + "/webhooks/github-app?installed=" + handle,
-		Access:      github.Access{Tier: tier, Workflows: seatWorkflows(seat)},
+		// D5: REGISTERED AT THE SEAT'S OWN PERMISSIONS, never wider, so a
+		// leaked key reaches only what the seat may do.
+		Permissions: perms,
 	})
 	httpjson.Write(w, http.StatusOK, map[string]any{
-		"seat": handle,
-		"tier": string(tier),
+		"seat":        handle,
+		"permissions": perms.Strings(),
 		// THE ACCOUNT THAT WILL OWN THE APP. An app registered under a
 		// person's own account cannot be installed on the organization
 		// that owns the repositories.
@@ -574,11 +576,13 @@ func seatTier(seat *org.Role) string {
 	return seat.GitHub.Tier
 }
 
-// seatWorkflows is whether this seat opts in to workflow writes, as written
-// down. [github.Access] decides what that grants at the seat's tier, so the
-// raw value is all a caller needs.
-func seatWorkflows(seat *org.Role) bool {
-	return seat != nil && seat.GitHub != nil && seat.GitHub.Workflows
+// seatPermissions is the GitHub App permissions this seat is set to, as
+// written down: what its app is registered with and its tokens carry.
+func seatPermissions(seat *org.Role) github.Permissions {
+	if seat == nil || seat.GitHub == nil {
+		return github.Permissions{}
+	}
+	return github.PermissionsOf(seat.GitHub.Permissions)
 }
 
 // orgOf is the organization whose repositories these agents work in.
