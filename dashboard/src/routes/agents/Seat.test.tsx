@@ -440,7 +440,7 @@ test("a person's profile has three tabs and asks nothing a runtime answers", asy
   expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
 });
 
-test("an agent's profile has six tabs, and Work counts the engine's total rather than a page", async () => {
+test("an agent's profile has seven tabs, and Work counts the engine's total rather than a page", async () => {
   mount("#/company/org/seats/swe", {
     answers: {
       work_items: {
@@ -459,6 +459,7 @@ test("an agent's profile has six tabs, and Work counts the engine's total rather
     "Turns",
     "Memory",
     "Schedules",
+    "Access",
     "Settings",
   ]);
   const work = screen.getAllByRole("tab").find((t) => t.textContent?.startsWith("Work"));
