@@ -151,11 +151,11 @@ type ManifestOptions struct {
 	// which is a separate act from creating the app.
 	SetupURL string
 
-	// Access is how much this seat may do, which decides the permissions
-	// the app is created with. An app cannot be widened later without its
-	// installation approving the change, so this is the one field worth
-	// getting right at creation.
-	Access Access
+	// Permissions are what this seat may do, which the app is registered
+	// with (D5: least privilege for a leaked key). Widening it later needs
+	// the app's owner and then the organization, so this is the one field
+	// worth getting right at creation.
+	Permissions Permissions
 
 	// Homepage is the `url` field, which GitHub requires. It is the only
 	// required field in the whole manifest.
@@ -248,7 +248,7 @@ func BuildManifest(opts ManifestOptions) Manifest {
 		SetupOnUpdate:  true,
 		HookAttributes: hook,
 		DefaultEvents:  eventsFor(hook),
-		DefaultPerms:   opts.Access.Permissions(),
+		DefaultPerms:   opts.Permissions.Token(),
 	}
 }
 
@@ -686,23 +686,23 @@ func (c *AppClient) Installation(ctx context.Context, id int64) (*Installation, 
 	return out, nil
 }
 
-// MintToken issues a token for one installation, scoped to the access.
+// MintToken issues a token for one installation, scoped to perms.
 //
-// SCOPED DOWN AT MINT TIME, which is where the tier becomes real. The app may
-// hold more than the access asks for, because a person installed it and a
-// person can widen it; the token carries only what the access lists, so a
+// SCOPED DOWN AT MINT TIME, which is where a seat's permissions become real.
+// The app may hold more than the seat asks for, because a person installed it
+// and a person can widen it; the token carries only what perms lists, so a
 // read-only seat cannot write even on an installation that could. The other
 // direction is GitHub's to refuse: a request naming a permission the
 // installation does not hold mints nothing, which the seat-app pass reports
-// as the seat's shortfall ([Shortfall]).
+// as the seat's shortfall ([Permissions.Short]).
 //
 // Repositories narrow it further where the seat names any. Empty means every
 // repository the installation covers, which is what the operator chose when
 // they installed it.
 func (c *AppClient) MintToken(
-	ctx context.Context, installationID int64, access Access, repos []string,
+	ctx context.Context, installationID int64, perms Permissions, repos []string,
 ) (*InstallationToken, error) {
-	return c.mint(ctx, installationID, access.Permissions(), repos)
+	return c.mint(ctx, installationID, perms.Token(), repos)
 }
 
 // mint issues one installation token carrying exactly perms, narrowed to

@@ -186,3 +186,13 @@ func TestDescribeUsesGitHubsNames(t *testing.T) {
 		t.Errorf("names = %q", got)
 	}
 }
+
+// tierPerms is a retired tier's permissions, for fixtures written against the
+// tiers: what the migration gives a seat that held it.
+func tierPerms(tier string, workflows bool) github.Permissions {
+	perms, ok := github.TierPermissions(tier, workflows)
+	if !ok {
+		panic("tierPerms: unknown tier " + tier)
+	}
+	return perms
+}
