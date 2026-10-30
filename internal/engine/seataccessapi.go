@@ -647,7 +647,7 @@ func (e *Engine) MigrateSeatAccess(ctx context.Context, doc accessmigrate.Docume
 	if err != nil {
 		return accessmigrate.Result{}, err
 	}
-	return accessmigrate.Run(ctx, accessmigrate.Deps{
+	result, err := accessmigrate.Run(ctx, accessmigrate.Deps{
 		Document: doc, Secrets: store, Records: ledgerRecords{ledger: ledger},
 		Open: func(ctx context.Context, kind integration.Kind,
 			in seataccess.OpenInput) (seataccess.Session, error) {
@@ -659,6 +659,28 @@ func (e *Engine) MigrateSeatAccess(ctx context.Context, doc accessmigrate.Docume
 		},
 		Env: e.resolver(), Managed: managed,
 	})
+	e.rememberSeatAccessPending(result)
+	return result, err
+}
+
+// rememberSeatAccessPending keeps why each integration waits, for its access
+// pass to say: kept for the ones an attempt left pending, forgotten for the
+// ones it moved.
+func (e *Engine) rememberSeatAccessPending(result accessmigrate.Result) {
+	for kind, why := range result.Pending {
+		e.seatAccessPending.Store(kind, why.Error())
+	}
+	for _, kind := range result.Migrated {
+		e.seatAccessPending.Delete(kind)
+	}
+}
+
+// seatAccessPendingReason is why the migration left kind unmigrated on its last
+// attempt on this node, or empty where it gave no reason here.
+func (e *Engine) seatAccessPendingReason(kind integration.Kind) string {
+	why, _ := e.seatAccessPending.Load(kind)
+	reason, _ := why.(string)
+	return reason
 }
 
 // ledgerRecords is the engine's ledger as [accessmigrate.Records].
