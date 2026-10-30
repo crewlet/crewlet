@@ -158,7 +158,7 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   const { reload, onAnswer } = draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   expect(screen.getByText("Not saved")).toBeTruthy();
-  expect(screen.getByRole("region", { name: "Unsaved changes" }).textContent).toContain(
+  expect(screen.getByRole("toolbar", { name: "Unsaved changes" }).textContent).toContain(
     "One change not saved",
   );
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
@@ -572,4 +572,21 @@ test("an install the browser would not open in a new tab is drawn as a link", as
   expect(link.getAttribute("href")).toBe("https://slack.com/oauth/v2/authorize?state=one-use");
   expect(screen.getByText(/kept the install page from opening/)).toBeTruthy();
   open.mockRestore();
+});
+
+test("the table is the kit's: a named table of real rows, with column headers and per-row expand names", () => {
+  draw(datadogAnswer());
+  const table = screen.getByRole("table", { name: "Agents on Datadog" });
+  expect(table.tagName).toBe("TABLE");
+  // NO HAND-SET STRUCTURE: no cell spans by an attribute, and no row group
+  // owning anything but rows.
+  expect(document.querySelector("[aria-colspan]")).toBeNull();
+  expect(document.querySelector('[role="rowgroup"]')).toBeNull();
+  const headers = within(table)
+    .getAllByRole("columnheader")
+    .map((h) => h.textContent ?? "");
+  for (const label of ["Agent", "On", "Access", "Status"])
+    expect(headers.some((h) => h.includes(label))).toBe(true);
+  for (const name of ["PM", "QA", "SRE"])
+    expect(screen.getByRole("button", { name: `Show ${name}'s Datadog details` })).toBeTruthy();
 });

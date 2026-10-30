@@ -26,16 +26,19 @@ import {
   Button,
   ButtonLink,
   Callout,
+  DataTable,
   DescriptionList,
-  IconButton,
   Select,
+  SelectionBar,
   Spinner,
   Switch,
   Tag,
   VisuallyHidden,
+  type DataTableColumn,
+  type DataTableRowTone,
   type SelectOption,
 } from "@crewlethq/ui";
-import { ChevronDownGlyph, ChevronRightGlyph, KeyGlyph } from "@crewlethq/icons/glyphs";
+import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import type {
   AccessAnswer,
   AccessDesired,
@@ -79,6 +82,7 @@ import {
   toolWords,
   type Lane,
   type SeatAction,
+  type Status,
 } from "./logic.ts";
 import { laneWords } from "./words.ts";
 
@@ -104,6 +108,33 @@ export interface AgentsAccessProps {
   /** The gesture a person takes at the vendor for one seat (GitHub's create and install), where there is one. */
   stepFor?: ((handle: string) => ReactNode) | undefined;
 }
+
+/** One row of the table: one agent on one product. */
+interface AccessRow {
+  key: string;
+  seat: AccessSeat;
+  lane: Lane;
+  saved: AccessSeatLane;
+  want: AccessDesired;
+  drafted: boolean;
+  /** The agent's first product, where its name is drawn. */
+  first: boolean;
+  status: Status;
+}
+
+/** The rail a row's status takes: the kit's three, and none for a row at rest. */
+function toneOf(status: Status): DataTableRowTone | null {
+  if (status.busy) return "info";
+  return status.tone === "danger" || status.tone === "warning" ? status.tone : null;
+}
+
+/** The unsaved changes, in the kit's selection bar's words. */
+const UNSAVED_WORDS = {
+  count: (n: number) => (n === 1 ? "One change not saved" : `${n} changes not saved`),
+  cleared: "Changes discarded",
+  clear: "Discard",
+  label: "Unsaved changes",
+};
 
 function levelOptions(lane: Lane): SelectOption[] {
   // WHERE THE LIST COMES FROM is the menu's own heading; the empty level
@@ -135,7 +166,6 @@ export function AgentsAccess({
 }: AgentsAccessProps) {
   const now = useNow();
   const [draft, setDraft] = useState<AccessDraft>({});
-  const [open, setOpen] = useState<Record<string, boolean>>({});
   const [review, setReview] = useState(false);
   const [removing, setRemoving] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
@@ -243,6 +273,205 @@ export function AgentsAccess({
     }
   };
 
+  // ONE ROW PER AGENT AND PRODUCT: Atlassian's agents have two, every other
+  // integration's one. The agent is named on its first.
+  const rows: AccessRow[] = seats.flatMap((seat) =>
+    lanes.flatMap((lane, i) => {
+      const saved = seat.lanes[lane.key];
+      if (!saved) return [];
+      const want = desiredOf(seat, lane.key);
+      const drafted = !sameDesired(lane, want, saved.desired);
+      return [
+        {
+          key: `${seat.handle}:${lane.key}`,
+          seat,
+          lane,
+          saved,
+          want,
+          drafted,
+          first: i === 0 || !lanes.slice(0, i).some((l) => seat.lanes[l.key]),
+          status: statusOf(lane, saved, drafted, data.syncing, seat.departed),
+        },
+      ];
+    }),
+  );
+
+  const columns: Record<string, DataTableColumn<AccessRow>> = {
+    who: {
+      label: only ? "Product" : "Agent",
+      sortable: false,
+      hideable: false,
+      render: ({ seat, lane, first }) =>
+        only ? (
+          <span className="agent-access-name">{lane.name}</span>
+        ) : first ? (
+          <span className="agent-access-who">
+            <SeatAvatar
+              name={seat.name}
+              kind="agent"
+              avatar={avatarOf(seat.handle)}
+              size="sm"
+              decorative
+            />
+            <span className="agent-access-name">
+              <span>{seat.name}</span>
+              <span className="t-caption mono">{handleLabel(seat.handle)}</span>
+            </span>
+          </span>
+        ) : null,
+    },
+    product: { label: "Product", sortable: false, render: ({ lane }) => lane.name },
+    on: {
+      label: "On",
+      sortable: false,
+      shrink: true,
+      render: ({ seat, lane, want }) => (
+        <>
+          {readOnly ? (
+            <span className="agent-access-quiet">{want.enabled ? "On" : "Off"}</span>
+          ) : (
+            <Switch
+              label={<VisuallyHidden>{`${seat.name} on ${lane.name}`}</VisuallyHidden>}
+              checked={want.enabled}
+              disabled={locked || seat.departed}
+              title={held}
+              onCheckedChange={(checked) => change(seat, lane, { enabled: checked })}
+            />
+          )}
+        </>
+      ),
+    },
+    access: {
+      label: "Access",
+      sortable: false,
+      render: ({ seat, lane, want }) => {
+        const off = !want.enabled;
+        return (
+          <>
+            {managedOutside(lane) ? (
+              <span className="agent-access-quiet">{MANAGED_OUTSIDE}</span>
+            ) : readOnly ? (
+              <span className="agent-access-quiet">
+                {lane.permissions
+                  ? permissionCount(lane, want.permissions)
+                  : (laneWords(lane.key).fixed ?? levelName(lane, want.level))}
+              </span>
+            ) : lane.multiple && lane.levels.length > 0 ? (
+              <Select
+                size="sm"
+                width="full"
+                menuClassName="agent-access-menu"
+                multiple
+                ariaLabel={`${seat.name}'s ${lane.name} permissions`}
+                value={levelIds(want.level)}
+                options={levelOptions(lane)}
+                disabled={off || locked || seat.departed}
+                placeholder={levelName(lane, "")}
+                onChange={(v) => {
+                  const level = joinLevels((Array.isArray(v) ? v : [v]).map(String));
+                  // PRODUCT ACCESS ONLY TAKES NO SCOPE, so choosing it clears one.
+                  change(seat, lane, productOnly(lane, level) ? { level, scope: [] } : { level });
+                }}
+                renderMultiLabel={(sel) =>
+                  levelSummary(lane, sel.map((x) => String(x.value)).join(" "))
+                }
+              />
+            ) : lane.levels.length > 0 ? (
+              <Select
+                size="sm"
+                width="full"
+                menuClassName="agent-access-menu"
+                ariaLabel={`${seat.name}'s ${lane.name} access`}
+                value={want.level ?? ""}
+                options={levelOptions(lane)}
+                disabled={off || locked || seat.departed}
+                onChange={(v) => {
+                  const level = String(v);
+                  change(seat, lane, productOnly(lane, level) ? { level, scope: [] } : { level });
+                }}
+              />
+            ) : lane.permissions ? (
+              <Button
+                size="small"
+                variant="ghost"
+                disabled={off || locked || seat.departed}
+                title={permissionWords(lane, want.permissions)}
+                onClick={() => setEditing({ seat, lane })}
+              >
+                {permissionCount(lane, want.permissions)}
+              </Button>
+            ) : laneWords(lane.key).fixed ? (
+              <span className="agent-access-quiet">{laneWords(lane.key).fixed}</span>
+            ) : null}
+          </>
+        );
+      },
+    },
+    scope: {
+      label: laneWords(lanes.find((l) => l.scope !== undefined)?.key ?? "").scope?.noun ?? "Scope",
+      sortable: false,
+      render: ({ seat, lane, want }) => {
+        const off = !want.enabled;
+        const words = laneWords(lane.key);
+        return (
+          <>
+            {!scopeApplies(lane, want) || !words.scope ? null : readOnly ? (
+              <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
+            ) : lane.scope ? (
+              <Select
+                size="sm"
+                width="full"
+                menuClassName="agent-access-menu"
+                multiple
+                searchable
+                ariaLabel={`${seat.name}'s ${lane.name} ${words.scope.noun.toLowerCase()}`}
+                value={want.scope ?? []}
+                options={lane.scope.map((o) => ({ value: o, label: o }))}
+                disabled={off || locked || seat.departed}
+                placeholder={words.scope.empty}
+                onChange={(v) =>
+                  change(seat, lane, {
+                    scope: (Array.isArray(v) ? v : [v]).map(String),
+                  })
+                }
+                renderMultiLabel={(sel) =>
+                  sel.length === 0
+                    ? words.scope!.empty
+                    : sel.length <= 2
+                      ? sel.map((s) => s.label).join(", ")
+                      : plural(sel.length, words.scope!.singular, words.scope!.noun.toLowerCase())
+                }
+              />
+            ) : null}
+          </>
+        );
+      },
+    },
+    status: {
+      label: "Status",
+      sortable: false,
+      shrink: true,
+      render: ({ status }) => (
+        <Tag
+          size="sm"
+          variant={status.tone}
+          appearance={status.outline ? "outline" : "soft"}
+          leadingIcon={status.busy ? <Spinner size="em" /> : undefined}
+        >
+          {status.label}
+        </Tag>
+      ),
+    },
+  };
+  const order = [
+    "who",
+    ...(lanes.length > 1 && !only ? ["product"] : []),
+    "on",
+    "access",
+    ...(scoped ? ["scope"] : []),
+    "status",
+  ];
+
   if (lanes.length === 0 || seats.length === 0) {
     return (
       <p className="t-caption">
@@ -289,251 +518,62 @@ export function AgentsAccess({
         </Callout>
       )}
 
-      <div
-        className={
-          scoped ? "agent-access-table" : "agent-access-table agent-access-table--unscoped"
+      <DataTable<AccessRow>
+        variant="compact"
+        data={rows}
+        getRowKey={(row) => row.key}
+        ariaLabel={only ? `Access on ${name}` : `Agents on ${name}`}
+        paginated={false}
+        showSettings={false}
+        resizable={false}
+        defaultColumnOrder={order}
+        columns={columns}
+        rowTone={(row) => toneOf(row.status)}
+        expandLabel={(row, isOpen) =>
+          `${isOpen ? "Hide" : "Show"} ${row.seat.name}'s ${row.lane.name} details`
         }
-        role="table"
-        aria-label={only ? `Access on ${name}` : `Agents on ${name}`}
-      >
-        <div className="agent-access-row agent-access-row--head" role="row">
-          <span role="columnheader">{only ? "Product" : "Agent"}</span>
-          {lanes.length > 1 && !only && <span role="columnheader">Product</span>}
-          <span role="columnheader">On</span>
-          <span role="columnheader">Access</span>
-          {scoped && (
-            <span role="columnheader">
-              {laneWords(lanes.find((l) => l.scope !== undefined)!.key).scope?.noun ?? "Scope"}
-            </span>
-          )}
-          <span role="columnheader">Status</span>
-          <span role="columnheader">
-            <VisuallyHidden>Details</VisuallyHidden>
-          </span>
-        </div>
-        {seats.map((seat) => (
-          <div key={seat.handle} className="agent-access-seat" role="rowgroup">
-            {lanes.map((lane, i) => {
-              const saved = seat.lanes[lane.key];
-              if (!saved) return null;
-              const want = desiredOf(seat, lane.key);
-              const drafted = !sameDesired(lane, want, saved.desired);
-              const status = statusOf(lane, saved, drafted, data.syncing, seat.departed);
-              const hint = emptyScopeHint(lane, want) ?? productOnlyNote(lane, want);
-              const key = `${seat.handle}:${lane.key}`;
-              const expanded = open[key] ?? false;
-              const off = !want.enabled;
-              const words = laneWords(lane.key);
-              return (
-                <div
-                  key={lane.key}
-                  className={expanded ? "agent-access-lane is-open" : "agent-access-lane"}
-                >
-                  <div className="agent-access-row" role="row">
-                    <span className="agent-access-who" role="cell">
-                      {only ? (
-                        <span className="agent-access-name">{lane.name}</span>
-                      ) : (
-                        i === 0 && (
-                          <>
-                            <SeatAvatar
-                              name={seat.name}
-                              kind="agent"
-                              avatar={avatarOf(seat.handle)}
-                              size="sm"
-                              decorative
-                            />
-                            <span className="agent-access-name">
-                              <span>{seat.name}</span>
-                              <span className="t-caption mono">{handleLabel(seat.handle)}</span>
-                            </span>
-                          </>
-                        )
-                      )}
-                    </span>
-                    {lanes.length > 1 && !only && (
-                      <span role="cell" className="agent-access-product">
-                        {lane.name}
-                      </span>
-                    )}
-                    <span role="cell">
-                      {readOnly ? (
-                        <span className="agent-access-quiet">{want.enabled ? "On" : "Off"}</span>
-                      ) : (
-                        <Switch
-                          label={<VisuallyHidden>{`${seat.name} on ${lane.name}`}</VisuallyHidden>}
-                          checked={want.enabled}
-                          disabled={locked || seat.departed}
-                          title={held}
-                          onCheckedChange={(checked) => change(seat, lane, { enabled: checked })}
-                        />
-                      )}
-                    </span>
-                    <span role="cell" className="agent-access-level">
-                      {managedOutside(lane) ? (
-                        <span className="agent-access-quiet">{MANAGED_OUTSIDE}</span>
-                      ) : readOnly ? (
-                        <span className="agent-access-quiet">
-                          {lane.permissions
-                            ? permissionCount(lane, want.permissions)
-                            : (laneWords(lane.key).fixed ?? levelName(lane, want.level))}
-                        </span>
-                      ) : lane.multiple && lane.levels.length > 0 ? (
-                        <Select
-                          size="sm"
-                          width="full"
-                          menuClassName="agent-access-menu"
-                          multiple
-                          ariaLabel={`${seat.name}'s ${lane.name} permissions`}
-                          value={levelIds(want.level)}
-                          options={levelOptions(lane)}
-                          disabled={off || locked || seat.departed}
-                          placeholder={levelName(lane, "")}
-                          onChange={(v) => {
-                            const level = joinLevels((Array.isArray(v) ? v : [v]).map(String));
-                            // PRODUCT ACCESS ONLY TAKES NO SCOPE, so choosing it clears one.
-                            change(
-                              seat,
-                              lane,
-                              productOnly(lane, level) ? { level, scope: [] } : { level },
-                            );
-                          }}
-                          renderMultiLabel={(sel) =>
-                            levelSummary(lane, sel.map((x) => String(x.value)).join(" "))
-                          }
-                        />
-                      ) : lane.levels.length > 0 ? (
-                        <Select
-                          size="sm"
-                          width="full"
-                          menuClassName="agent-access-menu"
-                          ariaLabel={`${seat.name}'s ${lane.name} access`}
-                          value={want.level ?? ""}
-                          options={levelOptions(lane)}
-                          disabled={off || locked || seat.departed}
-                          onChange={(v) => {
-                            const level = String(v);
-                            change(
-                              seat,
-                              lane,
-                              productOnly(lane, level) ? { level, scope: [] } : { level },
-                            );
-                          }}
-                        />
-                      ) : lane.permissions ? (
-                        <Button
-                          size="small"
-                          variant="ghost"
-                          disabled={off || locked || seat.departed}
-                          title={permissionWords(lane, want.permissions)}
-                          onClick={() => setEditing({ seat, lane })}
-                        >
-                          {permissionCount(lane, want.permissions)}
-                        </Button>
-                      ) : laneWords(lane.key).fixed ? (
-                        <span className="agent-access-quiet">{laneWords(lane.key).fixed}</span>
-                      ) : null}
-                    </span>
-                    {scoped && (
-                      <span role="cell" className="agent-access-scope">
-                        {!scopeApplies(lane, want) || !words.scope ? null : readOnly ? (
-                          <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
-                        ) : lane.scope ? (
-                          <Select
-                            size="sm"
-                            width="full"
-                            menuClassName="agent-access-menu"
-                            multiple
-                            searchable
-                            ariaLabel={`${seat.name}'s ${lane.name} ${words.scope.noun.toLowerCase()}`}
-                            value={want.scope ?? []}
-                            options={lane.scope.map((o) => ({ value: o, label: o }))}
-                            disabled={off || locked || seat.departed}
-                            placeholder={words.scope.empty}
-                            onChange={(v) =>
-                              change(seat, lane, {
-                                scope: (Array.isArray(v) ? v : [v]).map(String),
-                              })
-                            }
-                            renderMultiLabel={(sel) =>
-                              sel.length === 0
-                                ? words.scope!.empty
-                                : sel.length <= 2
-                                  ? sel.map((s) => s.label).join(", ")
-                                  : plural(
-                                      sel.length,
-                                      words.scope!.singular,
-                                      words.scope!.noun.toLowerCase(),
-                                    )
-                            }
-                          />
-                        ) : null}
-                      </span>
-                    )}
-                    <span role="cell">
-                      <Tag
-                        size="sm"
-                        variant={status.tone}
-                        appearance={status.outline ? "outline" : "soft"}
-                        leadingIcon={status.busy ? <Spinner size="em" /> : undefined}
-                      >
-                        {status.label}
-                      </Tag>
-                    </span>
-                    <span role="cell">
-                      <IconButton
-                        size="sm"
-                        variant="ghost"
-                        label={`${expanded ? "Hide" : "Show"} ${seat.name}'s ${lane.name} details`}
-                        aria-expanded={expanded}
-                        icon={
-                          expanded ? (
-                            <ChevronDownGlyph size="sm" />
-                          ) : (
-                            <ChevronRightGlyph size="sm" />
-                          )
-                        }
-                        onClick={() => setOpen((o) => ({ ...o, [key]: !expanded }))}
-                      />
-                    </span>
-                  </div>
-                  {!drafted && (
-                    <LaneMessage
-                      lane={lane}
-                      seat={seat}
-                      saved={saved}
-                      syncing={data.syncing}
-                      now={now}
-                      held={held}
-                      readOnly={readOnly !== undefined}
-                      step={stepFor?.(seat.handle)}
-                      pending={pending[key]}
-                      link={links[key]}
-                      onAct={(a) => void act(seat, lane, a)}
-                      onInstall={() => void install(seat, lane)}
-                      onRemove={() => setRemoving({ seat, lane })}
-                    />
-                  )}
-                  {hint && <p className="agent-access-hint t-caption">{hint}</p>}
-                  {expanded && (
-                    <Details
-                      lane={lane}
-                      seat={seat}
-                      saved={saved}
-                      now={now}
-                      actions={availableActions(lane, saved, held !== undefined, data.syncing)}
-                      pending={pending[key]}
-                      onAction={(a) =>
-                        a === "rotate" ? setRotating({ seat, lane }) : setRemoving({ seat, lane })
-                      }
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
+        renderExpandedRow={(row) => (
+          <Details
+            lane={row.lane}
+            seat={row.seat}
+            saved={row.saved}
+            now={now}
+            actions={availableActions(row.lane, row.saved, held !== undefined, data.syncing)}
+            pending={pending[row.key]}
+            onAction={(a) =>
+              a === "rotate"
+                ? setRotating({ seat: row.seat, lane: row.lane })
+                : setRemoving({ seat: row.seat, lane: row.lane })
+            }
+          />
+        )}
+        renderAccessoryRow={(row) => {
+          const message = row.drafted ? null : (
+            <LaneMessage
+              lane={row.lane}
+              seat={row.seat}
+              saved={row.saved}
+              syncing={data.syncing}
+              now={now}
+              held={held}
+              readOnly={readOnly !== undefined}
+              step={stepFor?.(row.seat.handle)}
+              pending={pending[row.key]}
+              link={links[row.key]}
+              onAct={(a) => void act(row.seat, row.lane, a)}
+              onInstall={() => void install(row.seat, row.lane)}
+              onRemove={() => setRemoving({ seat: row.seat, lane: row.lane })}
+            />
+          );
+          const hint = emptyScopeHint(row.lane, row.want) ?? productOnlyNote(row.lane, row.want);
+          return message || hint ? (
+            <div className="agent-access-under">
+              {message}
+              {hint && <p className="t-caption">{hint}</p>}
+            </div>
+          ) : null;
+        }}
+      />
 
       {said && (
         <Callout variant="danger" live="polite">
@@ -541,28 +581,21 @@ export function AgentsAccess({
         </Callout>
       )}
 
-      {changes > 0 && !readOnly && (
-        <div className="agent-access-bar" role="region" aria-label="Unsaved changes">
-          <span className="t-label">
-            {changes === 1 ? "One change" : `${changes} changes`} not saved
-          </span>
-          <span className="t-caption">Nothing changes at {name} until you save.</span>
-          <span className="agent-access-bar-actions">
-            <Button size="small" variant="ghost" onClick={() => setDraft({})}>
-              Discard
-            </Button>
-            <Button
-              size="small"
-              variant="primary"
-              disabledReason={refused}
-              onClick={() => {
-                if (!refused) setReview(true);
-              }}
-            >
-              Review changes
-            </Button>
-          </span>
-        </div>
+      {/* THE KIT'S STICKY BAR, which docks to the foot on a phone and says the
+          count as it changes: what is drafted, Discard, and the review. */}
+      {!readOnly && (
+        <SelectionBar count={changes} onClear={() => setDraft({})} labels={UNSAVED_WORDS}>
+          <Button
+            size="small"
+            variant="primary"
+            disabledReason={refused}
+            onClick={() => {
+              if (!refused) setReview(true);
+            }}
+          >
+            Review changes
+          </Button>
+        </SelectionBar>
       )}
 
       {review && (
@@ -840,7 +873,7 @@ function LaneMessage({
       </Callout>
     );
   }
-  return body ? <div className="agent-access-message">{body}</div> : null;
+  return body;
 }
 
 const ACTION_WORDS: Record<SeatAction, string> = {
@@ -890,52 +923,50 @@ function Details({
       </span>
     ) : null;
   return (
-    <div role="row">
-      <div className="agent-access-details-cell" role="cell" aria-colspan={7}>
-        {!saved.desired.enabled || seat.departed ? (
-          <p className="agent-access-off">{offSentence(lane, saved, seat.departed)}</p>
-        ) : (
-          <DescriptionList
-            uniform
-            dense
-            fit
-            className="agent-access-facts"
-            aria-label={`${seat.name} on ${lane.name}`}
-            items={[
-              [
-                "Account",
-                o.exists
-                  ? (o.account ?? "Created")
-                  : outside
-                    ? (o.account ?? MANAGED_OUTSIDE)
-                    : "Not created yet",
-              ],
-              [
-                laneWords(lane.key).access,
-                o.exists || outside ? accessWords(lane, o) : "Not granted yet",
-              ],
-              [
-                "Credential",
-                o.credential ? (
-                  <span key="credential">
-                    <span className="mono">{o.credential.variable}</span>
-                    {providedExternally(lane, o)
-                      ? ", provided externally"
-                      : `, minted ${relTime(o.credential.minted_at, now)}`}
-                  </span>
-                ) : providedExternally(lane, o) ? (
-                  "Provided externally"
-                ) : (
-                  "Not minted yet"
-                ),
-              ],
-              ["Tool", toolWords(lane, saved)],
-              ["Last sync", syncValue(saved, now)],
-            ]}
-          />
-        )}
-        {buttons}
-      </div>
+    <div className="agent-access-details">
+      {!saved.desired.enabled || seat.departed ? (
+        <p className="agent-access-off">{offSentence(lane, saved, seat.departed)}</p>
+      ) : (
+        <DescriptionList
+          uniform
+          dense
+          fit
+          className="agent-access-facts"
+          aria-label={`${seat.name} on ${lane.name}`}
+          items={[
+            [
+              "Account",
+              o.exists
+                ? (o.account ?? "Created")
+                : outside
+                  ? (o.account ?? MANAGED_OUTSIDE)
+                  : "Not created yet",
+            ],
+            [
+              laneWords(lane.key).access,
+              o.exists || outside ? accessWords(lane, o) : "Not granted yet",
+            ],
+            [
+              "Credential",
+              o.credential ? (
+                <span key="credential">
+                  <span className="mono">{o.credential.variable}</span>
+                  {providedExternally(lane, o)
+                    ? ", provided externally"
+                    : `, minted ${relTime(o.credential.minted_at, now)}`}
+                </span>
+              ) : providedExternally(lane, o) ? (
+                "Provided externally"
+              ) : (
+                "Not minted yet"
+              ),
+            ],
+            ["Tool", toolWords(lane, saved)],
+            ["Last sync", syncValue(saved, now)],
+          ]}
+        />
+      )}
+      {buttons}
     </div>
   );
 }
