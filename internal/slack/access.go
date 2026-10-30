@@ -141,7 +141,7 @@ func ScopeDrift(held []string) (missing, extra []string) {
 }
 
 // appGone reports a Slack error meaning the recorded app is not there any
-// more — deleted in the console, or moved to a workspace this credential
+// more: deleted in the console, or moved to a workspace this credential
 // cannot see.
 //
 // # Why it is a set of codes rather than a status

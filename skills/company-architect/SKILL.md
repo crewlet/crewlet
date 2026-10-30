@@ -345,14 +345,15 @@ there that is no secret is written as itself: `GITLAB_HOST: gitlab.com`,
 masks everything in such a position that is not exactly one reference,
 and writing the masked value back keeps the stored one.
 
-**Seats you will provision need a *whole-value* `${VAR}`.**
-`crewlet mattermost provision` / `crewlet gitlab provision` mint per-agent
-tokens *into the config's own references*, and that capture contract
-requires the value to be exactly one reference —
-`"${MATTERMOST_TOKEN_CEO}"`, never `"tok-${SUFFIX}"` or a literal. One
-distinct variable per seat. Atlassian and GitHub mint nothing: create
-those accounts and tokens by hand, and their commands report which
-account each credential turned out to be.
+**An agent's own account at a managed integration is the engine's.** Turn a
+seat on with `roles[].integrations.<kind>.enabled: true` and its access in
+the vendor's own terms (a Datadog role id, GitLab's `access_level`,
+Mattermost's `roles` and `channels`, and so on), or on the integration's
+Agents tab. The engine creates the account and seals its token under a name
+it derives for the seat, `<KIND>_<FIELD>_<HANDLE>` (for example
+`MATTERMOST_BOT_TOKEN_CEO`), and binds it to the seat's tools itself. Do not
+write a `${VAR}` for that token anywhere in the document: a seat's variable
+that a company block or another seat also names is refused.
 
 **The knowledge base and the tracker are each single-homed, and each is
 named.** `knowledge.backend` is `doclet` (the default), `confluence` or

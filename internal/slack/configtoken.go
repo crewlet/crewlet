@@ -44,8 +44,19 @@ var ErrNoConfigToken = errors.New(
 		"12-hour access token")
 
 // configTokenMargin is how much life a held token must have left to be used.
-// A run that started with seconds left would fail half way through.
-const configTokenMargin = time.Minute
+//
+// A PASS'S WORTH, not a request's. Creating an app is rate limited to about one
+// a minute at Slack, so a pass creating apps for twenty agents runs for twenty
+// minutes on the token it opened with, and one opened with less left fails
+// half way through, with some apps created and their installs not yet offered.
+const configTokenMargin = 30 * time.Minute
+
+// The bounds on keeping a rotated pair: a store that blinks is tried again a
+// few times, close together, before the rotation is reported lost.
+const (
+	saveAttempts = 3
+	saveBackoff  = 500 * time.Millisecond
+)
 
 // Usable reports a held access token with enough life left to use at at.
 // A token with no recorded expiry is used: Slack answered none, and a refusal
@@ -83,19 +94,38 @@ func (a *Admin) ConfigToken(
 	if refresh == "" {
 		return "", ErrNoConfigToken
 	}
-	rotated, err := a.RotateConfigToken(ctx, refresh)
+	// THE ROTATION AND ITS SAVE OUTLIVE THE CALLER. Once Slack is asked,
+	// the refresh token it was given is retired, so the answer has to be
+	// read and kept whatever happens to the pass that asked: cancelled
+	// between the two, the company would hold a refresh token Slack has
+	// already spent and nothing else.
+	keep := context.WithoutCancel(ctx)
+	rotated, err := a.RotateConfigToken(keep, refresh)
 	if err != nil {
 		return "", err
 	}
-	// PERSISTED BEFORE USE. The rotate already retired the refresh token
-	// it was given, so this pair is now the only way back into the
-	// company's apps.
-	if err := store.SaveConfigToken(ctx, rotated); err != nil {
+	if err := saveRotated(keep, store, rotated); err != nil {
 		return "", fmt.Errorf(
 			"slack: the app-configuration token was rotated and could not be "+
 				"recorded, which invalidates the refresh token it replaced: %w", err)
 	}
 	return rotated.Token, nil
+}
+
+// saveRotated makes a freshly rotated pair durable, trying a store that
+// refused again a few times before giving up: the pair is the only way back
+// into the company's apps.
+func saveRotated(ctx context.Context, store ConfigTokenStore, token ConfigToken) error {
+	var err error
+	for attempt := range saveAttempts {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * saveBackoff)
+		}
+		if err = store.SaveConfigToken(ctx, token); err == nil {
+			return nil
+		}
+	}
+	return err
 }
 
 // EncodeConfigToken is the pair as ONE sealed value.

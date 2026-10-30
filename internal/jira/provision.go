@@ -4,6 +4,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -51,12 +52,12 @@ func ProjectsOf(o *org.Organization) []string {
 	}
 	seen := map[string]bool{}
 	for u := range o.AllUnits() {
-		if key := org.NormalizeScope(u.Project); key != "" {
+		if key := config.JiraProjectKey(u.Project); key != "" {
 			seen[key] = true
 		}
 	}
 	for seat := range o.AllRoles() {
-		if key := org.NormalizeScope(seat.Project); key != "" {
+		if key := config.JiraProjectKey(seat.Project); key != "" {
 			seen[key] = true
 		}
 	}

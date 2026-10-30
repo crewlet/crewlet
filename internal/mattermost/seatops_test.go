@@ -69,18 +69,23 @@ func TestObserveBotReadsEveryFactAPassCompares(t *testing.T) {
 	}
 }
 
-// A BOT DEACTIVATED BY HAND IS NOT THIS ENGINE'S OFF (D3), and a running bot
-// costs no extra read.
+// A BOT DEACTIVATED BY HAND IS NOT THIS ENGINE'S OFF (D3), and the marker is
+// read of a running bot too, where it is stale and has to come off.
 func TestObserveBotTellsWhoDeactivatedIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name               string
-		deleteAt           string
-		deactivatedHere    bool
-		readsTheBotsRecord bool
+		name            string
+		deleteAt        string
+		description     string
+		marked          bool
+		deactivatedHere bool
 	}{
-		{name: "by hand", deleteAt: "1700000000000", readsTheBotsRecord: true},
+		{name: "by hand", deleteAt: "1700000000000"},
+		{name: "by this engine", deleteAt: "1700000000000",
+			description: mattermost.DisconnectedDescription, marked: true, deactivatedHere: true},
 		{name: "running", deleteAt: "0"},
+		{name: "running with a stale marker", deleteAt: "0",
+			description: mattermost.DisconnectedDescription, marked: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -90,7 +95,7 @@ func TestObserveBotTellsWhoDeactivatedIt(t *testing.T) {
 				case "/api/v4/users/u-1":
 					return writeJSON(w, `{"id":"u-1","roles":"system_user","delete_at":`+tc.deleteAt+`}`)
 				case "/api/v4/bots/u-1":
-					return writeJSON(w, `{"user_id":"u-1","description":""}`)
+					return writeJSON(w, `{"user_id":"u-1","description":"`+tc.description+`"}`)
 				}
 				return writeJSON(w, `[]`)
 			})
@@ -98,12 +103,9 @@ func TestObserveBotTellsWhoDeactivatedIt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("observe: %v", err)
 			}
-			if bot.DeactivatedHere != tc.deactivatedHere {
-				t.Errorf("deactivated here = %v", bot.DeactivatedHere)
-			}
-			read := slices.Contains(s.seen(), "GET /api/v4/bots/u-1")
-			if read != tc.readsTheBotsRecord {
-				t.Errorf("read the bot's record = %v, want %v", read, tc.readsTheBotsRecord)
+			if bot.Marked != tc.marked || bot.DeactivatedHere != tc.deactivatedHere {
+				t.Errorf("marked = %v, deactivated here = %v, want %v and %v",
+					bot.Marked, bot.DeactivatedHere, tc.marked, tc.deactivatedHere)
 			}
 		})
 	}
@@ -120,6 +122,8 @@ func TestSetChannelsStaysWithinTheCompanysList(t *testing.T) {
 		switch r.URL.Path {
 		case "/api/v4/users/u-1":
 			return writeJSON(w, `{"id":"u-1","roles":"system_user"}`)
+		case "/api/v4/bots/u-1":
+			return writeJSON(w, `{"user_id":"u-1","description":""}`)
 		case "/api/v4/users/u-1/teams/t-1/channels":
 			return writeJSON(w, `[{"id":"c-gen","name":"general","type":"O"},`+
 				`{"id":"c-inc","name":"incidents","type":"O"},`+
@@ -233,8 +237,8 @@ func TestTurnOffStopsAtATokenItCannotRevoke(t *testing.T) {
 	}
 }
 
-// BACK ON REACTIVATES AND CLEARS THE MARKER, or the live bot would read as
-// this engine's off on the next pass.
+// BACK ON CLEARS THE MARKER, THEN REACTIVATES: in the other order an
+// interrupted run would leave a live bot marked as this engine's off.
 func TestTurnOnReactivatesAndClearsTheMarker(t *testing.T) {
 	t.Parallel()
 	s := newServer(t)
@@ -249,11 +253,44 @@ func TestTurnOnReactivatesAndClearsTheMarker(t *testing.T) {
 	if err := client(t, s).TurnOn(context.Background(), mattermost.BotAccount{ID: "u-1"}); err != nil {
 		t.Fatalf("turn on: %v", err)
 	}
-	want := []string{"POST /api/v4/bots/u-1/enable", "PUT /api/v4/bots/u-1"}
+	want := []string{"PUT /api/v4/bots/u-1", "POST /api/v4/bots/u-1/enable"}
 	if got := writes(s); !slices.Equal(got, want) {
 		t.Errorf("writes = %q, want %q", got, want)
 	}
 	if !strings.Contains(description, `"description":""`) {
 		t.Errorf("the marker was not cleared: %s", description)
+	}
+}
+
+// A DEACTIVATION MATTERMOST REFUSES TAKES THE MARKER OFF AGAIN, so the bot is
+// not left live and marked, where a later deactivation by somebody else would
+// read as this engine's off and be undone (D3).
+func TestAFailedDeactivationTakesTheMarkerOffAgain(t *testing.T) {
+	t.Parallel()
+	s := newServer(t)
+	var descriptions []string
+	s.responds(func(w http.ResponseWriter, r *http.Request) bool {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v4/bots/u-1":
+			body, _ := io.ReadAll(r.Body)
+			descriptions = append(descriptions, string(body))
+		case r.URL.Path == "/api/v4/bots/u-1/disable":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"message":"no permission"}`))
+			return true
+		}
+		return false
+	})
+	err := client(t, s).Deactivate(context.Background(), mattermost.BotAccount{ID: "u-1"})
+	if err == nil {
+		t.Fatal("a refused deactivation was not reported")
+	}
+	want := []string{"PUT /api/v4/bots/u-1", "POST /api/v4/bots/u-1/disable", "PUT /api/v4/bots/u-1"}
+	if got := writes(s); !slices.Equal(got, want) {
+		t.Errorf("writes = %q, want %q", got, want)
+	}
+	if len(descriptions) != 2 || !strings.Contains(descriptions[1], `"description":""`) {
+		t.Errorf("descriptions written = %q, want the marker and then its removal", descriptions)
 	}
 }

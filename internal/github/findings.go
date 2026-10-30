@@ -145,7 +145,7 @@ func (r *Result) Findings() []integration.Finding {
 	// buys a seat is that its TOOLS act as somebody, so that is what a
 	// refused one costs — claiming the seat is unreachable was a second
 	// false statement, true only of a seat with no app either, which this
-	// run cannot see and [ReconcileSeatApps] reports on.
+	// run cannot see and the access sync reports on.
 	for _, seat := range r.Seats {
 		if !seat.Refused() {
 			continue

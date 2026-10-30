@@ -185,8 +185,11 @@ func TestAnUnreachableRegistryRefusesTheInstall(t *testing.T) {
 	if _, err := r.installs.Complete(t.Context(), state, "code"); refusal(t, err).Status != http.StatusServiceUnavailable {
 		t.Errorf("answered %v", err)
 	}
-	if _, err := r.installs.Link(t.Context(), "swe", "A0SWE"); err == nil {
-		t.Error("a link was minted that could not be recorded")
+	// AND A LINK THAT CANNOT BE RECORDED IS NOT MINTED, answered as the
+	// same 503 with a time to retry.
+	_, err := r.installs.Link(t.Context(), "swe", "A0SWE")
+	if got := refusal(t, err); got.Status != http.StatusServiceUnavailable || got.RetryAfter == 0 {
+		t.Errorf("an unrecordable link answered %+v", got)
 	}
 }
 

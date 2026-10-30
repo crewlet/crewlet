@@ -107,6 +107,16 @@ func (vendor) Steps(
 			Note: have.Level,
 		})
 		if driftNeedsReinstall(have.Level) {
+			// A BOT TOKEN KEEPS THE SCOPES IT WAS INSTALLED WITH, so a
+			// scope added at Slack stays on the live token after the
+			// manifest drops it, and one removed there is not back on it
+			// until an install. The token is retired, and the install
+			// issues one at the manifest's scopes.
+			add(seataccess.Step{
+				Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
+				Text: "Revoke " + name + "'s bot token",
+				Note: "It holds the scopes changed at Slack. The install below issues one with the manifest's.",
+			})
 			add(install)
 		}
 	case seataccess.OpDisable:
@@ -158,8 +168,14 @@ func (vendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Ses
 }
 
 // open is [vendor.Open] through httpClient, nil for the default.
+//
+// ENGINE-PROVISIONED ONLY (D4b): a company whose block names no configuration
+// token hands its agents' apps in from outside Crewlet, and the sync leaves
+// them alone whatever the store happens to hold.
 func open(ctx context.Context, in seataccess.OpenInput, httpClient *http.Client) (*session, error) {
-	if in.Config == nil || in.Config.Integrations.Slack == nil || !configTokenSealed(in) {
+	if in.Config == nil || in.Config.Integrations.Slack == nil ||
+		in.Config.SeatCredentialMode(string(integration.KindSlack), false) != config.SeatCredentialEngine ||
+		!configTokenSealed(in) {
 		return nil, fmt.Errorf("slack: %w", integration.ErrNotConfigured)
 	}
 	sessionIn := sessionInput{
@@ -178,7 +194,8 @@ func open(ctx context.Context, in seataccess.OpenInput, httpClient *http.Client)
 		}
 		sessionIn.seats[seat.Handle()] = seatDoc{name: seat.Name, block: role.Integrations.Slack}
 	}
-	sessionIn.configToken, sessionIn.noToken = openConfigToken(ctx, sessionIn.admin, in)
+	opened := openConfigToken(ctx, sessionIn.admin, in)
+	sessionIn.configToken, sessionIn.noToken, sessionIn.rotate = opened.token, opened.why, opened.rotate
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -187,52 +204,66 @@ func open(ctx context.Context, in seataccess.OpenInput, httpClient *http.Client)
 
 // configTokenName is the variable the company's app-configuration token pair
 // is sealed under: the one `integrations.slack.app_config_token` names, which
-// the connect form writes as [ConfigTokenVar], or that name where the block
-// names none.
+// the connect form writes as [ConfigTokenVar]. "" where the block names none.
 func configTokenName(in seataccess.OpenInput) string {
 	if in.Config != nil && in.Config.Integrations.Slack != nil {
 		if name, whole := envref.Whole(strings.TrimSpace(in.Config.Integrations.Slack.AppConfigToken)); whole {
 			return name
 		}
 	}
-	return ConfigTokenVar
+	return ""
 }
 
-// configTokenSealed reports a company that has sealed an app-configuration
-// token, whatever its state.
+// configTokenSealed reports a company that has sealed the app-configuration
+// token its block names, whatever its state.
 func configTokenSealed(in seataccess.OpenInput) bool {
-	if in.Env == nil {
+	name := configTokenName(in)
+	if in.Env == nil || name == "" {
 		return false
 	}
-	raw, ok := in.Env.LookupOK(configTokenName(in))
+	raw, ok := in.Env.LookupOK(name)
 	return ok && strings.TrimSpace(raw) != ""
+}
+
+// openedToken is a session's app-configuration token: the token, why there is
+// none, and how to renew it by force where a sink can keep the renewal.
+type openedToken struct {
+	token  string
+	why    error
+	rotate func(context.Context) (string, error)
 }
 
 // openConfigToken is the usable configuration token for a session, or why
 // there is none. Only a context that is done is an error the caller sees;
 // every other failure is the reason the steps needing the token report.
-func openConfigToken(ctx context.Context, admin *Admin, in seataccess.OpenInput) (string, error) {
-	held := ConfigToken{}
-	if in.Env != nil {
-		raw, _ := in.Env.LookupOK(configTokenName(in))
-		decoded, err := DecodeConfigToken(raw)
-		if err != nil {
-			return "", err
+func openConfigToken(ctx context.Context, admin *Admin, in seataccess.OpenInput) openedToken {
+	raw, _ := in.Env.LookupOK(configTokenName(in))
+	held, err := DecodeConfigToken(raw)
+	if err != nil {
+		return openedToken{why: err}
+	}
+	var out openedToken
+	if in.Sink != nil {
+		// THE RESOLVED PAIR IS THE BOOTSTRAP: the sink answers the same
+		// store in the loop, and where it holds nothing yet (a pair sealed
+		// before the sink was given) the resolver's refresh token is still
+		// the live one.
+		store := SinkConfigTokenStore{Sink: in.Sink, Var: configTokenName(in)}
+		out.rotate = func(ctx context.Context) (string, error) {
+			return admin.ConfigToken(ctx, store, held.RefreshToken, time.Now(), true)
 		}
-		held = decoded
+		if !held.Usable(time.Now()) {
+			out.token, out.why = admin.ConfigToken(ctx, store, held.RefreshToken, time.Now(), false)
+			return out
+		}
 	}
-	if held.Usable(time.Now()) {
-		return held.Token, nil
-	}
-	if in.Sink == nil {
-		return "", errors.New("slack: the app-configuration token needs rotating, " +
+	if !held.Usable(time.Now()) {
+		out.why = errors.New("slack: the app-configuration token needs rotating, " +
 			"which a preview does not do")
+		return out
 	}
-	// THE RESOLVED PAIR IS THE BOOTSTRAP: the sink answers the same store
-	// in the loop, and where it holds nothing yet (a pair sealed before the
-	// sink was given) the resolver's refresh token is still the live one.
-	return admin.ConfigToken(ctx, SinkConfigTokenStore{Sink: in.Sink, Var: configTokenName(in)},
-		held.RefreshToken, time.Now(), false)
+	out.token = held.Token
+	return out
 }
 
 // sessionInput is what a session is built from.
@@ -243,6 +274,10 @@ type sessionInput struct {
 	// with noToken saying why.
 	configToken string
 	noToken     error
+
+	// rotate renews the configuration token by force, nil on a preview,
+	// which rotates nothing.
+	rotate func(context.Context) (string, error)
 
 	// base is the deployment's public webhook base, "" where unknown.
 	base string
@@ -262,10 +297,18 @@ type seatDoc struct {
 type session struct {
 	sessionInput
 	cached map[string]Observed
+
+	// revoked is each seat's fields a step of this pass revoked at Slack,
+	// which the resolver, a snapshot taken when the pass began, still reads
+	// as sealed.
+	revoked map[string][]string
+
+	// renewed reports the one forced renewal a session makes.
+	renewed bool
 }
 
 func newSession(in sessionInput) *session {
-	return &session{sessionInput: in, cached: map[string]Observed{}}
+	return &session{sessionInput: in, cached: map[string]Observed{}, revoked: map[string][]string{}}
 }
 
 // Options implements [seataccess.Session]: nothing to choose, per seat.
@@ -274,19 +317,33 @@ func (s *session) Options(context.Context, seataccess.Lane) (seataccess.Options,
 }
 
 // Observe implements [seataccess.Session].
+//
+// ONE SEAT'S TOKEN, ONE SEAT'S FAULT: a bot token Slack could not check for one
+// seat says nothing about the others ([seataccess.SeatFaults]). A refused
+// configuration token is every seat's, so it is the kind's, as is a pass whose
+// context is done.
 func (s *session) Observe(ctx context.Context, in seataccess.ObserveInput) (seataccess.Observation, error) {
 	out := seataccess.Observation{}
+	faults := seataccess.SeatFaults{}
 	for _, handle := range observedHandles(in) {
 		record := recordOf(in.Records, handle)
 		seat := s.seatApp(handle, record)
-		obs, err := ObserveSeat(ctx, s.admin, s.configToken, s.base, s.http, seat)
+		obs, err := s.read(ctx, seat)
 		if err != nil {
-			return nil, fmt.Errorf("slack: observe %s: %w", handle, err)
+			var api *APIError
+			if ctx.Err() != nil || (errors.As(err, &api) && configTokenRefused(api.Code)) {
+				return nil, fmt.Errorf("slack: observe %s: %w", handle, err)
+			}
+			faults[handle] = fmt.Errorf("slack: read %s's app back: %w", handle, err)
+			continue
 		}
 		s.cached[handle] = obs
 		out[handle] = map[seataccess.Lane]seataccess.Observed{
 			seataccess.LaneSlack: observed(seat, obs, record),
 		}
+	}
+	if len(faults) > 0 {
+		return out, faults
 	}
 	return out, nil
 }
@@ -336,7 +393,7 @@ func observed(seat SeatApp, obs Observed, record *seataccess.Record) seataccess.
 
 // Apply implements [seataccess.Session].
 func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
-	seat := s.seatApp(in.Seat.Handle, in.Record)
+	seat := s.seatAt(in)
 	if in.Step.By == seataccess.ByYou {
 		return s.awaitInstall(ctx, seat)
 	}
@@ -344,28 +401,99 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 	case seataccess.OpCreate:
 		return s.applyCreate(ctx, seat)
 	case seataccess.OpLevel:
+		if in.Step.Verb == seataccess.VerbRevoke {
+			return s.revoke(ctx, seat, false)
+		}
 		if err := s.needs(true); err != nil {
 			return seataccess.StepResult{}, err
 		}
-		if err := restoreManifest(ctx, s.admin, s.configToken, s.base, seat); err != nil {
+		if err := s.withConfigToken(ctx, func(token string) error {
+			return restoreManifest(ctx, s.admin, token, s.base, seat)
+		}); err != nil {
 			return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbRestore)
 		}
 		return seataccess.StepResult{}, nil
 	case seataccess.OpDisable, seataccess.OpRevoke, seataccess.OpRotate:
-		// ONLY THE BOT TOKEN. The OAuth client and the signing secret
-		// stay sealed, because an install a person approves later needs
-		// both, and Slack serves them once.
-		if err := revokeToken(ctx, s.http, seat.BotToken); err != nil {
-			return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbRevoke)
-		}
-		return seataccess.StepResult{
-			Revoked:  []string{FieldBotToken},
-			Disabled: in.Step.Op != seataccess.OpRotate,
-		}, nil
+		return s.revoke(ctx, seat, in.Step.Op != seataccess.OpRotate)
 	case seataccess.OpRemove:
 		return s.applyRemove(ctx, seat)
 	}
 	return seataccess.StepResult{}, fmt.Errorf("slack: no step for %q", in.Step.Op)
+}
+
+// revoke withdraws the seat's bot token at Slack.
+//
+// ONLY THE BOT TOKEN. The OAuth client and the signing secret stay sealed,
+// because an install a person approves later needs both, and Slack serves them
+// once.
+func (s *session) revoke(ctx context.Context, seat SeatApp, disabled bool) (seataccess.StepResult, error) {
+	if err := revokeToken(ctx, s.http, seat.BotToken); err != nil {
+		return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbRevoke)
+	}
+	s.revokedAt(seat.Handle, FieldBotToken)
+	return seataccess.StepResult{Revoked: []string{FieldBotToken}, Disabled: disabled}, nil
+}
+
+// revokedAt records fields a step revoked at Slack for the rest of the pass,
+// and drops the seat's cached observation, which still says its token works.
+func (s *session) revokedAt(handle string, fields ...string) {
+	s.revoked[handle] = append(s.revoked[handle], fields...)
+	delete(s.cached, handle)
+}
+
+// seatAt is the seat's app as a step finds it: the values sealed when the
+// pass began, with what this pass revoked since and what this op's earlier
+// steps sealed laid over them.
+//
+// THE RESOLVER IS A SNAPSHOT taken when the pass began. Read alone, a create's
+// install step found the OAuth client its own first step had just sealed
+// missing, and refused; and a rotate's install step found the token its first
+// step had just revoked still sealed, read the cached observation that it
+// worked, and marked the reinstall done.
+func (s *session) seatAt(in seataccess.ApplyInput) SeatApp {
+	seat := s.seatApp(in.Seat.Handle, in.Record)
+	for _, prior := range in.Prior {
+		if prior.AccountID != "" {
+			seat.AppID = prior.AccountID
+		}
+		for _, minted := range prior.Minted {
+			seat.set(minted.Field, minted.Value)
+		}
+		for _, field := range prior.Revoked {
+			seat.set(field, "")
+		}
+	}
+	return seat
+}
+
+// withConfigToken runs call with the session's configuration token, and once
+// more with a renewed one where Slack answers token_expired before the expiry
+// it recorded. A token Slack retired early is renewed rather than reported,
+// once per session, so a refresh token is never spent in a loop.
+func (s *session) withConfigToken(ctx context.Context, call func(token string) error) error {
+	err := call(s.configToken)
+	var api *APIError
+	if err == nil || s.rotate == nil || s.renewed || !errors.As(err, &api) || api.Code != "token_expired" {
+		return err
+	}
+	s.renewed = true
+	token, renewErr := s.rotate(ctx)
+	if renewErr != nil {
+		return errors.Join(err, renewErr)
+	}
+	s.configToken = token
+	return call(token)
+}
+
+// read reads one seat's app and token back from Slack.
+func (s *session) read(ctx context.Context, seat SeatApp) (Observed, error) {
+	var obs Observed
+	err := s.withConfigToken(ctx, func(token string) error {
+		var readErr error
+		obs, readErr = ObserveSeat(ctx, s.admin, token, s.base, s.http, seat)
+		return readErr
+	})
+	return obs, err
 }
 
 // applyCreate creates the seat's app, unless the ledger already records one
@@ -384,8 +512,12 @@ func (s *session) applyCreate(ctx context.Context, seat SeatApp) (seataccess.Ste
 	if err := s.needs(true); err != nil {
 		return seataccess.StepResult{}, err
 	}
-	created, err := createApp(ctx, s.admin, s.configToken, s.base, seat)
-	if err != nil {
+	var created AppCredentials
+	if err := s.withConfigToken(ctx, func(token string) error {
+		var createErr error
+		created, createErr = createApp(ctx, s.admin, token, s.base, seat)
+		return createErr
+	}); err != nil {
 		return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbCreate)
 	}
 	undo := func(ctx context.Context) error {
@@ -462,10 +594,13 @@ func (s *session) applyRemove(ctx context.Context, seat SeatApp) (seataccess.Ste
 	if s.admin == nil || s.configToken == "" {
 		return byHand("No usable app-configuration token is held, so this engine cannot"), nil
 	}
-	err := s.admin.DeleteApp(ctx, s.configToken, seat.AppID)
+	err := s.withConfigToken(ctx, func(token string) error {
+		return s.admin.DeleteApp(ctx, token, seat.AppID)
+	})
 	var api *APIError
 	switch {
 	case err == nil:
+		s.revokedAt(seat.Handle, gone.Revoked...)
 		return gone, nil
 	case errors.As(err, &api) && configTokenRefused(api.Code):
 		return byHand("Slack refused the app-configuration token (" + api.Code + ")"), nil
@@ -501,7 +636,7 @@ func (s *session) observe(ctx context.Context, seat SeatApp) (Observed, error) {
 	if obs, ok := s.cached[seat.Handle]; ok && obs.TokenWorks {
 		return obs, nil
 	}
-	obs, err := ObserveSeat(ctx, s.admin, s.configToken, s.base, s.http, seat)
+	obs, err := s.read(ctx, seat)
 	if err != nil {
 		return obs, err
 	}
@@ -523,11 +658,12 @@ func (s *session) seatApp(handle string, record *seataccess.Record) SeatApp {
 	if s.resolve == nil {
 		return seat
 	}
-	value := func(field string) string {
-		return strings.TrimSpace(s.resolve("${" + SeatVar(handle, field) + "}"))
+	for _, field := range []string{FieldClientID, FieldClientSecret, FieldSigningSecret, FieldBotToken} {
+		seat.set(field, strings.TrimSpace(s.resolve("${"+SeatVar(handle, field)+"}")))
 	}
-	seat.ClientID, seat.ClientSecret = value(FieldClientID), value(FieldClientSecret)
-	seat.SigningSecret, seat.BotToken = value(FieldSigningSecret), value(FieldBotToken)
+	for _, field := range s.revoked[handle] {
+		seat.set(field, "")
+	}
 	return seat
 }
 

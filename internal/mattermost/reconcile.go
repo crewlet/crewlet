@@ -42,6 +42,12 @@ type Options struct {
 	// in step with their bots.
 	Org *org.Organization
 
+	// Managed is each agent seat's bot this engine manages, by the seat's
+	// handle: the bot user id the access sync's ledger records. Only these
+	// bots are renamed; a bot under a seat's username that the ledger does
+	// not record is somebody else's, and its name is left as it is.
+	Managed map[string]string
+
 	// ReadOnly is a check: the pass reads and reports, and renames no bot.
 	ReadOnly bool
 }
@@ -102,11 +108,11 @@ func listBots(ctx context.Context, opts Options, res *Result) {
 			"could not list bots, so display names are not checked this run: %v", err))
 		return
 	}
-	managed := make(map[string]Bot, len(bots))
+	byID := make(map[string]Bot, len(bots))
 	for _, bot := range bots {
-		managed[strings.ToLower(bot.Username)] = bot
+		byID[bot.UserID] = bot
 	}
-	renameBots(ctx, opts, managed, res)
+	renameBots(ctx, opts, byID, res)
 }
 
 // renameBots brings every agent seat's bot display name in line with the
@@ -114,20 +120,25 @@ func listBots(ctx context.Context, opts Options, res *Result) {
 //
 // A RENAMED ROLE REACHES THE BOT. A create-only display name means the roster
 // in Mattermost drifts from the org chart it mirrors, with no way back but
-// editing every bot by hand. It sweeps the document's agent seats, each of
-// whose bot the per-seat access sync creates.
+// editing every bot by hand. It sweeps the document's agent seats, and of
+// those only the bots the access sync's ledger records ([Options.Managed]),
+// found by user id so a bot renamed at Mattermost is still found.
 //
 // COMPARED ONLY AGAINST A LISTING THAT ANSWERED, which the caller guarantees
 // by calling this only when one did: the bot record is the only thing carrying
 // the current display name, so a missing entry would otherwise read as an
 // empty name and rewrite every bot on every pass.
-func renameBots(ctx context.Context, opts Options, managed map[string]Bot, res *Result) {
+func renameBots(ctx context.Context, opts Options, byID map[string]Bot, res *Result) {
 	for seat := range opts.Org.AllRoles() {
 		if !seat.IsAgent() {
 			continue
 		}
+		id, held := opts.Managed[seat.Handle()]
+		if !held {
+			continue
+		}
 		want := BotDisplayName(opts.Config.Provisioning, seat.Name)
-		bot, known := managed[strings.ToLower(BotUsername(opts.Config.Provisioning, seat.Handle()))]
+		bot, known := byID[id]
 		if want == "" || !known || bot.DisplayName == want {
 			continue
 		}

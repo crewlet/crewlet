@@ -60,6 +60,7 @@ func (accessVendor) Steps(
 		return seataccess.Step{Op: op, Verb: verb, By: seataccess.ByCrewlet, Text: text}
 	}
 	mint := step(seataccess.VerbMint, "Mint its access token and seal it as "+sink)
+	retire := step(seataccess.VerbRevoke, "Revoke the access tokens the new one replaces")
 	var out []seataccess.Step
 	switch op {
 	case seataccess.OpCreate:
@@ -80,7 +81,7 @@ func (accessVendor) Steps(
 			out = append(out, step(seataccess.VerbScope, scopeText(join, leave)))
 		}
 		if have.Credential == nil || have.CredentialGone {
-			out = append(out, mint)
+			out = append(out, mint, retire)
 		}
 	case seataccess.OpLevel:
 		out = []seataccess.Step{step(seataccess.VerbRerole,
@@ -92,7 +93,9 @@ func (accessVendor) Steps(
 		}
 		out = []seataccess.Step{step(seataccess.VerbScope, scopeText(join, leave))}
 	case seataccess.OpMint:
-		out = []seataccess.Step{mint}
+		// THE NEW TOKEN FIRST, sealed before anything is revoked, so the
+		// seat is never left holding nothing that authenticates.
+		out = []seataccess.Step{mint, retire}
 	case seataccess.OpDisable:
 		deactivate := step(seataccess.VerbDisable, "Deactivate its Mattermost bot")
 		deactivate.Note = "Mattermost keeps the bot and everything it posted, so turning it " +
@@ -107,7 +110,7 @@ func (accessVendor) Steps(
 		out = []seataccess.Step{remove}
 	case seataccess.OpRotate:
 		mint.Text = "Mint a new access token and seal it as " + sink
-		out = []seataccess.Step{mint, step(seataccess.VerbRevoke, "Revoke the token it replaces")}
+		out = []seataccess.Step{mint, retire}
 	default:
 		return nil
 	}
@@ -345,13 +348,7 @@ func (s *accessSession) observedOf(
 		Level: seataccess.MattermostLevel(bot.Roles), Scope: s.scopeOf(bot),
 	}
 	if bot.Deactivated {
-		// THIS ENGINE'S OFF, by either record of it: the ledger, or the
-		// marker on the bot, which survives a lost ledger (D3).
-		out.DisabledBy = seataccess.DisabledByHand
-		if bot.DeactivatedHere || (recorded && rec.Account != nil &&
-			rec.Account.State == seataccess.AccountDisabled) {
-			out.DisabledBy = seataccess.DisabledByCrewlet
-		}
+		out.DisabledBy = seataccess.DisabledByOf(bot.Marked, rec, recorded)
 	}
 	if recorded && rec.Account != nil {
 		out.CreatedAt = rec.Account.CreatedAt
@@ -424,7 +421,7 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			case seataccess.VerbScope:
 				return seataccess.StepResult{}, s.scope(ctx, in, teamID, bot)
 			default:
-				return s.mint(ctx, in, bot, false)
+				return s.mint(ctx, in, bot)
 			}
 		case seataccess.OpEnable:
 			switch in.Step.Verb {
@@ -436,11 +433,16 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 				return seataccess.StepResult{}, s.refused(in, err)
 			case seataccess.VerbScope:
 				return seataccess.StepResult{}, s.scope(ctx, in, teamID, bot)
+			case seataccess.VerbRevoke:
+				return s.retire(ctx, in, bot)
 			default:
-				return s.mint(ctx, in, bot, true)
+				return s.mint(ctx, in, bot)
 			}
 		case seataccess.OpMint:
-			return s.mint(ctx, in, bot, true)
+			if in.Step.Verb == seataccess.VerbRevoke {
+				return s.retire(ctx, in, bot)
+			}
+			return s.mint(ctx, in, bot)
 		case seataccess.OpLevel:
 			_, err := s.client.SetRoles(ctx, bot, levelRoles(in.Want.Level))
 			return seataccess.StepResult{}, s.refused(in, err)
@@ -470,14 +472,9 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			return seataccess.StepResult{Disabled: true, Revoked: []string{BotTokenField}}, nil
 		case seataccess.OpRotate:
 			if in.Step.Verb == seataccess.VerbMint {
-				return s.mint(ctx, in, bot, false)
+				return s.mint(ctx, in, bot)
 			}
-			// THE TOKEN THE FIRST STEP MINTED is kept, and every other
-			// token this engine minted is revoked; with none minted,
-			// nothing is.
-			_, err := s.client.RetireTokens(ctx, bot, in.Seat.Handle,
-				in.PriorCredentialID(BotTokenField))
-			return seataccess.StepResult{}, s.refused(in, err)
+			return s.retire(ctx, in, bot)
 		default:
 			return seataccess.StepResult{}, fmt.Errorf("mattermost: no step for %q", in.Step.Op)
 		}
@@ -533,20 +530,25 @@ func (s *accessSession) scope(
 	return nil
 }
 
+// retire revokes the tokens this engine minted on the bot other than the one
+// this op's earlier step minted ([seataccess.ApplyInput.PriorCredentialID]):
+// a mint's, an enable's and a rotation's second half.
+func (s *accessSession) retire(
+	ctx context.Context, in seataccess.ApplyInput, bot BotAccount,
+) (seataccess.StepResult, error) {
+	_, err := s.client.RetireTokens(ctx, bot, in.Seat.Handle, in.PriorCredentialID(BotTokenField))
+	return seataccess.StepResult{}, s.refused(in, err)
+}
+
 // mint creates one access token and hands it to the sync to seal.
 //
 // A TOKEN THE SYNC CANNOT SEAL IS REVOKED through its Revoke, which the sync
-// calls with a context that outlives its own cancellation (design 5.2).
-// replaceUnheld first revokes this engine's earlier tokens, which a seat being
-// given a credential because nothing is sealed for it holds values nobody has.
+// calls with a context that outlives its own cancellation (design 5.2). It
+// revokes nothing else: the tokens a new one replaces go in the op's next
+// step, once the new one is sealed.
 func (s *accessSession) mint(
-	ctx context.Context, in seataccess.ApplyInput, bot BotAccount, replaceUnheld bool,
+	ctx context.Context, in seataccess.ApplyInput, bot BotAccount,
 ) (seataccess.StepResult, error) {
-	if replaceUnheld {
-		if _, err := s.client.RevokeEngineTokens(ctx, bot, in.Seat.Handle); err != nil {
-			return seataccess.StepResult{}, s.refused(in, err)
-		}
-	}
 	token, err := s.client.CreateAccessToken(ctx, bot.ID, TokenDescription(in.Seat.Handle))
 	if err != nil {
 		return seataccess.StepResult{}, s.refused(in, err)
@@ -582,6 +584,15 @@ func (s *accessSession) withBot(
 	}
 	if !found {
 		return seataccess.StepResult{Gone: true}, nil
+	}
+	if !bot.Deactivated && bot.Marked && in.Step.Op.LeavesOn() {
+		// A STALE MARKER, left by an off that failed part way or by an
+		// older engine: on a live bot it would make a later deactivation by
+		// somebody else read as this engine's, and be undone (D3).
+		if err := s.client.ClearDisconnected(ctx, bot.ID); err != nil {
+			return seataccess.StepResult{}, s.refused(in, err)
+		}
+		bot.Marked = false
 	}
 	return fn(bot)
 }
