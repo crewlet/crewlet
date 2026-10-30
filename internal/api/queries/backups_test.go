@@ -18,7 +18,15 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-var backupNow = time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+// backupNow is the fixtures' "now", taken from the wall clock rather than
+// written as a date: the history is the runtime audit read through the event
+// log, whose listing pins no instant and so keeps only rows within
+// store.EventHistory of the wall clock. A fixed date passes until thirty days
+// after it and then fails for good with no file changed (store.EventHistory
+// names the trap), which is how a 2026-09-30 date emptied the history on
+// 2026-10-30. Truncated to the second so every instant derived from it
+// round-trips through a stored timestamp unchanged.
+var backupNow = time.Now().UTC().Truncate(time.Second)
 
 // register is a backup register holding fixed points, or one that cannot be
 // read.
