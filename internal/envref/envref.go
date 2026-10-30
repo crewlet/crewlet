@@ -205,3 +205,36 @@ func Resolve(value string, lookup func(name string) (string, bool)) string {
 	}
 	return strings.TrimSpace(resolved)
 }
+
+// SealedName is the one name a sealed value is derived under: VENDOR_FIELD,
+// plus _SEAT for a value that belongs to one seat, upper-snaked
+// (`DATADOG_APP_KEY_SRE`, `GITHUB_APP_KEY_SENIOR_ENGINEER`).
+//
+// ONE NAMING FUNCTION for every layer that derives a name: the connect form's
+// requirements (setup.SecretNameFor), a seat's engine-owned credentials
+// (seataccess.SinkName), and the tool binding the org model injects for a seat
+// (config). It lives here, in the leaf, because config is below the other two
+// and all three must agree byte for byte.
+//
+// Every character the grammar refuses becomes an underscore rather than being
+// dropped, which is what keeps two different seats on two different names: a
+// handle of `nova.1` and one of `nova-1` are different seats, and trimming the
+// separator would seal one seat's credential under the other's name. The
+// grammar's leading-digit rule needs no guard: a derived name always begins
+// with the vendor's own kind, which is letters.
+func SealedName(vendor, field, seat string) string {
+	parts := []string{vendor, field}
+	if seat != "" {
+		parts = append(parts, seat)
+	}
+	var b strings.Builder
+	for _, r := range strings.ToUpper(strings.TrimSpace(strings.Join(parts, "_"))) {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
