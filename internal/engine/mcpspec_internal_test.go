@@ -97,11 +97,16 @@ roles:
 	}
 }
 
-// provisioningDoc is a company that provisions an identity per agent at four
-// vendors — each agent opted in by pointing its block at a variable — with
-// the provisioning blocks as provisioned says. Off, nothing asks a pass to
-// mint: the bots, accounts and keys are the operator's, made by hand. Datadog
-// refuses an enabled block with no provisioning, so off it is switched off.
+// provisioningDoc is a company whose agents are each on at four vendors, with
+// the integrations migrated onto per-seat access and the provisioning blocks
+// as provisioned says. Off, nothing asks a pass to mint: the integrations hold
+// no authority to create an agent's account, so the bots, accounts and keys
+// are the operator's, made by hand, and Datadog, which refuses an enabled
+// block with no provisioning, is switched off.
+//
+// Each seat's tool names its own sealed names ([envref.SealedName]), which is
+// what the engine seals under where it provisions, and what an operator's
+// external credential may be handed in under where it does not.
 func provisioningDoc(provisioned bool) string {
 	atlassian, gitlab, mattermost := "", "", ""
 	datadogEnabled := "false"
@@ -121,12 +126,16 @@ func provisioningDoc(provisioned bool) string {
 	}
 	return `
 name: Acme
+seat_access_migrated: [atlassian, datadog, gitlab, mattermost]
 providers:
   sandbox: {fake: true}
   llm:
     zulu:
       model: claude-sonnet-5
 integrations:` + atlassian + `
+  jira:
+    url: https://acme.atlassian.net
+    token: "${JIRA_ORG_TOKEN}"
   gitlab:
     enabled: true
     url: https://gitlab.example.com
@@ -147,55 +156,61 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
+    integrations:
+      jira: {enabled: true, project_role: "10101"}
     mcp_env:
       atlassian:
-        JIRA_USERNAME: "${CEO_ATLASSIAN_EMAIL}"
-        JIRA_API_TOKEN: "${CEO_ATLASSIAN_TOKEN}"
+        JIRA_USERNAME: "${ATLASSIAN_EMAIL_CEO}"
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_CEO}"
   - name: SWE
     handle: swe
     llm: zulu
+    integrations:
+      gitlab: {enabled: true, access_level: 30}
     mcp_env:
       gitlab:
-        GITLAB_TOKEN: "${SWE_GITLAB_TOKEN}"
+        GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"
   - name: PM
     handle: pm
     llm: zulu
     integrations:
       mattermost:
-        enabled: false
-        bot_token: "${PM_MATTERMOST_TOKEN}"
+        enabled: true
+        roles: [system_user]
+        bot_token: "${MATTERMOST_BOT_TOKEN_PM}"
   - name: Ops
     handle: ops
     llm: zulu
+    integrations:
+      datadog: {enabled: true, role: "dd-role-ops"}
     mcp_env:
       datadog:
-        DD_APP_KEY: "${OPS_DATADOG_KEY}"
+        DD_APP_KEY: "${DATADOG_APP_KEY_OPS}"
 `
 }
 
 // WHAT A PASS WILL MINT IS READ FROM THE PLAN IT MINTS BY, and from a company
-// that asks it to.
+// that gives it the authority to.
 //
-// Each vendor writes a seat's credential into the variable its block points
-// at — Atlassian the address it assigns as well as the token — and that is
-// what a seat's child waits for. A company that connects the same vendors
-// and provisions nothing made its accounts by hand: nothing it runs will ever
-// mint a variable, and a child that read one of them as on its way would wait
-// for ever, reported as waiting rather than as the missing secret it is.
-// Mattermost is the vendor whose own plan does not say so — it plans a bot for
-// any enabled block — so the provisioning block is asked for here.
+// The access sync seals each seat that is on under the seat's own names
+// ([Engine.seatAccessPlan]), Atlassian's assigned address as well as the
+// token, and that is what a seat's child waits for. A company that connects
+// the same vendors with no authority to create an account made its accounts
+// by hand: nothing it runs will ever mint a variable, and a child that read
+// one of them as on its way would wait for ever, reported as waiting rather
+// than as the missing secret it is.
 func TestWhatAPassMintsIsReadFromItsOwnPlan(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
 	provisioned := specCompany(t, provisioningDoc(true))
 	want := map[string]map[string]integration.Kind{
 		"ceo": {
-			"CEO_ATLASSIAN_EMAIL": integration.KindAtlassian,
-			"CEO_ATLASSIAN_TOKEN": integration.KindAtlassian,
+			"ATLASSIAN_EMAIL_CEO": integration.KindAtlassian,
+			"ATLASSIAN_TOKEN_CEO": integration.KindAtlassian,
 		},
-		"swe": {"SWE_GITLAB_TOKEN": integration.KindGitLab},
-		"pm":  {"PM_MATTERMOST_TOKEN": integration.KindMattermost},
-		"ops": {"OPS_DATADOG_KEY": integration.KindDatadog},
+		"swe": {"GITLAB_TOKEN_SWE": integration.KindGitLab},
+		"pm":  {"MATTERMOST_BOT_TOKEN_PM": integration.KindMattermost},
+		"ops": {"DATADOG_APP_KEY_OPS": integration.KindDatadog},
 	}
 	for handle, minted := range want {
 		if got := e.mintedFor(provisioned, handle); !maps.Equal(got, minted) {
@@ -256,6 +271,7 @@ func heldBackCompany(t *testing.T) *Company {
 	t.Helper()
 	return specCompany(t, `
 name: Acme
+seat_access_migrated: [atlassian]
 providers:
   sandbox: {fake: true}
   llm:
@@ -265,6 +281,9 @@ integrations:
   atlassian:
     org_id: "${ATLASSIAN_ORG_ID}"
     api_key: "${ATLASSIAN_ORG_KEY}"
+  jira:
+    url: https://acme.atlassian.net
+    token: "${JIRA_ORG_TOKEN}"
 mcp_servers:
   - name: atlassian
     shared: false
@@ -276,10 +295,12 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
+    integrations:
+      jira: {enabled: true, project_role: "10101"}
     mcp_env:
       atlassian:
-        JIRA_USERNAME: "${CEO_ATLASSIAN_EMAIL}"
-        JIRA_API_TOKEN: "${CEO_ATLASSIAN_TOKEN}"
+        JIRA_USERNAME: "${ATLASSIAN_EMAIL_CEO}"
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_CEO}"
   - name: CTO
     handle: cto
     llm: zulu
@@ -338,7 +359,7 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 		atlassianRow.WaitSeat != ceoID || atlassianRow.Error != "" {
 		t.Errorf("atlassian row = %+v: want the CEO's child waiting, and not failed", atlassianRow)
 	}
-	for _, said := range []string{"${CEO_ATLASSIAN_EMAIL}", "${CEO_ATLASSIAN_TOKEN}",
+	for _, said := range []string{"${ATLASSIAN_EMAIL_CEO}", "${ATLASSIAN_TOKEN_CEO}",
 		"atlassian integration", "starts once the seal reaches this node"} {
 		if !strings.Contains(atlassianRow.Wait, said) {
 			t.Errorf("the waiting child's sentence %q does not say %q", atlassianRow.Wait, said)
@@ -360,7 +381,7 @@ func TestASeatChildWithoutItsCredentialIsHeldBackNotStarted(t *testing.T) {
 	// credentials, and the apply asks the seat's runner for a pass.
 	e.secretsMu.Lock()
 	e.installSecrets(map[string]string{
-		"CEO_ATLASSIAN_EMAIL": "agent-ceo@example.com", "CEO_ATLASSIAN_TOKEN": "ceo-minted",
+		"ATLASSIAN_EMAIL_CEO": "agent-ceo@example.com", "ATLASSIAN_TOKEN_CEO": "ceo-minted",
 	})
 	e.secretsMu.Unlock()
 	e.convergeSeat(t.Context(), ceo, true)

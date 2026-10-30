@@ -1372,7 +1372,9 @@ func (e *Engine) atlassianCredentialSealed(
 		return nil
 	}
 	plan, err := (&atlassianPass{engine: e}).seatPlan(company)
-	if err != nil {
+	if err != nil || len(plan.Seats) == 0 {
+		// NO SEAT THIS ENGINE PROVISIONS, so no clock: an account made by
+		// hand has no grant of this engine's to be waiting on.
 		return nil
 	}
 	vars := make(map[string]string, len(plan.Seats))

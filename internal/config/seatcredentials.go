@@ -38,17 +38,19 @@ func (c *Company) bindSeatCredentials(o *org.Organization) {
 		}
 	}
 	sealed := func(kind, field, handle, written string) string {
-		if c.SeatCredentialMode(kind) == SeatCredentialEngine && strings.TrimSpace(written) == "" {
+		if c.documentMode(kind) == SeatCredentialEngine && strings.TrimSpace(written) == "" {
 			return "${" + envref.SealedName(kind, field, handle) + "}"
 		}
 		return written
 	}
 	for role := range c.EachRole() {
-		seat := seats[role.Handle]
+		// BY THE DERIVED HANDLE, which is the org model's key and the one
+		// every sealed name is spelled from.
+		seat := seats[role.IdentityKey()]
 		if seat == nil {
 			continue
 		}
-		h := role.Handle
+		h := seat.Handle()
 		if c.SeatAccessMigratedFor("slack") {
 			if role.SeatAccessEnabled("slack") {
 				seat.Slack.BotToken = sealed("slack", "BOT_TOKEN", h, seat.Slack.BotToken)

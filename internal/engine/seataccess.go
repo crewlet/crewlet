@@ -257,6 +257,15 @@ func (e *Engine) seatAccessPlan(c *Company, kind integration.Kind) (*provision.P
 	}
 	cat := vendor.Catalog()
 	plan := &provision.Plan{}
+	// NOTHING IS ON ITS WAY where the access sync seals nothing: an
+	// integration whose credentials are handed in from outside (D4b), or one
+	// the document has not migrated onto per-seat access, whose sync changes
+	// nothing. A seat's child naming one of its sealed names there waits on
+	// no pass and is reported as the missing secret it is.
+	if c.Config.SeatCredentialMode(string(kind), e.companyManaged) != config.SeatCredentialEngine ||
+		!c.Config.SeatAccessMigratedFor(string(kind)) {
+		return plan, nil
+	}
 	for _, seat := range seataccess.SeatsOf(c.Config) {
 		on := false
 		for _, lane := range seataccess.LanesOf(kind) {

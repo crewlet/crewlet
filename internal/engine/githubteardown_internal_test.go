@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
@@ -298,7 +299,9 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	e := &Engine{}
+	// A FLEET STORE, which every engine [New] builds has: the pass's access
+	// sync reads the seat access ledger kept there.
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
 	company, err := NewCompanyWith(cfg, e.resolver())
 	if err != nil {
 		t.Fatalf("company: %v", err)

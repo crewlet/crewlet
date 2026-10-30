@@ -146,6 +146,12 @@ type Engine struct {
 	// nobody's. Tier A, so read once at boot like the posture beside it.
 	tierATokens map[string]struct{}
 
+	// companyManaged is whether only named systems write this deployment's
+	// company document (`api.auth.company_writers`), which decides who holds
+	// an agent's GitHub App ([config.Company.SeatCredentialMode]). Tier A,
+	// read once at boot.
+	companyManaged bool
+
 	// identity is the three identity duties' loops, or nil on a node that
 	// arms none of them. See identityduties.go. ATOMIC because `/health`
 	// reads the roster from the socket's health tick while a stop clears
@@ -1454,6 +1460,7 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	if opts.Bootstrap.ServesAPI() {
 		e.adminPosture = opts.Bootstrap.API.Auth.Admin
 	}
+	e.companyManaged = opts.Bootstrap.API.Auth.CompanyManaged()
 	e.tierATokens = make(map[string]struct{}, len(opts.Bootstrap.API.Auth.Tokens))
 	for _, token := range opts.Bootstrap.API.Auth.Tokens {
 		e.tierATokens[token.ID] = struct{}{}

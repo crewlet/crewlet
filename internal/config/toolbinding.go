@@ -368,12 +368,6 @@ func (c *Company) bindSeatTools(o *org.Organization) {
 			if len(bound) == 0 {
 				continue
 			}
-			// ONLY WHERE THE ENGINE SEALS THE CREDENTIAL (D4b). A credential
-			// provided from outside is the variable the seat names in its own
-			// mcp_env block, which reaches the server as written.
-			if c.SeatCredentialMode(b.Vendor) != SeatCredentialEngine {
-				continue
-			}
 			env := seat.MCPEnv.Clone()
 			if env == nil {
 				env = org.MCPEnv{}

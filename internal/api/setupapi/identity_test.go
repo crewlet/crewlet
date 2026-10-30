@@ -65,11 +65,11 @@ func TestAWorkingSeatNamesTheAccountItIsAtEachApp(t *testing.T) {
 	// a seat that works: a derived name is what the engine WOULD create
 	// rather than proof it did.
 	for name, value := range map[string]string{
-		"ATLASSIAN_TOKEN_SRE_LEAD": "atl-token",
-		"ATLASSIAN_EMAIL_SRE_LEAD":     "crewlet-sre-lead@acme.invalid",
-		"GITLAB_TOKEN_SRE_LEAD":    "gl-token",
-		"DATADOG_APP_KEY_SRE_LEAD":   "dd-key",
-		"MATTERMOST_BOT_TOKEN_SRE_LEAD":        "mm-token",
+		"ATLASSIAN_TOKEN_SRE_LEAD":      "atl-token",
+		"ATLASSIAN_EMAIL_SRE_LEAD":      "crewlet-sre-lead@acme.invalid",
+		"GITLAB_TOKEN_SRE_LEAD":         "gl-token",
+		"DATADOG_APP_KEY_SRE_LEAD":      "dd-key",
+		"MATTERMOST_BOT_TOKEN_SRE_LEAD": "mm-token",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatal(err)

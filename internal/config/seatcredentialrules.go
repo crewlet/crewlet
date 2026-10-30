@@ -62,20 +62,24 @@ func SeatSealedFields(kind string) []string {
 	}
 }
 
-// seatCredentialKinds is every integration a seat holds a sealed credential
-// at.
-func seatCredentialKinds() []string {
-	return []string{"atlassian", "datadog", "github", "gitlab", "mattermost", "slack"}
+// documentMode is [Company.SeatCredentialMode] as the document alone can tell
+// it. Whether the deployment is managed (`api.auth.company_writers`) is a
+// bootstrap fact the document does not carry, and it turns only GitHub's mode:
+// GitHub's agents' apps are the engine's only where the engine writes the
+// document. So the document's rules read GitHub as external, the stricter
+// engine rules being a subset no managed deployment may be held to, and an
+// agent's app key still reaches the seat only through its own exclusive
+// variable.
+func (c *Company) documentMode(kind string) SeatCredentialMode {
+	return c.SeatCredentialMode(kind, true)
 }
 
-// managedMCPEnv is every `mcp_env` server name whose credentials belong to an
-// integration the engine may provision, with that integration.
-func managedMCPEnv() map[string]string {
-	return map[string]string{
-		"atlassian": "atlassian", "jira": "atlassian", "confluence": "atlassian",
-		"datadog": "datadog", "github": "github", "gitlab": "gitlab",
-		"mattermost": "mattermost", "slack": "slack",
-	}
+// credentialKindOf is the integration whose seat credential an `mcp_env`
+// block named server carries, by the server's conventional name (Jira's and
+// Confluence's are Atlassian's), and whether it carries one.
+func credentialKindOf(server string) (string, bool) {
+	kind := SeatCredentialKind(server)
+	return kind, slices.Contains(SeatCredentialKinds(), kind)
 }
 
 // sealedOwners is every agent seat's sealed name, mapped to the seat it
@@ -83,12 +87,13 @@ func managedMCPEnv() map[string]string {
 func (c *Company) sealedOwners() map[string]string {
 	out := map[string]string{}
 	for role := range c.EachRole() {
-		if role.Kind == org.KindHuman || role.Handle == "" {
+		handle := role.IdentityKey()
+		if role.Kind == org.KindHuman || handle == "" {
 			continue
 		}
-		for _, kind := range seatCredentialKinds() {
+		for _, kind := range SeatCredentialKinds() {
 			for _, field := range SeatSealedFields(kind) {
-				out[envref.SealedName(kind, field, role.Handle)] = role.Handle
+				out[envref.SealedName(kind, field, handle)] = handle
 			}
 		}
 	}
@@ -127,17 +132,16 @@ func (r *Role) credentialPositions() []credentialPosition {
 func (c *Company) validateSeatCredentials(refs VariableReferences) error {
 	var p problems
 	owners := c.sealedOwners()
-	managed := managedMCPEnv()
 	for role, path := range c.EachRole() {
-		if role.Kind == org.KindHuman || role.Handle == "" {
+		own := role.IdentityKey()
+		if role.Kind == org.KindHuman || own == "" {
 			continue
 		}
-		own := role.Handle
 
 		// ENGINE MODE: the document names no credential for the kind.
 		for _, server := range sortedKeys(role.MCPEnv) {
-			kind, isManaged := managed[server]
-			if !isManaged || c.SeatCredentialMode(kind) != SeatCredentialEngine {
+			kind, isManaged := credentialKindOf(server)
+			if !isManaged || c.documentMode(kind) != SeatCredentialEngine {
 				continue
 			}
 			block := role.MCPEnv[server]
@@ -158,7 +162,7 @@ func (c *Company) validateSeatCredentials(refs VariableReferences) error {
 			name, whole := envref.Whole(strings.TrimSpace(pos.value))
 			mine := envref.SealedName(pos.kind, pos.field, own)
 			switch {
-			case c.SeatCredentialMode(pos.kind) == SeatCredentialEngine:
+			case c.documentMode(pos.kind) == SeatCredentialEngine:
 				if !whole || name != mine {
 					p.add(here, ErrConflict,
 						"the engine provisions %s for this company and seals this agent's "+
@@ -209,8 +213,8 @@ func (c *Company) validateSeatCredentials(refs VariableReferences) error {
 	// A UNIT'S BLOCK IS EVERY MEMBER'S, so in engine mode it names nothing.
 	for unit, path := range c.EachUnit() {
 		for _, server := range sortedKeys(unit.MCPEnv) {
-			kind, isManaged := managed[server]
-			if !isManaged || c.SeatCredentialMode(kind) != SeatCredentialEngine {
+			kind, isManaged := credentialKindOf(server)
+			if !isManaged || c.documentMode(kind) != SeatCredentialEngine {
 				continue
 			}
 			block := unit.MCPEnv[server]
