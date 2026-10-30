@@ -27,9 +27,8 @@ import (
 // # Read-only on the document
 //
 // The installation id the token issuer mints against and the app record are
-// written by the GitHub pass's own seat-app reconcile ([ReconcileSeatApps]),
-// which adopts an installation a person made and clears a record GitHub no
-// longer has. This session reads and acts at GitHub and leaves the document
+// written by the GitHub pass ([AdoptSeatApps]), which adopts an installation a
+// person made and clears a record GitHub no longer has. This session reads and acts at GitHub and leaves the document
 // to that pass, so there is one writer of those fields.
 
 func init() { seataccess.Register(vendor{}) }
@@ -100,11 +99,22 @@ func (vendor) Steps(
 		// ON AT THE DOCUMENT'S SETTING, as a create is: the plan adds no
 		// level or scope after an enable, so whatever the installation
 		// must still grant or cover is waited on here.
-		add(seataccess.Step{
-			Verb: seataccess.VerbEnable, By: seataccess.ByCrewlet,
-			Text: "Turn " + name + "'s installation back on",
-			Note: "A suspended installation is unsuspended; one that is not installed waits for a person to install it.",
-		})
+		if have.DisabledBy == seataccess.DisabledByHand {
+			// A PERSON SUSPENDED IT AT GITHUB, so it is lifted there:
+			// that decision was made at GitHub, and this engine lifts only
+			// a suspension it placed itself.
+			add(seataccess.Step{
+				Verb: seataccess.VerbEnable, By: seataccess.ByYou,
+				Text: "Unsuspend " + name + "'s installation at GitHub",
+				Note: "A person suspended it at GitHub, so it is turned back on there, on the installation's settings page.",
+			})
+		} else {
+			add(seataccess.Step{
+				Verb: seataccess.VerbEnable, By: seataccess.ByCrewlet,
+				Text: "Turn " + name + "'s installation back on",
+				Note: "A suspended installation is unsuspended; one that is not installed waits for a person to install it.",
+			})
+		}
 		raiseSteps(want, have, add)
 		scopeWait(want, have, add)
 	case seataccess.OpLevel:
@@ -196,8 +206,16 @@ func scopeWait(want seataccess.Desired, have seataccess.Observed, add func(seata
 }
 
 // Open implements [seataccess.Vendor].
+//
+// NOT CONFIGURED UNLESS THE ENGINE PROVISIONS GITHUB (D4b): agents' apps made
+// and handed in from outside Crewlet are bound to their tools and never
+// suspended, uninstalled or adopted by a sync. Whether only an operator writes
+// the document, which makes every app external whatever the block says, is
+// the engine's to decide before it opens a session; this is the half the
+// document alone answers.
 func (vendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
-	if in.Config == nil || in.Config.Integrations.GitHub == nil || !in.Config.Integrations.GitHub.Enabled {
+	if in.Config == nil || in.Config.Integrations.GitHub == nil ||
+		in.Config.SeatCredentialMode(string(integration.KindGitHub), false) != config.SeatCredentialEngine {
 		return nil, fmt.Errorf("github: %w", integration.ErrNotConfigured)
 	}
 	cfg := in.Config.Integrations.GitHub
@@ -268,19 +286,32 @@ func (s *session) Options(context.Context, seataccess.Lane) (seataccess.Options,
 }
 
 // Observe implements [seataccess.Session].
+//
+// ONE AGENT'S APP, ONE AGENT'S FAULT. Every seat authenticates with its own
+// app's key, so a read GitHub refused for one seat says nothing about the
+// others: it is reported as that seat's ([seataccess.SeatFaults]) and the rest
+// are synced. A pass whose context is done is the kind's fault.
 func (s *session) Observe(ctx context.Context, in seataccess.ObserveInput) (seataccess.Observation, error) {
 	out := seataccess.Observation{}
+	faults := seataccess.SeatFaults{}
 	for _, handle := range observedHandles(in) {
 		record := recordOf(in.Records, handle)
 		seat := s.seatApp(handle, record)
 		obs, err := ObserveSeat(ctx, s.opts, seat)
 		if err != nil {
-			return nil, fmt.Errorf("github: observe %s: %w", handle, err)
+			if stop := interrupted(ctx); stop != nil {
+				return nil, stop
+			}
+			faults[handle] = fmt.Errorf("github: read %s's app back: %w", handle, err)
+			continue
 		}
 		s.cached[handle] = obs
 		out[handle] = map[seataccess.Lane]seataccess.Observed{
 			seataccess.LaneGitHub: s.observed(seat, s.want(handle), obs, record),
 		}
+	}
+	if len(faults) > 0 {
+		return out, faults
 	}
 	return out, nil
 }
@@ -330,8 +361,12 @@ func (s *session) observed(
 	}
 	out.Enabled = !installation.Suspended()
 	if !out.Enabled {
+		// THE LEDGER SAYS WHETHER THIS ENGINE SUSPENDED IT, unless a person
+		// has suspended it at GitHub since: that suspension is theirs, and
+		// it stays until a person chooses Turn back on (D3).
 		out.DisabledBy = seataccess.DisabledByHand
-		if record != nil && record.Account != nil && record.Account.State == seataccess.AccountDisabled {
+		if !installation.SuspendedByPerson() && record != nil && record.Account != nil &&
+			record.Account.State == seataccess.AccountDisabled {
 			out.DisabledBy = seataccess.DisabledByCrewlet
 		}
 	}
@@ -407,11 +442,25 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 			res.Waiting = s.installWait(seat)
 			return res, nil
 		}
-		if obs.Installation.Suspended() {
-			seat.InstallationID = obs.Installation.ID
-			if err := UnsuspendSeat(ctx, s.opts, seat); err != nil {
-				return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbEnable)
-			}
+		if !obs.Installation.Suspended() {
+			return res, nil
+		}
+		if obs.Installation.SuspendedByPerson() {
+			// SUSPENDED AT GITHUB BY A PERSON since this pass planned:
+			// theirs to lift, on the installation's page.
+			res.Waiting = s.personSuspended(seat, obs)
+			return res, nil
+		}
+		seat.InstallationID = obs.Installation.ID
+		if err := UnsuspendSeat(ctx, s.opts, seat); err != nil {
+			return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbEnable)
+		}
+		// READ AGAIN, NOW THAT IT IS ON: a suspended installation's
+		// repositories could not be read, and the steps after this one
+		// act on what it covers.
+		if _, err := s.observe(ctx, seat, true); err != nil {
+			return seataccess.StepResult{}, fmt.Errorf(
+				"github: read %s's installation back after turning it on: %w", seat.Handle, err)
 		}
 		return res, nil
 	case seataccess.OpMint:
@@ -480,6 +529,16 @@ func (s *session) awaitPerson(ctx context.Context, in seataccess.ApplyInput, sea
 	obs, err := s.observe(ctx, seat, true)
 	if err != nil {
 		return seataccess.StepResult{}, err
+	}
+	if in.Step.Verb == seataccess.VerbEnable {
+		// A PERSON'S UNSUSPEND: done once GitHub shows it on.
+		switch {
+		case obs.Installation == nil:
+			return seataccess.StepResult{Waiting: s.installWait(seat)}, nil
+		case obs.Installation.Suspended():
+			return seataccess.StepResult{Waiting: s.personSuspended(seat, obs)}, nil
+		}
+		return s.adopted(seat, in.Record), nil
 	}
 	if in.Step.Verb == seataccess.VerbScope {
 		if missing := obs.UncoveredRepositories(seat); len(missing) > 0 {
@@ -566,6 +625,21 @@ func (s *session) installWait(seat SeatApp) *seataccess.Waiting {
 		ActionURL: InstallURL(s.opts.WebBase, s.opts.Org, seat.Slug),
 		Detail: seat.Handle + "'s app exists and nothing has installed it: install it on " +
 			orgLabel(s.opts.Org),
+	}
+}
+
+// personSuspended is the unsuspend a person still owes at GitHub.
+func (s *session) personSuspended(seat SeatApp, obs SeatObservation) *seataccess.Waiting {
+	by := ""
+	if obs.Installation != nil && obs.Installation.SuspendedBy != nil {
+		if login := strings.TrimSpace(obs.Installation.SuspendedBy.Login); login != "" {
+			by = " by " + login
+		}
+	}
+	return &seataccess.Waiting{
+		ActionURL: s.installationURL(seat, obs),
+		Detail: seat.Handle + "'s installation was suspended at GitHub" + by +
+			": unsuspend it on the installation's settings page",
 	}
 }
 
