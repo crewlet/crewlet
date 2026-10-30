@@ -264,7 +264,11 @@ roles:
   Confluence's names (View, Add pages, Delete pages, Add comments, Export
   space, Admin and the rest), stored as `operations: [read:space, create:page]`.
   View is granted first and removed last, because Confluence requires it for
-  every other permission and removes them all with it.
+  every other permission and removes them all with it. A set without View is
+  refused on save and reported by the sync, naming View; the Agents tab keeps
+  it checked while anything else is, from the lane's `required_level`.
+- **Space keys** are compared as Confluence matches them: a global space's key
+  in any case (`eng` is `ENG`), a personal space's `~` key exactly as written.
 
 - **Product access only**, offered first on either kind of site: the account
   has Confluence and holds no space role or permission of its own, so the

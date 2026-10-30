@@ -197,6 +197,8 @@ type RoleJira struct {
 
 	// Projects are the project keys the role is held in. Each must be a
 	// project the company document names, and a list needs a ProjectRole.
+	// A key is compared as Jira matches it ([JiraProjectKey]), so `ops` is
+	// `OPS`.
 	Projects []string `yaml:"projects,omitempty" json:"projects,omitempty" desc:"Jira project keys this agent holds the role in."`
 }
 
@@ -218,6 +220,8 @@ type RoleConfluence struct {
 
 	// Spaces are the space keys the role or permissions are held in. Each
 	// must be a space the company document names, and a list needs a
-	// SpaceRole or Operations.
+	// SpaceRole or Operations. A key is compared as Confluence matches it
+	// ([ConfluenceSpaceKey]): a global space's in any case, a personal
+	// space's `~` key exactly as written.
 	Spaces []string `yaml:"spaces,omitempty" json:"spaces,omitempty" desc:"Confluence space keys this agent holds the role in."`
 }

@@ -3,8 +3,8 @@ package confluence
 import (
 	"maps"
 	"slices"
-	"strings"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -17,27 +17,14 @@ func SpacesOf(o *org.Organization) []string {
 	}
 	seen := map[string]bool{}
 	for u := range o.AllUnits() {
-		if key := NormalizeSpaceKey(u.Space); key != "" {
+		if key := config.ConfluenceSpaceKey(u.Space); key != "" {
 			seen[key] = true
 		}
 	}
 	for seat := range o.AllRoles() {
-		if key := NormalizeSpaceKey(seat.Space); key != "" {
+		if key := config.ConfluenceSpaceKey(seat.Space); key != "" {
 			seen[key] = true
 		}
 	}
 	return slices.Sorted(maps.Keys(seen))
-}
-
-// NormalizeSpaceKey is a space key as Confluence matches it: a global space's
-// key upper-cased, as Confluence stores it, and a personal space's
-// (`~username`, `~<account id>`) trimmed and otherwise left exactly as
-// written, because Confluence matches those case-sensitively and an
-// upper-cased one names no space at all.
-func NormalizeSpaceKey(key string) string {
-	key = strings.TrimSpace(key)
-	if strings.HasPrefix(key, "~") {
-		return key
-	}
-	return org.NormalizeScope(key)
 }
