@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // Options is what one company-level pass needs.
@@ -18,12 +17,6 @@ type Options struct {
 	// OrgID and Key are the organization and its unscoped API key.
 	OrgID string
 	Key   string
-
-	// Plan and Sink are IGNORED. They are kept only so the engine's current
-	// call sites compile until they are retired: seats are per-seat access
-	// (internal/atlassian/agentaccess), and this pass seals nothing.
-	Plan *provision.Plan
-	Sink provision.TokenSink
 }
 
 // Result is what one pass found.
@@ -31,35 +24,6 @@ type Result struct {
 	// Site is the Atlassian site the organization's agents work in,
 	// discovered rather than asked for.
 	Site Site
-}
-
-// Findings is what this pass reports beyond a failure, which is nothing: a
-// key that does not work or a site that cannot be found is the error
-// [Reconcile] returns. A seat's findings come from per-seat access.
-func (r *Result) Findings() []integration.Finding { return nil }
-
-// TeardownOptions is what removing the organization's integration needs.
-type TeardownOptions struct {
-	Client *Client
-	OrgID  string
-	Key    string
-
-	// Plan is IGNORED, kept only so the engine's current call site compiles
-	// until it is retired: removing an agent's account is per-seat access,
-	// through the ledger.
-	Plan *provision.Plan
-}
-
-// Teardown has nothing of the organization's to undo. Atlassian keeps no
-// webhook this engine registered (Cloud events arrive through the Forge
-// relay), and every agent's account is per-seat access, removed through the
-// ledger rather than from the document's current seats. It answers an empty
-// [provision.Removed].
-func Teardown(_ context.Context, opts TeardownOptions) (provision.Removed, error) {
-	if opts.Client == nil {
-		return provision.Removed{}, errors.New("atlassian: no client")
-	}
-	return provision.Removed{}, nil
 }
 
 // Reconcile is the organization's company-level pass: it proves the
