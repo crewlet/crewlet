@@ -30,11 +30,13 @@ func init() { seataccess.Register(Vendor{}) }
 const FieldToken = "TOKEN"
 
 // toolEnv and toolHeader are where a GitLab MCP server reads the seat's
-// token: the variable the stdio servers read, and the header GitLab's REST
-// API takes a personal access token in.
+// token: the variable the default stdio server (`glab mcp serve`) reads, and
+// the header a shared http server in remote-authorization mode reads, which
+// is the one GitLab's REST API takes a personal access token in. Both are
+// among [CredentialKeys], the spellings identity resolution already reads.
 const (
-	toolEnv    = "GITLAB_PERSONAL_ACCESS_TOKEN"
-	toolHeader = "PRIVATE-TOKEN"
+	toolEnv    = "GITLAB_TOKEN"
+	toolHeader = "Private-Token"
 )
 
 // Vendor implements [seataccess.Vendor] for GitLab.
@@ -174,11 +176,14 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 	}
 	switch op {
 	case seataccess.OpCreate:
+		// RETIRE TOO: the create adopts an account this engine's naming
+		// already finds (one made before the ledger), and its earlier
+		// tokens must not outlive the one sealed now.
 		return []action{{
 			verb:  seataccess.VerbCreate,
 			text:  "Create a GitLab service account for " + seatName(seat),
 			apply: (*session).create,
-		}, grant, mint}
+		}, grant, mint, retire}
 	case seataccess.OpEnable:
 		return []action{{
 			verb: seataccess.VerbEnable,
@@ -310,7 +315,7 @@ func (Vendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Ses
 		return nil, fmt.Errorf("gitlab: the company does not provision GitLab: %w",
 			integration.ErrNotConfigured)
 	}
-	value := func(v string) string { return strings.TrimSpace(v) }
+	value := strings.TrimSpace
 	if in.Env != nil {
 		value = func(v string) string { return strings.TrimSpace(in.Env.Value(v)) }
 	}
@@ -342,7 +347,7 @@ func (Vendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Ses
 	}
 	return &session{
 		client: client, cfg: cfg, group: group, admin: admin,
-		mode: Mode(cfg.Provisioning.ModeOrDefault()),
+		mode:  Mode(cfg.Provisioning.ModeOrDefault()),
 		seats: seatBlocks(in.Config),
 	}, nil
 }
@@ -636,9 +641,9 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 	}
 	scopes := ScopesFor(want.Level)
 	if in.Step.Op == seataccess.OpLevel {
-		tokens, err := s.client.Tokens(ctx, s.mintGroup(), user.ID)
-		if err != nil {
-			return seataccess.StepResult{}, refuse(s, err)
+		tokens, listErr := s.client.Tokens(ctx, s.mintGroup(), user.ID)
+		if listErr != nil {
+			return seataccess.StepResult{}, refuse(s, listErr)
 		}
 		if newest, ok := newestOwn(tokens, in.Seat.Handle); ok && SameScopes(newest.Scopes, scopes) {
 			return seataccess.StepResult{}, nil
@@ -731,8 +736,8 @@ func (s *session) disable(ctx context.Context, in seataccess.ApplyInput) (seatac
 	}
 	if s.admin {
 		if !user.Blocked() {
-			if err := s.client.BlockUser(ctx, user.ID); err != nil {
-				return seataccess.StepResult{}, refuse(s, err)
+			if blockErr := s.client.BlockUser(ctx, user.ID); blockErr != nil {
+				return seataccess.StepResult{}, refuse(s, blockErr)
 			}
 		}
 		return seataccess.StepResult{Disabled: true}, nil
