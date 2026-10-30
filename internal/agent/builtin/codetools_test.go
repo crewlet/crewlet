@@ -1706,7 +1706,7 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // codeCatalogueBudget is the most bytes the twenty-one code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it.
 //
-// 31 300: measured at 29 223 (~7 306 tokens), so ~7% headroom — a sentence can
+// 31 300: measured at 29 628 (~7 407 tokens), so ~6% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
 // part adds raises this deliberately, with its measured cost). 10 654 → 9 570
 // when the revision grammar, written into each of the six revision arguments,
@@ -1727,13 +1727,16 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // ten fields and remove_gate — deliberately, with their measured cost: 22 787
 // → 24 990, 2 203 bytes (~551 tokens), each field its type and its values
 // alone (what a field does is the code host's documentation), the call's
-// field-at-a-time rule said once in the tool's description. And 26 800 →
-// 31 300 when the two change reads joined the list, deliberately, with their
-// measured cost: 24 990 → 29 223, 4 233 bytes (~1 058 tokens) for
-// code_list_changes and code_get_change, the parts named once in the
-// description and each argument cut to what its name and type do not say
-// (4 559 as first written: the listing's fields spelled out, and each part
-// in a sentence of its own).
+// field-at-a-time rule said once in the tool's description; 24 990 → 25 528
+// when code_update_repo took a repository's search mode, code_list_repos said
+// its rules come without their merge gates, which code_get_repo answers with
+// each rule, and code_get_repo how rules too many for one answer go on
+// (`protections_cursor`). And 26 800 → 31 300 when the two change reads joined
+// the list, deliberately, with their measured cost: 25 528 → 29 628, 4 100
+// bytes (~1 025 tokens) for code_list_changes and code_get_change, the parts
+// named once in the description and each argument cut to what its name and
+// type do not say (326 bytes more as first written: the listing's fields
+// spelled out, and each part in a sentence of its own).
 const codeCatalogueBudget = 31_300
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
