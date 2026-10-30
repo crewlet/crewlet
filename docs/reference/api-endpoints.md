@@ -5031,7 +5031,8 @@ write answers its `op_id` here, and takes it back, by the tracker's own rule
 (below). Wherever the company hosts its repositories in the engine
 (`code.native`), it serves the code reads too — `code_list_repos`,
 `code_get_repo`, `code_resolve`, `code_read`, `code_diff`, `code_compare`,
-`code_landed_in`, `code_log` and `code_blame` (see [The company's code](../guides/tools-and-mcp.md#the-companys-code)) —
+`code_landed_in`, `code_log`, `code_blame`, and a repository's changes,
+`code_list_changes` and `code_get_change` (see [The company's code](../guides/tools-and-mcp.md#the-companys-code)) —
 read as you, so every repository, and none recorded as `operator_acted` — and,
 where the code host's writes are served, the code writes: `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,

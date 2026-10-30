@@ -766,12 +766,15 @@ func TestAWriteNobodyCanAccountForIsAnUnknown(t *testing.T) {
 const scratchID = siteID
 
 // scratchHost is a code host whose one repository is agent-cto's scratch
-// repository, last active lastActive ago.
+// repository, last active lastActive ago, holding the change !7 site!7 is.
 func scratchHost(lastActive time.Duration) *codeHost {
 	host := newCodeHost()
 	host.detail.Name, host.detail.Kind = "agent-cto.lab", code.RepoScratch
 	host.detail.ManagedBy, host.detail.Owner = code.ManagedTools, code.Owner{Kind: code.OwnerSeat, Ref: "agent-cto"}
 	host.detail.LastActivityAt = time.Now().Add(-lastActive)
+	change := siteChange()
+	change.repo = host.detail.Name
+	host.changes = change.read
 	return host
 }
 
@@ -782,15 +785,17 @@ func scratchHost(lastActive time.Duration) *codeHost {
 func holdingCall(name string) (map[string]any, bool) {
 	repo := "agent-cto.lab"
 	rows := map[string]map[string]any{
-		builtin.CodeListReposTool: nil, // names no one repository, and holds nothing
-		builtin.CodeGetRepoTool:   {"repo": repo},
-		builtin.CodeResolveTool:   {"repo": repo, "ref": "main"},
-		builtin.CodeReadTool:      {"repo": repo, "rev": mainOID, "path": "README.md"},
-		builtin.CodeDiffTool:      {"repo": repo, "base": mainOID, "head": featureOID},
-		builtin.CodeCompareTool:   {"repo": repo, "base": mainOID, "head": featureOID},
-		builtin.CodeLandedInTool:  {"repo": repo, "commit": featureOID, "target": "main"},
-		builtin.CodeLogTool:       {"repo": repo, "rev": mainOID, "path": "README.md"},
-		builtin.CodeBlameTool:     {"repo": repo, "rev": mainOID, "path": "README.md"},
+		builtin.CodeListReposTool:   nil, // names no one repository, and holds nothing
+		builtin.CodeGetRepoTool:     {"repo": repo},
+		builtin.CodeResolveTool:     {"repo": repo, "ref": "main"},
+		builtin.CodeReadTool:        {"repo": repo, "rev": mainOID, "path": "README.md"},
+		builtin.CodeDiffTool:        {"repo": repo, "base": mainOID, "head": featureOID},
+		builtin.CodeCompareTool:     {"repo": repo, "base": mainOID, "head": featureOID},
+		builtin.CodeLandedInTool:    {"repo": repo, "commit": featureOID, "target": "main"},
+		builtin.CodeLogTool:         {"repo": repo, "rev": mainOID, "path": "README.md"},
+		builtin.CodeBlameTool:       {"repo": repo, "rev": mainOID, "path": "README.md"},
+		builtin.CodeListChangesTool: {"repo": repo},
+		builtin.CodeGetChangeTool:   {"repo": repo, "change": 7, "part": "findings"},
 		builtin.CodeCommitFilesTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,
 			"message": "m", "files": []any{map[string]any{"op": "delete", "path": "a"}}},
 		builtin.CodeRevertTool: {"repo": repo, "branch": "fix", "expected_head": mainOID,

@@ -96,7 +96,7 @@ func operatorOnlyTools(t *testing.T) []string {
 // company's knowledge and who read a unit's repository — each a person's
 // decision or audit of the company, served on the operator surface alone.
 // Counted from the catalogue with every seam wired — the code reads on both
-// sides, so the nine a seat holds too are not counted — for the page that
+// sides, so the code reads a seat holds too are not counted — for the page that
 // lists them all.
 func everyOperatorOnlyTool(t *testing.T) []string {
 	t.Helper()

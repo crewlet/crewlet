@@ -85,6 +85,20 @@ const (
 	// author a commit states is text its pusher wrote, no principal the
 	// read can name, and an import carries commits authored anywhere.
 	SourceRepoCommit Source = "repo_commit"
+
+	// SourceChangeDescription is a change's description — what its owner,
+	// or whoever edited it since, says it does — SourceChangeReview what a
+	// review of it says, its summary and each finding's body and
+	// suggestion, and SourceChangeComment a comment on it. Unlike a
+	// repository's own text, each NAMES ITS WRITER: a change's rows record
+	// the principal that opened it, reviewed it and commented on it — a seat
+	// of the company, or a person by the human seat they hold — so each is
+	// read at the trust that writer earns from the reader ([TrustFor]), and
+	// a description a later edit may have rewritten by somebody its row
+	// does not name at [TrustForPartial].
+	SourceChangeDescription Source = "change_description"
+	SourceChangeReview      Source = "change_review"
+	SourceChangeComment     Source = "change_comment"
 )
 
 // Sources are every surface.
@@ -92,6 +106,7 @@ var Sources = []Source{
 	SourcePageBody, SourcePageComment, SourceWorkDescription, SourceWorkComment,
 	SourceProjectFile, SourceChatThread, SourceArtifactFile, SourceArtifactRow,
 	SourceBrandVoice, SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
+	SourceChangeDescription, SourceChangeReview, SourceChangeComment,
 }
 
 // Valid reports whether s is one of [Sources].

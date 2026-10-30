@@ -78,9 +78,11 @@ This is the product's current shape, not a configuration choice:
   head its target holds ([The home's change work](#the-homes-change-work)), the
   [change writer](#reviews-and-findings) beside the committer decides who is
   asked to review it and what is said on it, and a data node answers a listing
-  of changes and one change in detail ([Reading changes](#reading-changes)) —
-  but no tool or route opens, edits, reads or discusses a change in this
-  release, and no change is gated in front of a protected branch. A protection
+  of changes and one change in detail ([Reading changes](#reading-changes)),
+  which a seat and a person's assistant read through two code tools,
+  `code_list_changes` and `code_get_change` — but no tool or route opens,
+  edits or discusses a change in this release, no route reads one, and no
+  change is gated in front of a protected branch. A protection
   rule decides what a push may do to a ref, and nothing else stands in front
   of one. So a rule's [merge gate](#merge-gates) is recorded and read, and
   nothing merges by it yet.
@@ -1303,6 +1305,18 @@ a comment, a review and a finding by its own — and a page's own cursor is its
 last row's. So a reader whose answer is smaller than a page — a code tool's,
 one tool answer, where a page may be four mebibytes — keeps a page's first
 rows, resumes after the last it kept, and reads every row after it once.
+
+**A seat reads changes with its code tools**, and a person's assistant with
+the same ones ([The company's code](../guides/tools-and-mcp.md#the-companys-code)):
+`code_list_changes` is the listing, and `code_get_change` one change a part at
+a time — its summary, its [merge readiness](#merge-readiness), a revision's
+files and a file's patch from the base its facts record or, since an earlier
+revision, what changed between the two ([What changed between two
+revisions](#what-changed-between-two-revisions)), its findings each placed in
+the revision asked about ([Where lines are in another
+revision](#where-lines-are-in-another-revision)), its reviews and its
+comments — each page cut whole-row at one tool answer and resumed after the
+last row it kept.
 
 ---
 
@@ -3537,7 +3551,9 @@ their own assistant, which the operator catalogue serves the same tools to:
 `code_read`, `code_diff`, `code_compare`, `code_landed_in`, `code_log` and
 `code_blame` read by commit id, beside `code_list_repos`, `code_get_repo` and
 `code_resolve`, which read the rows — what a repository is, its branches, what
-a ref points at now — at linearizable
+a ref points at now — at linearizable; and `code_get_change` reads a change's
+rows at linearizable and its files, its patches and where its findings' lines
+are by the commit ids its revisions recorded
 ([The company's code](../guides/tools-and-mcp.md#the-companys-code)).
 A turn reads each repository it names once, and resolves the refs a call
 names in one read — a comparison's two branches cost one barrier — so a seat

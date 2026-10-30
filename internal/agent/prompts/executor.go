@@ -81,15 +81,16 @@ const KeyCodeHistory = "code_history"
 // CodeHistoryTools are the code tools [codeHistorySection]'s claims rest on:
 // what a file says, what changed, who last changed a line, how a file's
 // history went and whether a commit reached a branch, read by the commit ids a
-// ref resolves to. The section renders only where the executor holds EVERY one
-// of them, so a prompt never sends a seat to a tool its surface does not
-// carry; they are registered together where a company hosts code, so a seat
-// holds all of them or none. Exported for the test in internal/agent/builtin
-// that holds them to the code tools that package registers, which this
-// package cannot import.
+// ref resolves to — and a change's diff, its findings and what changed since a
+// review, read by the change. The section renders only where the executor
+// holds EVERY one of them, so a prompt never sends a seat to a tool its
+// surface does not carry; they are registered together where a company hosts
+// code, so a seat holds all of them or none. Exported for the test in
+// internal/agent/builtin that holds them to the code tools that package
+// registers, which this package cannot import.
 func CodeHistoryTools() []string {
 	return []string{"code_resolve", "code_read", "code_diff", "code_compare", "code_landed_in", "code_log",
-		"code_blame"}
+		"code_blame", "code_get_change"}
 }
 
 // codeHistorySection is the one rule about reading the company's code that no
@@ -102,12 +103,17 @@ func CodeHistoryTools() []string {
 // holds, which costs minutes and the company's git nodes their transfer lane.
 //
 // The tools by their family's name rather than one by one, so the sentence
-// stays true as later reads join the family.
+// stays true as later reads join the family — but for the one read a review
+// is done with, named because the choice it settles is the same one: a
+// reviewer that re-reads a change by checking it out and walking its history
+// in a box spends the box's minutes on a question the server answers by the
+// change, the revisions its rows record, and the findings placed in them.
 const codeHistorySection = "\n## Reading the company's code" +
 	"\nWhat a file says, what changed, who last changed a line, how a file's " +
 	"history went, and whether a commit reached a branch are read on the " +
 	"server with the `code_*` tools, by commit id — never from a clone, which " +
-	"costs minutes for one file."
+	"costs minutes for one file. A change's diff, its findings and what changed " +
+	"since your review are read with `code_get_change`."
 
 // codeHistoryBoxSentence closes [codeHistorySection] where the executor is
 // also offered run_sandbox ([ExecutorInput.OffersSandbox]), which then takes
@@ -115,10 +121,11 @@ const codeHistorySection = "\n## Reading the company's code" +
 // serves the code host — because a repository a coding run is given is cloned
 // BLOBLESS: a `git log -p` or a `git blame` in the box fetches each file's
 // contents over the network as it walks, so the history question a seat might
-// hand the box is the one the server answers fastest. Said only there: to a
-// seat with no sandbox it is prose about a box it never gets.
+// hand the box is the one the server answers fastest: history in a box is
+// for building, not for answering questions. Said only there: to a seat with
+// no sandbox it is prose about a box it never gets.
 const codeHistoryBoxSentence = " A repository `run_sandbox` clones is blobless — each " +
-	"file's contents fetched as git needs them — so ask history questions here, not in the box."
+	"file's contents fetched as git needs them — so its history is for building, not for answering questions."
 
 // KeyCodeWrites is the outline key of the guidance on changing the company's
 // own code.

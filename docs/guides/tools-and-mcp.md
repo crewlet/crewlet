@@ -318,18 +318,19 @@ is (copy the directory into your assistant's skills folder).
 
 ### The company's code
 
-Nineteen more — nine that read and ten that change a branch or a
-repository — registered wherever the company hosts its git repositories in the
-engine (`code.native`; see [Code Host](../concepts/code-host.md)) — on every
+Twenty-one more — eleven that read, two of them a repository's changes, and
+ten that change a branch or a repository — registered wherever the company
+hosts its git repositories in the engine (`code.native`; see [Code
+Host](../concepts/code-host.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
 `git` role reaches both through the nodes that do. They are offered on the
 terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same nineteen, so an operator's own
+and the operator catalogue serves the same twenty-one, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
-person as the human seat they hold. The nine reads are reads: none counts as
+person as the human seat they hold. The eleven reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
 them, and the operator catalogue records no call to one. The ten writes each
 deliver to the code host, so a turn woken about work on a repository that
@@ -348,6 +349,8 @@ catalogue is recorded as any write is.
 | `code_landed_in` | Whether a commit reached a branch (`target`, resolved to its tip now and never a commit id), the push that landed it there and kept it there, the push that introduced the commit, and what the git node's index of pushes covers ([Which push landed a commit](../concepts/code-host.md#which-push-landed-a-commit)) |
 | `code_log` | The commits that changed a file or a directory (`path`), or every commit, newest first from a commit (`rev`): each with its parents, its author and address as the commit states them, its two dates, its subject and the push that introduced it, `limit` a page (1 to 100, 25 by default; `next` back as `cursor`). `grep` keeps the commits whose message holds its words — a literal, in any case, never a pattern — and `since` (RFC 3339) those committed from then on. A page ends sooner where its subjects fill it, and one the git node's time ended says so: it lists what it found and names where the next page begins ([A path's history](../concepts/code-host.md#a-paths-history)) |
 | `code_blame` | Which commit last changed each line of a file (`path`) at a commit (`rev`): every line with its commit, the line it was in that commit and its old path where the file was renamed since, and each commit once with its author, date, subject and the push behind it — at most 500 lines a call (`start_line`, `end_line`), a page at a time (`next` back as `cursor`) ([Who changed a line](../concepts/code-host.md#who-changed-a-line)) |
+| `code_list_changes` | Changes — a branch proposed into another, named like `web!42` — newest first, `limit` a page (1 to 50, 20 by default; `next` back as `cursor`): each with its title, state, branches, head and revision, owner, work item, version and, while it is live, its [merge readiness](../concepts/code-host.md#merge-readiness) in a line. A call names what to list — a `repo`, a `work` item (`<backend>:<id>`), a `state`, a `reviewer`, or `needs`: `review` or `fix` (a reviewer's or an owner's, the caller's own by default), `me` (both of the caller's) or `person` — and narrows it by the rest and an `owner` ([Reading changes](../concepts/code-host.md#reading-changes)). A change of a repository the caller may not read — or, in a turn a colleague seat woke, the colleague may not — is not listed, so a page can hold fewer than `limit`, or none, and still name a `next` |
+| `code_get_change` | One change, named by `change` — its number on `repo`, or its reference, `web!42` — a `part` at a time: `summary` (its row, description, authors, conversation counts and revisions, newest first, a page at a time), `merge_readiness` (each precondition, whom an unmet one waits on, who clears each standing blocker, and its head's recorded merge into its target), `files` and `diff` (a `revision`'s files from the base its facts record — its latest by default — and one `file`'s patch; with `since_revision`, what changed from that revision to it, kept to the files either touches: what to re-review), `findings` (each with `at`, where its lines are in the `revision` asked about — moved, outdated or gone), `reviews` and `comments`, each a page at a time (`next` back as `cursor`) ([A revision's facts](../concepts/code-host.md#a-revisions-facts)) |
 | `code_commit_files` | A small change to a branch's files, built on the code host and landed as one push: `files`, one operation a path — `put` (`content`, or `blob_oid` of a file the repository holds; `mode` 100755 for an executable, 120000 for a link whose target is `content`), `edit` (`old`, which must occur exactly once, and `new`), `delete`, `move` (`to`) or `mode` (100644 or 100755) — onto the head the caller read (`expected_head`), or creating the branch from `base`. At most 1 000 operations and 1 MiB a call; a change to build or test belongs in a coding run |
 | `code_revert` | The revert of one `commit` onto a branch's head (`expected_head`). One that conflicts commits nothing, and answers each conflicted path with its stages' ids — base, ours, theirs, each readable with `code_read` — and the start of the file as git marked it |
 | `code_cherry_pick` | One `commit`'s change onto a branch's head (`expected_head`), its message naming the commit it came from; a conflict is answered as `code_revert`'s |
@@ -413,6 +416,26 @@ subject a history or a blame names, as `repo_commit`, a message its pusher
 wrote. Every other string of an answer — a path, a ref, a description, a
 commit's author and address — has the fence's escapes applied.
 
+**A change's text names its writer.** A change's description, a review's
+summary, a finding's body and suggestion, and a comment arrive fenced as
+`change_description`, `change_review` and `change_comment` under the seat or
+the person who wrote them, whom the change's rows record, at the trust that
+writer earns from the reader — a description at `colleague` at the most once
+the change has moved past its open, since an edit may have rewritten it by
+somebody its row does not name. A patch `code_get_change` reads is a
+repository's text, fenced as `code_diff`'s is.
+
+**A change is read by its revisions.** A change's rows are read at
+linearizable as a repository's are — once a call: a call that reads the change
+twice, its findings beside the revision they are placed in or two revisions
+to compare, makes its later reads at the position the first answered. Its
+files, a file's patch, what changed since an earlier revision and where a
+finding's lines are now are reads by commit id of the heads and bases the
+change's revisions recorded, asked of the home git node at the floor of the
+pushes that moved them — never at the position the rows were read at. A
+revision whose base its home has not recorded yet is answered as not yet
+readable, a minute after its push at the most on a live change.
+
 **A write is a push, and a retry is the same one.** Each of the five that
 change a branch is an [engine-built commit](../concepts/code-host.md#engine-built-commits):
 the repository's git node builds it beside its copy and lands it as one push,
@@ -452,7 +475,7 @@ narrower read: a line range, fewer commits, or a file's lines in place of its
 patch.
 
 **And one no seat is given: `code_repo_readers`**, which the operator
-catalogue serves beside the nine, on their terms — who read a
+catalogue serves beside the eleven, on their terms — who read a
 `visibility: unit` repository's contents over a range of company days (`from`
 and `to`, both inclusive, the thirty days ending today where the call names
 neither, at most 181 apart; `next` back as `cursor`): every credential and the

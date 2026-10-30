@@ -81,8 +81,16 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 // tight enough that a section could not. The sentence it was left for came:
 // `code_history` says a repository `run_sandbox` clones is blobless, where the
 // seat holds the sandbox beside the code tools (~36), so it measures ~983 and
-// ~3% is left — the next sentence needs a decision here, as a section did. The plain contract alone — no tracker,
-// no workers, no sandbox, no code — measures ~508 of it.
+// ~3% is left — the next sentence needs a decision here, as a section did.
+//
+// 1010 -> 1040 for a sentence, deliberately: `code_history` names the read a
+// review is done with — a change's diff, its findings and what changed since
+// a review are `code_get_change`'s — and its box sentence says a box's
+// history is for building, not for answering questions, which took the prompt
+// from ~983 to ~1011 (~28): the choice a reviewer makes before it reaches for
+// a checkout, which no tool's description reaches a seat early enough to make.
+// Measured at ~1011, so ~3% is left, as before it. The plain contract alone —
+// no tracker, no workers, no sandbox, no code — measures ~508 of it.
 //
 // IT BOUNDS THE PROSE, NOT THE ROSTER. The reference lead has one direct
 // report, so what this number holds down is the contract text — the part that
@@ -93,7 +101,7 @@ func withinBudget(t *testing.T, name, prompt string, budget int) {
 func TestTheExecutorPromptStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	p := BuildExecutor(lead(), referenceExecutor(t)).Text
-	withinBudget(t, "executor", p, 1010)
+	withinBudget(t, "executor", p, 1040)
 }
 
 // THE REFERENCE RENDERS EVERY GATED SECTION. A budget measured on an input
@@ -293,6 +301,13 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 // 2490 -> 2565 for the code writes guidance (~72 tokens), the same exception
 // for the same reason: rendered only for a seat of a company serving the code
 // host's writes. The turn is ~2,478 with it, so ~3% headroom, as before it.
+//
+// 2565 -> 2620 for the code guidance's sentence on reading a change with
+// `code_get_change` and its box sentence's account of a box's history (~28
+// tokens), the same exception again. The turn measured ~2,542 with it: ~2,514
+// before it, since the box sentence the code guidance gained beside the
+// sandbox (~36) was charged to the executor's budget above and never to this
+// account, which had ~1% headroom left unsaid. ~3% headroom again.
 func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	seat := bigLead(500)
@@ -317,7 +332,7 @@ func TestTheWholeTurnStaysUnderBudget(t *testing.T) {
 // wholeTurnBudget is the budget TestTheWholeTurnStaysUnderBudget holds the
 // turn to, and the size its control has to exceed: one number, so the control
 // cannot go on proving the allowance against a budget the assertion left.
-const wholeTurnBudget = 2565
+const wholeTurnBudget = 2620
 
 // THE LADDER, and it is an order rather than a set: a lead reads profiles,
 // then names, then one line telling it where the rest of its team went.

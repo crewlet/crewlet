@@ -121,6 +121,11 @@ const (
 	ActionCodeLandedIn  Action = "code_landed_in"
 	ActionCodeLog       Action = "code_log"
 	ActionCodeBlame     Action = "code_blame"
+	// AND THE CHANGE READS, the same footing: a listing of changes and one
+	// change a part at a time, each held where it is answered to the grant on
+	// the change's repository, as every read of the repository's rows is.
+	ActionCodeListChanges Action = "code_list_changes"
+	ActionCodeGetChange   Action = "code_get_change"
 	// ActionCodeRepoReaders is WHO READ a `visibility: unit` repository —
 	// the operator tool `code_repo_readers` and the query registry's
 	// question of the same name, on `GET /code/repos/{name}/readers` and
@@ -744,6 +749,13 @@ var rules = map[Action]rule{
 	ActionCodeLandedIn:  {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeLog:       {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeBlame:     {class: ClassEverybody, recency: iam.RecencyAny},
+	// A CHANGE IS ITS REPOSITORY'S CONTENTS, read on the footing of the
+	// reads above: admitted for every principal, and judged by the grant on
+	// the change's repository on the data node that answers — a listing
+	// leaves out the changes of a repository the asker may not read, and a
+	// read of one such change is refused `not_permitted`.
+	ActionCodeListChanges: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeGetChange:   {class: ClassEverybody, recency: iam.RecencyAny},
 	// AND THE CODE WRITE TOOLS, on code.git's own footing: the gate admits
 	// every principal and the repository decides — an engine write by the
 	// grant's ref rule and the protections, a lifecycle request by the one

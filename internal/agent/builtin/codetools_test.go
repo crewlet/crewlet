@@ -86,6 +86,10 @@ type codeHost struct {
 	readErr  error
 	gitErr   error
 	git      func(q code.GitQuery) code.GitAnswer
+	// changes, set, answers the reads of a repository's changes — a listing,
+	// and one change a part at a time (codechanges_test.go) — under the
+	// host's lock, every one recorded with the rest.
+	changes func(q code.ReadQuery) (code.ReadAnswer, error)
 	// before, set, is called with each question's kind before it is
 	// answered, outside the host's lock — so a case can read what the asking
 	// turn held when the question arrived.
@@ -185,6 +189,10 @@ func (h *codeHost) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, e
 			}
 		}
 		return out, nil
+	case code.ReadChanges, code.ReadChange:
+		if h.changes != nil {
+			return h.changes(q)
+		}
 	}
 	return code.ReadAnswer{}, fmt.Errorf("%w: a code tool read kind %s", code.ErrInvalid, q.Kind)
 }
@@ -397,7 +405,7 @@ func asUnboundToken() context.Context {
 // ---- one list, two surfaces --------------------------------------------- //
 
 // THE CODE TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
-// built over the same deps, hold the same nineteen tools — the nine reads,
+// built over the same deps, hold the same twenty-one tools — the eleven reads,
 // then the ten writes, every one the authority table names, in the list's own
 // order — with byte-identical descriptions and schemas but for the one
 // argument the operator surface alone offers, the writes' `op_id`, which no
@@ -1695,10 +1703,10 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the nineteen code tools' definitions
-// may add to a tool catalogue as a CLI's prompt renders it.
+// codeCatalogueBudget is the most bytes the twenty-one code tools'
+// definitions may add to a tool catalogue as a CLI's prompt renders it.
 //
-// 26 800: measured at 24 990 (~6 248 tokens), so ~7% headroom — a sentence can
+// 31 300: measured at 29 223 (~7 306 tokens), so ~7% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
 // part adds raises this deliberately, with its measured cost). 10 654 → 9 570
 // when the revision grammar, written into each of the six revision arguments,
@@ -1719,14 +1727,20 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // ten fields and remove_gate — deliberately, with their measured cost: 22 787
 // → 24 990, 2 203 bytes (~551 tokens), each field its type and its values
 // alone (what a field does is the code host's documentation), the call's
-// field-at-a-time rule said once in the tool's description.
-const codeCatalogueBudget = 26_800
+// field-at-a-time rule said once in the tool's description. And 26 800 →
+// 31 300 when the two change reads joined the list, deliberately, with their
+// measured cost: 24 990 → 29 223, 4 233 bytes (~1 058 tokens) for
+// code_list_changes and code_get_change, the parts named once in the
+// description and each argument cut to what its name and type do not say
+// (4 559 as first written: the listing's fields spelled out, and each part
+// in a sentence of its own).
+const codeCatalogueBudget = 31_300
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code carries the nineteen definitions on every round of every turn: a CLI's
+// code carries the twenty-one definitions on every round of every turn: a CLI's
 // catalogue rides in the user text (cliagent.RenderPrompt), so nothing caches
 // them, and each byte is paid again every round. Measured as that catalogue
-// renders them — indented, HTML-escaped, the nineteen added to a catalogue
+// renders them — indented, HTML-escaped, the twenty-one added to a catalogue
 // already holding a tool, so each one's separator and indentation count — and
 // held to a budget, so a later description edit is a decision rather than
 // drift, as the executor prompt's budgets make a sentence one
@@ -1777,7 +1791,7 @@ func TestTheCodeGuidanceNamesTheCodeTools(t *testing.T) {
 }
 
 // THE PAGES NAME EVERY CODE TOOL THE REGISTRY HOLDS: the tools guide's table of
-// them lists exactly the nine, and the operator reference's account of what
+// them lists exactly the twenty-one, and the operator reference's account of what
 // `/operator/mcp` serves names each — two hand-kept copies of one list, which is
 // how a page comes to describe a catalogue the engine no longer serves.
 func TestThePagesNameEveryCodeTool(t *testing.T) {

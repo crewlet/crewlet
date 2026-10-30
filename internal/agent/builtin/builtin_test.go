@@ -325,6 +325,10 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeLandedInTool:  false,
 		builtin.CodeLogTool:       false,
 		builtin.CodeBlameTool:     false,
+		// A repository's changes are read the same way: a worker handed a
+		// change's findings to weigh reads them as its parent would.
+		builtin.CodeListChangesTool: false,
+		builtin.CodeGetChangeTool:   false,
 
 		// AND ITS WRITES, every one a branch or a repository every colleague
 		// reads: a worker writing one would write with its parent's grant.
@@ -1059,10 +1063,10 @@ func fullDeps(t *testing.T) builtin.Deps {
 		// AND THE DATASTORE BESIDE IT, which the four data tools take
 		// with the artifacts half.
 		ArtifactData: artifactDataDeps(newFakeData()),
-		// AND THE CODE HOST, whose nine read tools register only over a
+		// AND THE CODE HOST, whose eleven read tools register only over a
 		// code host and the requester ceiling's halves beside it, and whose
 		// ten writes only where its writes are wired too: left out, every
-		// walk over this fixture met their nineteen authority rows as rules
+		// walk over this fixture met their twenty-one authority rows as rules
 		// no registered tool answers.
 		Code: writeDeps(newCodeHost(), &codeWrites{}),
 		// AND THE HEALTH TOOLS, over a lease table and the git nodes' status

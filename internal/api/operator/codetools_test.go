@@ -58,7 +58,7 @@ func (h *listingHost) askers() []code.Principal {
 }
 
 // THE CODE TOOLS ARE SERVED PER CALL, AND A CALL TO ONE IS A READ. The
-// catalogue holds the nine exactly while the call's company hosts code — so a
+// catalogue holds the eleven exactly while the call's company hosts code — so a
 // revision that turns `code.native` on serves them from the next call and one
 // that turns it off withdraws them from the next — each advertised as the
 // proven read it is; and a call to one is answered as the request's person,

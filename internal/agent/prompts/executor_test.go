@@ -226,7 +226,8 @@ func TestTheCodeHistoryGuidanceNeedsACodeTool(t *testing.T) {
 
 	held := append([]string{"submit_work"}, CodeHistoryTools()...)
 	p := BuildExecutor(engineer(), ExecutorInput{AvailableTools: held})
-	contains(t, p.Text, heading, "`code_*` tools", "by commit id", "never from a clone")
+	contains(t, p.Text, heading, "`code_*` tools", "by commit id", "never from a clone",
+		"what changed since your review are read with `code_get_change`")
 	if _, ok := slice(p, KeyCodeHistory); !ok {
 		t.Errorf("the guidance is not its own %q section of the outline", KeyCodeHistory)
 	}
@@ -259,7 +260,8 @@ func TestTheCodeHistoryGuidanceSaysABoxCloneIsBlobless(t *testing.T) {
 	if !ok {
 		t.Fatalf("no %q section rendered", KeyCodeHistory)
 	}
-	contains(t, section, "`run_sandbox` clones is blobless", "ask history questions here, not in the box")
+	contains(t, section, "`run_sandbox` clones is blobless",
+		"its history is for building, not for answering questions")
 
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{AvailableTools: held}).Text, "blobless")
 	excludes(t, BuildExecutor(engineer(), ExecutorInput{

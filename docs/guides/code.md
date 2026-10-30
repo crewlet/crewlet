@@ -399,11 +399,13 @@ Nothing runs a check yet in this release: the file is defined and validated
 ## What your seats read
 
 Nothing to set up: once the company hosts code, every seat holds the
-nineteen [code tools](tools-and-mcp.md#the-companys-code) and reads the
-repositories with nine of them, on the server — a file's lines, a directory,
+twenty-one [code tools](tools-and-mcp.md#the-companys-code) and reads the
+repositories with eleven of them, on the server — a file's lines, a directory,
 what changed between two commits, how two commits relate, whether a fix
 reached a branch and which push put it there, a path's history and who last
-changed each line of a file — with no clone and no token. A seat itself holds
+changed each line of a file, and a repository's changes: what each one
+changes, its findings placed in the revision it reads and what changed since
+an earlier revision — with no clone and no token. A seat itself holds
 no git credential: it changes the repositories through the other
 ten — a small change committed to a branch, a commit reverted or picked, a
 branch created or deleted, each built on the server and landed as one push in

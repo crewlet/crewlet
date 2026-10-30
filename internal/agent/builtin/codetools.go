@@ -24,10 +24,11 @@ import (
 // THE CODE READ TOOLS: the company's own repositories (`code.native`), read on
 // the server rather than in a clone — code_list_repos, code_get_repo,
 // code_resolve, code_read, code_diff, code_compare, code_landed_in, code_log
-// and code_blame — each named for its authority row, and ONE list
-// ([CodeTools]) that a seat's registry and the operator catalogue both take,
-// so a schema, a default and a refusal's words are written once. The code
-// WRITES join the same list where the code host's writes are wired
+// and code_blame, and a repository's changes, code_list_changes and
+// code_get_change (codechanges.go) — each named for its authority row, and ONE
+// list ([CodeTools]) that a seat's registry and the operator catalogue both
+// take, so a schema, a default and a refusal's words are written once. The
+// code WRITES join the same list where the code host's writes are wired
 // (codewrite.go), through the same resolution of a repository — and the same
 // turn's hold on it (codehold.go).
 //
@@ -125,11 +126,12 @@ const (
 	CodeBlameTool     = string(authz.ActionCodeBlame)
 )
 
-// CodeToolNames are the nine, in the order a catalogue lists them: the
-// repositories, a ref, then the reads by object id — the history's last.
+// CodeToolNames are the eleven, in the order a catalogue lists them: the
+// repositories, a ref, then the reads by object id — the history's last — and
+// a repository's changes ([ChangeToolNames]).
 func CodeToolNames() []string {
-	return []string{CodeListReposTool, CodeGetRepoTool, CodeResolveTool, CodeReadTool,
-		CodeDiffTool, CodeCompareTool, CodeLandedInTool, CodeLogTool, CodeBlameTool}
+	return append([]string{CodeListReposTool, CodeGetRepoTool, CodeResolveTool, CodeReadTool,
+		CodeDiffTool, CodeCompareTool, CodeLandedInTool, CodeLogTool, CodeBlameTool}, ChangeToolNames()...)
 }
 
 // The listing pages. A repository row carries a description of up to a
@@ -231,6 +233,7 @@ func CodeTools(deps CodeDeps) []tools.Callable {
 		&codeListRepos{deps: deps}, &codeGetRepo{deps: deps}, &codeResolve{deps: deps},
 		&codeRead{deps: deps}, &codeDiff{deps: deps}, &codeCompare{deps: deps},
 		&codeLandedIn{deps: deps}, &codeLog{deps: deps}, &codeBlame{deps: deps},
+		&codeListChanges{deps: deps}, &codeGetChange{deps: deps},
 	}
 	if deps.Writer != nil {
 		out = append(out, codeWriteTools(deps)...)
@@ -907,6 +910,15 @@ func codeFailure(ctx context.Context, tool, repo string, err error) tools.Result
 		said, _ := RefusalSentence(err, code.ErrRefNotFound)
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s. Its branches are listed by "+
 			"%s; a commit is named by its id.", tool, said, CodeGetRepoTool))
+	case errors.Is(err, code.ErrChangeNotFound):
+		// THE CHANGE IT NAMES, of a repository the asker reads: a number of
+		// one it may not read is never this answer (code.ErrNotPermitted).
+		said, ok := RefusalSentence(err, code.ErrChangeNotFound)
+		if !ok {
+			said = "of that number"
+		}
+		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: repository %q has no change %s. Its "+
+			"changes are listed by %s.", tool, repo, said, CodeListChangesTool))
 	case errors.Is(err, code.ErrObjectNotFound), errors.Is(err, code.ErrNotATree),
 		errors.Is(err, code.ErrNotABlob):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s.", tool, domainWords(err)))
@@ -2149,26 +2161,9 @@ func (t *codeBlame) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // caller receives rather than an estimate of them. A search over the prefixes,
 // since an answer only grows with its rows: a page that fits costs one render,
 // and one that does not about log₂ n more.
+//
+// One read labels every probe, so a page it cuts fences nothing ([fitLabelled]
+// builds a page whose rows carry fenced text, a read a probe).
 func (r *foreignRead) fit(n int, answer func(k int) any) (int, json.RawMessage, error) {
-	whole, err := r.render(answer(n))
-	if err != nil || len(whole) <= ToolAnswerBytes {
-		return n, whole, err
-	}
-	fits, kept := 0, json.RawMessage(nil)
-	if kept, err = r.render(answer(0)); err != nil {
-		return 0, nil, err
-	}
-	for over := n; over-fits > 1; {
-		mid := fits + (over-fits)/2
-		rendered, err := r.render(answer(mid))
-		if err != nil {
-			return 0, nil, err
-		}
-		if len(rendered) <= ToolAnswerBytes {
-			fits, kept = mid, rendered
-		} else {
-			over = mid
-		}
-	}
-	return fits, kept, nil
+	return fitLabelled(n, func(k int) (*foreignRead, any) { return r, answer(k) })
 }
