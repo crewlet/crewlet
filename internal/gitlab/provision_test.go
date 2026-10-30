@@ -238,3 +238,18 @@ func TestTheNotesSayTheShapeAndNotTheValue(t *testing.T) {
 		t.Errorf("the composite seat's note does not say so:\n%s", joined)
 	}
 }
+
+// A SEAT'S ACCOUNT IS NAMED FROM ITS HANDLE, which is immutable, because GitLab
+// keeps no field of this engine's own: the name is how the next pass finds
+// the account it made.
+func TestAnAccountIsNamedFromItsSeatsHandle(t *testing.T) {
+	t.Parallel()
+	p := &config.GitLabProvisioning{Group: "nimbus"}
+	if got := gitlab.Username(p, "sre"); got != "crewlet-sre" {
+		t.Errorf("default prefix = %q", got)
+	}
+	p.UsernamePrefix = " agent "
+	if got := gitlab.Username(p, "sre"); got != "agent-sre" {
+		t.Errorf("configured prefix = %q", got)
+	}
+}

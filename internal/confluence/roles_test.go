@@ -235,16 +235,16 @@ func TestOperationsCarryConfluencesNames(t *testing.T) {
 	}
 }
 
-// A SET OF OPERATIONS IS ONE STORED LEVEL, in the catalogue's order whatever
-// order it was written in, and an operation Confluence does not grant is
-// refused rather than dropped.
+// A SET OF OPERATIONS IS ONE STORED LEVEL, sorted whatever order it was
+// written in, and an operation Confluence does not grant is refused rather
+// than dropped.
 func TestASetOfOperationsRoundTripsAsOneLevel(t *testing.T) {
 	t.Parallel()
 	ops, err := confluence.ParseOperationsLevel("create:page  read:space create:page")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := confluence.OperationsLevel(ops); got != "read:space create:page" {
+	if got := confluence.OperationsLevel(ops); got != "create:page read:space" {
 		t.Fatalf("level = %q", got)
 	}
 	if _, err := confluence.ParseOperationsLevel("read:space purge:space"); err == nil {

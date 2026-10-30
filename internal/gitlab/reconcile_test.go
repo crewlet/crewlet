@@ -1258,16 +1258,14 @@ func (s *recordingSink) recorded() map[string]string {
 	return out
 }
 
-func reconcileAgainst(t *testing.T, f *adminInstance, sink provision.TokenSink,
-	seats map[string]string,
-) (*gitlab.Result, error) {
+func reconcileAgainst(t *testing.T, f *adminInstance, sink provision.TokenSink) (*gitlab.Result, error) {
 	t.Helper()
-	return reconcileWith(t, f, sink, seats, func(*gitlab.Options) {})
+	return reconcileWith(t, f, sink, func(*gitlab.Options) {})
 }
 
 // reconcileWith is the same run with the options a test wants to vary.
 func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
-	seats map[string]string, tune func(*gitlab.Options),
+	tune func(*gitlab.Options),
 ) (*gitlab.Result, error) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
@@ -1286,14 +1284,8 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 	}
 	cfg := enabledGitLab()
 	cfg.Provisioning.Projects = []string{"nimbus/api"}
-	plan := &provision.Plan{}
-	for handle, tokenVar := range seats {
-		plan.Add(provision.Seat{
-			Handle: handle, Role: strings.ToUpper(handle), TokenVar: tokenVar,
-		})
-	}
 	opts := gitlab.Options{
-		Client: client, Config: cfg, Plan: plan, Sink: sink,
+		Client: client, Config: cfg, Sink: sink,
 		WebhookBase: "https://crewlet.example.com", SigningSecret: testSigningSecret,
 		Now: func() time.Time { return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) },
 	}
@@ -1305,93 +1297,6 @@ func reconcileWith(t *testing.T, f *adminInstance, sink provision.TokenSink,
 		tune(&opts)
 	}
 	return gitlab.Reconcile(context.Background(), opts)
-}
-
-// A RECONCILE CREATES WHAT IS MISSING AND RECORDS WHAT IT MINTS.
-func TestAReconcileProvisionsEverySeat(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	res, err := reconcileAgainst(t, f, sink, map[string]string{
-		"swe": "GITLAB_TOKEN_SWE", "cto": "GITLAB_TOKEN_CTO",
-	})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(res.Created) != 2 || len(res.Rotated) != 2 {
-		t.Fatalf("result = %+v, want two created and two rotated", res)
-	}
-	got := sink.recorded()
-	for _, name := range []string{"GITLAB_TOKEN_SWE", "GITLAB_TOKEN_CTO"} {
-		if !strings.HasPrefix(got[name], "glpat-minted-") {
-			t.Errorf("%s = %q, want a minted token", name, got[name])
-		}
-	}
-	if res.Hooked != "https://crewlet.example.com/webhooks/gitlab" {
-		t.Errorf("hooked %q", res.Hooked)
-	}
-}
-
-// RUNNING IT TWICE IS SAFE AND QUIET about the accounts — but it DOES rotate
-// the tokens, because a personal access token's value is returned once and
-// there is no "already correct" state to detect.
-func TestASecondRunCreatesNothingAndRotatesEverything(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(), seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	sink := newRecordingSink()
-	res, err := reconcileAgainst(t, f, sink, seats)
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if len(res.Created) != 0 {
-		t.Errorf("the second run created %v", res.Created)
-	}
-	if len(res.Rotated) != 1 {
-		t.Errorf("the second run rotated %v, want the token minted again", res.Rotated)
-	}
-	if sink.recorded()["GITLAB_TOKEN_SWE"] == "" {
-		t.Error("the second run recorded nothing")
-	}
-}
-
-// A RUN THAT CANNOT RECORD WHAT IT MINTED REVOKES IT. Between the third-party app
-// minting a token and the sink recording it, the only copy of a live
-// credential is in this process's memory — a failure there leaves it live,
-// unusable and unknown.
-func TestAFailedRecordRevokesEveryMintedToken(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	sink.failOn = "GITLAB_TOKEN_SWE"
-
-	_, err := reconcileAgainst(t, f, sink, map[string]string{
-		"cto": "GITLAB_TOKEN_CTO", "swe": "GITLAB_TOKEN_SWE",
-	})
-	if err == nil {
-		t.Fatal("a failed record was reported as a successful run")
-	}
-	if live := f.liveTokens(); live != 0 {
-		t.Fatalf("%d minted token(s) are still live after a rollback", live)
-	}
-	if sink.discards == 0 {
-		t.Error("the sink was not asked to discard what it had recorded")
-	}
-	if len(sink.recorded()) != 0 {
-		t.Errorf("the sink still holds %v", sink.recorded())
-	}
-	// THE ORIGINAL CAUSE SURVIVES. It is what an operator has to fix, and
-	// a cleanup message that replaced it would hide the cause behind its
-	// consequence.
-	if !strings.Contains(err.Error(), "unreachable") {
-		t.Errorf("the error lost the cause: %v", err)
-	}
-	if !strings.Contains(err.Error(), "revoked") {
-		t.Errorf("the error does not say the tokens were revoked: %v", err)
-	}
 }
 
 // A ROLLBACK DISCARDS WHAT THE RUN SEALED EVEN WHEN IT MINTED NO SEAT TOKEN.
@@ -1418,11 +1323,10 @@ func TestAFailedHookRollsBackASecretItHadNoTokensToRevoke(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
 
 	// A converged company: the seat's token is live and recorded, so the
 	// pass below keeps it and mints nothing.
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("the run that converges the seat: %v", err)
 	}
 	f.forget()
@@ -1441,7 +1345,7 @@ func TestAFailedHookRollsBackASecretItHadNoTokensToRevoke(t *testing.T) {
 	// than a tier gate, so the pass raises after the secret is sealed.
 	f.hookStatus = http.StatusInternalServerError
 
-	res, err := reconcileWith(t, f, next, seats, func(o *gitlab.Options) {
+	res, err := reconcileWith(t, f, next, func(o *gitlab.Options) {
 		o.SigningSecret = ""
 		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
 	})
@@ -1465,25 +1369,6 @@ func TestAFailedHookRollsBackASecretItHadNoTokensToRevoke(t *testing.T) {
 	}
 }
 
-// AND WHEN THE CLEANUP ITSELF FAILS, the report says so loudly: those
-// credentials are live, nothing can use them, and only a human can remove
-// them.
-func TestAFailedRollbackNamesWhatIsStillLive(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.failTokenRevoke = true
-	sink := newRecordingSink()
-	sink.failOn = "GITLAB_TOKEN_SWE"
-
-	_, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
-	if err == nil {
-		t.Fatal("a failed run with a failed rollback was reported as success")
-	}
-	if !strings.Contains(err.Error(), "by hand") {
-		t.Errorf("the error does not tell the operator to intervene: %v", err)
-	}
-}
-
 // A HOOK IS UPDATED RATHER THAN DUPLICATED, because the signing secret may
 // have rotated — and an instance may carry hooks somebody else registered,
 // which a run must not replace. The delivery path is what separates the two:
@@ -1497,8 +1382,7 @@ func TestAnExistingHookIsUpdatedRatherThanDuplicated(t *testing.T) {
 		// Ours, and not converged: it carries no digest of the key.
 		namedHook(10, "crewlet", "https://crewlet.example.com/webhooks/gitlab"),
 	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -1527,8 +1411,7 @@ func TestAnExistingHookIsUpdatedRatherThanDuplicated(t *testing.T) {
 func TestTheHookSubscribesToExactlyWhatIsRouted(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -1583,12 +1466,8 @@ func TestWithoutAPublicURLNoHookIsGuessed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	plan := &provision.Plan{}
-	plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "T"})
-
 	res, err := gitlab.Reconcile(context.Background(), gitlab.Options{
-		Client: client, Config: enabledGitLab(), Plan: plan,
-		Sink: newRecordingSink(),
+		Client: client, Config: enabledGitLab(), Sink: newRecordingSink(),
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -1601,6 +1480,33 @@ func TestWithoutAPublicURLNoHookIsGuessed(t *testing.T) {
 	}
 }
 
+// THE WEBHOOK IS REGISTERED WITH NO SEATS AT ALL. An earlier shape of this
+// pass returned before the hook when no seat asked for an account, so a
+// company whose agents were all off GitLab, the normal state now that seats
+// are per-seat access, had no hook and nothing said so.
+func TestAHookIsRegisteredWithNoSeatsAtAll(t *testing.T) {
+	t.Parallel()
+	f := newAdminInstance()
+	res, err := reconcileAgainst(t, f, newRecordingSink())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.Hooked == "" || len(res.HookedOn) == 0 {
+		t.Fatalf("result = %+v, want a hook registered", res)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.hooks)+len(f.projectHooks) == 0 {
+		t.Fatal("the instance holds no hook")
+	}
+	for _, call := range f.calls {
+		if strings.Contains(call, "service_accounts") || strings.HasSuffix(call, "/members") ||
+			strings.Contains(call, "personal_access_tokens") && !strings.HasSuffix(call, "/personal_access_tokens/self") {
+			t.Errorf("the company-level pass touched a seat's account: %s", call)
+		}
+	}
+}
+
 func TestAReconcileNeedsAClientAndASink(t *testing.T) {
 	t.Parallel()
 	if _, err := gitlab.Reconcile(context.Background(), gitlab.Options{}); err == nil {
@@ -1610,40 +1516,6 @@ func TestAReconcileNeedsAClientAndASink(t *testing.T) {
 	_, err := gitlab.Reconcile(context.Background(), gitlab.Options{Client: client})
 	if !errors.Is(err, provision.ErrNoSink) {
 		t.Errorf("err = %v, want ErrNoSink", err)
-	}
-}
-
-// A CANCELLED RUN STILL REVOKES. Ctrl+C during provisioning is exactly when
-// leaving credentials live is worst: the operator believes nothing happened.
-// A rollback that inherited the cancelled context would do nothing at all.
-func TestACancelledRunStillRevokesWhatItMinted(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	srv := httptest.NewServer(http.HandlerFunc(f.serve))
-	t.Cleanup(srv.Close)
-	client, err := gitlab.NewClient(gitlab.ClientOptions{URL: srv.URL, Token: "admin"})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	plan := &provision.Plan{}
-	plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
-
-	// The sink cancels the run as it is asked to record — the shape of an
-	// interrupt arriving between minting and persisting.
-	sink := &cancellingSink{cancel: cancel}
-	_, err = gitlab.Reconcile(ctx, gitlab.Options{
-		Client: client, Config: enabledGitLab(), Plan: plan, Sink: sink,
-	})
-	if err == nil {
-		t.Fatal("a cancelled run was reported as successful")
-	}
-	if live := f.liveTokens(); live != 0 {
-		t.Fatalf("%d token(s) are still live after a cancelled run", live)
-	}
-	if !sink.discarded {
-		t.Error("the sink was not asked to discard after a cancelled run")
 	}
 }
 
@@ -1689,387 +1561,7 @@ func sortByUsername(rows []map[string]any) {
 	})
 }
 
-// A PREFIX MATCH IS NOT THE ACCOUNT. /users?username= filters rather than
-// looks up on several GitLab versions, so a run that took the first row
-// would mint a token for a retired account and record it as the live seat's
-// — an authentication failure whose cause is invisible from either side.
-func TestAPrefixMatchIsNotMistakenForTheAccount(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	// A retired account whose name is a prefix of the one being sought,
-	// and which sorts first.
-	f.users["crewlet-swe-old"] = 55
-
-	sink := newRecordingSink()
-	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	// The run must have CREATED the real account rather than adopting the
-	// decoy.
-	if len(res.Created) != 1 {
-		t.Fatalf("created %v, want the real account to have been created", res.Created)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.tokens[55]) != 0 {
-		t.Fatal("a token was minted on the retired account")
-	}
-	if _, exists := f.users["crewlet-swe"]; !exists {
-		t.Fatal("the real account was never created")
-	}
-}
-
-// A MINT THAT RETURNS NO VALUE IS A FAILURE, not a token. GitLab shows a
-// personal access token's value once; a 200 carrying an empty one means the
-// token exists, cannot be recovered, and would otherwise be recorded as the
-// empty string — which resolves to an empty Bearer header and a 401 nobody
-// can trace back here.
-func TestAMintThatReturnsNoValueIsARollback(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.mintEmpty = true
-	sink := newRecordingSink()
-
-	_, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
-	if err == nil {
-		t.Fatal("a token with no value was accepted")
-	}
-	if got := sink.recorded()["GITLAB_TOKEN_SWE"]; got != "" {
-		t.Fatalf("an empty token was recorded as %q", got)
-	}
-	if !strings.Contains(err.Error(), "revoke") {
-		t.Errorf("the error does not say the token has to be revoked: %v", err)
-	}
-}
-
 // ---- what a re-run does and does not touch ------------------------------ //
-
-// A PLAIN RE-RUN KEEPS A WORKING TOKEN. Rotating it would revoke what the
-// running engine is authenticating with — an operator adding one seat would
-// take the others down, from a command whose promise is that it is safe to
-// re-run.
-func TestARerunKeepsAWorkingToken(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	first := sink.value("GITLAB_TOKEN_SWE")
-	f.forget()
-
-	res, err := reconcileAgainst(t, f, sink, seats)
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if len(res.Rotated) != 0 || len(res.Kept) != 1 {
-		t.Fatalf("rotated %v, kept %v", res.Rotated, res.Kept)
-	}
-	if sink.value("GITLAB_TOKEN_SWE") != first {
-		t.Error("the recorded credential changed under a running engine")
-	}
-	if f.revoked() != 0 {
-		t.Errorf("a plain re-run revoked %d tokens", f.revoked())
-	}
-}
-
-// -rotate IS THE OPERATOR ASKING, and it retires the previous token after
-// recording the new one — never before, or a failed record leaves the seat
-// with nothing.
-func TestRotateMintsAfreshAndRetiresOnlyThisToolsToken(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	first := sink.value("GITLAB_TOKEN_SWE")
-	// An administrator's own token on the same account, which rotation
-	// must not touch: nothing here knows what is using it.
-	f.mu.Lock()
-	for id := range f.tokens {
-		f.tokens[id] = append(f.tokens[id], &gitlab.Token{
-			ID: 9001, Name: "set up by an admin",
-		})
-	}
-	f.mu.Unlock()
-	f.forget()
-
-	res, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) { o.Rotate = true })
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if len(res.Rotated) != 1 {
-		t.Fatalf("rotated = %v", res.Rotated)
-	}
-	if sink.value("GITLAB_TOKEN_SWE") == first {
-		t.Error("-rotate left the credential alone")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	recorded := false
-	for _, tokens := range f.tokens {
-		for _, token := range tokens {
-			if token.ID == 9001 && token.Revoked {
-				t.Error("rotation revoked a token it did not mint")
-			}
-			if token.Value == sink.value("GITLAB_TOKEN_SWE") && !token.Revoked {
-				recorded = true
-			}
-		}
-	}
-	// THE RECORDED VALUE MUST STILL BE LIVE. Retiring the previous
-	// tokens re-lists them AFTER the mint, so the fresh one is in that
-	// list — revoking it would record a credential that is already dead.
-	if !recorded {
-		t.Error("rotation revoked the token it had just recorded")
-	}
-}
-
-// A VARIABLE NOBODY RECORDED IS MINTED INTO even though the account has a
-// working token: GitLab will not show the value again, so minting is the
-// only recovery.
-func TestAnUnrecordedVariableIsMintedInto(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(), seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.forget()
-	fresh := newRecordingSink() // a second machine: nothing recorded here
-	res, err := reconcileAgainst(t, f, fresh, seats)
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if len(res.Rotated) != 1 {
-		t.Fatalf("rotated = %v, kept = %v", res.Rotated, res.Kept)
-	}
-	if fresh.value("GITLAB_TOKEN_SWE") == "" {
-		t.Error("nothing was recorded")
-	}
-}
-
-// A REVOKED TOKEN IS MINTED OVER whatever the variable holds: a value whose
-// credential is dead leaves the seat 401ing for ever.
-func TestARevokedTokenIsReplacedEvenWithAValueOnRecord(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.mu.Lock()
-	for _, tokens := range f.tokens {
-		for _, token := range tokens {
-			token.Revoked = true
-		}
-	}
-	f.mu.Unlock()
-	f.forget()
-
-	res, err := reconcileAgainst(t, f, sink, seats)
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if len(res.Rotated) != 1 {
-		t.Errorf("rotated = %v, kept = %v", res.Rotated, res.Kept)
-	}
-}
-
-// AN EXPIRED TOKEN IS NOT A LIVE ONE. GitLab serves the expiry as a bare
-// date, which is not a timestamp and does not unmarshal as one.
-func TestAnExpiredTokenIsReplaced(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	days := 30
-	set := func(o *gitlab.Options) { o.ExpiryDays = &days }
-	if _, err := reconcileWith(t, f, sink, seats, set); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	if body := f.mintBodies[0]; body["expires_at"] != "2026-01-31" {
-		t.Fatalf("expires_at = %v", body["expires_at"])
-	}
-	f.forget()
-
-	// The instance's clock moves past the expiry too — otherwise the token
-	// still authenticates and the run is right to keep it.
-	f.mu.Lock()
-	f.now = time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	f.mu.Unlock()
-	res, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
-		o.ExpiryDays = &days
-		o.Now = func() time.Time { return time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC) }
-	})
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if len(res.Rotated) != 1 {
-		t.Errorf("an expired token was kept: rotated = %v, kept = %v",
-			res.Rotated, res.Kept)
-	}
-}
-
-// NO EXPIRY IS SENT BY DEFAULT: nothing in Crewlet renews a credential on a
-// schedule, so a lifetime nobody renews is an outage with a date on it.
-func TestNoExpiryIsSentUnlessAskedFor(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(f.mintBodies) != 1 {
-		t.Fatalf("minted %d times", len(f.mintBodies))
-	}
-	if _, set := f.mintBodies[0]["expires_at"]; set {
-		t.Errorf("an unasked-for expiry was sent: %v", f.mintBodies[0]["expires_at"])
-	}
-}
-
-// AN UNREADABLE SINK IS NOT AN EMPTY ONE. Reading it as empty would rotate
-// every live credential in the company because a store blinked.
-func TestAnUnreadableSinkStopsTheGitLabRun(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.forget()
-	sink.holdsErr = errors.New("the store is unreachable")
-	if _, err := reconcileAgainst(t, f, sink, seats); err == nil {
-		t.Fatal("an unreadable sink was read as holding nothing")
-	}
-	if f.revoked() != 0 {
-		t.Errorf("%d tokens were revoked on an unreadable sink", f.revoked())
-	}
-}
-
-// AN ACCOUNT THIS RUN CREATES ASKS NO SINK. Nothing can hold a token for an
-// account that did not exist a moment ago, so its first token is minted
-// whatever the sink would answer — even a sink that cannot say, as a
-// -secret-store sink whose node refused the reveal cannot.
-//
-// Mutation: ask the sink before minting a created account's first token, and
-// the run fails on the unreadable sink.
-func TestAnAccountThisRunCreatesIsMintedWhateverItsSinkCanSay(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	// a -secret-store sink whose node refused the reveal
-	sink.holdsErr = errors.New("the store could not say")
-	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
-	if err != nil {
-		t.Fatalf("a seat whose account this run created was refused over its sink: %v", err)
-	}
-	if !slices.Equal(res.Created, []string{"swe"}) || !slices.Equal(res.Rotated, []string{"swe"}) {
-		t.Fatalf("created %v, minted for %v — want the seat created and minted for",
-			res.Created, res.Rotated)
-	}
-	if sink.value("GITLAB_TOKEN_SWE") == "" {
-		t.Error("the created account's first token was not recorded")
-	}
-}
-
-// A ROLLBACK ON A PRE-EXISTING ACCOUNT REVOKES ONLY WHAT IT MINTED.
-// Sweeping the account would take an administrator's own token with no way
-// to tell that it had.
-func TestARollbackOnAnExistingAccountSparesTheAdminsToken(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(), seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.mu.Lock()
-	for id := range f.tokens {
-		f.tokens[id] = append(f.tokens[id], &gitlab.Token{
-			ID: 9001, Name: "set up by an admin",
-		})
-	}
-	f.mu.Unlock()
-	f.forget()
-
-	failing := newRecordingSink()
-	failing.failOn = "GITLAB_TOKEN_SWE"
-	if _, err := reconcileWith(t, f, failing, seats,
-		func(o *gitlab.Options) { o.Rotate = true }); err == nil {
-		t.Fatal("the run reported success with nothing recorded")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, tokens := range f.tokens {
-		for _, token := range tokens {
-			if token.ID == 9001 && token.Revoked {
-				t.Fatal("the rollback revoked a token it did not mint")
-			}
-		}
-	}
-}
-
-// RETIRED TOKENS ARE NOT RE-REVOKED. GitLab keeps a revoked row in the
-// listing, and every rotation leaves another — so a run without that check
-// issues one more pointless request than the run before it, for ever.
-func TestRotationDoesNotReRevokeWhatItAlreadyRetired(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	rotate := func(o *gitlab.Options) { o.Rotate = true }
-	for i := range 3 {
-		if _, err := reconcileWith(t, f, sink, seats, rotate); err != nil {
-			t.Fatalf("run %d: %v", i, err)
-		}
-		if i == 1 {
-			f.forget()
-		}
-	}
-	if n := f.revoked(); n != 1 {
-		t.Errorf("the third run issued %d revocations, want 1 — the previous "+
-			"rotation's row is already revoked", n)
-	}
-}
-
-// -decommission DELETES THE ACCOUNTS WHOSE SEATS LEFT, and only those:
-// scoped by the managed prefix AND by membership of this company's group,
-// because either alone is too broad.
-func TestDecommissionRemovesManagedAccountsWithNoSeat(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(), seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.mu.Lock()
-	f.join("crewlet-qa", 500, gitlabDeveloperLevel) // a seat that used to exist
-	f.join("ci-runner", 501, gitlabDeveloperLevel)  // somebody else's account
-	f.mu.Unlock()
-
-	res, err := reconcileWith(t, f, newRecordingSink(), seats,
-		func(o *gitlab.Options) { o.Decommission = true })
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(res.Decommissioned) != 1 || res.Decommissioned[0] != "crewlet-qa" {
-		t.Fatalf("decommissioned = %v", res.Decommissioned)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if _, still := f.users["ci-runner"]; !still {
-		t.Error("an unmanaged account was deleted")
-	}
-	if _, still := f.users["crewlet-swe"]; !still {
-		t.Error("a live seat's account was deleted")
-	}
-}
 
 // A COMPANY WITH NO PUBLIC BASE URL IS DEGRADED, NOT READY.
 //
@@ -2091,7 +1583,7 @@ func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	res, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+	res, err := reconcileWith(t, f, sink,
 		func(o *gitlab.Options) { o.WebhookBase = "" })
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -2107,13 +1599,6 @@ func TestNoPublicBaseURLIsReportedRatherThanNoted(t *testing.T) {
 	if report := integration.Classify(findings); report.Phase == integration.PhaseReady {
 		t.Errorf("a GitLab that delivers nothing classifies as %+v", report)
 	}
-	// AND THE SEATS WERE STILL PROVISIONED. Ingress is independent of
-	// identity: refusing to provision because there is nowhere to deliver
-	// would make one missing setting take the whole integration down.
-	if len(res.Created) != 1 || sink.value("GITLAB_TOKEN_SWE") == "" {
-		t.Errorf("the seat half did not run: created %v, sink %v",
-			res.Created, sink.recorded())
-	}
 }
 
 // BEHIND A PUBLIC LISTENER THE FINDING NAMES THE PUBLIC LISTENER'S KEY, and
@@ -2123,7 +1608,6 @@ func TestBehindAPublicListenerTheMissingAddressNamesItsKey(t *testing.T) {
 	t.Parallel()
 	const key = "api.public.external_url"
 	res, err := reconcileWith(t, newAdminInstance(), newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) { o.WebhookBase, o.WebhookBaseKey = "", key })
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -2134,143 +1618,6 @@ func TestBehindAPublicListenerTheMissingAddressNamesItsKey(t *testing.T) {
 	}
 	if !strings.Contains(findings[0].Detail, "set "+key+" to") {
 		t.Errorf("the sentence names another setting: %q", findings[0].Detail)
-	}
-}
-
-// A SUCCESSFUL DECOMMISSION IS NOT A FINDING.
-//
-// It reported one per deleted account, as FindingIdentityMissing — whose
-// verdict is PhaseProvisioning / ActorEngine, rendered as "creating agent
-// identities". So an operator who removed a seat and ran -decommission got a
-// run that did exactly what they asked for, and a status row claiming the
-// engine was mid-way through creating an identity for a handle the company
-// document no longer contains. Nothing ever cleared it: no later pass
-// provisions a seat that is not in the plan.
-//
-// The branch's own comment gave it away — "it is in the plan, so the company
-// expects it to act on GitLab" — which is the one thing Result.Decommissioned
-// is guaranteed not to be. Deleting a departed seat's account is the
-// successful outcome of a destructive flag, exactly as Result.Kept is the
-// successful outcome of a re-run, and neither is something a person has to
-// look at.
-func TestADecommissionedAccountIsNotReportedAsWorkOutstanding(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(), seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.mu.Lock()
-	f.join("crewlet-qa", 500, gitlabDeveloperLevel) // a seat that used to exist
-	f.mu.Unlock()
-
-	res, err := reconcileWith(t, f, newRecordingSink(), seats,
-		func(o *gitlab.Options) { o.Decommission = true })
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(res.Decommissioned) != 1 {
-		t.Fatalf("decommissioned = %v, want the departed seat's account gone",
-			res.Decommissioned)
-	}
-	if findings := res.Findings(); len(findings) != 0 {
-		t.Errorf("a run that did what -decommission asked reported %+v", findings)
-	}
-}
-
-// A PERSON THE INSTANCE REFUSES TO DELETE is reported rather than aborting:
-// that refusal is GitLab catching what the scan should not have proposed,
-// so it is a signal about the prefix.
-func TestDecommissionReportsAnAccountTheInstanceWillNotDelete(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.mu.Lock()
-	f.join("crewlet-person", 600, gitlabDeveloperLevel)
-	f.people["crewlet-person"] = true
-	f.mu.Unlock()
-
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
-		func(o *gitlab.Options) { o.Decommission = true })
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(res.Decommissioned) != 0 {
-		t.Errorf("decommissioned %v", res.Decommissioned)
-	}
-	found := false
-	for _, note := range res.Notes {
-		if strings.Contains(note, "not catching people") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("notes = %q", res.Notes)
-	}
-}
-
-// A COPY-PASTED VARIABLE IS CAUGHT AT THE INSTANCE. Minting over it would
-// hand this seat a second identity while the other keeps authenticating as
-// one account from two places, and nothing would report it.
-func TestATokenBelongingToAnotherAccountStopsTheRun(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.mu.Lock()
-	f.users["crewlet-qa"] = 700
-	f.tokens[700] = []*gitlab.Token{{
-		ID: 7001, Name: gitlab.TokenName("qa"), Value: "glpat-qa",
-	}}
-	f.mu.Unlock()
-	sink.seed("GITLAB_TOKEN_SWE", "glpat-qa")
-
-	if _, err := reconcileAgainst(t, f, sink, seats); err == nil {
-		t.Fatal("a token belonging to another account was accepted")
-	} else if !strings.Contains(err.Error(), "different account") {
-		t.Errorf("error = %v", err)
-	}
-}
-
-// "CANNOT TELL" LEAVES THE SEAT EXACTLY AS IT WAS.
-func TestAnUnverifiableTokenIsLeftAloneWithANote(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	before := sink.value("GITLAB_TOKEN_SWE")
-	f.forget()
-	f.mu.Lock()
-	f.identityFails = true
-	f.mu.Unlock()
-
-	res, err := reconcileAgainst(t, f, sink, seats)
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(res.Rotated) != 0 || len(res.Kept) != 1 {
-		t.Fatalf("rotated %v, kept %v", res.Rotated, res.Kept)
-	}
-	if sink.value("GITLAB_TOKEN_SWE") != before {
-		t.Error("a token that could not be checked was replaced")
-	}
-	found := false
-	for _, note := range res.Notes {
-		if strings.Contains(note, "could not check") {
-			found = true
-		}
-	}
-	if !found {
-		t.Errorf("notes = %q", res.Notes)
-	}
-	if f.revoked() != 0 {
-		t.Errorf("%d tokens were revoked on an unverifiable seat", f.revoked())
 	}
 }
 
@@ -2293,7 +1640,7 @@ func TestOnFreeTheHookFallsBackToTheProjects(t *testing.T) {
 	f.noGroupHooks = true
 	sink := newRecordingSink()
 
-	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	res, err := reconcileAgainst(t, f, sink)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -2302,11 +1649,6 @@ func TestOnFreeTheHookFallsBackToTheProjects(t *testing.T) {
 	}
 	if got := res.HookedOn; len(got) != 1 || got[0] != "nimbus/api" {
 		t.Errorf("HookedOn = %v, want the project", got)
-	}
-	// AND THE TOKENS SURVIVED. The bug this covers was not "no webhook" —
-	// it was a rollback that revoked every credential the run had minted.
-	if sink.value("GITLAB_TOKEN_SWE") == "" {
-		t.Error("the run rolled back and revoked what it had minted")
 	}
 	// SAID OUT LOUD, because the two are not interchangeable: a project
 	// added to the group later is covered by a group hook and not by
@@ -2323,7 +1665,7 @@ func TestOnPremiumTheHookGoesOnTheGroup(t *testing.T) {
 	f := newAdminInstance()
 	sink := newRecordingSink()
 
-	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	res, err := reconcileAgainst(t, f, sink)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -2343,7 +1685,6 @@ func TestGroupWebhookFalseNeverTouchesTheGroup(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
 			o.Config.Provisioning.GroupWebhook = config.ContainerWebhookNever
 		})
@@ -2369,7 +1710,6 @@ func TestGroupWebhookTrueFailsRatherThanFallingBack(t *testing.T) {
 	f := newAdminInstance()
 	f.noGroupHooks = true
 	_, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
 			o.Config.Provisioning.GroupWebhook = config.ContainerWebhookRequire
 		})
@@ -2391,8 +1731,7 @@ func TestABadCredentialDoesNotLookLikeAFreeInstance(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	f.hookStatus = http.StatusUnauthorized
-	_, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	_, err := reconcileAgainst(t, f, newRecordingSink())
 	if err == nil {
 		t.Fatal("an unauthorized group-hooks call was treated as success")
 	}
@@ -2408,7 +1747,6 @@ func TestPerProjectHooksWithNoProjectsRefuses(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	_, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
 			o.Config.Provisioning.GroupWebhook = config.ContainerWebhookNever
 			o.Config.Provisioning.Projects = nil
@@ -2432,8 +1770,7 @@ func TestAnExistingProjectHookIsUpdated(t *testing.T) {
 	f.projectHooks = map[string][]hookRow{
 		"nimbus/api": {namedHook(4, "crewlet", "https://crewlet.example.com/webhooks/gitlab")},
 	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if len(f.projectHooks["nimbus/api"]) != 1 {
@@ -2459,60 +1796,22 @@ func TestAMissingProjectIsSkippedRatherThanFatal(t *testing.T) {
 	f.missingProjects = map[string]bool{"nimbus/gone": true}
 	sink := newRecordingSink()
 
-	res, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+	res, err := reconcileWith(t, f, sink,
 		func(o *gitlab.Options) {
 			o.Config.Provisioning.Projects = []string{"nimbus/api", "nimbus/gone"}
 		})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	// THE REST RECONCILED. The seat has its token and its membership of
-	// the project that does exist.
-	if sink.value("GITLAB_TOKEN_SWE") == "" {
-		t.Error("the run rolled back and revoked what it had minted")
-	}
-	if len(f.projectMembers["nimbus/api"]) != 1 {
-		t.Errorf("the seat did not join the project that exists: %v", f.projectMembers)
-	}
-	if len(f.projectMembers["nimbus/gone"]) != 0 {
-		t.Errorf("the seat was added to a project that does not exist: %v",
-			f.projectMembers["nimbus/gone"])
+	// THE REST RECONCILED: the project that exists carries the hook.
+	if res.Hooked == "" {
+		t.Error("the run registered no hook over the project that exists")
 	}
 	// AND IT SAID WHAT IT SKIPPED, with the fix: an operator who is not
 	// told cannot know why an agent never sees that repository.
 	notes := strings.Join(res.Notes, "\n")
 	if !strings.Contains(notes, "nimbus/gone") || !strings.Contains(notes, "re-run") {
 		t.Errorf("notes do not name the skipped project and the fix: %v", res.Notes)
-	}
-}
-
-// THE CHECK RUNS BEFORE ANYTHING IS MUTATED, so a missing project cannot
-// leave half a reconcile behind for the operator to reason about.
-func TestProjectsAreCheckedBeforeAnySeatIsTouched(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.missingProjects = map[string]bool{"nimbus/gone": true}
-	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
-		func(o *gitlab.Options) {
-			o.Config.Provisioning.Projects = []string{"nimbus/gone", "nimbus/api"}
-		}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	probe, firstWrite := -1, -1
-	for i, call := range f.calls {
-		if probe < 0 && call == "GET /projects/nimbus/gone" {
-			probe = i
-		}
-		if firstWrite < 0 && strings.HasPrefix(call, "POST ") {
-			firstWrite = i
-		}
-	}
-	if probe < 0 || firstWrite < 0 {
-		t.Fatalf("expected both a probe and a write: %v", f.calls)
-	}
-	if probe > firstWrite {
-		t.Errorf("the project was probed at %d, after the first write at %d", probe, firstWrite)
 	}
 }
 
@@ -2525,7 +1824,6 @@ func TestAForbiddenProjectIsNotSilentlySkipped(t *testing.T) {
 	f := newAdminInstance()
 	f.projectStatus = http.StatusForbidden
 	_, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
 			o.Config.Provisioning.Projects = []string{"nimbus/api"}
 		})
@@ -2549,7 +1847,7 @@ func TestAnUnsetSigningSecretIsMintedAndRecorded(t *testing.T) {
 	f := newAdminInstance()
 	sink := newRecordingSink()
 
-	res, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+	res, err := reconcileWith(t, f, sink,
 		func(o *gitlab.Options) {
 			o.SigningSecret = ""
 			o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
@@ -2604,7 +1902,6 @@ func TestAnUnsetLiteralSigningSecretIsRefused(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	_, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
 			o.SigningSecret = ""
 			o.SigningSecretVar = ""
@@ -2627,7 +1924,7 @@ func TestAResolvedSigningSecretIsNotReminted(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	if _, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+	if _, err := reconcileWith(t, f, sink,
 		func(o *gitlab.Options) {
 			o.SigningSecret = operatorSigningSecret
 			o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
@@ -2652,7 +1949,7 @@ func TestMintedSigningSecretsDiffer(t *testing.T) {
 	for range 8 {
 		f := newAdminInstance()
 		sink := newRecordingSink()
-		if _, err := reconcileWith(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"},
+		if _, err := reconcileWith(t, f, sink,
 			func(o *gitlab.Options) {
 				o.SigningSecret = ""
 				o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
@@ -2685,8 +1982,7 @@ func TestAGitLabThatCannotSignIsRefused(t *testing.T) {
 	f := newAdminInstance()
 	f.signsNothing = true
 
-	_, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	_, err := reconcileAgainst(t, f, newRecordingSink())
 	if err == nil {
 		t.Fatal("the run succeeded against an instance that ignores signing " +
 			"tokens, so the hook would deliver unsigned for ever")
@@ -2709,8 +2005,7 @@ func TestTheHookIsStillWrittenWhenTheConfirmationFails(t *testing.T) {
 	f := newAdminInstance()
 	f.signsNothing = true
 
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err == nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err == nil {
 		t.Fatal("expected the run to be refused")
 	}
 	f.mu.Lock()
@@ -2742,8 +2037,7 @@ func TestAGitLabThatCannotNameAHookIsRefusedAndLeavesNoHook(t *testing.T) {
 			f.noGroupHooks = level == "project"
 
 			for pass := 1; pass <= 2; pass++ {
-				_, err := reconcileAgainst(t, f, newRecordingSink(),
-					map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+				_, err := reconcileAgainst(t, f, newRecordingSink())
 				if err == nil {
 					t.Fatalf("pass %d succeeded against an instance that does not keep a hook's name", pass)
 				}
@@ -2777,7 +2071,6 @@ func TestRotateReplacesTheSigningSecret(t *testing.T) {
 	run := func(rotate bool, resolved string) string {
 		f, sink := newAdminInstance(), newRecordingSink()
 		if _, err := reconcileWith(t, f, sink,
-			map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 			func(o *gitlab.Options) {
 				o.SigningSecret = resolved
 				o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
@@ -2813,12 +2106,11 @@ func TestRotateReplacesTheSigningSecret(t *testing.T) {
 func TestRotateReportsASigningSecretItCannotReplace(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, func(o *gitlab.Options) {
-			o.SigningSecret = operatorSigningSecret
-			o.SigningSecretVar = "" // not a ${VAR}: nowhere to record one
-			o.Rotate = true
-		})
+	res, err := reconcileWith(t, f, newRecordingSink(), func(o *gitlab.Options) {
+		o.SigningSecret = operatorSigningSecret
+		o.SigningSecretVar = "" // not a ${VAR}: nowhere to record one
+		o.Rotate = true
+	})
 	if err != nil {
 		t.Fatalf("the run was refused over a signing secret it was not asked "+
 			"to rotate: %v", err)
@@ -2869,303 +2161,6 @@ func TestARotatePlanOverALiteralSaysItLeavesTheSecretAlone(t *testing.T) {
 
 // --- instance mode -------------------------------------------------------- //
 
-// AN INSTANCE SERVICE ACCOUNT IS CREATED ON THE INSTANCE ROUTE, and is still
-// made a member of the company's group — that is what gives a seat access to
-// the repositories, and it is what keeps a decommission scan scoped.
-func TestInstanceModeCreatesOnTheInstanceRoute(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	// The group route is refused, so a run that fell back to it fails
-	// rather than passing by accident. And the credential IS an admin
-	// token, which is what instance mode requires and what makes the
-	// /users/:id mint permitted at all.
-	f.instanceOnly, f.instanceAdmin = true, true
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if len(res.Created) != 1 {
-		t.Fatalf("result = %+v", res)
-	}
-	if !f.called("POST /service_accounts") {
-		t.Errorf("the instance route was never used: %v", f.calls)
-	}
-	if !f.called("POST /groups/7/members") {
-		t.Errorf("the account was not made a group member: %v", f.calls)
-	}
-}
-
-// THE DEFAULT IS THE GROUP ROUTE, which is the only shape GitLab.com has.
-func TestTheDefaultModeCreatesUnderTheGroup(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.noInstanceRoute = true
-	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-		func(*gitlab.Options) {}); err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	if !f.called("POST /groups/7/service_accounts") {
-		t.Errorf("the group route was never used: %v", f.calls)
-	}
-	if f.called("POST /service_accounts") {
-		t.Errorf("the instance route was used by default: %v", f.calls)
-	}
-}
-
-// GITLAB.COM DOES NOT SERVE THE ROUTE AT ALL, and a bare 404 tells an
-// operator nothing about which of their two flags was wrong.
-func TestInstanceModeOnAnInstanceThatHasNoSuchRouteSaysSo(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.noInstanceRoute = true
-	_, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
-	if err == nil {
-		t.Fatal("the run succeeded on an instance without the route")
-	}
-	if !strings.Contains(err.Error(), "self-managed only") {
-		t.Errorf("error = %v", err)
-	}
-}
-
-// A 403 MEANS TWO DIFFERENT THINGS depending on the mode, so the message has
-// to name the credential this mode actually needs.
-func TestEachModesRefusalNamesTheCredentialItNeeds(t *testing.T) {
-	t.Parallel()
-	t.Run("instance", func(t *testing.T) {
-		t.Parallel()
-		f := newAdminInstance()
-		f.instanceForbidden = true
-		_, err := reconcileWith(t, f, newRecordingSink(),
-			map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-			func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
-		if err == nil || !strings.Contains(err.Error(), "INSTANCE ADMINISTRATOR") {
-			t.Errorf("error = %v", err)
-		}
-	})
-	t.Run("group", func(t *testing.T) {
-		t.Parallel()
-		f := newAdminInstance()
-		f.instanceOnly = true
-		_, err := reconcileWith(t, f, newRecordingSink(),
-			map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-			func(*gitlab.Options) {})
-		if err == nil || !strings.Contains(err.Error(), "Owner of provisioning.group") {
-			t.Errorf("error = %v", err)
-		}
-	})
-}
-
-// AN ACCOUNT THAT ALREADY EXISTS IS FOUND WHATEVER OWNS IT, which is what
-// makes switching modes safe: the lookup is /users?username=, and an
-// operator moving a company between modes must not collide with its own
-// usernames.
-func TestSwitchingModesFindsTheAccountsTheCompanyAlreadyHas(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	// Instance mode holds an admin token, which is what permits the
-	// /users/:id mint at all; a group Owner is refused there.
-	f.instanceAdmin = true
-	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-		func(*gitlab.Options) {}); err != nil {
-		t.Fatalf("group run: %v", err)
-	}
-	f.instanceForbidden = true // a second create would fail
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
-	if err != nil {
-		t.Fatalf("instance run: %v", err)
-	}
-	if len(res.Created) != 0 {
-		t.Errorf("the second run created %v", res.Created)
-	}
-}
-
-// THE DELETE ROUTE IS NOT INTERCHANGEABLE. The group route answers "no such
-// account" for one the instance owns, which a caller reads as "already gone"
-// — a decommission that silently kept every credential it was asked to
-// destroy.
-func TestInstanceModeDecommissionsDownTheInstanceRoute(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	// Instance mode holds an admin token, which is what permits the
-	// /users/:id mint at all; a group Owner is refused there.
-	f.instanceAdmin = true
-	instance := func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance }
-	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}", "qa": "${GITLAB_TOKEN_QA}"},
-		instance); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-		func(o *gitlab.Options) { instance(o); o.Decommission = true })
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if len(res.Decommissioned) != 1 || res.Decommissioned[0] != "crewlet-qa" {
-		t.Fatalf("decommissioned = %v", res.Decommissioned)
-	}
-	if f.hasUser("crewlet-qa") {
-		t.Error("the account is still live")
-	}
-}
-
-// AN UNKNOWN MODE IS REFUSED BEFORE ANYTHING IS TOUCHED: it decides which
-// endpoint every account is created on, and finding out from a 404 half way
-// through leaves an operator working out which seats landed.
-func TestAnUnknownModeIsRefused(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	_, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-		func(o *gitlab.Options) { o.Mode = gitlab.Mode("cluster") })
-	if err == nil {
-		t.Fatal("an unknown mode ran")
-	}
-	if !strings.Contains(err.Error(), "group, instance") {
-		t.Errorf("the error does not name the modes: %v", err)
-	}
-	if len(f.calls) != 0 {
-		t.Errorf("the instance was touched: %v", f.calls)
-	}
-}
-
-// A GROUP LISTING IS PAGED TO EXHAUSTION. It asked for one page and took
-// what came back — so on a group with more members than a page, every
-// managed account past the first was invisible to a decommission and stayed
-// live for ever, with the run reporting success.
-func TestADecommissionSeesPastTheFirstPageOfMembers(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	// 130 members, and the 128 people SORT BEFORE the managed accounts —
-	// so both of those land on page two, which is the only arrangement
-	// that can tell a paged walk from a single-page one.
-	for i := range 128 {
-		f.addPerson(fmt.Sprintf("aaa-person-%03d", i))
-	}
-	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}", "qa": "${GITLAB_TOKEN_QA}"},
-		func(*gitlab.Options) {}); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"},
-		func(o *gitlab.Options) { o.Decommission = true })
-	if err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if len(res.Decommissioned) != 1 || res.Decommissioned[0] != "crewlet-qa" {
-		t.Fatalf("decommissioned = %v", res.Decommissioned)
-	}
-}
-
-// A GROUP OWNER MINTS THROUGH THE GROUP, because that is the only route it
-// may use.
-//
-// `POST /users/:id/personal_access_tokens` is INSTANCE ADMIN ONLY, and on
-// gitlab.com nobody is an instance admin. So a run that created a service
-// account through the group route, which a group Owner may do, and then
-// minted through the admin one got a 403 on every seat, for ever: an account
-// existed with no token, the seat authenticated as nobody, and the card said
-// the sync would take care of it.
-func TestAGroupOwnerUsesTheGroupRouteForEveryTokenOperation(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	// NOT AN ADMIN, which is every gitlab.com credential: the fake refuses
-	// the /users/:id route, exactly as the real instance does.
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
-	if err != nil {
-		t.Fatalf("a group Owner could not provision a seat: %v", err)
-	}
-	if len(res.Created) != 1 {
-		t.Fatalf("result = %+v", res)
-	}
-
-	// THE GROUP'S OWN ROUTES, and never the instance's. All three of them:
-	// the mint 403s outright, the list 401s on the NEXT pass after minting
-	// had already succeeded, and the revoke fails inside a rollback where
-	// the message says a live credential was left behind.
-	for _, call := range f.calls {
-		// `/personal_access_tokens/self` is the one token route every
-		// access token may call — it describes the caller's own token.
-		if !strings.Contains(call, "/personal_access_tokens") ||
-			strings.HasSuffix(call, "/personal_access_tokens/self") {
-			continue
-		}
-		if !strings.Contains(call, "/service_accounts/") {
-			t.Errorf("a token operation went through %q, which a group Owner "+
-				"may not call: on gitlab.com nobody is an instance admin", call)
-		}
-	}
-
-	// AND A SECOND PASS IS THE ONE THAT LISTS. The first mints; the next
-	// reads the tokens back to decide whether to keep what it finds, and
-	// that read is the admin listing unless it goes through the group.
-	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil); err != nil {
-		t.Fatalf("a second pass could not read the tokens it had minted: %v", err)
-	}
-}
-
-// A NAME GITLAB HAS NOT RELEASED YET IS A DELETION STILL RUNNING.
-//
-// GitLab removes a user asynchronously: the account is gone from every
-// listing the moment the delete is accepted, and its username and email stay
-// reserved until a background job finishes. So a disconnect followed by a
-// reconnect inside that window looks the account up, honestly does not find
-// it, creates one, and is refused with "has already been taken".
-//
-// Reported as an ordinary failure it read as "the last pass could not read
-// this integration", which sends an operator looking for an outage over a
-// state that clears itself on the next tick. Named, the caller can say what
-// is actually happening.
-func TestANameStillBeingReleasedIsNotAFailureToRead(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.createRefusal = &refusal{
-		status: http.StatusBadRequest,
-		body:   `{"message":"400 Bad request - Email has already been taken and Username has already been taken"}`,
-	}
-
-	_, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
-	if err == nil {
-		t.Fatal("a refused creation was reported as a clean run")
-	}
-	if !errors.Is(err, gitlab.ErrNameReserved) {
-		t.Fatalf("error = %v, and nothing marks it as a deletion still running", err)
-	}
-}
-
-// AND EVERY OTHER 400 IS STILL A REFUSAL. A creation GitLab rejected for a
-// reason of its own is not something a later tick fixes, and dressing one as
-// work in progress would leave a card reporting progress for ever.
-func TestAnOrdinaryRefusalIsNotDressedAsProgress(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.createRefusal = &refusal{
-		status: http.StatusBadRequest,
-		body:   `{"message":"400 Bad request - Name is too long"}`,
-	}
-
-	_, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
-	if err == nil {
-		t.Fatal("a refused creation was reported as a clean run")
-	}
-	if errors.Is(err, gitlab.ErrNameReserved) {
-		t.Fatalf("an unrelated refusal reads as a deletion still running: %v", err)
-	}
-}
-
 // A FREE GROUP TAKES THE REGISTRATION AND NEVER DELIVERS, which no error can
 // tell you.
 //
@@ -3181,7 +2176,7 @@ func TestAFreeTierGroupHooksTheProjectsWithoutTrying(t *testing.T) {
 	f.plan = "free"
 	sink := newRecordingSink()
 
-	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	res, err := reconcileAgainst(t, f, sink)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -3212,7 +2207,7 @@ func TestAnInstanceThatNamesNoPlanKeepsTheGroupHook(t *testing.T) {
 	f.plan = ""
 	sink := newRecordingSink()
 
-	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	res, err := reconcileAgainst(t, f, sink)
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -3225,183 +2220,6 @@ func TestAnInstanceThatNamesNoPlanKeepsTheGroupHook(t *testing.T) {
 }
 
 // --- reading before writing ----------------------------------------------- //
-
-// A CONVERGED PASS SENDS NO MEMBERSHIP WRITE AT ALL.
-//
-// It used to send one POST per seat to the group and one per seat per project
-// on every pass, for ever, and GitLab answered every one of them with a 409
-// the client read as success. That is the shape [integration.Reconciler]'s
-// contract forbids: the loop runs this every few minutes for the life of the
-// deployment, so a write here is a third-party-app mutation on a timer.
-func TestASecondPassSendsNoMembershipItAlreadyRead(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE", "cto": "GITLAB_TOKEN_CTO"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.forget()
-
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	for _, unwanted := range []string{
-		"POST /groups/7/members", "POST /projects/nimbus/api/members",
-	} {
-		if f.called(unwanted) {
-			t.Errorf("a converged pass sent %s", unwanted)
-		}
-	}
-	// AND IT READ INSTEAD. The point is not that the write vanished but
-	// that the pass now knows what the instance holds.
-	for _, wanted := range []string{
-		"GET /groups/7/members", "GET /projects/nimbus/api/members",
-	} {
-		if !f.called(wanted) {
-			t.Errorf("the pass never read %s, so it cannot know what to write", wanted)
-		}
-	}
-}
-
-// A CHANGED ACCESS LEVEL REACHES A MEMBERSHIP THAT ALREADY EXISTS.
-//
-// This is the bug the swallowed 409 was hiding. Adding was the only thing the
-// pass could do and GitLab answers a second add with a conflict and changes
-// nothing, so editing provisioning.access_level did NOTHING for a seat that
-// already had a membership: the company document said maintainer, the
-// instance kept developer, and every pass reported converged for the life of
-// the deployment.
-func TestAChangedAccessLevelReachesAnExistingMembership(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.mu.Lock()
-	id := f.users["crewlet-swe"]
-	if got := f.groupMembers[id]; got != gitlabDeveloperLevel {
-		f.mu.Unlock()
-		t.Fatalf("the first run joined at %d, want the default developer level", got)
-	}
-	f.mu.Unlock()
-
-	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
-		o.Config.Provisioning.AccessLevel = config.GitLabMaintainer
-	}); err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if got := f.groupMembers[id]; got != gitlabMaintainerLevel {
-		t.Errorf("the group membership is at %d after the config said maintainer; "+
-			"the instance keeps the old level and every pass reports converged", got)
-	}
-	if got := f.projectMembers["nimbus/api"][id]; got != gitlabMaintainerLevel {
-		t.Errorf("the project membership is at %d, want maintainer", got)
-	}
-}
-
-// AND A PER-SEAT OVERRIDE DOES TOO, which is the same drift reached from the
-// other config field. The plan carries it, resolved against the chart by
-// [gitlab.PlanFor], so the pass reads the seat's entry and nothing keyed on a
-// handle — a key in the config the plan did not resolve changes nothing.
-func TestAPerHandleAccessOverrideReachesAnExistingMembership(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE", "cto": "GITLAB_TOKEN_CTO"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
-		for i := range o.Plan.Seats {
-			if o.Plan.Seats[i].Handle == "cto" {
-				o.Plan.Seats[i].AccessLevel = string(config.GitLabMaintainer)
-			}
-		}
-	}); err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if got := f.groupMembers[f.users["crewlet-cto"]]; got != gitlabMaintainerLevel {
-		t.Errorf("the overridden seat is at %d, want maintainer", got)
-	}
-	// AND ONLY THAT SEAT. An override that moved everybody would be the
-	// opposite failure and just as silent.
-	if got := f.groupMembers[f.users["crewlet-swe"]]; got != gitlabDeveloperLevel {
-		t.Errorf("a seat with no override moved to %d", got)
-	}
-}
-
-// A SEAT THE ROSTER DOES NOT CARRY IS STILL ADDED. Reading first must not
-// turn into reading instead: an account somebody removed from the group by
-// hand is exactly what a reconcile is for.
-func TestAMembershipTheGroupLostIsPutBack(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	f.mu.Lock()
-	id := f.users["crewlet-swe"]
-	delete(f.groupMembers, id)
-	delete(f.projectMembers["nimbus/api"], id)
-	f.mu.Unlock()
-	f.forget()
-
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if _, member := f.groupMembers[id]; !member {
-		t.Error("the seat was left out of the group it had been removed from")
-	}
-	if _, member := f.projectMembers["nimbus/api"][id]; !member {
-		t.Error("the seat was left out of the project it had been removed from")
-	}
-}
-
-// A PROJECT'S MEMBERSHIP IS WALKED TO EXHAUSTION.
-//
-// The group listing already had this correction; the project one arrived with
-// it. A single-page read makes every member past the first hundred invisible,
-// and invisible here means the pass re-adds a seat that is already there — on
-// every pass, for ever, which is the clause it must not break.
-func TestAProjectMembershipPastTheFirstPageIsSeen(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	// 128 members whose usernames SORT BEFORE the managed account, so the
-	// seat lands on page two — the only arrangement that tells a paged
-	// walk from a single-page one.
-	f.mu.Lock()
-	for i := range 128 {
-		f.nextID++
-		f.projectMembers["nimbus/api"][f.nextID] = gitlabDeveloperLevel
-		f.users[fmt.Sprintf("aaa-person-%03d", i)] = f.nextID
-	}
-	f.mu.Unlock()
-	f.forget()
-
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("second run: %v", err)
-	}
-	if f.called("POST /projects/nimbus/api/members") {
-		t.Error("the seat was re-added to a project it is already in, so the " +
-			"membership read stopped at the first page")
-	}
-}
 
 // --- the hook, written only on a difference -------------------------------- //
 
@@ -3417,13 +2235,12 @@ func TestAConvergedGroupHookIsNotRewritten(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 	f.forget()
 
-	res, err := reconcileAgainst(t, f, sink, seats)
+	res, err := reconcileAgainst(t, f, sink)
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -3459,15 +2276,14 @@ func TestAConvergedProjectHookIsNotRewritten(t *testing.T) {
 	f := newAdminInstance()
 	f.plan = "free"
 	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+	if _, err := reconcileWith(t, f, sink, func(o *gitlab.Options) {
 		o.Config.Provisioning.Projects = []string{"nimbus/api", "nimbus/web"}
 	}); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 	f.forget()
 
-	res, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+	res, err := reconcileWith(t, f, sink, func(o *gitlab.Options) {
 		o.Config.Provisioning.Projects = []string{"nimbus/api", "nimbus/web"}
 	})
 	if err != nil {
@@ -3496,8 +2312,7 @@ func TestARotatedSigningSecretIsWrittenToAHookThatLooksConverged(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+	if _, err := reconcileWith(t, f, sink, func(o *gitlab.Options) {
 		o.SigningSecret = ""
 		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
 	}); err != nil {
@@ -3506,7 +2321,7 @@ func TestARotatedSigningSecretIsWrittenToAHookThatLooksConverged(t *testing.T) {
 	minted := sink.value("GITLAB_SIGNING_SECRET")
 	f.forget()
 
-	if _, err := reconcileWith(t, f, sink, seats, func(o *gitlab.Options) {
+	if _, err := reconcileWith(t, f, sink, func(o *gitlab.Options) {
 		o.SigningSecret = minted
 		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
 		o.Rotate = true
@@ -3539,8 +2354,7 @@ func TestAHookThatLostARoutedEventIsPutBack(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 	f.mu.Lock()
@@ -3548,7 +2362,7 @@ func TestAHookThatLostARoutedEventIsPutBack(t *testing.T) {
 	f.mu.Unlock()
 	f.forget()
 
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	f.mu.Lock()
@@ -3568,8 +2382,7 @@ func TestAHookSubscribedToWhatNothingRoutesIsPutBack(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 	f.mu.Lock()
@@ -3577,7 +2390,7 @@ func TestAHookSubscribedToWhatNothingRoutesIsPutBack(t *testing.T) {
 	f.mu.Unlock()
 	f.forget()
 
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	f.mu.Lock()
@@ -3597,8 +2410,7 @@ func TestAHookWithTLSVerificationOffIsPutBack(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 	f.mu.Lock()
@@ -3606,7 +2418,7 @@ func TestAHookWithTLSVerificationOffIsPutBack(t *testing.T) {
 	f.mu.Unlock()
 	f.forget()
 
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	f.mu.Lock()
@@ -3630,8 +2442,7 @@ func TestAHookWithNoSigningTokenIsAlwaysWritten(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 	// Everything else exactly as the pass left it — only the signing
@@ -3641,7 +2452,7 @@ func TestAHookWithNoSigningTokenIsAlwaysWritten(t *testing.T) {
 	f.mu.Unlock()
 	f.forget()
 
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
+	if _, err := reconcileAgainst(t, f, sink); err != nil {
 		t.Fatalf("second run: %v", err)
 	}
 	f.mu.Lock()
@@ -3679,8 +2490,7 @@ func TestACancelledPassWithNothingToDoIsStillAFault(t *testing.T) {
 	cancel()
 
 	res, err := gitlab.Reconcile(ctx, gitlab.Options{
-		Client: client, Config: enabledGitLab(), Plan: &provision.Plan{},
-		Sink: newRecordingSink(),
+		Client: client, Config: enabledGitLab(), Sink: newRecordingSink(),
 	})
 	if err == nil {
 		t.Fatalf("a cancelled pass answered %+v, which the loop reads as a "+
@@ -3688,249 +2498,6 @@ func TestACancelledPassWithNothingToDoIsStillAFault(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("the fault does not name the cancellation: %v", err)
-	}
-}
-
-// AND SO DOES ONE WITH SEATS, which is the same claim reached the other way:
-// the guard is at the top of the pass rather than beside the one early return
-// that happened to have the hole.
-func TestACancelledPassWithSeatsMakesNoRequest(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	srv := httptest.NewServer(http.HandlerFunc(f.serve))
-	t.Cleanup(srv.Close)
-	client, err := gitlab.NewClient(gitlab.ClientOptions{
-		URL: srv.URL, Token: adminToken, HTTP: srv.Client(),
-	})
-	if err != nil {
-		t.Fatalf("NewClient: %v", err)
-	}
-	plan := &provision.Plan{}
-	plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if _, err := gitlab.Reconcile(ctx, gitlab.Options{
-		Client: client, Config: enabledGitLab(), Plan: plan,
-		Sink: newRecordingSink(),
-	}); err == nil {
-		t.Fatal("a cancelled pass with work outstanding reported success")
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if len(f.calls) != 0 {
-		t.Errorf("a cancelled pass still talked to the instance: %v", f.calls)
-	}
-}
-
-// AN ACCOUNT THAT CANNOT AUTHENTICATE IS REPORTED, NOT MINTED AT — AND THE
-// TOKENS ALREADY MINTED FOR IT ARE SWEPT.
-//
-// This is the loop, and it needs three things to be true at once, which is
-// why it is one case rather than three.
-//
-// A pass mints because the seat's STORED token was refused, and reads that
-// refusal as "the credential is stale" — which is right, except when it is
-// the account GitLab is refusing rather than the credential. Then the new
-// token is refused for the same reason, the next pass reads it as stale
-// again, and the run mints for ever. Measured against gitlab.com: 144 live
-// `api`-scoped tokens on one service account, valid for a year, none of which
-// had ever worked, plus twenty more from a slower build of the same loop.
-//
-// Nothing retired them, because [gitlab.Client.Tokens] read one unpaged page
-// — the oldest twenty, every one already revoked — so `retirePrevious`
-// revoked nothing and reported success.
-//
-// So: mint at most once, prove it, and if a token this pass created seconds
-// ago is itself refused, sweep every token this tool owns on that account and
-// say what is wrong. A seat is left with NO credential, deliberately: the
-// alternative is the pile above.
-func TestAnAccountThatCannotAuthenticateIsSweptRatherThanMintedAt(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-
-	// PASS ONE creates the account and mints its first token. Nothing is
-	// wrong yet — this is the healthy connect.
-	if _, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"}); err != nil {
-		t.Fatalf("first pass: %v", err)
-	}
-	userID := f.userID(t, "crewlet-swe")
-	sealed := sink.values["T_SWE"]
-	if sealed == "" {
-		t.Fatal("precondition: the first pass sealed no token")
-	}
-
-	// AND THEN THE ACCOUNT GOES BAD — or, in the field, was never good:
-	// GitLab refuses everything it presents, however new.
-	f.setUnusable(userID)
-
-	// Three passes, which is what a reconcile loop does in half a minute.
-	for pass := 2; pass <= 4; pass++ {
-		res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"})
-		if err != nil {
-			t.Fatalf("pass %d: %v", pass, err)
-		}
-		if !slices.Contains(res.Unusable, "swe") {
-			t.Fatalf("pass %d reported Unusable = %v, want swe", pass, res.Unusable)
-		}
-		if len(res.Rotated) != 0 {
-			t.Errorf("pass %d rotated %v: a token that was refused on sight "+
-				"must not be reported as this seat's credential", pass, res.Rotated)
-		}
-	}
-
-	// THE INVARIANT THE INCIDENT BROKE: nothing accumulates. Every token
-	// this tool minted on the account is revoked, including the one the
-	// last pass made a moment ago.
-	if live := f.liveTokensOf(userID); live != 0 {
-		t.Errorf("the account holds %d live token(s) after three refused "+
-			"passes, want 0 — this is the pile that reached 144", live)
-	}
-
-	// AND NO REFUSED TOKEN IS EVER SEALED. The variable still holds what
-	// the healthy pass put there — which is stale, and says so through the
-	// finding below rather than by being overwritten with something that
-	// works no better. Recording a refused token would both hand the engine
-	// a credential that cannot authenticate and, because sealing
-	// re-activates the revision, wake the pass that seals the next one.
-	if got := sink.values["T_SWE"]; got != sealed {
-		t.Errorf("T_SWE moved from %q to %q: a token GitLab refused on sight "+
-			"was sealed as this seat's credential", sealed, got)
-	}
-
-	// THE OPERATOR IS TOLD, as a seat's identity failing rather than as a
-	// surface fault: no retry fixes this and the engine is not working on it.
-	res, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"})
-	if err != nil {
-		t.Fatalf("final pass: %v", err)
-	}
-	var kinds []integration.FindingKind
-	for _, finding := range res.Findings() {
-		kinds = append(kinds, finding.Kind)
-	}
-	if !slices.Contains(kinds, integration.FindingIdentityFailed) {
-		t.Fatalf("findings = %v, want an identity_failed naming the seat", kinds)
-	}
-	phase, actor := integration.FindingIdentityFailed.Verdict()
-	if !actor.WaitsOnAPerson() {
-		t.Errorf("identity_failed is %s/%s, which does not ask anybody to act "+
-			"— nothing in this engine can fix an account GitLab refuses",
-			phase, actor)
-	}
-}
-
-// A SERVICE ACCOUNT IS CREATED WITH NO ADDRESS, and the absent key is the
-// whole of it.
-//
-// GitLab's service-account routes take `email` as optional and generate one
-// under the instance's own noreply domain when it is omitted. A CUSTOM address
-// "requires confirmation before the account is active" — and every address
-// this tool could derive is undeliverable by construction, so confirmation
-// never arrives and the account is permanently inactive. See the case above
-// for what that cost.
-func TestAServiceAccountIsCreatedWithNoAddress(t *testing.T) {
-	t.Parallel()
-	for _, mode := range []struct {
-		name  string
-		route string
-		tune  func(*gitlab.Options)
-	}{
-		{"group", "POST /groups/7/service_accounts", func(*gitlab.Options) {}},
-		{"instance", "POST /service_accounts", func(o *gitlab.Options) {
-			o.Mode = gitlab.ModeInstance
-		}},
-	} {
-		t.Run(mode.name, func(t *testing.T) {
-			t.Parallel()
-			f := newAdminInstance()
-			f.instanceAdmin = mode.name == "instance"
-			if _, err := reconcileWith(t, f, newRecordingSink(),
-				map[string]string{"swe": "T_SWE"}, mode.tune); err != nil {
-				t.Fatalf("reconcile: %v", err)
-			}
-			if !f.called(mode.route) {
-				t.Fatalf("no account was created down %s", mode.route)
-			}
-			for _, body := range f.creates() {
-				if _, sent := body["email"]; sent {
-					t.Errorf("the create sent email=%v; GitLab must name the "+
-						"address, because one this tool derives needs a "+
-						"confirmation that can never arrive", body["email"])
-				}
-				if body["username"] != "crewlet-swe" {
-					t.Errorf("the create sent username=%v", body["username"])
-				}
-			}
-		})
-	}
-}
-
-// THE TOKEN LIST IS PAGED TO EXHAUSTION, because a destructive decision is
-// made from it.
-//
-// It read one default page — TWENTY rows — and both callers treat what comes
-// back as the whole truth: `retirePrevious` revokes this tool's earlier
-// tokens, and the decommission sweep empties an account it is deleting. A
-// truncated read is not a slow report there; it is a live `api`-scoped
-// credential left behind by a run that said it cleaned up.
-func TestTheTokenListIsPagedToExhaustion(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-
-	if _, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"}); err != nil {
-		t.Fatalf("first pass: %v", err)
-	}
-	userID := f.userID(t, "crewlet-swe")
-
-	// A PILE LIKE THE ONE THE FIELD FOUND, well past one page and past
-	// two, so a loop that stopped after the first is caught and so is one
-	// that stopped after any fixed number.
-	f.pileTokens(userID, gitlab.TokenName("swe"), 150)
-	if live := f.liveTokensOf(userID); live != 151 {
-		t.Fatalf("precondition: %d live tokens, want 151", live)
-	}
-
-	// A ROTATION, which is the gesture that retires what came before.
-	if _, err := reconcileWith(t, f, sink, map[string]string{"swe": "T_SWE"},
-		func(o *gitlab.Options) { o.Rotate = true }); err != nil {
-		t.Fatalf("rotate: %v", err)
-	}
-
-	// EXACTLY THE NEW ONE SURVIVES. Unpaged, 131 of these stayed live and
-	// the run reported a successful rotation.
-	if live := f.liveTokensOf(userID); live != 1 {
-		t.Errorf("%d live tokens after a rotation, want 1: every token this "+
-			"tool minted earlier should have been revoked", live)
-	}
-}
-
-// AN ADMINISTRATOR'S OWN TOKEN SURVIVES THE SWEEP, which is what keeps the
-// two cases above from being a licence to empty an account.
-//
-// The name is the only thing separating a token this tool minted from one a
-// person created by hand, and revoking the second breaks whatever is using it
-// — silently, since nothing here knows what that is.
-func TestTheSweepLeavesTokensThisToolDidNotMint(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	sink := newRecordingSink()
-	if _, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"}); err != nil {
-		t.Fatalf("first pass: %v", err)
-	}
-	userID := f.userID(t, "crewlet-swe")
-	f.pileTokens(userID, "deploy-key-do-not-touch", 3)
-	f.setUnusable(userID)
-
-	if _, err := reconcileAgainst(t, f, sink, map[string]string{"swe": "T_SWE"}); err != nil {
-		t.Fatalf("second pass: %v", err)
-	}
-
-	// The three are all that is left: this tool's own are gone, and the
-	// sweep for an unusable account is the most destructive path there is.
-	if live := f.liveTokensOf(userID); live != 3 {
-		t.Errorf("%d live tokens, want the 3 this tool never minted", live)
 	}
 }
 
@@ -4006,8 +2573,7 @@ func TestTheHooksLeftAtAMovedAddressAreRemoved(t *testing.T) {
 		namedHook(1, "crewlet", "https://old-tunnel.example.com/webhooks/gitlab"),
 		namedHook(2, "crewlet", "https://older-tunnel.example.com/webhooks/gitlab"),
 	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4038,8 +2604,7 @@ func TestTheProjectHooksLeftAtAMovedAddressAreRemoved(t *testing.T) {
 			namedHook(2, "crewlet", "https://older-tunnel.example.com/webhooks/gitlab"),
 		},
 	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4064,8 +2629,7 @@ func TestAHookNamedByAnotherDeploymentIsLeftAlone(t *testing.T) {
 	f.hooks = []hookRow{
 		namedHook(1, "crewlet-staging", "https://staging.example.com/webhooks/gitlab"),
 	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4088,8 +2652,7 @@ func TestAHookSharingTheNameButNotThePathIsLeftAlone(t *testing.T) {
 	f.hooks = []hookRow{
 		namedHook(1, "crewlet", "https://someone-else.example.com/ci-trigger"),
 	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4106,8 +2669,7 @@ func TestAHookSharingTheNameButNotThePathIsLeftAlone(t *testing.T) {
 func TestEveryHookIsRegisteredUnderTheConfiguredName(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4134,7 +2696,6 @@ func TestTheGroupHookGoesWhenTheCompanyMovesToProjectHooks(t *testing.T) {
 		namedHook(1, "crewlet", "https://crewlet.example.com/webhooks/gitlab"),
 	}
 	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) {
 			o.Config.Provisioning.GroupWebhook = config.ContainerWebhookNever
 		}); err != nil {
@@ -4161,8 +2722,7 @@ func TestANamelessHookAtThisPathIsLeftAlone(t *testing.T) {
 	f.hooks = []hookRow{
 		foreignHook(9, "https://someone-else.example.com/webhooks/gitlab"),
 	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4205,13 +2765,11 @@ func TestAMovedPublicBaseRepointsTheHookRatherThanAddingOne(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) { o.WebhookBase = "https://first.example.com" }); err != nil {
 		t.Fatalf("first Reconcile: %v", err)
 	}
 	f.forget()
 	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) { o.WebhookBase = "https://second.example.com" }); err != nil {
 		t.Fatalf("second Reconcile: %v", err)
 	}
@@ -4243,8 +2801,7 @@ func TestTheProjectHooksGoWhenTheCompanyMovesUpToAGroupHook(t *testing.T) {
 	f.projectHooks = map[string][]hookRow{
 		"nimbus/api": {namedHook(1, "crewlet", "https://crewlet.example.com/webhooks/gitlab")},
 	}
-	res, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	res, err := reconcileAgainst(t, f, newRecordingSink())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -4272,8 +2829,7 @@ func TestTheProjectSweepLeavesSomebodyElsesHookAlone(t *testing.T) {
 	f.projectHooks = map[string][]hookRow{
 		"nimbus/api": {foreignHook(1, "https://someone-else.example.com/hook")},
 	}
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4311,8 +2867,7 @@ func TestTheProjectHookListingIsPagedToExhaustion(t *testing.T) {
 		"https://crewlet.example.com/webhooks/gitlab"))
 	f.projectHooks = map[string][]hookRow{"nimbus/api": rows}
 
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4335,8 +2890,7 @@ func TestTheGroupHookListingIsPagedToExhaustion(t *testing.T) {
 	f.hooks = append(f.hooks, namedHook(hookPageProbe+1, "crewlet",
 		"https://crewlet.example.com/webhooks/gitlab"))
 
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	f.mu.Lock()
@@ -4367,8 +2921,7 @@ func TestASecretRotatedOutsideARunIsWrittenToTheHook(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 
-	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, nil); err != nil {
+	if _, err := reconcileWith(t, f, newRecordingSink(), nil); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
 	f.forget()
@@ -4378,7 +2931,6 @@ func TestASecretRotatedOutsideARunIsWrittenToTheHook(t *testing.T) {
 	// reporting a signing token present.
 	const rotated = "whsec_Y3Jld2xldC1yb3RhdGVkLXNpZ25pbmcta2V5LTMyYnk="
 	if _, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
 		func(o *gitlab.Options) { o.SigningSecret = rotated }); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
@@ -4399,14 +2951,12 @@ func TestAnUnchangedSecretLeavesTheHookAlone(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
 	f.forget()
 
-	if _, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+	if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
 	f.mu.Lock()
@@ -4463,8 +3013,7 @@ func TestASecondPassDoesNotMintOverASigningSecretThisDeploymentSealed(t *testing
 		o.SigningSecretVar = "GITLAB_SIGNING_SECRET"
 	}
 
-	if _, err := reconcileWith(t, f, sink,
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, blind); err != nil {
+	if _, err := reconcileWith(t, f, sink, blind); err != nil {
 		t.Fatalf("first pass: %v", err)
 	}
 	minted := sink.value("GITLAB_SIGNING_SECRET")
@@ -4473,8 +3022,7 @@ func TestASecondPassDoesNotMintOverASigningSecretThisDeploymentSealed(t *testing
 	}
 	f.forget()
 
-	res, err := reconcileWith(t, f, sink,
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"}, blind)
+	res, err := reconcileWith(t, f, sink, blind)
 	if err != nil {
 		t.Fatalf("second pass: %v", err)
 	}
@@ -4492,112 +3040,6 @@ func TestASecondPassDoesNotMintOverASigningSecretThisDeploymentSealed(t *testing
 		if strings.Contains(note, "signing secret") {
 			t.Errorf("a pass that minted nothing reported %q", note)
 		}
-	}
-}
-
-// A RECONNECT AFTER A `remove_seats` DISCONNECT REPORTS THE BLOCKED ACCOUNT
-// RATHER THAN MINTING INTO IT.
-//
-// GitLab's service-account delete BLOCKS rather than erases (see
-// [adminInstance.blocked]), so the ordinary disconnect-then-reconnect leaves
-// an account that still exists, still answers the lookup, and can sign in
-// nowhere. The pass used to walk straight past that: it found the account,
-// minted a token, recorded it, and the very next request with that token was
-// refused — so every tick minted another one, and the card said `degraded`
-// with no word about why.
-//
-// The three things this pins are what a person needs and what a machine must
-// not do: the state is NAMED, the page that can change it is LINKED, and
-// nothing is minted into an account no credential can work on.
-func TestABlockedAccountIsReportedRatherThanMintedInto(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.blocks = true
-	sink := newRecordingSink()
-	seats := map[string]string{"swe": "GITLAB_TOKEN_SWE"}
-	if _, err := reconcileAgainst(t, f, sink, seats); err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	if _, err := tearDownAgainst(t, f, func(o *gitlab.TeardownOptions) {
-		o.RemoveSeats = true
-		o.Plan = &provision.Plan{}
-		o.Plan.Add(provision.Seat{Handle: "swe", Role: "SWE", TokenVar: "GITLAB_TOKEN_SWE"})
-	}); err != nil {
-		t.Fatalf("disconnect: %v", err)
-	}
-	f.mu.Lock()
-	id := f.users["crewlet-swe"]
-	before := len(f.tokens[id])
-	f.mu.Unlock()
-
-	res, err := reconcileAgainst(t, f, sink, seats)
-	if err != nil {
-		t.Fatalf("reconnect: %v", err)
-	}
-	if len(res.Blocked) != 1 || res.Blocked[0].Handle != "swe" ||
-		res.Blocked[0].State != "blocked" {
-		t.Fatalf("blocked = %+v, want the seat named with the state GitLab reports",
-			res.Blocked)
-	}
-	f.mu.Lock()
-	after := len(f.tokens[id])
-	f.mu.Unlock()
-	if after != before {
-		t.Errorf("minted %d token(s) into an account that can sign in nowhere",
-			after-before)
-	}
-
-	var got integration.Finding
-	for _, finding := range res.Findings() {
-		if finding.Subject == "swe" {
-			got = finding
-		}
-	}
-	if got.Kind != integration.FindingIdentityFailed {
-		t.Fatalf("findings = %+v, want the seat reported as identity_failed",
-			res.Findings())
-	}
-	if !strings.Contains(got.Detail, "blocked") {
-		t.Errorf("detail = %q, want the state GitLab reports", got.Detail)
-	}
-	// AND NOTHING IS LINKED IN GROUP MODE, which is the deliberate half:
-	// where a group Owner administers service accounts has moved between
-	// GitLab versions, so the finding says the state in words rather than
-	// sending somebody to a 404. See [TestAnInstanceLinksItsUserAdmin].
-	if got.ActionURL != "" {
-		t.Errorf("action_url = %q, want nothing guessed for a group-mode "+
-			"deployment", got.ActionURL)
-	}
-}
-
-// AND AN INSTANCE-MODE DEPLOYMENT GETS THE PAGE, because its credential is an
-// instance administrator by definition and /admin/users?filter=blocked is
-// where that person unblocks the account. Nobody else here can: unblocking is
-// POST /users/:id/unblock, an instance-admin route, so the finding is owed to
-// a human and has to reach them somewhere they can act.
-func TestAnInstanceLinksItsUserAdmin(t *testing.T) {
-	t.Parallel()
-	f := newAdminInstance()
-	f.instanceOnly, f.instanceAdmin = true, true
-	f.join("crewlet-swe", 502, gitlabDeveloperLevel)
-	f.mu.Lock()
-	f.blocked["crewlet-swe"] = true
-	f.mu.Unlock()
-
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"},
-		func(o *gitlab.Options) { o.Mode = gitlab.ModeInstance })
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
-	}
-	var got integration.Finding
-	for _, finding := range res.Findings() {
-		if finding.Subject == "swe" {
-			got = finding
-		}
-	}
-	if want := "https://gitlab.example.com/admin/users?filter=blocked"; got.ActionURL != want {
-		t.Errorf("action_url = %q, want %q", got.ActionURL, want)
 	}
 }
 
@@ -4620,8 +3062,7 @@ func TestAFreeGroupIsFoundWhenOnlyTheNamespaceSaysSo(t *testing.T) {
 	f.plan = ""
 	f.namespacePlan = "free"
 
-	res, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	res, err := reconcileAgainst(t, f, newRecordingSink())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -4659,8 +3100,7 @@ func TestAnInstanceThatStatesNoTierKeepsTheGroupHook(t *testing.T) {
 			f.plan = ""
 			tc.setup(f)
 
-			if _, err := reconcileAgainst(t, f, newRecordingSink(),
-				map[string]string{"swe": "GITLAB_TOKEN_SWE"}); err != nil {
+			if _, err := reconcileAgainst(t, f, newRecordingSink()); err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}
 			if len(f.hooks) != 1 {
@@ -4683,8 +3123,7 @@ func TestATierThatCouldNotBeReadIsNotFree(t *testing.T) {
 	f.plan = ""
 	f.namespaceFails = true
 
-	_, err := reconcileAgainst(t, f, newRecordingSink(),
-		map[string]string{"swe": "GITLAB_TOKEN_SWE"})
+	_, err := reconcileAgainst(t, f, newRecordingSink())
 	if err == nil {
 		t.Fatal("a pass that could not read the tier carried on and decided")
 	}
@@ -4719,8 +3158,7 @@ func TestTheOwnerTokenIsWarnedAboutOnlyInsideTheWindow(t *testing.T) {
 			t.Parallel()
 			f := newAdminInstance()
 			f.selfExpires = c.expires
-			res, err := reconcileWith(t, f, newRecordingSink(),
-				map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+			res, err := reconcileWith(t, f, newRecordingSink(), nil)
 			if err != nil {
 				t.Fatalf("reconcile: %v", err)
 			}
@@ -4763,8 +3201,7 @@ func TestAnUnreadableTokenExpiryIsANoteNotAFault(t *testing.T) {
 	t.Parallel()
 	f := newAdminInstance()
 	f.selfRefused = true
-	res, err := reconcileWith(t, f, newRecordingSink(),
-		map[string]string{"swe": "${GITLAB_TOKEN_SWE}"}, nil)
+	res, err := reconcileWith(t, f, newRecordingSink(), nil)
 	if err != nil {
 		t.Fatalf("a pass failed over an expiry it could not read: %v", err)
 	}

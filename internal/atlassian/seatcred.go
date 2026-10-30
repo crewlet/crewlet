@@ -9,7 +9,6 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // WHERE A SEAT'S ATLASSIAN CREDENTIAL LIVES, AND WHO MAY READ IT.
@@ -201,8 +200,8 @@ func CredentialOf(p Product, seat *org.Role, value func(string) string) Credenti
 }
 
 // The credential fields the engine seals per seat for Atlassian, which name
-// the variables through [seataccess.SinkName]: the API token, and the
-// address its products authenticate it with.
+// the variables through [envref.SealedName], the one naming function: the
+// API token, and the address its products authenticate it with.
 const (
 	FieldToken = "TOKEN"
 	FieldEmail = "EMAIL"
@@ -210,13 +209,13 @@ const (
 
 // SinkToken is the variable a seat's Atlassian API token is sealed under.
 func SinkToken(handle string) string {
-	return seataccess.SinkName(integration.KindAtlassian, FieldToken, handle)
+	return envref.SealedName(string(integration.KindAtlassian), FieldToken, handle)
 }
 
 // SinkEmail is the variable a seat's Atlassian account address is sealed
 // under.
 func SinkEmail(handle string) string {
-	return seataccess.SinkName(integration.KindAtlassian, FieldEmail, handle)
+	return envref.SealedName(string(integration.KindAtlassian), FieldEmail, handle)
 }
 
 // SealedReads is every engine-owned variable one seat's credential is read

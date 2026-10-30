@@ -230,9 +230,11 @@ func (s *session) observe(ctx context.Context, r *roster, handle string, rec *se
 		if disabledByUs {
 			out.DisabledBy = seataccess.DisabledByCrewlet
 		}
-	case disabledByUs && !s.admin && len(held) == 0 && !live:
-		// OFF THE WAY A GROUP OWNER TURNS IT OFF: no membership and no
-		// token, on an account the ledger says this engine disabled.
+	case disabledByUs && !s.admin && len(held) == 0:
+		// OFF THE WAY A GROUP OWNER TURNS IT OFF: no membership, on an
+		// account the ledger says this engine disabled. Its tokens are
+		// the credential's business ([seataccess.OpRevoke]), not the
+		// account's state.
 		out.DisabledBy = seataccess.DisabledByCrewlet
 	default:
 		out.Enabled = true

@@ -44,7 +44,7 @@ func tokenLabel(handle string, l lanes) string {
 // a token this engine did not mint for the seat.
 //
 // A token minted before lanes existed is labelled `<handle>-<unix>` and was
-// minted with both products' scopes ([atlassian.AgentScopes]), so it reads
+// minted with both products' scopes, so it reads
 // as carrying both.
 func labelLanes(label, handle string) (lanes, int64, bool) {
 	stem, stamp, ok := cutStamp(label)
@@ -219,7 +219,7 @@ func (s *session) observe(ctx context.Context, handle string, rec *seataccess.Re
 			}
 			return nil, err
 		}
-		observed.Level, observed.Scope = pickLevel(held, applied), heldScope(held)
+		observed.Level, observed.Scope = pickLevel(held, applied), s.observedScope(handle, lane, held)
 		out[lane] = observed
 	}
 	return out, nil
@@ -368,7 +368,26 @@ func pickLevel(held map[string]string, applied string) string {
 	return held[keys[0]]
 }
 
-// heldScope is where an account holds anything, as keys.
-func heldScope(held map[string]string) []string {
-	return slices.Sorted(maps.Keys(held))
+// observedScope is where an account holds anything, in [seataccess.Desired]'s
+// terms: an empty scope stands for every project or space the company names,
+// so a seat whose document scope is empty and which holds exactly that list
+// reads back as empty, and the plan sees nothing to change.
+func (s *session) observedScope(handle string, lane seataccess.Lane, held map[string]string) []string {
+	scope := slices.Sorted(maps.Keys(held))
+	if len(scope) > 0 && len(s.docScope(handle, lane)) == 0 && slices.Equal(scope, s.target(lane, nil)) {
+		return nil
+	}
+	return scope
+}
+
+// docScope is the scope a seat's document block names for a lane.
+func (s *session) docScope(handle string, lane seataccess.Lane) []string {
+	d := s.doc(handle)
+	switch {
+	case lane == seataccess.LaneJira && d.jira != nil:
+		return normalKeys(d.jira.Projects)
+	case lane == seataccess.LaneConfluence && d.confluence != nil:
+		return normalKeys(d.confluence.Spaces)
+	}
+	return nil
 }

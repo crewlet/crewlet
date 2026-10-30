@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -29,33 +30,18 @@ func init() { seataccess.Register(Vendor{}) }
 // token, under seataccess.SinkName(gitlab, TOKEN, handle).
 const FieldToken = "TOKEN"
 
-// toolEnv and toolHeader are where a GitLab MCP server reads the seat's
-// token: the variable the default stdio server (`glab mcp serve`) reads, and
-// the header a shared http server in remote-authorization mode reads, which
-// is the one GitLab's REST API takes a personal access token in. Both are
-// among [CredentialKeys], the spellings identity resolution already reads.
-const (
-	toolEnv    = "GITLAB_TOKEN"
-	toolHeader = "Private-Token"
-)
-
 // Vendor implements [seataccess.Vendor] for GitLab.
 type Vendor struct{}
 
 // Kind implements [seataccess.Vendor].
 func (Vendor) Kind() integration.Kind { return integration.KindGitLab }
 
-// Catalog implements [seataccess.Vendor].
+// Catalog implements [seataccess.Vendor]. The seat's token reaches its tool
+// server through the binding table in internal/config, not from here.
 func (Vendor) Catalog() seataccess.Catalog {
 	return seataccess.Catalog{
 		Kind:        integration.KindGitLab,
 		Credentials: []string{FieldToken},
-		Tool: &seataccess.ToolBinding{
-			Server: SeatEnv,
-			Keys: []seataccess.BoundKey{{
-				Field: FieldToken, Env: toolEnv, Header: toolHeader,
-			}},
-		},
 		Lanes: []seataccess.LaneSpec{{
 			Lane:       seataccess.LaneGitLab,
 			Levels:     true,
@@ -68,12 +54,13 @@ func (Vendor) Catalog() seataccess.Catalog {
 	}
 }
 
-// memberRolePrefix marks a custom role in a stored level. A default role is
-// its `access_level` as a decimal ("30"); a custom role on Ultimate is
-// "member_role:<id>", held instead of a default role.
+// memberRolePrefix marks a custom role in a stored level, as
+// [seataccess.GitLabLevel] reads it: a default role is its `access_level` as
+// a decimal ("30"), a custom role on Ultimate "member_role:<id>".
 const memberRolePrefix = "member_role:"
 
-// LevelID is the stored form of what a membership holds.
+// LevelID is the stored form of what a membership holds, the inverse of
+// [seataccess.GitLabLevel] (a test holds the two to each other).
 func LevelID(a Access) string {
 	if a.MemberRoleID != 0 {
 		return memberRolePrefix + strconv.Itoa(a.MemberRoleID)
@@ -81,36 +68,32 @@ func LevelID(a Access) string {
 	return strconv.Itoa(a.Level)
 }
 
-// ParseLevel reads a stored level: a default role's access level, or a custom
-// role's id. Exactly one of the two is non-zero on success.
+// ParseLevel reads a stored level through the one parser the document
+// mapping uses, refusing an empty one: a seat that is on holds a role.
 func ParseLevel(id string) (level, memberRoleID int, err error) {
-	id = strings.TrimSpace(id)
-	if rest, custom := strings.CutPrefix(id, memberRolePrefix); custom {
-		n, convErr := strconv.Atoi(rest)
-		if convErr != nil || n <= 0 {
-			return 0, 0, fmt.Errorf("gitlab: %q is not a custom role id", id)
-		}
-		return 0, n, nil
+	level, role, err := seataccess.GitLabLevel(id)
+	if err == nil && level == 0 && role == 0 {
+		err = errors.New("gitlab: no role is set")
 	}
-	n, convErr := strconv.Atoi(id)
-	if convErr != nil || !Offered(n) {
-		return 0, 0, fmt.Errorf("gitlab: %q is not a GitLab role this build offers", id)
-	}
-	return n, 0, nil
+	return level, int(role), err
 }
 
-// levelName is GitLab's name for a stored level, for a step's text. A custom
-// role's name is live at GitLab, so it is named by its id here.
-func levelName(id string) string {
-	level, role, err := ParseLevel(id)
-	switch {
-	case err != nil:
-		return id
-	case role != 0:
-		return "custom role " + strconv.Itoa(role)
+// levelName is GitLab's name for a stored level, for a step's text: the
+// name the lane's Options carry (a custom role's is live at GitLab), GitLab's
+// own name for a default role, and the id marked as missing where GitLab has
+// no such role.
+func levelName(id string, opts seataccess.Options) string {
+	if strings.TrimSpace(id) == "" {
+		return "no role"
 	}
-	name, _ := RoleName(level)
-	return name
+	if level, _, ok := opts.Level(id); ok {
+		return level.Name
+	}
+	if level, role, err := ParseLevel(id); err == nil && role == 0 {
+		name, _ := RoleName(level)
+		return name
+	}
+	return id + " (not found at GitLab)"
 }
 
 // scopeText says where a seat's memberships are, in a step's words.
@@ -156,9 +139,12 @@ type action struct {
 }
 
 // actions is the steps one op takes for one seat, in order. PURE: it reads
-// only the document's setting and what the vendor showed.
-func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired, have seataccess.Observed) []action {
-	role, where := levelName(want.Level), scopeText(want.Scope)
+// only the document's setting, what the vendor showed, and the lane's Options,
+// which change the words and never which steps there are.
+func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired, have seataccess.Observed,
+	opts seataccess.Options,
+) []action {
+	role, where := levelName(want.Level, opts), scopeText(want.Scope)
 	grant := action{
 		verb:  seataccess.VerbGrant,
 		text:  "Make it a member of " + where + " as " + role,
@@ -185,17 +171,23 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 			apply: (*session).create,
 		}, grant, mint, retire}
 	case seataccess.OpEnable:
-		return []action{{
+		// AT THE DOCUMENT'S ROLE AND SCOPE, as a create is, and with a new
+		// token only where the seat holds none: off revoked it.
+		steps := []action{{
 			verb: seataccess.VerbEnable,
 			text: "Turn its account back on",
 			note: "GitLab unblocks it where Crewlet's token is an instance " +
 				"administrator's; otherwise its memberships are restored.",
 			apply: (*session).enable,
-		}, grant, mint, retire}
+		}, grant}
+		if have.Credential == nil {
+			steps = append(steps, mint, retire)
+		}
+		return steps
 	case seataccess.OpLevel:
 		steps := []action{{
 			verb:  seataccess.VerbRerole,
-			text:  "Change its role from " + levelName(have.Level) + " to " + role + " in " + where,
+			text:  "Change its role from " + levelName(have.Level, opts) + " to " + role + " in " + where,
 			apply: (*session).converge,
 		}}
 		if !sameScopesDrawn(have.Level, want.Level) {
@@ -220,7 +212,9 @@ func actions(seat seataccess.SeatRef, op seataccess.Op, want seataccess.Desired,
 				"administrator's; otherwise its memberships are removed. The " +
 				"account and its history are kept.",
 			apply: (*session).disable,
-		}, {
+		}}
+	case seataccess.OpRevoke:
+		return []action{{
 			verb:  seataccess.VerbRevoke,
 			text:  "Revoke the access tokens Crewlet minted on it",
 			apply: (*session).revokeAll,
@@ -286,15 +280,23 @@ func seatName(seat seataccess.SeatRef) string {
 	return seat.Handle
 }
 
-// Steps implements [seataccess.Vendor].
-func (Vendor) Steps(
+// Steps implements [seataccess.Vendor], naming what it can without the
+// lane's Options. See [Vendor.StepsFor].
+func (v Vendor) Steps(
 	seat seataccess.SeatRef, lane seataccess.Lane, op seataccess.Op,
 	want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	if lane != seataccess.LaneGitLab {
+	return v.StepsFor(seataccess.StepsInput{Seat: seat, Lane: lane, Op: op, Want: want, Have: have})
+}
+
+// StepsFor implements [seataccess.NamedSteps]: the steps, with every role
+// named as GitLab names it.
+func (Vendor) StepsFor(in seataccess.StepsInput) []seataccess.Step {
+	if in.Lane != seataccess.LaneGitLab {
 		return nil
 	}
-	drawn := actions(seat, op, want, have)
+	op := in.Op
+	drawn := actions(in.Seat, op, in.Want, in.Have, in.Options)
 	out := make([]seataccess.Step, 0, len(drawn))
 	for i, a := range drawn {
 		out = append(out, seataccess.Step{
@@ -398,7 +400,9 @@ type session struct {
 }
 
 // mintGroup is the group tokens are minted through, or zero on the instance
-// route. See [mintGroup].
+// route: an account the group owns is minted on through the group, which is
+// what a group Owner may call, and an instance account through the
+// administrator's route.
 func (s *session) mintGroup() int {
 	if s.mode.Or() == ModeInstance {
 		return 0
@@ -526,7 +530,9 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 	if in.Lane != seataccess.LaneGitLab {
 		return seataccess.StepResult{}, fmt.Errorf("gitlab: no lane %q", in.Lane)
 	}
-	drawn := actions(in.Seat, in.Step.Op, in.Want, in.Have)
+	// REDRAWN WITHOUT OPTIONS: they change a step's words, never which step
+	// sits at an index.
+	drawn := actions(in.Seat, in.Step.Op, in.Want, in.Have, seataccess.Options{})
 	if in.Step.Index < 0 || in.Step.Index >= len(drawn) {
 		return seataccess.StepResult{}, fmt.Errorf("gitlab: %s has no step %d",
 			in.Step.Op, in.Step.Index)
@@ -549,13 +555,20 @@ func (s *session) create(ctx context.Context, in seataccess.ApplyInput) (seatacc
 			user, err = s.client.CreateServiceAccount(ctx, s.group.ID, seatName(in.Seat), username)
 		}
 		if err != nil {
-			if errors.Is(modeError(s.mode, err), ErrNameReserved) {
+			if nameReserved(err) {
 				// A deletion GitLab has not finished: the next pass
 				// creates it. A fault rather than a refusal, so the sync
 				// reports a retry and nobody is sent to act.
-				return seataccess.StepResult{}, modeError(s.mode, err)
+				return seataccess.StepResult{}, fmt.Errorf("%w: %w", ErrNameReserved, err)
 			}
-			return seataccess.StepResult{}, refuse(s, err)
+			refused := refuse(s, err)
+			var refusal *seataccess.Refusal
+			if errors.As(refused, &refusal) {
+				if remedy := createRemedy(s.mode, Status(err)); remedy != "" {
+					refusal.Remedy = remedy
+				}
+			}
+			return seataccess.StepResult{}, refused
 		}
 	}
 	return seataccess.StepResult{
@@ -658,8 +671,9 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 		return s.client.RevokeToken(ctx, group, user.ID, token.ID)
 	}
 	// THE FRESH TOKEN IS THE PROBE. If GitLab refuses a credential minted
-	// seconds ago, the account itself cannot authenticate, and minting again
-	// on every pass is the loop [Reconcile] documents, not a recovery.
+	// seconds ago, the account itself cannot authenticate (an unconfirmed
+	// address, see [Username]), and minting again on every pass is a loop
+	// that once left 144 live tokens on one account, not a recovery.
 	if verdict := s.client.verify(ctx, token.Value, user.ID); verdict == provision.VerdictRejected {
 		if err := revoke(context.WithoutCancel(ctx)); err != nil {
 			return seataccess.StepResult{}, fmt.Errorf("gitlab: %s cannot authenticate, "+
@@ -679,8 +693,11 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 	}}}, nil
 }
 
-// noExpiry mints at the instance's default lifetime. See [expiry].
-var noExpiry = expiry(Options{})
+// noExpiry mints at the instance's own default lifetime (a year on
+// GitLab.com, which requires one). Nothing has to renew it on a schedule: a
+// token that lapses stops being a live token of this engine's, the next pass
+// reads the seat as holding no credential, and the plan mints one.
+var noExpiry time.Time
 
 // newestOwn is the most recent live token this engine minted for a seat.
 func newestOwn(tokens []Token, handle string) (Token, bool) {
@@ -848,4 +865,55 @@ func normalScope(scope []string) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// ErrNameReserved reports a username or email GitLab is still releasing from
+// an account it is deleting.
+//
+// A STATE THAT CLEARS ITSELF, and the whole reason it is named: the pass has
+// nothing to fix and nobody to tell, it simply has to be run again once
+// GitLab's own deletion finishes. The caller reports it as work in progress
+// rather than as a failure to read the integration.
+var ErrNameReserved = errors.New(
+	"gitlab is still releasing the name of an account it is deleting")
+
+// nameReserved reports a create refused because GitLab has not yet released
+// the username or address of an account it is deleting.
+//
+// GitLab removes a user asynchronously: the account is gone from every
+// listing the moment the delete is accepted, and its username and email stay
+// reserved until a background job finishes. So a removal followed by a fresh
+// create inside that window honestly finds no account, creates one, and is
+// refused with "has already been taken". That is a state that clears itself,
+// not a refusal anybody acts on: see [ErrNameReserved].
+func nameReserved(err error) bool {
+	var api *APIError
+	return errors.As(err, &api) && api.Status == http.StatusBadRequest &&
+		strings.Contains(api.Detail, "already been taken")
+}
+
+// createRemedy is the sentence that names the credential a service-account
+// create needs, which differs by where the account is owned.
+//
+// A 403 IS UNREADABLE ON ITS OWN here: group creation is satisfied by a group
+// Owner and instance creation is not, so the same status means two different
+// remedies. A 404 on the instance route means the same thing a third way:
+// GitLab.com does not serve it at all. Empty where the status says nothing
+// mode-specific.
+func createRemedy(mode Mode, status int) string {
+	forbidden := status == http.StatusForbidden || status == http.StatusUnauthorized
+	switch {
+	case mode.Or() != ModeInstance && forbidden:
+		return "Creating a group service account needs a token whose owner is an " +
+			"Owner of provisioning.group (or an instance administrator)."
+	case mode.Or() == ModeInstance && forbidden:
+		return "Instance mode creates service accounts the instance owns, which " +
+			"only an instance administrator may do: use an administrator's token, " +
+			"or set integrations.gitlab.provisioning.mode: group to create them " +
+			"under provisioning.group."
+	case mode.Or() == ModeInstance && status == http.StatusNotFound:
+		return "This GitLab does not serve instance service accounts, which is " +
+			"how GitLab.com answers: set integrations.gitlab.provisioning.mode: group."
+	}
+	return ""
 }
