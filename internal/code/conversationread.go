@@ -688,7 +688,7 @@ const (
 // listing, what a seat's or a person's "reviews given" reads — newest first,
 // after the review a cursor names, across every change of every repository
 // the asker may read: one range of code_reviews_reviewer_idx (replicated
-// 0086), the changes the page names read by their keys in one statement, and
+// 0090), the changes the page names read by their keys in one statement, and
 // their repositories judged once a page against the grant ([listedReposAmong]),
 // so a review of a change on a repository the asker may not read is left out
 // as a listing of changes leaves the change out. A page READS its limit of
@@ -791,7 +791,7 @@ func (q ReadQuery) validateReviews() error {
 }
 
 // reviewsGivenKey is code_reviews_reviewer_idx, (reviewer, position)
-// (replicated 0086): one reviewer's reviews in the order their records landed
+// (replicated 0090): one reviewer's reviews in the order their records landed
 // — a GUARD as planner.go says, held by plan_test.go to its seek.
 const reviewsGivenKey = "code_reviews_reviewer_idx"
 
