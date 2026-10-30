@@ -45,12 +45,14 @@ per agent.
 
 **The engine creates the apps** once an app-configuration token is sealed for
 the company. Create one at [api.slack.com/apps](https://api.slack.com/apps) and
-seal its refresh token once as `SLACK_APP_CONFIG_TOKEN`
-(`crewlet secrets set SLACK_APP_CONFIG_TOKEN`). From then on the engine keeps
-the token pair in that one sealed value and rotates it before it expires,
-saving each new pair before using it, because Slack's refresh token works once.
-Without one, the engine does not manage the company's Slack apps, and they are
-set up as described below.
+paste its refresh token into **App configuration token** on Slack's connect
+form, under Company › Integrations. The engine seals it as
+`SLACK_APP_CONFIG_TOKEN`, points `integrations.slack.app_config_token` at it,
+and from then on keeps the token pair in that one sealed value, rotating it
+before it expires and saving each new pair before using it, because Slack's
+refresh token works once. The field is always one whole `${VAR}`, never the
+token itself. Without one, the engine does not manage the company's Slack apps,
+and they are set up as described below.
 
 The install stays a person's click: the tab shows a waiting step with
 **Install**, which mints a link valid for fifteen minutes and once, and sends

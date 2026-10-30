@@ -722,6 +722,56 @@ A Slack-enabled agent names its bot token in **both** `role.integrations.slack.b
 
 When the engine launches a per-role MCP server instance, it merges the base server config with the role's `mcp_env` (applied as **env vars** for `stdio` servers, **HTTP headers** for `http` servers).
 
+### Seat credentials the engine binds
+
+For an integration the engine manages an account on (Atlassian, Datadog,
+GitHub, GitLab, Mattermost, Slack), a seat's own credential is never named in
+`mcp_env`. The engine seals it under a name it derives from the handle and
+binds it to every per-seat server (`shared: false`) that reads that
+integration's credential, whatever the server is called, for each seat that is
+on at that integration. The binding wins over any value a unit or seat wrote
+for the same key.
+
+Which variable or header a server reads is the server's own, so the
+`mcp_servers` entry says it under `seat_credentials`:
+
+```yaml
+mcp_servers:
+  - name: tracker
+    transport: http
+    shared: false
+    url: "https://mcp.example.com/"
+    seat_credentials:
+      - kind: atlassian          # atlassian | datadog | github | gitlab | mattermost | slack
+        field: EMAIL             # optional: Atlassian's TOKEN or EMAIL; empty is the credential itself
+        key: X-Atlassian-User    # the variable (stdio) or header (http) the server reads
+      - kind: atlassian
+        key: Authorization
+        prefix: "Bearer "        # text before the value
+        as: header               # optional; must match the transport
+```
+
+An entry that declares nothing is bound by what the engine recognises it as,
+by its command or its address:
+
+| Server | Recognised by | Reads |
+|---|---|---|
+| Datadog's remote server | a `datadoghq.` or `ddog-gov.` host | `DD_APPLICATION_KEY` |
+| GitHub's remote server | `api.githubcopilot.com` | `Authorization: Bearer <installation token>` |
+| GitHub's local server | a `github-mcp-server` command or image | `GITHUB_PERSONAL_ACCESS_TOKEN` |
+| `glab mcp serve` | the `glab` command with `mcp` | `GITLAB_TOKEN` |
+| GitLab's community servers | `server-gitlab` or `gitlab-mcp` | `GITLAB_PERSONAL_ACCESS_TOKEN` |
+| `slack-mcp-server` | the package name | `SLACK_MCP_XOXB_TOKEN` |
+| The Mattermost server | `mcp-server-mattermost` | `MATTERMOST_TOKEN` |
+| `mcp-atlassian` | the package or image name | `JIRA_API_TOKEN`, `JIRA_USERNAME`, `CONFLUENCE_API_TOKEN`, `CONFLUENCE_USERNAME` |
+
+A declaration replaces the recognised keys rather than adding to them. A
+per-seat server named after one of these integrations that neither declares
+nor is recognised is reported on the integration as **tool declared but no
+credential binding**: it would start for every agent and act as nobody. The
+integration's Agents tab reports each seat's tool as live, waiting for its
+credential, or missing because no per-seat server reads it.
+
 ### Per-Unit Config
 
 A unit declares its tracker project and knowledge container *identity* under `project` / `space` (used for inbound webhook routing and as the team's write home; not a tool credential, and it does not scope knowledge reads). The two keys are vendor-neutral: they name a Worklet project and a Doclet container, or a Jira project and a Confluence space, depending on which backends the company runs. Real per-agent tool credentials still live in `mcp_env`, which the unit's direct agent seats inherit:

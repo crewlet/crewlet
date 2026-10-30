@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
@@ -184,13 +185,26 @@ func open(ctx context.Context, in seataccess.OpenInput, httpClient *http.Client)
 	return newSession(sessionIn), nil
 }
 
+// configTokenName is the variable the company's app-configuration token pair
+// is sealed under: the one `integrations.slack.app_config_token` names, which
+// the connect form writes as [ConfigTokenVar], or that name where the block
+// names none.
+func configTokenName(in seataccess.OpenInput) string {
+	if in.Config != nil && in.Config.Integrations.Slack != nil {
+		if name, whole := envref.Whole(strings.TrimSpace(in.Config.Integrations.Slack.AppConfigToken)); whole {
+			return name
+		}
+	}
+	return ConfigTokenVar
+}
+
 // configTokenSealed reports a company that has sealed an app-configuration
 // token, whatever its state.
 func configTokenSealed(in seataccess.OpenInput) bool {
 	if in.Env == nil {
 		return false
 	}
-	raw, ok := in.Env.LookupOK(ConfigTokenVar)
+	raw, ok := in.Env.LookupOK(configTokenName(in))
 	return ok && strings.TrimSpace(raw) != ""
 }
 
@@ -200,7 +214,7 @@ func configTokenSealed(in seataccess.OpenInput) bool {
 func openConfigToken(ctx context.Context, admin *Admin, in seataccess.OpenInput) (string, error) {
 	held := ConfigToken{}
 	if in.Env != nil {
-		raw, _ := in.Env.LookupOK(ConfigTokenVar)
+		raw, _ := in.Env.LookupOK(configTokenName(in))
 		decoded, err := DecodeConfigToken(raw)
 		if err != nil {
 			return "", err
@@ -217,7 +231,7 @@ func openConfigToken(ctx context.Context, admin *Admin, in seataccess.OpenInput)
 	// THE RESOLVED PAIR IS THE BOOTSTRAP: the sink answers the same store
 	// in the loop, and where it holds nothing yet (a pair sealed before the
 	// sink was given) the resolver's refresh token is still the live one.
-	return admin.ConfigToken(ctx, SinkConfigTokenStore{Sink: in.Sink, Var: ConfigTokenVar},
+	return admin.ConfigToken(ctx, SinkConfigTokenStore{Sink: in.Sink, Var: configTokenName(in)},
 		held.RefreshToken, time.Now(), false)
 }
 
