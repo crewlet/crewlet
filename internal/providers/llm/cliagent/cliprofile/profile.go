@@ -859,6 +859,42 @@ const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 type AuthMarker struct {
 	// Sentinel is matched exactly as a [LimitMarker]'s is, in the same scope.
 	Sentinel string `yaml:"sentinel,omitempty"`
+
+	// Meaning is what the failure says about the credential the CLI was
+	// handed: [AuthRefused] (the default) when the vendor turned it down,
+	// [AuthUnread] when the CLI never used it at all. Only the words a person
+	// is shown depend on it; every auth marker fires the same failure.
+	Meaning AuthMeaning `yaml:"meaning,omitempty"`
+}
+
+// AuthMeaning is what an [AuthMarker] says about the credential a run was
+// handed.
+type AuthMeaning string
+
+const (
+	// AuthRefused is a credential the vendor saw and turned down: wrong,
+	// expired or revoked. The empty meaning reads as this one.
+	AuthRefused AuthMeaning = "refused"
+	// AuthUnread is a credential the CLI did not use, so the vendor never saw
+	// it: the CLI reports itself signed out although a value was set. Claude
+	// Code does this with a token that has a space inside it.
+	AuthUnread AuthMeaning = "unread"
+)
+
+// AuthMeaning is the meaning of the first auth marker, in the profile's
+// order, whose sentinel said contains: what a refused sign-in's own words
+// ([llm.Error] Said) say about the credential. [AuthRefused] when none
+// matches, since a sign-in failure is otherwise the vendor's refusal.
+func (p Profile) AuthMeaning(said string) AuthMeaning {
+	for _, m := range p.AuthMarkers {
+		if m.Sentinel != "" && strings.Contains(said, m.Sentinel) {
+			if m.Meaning == "" {
+				return AuthRefused
+			}
+			return m.Meaning
+		}
+	}
+	return AuthRefused
 }
 
 // Profile is everything the engine needs to drive one coding CLI.
@@ -2056,6 +2092,11 @@ func (p *Profile) problems() []string {
 	for i, m := range p.AuthMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
 			add("auth_markers[%d].sentinel %s", i, problem)
+		}
+		switch m.Meaning {
+		case "", AuthRefused, AuthUnread:
+		default:
+			add("auth_markers[%d].meaning is %q (want %s or %s)", i, m.Meaning, AuthRefused, AuthUnread)
 		}
 	}
 	if p.StdinLogin != nil && len(p.StdinLogin.Args) == 0 {
