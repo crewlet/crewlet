@@ -791,7 +791,6 @@ units:
                 enabled: true
                 roles: [system_user]
                 channels: [town-square, engineering, product]
-                channel: town-square
             # Role-scoped recurring work: a weekday-morning read of the
             # room.  Fires a TaskAssigned to the CEO's own inbox on the
             # cron.  In the fully-wired company this reviews overnight
@@ -844,7 +843,6 @@ units:
                 enabled: true
                 roles: [system_user]
                 channels: [town-square, engineering, product]
-                channel: engineering
 
   - name: Product
     id: product
@@ -895,7 +893,6 @@ units:
                 enabled: true
                 roles: [system_user]
                 channels: [town-square, engineering, product]
-                channel: product
 
       - name: Developer Relations
         id: developer-relations
@@ -941,7 +938,6 @@ units:
                 enabled: true
                 roles: [system_user]
                 channels: [town-square, engineering, product]
-                channel: product
 
   - name: Engineering
     id: engineering
@@ -1041,7 +1037,6 @@ units:
                 enabled: true
                 roles: [system_user]
                 channels: [town-square, engineering, product]
-                channel: engineering
 
           - name: Agent Frontend SWE
             handle: agent-frontend-swe
@@ -1087,7 +1082,6 @@ units:
                 enabled: true
                 roles: [system_user]
                 channels: [town-square, engineering, product]
-                channel: engineering
 
           - name: Agent AI Systems Engineer
             handle: agent-ai-systems-engineer
@@ -1137,7 +1131,6 @@ units:
                 enabled: true
                 roles: [system_user]
                 channels: [town-square, engineering, product]
-                channel: engineering
             # Role-scoped recurring work owned by this engineer — a role
             # schedule (not a unit schedule) is the right home for a task
             # pinned to one person.

@@ -541,7 +541,7 @@ func TestACredentialChangeIsListedApart(t *testing.T) {
 	// GitHub App declared before it has a key is no credential change.
 	unset := config.DiffOrg(base, edit(t, "          - name: SRE\n",
 		"          - name: Intern\n            handle: intern\n            llm: zulu\n"+
-			"            integrations:\n              github:\n                tier: review\n"+
+			"            integrations:\n              github:\n                enabled: false\n"+
 			"          - name: SRE\n"))
 	if change := only(t, unset); len(change.Credentials) != 0 {
 		t.Errorf("a seat added with no credential listed %v", change.Credentials)

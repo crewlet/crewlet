@@ -20,7 +20,7 @@ const mattermostDoc = `{
   },
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu",
-     "integrations": {"mattermost": {"enabled": false, "bot_token": "${SRE_MATTERMOST_TOKEN}", "channel": "engineering"}}},
+     "integrations": {"mattermost": {"enabled": false, "bot_token": "${SRE_MATTERMOST_TOKEN}", "channels": ["engineering"]}}},
     {"name": "Builder", "handle": "builder", "llm": "zulu",
      "integrations": {"mattermost": {"enabled": false, "bot_token": "${BUILDER_MATTERMOST_TOKEN}"}}},
     {"name": "Reviewer", "handle": "reviewer", "llm": "zulu"},

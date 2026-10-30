@@ -138,7 +138,6 @@ units:
         integrations:
           github:
             enabled: false
-            tier: review
             app_id: 42
             app_slug: acme-dev
             installation_id: 7

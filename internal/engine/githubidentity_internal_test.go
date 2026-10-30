@@ -34,7 +34,6 @@ roles:
     integrations:
       github:
         enabled: false
-        tier: review
   - name: Writer
     handle: writer
     llm: primary

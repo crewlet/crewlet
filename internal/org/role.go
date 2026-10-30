@@ -426,18 +426,10 @@ type GitHubApp struct {
 	// GitHub's key, each `read` or `write`; a key left out is No access.
 	Permissions map[string]string `yaml:"permissions,omitempty" json:"permissions,omitempty"`
 
-	// Tier is the retired word for this seat's access, which only the
-	// migration to Permissions reads.
-	Tier string `yaml:"tier,omitempty" json:"tier,omitempty"`
-
 	// Repos are the repositories this seat works in, as owner/name. Empty
 	// means every repository the installation covers, which is what the
 	// operator chose when they installed the app.
 	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty"`
-
-	// Workflows is the retired opt-in to `workflows: write` beside Tier,
-	// which only the migration reads.
-	Workflows bool `yaml:"workflows,omitempty" json:"workflows,omitempty"`
 
 	// AppID and AppSlug are the app GitHub created. The SLUG is what the
 	// bot's login derives from, so it is what an @mention resolves through.
@@ -475,10 +467,6 @@ type MattermostIdentity struct {
 	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
 	// Username defaults to the seat handle when empty.
 	Username string `yaml:"username,omitempty" json:"username,omitempty"`
-	// Channel is a channel this seat's bot is added to at provisioning,
-	// beside the company-wide ones. It aims nothing: this backend's
-	// transport posts no message.
-	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
 }
 
 // IsZero reports an unconfigured Mattermost identity.

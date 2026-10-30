@@ -805,11 +805,6 @@ type DatadogProvisioning struct {
 	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"Datadog API key; says which organization."`
 	AppKey string `secret:"true" yaml:"app_key,omitempty" json:"app_key,omitempty" desc:"Datadog application key; says which user acts."`
 
-	// Role is the Datadog role every agent account is created holding.
-	// Empty takes the read-only role, which is the honest default for
-	// accounts nothing yet authenticates with.
-	Role string `yaml:"role,omitempty" json:"role,omitempty" desc:"Role each agent's service account holds (default Datadog Read Only Role)."`
-
 	// EmailDomain is the domain each agent's service-account address is
 	// built under. Service accounts need an address Datadog will accept
 	// and never deliver to, so it is a domain the company controls rather

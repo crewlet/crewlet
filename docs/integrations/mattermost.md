@@ -286,9 +286,10 @@ Three things that do **not** work, and cost an afternoon each:
 
 `integrations.mattermost` enables the transport and the websocket fleet. The
 Mattermost **MCP tool** server is a separate `mcp_servers` entry
-(`shared: false`). Per agent, the same `${VAR}` names the token in both
-places — one credential, three readers (websocket, REST, MCP), no secret
-duplicated. The REST reader makes two kinds of call on that token, both reads:
+(`shared: false`). Each agent's bot token is one credential with three readers
+(websocket, REST, MCP): the engine seals it under the agent's own name and binds
+it to the agent's instance of the tool server itself, so the document names it
+nowhere. The REST reader makes two kinds of call on that token, both reads:
 the backfill a seat runs over a websocket reconnect gap, and
 `GET /api/v4/posts/{root}/thread` at the start of a turn woken in a thread, so
 the agent is handed the conversation instead of being told to go and fetch it
@@ -324,13 +325,11 @@ units:
     lead: engineer                       # the lead seat's handle
     roles:
       - name: Engineer
-        integrations:                              # per-agent transport identity
+        integrations:                              # this agent's own Mattermost bot
           mattermost:
-            bot_token: "${MATTERMOST_TOKEN_ENGINEER}"
-            channel: engineering                   # optional — a channel this bot is added to
-        mcp_env:
-          mattermost:
-            MATTERMOST_TOKEN: "${MATTERMOST_TOKEN_ENGINEER}"   # same token
+            enabled: true
+            roles: [system_user]
+            channels: [engineering]                # within provisioning.channels
 ```
 
 **The server is pinned, and two of its tools reach the engine host's disk.**

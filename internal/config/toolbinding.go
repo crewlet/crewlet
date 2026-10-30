@@ -58,26 +58,17 @@ type SeatCredential struct {
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty" desc:"Text before the value, e.g. \"Bearer \"."`
 }
 
-// seatCredentialFields is each integration's per-seat credential fields, the
-// credential itself first, as the vendors' catalogs name them. RESTATED here
-// for the reason [CodeAccessTiers] is; internal/seataccess holds the vendors
-// to the same lists. GitHub's is the installation token the engine issues at
-// use, never sealed.
+// seatCredentialFields is each integration's per-seat fields a seat's tool
+// server may read, the credential itself first ([seatFields]). GitHub's is the
+// installation token the engine issues at use, never sealed.
 func seatCredentialFields(kind string) []string {
-	switch kind {
-	case "datadog":
-		return []string{"APP_KEY"}
-	case "gitlab":
-		return []string{"TOKEN"}
-	case "atlassian":
-		return []string{"TOKEN", "EMAIL"}
-	case "mattermost", "slack":
-		return []string{"BOT_TOKEN"}
-	case "github":
-		return []string{"APP_TOKEN"}
-	default:
-		return nil
+	var out []string
+	for _, f := range seatFields(kind) {
+		if f.tool {
+			out = append(out, f.name)
+		}
 	}
+	return out
 }
 
 // SeatCredentialKinds is every integration a server can read a seat
