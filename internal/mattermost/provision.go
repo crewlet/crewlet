@@ -92,7 +92,7 @@ type Bot struct {
 func (c *Client) BotByUsername(ctx context.Context, username string) (User, bool, error) {
 	user, err := c.UserByUsername(ctx, username)
 	if err != nil {
-		if isStatus(err, http.StatusNotFound) {
+		if isNotFound(err) {
 			return User{}, false, nil
 		}
 		return User{}, false, err
@@ -157,7 +157,7 @@ func (c *Client) Tokens(ctx context.Context, userID string) ([]Token, error) {
 func (c *Client) RevokeToken(ctx context.Context, tokenID string) error {
 	_, err := c.request(ctx, http.MethodPost, "/users/tokens/revoke",
 		map[string]string{"token_id": tokenID}, nil, false)
-	if isStatus(err, http.StatusNotFound) {
+	if isNotFound(err) {
 		return nil
 	}
 	return err
@@ -210,7 +210,7 @@ func (c *Client) TeamByName(ctx context.Context, name string) (Team, bool, error
 	var out Team
 	_, err := c.request(ctx, http.MethodGet, "/teams/name/"+name, nil, &out, true)
 	if err != nil {
-		if isStatus(err, http.StatusNotFound) {
+		if isNotFound(err) {
 			return Team{}, false, nil
 		}
 		return Team{}, false, err
@@ -243,7 +243,7 @@ func (c *Client) TeamMember(ctx context.Context, teamID, userID string) (bool, e
 	}
 	_, err := c.request(ctx, http.MethodGet, "/teams/"+url.PathEscape(teamID)+
 		"/members/"+url.PathEscape(userID), nil, &out, true)
-	if isStatus(err, http.StatusNotFound) {
+	if isNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
@@ -274,8 +274,9 @@ func (c *Client) AddChannelMember(ctx context.Context, channelID, userID string)
 	return err
 }
 
-// isStatus reports an error carrying a particular HTTP status.
-func isStatus(err error, status int) bool { return Status(err) == status }
+// isNotFound reports an error carrying a 404: the thing asked about is not
+// there, which several reads answer as absent rather than as a failure.
+func isNotFound(err error) bool { return Status(err) == http.StatusNotFound }
 
 // isConflictStatus reports "this already exists" in the shapes Mattermost
 // uses for it.

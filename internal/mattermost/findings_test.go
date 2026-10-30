@@ -12,7 +12,7 @@ import (
 
 // theOnlySeat is the company every case here runs.
 func theOnlySeat() []*org.Role {
-	return []*org.Role{chatSeat("CEO", "", "leadership")}
+	return []*org.Role{chatSeat("CEO", "")}
 }
 
 // THE PREFLIGHT REACHES THE LOOP AND NOT ONLY THE TERMINAL.
@@ -177,7 +177,7 @@ func TestTheCompanyPassNeverTouchesAnAgentsToken(t *testing.T) {
 	id := seedBot(srv, "ceo", mattermost.BotDisplayName(enabledChat().Provisioning, "CEO"))
 	srv.issue(id, "fake-live-token")
 	before := srv.mutations()
-	if _, err := reconcileChat(t, srv, []*org.Role{chatSeat("CEO", "", "leadership")}); err != nil {
+	if _, err := reconcileChat(t, srv, []*org.Role{chatSeat("CEO", "")}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if got := srv.mutations() - before; got != 0 {
