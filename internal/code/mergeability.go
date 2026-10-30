@@ -93,7 +93,7 @@ import (
 // # Its tables
 //
 // code_mergeability, one row a change (replicated 0077, created again by 0078
-// with the readiness it stores and by 0087 with the checks position it was
+// with the readiness it stores and by 0089 with the checks position it was
 // judged at), written by the applier
 // (apply_mergeability.go) from the records on the change's own subject and
 // removed only with the change by its repository's purge. Its conflicted
