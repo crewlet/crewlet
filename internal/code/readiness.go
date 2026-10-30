@@ -60,7 +60,10 @@ import (
 //     computing while its home has merged no such revision, or decided
 //     nothing within its deadline.
 //
-// M5's gate adds its own kinds through the same [Readiness] (code.JudgeGate).
+// THE MERGE GATE ([JudgeGate], gatejudge.go) is what every reader and every
+// decide of a change's merge asks: these five, and the kinds the branch's gate
+// imposes, through the same [Readiness] — where the approval above is a
+// precondition only of a change whose target's gate asks one.
 //
 // # Whom it waits on
 //
@@ -92,8 +95,8 @@ import (
 // record — which is why no reader of a change's readiness reads it.
 
 // PreconditionKind is one thing a live change must be before it merges: a
-// precondition its readiness judges ([ReadinessOf]). A closed set
-// ([PreconditionKinds]), in the order a readiness lists them and reads its
+// precondition its readiness judges ([ReadinessOf], [JudgeGate]). A closed
+// set ([PreconditionKinds]), in the order a readiness lists them and reads its
 // first unmet one in.
 type PreconditionKind string
 
@@ -105,17 +108,38 @@ const (
 	PreconditionFacts PreconditionKind = "facts"
 	// PreconditionApproval is one counted approval of the head revision.
 	PreconditionApproval PreconditionKind = "approval"
+	// PreconditionHumanApproval is a PERSON'S counted approval, of a change
+	// touching a path its target's gate holds to a person
+	// ([MergeGate.HumanPaths]).
+	PreconditionHumanApproval PreconditionKind = "human_approval"
+	// PreconditionOwnersApproval is ONE counted approval from somebody
+	// eligible for every path owner the change touches, where its target's
+	// gate makes path owners gating ([MergeGate.OwnersApprove]).
+	PreconditionOwnersApproval PreconditionKind = "owners_approval"
 	// PreconditionBlocker is no standing blocker.
 	PreconditionBlocker PreconditionKind = "blocker"
+	// PreconditionCheck is every check its target's gate requires passed on
+	// the head commit ([MergeGate.Checks]).
+	PreconditionCheck PreconditionKind = "check"
 	// PreconditionMergeable is the head revision merging cleanly into its
 	// target, as its home merged it.
 	PreconditionMergeable PreconditionKind = "mergeable"
+	// PreconditionMergeAuthority is the authority of whoever would merge it
+	// — a read's asker, a decide's principal — to merge into its target
+	// ([MergeGate.MergeBy], code.merge_by_floor).
+	PreconditionMergeAuthority PreconditionKind = "merge_authority"
 )
 
-// PreconditionKinds is the closed set, in the order a readiness lists them.
+// PreconditionKinds is the closed set, in the order a readiness lists them:
+// THE ORDER A CHANGE MOVES THROUGH — it is opened, measured, reviewed by each
+// kind of approval its gate asks, cleared of its blockers, checked, merged,
+// and merged by somebody — so a readiness's first unmet precondition is the
+// earliest thing standing in its way, never whether this asker may merge a
+// change that still waits on its review.
 func PreconditionKinds() []PreconditionKind {
-	return []PreconditionKind{PreconditionDraft, PreconditionFacts, PreconditionApproval, PreconditionBlocker,
-		PreconditionMergeable}
+	return []PreconditionKind{PreconditionDraft, PreconditionFacts, PreconditionApproval,
+		PreconditionHumanApproval, PreconditionOwnersApproval, PreconditionBlocker, PreconditionCheck,
+		PreconditionMergeable, PreconditionMergeAuthority}
 }
 
 // Valid reports a kind this build knows.
@@ -350,9 +374,30 @@ func (r ReadinessRows) With(m Mergeability) ReadinessRows {
 // are the chart's ([GrantOf]); a nil chart lets no seat review or maintain,
 // which no caller of a judgment that counts asks it to.
 func ReadinessOf(rows ReadinessRows, r Roster) Readiness {
-	j := readinessJudge{rows: rows, roster: r, ref: ChangeRef(rows.Repo.Name, rows.Change.Number),
+	j := newReadinessJudge(rows, r)
+	return j.readiness([]Precondition{j.draft(), j.facts(), j.approval(), j.blocker(), j.mergeable()})
+}
+
+// readinessJudge is one judgment of a change's readiness: its rows, the
+// chart, the change as a sentence names it (web!42) and its owner.
+type readinessJudge struct {
+	rows   ReadinessRows
+	roster Roster
+	ref    string
+	owner  Party
+}
+
+// newReadinessJudge is the judgment of rows' change by chart r.
+func newReadinessJudge(rows ReadinessRows, r Roster) readinessJudge {
+	return readinessJudge{rows: rows, roster: r, ref: ChangeRef(rows.Repo.Name, rows.Change.Number),
 		owner: Party{Handle: rows.Change.Owner, Kind: rows.Change.OwnerKind}}
-	pre := []Precondition{j.draft(), j.facts(), j.approval(), j.blocker(), j.mergeable()}
+}
+
+// readiness is pre — each precondition judged, in [PreconditionKinds]' order —
+// as the readiness that lists them: how many are met of how many, and the
+// FIRST sentence, the first unmet precondition's, else the first computing
+// one's, else that the change is ready.
+func (j readinessJudge) readiness(pre []Precondition) Readiness {
 	out := Readiness{Total: len(pre), Preconditions: pre}
 	for _, p := range pre {
 		if p.State == PreconditionMet {
@@ -367,15 +412,6 @@ func ReadinessOf(rows ReadinessRows, r Roster) Readiness {
 		}
 	}
 	return out
-}
-
-// readinessJudge is one judgment of a change's readiness: its rows, the
-// chart, the change as a sentence names it (web!42) and its owner.
-type readinessJudge struct {
-	rows   ReadinessRows
-	roster Roster
-	ref    string
-	owner  Party
 }
 
 // draft is the draft precondition.
@@ -407,22 +443,47 @@ func (j readinessJudge) facts() Precondition {
 			target)}
 }
 
-// approval is the approval precondition.
-func (j readinessJudge) approval() Precondition {
+// approvalTally is which approvals count on a change's head revision, by the
+// one rule every approval a merge counts is held to — M4's approval and the
+// gate's person's and owners' approvals alike ([JudgeGate]): an ELIGIBLE
+// reviewer's standing verdict, NEVER AN AUTHOR's, approving the head revision
+// (onHead), or an earlier revision whose code the head holds unchanged
+// (unchanged, the latest such revision unchangedFrom) or whose diff it carries
+// unchanged (carried, from carriedFrom) — and pending, an approval of an
+// earlier revision waiting on the head's facts against its current target,
+// which say whether it carries.
+type approvalTally struct {
+	onHead, unchanged, carried []Party
+	unchangedFrom, carriedFrom int64
+	pending                    bool
+}
+
+// counted is every reviewer whose approval counts on the head revision, each
+// once, in the order the rows hold their verdicts.
+func (t approvalTally) counted() []Party {
+	var out []Party
+	for _, list := range [][]Party{t.onHead, t.unchanged, t.carried} {
+		for _, p := range list {
+			if !slices.Contains(out, p) {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+// tally is which of the change's approvals count on its head revision — see
+// [approvalTally].
+func (j readinessJudge) tally() approvalTally {
 	n := j.rows.Change.Revision
 	head, current := j.headFacts()
-	p := Precondition{Kind: PreconditionApproval}
-	var (
-		onHead, unchanged, carried []Party
-		unchangedFrom, carriedFrom int64
-		pending                    bool
-	)
+	var t approvalTally
 	for _, a := range j.rows.Approvals {
 		if j.author(a.Reviewer) || !j.eligible(a.Reviewer) {
 			continue
 		}
 		if a.Revision == n {
-			onHead = append(onHead, a.Reviewer)
+			t.onHead = append(t.onHead, a.Reviewer)
 			continue
 		}
 		from, recorded := j.factsOf(a.Revision)
@@ -433,17 +494,28 @@ func (j readinessJudge) approval() Precondition {
 			// id name can never be shown to be the head's — its home
 			// measures the head alone.
 		case !current:
-			pending = true
+			t.pending = true
 		case head.sameCode(from):
 			// NO CODE CHANGE: the head holds the code that was approved,
 			// byte for byte, whatever its patch id says — or omits.
-			unchanged = append(unchanged, a.Reviewer)
-			unchangedFrom = max(unchangedFrom, a.Revision)
+			t.unchanged = append(t.unchanged, a.Reviewer)
+			t.unchangedFrom = max(t.unchangedFrom, a.Revision)
 		case head.identified() && from.identified() && head.PatchID == from.PatchID:
-			carried = append(carried, a.Reviewer)
-			carriedFrom = max(carriedFrom, a.Revision)
+			t.carried = append(t.carried, a.Reviewer)
+			t.carriedFrom = max(t.carriedFrom, a.Revision)
 		}
 	}
+	return t
+}
+
+// approval is the approval precondition.
+func (j readinessJudge) approval() Precondition { return j.approvalBy(j.tally()) }
+
+// approvalBy is the approval precondition, t the head revision's approvals.
+func (j readinessJudge) approvalBy(t approvalTally) Precondition {
+	n := j.rows.Change.Revision
+	p := Precondition{Kind: PreconditionApproval}
+	onHead, unchanged, carried := t.onHead, t.unchanged, t.carried
 	switch {
 	case len(onHead) > 0:
 		p.State = PreconditionMet
@@ -457,14 +529,14 @@ func (j readinessJudge) approval() Precondition {
 		if len(unchanged) > 0 {
 			says = append(says, fmt.Sprintf("revision %d holds the code %s approved unchanged (%s: the base and "+
 				"head trees of revision %d, the latest approved)", n, namedAll(unchanged), ChangeClassNoCodeChange,
-				unchangedFrom))
+				t.unchangedFrom))
 		}
 		if len(carried) > 0 {
 			says = append(says, fmt.Sprintf("revision %d carries the diff %s approved unchanged (equal patch ids, "+
-				"revision %d the latest approved)", n, namedAll(carried), carriedFrom))
+				"revision %d the latest approved)", n, namedAll(carried), t.carriedFrom))
 		}
 		p.Detail = strings.Join(says, "; ")
-	case pending:
+	case t.pending:
 		p.State = PreconditionComputing
 		p.Detail = fmt.Sprintf("an approval of an earlier revision waits for revision %d's facts against %s, "+
 			"which say whether it carries that revision's diff unchanged", n, j.rows.Change.TargetRef)

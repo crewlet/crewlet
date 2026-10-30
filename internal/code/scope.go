@@ -55,6 +55,8 @@ func RepoPath(id string) string { return pathDomain + "/" + pathRepo + "/" + id 
 // the repository's records write — the change's row, the repository's status
 // — so a record of the repository's this node could not decode leaves the
 // conversation's decide reading stale rows, and the scope probe must find it.
+// A MERGEABILITY names the repository's checks too ([ChecksPath]): the
+// readiness it stamps judges the merge gate, which reads them ([JudgeGate]).
 func ChangePath(id string) string { return pathDomain + "/" + pathChange + "/" + id }
 
 // ChecksPath is one repository's checks: every row a record on its checks

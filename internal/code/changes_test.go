@@ -51,6 +51,12 @@ func changeRepo(t testing.TB, n *node, name string) string {
 	t.Helper()
 	s := suiteSettings()
 	s.Owner = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}
+	// MAIN ASKS ONE COUNTED APPROVAL, and nothing else of a merge: the gate a
+	// change's readiness in these cases is judged under. A branch whose gate
+	// asks none merges on none (code.JudgeGate), and the readiness cases are
+	// about whose approval counts.
+	s.Protections[0].Gate = &code.MergeGate{MergeBy: code.MergeByWriters, Approvals: code.ApprovalsOne,
+		Landing: code.Landing{Policy: code.LandingPreLand, Depth: 4, Batch: 4}, DeleteSource: code.DeleteSeats}
 	repo := n.ensure(name, s, t1).RepoID
 	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
 		set(featureRef, code.ZeroOID, oidOf("B")), set(releaseRef, code.ZeroOID, oidOf("R"))))

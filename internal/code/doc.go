@@ -249,6 +249,18 @@
 // ([Mergeability.Refresh]). It reads the change's own review objects, never a
 // decision of the tracker's.
 //
+// AND IT IS JUDGED UNDER ITS TARGET'S MERGE GATE (gatejudge.go): every reader
+// and every decide of a merge asks ONE pure [JudgeGate] over the facts one
+// snapshot holds ([GateFacts], read for a page a kind of row at a time and for
+// one change by [LoadGateFacts]) and the gate the rules matching the target
+// combine into, the strictest of each term ([GateRulesOf]) — M4's
+// preconditions, the approval only where the gate asks one, and the gate's
+// own: a person's approval of a change touching its human paths, one approval
+// from somebody on every touched path owner's lead chain (the head revision's
+// RECORDED match, no glob matched in a judgment), the checks a pre_land gate
+// requires passed on the head commit, and the merger's authority where a
+// merger is named.
+//
 // # A repository's checks are rows on their own subject
 //
 // What a repository's `.crewlet/checks.yaml` defines (checksfile.go:

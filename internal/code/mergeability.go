@@ -62,7 +62,8 @@ import (
 // # The readiness it stamps
 //
 // Every mergeability record carries the change's READINESS as its decide
-// judged it ([ReadinessOf], readiness.go): over the decide's own snapshot and
+// judged it — its target's merge gate ([JudgeGate], gatejudge.go), for no
+// merger in particular: over the decide's own snapshot and
 // chart, with the merge the record carries in place of the row's
 // ([ReadinessRows.With]) — whatever the home read, which may be a record
 // behind — stamped by the writer as whether every precondition is met and
@@ -484,12 +485,20 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	}
 	// THE READINESS, from THIS snapshot with the record's merge: what the
 	// home read may be a record behind, and an answer the record's own apply
-	// would not leave true is no answer to store.
-	rows, err := readinessRowsIn(ctx, tx, []readinessSubject{{repo: repo, row: row}})
+	// would not leave true is no answer to store. Its target's merge gate
+	// judged for NO MERGER: whether the change is ready, for whoever merges
+	// it — what a wake that it became ready reads.
+	facts, err := gateFactsIn(ctx, tx, []readinessSubject{{repo: repo, row: row}})
 	if err != nil {
 		return conversationDecision{}, err
 	}
-	readiness := ReadinessOf(rows[0].With(m), roster)
+	f := facts[0]
+	f.Rows, f.Roster = f.Rows.With(m), roster
+	gate, err := f.Gate()
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	readiness := JudgeGate(f, gate)
 	m.ChangeVersion, m.ReadinessVersion = row.version, d.readiness
 	m.Ready, m.WaitsPerson = readiness.Ready(), readiness.WaitsPerson()
 	// WHOM THE RECORD CONCERNS, by what it turns on the row it replaces: a

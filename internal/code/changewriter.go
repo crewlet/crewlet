@@ -386,6 +386,13 @@ func (w *ChangeWriter) write(cw ConversationWrite, seats SeatRules) (Conversatio
 	repoID, changeID := cw.RepoID(), cw.ChangeID()
 	subject := ChangeSubject(changeID)
 	scope := []string{RepoPath(repoID), ChangePath(changeID)}
+	if cw.Mergeability != nil {
+		// A MERGEABILITY'S READINESS JUDGES ITS TARGET'S MERGE GATE, which
+		// reads the repository's checks (gatejudge.go): its scope names them
+		// beside the repository and the change, so a node holding a deferred
+		// record of them decides none (M5-D33).
+		scope = []string{RepoPath(repoID), ChecksPath(repoID), ChangePath(changeID)}
+	}
 	var (
 		last    conversationDecision
 		decided bool

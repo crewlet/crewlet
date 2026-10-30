@@ -83,10 +83,11 @@ This is the product's current shape, not a configuration choice:
   which a seat and a person's assistant read through two code tools,
   `code_list_changes` and `code_get_change` — but no tool or route opens,
   edits or discusses a change in this release, no route reads one, and no
-  change is gated in front of a protected branch. A protection
+  change is merged in front of a protected branch. A protection
   rule decides what a push may do to a ref, and nothing else stands in front
   of one. So a rule's [merge gate](#merge-gates) is recorded and read, and
-  nothing merges by it yet.
+  every change into its branch is judged under it ([The merge
+  gate](#the-merge-gate)) — and nothing merges by it yet.
 - **Nothing searches a repository's code yet.** Every repository names how it
   is to be searched — `search: indexed` or `grep`
   ([Declaring repositories](#declaring-repositories)) — and the mode is
@@ -288,7 +289,9 @@ field at a time, each field a call leaves out kept as the branch's gate has it
 — or defaulted as above, on a branch whose rule has none — and only a person
 loosens one ([Who may change a protection](#who-may-change-a-protection)).
 
-A gate is **recorded and answered, and nothing merges by it yet**: a read of
+A gate is **recorded, answered and judged, and nothing merges by it yet**:
+every change into a gated branch is judged under it, its readiness listing
+each term the gate holds it to ([The merge gate](#the-merge-gate)); a read of
 one repository in detail answers every gated rule's gate beside its pattern
 (`GET /code/repos/{name}`'s `gates`, and `code_get_repo`), and a push is held
 to the rule's `allow_force`, `allow_delete` and `direct_push` alone, as before
@@ -4489,7 +4492,7 @@ records: what a merge counts is the change's own reviews and findings.
 |---|---|---|
 | `draft` | The change is open for review, not a draft. | Its owner, who marks it ready — as a principal that maintains the repository or a person may. |
 | `facts` | Its head revision's [facts](#recorded-on-the-change) against its current target are recorded. | Nobody: it is `computing` until its home reads them. |
-| `approval` | ONE COUNTED APPROVAL stands: an eligible reviewer's standing verdict approves the head revision, or an earlier revision whose code or diff the head carries unchanged. | The reviewers asked who may approve it; its owner, to ask one, where nobody is. |
+| `approval` | ONE COUNTED APPROVAL stands: an eligible reviewer's standing verdict approves the head revision, or an earlier revision whose code or diff the head carries unchanged. A precondition only where the target's [merge gate](#the-merge-gate) asks one. | The reviewers asked who may approve it; its owner, to ask one, where nobody is. |
 | `blocker` | No blocker stands. | Its owner while a blocker is open; each blocker an author answered, its raiser, who judges the answer. |
 | `mergeable` | Its head revision merges cleanly into its target, as its home recorded it — "as of" the tip it merged into, whatever the target did since. | Its owner, on a conflict. It is `computing` until its home merges the head revision, and while a merge decided nothing within its deadline. |
 
@@ -4519,9 +4522,11 @@ records: what a merge counts is the change's own reviews and findings.
   any person, by dismissing it. A readiness names the 16 oldest and counts
   the rest; the change's findings are read a page at a time.
 - **The first sentence** is the first unmet precondition's, in the order
-  above, else the first that is `computing`, else that the change is ready.
-  A change whose first unmet precondition waits on persons alone **waits on
-  a person**, which `needs=person` lists ([Reading changes](#reading-changes)).
+  a change moves through — the merge gate's own placed among them ([The merge
+  gate](#the-merge-gate)) — else the first that is `computing`, else that the
+  change is ready. A change whose first unmet precondition waits on persons
+  alone **waits on a person**, which `needs=person` lists ([Reading
+  changes](#reading-changes)).
 
 **Judged on every read, stored by its home.** A read of a change, and each
 row of a listing, judges the readiness again from the read's own snapshot.
@@ -4541,6 +4546,66 @@ the most. A refresh whose readiness is judged at its inputs already, or of a
 change whose head revision its home has not merged yet, is refused
 `superseded`, recorded nowhere. The chart moves no version: a stored answer
 is as of the chart that judged it, until the change's next record.
+
+### The merge gate
+
+A change is judged under the **merge gate** of the branch it targets ([Merge
+gates](#merge-gates)) — every reader of its readiness and every decision
+about its merge judges it by one function, from the rows of one snapshot and
+the chart of one epoch. Every protection rule whose pattern matches the branch
+holds it, as every matching rule holds a push to it, so the gate is the
+rules' combination, the strictest of each term:
+
+| Term | Combined over the rules matching the branch |
+|---|---|
+| `merge_by` | The strictest of the rules' — a rule with no gate reading as `writers` — and `code.merge_by_floor`. A branch no rule matches has no floor: whoever may push it merges into it. |
+| `approvals` | `one` where any gate asks one; `approvals_unless` exempts a change only by a class every such gate names. |
+| `human_paths`, `checks` | Every gate's, each entry as its gate wrote it. |
+| `owners_approve` | On where any gate turns it on. |
+| `landing` | `post_land` only where every gate requiring checks lands so. |
+
+Its preconditions are [Merge readiness](#merge-readiness)'s and the gate's
+own, each listed only where the gate holds the change to it, in the order a
+change moves through — opened, measured, approved, cleared, checked, merged
+and merged by somebody:
+
+| Precondition | Listed where | Met when | Waits on, while unmet |
+|---|---|---|---|
+| `draft`, `facts` | Always. | As in [Merge readiness](#merge-readiness). | As there. |
+| `approval` | The gate asks one: an ungated branch merges on none. | One counted approval stands — or every path the head revision touches is of a class `approvals_unless` names, its classification complete. | As in [Merge readiness](#merge-readiness). |
+| `human_approval` | The gate names human paths. | No human path holds the head revision — none matches a path it touches, or every path one matched is of a class its `unless` waives — or a **person's** counted approval stands. | The persons asked to review it; its owner, to ask one, where none is. |
+| `owners_approval` | The gate sets `owners_approve`. | The head revision touches no owned path, or ONE counted approval comes from somebody eligible for **every** [path owner](#path-owners) it touches: a unit owner's effective lead and every lead above it, a seat owner and its unit's lead chain — or any person. | The seats on every touched owner's chain that may review it, and the persons asked; its owner, to ask one, where none is. |
+| `blocker` | Always. | As in [Merge readiness](#merge-readiness). | As there. |
+| `check` | The gate requires checks and lands `pre_land`. | Every required check passed — or was skipped, its paths untouched — on the head commit, by its latest attempt, whatever ran it. | Its owner, on a check that failed, errored past the home's requeue or was cancelled. |
+| `mergeable` | Always. | As in [Merge readiness](#merge-readiness). | As there. |
+| `merge_authority` | A merger is named: whoever reads, on a read; the principal, on a decision. | A person; on a protected branch, a principal holding what `merge_by` asks — `writers` write the repository, `maintainers` maintain it, `persons` are persons; on a branch no rule protects, a principal that may push it. | The seat that maintains the repository, where one may merge it. |
+
+- **Every approval a term counts is counted by one rule**: an eligible
+  reviewer's standing verdict, never an author's, on the head revision or
+  carried to it unchanged by its code or its diff ([Merge
+  readiness](#merge-readiness)). An approval of an earlier revision whose
+  code moved since counts for none of the terms — and two approvals each
+  eligible for one of two touched owners are not the one approval
+  `owners_approve` waits for.
+- **No path owner's glob is matched in a judgment.** The owners a revision
+  touches are its facts' recorded match, made by the repository's home
+  ([Recorded on the change](#recorded-on-the-change)) against the owner rows
+  whose digest it records: up to 64 owners of 32 globs each against a
+  thousand paths, which no decision pays on every round it takes. Where the
+  owner rows a snapshot holds digest to another value — owners added or
+  removed since — `owners_approval` is `computing` until the home matches the
+  paths again.
+  The gate's human paths, at most 32 a rule, are matched against the paths
+  the facts list, and a glob this build cannot read holds the change.
+- **A required check with no attempt is `computing`**: one the target's
+  [checks file](#the-checks-file) defines waits for the repository's home to
+  queue it, and one it does not for a person's CI to report it. So is one
+  queued or running, and one that errored for its runner's reasons below its
+  third attempt, which the home queues again. A `post_land` branch's checks
+  hold its tip, never a change into it.
+- **What a change's home stores is its readiness for whoever merges it**: a
+  [mergeability](#mergeability) record judges the gate with no merger, so
+  `merge_authority` is a read's alone, judged for whoever reads.
 
 ### Where lines are in another revision
 

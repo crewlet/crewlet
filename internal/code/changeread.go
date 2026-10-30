@@ -101,13 +101,14 @@ import (
 // # Its readiness
 //
 // A live change's READINESS rides it — on one change's detail and on every
-// row of a listing ([ChangeSummary.Readiness]) — judged in the read's own
-// transaction against the read's one chart ([ReadinessOf], readiness.go), the
-// rows of a whole page read a kind at a time ([readinessRowsIn]), never the
-// answer the change's last mergeability stored: a read answers as of its
-// snapshot. So a read of changes is judged by a chart whoever asks — an
-// approver's eligibility is the chart's — and a reader that holds none
-// refuses one about itself ([Reader.chartFor]).
+// row of a listing ([ChangeSummary.Readiness]) — its target's merge gate
+// judged in the read's own transaction against the read's one chart
+// ([JudgeGate], gatejudge.go), the merge authority for the read's asker, the
+// rows of a whole page read a kind at a time ([gateFactsIn]), never the answer
+// the change's last mergeability stored: a read answers as of its snapshot. So
+// a read of changes is judged by a chart whoever asks — an approver's
+// eligibility is the chart's — and a reader that holds none refuses one about
+// itself ([Reader.chartFor]).
 //
 // # A page kept shorter than it was served
 //
@@ -401,9 +402,9 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	}
 	// EVERY KEPT CHANGE'S READINESS, judged in this transaction against
 	// this read's one chart — the rows of all of them read a kind at a time
-	// ([readinessRowsIn]) — before the page is cut, since what waits on a
+	// ([gateFactsIn]) — before the page is cut, since what waits on a
 	// person is a filter of what is judged.
-	readiness, err := readinessIn(ctx, tx, kept, repos, chart)
+	readiness, err := readinessIn(ctx, tx, kept, repos, chart, q.Asker, r.limits().MergeByFloor)
 	if err != nil {
 		return err
 	}
@@ -427,11 +428,13 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	return nil
 }
 
-// readinessIn is the readiness of each LIVE change of rows, by id, judged in
-// tx against chart — every repository a row names in repos — and none for a
+// readinessIn is the readiness of each LIVE change of rows, by id — its target's
+// merge gate judged ([JudgeGate]) in tx against chart, every repository a row
+// names in repos, the merge authority judged for asker, who reads, under
+// floor, code.merge_by_floor on the serving node's epoch — and none for a
 // change no longer live, which merges nothing.
 func readinessIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[string]listedRepo,
-	chart Roster) (map[string]*Readiness, error) {
+	chart Roster, asker Principal, floor MergeBy) (map[string]*Readiness, error) {
 
 	subjects := make([]readinessSubject, 0, len(rows))
 	for _, row := range rows {
@@ -439,13 +442,19 @@ func readinessIn(ctx context.Context, tx *sql.Tx, rows []changeRow, repos map[st
 			subjects = append(subjects, readinessSubject{repo: repos[row.repoID].ref, row: row})
 		}
 	}
-	judged, err := readinessRowsIn(ctx, tx, subjects)
+	judged, err := gateFactsIn(ctx, tx, subjects)
 	if err != nil {
 		return nil, err
 	}
 	out := make(map[string]*Readiness, len(subjects))
 	for i, s := range subjects {
-		readiness := ReadinessOf(judged[i], chart)
+		f := judged[i]
+		f.Roster, f.Floor, f.Merger = chart, floor, asker
+		gate, err := f.Gate()
+		if err != nil {
+			return nil, err
+		}
+		readiness := JudgeGate(f, gate)
 		out[s.row.id] = &readiness
 	}
 	return out, nil
@@ -560,7 +569,7 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 			return mergeErr
 		}
 		readiness, readinessErr := readinessIn(ctx, tx, []changeRow{row}, map[string]listedRepo{row.repoID: repo},
-			chart)
+			chart, q.Asker, r.limits().MergeByFloor)
 		if readinessErr != nil {
 			return readinessErr
 		}

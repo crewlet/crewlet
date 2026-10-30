@@ -694,6 +694,16 @@ func registeredStatements() map[string]statement {
 			[]string{"SCAN json_each AS j", mergeabilityKey + " (change_id=?)"}},
 		"readiness facts": {readinessFactsSQL, []any{`[["repo-1-change-000001",3],["repo-1-change-000001",1]]`},
 			[]string{"SCAN json_each AS j", factsKey + " (change_id=? AND n=?)"}},
+		// THE MERGE GATE (gatejudge.go), beside the readiness rows and the
+		// repositories' rules ("protections of"): the head revisions' facts a
+		// gate reaches, driven from the list of (change, revision) pairs, one
+		// seek of their key a pair; and every attempt of a required check on
+		// a head commit, driven from the list of (repository, commit, check)
+		// triples, one seek of the checks' key a triple.
+		"gate heads": {gateHeadsSQL, []any{`[["repo-1-change-000001",3],["repo-1-change-000002",1]]`},
+			[]string{"SCAN json_each AS j", factsKey + " (change_id=? AND n=?)"}},
+		"gate checks": {gateChecksSQL, []any{`[["repo-1","` + oid("c") + `","unit"],["repo-1","` + oid("c") +
+			`","lint"]]`}, []string{"SCAN json_each AS j", checksKey + " (repo_id=? AND commit_oid=? AND name=?)"}},
 		"standing blockers": {standingBlockersSQL, []any{"repo-1-change-000001", MaxReadinessBlockers},
 			[]string{blockersKey + " (change_id=?)"}},
 		// A REVISION'S FACTS: one revision's by their key, a decide's and an

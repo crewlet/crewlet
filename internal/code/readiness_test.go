@@ -664,16 +664,18 @@ func (n *node) mergingWith(repo, change string, set func(*code.Mergeability)) co
 	return w
 }
 
-// THE READINESS COUNTS NO TRACKER DECISION: a merge counts the change's own
-// review objects — its reviews' verdicts and its findings — and never a
-// decision the tracker records (ADR-0023's asks), so no file of the code host
-// imports the tracker or spells one of its tables. A decision a seat asked
-// for on a task is an answer about the task, and a change gated by one would
-// merge on a word nobody gave about its code.
+// THE GATE READS NO DECISION: a merge counts the change's own review objects
+// — its reviews' verdicts, its findings and its checks — and never a decision
+// the tracker records (ADR-0023's asks), so no file of the code host imports
+// the tracker or spells one of its tables: neither M4's readiness nor the
+// merge gate that widens it (gatejudge.go), nor any decide that will judge a
+// merge by it. A decision a seat asked for on a task is an answer about the
+// task, and a change gated by one would merge on a word nobody gave about its
+// code.
 //
-// Mutation: import internal/tracker in readiness.go, or read
+// Mutation: import internal/tracker in gatejudge.go, or read
 // `tracker_comments` there → red.
-func TestReadinessCountsNoTrackerDecision(t *testing.T) {
+func TestTheGateReadsNoDecision(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
 	tracker := regexp.MustCompile(`\btracker_[a-z_]+\b`)
