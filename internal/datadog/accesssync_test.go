@@ -213,3 +213,27 @@ func TestADatadogAccountDisabledByHandWaits(t *testing.T) {
 		t.Errorf("sync = %+v, want waiting for a person", sync)
 	}
 }
+
+// A KEY DELETED AT DATADOG IS REPLACED. The ledger still records the sealed
+// key, and the account holds none, so the sealed value answers 403 for ever:
+// the next sync mints and seals a fresh one rather than reporting the seat in
+// sync.
+func TestADatadogKeyDeletedAtDatadogIsReMinted(t *testing.T) {
+	t.Parallel()
+	w := newSyncWorld(t, roRole)
+	w.sync()
+	rec := w.record()
+	before, _ := w.sink.Held("DATADOG_APP_KEY_SRE")
+	w.org.mu.Lock()
+	w.org.keys[rec.Account.ID] = nil
+	w.org.mu.Unlock()
+
+	if report := w.sync(); len(report.Findings) != 0 {
+		t.Fatalf("findings = %+v", report.Findings)
+	}
+	after, ok := w.sink.Held("DATADOG_APP_KEY_SRE")
+	if !ok || after == before || len(w.org.keyIDs(rec.Account.ID)) != 1 {
+		t.Errorf("sealed=%v changed=%v keys=%q, want a fresh key sealed",
+			ok, after != before, w.org.keyIDs(rec.Account.ID))
+	}
+}

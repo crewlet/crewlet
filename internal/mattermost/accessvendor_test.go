@@ -393,7 +393,7 @@ func TestMattermostStepsPerOp(t *testing.T) {
 	for op, verbs := range map[seataccess.Op][]seataccess.StepVerb{
 		seataccess.OpCreate: {seataccess.VerbCreate, seataccess.VerbGrant, seataccess.VerbScope,
 			seataccess.VerbMint},
-		seataccess.OpEnable:  {seataccess.VerbEnable, seataccess.VerbMint},
+		seataccess.OpEnable:  {seataccess.VerbEnable, seataccess.VerbScope, seataccess.VerbMint},
 		seataccess.OpLevel:   {seataccess.VerbRerole},
 		seataccess.OpScope:   {seataccess.VerbScope},
 		seataccess.OpMint:    {seataccess.VerbMint},
@@ -457,11 +457,11 @@ func TestMattermostObserve(t *testing.T) {
 	}
 	lane := func(h string) seataccess.Observed { return obs[h][seataccess.LaneMattermost] }
 	if got := lane("sre"); !got.Exists || got.Level != postAll || got.Account != "@agent-sre" ||
-		!slices.Equal(got.Scope, []string{"general"}) {
+		!slices.Equal(got.Scope, []string{"general"}) || got.CredentialGone {
 		t.Errorf("sre = %+v", got)
 	}
 	if got := lane("oncall"); got.AccountID != adopted.id || got.Level != "system_custom system_user" ||
-		!slices.Equal(got.Scope, []string{"incidents"}) {
+		!slices.Equal(got.Scope, []string{"incidents"}) || !got.CredentialGone {
 		t.Errorf("oncall = %+v", got)
 	}
 	if got := lane("dba"); got.Enabled || got.DisabledBy != seataccess.DisabledByHand {

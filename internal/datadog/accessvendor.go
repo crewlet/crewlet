@@ -54,16 +54,16 @@ func (accessVendor) Catalog() seataccess.Catalog {
 // Steps is each op as Datadog takes it, in the order Apply takes it. Pure.
 func (accessVendor) Steps(
 	seat seataccess.SeatRef, _ seataccess.Lane, op seataccess.Op,
-	_ seataccess.Desired, _ seataccess.Observed,
+	_ seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	out := datadogSteps(seat, op)
+	out := datadogSteps(seat, op, have)
 	for i := range out {
 		out[i].Index = i
 	}
 	return out
 }
 
-func datadogSteps(seat seataccess.SeatRef, op seataccess.Op) []seataccess.Step {
+func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Observed) []seataccess.Step {
 	sink := seataccess.SinkName(integration.KindDatadog, AppKeyField, seat.Handle)
 	mint := seataccess.Step{
 		Op: op, Verb: seataccess.VerbMint, By: seataccess.ByCrewlet,
@@ -77,10 +77,17 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op) []seataccess.Step {
 				", holding the role this seat names",
 		}, mint}
 	case seataccess.OpEnable:
-		return []seataccess.Step{{
+		// BACK ON AT THE DOCUMENT'S ROLE, as a create is, and with a fresh
+		// key only where none is held: off revoked it, so one is minted
+		// unless an account somebody disabled by hand still holds its own.
+		out := []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbEnable, By: seataccess.ByCrewlet,
-			Text: "Turn its Datadog service account back on",
-		}, mint}
+			Text: "Turn its Datadog service account back on, holding the role this seat names",
+		}}
+		if have.Credential == nil || have.CredentialGone {
+			out = append(out, mint)
+		}
+		return out
 	case seataccess.OpLevel:
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbRerole, By: seataccess.ByCrewlet,
@@ -316,6 +323,11 @@ func observedOf(account Account, rec seataccess.Record, recorded bool) seatacces
 	if recorded && rec.Account != nil {
 		out.CreatedAt = rec.Account.CreatedAt
 	}
+	// A KEY DELETED AT DATADOG leaves whatever is sealed for the seat
+	// answering 403 for ever. The account's own key list is the proof: this
+	// engine mints every key under one name, so an account holding none of
+	// them holds nothing the seat can authenticate with.
+	out.CredentialGone = len(account.EngineKeys()) == 0
 	return out
 }
 
@@ -330,11 +342,17 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 	case seataccess.OpEnable:
 		if in.Step.Verb == seataccess.VerbEnable {
 			return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
-				return seataccess.StepResult{}, s.refused(in,
-					s.client.EnableUser(ctx, s.creds, account.ID))
+				if err := s.roleExists(ctx, in); err != nil {
+					return seataccess.StepResult{}, err
+				}
+				if err := s.client.EnableUser(ctx, s.creds, account.ID); err != nil {
+					return seataccess.StepResult{}, s.refused(in, err)
+				}
+				_, err := s.client.SetRole(ctx, s.creds, account, in.Want.Level)
+				return seataccess.StepResult{}, s.refused(in, err)
 			})
 		}
-		return s.mint(ctx, in, false)
+		return s.mint(ctx, in, true)
 	case seataccess.OpMint:
 		return s.mint(ctx, in, true)
 	case seataccess.OpLevel:
