@@ -1,6 +1,7 @@
 package jetstreamtest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -9,58 +10,80 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
-// A NODE'S CONNECTION STAYS ON ITS OWN MEMBER, AND DOES NOT OUTLIVE IT.
+// A MEMBER'S OWN CLIENT DISCOVERS NO PEER, AND DOES NOT OUTLIVE ITS MEMBER.
 //
 // Each node of an embedded fleet talks to the member in its own process. A
-// member advertises its peers' client URLs, and a connection that takes them
-// into its reconnect pool goes to a peer the moment it drops: for the rest of
-// its life on a slow-consumer drop, and for good when its own member stops —
-// where the node, instead of running its reconnects out and stopping for its
-// supervisor to bring the member back, ran on through a peer with its member
-// dead, the cluster a replica short and nothing saying so.
+// member used to be dialled over TCP at its client listener, which bound every
+// interface, and it advertised every peer's client URL — on the host's
+// external address — in the INFO it sent: a connection that took them into
+// its reconnect pool went to a peer the moment it dropped, for the rest of its
+// life on a slow-consumer drop and for good when its own member stopped, where
+// the node ran on through a peer with its member dead, the cluster a replica
+// short and nothing saying so. That reconnect is held by the dial ignoring what
+// it discovers; this case holds the rest: the node's connection is IN PROCESS,
+// its pool is this member alone and lists nothing discovered, and the member's
+// client listener — open only because routing needs it — is on loopback and
+// tells NO client of any peer.
 //
-// The CONTROL is a connection with the client's own defaults to the same
-// member: it reads the peers, and when the member stops it moves to one — so
-// the case is about the dial a node's queue takes, never about a cluster that
-// advertises nobody or a peer nothing could have reached.
+// The CONTROL is a client with nats's own defaults dialling member 0's client
+// listener, which is what any process on the host could do: it reads every
+// peer the member advertises, and before this change it read all of them.
 //
-// Mutation: drop IgnoreDiscoveredServers from the embedded dial and both the
-// pool row and the stop row go red.
-func TestANodesConnectionStaysOnItsOwnMember(t *testing.T) {
+// Mutations: Cluster.NoAdvertise off → the control discovers the peers, red;
+// dial a clustered member over its client listener again → the in-process row,
+// red; drop IgnoreDiscoveredServers and NoAdvertise together → the node's pool
+// row, red.
+func TestAMembersOwnClientDiscoversNoPeer(t *testing.T) {
 	t.Parallel()
 	c := StartCluster(t, 3, js.Config{})
 	q := c.Client(t, 0)
 	own := q.Conn().ConnectedUrl()
 
-	control, err := nats.Connect(own, nats.MaxReconnects(-1),
-		nats.ReconnectWait(100*time.Millisecond))
-	if err != nil {
-		t.Fatalf("the control connection: %v", err)
+	if q.Conn().Opts.InProcessServer == nil {
+		t.Fatalf("the node's connection to its own member dials %s over TCP, where "+
+			"every connection to a member in this process is a pipe", own)
 	}
-	t.Cleanup(control.Close)
-	within(t, 30*time.Second, "the member to advertise its peers to a client",
-		func() bool { return len(control.DiscoveredServers()) > 0 })
-
 	if pool := q.Conn().Servers(); len(pool) != 1 || pool[0] != own {
 		t.Errorf("the node's connection would reconnect to %v, want its own "+
 			"member %s alone", pool, own)
 	}
+	if found := q.Conn().DiscoveredServers(); len(found) != 0 {
+		t.Errorf("the node's connection was told of %v, where a member "+
+			"advertises no peer", found)
+	}
+
+	listener := c.Servers[0].ClientListener()
+	if !strings.HasPrefix(listener, "127.0.0.1:") {
+		t.Fatalf("member 0's client listener is %q, want loopback alone", listener)
+	}
+	// THE MESH IS WHOLE before the control reads anything ([StartCluster]
+	// waits for every member to be routed to its peers), so the INFO the
+	// control is handed on connecting already carries every peer a member
+	// would advertise; the round trip after it lets any INFO sent since land.
+	control, err := nats.Connect("nats://"+listener, nats.MaxReconnects(-1),
+		nats.ReconnectWait(100*time.Millisecond))
+	if err != nil {
+		t.Fatalf("the control connection to member 0's client listener: %v", err)
+	}
+	t.Cleanup(control.Close)
+	if err := control.Flush(); err != nil {
+		t.Fatalf("the control connection's round trip: %v", err)
+	}
+	if found := control.DiscoveredServers(); len(found) != 0 {
+		t.Errorf("a client of member 0's client listener was told of %v: a member "+
+			"maps the fleet's listeners for whoever connects", found)
+	}
 
 	c.Servers[0].Shutdown()
-	within(t, 30*time.Second, "the control connection to move to a peer",
-		func() bool { return control.IsConnected() && control.ConnectedUrl() != own })
-
 	// LONGER THAN THE NODE'S OWN RECONNECT WAIT, several times over: a dial
-	// that took the peers moves within one wait of the control, and one that
-	// did not stays down for its member's whole reconnect span.
+	// that could reach a peer would be up there within one wait, and one that
+	// cannot stays down for its member's whole reconnect span.
 	//
 	// ON ANOTHER MEMBER is the failure, never "connected": the client learns
-	// its socket closed on its own reader goroutine, so for a moment after
-	// the shutdown it still reports itself connected to its own member's
-	// URL. Under a loaded runner that moment outlasted the first poll, and
-	// a check of IsConnected alone failed with the node's own URL named as
-	// "a peer". ConnectedUrl is empty while the connection is down, so this
-	// fails exactly when the connection is up somewhere it must not be.
+	// its connection closed on its own reader goroutine, so for a moment after
+	// the shutdown it still reports itself connected to its own member's URL.
+	// ConnectedUrl is empty while the connection is down, so this fails
+	// exactly when the connection is up somewhere it must not be.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if at := q.Conn().ConnectedUrl(); at != "" && at != own {
@@ -73,17 +96,5 @@ func TestANodesConnectionStaysOnItsOwnMember(t *testing.T) {
 	if q.Conn().IsConnected() {
 		t.Fatalf("the node's connection is still up on %s, %v after its own "+
 			"member stopped", q.Conn().ConnectedUrl(), 5*time.Second)
-	}
-}
-
-// within waits for cond, failing the case naming what it waited for.
-func within(t *testing.T, budget time.Duration, what string, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(budget)
-	for !cond() {
-		if time.Now().After(deadline) {
-			t.Fatalf("waited %s for %s", budget, what)
-		}
-		time.Sleep(20 * time.Millisecond)
 	}
 }

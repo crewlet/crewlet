@@ -401,7 +401,7 @@ is counted as a member — see [Running a Fleet](fleet.md#what-a-fleet-needs).
 
 **A fresh cluster takes seconds to form, and the engine waits it out rather
 than hanging.** Accepting connections is not the same as being able to serve
-JetStream: a member answers its client port as soon as it is listening, while
+JetStream: a member accepts connections as soon as it is listening, while
 the metadata group takes seconds to elect a leader — measured at around eight
 on a quiet three-member cluster — and until it has one, creating a replicated
 stream *blocks* instead of failing.
@@ -554,9 +554,11 @@ another's.
 > **The clustered embedded broker has no authentication and no TLS. Run it on
 > a trusted network.**
 >
-> A clustered member listens on two ports, on every interface: the route port
-> named in the config, and a client port the server picks for itself. Neither
-> carries a credential or a certificate. `credentials`, `token` and
+> A clustered member listens on two ports: a route port on the configured
+> interface, and a client port on loopback that the server picks for itself —
+> NATS opens it before it routes, the engine's own connections never dial it
+> (they are in process), and no client is told where it is. Neither carries a
+> credential or a certificate. `credentials`, `token` and
 > `stream.tls` are **dial-side** options — they configure this process
 > connecting *out* to a URL — and an embedded server has no server-side
 > counterpart in Tier A at all. Anything that can reach those ports can

@@ -83,7 +83,7 @@ import (
 //
 // The listener budget also bounds the CLIENT HANDSHAKE a connection to this
 // server makes ([embeddedServer.connect]) — INFO, CONNECT, PING, PONG with a
-// broker in this very process, or on its loopback. That used nats's own
+// broker in this very process, over an in-memory pipe. That used nats's own
 // default, two seconds, which is a figure for dialling a REMOTE server whose
 // silence means it is not there. This one has already answered
 // ReadyForConnections, so the only thing a slow handshake here measures is the
@@ -187,6 +187,12 @@ type readiness struct {
 // In a fleet the same server joins a cluster, so the difference between
 // "solo" and "fleet" is cluster configuration rather than a different
 // architecture — and the client code above it is identical either way.
+//
+// EVERY CONNECTION THIS PROCESS OPENS TO IT IS IN PROCESS, on every topology
+// ([embeddedServer.connect]): through an in-memory pipe, never a socket. A
+// clustered member still opens a client listener, because nats-server starts
+// routing only once one is open, and it binds loopback and is advertised to
+// nobody ([embeddedOptions]) — no engine connection dials it.
 type embeddedServer struct {
 	ns *server.Server
 	// started is closed when ns.Start has returned. Every shutdown waits for
@@ -195,10 +201,6 @@ type embeddedServer struct {
 	// death is the server's own declaration that it cannot go on, made by
 	// its logger's Fatalf — see [Death] and [Server.Death].
 	death *Death
-	// inProcess is true when nothing listens on a socket, which is the
-	// solo case: connections are made through an in-memory pipe, so the
-	// broker cannot be reached from outside the process at all.
-	inProcess bool
 	// scratch is a private directory this server owns and deletes on
 	// shutdown, used when no StoreDir was configured. See startEmbedded.
 	scratch string
@@ -265,15 +267,18 @@ func StartServer(ctx context.Context, cfg Config) (*Server, error) {
 // opts are the contract-level settings — [queue.WithNode] names the node the
 // client publishes for — and belong to the CLIENT rather than to the server,
 // because several nodes can be clients of one broker.
+//
+// Its connections are in process, as every connection this package opens to
+// an embedded broker is ([embeddedServer.connect]).
 func (s *Server) Client(ctx context.Context, opts ...queue.Option) (*Queue, error) {
 	return newQueueOn(ctx, s.cfg, s.embedded, false, queue.Resolve(opts...))
 }
 
-// Conn returns a NATS connection to this server, held to the transport's
-// contract like every connection this package opens, for a caller that rides
-// the broker without a queue client of its own: a test standing members up to
-// exercise the coordination store, an object store or the broker's log bridge
-// directly.
+// Conn returns a NATS connection to this server, in process and held to the
+// transport's contract like every connection this package opens to an embedded
+// broker ([embeddedServer.connect]), for a caller that rides the broker without
+// a queue client of its own: a test standing members up to exercise the
+// coordination store, an object store or the broker's log bridge directly.
 //
 // UNWATCHED: NATS closing it for good is the caller's to notice, and no queue
 // reports it as a lost node — see [watched]. That is why a node's own
@@ -441,6 +446,29 @@ func (s *Server) LeafPort() int {
 	return varz.LeafNode.Port
 }
 
+// ClientListener is this member's client listener, as host:port on loopback,
+// or "" where it opens none: a solo member, a member with only a leaf listener
+// and a leaf listen on no client port at all.
+//
+// A CLUSTERED MEMBER OPENS ONE ONLY BECAUSE nats-server starts routing once its
+// client listener is open (server.go Start, route.go StartRouting, v2.15.1), so
+// it binds 127.0.0.1 and is advertised to nobody ([embeddedOptions]): no
+// connection of this process dials it ([embeddedServer.connect]), and only a
+// process on this member's own host can reach it, told where by this and by
+// nothing else. The port is the OS's, chosen at each start — a fixed default
+// would collide between members on one host — and read back here, from the
+// listener itself.
+func (s *Server) ClientListener() string {
+	if s.embedded == nil {
+		return ""
+	}
+	addr := s.embedded.ns.Addr()
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
+}
+
 // Shutdown stops the broker. Every client of it should be stopped first.
 //
 // WHEN IT RETURNS THE SERVER HAS STOPPED, and every writer of its store has
@@ -534,7 +562,17 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 		// much as a convenience: an embedded broker with no socket
 		// cannot be reached by anything but this process.
 		DontListen: len(cfg.ClusterURLs) == 0 && cfg.ClusterPort == 0,
-		StoreDir:   cfg.StoreDir,
+		// AND WHERE ROUTING FORCES ONE OPEN, LOOPBACK. nats-server starts a
+		// clustered member's routing only once its client listener is open
+		// (server.go Start hands StartRouting a channel only AcceptLoop
+		// closes, v2.15.1), so a member that routes cannot set DontListen.
+		// No connection of this process dials the listener — every one is
+		// in process ([embeddedServer.connect]) — so it is for nobody off
+		// this host, and binding every interface, as it did, offered it to
+		// anything that could reach the machine. The port stays the OS's
+		// (Port: -1): a fixed one would collide between members on one host.
+		Host:     "127.0.0.1",
+		StoreDir: cfg.StoreDir,
 
 		// The transport's own ceiling, from the contract's number rather
 		// than nats-server's 1 MiB default — see queue.MaxPayloadBytes for
@@ -699,6 +737,15 @@ func embeddedOptions(cfg Config, system systemUser) (*server.Options, string, er
 			// member nobody can route to.
 			Host:      cfg.ClusterHost,
 			Advertise: cfg.ClusterAdvertise,
+			// NO CLIENT IS TOLD OF ANY MEMBER. Left false, a member gossips
+			// its client listener's URL to its peers and hands every peer's
+			// to each client in its INFO — on the host's external address
+			// while the listener bound every interface — and a client takes
+			// them into its reconnect pool. Nothing dials a member's client
+			// listener (every connection of this process is in process), so
+			// there is nobody to tell, and a URL in any INFO is only a map of
+			// the fleet's listeners for whoever reads it.
+			NoAdvertise: true,
 		}
 		opts.Routes = server.RoutesFromStr(joinURLs(cfg.ClusterURLs))
 		// AND ITS SYSTEM ACCOUNT, reachable from this process alone — the
@@ -818,7 +865,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		route: listenerSpec{port: opts.Cluster.Port, host: opts.Cluster.Host},
 		leaf:  listenerSpec{port: opts.LeafNode.Port, host: opts.LeafNode.Host},
 	}
-	store, inProcess, leaf := opts.StoreDir, opts.DontListen, len(opts.LeafNode.Remotes) > 0
+	store, leaf := opts.StoreDir, len(opts.LeafNode.Remotes) > 0
 	// START IS JOINED, and every shutdown of this server waits for it: see
 	// [shutdownAndClean] for what a Shutdown that overlaps it leaves behind.
 	started := make(chan struct{})
@@ -860,7 +907,7 @@ func startEmbedded(ctx context.Context, cfg Config) (*embeddedServer, error) {
 		return nil, err
 	}
 	return &embeddedServer{
-		ns: ns, started: started, death: death, inProcess: inProcess,
+		ns: ns, started: started, death: death,
 		scratch: scratch, dirLock: dirLock, clustered: clustered, leaf: leaf,
 		system: system,
 	}, nil
@@ -1290,10 +1337,12 @@ const embeddedReconnectWait = time.Second
 // budget is how long a node whose own broker has stopped stays up, dark, before
 // it exits for its supervisor to restart the two together.
 //
-// Only because every attempt is at THIS member: a cluster member's peers are
-// in its INFO, and a pool that took them would land the reconnect on one of
-// them and never run out at all — which is why [embeddedServer.connect]
-// ignores what a member discovers.
+// Only because every attempt is at THIS member: the dial is in process, so
+// each attempt asks this server for a pipe, and no URL in the pool reaches
+// another. A member advertises no peer to a client either ([embeddedOptions]
+// sets Cluster.NoAdvertise), and [embeddedServer.connect] ignores what one
+// discovers besides — a pool that took a peer would land the reconnect on it
+// and never run out at all.
 //
 // # The listener budget, spent one wait at a time
 //
@@ -1307,16 +1356,27 @@ const embeddedReconnectWait = time.Second
 // stated.
 const embeddedReconnects = int(listenTimeout / embeddedReconnectWait)
 
-// connect opens a client connection to this server: through an in-memory
-// pipe when it listens on no socket, over its loopback client port when it
-// does.
+// connect opens a client connection to this server, through an in-memory
+// pipe — on every topology.
 //
-// BOTH DIALS TAKE THE LISTENER BUDGET as their handshake timeout, not nats's
+// # In process, a clustered member's too
+//
+// A clustered member's connections used to dial its client listener over
+// TCP, at the URL nats-server reports for it, while a solo member and a leaf
+// used the pipe. That made the listener something the engine needed: bound on
+// every interface, its URL — on the host's external address — gossiped to
+// every member's clients, and a connection that dropped could reconnect onto
+// a peer's broker. The pipe needs none of it, and it is never the slower dial
+// (measured on a three-member mesh, p50: a request and its reply 12 µs in
+// process against 19 µs over the loopback, an R3 synchronous publish 257 µs
+// against 309 µs). So the listener a member keeps open for routing is bound to
+// loopback and advertised to nobody ([embeddedOptions]), and nothing here
+// dials it.
+//
+// THE DIAL TAKES THE LISTENER BUDGET as its handshake timeout, not nats's
 // two-second default — see the budgets' doc for why a handshake with a server
-// already accepting shares it — and as the span of their reconnects
-// ([embeddedReconnects]). One option list for the two branches, so the
-// loopback dial a clustered member takes cannot lose a budget the in-process
-// one keeps.
+// already accepting shares it — and as the span of its reconnects
+// ([embeddedReconnects]).
 //
 // AND EVERY CONNECTION IS HELD TO THE CONTRACT ([carriesTheContract]), with
 // the reconnect watch installed beside it — this and [dial] are the only two
@@ -1330,16 +1390,19 @@ func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 		nats.Timeout(listenTimeout),
 		nats.MaxReconnects(embeddedReconnects),
 		nats.ReconnectWait(embeddedReconnectWait),
-		// THIS MEMBER AND NO OTHER. A clustered member advertises every
-		// peer's client URL in the INFO it sends, and the client adds each
-		// to its reconnect pool unless told not to: a connection that
+		// THIS MEMBER AND NO OTHER. A clustered member used to advertise
+		// every peer's client URL in the INFO it sends, and the client adds
+		// each to its reconnect pool unless told not to: a connection that
 		// dropped — a slow consumer is enough — reconnected to a random
 		// member and carried this node's traffic to a peer for the rest of
 		// its life, and one whose own member had STOPPED was carried on a
 		// peer's broker instead of running its reconnects out, so the node
 		// ran on with its member dead, the cluster a replica short, and
-		// nothing saying so. The member is in this process; a connection to
-		// any other is not what this dial is for.
+		// nothing saying so. In process, every attempt is a pipe to this
+		// server whatever URL the pool names, and no member advertises a
+		// peer to a client any more; this stays so the pool never names one
+		// should the dial or the options change again. The member is in this
+		// process; a connection to any other is not what this dial is for.
 		nats.IgnoreDiscoveredServers(),
 		nats.ReconnectHandler(reconnectWatch{
 			log: logging.Get("queue.jetstream"), embedded: true}.reconnected),
@@ -1348,13 +1411,7 @@ func (e *embeddedServer) connect(at watched) (*nats.Conn, error) {
 		nats.ErrorHandler(clientErrors{log: logging.Get("queue.jetstream")}.reported),
 	}
 	opts = append(opts, watchClose(at, true, "")...)
-	var nc *nats.Conn
-	var err error
-	if e.inProcess {
-		nc, err = nats.Connect("", append(opts, nats.InProcessServer(e.ns))...)
-	} else {
-		nc, err = nats.Connect(e.ns.ClientURL(), opts...)
-	}
+	nc, err := nats.Connect("", append(opts, nats.InProcessServer(e.ns))...)
 	if err != nil {
 		return nil, err
 	}

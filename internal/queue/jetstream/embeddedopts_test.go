@@ -86,6 +86,56 @@ func TestTheEmbeddedServerCarriesWhatTheContractPromises(t *testing.T) {
 	}
 }
 
+// A MEMBER'S CLIENT LISTENER IS FOR THIS HOST, AND NOBODY IS TOLD OF IT.
+//
+// A clustered member must open a client listener — nats-server starts routing
+// only once one is — and nothing of this process dials it: every connection
+// is in process. Bound on every interface, as it was, it was open to anything
+// that could reach the machine, and its URL, on the host's external address,
+// was gossiped through every member to every client in their INFO. So it binds
+// loopback and advertises nothing, and a member that routes nowhere — solo, a
+// member with only a leaf listener, a leaf — opens none at all.
+//
+// Asserted on the options, where it is decided: what a client of a live
+// member discovers is jetstreamtest's TestAMembersOwnClientDiscoversNoPeer.
+//
+// Mutations: leave Host empty → the clustered row, red; leave NoAdvertise
+// off → the clustered row, red; let a member with only a leaf listener listen
+// → its row, red.
+func TestAMembersClientListenerIsLoopbackAndUnadvertised(t *testing.T) {
+	t.Parallel()
+	member := Config{ServerName: "a", ClusterName: "c", ClusterPort: 6222,
+		ClusterURLs: []string{"nats://127.0.0.1:6223"}, StoreDir: t.TempDir()}
+	opts, _, err := embeddedOptions(member, systemUser{})
+	if err != nil {
+		t.Fatalf("a clustered member's options: %v", err)
+	}
+	if opts.DontListen || opts.Host != "127.0.0.1" {
+		t.Errorf("a clustered member's client listener: DontListen=%v on %q, want it "+
+			"open — routing needs it — on 127.0.0.1 alone", opts.DontListen, opts.Host)
+	}
+	if !opts.Cluster.NoAdvertise {
+		t.Error("a clustered member advertises its client URL to its peers and theirs " +
+			"to its clients, where no connection of the engine dials one")
+	}
+
+	for name, cfg := range map[string]Config{
+		"a solo member":                      {StoreDir: t.TempDir()},
+		"a member with only a leaf listener": {ServerName: "a", LeafPort: 7422, StoreDir: t.TempDir()},
+		"a leaf":                             {ServerName: "leaf", LeafURLs: []string{"nats-leaf://127.0.0.1:7422"}},
+		"a cluster that is named and routes nowhere": {ServerName: "a", ClusterName: "c", StoreDir: t.TempDir()},
+	} {
+		opts, scratch, err := embeddedOptions(cfg, systemUser{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		removeScratch(scratch)
+		if !opts.DontListen {
+			t.Errorf("%s opens a client listener, where nothing could dial it", name)
+		}
+	}
+}
+
 // TestTheClientIsToldTheCeiling is the other half: setting MaxPayload on the
 // server is only useful because the client learns it from the server's INFO
 // and refuses an oversized publish itself. That local refusal is what makes an
