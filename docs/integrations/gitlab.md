@@ -12,8 +12,10 @@ What GitLab adds over GitHub is **automated, per-agent identity provisioning**. 
 
 Connect GitLab in Company › Integrations with the instance address, the group
 and a group Owner token. The engine generates the signing secret and the
-reconcile loop creates the service accounts on its next tick, running the same
-pass `crewlet gitlab provision` runs.
+reconcile loop registers the webhook on its next tick, running the same
+company-level pass `crewlet gitlab provision` runs. Each agent turned on in the
+integration's Agents tab gets its own account through
+[per-agent access](#per-agent-access).
 
 The **group Owner token is sealed in the fleet's secret store and kept**. That
 token creates accounts and mints tokens on them, which is a standing power, and
@@ -21,11 +23,10 @@ it is held anyway for one reason: removing an account needs the authority that
 created it, so with nothing kept there was no way to disconnect the integration
 and take the accounts away with it.
 
-Two things the dashboard deliberately does not do, both of which stay on the
-command line: **rotating** every seat's token, which revokes the credential
-every agent is currently authenticating with, and **decommissioning** accounts
-whose seats have left the configuration, which cannot be told apart from a
-company mid-edit.
+Rotating a seat's token and removing its account are actions on the Agents
+tab, one seat at a time: a rotation seals the new token before the old one is
+revoked, and removal is allowed only once the seat is off, so neither can come
+from a document edit or a timer.
 
 See [Running the provisioning pass](../reference/api-endpoints.md#running-the-provisioning-pass).
 
@@ -52,17 +53,13 @@ integrations:
     webhook_name: crewlet                       # which hooks on the instance are this deployment's
     provisioning:                # read by the engine's reconcile loop AND by `crewlet gitlab provision`
       group: nimbus-hq           # top-level group the agent service accounts join
-      access_level: developer    # default group membership (developer | maintainer)
-      access_levels:             # per-handle overrides
-        tech-lead: maintainer
       username_prefix: ""        # crewlet when empty; the username is <prefix>-<handle>
-      projects: []               # extra projects to add each account to (+ hooks only when group_webhook: false / falls back)
+      projects: []               # the projects an agent may be scoped to (+ hooks only when group_webhook: false / falls back); empty: any project in the group
       group_webhook: auto        # auto (group hook, else per-project) | true (group only) | false (per-project only)
       mode: group                # where accounts are OWNED: group (default) | instance (self-managed only)
-      token_scopes: [api]        # scopes minted on each service-account PAT
 ```
 
-`access_levels` is keyed by seat **handle**, which never changes for a seat: a seat given a different handle is a new seat. A key no seat answers to is not refused: the engine logs it on every node, once per applied epoch, as an `org_dangling_reference` warning with `ref=gitlab_access_level` (see [Dangling references](../concepts/organization-model.md#dangling-references)). Remove the key when you remove the seat, or it grants its level to whichever seat is next added under that handle.
+Each agent's role and projects are set per seat, not here: see [Per-agent access](#per-agent-access).
 
 Four fields differ from the [hosted code host's](github.md) block beside it:
 
@@ -73,13 +70,59 @@ Four fields differ from the [hosted code host's](github.md) block beside it:
 
 The `provisioning:` sub-block drives the reconcile described under [Provisioning](#provisioning), and both the CLI and the engine's own reconcile loop read it.
 
-**`mode` says where a service account is owned, and it is not only the CLI's business.** It decides which endpoint creates an account, which one mints its tokens, and which one deletes it — and the group delete answers `404` as success ("unknown or already removed; both are the state the caller asked for"), so an instance-owned account sent down the group route reports itself deleted and stays live with every credential it holds. It used to be `-mode` on the command line and nowhere else, so the engine assumed `group` for every company: against accounts created with `-mode instance` its passes minted through a group that does not own them and its disconnect removed none of them. `crewlet gitlab provision -mode …` still overrides it for one invocation, the way `-public-url` overrides the Tier A webhook address — `api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise — which the command reads from the file `-config` names, already resolved.
+**`mode` says where a service account is owned.** It decides which endpoint creates an account, which one mints its tokens, and which one deletes it, and the group delete answers `404` as success ("unknown or already removed; both are the state the caller asked for"), so an instance-owned account sent down the group route would report itself deleted and stay live with every credential it holds. Per-agent access reads it from the document on every pass.
+
+---
+
+## Per-agent access
+
+Every agent seat carries its own GitLab block, and the Agents tab on the
+integration edits it. The block stores GitLab's own terms, never a Crewlet
+word:
+
+```yaml
+roles:
+  - name: SRE
+    integrations:
+      gitlab:
+        enabled: true            # off until turned on; off blocks the account and keeps it
+        access_level: 20         # GitLab's integer: 10 Guest, 15 Planner, 20 Reporter, 30 Developer, 40 Maintainer, 50 Owner
+        member_role_id: 1007     # or a custom role on GitLab Ultimate, instead of access_level
+        projects: [nimbus-hq/infra]   # empty: a member of the whole group
+```
+
+| What the seat holds | How the engine applies it |
+|---|---|
+| The role | A direct membership at that `access_level` (or custom role) in each listed project, or in the group where `projects` is empty. Security Manager and Minimal Access are not offered: the first is a beta disabled by default outside GitLab.com, and the second grants an agent nothing by itself. |
+| The token | One personal access token, named `crewlet-<handle>`, whose scopes follow the role: `read_api` and `read_repository` below Developer, `api` from Developer up. A role change that changes the scopes mints a new token, seals it, and only then revokes the old one. |
+| Off | The account is blocked where the provisioning token is an instance administrator's; with a group Owner token (every GitLab.com deployment) its memberships are removed instead. Either way every token the engine minted on it is revoked, and the account and its history are kept. |
+| Back on | Unblocked (only an account the engine blocked; one somebody else blocked waits for a person to choose Turn back on), memberships restored, a new token minted. |
+| Remove | A separate, confirmed action, allowed only while the seat is off. The service account is deleted through the route that matches its owner; GitLab keeps its contributions under the Ghost User. |
+| Rotate | A new token is minted and sealed, then the previous one is revoked. A token an administrator made by hand on the account is never touched. |
+
+The token is sealed under the name the engine derives for the seat,
+`GITLAB_TOKEN_<HANDLE>` (for example `GITLAB_TOKEN_SRE`), and no document
+names it. The engine binds it to the seat's GitLab tool server under
+`GITLAB_TOKEN` (the variable `glab mcp serve` reads) or the `Private-Token`
+header (a shared HTTP server in remote-authorization mode).
+
+Every pass reads each account back: its state, its memberships in the group
+and in every project the company or a seat names, and the tokens the engine
+minted on it. A role or project changed by hand at GitLab is restored to the
+document's setting and reported; the Agents tab offers Keep the vendor's
+setting, which writes GitLab's value into the document instead. Maintainer and
+Owner are administration roles: a raise to either carries a warning and asks
+for a fresh step-up.
+
+Custom roles are read live: from the group on GitLab.com, from the instance on
+a self-managed GitLab, and only on Ultimate. A custom role GitLab no longer has
+is reported on the seat, never replaced by a default role.
 
 ---
 
 ## Per-role wiring
 
-Declare the GitLab **MCP tool server** once in `mcp_servers` as a `shared: false` server. Each agent supplies its own service-account PAT in `role.mcp_env.gitlab`; a seat whose executor run pushes code also declares the same PAT in `role.sandbox.env`, for the git-auth recipe its box runs:
+Declare the GitLab **MCP tool server** once in `mcp_servers` as a `shared: false` server. Each agent that is on for GitLab gets its own service-account token from the engine, bound to the server under the key it reads; a seat whose executor run pushes code also names the same engine-owned variable in `role.sandbox.env`, for the git-auth recipe its box runs:
 
 ```yaml
 mcp_servers:
@@ -94,18 +137,21 @@ mcp_servers:
 
 roles:
   - name: Agent SWE
+    integrations:
+      gitlab:
+        enabled: true
+        access_level: 30                         # Developer
     mcp_env:
       gitlab:
-        GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"    # per-agent service-account PAT (glab reads it)
-        GITLAB_HOST: gitlab.com
+        GITLAB_HOST: gitlab.com                  # config only; the engine binds the seat's own token
     sandbox:
       env:
-        GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"     # same PAT for the git-auth recipe
+        GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_SWE}"  # the engine-owned name, for the git-auth recipe
 ```
 
-Provisioning mints into the `${VAR}` referenced by the block's **credential** key — `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, or `Authorization: Bearer …`, the same keys boot-time identity resolution reads. Everything else in the block (`GITLAB_HOST`, an API url) is config and is left alone, so two seats may point at one shared `${GITLAB_HOST}` without it being mistaken for a credential they both claim.
+`mcp_env.gitlab` no longer carries the credential: a seat's token is the engine's (see [Per-agent access](#per-agent-access)), and a credential key there (`GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, `Authorization`) is refused. Everything else in the block (`GITLAB_HOST`, an API url) is config and is forwarded to the seat's instance as before.
 
-The default is the official **`glab` CLI stdio MCP server** (`glab mcp serve`): the engine's MCP bridge spawns one `glab` process per role with that role's `mcp_env.gitlab` env, so the per-agent PAT (`GITLAB_TOKEN`) IS the per-agent identity — no separate server to run. Boot-time identity resolution reads the token from whichever key is present (`GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, a `Private-Token` header, or `Authorization: Bearer <pat>`), so the http alternative below works too. The engine names **no tool-specific variable** — the whole `mcp_env.gitlab` block is forwarded verbatim to the role's MCP instance — and `GITLAB_TOKEN` is declared in `role.sandbox.env` by the founder exactly as `GITHUB_TOKEN` is (see [Code Sandbox](../concepts/code-sandbox.md)). A role with no `mcp_env.gitlab` gets no GitLab tools.
+The default is the official **`glab` CLI stdio MCP server** (`glab mcp serve`): the engine's MCP bridge spawns one `glab` process per role with that role's `mcp_env.gitlab` env, so the per-agent PAT (`GITLAB_TOKEN`) IS the per-agent identity, no separate server to run. Boot-time identity resolution reads the token from whichever key is present (`GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, a `Private-Token` header, or `Authorization: Bearer <pat>`), so the http alternative below works too. The engine adds the seat's own token to the role's MCP instance under `GITLAB_TOKEN` and forwards the rest of the `mcp_env.gitlab` block verbatim, and `GITLAB_TOKEN` is declared in `role.sandbox.env` by the founder exactly as `GITHUB_TOKEN` is (see [Code Sandbox](../concepts/code-sandbox.md)). A seat that is off for GitLab gets no GitLab tools.
 
 The entry's own `env` is not tuning: it keeps what `glab` prints on its own out of the tool results an agent reads, and stops a usage report to the instance on every call. [MCP tool server](#mcp-tool-server) says what each switch stops, and why the switches go in the entry rather than in the engine host's environment.
 
@@ -194,12 +240,12 @@ Once an MR exists, GitLab tools stay in the picture on the **read/review/track**
 
 ## Provisioning
 
-`crewlet gitlab provision <company.yaml>` is a one-shot, **idempotent reconcile** from company config to GitLab state, runnable any number of times. It reads the company's `${VAR}`s — the instance URL, the signing secret and, with `-secret-store`, each seat's token — the way the engine resolves them, from the secret store first: through the running engine with one of its Tier A tokens in `CREWLET_API_TOKEN`, or, with the engine stopped, from the fleet's store itself, which the run reaches through this node's own broker or the external one. A member of a cluster whose engine is stopped is refused before it reads or touches anything, naming `-api` ([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)).
+`crewlet gitlab provision <company.yaml>` is a one-shot, **idempotent reconcile** of the company-level half of GitLab, runnable any number of times: it checks the group, warns when the provisioning token is about to expire, and registers the webhook with its signing secret. It reads the company's `${VAR}`s (the instance URL and the signing secret) and mints nothing but a signing secret. Each agent's account, role and token are [per-agent access](#per-agent-access), applied by the engine.
 
 ```bash
 GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
   -public-url https://engine.example.com \
-  -env-file .env.gitlab
+  -secret-store
 ```
 
 ### Flags
@@ -207,61 +253,32 @@ GITLAB_ADMIN_TOKEN="$GITLAB_ADMIN_TOKEN" crewlet gitlab provision company.yaml \
 | Flag | Description |
 |------|-------------|
 | `company.yaml` (positional) | Path to the Tier B company YAML |
-| `-admin-token` | Operator credential (see the permission matrix below). Empty reads `$GITLAB_ADMIN_TOKEN` |
-| `-public-url URL` | The engine's **public base address**, e.g. `https://engine.example.com` — *not* a webhook path. The engine owns its six webhook routes and derives `/webhooks/gitlab` itself, so there is no path to mistype. **Omit to skip webhook registration** |
-| `-secret-store` | Write minted credentials into the encrypted [secret store](../concepts/secret-store.md) instead of an env file — the engine reads them back directly, so there is nothing to source, and every node of the fleet reads them: the store is the fleet's whether the run writes through this node's running engine or, with it stopped, reaches the store itself ([Which store the CLI writes](../concepts/secret-store.md#which-store-the-cli-writes)). Through a running node, the run re-activates the revision that reads the values once, at its end (`POST /config/reload`, retried over a moment's failure; one that still fails is named on the `Next:` line and rolls nothing back, and a run that dies first leaves them sealed and inactive until the company is next re-activated); with this node's engine stopped, a running fleet reads them at its next apply, the `POST /config/reload` the run's `Next:` line names. It records into the store the run reads from, and reads back each planned seat's token in the run's first batch to decide whether to keep it. Needs a Tier A keyring (`-config`) or `-api` |
-| `-env-file PATH` | Env file to append/update minted tokens into. Exactly one of the three sinks: naming two is refused. Refused where the company's store holds a name the run can mint into — see [Token sinks](#token-sinks) |
-| `-print` | Print `export VAR=token` lines to stdout and persist nothing. Refused where the company's store holds a name the run can mint into — see [Token sinks](#token-sinks) |
-| `-config PATH` | Tier A config naming this node's store and secret keyring (default `crewlet.yaml`). Every run reads it, not only one with `-secret-store`: the company's `${VAR}`s — the instance URL, the signing secret — resolve through the fleet's store ahead of the environment, as the engine resolves them, and a run that read the environment alone would see a signing secret the store already holds as unset and mint over it. With no file at that path and no `-api`, the run resolves from the environment only, and says so |
-| `-api URL` | A running node to read the company's stored values and record credentials through. Default: this node's engine when it runs, and the fleet's store itself when it is stopped; name one from a node that holds no data, from a member of a cluster whose engine is stopped, or from a machine that is not a node, with one of its Tier A tokens in `CREWLET_API_TOKEN` — each value the run reads through a node is a reveal, which a machine token is refused |
-| `-rotate` | Mint a fresh token for **every** seat, including seats whose current one still works — and, wherever the hook is registered, a fresh signing secret into the variable `signing_secret` names. Not the default, and not what a re-run does: GitLab returns a token's value once, so minting every run would revoke the credential every agent is currently authenticating with — an operator adding a tenth seat would take the other nine down. Then do what the run's `Next:` line says |
-| `-decommission` | Delete managed service accounts whose seats have left the config. Off by default: it is the one destructive direction, and a company mid-edit looks exactly like a company that removed a seat |
-| `-mode group\|instance` | Where service accounts are **owned**, for this run only. It defaults to **`integrations.gitlab.provisioning.mode`**, which is where the answer lives: the engine provisions the same company from the same document and reads no flags, so a mode that existed only on the command line had the CLI creating accounts one way and the loop minting and deleting them the other. `group` creates them under `provisioning.group`; `instance` creates them on the instance itself. Self-managed only — GitLab.com does not serve the instance route, and a run that asks for it there is refused naming this flag. An unknown value is refused before the config is even loaded |
-| `-token-expiry-days N` | Lifetime minted onto each token. `0` sends no expiry and lets the instance policy decide |
-| `-dry-run` | Print what the run would do and touch nothing. It reads the company's values as a real run does — its signing-secret line depends on them — by the same route |
-
-The CLI probes the operator credential with `GET /user` up front and fails fast with the failing endpoint and status if the token or its scopes are wrong. It then runs two **preflights** so common setup gaps surface as one clear message instead of a stack of API errors:
-
-- **Service-accounts access.** A single list call to the service-accounts API. A `403` here — even with a valid group-Owner `api` token — is GitLab.com's identity-verification gate, not a scope problem; the run aborts with `Provisioning cannot proceed: …` pointing at [identity verification](#prerequisites-gitlabcom).
-- **Declared projects exist.** Each `provisioning.projects` entry is checked with `GET /projects/:id`. A project that does **not** exist (`404`) is **dropped and named in a report note** rather than aborting the whole reconcile on the first missing one — create it (or remove it from the config) and re-run. The accounts, tokens, and any projects that do exist still reconcile.
+| `-admin-token` | The provisioning credential (see the permission matrix below). Empty reads `$GITLAB_ADMIN_TOKEN` |
+| `-public-url URL` | The engine's **public base address**, for example `https://engine.example.com`, not a webhook path: the engine derives `/webhooks/gitlab` itself. **Omit to skip webhook registration**, which the run then reports |
+| `-secret-store` | Write a minted signing secret into the encrypted [secret store](../concepts/secret-store.md), where every node of the fleet reads it |
+| `-env-file PATH` | Env file to write a minted signing secret into. Exactly one of the three sinks: naming two is refused |
+| `-print` | Print `export VAR=value` lines to stdout and persist nothing |
+| `-config PATH` | Tier A config naming this node's store and secret keyring (default `crewlet.yaml`) |
+| `-api URL` | A running node to read the company's stored values and record through |
+| `-rotate` | Mint a fresh signing secret into the variable `signing_secret` names, wherever the hook is registered. Not what a re-run does: the hook stops verifying against the old key the moment it runs, until the engine reads the new one |
+| `-dry-run` | Print what the run would do and touch nothing |
 
 ### What a run does
 
-For each **agent** seat that declares GitLab credentials (presence of `mcp_env.gitlab`, the same convention GitHub uses):
+1. **Checks the group.** `provisioning.group` must exist: every agent's access is granted within it. This first call is also where a refused token shows up, named as a rejected credential.
+2. **Warns about the provisioning token.** Where GitLab publishes the token's expiry and it falls inside the warning window, the run reports it: nothing rotates this credential, and the day it lapses every pass is refused.
+3. **Ensures webhooks** (only when a public address is known). It registers the events the router acts on (`issues_events`, `merge_requests_events`, `note_events`, `pipeline_events`) with **every other event explicitly off**, pointing at the engine's `/webhooks/gitlab`.
 
-1. **Ensure the service account exists.** Look it up by username — `<username_prefix>-<handle>`, the prefix being `crewlet` when it is unset (see [A seat's account is named after its handle](../concepts/integration-reconcile.md#a-seats-account-is-named-after-its-handle)) — and create it if missing, under the configured group or (with `-mode instance`) on the instance. The display name is `role.name`. **No email address is sent**, so GitLab assigns one itself (`service_account_group_…@noreply.<instance>`).
+   > **The hook's description records which key it carries, as a digest.** GitLab never returns a hook's signing token, so the digest is how a later pass tells a hook holding the current key from one holding a key rotated elsewhere.
 
-   > **That omission is load-bearing.** GitLab's service-account routes take `email` as optional, and its documentation adds the sentence this turns on: *"custom email addresses require confirmation before the account is active"*, unless the group has a matching verified domain. Crewlet used to derive `<prefix><handle>@noreply.crewlet.invalid` — a reserved TLD ([RFC 2606](https://www.rfc-editor.org/rfc/rfc2606)), so no confirmation mail can ever be delivered and no domain can ever be verified. Every account created that way was permanently inactive, and GitLab refused each of its tokens with `403 Your primary email address is not confirmed`. Letting GitLab name the address keeps the same promise — the account is a robot and its mailbox does not exist — on a domain the instance actually controls.
+   > **Auto-generated signing secret.** If `signing_secret` points at a `${VAR}` that is unset, the run generates a valid `whsec_<base64-of-32-bytes>` secret, stamps it on the hook, and records it to the chosen sink.
 
-   > **An account GitLab will not let sign in stops the seat here.** GitLab's service-account delete **blocks** rather than erases, so the ordinary disconnect-then-reconnect finds an account that still exists, still answers the lookup, and holds no credential that can ever work. The pass used to walk straight past that: mint a token, seal it, have the very next request refused, and mint another on the next tick, for ever. It now mints nothing into an account whose `state` is anything but `active` — blocked, deactivated, `ldap_blocked` or banned — and reports the seat as `identity_failed` naming the account and the state GitLab itself reports. An absent `state` is *not* read as blocked: older listings and the creation response omit the field, and reading absence as "cannot sign in" would report every seat on such an instance as failed while provisioning nothing.
-
-   > **It is reported rather than fixed, and that is GitLab's doing.** Unblocking is `POST /users/:id/unblock`, an **instance-admin** route, while the ordinary deployment provisions with a group Owner token — so attempting it would be a `403` on every tick. This is the one place the [shared rule for apps that disable rather than delete](../concepts/integration-reconcile.md#three-apps-disable-rather-than-delete-and-one-rule-covers-all-three) cannot be carried out, and no provenance marker is written either: a marker is only worth having where the engine could act on it. With `mode: instance` the finding links to `/admin/users?filter=blocked`, because there the operator credential *is* an instance administrator; in group mode it gives the state in words and no link, since where a group Owner administers service accounts has moved between GitLab versions and a link that 404s costs a trip to find out.
-
-   > **The lookup is mode-independent**, `GET /users?username=`, which sees every account on the instance whatever owns it. That is what makes switching modes safe: an operator who moves a company from `group` to `instance` finds the accounts it already has instead of colliding with their own usernames. Nothing migrates an existing account between owners — GitLab has no such operation — so a company that wants its accounts genuinely instance-owned decommissions and re-provisions them.
-2. **Ensure membership.** Read the group's roster, and each listed project's, and write only on a real difference: a seat that is not a member is **added** at its access level (`access_level`, with `access_levels` per-handle overrides); one already there at that level costs no request; one at a level the config no longer asks for is **updated**.
-
-   > **That last case used to do nothing.** The pass only ever POSTed, and GitLab answers a POST for an existing member with 409, which was swallowed as success — so editing `access_level` or an `access_levels` override changed nothing at all for a seat that was already a member, silently, and the only way to apply it was to remove the account and re-provision. A converged pass also sent one POST per seat and one per seat × project on every tick for ever; at ten seats and four projects that was about fifty writes every ten minutes that changed nothing.
-
-   > **Access level and merging.** A **Developer** can push a branch and open an MR, but GitLab's default protected branch (`main`) only permits **Maintainers** to *merge* — so for an autonomous review→merge loop (no human doing the final merge), provision the code-active seats as **`maintainer`**. The trade-off: membership here is **group-wide and uniform**, so group-Maintainer means an agent can merge *any* project in the group; scope that behaviourally with an "own your repos" policy. Hard per-repo scoping (Maintainer only on owned projects, Developer elsewhere) would need per-`(seat, project)` access levels, which the reconcile does not model today — provision the group at `developer` and add per-project `maintainer` memberships out of band if you need it. Alternatively, keep `developer` and relax each project's protected-branch *"Allowed to merge"* to include Developers (a project setting the provisioner does not manage).
-3. **Ensure a token.** The provisioner derives the **env-var name from the config itself** — it scans the seat's `mcp_env.gitlab` values *and* its `sandbox.env.GITLAB_TOKEN` for unresolved `${VAR}` references (so a sandbox-authoring seat with no MCP surface still gets its token; other sandbox env keys are never scanned). For each referenced var with no recorded value, it mints a PAT (scopes from `provisioning.token_scopes`, default `[api]`; expiry from `-token-expiry-days`) named `crewlet-<handle>` and writes `VAR=glpat-…` to the sink. So the config's `${GITLAB_TOKEN_SWE}` reference is the *contract* and the provisioner fills it — it never invents its own naming scheme. This is what makes minting idempotent: GitLab never returns a token value after creation, so a seat whose `${VAR}` already carries a value is **skipped**.
-
-   > **A minted token is proved before it is sealed.** It is checked against `GET /user` immediately: a token refused seconds after GitLab issued it means the *account* cannot authenticate, not that the credential is stale. The pass then revokes every token it owns on that account, seals nothing, and reports the seat as `identity_failed` — for a person to fix at GitLab. Without that check the refusal is indistinguishable from a stale token, so the pass mints a replacement, which is refused for the same reason, on every tick, for ever. Measured against GitLab.com: 144 live `api`-scoped tokens on one service account, valid for a year, none of which had ever worked. A seat in this state is deliberately left with **no** credential; the alternative is that pile.
-4. **Nothing is provisioned for `integrations.gitlab.token`.** That field holds the read-only credential [participants-based routing](#event-routing) uses, and **you supply it**: a personal access token with the `read_api` scope, set in GitLab's settings under Company › Integrations or written into the `${VAR}` the field references.
-
-   > **This step used to claim otherwise**, saying a dedicated `crewlet-engine` service account was provisioned with Reporter access and a `read_api` PAT minted into that var. No such account was ever created and `integrations.gitlab.token` is read by no reconcile path in this package — so the engine warned `gitlab_has_no_routing_token`, the setup form declared no input for it, and there was nowhere at all to supply the value the warning was about. The form asks for it now, as an optional field, and the warning names it.
-5. **Ensure webhooks** (only when `-public-url` is passed). Register the events the router acts on — `issues_events`, `merge_requests_events`, `note_events`, `pipeline_events` — and **every other event explicitly off**, pointing at the engine's `/webhooks/gitlab`, carrying the `signing_secret` as the hook's `signing_token` (the caller-supplied, write-only `whsec_…` value GitLab uses to sign the `webhook-signature` header; it is never returned, so it must come from your side — see [Verification](#verification)). Existing hooks carrying this deployment's `webhook_name` are **updated, not duplicated**, whatever address they point at — and updated only when what they carry differs from what the company asks for: a missing signing token, a routed event switched off, an unrouted one switched on, TLS verification disabled, or a signing key that is no longer the one this deployment holds. A hook that already matches is left alone rather than re-PUT on every pass.
-
-   > **The hook's description records which key it carries, as a digest.** GitLab never returns a hook's signing token and answers exactly one question about it — whether one is set — so "does this hook hold the key the fleet currently holds" had no answer, and a secret rotated any other way (`crewlet secrets set`, the signing-secret field on the setup form, a peer's apply) never reached the hook: the pass found it converged, wrote nothing, and GitLab went on signing with the previous key while the engine verified with the new one and refused every delivery, on a surface reporting ready. The description is the only field this engine controls that GitLab gives back, so the answer goes there as `crewlet:<12 hex characters>` — a truncated SHA-256 over a domain string and the secret. It is one-way and 48 bits wide: enough to notice a change, useless for recovering anything, since the secret is 32 random bytes. Edit or clear it and the next pass re-keys the hook once, which is the correct direction — a hook this engine cannot place is one it should re-key.
-
-   > **Auto-generated signing secret.** If `signing_secret` points at a `${VAR}` that is unset, the provisioner **generates** a valid `whsec_<base64-of-32-bytes>` secret, stamps it on the hook, and records it to the token sink (env file or `-print`) under that var name — the same mint-into-`${VAR}` contract used for seat tokens. Source the sink into the engine's env and both sides share the value; re-runs reuse the persisted secret rather than regenerating (so a rotated hook and the engine stay in sync). A value **this deployment has already sealed** is read back and reused even when the variable resolves to nothing, which matters to the reconcile loop rather than to this command: a `${VAR}` resolves from a snapshot taken at apply time, so in the window between a pass sealing a secret and something rebuilding that snapshot the resolver answers empty for a key the fleet already holds — and without the read-back the loop minted again on every tick, re-pointing the hook at a key the running engine does not hold. This only happens when a hook is actually being created (`-public-url` given); provide the var yourself to pin a specific secret.
-
-   > **Off is stated, never omitted.** GitLab defaults `push_events` to **true**, so a subscription body that simply does not mention push subscribes to it — every push on every repository delivered to an engine that answers `200` and drops it. So the hook is registered with the full flag set: the four above `true` and the other fifteen `false`. An emoji award is the near miss and is deliberately off: it names a user and a target but no party to notify.
+   > **Off is stated, never omitted.** GitLab defaults `push_events` to true, so a body that does not mention push subscribes to it.
 
    See [Where the webhook lands](#where-the-webhook-lands) for which level it goes on.
+4. **Nothing is provisioned for `integrations.gitlab.token`.** That field holds the read-only credential [participants-based routing](#event-routing) uses, and **you supply it**: a personal access token with the `read_api` scope.
 
-Human seats are never created — they carry `contact.gitlab_username` and are resolved, not provisioned.
-
-> **Same `${VAR}` in both places.** Point `role.sandbox.env.GITLAB_TOKEN` at the *same* `${GITLAB_TOKEN_<SEAT>}` reference as `mcp_env.gitlab.GITLAB_TOKEN` (as the examples do) — one PAT, one identity for both tools and git.
+The webhook is registered whatever the seats: a company whose agents are all off GitLab still has its hook.
 
 ### Where the webhook lands
 
@@ -293,20 +310,18 @@ The steady-state reconcile deliberately does **not** walk the group like that. I
 
 ### Token sinks
 
-Three sinks, chosen by flag:
+Three sinks, chosen by flag, for the one value this command can mint, the signing secret:
 
-- **`-secret-store`**: write each minted value into the encrypted [secret store](../concepts/secret-store.md) under the same `${VAR}` name the config references. The engine consults the store ahead of the environment, so there is no file to source and no restart — and the credential is recorded where the whole fleet reads it, through this node's running engine or, with it stopped, in the fleet's store directly. A running engine resolves through a snapshot it rebuilds at each configuration apply: written through a running node, the node re-activates the revision that reads the values once, at the end of the run, and written with this node's engine stopped, the run's last line says to re-activate the current revision (`POST /config/reload` to a node that is up); a stopped one reads the values when it starts. This is the recommended sink: every node's Tier A carries the keyring the store seals under.
-- **`-env-file PATH`**: append/update `VAR=token` lines — the file the operator feeds the engine. Written through on every mint, so a crash mid-run cannot leave a minted-but-unrecorded credential, and each write is atomic and leaves the file `0600` — including when you created it yourself, which under the usual umask means `0644`. A newly minted token is shown once; re-runs never re-print a live token.
-- **`-print`**: emit `export VAR=token` lines to stdout for shell `eval` and persist nothing.
+- **`-secret-store`**: write it into the encrypted [secret store](../concepts/secret-store.md) under the name the config references. The engine consults the store ahead of the environment, so there is no file to source and every node reads it.
+- **`-env-file PATH`**: append or update a `VAR=value` line, written atomically and left `0600`.
+- **`-print`**: emit an `export VAR=value` line to stdout and persist nothing.
 
-**The store outranks an env file and stdout.** The engine resolves every `${VAR}` from the secret store before its environment, so a token minted into `-env-file` or `-print` for a seat whose token variable the store already holds would never be read — and the run retires the seat's earlier tokens once it records the new one, so the seat the engine runs on the stored token is locked out. The same goes for the signing secret under `-rotate`: the hook would sign with the new key while the engine verified with the stored one. So a real run with either sink is refused before it reaches GitLab where the store — through a running node, or reached directly with this node's engine stopped — holds a planned seat's token variable, or the signing secret's `${VAR}` the run would mint or rotate. Record with `-secret-store`, or remove the stored value first with `crewlet secrets unset` ([a sink the store outranks](../reference/cli.md#a-sink-the-store-outranks)).
+**The store outranks an env file and stdout.** The engine resolves every `${VAR}` from the secret store before its environment, so a secret minted into `-env-file` or `-print` under a name the store already holds would never be read; such a run is refused before it reaches GitLab.
 
-### Rotation & decommission
+### Rotation
 
-- **`-rotate`** mints a fresh token for **every** seat — including seats whose current one still works — retires the previous `crewlet-<handle>` tokens on that account, and updates the chosen sink; wherever the hook is registered it replaces the [signing secret](#verification) too, minted into the variable `signing_secret` names. It is a flag rather than what a run does because GitLab returns a token's value exactly once: a provisioner cannot check that what it recorded last time still matches, so minting every run would revoke the credential every agent is currently authenticating with. An operator adding a tenth seat would take the other nine down, from a command whose whole promise is that it is safe to re-run. Then do what the run's `Next:` line says: with `-secret-store`, nothing through a running node, which re-activated the revision once at the end of the run, or `POST /config/reload` to a node that is up for a run made with this node's engine stopped, while a node that has not started yet reads them as it starts; with `-env-file` or `-print`, the values into the engine's environment and a restart. On the GitLab.com Free tier — where every PAT expires within 365 days — this is the once-a-year cron candidate.
-- **`-decommission`** (explicit, never default) deletes managed service accounts whose seats have left the config. It considers only members of `provisioning.group` whose username starts with `<username_prefix>-` (`crewlet-` when the prefix is unset), so an account without that prefix is never touched. Off by default because it is the one destructive direction, and a company mid-edit looks exactly like a company that removed a seat.
-
-A run that changed nothing still says so: the report names the seats it **kept**, because a report listing only changes reads as a run that did nothing — and the operator's next move would be to reach for `-rotate`, which is exactly the outage above.
+- **`-rotate`** replaces the [signing secret](#verification), minted into the variable `signing_secret` names, wherever the hook is registered. It is a flag rather than what a run does because the hook stops verifying against the old key the moment it runs.
+- **A seat's token** is rotated from the Agents tab: the new token is sealed before the old one is revoked.
 
 ### Permission matrix — the operator credential
 
@@ -319,8 +334,8 @@ It is **held** rather than asked for each time, and the reason is the disconnect
 | Target | Required credential |
 |--------|---------------------|
 | **GitLab.com** (primary) | A **top-level group Owner PAT with the `api` scope** — no instance admin. Everything the provisioner touches (service accounts, their PATs, memberships, hooks) is group-Owner-callable on GitLab.com |
-| **Self-managed**, `-mode group` (default) | An **instance admin PAT**, **or** a group Owner PAT with the instance setting `allow_top_level_group_owners_to_create_service_accounts` enabled |
-| **Self-managed**, `-mode instance` | An **instance admin PAT**, always — a group Owner cannot create an account the instance owns. A `403` on this route says so by name, because the same status means a different remedy in each mode and "403 Forbidden" alone tells an operator nothing about which |
+| **Self-managed**, `mode: group` (default) | An **instance admin PAT**, **or** a group Owner PAT with the instance setting `allow_top_level_group_owners_to_create_service_accounts` enabled |
+| **Self-managed**, `mode: instance` | An **instance admin PAT**, always: a group Owner cannot create an account the instance owns. A `403` on this route says so by name, because the same status means a different remedy in each mode and "403 Forbidden" alone tells an operator nothing about which |
 
 **Every token operation goes through the group that owns the account**, which
 is what makes the GitLab.com row above true:
@@ -520,14 +535,14 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
    cp examples/nimbus.company.yaml nimbus.local.company.yaml
    ```
    Then edit `nimbus.local.company.yaml`:
-   - **`integrations.gitlab`** — set `url: http://gitlab.local:8929`. Leave `provisioning.group: nimbus-hq` and `access_level: maintainer` as shipped: an agent has to be able to merge its own reviewed MR, GitLab's default protected `main` lets only maintainers merge, and a Developer would stall the review→merge loop on a human. Nothing mints the `token` it names: give it a `read_api` token on the local instance, or leave it unresolved and comments reach only the people a payload names (see [Event routing](#event-routing)).
+   - **`integrations.gitlab`**: set `url: http://gitlab.local:8929`. Leave `provisioning.group: nimbus-hq` as shipped, and give each GitLab seat `integrations.gitlab: {enabled: true, access_level: 40}` (Maintainer): an agent has to be able to merge its own reviewed MR, GitLab's default protected `main` lets only maintainers merge, and a Developer would stall the review→merge loop on a human. Nothing mints the `token` it names: give it a `read_api` token on the local instance, or leave it unresolved and comments reach only the people a payload names (see [Event routing](#event-routing)).
    - **the `gitlab` MCP server** — nothing to change: the `shared: false` `glab mcp serve` entry under [Per-role wiring](#per-role-wiring) names no host, and its `env` is the same against any instance.
    - **`mcp_env.gitlab`** on `Agent DevRel`, `Agent SWE`, `Agent Frontend SWE` and `Agent AI Systems Engineer` — set `GITLAB_HOST: http://gitlab.local:8929` and `GLAB_API_PROTOCOL: http` beside each seat's `${GITLAB_TOKEN_*}` placeholder. The second is not optional: glab takes the API's scheme from its `api_protocol` setting, which is `https` unless `GLAB_API_PROTOCOL` says otherwise, and not from the URL in `GITLAB_HOST`, so without it every glab tool call goes to the compose instance over HTTPS and fails with `http: server gave HTTP response to HTTPS client`.
    - **the git-auth recipe** under `providers.sandbox.setup` — point its host at the local instance: the helper's check becomes `host=gitlab.local:8929` (git sends the port), its registration `'git config --global credential."http://gitlab.local:8929".helper "!''$HOME/.local/bin/git-credential-crewlet''"'` (the key re-pointed, the quoted helper path kept as it is), and the two `insteadOf` rewrites map `git@gitlab.local:` and `ssh://git@gitlab.local:2424/` (the compose instance's SSH port) onto `http://gitlab.local:8929/`. The helper already lives in the box's home, the only place a local box writes a setup file (see [Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)); see the caveat at the end of this section before moving a seat to a cell that cannot reach a laptop.
    - **every `gitlab.com` an agent reads**, in every form — in the `brief` of both engine-wide steps (`git-auth` and `nimbus-conventions`, which says every project lives under `gitlab.com/nimbus-hq`), in each engineering seat's own setup `brief` (`go`, `node` and `python` name the projects that seat owns), and in the engineering seats' `backstory`: `https://gitlab.com` becomes `http://gitlab.local:8929`, `git@gitlab.com:` becomes `git@gitlab.local:`, and every other `gitlab.com` — `gitlab.com/nimbus-hq/…`, and the git-auth brief's "authenticate to gitlab.com" — becomes `gitlab.local:8929`; and the git-auth brief's "HTTPS", which it says git pushes over and rewrites SSH remotes to, becomes "HTTP". Every step's brief is folded into the coding agent's `## Your environment` block, so a mention left behind sends it to gitlab.com, where the re-pointed helper offers no token, or over a scheme the instance does not serve.
 
-   The `${GITLAB_TOKEN_*}` placeholders the copy carries are what the provisioner mints into in the next step; do not replace them with a literal token.
-4. **Provision the agents.** The root PAT is the operator credential; `-public-url` is the engine's base address — its **embedded API**, on whatever `api.port` your Tier A file binds (`80` in `examples/nimbus.config.yaml`), reachable from the GitLab container via `host.docker.internal` — and the provisioner appends `/webhooks/gitlab` itself. No `GITLAB_SIGNING_SECRET` needed — the provisioner [generates one](#what-a-run-does) and writes it to the env file. The run loads `examples/nimbus.config.yaml`, the Tier A file step 5 runs the engine with, so export what that file reads first: the keyring (`crewlet secrets keygen -key-id 2026-01` prints the line) and this node's own API token:
+   Each seat's token is the engine's, sealed as `GITLAB_TOKEN_<HANDLE>` once the seat is on; the copy names no token of its own, and `role.sandbox.env.GITLAB_TOKEN` references that engine-owned name.
+4. **Register the webhook.** The root PAT is the provisioning credential; `-public-url` is the engine's base address (its **embedded API**, on whatever `api.port` your Tier A file binds, `80` in `examples/nimbus.config.yaml`, reachable from the GitLab container via `host.docker.internal`), and the run appends `/webhooks/gitlab` itself. No `GITLAB_SIGNING_SECRET` is needed: the run [generates one](#what-a-run-does) and writes it to the env file. The run loads `examples/nimbus.config.yaml`, the Tier A file step 5 runs the engine with, so export what that file reads first: the keyring (`crewlet secrets keygen -key-id 2026-01` prints the line) and this node's own API token:
    ```bash
    export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
    export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
@@ -537,7 +552,7 @@ There is no MCP-server sidecar: the GitLab tool surface is `glab mcp serve`, whi
        -env-file .env.gitlab -config examples/nimbus.config.yaml
    ```
    This is before that node's first start, so the run starts the node's own broker on its `stream.store_dir`, creates the fleet's store there as the engine's first boot would, and reads it, saying so on its first line. Only `nimbus-hq/nimbuscore` is seeded by the bootstrap, so the config's other projects (`nimbusk0s`, `console`, `website`) are checked, **dropped with a note, and everything else still reconciles** — create them in the UI if you want them, then re-run (the reconcile is idempotent). A re-run once step 5 has started the engine goes through it, so export one of its Tier A tokens first — `export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"` — and a re-run with that engine stopped again reaches the same store itself ([where a command reads the company's values](../reference/cli.md#where-a-command-reads-the-companys-values)). The compose instance serves group hooks, so the webhook lands on the group; see [Where the webhook lands](#where-the-webhook-lands) for the instances where it does not.
-5. **Run the engine** with the minted tokens sourced. `examples/nimbus.config.yaml` works as the Tier A file as-is: with a `api.port` above 0 the engine's **embedded API** both receives the GitLab webhooks and serves the dashboard, so one process is the whole stack. The port only has to match the `-public-url` you provisioned with. (Do *not* also start a second, ingress-only node here — the two would fight over the port; splitting ingress off is for [fleets](../guides/fleet.md) only):
+5. **Run the engine**, which creates each agent's account and seals its token on its first pass. `examples/nimbus.config.yaml` works as the Tier A file as-is: with a `api.port` above 0 the engine's **embedded API** both receives the GitLab webhooks and serves the dashboard, so one process is the whole stack. The port only has to match the `-public-url` you registered the hook with. (Do *not* also start a second, ingress-only node here: the two would fight over the port, and splitting ingress off is for [fleets](../guides/fleet.md) only):
    ```bash
    source .env.gitlab
    crewlet run -config examples/nimbus.config.yaml -company nimbus.local.company.yaml
