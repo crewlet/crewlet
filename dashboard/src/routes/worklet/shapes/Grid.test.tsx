@@ -32,6 +32,7 @@ vi.mock("~/lib/viewer.ts", () => ({
     admin: false,
     worklet: false,
     doclet: false,
+    chatlet: false,
     handle: "",
     owner: "",
     name: "",
@@ -43,6 +44,7 @@ vi.mock("~/lib/viewer.ts", () => ({
     asking: false,
     configWriter: true,
     configManagedBy: [],
+    chatVendors: [],
   }),
 }));
 vi.mock("~/lib/store-hooks.ts", async () => {

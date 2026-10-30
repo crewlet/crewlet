@@ -208,6 +208,9 @@ function refusalWords(
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "starting":
       return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
+    case "unavailable":
+      // CERTAIN, like a drain's: the engine refused before writing, and a wait clears it.
+      return `Nothing was removed${refusal.detail ? `: ${refusal.detail}` : "."} Try again in a moment.`;
     case "unsettled":
       // A CHECK STORES NOTHING, whoever answered it; only the removal itself may have landed.
       return stage === "check"

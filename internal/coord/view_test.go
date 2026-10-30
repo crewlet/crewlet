@@ -220,6 +220,53 @@ func TestAViewThatCannotListAnswersUnknown(t *testing.T) {
 	awaitAnswer(t, view, "the recovered store's two leases", holding(2))
 }
 
+// THE FIRST LISTING THAT ANSWERS IS AN EVENT, and none before it is.
+//
+// A node's seat claims wait on its view of the fleet having listed at least
+// once, and nothing else tells them when it has: a listing that failed is not
+// one, and the claims would otherwise be asked again only at the next sweep.
+// The channel closes with the answer recorded, so a reader it wakes finds the
+// listing it was woken for.
+func TestTheFirstListingThatAnswersIsAnEvent(t *testing.T) {
+	t.Parallel()
+	store := newStubLister(node("a"))
+	store.set(errors.New("the store is unreachable"))
+	view, err := coord.NewLeaseView(store, coord.ClassNode,
+		coord.ViewOptions{Every: time.Hour, Trust: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runView(t, view)
+	store.awaitListing(t)
+	view.Invalidate()
+	store.awaitListing(t)
+	select {
+	case <-view.Listed():
+		t.Fatal("the view said it had listed while every listing had failed")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	store.set(nil, node("a"))
+	view.Invalidate()
+	select {
+	case <-view.Listed():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first listing that answered was never said")
+	}
+	if at := view.ListedAt(); at.IsZero() {
+		t.Fatal("the view said it had listed before the listing was recorded")
+	}
+	// AND IT STAYS SAID, through listings after it and failures after them.
+	store.set(errors.New("the store is unreachable again"))
+	view.Invalidate()
+	store.awaitListing(t)
+	select {
+	case <-view.Listed():
+	default:
+		t.Fatal("a failed listing after the first took back that the view had listed")
+	}
+}
+
 // heldLister is a store whose listing of one lease waits to be let go, saying
 // when it is asked.
 type heldLister struct {

@@ -534,6 +534,49 @@ func TestAnUnavailableAnswerWithADetailCarriesBoth(t *testing.T) {
 	}
 }
 
+// A 503 THAT NO WAIT CLEARS SAYS SO IN ITS MESSAGE TOO.
+//
+// The Retry-After and the message beside it are one answer to "should I come
+// back", and a refusal written with no hint (a full log, a full file store, an
+// evicted node) went out saying "Try again in a moment", so a client that read
+// the message sent the same request into the same refusal. Every code a caller
+// writes under a derived hint reads its own sentence while there is a wait and
+// a waitless one when there is none — except a write whose outcome nobody
+// knows, which may have landed and keeps the code's own. Mutation: write the
+// code's own message under a zero hint and the waitless rows fail; apply the
+// waitless one to an unknown outcome and that row does.
+func TestA503NoWaitClearsSaysSoInItsMessage(t *testing.T) {
+	t.Parallel()
+	message := func(code httpjson.Code, after int, detail httpjson.Detail) (string, string) {
+		rec := httptest.NewRecorder()
+		httpjson.UnavailableWith(rec, code, after, detail)
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("body is not JSON: %v", err)
+		}
+		said, _ := body["message"].(string)
+		return said, rec.Header().Get("Retry-After")
+	}
+	for _, code := range []httpjson.Code{httpjson.CodeUnavailable, httpjson.CodeIdentityUnavailable} {
+		waits, header := message(code, 2, nil)
+		if waits != code.Message() || header != "2" || !strings.Contains(waits, "in a moment") {
+			t.Errorf("%s under a hint says %q (Retry-After %q), want its own sentence", code,
+				waits, header)
+		}
+		stuck, header := message(code, 0, httpjson.Detail{"detail": "Somebody has to make room."})
+		if header != "" || strings.Contains(stuck, "in a moment") ||
+			!strings.Contains(stuck, "waiting won't change that") {
+			t.Errorf("%s under no hint says %q (Retry-After %q), want that waiting won't help",
+				code, stuck, header)
+		}
+	}
+	unknown, _ := message(httpjson.CodeUnavailable, 0, httpjson.Detail{
+		"outcome": httpjson.OutcomeUnknown, "op_id": "op-1"})
+	if unknown != httpjson.CodeUnavailable.Message() {
+		t.Errorf("a write that may have landed says %q, want the code's own sentence", unknown)
+	}
+}
+
 // A WRITE THAT MAY HAVE LANDED SAYS SO AS A FIELD, NOT A SENTENCE.
 //
 // An unknown outcome and a refusal are both 503s and send a client opposite
@@ -869,5 +912,33 @@ func TestThePackagePrefixesAreTheModulesPackages(t *testing.T) {
 		if !found[name] {
 			t.Errorf("goPackages names %s, which no package in the tree is; remove it", name)
 		}
+	}
+}
+
+// THE WIRE ESCAPES MARKUP AT ITS ONE WRITER, uniformly: a plain string and the
+// bytes a json.RawMessage embeds come out spelled alike, and every decoder
+// reads them back as written. The escaping protects nothing behind nosniff
+// and a `default-src 'none'` policy, but turned off at Write alone the wire
+// would be spelled however each producer chose — so it stays on, and a reader
+// that shows an answer as text decodes it first. Mutation: Write through
+// internal/plainjson leaves the embedded `<b>&` raw and is red.
+func TestTheWireEscapesMarkupAtItsOneWriter(t *testing.T) {
+	t.Parallel()
+	rec := httptest.NewRecorder()
+	httpjson.Write(rec, http.StatusOK, map[string]any{
+		"text":     "a < b & c > d",
+		"embedded": json.RawMessage(`"<b>&</b>"`),
+	})
+	body := rec.Body.String()
+	if strings.ContainsAny(body, "<>&") {
+		t.Errorf("the wire carried markup unescaped, so it is spelled by whichever "+
+			"producer made each value: %s", body)
+	}
+	var back map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &back); err != nil {
+		t.Fatal(err)
+	}
+	if back["text"] != "a < b & c > d" || back["embedded"] != "<b>&</b>" {
+		t.Errorf("a decoder read back %q, want the text as written", back)
 	}
 }

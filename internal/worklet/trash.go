@@ -28,13 +28,28 @@ import (
 // being possible. That is the property the tombstone buys and the reason
 // nothing here has a retention horizon.
 //
-// # A SUBTREE LEAVES TOGETHER OR NOT AT ALL
+// # A SUBTREE GESTURE TAKES ITS SUBTREE, AND AN ITEM'S ALONE TAKES THE ITEM
 //
-// Removing a parent and leaving its children reachable is the shape that
-// produces orphans a person then has to find. `RemovedWith` is what makes the
-// inverse true as well: every descendant's tombstone names the root of the
-// gesture that removed it, so a restore brings back exactly what one removal
-// took and never a task that was already in the trash for its own reasons.
+// A removal made on a subtree takes the whole subtree, and `RemovedWith` is
+// what makes its inverse exact: every descendant's tombstone names the root of
+// the gesture that removed it, so a restore brings back exactly what one
+// removal took and never a task that was already in the trash for its own
+// reasons.
+//
+// A removal made on one item ALONE is a gesture too, and the one an author
+// makes: whoever filed an item may put it in the trash, and what hangs from it
+// may be anybody's, so taking that too is the project lead's or an admin's.
+// Its live subtasks stay where they are, and nothing is orphaned out of sight
+// by it: a listing anchors a task whose root is on the other side of the trash
+// on the task itself ([anchorOf]), so each of them is on every board and list
+// it belongs on, as the root of what is left and filtered on its own, until
+// its parent comes back.
+//
+// It is how the trash is LISTED as well. What somebody restores is a removal,
+// so in the default subtask mode the trash lists each one once, under the task
+// the gesture was made on, with what it took riding along: a task's anchor
+// there is the task its tombstone names, and itself where it names none
+// ([anchorOf]).
 //
 // That inverse is also why a restore can be asked for its task ALONE: whoever
 // filed a task may take it out of the trash, and what went in with it at a
@@ -167,11 +182,13 @@ func (w *Writer) RemoveTask(ctx context.Context, opID, id, project string,
 		}
 	}
 
-	// THE ROOT FIRST. A descendant removed while its parent is still live
-	// is an ordinary state somebody can undo; a live child under a removed
-	// parent is the orphan this order exists to avoid — which is also why
-	// an UNKNOWN root ends the walk: nothing follows a root nobody can say
-	// went.
+	// THE ROOT FIRST, because the root is what the gesture is ABOUT: its
+	// own step is the one the answer reports, and an UNKNOWN root ends the
+	// walk, since nothing follows a root nobody can say went. A walk that
+	// stops part of the way through leaves the rest live under a removed
+	// root, which is the state removing an item alone leaves by design — each
+	// stays on every listing as the root of what is left ([anchorOf]) — and
+	// the same gesture again takes what this one did not reach.
 	result, err := w.tombstone(ctx, opID, id, project, stamp, notify)
 	if err = resolved(fmt.Sprintf("task %s's removal", id), result, err); err != nil {
 		return result, err
@@ -248,8 +265,10 @@ func (w *Writer) RestoreTask(ctx context.Context, opID, id, project string,
 		return result, err
 	}
 	if live && len(removedWith) == 0 {
-		return result, fmt.Errorf("worklet: task %s is not in the trash and "+
-			"nothing is in the trash with it: %w", id, ErrNothingToRestore)
+		// THE TASK'S STATE, said to the person a screen shows it to beside
+		// the task, so its id adds nothing.
+		return result, fmt.Errorf("%w: this task isn't in the trash, and nothing "+
+			"went in with it", ErrNothingToRestore)
 	}
 	for i, descendant := range removedWith {
 		var already bool
@@ -380,10 +399,9 @@ func (w *Writer) clearTombstone(ctx context.Context, opID, id, project string,
 // exists: a task in another project would be written under a container it is
 // not in, so a deferral on its real project would not hold this write back and
 // one on the named project would hold back a write that never touches it. A
-// bulk edit names one project for every task in it, which is where a task
-// from elsewhere arrives, and a subtree's descendants are named by a read
-// outside the snapshot, so a removal or a restore of one moved since is
-// refused here and the walk stops where a re-run resolves it again.
+// subtree's descendants are named by a read outside the snapshot, so a removal
+// or a restore of one moved since is refused here and the walk stops where a
+// re-run resolves it again.
 //
 // So the project argument is a PRECONDITION, not a label, and it is checked
 // here — the one place the framework guarantees a single consistent read —
@@ -432,6 +450,20 @@ func (w *Writer) subtreeOf(ctx context.Context, id string) ([]Task, error) {
 	return out, nil
 }
 
+// removedWithStatement is [Writer.removedWith]'s one statement, named so the
+// plan test explains exactly what the restore issues.
+//
+// THE PARTIAL PREDICATE IS SPELLED OUT. `tracker_tasks_removed_with_idx` holds
+// only the rows `removed_with IS NOT NULL`, and this engine's planner does not
+// infer that from `removed_with = ?`, so without the term the index is not one
+// it may use: the restore reads every task in the company from the heap and
+// sorts the few it keeps.
+const removedWithStatement = `
+		SELECT id, project_key FROM tracker_tasks
+		WHERE removed_with IS NOT NULL AND removed_with = ?
+		  AND removed_at IS NOT NULL
+		ORDER BY depth, id`
+
 // removedWith is every task whose tombstone names this one as the gesture that
 // removed it.
 //
@@ -444,10 +476,7 @@ func (w *Writer) removedWith(ctx context.Context, id string) ([]Task, error) {
 	}
 	var out []Task
 	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id, project_key FROM tracker_tasks
-			 WHERE removed_with = ? AND removed_at IS NOT NULL
-			 ORDER BY depth, id`, id)
+		rows, err := tx.QueryContext(ctx, removedWithStatement, id)
 		if err != nil {
 			return err
 		}

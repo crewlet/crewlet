@@ -83,8 +83,9 @@ type Config struct {
 	// presence heartbeat. Nil publishes none, which reads as "did not
 	// say" rather than as an idle node.
 	//
-	// The beat bounds it: see [seat.Config].Status.
-	Status func(context.Context) coord.NodeStatus
+	// The beat bounds it, and an error means it did not answer: see
+	// [seat.Config].Status.
+	Status func(context.Context) (coord.NodeStatus, error)
 
 	// Turn runs a seat's turn. Required.
 	Turn TurnFunc

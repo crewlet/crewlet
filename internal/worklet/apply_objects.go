@@ -345,6 +345,24 @@ func placeTask(ctx context.Context, tx *sql.Tx, c applyContext, project string,
 	})
 }
 
+// rankDuplicateStatement is the duplicate-rank probe [Applier.applyRankOrder]
+// runs for each key it wrote, named for the plan test.
+const rankDuplicateStatement = `
+		UPDATE tracker_projects SET rank_duplicate_pending = 1
+		WHERE key = ? AND EXISTS (
+			SELECT 1 FROM tracker_tasks t
+			WHERE t.project_key = ? AND t.rank = ? AND t.id <> ?)`
+
+// respreadPendingStatement is the re-spread hand-off [Applier.applyRankOrder]
+// sets and clears. Named for the plan test, and a variable because [longRank]
+// spells its threshold.
+var respreadPendingStatement = `
+		UPDATE tracker_projects SET rank_respread_pending = EXISTS (
+			SELECT 1 FROM tracker_tasks t INDEXED BY tracker_tasks_respread_idx
+			WHERE t.project_key = ? AND t.removed_at IS NULL
+			  AND ` + longRank("t.rank") + `)
+		WHERE key = ?`
+
 // applyRankOrder writes a project's manual order.
 //
 // THE OBJECT IS THE ORDER, so the version lands on the order's own row and
@@ -398,11 +416,7 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 	// A unique index instead would turn a rare cosmetic anomaly into a
 	// deterministic fleet-wide stalled log.
 	for _, placement := range order.Placements {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE tracker_projects SET rank_duplicate_pending = 1
-			WHERE key = ? AND EXISTS (
-				SELECT 1 FROM tracker_tasks t
-				WHERE t.project_key = ? AND t.rank = ? AND t.id <> ?)`,
+		if _, err := tx.ExecContext(ctx, rankDuplicateStatement,
 			order.Project, order.Project, string(placement.Rank),
 			placement.Task); err != nil {
 			return 0, fmt.Errorf("worklet: probe for a duplicate of rank %s "+
@@ -420,14 +434,9 @@ func (a *Applier) applyRankOrder(ctx context.Context, tx *sql.Tx, c applyContext
 	// own rows still justify.
 	//
 	// One indexed probe on the partial index over long keys, which is a
-	// fraction of the project rather than a scan of it.
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE tracker_projects SET rank_respread_pending = EXISTS (
-			SELECT 1 FROM tracker_tasks t
-			WHERE t.project_key = ? AND t.removed_at IS NULL
-			  AND length(t.rank) > ?)
-		WHERE key = ?`,
-		order.Project, RankRenormaliseAt, order.Project); err != nil {
+	// fraction of the project rather than a scan of it ([longRank]).
+	if _, err := tx.ExecContext(ctx, respreadPendingStatement,
+		order.Project, order.Project); err != nil {
 		return 0, fmt.Errorf("worklet: set %s's re-spread hand-off: %w",
 			order.Project, err)
 	}

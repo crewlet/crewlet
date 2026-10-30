@@ -218,7 +218,7 @@ function RunningRecords({ name, args }: { name: string; args: string }) {
           <CodeBlock plain selectable label={`${name} · arguments`} code={prettyArgs} />
         </>
       )}
-      <span className="t-caption">Still running — its result lands here when it returns.</span>
+      <span className="t-caption">Still running: its result lands here when it returns.</span>
     </div>
   );
 }

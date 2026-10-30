@@ -293,18 +293,23 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// A CREDENTIAL'S TEST IS NOT A CHECK in ADR-0055's sense, though it
 	// reads `dry_run`: it runs the entry's CLI with the candidate and sends
 	// it to the vendor, which changes something and spends tokens. So it is
+	// EACH POST SAYS WHAT IT DOES (authz.Effect): a check, a retry and a
+	// host-login check act on the entry their path names and keep it, each
+	// a model or vendor call rather than a read, and a device sign-in adds a
+	// record of its own.
+	//
 	// NOT declared [authz.Policy.Checked], which would decide it at the
 	// read's proof: `dry_run=true` here asks the write's own proof.
 	mount("PUT /llm/providers/{key}/credential",
 		authz.Policy{Action: authz.ActionSecretWrite}, types.ModelCredential, s.credential)
-	mount("POST /llm/providers/{key}/check", authz.Policy{Action: authz.ActionModelsCheck},
+	mount("POST /llm/providers/{key}/check", authz.Policy{Action: authz.ActionModelsCheck}.Rewriting(),
 		types.ModelCheck, s.check)
-	mount("POST /llm/providers/{key}/retry", authz.Policy{Action: authz.ActionModelsRetry},
+	mount("POST /llm/providers/{key}/retry", authz.Policy{Action: authz.ActionModelsRetry}.Rewriting(),
 		types.ModelRetry, s.retry)
 	mount("POST /llm/providers/{key}/host-login/check",
-		authz.Policy{Action: authz.ActionModelsCheck}, types.ModelHostLoginCheck, s.hostLogin)
+		authz.Policy{Action: authz.ActionModelsCheck}.Rewriting(), types.ModelHostLoginCheck, s.hostLogin)
 	mount("POST /llm/providers/{key}/device-sign-in",
-		authz.Policy{Action: authz.ActionSecretWrite}, types.ModelDeviceSignIn, s.startDevice)
+		authz.Policy{Action: authz.ActionSecretWrite}.Creating(), types.ModelDeviceSignIn, s.startDevice)
 	mount("DELETE /llm/device-sign-ins/{id}", authz.Policy{Action: authz.ActionSecretWrite},
 		types.ModelDeviceSignInCancel, s.cancelDevice)
 	return errors.Join(failures...)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/svgsafe"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- the stage and the bounds --------------------------------------------- //
@@ -536,7 +537,7 @@ func (p *parser) attr(node *Node, key, val string, bad func(string, ...any)) {
 		p.slide.Hidden = true
 	case "section data-transition":
 		if !slices.Contains(Transitions, val) {
-			bad("data-transition=%q: a slide leaves by %s", val, strings.Join(Transitions, " or "))
+			bad("data-transition=%q: a slide leaves by %s", val, words.Or(Transitions))
 			return
 		}
 		p.slide.Transition = val
@@ -556,13 +557,13 @@ func (p *parser) attr(node *Node, key, val string, bad func(string, ...any)) {
 		set()
 	case "x-shape kind":
 		if !slices.Contains(ShapeKinds, val) {
-			bad("<x-shape kind=%q>: a shape is one of %s", val, strings.Join(ShapeKinds, ", "))
+			bad("<x-shape kind=%q>: a shape is one of %s", val, words.Or(ShapeKinds))
 			return
 		}
 		set()
 	case "x-icon name":
 		if !slices.Contains(Icons, val) {
-			bad("<x-icon name=%q>: an icon is one of %s", val, strings.Join(Icons, ", "))
+			bad("<x-icon name=%q>: an icon is one of %s", val, words.Or(Icons))
 			return
 		}
 		set()

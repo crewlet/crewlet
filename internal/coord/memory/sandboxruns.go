@@ -126,10 +126,10 @@ func (f *Fleet) applyRunChange(turnID string, read coord.Record, change coord.Sa
 // WatchSandboxRun streams one run's record, its first state included.
 //
 // The snapshot and the registration happen under ONE lock, the ordering
-// guarantee [Fleet.WatchSeatPauses] states: a write lands before the snapshot
-// and is in it, or after the registration and is delivered as a change. This
-// twin delivers every state, none passed over — inside what the contract
-// allows, which only says a backend MAY pass one over.
+// guarantee [watcher] states: a write lands before the snapshot and is in it,
+// or after the registration and is delivered as a change. This twin delivers
+// every state, none passed over — inside what the contract allows, which only
+// says a backend MAY pass one over.
 func (f *Fleet) WatchSandboxRun(ctx context.Context, turnID string) (<-chan coord.SandboxRunUpdate, error) {
 	if turnID == "" {
 		return nil, errors.New("coord/memory: a sandbox run needs a turn id")

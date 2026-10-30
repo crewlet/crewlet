@@ -1,0 +1,52 @@
+# A brief of the Chatlet room the person has open. The room's own page names
+# it as the page's record, so the drawer asks for a brief of this room; the
+# brief reads the room's messages, finds Ada's question waiting on the person
+# and cites the room by its id, as the read gave it. The engine reads the room
+# again as the person, keeps the row and counts it in the verdict, and the row
+# opens the room. Before a room was a record, the page could name no record
+# the engine took, and no row could cite the room the question waits in.
+person:
+  apps: [chatlet]
+page:
+  screen: chatlet
+  title: Chatlet › #launch
+  params: {id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31}
+  query: {}
+  resources: []
+  selection: {kind: room, id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31, noun: room}
+  source_revision: url:9c4e1a7b
+  accepts: []
+mode: brief
+question: Brief me on this room
+answers:
+  - route: GET /chatlet/channels/{channel_id}/messages
+    body:
+      channel_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31
+      messages:
+        - message:
+            id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e41
+            channel_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31
+            author: ada
+            body: "@grace can you approve the launch copy by Thursday?"
+            created_at: "2026-10-26T09:00:00Z"
+  - route: GET /chatlet/channels/{channel_id}
+    body:
+      channel: {id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31, kind: public, name: launch, topic: Friday's launch}
+      members: [{handle: ada}, {handle: grace}]
+script:
+  - call: read_chat_messages
+    args: {channel: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31}
+  - call: answer_brief
+    args:
+      about: Ada asks you in #launch to approve the launch copy by Thursday.
+      needs:
+        - {ref_kind: room, ref_id: 0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31, do: "Answer Ada in #launch: approve the launch copy?", why: "Asked at 09:00", tone: warning, action: open}
+expect:
+  calls: [read_chat_messages, answer_brief]
+  proposals: 0
+  state: completed
+  brief:
+    needs: [0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31]
+    tones: [warning]
+    verdict: 1 thing needs you
+  shows: ["#/chatlet/0b9d2a52-6d1c-4f0e-9a51-2a7f3c1d9e31", Open the room]

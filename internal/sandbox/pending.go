@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // The durable state of a detached coding job.
@@ -656,13 +657,12 @@ const MaxBridgeCalls = 200
 
 // The two tools whose calls END an executor's run, as the bridge records them:
 // submitting its work, or asking a person and parking on the answer
-// (ADR-0068). Named here, beside the log that keeps them, because the log's
-// bound keeps them and the bridge's nudge reads them by these names; the
-// runner's submission and the ask tool are named after them (a test in
-// internal/engine holds the runner's to this one).
+// (ADR-0068). Read here, beside the log that keeps them, because the log's
+// bound keeps them and the bridge's nudge reads them by these names; each is
+// declared once, in internal/toolname, beside every other shared tool name.
 const (
-	SubmitWorkTool = "submit_work"
-	AskAndWaitTool = "ask_and_wait"
+	SubmitWorkTool = toolname.SubmitWork
+	AskAndWaitTool = toolname.AskAndWait
 )
 
 // EndsRun reports whether a call to the tool named is one of the two ways an
@@ -763,9 +763,10 @@ type PendingRun struct {
 	Owner      string `json:"owner"`
 	OwnerEpoch int64  `json:"owner_epoch"`
 
-	// TaskDescription is the ask the suspended turn was working on, so a
-	// resume days later has the brief even when the trigger that produced
-	// it is long gone.
+	// TaskDescription is what a person reads the run by, in the launching
+	// turn's own words and with no fence: what the turn was asked, or the
+	// line a feed shows its trigger by ([LaunchRequest.Task]). A resume reads
+	// the brief it re-enters with off the turn's park, never off this.
 	TaskDescription string `json:"task_description"`
 
 	// Label is what the run is named by on the running-runs panel — the
@@ -1437,10 +1438,15 @@ type PendingStore interface {
 	// the row later would learn whichever job the row held by then.
 	//
 	// A RESET THE ROW REFUSES IS AN ERROR, never a launch that went ahead: a
-	// newer lease owns the run, or its ending is decided ([ErrRunEnding]). A
-	// launch told nothing went on to start a job on a row that never named
-	// it, in a box nothing would reclaim. A row that went between the create
-	// and the reset is created again.
+	// newer lease owns the run ([ErrSeatNotHeld]: this node no longer holds
+	// the seat), or its ending is decided ([ErrRunEnding]). The lease is
+	// asked first, so a row a newer lease owns is [ErrSeatNotHeld] whether or
+	// not that lease has decided its ending too, which the seat's next holder
+	// does as it recovers a run it found claimed, fencing it before it ends it
+	// ([Coordinator.RecoverSeat]). A launch told nothing went on to
+	// start a job on a row that never named it, in a box nothing would
+	// reclaim. A row that went between the create and the reset is created
+	// again.
 	//
 	// THE TURN'S NOTES ([PendingRun.Steer]) ARE KEPT by a reset — every note,
 	// read or waiting, with its numbering and the seat anchor — and created
@@ -1658,6 +1664,17 @@ type PendingStore interface {
 	// attach naming a command records the job STARTED on the job's record
 	// ([LaunchRecord.Started]) in the same write, and no later write of the
 	// job unsays it: the box and its command may go, the job still ran.
+	//
+	// A REFUSED ATTACH IS AN ERROR, as a refused relaunch is
+	// ([PendingStore.BeginLaunch]), with the same two answers asked in the
+	// same order: a newer lease owns the run ([ErrSeatNotHeld]), whether or
+	// not its ending is decided too, or its ending is decided
+	// ([ErrRunEnding]). The caller is a launch about to start a job in that
+	// box, which must abandon the box rather than run a job the row does not
+	// name. The box is attached after it is made and set up, which can take
+	// minutes, and a seat that moves meanwhile reaches this as the ending its
+	// next holder decided, or as no record at all: that holder ends a
+	// launching run without fencing it ([Coordinator.RecoverSeat]).
 	AttachSandbox(ctx context.Context, turnID string, box BoxRef, fence Fence) error
 
 	// MarkBoxPaused and ReleaseBox are the two halves of the box record:
@@ -2392,7 +2409,7 @@ type LaunchRecord struct {
 	// [PendingRun.Charged] is: the publish sits inside the part of the
 	// completion tail that is retried, the retry may run on another node or
 	// after a restart, and every reader of that record — the spend rollup,
-	// each node's daily usage — counts it as spend. A second copy is a
+	// each data node's daily usage — counts it as spend. A second copy is a
 	// second charge on every surface that shows one. WRITTEN BY THE
 	// RELEASE ([Release.Published]), the one write through which a retry
 	// reaches the publish again.

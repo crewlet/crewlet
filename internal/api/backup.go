@@ -17,8 +17,8 @@ import (
 // Taking a backup over HTTP.
 //
 // A route rather than a command, because what has to be copied is only
-// reachable, consistently, from inside the running engine. The store is one
-// file this process holds an exclusive lock on, and the coordination estate
+// reachable, consistently, from inside the running engine. The store is two
+// files this process holds an exclusive lock on, and the coordination estate
 // is a broker embedded in this process whose store directory it holds too —
 // so a CLI run while the engine is UP can open neither. With the engine down a
 // command could reach the coordination store (engine.OpenFleetStore), but a

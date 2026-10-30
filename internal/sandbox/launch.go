@@ -147,15 +147,21 @@ type LaunchRequest struct {
 	// it, and the whole of what the CLI is prompted with.
 	Brief string
 
-	// Task is the ask the suspended turn was working on, carried onto the
-	// row so a resume has the brief when the trigger is long gone.
+	// Task is what the launching turn's work is read by, in a person's
+	// words (what it was asked, or the line a feed shows its trigger by),
+	// carried onto the row ([PendingRun.TaskDescription]) as what the run is
+	// listed under. Never the brief: a resume reads its brief off the
+	// turn's park, where somebody else's words in it are fenced as the
+	// model read them, and a person reading the row would read those fence
+	// lines.
 	Task string
 
 	// Label is what a person sees the run named by — on the running-runs
 	// panel, live and after a restart alike ([LaunchRequest.label]). The
-	// launch names its turn's task: the brief is the turn's whole message,
-	// which opens with a heading rather than with what the run is doing.
-	// Empty takes the brief's first line, for a turn whose task is empty.
+	// launch names what its turn's work is read by ([LaunchRequest.Task]):
+	// the brief is the turn's whole message, which opens with a heading
+	// rather than with what the run is doing. Empty takes the brief's first
+	// line.
 	Label string
 
 	// Ask is the addendum telling the coding agent how to get a person's

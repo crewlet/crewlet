@@ -221,6 +221,23 @@ func (d *duty) clearDuplicates(ctx context.Context, now, _ time.Time) (int64, er
 	return fixed, nil
 }
 
+// The two reads [duty.duplicatesIn] takes, named for the plan test: a page of
+// the project's live tasks holding a rank an earlier task of it holds too, in
+// the board's order, and the next rank above a shared one over every row of
+// the project.
+const (
+	duplicateRanksStatement = `
+		SELECT t.id, t.rank FROM tracker_tasks t
+		WHERE t.project_key = ? AND t.removed_at IS NULL
+		  AND EXISTS (SELECT 1 FROM tracker_tasks o
+		              WHERE o.project_key = t.project_key
+		                AND o.rank = t.rank AND o.id < t.id)
+		ORDER BY t.rank, t.id LIMIT ?`
+	rankAboveStatement = `
+		SELECT MIN(rank) FROM tracker_tasks
+		WHERE project_key = ? AND rank > ?`
+)
+
 // duplicatesIn mints a fresh key for every task but the first at each shared
 // rank.
 //
@@ -244,13 +261,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 		ceiling = map[Rank]Rank{}
 	)
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT t.id, t.rank FROM tracker_tasks t
-			WHERE t.project_key = ? AND t.removed_at IS NULL
-			  AND EXISTS (SELECT 1 FROM tracker_tasks o
-			              WHERE o.project_key = t.project_key
-			                AND o.rank = t.rank AND o.id < t.id)
-			ORDER BY t.rank, t.id LIMIT ?`, project, WalkBatch)
+		rows, err := tx.QueryContext(ctx, duplicateRanksStatement, project, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("worklet: read %s's duplicate ranks: %w", project, err)
 		}
@@ -275,9 +286,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 				continue
 			}
 			var next sql.NullString
-			if err := tx.QueryRowContext(ctx, `
-				SELECT MIN(rank) FROM tracker_tasks
-				WHERE project_key = ? AND rank > ?`,
+			if err := tx.QueryRowContext(ctx, rankAboveStatement,
 				project, string(loser.Rank)).Scan(&next); err != nil {
 				return fmt.Errorf("worklet: read the key above %q in %s: %w",
 					loser.Rank, project, err)
@@ -309,6 +318,10 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 	return placements, nil
 }
 
+// mergePendingStatement is [duty.pendingMerges]' probe, named for the plan
+// test.
+const mergePendingStatement = `SELECT EXISTS (SELECT 1 FROM tracker_tasks WHERE merging = 1)`
+
 // pendingMerges reads whether any task is mid-merge.
 //
 // A REMOVED ONE COUNTS. A tombstoned task is frozen, so nothing can finish its
@@ -319,9 +332,7 @@ func (d *duty) duplicatesIn(ctx context.Context, project string) ([]Placement, e
 func (d *duty) pendingMerges(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM tracker_tasks WHERE merging = 1)`).
-			Scan(&found)
+		return tx.QueryRowContext(ctx, mergePendingStatement).Scan(&found)
 	})
 	if err != nil {
 		return false, fmt.Errorf("worklet: read whether a merge is mid-walk: %w", err)
@@ -494,14 +505,17 @@ var mergeWaits = []struct {
 			"clears the mark"},
 }
 
+// mergingAfterStatement is [duty.markedAfter]'s page, named for the plan test.
+const mergingAfterStatement = `
+		SELECT id FROM tracker_tasks WHERE merging = 1 AND id > ?
+		ORDER BY id LIMIT ?`
+
 // markedAfter is one page of the tasks marked mid-merge, in id order, after a
 // cursor — the partial index's own order, so each page is a seek.
 func (d *duty) markedAfter(ctx context.Context, after string) ([]string, error) {
 	var ids []string
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id FROM tracker_tasks WHERE merging = 1 AND id > ?
-			 ORDER BY id LIMIT ?`, after, WalkBatch)
+		rows, err := tx.QueryContext(ctx, mergingAfterStatement, after, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("worklet: read the abandoned merges: %w", err)
 		}
@@ -615,6 +629,11 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 	return true, nil
 }
 
+// movePendingStatement is [duty.pendingMoves]' probe, named for the plan test.
+const movePendingStatement = `
+		SELECT EXISTS (SELECT 1 FROM tracker_tasks
+		               WHERE moving = 1 AND removed_at IS NULL)`
+
 // pendingMoves reads whether any root is marked mid-move. ONE PROBE on the
 // partial index the schema ships for exactly this predicate, so a company
 // where nothing is mid-move pays it and nothing else.
@@ -624,16 +643,19 @@ func (d *duty) finishMerge(ctx context.Context, id string, now time.Time) (bool,
 func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT EXISTS (SELECT 1 FROM tracker_tasks
-			               WHERE moving = 1 AND removed_at IS NULL)`).
-			Scan(&found)
+		return tx.QueryRowContext(ctx, movePendingStatement).Scan(&found)
 	})
 	if err != nil {
 		return false, fmt.Errorf("worklet: read whether a move is mid-walk: %w", err)
 	}
 	return found == 1, nil
 }
+
+// movingStatement is [duty.finishMoves]' selection of the marked roots, named
+// for the plan test.
+const movingStatement = `
+		SELECT id FROM tracker_tasks
+		WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`
 
 // finishMoves completes every cross-project move whose walk stopped with its
 // root marked mid-move.
@@ -652,10 +674,7 @@ func (d *duty) pendingMoves(ctx context.Context) (bool, error) {
 func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error) {
 	var marked []string
 	if err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `
-			SELECT id FROM tracker_tasks
-			WHERE moving = 1 AND removed_at IS NULL ORDER BY id LIMIT ?`,
-			WalkBatch)
+		rows, err := tx.QueryContext(ctx, movingStatement, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("worklet: read the abandoned moves: %w", err)
 		}
@@ -707,11 +726,28 @@ func (d *duty) finishMoves(ctx context.Context, now, _ time.Time) (int64, error)
 // with a PARENT is no root at all but where a cycle's walk stopped, which is
 // the `cycle` flag's to report and no move's to repair. Selected anyway, each
 // would hold the gate open on every tick for work this job refuses.
+//
+// DRIVEN FROM THE FLAGGED ROWS, which CROSS JOIN fixes: the index holds the
+// few tasks the gate is asking about, and each one's root is then one
+// primary-key read. Joined plainly, the gate has no term on `t.root_id` to
+// seek by, and the planner — with no statistics, as on every node — drove it
+// from the ROOTS instead: a walk of every live task in the company through
+// `tracker_tasks_type_idx`, probing the index once for each, on every tick of
+// the duty.
 const strandedFrom = `
-	FROM tracker_tasks t JOIN tracker_tasks r ON r.id = t.root_id
+	FROM tracker_tasks t CROSS JOIN tracker_tasks r ON r.id = t.root_id
 	WHERE t.inconsistent_project = 1 AND t.removed_at IS NULL
 	  AND r.removed_at IS NULL AND r.moving = 0
 	  AND (r.parent_id IS NULL OR r.parent_id = '')`
+
+// strandedPendingStatement is [duty.pendingStragglers]' probe and
+// strandedAfterStatement [duty.strandedAfter]'s page, over the predicate they
+// share — named for the plan test.
+const (
+	strandedPendingStatement = `SELECT EXISTS (SELECT 1 ` + strandedFrom + `)`
+	strandedAfterStatement   = `SELECT DISTINCT t.root_id ` + strandedFrom +
+		` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`
+)
 
 // pendingStragglers reads whether any live task sits in another project than
 // its root with nothing walking that root — see [duty.carryStragglers]. ONE
@@ -719,8 +755,7 @@ const strandedFrom = `
 func (d *duty) pendingStragglers(ctx context.Context) (bool, error) {
 	var found int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 `+strandedFrom+`)`).Scan(&found)
+		return tx.QueryRowContext(ctx, strandedPendingStatement).Scan(&found)
 	})
 	if err != nil {
 		return false, fmt.Errorf("worklet: read whether a task was filed "+
@@ -808,9 +843,7 @@ func (d *duty) carryStragglers(ctx context.Context, now, _ time.Time) (int64, er
 func (d *duty) strandedAfter(ctx context.Context, after string) ([]string, error) {
 	var roots []string
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT DISTINCT t.root_id `+
-			strandedFrom+` AND t.root_id > ? ORDER BY t.root_id LIMIT ?`,
-			after, WalkBatch)
+		rows, err := tx.QueryContext(ctx, strandedAfterStatement, after, WalkBatch)
 		if err != nil {
 			return fmt.Errorf("worklet: read the tasks filed behind a move: %w", err)
 		}
@@ -976,6 +1009,17 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 	return projects, err
 }
 
+// clearDuplicateProbeStatement is [duty.clearProbe]'s write, named for the
+// plan test.
+const clearDuplicateProbeStatement = `
+		UPDATE tracker_projects SET rank_duplicate_pending = 0
+		WHERE key = ? AND NOT EXISTS (
+			SELECT 1 FROM tracker_tasks t
+			WHERE t.project_key = ? AND t.removed_at IS NULL
+			  AND EXISTS (SELECT 1 FROM tracker_tasks o
+			              WHERE o.project_key = t.project_key
+			                AND o.rank = t.rank AND o.id < t.id))`
+
 // clearProbe clears the applier-owned duplicate flag on this node.
 //
 // LOCAL, and that is correct where the re-spread flag's clear is not: the
@@ -992,14 +1036,14 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 // only the node holding this fleet-singleton duty ever writes a 0.
 //
 // That divergence is bounded rather than harmless: the column is deliberately
-// outside the identity claim (see [Domain.ClaimsIdentity]), nothing reads it
-// as a fleet-wide fact, and the duplicate itself is repaired by a published
-// record every node applies. Making the clear deterministic — every applier
+// outside the identity claim (see [Domain.ClaimsIdentity]), nothing reads it as
+// a fleet-wide fact, and the duplicate itself is repaired by a published record
+// every data node applies. Making the clear deterministic — every applier
 // clearing the flag when it applies the duty's repair, re-probing under this
 // same guard, and this local write going away — is a change to what a record
-// owns, which the apply path's own comment has weighed and declined once
-// before ("a company-wide aggregate on every drag is the per-minute scan no
-// index answers"), so it wants its own change rather than this one.
+// owns, which the apply path's own comment has weighed and declined once before
+// ("a company-wide aggregate on every drag is the per-minute scan no index
+// answers"), so it wants its own change rather than this one.
 //
 // The guard below is also why this clears nothing on the tick that publishes
 // a repair: the repair has not been applied yet, so the NOT EXISTS still
@@ -1011,15 +1055,7 @@ func (d *duty) projectsWith(ctx context.Context, column string) ([]string, error
 // tick of a running node.
 func (d *duty) clearProbe(ctx context.Context, project string) error {
 	return d.deps.DB.Tx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `
-			UPDATE tracker_projects SET rank_duplicate_pending = 0
-			WHERE key = ? AND NOT EXISTS (
-				SELECT 1 FROM tracker_tasks t
-				WHERE t.project_key = ? AND t.removed_at IS NULL
-				  AND EXISTS (SELECT 1 FROM tracker_tasks o
-				              WHERE o.project_key = t.project_key
-				                AND o.rank = t.rank AND o.id < t.id))`,
-			project, project)
+		_, err := tx.ExecContext(ctx, clearDuplicateProbeStatement, project, project)
 		return err
 	})
 }
@@ -1038,6 +1074,18 @@ func (d *duty) opID(job, subject string, now time.Time) string {
 		d.deps.NodeID, job, subject, strconv.FormatInt(tick.Unix(), 10))
 }
 
+// oneSidedSubject names a one-sided edge's repair in its operation id: the
+// dependent and the blocker, joined by a COLON.
+//
+// NOT A DOT, which is the operation-id grammar's step separator
+// (statelog's `<uuidv7>[.<name>][.<step>…]`): joined by one, the repair of
+// `dep → blk` was the name `onesided-dep` with a step `blk`, an id the grammar
+// reads as a step of another operation. Both ends are task ids — uuids, or
+// whatever a test names — so a colon keeps the pair one name of visible ASCII.
+func oneSidedSubject(edge OneSided) string {
+	return edge.Dependent + ":" + edge.Blocker
+}
+
 // pendingOneSided is the gate: one indexed read against the partial index the
 // schema ships for exactly this predicate.
 //
@@ -1048,10 +1096,7 @@ func (d *duty) opID(job, subject string, now time.Time) string {
 func (d *duty) pendingOneSided(ctx context.Context) (bool, error) {
 	var any int
 	err := d.deps.DB.Read(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `
-			SELECT EXISTS (SELECT 1 FROM tracker_relations
-			               WHERE one_sided = 1 AND one_sided_final = 0)`).
-			Scan(&any)
+		return tx.QueryRowContext(ctx, pendingOneSidedStatement).Scan(&any)
 	})
 	if err != nil {
 		return false, fmt.Errorf("worklet: probe for one-sided dependencies: %w", err)
@@ -1080,7 +1125,7 @@ func (d *duty) repairOneSided(ctx context.Context, now, _ time.Time) (int64, err
 	for _, edge := range edges {
 		reason, final := edge.Final()
 		if _, err := d.deps.Writer.RepairOneSided(ctx,
-			d.opID("onesided", edge.Dependent+"."+edge.Blocker, now),
+			d.opID("onesided", oneSidedSubject(edge), now),
 			edge, d.leads()); err != nil {
 			// ONE EDGE'S FAILURE IS NOT THE TICK'S. The rest of this
 			// batch is independent — different subjects, different

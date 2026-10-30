@@ -40,8 +40,10 @@ var ErrNotInTrash = errors.New("doclet: the page is not in the trash past the cu
 // OLDEST FIRST so a pass that stops at its cap has purged the pages longest
 // past their term, and the next pass starts where it left off. THE ID BREAKS A
 // TIE, so two passes over the same rows list them in the same order on every
-// node. Over the partial index on `trashed_at` (migration 0005), which holds
-// the trashed pages and nothing else.
+// node. A SEEK OF THE INDEX IN THAT ORDER, with no sort: the partial index on
+// `trashed_at` and the id (replicated 0066) holds the trashed pages and
+// nothing else, so the LIMIT stops the seek at the cap rather than after every
+// page past the cutoff has been read and sorted.
 func (s *Store) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) ([]string, error) {
 	switch {
 	case cutoff.IsZero():
@@ -53,11 +55,7 @@ func (s *Store) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) 
 	}
 	var out []string
 	err := s.db.Read(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx,
-			`SELECT id FROM pages_heads
-			  WHERE trashed_at IS NOT NULL AND trashed_at < ? AND status = ?
-			  ORDER BY trashed_at, id
-			  LIMIT ?`,
+		rows, err := tx.QueryContext(ctx, trashedBeforeStatement,
 			store.EncodeTime(cutoff), string(StatusTrashed), limit)
 		if err != nil {
 			return err
@@ -78,6 +76,14 @@ func (s *Store) TrashedBefore(ctx context.Context, cutoff time.Time, limit int) 
 	}
 	return out, nil
 }
+
+// trashedBeforeStatement is the trash listing [Store.TrashedBefore] makes,
+// named for the plan gate. It restates the partial index's predicate
+// (`trashed_at IS NOT NULL`), which is what lets the planner choose it.
+const trashedBeforeStatement = `SELECT id FROM pages_heads
+	  WHERE trashed_at IS NOT NULL AND trashed_at < ? AND status = ?
+	  ORDER BY trashed_at, id
+	  LIMIT ?`
 
 // PurgeTrashed destroys a page that has been in the trash since before cutoff,
 // as [Store.Purge] does, and refuses one that has not ([ErrNotInTrash]).

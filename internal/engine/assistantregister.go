@@ -64,7 +64,14 @@ func assistantRegistrations() []registration {
 			return writeSeams{Rows: rows, Fence: fence,
 				Gates: assistantdomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
-		Barrier:    assistantdomain.EncodeBarrier,
+		Barrier: assistantdomain.EncodeBarrier,
+		// NO SEAT READS THIS LOG, so its read model is zero, as the identity
+		// estate's is: a person's reads take no barrier (above), and the
+		// object collector's pins, its one linearizable reader, are counted
+		// as the engine's own ([Engine.backgroundBarriers]). A seat that
+		// starts reading it at `linearizable` meets `census_drift` on its
+		// first barrier.
+		Reads:      &statelog.ReadModel{PerSeatDay: 0},
 		Generation: assistantdomain.GenerationRecord{},
 		NewGate: func(s *stateLog, _ *runningLog,
 			publisher *statelog.Publisher) (gateWrite, error) {
@@ -95,10 +102,11 @@ func assistantRegistrations() []registration {
 		// which the identity estate's and the usage log's are not: the
 		// assistant is a feature a company may never turn on, and a fixed
 		// 512 MiB counted in full on every fresh node raised the least a
-		// node boots in past the 9 GiB a stated broker limit commonly
-		// gives, so a deployment sized for everything else stopped
-		// booting. Scaled, it reserves its 64 MiB floor there (a month at
-		// ten people) and its default wherever the broker has the room.
+		// node boots in past the limit crewlet-operator gives the smallest
+		// data volume it admits, so a deployment sized for everything else
+		// stopped booting. Scaled, it reserves its 64 MiB floor there (a
+		// month at ten people) and its default wherever the broker has the
+		// room.
 		Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 			bytes, derived := stream.AssistantMaxBytes()
 			return domainCeiling{Bytes: bytes,
@@ -163,20 +171,37 @@ func (e *Engine) AssistantWriter() *assistantdomain.Writer {
 }
 
 // assistantRetention is how long a conversation is kept after it was last
-// used, read from the company this node runs NOW, at every reaper pass: the
-// company document's `assistant.retention_days`, with its default and its
-// bounds applied by the block itself ([config.Assistant.Retention]), so an
-// apply that changes it reaches the next pass without a restart.
-func (e *Engine) assistantRetention() time.Duration {
-	return assistantRetentionOf(e.Company())
+// used, asked at every reaper pass: the `assistant.retention_days` of the
+// revision the fleet's activation pointer names, read on a node that runs that
+// very activation ([Engine.fleetCompany]), so an apply that changes it reaches
+// the next pass without a restart. Or an error saying why this node cannot
+// know it.
+//
+// THE FLEET'S REVISION, NEVER THIS NODE'S OWN. The purge is a record every
+// data node applies, and a purged conversation is gone for the person who
+// owned it. The revision a node serves is that node's alone (ADR-0057): a node
+// that refused the fleet's revision goes on serving the one before and boots
+// on it again, and a node booted on an offline import the fleet did not take
+// runs a document the fleet never activated. Read from either, the term may be
+// one the company has since lengthened, and every conversation between the two
+// terms would be purged for good. So the term is unknown there, and an unknown
+// term purges nothing of this source ([trashreap.Termed]): a purge the
+// company's term allows is made by the next pass that can read it, which is
+// late rather than wrong. A node that runs no company at all is no exception:
+// it reaps nothing for its age until it applies the fleet's revision.
+func (e *Engine) assistantRetention(ctx context.Context) (time.Duration, error) {
+	company, err := e.fleetCompany(ctx, e.Company())
+	if err != nil {
+		return 0, err
+	}
+	return assistantRetentionOf(company), nil
 }
 
-// assistantRetentionOf is the retention a running company keeps, and the
-// block's own default on a node running none yet: a node that boots with no
-// company still reaps what an earlier company left, at the term an unset
-// setting means.
+// assistantRetentionOf is the retention a company's document states, with the
+// block's own default and bounds ([config.Assistant.Retention]); a company
+// built in code without a document states none, which is the default.
 func assistantRetentionOf(c *Company) time.Duration {
-	if c == nil || c.Config == nil {
+	if c.Config == nil {
 		return config.Assistant{}.Retention()
 	}
 	return c.Config.Assistant.Retention()
@@ -198,10 +223,17 @@ const ownerItem = "owner:"
 // fleet singleton that already runs hourly with a lease, a report and derived
 // operation ids, so a retention purge and an erasure are decided by exactly
 // the machinery every other domain's trash is.
+//
+// ONE SOURCE FOR BOTH, so a pass that cannot read this source's term skips
+// its erasures with its purges ([Engine.assistantRetention]). The erasure is
+// not the reaper's to make first: every data node erases a removed person as
+// soon as its own identity applier reports the removal
+// ([Engine.runAssistantErasure]), and only an erasure every node failed to
+// make waits, with the purges, for a pass that can read the term.
 type assistantTrash struct {
 	reader assistantRows
 	writer assistantPurges
-	term   func() time.Duration
+	term   func(context.Context) (time.Duration, error)
 
 	// removed answers which of the ids the identity estate holds a removal
 	// tombstone for ([iamdomain.Reader.Removed]).
@@ -226,8 +258,11 @@ var _ trashreap.Termed = assistantTrash{}
 
 func (assistantTrash) Name() string { return assistantdomain.Domain{}.Name() }
 
-// Term is the conversation's retention, asked at every pass.
-func (a assistantTrash) Term() time.Duration { return a.term() }
+// Term is the conversation's retention, asked at every pass, or why this node
+// cannot know it.
+func (a assistantTrash) Term(ctx context.Context) (time.Duration, error) {
+	return a.term(ctx)
+}
 
 // TrashedBefore nominates, first, every person the identity estate removed who
 // still owns a conversation here (their erasure), and then the conversations
@@ -326,9 +361,10 @@ func (e *Engine) nudgeAssistantErasure() {
 //
 // THE REAPER IS THE BACKSTOP, not this: a node that was down when the removal
 // applied, or one in a mode that publishes nothing, leaves the erasure to the
-// reaper's next pass, which nominates the same people. Every data node hears
-// the removal from its own applier and asks; the erasure is arbitrated on the
-// owner's subject, so the first lands and the rest find it done.
+// reaper's next pass that can read the assistant's term, which nominates the
+// same people ([assistantTrash]). Every data node hears the removal from its
+// own applier and asks; the erasure is arbitrated on the owner's subject, so
+// the first lands and the rest find it done.
 func (e *Engine) runAssistantErasure(ctx context.Context) {
 	for {
 		select {

@@ -328,6 +328,31 @@ func fieldValueIndex(t FieldType) string {
 	return "tracker_field_values_" + FieldValueColumn(t) + "_idx"
 }
 
+// fieldValuesKey is the value table's primary key, `(task_id, field_id, seq)`,
+// as this engine names it — the index every read of ONE TASK'S values of a
+// field names: a sort's join, a grouping's join and its column filter, and a
+// total's read of the answer's own values.
+//
+// # Why a read of one task's values NAMES the key
+//
+// Because the four value indexes ([fieldValueIndex]) lead with `field_id` and
+// are partial on `hidden = 0`, which every such read states — so with no
+// statistics (nothing here runs ANALYZE) the planner took one of them and
+// sought `field_id` alone: every value the field holds in the company, read
+// again for every task the statement visited. Measured on the plan fixture: a
+// page sorted by a choice field, a board grouped by one and that board's
+// column counts each read the field's every value once per task, one column's
+// rows read the field's every value and then the project's whole board once
+// per value, and a total over a number field read the field's every value
+// through the choice column's index from the heap. Named, each is a seek on
+// the task and the field — on its first value too, for a sort or a
+// single-valued grouping — so it costs the tasks the statement already reads.
+//
+// A FILTER IS THE OTHER READ, and names the other index: it asks which tasks
+// hold a value, which the field's own column's index answers as one range, so
+// it is driven from there ([fieldClause]).
+const fieldValuesKey = "sqlite_autoindex_tracker_field_values_1"
+
 // fieldRows turns one declared field's JSON value into its rows.
 //
 // A MULTI-VALUED FIELD IS N ROWS, one per member, because that is what makes

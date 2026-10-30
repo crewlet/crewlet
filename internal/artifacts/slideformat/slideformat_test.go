@@ -163,7 +163,7 @@ func TestASlideOutsideTheSubsetIsRefused(t *testing.T) {
 		{"nested list", head + `<ul><li>a<ul><li>b</li></ul></li></ul></section>`, "may not sit in <li>", RuleElement, 1},
 		{"unclosed", head + "<p>Hi</section>", "</section> closes <p>", RuleMarkup, 1},
 		{"embed", head + `<x-embed style="position:absolute"></x-embed></section>`, "no live page", RuleElement, 1},
-		{"magic", `<section id="agenda" data-transition="magic" style="background:#fff"></section>`, "fade or push", RuleAttribute, 1},
+		{"magic", `<section id="agenda" data-transition="magic" style="background:#fff"></section>`, `"fade" or "push"`, RuleAttribute, 1},
 		{"build", head + `<p data-build-in="fade">x</p></section>`, "builds are not drawn", RuleAttribute, 1},
 		{"svg script", head + `<svg aria-label="x"><script>x()</script></svg></section>`, "runs no code", RuleElement, 1},
 		{"svg style", head + `<svg aria-label="x"><rect style="fill:red"/></svg></section>`, "presentation attributes", RuleAttribute, 1},

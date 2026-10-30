@@ -536,23 +536,35 @@ const (
 	ResourceRun       ResourceKind = "run"
 	ResourceSchedule  ResourceKind = "schedule"
 	ResourceView      ResourceKind = "view"
+	// ResourceRoom is a room of the company's own chat (Chatlet): a named
+	// room or a direct conversation. Not "channel", which is the frame's
+	// word for an A2A channel.
+	ResourceRoom ResourceKind = "room"
 )
 
-// ResourceKinds are the eleven, in declaration order.
+// ResourceKinds are the twelve, in declaration order.
 var ResourceKinds = []ResourceKind{
 	ResourceTask, ResourceProject, ResourceSeat, ResourceUnit, ResourcePage,
 	ResourceContainer, ResourceArtifact, ResourceTurn, ResourceRun,
-	ResourceSchedule, ResourceView,
+	ResourceSchedule, ResourceView, ResourceRoom,
 }
 
 // Valid reports whether k is a kind this build knows.
 func (k ResourceKind) Valid() bool { return slices.Contains(ResourceKinds, k) }
 
 // Keyed reports whether a record of kind k is written in prose by a short key
-// of its own (a task's "GOP-11", a project's "GOP"), which its
-// [EntityCard.Key] then carries. Every other kind is written by its name, a
-// seat's included: the assistant names a seat by its name, never its handle.
-func (k ResourceKind) Keyed() bool { return k == ResourceTask || k == ResourceProject }
+// of its own (a task's "GOP-11", a project's "GOP", a room's name with its
+// "#", "#launch"), which its [EntityCard.Key] then carries. Every other kind is
+// written by its name, a seat's included: the assistant names a seat by its
+// name, never its handle.
+//
+// A ROOM IS KEYED BY ITS NAME, because the name is its address: written with
+// its "#", in lower case, immutable once the room is made, and matched as a
+// key is, exactly. A direct conversation has no name and so no key, and its
+// heading (its people) is never read as one.
+func (k ResourceKind) Keyed() bool {
+	return k == ResourceTask || k == ResourceProject || k == ResourceRoom
+}
 
 // RecordNoun is what the person calls the record a screen has open, as the
 // drawer names it ("Brief me on this decision"): a selection's word for itself
@@ -571,12 +583,13 @@ const (
 	NounPage     RecordNoun = "page"
 	NounTurn     RecordNoun = "turn"
 	NounRun      RecordNoun = "run"
+	NounRoom     RecordNoun = "room"
 )
 
-// RecordNouns are the nine, in declaration order.
+// RecordNouns are the ten, in declaration order.
 var RecordNouns = []RecordNoun{
 	NounDecision, NounUpdate, NounTask, NounProject, NounAgent, NounArtifact, NounPage,
-	NounTurn, NounRun,
+	NounTurn, NounRun, NounRoom,
 }
 
 // Valid reports whether n is a noun this build knows.

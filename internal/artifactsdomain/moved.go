@@ -1,6 +1,8 @@
 package artifactsdomain
 
 import (
+	"time"
+
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -68,21 +70,29 @@ var MoveKinds = []MoveKind{
 }
 
 // Moved is one artifact's movement in a committed batch.
+//
+// TAGGED FOR THE WIRE, because a node whose copy is out of service hears a
+// sound peer's movements relayed (internal/engine's live relay), and a
+// relayed movement is this encoding.
 type Moved struct {
 	// Artifact is the artifact that moved; zero for [MoveReset].
-	Artifact artifacts.ID
+	Artifact artifacts.ID `json:"artifact,omitzero"`
 
-	What MoveKind
+	What MoveKind `json:"what"`
 
 	// AccessEpoch is the artifact's access epoch after the record: what a
 	// view ticket minted before a narrowing is now refused by.
-	AccessEpoch int64
+	AccessEpoch int64 `json:"access_epoch,omitempty"`
 
 	// Head is the artifact's head version after the record.
-	Head int
+	Head int `json:"head,omitempty"`
 
-	// Position is the record's position on the log.
-	Position statelog.Position
+	// Position is the record's position on the log, and At the broker's
+	// own instant for it: when the change was stored, which every node
+	// reads alike and what the socket's push of it is timed from
+	// (internal/objectives' change visibility).
+	Position statelog.Position `json:"position,omitzero"`
+	At       time.Time         `json:"at,omitzero"`
 }
 
 // Reset is the movement that names everything.

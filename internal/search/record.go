@@ -34,8 +34,8 @@ import (
 // # Why an embedding is a record at all
 //
 // It costs a provider call per source, and it is the one thing in the search
-// path a node cannot recompute on its own. Published once, applied N times,
-// the fleet pays the bill once and every node holds the answer — which is what
+// path a node cannot recompute on its own. Published once, applied N times, the
+// fleet pays the bill once and every data node holds the answer — which is what
 // the node estate's own rule said a table there may NOT be.
 
 // RecordVersion is the record shape this build reads.

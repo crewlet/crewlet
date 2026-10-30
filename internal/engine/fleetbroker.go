@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/signedask"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE FLEET'S BROKER MEMBERSHIP, as an operator reads and changes it.
@@ -519,7 +520,7 @@ func (e *Engine) answerBroker(ctx context.Context, raw []byte, taken *signedask.
 			"detail", admitted.Why+"; nothing in it ran")
 		return brokerReply{Node: e.id, Request: admitted.ID, Code: brokerCodeUnauthenticated,
 			Detail: fmt.Sprintf("%s does not hold the key the request is signed under "+
-				"(it holds %v)", e.id, e.brokerWire.HeldKeys())}
+				"(it holds %s)", e.id, words.And(e.brokerWire.HeldKeys()))}
 	case signedask.Undecodable:
 		return brokerReply{Node: e.id, Code: brokerCodeFailed,
 			Detail: fmt.Sprintf("%s could not decode a request the fleet signed: %s", e.id, admitted.Why)}

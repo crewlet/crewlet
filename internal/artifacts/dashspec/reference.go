@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Reference is the board format as an agent reads it before writing a
@@ -16,8 +17,8 @@ func Reference() string {
 	b.WriteString("A dashboard is `" + EntryPath + "` at the version's root, and any CSV or JSON " +
 		"files its file datasets read. A key not listed is refused, and so is a value of another " +
 		"type; a widget names only the fields its type reads. `[]` is each element of a list " +
-		"and `{}` each value of an object keyed by name. list_dashboard_sources lists the " +
-		"engine sources.\n\n## Every key of " + EntryPath + "\n\n")
+		"and `{}` each value of an object keyed by name. " + toolname.ListDashboardSources +
+		" lists the engine sources.\n\n## Every key of " + EntryPath + "\n\n")
 	b.WriteString(Form.Outline(map[string]string{
 		"v":                 fmt.Sprintf("required, always %d", FormatVersion),
 		"datasets[].source": jsonform.OneOf(SourceKinds),

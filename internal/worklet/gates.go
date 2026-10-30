@@ -611,7 +611,7 @@ func (w *Writer) EvictNode(ctx context.Context, opID, nodeID string) (WriteResul
 // Unjudged here for [Writer.EvictNode]'s reason: a node below a trim floor is
 // refused a readmission by the engine's node gate, which reads the positions
 // register, the published floors and every identity-claiming log once, before
-// either log is written — see [statelog.PermitReadmission].
+// any log is written — see [statelog.PermitReadmission].
 func (w *Writer) ReadmitNode(ctx context.Context, opID, nodeID string) (WriteResult, error) {
 	return w.gateNode(ctx, opID, nodeID, true)
 }

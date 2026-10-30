@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The event log's own time axis.
@@ -371,8 +373,8 @@ func (h EventHistogram) InsideHistory(at time.Time) EventHistogram {
 // ([EventHistogram.InsideHistory]).
 func (l *EventLog) Histogram(ctx context.Context, q HistogramQuery) (EventHistogram, error) {
 	if !q.Bucket.Valid() {
-		return EventHistogram{}, fmt.Errorf("%w: bucket %q is not one of %v",
-			ErrHistogramBucket, q.Bucket, EventBuckets)
+		return EventHistogram{}, fmt.Errorf("%w: bucket %q is not one of %s",
+			ErrHistogramBucket, q.Bucket, words.Or(EventBuckets))
 	}
 	if q.RelatedAgent != "" {
 		return EventHistogram{}, ErrHistogramRelated

@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- validation ------------------------------------------------------------ //
@@ -186,7 +187,7 @@ func (c *checker) datasets() {
 		seen[d.ID] = true
 		c.text(f+".title", d.Title, true, int(artifacts.MaxTitleBytes))
 		if !d.Source.Valid() {
-			c.add(f+".source", "%q is not one of %s", d.Source, quoteList(stringsOf(SourceKinds)))
+			c.add(f+".source", "%q is not one of %s", d.Source, words.Or(SourceKinds))
 			continue
 		}
 		c.blocks(f, d)
@@ -242,12 +243,12 @@ func (c *checker) declared(f string, d Dataset, implicit []Column, defaultKey st
 			c.add(cf+".key", "%q is declared twice, or is a column every %s dataset has", col.Key, d.Source)
 		}
 		if !col.Type.Valid() {
-			c.add(cf+".type", "%q is not one of %s", col.Type, quoteList(stringsOf(ColumnTypes)))
+			c.add(cf+".type", "%q is not one of %s", col.Type, words.Or(ColumnTypes))
 		}
 		c.text(cf+".label", col.Label, false, int(artifacts.MaxTitleBytes))
 		switch {
 		case !col.Words.Valid():
-			c.add(cf+".words", "%q is not one of %s", col.Words, quoteList(stringsOf(WordSets)))
+			c.add(cf+".words", "%q is not one of %s", col.Words, words.Or(WordSets))
 		case col.Words != WordsNone && col.Type != ColumnText:
 			c.add(cf+".words", "names a text column's vocabulary, and %q is a %s", col.Key, col.Type)
 		}
@@ -267,7 +268,7 @@ func (c *checker) store(f string, d Dataset) {
 	if d.Store != nil && !artifacts.ValidCollectionName(d.Store.Collection) {
 		c.add(f+".store.collection", "%q is not a collection a store holds: a lowercase letter, then "+
 			"lowercase letters, digits and `_`, at most %d bytes, and not one of %s", d.Store.Collection,
-			artifacts.MaxCollectionNameBytes, quoteList(artifacts.ReservedCollections))
+			artifacts.MaxCollectionNameBytes, words.Or(artifacts.ReservedCollections))
 	}
 	c.declared(f, d, []Column{{Key: StoreIDColumn, Type: ColumnText, Label: "Document"}}, StoreIDColumn)
 }
@@ -287,7 +288,7 @@ func (c *checker) file(f string, d Dataset) {
 		return
 	case !slices.Contains(FileEssences, essence):
 		c.add(f+".file.path", "%q is %s, and a file dataset reads %s", d.File.Path, essence,
-			strings.Join(FileEssences, " or "))
+			words.Or(FileEssences))
 		return
 	}
 	if len(c.found) > 0 {
@@ -332,7 +333,7 @@ func (c *checker) engine(f string, d Dataset) {
 	src, ok := Source(d.Engine.Name)
 	if !ok {
 		c.add(f+".engine.name", "%q is not a source this build answers: one of %s", d.Engine.Name,
-			quoteList(SourceNames()))
+			words.Or(SourceNames()))
 		return
 	}
 	for _, key := range sortedKeys(d.Engine.Params) {
@@ -499,7 +500,7 @@ func (c *checker) boundConditions(f string, st Step, cols []Column) {
 // stepFields refuses a field a step's op does not read.
 func stepFields(st Step) string {
 	if !st.Op.Valid() {
-		return "op is one of " + quoteList(stringsOf(Ops))
+		return "op is one of " + words.Or(Ops)
 	}
 	set := map[string]bool{
 		"where": len(st.Where) > 0, "by": len(st.By) > 0, "aggregates": len(st.Aggregates) > 0,
@@ -569,7 +570,7 @@ func (c *checker) widget(f string, w Widget, seen map[string]bool, nested bool) 
 	}
 	seen[w.ID] = true
 	if !w.Type.Valid() {
-		c.add(f+".type", "%q is not one of %s", w.Type, quoteList(stringsOf(WidgetTypes)))
+		c.add(f+".type", "%q is not one of %s", w.Type, words.Or(WidgetTypes))
 		return
 	}
 	if w.W < 1 || w.W > artifacts.DashboardColumns {
@@ -582,7 +583,7 @@ func (c *checker) widget(f string, w Widget, seen map[string]bool, nested bool) 
 	c.text(f+".title", w.Title, w.Type != WidgetNote, int(artifacts.MaxTitleBytes))
 	c.text(f+".unit", w.Unit, false, artifacts.MaxUnitBytes)
 	if w.Format != "" && !w.Format.Valid() {
-		c.add(f+".format", "%q is not one of %s", w.Format, quoteList(stringsOf(Formats)))
+		c.add(f+".format", "%q is not one of %s", w.Format, words.Or(Formats))
 	}
 	if why := widgetFields(w); why != "" {
 		c.add(f, "%s", why)
@@ -597,7 +598,7 @@ func (c *checker) widget(f string, w Widget, seen map[string]bool, nested bool) 
 			c.add(f+".children", "a group holds at least one widget")
 		}
 		if w.Tone != "" && !slices.Contains(Tones, w.Tone) {
-			c.add(f+".tone", "%q is not one of %s", w.Tone, quoteList(Tones))
+			c.add(f+".tone", "%q is not one of %s", w.Tone, words.Or(Tones))
 		}
 		return
 	case WidgetNote:
@@ -620,7 +621,7 @@ func (c *checker) widget(f string, w Widget, seen map[string]bool, nested bool) 
 			c.add(f+"."+field, "%q is not a column of %q", key, w.Dataset)
 		case !slices.Contains(types, col.Type):
 			c.add(f+"."+field, "%q is a %s column, and a %s's %s is %s", key, col.Type, w.Type, field,
-				strings.Join(stringsOf(types), " or "))
+				words.Or(types))
 		}
 	}
 	bound := func(field string, n, lo, hi int) {
@@ -632,7 +633,7 @@ func (c *checker) widget(f string, w Widget, seen map[string]bool, nested bool) 
 	case WidgetStat, WidgetMeter:
 		agg := w.EffectiveAgg()
 		if !agg.Valid() {
-			c.add(f+".agg", "%q is not one of %s", w.Agg, quoteList(stringsOf(Aggs)))
+			c.add(f+".agg", "%q is not one of %s", w.Agg, words.Or(Aggs))
 		} else if agg != AggCount || w.Value != "" {
 			if agg == AggCount {
 				if _, ok := shape.column(w.Value); !ok {

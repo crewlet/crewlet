@@ -122,8 +122,8 @@ func runJiraProvision(inv invocation, args []string, stdout, stderr io.Writer) e
 	token := strings.TrimSpace(env.Value(cfg.Token))
 	if token == "" {
 		return fmt.Errorf(
-			"jira: integrations.jira.token (%q) resolved empty — the org "+
-				"account is what this run reads the instance with", cfg.Token)
+			"jira: integrations.jira.token (%q) resolved empty. Set it: this run "+
+				"reads the instance as the org account it belongs to", cfg.Token)
 	}
 	client, err := jira.NewClient(jira.ClientOptions{
 		URL: base, Email: env.Value(cfg.Email), Token: token,
@@ -183,7 +183,7 @@ func printJiraResult(w io.Writer, res *jira.Result) {
 			fmt.Fprintf(w, "  %-16s %-10s %s\n", seat.Handle, where, seat.Account)
 			continue
 		}
-		fmt.Fprintf(w, "  %-16s %-10s NO ACCOUNT — %s\n", seat.Handle, where, seat.Reason)
+		fmt.Fprintf(w, "  %-16s %-10s NO ACCOUNT: %s\n", seat.Handle, where, seat.Reason)
 	}
 
 	if len(res.Projects) > 0 {
@@ -193,7 +193,7 @@ func printJiraResult(w io.Writer, res *jira.Result) {
 			case !p.Exists:
 				// BOTH HALVES: Jira answers 404 for a project that is not
 				// there and for one this credential may not browse.
-				fmt.Fprintf(w, "  %-10s NOT VISIBLE — no such project, or "+
+				fmt.Fprintf(w, "  %-10s NOT VISIBLE: no such project, or "+
 					"this credential may not browse it\n", p.Key)
 			case p.Agrees():
 				fmt.Fprintf(w, "  %-10s %s (lead %s)\n", p.Key, p.Name, p.OrgLead)

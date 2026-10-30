@@ -69,9 +69,6 @@ func isWrite(method string) bool {
 	return false
 }
 
-// requestIDHeader names the request: see [httpjson.RequestIDHeader].
-const requestIDHeader = httpjson.RequestIDHeader
-
 func (m refusalMux) logRefusals(pattern string, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// READS PASS THROUGH ON PURPOSE. Every route is wrapped, a read's
@@ -83,8 +80,8 @@ func (m refusalMux) logRefusals(pattern string, h http.Handler) http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		id := requestID(r.Header.Get(requestIDHeader))
-		w.Header().Set(requestIDHeader, id)
+		id := requestID(r.Header.Get(httpjson.RequestIDHeader))
+		w.Header().Set(httpjson.RequestIDHeader, id)
 		watched := &refusalWatcher{ResponseWriter: w}
 		h.ServeHTTP(watched, r)
 		if watched.status < 400 || watched.status >= 500 {

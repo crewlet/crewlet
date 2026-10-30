@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -167,28 +166,15 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 	return statelog.GenerationRecord{Subject: subject.framework(), OpID: opID, Payload: encoded}, true, nil
 }
 
-// generationActor is who a generation record names as its author. NOBODY
-// NAMED IS THE NODE, recorded under its own id as the engine.
+// generationActor is who a generation record names as its author: the party
+// the facts name, read by the one rule every log's generation record reads it
+// by ([statelog.GenerationFacts.Author]), already in the identity
+// vocabulary's actor kinds this log's columns hold. NOBODY NAMED IS THE NODE,
+// recorded under its own id as the engine.
 func generationActor(f statelog.GenerationFacts) iam.Actor {
-	if strings.TrimSpace(f.By) == "" {
+	party, named := f.Author()
+	if !named {
 		return iam.Actor{Name: f.Writer, Kind: iam.ActorSystem}
 	}
-	var kind iam.ActorKind
-	switch {
-	case iam.Kind(f.ByKind) == iam.KindSeat:
-		kind = iam.ActorAgent
-	case iam.Kind(f.ByKind) == iam.KindPerson:
-		kind = iam.ActorHuman
-	case iam.Kind(f.ByKind) == iam.KindEngine:
-		kind = iam.ActorSystem
-	case iam.ActorKind(f.ByKind).Valid():
-		kind = iam.ActorKind(f.ByKind)
-	default:
-		kind = iam.ActorOperator
-	}
-	operator := f.OperatorID
-	if kind == iam.ActorOperator && operator == "" {
-		operator = f.By
-	}
-	return iam.Actor{Name: f.By, Kind: kind, OperatorID: operator}
+	return party
 }

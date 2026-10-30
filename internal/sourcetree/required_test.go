@@ -203,10 +203,10 @@ func sequence(rng *rand.Rand, depth int) string {
 	return b.String()
 }
 
-// words are literal runs, each with a rune whose folding is the hard case: an
+// literals are literal runs, each with a rune whose folding is the hard case: an
 // ASCII letter with a non-ASCII partner, a non-ASCII orbit that lowers
 // inconsistently, U+FFFD, and punctuation the gates write.
-var words = []string{
+var literals = []string{
 	"ADR-", "types.", "kind", "class", "Sk", "metrics", "env", "_", ":", "{",
 	"ſ", "\U0000212A", "é", "σ", "ς", "Σ", "\U000000B5", "\U0000FFFD", "x\U0000FFFDy", "%s", " ",
 }
@@ -224,7 +224,7 @@ func atom(rng *rand.Rand, depth int) string {
 	}
 	switch choice {
 	case 0, 1, 2:
-		return regexp.QuoteMeta(words[rng.IntN(len(words))])
+		return regexp.QuoteMeta(literals[rng.IntN(len(literals))])
 	case 3, 4:
 		return classes[rng.IntN(len(classes))]
 	case 5:
@@ -240,7 +240,7 @@ func atom(rng *rand.Rand, depth int) string {
 		sequence(rng, depth-1) + ")"
 }
 
-// noise is context a match is embedded in: words, separators, a newline, the
+// noise is context a match is embedded in: literals, separators, a newline, the
 // escapes, and a byte that is not UTF-8.
 func noise(rng *rand.Rand) string {
 	pieces := []string{"a", "Z", " ", "\n", ".", "ſ", "\U0000212A", "\xff", "ADR", "e", "-", "σ"}

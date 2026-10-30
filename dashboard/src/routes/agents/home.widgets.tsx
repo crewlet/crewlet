@@ -12,7 +12,7 @@ import { useMemo } from "react";
 import { List, ListItem, StatCard, StatGroup, Tag, type StatCardTone } from "@crewlethq/ui";
 import { CalendarClockGlyph, UserGlyph, UsersGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
-import { QueryState, SeatCard } from "~/components/common.tsx";
+import { SeatCard } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtDateTime, inTime, plural, tsKey } from "~/lib/format.ts";
 import { useAgents, useOrg } from "~/lib/store-hooks.ts";
@@ -23,6 +23,7 @@ import { scopeLabel } from "~/routes/agents/Schedules.tsx";
 import {
   ChoiceNote,
   WidgetCard,
+  WidgetQuery,
   defineWidgets,
   type WidgetChoices,
 } from "~/routes/home/board/kit.tsx";
@@ -139,10 +140,13 @@ function NextSchedules() {
   const rows = upcoming(data?.schedules ?? []);
   return (
     <WidgetCard title="Upcoming schedules" from="schedules">
-      <QueryState
+      <WidgetQuery
         error={error}
         refusal={refusal}
         loading={loading && !data}
+        // NOTHING TO READ A GAP FROM: the schedules' answer carries no flag
+        // saying what it could not account for.
+        gaps={[]}
         empty={
           data && rows.length === 0
             ? {
@@ -185,7 +189,7 @@ function NextSchedules() {
             {`All ${plural(data?.schedules.length ?? 0, "schedule")}`}
           </a>
         ) : null}
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }

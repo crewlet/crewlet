@@ -27,7 +27,7 @@ const (
 	// WritePaceBytes is how fast a walk may publish.
 	//
 	// A walk competes with the company's own writes for the SAME serial
-	// applier on every node, so its cost is not its own latency — it is
+	// applier on every data node, so its cost is not its own latency — it is
 	// how long every other write on the fleet waits behind it. 1.4 MiB/s
 	// is a tenth of the log's own steady rate at the design corpus, which
 	// keeps a full re-spread of a large project inside a minute while
@@ -105,6 +105,21 @@ func (p RespreadPlan) Batch(k int) []Placement {
 	return p.Placements[from:min(from+WalkBatch, len(p.Placements))]
 }
 
+// respreadRowsStatement is [PlanRespread]'s read of a project's long keys, in
+// key order, through the index built for them ([longRank] says why it is
+// named). Named for the plan test, and a variable because [longRank] spells its
+// threshold.
+var respreadRowsStatement = `
+		SELECT id, rank FROM tracker_tasks INDEXED BY tracker_tasks_respread_idx
+		WHERE project_key = ? AND removed_at IS NULL AND ` + longRank("rank") + `
+		ORDER BY rank, id`
+
+// lowestRankStatement is [PlanRespread]'s read of the project's lowest live
+// rank, named for the plan test.
+const lowestRankStatement = `
+		SELECT MIN(rank) FROM tracker_tasks
+		WHERE project_key = ? AND removed_at IS NULL`
+
 // PlanRespread mints a project's whole re-spread.
 //
 // It reads ONE snapshot: the rows whose keys are past the threshold, in
@@ -118,10 +133,7 @@ func PlanRespread(ctx context.Context, db store.ReplicatedReader, project string
 		// ONLY THE LONG ONES: a key already under the threshold costs
 		// nothing to leave where it is, and rewriting it would spend a
 		// record to change nothing.
-		found, err := tx.QueryContext(ctx, `
-			SELECT id, rank FROM tracker_tasks
-			WHERE project_key = ? AND removed_at IS NULL AND length(rank) > ?
-			ORDER BY rank, id`, project, RankRenormaliseAt)
+		found, err := tx.QueryContext(ctx, respreadRowsStatement, project)
 		if err != nil {
 			return fmt.Errorf("worklet: read %s's re-spread rows: %w", project, err)
 		}
@@ -139,9 +151,7 @@ func PlanRespread(ctx context.Context, db store.ReplicatedReader, project string
 			return err
 		}
 		var min sql.NullString
-		if err := tx.QueryRowContext(ctx, `
-			SELECT MIN(rank) FROM tracker_tasks
-			WHERE project_key = ? AND removed_at IS NULL`, project).
+		if err := tx.QueryRowContext(ctx, lowestRankStatement, project).
 			Scan(&min); err != nil {
 			return fmt.Errorf("worklet: read %s's lowest rank: %w", project, err)
 		}

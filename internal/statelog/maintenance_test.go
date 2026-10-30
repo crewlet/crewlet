@@ -1,6 +1,7 @@
 package statelog_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,10 +33,10 @@ func operation(phase coord.MaintenancePhase) coord.MaintenanceOperation {
 // participants, this operation, this attempt, seal mode, fresh incarnations.
 func sealed(attempt int) []coord.MaintenanceAck {
 	return []coord.MaintenanceAck{
-		{NodeID: "node-1", OperationID: "op-1", Attempt: attempt,
-			Incarnation: "node-1:new", Mode: "seal"},
-		{NodeID: "node-2", OperationID: "op-1", Attempt: attempt,
-			Incarnation: "node-2:new", Mode: "seal"},
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1", OperationID: "op-1",
+			Attempt: attempt, Incarnation: "node-1:new", Mode: "seal"},
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-2", OperationID: "op-1",
+			Attempt: attempt, Incarnation: "node-2:new", Mode: "seal"},
 	}
 }
 
@@ -220,6 +221,11 @@ func TestASameAttemptRecordBlocksTheSeal(t *testing.T) {
 	if !strings.Contains(missing, "unresolved") {
 		t.Fatalf("the seal refused with %q, which does not name the record", missing)
 	}
+	// AND WHEN IT WAS SENT, since one attempt can send more than one.
+	if sent := maintenanceAt.UTC().Format(time.RFC3339); !strings.Contains(missing, sent) {
+		t.Errorf("the seal refused with %q, which doesn't say the request was "+
+			"sent at %s", missing, sent)
+	}
 }
 
 // TestObservingTheTargetIsNotRetirement: a live request is not dead because
@@ -273,7 +279,8 @@ func TestRetirementLeavesAResolvedRecordAlone(t *testing.T) {
 
 // TestTheSealNeedsARestartRatherThanAnAcknowledgement: the whole barrier is
 // that the process holding a request is gone, so an ack carrying the
-// incarnation it was baselined at proves the opposite of what is needed.
+// incarnation recorded as the request left proves the opposite of what is
+// needed.
 func TestTheSealNeedsARestartRatherThanAnAcknowledgement(t *testing.T) {
 	t.Parallel()
 	op := operation(coord.PhaseSealing)
@@ -284,8 +291,69 @@ func TestTheSealNeedsARestartRatherThanAnAcknowledgement(t *testing.T) {
 		t.Fatal("the seal held on an acknowledgement from the same process that " +
 			"was baselined — that process may still be holding the request")
 	}
-	if !strings.Contains(missing, "did not restart") {
+	if !strings.Contains(missing, "hasn't restarted since") {
 		t.Fatalf("the refusal says %q, which does not name what is wrong", missing)
+	}
+}
+
+// A RESTART MADE BEFORE THE WINDOW OPENED IS NOT A SEAL, whatever its mode and
+// incarnation: it binds no operation, and the seal takes only an
+// acknowledgement a boot made while this operation's attempt was open. It is
+// what a baseline reads, and it says so when it is all a node has.
+func TestARestartBeforeTheWindowIsNotASeal(t *testing.T) {
+	t.Parallel()
+	op := operation(coord.PhaseSealing)
+	early := sealed(1)
+	early[1].OperationID, early[1].Attempt = "", 0
+	held, missing := statelog.SealHolds(op, early)
+	if held {
+		t.Fatal("the seal held on a restart that bound no operation")
+	}
+	if !strings.Contains(missing, "node-2 restarted before this operation opened") {
+		t.Fatalf("the refusal says %q, which does not name what is wrong", missing)
+	}
+}
+
+// AN ACKNOWLEDGEMENT OF ANOTHER LOG'S WINDOW IS NOT A SEAL OF THIS ONE, even
+// one naming this operation, attempt, mode and a fresh process: a window is per
+// log, two can be open at once, and each is sealed by its own log's
+// acknowledgements.
+//
+// Mutation: read every log's acknowledgements in SealRestarts and the seal
+// holds here.
+func TestAnotherLogsAcknowledgementIsNotASealOfThisOne(t *testing.T) {
+	t.Parallel()
+	op := operation(coord.PhaseSealing)
+	elsewhere := sealed(1)
+	elsewhere[1].Stream = "CREWLET_PAGES_LOG"
+	held, missing := statelog.SealHolds(op, elsewhere)
+	if held {
+		t.Fatal("the seal held on an acknowledgement of another log's window")
+	}
+	if !strings.Contains(missing, "node-2 has not acknowledged") {
+		t.Fatalf("the refusal says %q, want node-2 named as not having "+
+			"acknowledged this log's window", missing)
+	}
+}
+
+// SealOutstanding NAMES THE NODES SealRestarts REFUSES, and only those: an
+// excluded node is owed nothing, a node the seal takes is not outstanding, and
+// the list is sorted so two reads compare.
+func TestSealOutstandingNamesTheNodesTheSealRefuses(t *testing.T) {
+	t.Parallel()
+	op := operation(coord.PhaseSealing)
+	op.Participants = []string{"node-3", "node-1", "node-2", "node-4"}
+	op.Excluded = []string{"node-4"}
+	acks := sealed(1)
+	acks[0].Mode = string(statelog.ModeMaintenance)
+	got := statelog.SealOutstanding(op, acks)
+	if want := []string{"node-1", "node-3"}; !slices.Equal(got, want) {
+		t.Fatalf("SealOutstanding = %v, want %v", got, want)
+	}
+	_, missing := statelog.SealRestarts(op, acks)
+	if len(missing) != len(got) {
+		t.Fatalf("SealRestarts names %d gap(s), SealOutstanding %d nodes: %v",
+			len(missing), len(got), missing)
 	}
 }
 
@@ -377,6 +445,32 @@ func TestAMismatchStartsANumberedAttemptFromTheWritableMode(t *testing.T) {
 	}
 }
 
+// THE VERIFY CONFIRMS AN ABANDONED OPERATION AT WHATEVER ITS SEAL FOUND, and
+// any other at its target alone: abandoning stops an operation trying to
+// reach its target, so a ceiling other than the target is its outcome rather
+// than a reason for another attempt at it.
+func TestTheVerifyConfirmsAnAbandonedOperationAtWhatItFound(t *testing.T) {
+	t.Parallel()
+	op := operation(coord.PhaseSealed)
+	for _, c := range []struct {
+		name     string
+		blocked  coord.MaintenanceBlock
+		observed uint64
+		want     bool
+	}{
+		{"the target", "", op.TargetMaxBytes, true},
+		{"another ceiling", "", op.TargetMaxBytes - 1, false},
+		{"another ceiling, out of attempts", coord.BlockUnsealed, op.TargetMaxBytes - 1, false},
+		{"another ceiling, abandoned", coord.BlockAbandoned, op.TargetMaxBytes - 1, true},
+		{"the target, abandoned", coord.BlockAbandoned, op.TargetMaxBytes, true},
+	} {
+		op.Blocked = c.blocked
+		if got := statelog.Verifies(op, c.observed); got != c.want {
+			t.Errorf("%s: Verifies = %t, want %t", c.name, got, c.want)
+		}
+	}
+}
+
 // TestTheAttemptBudgetSurvivesCoordinatorFailure: the count is on the RECORD,
 // so a takeover resumes it. Held in the coordinator, each takeover would reset
 // it and the advertised bound would be unbounded.
@@ -389,11 +483,13 @@ func TestTheAttemptBudgetSurvivesCoordinatorFailure(t *testing.T) {
 		t.Fatalf("attempt %d was allowed past the budget of %d",
 			op.Attempt, statelog.ControlRaiseAttempts)
 	}
-	if blocked.Blocked != "capacity_operation_unsealed" {
+	if blocked.Blocked != coord.BlockUnsealed {
 		t.Fatalf("the exhausted operation is blocked by %q", blocked.Blocked)
 	}
-	if !strings.Contains(err.Error(), "maintenance status") {
-		t.Fatalf("the refusal does not say where to look: %v", err)
+	if want := "`crewlet retention maintenance abandon -stream " + op.Stream +
+		" -confirm " + op.OperationID + "`"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("the refusal does not name the way out as the CLI takes it, %s: %v",
+			want, err)
 	}
 }
 
@@ -472,10 +568,11 @@ func TestAnUnknownDeleteIsResolvedByReadingNotByAssuming(t *testing.T) {
 	}
 }
 
-// TestAnAdmissionBlocksTheExclusion: a positive record from each side is what
-// makes either order safe. A node that slipped between the coordinator's check
-// and its own start leaves a durable key rather than a silence.
-func TestAnAdmissionBlocksTheExclusion(t *testing.T) {
+// TestAnAdmissionBlocksTheFirstRequest: a positive record from each side is
+// what makes either order safe. A node that slipped between the coordinator's
+// write and its own start leaves a durable key rather than a silence, and only
+// the operator's exclusion, recorded on the window, stops it counting.
+func TestAnAdmissionBlocksTheFirstRequest(t *testing.T) {
 	t.Parallel()
 	admissions := []coord.Admission{
 		{NodeID: "node-2", Incarnation: "node-2:x"},
@@ -487,6 +584,44 @@ func TestAnAdmissionBlocksTheExclusion(t *testing.T) {
 	}
 	if got := statelog.AdmissionBlocks(admissions, []string{"node-1", "node-2"}); len(got) != 0 {
 		t.Fatalf("excluded nodes still blocked: %v", got)
+	}
+}
+
+// TestAWindowAtOpenedWaitsOnlyOnRestartsNobodyRecorded: what holds a window
+// before its baseline is a participant with no restart into a maintenance mode
+// recorded at all. A restart made before the window opened counts, and so does
+// one bound to another window, since the baseline only reads which process a
+// node is; an excluded participant waits on nothing; and a restart recorded
+// only for another log's window is none for this one.
+//
+// Mutation: count only acknowledgements bound to this window and the
+// windowless row fails; ignore the exclusions and the excluded row fails;
+// read every log's acknowledgements and the other log's row fails.
+func TestAWindowAtOpenedWaitsOnlyOnRestartsNobodyRecorded(t *testing.T) {
+	t.Parallel()
+	op := coord.MaintenanceOperation{
+		Stream: "CREWLET_TRACKER_LOG", OperationID: "capacity:now", Attempt: 1,
+		Phase: coord.PhaseOpened,
+		Participants: []string{"node-windowless", "node-elsewhere", "node-silent",
+			"node-excluded", "node-bound", "node-another-silent", "node-other-log"},
+		Excluded: []string{"node-excluded"},
+	}
+	acks := []coord.MaintenanceAck{
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-windowless",
+			Incarnation: "node-windowless:2", Mode: "maintenance"},
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-elsewhere",
+			OperationID: "capacity:before", Attempt: 3,
+			Incarnation: "node-elsewhere:2", Mode: "seal"},
+		{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-bound",
+			OperationID: "capacity:now", Attempt: 1,
+			Incarnation: "node-bound:2", Mode: "maintenance"},
+		{Stream: "CREWLET_PAGES_LOG", NodeID: "node-other-log",
+			Incarnation: "node-other-log:2", Mode: "maintenance"},
+	}
+	got := statelog.BaselineMissing(op, acks)
+	want := []string{"node-another-silent", "node-other-log", "node-silent"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("BaselineMissing = %v, want %v", got, want)
 	}
 }
 

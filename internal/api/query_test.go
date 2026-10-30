@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -24,8 +25,11 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/eventfan"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -369,6 +373,36 @@ func TestARefusalsSentenceReachesTheCallerOnBothTransports(t *testing.T) {
 	}
 }
 
+// AN ARTIFACT IN THE TRASH IS `artifact_trashed` ON BOTH TRANSPORTS: the
+// `409` every artifacts route answers it with over REST, and the same code on
+// the socket — never `not_found`, which is the answer for a caller the
+// artifact is answered as absent to. A datastore's question about a binned
+// sheet said it did not exist while the route beside it said it was in the
+// trash, so a screen drew a restorable sheet as a dead link.
+//
+// Mutation: translate queries.ErrArtifactTrashed as not found on either
+// transport, or drop its arm, and this goes red naming the transport.
+func TestATrashedArtifactIsAnsweredAsTrashedOnBothTransports(t *testing.T) {
+	t.Parallel()
+	a := seededApp(t, nil)
+	a.Queries().Register("binned", queries.Everybody(), func(context.Context, queries.Params) (any, error) {
+		return nil, fmt.Errorf("%w: the sheet", queries.ErrArtifactTrashed)
+	})
+
+	status, body := overREST(t, a, "binned", nil)
+	if status != http.StatusConflict ||
+		body.(map[string]any)["error"] != string(httpjson.CodeArtifactTrashed) {
+		t.Errorf("REST = %d %v, want 409 artifact_trashed", status, body)
+	}
+	if got := body.(map[string]any)["message"]; got != httpjson.CodeArtifactTrashed.Message() {
+		t.Errorf("REST message = %v, want the code's own sentence", got)
+	}
+	socket := overSocket(t, a, "binned", nil)
+	if socket["kind"] != "error" || socket["error"] != stream.CodeArtifactTrashed {
+		t.Errorf("socket answer = %v, want artifact_trashed", socket)
+	}
+}
+
 func TestAFailingQuestionReportsACodeAndNothingElse(t *testing.T) {
 	t.Parallel()
 	// The reason reaches the LOG, not the caller: it can carry a database
@@ -507,9 +541,12 @@ func TestANativeQuestionOnANodeWithNoCompanyIsOneAnswerOnBothTransports(t *testi
 // stream — reached the caller as a 500 `query_failed` with the refusal's words
 // sent only to the log, and a refusal waiting cannot clear, a record this node
 // cannot decode, always had. Neither is a fault. Both transports now answer
-// `unavailable` with the refusal's code and detail, and the hint is the state
-// log's: none at all for a refusal no wait changes, so a client is told what
-// to do rather than to poll, and the derived hint for a node that is behind.
+// `unavailable` with the refusal's code and the state log's sentence for it,
+// what happened and what to do ([statelog.ConditionSentence]), and never the
+// refusal's own detail, which names a setting or the broker's words for
+// whoever runs the node and goes to the log; and the hint is the state log's:
+// none at all for a refusal no wait changes, so a client is told what to do
+// rather than to poll, and the derived hint for a node that is behind.
 func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -546,17 +583,18 @@ func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 				t.Fatalf("REST body: %v", err)
 			}
+			said, _ := statelog.ConditionSentence(tc.refused)
 			if body["error"] != "unavailable" || body["refusal"] != string(tc.refused.Code) ||
-				body["detail"] != httpjson.Sentence(tc.refused.Detail) {
-				t.Errorf("REST body = %v, want unavailable carrying %s and its words",
-					body, tc.refused.Code)
+				body["detail"] != said {
+				t.Errorf("REST body = %v, want unavailable carrying %s and %q",
+					body, tc.refused.Code, said)
 			}
 
 			socket := overSocket(t, a, "refused", nil)
 			if socket["error"] != "unavailable" || socket["refusal"] != string(tc.refused.Code) ||
-				socket["detail"] != httpjson.Sentence(tc.refused.Detail) {
-				t.Errorf("socket answer = %v, want unavailable carrying %s and its words",
-					socket, tc.refused.Code)
+				socket["detail"] != said {
+				t.Errorf("socket answer = %v, want unavailable carrying %s and %q",
+					socket, tc.refused.Code, said)
 			}
 			wantSeconds := 0.0
 			if tc.retry != "" {
@@ -565,6 +603,130 @@ func TestAStateLogRefusalIsUnavailableOnBothTransports(t *testing.T) {
 			if got, ok := socket["retry_after"].(float64); !ok || got != wantSeconds {
 				t.Errorf("socket retry_after = %v, want %v — its zero is the answer, "+
 					"so it is never omitted", socket["retry_after"], wantSeconds)
+			}
+		})
+	}
+}
+
+// EVERY CONDITION IS TOLD IN THE SAME WORDS ON EVERY TRANSPORT, not a
+// state-log refusal's alone.
+//
+// A coordination store that did not answer, no data node serving, a store
+// busy or closed, a queue down and a read that ran out of time are each
+// `unavailable` on the query surface, and were worded only where a state-log
+// refusal was behind them: REST answered the table's fixed message and the
+// socket no detail at all, while the act route, the work surface and the
+// artifacts told the same error in [builtin.ConditionSentence]'s words — one
+// read, three texts. Both transports now carry that sentence for every one,
+// and nothing of the error's own text.
+//
+// Mutation: word only a state-log refusal in stream.UnavailableOf, or carry
+// the detail only beside a refusal in Fields, and every row goes red.
+func TestEveryConditionIsToldInTheSameWordsOnEveryTransport(t *testing.T) {
+	t.Parallel()
+	for name, cond := range map[string]error{
+		"a coordination store that did not answer": coord.ErrUnavailable,
+		"no data node serving":                     &estate.ErrUnserved{Detail: "data-a: out of service"},
+		"a store too busy":                         store.ErrBusy,
+		"a store closed":                           store.ErrNoEstate,
+		"a queue that is not running":              queue.ErrNotLive,
+		"a broker that did not answer":             queue.ErrUnavailable,
+		"a read that ran out of time":              context.DeadlineExceeded,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			err := fmt.Errorf("read the board via nats://10.0.0.7:4222: %w", cond)
+			said, ok := builtin.ConditionSentence(err)
+			if !ok {
+				t.Fatalf("%v is no condition", err)
+			}
+			a := seededApp(t, nil)
+			a.Queries().Register("blinked", queries.Everybody(),
+				func(context.Context, queries.Params) (any, error) { return nil, err })
+
+			status, answered := overREST(t, a, "blinked", nil)
+			body, _ := answered.(map[string]any)
+			if status != http.StatusServiceUnavailable || body["detail"] != said {
+				t.Errorf("REST = %d %v, want 503 carrying %q", status, body, said)
+			}
+			socket := overSocket(t, a, "blinked", nil)
+			if socket["error"] != "unavailable" || socket["detail"] != said {
+				t.Errorf("socket answer = %v, want unavailable carrying %q", socket, said)
+			}
+			for _, leak := range []string{"10.0.0.7", "nats:"} {
+				if strings.Contains(fmt.Sprint(body, socket), leak) {
+					t.Errorf("the answer carries %q: %v %v", leak, body, socket)
+				}
+			}
+		})
+	}
+}
+
+// A RUNNING RUN'S OUTPUT THAT COULD NOT BE READ IS TOLD BY WHAT CLEARS IT, on
+// both transports: a box its provider did not answer and a node that could not
+// answer just now are a 503 with a Retry-After, a setup somebody has to fix is
+// a 503 with none, and only a fault of the node that owns the run is a 500 —
+// each in the engine's own words, with nothing of the provider's. A provider
+// outage while somebody watched a run used to be a 500 query_failed, the
+// answer that says the node broke and waiting won't help.
+//
+// Mutation: drop the sandbox classes from [builtin.Condition] and the first
+// three rows answer 500; mark configuration as a wait and its row carries a
+// Retry-After.
+func TestARunsOutputThatCouldNotBeReadIsToldByWhatClearsIt(t *testing.T) {
+	t.Parallel()
+	host := errors.New("e2b: GET https://49983-box.e2b.example.com/files: 502 Bad Gateway")
+	for name, c := range map[string]struct {
+		err    error
+		status int
+		waits  bool
+	}{
+		"a box its provider did not answer": {err: fmt.Errorf("sandbox: read the box of "+
+			"run t1: %w", sandbox.Because(sandbox.WhyProviderUnavailable, host)),
+			status: http.StatusServiceUnavailable, waits: true},
+		"the owner's provider did not answer": {err: &sandbox.TailError{Node: "n2",
+			TurnID: "t1", Failure: sandbox.TailFailure(sandbox.WhyProviderUnavailable)},
+			status: http.StatusServiceUnavailable, waits: true},
+		"the owner could not answer just now": {err: &sandbox.TailError{Node: "n2",
+			TurnID: "t1", Failure: sandbox.TailFailedUnanswered},
+			status: http.StatusServiceUnavailable, waits: true},
+		"the owner's sandbox setup": {err: &sandbox.TailError{Node: "n2", TurnID: "t1",
+			Failure: sandbox.TailFailure(sandbox.WhyConfiguration)},
+			status: http.StatusServiceUnavailable},
+		"a fault of the owner's": {err: &sandbox.TailError{Node: "n2", TurnID: "t1",
+			Failure: sandbox.TailFailedFault}, status: http.StatusInternalServerError},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			a := seededApp(t, nil)
+			a.Queries().Register("tailed", queries.Everybody(),
+				func(context.Context, queries.Params) (any, error) { return nil, c.err })
+			rec := httptest.NewRecorder()
+			a.ServeHTTP(rec, authed(httptest.NewRequest(http.MethodGet, "/query/tailed", nil)))
+			if rec.Code != c.status {
+				t.Fatalf("REST status = %d, want %d: %s", rec.Code, c.status, rec.Body.String())
+			}
+			for _, leak := range []string{"e2b.example.com", "502", "n2 owns"} {
+				if strings.Contains(rec.Body.String(), leak) {
+					t.Errorf("REST body carries %q: %s", leak, rec.Body.String())
+				}
+			}
+			if c.status != http.StatusServiceUnavailable {
+				return
+			}
+			said, _ := builtin.ConditionSentence(c.err)
+			var body map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["detail"] != said {
+				t.Errorf("REST body = %s, want the engine's sentence %q", rec.Body.String(), said)
+			}
+			if got := rec.Header().Get("Retry-After"); (got != "") != c.waits {
+				t.Errorf("REST Retry-After = %q, want one: %v", got, c.waits)
+			}
+			socket := overSocket(t, a, "tailed", nil)
+			wait, _ := socket["retry_after"].(float64)
+			if socket["error"] != "unavailable" || socket["detail"] != said || (wait > 0) != c.waits {
+				t.Errorf("socket answer = %v, want unavailable carrying %q, waits %v",
+					socket, said, c.waits)
 			}
 		})
 	}

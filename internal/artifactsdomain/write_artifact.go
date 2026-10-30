@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The artifact's own writes: the create, a publish and a rollback, a patch,
@@ -110,9 +111,6 @@ func (w *Writer) Create(ctx context.Context, c Call, in CreateInput) (Published,
 			return w.decision(stamp, c, subject, OpCreate, scope, opID, payload, at)
 		}))
 	out := Published{Artifact: id, Number: 1, VersionID: versionID, Result: res}
-	if errors.Is(err, statelog.ErrExists) && in.SourceKey != "" {
-		return out, fmt.Errorf("%w: %w", ErrSourceTaken, err)
-	}
 	if err != nil {
 		return out, err
 	}
@@ -149,7 +147,7 @@ func checkCreate(c Call, in CreateInput, at time.Time) error {
 		return fmt.Errorf("%w: %q", ErrFolderNotFound, in.Folder)
 	}
 	if !in.Kind.Valid() {
-		return fmt.Errorf("%w: kind %q is not one of %v", ErrInvalid, in.Kind, artifacts.Kinds)
+		return fmt.Errorf("%w: kind %q is not one of %s", ErrInvalid, in.Kind, words.Or(artifacts.Kinds))
 	}
 	if err := checkHead(&in.Title, &in.Description, &in.Icon, true); err != nil {
 		return err
@@ -240,8 +238,8 @@ func checkShare(c Call, s artifacts.Share, ceiling artifacts.Role) error {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if !slices.Contains(artifacts.ShareableRoles, s.Role) {
-		return fmt.Errorf("%w: role %q is not one a share grants (%v): ownership moves "+
-			"only by transfer", ErrInvalid, s.Role, artifacts.ShareableRoles)
+		return fmt.Errorf("%w: role %q is not one a share grants (%s): ownership moves "+
+			"only by transfer", ErrInvalid, s.Role, words.Or(artifacts.ShareableRoles))
 	}
 	if !ceiling.Valid() {
 		return fmt.Errorf("%w: the call's authority names no role on the artifact, so "+
@@ -361,8 +359,8 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 			return VersionPayload{}, err
 		}
 		if !found {
-			return VersionPayload{}, fmt.Errorf("%w: artifact %s keeps no version %d",
-				ErrNotFound, id, in.RestoredFrom)
+			return VersionPayload{}, fmt.Errorf("%w: %s: this artifact doesn't keep "+
+				"version %d", ErrNotFound, id, in.RestoredFrom)
 		}
 		m = from.Manifest
 		for i := range m.Files {
@@ -394,16 +392,15 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 			return VersionPayload{}, err
 		}
 		if holder != 0 {
-			return VersionPayload{}, fmt.Errorf("%w: version %d holds %q", ErrLabelTaken,
-				holder, in.Label)
+			return VersionPayload{}, fmt.Errorf("%w: version %d is labelled %q",
+				ErrLabelTaken, holder, in.Label)
 		}
 		count, err := labelled(ctx, tx, id)
 		if err != nil {
 			return VersionPayload{}, err
 		}
 		if count >= artifacts.MaxLabels {
-			return VersionPayload{}, fmt.Errorf("%w: artifact %s already keeps %d labelled "+
-				"versions, the most it keeps; remove a label first", ErrLabelTaken, id, count)
+			return VersionPayload{}, labelsFull(count)
 		}
 	}
 	prune, err := retention(ctx, tx, id, in.Label == "", 0, head.HeadNumber)
@@ -415,8 +412,8 @@ func versionFor(ctx context.Context, tx *sql.Tx, head Head, in PublishInput,
 		return VersionPayload{}, err
 	}
 	if !ok {
-		return VersionPayload{}, fmt.Errorf("artifactsdomain: %s's retention list %v "+
-			"names a version it cannot retire", id, prune)
+		return VersionPayload{}, fmt.Errorf("artifactsdomain: %s's retention list (versions %s) "+
+			"names a version it cannot retire", id, words.And(prune))
 	}
 	plan, refusal, err := planObjects(ctx, tx, id, m.Files, retired)
 	if err != nil {
@@ -490,6 +487,15 @@ func (w *Writer) Patch(ctx context.Context, c Call, id artifacts.ID, p Patch) (W
 	return w.written(ctx, id, opID, res, err)
 }
 
+// labelsFull is the refusal of a label for a version of an artifact that
+// already keeps count labelled versions ([ErrLabelsFull]), naming the remedy a
+// person and a model both take: remove a label from a version that no longer
+// needs one.
+func labelsFull(count int) error {
+	return fmt.Errorf("%w: it keeps %d. Remove a label from a version that no "+
+		"longer needs one, then label this one", ErrLabelsFull, count)
+}
+
 // patchFor is the record a patch publishes, carrying only what it changes, and
 // false when it changes nothing.
 func patchFor(ctx context.Context, tx *sql.Tx, head Head, p Patch) (PatchPayload, bool, error) {
@@ -513,8 +519,8 @@ func patchFor(ctx context.Context, tx *sql.Tx, head Head, p Patch) (PatchPayload
 		return PatchPayload{}, false, err
 	}
 	if !found {
-		return PatchPayload{}, false, fmt.Errorf("%w: artifact %s keeps no version %d",
-			ErrNotFound, id, p.Label.Number)
+		return PatchPayload{}, false, fmt.Errorf("%w: %s: this artifact doesn't keep "+
+			"version %d", ErrNotFound, id, p.Label.Number)
 	}
 	if v.Label == p.Label.Label {
 		return out, changed, nil
@@ -525,7 +531,7 @@ func patchFor(ctx context.Context, tx *sql.Tx, head Head, p Patch) (PatchPayload
 			return PatchPayload{}, false, err
 		}
 		if holder != 0 && holder != p.Label.Number {
-			return PatchPayload{}, false, fmt.Errorf("%w: version %d holds %q",
+			return PatchPayload{}, false, fmt.Errorf("%w: version %d is labelled %q",
 				ErrLabelTaken, holder, p.Label.Label)
 		}
 		if v.Label == "" {
@@ -534,9 +540,7 @@ func patchFor(ctx context.Context, tx *sql.Tx, head Head, p Patch) (PatchPayload
 				return PatchPayload{}, false, err
 			}
 			if count >= artifacts.MaxLabels {
-				return PatchPayload{}, false, fmt.Errorf("%w: artifact %s already keeps %d "+
-					"labelled versions, the most it keeps; remove a label first",
-					ErrLabelTaken, id, count)
+				return PatchPayload{}, false, labelsFull(count)
 			}
 		}
 	} else {

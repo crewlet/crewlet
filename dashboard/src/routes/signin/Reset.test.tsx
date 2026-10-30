@@ -12,6 +12,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vi
 import { CHUNKS, loadChunk } from "~/app/lazyScreen.ts";
 import { App } from "~/app/App.tsx";
 import { Router } from "~/app/router.tsx";
+import { RESET_SECRET_HEADER } from "~/contract/identity.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, needSession, Store, sessionRestored } from "~/protocol/index.ts";
 
@@ -133,7 +134,7 @@ describe("opening the link", () => {
     ).toBe("jane.doe");
     const view = sent.find((s) => s.url.includes("/auth/reset/"));
     expect(view?.method).toBe("GET");
-    expect(view?.headers["X-Crewlet-Reset-Secret"]).toBe(SECRET);
+    expect(view?.headers[RESET_SECRET_HEADER]).toBe(SECRET);
     for (const request of sent) expect(request.url).not.toContain(SECRET);
   });
 

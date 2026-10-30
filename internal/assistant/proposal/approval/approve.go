@@ -69,17 +69,38 @@ func (a *Approver) deciderOf(ctx context.Context, key string, page *wire.PageCon
 // load is one of the owner's proposals.
 func (a *Approver) load(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Proposal, error) {
 	p, err := a.d.Store.Proposal(ctx, owner, id)
-	switch {
-	case errors.Is(err, assistantdomain.ErrNotFound), errors.Is(err, assistantdomain.ErrPurged):
-		return assistantdomain.Proposal{}, ErrNotFound
-	case err != nil:
-		return assistantdomain.Proposal{}, &Unconfirmed{Cause: err}
+	if err != nil {
+		return assistantdomain.Proposal{}, unread("read proposal "+id.String(), err)
 	}
 	return p, nil
 }
 
+// unread is a read of the assistant's own records that failed before anything
+// was decided: [ErrNotFound] for a record that is gone, and otherwise the
+// store's own error, the condition or the fault it is. Nothing was decided, so
+// it is no outcome in doubt; it was [Unconfirmed], and a person was told an
+// approval may have landed that had not been recorded at all
+// ([Approver.answerNow], which reads back a decision already recorded,
+// answers a failed read as one).
+func unread(what string, err error) error {
+	if errors.Is(err, assistantdomain.ErrNotFound) || errors.Is(err, assistantdomain.ErrPurged) {
+		return ErrNotFound
+	}
+	return fmt.Errorf("approval: %s: %w", what, err)
+}
+
 // move records one move, answering [Decided] where the proposal left the state
-// it was decided from and [Unconfirmed] where nobody can say it landed.
+// it was decided from and [Unconfirmed] where the record was sent and nobody
+// can say it landed.
+//
+// A RECORD THE STORE REFUSED WAS NOT WRITTEN: a state-log refusal (a log at its
+// ceiling, a copy behind its log), a store that did not answer before the
+// record was sent, a record it could not form. Each is returned as the store's
+// own error, so the surface tells a condition of the node as one and a fault
+// as a fault. Told as [Unconfirmed], a person whose approval wrote nothing was
+// told it may have landed and asked to approve again under a Retry-After,
+// into a log a wait cannot clear. A caller whose move records what already
+// happened answers that error as [Unconfirmed] itself ([unsettled]).
 func (a *Approver) move(ctx context.Context, c assistantdomain.Call, id uuid.UUID,
 	m assistantdomain.ProposalMove) (Written, error) {
 
@@ -94,11 +115,27 @@ func (a *Approver) move(ctx context.Context, c assistantdomain.Call, id uuid.UUI
 	case errors.Is(err, assistantdomain.ErrNotFound), errors.Is(err, assistantdomain.ErrPurged):
 		return Written{}, ErrNotFound
 	case err != nil:
-		return Written{}, &Unconfirmed{OpID: c.OpID, Cause: err}
+		return Written{}, fmt.Errorf("approval: record the move to %s: %w", m.To, err)
 	case !w.landed():
 		return Written{}, &Unconfirmed{OpID: c.OpID}
 	}
 	return w, nil
+}
+
+// unsettled is a failed [Approver.move] or read as a caller answers it whose
+// record states what already happened (a sent write's settlement, a decision
+// sent again to learn whose it was, a decision this request already recorded
+// read back): [Decided], [ErrNotFound] and [Unconfirmed] as they are, and
+// anything else as [Unconfirmed] too. What it was to state stands whatever
+// kept the record from landing, so the outcome is one nobody can confirm, and
+// the same request sent again answers it.
+func unsettled(opID string, err error) error {
+	var unconfirmed *Unconfirmed
+	if errors.As(err, &unconfirmed) || errors.Is(err, ErrAlreadyDecided) ||
+		errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return &Unconfirmed{OpID: opID, Cause: err}
 }
 
 // Approve carries out the person's approval of one of their proposals.
@@ -137,7 +174,8 @@ func (a *Approver) Approve(ctx context.Context, ap Approval) (wire.ProposalAnswe
 	}
 	switch carries, carriesErr := a.d.Turns.Carries(ctx, d.person.ID, p.Conversation, p.Turn); {
 	case carriesErr != nil:
-		return wire.ProposalAnswer{}, &Unconfirmed{OpID: ap.Key, Cause: carriesErr}
+		return wire.ProposalAnswer{}, unread("read whether turn "+p.Turn.String()+
+			" carries on", carriesErr)
 	case !carries:
 		return a.withdrawn(ctx, d, p)
 	}
@@ -193,7 +231,7 @@ func (a *Approver) repeated(ctx context.Context, c assistantdomain.Call, p assis
 	case err == nil, errors.Is(err, ErrAlreadyDecided):
 		return &Decided{State: state}
 	}
-	return err
+	return unsettled(c.OpID, err)
 }
 
 // repeat answers an approval of a proposal that is no longer waiting: the
@@ -219,7 +257,9 @@ func (a *Approver) repeat(ctx context.Context, d decider, p assistantdomain.Prop
 func (a *Approver) answerNow(ctx context.Context, d decider, id uuid.UUID) (wire.ProposalAnswer, error) {
 	p, err := a.load(ctx, d.person.ID, id)
 	if err != nil {
-		return wire.ProposalAnswer{}, err
+		// THIS REQUEST'S DECISION IS RECORDED (an earlier attempt landed
+		// it), and only its state now went unread.
+		return wire.ProposalAnswer{}, unsettled(d.key, err)
 	}
 	state := proposal.StateNow(p, a.d.Now())
 	if state == wire.ProposalProposed {

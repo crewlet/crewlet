@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/statelog`
-- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`
+- **Enforced-by:** `internal/statelog.TestTheApplierIsHandedTheBodyAndTheTableTheFrame`, `internal/statelog.TestATamperedRecordIsRefusedPermanently`, `internal/engine.TestTheChangeFeedOpensTheFrameBeforeADomainDecodes`, `internal/estate.TestARequestTheFleetDidNotSignRunsNothing`, `internal/estate.TestARequestUnderAKeyThisNodeDoesNotHoldIsAskedElsewhere`, `internal/estate.TestAReplyTheRouterCannotBelieveIsNoAnswer`, `internal/estate.TestEnvelopeDomainsNeverVerifyAsEachOther`, `internal/signedask.TestARequestTheFleetDidNotSignIsBelievedInNothing`, `internal/signedask.TestAReplyIsBelievedOnlyWhenBoundToTheQuestion`, `internal/engine.TestARemovalTheFleetDidNotSignRemovesNothing`, `internal/engine.TestOnlyANoteTheFleetSignedReachesATurn`, `internal/engine.TestEveryInstructionChannelSignsInDomainsOfItsOwn`, `internal/sandbox.TestAnAnswerOpensOnlyAsTheAnswerToTheQuestionItWasSealedFor`, `internal/sandbox.TestAnAnswerWhoseSealDoesNotOpenIsHandedToNoTurn`, `internal/sandbox.TestAnAnswerUnderAKeyThisNodeDoesNotHoldWaitsForANodeThatHoldsIt`, `internal/engine.TestAnUnsealedNoteOnARowReachesNoModel`, `internal/engine.TestANoteSealedForAnotherTurnIsNotDelivered`, `internal/engine.TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys`, `internal/engine.TestAnAnchorThatDoesNotOpenDecidesNoAuthority`, `internal/engine.TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket`, `internal/engine.TestARelayServerAnswersOnlyAnAskTheFleetSigned`, `internal/engine.TestABoxReadTheFleetDidNotSignReadsNothing`, `internal/httprelay.TestAnOpenTheFleetDidNotSignRunsNothing`, `internal/assistant/live.TestAFrameTheFleetDidNotSealIsDropped`
 - **Cost-when-tried:** both readers shipped handing the frame on, and neither failed as a signature bug. The applier put the framed bytes on `Record.Payload`, which every domain decodes, so every record came back `invalid character 'c' looking for beginning of value` from inside the apply transaction — the position never moved, health read the node as BEHIND rather than broken, and it shed its seats to a peer that would have done the same. The change feed read the same bytes and acknowledged each one under its own rule for a record it cannot decode, so every notification in the company stopped.
 - **Tag-status:** unreleased
 
@@ -10,8 +10,9 @@
 
 The broker has no authentication of its own. It binds no listener on the
 default topology, but a fleet clusters its embedded members over a port, and a
-record on a state log is not a message — it is what the next node APPLIES.
-Rows every peer derives identically, a seat's environment, a person's grants.
+record on a state log is not a message — it is what every data node APPLIES.
+Rows every data node derives identically, a seat's environment, a person's
+grants.
 An unsigned record on such a log is an instruction anyone who can reach the
 cluster port may write.
 
@@ -79,7 +80,7 @@ by a signature.
 
 It DOES extend past the logs to every channel whose messages are
 instructions — a request a node CARRIES OUT over the queue's ephemeral verbs —
-and there are three:
+and they are these:
 
 - **the estate service**: a node without data reaches the estate through a node
   that holds it (ADR-0025), and that node runs a write AS the actor the request
@@ -93,30 +94,65 @@ and there are three:
 - **a note to a running turn**: the running node offers a person's note to the
   turn AS that person, on the asking node's decision that they may steer it —
   so an unsigned request puts words in front of a running agent under anybody's
-  name.
+  name;
+- **a read of a run's box asked of its host**: a `direct` or `container` box is
+  touched only on the host of the node that launched it
+  ([ADR-0065](0065-a-local-box-is-driven-by-the-node-that-launched-it.md)), so
+  a seat's holder on another node asks that host to read the box, and the host
+  reads it back and pauses it, as the collection it is part of does. So an
+  unsigned request has a run's box read back and paused at anybody's word;
+- **the box bridge's relay**: a box's tool call lands on any node that serves
+  the API, and that node relays it to the node holding the run's session
+  ([ADR-0056](0056-a-box-reaches-its-run-through-any-node.md)), which runs it
+  AS whoever the call's token names and writes the answer back as frames the
+  first node hands to the box as the holder's. Both directions are
+  instructions: an unsigned OPEN calls a running seat's tools as that seat,
+  and an unsigned frame answers a box in its holder's place;
+- **a person's assistant turn on another node**: a node following or stopping
+  a Dashboard Assistant turn asks the node running it for the frames its
+  client missed, or to stop it, and the running node carries either out for
+  the person the request names, on the asking node's word that they asked
+  ([ADR-0053](0053-an-assistant-conversation-belongs-to-its-owner.md)). So an
+  unsigned request stops anybody's turn, and an unsigned answer ends one in
+  its runner's place.
 
 Each signs every request and every reply under the same keyring, in key
-domains of its own (`estate`, `fleet.broker`, `seat.steer`, each split into a
-`.request` and a `.reply`), so a frame lifted off one channel — or off a log —
-never verifies on another; each binds a request to an id and a deadline inside
-the signature and a reply to the request it answers, because a signature says
-the fleet wrote the bytes and not that it wrote them now or for this question;
-and each judges what arrives by the same two failures with the dispositions a
-channel allows: a key the receiving node does not hold answers that the request
-DID NOT RUN, so the asker moves on to a node that holds it rather than counting
-a refusal — or, where only one node can take it, as only the node running a
-turn can take its note, tells the person the keyring is what to fix — and a MAC
-that fails under a key it holds is refused and logged at error, because no
-holder will ever accept it. The rule has ONE implementation,
-`internal/signedask`, for ADR-0008's reason: three channels each keeping their
-own copy of the binding and the dispositions is how one of them would come to
-believe a reply it never asked for.
+domains of its own (`estate`, `fleet.broker`, `seat.steer`, `sandbox.box_read`,
+`mcpbridge.open`, `mcpbridge.frame`, `assistant.replay` and `assistant.stop`,
+each split into a `.request` and a `.reply`), so a frame lifted off one
+channel — or off a log — never verifies on another; each binds a request to an
+id and a deadline inside the signature and a reply to the request it answers,
+because a signature says the fleet wrote the bytes and not that it wrote them
+now or for this question; and each judges what arrives by the same two failures
+with the dispositions a channel allows: a key the receiving node does not hold
+answers that the request DID NOT RUN, so the asker moves on to a node that
+holds it rather than counting a refusal — or, where only one node can take it,
+as only the node running a turn can take its note, answers that it took
+nothing, which the asking node refuses under no wait, its tool telling the
+assistant that called it that the keyring is what to fix (a person at the
+dashboard is answered in the refusal's code alone, ADR-0060), and as only a
+box's host can read the box, answers nothing, so
+the asker hears a host that did not answer and the host's own next poll
+announces the run again — and a MAC that fails under a key it holds is refused
+and logged at error, because no holder will ever accept it. The rule has ONE
+implementation, `internal/signedask`, for ADR-0008's reason: every channel
+keeping its own copy of the binding and the dispositions is how one of them
+would come to believe a reply it never asked for.
 
 The scatters that only READ — the fleet's history, a search slice, a held
 seat's memory, a sandbox's live tail — are not instructions and are not signed
 by this decision; what a party on the broker can do there is what it can do on
 any subject it reaches, and keeping both ports private is the operator's half
-(SECURITY.md).
+(SECURITY.md). The exemption is for an answer that is READ: handed back to the
+one caller that asked, as the answer to the question it put, and asked again
+the next time it is wanted. A scatter whose answer a node DISPLAYS as another
+node's content of its own accord — pushes, unasked, to every screen it holds as
+what somebody just said, wrote or is doing, with no question of the viewer's
+behind it and nothing but a later re-read to correct it — is not exempt,
+however much it only reads, because a forged answer there is not a wrong reply
+to one question but words shown under somebody's name to everybody watching;
+the amendments below for presence, the live relay and the assistant's frames
+are the channels that rule reaches.
 
 It does not decide what a reader does once verification fails — only that it
 must not decode. The change feed acknowledges and derives no wake; the applier
@@ -163,7 +199,52 @@ id, and the record names the seat a person's authority is decided on only
 inside a seal of its own (`seat.steer.seat`). Every reader opens both before
 using either, with the two failures' dispositions: a key the node does not hold
 leaves the note waiting, with a warning naming the keys the node holds, and
-refuses a decision on the anchor as unavailable; a seal that does not open, or
+refuses a decision on the anchor as unavailable under no wait, the condition
+of the fleet the steer channel's own unheld key is; a seal that does not open, or
 opens as another turn's or another note's, is never handed to a model, carried
 or attributed, and is logged at error. The detail is `internal/engine`'s
 (runsteer.go).
+
+## Amendment: the live relay is sealed too
+
+The live relay (internal/engine, `liverelay.go`) is a scatter that only reads:
+a data node whose own copy is out of service asks a sound peer what that peer's
+appliers committed, so its sockets hear the company while its own appliers are
+not trusted. It shipped unsigned under the exemption above, and it is not one
+of its readers: what a follower takes from an answer is pushed to every socket
+on its node as the peer's appliers' work — a chat batch's excerpts and the
+people it mentions, a datastore batch's documents whole — so anybody who could
+reach the cluster or the leaf port could answer a follower before its server
+did and show words in a room under anybody's name, or values in a shared
+table, on every screen of that node until each read the rows again.
+
+So the relay is a request-and-reply channel of `internal/signedask`, in key
+domains of its own (`live.relay.request` and `live.relay.reply`): every ask is
+signed and bound to an id drawn for it and a deadline, a server answers from
+its ring only an ask the fleet signed and has not answered before, and a
+follower believes only an answer signed for the ask it sent. A channel rather
+than the one-way form presence uses, because the relay is an ask and one
+answer to it, and an answer is worth believing only as the answer to THIS ask:
+one way, a captured answer would be believed by any follower asking inside its
+validity. An answer a follower cannot believe is no answer — passed over while
+the follower goes on waiting for its server's own, since the transport names no
+sender and a forged reply that ended the ask would let anybody move every
+follower off every server — and a server that never sends a believable one is
+a silent peer, which the relay already handles by asking another.
+
+## Amendment: the assistant's frames are sealed too
+
+A Dashboard Assistant turn streams to its person from the node running it, and
+a person whose stream lands on another node follows the turn there: the running
+node broadcasts each frame on the turn's own subject, and every node following
+it streams what it hears to the person
+([ADR-0053](0053-an-assistant-conversation-belongs-to-its-owner.md)). What a
+node does with such a frame is show it to the person as their own turn, so a
+forged one would put words in their conversation. Every frame is sealed one
+way, as presence is, in a key domain of its own (`assistant.frame`) with a
+short validity inside the seal, through the same `internal/signedask`
+implementation, and a frame that does not open is dropped. It is encrypted
+under the keyring's AEAD before it is sealed, with the turn as associated
+data, because it carries what the person asked and what their reads returned,
+and a seal hides nothing. The replay that fills a follower's gaps and the Stop
+are instruction channels, listed above.

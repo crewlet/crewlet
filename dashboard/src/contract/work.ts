@@ -222,3 +222,17 @@ export const VIEW_NAME_MAX_BYTES = 128;
  * Held by the same gate.
  */
 export const DECISION_QUESTION_MAX_BYTES = 300;
+
+/**
+ * The chat surfaces a structured ask's `inform` may name — where the asker
+ * said it would report what was decided — as the engine's `InformSurfaces`
+ * names them: `mattermost`, `slack`, and `chat`, the engine's own.
+ *
+ * A copy the dashboard keeps because a separate build cannot import a Go
+ * identifier, held against the engine's in both directions by
+ * `internal/worklet/client_gate_test.go`. It has drifted once already: the
+ * engine added `chat` while this said only the two vendors, so every decision
+ * on a company running its own chat carried a surface the type said could not
+ * occur.
+ */
+export type InformSurface = "mattermost" | "slack" | "chat";

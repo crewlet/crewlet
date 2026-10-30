@@ -711,12 +711,9 @@ func assisted(r *http.Request, p iam.Principal, claims AssistClaims) *http.Reque
 }
 
 // assistRefusal is the guard's 403 for a grant that does not reach a request:
-// `unauthorized`, carrying the authority table's reason under its keys.
+// `unauthorized`, carrying the authority table's reason under its keys, as
+// the table's one mapping writes it ([authz.RefusalFields]).
 func assistRefusal(reason authz.Reason, detail string) *Refusal {
-	return &Refusal{
-		Status: http.StatusForbidden,
-		Code:   httpjson.CodeUnauthorized,
-		Detail: detail,
-		fields: authz.RefusalDetail(reason, nil),
-	}
+	status, code, fields := authz.RefusalFields(authz.Decision{Reason: reason})
+	return &Refusal{Status: status, Code: code, Detail: detail, fields: fields}
 }

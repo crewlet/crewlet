@@ -170,10 +170,13 @@ func TestADuplicateBindingIsWithheldIfEitherHolderMayNotBeReached(t *testing.T) 
 
 // READING THE DIRECTORY IS THREE-VALUED.
 //
-// No directory is CHART-ONLY and no error — a node that does not run the
-// identity domain. A directory that could not be read is an ERROR, never an
-// empty reading: an empty reading withholds nothing, and folding an outage
-// into it would hand every suspended person's seat back to the chart.
+// No directory is CHART-ONLY and no error — an engine wired with no directory
+// at all, which is `crewlet validate` and a test, never a running node: a data
+// node reads its own identity rows, and a node without the data role reads the
+// same standing through the estate router. A directory that could not be read
+// is an ERROR, never an empty reading: an empty reading withholds nothing, and
+// folding an outage into it would hand every suspended person's seat back to
+// the chart.
 func TestReadingTheDirectoryIsThreeValued(t *testing.T) {
 	t.Parallel()
 	none, err := notify.ReadStanding(t.Context(), nil)

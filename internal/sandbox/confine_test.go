@@ -43,6 +43,12 @@ func newEngineHost(t *testing.T) engineHost {
 		if err := os.MkdirAll(filepath.Dir(f.path), 0o700); err != nil {
 			t.Fatal(err)
 		}
+		if f.path == h.cli {
+			// THE ONE FILE A JOB RUNS, written as every script a case of
+			// this package execs is ([writeExecutable]).
+			writeExecutable(t, f.path, f.body)
+			continue
+		}
 		if err := os.WriteFile(f.path, []byte(f.body), 0o700); err != nil {
 			t.Fatal(err)
 		}

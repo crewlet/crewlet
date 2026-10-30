@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -192,7 +193,7 @@ func TestProgressCarriesTheCurrentCapAndCeiling(t *testing.T) {
 	}
 	// Every call announced WHILE it ran — the three calls this phase made,
 	// in order.
-	want := []string{runner.ReflectAndPersistTool, runner.ReflectAndPersistTool, runner.MarkOnboardedTool}
+	want := []string{toolname.ReflectAndPersist, toolname.ReflectAndPersist, toolname.MarkOnboarded}
 	if !slices.Equal(running, want) {
 		t.Errorf("running calls announced = %v, want %v", running, want)
 	}

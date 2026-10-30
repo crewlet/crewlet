@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // DefaultPollInterval is how often the waiter reconnects to each running box.
@@ -342,8 +343,8 @@ func NewWaiter(opts WaiterOptions) (*Waiter, error) {
 	}
 	switch {
 	case !opts.Drives.Valid():
-		return nil, fmt.Errorf("sandbox: a waiter drives one of %v, not %q (WaiterOptions.Drives)",
-			AllDrives, opts.Drives)
+		return nil, fmt.Errorf("sandbox: a waiter drives one of %s, not %q (WaiterOptions.Drives)",
+			words.Or(AllDrives), opts.Drives)
 	case opts.Drives == DrivesLocal && opts.ClaimDuty != nil:
 		return nil, errors.New("sandbox: a waiter of one node's own boxes claims no duty: no " +
 			"other node can reach those boxes, so none can poll them beside it")

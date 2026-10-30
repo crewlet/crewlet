@@ -26,9 +26,9 @@ func removed(t *testing.T, r *roundTrip, id string) bool {
 //
 // Tombstone was defined, applied, routed as a `removed` notification and
 // readable with `removed=true` — and nothing in the tree could produce one. A
-// task could be PURGED, destroying every row on every node with no inverse,
-// and could not be removed; the restore path the applier carries could never
-// run at all.
+// task could be PURGED, destroying every row on every data node with no
+// inverse, and could not be removed; the restore path the applier carries
+// could never run at all.
 func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -81,13 +81,12 @@ func TestATaskCanBeRemovedAndRestored(t *testing.T) {
 	}
 }
 
-// A SUBTREE LEAVES TOGETHER AND COMES BACK TOGETHER — and brings back only
-// what it took.
+// A SUBTREE REMOVED TOGETHER COMES BACK TOGETHER — and brings back only what
+// it took.
 //
-// Removing a parent and leaving its children reachable is the shape that makes
-// orphans somebody then has to find. `removed_with` is what makes the inverse
-// true: a task already in the trash for its own reasons is not restored by
-// somebody restoring its parent.
+// `removed_with` is what makes a subtree gesture's inverse exact: a task
+// already in the trash for its own reasons is not restored by somebody
+// restoring its parent.
 func TestRemovingASubtreeIsReversibleAndBringsBackOnlyWhatItTook(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -423,6 +422,70 @@ func TestTheTrashIsOrderedByRemoval(t *testing.T) {
 	}
 }
 
+// THE TRASH ANSWERS THE SAME AT EITHER SCOPE, THROUGH EVERY STATEMENT OVER IT.
+//
+// Every statement over a trash is read through an index that holds only
+// removed rows ([taskSource]), named in the statement — so a statement whose
+// predicate stopped implying that index's would fail rather than answer, and
+// one reading another scope's index would answer another scope's trash. The
+// plan test holds what each statement reads; this holds what it ANSWERS: the
+// page, the count beside it, a total and a board's columns, at the workspace
+// and inside the project, in the default subtask mode (where each row probes
+// the removal it rides along with) and flat.
+func TestTheTrashAnswersTheSameAtEitherScope(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	for _, id := range []string{"kept", "first", "second"} {
+		filedTask(t, r, id)
+	}
+	for i, id := range []string{"first", "second"} {
+		r.at = wednesday.Add(time.Duration(i) * time.Minute)
+		if _, err := r.writer.RemoveTask(t.Context(), "op-rm-"+id, id, "ENG",
+			false, nil); err != nil {
+			t.Fatalf("RemoveTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	r.at = wednesday
+
+	want := []string{"second", "first"}
+	for _, container := range []string{"workspace", "project:ENG"} {
+		for _, mode := range []string{"collapsed", "separate"} {
+			params := func(extra map[string]any) map[string]any {
+				out := map[string]any{"container": container, "removed": "true",
+					"show_closed": "true", "subtasks": mode}
+				for key, value := range extra {
+					out[key] = value
+				}
+				return out
+			}
+			what := container + " " + mode
+			answer := r.ask(params(map[string]any{"totals": "tasks:count"}))
+			if got := ids(answer); !slices.Equal(got, want) {
+				t.Errorf("%s: the trash answers %v, want %v", what, got, want)
+			}
+			if answer.TotalHint != len(want) {
+				t.Errorf("%s: the trash counts %d beside its page, want %d",
+					what, answer.TotalHint, len(want))
+			}
+			if len(answer.Totals) != 1 || answer.Totals[0].Value == nil ||
+				*answer.Totals[0].Value != float64(len(want)) {
+				t.Errorf("%s: the trash totals %v, want a count of %d", what,
+					answer.Totals, len(want))
+			}
+			board := r.ask(params(map[string]any{"group_by": "status"}))
+			counted := 0
+			for _, column := range board.Groups {
+				counted += column.Count
+			}
+			if counted != len(want) {
+				t.Errorf("%s: a board over the trash counts %d across its "+
+					"columns, want %d", what, counted, len(want))
+			}
+		}
+	}
+}
+
 // AND A READER MAY ASK FOR THE OTHER END OF IT.
 //
 // The default above is what an unsorted trash gets. `sort=removed` is the
@@ -504,5 +567,185 @@ func TestARemovalOrARestoreNamingAnotherProjectIsRefused(t *testing.T) {
 	r.drain()
 	if !removed(t, r, "t-here") {
 		t.Fatal("a restore refused for naming the wrong project restored the task")
+	}
+}
+
+// THE TRASH LISTS EVERY REMOVAL UNDER THE TASK IT WAS MADE ON.
+//
+// What somebody restores is a removal — the task a gesture named, and what it
+// took with it — so in the default subtask mode the trash lists each removal
+// once, with what went with it riding along, and filters the removal rather
+// than the tree. Three shapes, each one a removal of its own:
+//
+//   - a subtask removed alone while its parent stayed live, which is what an
+//     author removing their own item does;
+//   - a subtree removed together, an epic and the task under it;
+//   - a subtask already in the trash when its root was removed with its
+//     subtree, which that removal does not take and does not re-stamp.
+//
+// Anchored on the tree's root instead, the default trash asked whether the
+// ROOT was removed, and the subtask removed alone under a live parent was in
+// no default-mode trash at either scope.
+func TestTheTrashListsEveryRemovalUnderItsOwnRoot(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	file := func(id, kind, parent string) {
+		t.Helper()
+		task := newTask(id)
+		task.Key = "ENG-" + id
+		task.Type = kind
+		if parent != "" {
+			task.Parent = &parent
+			task.Depth = 1
+		}
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	remove := func(id string, subtree bool) {
+		t.Helper()
+		if _, err := r.writer.RemoveTask(t.Context(), "op-rm-"+id, id, "ENG",
+			subtree, nil); err != nil {
+			t.Fatalf("RemoveTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	file("root-x", "task", "")
+	file("sub-x", "task", "root-x")
+	remove("sub-x", false)
+
+	file("root-w", "epic", "")
+	file("sub-w", "task", "root-w")
+	remove("root-w", true)
+
+	file("root-n", "epic", "")
+	file("sub-n", "task", "root-n")
+	remove("sub-n", false)
+	remove("root-n", true)
+	detail, err := r.reader.Task(t.Context(), "sub-n", worklet.DetailWants{},
+		statelog.Freshness{Level: statelog.ReadStale})
+	if err != nil {
+		t.Fatalf("read sub-n: %v", err)
+	}
+	if detail.Task.Removed == nil || detail.Task.Removed.RemovedWith != nil {
+		t.Fatalf("sub-n's tombstone is %+v after its root's subtree removal, "+
+			"want its own removal untouched", detail.Task.Removed)
+	}
+
+	every := []string{"root-w", "sub-w", "sub-x", "root-n", "sub-n"}
+	for _, container := range []string{"project:ENG", "workspace"} {
+		for _, mode := range []string{"collapsed", "expanded", "separate"} {
+			ask := func(extra map[string]any) []string {
+				params := map[string]any{"container": container,
+					"removed": "true", "show_closed": "true", "subtasks": mode}
+				for key, value := range extra {
+					params[key] = value
+				}
+				return ids(r.ask(params))
+			}
+			what := container + " " + mode
+			if got := ask(nil); !sameSet(got, every) {
+				t.Errorf("%s: the trash lists %v, want every removed task %v",
+					what, got, every)
+			}
+			// THE REMOVAL IS FILTERED AND WHAT IT TOOK RIDES ALONG, in a
+			// rolled-up mode; flat, every task answers for itself.
+			epics, tasks := []string{"root-w", "root-n", "sub-w"}, []string{"sub-x", "sub-n"}
+			if mode == "separate" {
+				epics, tasks = []string{"root-w", "root-n"}, []string{"sub-w", "sub-x", "sub-n"}
+			}
+			if got := ask(map[string]any{"type": "epic"}); !sameSet(got, epics) {
+				t.Errorf("%s: the trash's epics are %v, want %v", what, got, epics)
+			}
+			if got := ask(map[string]any{"type": "task"}); !sameSet(got, tasks) {
+				t.Errorf("%s: the trash's tasks are %v, want %v", what, got, tasks)
+			}
+		}
+	}
+}
+
+// sameSet reports whether got holds exactly want, in any order.
+func sameSet(got, want []string) bool {
+	return len(got) == len(want) &&
+		!slices.ContainsFunc(want, func(id string) bool { return !slices.Contains(got, id) })
+}
+
+// A TASK WHOSE ANCHOR IS ACROSS THE TRASH IS FILTERED ON ITS OWN.
+//
+// A row rides along with its anchor — its root, or in the trash its removal —
+// and a gesture can move one to the other side of the trash without the
+// other. Two shapes, on the two sides:
+//
+//   - the residue of a restore that stopped after its root: a subtask still
+//     in the trash whose tombstone names a root that is back;
+//   - a parent removed alone, which is all its author may do, over a live
+//     subtask.
+//
+// Probed for the anchor's answer, each was in no default-mode listing — the
+// residue in no trash, the live subtask on no board — and only
+// `subtasks=separate` reached either. Each is the root of what is left, so it
+// is listed, and filtered, on its own.
+func TestATaskWhoseAnchorIsAcrossTheTrashIsFilteredOnItsOwn(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	file := func(id, kind, parent string, tombstone *worklet.Tombstone) {
+		t.Helper()
+		task := newTask(id)
+		task.Key = "ENG-" + id
+		task.Type = kind
+		if parent != "" {
+			task.Parent = &parent
+			task.Depth = 1
+		}
+		task.Removed = tombstone
+		if _, err := r.writer.CreateTask(t.Context(), "op-"+id, task, nil); err != nil {
+			t.Fatalf("CreateTask %s: %v", id, err)
+		}
+		r.drain()
+	}
+	// THE RESIDUE, seeded with the tombstone the stopped restore left:
+	// what is under test is the predicate that reads it.
+	root := "root-y"
+	file(root, "task", "", nil)
+	file("sub-y", "bug", root, &worklet.Tombstone{
+		By: "ana", Kind: worklet.AuthorHuman, At: wednesday, RemovedWith: &root,
+	})
+	// AND A PARENT REMOVED ALONE OVER A LIVE SUBTASK.
+	file("root-z", "task", "", nil)
+	file("sub-z", "bug", "root-z", nil)
+	if _, err := r.writer.RemoveTask(t.Context(), "op-rm-root-z", "root-z", "ENG",
+		false, nil); err != nil {
+		t.Fatalf("RemoveTask root-z: %v", err)
+	}
+	r.drain()
+
+	for _, container := range []string{"project:ENG", "workspace"} {
+		for _, mode := range []string{"collapsed", "expanded"} {
+			ask := func(extra map[string]any) []string {
+				params := map[string]any{"container": container, "subtasks": mode}
+				for key, value := range extra {
+					params[key] = value
+				}
+				return ids(r.ask(params))
+			}
+			what := container + " " + mode
+			if got := ask(map[string]any{"removed": "true"}); !sameSet(got, []string{"root-z", "sub-y"}) {
+				t.Errorf("%s: the trash lists %v, want the removed parent and "+
+					"the subtask its restore left behind", what, got)
+			}
+			if got := ask(map[string]any{"removed": "true", "type": "bug"}); !sameSet(got, []string{"sub-y"}) {
+				t.Errorf("%s: the trash's bugs are %v, want the subtask filtered "+
+					"on its own", what, got)
+			}
+			if got := ask(nil); !sameSet(got, []string{"root-y", "sub-z"}) {
+				t.Errorf("%s: the board lists %v, want the restored root and the "+
+					"subtask its parent's removal left", what, got)
+			}
+			if got := ask(map[string]any{"type": "bug"}); !sameSet(got, []string{"sub-z"}) {
+				t.Errorf("%s: the board's bugs are %v, want the subtask filtered "+
+					"on its own", what, got)
+			}
+		}
 	}
 }

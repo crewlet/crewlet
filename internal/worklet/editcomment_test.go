@@ -39,9 +39,7 @@ func TestOnlyACommentsAuthorMayEditIt(t *testing.T) {
 	}
 
 	// THE AUTHOR, and the edit keeps everything the remark was besides its
-	// words: the question it asked and who it woke. The apply is an upsert
-	// of the whole row, so an edit carrying only the body would have
-	// closed a question nobody answered.
+	// words: the question it asked and who it woke.
 	if _, err := r.writer.EditComment(t.Context(), "op-ana", created.ID, "ENG",
 		"cm-1", "who owns the rollback now?", nil); err != nil {
 		t.Fatalf("ana's own edit: %v", err)

@@ -364,7 +364,7 @@ func TestTrimRacesATransfer(t *testing.T) {
 	t.Parallel()
 
 	// ARM 1 — THE HOLD IS TAKEN BEFORE THE TICK READS IT. The adopter
-	// pins the tail as step 1 of nine, before a byte is fetched, so every
+	// pins the tail as step 1 of ten, before a byte is fetched, so every
 	// tick from then on sees it and the minimum cannot pass it.
 	t.Run("a hold taken before the tick pins the tail", func(t *testing.T) {
 		t.Parallel()
@@ -452,7 +452,7 @@ func TestTrimRacesATransfer(t *testing.T) {
 			t.Fatalf("the refusal is %q and does not say the artefact went stale "+
 				"during the transfer", err)
 		}
-		// AND THE LIVE DATABASE SURVIVED. Step 7 is before step 8, which
+		// AND THE LIVE DATABASE SURVIVED. Step 7 is before step 9, which
 		// is the one place the engine replaces a database.
 		if h.closes.Load() != 0 {
 			t.Errorf("the live database was closed %d time(s) for an install "+

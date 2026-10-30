@@ -191,3 +191,44 @@ roles:
 		}
 	})
 }
+
+// A RUNNER'S ROSTER KNOWS WHICH CHAT THE COMPANY RUNS. On the engine's own a
+// person answers to their seat's handle, so a lead's roster gives it and is
+// told to mention them by it; on a company whose chat is nobody's they have
+// no account to be mentioned on. Read off the prompt a runner the epoch builds sends, because
+// the backend is decided by the epoch's configuration and handed to the roster
+// by [Company.RunnerFor], and the roster alone cannot see it.
+func TestARunnersRosterKnowsWhichChatTheCompanyRuns(t *testing.T) {
+	t.Parallel()
+	for backend, want := range map[string]string{
+		"chatlet": "  - Chat: @founder",
+		"none":    "nobody to @-mention",
+	} {
+		t.Run(backend, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := config.ParseCompany([]byte(`
+name: Acme
+chat:
+  backend: ` + backend + `
+roles:
+  - name: CEO
+    handle: ceo
+    manages: [founder]
+  - name: Founder
+    handle: founder
+    kind: human
+`))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			c, err := NewCompany(cfg)
+			if err != nil {
+				t.Fatalf("NewCompany: %v", err)
+			}
+			if prompt := leadPrompt(t, c); !strings.Contains(prompt, want) {
+				t.Errorf("on %s chat the CEO's prompt never says %q about its "+
+					"human report:\n%s", backend, want, prompt)
+			}
+		})
+	}
+}

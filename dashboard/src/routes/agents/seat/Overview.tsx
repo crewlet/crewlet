@@ -6,8 +6,8 @@
  *
  * The four tiles and the fortnight chart are ONE answer — `seat_activity`
  * with `previous` — so "+9 vs last week" and the chart's first seven columns
- * are the same days, summed from every node's usage rows rather than from the
- * answering node's event log. The first-pass rate is the engine's own
+ * are the same days, summed from every data node's usage rows rather than
+ * from the answering node's event log. The first-pass rate is the engine's own
  * percentage over REVIEWED turns (a turn nobody reviewed has no verdict), the
  * median and the p90 are its quantiles, and the tokens tile is the seat's
  * CAPPED window where it has one, so the figure and its ceiling are one

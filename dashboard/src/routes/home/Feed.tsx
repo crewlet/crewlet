@@ -30,7 +30,6 @@ import {
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import { useAssistantContext } from "~/app/assistant/useAssistantContext.ts";
 import { choiceKey, urlAction } from "~/app/assistant/urlAction.ts";
-import { QueryState } from "~/components/common.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
 import { PHONE_BREAKPOINT } from "~/app/layout.ts";
 import { useClient, useOrg } from "~/lib/store-hooks.ts";
@@ -47,6 +46,7 @@ import {
   surfaceName,
 } from "./model.ts";
 import { itemPath } from "~/lib/work.ts";
+import { WidgetQuery, gapsOf } from "./board/kit.tsx";
 
 /** One screen of the feed before "Load older". */
 export const FEED_PAGE = 20;
@@ -138,10 +138,13 @@ export function Feed({ now }: { now: number }) {
           />
         </span>
       </Card.Header>
-      <QueryState
+      <WidgetQuery
         error={live.error}
         refusal={live.refusal}
         loading={live.loading && !live.data}
+        // EVERY PAGE ON SCREEN, the older ones a reader loaded included: a
+        // page this build could not fully read is a gap in the feed it drew.
+        gaps={gapsOf([head, ...(held?.pages ?? [])])}
         empty={
           head && rows.length === 0
             ? {
@@ -172,7 +175,7 @@ export function Feed({ now }: { now: number }) {
             </Button>
           </div>
         )}
-      </QueryState>
+      </WidgetQuery>
     </Card>
   );
 }

@@ -129,6 +129,34 @@ func TestARevealOfSeveralNamesRefusesWhatNoDocumentAsks(t *testing.T) {
 	}
 }
 
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS ([plainjson.Unreadable]): which
+// field held what where something else belongs, or a field the route does not
+// read, never encoding/json's own sentence, which names Go's struct and the
+// field's Go type ("json: cannot unmarshal string into Go struct field
+// revealRequest.names of type []string"). Mutation: answer err.Error() again
+// and every row goes red.
+func TestARevealBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	h, _ := surface(t, cipherFor(t, "k1"), "k1")
+	for _, tc := range []struct{ body, says string }{
+		{`{"names":"A"}`, `In the body, "names" holds text where a list belongs.`},
+		{`{"names":["A"],"all":true}`, `In the body, "all" isn't a field this takes.`},
+		{`[1]`, "The body is a list where an object belongs."},
+	} {
+		code, raw := call(t, h, http.MethodPost, "/secrets/reveal", tc.body)
+		var body map[string]any
+		if err := json.Unmarshal([]byte(raw), &body); err != nil {
+			t.Errorf("%s: the refusal is not JSON: %s", tc.body, raw)
+			continue
+		}
+		if code != http.StatusBadRequest || body["error"] != string(httpjson.CodeInvalidBody) ||
+			body["detail"] != tc.says {
+			t.Errorf("%s answered %d %v, want 400 invalid_body saying %q", tc.body,
+				code, body, tc.says)
+		}
+	}
+}
+
 // THE LONGEST ANSWER FITS THE BOUND A READER IS GIVEN.
 //
 // [secretsapi.MaxRevealAnswerBytes] is what a client is told to be prepared to

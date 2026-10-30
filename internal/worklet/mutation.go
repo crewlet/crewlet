@@ -295,16 +295,16 @@ type ScopeTerm struct {
 func (t ScopeTerm) Path() string {
 	switch t.Kind {
 	case TermObject:
-		return join(pathDomain, pathContainer, t.container(), pathObject, t.ID)
+		return statelog.ScopePath(pathDomain, pathContainer, t.container(), pathObject, t.ID)
 	case TermKey:
-		return join(pathDomain, pathContainer, t.container(), pathKey, t.ID)
+		return statelog.ScopePath(pathDomain, pathContainer, t.container(), pathKey, t.ID)
 	case TermContainer:
-		return join(pathDomain, pathContainer, t.named())
+		return statelog.ScopePath(pathDomain, pathContainer, t.named())
 	case TermFamily:
 		if t.ID == "" {
 			return pathDomain
 		}
-		return join(pathDomain, pathFamily, t.ID)
+		return statelog.ScopePath(pathDomain, pathFamily, t.ID)
 	case TermDomain:
 		return pathDomain
 	}
@@ -337,23 +337,11 @@ func (t ScopeTerm) named() string {
 	return t.ID
 }
 
-// join builds a scope path from its segments, skipping empty ones so a
-// missing id can never produce a path with a hole in it.
-func join(segments ...string) string {
-	kept := make([]string, 0, len(segments))
-	for _, s := range segments {
-		if s = strings.TrimSpace(s); s != "" {
-			kept = append(kept, s)
-		}
-	}
-	return strings.Join(kept, statelog.ScopeSeparator)
-}
-
 // MaxScopeTerms is the cap on a record's declared scope.
 //
 // NOT A NEW NUMBER: it is this design's universal fan-out batch — 64
 // descendants per move batch, 64 children per merge batch, 64 dependents, 64
-// watchers, 64 tasks per bulk update. A writer whose
+// watchers, 64 of a caller's own moves per rank order. A writer whose
 // affected set would exceed it emits the smallest COVERING container or family
 // term instead, so the field is bounded by construction rather than by a cap a
 // writer can hit and then have to handle.
@@ -777,9 +765,8 @@ type MutationRecord struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 
-	TurnID  string   `json:"turn_id,omitempty"`
-	Chain   []string `json:"chain,omitempty"`
-	BatchID *string  `json:"batch_id,omitempty"`
+	TurnID string   `json:"turn_id,omitempty"`
+	Chain  []string `json:"chain,omitempty"`
 
 	// Kind is WHAT THIS RECORD DID, stated by the writer, and it is a
 	// different fact from whether anybody was told about it.
@@ -909,7 +896,7 @@ func Decode(payload []byte) (MutationRecord, error) {
 var knownKeys = []string{
 	"v", "op_id", "subject", "op", "created_at", "gen", "writer", "scope",
 	"expect", "mutation", "actor", "actor_kind", "operator_id",
-	"turn_id", "chain", "batch_id", "kind", "notify",
+	"turn_id", "chain", "kind", "notify",
 }
 
 // ErrFutureVersion reports a record a newer build wrote.
@@ -1176,11 +1163,11 @@ const MaxExcerpt = 600
 // "+18 more" leaving. What a set's commit changed is what joined and what
 // left, and that is always small; the whole set is on the row's document.
 type Delta struct {
-	From string `json:"from"`
-	To   string `json:"to"`
+	From string `json:"from" untrusted:"name"`
+	To   string `json:"to" untrusted:"name"`
 	// Added and Removed are what a set gained and lost — see [Delta].
-	Added   []string `json:"added,omitempty"`
-	Removed []string `json:"removed,omitempty"`
+	Added   []string `json:"added,omitempty" untrusted:"name"`
+	Removed []string `json:"removed,omitempty" untrusted:"name"`
 }
 
 // TaskParty is one task and who is on it, for the two lists that name
@@ -1448,7 +1435,7 @@ func (a *AnsweredDecision) check() error {
 type AnsweredDecision struct {
 	// Question is the decision's own question, at most
 	// [MaxDecisionQuestion] bytes.
-	Question string `json:"question"`
+	Question string `json:"question" untrusted:"name"`
 
 	// Choice is the option the answer chose. Nil for an answer in prose,
 	// which is an answer too — "none of these" is one.
@@ -1457,24 +1444,6 @@ type AnsweredDecision struct {
 	// Inform is where the asker said it would report the outcome.
 	Inform *decision.Inform `json:"inform,omitempty"`
 }
-
-// Batched reports a record written as part of a BULK GESTURE.
-//
-// ONE SPELLING FOR BOTH SURFACES, and that is the whole reason it is a method
-// rather than the expression it wraps. [Candidates] is called twice for every
-// record — once by the applier, writing the notification rows, and once by the
-// parser, fanning the wake out — and its `batched` argument decides whether a
-// recipient is ADDRESSED. The applier derived it from this field and the
-// parser read a struct field on itself that NOTHING EVER ASSIGNED, so the two
-// agreed only because no writer sets a batch id yet: the first bulk verb to
-// land would have made one surface record thirty asks and the other thirty
-// facts to absorb, for the same thirty records, with nothing comparing them.
-//
-// A bulk gesture is thirty facts rather than thirty asks — a lead re-tagging
-// a project's backlog is not thirty people each owing an answer — which is
-// what the flag suppresses, and why getting it wrong on one side only is worse
-// than getting it wrong on both.
-func (r MutationRecord) Batched() bool { return r.BatchID != nil }
 
 // Validate refuses a notification that would render wrong.
 func (n *Notify) Validate() error {
@@ -1511,15 +1480,15 @@ func (n *Notify) Validate() error {
 // # Why this is at the publish boundary and not at each builder
 //
 // Because the record is what the cost lives on. A snapshot is COPIED onto the
-// log, replicated to every node, held for the stream's whole retention window
-// and read back by every applier — so a collection that grew without a bound
-// is not one screen rendering badly, it is bytes every member of the fleet
-// stores for a year. The design's own arithmetic sums these eleven caps to
-// about 19 KiB worst and sizes [MaxCommitBytes] from it, and until this
-// existed [Notify.Validate] read `Kind`, `Fields` and `Excerpt` and NOTHING
-// on the snapshot: the caps that held were incidental properties of whichever
-// builder happened to read a bounded table, and the ones that did not hold
-// were invisible.
+// log, held by each of the stream's replicas for its whole retention window,
+// and applied into every data node's rows — so a collection that grew without
+// a bound is not one screen rendering badly, it is bytes every replica and
+// every data node stores for a year. The design's own arithmetic sums these
+// eleven caps to about 19 KiB worst and sizes [MaxCommitBytes] from it, and
+// until this existed [Notify.Validate] read `Kind`, `Fields` and `Excerpt` and
+// NOTHING on the snapshot: the caps that held were incidental properties of
+// whichever builder happened to read a bounded table, and the ones that did
+// not hold were invisible.
 //
 // # And it is a REFUSAL rather than a trim
 //
@@ -1546,9 +1515,10 @@ func (n *Notify) checkSnapshot() error {
 		if c.size > c.max {
 			return invalid("a notification names %d %s and the "+
 				"maximum is %d — a routing snapshot is copied onto the log, "+
-				"replicated to every node and held for the stream's whole "+
-				"retention window, so an unbounded one is bytes the fleet "+
-				"stores for a year", c.size, c.field, c.max)
+				"held by each of the stream's replicas for its whole "+
+				"retention window and applied into every data node's rows, "+
+				"so an unbounded one is bytes the fleet stores for a year",
+				c.size, c.field, c.max)
 		}
 	}
 	return nil

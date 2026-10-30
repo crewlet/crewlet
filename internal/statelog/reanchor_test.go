@@ -18,6 +18,7 @@ import (
 
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
@@ -39,7 +40,7 @@ func reanchorInputs() statelog.ReanchorInputs {
 		StreamCreatedAt:  reanchorCreated,
 		KeyedTo:          keyedCreated,
 		FirstSeq:         0,
-		PeersReanchored:  0,
+		ReanchoredPeers:  nil,
 		Position:         9_000,
 		Highest:          9_000,
 		RegisterReadable: true,
@@ -90,7 +91,7 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 		"a peer has already re-anchored the stream": {
 			in: func() statelog.ReanchorInputs {
 				in := reanchorInputs()
-				in.PeersReanchored = 1
+				in.ReanchoredPeers = []string{"node-2"}
 				return in
 			}(),
 			guard: confirmed(),
@@ -113,7 +114,7 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 				return in
 			}(),
 			guard: confirmed(),
-			names: "node-ahead reached 9000 holding history the log does not — only " +
+			names: "node-ahead reached 9000 holding history the log doesn't. Only " +
 				"the most caught-up node may reanchor, because everything above its " +
 				"own position is what the reanchor discards; re-anchor on node-ahead",
 		},
@@ -144,6 +145,14 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.names) {
 				t.Errorf("the refusal does not say %q: %v", tc.names, err)
+			}
+			// TOLD TO THE OPERATOR IN ITS OWN SENTENCE, without the
+			// package that wrote it: the retention route answers the
+			// sentence and logs the error ([statelog.Told]).
+			said, told := statelog.Tell(err)
+			if !told || !strings.Contains(said, tc.names) ||
+				strings.Contains(said, "statelog:") || strings.Contains(said, "—") {
+				t.Errorf("the refusal tells %q (told %v), want its sentence alone", said, told)
 			}
 		})
 	}
@@ -179,7 +188,7 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 		t.Fatalf("a forced reanchor was refused: %v", err)
 	}
 	reanchored := reanchorInputs()
-	reanchored.PeersReanchored = 1
+	reanchored.ReanchoredPeers = []string{"node-2"}
 	if _, err := statelog.PermitReanchor(reanchored, statelog.ReanchorGuard{
 		Confirm: confirmed().Confirm, Force: true,
 	}); err == nil {
@@ -187,6 +196,58 @@ func TestAReanchorRefusesEveryWayItCanBeWrong(t *testing.T) {
 			"stream — that is not a judgement an operator can make, because the " +
 			"divergence it produces is silent and there is no log left to " +
 			"reconcile from")
+	}
+}
+
+// A REANCHOR REFUSED OVER A RE-ANCHORED PEER NAMES IT, AND HOW TO EVICT IT.
+//
+// The refusal sends the operator to a re-anchored peer, to adopt its snapshot
+// or to evict it if it is gone, and both need its name. It counted the peers,
+// and the names were glued on by the engine outside the sentence the operator
+// is told, so the route answered "1 peer(s) have already re-anchored" and the
+// names reached only the log. Mutation: refuse with the count, or without the
+// evict command, and this fails.
+func TestARefusalOverAReanchoredPeerNamesIt(t *testing.T) {
+	t.Parallel()
+	in := reanchorInputs()
+	in.ReanchoredPeers = []string{"node-2"}
+	_, err := statelog.PermitReanchor(in, confirmed())
+	said, told := statelog.Tell(err)
+	if !told {
+		t.Fatalf("the refusal tells the operator nothing: %v", err)
+	}
+	for _, want := range []string{`"node-2" has already re-anchored`,
+		"Adopt its snapshot", "`crewlet retention evict node-2 -confirm node-2`"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal %q doesn't say %q", said, want)
+		}
+	}
+	in.ReanchoredPeers = []string{"node-2", "node-3"}
+	_, err = statelog.PermitReanchor(in, confirmed())
+	said, _ = statelog.Tell(err)
+	for _, want := range []string{`"node-2" and "node-3" have already re-anchored`,
+		"Adopt a snapshot from one of them instead"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("two peers are not named as two: %q doesn't say %q", said, want)
+		}
+	}
+
+	// AND A LOG THAT STILL HOLDS WHAT THE ROWS ARE MISSING names them too:
+	// it is what a node a peer re-anchored past reads, stopped on the
+	// peer's generation, and the case is decided before the fleet is.
+	// Mutation: drop the peers from that refusal and this fails.
+	in = reanchorInputs()
+	in.KeyedTo = reanchorCreated.Truncate(time.Microsecond)
+	in.FirstSeq, in.LastSeq = 1, in.Position+50
+	in.ReanchoredPeers = []string{"node-2"}
+	_, err = statelog.PermitReanchor(in, confirmed())
+	said, _ = statelog.Tell(err)
+	for _, want := range []string{"nothing to re-anchor",
+		`"node-2" has re-anchored it past this node. Adopt its snapshot instead`,
+		"`crewlet retention evict node-2 -confirm node-2`"} {
+		if !strings.Contains(said, want) {
+			t.Errorf("the refusal %q doesn't say %q", said, want)
+		}
 	}
 }
 
@@ -201,7 +262,7 @@ func TestADomainClaimingNoIdentityIsNotHeldToTheFleetGuards(t *testing.T) {
 	t.Parallel()
 	in := reanchorInputs()
 	in.ClaimsIdentity = false
-	in.PeersReanchored = 2
+	in.ReanchoredPeers = []string{"node-2", "node-3"}
 	in.Position = 10
 	in.RegisterReadable = false
 	plan, err := statelog.PermitReanchor(in, confirmed())
@@ -432,6 +493,9 @@ type reanchorLog struct {
 	order   *[]string
 	// lose makes the next append go unanswered, having landed or not.
 	lose, loseLanded bool
+	// refuse is what the broker answers every append with, nil while it
+	// stores them.
+	refuse error
 	// dedupeFirst is the CLUSTERED broker's order: a message id already in
 	// the duplicate window is acknowledged as a duplicate of the record it
 	// landed as before any expectation is checked. The solo broker — the
@@ -466,6 +530,9 @@ func (l *reanchorLog) Append(_ context.Context, subject, msgID string, expect *u
 	l.appends++
 	if l.order != nil {
 		*l.order = append(*l.order, "append")
+	}
+	if l.refuse != nil {
+		return 0, false, l.refuse
 	}
 	if l.lose {
 		l.lose = false
@@ -640,7 +707,7 @@ func (f *reanchorFixture) deps(domain statelog.Domain) statelog.ReanchorDeps {
 	return statelog.ReanchorDeps{
 		Domain: domain, Spec: specOf(domain), Stream: f.log, Record: probeGeneration{keeps: true},
 		Consumer: f.consumer, Runner: f.runner, DB: f.estate,
-		By: "ops-1", ByKind: "human", OperatorID: "session:ops-1", NodeID: "node-a",
+		By: "ops-1", ByKind: iam.ActorHuman, OperatorID: "session:ops-1", NodeID: "node-a",
 	}
 }
 
@@ -834,7 +901,12 @@ func TestAReanchorMovesOnlyTheDomainItNamed(t *testing.T) {
 	for runner.Committed() != secondAt && runner.Stopped() == nil && ctx.Err() == nil {
 		time.Sleep(2 * time.Millisecond)
 	}
-	time.Sleep(20 * time.Millisecond)
+	// AND GOES ON RUNNING across two more fetches it has answered and
+	// handled: a sleep here watched nothing on a runner that let no fetch
+	// happen during it.
+	if runner.Stopped() == nil {
+		secondFetch.awaitAnswered(t, 2, "two fetches past the other domain's checkpoint")
+	}
 	cancel()
 	<-errs
 	if err := runner.Stopped(); err != nil {
@@ -971,6 +1043,56 @@ func TestTheReanchorsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 	if len(f.runner.created) != 1 || !f.runner.created[0].Equal(reanchorCreated) {
 		t.Fatalf("the runner was re-keyed to %v, want the confirmed %s",
 			f.runner.created, reanchorCreated)
+	}
+}
+
+// A GENERATION RECORD THE BROKER REFUSES IS TOLD WITH ITS OWN REMEDY.
+//
+// A full log is cleared by raising its ceiling and re-running; a record too
+// large and any other refusal are not cleared by re-running at all. The three
+// were one sentence that said the broker refused and that this node's log had
+// its words, so nobody was told what to do. Mutation: fold the arms back into
+// one sentence and every row fails.
+func TestARefusedGenerationRecordIsToldWithItsRemedy(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		refuse error
+		want   []string
+		never  string
+	}{
+		{"a full log", &natsjs.APIError{ErrorCode: 10077, Code: 503,
+			Description: "maximum bytes exceeded"},
+			[]string{"at its ceiling", "`crewlet retention set-capacity ", "re-run the reanchor"},
+			"won't change"},
+		{"a record too large", &natsjs.APIError{ErrorCode: 10054, Code: 400,
+			Description: "message size exceeds maximum allowed"},
+			[]string{"larger than", "re-running the reanchor won't change that"},
+			"set-capacity"},
+		{"any other refusal", &natsjs.APIError{ErrorCode: 10999, Code: 400,
+			Description: "something the server named"},
+			[]string{"refused to store", "re-running the reanchor won't change that"},
+			"set-capacity"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newReanchorFixture(t)
+			f.log.refuse = tc.refuse
+			_, err := statelog.Reanchor(t.Context(), f.deps(probeDomain{}),
+				reanchorInputs(), confirmed())
+			said, told := statelog.Tell(err)
+			if !told {
+				t.Fatalf("the refusal tells the operator nothing: %v", err)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(said, want) {
+					t.Errorf("%q doesn't say %q", said, want)
+				}
+			}
+			if strings.Contains(said, tc.never) {
+				t.Errorf("%q says %q, which is another refusal's remedy", said, tc.never)
+			}
+		})
 	}
 }
 
@@ -2606,5 +2728,94 @@ func TestARestoredCheckpointsRuleTravelsInASnapshot(t *testing.T) {
 	}
 	if staleAfter != 4_201 {
 		t.Fatalf("the adopted checkpoint voids old-generation records after %d, want the donor's 4201", staleAfter)
+	}
+}
+
+// A GENERATION'S AUTHOR IS READ ONE WAY FOR EVERY DOMAIN.
+//
+// The seven generation records — the tracker's, the knowledge base's, the
+// identity estate's, the artifacts log's, the artifact datastore's, the
+// Dashboard Assistant's and chat's — name the party a reanchor's facts name,
+// and the audit feed reads those histories side by side, so the facts are
+// read by one rule ([statelog.GenerationFacts.Author]) rather than seven
+// copies of it.
+// The kind is an ACTOR kind, the vocabulary the engine's reanchor passes, and
+// one that vocabulary does not hold — a principal's word among them — is an
+// operator; an operator with no credential beside it is a credential acting
+// under its own login, so its name is its credential and nobody else's is;
+// and a name of nothing but spaces names nobody, which is the node, as an
+// empty one does. The copies disagreed on that last: two read spaces as a
+// party.
+//
+// Mutations: read a principal's word as its actor kind again and a person
+// named by `person` is a human rather than an operator; give every kind the
+// name as its credential and a person's handle lands in the credential
+// column; test the name untrimmed and the spaces are a party.
+func TestAGenerationsAuthorIsReadOneWayForEveryDomain(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		facts statelog.GenerationFacts
+		want  iam.Actor
+		named bool
+	}{
+		"a person acting as their seat, through a token": {
+			facts: statelog.GenerationFacts{By: "eng", ByKind: iam.ActorHuman,
+				OperatorID: "pat:founder"},
+			want:  iam.Actor{Name: "eng", Kind: iam.ActorHuman, OperatorID: "pat:founder"},
+			named: true,
+		},
+		"a seat acting as itself": {
+			facts: statelog.GenerationFacts{By: "eng", ByKind: iam.ActorAgent},
+			want:  iam.Actor{Name: "eng", Kind: iam.ActorAgent},
+			named: true,
+		},
+		"the engine": {
+			facts: statelog.GenerationFacts{By: "engine", ByKind: iam.ActorSystem},
+			want:  iam.Actor{Name: "engine", Kind: iam.ActorSystem},
+			named: true,
+		},
+		"a principal's word is no actor kind": {
+			facts: statelog.GenerationFacts{By: "eng", ByKind: iam.ActorKind(iam.KindPerson)},
+			want:  iam.Actor{Name: "eng", Kind: iam.ActorOperator, OperatorID: "eng"},
+			named: true,
+		},
+		"a service account acting as itself": {
+			facts: statelog.GenerationFacts{By: "ci:release", ByKind: iam.ActorOperator},
+			want: iam.Actor{Name: "ci:release", Kind: iam.ActorOperator,
+				OperatorID: "ci:release"},
+			named: true,
+		},
+		"a Tier A token, recorded as the operator it is": {
+			facts: statelog.GenerationFacts{By: "token:ops", ByKind: iam.ActorOperator},
+			want: iam.Actor{Name: "token:ops", Kind: iam.ActorOperator,
+				OperatorID: "token:ops"},
+			named: true,
+		},
+		"an operator beside the credential it acted through": {
+			facts: statelog.GenerationFacts{By: "jane.doe", ByKind: iam.ActorOperator,
+				OperatorID: "session:abc"},
+			want: iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator,
+				OperatorID: "session:abc"},
+			named: true,
+		},
+		"a kind this build does not know": {
+			facts: statelog.GenerationFacts{By: "jane.doe", ByKind: "daemon"},
+			want: iam.Actor{Name: "jane.doe", Kind: iam.ActorOperator,
+				OperatorID: "jane.doe"},
+			named: true,
+		},
+		"nobody named":             {facts: statelog.GenerationFacts{}},
+		"a name of spaces":         {facts: statelog.GenerationFacts{By: "  ", ByKind: iam.ActorHuman}},
+		"nobody named, but a kind": {facts: statelog.GenerationFacts{ByKind: iam.ActorOperator}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tc.facts.Writer = "node-a"
+			got, named := tc.facts.Author()
+			if named != tc.named || got != tc.want {
+				t.Errorf("Author() = (%+v, %v), want (%+v, %v)", got, named,
+					tc.want, tc.named)
+			}
+		})
 	}
 }

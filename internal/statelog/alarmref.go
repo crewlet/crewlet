@@ -3,6 +3,8 @@ package statelog
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AlarmReference renders the alarm table as the published markdown page.
@@ -22,18 +24,18 @@ func AlarmReference() string {
 	fmt.Fprintf(&b, alarmHeader,
 		spoken(AlarmInterval), spoken(TrimInterval), spoken(StallGrace))
 	if perLog := PerLogKinds(); len(perLog) > 0 {
-		named := make([]string, len(perLog))
+		named := make([]words.Said, len(perLog))
 		for i, kind := range perLog {
-			named[i] = "`" + string(kind) + "`"
+			named[i] = words.Said("`" + string(kind) + "`")
 		}
-		fmt.Fprintf(&b, perLogNote, sentenceList(named))
+		fmt.Fprintf(&b, perLogNote, words.And(named))
 	}
 	if perEntry := PerEntryKinds(); len(perEntry) > 0 {
-		named := make([]string, len(perEntry))
+		named := make([]words.Said, len(perEntry))
 		for i, kind := range perEntry {
-			named[i] = "`" + string(kind) + "`"
+			named[i] = words.Said("`" + string(kind) + "`")
 		}
-		fmt.Fprintf(&b, perEntryNote, sentenceList(named),
+		fmt.Fprintf(&b, perEntryNote, words.And(named),
 			CredentialNoticeDays, CredentialWarningDays, spoken(LimitWaitingGrace))
 	}
 	b.WriteString("\n| Alarm | What it means | What to do |\n")
@@ -66,27 +68,30 @@ var alarmMeaning = map[Kind]string{
 		"ordinary writes are held to. One alarm names every such log, " +
 		"leading with the one with the least room. A full log refuses writes " +
 		"rather than dropping records; on every log that claims identity " +
-		"(Worklet's, Doclet's and the identity estate's) an " +
-		"eviction still lands in the gate reserve above that ceiling.",
-	KindBackupAge: "No verified backup has been recorded, or the newest is " +
-		"older than the policy asks for. The trim does not advance either way, " +
-		"and the alarm names every log whose trim the backup term is holding " +
-		"past its replay window, so those logs raise no `trim_blocked` of " +
-		"their own.",
+		"(Worklet's, Doclet's, the identity estate's, the artifacts " +
+		"log's, the artifact datastore's, the Dashboard Assistant's and " +
+		"Chatlet's) an eviction still lands in the gate reserve above that " +
+		"ceiling.",
+	KindBackupAge: "No verified backup of a log has been recorded, or the " +
+		"newest one covering it is older than the policy asks for. The trim " +
+		"does not advance that log either way. One alarm names every such " +
+		"log, leading with the one whose backup is missing or oldest, and a " +
+		"log it names whose trim the backup term is holding past its replay " +
+		"window raises no `trim_blocked` of its own.",
 	KindTrimBlocked: "A log's trim has been blocked for longer than its " +
 		"`min_age` replay window plus one trim tick, and the log is keeping " +
 		"records older than that window, so it is holding what a working trim " +
 		"would have removed and growing toward its ceiling. One alarm names " +
 		"every such log and the term holding each, leading with the one held " +
-		"longest; a log the backup term holds while `backup_age` fires is " +
+		"longest; a log the backup term holds while `backup_age` names it is " +
 		"named there instead. A young fleet blocked on its first backup or " +
 		"snapshot donors does not raise it: nothing in its log is past the " +
 		"window yet.",
 	KindDeferredOld: "This node has been holding a record it cannot apply on " +
 		"a log for longer than the thirty-minute deferral grace. One alarm " +
 		"names every log that is, leading with the one held longest. Where a " +
-		"log judges this node's copy of the estate (Worklet's and Doclet's " +
-		"do), the node no longer serves its copy, and its " +
+		"log judges this node's copy of the estate (Worklet's, Doclet's and " +
+		"Chatlet's do), the node no longer serves its copy, and its " +
 		"seats read the estate from the other data nodes.",
 	KindFloorUnknown: "This node has been unable to read a log's trim floor " +
 		"for four heartbeats, so every read of that log here refuses. One " +
@@ -101,8 +106,8 @@ var alarmMeaning = map[Kind]string{
 	KindSearchScoped: "Searches are being answered over part of the corpus " +
 		"because a node did not answer its bucket range.",
 	KindHistoryPartial: "Fleet history reads (turns, traces, the event log) " +
-		"are being answered without every node, because one did not answer " +
-		"inside the fleet read budget.",
+		"are being answered without every data node, because one did not " +
+		"answer inside the fleet read budget.",
 	KindRecallBelowFloor: "Less of the corpus has current vectors than " +
 		"semantic recall claims to cover.",
 	KindIVFRecallBelowFloor: "The latest measurement of the " +
@@ -114,8 +119,10 @@ var alarmMeaning = map[Kind]string{
 		"recoverable by nothing.",
 	KindFeedUnreadable: "A change record no build on this node can read. It " +
 		"redelivers for ever, so every wake behind it is waiting too.",
-	KindMaintenanceOpen: "A maintenance operation has been open for an hour. " +
-		"Maintenance stops every publisher on every node.",
+	KindMaintenanceOpen: "A capacity window has been open for an hour. While " +
+		"it's open no node starts in service, and every node restarted for it " +
+		"publishes nothing. A window this node last read open and can't read " +
+		"now is judged as old as it was when it was read, and says so.",
 	KindVolumeLow: "A volume holding this node's databases has less free space " +
 		"than the next restore, vacuum or snapshot needs for a second copy, or " +
 		"could not be measured at all. The alarm names the volume.",
@@ -124,9 +131,12 @@ var alarmMeaning = map[Kind]string{
 	KindPoolStarved: "Callers are queuing for a database connection before " +
 		"their query starts.",
 	KindCensusDrift: "A log is taking more than twice the linearizable reads " +
-		"its census allows (125 a day per agent seat, at least one seat, " +
-		"plus what the object store's collector reads on its own schedule), " +
-		"so every sizing decision under it is stale.",
+		"its census allows, so every sizing decision under it is stale. The " +
+		"census is the rate its domain declares for each agent seat, counting " +
+		"at least one seat, plus what the object store's collector reads on " +
+		"its own schedule. That rate is 125 a day for the tracker, the " +
+		"knowledge base, the artifacts and their datastore, 120 for chat, and " +
+		"none for the identity estate and the Dashboard Assistant.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +
@@ -140,9 +150,10 @@ var alarmMeaning = map[Kind]string{
 		"more than four fifths of the bytes it reserves. A full bucket refuses every " +
 		"upload, though nothing else on the broker is affected.",
 	KindObjectiveBurn: "A service objective this node measures (publishing, serving a " +
-		"document, a frame becoming ready in a viewer's browser, a datastore verdict) " +
-		"is failing fast enough to spend its month's error budget early: in both the " +
-		"long and the short window of one of the two burn-rate pairs.",
+		"document, a frame becoming ready in a viewer's browser, a datastore verdict, " +
+		"a committed change reaching the sockets watching it, a wake leaving the " +
+		"change feed) is failing fast enough to spend its month's error budget early: " +
+		"in both the long and the short window of one of the two burn-rate pairs.",
 	KindLLMCredentialExpiring: "A model's credential expires in thirty days or less, " +
 		"and more than seven. The expiry is computed from when the credential was " +
 		"stored and the lifetime its CLI declares (a Claude Code setup-token lasts a " +
@@ -191,10 +202,13 @@ rather than the node:
 
 %s.
 
-Each of those names every log it stands on in its ` + "`domains`" + ` list, with that
-log's own measurement, and leads with the most pressing log's, so the health
-count and the gauge (one series per kind, reading 1 while any log's stands)
-agree about how many problems there are. Their log lines are written per log:
+Each of those names every log it stands on in its ` + "`domains`" + ` list, each
+entry a measurement and the logs it was taken on — one log where a trim term
+holds it, and every log measured in the same words otherwise, so a fleet with
+no backup yet is one entry naming every log — and leads with the most pressing
+log's, so the health count and the gauge (one series per kind, reading 1 while
+any log's stands) agree about how many problems there are. Their log lines are
+written per log:
 each log the alarm comes to stand on writes its own ` + "`alarm_raised`" + `, and each
 log it stops standing on its own ` + "`alarm_cleared`" + `, carrying the log as
 ` + "`domain`" + `, so a second log joining an alarm that is already up, and the first
@@ -234,12 +248,3 @@ The ` + "`seat_budget_parked`" + ` line names the window and when it resets, and
 the budgets surfaces show the refusing window. See the budget park in
 docs/concepts/agent-runtime.md.
 `
-
-// sentenceList joins names the way a sentence does: "a", "a and b", "a, b
-// and c".
-func sentenceList(names []string) string {
-	if len(names) < 2 {
-		return strings.Join(names, "")
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
-}

@@ -268,6 +268,19 @@ func (row flowRow) completes() bool {
 	return ok && !Delivered(Status(moved.From)) && Delivered(Status(moved.To))
 }
 
+// flowCensusStatement is [readFlow]'s count of today's live work by status,
+// in one project or across the company, named for the plan test.
+func flowCensusStatement(project string) (string, []any) {
+	where, args := "removed_at IS NULL", []any{}
+	if project != "" {
+		where += " AND project_key = ?"
+		args = append(args, project)
+	}
+	return `
+		SELECT status, COUNT(*) FROM tracker_tasks
+		WHERE ` + where + ` GROUP BY status`, args
+}
+
 func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 	loc *time.Location, out *FlowAnswer) error {
 
@@ -284,14 +297,8 @@ func readFlow(ctx context.Context, tx *sql.Tx, q FlowQuery, now time.Time,
 
 	// TODAY'S CENSUS, exact, from the rows as they stand.
 	var current census
-	censusWhere, censusArgs := "removed_at IS NULL", []any{}
-	if q.Project != "" {
-		censusWhere += " AND project_key = ?"
-		censusArgs = append(censusArgs, q.Project)
-	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT status, COUNT(*) FROM tracker_tasks
-		WHERE `+censusWhere+` GROUP BY status`, censusArgs...)
+	censusQuery, censusArgs := flowCensusStatement(q.Project)
+	rows, err := tx.QueryContext(ctx, censusQuery, censusArgs...)
 	if err != nil {
 		return fmt.Errorf("worklet: count today's census: %w", err)
 	}
@@ -439,14 +446,17 @@ func historyDeltas(fields string) map[string]Delta {
 	return out
 }
 
+// taskStateStatement is [taskStateNow]'s read, named for the plan test.
+const taskStateStatement = `
+		SELECT status, project_key, removed_at IS NOT NULL
+		FROM tracker_tasks WHERE id = ?`
+
 // taskStateNow is one task as its row stands, or — for a task with no row,
 // which only a purge leaves — a task that does not exist.
 func taskStateNow(ctx context.Context, tx *sql.Tx, id string) (flowState, error) {
 	var status, project string
 	var removed int
-	err := tx.QueryRowContext(ctx, `
-		SELECT status, project_key, removed_at IS NOT NULL
-		FROM tracker_tasks WHERE id = ?`, id).Scan(&status, &project, &removed)
+	err := tx.QueryRowContext(ctx, taskStateStatement, id).Scan(&status, &project, &removed)
 	switch {
 	case err == sql.ErrNoRows:
 		return flowState{}, nil
@@ -457,6 +467,12 @@ func taskStateNow(ctx context.Context, tx *sql.Tx, id string) (flowState, error)
 		project: project}, nil
 }
 
+// purgedHistoryStatement is [stateBeforePurge]'s one statement — a purged
+// task's own rows, oldest first — named for the plan test.
+const purgedHistoryStatement = `
+		SELECT kind, fields_json FROM tracker_history
+		WHERE subject_id = ? ORDER BY log_seq`
+
 // stateBeforePurge is a purged task as it stood just before its purge: the
 // forward replay of its own rows below the purge row.
 //
@@ -464,9 +480,7 @@ func taskStateNow(ctx context.Context, tx *sql.Tx, id string) (flowState, error)
 // the only account left of where it stood — whether it was still counted (a
 // purge does not require a removal first) and in which group.
 func stateBeforePurge(ctx context.Context, tx *sql.Tx, id string) (flowState, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT kind, fields_json FROM tracker_history
-		WHERE subject_id = ? ORDER BY log_seq`, id)
+	rows, err := tx.QueryContext(ctx, purgedHistoryStatement, id)
 	if err != nil {
 		return flowState{}, fmt.Errorf("worklet: read purged task %s's history: %w", id, err)
 	}
@@ -502,6 +516,26 @@ func stateBeforePurge(ctx context.Context, tx *sql.Tx, id string) (flowState, er
 	return s, nil
 }
 
+// flowNowStatement is [readFlowNow]'s count of the open work that is blocked
+// and that is overdue at dayStart, named for the plan test.
+func flowNowStatement(project string, dayStart time.Time) (string, []any) {
+	where := "t.removed_at IS NULL AND t.status_group IN (" + openGroupsSQL + ")"
+	args := []any{store.EncodeTime(dayStart)}
+	if project != "" {
+		where += " AND t.project_key = ?"
+		args = append(args, project)
+	}
+	return `
+		SELECT
+		  COALESCE(SUM(CASE WHEN EXISTS (
+		      SELECT 1 FROM tracker_task_deps d
+		      WHERE d.task_id = t.id AND d.blocker_open = 1)
+		    THEN 1 ELSE 0 END), 0),
+		  COALESCE(SUM(CASE WHEN t.due_at IS NOT NULL AND t.due_at < ?
+		    THEN 1 ELSE 0 END), 0)
+		FROM tracker_tasks t WHERE ` + where, args
+}
+
 // readFlowNow fills the present-tense half: the open census it already has,
 // and blocked and overdue, which only the present can answer.
 func readFlowNow(ctx context.Context, tx *sql.Tx, project string, now time.Time,
@@ -514,21 +548,8 @@ func readFlowNow(ctx context.Context, tx *sql.Tx, project string, now time.Time,
 	if err != nil {
 		return err
 	}
-	where := "t.removed_at IS NULL AND t.status_group IN (" + openGroupsSQL + ")"
-	args := []any{store.EncodeTime(anchor.At)}
-	if project != "" {
-		where += " AND t.project_key = ?"
-		args = append(args, project)
-	}
-	err = tx.QueryRowContext(ctx, `
-		SELECT
-		  COALESCE(SUM(CASE WHEN EXISTS (
-		      SELECT 1 FROM tracker_task_deps d
-		      WHERE d.task_id = t.id AND d.blocker_open = 1)
-		    THEN 1 ELSE 0 END), 0),
-		  COALESCE(SUM(CASE WHEN t.due_at IS NOT NULL AND t.due_at < ?
-		    THEN 1 ELSE 0 END), 0)
-		FROM tracker_tasks t WHERE `+where, args...).Scan(&out.Blocked, &out.Overdue)
+	statement, args := flowNowStatement(project, anchor.At)
+	err = tx.QueryRowContext(ctx, statement, args...).Scan(&out.Blocked, &out.Overdue)
 	if err != nil {
 		return fmt.Errorf("worklet: count blocked and overdue work: %w", err)
 	}

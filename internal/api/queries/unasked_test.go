@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/learning/memread"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -249,11 +250,12 @@ type stubMemory struct {
 	conversation string
 	episode      string
 	limit        int
+	skills       learning.SkillOrder
 	seats        []memread.Seat
 }
 
-func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, limit int) (memread.Memory, error) {
-	s.seat, s.limit = seat, limit
+func (s *stubMemory) Memory(_ context.Context, seat memread.Seat, q memread.MemoryQuery) (memread.Memory, error) {
+	s.seat, s.limit, s.skills = seat, q.Limit, q.Skills
 	return s.memory, s.err
 }
 

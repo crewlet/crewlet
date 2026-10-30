@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -223,9 +224,9 @@ func TestMarkInboxCarriesThePrimarySplit(t *testing.T) {
 	if !bad.Failed {
 		t.Fatal("an unknown wake reason was accepted")
 	}
-	if !strings.Contains(bad.Output, "mention") {
-		t.Fatalf("the refusal does not name the reasons that exist: %q",
-			bad.Output)
+	if want := "The reasons are: " + words.And(worklet.Reasons) + "."; !strings.Contains(bad.Output, want) {
+		t.Fatalf("the refusal does not name the reasons that exist as %q: %q",
+			want, bad.Output)
 	}
 }
 
@@ -257,9 +258,9 @@ func TestWorkInboxIsServedAndNarrows(t *testing.T) {
 	if !bad.Failed {
 		t.Fatal("an unknown wake reason was accepted")
 	}
-	if !strings.Contains(bad.Output, "assignee") {
-		t.Fatalf("the refusal does not name the reasons that exist: %q",
-			bad.Output)
+	if want := "The reasons are: " + words.And(worklet.Reasons) + "."; !strings.Contains(bad.Output, want) {
+		t.Fatalf("the refusal does not name the reasons that exist as %q: %q",
+			want, bad.Output)
 	}
 }
 

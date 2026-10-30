@@ -140,7 +140,7 @@ func TestTheGuidesQuoteTheFloor(t *testing.T) {
 // A BROKER LIMIT WRITTEN BELOW THE FLOOR IS SAID BEFORE THE BOOT REFUSES IT.
 //
 // stream.store_max_bytes accepts six gibibytes, and a fresh node of the default
-// document needs more than eight, so a value the schema takes is one the boot
+// document needs more than ten, so a value the schema takes is one the boot
 // refuses. Said only where it is exact: a data node on its own embedded broker,
 // whose limit is the number written. Anywhere else the limit is a volume or an
 // account this judgement cannot see, and it says nothing rather than guess.
@@ -201,10 +201,26 @@ func TestAStoreLimitBelowTheFloorIsAnAdvisory(t *testing.T) {
 
 // THE ASSISTANT'S LOG RESERVES ONLY ITS FLOOR ON A FRESH NODE, so a deployment
 // sized for everything else boots with it. Its unset 512 MiB counted in full
-// raised the least a fresh node reserves past a stated 9 GiB broker limit, the
-// size crewlet-operator's getting-started company sets, and every such node
-// refused to boot on CREWLET_ASSISTANT_LOG. Scaled, it counts its field's
-// 64 MiB floor, and a 9 GiB limit holds the whole fresh node again.
+// raised the least a fresh node reserves past the broker limit
+// crewlet-operator gives the smallest data volume it admits, the one its
+// getting-started company runs on, and every such node refused to boot on
+// CREWLET_ASSISTANT_LOG. Scaled, it counts its field's 64 MiB floor, and that
+// limit holds the whole fresh node again.
+//
+// THAT LIMIT IS 10.5 GiB, three quarters of a 14Gi volume. It was 9 GiB, of
+// 12Gi, when the assistant's scaling was written; then the chat log joined the
+// register at the gibibyte every corpus-sized log is scaled no lower than
+// ([config.ChatLogMaxBytesFloor]), and a fresh node reserves 10826896725 bytes.
+// Chat does not give way on a short broker as the assistant does: it is not a
+// feature a company may never turn on — it is the company's chat unless a
+// vendor's is declared — and the room a 9 GiB limit leaves it, 192 MiB beside
+// the eight other logs at their floors and the bucket, is less than the one
+// min_age window of messages a healthily trimming chat log keeps, about
+// 225 MB at its declared census. So the least a fresh node needs moved with
+// the register, as it did when the artifact logs joined, and
+// crewlet-operator's smallest volume moved with it. The assistant's scaling
+// still decides whether that volume boots: counted at its 512 MiB, a fresh
+// node would need 11453246122 bytes.
 func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
 	t.Parallel()
 	boot := config.DefaultBootstrap()
@@ -219,10 +235,12 @@ func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
 		t.Fatalf("the assistant's ceiling asks %d and scales to %d, want its default and its field's floor",
 			assistant.Bytes, assistant.scaleFloor())
 	}
+	// crewlet-operator states three quarters of a company's data volume as
+	// stream.store_max_bytes, and admits no volume smaller than 14Gi.
 	stated := config.DefaultBootstrap()
-	stated.Stream.StoreMaxBytes = 9 << 30
+	stated.Stream.StoreMaxBytes = (14 << 30) / embeddedShareDen * embeddedShareNum
 	if got := BrokerFloorFor(&stated).Limit; got > stated.Stream.StoreMaxBytes {
-		t.Errorf("a fresh node reserves at least %d bytes, more than a stated 9 GiB limit (%d)",
+		t.Errorf("a fresh node reserves at least %d bytes, more than the %d a 14Gi volume states",
 			got, stated.Stream.StoreMaxBytes)
 	}
 	// An explicit ceiling is reserved as written, never scaled.
@@ -231,6 +249,13 @@ func TestTheAssistantLogCountsOnlyItsFloorTowardAFreshNode(t *testing.T) {
 	if grew := BrokerFloorFor(&explicit).Logs - floor.Logs; grew != config.DefaultAssistantLogMaxBytes-config.AssistantLogMaxBytesFloor {
 		t.Errorf("an explicit 512 MiB moved the logs' floor by %d, want %d", grew,
 			config.DefaultAssistantLogMaxBytes-config.AssistantLogMaxBytesFloor)
+	}
+	// And reserved as written it does not fit that volume, so the scaling is
+	// what this case holds rather than a limit every fresh node clears.
+	if got := BrokerFloorFor(&explicit).Limit; got <= stated.Stream.StoreMaxBytes {
+		t.Errorf("counted at its 512 MiB the assistant's log leaves a fresh node at %d "+
+			"bytes, inside the %d a 14Gi volume states, so its scaling no longer decides "+
+			"whether that volume boots", got, stated.Stream.StoreMaxBytes)
 	}
 }
 

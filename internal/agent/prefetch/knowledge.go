@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/knowledge"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -126,8 +127,8 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 	if !f.src.Knowledge.CanSearch(r.Seat, r.Org) {
 		return knowledgeBlock{}
 	}
-	// A BACKEND THAT KEEPS AN INDEX can be behind its own projection, and
-	// during that window every search answers empty. Said out loud rather
+	// A BACKEND THAT KEEPS AN INDEX can be behind the records it indexes,
+	// and during that window every search answers empty. Said out loud rather
 	// than searched anyway, and BEFORE the query call: the auxiliary model
 	// round trip would be spent producing a query nothing can match, which
 	// is the same waste CanSearch's gate exists to avoid.
@@ -183,11 +184,11 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 		}
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
-	bullets := make([]string, 0, len(hits)+1)
-	for _, hit := range hits {
-		bullets = append(bullets, renderHit(hit))
-	}
-	rendered := joinBullets(bullets)
+	// FENCED, under the turn's own token and the label the backend that
+	// found the pages stamped on them ([knowledge.Render], ADR-0040): a
+	// page's title and opening are somebody else's words, in the system
+	// prompt.
+	rendered := knowledge.Render(r.Boundary, hits)
 	if rendered == "" {
 		return knowledgeBlock{text: EmptyKnowledgeHint}
 	}
@@ -210,10 +211,14 @@ func (f *Fetcher) relevantKnowledge(ctx context.Context, r Request) knowledgeBlo
 // those as candidate search terms beside the one sentence the turn is about,
 // as it was handed the worked examples the triage carried then (a new hire
 // welcomed, a ticket opened for an engineer).
+//
+// THE TASK ARRIVES FENCED, under a token minted for this call ([Ask]), rather
+// than in quotes: the query decides which pages the seat is shown, and a quote
+// is a delimiter the task can close.
 func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 	answer, ok := f.auxCall(ctx, r, types.AuxKnowledgeQuery, knowledgeQuerySystemPrompt,
-		"Task the agent is about to work on:\n\""+r.Ask+
-			"\"\n\nKnowledge-base search query:")
+		"Task the agent is about to work on:\n"+r.Ask.For(provenance.NewBoundary())+
+			"\n\nKnowledge-base search query:")
 	if !ok {
 		return ""
 	}
@@ -228,26 +233,6 @@ func (f *Fetcher) knowledgeQuery(ctx context.Context, r Request) string {
 		}
 	}
 	return ""
-}
-
-// renderHit renders one page as a bullet.
-//
-// Falls back to the title alone where a page has no snippet — an empty page,
-// or one whose body is a table the extractor could not read — because the
-// title is still enough to decide whether to open it.
-func renderHit(hit knowledge.Hit) string {
-	title := strings.TrimSpace(hit.Title)
-	snippet := collapse(hit.Snippet)
-	switch {
-	case title == "" && snippet == "":
-		return ""
-	case title == "":
-		title = "(untitled)"
-	}
-	if snippet == "" {
-		return "- **" + title + "**"
-	}
-	return "- **" + title + "**: " + snippet
 }
 
 // auxRequest is the shape every auxiliary pass here sends.

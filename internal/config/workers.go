@@ -197,7 +197,7 @@ func validateOutputSchema(path Path, schema map[string]any) error {
 	var p problems
 	if t, ok := schema["type"].(string); !ok || t != "object" {
 		p.add(at(path, "type"), ErrUnknownValue,
-			`must be "object" — a submission's arguments are named fields, and a `+
+			`must be "object": a submission's arguments are named fields, and a `+
 				`provider given a non-object schema for a tool call rejects the call`)
 	}
 	props, ok := schema["properties"].(map[string]any)

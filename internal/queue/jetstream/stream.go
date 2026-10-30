@@ -648,8 +648,8 @@ func (d DomainStream) spec() streamSpec {
 
 		// A log keeps every record until the trim moves the floor; a
 		// compacted stream keeps one per subject and may bound its own
-		// age, because its rows are durable in SQL on every node and an
-		// expired message therefore deletes nothing.
+		// age, because its rows are durable in SQL on every data node and
+		// an expired message therefore deletes nothing.
 		maxAge:        d.MaxAge,
 		maxPerSubject: d.MaxPerSubject,
 	}

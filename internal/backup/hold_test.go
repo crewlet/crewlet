@@ -393,7 +393,7 @@ func TestAFinishedBackupAnnouncesWhatItCovers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BackupPoints: %v", err)
 	}
-	newest, ok := coord.NewestBackup(points)
+	newest, ok := coord.NewestBackupOf(points, "CREWLET_TRACKER_LOG")
 	if !ok {
 		t.Fatal("a finished backup announced nothing — the trim's backup term " +
 			"has no input at all and refuses for ever, so this fleet's log " +

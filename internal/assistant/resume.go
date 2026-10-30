@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -113,7 +113,8 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	floor := s.continuing(ctx, r.Owner, r.Turn, keep.Seq)
 	acts, err := s.acts(ctx, person)
 	if err != nil {
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+		return wire.TurnAccepted{}, fmt.Errorf("assistant: the writes the person may "+
+			"propose: %w", err)
 	}
 	if err = s.admit(ctx, person); err != nil {
 		return wire.TurnAccepted{}, err
@@ -127,7 +128,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	}()
 	meter, err := s.budget.Meter(ctx, person)
 	if err != nil {
-		return wire.TurnAccepted{}, &Unavailable{RetryAfter: 2 * time.Second, Cause: err}
+		return wire.TurnAccepted{}, fmt.Errorf("assistant: the turn's budget meter: %w", err)
 	}
 	if refusal := budgetRefusal(ctx, meter); refusal != nil {
 		return wire.TurnAccepted{}, refusal
@@ -157,7 +158,11 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		t.anchor = anchor
 	}
 	t.used(keep.Apps)
-	decision, screen := resultOf(r, t.boundary), ""
+	// THE TAINT RIDES THE PARK, and what the decision hands the model taints
+	// the turn as a read does: a proposal this segment makes after it names
+	// the outside source its model holds, whichever segment read it (D25).
+	t.taintedBy(provenance.Source(keep.Outside))
+	decision, screen := resultOf(r, t.boundary, t.readAnswer), ""
 	if fresh {
 		screen = screenNow(t.boundary, page)
 	}
@@ -228,12 +233,31 @@ func screenNow(b provenance.Boundary, page *wire.PageContext) string {
 		"itself (it replaces any earlier description of the screen):\n" + pageFence(b, page)
 }
 
+// answerTrust is how far a resumed turn may rely on what a write's request
+// answered: what the write's catalogue tool declares its answer carries
+// ([catalog.Tool.Trust]: a coding run's question beside answer_coding_run's
+// receipt, read by the one rule for a coding run's words), and otherwise the
+// engine's own records, a colleague's by the one rule for a surface the engine
+// hosts.
+func answerTrust(r approval.Resumption) provenance.Trust {
+	if p := r.Card.Proposal; p != nil {
+		if tool, ok := catalog.Lookup(p.Tool); ok && tool.Trust.Valid() {
+			return tool.Trust
+		}
+	}
+	return provenance.TrustForHosted("", nil, false)
+}
+
 // resultOf is the answer to the call a turn suspended on, as its model reads
 // it: the engine's own words for what became of the proposal; the route's
 // answer to a write that was sent, fenced as an API answer, since it carries
 // text other people wrote; and a page's own report fenced as the page's,
-// never as the engine's, since the engine cannot verify it.
-func resultOf(r approval.Resumption, b provenance.Boundary) string {
+// never as the engine's, since the engine cannot verify it. Each fenced
+// answer is told to read, with its source and the trust it is fenced at,
+// which taints the turn as a step's read does ([turn.readAnswer]).
+func resultOf(r approval.Resumption, b provenance.Boundary,
+	read func(provenance.Source, provenance.Trust)) string {
+
 	var out strings.Builder
 	// THE CHANGE IS NAMED BY ITS ACTION, which the catalogue wrote ("Create
 	// task"); its target is the model's own argument, and may carry text it
@@ -265,14 +289,30 @@ func resultOf(r approval.Resumption, b provenance.Boundary) string {
 		if len(answer) > ModelResultBytes {
 			answer = textcut.Within(answer, ModelResultBytes)
 		}
-		out.WriteString("\n" + provenance.Fence(b, provenance.SourceAPIAnswer,
-			provenance.TrustColleague, nil, answer))
+		// AT THE TRUST WHAT IT CARRIES EARNS ([answerTrust]), naming none of
+		// its writers, as every route's answer is read.
+		trust := answerTrust(r)
+		read(provenance.SourceAPIAnswer, trust)
+		out.WriteString("\n" + provenance.Fence(b, provenance.SourceAPIAnswer, trust, nil,
+			answer))
 	}
 	if r.ClientReported && r.Receipt != nil {
-		out.WriteString("\n" + provenance.Fence(b, provenance.SourcePageContext,
-			provenance.TrustPage, nil, redact.Secrets(r.Receipt.Summary)))
+		out.WriteString("\n" + pageReport(b, r.Receipt.Summary, read))
 	}
 	return out.String()
+}
+
+// pageReport is what a page reported of a page action it applied, as the model
+// reads it: fenced at the page's own trust, which no set of writers earns,
+// because the engine cannot verify what a page says it did, and told to read
+// at it.
+func pageReport(b provenance.Boundary, summary string,
+	read func(provenance.Source, provenance.Trust)) string {
+
+	trust := provenance.TrustPage
+	read(provenance.SourcePageContext, trust)
+	return provenance.Fence(b, provenance.SourcePageContext, trust, nil,
+		redact.Secrets(summary))
 }
 
 // Emit appends frames to a turn that stays parked, or that the person asked

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // DEEP WORK AND FILES (ADR-0054): the values the drawer reads about a turn that
@@ -72,7 +74,8 @@ type DeepProgress struct {
 func (d DeepProgress) validate() error {
 	switch {
 	case !d.State.Valid():
-		return fmt.Errorf("%w: deep state %q is not one of %v", ErrInvalid, d.State, DeepStates)
+		return fmt.Errorf("%w: deep state %q is not one of %s", ErrInvalid, d.State,
+			words.Or(DeepStates))
 	case d.BudgetPercent < 0 || d.BudgetPercent > 100:
 		return fmt.Errorf("%w: a deep run's budget share is %d%%", ErrInvalid, d.BudgetPercent)
 	case len(d.Activity) > DeepActivityLines:

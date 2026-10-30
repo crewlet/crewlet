@@ -58,30 +58,37 @@ type WriteSummary struct {
 }
 
 // Moved is one store's movement in a committed batch.
+//
+// TAGGED FOR THE WIRE, for [artifactsdomain.Moved]'s reason: a node whose copy
+// is out of service hears a sound peer's movements relayed.
 type Moved struct {
 	// Artifact is the store's artifact; zero with Reset.
-	Artifact artifacts.ID
+	Artifact artifacts.ID `json:"artifact,omitzero"`
 
 	// Docs are the documents the batch changed, in the order it changed
 	// them; a later delta for one document supersedes an earlier one.
-	Docs []DocDelta
+	Docs []DocDelta `json:"docs,omitempty"`
 
 	// Writes are the records the batch applied on the store.
-	Writes []WriteSummary
+	Writes []WriteSummary `json:"writes,omitempty"`
 
 	// Schema says a record changed the store's collections, so a listener
 	// drops any shaping it decided from the old rules.
-	Schema bool
+	Schema bool `json:"schema,omitempty"`
 
 	// Purged says the store is gone for good.
-	Purged bool
+	Purged bool `json:"purged,omitempty"`
 
 	// Reset names NO store: every store on this node may have moved with no
 	// committed record to say which (a retained record, an adoption).
-	Reset bool
+	Reset bool `json:"reset,omitempty"`
 
-	// Through is the position of the batch's last record on the store.
-	Through statelog.Position
+	// Through is the position of the batch's last record on the store, and
+	// At the broker's own instant for it: when the change was stored, which
+	// every node reads alike and what the socket's push of it is timed from
+	// (internal/objectives' change visibility).
+	Through statelog.Position `json:"through,omitzero"`
+	At      time.Time         `json:"at,omitzero"`
 }
 
 // ResetMove is the movement that names everything.

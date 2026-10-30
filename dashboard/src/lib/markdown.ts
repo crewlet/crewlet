@@ -40,10 +40,8 @@
 
 import { createElement, Fragment, type ReactNode } from "react";
 import {
-  ColorChip,
   Highlight,
   InlineCode,
-  InlineRef,
   MARKDOWN_CALLOUT_NAMES,
   markdownClosesFence,
   markdownFenceOf,
@@ -54,7 +52,7 @@ import {
   type MarkdownBlock,
   type MarkdownFence,
 } from "@crewlethq/ui";
-import { InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
+import { ColourCode, InlineToken, LabelledLink, TokenRun } from "~/components/InlineToken.tsx";
 import { codeColour, type LinkMode } from "./inlineTokens.ts";
 import { inlineText, plainText } from "./markdownText.ts";
 
@@ -378,9 +376,10 @@ export interface RenderOptions {
    * `checked`: a link is live only where the dashboard BUILT it, from parts
    * it checked, to a place that is the company's (`LinkMode` in
    * `lib/inlineTokens.ts`). For words written by an agent or a model that may
-   * have read anything: the Dashboard Assistant's answers and the Inbox. Any
-   * other address is drawn inert, its label and then the host it names, in
-   * the quiet link ink, readable and copyable and never a control.
+   * have read anything: the Dashboard Assistant's answers, the Inbox and a
+   * coding run's question. Any other address is drawn inert, its label and
+   * then the host it names, in the quiet link ink, readable and copyable and
+   * never a control.
    */
   links?: LinkMode;
   /**
@@ -446,22 +445,13 @@ export function renderInline(
       // longer one (a URL, a whole config line) still wraps, since holding it
       // whole would overflow a phone's column.
       // A SPAN THAT IS ONE COLOUR is drawn with a swatch of it, since that is
-      // how a colour is quoted (`#ffe100`); a colour inside a longer span is
-      // code (`lib/inlineTokens.ts`, rule 1).
+      // how a colour is quoted (`#ffe100`), unless it is a room's `#name`,
+      // which the frame's rooms decide (`ColourCode`); a colour inside a
+      // longer span is code (`lib/inlineTokens.ts`, rule 1).
       const colour = codeColour(code);
       out.push(
         colour
-          ? createElement(
-              InlineCode,
-              { key, whole: true },
-              // THE SAME MARK BOX as a colour in words, so the two swatches
-              // stand at one height and both say "Colour" to a screen reader.
-              createElement(InlineRef, {
-                kind: "Colour",
-                mark: createElement(ColorChip, { value: colour, size: "text", shape: "square" }),
-                children: code,
-              }),
-            )
+          ? createElement(ColourCode, { key, code, colour })
           : createElement(InlineCode, { key, whole: code.length <= UnbrokenCode }, code),
       );
     } else if (g.src !== undefined) {
@@ -871,9 +861,12 @@ export const ASSISTANT_WORDS: RenderOptions = {
 };
 
 /**
- * How words an agent wrote for a person to act on are read in the Inbox (an
- * ask, its context, its conversation): a link is live only where the
- * dashboard built it (`links: "checked"`), as in the assistant's answers.
+ * How words an agent wrote for a person to act on are read, in the Inbox (an
+ * ask, its context, its conversation) and in a coding run's Answer dialog
+ * (its question's context, `components/writes.tsx`): a link is live only
+ * where the dashboard built it (`links: "checked"`), as in the assistant's
+ * answers and in the links a chat message carries
+ * (`routes/chatlet/MessageLinks.tsx`).
  */
 export const CHECKED_WORDS: RenderOptions = { links: "checked" };
 

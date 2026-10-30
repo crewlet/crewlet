@@ -31,14 +31,10 @@ import (
 // keys argument.
 type purgeReach map[string]string
 
-// readPurgeReach reads a purge's reach inside tx.
-//
-// ONE STATEMENT, the task table joined for where each is filed, so the set is
-// read from one snapshot. The parent pointers are read beside the closure
-// because they are what the apply re-parents by; the closure alone would miss
-// a child a cycle left without an ancestry row.
-func readPurgeReach(ctx context.Context, tx *sql.Tx, id string) (purgeReach, error) {
-	rows, err := tx.QueryContext(ctx, `
+// purgeReachStatement is [readPurgeReach]'s one statement, named for the plan
+// test: every arm a seek on the purged task's id, its children's through the
+// index of the tree (replicated 0058).
+const purgeReachStatement = `
 		SELECT o.id, COALESCE(t.project_key, '') FROM (
 			SELECT task_id AS id FROM tracker_task_deps WHERE blocker_id = ?
 			UNION SELECT task_id FROM tracker_task_dependents WHERE dependent_id = ?
@@ -47,7 +43,16 @@ func readPurgeReach(ctx context.Context, tx *sql.Tx, id string) (purgeReach, err
 			UNION SELECT descendant_id FROM tracker_task_closure WHERE ancestor_id = ?
 			UNION SELECT id FROM tracker_tasks WHERE parent_id = ?
 		) o LEFT JOIN tracker_tasks t ON t.id = o.id
-		WHERE o.id <> ?`, id, id, id, id, id, id, id)
+		WHERE o.id <> ?`
+
+// readPurgeReach reads a purge's reach inside tx.
+//
+// ONE STATEMENT, the task table joined for where each is filed, so the set is
+// read from one snapshot. The parent pointers are read beside the closure
+// because they are what the apply re-parents by; the closure alone would miss
+// a child a cycle left without an ancestry row.
+func readPurgeReach(ctx context.Context, tx *sql.Tx, id string) (purgeReach, error) {
+	rows, err := tx.QueryContext(ctx, purgeReachStatement, id, id, id, id, id, id, id)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read what a purge of %s writes: %w", id, err)
 	}

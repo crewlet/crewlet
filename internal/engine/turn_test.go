@@ -2168,7 +2168,7 @@ func TestACoalescedConversationReachesTheTurnAsOneDigest(t *testing.T) {
 	if n := len(r.reqs[0].Trigger); n != 1 {
 		t.Fatalf("the turn was handed %d asks, want one merged digest", n)
 	}
-	ask := engine.DescribeTrigger(r.reqs[0].Ask())
+	ask := engine.DescribeTrigger(r.reqs[0].Ask(), "")
 
 	// EVERY constituent survives the merge: a digest that kept only the
 	// latest hands the seat a follow-up with no idea what it follows.

@@ -218,6 +218,64 @@
         "null"
       ]
     },
+    "Chat": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "description": "Which chat surface: chatlet, vendor, or none. Empty derives from integrations.mattermost, integrations.slack and the seats' Slack apps.",
+          "enum": [
+            "chatlet",
+            "vendor",
+            "none",
+            "",
+            null
+          ]
+        },
+        "chatlet": {
+          "$ref": "#/$defs/ChatletConfig"
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "ChatletConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "default_channel_private": {
+          "description": "Create channels private when the caller names no visibility. Default false: a company's rooms are readable by its seats.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "message_retention_days": {
+          "description": "How long a message lives (default 365, 30..3650). 0 keeps messages for ever.",
+          "maximum": 3650,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "typing_status": {
+          "description": "When to show the working indicator (default always).",
+          "enum": [
+            "always",
+            "addressed",
+            "",
+            null
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "CompanyArtifacts": {
       "additionalProperties": false,
       "properties": {
@@ -410,7 +468,7 @@
           ]
         },
         "webhook_name": {
-          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-\u003cname\u003e (default crewlet).",
+          "description": "Name of the webhook the engine keeps at Datadog; monitors name it as @webhook-<name> (default crewlet).",
           "type": [
             "string",
             "number",
@@ -1303,7 +1361,7 @@
           ]
         },
         "model": {
-          "description": "Model id, in the CLI's own grammar (OpenCode: \u003cprovider\u003e/\u003cmodel\u003e).",
+          "description": "Model id, in the CLI's own grammar (OpenCode: <provider>/<model>).",
           "type": [
             "string",
             "number",
@@ -1330,7 +1388,7 @@
           ]
         },
         "state_dir": {
-          "description": "Credential + per-seat home directory, each CLI under \u003cstate_dir\u003e/\u003cagent\u003e. Entries sharing one and a CLI share a login.",
+          "description": "Credential + per-seat home directory, each CLI under <state_dir>/<agent>. Entries sharing one and a CLI share a login.",
           "type": [
             "string",
             "number",
@@ -3795,7 +3853,15 @@
       "additionalProperties": false,
       "properties": {
         "channel": {
-          "description": "Unit channel on the company's chat surface; inherited by child units.",
+          "anyOf": [
+            {
+              "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "Unit channel on the company's chat surface, e.g. engineering; inherited by child units. Lowercase letters, digits, - and _.",
           "type": [
             "string",
             "number",
@@ -4065,6 +4131,9 @@
     "assistant": {
       "$ref": "#/$defs/Assistant"
     },
+    "chat": {
+      "$ref": "#/$defs/Chat"
+    },
     "integrations": {
       "$ref": "#/$defs/Integrations"
     },
@@ -4183,7 +4252,7 @@
           "null"
         ]
       },
-      "description": "name -\u003e value facts substituted into tool-skill text. Keys must be identifiers.",
+      "description": "name -> value facts substituted into tool-skill text. Keys must be identifiers.",
       "type": [
         "object",
         "null"

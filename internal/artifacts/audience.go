@@ -53,8 +53,19 @@ func (a Audience) Validate() error {
 	case AudienceSeat, AudienceUnit:
 		return validAudienceID(a.Kind, a.ID)
 	}
-	return fmt.Errorf("%w: kind %q is not one this build shares with (want one of "+
-		"%v)", ErrInvalidAudience, a.Kind, AudienceKinds)
+	return notAnAudience(string(a.Kind))
+}
+
+// notAnAudience is what a value naming no kind of audience is refused with,
+// whether it came as a kind ([Audience.Validate]) or as an audience's text
+// ([ParseAudience]): what it is not, and the forms an audience is written in.
+// ONE SENTENCE for both, because a person who typed `team:eng` and one whose
+// request carried the kind `team` made the same mistake, and were told it in
+// two different sentences, each in a program's words ("kind … is not one this
+// build shares with (want one of …)" and "… is not `seat:<handle>`, …").
+func notAnAudience(what string) error {
+	return fmt.Errorf("%w: %q isn't someone you can share with. Use `seat:<handle>`, "+
+		"`unit:<key>` or `company`", ErrInvalidAudience, what)
 }
 
 // validAudienceID refuses an id that is empty, too long, or carries a
@@ -118,8 +129,7 @@ func ParseAudience(s string) (Audience, error) {
 	}
 	kind, id, ok := strings.Cut(s, audienceSeparator)
 	if !ok {
-		return Audience{}, fmt.Errorf("%w: %q is not `seat:<handle>`, "+
-			"`unit:<key>` or `company`", ErrInvalidAudience, s)
+		return Audience{}, notAnAudience(s)
 	}
 	a := Audience{Kind: AudienceKind(kind), ID: id}
 	if a.Kind == AudienceCompany {

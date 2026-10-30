@@ -110,9 +110,10 @@ const identityRules = "You are the Crewlet assistant inside the company's dashbo
 	"the rows that matter, the reason) and let the table carry the rest.\n" +
 	"- Write plain sentences and simple Markdown lists. Do not write links or images: " +
 	"the person opens a record from where your answer names it. So name each record " +
-	"you read exactly as your tools give it, a task or a project by its key (GOP-11) " +
-	"and a seat, team, page or space by its name, outside code formatting; what you " +
-	"read and never name is listed under your answer.\n" +
+	"you read exactly as your tools give it, a task or a project by its key (GOP-11), " +
+	"a chat room by its name with its # (#launch), and a seat, team, page or space by " +
+	"its name, outside code formatting; what you read and never name is listed under " +
+	"your answer.\n" +
 	"- Write for the person, in their words. Never name a tool, a route, an HTTP " +
 	"method, a config key, a field in code or a file path; name what you read or " +
 	"change as they know it (\"the QA Engineer's seat\", \"the brand\", \"the FAIR " +
@@ -308,6 +309,10 @@ func questionBlock(in promptInput) string {
 // and a deep-work run alike: the screen's own description, fenced as the
 // page's. Empty for no page, and for one that does not encode, which a page
 // context that validated always does.
+//
+// A COLLEAGUE'S, by the one rule for a surface the engine hosts: the screen
+// shows the engine's own records, whose labels are names the company's
+// principals chose, and the description names none of them.
 func pageFence(b provenance.Boundary, p *wire.PageContext) string {
 	if p == nil {
 		return ""
@@ -316,8 +321,8 @@ func pageFence(b provenance.Boundary, p *wire.PageContext) string {
 	if err != nil {
 		return ""
 	}
-	return provenance.Fence(b, provenance.SourcePageContext, provenance.TrustColleague, nil,
-		string(raw))
+	return provenance.Fence(b, provenance.SourcePageContext,
+		provenance.TrustForHosted("", nil, false), nil, string(raw))
 }
 
 // admitPage is the one admission of a page context a request carried, a

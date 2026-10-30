@@ -306,22 +306,15 @@ func (p *problems) wrap(err error) {
 // err returns the joined failures, or nil when there were none.
 func (p problems) err() error { return errors.Join(p...) }
 
-// names renders a closed set for an error message or a schema enum.
+// strs converts a closed set to plain strings.
 //
 // EVERY CLOSED SET IN THIS PACKAGE IS A PACKAGE-LEVEL SLICE, and this is why:
-// the validator (through [slices.Contains]) and the JSON Schema generator
-// (through here) read the SAME list. A schema that accepts what the validator
-// rejects is worse than no schema, because an editor then blesses a config
-// that will not boot.
-func names[T ~string](allowed []T) string {
-	out := make([]string, len(allowed))
-	for i, a := range allowed {
-		out[i] = string(a)
-	}
-	return strings.Join(out, ", ")
-}
-
-// strs converts a closed set to plain strings, for the schema generator.
+// the validator (through [slices.Contains]) and the refusal that offers the
+// set (through words.Or) read the SAME list, and the JSON Schema's enum,
+// written in a js tag, is held to it through here
+// (TestSchemaEnumsMatchTheValidators). A schema that accepts what the
+// validator rejects is worse than no schema, because an editor then blesses a
+// config that will not boot.
 func strs[T ~string](allowed []T) []string {
 	out := make([]string, len(allowed))
 	for i, a := range allowed {

@@ -34,6 +34,7 @@ const JANE: ViewerState = {
   admin: true,
   worklet: true,
   doclet: true,
+  chatlet: true,
   handle: "jane",
   owner: "jane",
   name: "Jane Founder",
@@ -48,6 +49,7 @@ const JANE: ViewerState = {
   configManagedBy: [],
   assistant: "disabled",
   assistantModel: null,
+  chatVendors: [],
 };
 
 beforeEach(() => {
@@ -112,16 +114,19 @@ describe("SteerTurnButton", () => {
 // takes this note once it has read them, and one that has taken all it takes
 // never will. Neither is a write that collided with another, which "look again,
 // then retry" would tell them it was.
+//
+// THE ANSWER CARRIES NO DETAIL: the act route answers a refusal in a person's
+// words or in none (ADR-0060), and nobody has worded either bound for a
+// person, so the dashboard's sentence for the code is the whole of it. The
+// tool's own sentence, which names the turn and its count for a model, is
+// never the answer's detail.
 describe("a note the turn refuses on its bounds", () => {
-  test.each([
-    ["notes_full", "Turn t-1 already holds 5 notes it has not read yet."],
-    ["notes_spent", "Turn t-1 has been sent the 10 notes a turn takes."],
-  ] as const)("%s is said in its own words", async (code, detail) => {
+  test.each(["notes_full", "notes_spent"] as const)("%s is said in its own words", async (code) => {
     vi.stubGlobal(
       "fetch",
       vi.fn(
         async () =>
-          new Response(JSON.stringify({ error: code, detail }), {
+          new Response(JSON.stringify({ error: code }), {
             status: 409,
             headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
           }),
@@ -139,7 +144,9 @@ describe("a note the turn refuses on its bounds", () => {
     fireEvent.change(within(dialog).getByLabelText("Note"), { target: { value: "use staging" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Send note" }));
     await waitFor(() => expect(within(dialog).getByText(ACT_ERRORS[code])).toBeTruthy());
-    expect(within(dialog).queryByText(ACT_ERRORS.conflict)).toBeNull();
+    // A COLLISION'S WORDS ARE LOOKED FOR IN THE TEXT: a `conflict` is said in
+    // the engine's words, and has no fixed sentence of the dashboard's to find.
+    expect(dialog.textContent).not.toMatch(/look again|retry/i);
     expect(dialog.textContent).not.toMatch(/collided/);
   });
 });

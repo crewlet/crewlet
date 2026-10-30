@@ -1,6 +1,7 @@
 package turnctx_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -61,6 +62,75 @@ func TestACallCountsTheDifferentCallsBeforeIt(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TWO TOOLS THAT WRITE ONE STATE COUNT EACH OTHER'S CALLS, so joining a room
+// again after leaving it is a new operation rather than the first join's
+// retry — the count a per-tool log cannot give, because the leave between the
+// two joins is another tool's call.
+func TestAFamilyCountsEachOthersCalls(t *testing.T) {
+	t.Parallel()
+	membership := []string{"join", "leave"}
+	room := map[string]any{"channel": "eng"}
+	other := map[string]any{"channel": "ops"}
+	type call = struct {
+		tool string
+		args map[string]any
+	}
+	cases := []struct {
+		name  string
+		calls []call
+		want  []int
+	}{
+		{"joining again after leaving is a new operation",
+			[]call{{"join", room}, {"leave", room}, {"join", room}}, []int{0, 1, 1}},
+		{"and so is leaving again after joining",
+			[]call{{"leave", room}, {"join", room}, {"leave", room}}, []int{0, 1, 1}},
+		{"a repeat with nothing in the family between is one operation",
+			[]call{{"join", room}, {"join", room}, {"leave", room}, {"leave", room}},
+			[]int{0, 0, 2, 2}},
+		{"a call outside the family counts for nothing",
+			[]call{{"join", room}, {"post", other}, {"join", room}}, []int{0, 0, 0}},
+		{"a family member's other arguments count",
+			[]call{{"join", other}, {"leave", room}, {"join", room}}, []int{0, 1, 2}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			log := turnctx.NewCallLog()
+			var got []int
+			for _, call := range c.calls {
+				// EACH TOOL IS COUNTED AMONG ITS OWN FAMILY, as a caller
+				// hands them: the membership pair, or the tool alone.
+				var family []string
+				if slices.Contains(membership, call.tool) {
+					family = membership
+				}
+				got = append(got, log.OrdinalAmong(family, call.tool, call.args))
+				log.Record(call.tool, toolargs.Of(nil, call.args))
+			}
+			if len(got) != len(c.want) {
+				t.Fatalf("counts = %v, want %v", got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("counts = %v, want %v", got, c.want)
+				}
+			}
+		})
+	}
+
+	// A FAMILY OF ONE IS THE PER-TOOL COUNT, whether or not the tool names
+	// itself — which is what lets a caller hand every tool its family.
+	log := turnctx.NewCallLog()
+	log.Record("join", toolargs.Of(nil, room))
+	log.Record("leave", toolargs.Of(nil, room))
+	for _, family := range [][]string{nil, {"join"}} {
+		if got, want := log.OrdinalAmong(family, "join", other), log.Ordinal("join", other); got != want {
+			t.Errorf("a family of %v counts %d where the tool's own count is %d",
+				family, got, want)
+		}
 	}
 }
 

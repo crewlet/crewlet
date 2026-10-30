@@ -183,6 +183,13 @@ func (a *Applier) applyTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	return rows + children + thread + counts + history + entered + told, nil
 }
 
+// unblockedToldStatement is [Applier.stampUnblocked]'s write, named for the
+// plan test.
+const unblockedToldStatement = `
+		UPDATE tracker_tasks
+		SET unblocked_told_at = MAX(COALESCE(unblocked_told_at, 0), ?)
+		WHERE id = ? AND COALESCE(unblocked_told_at, 0) < ?`
+
 // stampUnblocked records that this commit told a dependent it is workable.
 //
 // # Why the applier writes it and not the writer
@@ -218,11 +225,7 @@ func (a *Applier) stampUnblocked(ctx context.Context, tx *sql.Tx, c applyContext
 			return 0, err
 		}
 		at := store.EncodeTime(effective)
-		res, err := tx.ExecContext(ctx, `
-			UPDATE tracker_tasks
-			SET unblocked_told_at = MAX(COALESCE(unblocked_told_at, 0), ?)
-			WHERE id = ? AND COALESCE(unblocked_told_at, 0) < ?`,
-			at, party.Task, at)
+		res, err := tx.ExecContext(ctx, unblockedToldStatement, at, party.Task, at)
 		if err != nil {
 			return 0, fmt.Errorf("worklet: record that %s was told it is "+
 				"unblocked at %s: %w", party.Task, c.position, err)
@@ -312,6 +315,9 @@ func effectiveOf(c applyContext) (time.Time, error) {
 	return c.brokerAt.UTC(), nil
 }
 
+// readTaskStatement is [readTask]'s read, named for the plan test.
+const readTaskStatement = `SELECT document, version, scoped_through, rank FROM tracker_tasks WHERE id = ?`
+
 // readTask reads the stored task, reporting whether the row exists — with the
 // rank its ROW holds, which is the task's place on its board.
 //
@@ -325,9 +331,8 @@ func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
 	var document []byte
 	var version, scoped int64
 	var rank string
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, version, scoped_through, rank FROM tracker_tasks WHERE id = ?`,
-		id).Scan(&document, &version, &scoped, &rank)
+	err := tx.QueryRowContext(ctx, readTaskStatement, id).Scan(&document, &version,
+		&scoped, &rank)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return Task{}, false, nil
@@ -563,12 +568,12 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			 points, spend_turns, spend_rounds, spend_input, spend_output,
 			 spend_cache_read, spend_cache_write, spend_wall_ms, spend_tokens,
 			 spend_workers, spend_sent_back, done_at, closed_at, finished_at, archived, archived_at, removed_at,
-			 removed_with, batch_id, merging, moving, reassignments, policy_stamp,
+			 removed_with, merging, moving, reassignments, policy_stamp,
 			 unblocked_told_at, inconsistent_project,
 			 cycle, too_deep, key_collision, created_at, updated_at, version,
 			 scoped_through, document)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,
-		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,?,?,?,0,?)
+		        ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,0,0,0,0,?,?,?,0,?)
 		ON CONFLICT (id) DO UPDATE SET
 			key = excluded.key, project_key = excluded.project_key,
 			routing_unit = excluded.routing_unit,
@@ -583,7 +588,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 			done_at = excluded.done_at, closed_at = excluded.closed_at,
 			finished_at = excluded.finished_at, archived = excluded.archived,
 			archived_at = excluded.archived_at, removed_at = excluded.removed_at,
-			removed_with = excluded.removed_with, batch_id = excluded.batch_id,
+			removed_with = excluded.removed_with,
 			merging = excluded.merging, moving = excluded.moving,
 			reassignments = excluded.reassignments,
 			policy_stamp = excluded.policy_stamp,
@@ -603,7 +608,7 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 		task.Spend.SentBack, nullableTime(task.DoneAt),
 		nullableTime(task.ClosedAt), nullableTime(task.FinishedAt()),
 		boolInt(task.Archived), nullableTime(task.ArchivedAt),
-		removedAt(task), removedWith(task), batchOf(c.record),
+		removedAt(task), removedWith(task),
 		boolInt(task.Merging), boolInt(task.Moving), task.Reassignments,
 		task.PolicyStamp,
 		store.EncodeTime(task.CreatedAt), store.EncodeTime(task.UpdatedAt),
@@ -612,6 +617,17 @@ func upsertTask(ctx context.Context, tx *sql.Tx, task Task, document []byte,
 		return 0, fmt.Errorf("worklet: write task %s at %s: %w", task.ID, c.position, err)
 	}
 	return affected(res)
+}
+
+// clearFieldValuesStatement is the delete of one task's value rows that
+// [Applier.explodeTask] rewrites them after and a purge ends them with, named
+// for the plan test.
+const clearFieldValuesStatement = `DELETE FROM tracker_field_values WHERE task_id = ?`
+
+// childClearStatement is the delete of one task's rows of one child table
+// that [Applier.explodeTask] writes them again after, named for the plan test.
+func childClearStatement(table string) string {
+	return `DELETE FROM ` + table + ` WHERE task_id = ?`
 }
 
 // explodeTask rewrites the child rows a task's collections produce.
@@ -654,6 +670,12 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 				task.Collaborators, func(h string) []any { return []any{task.ID, h} })
 		}},
 		{"tracker_task_tags", func() (int, error) {
+			// UNDER THE TASK'S CURRENT PROJECT, rewritten with the
+			// task on every apply: a project's tag filter seeks the
+			// slug and the project together ([tagClause]), so a row
+			// left under the project a task moved out of would hide
+			// it from its new project's filter and show it in its old
+			// one's.
 			return insertMany(ctx, tx, c.maxVariables,
 				`INSERT INTO tracker_task_tags (task_id, project_key, slug) VALUES`,
 				`(?,?,?)`,
@@ -682,20 +704,8 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 			// apply is the entry BELOW this one in the same loop,
 			// which is still ahead of us whether the rows went out
 			// one at a time or all at once.
-			return insertMany(ctx, tx, c.maxVariables, `
-				INSERT INTO tracker_relations
-					(task_id, other_id, kind, derived, one_sided,
-					 one_sided_final, note, created_at)
-				VALUES`,
-				`(?,?,?,0,
-					CASE WHEN ? = 'waiting_on' AND NOT EXISTS (
-						SELECT 1 FROM tracker_task_dependents d
-						WHERE d.task_id = ? AND d.dependent_id = ?)
-					THEN 1 ELSE 0 END, ?, ?, ?)`,
-				`ON CONFLICT (task_id, other_id, kind) DO UPDATE SET
-					one_sided = excluded.one_sided,
-					one_sided_final = excluded.one_sided_final,
-					note = excluded.note`,
+			return insertMany(ctx, tx, c.maxVariables, relationsInsertPrefix,
+				relationsInsertRow, relationsInsertConflict,
 				task.Relations, func(r Relation) []any {
 					return []any{task.ID, r.Other, string(r.Kind),
 						string(r.Kind), r.Other, task.ID,
@@ -711,10 +721,8 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 		{"tracker_task_dependents", func() (int, error) {
 			// THE MIRROR AS A ROW, so the derivation above is an
 			// indexed probe rather than a document decode per edge.
-			return insertMany(ctx, tx, c.maxVariables,
-				`INSERT INTO tracker_task_dependents (task_id, dependent_id) VALUES`,
-				`(?,?)`,
-				`ON CONFLICT (task_id, dependent_id) DO NOTHING`,
+			return insertMany(ctx, tx, c.maxVariables, mirrorInsertPrefix,
+				mirrorInsertRow, mirrorInsertConflict,
 				task.Dependents, func(id string) []any {
 					return []any{task.ID, id}
 				})
@@ -724,7 +732,7 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 		// collection the record cleared ends empty rather than keeping
 		// whatever this node happened to hold.
 		if _, err := tx.ExecContext(ctx,
-			`DELETE FROM `+child.table+` WHERE task_id = ?`, task.ID); err != nil {
+			childClearStatement(child.table), task.ID); err != nil {
 			return 0, fmt.Errorf("worklet: clear %s for %s: %w",
 				child.table, task.ID, err)
 		}
@@ -742,8 +750,7 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	// column each value goes in — which the loop's shape has no room for,
 	// and which [Applier.applyTask] reads and hands down rather than
 	// re-reading here.
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM tracker_field_values WHERE task_id = ?`, task.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, clearFieldValuesStatement, task.ID); err != nil {
 		return 0, fmt.Errorf("worklet: clear tracker_field_values for %s: %w",
 			task.ID, err)
 	}
@@ -774,6 +781,30 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 	return written + deps + refs + keys + closure, nil
 }
 
+// The statements [Applier.maintainDeps] writes a task's dependency rows with,
+// named for the plan test: its own edges cleared by the task, rewritten one
+// row per blocker — each row reading its blocker's state by the blocker's key —
+// and every edge naming it as the blocker settled by the blocker.
+const (
+	clearDepsStatement = `DELETE FROM tracker_task_deps WHERE task_id = ?`
+	depsInsertPrefix   = `
+		INSERT INTO tracker_task_deps (blocker_id, task_id, blocker_open, cleared_at)
+		VALUES`
+	depsInsertRow = `(?, ?,
+		  COALESCE((SELECT CASE WHEN b.status_group IN ('done','closed')
+		                        THEN 0 ELSE 1 END
+		            FROM tracker_tasks b WHERE b.id = ?), 1),
+		  (SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?))`
+	depsInsertConflict = `ON CONFLICT (blocker_id, task_id) DO UPDATE SET
+			blocker_open = excluded.blocker_open,
+			cleared_at = excluded.cleared_at`
+	clearDependentsStatement = `
+		UPDATE tracker_task_deps SET
+			blocker_open = CASE WHEN ? IN ('done','closed') THEN 0 ELSE 1 END,
+			cleared_at = ?
+		WHERE blocker_id = ?`
+)
+
 // maintainDeps derives the dependency edges from the task's own relations.
 //
 // DERIVED RATHER THAN CARRIED, so the two flags a query reads — is this task
@@ -782,8 +813,7 @@ func (a *Applier) explodeTask(ctx context.Context, tx *sql.Tx,
 func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	c applyContext) (int, error) {
 
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM tracker_task_deps WHERE task_id = ?`, task.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, clearDepsStatement, task.ID); err != nil {
 		return 0, fmt.Errorf("worklet: clear the dependencies of %s: %w", task.ID, err)
 	}
 	// THE WAITING_ON EDGES ARE THE COLLECTION, filtered out of the
@@ -802,18 +832,8 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	// the VALUES form is a row template a multi-row insert can repeat.
 	// Each row's two probes read tracker_tasks while this statement writes
 	// tracker_task_deps, so batching cannot change what any of them sees.
-	written, err := insertMany(ctx, tx, c.maxVariables, `
-		INSERT INTO tracker_task_deps (blocker_id, task_id, blocker_open, cleared_at)
-		VALUES`,
-		`(?, ?,
-		  COALESCE((SELECT CASE WHEN b.status_group IN ('done','closed')
-		                        THEN 0 ELSE 1 END
-		            FROM tracker_tasks b WHERE b.id = ?), 1),
-		  (SELECT b.finished_at FROM tracker_tasks b WHERE b.id = ?))`,
-		`ON CONFLICT (blocker_id, task_id) DO UPDATE SET
-			blocker_open = excluded.blocker_open,
-			cleared_at = excluded.cleared_at`,
-		blockers, func(r Relation) []any {
+	written, err := insertMany(ctx, tx, c.maxVariables, depsInsertPrefix,
+		depsInsertRow, depsInsertConflict, blockers, func(r Relation) []any {
 			return []any{r.Other, task.ID, r.Other, r.Other}
 		})
 	if err != nil {
@@ -824,11 +844,7 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	// names it as a blocker. It is the same statement on every node,
 	// against the row this transaction has just written, so two nodes
 	// cannot disagree about whether a dependent is still blocked.
-	res, err := tx.ExecContext(ctx, `
-		UPDATE tracker_task_deps SET
-			blocker_open = CASE WHEN ? IN ('done','closed') THEN 0 ELSE 1 END,
-			cleared_at = ?
-		WHERE blocker_id = ?`,
+	res, err := tx.ExecContext(ctx, clearDependentsStatement,
 		string(statusOf(task).Group()), nullableTime(task.FinishedAt()), task.ID)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: clear the dependents of %s: %w", task.ID, err)
@@ -850,12 +866,7 @@ func (a *Applier) maintainDeps(ctx context.Context, tx *sql.Tx, task Task,
 	// dependent set while waiting, and the duty repairs an edge that is
 	// already whole — for ever, because its repair writes the mirror that
 	// is already there.
-	res, err = tx.ExecContext(ctx, `
-		UPDATE tracker_relations SET one_sided =
-			CASE WHEN EXISTS (SELECT 1 FROM tracker_task_dependents d
-			                  WHERE d.task_id = ? AND d.dependent_id = tracker_relations.task_id)
-			THEN 0 ELSE 1 END
-		WHERE other_id = ? AND kind = 'waiting_on'`, task.ID, task.ID)
+	res, err = tx.ExecContext(ctx, rejudgeEdgesStatement, task.ID, task.ID)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: re-judge the edges waiting on %s: %w",
 			task.ID, err)
@@ -1008,21 +1019,24 @@ func (a *Applier) maintainKeys(ctx context.Context, tx *sql.Tx, task Task,
 	return claimed + flagged, nil
 }
 
-// flagKeyCollisions re-derives `key_collision` for every task holding a key:
-// set on each one the directory does not name, clear on the one it does.
-//
-// ONLY THE ROWS WHOSE FLAG DISAGREES ARE WRITTEN, so an ordinary apply of a
-// task that holds its key alone touches no row here and reports none.
-func flagKeyCollisions(ctx context.Context, tx *sql.Tx, key string) (int, error) {
-	res, err := tx.ExecContext(ctx, `
+// keyCollisionStatement is [flagKeyCollisions]' write, named for the plan
+// test: the holders of one key, found by the key.
+const keyCollisionStatement = `
 		UPDATE tracker_tasks
 		SET key_collision = NOT EXISTS (
 			SELECT 1 FROM tracker_task_keys k
 			WHERE k.key = tracker_tasks.key AND k.task_id = tracker_tasks.id)
 		WHERE key = ? AND key_collision = EXISTS (
 			SELECT 1 FROM tracker_task_keys k
-			WHERE k.key = tracker_tasks.key AND k.task_id = tracker_tasks.id)`,
-		key)
+			WHERE k.key = tracker_tasks.key AND k.task_id = tracker_tasks.id)`
+
+// flagKeyCollisions re-derives `key_collision` for every task holding a key:
+// set on each one the directory does not name, clear on the one it does.
+//
+// ONLY THE ROWS WHOSE FLAG DISAGREES ARE WRITTEN, so an ordinary apply of a
+// task that holds its key alone touches no row here and reports none.
+func flagKeyCollisions(ctx context.Context, tx *sql.Tx, key string) (int, error) {
+	res, err := tx.ExecContext(ctx, keyCollisionStatement, key)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: flag the holders of key %s: %w", key, err)
 	}
@@ -1324,6 +1338,13 @@ func (a *Applier) purgeTask(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	return written + marker + moved + handed + history + forgotten, nil
 }
 
+// handOnKeyStatement is [handOnKey]'s write, named for the plan test: the
+// key's current holders found by the key, the lowest id taking it.
+const handOnKeyStatement = `
+		INSERT INTO tracker_task_keys (key, task_id)
+		SELECT key, id FROM tracker_tasks WHERE key = ? ORDER BY id LIMIT 1
+		ON CONFLICT (key) DO NOTHING`
+
 // handOnKey gives a purged task's key to whoever else holds it.
 //
 // A PURGED CLAIMANT WOULD OTHERWISE LEAVE THE KEY UNCLAIMED and the task that
@@ -1343,10 +1364,7 @@ func handOnKey(ctx context.Context, tx *sql.Tx, key string) (int, error) {
 	if key == "" {
 		return 0, nil
 	}
-	res, err := tx.ExecContext(ctx, `
-		INSERT INTO tracker_task_keys (key, task_id)
-		SELECT key, id FROM tracker_tasks WHERE key = ? ORDER BY id LIMIT 1
-		ON CONFLICT (key) DO NOTHING`, key)
+	res, err := tx.ExecContext(ctx, handOnKeyStatement, key)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: hand on key %s: %w", key, err)
 	}
@@ -1386,13 +1404,51 @@ func purgeDeletes(id string) []purgeStatement {
 		{`DELETE FROM tracker_task_deps WHERE task_id = ? OR blocker_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_task_dependents WHERE task_id = ? OR dependent_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_checklist_items WHERE task_id = ?`, []any{id}},
-		{`DELETE FROM tracker_field_values WHERE task_id = ?`, []any{id}},
+		{clearFieldValuesStatement, []any{id}},
 		{`DELETE FROM tracker_task_closure WHERE ancestor_id = ? OR descendant_id = ?`, []any{id, id}},
 		{`DELETE FROM tracker_body_revisions WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_comments WHERE task_id = ?`, []any{id}},
 		{`DELETE FROM tracker_tasks WHERE id = ?`, []any{id}},
 	}
 }
+
+// The statements a purge runs over the task's history, named for the plan
+// test: the notices its rows routed, which [forgottenNotices] reads first by
+// the same predicate, both finding the rows by the subject; and the skeleton
+// each row the census walks keeps, written to that row by its own id.
+const (
+	forgottenNoticesStatement = `
+		SELECT record_id, recipient, reason FROM tracker_notifications
+		WHERE record_id IN (
+			SELECT id FROM tracker_history
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)
+		ORDER BY record_id, recipient`
+	forgetNoticesStatement = `
+		DELETE FROM tracker_notifications WHERE record_id IN (
+			SELECT id FROM tracker_history
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`
+	forgetSkeletonStatement = `
+		UPDATE tracker_history
+		SET excerpt = '', comment_id = '', document = ?, fields_json = ?
+		WHERE id = ?`
+)
+
+// The purge's two statements over the census's own rows, found by the subject:
+// the rows it does not walk, which go, and the walk's own read
+// ([censusRows]). Variables rather than constants because both are spelled
+// with [historyMoves], the predicate the flow walk reads, so a purge keeps
+// exactly the rows the census counts.
+var (
+	forgetHistoryStatement = `
+		DELETE FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
+		  AND NOT (` + historyMoves("") + `)`
+	censusRowsStatement = `
+		SELECT id, fields_json FROM tracker_history
+		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
+		  AND ` + historyMoves("") + `
+		ORDER BY id`
+)
 
 // forgetRecords destroys what a purged task's own records wrote beside its
 // rows: the inbox notices its rows routed and its turn records go, and of its
@@ -1470,27 +1526,21 @@ func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 	for _, notice := range gone {
 		a.noteInbox(inboxNote{
 			record: notice.record, handle: notice.recipient, subject: id,
-			reason: notice.reason, position: c.packed, removed: true,
+			reason: notice.reason, position: c.packed, at: c.brokerAt, removed: true,
 		})
 	}
-	if err = exec(`DELETE FROM tracker_notifications WHERE record_id IN (
-		SELECT id FROM tracker_history
-		WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`, id, kind, keep); err != nil {
+	if err = exec(forgetNoticesStatement, id, kind, keep); err != nil {
 		return 0, err
 	}
 	skeleton, err := censusRows(ctx, tx, id, keep)
 	if err != nil {
 		return 0, err
 	}
-	if err := exec(`DELETE FROM tracker_history
-		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
-		  AND NOT (`+historyMoves("")+`)`, id, kind, keep); err != nil {
+	if err := exec(forgetHistoryStatement, id, kind, keep); err != nil {
 		return 0, err
 	}
 	for _, row := range skeleton {
-		if err := exec(`UPDATE tracker_history
-			SET excerpt = '', comment_id = '', document = ?, fields_json = ?
-			WHERE id = ?`, []byte("{}"), row.fields, row.id); err != nil {
+		if err := exec(forgetSkeletonStatement, []byte("{}"), row.fields, row.id); err != nil {
 			return 0, err
 		}
 	}
@@ -1510,12 +1560,7 @@ type forgottenNotice struct {
 // forgottenNotices reads the notices [Applier.forgetRecords] deletes, by the
 // same predicate it deletes them with, ordered so every node notes them alike.
 func forgottenNotices(ctx context.Context, tx *sql.Tx, id, keep string) ([]forgottenNotice, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT record_id, recipient, reason FROM tracker_notifications
-		WHERE record_id IN (
-			SELECT id FROM tracker_history
-			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)
-		ORDER BY record_id, recipient`, id, string(KindTask), keep)
+	rows, err := tx.QueryContext(ctx, forgottenNoticesStatement, id, string(KindTask), keep)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read whose inbox a purge of %s empties: %w", id, err)
 	}
@@ -1547,11 +1592,7 @@ type skeletonRow struct {
 // its `fields_json` cut to [censusFields]. Ordered by id, so every node issues
 // the same updates in the same order.
 func censusRows(ctx context.Context, tx *sql.Tx, id, keep string) ([]skeletonRow, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, fields_json FROM tracker_history
-		WHERE subject_id = ? AND subject_kind = ? AND id <> ?
-		  AND `+historyMoves("")+`
-		ORDER BY id`, id, string(KindTask), keep)
+	rows, err := tx.QueryContext(ctx, censusRowsStatement, id, string(KindTask), keep)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read what the census keeps of a purged task: %w", err)
 	}
@@ -1619,15 +1660,11 @@ type otherEdit struct {
 func othersNaming(ctx context.Context, tx *sql.Tx, id string,
 	children []string) (map[string]otherEdit, error) {
 
-	relating, err := idsOf(ctx, tx, `
-		SELECT DISTINCT task_id FROM tracker_relations
-		WHERE other_id = ? AND task_id <> ?`, id, id)
+	relating, err := idsOf(ctx, tx, relatingStatement, id, id)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the tasks relating to %s: %w", id, err)
 	}
-	mirroring, err := idsOf(ctx, tx, `
-		SELECT task_id FROM tracker_task_dependents
-		WHERE dependent_id = ? AND task_id <> ?`, id, id)
+	mirroring, err := idsOf(ctx, tx, mirroringStatement, id, id)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the blockers listing %s: %w", id, err)
 	}
@@ -1722,6 +1759,22 @@ type movedColumns struct {
 	rank   bool
 }
 
+// rewriteOtherStatement is [rewriteOther]'s write, named for the plan test:
+// the document and the scope stamp, the columns moved names beside them, and
+// the task found by its key. Its arguments are the document, the stamp, then
+// each moved column in this order, then the id and the stamp again.
+func rewriteOtherStatement(moved movedColumns) string {
+	set := `document = ?, scoped_through = ?`
+	if moved.parent {
+		set += `, parent_id = ?`
+	}
+	if moved.rank {
+		set += `, rank = ?`
+	}
+	return `UPDATE tracker_tasks SET ` + set + `
+		WHERE id = ? AND ? > MAX(version, scoped_through)`
+}
+
 // rewriteOther applies change to ANOTHER task's document, from a record on
 // some other subject, and reports the rows written.
 //
@@ -1750,17 +1803,14 @@ func rewriteOther(ctx context.Context, tx *sql.Tx, id string, c applyContext,
 	if err != nil {
 		return 0, fmt.Errorf("worklet: encode task %s at %s: %w", id, c.position, err)
 	}
-	set, args := `document = ?, scoped_through = ?`, []any{document, c.packed}
+	args := []any{document, c.packed}
 	if moved.parent {
-		set += `, parent_id = ?`
 		args = append(args, nullableStringPtr(task.Parent))
 	}
 	if moved.rank {
-		set += `, rank = ?`
 		args = append(args, string(task.Rank))
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE tracker_tasks SET `+set+`
-		WHERE id = ? AND ? > MAX(version, scoped_through)`,
+	res, err := tx.ExecContext(ctx, rewriteOtherStatement(moved),
 		append(args, id, c.packed)...)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: rewrite task %s at %s: %w", id, c.position, err)
@@ -1786,14 +1836,17 @@ func idsOf(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]string
 	return out, rows.Err()
 }
 
+// childrenStatement is [childrenOf]'s read, named for the plan test: a seek on
+// the parent in the index of the tree (replicated 0058).
+const childrenStatement = `SELECT id FROM tracker_tasks WHERE parent_id = ? ORDER BY id`
+
 // childrenOf reads a task's DIRECT children.
 //
 // From the parent pointers rather than the closure, because what this needs is
 // the tasks whose own `parent_id` would dangle — and the closure holds every
 // descendant, whose pointers name their own parents and are unaffected.
 func childrenOf(ctx context.Context, tx *sql.Tx, id string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id FROM tracker_tasks WHERE parent_id = ? ORDER BY id`, id)
+	rows, err := tx.QueryContext(ctx, childrenStatement, id)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the children of %s: %w", id, err)
 	}
@@ -2043,7 +2096,7 @@ func (a *Applier) explodeCatalogue(ctx context.Context, tx *sql.Tx, name string,
 // every filter for ever. `AppliesTo` is not one-way at all: a declaration that
 // adds a type has to bring those tasks' values back into the filterable set.
 //
-// TWO FACTS IN ONE COLUMN, and the statement computes both — a value is hidden
+// TWO FACTS IN ONE COLUMN, and the statements compute both — a value is hidden
 // when its field is ARCHIVED or when the field's `AppliesTo` excludes the TYPE
 // of the task holding it. The type comparison is case-folded because
 // [appliesTo] decides the same thing at explode time and folds too, and the
@@ -2058,51 +2111,88 @@ func (a *Applier) settleFieldVisibility(ctx context.Context, tx *sql.Tx,
 
 	written := 0
 	for _, field := range fields {
-		var res sql.Result
-		var err error
-		switch {
-		case field.Archived || len(field.AppliesTo) == 0:
-			// ONE ANSWER FOR EVERY ROW: an archived field hides all
-			// of its values and an unrestricted one hides none, and
-			// neither needs to know which task a row sits on.
-			want := boolInt(field.Archived)
-			res, err = tx.ExecContext(ctx, `
-				UPDATE tracker_field_values SET hidden = ?
-				WHERE field_id = ? AND kind = ? AND hidden <> ?`,
-				want, field.ID, FieldValueNative, want)
-		default:
-			types := make([]any, 0, len(field.AppliesTo))
-			for _, name := range field.AppliesTo {
-				types = append(types, strings.ToLower(name))
+		for _, write := range settleStatements(field) {
+			res, err := tx.ExecContext(ctx, write.sql, write.args...)
+			if err != nil {
+				return 0, fmt.Errorf("worklet: settle %s's value rows against its "+
+					"declaration: %w", field.Slug, err)
 			}
-			// A ROW WHOSE TASK IS GONE IS HIDDEN, which is what the
-			// COALESCE says: the column is NOT NULL, and a value with
-			// no task to be about cannot be shown to belong to one.
-			expr := `COALESCE((SELECT CASE WHEN LOWER(t.type) IN (` +
-				placeholders(len(types)) + `) THEN 0 ELSE 1 END ` +
-				`FROM tracker_tasks t ` +
-				`WHERE t.id = tracker_field_values.task_id), 1)`
-			// THE SET CLAUSE'S ARGUMENTS BIND FIRST, then the
-			// WHERE's, then the same expression's again: a
-			// placeholder binds in statement order and this
-			// expression appears twice.
-			bound := append(append([]any{}, types...), field.ID, FieldValueNative)
-			bound = append(bound, types...)
-			res, err = tx.ExecContext(ctx, `
-				UPDATE tracker_field_values SET hidden = `+expr+`
-				WHERE field_id = ? AND kind = ? AND hidden <> `+expr, bound...)
+			n, err := affected(res)
+			if err != nil {
+				return 0, err
+			}
+			written += n
 		}
-		if err != nil {
-			return 0, fmt.Errorf("worklet: settle %s's value rows against its "+
-				"declaration: %w", field.Slug, err)
-		}
-		n, err := affected(res)
-		if err != nil {
-			return 0, err
-		}
-		written += n
 	}
 	return written, nil
+}
+
+// The index of the value rows a declaration hides (replicated 0059): the size
+// of what is hidden, which a healthy company keeps small.
+const hiddenFieldValuesIndex = "tracker_field_values_hidden_idx"
+
+// settleWrite is one statement [Applier.settleFieldVisibility] runs, with its
+// arguments.
+type settleWrite struct {
+	sql  string
+	args []any
+}
+
+// settleStatements is what makes one field's value rows agree with its
+// declaration: the visible rows that should be hidden, then the hidden rows
+// that should be visible — each one only where the declaration can produce
+// such a row, and each named for the plan test.
+//
+// # Why two writes, and why each NAMES its index
+//
+// The settle runs for every field on every catalogue apply, and it was one
+// statement per field — `hidden <> <what the declaration says>` — which no
+// index can serve, since a row on either side of the column may be the one
+// that moves. So every catalogue change read every value row in the company
+// from the heap, once per field the company declares, inside the applier's
+// transaction. Split by the side a row is on, each half has an index that
+// holds exactly that side: the VISIBLE rows are every one of the four value
+// indexes, which are partial on `hidden = 0` and on nothing else — the field's
+// own column's is named, the index its filters read — and the HIDDEN rows are
+// [hiddenFieldValuesIndex]. Named, because the planner reaches a partial index
+// only when it chooses to, and the visible half reaches one of four by its
+// own costing; and the clause is a guard, refusing with `no query solution`
+// a write that stopped stating the side its index holds.
+//
+// So a field with nothing to move costs a seek that finds nothing — an
+// unrestricted field's hidden rows, an archived one's visible rows — and only
+// a field that restricts the types it applies to reads every live value it
+// has, because whether each row should be shown is a fact about its task.
+func settleStatements(field FieldDef) []settleWrite {
+	visible := "UPDATE tracker_field_values INDEXED BY " + fieldValueIndex(field.Type) +
+		" SET hidden = 1 WHERE field_id = ? AND kind = ? AND hidden = 0"
+	hidden := "UPDATE tracker_field_values INDEXED BY " + hiddenFieldValuesIndex +
+		" SET hidden = 0 WHERE field_id = ? AND kind = ? AND hidden = 1"
+	bound := []any{field.ID, FieldValueNative}
+	switch {
+	case field.Archived:
+		// AN ARCHIVED FIELD HIDES EVERY VALUE, and has none to show.
+		return []settleWrite{{visible, bound}}
+	case len(field.AppliesTo) == 0:
+		// AN UNRESTRICTED ONE HIDES NONE, so all it does is show.
+		return []settleWrite{{hidden, bound}}
+	}
+	types := make([]any, 0, len(field.AppliesTo))
+	for _, name := range field.AppliesTo {
+		types = append(types, strings.ToLower(name))
+	}
+	// A ROW WHOSE TASK IS GONE IS HIDDEN, which is what the COALESCE says:
+	// the column is NOT NULL, and a value with no task to be about cannot be
+	// shown to belong to one.
+	excluded := ` AND COALESCE((SELECT CASE WHEN LOWER(t.type) IN (` +
+		placeholders(len(types)) + `) THEN 0 ELSE 1 END ` +
+		`FROM tracker_tasks t ` +
+		`WHERE t.id = tracker_field_values.task_id), 1) = `
+	args := append(append([]any{}, bound...), types...)
+	return []settleWrite{
+		{visible + excluded + "1", args},
+		{hidden + excluded + "0", args},
+	}
 }
 
 // writeThread writes the rows a record's own payload carries, as against the
@@ -2176,14 +2266,41 @@ func (a *Applier) writeThread(ctx context.Context, tx *sql.Tx, task Task,
 	return written, nil
 }
 
-// writeComment writes one comment row, and every EDIT of it.
+// writeComment writes what one record says about one comment: a POST creates
+// its row, an EDIT rewrites its words and a RESOLVE marks it resolved.
 //
-// AN UPSERT ON THE ID, because a comment is edited, answered, resolved and
-// removed in place — each of those is a later patch naming the same comment,
-// and an insert-only write would leave the thread showing the first version of
-// every remark for ever. The id is derived from the operation, so a retried
-// turn lands on the row it already wrote rather than saying the same thing
-// twice.
+// # Each kind writes only what it owns
+//
+// A post owns the row's existence and what the remark is — who wrote it, its
+// words, what it asks and what it answers. An edit owns the words: the body,
+// when they were last changed, and the document that carries both. A resolve
+// owns the resolution: `resolved`, `resolved_by` and `resolved_at`, and the
+// fields of the document that carry them. None owns `answered_by`, which is
+// the ANSWERING remark's: a later record, about another row, stamps it below.
+// So the post is an insert of a row that is not there yet and the edit and the
+// resolve updates of what each owns, and none can reach a column another
+// record put there.
+//
+// It was one upsert of everything the record carried, and the record carries
+// no `answered_by` — so it wrote NULL there on every write. An author
+// correcting the wording of a question somebody had answered reopened it: back
+// in `has_open_asks`, `asked_of=`, `asked_by=`, the answerer's own
+// `my_work.asked_of_me` and the item's `open_asks`, asking somebody again a
+// question they had answered. And a post naming a row that already exists — a
+// re-run of the call that posted it — rewrote it whole, the author's edit
+// since and the answer that closed it included.
+//
+// NO GESTURE TAKES A TRACKER COMMENT DOWN YET. The `removed` column is written
+// by nothing — every comment holds the row's default — so no kind writes it,
+// and a record of the removal kind ([ChangeCommentRemoved]) writes nothing at
+// all. Taken for a post, as a comment under any kind but the edit and the
+// resolve is, it made the remark it named up from the removal on a node that
+// did not hold it, closing whatever ask the remark claimed to answer.
+//
+// `record_id` is the record that POSTED the remark — the id of the history row
+// it wrote ([historyID]), which is what places the remark in the log for
+// [rederiveAnswers] — and an edit leaves it as it is: the row is that record's,
+// and its words are all an edit changes.
 func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	c applyContext) (int, error) {
 
@@ -2193,31 +2310,33 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 		// two nodes' threads would stop matching.
 		return 0, nil
 	}
+	switch c.record.Kind {
+	case ChangeCommentEdited:
+		return editComment(ctx, tx, task, comment, c)
+	case ChangeCommentResolved:
+		return resolveComment(ctx, tx, task, comment, c)
+	case ChangeCommentRemoved:
+		return 0, nil
+	}
 	comment.Task = task.ID
 	document, err := json.Marshal(comment)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",
 			comment.ID, c.position, err)
 	}
+	// A ROW ALREADY UNDER THIS ID IS LEFT AS IT IS: it was posted by the
+	// record that created it, and whatever has happened to it since — an
+	// edit, an answer — is a later record's to have said. Every node meets
+	// the same row at the same position, so every node leaves it alone.
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_comments
 			(id, task_id, author, author_kind, body, reply_to, ask, answers,
-			 answered_by, resolved, resolved_by, resolved_at, removed,
 			 record_id, created_at, updated_at, document)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT (id) DO UPDATE SET
-			body = excluded.body, ask = excluded.ask,
-			answers = excluded.answers, answered_by = excluded.answered_by,
-			resolved = excluded.resolved, resolved_by = excluded.resolved_by,
-			resolved_at = excluded.resolved_at, removed = excluded.removed,
-			record_id = excluded.record_id, updated_at = excluded.updated_at,
-			document = excluded.document`,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT (id) DO NOTHING`,
 		comment.ID, task.ID, comment.Author, string(comment.AuthorKind),
-		comment.Body, comment.ReplyTo, comment.Ask,
-		comment.Answers, nil,
-		boolInt(comment.Resolved), nonEmpty(comment.ResolvedBy),
-		nullableTime(comment.ResolvedAt), boolInt(comment.Removed),
-		c.record.OpID, store.EncodeTime(comment.CreatedAt),
+		comment.Body, comment.ReplyTo, comment.Ask, comment.Answers,
+		historyID(c), store.EncodeTime(comment.CreatedAt),
 		store.EncodeTime(commentUpdatedAt(comment)), document)
 	if err != nil {
 		return 0, fmt.Errorf("worklet: write comment %s at %s: %w",
@@ -2226,6 +2345,12 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	written, err := affected(res)
 	if err != nil {
 		return 0, err
+	}
+	if written == 0 {
+		// NOTHING POSTED, SO NOTHING ANSWERED: a post that found its row
+		// already there closes no ask either, since whatever it answers
+		// was closed — or not — by the record that did post it.
+		return 0, nil
 	}
 	// AND AN ANSWER CLOSES THE ASK IT NAMES. The two are separate rows —
 	// a reply is its own comment — so the ask stays open on every board,
@@ -2249,6 +2374,117 @@ func writeComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
 	return written, nil
 }
 
+// editComment rewrites a stored comment's words: its body, the instant they
+// were changed and the document carrying both.
+//
+// THE STORED COMMENT WITH ITS WORDS REPLACED, rather than the record's whole
+// comment written over it: what a remark asked, the question it answers, the
+// decision it carries and whom it mentioned stay what its post made them,
+// whatever an edit record carries beside its body. The writer forms an edit
+// from the stored row anyway ([Writer.EditComment]); building the document
+// here as well is what keeps the columns and the document one account of the
+// remark rather than two that a record could make disagree.
+//
+// AN EDIT OF A ROW THIS NODE DOES NOT HOLD WRITES NOTHING: the post is below
+// it in the log, so a missing row is a remark nobody posted, and one made up
+// from an edit would be a remark with no post behind it.
+func editComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
+	c applyContext) (int, error) {
+
+	var stored []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
+		comment.ID, task.ID).Scan(&stored)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("worklet: read comment %s to edit at %s: %w",
+			comment.ID, c.position, err)
+	}
+	var edited Comment
+	if err = json.Unmarshal(stored, &edited); err != nil {
+		return 0, fmt.Errorf("worklet: decode comment %s to edit at %s: %w",
+			comment.ID, c.position, err)
+	}
+	edited.Body = comment.Body
+	if !comment.UpdatedAt.IsZero() {
+		edited.UpdatedAt = comment.UpdatedAt
+	}
+	document, err := json.Marshal(edited)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_comments SET body = ?, updated_at = ?, document = ?
+		WHERE id = ? AND task_id = ?`,
+		edited.Body, store.EncodeTime(commentUpdatedAt(edited)), document,
+		comment.ID, task.ID)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: edit comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	return affected(res)
+}
+
+// resolveComment marks a stored comment resolved: who resolved it and when,
+// in its columns and in the document carrying them.
+//
+// THE STORED COMMENT WITH ITS RESOLUTION SET, for [editComment]'s reason: its
+// words, when they last changed, what it asked and answers and the answer that
+// closed it stay what the records that own them made them, whatever a resolve
+// record carries beside its resolution. A question resolved after somebody
+// answered it is still answered, and the answer still says what was decided.
+//
+// THE KIND IS THE GESTURE: a resolve record resolves whatever flag its comment
+// carries, and who resolved it and when are what the record states. A record
+// stating them again is written again, as an edit that changes no word is, so
+// the row holds the newest resolution.
+//
+// A RESOLVE OF A ROW THIS NODE DOES NOT HOLD WRITES NOTHING, for an edit's
+// reason: the post is below it in the log, so a missing row is a remark nobody
+// posted, and one made up from a resolve would be a remark with no post behind
+// it.
+func resolveComment(ctx context.Context, tx *sql.Tx, task Task, comment Comment,
+	c applyContext) (int, error) {
+
+	var stored []byte
+	err := tx.QueryRowContext(ctx, `
+		SELECT document FROM tracker_comments WHERE id = ? AND task_id = ?`,
+		comment.ID, task.ID).Scan(&stored)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, nil
+	case err != nil:
+		return 0, fmt.Errorf("worklet: read comment %s to resolve at %s: %w",
+			comment.ID, c.position, err)
+	}
+	var resolved Comment
+	if err = json.Unmarshal(stored, &resolved); err != nil {
+		return 0, fmt.Errorf("worklet: decode comment %s to resolve at %s: %w",
+			comment.ID, c.position, err)
+	}
+	resolved.Resolved = true
+	resolved.ResolvedBy, resolved.ResolvedAt = comment.ResolvedBy, comment.ResolvedAt
+	document, err := json.Marshal(resolved)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: encode comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	res, err := tx.ExecContext(ctx, `
+		UPDATE tracker_comments
+		SET resolved = 1, resolved_by = ?, resolved_at = ?, document = ?
+		WHERE id = ? AND task_id = ?`,
+		sql.NullString{String: resolved.ResolvedBy, Valid: resolved.ResolvedBy != ""},
+		nullableTime(resolved.ResolvedAt), document, comment.ID, task.ID)
+	if err != nil {
+		return 0, fmt.Errorf("worklet: resolve comment %s at %s: %w",
+			comment.ID, c.position, err)
+	}
+	return affected(res)
+}
+
 // commentUpdatedAt is the edit instant, defaulting to the creation one so the
 // column is never zero on a comment nobody has touched.
 func commentUpdatedAt(comment Comment) time.Time {
@@ -2256,13 +2492,6 @@ func commentUpdatedAt(comment Comment) time.Time {
 		return comment.CreatedAt
 	}
 	return comment.UpdatedAt
-}
-
-func nonEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }
 
 // writeBodyRevision keeps the body a write replaced, and prunes what the

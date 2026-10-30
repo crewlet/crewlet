@@ -30,7 +30,7 @@ func TestEveryPageReaderRefusesPastTheCallersOwnStalenessBound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := doclet.NewReader(doclet.ReaderOptions{DB: r.db.Reader(), Log: behind})
+	reader, err := doclet.NewReader(doclet.ReaderOptions{Log: behind})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestAPageReadWaitsForTheFloorTheCallerNamed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("waiting read authority: %v", err)
 	}
-	reader, err := doclet.NewReader(doclet.ReaderOptions{DB: r.db.Reader(), Log: waiting})
+	reader, err := doclet.NewReader(doclet.ReaderOptions{Log: waiting})
 	if err != nil {
 		t.Fatalf("pages reader: %v", err)
 	}

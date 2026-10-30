@@ -27,10 +27,10 @@ var (
 	// ErrBusy reports a person past their running turns or their turn rate.
 	// [Busy] carries when to try again.
 	ErrBusy = errors.New("assistant: too many turns at once")
-	// ErrUnavailable reports an assistant this node cannot run now: every
-	// model in the chain failing, the store unreachable, or the turn's
-	// runner on a node this one cannot reach. [Unavailable] carries when to
-	// try again where that is known.
+	// ErrUnavailable reports an assistant this node cannot run now for a
+	// reason of its own: no model chain it can build, the node shutting
+	// down, or the turn's runner on a node this one cannot reach.
+	// [Unavailable] carries the cause.
 	ErrUnavailable = errors.New("assistant: unavailable")
 	// ErrNotAvailable reports an assistant this person may not use here:
 	// [NotAvailable] carries the reason `/viewer` gives.
@@ -68,11 +68,20 @@ func (e *Busy) Error() string { return fmt.Sprintf("%s: %s", ErrBusy, e.Reason) 
 // Unwrap makes [Busy] errors.Is-comparable with [ErrBusy].
 func (e *Busy) Unwrap() error { return ErrBusy }
 
-// Unavailable is an assistant this node cannot run now. It wraps
-// [ErrUnavailable]; RetryAfter is zero where no wait is known to clear it.
+// Unavailable is an assistant this node cannot run now, for one of the reasons
+// [ErrUnavailable] names. It wraps [ErrUnavailable] and its cause.
+//
+// IT CARRIES NO WAIT, because none of its reasons is known to clear by waiting
+// on this node, and the surface tells a condition of the node beneath its
+// cause (the fleet's broker not answering a Stop) as that condition, under
+// that condition's own hint (internal/api/assistantapi). A read or a write of
+// the assistant's own records that failed is never one: it is returned as the
+// store's own error, which the surface answers as the condition or the fault
+// it is. Every such failure once carried a wait of two seconds, so a full log
+// was asked again every two seconds, and a store that was broken was said to
+// be coming back.
 type Unavailable struct {
-	RetryAfter time.Duration
-	Cause      error
+	Cause error
 }
 
 func (e *Unavailable) Error() string { return fmt.Sprintf("%s: %v", ErrUnavailable, e.Cause) }

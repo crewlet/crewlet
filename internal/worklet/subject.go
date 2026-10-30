@@ -107,7 +107,7 @@
 // hazard with no new field to carry it, and takes the same gate: a marker the
 // writer sets and a row that stamps it, with the new rule applied only to a
 // record at that version or above, so a record the build before the change
-// wrote is applied by that build's rule on every node.
+// wrote is applied by that build's rule on every data node.
 //
 // A column the applier COMPUTES from the rows it holds, rather than copies out
 // of a record, is the other half: no record version can see it, because what

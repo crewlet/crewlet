@@ -60,6 +60,9 @@ func (s *Store) ReadmitNode(ctx context.Context, actor Actor, opID, nodeID strin
 // decision runs ([statelog.Snap.Held]); what this write adds is whether the
 // record its operation landed is still in force, judged from the node's own
 // row in the same snapshot ([statelog.GateStanding]).
+//
+// ITS REFUSALS COME BACK IN THE FRAMEWORK'S OWN WORDS: [refusal] translates
+// only on a subject a person edits, and a node's gate is not one.
 func (s *Store) gateNode(ctx context.Context, actor Actor, opID, nodeID string,
 	readmit bool) (statelog.Result, error) {
 
@@ -127,10 +130,10 @@ func standingIn(ctx context.Context, tx *sql.Tx, nodeID string) (statelog.Evicti
 // window has passed.
 //
 // THIS DOMAIN'S OWN TABLE, because an eviction is a record on this log: every
-// node applies it into `pages_evictions` and every node's copy is identical,
-// which is what makes the applier's gate hold when coordination cannot be
-// reached. The trim read the tracker's table instead, filtered on this log's
-// stream name, and found nothing for as long as the fleet existed.
+// node applies it into `pages_evictions` and every data node's copy is
+// identical, which is what makes the applier's gate hold when coordination
+// cannot be reached. The trim read the tracker's table instead, filtered on
+// this log's stream name, and found nothing for as long as the fleet existed.
 //
 // THROUGH THE NODE HANDLE'S REPLICATED PEER, for the reason [Fence.Evicted]
 // gives: the peer is nil while an adoption swaps the file, and [store.DB.Read]

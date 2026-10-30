@@ -1,6 +1,7 @@
 package steer
 
 import (
+	"errors"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/iam"
@@ -46,8 +47,9 @@ import (
 // one past its deadline and one whose id the node has taken already are
 // answered by nobody — the asker hears what it hears from a node the turn is
 // not on — and one signed under a key the running node does not hold is
-// answered [Reply.Unverified], so the person is told what to fix rather than
-// that nobody knows.
+// answered [Reply.Unverified], so the person is told the note was not taken
+// rather than that nobody knows, and the operator reads in both nodes' logs
+// which keys the running one holds.
 //
 // # Evolution
 //
@@ -128,11 +130,58 @@ type Reply struct {
 	Reads Reads `json:"reads,omitempty"`
 
 	// Unverified is set, and Status and the seat are empty, where the
-	// running node took nothing because it could not verify the request —
-	// signed under a key it does not hold. The sentence names the keys it
-	// holds; an operator adding the key is what changes the answer.
-	Unverified string `json:"unverified,omitempty"`
+	// running node took nothing because it could not verify the request,
+	// signed under a key it does not hold. It names that node and the keys it
+	// holds, for the asking node's log and the operator who reads it: an
+	// operator adding the key there is what changes the answer, and the
+	// person steering is told only that the note was not taken.
+	Unverified *Unverified `json:"unverified,omitempty"`
+}
+
+// Unverified is the running node's account of a request it could not verify,
+// as fields rather than a sentence: the asking node logs them as its own
+// (running_node, held_keys), where a sentence the running node wrote about
+// "this node" read, in the asking node's log, as the asking node.
+type Unverified struct {
+	// Node is the id of the node running the turn, which is where the key
+	// has to be added.
+	Node string `json:"node"`
+	// HeldKeys are the keyring keys that node holds, none of which is the
+	// one the note is signed under.
+	HeldKeys []string `json:"held_keys"`
 }
 
 // Answers is the id of the request this reply answers (internal/signedask).
 func (r Reply) Answers() string { return r.Request }
+
+// ErrUnverified is a note the running node took nothing of because it could
+// not verify it ([Reply.Unverified]): a condition of the fleet rather than of
+// the request, cleared only by an operator giving the two nodes the same keys,
+// never by a wait. The steer tool refuses on it, which is how every surface
+// that tells a person a condition in their own words knows this one.
+var ErrUnverified = errors.New("steer: the node running the turn could not verify the note")
+
+// What a run's record says of the seat its turn serves, where its sealed
+// anchor names none anybody can vouch for (internal/engine, runsteer.go, and
+// ADR-0067): a note to a turn whose coding run is out is decided on that seat,
+// so such a record decides nothing, and the steer tool words each of these for
+// its own readers.
+//
+// ONLY [ErrSeatKeyUnknown] IS A CONDITION, the record's side of
+// [ErrUnverified]: the anchor is sealed under a key the reading node does not
+// hold, which an operator giving the fleet's nodes the same keys clears and no
+// wait does. A record that names no seat, and an anchor that does not verify,
+// stay so: the launch sealed the anchor once.
+var (
+	// ErrSeatUnnamed is a run's record whose anchor names no seat.
+	ErrSeatUnnamed = errors.New("steer: the run's record names no seat")
+
+	// ErrSeatUnverified is an anchor that does not verify under the key it
+	// names, or that was sealed for another turn.
+	ErrSeatUnverified = errors.New("steer: the seat the run's record names does not verify")
+
+	// ErrSeatKeyUnknown is an anchor sealed under a key the reading node does
+	// not hold.
+	ErrSeatKeyUnknown = errors.New("steer: the seat the run's record names is sealed " +
+		"under a key this node does not hold")
+)

@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/backoff"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
@@ -236,9 +237,21 @@ type Reply struct {
 	// Conv is where the delivery came from — see [ConversationRef].
 	Conv ConversationRef
 
-	// Text is the delivery as a turn would be asked it: the reply the
-	// resumed run is handed.
+	// Text is what the delivery says, in its writers' own words: each
+	// message as it was written, under its writer's name where the delivery
+	// holds more than one writer's. It is the reply the resumed run is
+	// handed, and what the person who gave it reads back as their answer
+	// ([AnswerWords.Text]), so never the prompt the delivery would wake the
+	// seat with, which the engine writes for the seat's own turn.
 	Text string
+
+	// Label is what the fence around the delivery's message says of Text,
+	// for the seat it was delivered to: where it was read, who wrote it, and
+	// how far the run may rely on it, as the trigger's own fence labelled it.
+	// The run the reply carries on reads it inside a fence of its turn's
+	// token under it (ADR-0040). Nil where the delivery holds words no
+	// surface labelled, which the run reads defused instead.
+	Label *provenance.Label
 
 	// Events are the delivery's events, oldest first.
 	Events []*events.Event
@@ -359,6 +372,7 @@ func (r Reply) answerOf(now time.Time) (AnswerWords, RecordedAnswer) {
 		// own session keep.
 		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat,
 		By: who.by, ByKind: who.kind, OperatorID: who.operatorID,
+		Label: r.Label,
 	}
 	answer := RecordedAnswer{EventIDs: r.ids(), PostedAt: r.Posted(), RecordedAt: now}
 	for _, ev := range r.Events {

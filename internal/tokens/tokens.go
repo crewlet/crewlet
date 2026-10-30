@@ -14,10 +14,10 @@
 // The LIVE window is a list of phase records the projection holds ([Record],
 // folded by [Aggregate]). Every NAMED window is company days read from the
 // replicated `usage` domain ([Cell] and [SeatDay], folded by [FoldDaily] and
-// bucketed by [BucketDaily]) — every node's day, so the answer is the same on
-// whichever node is asked and still includes a node that has left the fleet
-// (ADR-0020). The two are folded into the same [Rollup] and [Bucket], so a
-// reader moving from "the last 24 hours" to "the last 7 days" compares like
+// bucketed by [BucketDaily]) — every data node's day, so the answer is the
+// same on whichever node is asked and still includes a node that has left the
+// fleet (ADR-0020). The two are folded into the same [Rollup] and [Bucket], so
+// a reader moving from "the last 24 hours" to "the last 7 days" compares like
 // with like. What a daily row cannot answer it does not pretend to: a turn and
 // an hour are not in it, so a windowed answer has no `by_turn` and a series
 // has no hourly bucket — per-turn spend is the turn list's `sort=-tokens`.

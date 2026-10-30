@@ -50,7 +50,7 @@ import {
 } from "react";
 import { useQuery } from "./useQuery.ts";
 import { useFrameSession } from "./frameSession.ts";
-import { ADMIN, DOCLET, WORKLET, holds } from "./access.ts";
+import { ADMIN, CHATLET, DOCLET, WORKLET, holds } from "./access.ts";
 import type { SessionAnswer, Viewer } from "~/protocol/index.ts";
 import type { AssistantModelNotice } from "~/contract/assistant.ts";
 import {
@@ -85,6 +85,8 @@ export interface ViewerState {
   worklet: boolean;
   /** Whether this caller holds DOCLET: every page question. */
   doclet: boolean;
+  /** Whether this caller holds CHATLET: every room question. */
+  chatlet: boolean;
   /** The seat the directory binds this caller to, or "" — see the note above. */
   handle: string;
   /**
@@ -153,6 +155,14 @@ export interface ViewerState {
    * is known to be wrong with it: the drawer's notice, never a reason above.
    */
   assistantModel: AssistantModelNotice | null;
+  /**
+   * On a company talking on a vendor's chat, which vendor surfaces it
+   * declares, named to a reader holding Chatlet only: empty everywhere else.
+   * WHETHER the company runs Chatlet is every reader's, on the org
+   * projection (`lib/services.ts`); this is the one further fact a place
+   * naming the vendor needs (`chatVendorName`).
+   */
+  chatVendors: readonly string[];
 }
 
 /** The mounted reads of the viewer, asked again by [rereadViewer]. */
@@ -201,6 +211,7 @@ function useViewerRead(): ViewerState {
     admin: holds(grants, ADMIN),
     worklet: holds(grants, WORKLET),
     doclet: holds(grants, DOCLET),
+    chatlet: holds(grants, CHATLET),
     handle,
     owner: data?.owner ?? "",
     name: data?.name ?? "",
@@ -215,6 +226,7 @@ function useViewerRead(): ViewerState {
     configManagedBy: data?.config_managed_by ?? [],
     assistant: assistantUnavailable(data?.assistant),
     assistantModel: assistantModelNotice(data?.assistant),
+    chatVendors: data?.chat_vendors ?? [],
   };
 }
 

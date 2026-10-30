@@ -354,6 +354,39 @@ func TestARecordedEventReachesTheRecorder(t *testing.T) {
 	}
 }
 
+// AN EVENT STAMPED BY ANOTHER CLOCK IS MEASURED ON THIS ONE, AND SKEW IS NOT A
+// FAULT.
+//
+// The broker stamps a stored record and a peer stamps its member's move, and
+// the meter ends the event on its own clock. A stamp a little ahead of that
+// clock is the two clocks' skew: counted as negative it would be a bad event
+// the engine did nothing to cause, so it is zero — good — while a stamp behind
+// by more than the bound is late, whichever clock is to blame. A zero stamp
+// names no event and counts none.
+//
+// Mutation: drop the clamp, and the skewed event is bad.
+func TestAnEventStampedByAnotherClockIsMeasuredOnThisOne(t *testing.T) {
+	t.Parallel()
+	rec := newRecorded()
+	c := newClock()
+	m := objectives.NewMeter(rec, c.now)
+	m.RecordSince(objectives.ChangeVisibility, c.now().Add(-400*time.Millisecond), true)
+	m.RecordSince(objectives.ChangeVisibility, c.now().Add(50*time.Millisecond), true)
+	m.RecordSince(objectives.ChangeVisibility, c.now().Add(-2*time.Second), true)
+	m.RecordSince(objectives.ChangeVisibility, c.now(), false)
+	m.RecordSince(objectives.ChangeVisibility, time.Time{}, true)
+	good := rec.adds[key(metrics.ObjectivesEvents,
+		metrics.Attrs{"objective": "change_visibility", "outcome": "good"})]
+	bad := rec.adds[key(metrics.ObjectivesEvents,
+		metrics.Attrs{"objective": "change_visibility", "outcome": "bad"})]
+	if good != 2 || bad != 2 {
+		t.Errorf("good %d bad %d, want the in-bound and the skewed event good and the late "+
+			"and the faulted bad, with the unstamped one not counted", good, bad)
+	}
+	var nilMeter *objectives.Meter
+	nilMeter.RecordSince(objectives.ChangeVisibility, c.now(), true)
+}
+
 // THE REFERENCE PAGE SAYS WHAT THE CODE JUDGES: the table in
 // docs/reference/service-objectives.md is the catalogue's own rendering.
 func TestTheReferencePageCarriesTheCatalogue(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
+	"github.com/crewlet/crewlet/internal/api/paced"
 	"github.com/crewlet/crewlet/internal/api/workapi"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/estate"
@@ -151,6 +152,10 @@ type fakeFiles struct {
 	// readErr fails every read of a file's row, as a node that could not
 	// serve it answers.
 	readErr error
+
+	// putLimit, where set, is the cap the store holds an upload to in place
+	// of the surface's own, so a body can pass it without a gibibyte.
+	putLimit int64
 }
 
 func newFakeFiles(t *testing.T) *fakeFiles {
@@ -203,6 +208,9 @@ func (f *fakeFiles) Put(ctx context.Context, r io.Reader, limit int64,
 	m objstore.PutMeta) (objstore.Object, error) {
 	f.mu.Lock()
 	f.objects++
+	if f.putLimit > 0 {
+		limit = f.putLimit
+	}
 	f.mu.Unlock()
 	return f.store.Put(ctx, working{r: r, work: f.work, clock: f.clock}, limit, m)
 }
@@ -428,6 +436,11 @@ func TestAnUploadIsChargedOnlyWhileTheClientIsWaitedOn(t *testing.T) {
 // answers a client that went away mid-body with io.ErrUnexpectedEOF, which an
 // upload once took for the end of the file and RECORDED — the half that
 // arrived, as the file, answered 200.
+//
+// TOLD IN A PERSON'S WORDS ([paced.Unread]): the detail was the read's own
+// failure as Go spells it — "the body could not be read: unexpected EOF", "…:
+// i/o timeout" — which goes to the log. Mutation: answer err.Error() again
+// and both rows go red.
 func TestAnUploadWhoseBodyStopsIsRefusedAsTheClients(t *testing.T) {
 	t.Parallel()
 	for _, stop := range []error{errors.New("i/o timeout"), io.ErrUnexpectedEOF} {
@@ -447,8 +460,9 @@ func TestAnUploadWhoseBodyStopsIsRefusedAsTheClients(t *testing.T) {
 			answer := answerOf(t, rec)
 			detail, _ := answer["detail"].(string)
 			if answer["error"] != string(httpjson.CodeUnreadableBody) ||
-				!strings.Contains(detail, stop.Error()) {
-				t.Errorf("answer = %v, want unreadable_body naming the read's own failure", answer)
+				detail != paced.Unread || strings.Contains(detail, stop.Error()) {
+				t.Errorf("answer = %v, want unreadable_body saying %q and not "+
+					"the read's own failure", answer, paced.Unread)
 			}
 			fake.mu.Lock()
 			defer fake.mu.Unlock()
@@ -477,8 +491,10 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 		if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
 			t.Fatal(aborted)
 		}
+		answer := answerOf(t, rec)
 		if rec.Code != http.StatusRequestEntityTooLarge ||
-			answerOf(t, rec)["error"] != string(httpjson.CodeBodyTooLarge) {
+			answer["error"] != string(httpjson.CodeBodyTooLarge) ||
+			answer["detail"] != tooLargeSaid {
 			t.Fatalf("a declared length over the cap answered %d: %s", rec.Code, rec.Body.String())
 		}
 		if fake.objects != 0 {
@@ -494,8 +510,10 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 		s.upload(bytes.NewReader([]byte("x")), rec)
 		answer := answerOf(t, rec)
 		detail, _ := answer["detail"].(string)
-		if rec.Code != http.StatusBadRequest || answer["error"] != "invalid" ||
-			!strings.Contains(detail, "archived") {
+		// THE PROJECT'S STATE, answered as every surface answers it: `409
+		// conflict`, never a request to fix, and in its code's own message,
+		// since nobody has worded it for a person yet (ADR-0060).
+		if rec.Code != http.StatusConflict || answer["error"] != "conflict" || detail != "" {
 			t.Fatalf("an upload into an archived project answered %d: %s", rec.Code, rec.Body.String())
 		}
 		if fake.objects != 0 {
@@ -516,6 +534,10 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 			answerOf(t, rec)["error"] != string(httpjson.CodeNoProject) {
 			t.Fatalf("an upload into no project answered %d: %s", rec.Code, rec.Body.String())
 		}
+		// IN THE TRACKER'S WORDS, never its package's name.
+		if strings.Contains(rec.Body.String(), "worklet:") {
+			t.Errorf("the refusal tells a person the package's name: %s", rec.Body.String())
+		}
 		if fake.objects != 0 {
 			t.Error("the body was streamed into the store before the refusal")
 		}
@@ -529,10 +551,15 @@ func TestAnUploadRefusedByWhatIsKnownReadsNothing(t *testing.T) {
 // an upload too old to be named is `409 upload_expired` — the bytes are stored
 // and the write may no longer name them, and sending the request again is the
 // one thing that lands, where a 503 would invite the same doomed retry of the
-// record alone. A conflict the domain names goes through the one refusal
-// mapping ([operator.Fail]), as it would from any tool; the byte routes used to
+// record alone. A conflict the domain names, the project's state and a value
+// it refuses go through the one refusal mapping ([operator.Fail]), as they
+// would from any tool; the byte routes used to
 // answer every refusal they did not name with a 503, so a fault told a client
-// to retry for ever.
+// to retry for ever. And each is told in the writer's sentence: the codes of
+// their own answered the error's text, which opens with the package's name.
+//
+// Mutation: answer any of the file's own codes with err.Error() again and its
+// row names the package.
 func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -549,6 +576,15 @@ func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
 			http.StatusNotFound, httpjson.CodeNoProject},
 		{"a race the domain names", fmt.Errorf("%w: another write landed", statelog.ErrConflict),
 			http.StatusConflict, httpjson.CodeConflict},
+		// THE ONE RULE, BY THE ONE MAPPING: a project archived since the
+		// early read is its state, `409 conflict`, and a content type no
+		// row may hold is the request's, `422 invalid` — this route
+		// answered both `400 invalid` from an arm of its own.
+		{"a project archived since the early read", worklet.AcceptFiles("ENG", true),
+			http.StatusConflict, httpjson.CodeConflict},
+		{"a value the writer refuses", &worklet.Refusal{Mark: worklet.ErrInvalid,
+			Err: errors.New("the content type spans lines")},
+			http.StatusUnprocessableEntity, httpjson.CodeInvalid},
 		{"a fault of the node's own", errors.New("disk I/O error"),
 			http.StatusInternalServerError, httpjson.CodeInternalError},
 	} {
@@ -567,7 +603,36 @@ func TestTheWritersRefusalsReadAsTheFileRoutesDocument(t *testing.T) {
 				strings.Contains(rec.Body.String(), "disk") {
 				t.Errorf("a fault's own words reached the client: %s", rec.Body.String())
 			}
+			if detail, _ := answerOf(t, rec)["detail"].(string); strings.Contains(detail,
+				"worklet:") || strings.Contains(detail, "statelog") {
+				t.Errorf("the detail a person reads names a package: %s", detail)
+			}
 		})
+	}
+}
+
+// A PATH THE TRACKER REFUSES IS TOLD IN ITS SENTENCE: `400 bad_path` naming
+// what is wrong with it, and never the error's text, which opens with the
+// package's name ("worklet: the path … ends in a slash").
+//
+// Mutation: answer the refusal with err.Error() again and the detail names
+// the package.
+func TestARefusedPathIsToldInTheTrackersSentence(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	s := filesSurface(t, fake, chart{})
+	req := httptest.NewRequest(http.MethodPut, "/worklet/files/ENG/reports/",
+		bytes.NewReader([]byte("x")))
+	rec := httptest.NewRecorder()
+	if aborted := s.serve(rec, req, admin("ana")); aborted != nil {
+		t.Fatal(aborted)
+	}
+	answer := answerOf(t, rec)
+	detail, _ := answer["detail"].(string)
+	if rec.Code != http.StatusBadRequest || answer["error"] != string(httpjson.CodeBadPath) ||
+		!strings.Contains(detail, "ends in a slash") || strings.Contains(detail, "worklet") {
+		t.Errorf("a refused path answered %d %v, want 400 bad_path in the "+
+			"tracker's sentence", rec.Code, answer)
 	}
 }
 
@@ -854,10 +919,12 @@ func TestADownloadNoDataNodeServedIsUnavailable(t *testing.T) {
 // refuses a `min_position` on another domain's log before it waits for
 // anything, and every node refuses it the same, so it is `400 bad_params`
 // naming the log, as every read surface answers it: never a fault of this
-// node.
+// node — and in the framework's words without its name, which the error
+// carries in the middle of its sentence.
 //
 // Mutation: drop the foreign-position arm from readFailed and the download is
-// a `500 internal_error`.
+// a `500 internal_error`; answer it with the error's own text and the
+// package's name reaches the person.
 func TestADownloadFlooredOnAnotherLogIsBadParams(t *testing.T) {
 	t.Parallel()
 	fake := newFakeFiles(t)
@@ -874,6 +941,9 @@ func TestADownloadFlooredOnAnotherLogIsBadParams(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), topics.PagesLogStream) {
 		t.Errorf("the refusal does not name the log the floor is on: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "statelog:") {
+		t.Errorf("the refusal tells a person the package's name: %s", rec.Body.String())
 	}
 }
 
@@ -921,5 +991,34 @@ func TestADownloadWritesEachMebibyteInAWindowOfItsOwn(t *testing.T) {
 		if d != objstore.MiBPace {
 			t.Errorf("deadline %d was set %v out, want %v", i, d, objstore.MiBPace)
 		}
+	}
+}
+
+// tooLargeSaid is what a person is told about a file over the cap.
+const tooLargeSaid = "This file is over 1 GiB, the most a project's file can hold."
+
+// A FILE OVER THE CAP IS TOLD IN A PERSON'S WORDS, whether its length was
+// declared or the store found it while the body streamed: the detail was the
+// store's error — "objstore: the object is over its size limit (1073741824
+// bytes)", a package's name and the cap in bytes. Mutation: answer
+// err.Error() for it again and this goes red.
+func TestAFileOverTheCapIsToldInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	fake := newFakeFiles(t)
+	fake.putLimit = 4
+	s := filesSurface(t, fake, chart{})
+	rec := httptest.NewRecorder()
+	s.upload(bytes.NewReader([]byte("five!")), rec)
+	answer := answerOf(t, rec)
+	if rec.Code != http.StatusRequestEntityTooLarge ||
+		answer["error"] != string(httpjson.CodeBodyTooLarge) ||
+		answer["detail"] != tooLargeSaid {
+		t.Fatalf("a body the store found over the cap answered %d %v, want 413 "+
+			"saying %q", rec.Code, answer, tooLargeSaid)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.puts) != 0 {
+		t.Error("a file was recorded from a body over the cap")
 	}
 }

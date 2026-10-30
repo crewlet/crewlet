@@ -66,14 +66,15 @@ func Window(ctx context.Context, tx *sql.Tx, window int) ([]WindowReport, error)
 	}
 	out := make([]WindowReport, 0, 2)
 	for _, corpus := range []struct {
-		source    Source
-		statement string
+		source Source
+		read   func() (string, []any)
 	}{
-		{SourceTask, taskTextStatement},
-		{SourcePage, pageTextStatement},
+		{SourceTask, TaskTextRead},
+		{SourcePage, PageTextRead},
 	} {
 		rep := WindowReport{Source: corpus.source}
-		rows, err := tx.QueryContext(ctx, corpus.statement, embedReadChars)
+		statement, args := corpus.read()
+		rows, err := tx.QueryContext(ctx, statement, args...)
 		if err != nil {
 			return nil, fmt.Errorf("search: read the %s corpus's text: %w", corpus.source, err)
 		}
@@ -107,6 +108,14 @@ func Window(ctx context.Context, tx *sql.Tx, window int) ([]WindowReport, error)
 	}
 	return out, nil
 }
+
+// TaskTextRead is the statement [Window] reads the task corpus with, and its
+// arguments. See the package doc's "a read of another domain's table".
+func TaskTextRead() (string, []any) { return taskTextStatement, []any{embedReadChars} }
+
+// PageTextRead is the statement [Window] reads the page corpus with, and its
+// arguments.
+func PageTextRead() (string, []any) { return pageTextStatement, []any{embedReadChars} }
 
 // taskTextStatement and pageTextStatement read every source each corpus
 // embeds — the population its selection draws from ([taskLive], [pageLive]) —

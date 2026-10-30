@@ -10,8 +10,9 @@
  *
  * # Two records, because they answer two questions
  *
- * The fleet's register holds each owner's NEWEST point — the one the trim's
- * backup term reads, marked here by the policy the trim takes. It cannot say
+ * The fleet's register holds each node's NEWEST point and the operator's
+ * newest acknowledgement of each log — each log's trim reads the newest of them
+ * that covers it, marked here by the policy the trim takes. It cannot say
  * that last night's copy failed or that three were taken this week, so the
  * history is the other record: the runtime audit every `POST /backup` leaves on
  * the node that took it, failures included, for as far back as the event log
@@ -60,6 +61,7 @@ import { throughOf } from "~/lib/attribution.ts";
 import { useSeatOf, writerOf, WriterCell } from "./Audit.tsx";
 import {
   coverWords,
+  oldestRead,
   OUTCOME_WORDS,
   OWNER_KIND_WORDS,
   POLICY_WORDS,
@@ -174,7 +176,7 @@ export function BackupRecord({
   const historySeconds = useEngineHealth()?.event_history_seconds;
   const span = eventHistorySpan(historySeconds);
 
-  const newest = answer.points.find((p) => p.newest);
+  const read = oldestRead(answer.points);
   const failed = answer.history.filter((r) => r.outcome === "failed").length;
   const requested = `${answer.history.length}${answer.more ? "+" : ""}`;
   const unread = missingFrom([answer.coverage]);
@@ -190,13 +192,19 @@ export function BackupRecord({
         <StatGroup columns={owner === undefined ? 3 : 4}>
           <StatCard
             icon={<ClockGlyph size="xs" />}
-            label="Newest counted backup"
-            value={newest ? relTime(newest.taken_at, now) : EMPTY_VALUE}
+            // THE OLDEST POINT ANY LOG'S TRIM READS, not the newest: each log
+            // is trimmed against the newest counted backup that covers it, so
+            // there is one such point per log under `operator`, and the one
+            // that matters is the stalest — it is the log the backup-age alarm
+            // names first. The freshest hid a log days past its
+            // acknowledgement behind another acknowledged a minute ago.
+            label="Oldest backup a trim reads"
+            value={read ? relTime(read.point.taken_at, now) : EMPTY_VALUE}
             sub={
-              newest
-                ? `${newest.kind === "operator" ? "acknowledged by an operator" : newest.owner}${
-                    newest.bytes != null ? ` · ${fmtBytes(newest.bytes)}` : ""
-                  }`
+              read
+                ? `${read.point.kind === "operator" ? "acknowledged by an operator" : read.point.owner}${
+                    read.point.bytes != null ? ` · ${fmtBytes(read.point.bytes)}` : ""
+                  }${read.of > 1 ? ` · oldest of ${read.of}` : ""}`
                 : "none yet"
             }
           />
@@ -237,12 +245,16 @@ export function BackupRecord({
         <>
           <Card padding="none">
             <Card.Header icon={<DatabaseGlyph size="sm" />} count={answer.points.length}>
-              <Card.Title>Newest per owner</Card.Title>
+              <Card.Title>Newest per node and log</Card.Title>
             </Card.Header>
             <DataGrid<BackupPointRow>
               name="points"
               rows={answer.points}
-              rowKey={(p) => p.owner}
+              // OWNER AND REACH, because the owner alone is not a row's
+              // identity: the operator holds one acknowledgement per log, all
+              // under one owner, and a node's single row is told apart by its
+              // owner anyway.
+              rowKey={(p) => `${p.owner}/${p.covers.map((c) => c.stream).join(",")}`}
               defaultSort="-taken"
               empty={{
                 title: "Nothing has been backed up",
@@ -448,7 +460,16 @@ export function BackupRecord({
 
 /** Whether the trim reads a point, in the words that say why not. */
 function TrimCell({ point: p }: { point: BackupPointRow }) {
-  if (p.newest) return <Tag variant="success">counted · newest</Tag>;
+  if (p.newest) {
+    return (
+      <Tag
+        variant="success"
+        title="The newest counted backup of at least one log it covers, which that log’s trim reads"
+      >
+        counted · newest
+      </Tag>
+    );
+  }
   if (!p.verified) {
     return (
       <Tag variant="warning" title="Unverified, so it doesn’t count">
@@ -458,7 +479,7 @@ function TrimCell({ point: p }: { point: BackupPointRow }) {
   }
   if (p.counted) {
     return (
-      <Tag appearance="outline" title="A newer backup is the one in use">
+      <Tag appearance="outline" title="Every log it covers is read from a newer counted backup">
         counted
       </Tag>
     );

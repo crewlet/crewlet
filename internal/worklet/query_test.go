@@ -2,6 +2,7 @@ package worklet_test
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,29 @@ func TestTheTagModesAreThreeAndDefaultToAny(t *testing.T) {
 	}
 	if _, err := parse(t, map[string]any{"tag": "most:api"}); err == nil {
 		t.Error("a fourth tag mode was accepted")
+	}
+}
+
+// A TAG FILTER NAMES TAGS THE WAY A WRITE STORES THEM.
+//
+// The rows hold slugs ([worklet.TagSlug]) and a filter compares them exactly,
+// so a filter left as typed is one `tag=Regression` — the label a model read —
+// silently matches nothing under. Normalised at the parse, as the write
+// normalises, and a value with no slug in it refused by name rather than
+// answered as an empty board.
+func TestATagFilterIsNormalisedAsAWriteNormalisesIt(t *testing.T) {
+	t.Parallel()
+	got := mustParse(t, map[string]any{"tag": "all:Needs Design, API ,api"})
+	if want := []string{"needs-design", "api"}; !slices.Equal(got.Tags.Tags, want) ||
+		got.Tags.Mode != worklet.TagAll {
+		t.Errorf("tag=all:Needs Design, API ,api parsed as %+v, want %v under "+
+			"all: — each slug once, spelled as the rows hold it", got.Tags, want)
+	}
+	for _, refused := range []string{"!!!", "none:" + strings.Repeat("a", 65)} {
+		if _, err := parse(t, map[string]any{"tag": refused}); err == nil {
+			t.Errorf("tag=%s was accepted, though it names no tag a task can "+
+				"carry", refused)
+		}
 	}
 }
 

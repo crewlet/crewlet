@@ -55,12 +55,13 @@ func (a *App) overview(ctx context.Context, principal iam.Principal, kind stream
 	if !principal.Stage.MayAct() {
 		// THE AUTHORITY TABLE'S FIRST CHECK, as every question's: a person
 		// whose stage may not act reads nothing, the overview included.
-		return nil, &queries.Refusal{What: string(kind), Reason: authz.ReasonStage}
+		return nil, queries.NewRefusal(string(kind), authz.Decision{Reason: authz.ReasonStage})
 	}
 	audience := a.stream.AudienceFor(ctx, principal)
 	if !audience.Receives(kind) {
 		need, _ := stream.NeedOf(kind)
-		return nil, &queries.Refusal{What: string(kind), Reason: authz.ReasonNoGrant, Grants: need.Grants()}
+		return nil, queries.NewRefusal(string(kind),
+			authz.Decision{Reason: authz.ReasonNoGrant, Grants: need.Grants()})
 	}
 	return stream.ShapeFor(build(audience), audience), nil
 }

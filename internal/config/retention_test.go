@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -248,12 +249,13 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 //
 // The broker grants a stream its WHOLE ceiling when it creates it, so a
 // domain's floor is free space a node must have before it can boot at all. The
-// identity log grows with headcount and sign-ins and the usage log with a
-// census of seats and schedules — neither with a corpus the operator's volume
-// has anything to say about — and a ten-person company writes a few megabytes
-// to either. Held to the gibibyte the corpus-sized logs take, each would raise
-// the disk the smallest deployment needs by a gibibyte for a log it will never
-// fill.
+// identity log grows with headcount and sign-ins, the usage log with a census
+// of seats and schedules, and the Dashboard Assistant's log with the questions
+// people ask it: none of them with a corpus the operator's volume has anything
+// to say about. A ten-person company writes a few megabytes to the first two,
+// and a month of its questions fits in the assistant's 64 MiB. Held to the
+// gibibyte the corpus-sized logs take, each would raise the disk the smallest
+// deployment needs by a gibibyte for a log it will never fill.
 //
 // The floor the corpus-sized logs take belongs to them: a mutation log under a
 // gibibyte really is a window that refuses appends within a week of a company
@@ -267,13 +269,35 @@ func TestThePagesCeilingIsAQuarterOfTheMutationLogs(t *testing.T) {
 func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
 	t.Parallel()
 
-	// THE THREE CORPUS-SIZED FLOORS, read through a map rather than
+	// THE SIX CORPUS-SIZED FLOORS, read through a map rather than
 	// compared as constants: they are equal today, and `go vet` reads a
-	// constant comparison that cannot be false as a mistake.
+	// constant comparison that cannot be false as a mistake. The chat log
+	// is one of them — it grows with what the company says, as the
+	// mutation log grows with what it files. So are the artifacts log and
+	// the artifact datastore's, for the knowledge base's reasons.
 	corpus := map[string]int64{
-		"tracker_log_max_bytes":     config.TrackerLogMaxBytesFloor,
-		"pages_log_max_bytes":       config.PagesLogMaxBytesFloor,
-		"tracker_vectors_max_bytes": config.TrackerVectorsMaxBytesFloor,
+		"tracker_log_max_bytes":       config.TrackerLogMaxBytesFloor,
+		"pages_log_max_bytes":         config.PagesLogMaxBytesFloor,
+		"tracker_vectors_max_bytes":   config.TrackerVectorsMaxBytesFloor,
+		"artifacts_log_max_bytes":     config.ArtifactsLogMaxBytesFloor,
+		"artifact_data_log_max_bytes": config.ArtifactDataLogMaxBytesFloor,
+		"chat_log_max_bytes":          config.ChatLogMaxBytesFloor,
+	}
+	noCorpus := map[string]int64{
+		"iam_log_max_bytes":       config.IamLogMaxBytesFloor,
+		"usage_log_max_bytes":     config.UsageLogMaxBytesFloor,
+		"assistant_log_max_bytes": config.AssistantLogMaxBytesFloor,
+	}
+	// EVERY LOG IS IN EXACTLY ONE OF THE TWO, read off config.Stream rather
+	// than listed: a log that joins the broker with a ceiling and is in
+	// neither would otherwise pass here with its floor never weighed.
+	for name := range logCeilings(t) {
+		_, big := corpus[name]
+		_, small := noCorpus[name]
+		if big == small {
+			t.Errorf("%s must be in exactly one of the two tables, by whether "+
+				"its log grows with a corpus", name)
+		}
 	}
 	corpusFloor := config.TrackerLogMaxBytesFloor
 	for name, floor := range corpus {
@@ -284,10 +308,7 @@ func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
 				name, floor, corpusFloor)
 		}
 	}
-	for name, floor := range map[string]int64{
-		"iam_log_max_bytes":   config.IamLogMaxBytesFloor,
-		"usage_log_max_bytes": config.UsageLogMaxBytesFloor,
-	} {
+	for name, floor := range noCorpus {
 		if floor*4 > corpusFloor {
 			t.Errorf("%s's floor is %d bytes and a corpus-sized log's is %d.\n"+
 				"A ceiling is granted in full at create time, so a floor is "+
@@ -297,6 +318,25 @@ func TestALogThatGrowsWithNoCorpusTakesAFloorFarUnderOneThatDoes(t *testing.T) {
 				"gibibyte for a log it never fills.", name, floor, corpusFloor)
 		}
 	}
+}
+
+// logCeilings is the yaml name of every state log's byte ceiling, read off
+// config.Stream: each `*_max_bytes` field but `store_max_bytes`, which is the
+// broker's own limit rather than a log's.
+func logCeilings(t *testing.T) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	stream := reflect.TypeFor[config.Stream]()
+	for i := range stream.NumField() {
+		name, _, _ := strings.Cut(stream.Field(i).Tag.Get("yaml"), ",")
+		if strings.HasSuffix(name, "_max_bytes") && name != "store_max_bytes" {
+			out[name] = true
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("config.Stream declares no log ceiling, so this case weighs nothing")
+	}
+	return out
 }
 
 // THE VECTOR CHANGELOG IS SIZED FOR THE PEAK, FROM THE VOLUME.
@@ -405,6 +445,28 @@ func TestTheByteCeilingsAreBounded(t *testing.T) {
 		"usage at its floor":       {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = mib * 64 }, true, ""},
 		"usage at 64 GiB":          {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = 64 * gib }, true, ""},
 		"usage past 64 GiB":        {func(b *config.Bootstrap) { b.Stream.UsageLogMaxBytes = 64*gib + 1 }, false, "usage_log_max_bytes"},
+		// THE DASHBOARD ASSISTANT'S LOG TAKES THE SAME 64 MiB: it grows with
+		// the questions people ask it, not with a corpus.
+		"assistant below its floor": {func(b *config.Bootstrap) { b.Stream.AssistantLogMaxBytes = mib*64 - 1 }, false, "assistant_log_max_bytes"},
+		"assistant at its floor":    {func(b *config.Bootstrap) { b.Stream.AssistantLogMaxBytes = mib * 64 }, true, ""},
+		"assistant at 64 GiB":       {func(b *config.Bootstrap) { b.Stream.AssistantLogMaxBytes = 64 * gib }, true, ""},
+		"assistant past 64 GiB":     {func(b *config.Bootstrap) { b.Stream.AssistantLogMaxBytes = 64*gib + 1 }, false, "assistant_log_max_bytes"},
+		// THE ARTIFACTS LOG AND THE ARTIFACT DATASTORE'S TAKE THE CORPUS-SIZED
+		// LOGS' GIBIBYTE, each under a ceiling of its own.
+		"artifacts below a gibibyte":     {func(b *config.Bootstrap) { b.Stream.ArtifactsLogMaxBytes = gib - 1 }, false, "artifacts_log_max_bytes"},
+		"artifacts at a gibibyte":        {func(b *config.Bootstrap) { b.Stream.ArtifactsLogMaxBytes = gib }, true, ""},
+		"artifacts at 256 GiB":           {func(b *config.Bootstrap) { b.Stream.ArtifactsLogMaxBytes = 256 * gib }, true, ""},
+		"artifacts past 256 GiB":         {func(b *config.Bootstrap) { b.Stream.ArtifactsLogMaxBytes = 256*gib + 1 }, false, "artifacts_log_max_bytes"},
+		"artifact data below a gibibyte": {func(b *config.Bootstrap) { b.Stream.ArtifactDataLogMaxBytes = gib - 1 }, false, "artifact_data_log_max_bytes"},
+		"artifact data at a gibibyte":    {func(b *config.Bootstrap) { b.Stream.ArtifactDataLogMaxBytes = gib }, true, ""},
+		"artifact data at 512 GiB":       {func(b *config.Bootstrap) { b.Stream.ArtifactDataLogMaxBytes = 512 * gib }, true, ""},
+		"artifact data past 512 GiB":     {func(b *config.Bootstrap) { b.Stream.ArtifactDataLogMaxBytes = 512*gib + 1 }, false, "artifact_data_log_max_bytes"},
+		// THE CHAT LOG TAKES THE CORPUS-SIZED LOGS' GIBIBYTE: it grows with
+		// what the company says.
+		"chat below a gibibyte": {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = gib - 1 }, false, "chat_log_max_bytes"},
+		"chat at a gibibyte":    {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = gib }, true, ""},
+		"chat at 256 GiB":       {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = 256 * gib }, true, ""},
+		"chat past 256 GiB":     {func(b *config.Bootstrap) { b.Stream.ChatLogMaxBytes = 256*gib + 1 }, false, "chat_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.RunnableBootstrap()
@@ -500,7 +562,7 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.PagesLogMaxBytes, b.Stream.UsageLogMaxBytes = gib, gib
 			b.Stream.IamLogMaxBytes = 512 * mib
 		}, false, "store_max_bytes"},
-		// EACH OF THE FIVE IS IN THE SUM: ceilings that fit exactly, and
+		// EVERY STATE LOG IS IN THE SUM: ceilings that fit exactly, and
 		// the one log that tips them past the limit.
 		"tipped past it by the knowledge base's log": {func(b *config.Bootstrap) {
 			b.Stream.StoreMaxBytes = 16 * gib
@@ -537,6 +599,26 @@ func TestTheBrokerStorageLimitIsBoundedEmbeddedOnlyAndFitsItsOwnCeilings(t *test
 			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
 			b.Stream.UsageLogMaxBytes = 1 * gib
 		}, false, "usage_log_max_bytes"},
+		"tipped past it by the artifacts log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.ArtifactsLogMaxBytes = 1 * gib
+		}, false, "artifacts_log_max_bytes"},
+		"tipped past it by the artifact datastore's log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.ArtifactDataLogMaxBytes = 1 * gib
+		}, false, "artifact_data_log_max_bytes"},
+		"tipped past it by the Dashboard Assistant's log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.AssistantLogMaxBytes = 64 * mib
+		}, false, "assistant_log_max_bytes"},
+		"tipped past it by the chat log": {func(b *config.Bootstrap) {
+			b.Stream.StoreMaxBytes = 48 * gib
+			b.Stream.TrackerLogMaxBytes, b.Stream.TrackerVectorsMaxBytes = 32*gib, 16*gib
+			b.Stream.ChatLogMaxBytes = 1 * gib
+		}, false, "chat_log_max_bytes"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			b := config.RunnableBootstrap()

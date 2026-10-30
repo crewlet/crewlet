@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
 
@@ -181,10 +182,14 @@ func (r *Refiner) Reflect(ctx context.Context, t Turn) ([]events.Payload, error)
 	}
 	call, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
+	// ONE TOKEN FOR THE CALL, never a turn's: what the turn was asked is
+	// fenced under it, and what this call answers is written into a skill
+	// the seat will follow as its own.
+	fence := provenance.NewBoundary()
 	completion, err := member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: RefinementSystemPrompt},
-			{Role: llm.RoleUser, Content: buildRefinementPrompt(t, candidates)},
+			{Role: llm.RoleUser, Content: buildRefinementPrompt(fence, t, candidates)},
 		},
 	})
 	if err != nil {
@@ -350,6 +355,11 @@ func parseRefinement(completion *llm.Completion) (refinementChoice, bool) {
 // "Or nothing" is stated twice for the same reason it is in the synthesis
 // prompt: a model asked what a turn taught will always answer, and a skill
 // that grows a bullet per turn stops being a procedure.
+//
+// IT ENDS ON THE STANDING SENTENCE ON FENCES ([provenance.StandingInstruction]),
+// the one the seat's own prompt carries: what the turn was asked and what was
+// said to it reach this call fenced under a token minted for the call
+// (ADR-0040), and the sentence is what says a fence is somebody's words.
 const RefinementSystemPrompt = `You decide whether a completed agent turn taught
 one of that agent's own skills something worth writing down.
 
@@ -362,20 +372,24 @@ when what you would write is already in the skill.
 
 Write a bullet ONLY for something the skill does not say and its next reader
 would want to know: a case where following it goes wrong, a precondition it
-omits, a step that turned out to matter. ` + skillGenerality
+omits, a step that turned out to matter. ` + skillGenerality + "\n\n" + provenance.StandingInstruction
 
-// buildRefinementPrompt renders the turn and the skills it was working from.
-func buildRefinementPrompt(t Turn, candidates []Skill) string {
+// buildRefinementPrompt renders the turn and the skills it was working from:
+// what the turn was asked fenced under fence as the turn read it
+// ([describeTurn]), and the skills — the seat's own, which earlier passes
+// wrote — neutralised under it, so none of them opens or closes a fence.
+func buildRefinementPrompt(fence provenance.Boundary, t Turn, candidates []Skill) string {
 	var b strings.Builder
 	b.WriteString("The agent's skills on this turn:\n")
 	for _, sk := range candidates {
-		fmt.Fprintf(&b, "\n### %s\n%s\n\n%s\n", sk.Name, sk.Description, sk.Content)
+		b.WriteString(provenance.Neutralise(fence,
+			fmt.Sprintf("\n### %s\n%s\n\n%s\n", sk.Name, sk.Description, sk.Content)))
 	}
 	b.WriteString("\nThe turn:\n")
-	describeTurn(&b, t, t.Ask())
+	describeTurn(&b, fence, t, t.Ask(), t.AskLabel())
 	b.WriteString("\n- Tools called, in order: ")
 	b.WriteString(strings.Join(t.Event.ToolSequence, " -> "))
 	b.WriteString("\n- Outcome: ")
-	b.WriteString(t.Event.ReviewOutcome)
+	b.WriteString(provenance.Neutralise(fence, t.Event.ReviewOutcome))
 	return b.String()
 }

@@ -59,8 +59,8 @@ type Tombstone struct {
 // # Why every domain answers for its own log
 //
 // An eviction is a record on a log like any other, keyed on a position in that
-// log's own sequence space, so every node applies it into that domain's table
-// and every node's copy is identical — which is what makes the applier's
+// log's own sequence space, so every data node applies it into that domain's
+// table and every node's copy is identical — which is what makes the applier's
 // eviction gate hold when coordination cannot be reached at all. The trim reads
 // the same rows for a different question: a node stops being counted on a log
 // once its tombstone THERE is older than the fence window. Asked of another
@@ -186,8 +186,14 @@ type EvictionRefusal struct {
 	Detail string
 }
 
-func (e *EvictionRefusal) Error() string {
-	return fmt.Sprintf("statelog: %s may not be evicted: %s", e.NodeID, e.Detail)
+func (e *EvictionRefusal) Error() string { return "statelog: " + e.Tell() }
+
+// Tell is the refusal as the operator who asked reads it ([Told]).
+func (e *EvictionRefusal) Tell() string {
+	if e.NodeID == "" {
+		return e.Detail
+	}
+	return fmt.Sprintf("%s may not be evicted: %s", e.NodeID, e.Detail)
 }
 
 // PermitEviction decides whether a node may be evicted at all.
@@ -221,10 +227,10 @@ func PermitEviction(nodeID string, live []Presence, force bool) error {
 	held := slices.ContainsFunc(live, func(p Presence) bool { return p.NodeID == nodeID })
 	if held && !force {
 		return &EvictionRefusal{NodeID: nodeID, Detail: "it holds a live presence " +
-			"lease, so it is still reaching coordination and almost certainly " +
-			"running — an eviction drops every record it writes on every node and " +
+			"lease, so it's still reaching coordination and almost certainly " +
+			"running. An eviction drops every record it writes on every node and " +
 			"takes its copy out of service, which is the gesture for a node that " +
-			"is not coming back"}
+			"isn't coming back"}
 	}
 	return nil
 }
@@ -242,9 +248,9 @@ func (e *EvictionRefusal) Remedy() GateRemedy {
 	}
 	return GateRemedy{
 		Actions: []GateAction{GateWait, GateForce},
-		Detail: fmt.Sprintf("stop %s and wait for its presence lease to lapse — "+
-			"the retention report stops showing it live — then run the eviction "+
-			"again; or, if it is wedged in a way that still renews its lease, "+
+		Detail: fmt.Sprintf("stop %s and wait for its presence lease to lapse "+
+			"(the retention report stops showing it live), then run the eviction "+
+			"again; or, if it's wedged in a way that still renews its lease, "+
 			"force the eviction past the lease", e.NodeID),
 	}
 }
@@ -309,7 +315,11 @@ type ReadmissionRefusal struct {
 	Bound ReadmissionBound
 }
 
-func (e *ReadmissionRefusal) Error() string {
+func (e *ReadmissionRefusal) Error() string { return "statelog: " + e.Tell() }
+
+// Tell is the refusal as the operator who asked reads it ([Told]), every number
+// it turns on included, since the inequality is the reason.
+func (e *ReadmissionRefusal) Tell() string {
 	gone := fmt.Sprintf("records below %d may already be gone from the %s log "+
 		"(published floor %d, first surviving sequence %d)",
 		e.Bound.Held(), e.Domain, e.Bound.Floor, e.Bound.First)
@@ -322,18 +332,18 @@ func (e *ReadmissionRefusal) Error() string {
 	}
 	switch {
 	case !e.Published:
-		return fmt.Sprintf("statelog: %s may not be readmitted: it has never "+
+		return fmt.Sprintf("%s may not be readmitted: it has never "+
 			"published a position, so as far as the fleet knows it holds "+
 			"nothing, and %s", e.NodeID, gone)
 	case e.Generation < e.Bound.Generation:
-		return fmt.Sprintf("statelog: %s may not be readmitted: its last position "+
+		return fmt.Sprintf("%s may not be readmitted: its last position "+
 			"in %s%s is %d at generation %d and the log is at generation %d, a "+
-			"sequence space that no longer exists — nothing it holds can be "+
+			"sequence space that no longer exists, so nothing it holds can be "+
 			"compared with anything the log still has",
 			e.NodeID, e.Domain, reported, e.Seq, e.Generation, e.Bound.Generation)
 	}
-	return fmt.Sprintf("statelog: %s may not be readmitted: its last position in "+
-		"%s%s is %d and %s — it has to catch up before the fleet counts it again",
+	return fmt.Sprintf("%s may not be readmitted: its last position in "+
+		"%s%s is %d and %s. It has to catch up before the fleet counts it again",
 		e.NodeID, e.Domain, reported, e.Seq, gone)
 }
 
@@ -347,16 +357,40 @@ func (e *ReadmissionRefusal) Error() string {
 func (e *ReadmissionRefusal) Remedy() GateRemedy {
 	return GateRemedy{
 		Actions: []GateAction{GateWait},
-		Detail: fmt.Sprintf("start %s if it is not running: it catches up on its "+
+		Detail: fmt.Sprintf("start %s if it isn't running: it catches up on its "+
 			"own, replaying what the log still holds and adopting a peer's snapshot "+
-			"where it does not — the retention report's snapshots say whether any "+
-			"peer can donate one. Readmit it once it has applied every record up to "+
+			"where it doesn't (the retention report's snapshots say whether any "+
+			"peer can donate one). Readmit it once it has applied every record up to "+
 			"the one just before the higher of the floor and the first surviving "+
 			"sequence this refusal names: its position on that log in the retention "+
 			"report at that bound minus one or above, at the log's current "+
 			"generation", e.NodeID),
 	}
 }
+
+// ReanchorNotApplied is a readmission this node can't judge on one log: the
+// node reports its position there at a later generation than this node runs
+// the log at, so the fleet has re-anchored it and this node hasn't applied
+// that yet. A position in a generation this node doesn't hold compares to
+// nothing it has. It is a CONDITION ([ErrUnavailable]): it clears when this
+// node applies the re-anchor, and a node that already has judges it now, so
+// the remedy is to ask again or to ask another node.
+type ReanchorNotApplied struct {
+	Node   string
+	Domain string
+	// Reported is the generation the node's position is at, and Runs the
+	// one this node runs the log at.
+	Reported, Runs uint32
+}
+
+func (e *ReanchorNotApplied) Error() string {
+	return fmt.Sprintf("statelog: %s reports its %s position at generation %d and "+
+		"this node runs that log at generation %d: the fleet has re-anchored it "+
+		"and this node hasn't applied that yet", e.Node, e.Domain, e.Reported, e.Runs)
+}
+
+// Unwrap is the condition it is: one a wait, or another node, clears.
+func (e *ReanchorNotApplied) Unwrap() error { return ErrUnavailable }
 
 // PermitReadmission decides whether an evicted node may be counted again.
 //
@@ -427,12 +461,8 @@ func PermitReadmission(nodeID string, register []coord.NodePositions,
 		refusal.Generation, refusal.Seq, refusal.ReportedAt = at.Generation, at.Seq, row.At
 		switch {
 		case at.Generation > b.Generation:
-			return fmt.Errorf("statelog: %s reports its %s position at generation %d "+
-				"and this node runs that log at generation %d — the fleet has "+
-				"re-anchored it and this node has not applied that yet, so it cannot "+
-				"judge where %s stands; retry, or readmit through a node that has "+
-				"caught up: %w", nodeID, b.Domain, at.Generation, b.Generation,
-				nodeID, ErrUnavailable)
+			return &ReanchorNotApplied{Node: nodeID, Domain: b.Domain,
+				Reported: at.Generation, Runs: b.Generation}
 		case at.Generation < b.Generation, !Replayable(at.Seq, b.Held()):
 			return refusal
 		}
@@ -486,7 +516,7 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 			Reason: ReasonSuperseded,
 			Detail: fmt.Sprintf("operation %q's record for %s landed at %s and %s "+
 				"at composed position %d has superseded it, so retrying it is not "+
-				"a new gesture — start one, under a fresh operation id, if %s "+
+				"a new gesture. Start one, under a fresh operation id, if %s "+
 				"should change again", opID, nodeID, held, what, at, nodeID),
 			Position: held,
 			OpID:     opID,
@@ -494,7 +524,7 @@ func GateStanding(opID, nodeID string, readmit bool, held Position,
 	}
 	inconsistent := func(detail string) error {
 		return fmt.Errorf("statelog: operation %q's record for %s landed at %s and "+
-			"%s — the row and the ledger were written by the same apply, so this "+
+			"%s. The row and the ledger were written by the same apply, so this "+
 			"estate is not one a retry can be judged against", opID, nodeID,
 			held, detail)
 	}

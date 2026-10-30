@@ -66,6 +66,11 @@ type NodeStatus struct {
 	// see WHY a node left rotation: /ready reports a bare 503 either way,
 	// and "draining" and "cannot apply epoch 41" call for opposite
 	// responses.
+	//
+	// EMPTY when the node could not read its control plane, beside a status
+	// that is otherwise whole: the reader's fail-open answer there is serve,
+	// which is right for the node's own readiness probe and a confident lie
+	// on a peer's screen.
 	Posture string
 
 	// StartedAt is when the node's ENGINE was built, which is when the node
@@ -73,25 +78,27 @@ type NodeStatus struct {
 	// instant on its own health body.
 	StartedAt time.Time
 
-	// Projections is how many of this node's document projections have
-	// caught up, out of how many it runs. Zero of zero is a node running
-	// no native backend, which is every company on the vendor ones.
+	// AppliersReady and AppliersTotal are how many of this node's
+	// state-log appliers — one per registered domain, run from boot on
+	// every data node whatever its company runs — have caught up with
+	// their logs, out of how many it runs. Zero of zero is a node without
+	// `data`, which runs no log.
 	//
 	// # Why it is here and not on /ready
 	//
-	// A node mid-hydration is HEALTHY. It serves its dashboard, answers
-	// its probes and runs the duties it holds; what it does not do is
-	// take on NEW seats, because a seat whose tools read an incomplete
-	// projection answers "there is no such item" — and a seat acts on
-	// that. So the fact belongs where an operator asking "why is the new
-	// node holding nothing" can see it, which is the fleet view, and NOT
-	// where it would take the node out of rotation.
+	// A node still catching up is HEALTHY. It serves its dashboard,
+	// answers its probes and runs the duties it holds; what it does not do
+	// is take on NEW seats, because a seat whose tools read a copy that is
+	// behind answers "there is no such item" — and a seat acts on that.
+	// So the fact belongs where an operator asking "why is the new node
+	// holding nothing" can see it, which is the fleet view, and NOT where
+	// it would take the node out of rotation.
 	//
 	// Two integers rather than a bool: "3 of 5" and "0 of 2" are the two
 	// readings an operator needs to tell apart, and a bool collapses
 	// them.
-	ProjectionsReady int
-	ProjectionsTotal int
+	AppliersReady int
+	AppliersTotal int
 
 	// AdminPosture is this node's own `api.auth.admin`: whether it grants
 	// admin to those who hold it (`serve`) or clamps admin away and keeps
@@ -451,12 +458,12 @@ func (s NodeStatus) Meta() map[string]any {
 		// posture differs from everybody's.
 		out["admin"] = string(s.AdminPosture)
 	}
-	if s.ProjectionsTotal > 0 {
-		// OMITTED where the node runs none, so a peer on the vendor
-		// backends reads absent rather than "0 of 0" — which a reader
-		// would otherwise have to know is not a stalled projection.
-		out["projections_ready"] = s.ProjectionsReady
-		out["projections_total"] = s.ProjectionsTotal
+	if s.AppliersTotal > 0 {
+		// OMITTED where the node runs none — a node without `data` — so
+		// it reads absent rather than "0 of 0", which a reader would
+		// otherwise have to know is not a stalled applier.
+		out["appliers_ready"] = s.AppliersReady
+		out["appliers_total"] = s.AppliersTotal
 	}
 	if len(s.MCP) > 0 {
 		rows := make([]map[string]any, len(s.MCP))
@@ -605,11 +612,11 @@ func instant(v any) time.Time {
 //
 // # Absent is not zero
 //
-// A node that publishes no status — its status hook overran its budget on
-// that beat, so its heartbeat carried the placement half alone — is not a node
-// with no work in flight. Reporting it as 0 would draw an idle row for a
-// process that is simply not saying, which is the confident-zero mistake the
-// whole surface is written to avoid.
+// A node that publishes no status — its status hook did not answer within its
+// share of that beat, so its heartbeat carried the placement half alone — is
+// not a node with no work in flight. Reporting it as 0 would draw an idle row
+// for a process that is simply not saying, which is the confident-zero mistake
+// the whole surface is written to avoid.
 //
 // A key this build does not know is IGNORED rather than refused: a successor
 // sharing the fleet publishes what it adds beside what this build reads, and a
@@ -621,11 +628,11 @@ func StatusFromMeta(meta map[string]any) (NodeStatus, bool) {
 		return NodeStatus{}, false
 	}
 	status := NodeStatus{
-		InFlight:         intFromMeta(raw["in_flight"]),
-		Posture:          stringFromMeta(raw["posture"]),
-		ProjectionsReady: intFromMeta(raw["projections_ready"]),
-		ProjectionsTotal: intFromMeta(raw["projections_total"]),
-		AdminPosture:     iam.AdminPosture(stringFromMeta(raw["admin"])),
+		InFlight:      intFromMeta(raw["in_flight"]),
+		Posture:       stringFromMeta(raw["posture"]),
+		AppliersReady: intFromMeta(raw["appliers_ready"]),
+		AppliersTotal: intFromMeta(raw["appliers_total"]),
+		AdminPosture:  iam.AdminPosture(stringFromMeta(raw["admin"])),
 	}
 	status.Draining, _ = raw["draining"].(bool)
 	if at, err := time.Parse(time.RFC3339, stringFromMeta(raw["started_at"])); err == nil {

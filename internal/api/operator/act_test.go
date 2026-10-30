@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -22,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/modelnote"
@@ -71,6 +74,9 @@ type recordingWork struct {
 	actors  []builtin.Actor
 	opIDs   []string
 	taskIDs []string
+	// fields is every create's custom-field values, as the tool encoded
+	// them for the writer.
+	fields  []map[string]json.RawMessage
 	outcome statelog.Outcome
 	// caveats is what every create answers it was not refused for.
 	caveats []caveat.Caveat
@@ -99,6 +105,7 @@ func (w recordingWriter) CreateTask(_ context.Context, opID string, task worklet
 	w.w.actors = append(w.w.actors, w.actor)
 	w.w.opIDs = append(w.w.opIDs, opID)
 	w.w.taskIDs = append(w.w.taskIDs, task.ID)
+	w.w.fields = append(w.w.fields, task.Fields)
 	outcome := w.w.outcome
 	if outcome == "" {
 		outcome = statelog.OutcomeApplied
@@ -126,6 +133,13 @@ func (r *recordingWork) writes() ([]builtin.Actor, []string) {
 	return append([]builtin.Actor(nil), r.actors...), append([]string(nil), r.opIDs...)
 }
 
+// fieldsFiled is every create's custom-field values, in order.
+func (r *recordingWork) fieldsFiled() []map[string]json.RawMessage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]map[string]json.RawMessage(nil), r.fields...)
+}
+
 // filed is the id of every task a create was asked to file, in order.
 func (r *recordingWork) filed() []string {
 	r.mu.Lock()
@@ -144,7 +158,8 @@ func actSurface(t *testing.T, work *recordingWork) *operator.Server {
 				Reader: stubPageReader{}, Writer: stubPageWriter{},
 			},
 		}),
-		Org: company,
+		Org:       company,
+		Authorize: builtin.Decide(leadsNobody{}),
 	})
 }
 
@@ -546,7 +561,11 @@ func TestAReadToolIsRefusedOnTheActTransport(t *testing.T) {
 	}
 	// AND WHAT THE TABLE WOULD NEVER ADMIT IS NOT OFFERED: a screen enables
 	// exactly the controls a press of could be served.
-	if acts, _ := s.Acts(t.Context(), reader); slices.Contains(acts, worklet.CreateWorkItemTool) {
+	// THE ERROR IS READ: a list that could not be decided is nil, which
+	// contains nothing and passed this check while it decided nothing.
+	if acts, err := s.Acts(t.Context(), reader); err != nil {
+		t.Errorf("Acts for a reader: %v", err)
+	} else if slices.Contains(acts, worklet.CreateWorkItemTool) {
 		t.Errorf("a reader is offered %v, including a create the table refuses them", acts)
 	}
 	status, answer = act(t, guarded(s), "founder", "no_such_tool",
@@ -589,6 +608,8 @@ func TestAFormPostCannotReachTheActTransport(t *testing.T) {
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
 		{"two objects", "application/json", good + good, newKey(),
 			http.StatusBadRequest, httpjson.CodeInvalidBody},
+		{"arguments that are not an object", "application/json",
+			`{"args":["title"]}`, newKey(), http.StatusBadRequest, httpjson.CodeInvalidBody},
 		{"no operation key", "application/json", good, "",
 			http.StatusBadRequest, httpjson.CodeOpIDInvalid},
 		{"a key that is not an operation id", "application/json", good, "r-1",
@@ -719,6 +740,70 @@ func TestAToolRefusalIsAnsweredByItsClass(t *testing.T) {
 	}
 }
 
+// A TOOL REFUSED UNDER AN If-Match HEADER IS ANSWERED AS [operator.FailTool]
+// ANSWERS IT, BUT FOR A STALE VERSION, which is HTTP's failed precondition
+// (`412 version_moved`, [operator.FailIfMatched]); and either way the tool's
+// own sentence is told to the model that made the call and is never in the
+// person's answer. A route that folded the header answers both halves through
+// one function ([operator.FailToolIfMatched]), so the header moves the status
+// of a stale version and nothing about who hears which words.
+//
+// Mutation: answer the stale class 409 under the header, any other class
+// differently from FailTool, or drop FailToolIfMatched's modelnote.Tell, and
+// this goes red naming it.
+func TestAToolRefusedUnderIfMatchIsFailToolsAnswerButForAStaleVersion(t *testing.T) {
+	t.Parallel()
+	const model = "update_work_item refused that: the model's sentence, naming what to send."
+	answer := func(fail func(http.ResponseWriter, *http.Request, tools.Result, string,
+		httpjson.Detail), cause error) (*httptest.ResponseRecorder, string) {
+
+		ctx, heard := modelnote.Expect(t.Context())
+		r := httptest.NewRequestWithContext(ctx, http.MethodPatch, "/worklet/items/ENG-1", nil)
+		rec := httptest.NewRecorder()
+		// ANY PERSON'S WORDS: what is held is that both answers carry them.
+		fail(rec, r, tools.Result{Failed: true, Output: model, Cause: cause,
+			PersonRefusal: caveat.NotAnOption()}, "the-key",
+			httpjson.Detail{"tool": worklet.UpdateWorkItemTool})
+		return rec, heard.Said()
+	}
+	causes := map[string]error{
+		"an outcome nobody can establish": crewletmcp.ErrOutcomeUnknown,
+		"an unclassified failure":         errors.New("a tool that forgot to classify"),
+	}
+	for _, class := range crewletmcp.Refusals {
+		causes[string(class)] = crewletmcp.Classify(class, errors.New("the reason"))
+	}
+	for name, cause := range causes {
+		plain, toldPlain := answer(operator.FailTool, cause)
+		matched, toldMatched := answer(operator.FailToolIfMatched, cause)
+		if toldMatched != model || toldPlain != model {
+			t.Errorf("%s: the model heard %q under If-Match and %q without it, want "+
+				"the tool's sentence both times", name, toldMatched, toldPlain)
+		}
+		if strings.Contains(matched.Body.String(), "refused that") {
+			t.Errorf("%s: the person's answer under If-Match carries the model's "+
+				"sentence: %s", name, matched.Body)
+		}
+		if name == string(crewletmcp.RefusalStaleVersion) {
+			body, class := decode(t, matched), decode(t, plain)
+			if matched.Code != http.StatusPreconditionFailed ||
+				body["error"] != string(httpjson.CodeVersionMoved) ||
+				body["detail"] != class["detail"] || body["tool"] != worklet.UpdateWorkItemTool {
+				t.Errorf("a stale version under If-Match answered %d %v, want 412 "+
+					"version_moved carrying the person's words and what it was about",
+					matched.Code, body)
+			}
+			continue
+		}
+		if matched.Code != plain.Code || matched.Body.String() != plain.Body.String() ||
+			matched.Header().Get("Retry-After") != plain.Header().Get("Retry-After") {
+			t.Errorf("%s: under If-Match %d %s, and through FailTool %d %s: only a "+
+				"stale version may differ", name, matched.Code, matched.Body, plain.Code,
+				plain.Body)
+		}
+	}
+}
+
 // THE LARGEST PAGE THE KNOWLEDGE BASE ACCEPTS FITS THE BODY, as the browser
 // sends it: JSON.stringify escapes a quote, a backslash and a newline to two
 // bytes each, so a legal page of nothing but those doubles on the wire, and a
@@ -828,6 +913,48 @@ func (p *positionedPages) Comment(ctx context.Context, actor doclet.Actor, id st
 		Outcome:  statelog.OutcomePending,
 		Position: statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 2, Seq: 88},
 	}}, err
+}
+
+// A PAGE CREATE NOBODY ANSWERED NAMES WHERE TO LOOK.
+//
+// A new page has no id to name: write_page addresses it by its container and
+// its title, so the answer to a create whose outcome nobody can establish names
+// the container beside the tool — the object to read to see whether the page
+// landed. It named the tool alone, because no declared object argument covered
+// a page that does not exist yet.
+//
+// Mutation: drop `container` from the pages domain's objects (builtin's
+// writerclass.go) and the answer names no container.
+func TestAPageCreateNobodyAnsweredNamesItsContainer(t *testing.T) {
+	t.Parallel()
+	kb := &unansweredPages{}
+	s := newSurface(t, operator.Options{
+		Halves: fixed(operator.Halves{Pages: builtin.PageDeps{Reader: kb, Writer: kb}}),
+		Org:    company,
+	})
+	body := `{"args":{"container":"ENG","title":"Rollback runbook","body":"step one"}}`
+	status, answer := act(t, guarded(s), "founder", builtin.WritePageTool,
+		"application/json", body, newKey())
+	if status != http.StatusServiceUnavailable ||
+		answer["outcome"] != string(statelog.OutcomeUnknown) {
+
+		t.Fatalf("a create nobody answered answered %d %v, want 503 with outcome "+
+			"unknown", status, answer)
+	}
+	if answer["tool"] != builtin.WritePageTool || answer["container"] != "ENG" {
+		t.Errorf("the answer names tool %v and container %v, want %s in ENG — "+
+			"nothing else in it says where the page would be", answer["tool"],
+			answer["container"], builtin.WritePageTool)
+	}
+}
+
+// unansweredPages is a knowledge base whose create was sent to a data node
+// that never answered.
+type unansweredPages struct{ recordingPages }
+
+func (*unansweredPages) Create(context.Context, doclet.Actor, doclet.NewPage) (doclet.Written, error) {
+	return doclet.Written{}, fmt.Errorf("%w (pages.create, asked of data-b)",
+		estate.ErrOutcomeUnknown)
 }
 
 // AN INTERRUPTED CALL SAYS, IN A FIELD, THAT NOBODY KNOWS WHETHER IT LANDED.
@@ -1033,5 +1160,112 @@ func TestTheActRouteTellsTheModelTheNoteAndNeverThePerson(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "bogus") {
 		t.Errorf("the person's answer carries the model's note: %s", rec.Body)
+	}
+}
+
+// AN OPERATOR CALL'S NUMBERS ARRIVE EXACTLY, on both of this surface's
+// transports, as they do from a seat.
+//
+// Every other path into these tools reads a call's arguments through
+// json.Number — a seat's from its provider — and the tools are written for
+// that. The act and MCP transports decoded with the default decoder, which
+// turns every JSON number into a float64 first, so an integer past 2^53 was
+// rounded before any tool saw it: a whole-number custom-field value a person
+// typed was filed as one they never typed, and nothing said so.
+//
+// Mutation: decode the act envelope's `args` as a map with its own decoder, or
+// the MCP handler's with json.Unmarshal, and that transport's case goes red.
+func TestAnOperatorCallsNumbersArriveExactly(t *testing.T) {
+	t.Parallel()
+	const past = "9007199254740993" // 2^53 + 1, the first integer a float64 rounds
+	args := map[string]any{"title": "Rotate the signing key", "project": "ENG",
+		"fields": map[string]any{"points": json.Number(past)}}
+	filedExactly := func(t *testing.T, work *recordingWork) {
+		t.Helper()
+		filed := work.fieldsFiled()
+		if len(filed) != 1 {
+			t.Fatalf("the create reached the writer %d times", len(filed))
+		}
+		if got := string(filed[0]["points"]); got != past {
+			t.Errorf("points was filed as %s, want %s as it was sent", got, past)
+		}
+	}
+
+	t.Run("act", func(t *testing.T) {
+		t.Parallel()
+		work := &recordingWork{}
+		raw, err := json.Marshal(map[string]any{"args": args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, answer := act(t, guarded(actSurface(t, work)), "founder",
+			worklet.CreateWorkItemTool, "application/json", string(raw), newKey())
+		if status != http.StatusOK {
+			t.Fatalf("the act answered %d %v", status, answer)
+		}
+		filedExactly(t, work)
+	})
+
+	t.Run("mcp", func(t *testing.T) {
+		t.Parallel()
+		work := &recordingWork{}
+		dir := &directory{people: map[string]iam.Principal{"founder": founder}}
+		server := httptest.NewServer(dir.middleware(actSurface(t, work).MCPHandler()))
+		t.Cleanup(server.Close)
+		sess := connectAs(t, server.URL+operator.MCPPath, "founder")
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
+		res, err := sess.CallTool(ctx, &mcp.CallToolParams{
+			Name: worklet.CreateWorkItemTool, Arguments: args,
+		})
+		if err != nil {
+			t.Fatalf("CallTool: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("the create was refused: %+v", res.Content)
+		}
+		filedExactly(t, work)
+	})
+}
+
+// A BODY THAT DOES NOT DECODE IS ANSWERED BY ITS CODE, AND LOGGED IN WORDS
+// ([plainjson.Unreadable]). The route's own refusal names the tool and says
+// nothing else (ADR-0060), so a person reads invalid_body's own sentence; what
+// the body got wrong is what this node logs (operator_act_body_refused), which
+// carried encoding/json's own sentence after the envelope's shape (`invalid
+// character '}' looking for beginning of value`, `json: unknown field
+// "op_id"`, "json: cannot unmarshal array into Go value of type
+// map[string]interface {}"). Mutation: wrap the decoder's error again in
+// decodeAct, or the arguments' error, and its row goes red; answer the error
+// as the refusal's detail, and every row does.
+func TestAnActBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ body, says string }{
+		{`{"args":`, "the body isn't valid JSON: it ends too soon. Send one JSON " +
+			`object, {"args": {…}}, with the operation in the Idempotency-Key header`},
+		{`{"args":{},"tool":"x"}`, `in the body, "tool" isn't a field this takes. ` +
+			`Send one JSON object, {"args": {…}}, with the operation in the ` +
+			"Idempotency-Key header"},
+		{`{"args":[1]}`, `"args" in the body is a list where an object belongs`},
+		{`{"args":{}} {}`, "the body has more after its JSON value, which is all it " +
+			"may hold"},
+		{`{"args":{}}}`, "the body has more after its JSON value, which is all it " +
+			"may hold"},
+	} {
+		if _, err := operator.DecodeAct([]byte(tc.body)); err == nil || err.Error() != tc.says {
+			t.Errorf("%s is logged as %v, want %q", tc.body, err, tc.says)
+		}
+		work := &recordingWork{}
+		status, answer := act(t, guarded(actSurface(t, work)), "founder",
+			worklet.CreateWorkItemTool, "application/json", tc.body, newKey())
+		if status != http.StatusBadRequest || answer["error"] != string(httpjson.CodeInvalidBody) ||
+			answer["tool"] != worklet.CreateWorkItemTool {
+			t.Errorf("%s answered %d %v, want 400 invalid_body naming the tool", tc.body,
+				status, answer)
+		}
+		if detail, has := answer["detail"]; has {
+			t.Errorf("%s answered the detail %v: the route's own refusal says its "+
+				"code's sentence alone", tc.body, detail)
+		}
 	}
 }

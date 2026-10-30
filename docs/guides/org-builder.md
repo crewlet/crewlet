@@ -142,9 +142,13 @@ the engine runs) or **people** (human seats). A template never invents a
 contact identity, so human leads are created without one, and the only identity
 written is the one you type for your own seat — which is optional too: leave it
 empty if you will work only through the dashboard. A human seat with no contact
-identity is legitimate, but no agent can @-mention that person, so the review
-names each one and the configuration keeps warning about it at the seat's
-`contact` until an identity is added.
+identity is legitimate. On the engine's own chat an agent mentions a person by
+their seat's handle — a lead's roster gives each human report as `@handle`, and
+the note on human colleagues says to mention them there — so nothing is missing;
+on a company that talks on Mattermost or Slack, nothing addressed to the seat
+there reaches anybody, so
+the configuration warns about it at the seat's `contact` — and the review lists
+that warning with the others — until an id on that workspace is added.
 
 Everything the template writes is one change: undo takes you back to the form.
 From there the organization is edited like any other, and **Review and save**
@@ -803,6 +807,14 @@ is nothing to retry until it has landed; the seat's page in the org chart says
 what holds it. The same refusal meets a held seat replaced
 ([Replacing a seat](#replacing-a-seat)), and a document written outside the
 builder that makes a held human seat an agent's.
+
+A node that cannot read who holds the seats a change removes refuses it
+`503 seat_holders_unavailable`, and nothing is written. Where waiting clears
+it (the engine names a wait), the check asks again by itself and reads *Could
+not reach the engine to check* meanwhile; where waiting does not (the node has
+been evicted, or its identity log is full), each seat the change removes shows
+the engine's own sentence for what clears it, and stays so until the draft
+changes or the node can read them again.
 
 Removing more than half of the saved company's seats asks for an
 acknowledgement first.

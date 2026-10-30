@@ -49,6 +49,8 @@ function refusalWords(refusal: ConfigRefusal, name: string): string {
       return `This node is shutting down and stored nothing${refusal.detail ? `: ${sentence(refusal.detail)}` : "."} Save again once another node answers.`;
     case "starting":
       return "This node is still starting and stored nothing. Save again in a moment.";
+    case "unavailable":
+      return refusal.detail;
     case "unsettled":
       return `${unsettledSentence(refusal)} Whether ${name} changed is not known. Save again: the page checks what the company holds before it writes.`;
     case "problems":

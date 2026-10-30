@@ -21,14 +21,14 @@ import (
 //
 // # Sealed at the WRITER, before publication
 //
-// The log is the write-ahead log and every node's rows are derived from it,
-// so a value sealed anywhere later would already have crossed the broker, the
-// cluster port and every node's deferred table in the clear. Sealing it before
-// the record is formed is what keeps it ciphertext on the log, in every node's
-// rows, in every snapshot a node donates and in every backup — and it is what
-// keeps the identity claim a byte comparison: every node writes the same
-// ciphertext, so a determinism check compares content rather than counting
-// rows it cannot read. The APPLIER never opens anything.
+// The log is the write-ahead log and every data node's rows are derived from
+// it, so a value sealed anywhere later would already have crossed the broker,
+// the cluster port and every data node's deferred table in the clear. Sealing
+// it before the record is formed is what keeps it ciphertext on the log, in
+// every data node's rows, in every snapshot a node donates and in every backup
+// — and it is what keeps the identity claim a byte comparison: every data node
+// writes the same ciphertext, so a determinism check compares content rather
+// than counting rows it cannot read. The APPLIER never opens anything.
 //
 // # Under the fleet keyring, the one every node already holds
 //
@@ -120,7 +120,7 @@ type Sealer struct {
 //
 // A NIL CIPHER IS REFUSED rather than read as "seal nothing": a sealer that
 // passed values through would write cleartext names, addresses and second
-// factors into the log, every node's database, every snapshot and every
+// factors into the log, every data node's database, every snapshot and every
 // backup — and no node runs without a keyring, so a nil here is a wiring
 // mistake.
 //
@@ -133,7 +133,7 @@ func NewSealer(cipher secrets.Cipher) (*Sealer, error) {
 	if cipher == nil {
 		return nil, errors.New("iamdomain: a sealer with no keyring would " +
 			"write cleartext names, addresses and second factors into the " +
-			"log, every node's database, every snapshot and every backup")
+			"log, every data node's database, every snapshot and every backup")
 	}
 	probe, err := cipher.Encrypt("", "iam_sealer/active-key")
 	if err != nil {
@@ -200,8 +200,8 @@ func AADFor(personID string, field Field) string {
 // # Sealed, because in the clear it is a second factor everybody holds
 //
 // The estate a seed is written to is replicated, snapshotted, backed up and
-// donated to joining peers: in the clear it was a second factor every node,
-// every artefact and every donor held, and read off the cluster port by
+// donated to joining peers: in the clear it was a second factor every data
+// node, every artefact and every donor held, and read off the cluster port by
 // anybody who could read a stream.
 //
 // # Bound to the credential as well as the person

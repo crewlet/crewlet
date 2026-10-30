@@ -15,7 +15,7 @@ import (
 // An applier runs on every data node at its own pace, and the identity
 // estate, the shares and the org chart are other logs and another epoch,
 // applied at independent paces. A role read at apply time would be read at a
-// different moment on every node, and two nodes would give one record two
+// different moment on every data node, and two nodes would give one record two
 // verdicts. So whatever needs IAM or the chart (the role, the actor's kind,
 // the limits in force) is decided once, where the write arrives, and carried;
 // what is deterministic from the log (the schema, the row's creator, a guard,

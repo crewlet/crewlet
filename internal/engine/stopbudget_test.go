@@ -3,7 +3,9 @@ package engine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,12 +34,14 @@ import (
 // a share of the allowance no step before it can spend — carved out of the
 // allowance rather than added to it. Each step used to wait out a bound of its
 // own, so the stop spent their sum, close to an orchestrator's kill grace and
-// past it once the flushes behind them ran. Here every round trip to the lease
-// and fleet stores stalls for five seconds once the stop begins, against a
-// lease TTL of three — an allowance of one second, the admission's share
-// included — so the old sum is past half a minute and one allowance is a
-// second. (The stream stays up: the native backends this company runs are
-// reached through the broker's own client, which a stand-in cannot be.)
+// past it once the flushes behind them ran. Here every read and give-back the
+// lease and fleet stores are asked for stalls once the stop begins — until the
+// deadline its context carries or, where it carries none, for a bound of the
+// stand-in's own: a whole lease TTL, past which every lease the stop races has
+// lapsed anyway. The TTL is [startedLeaseTTL], so the allowance is a third of
+// it, the admission's share included, where the old sum was a bound per step.
+// (The stream stays up: the native backends this company runs are reached
+// through the broker's own client, which a stand-in cannot be.)
 //
 // A RECONCILE PASS IS IN FLIGHT WHEN THE STOP BEGINS, under the hold on its
 // surface: the integration loop's first grant is held back until then. The
@@ -54,11 +58,27 @@ import (
 // client's bound like any round trip in flight when a stop begins, and a case
 // that took the store away first measured whether one of those happened to
 // start in between.
+//
+// THE ALLOWANCE IS READ OFF THE DEADLINES THE STOP HANDED ITS ROUND TRIPS,
+// never off the stop's wall clock. The clock is the allowance plus every
+// local step of the teardown — the loops it ends, the flushes, the native
+// half and the stream it closes — which a loaded machine stretches past any
+// margin, and a margin wide enough for that would let a step that waited out
+// a bound of its own through too. The deadlines are exact, whatever the
+// scheduler does: a step begun at an instant is given the rest of the one
+// allowance ([seat.StopStep]), which is spent only while a step is in flight,
+// so the time covered by the stalled steps' spans from start to deadline is at
+// most the allowance less the admission's share — up to the start of the step
+// whose deadline is latest the covered time is time a step was in flight, and
+// from there that step was handed what was left — and the admission's own
+// bound adds at most its share. So the verdict is that measure, and that no
+// round trip ended on the stand-in's own bound: a step the stop left
+// unbounded, whose span no deadline covers.
 func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-		b.Coordination.LeaseTTLSeconds = 3
+		b.Coordination.LeaseTTLSeconds = startedLeaseTTL.Seconds()
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
 	if err != nil {
@@ -71,8 +91,9 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 		return e != nil && e.ShuttingDown()
 	}
 	pass := &heldPass{granted: make(chan struct{})}
-	back.Coord = stallingLeases{coordBackend: back.Coord, gone: gone, pass: pass}
-	back.Fleet = stallingFleet{fleet: back.Fleet, gone: gone}
+	record := &stalls{ownBound: startedLeaseTTL}
+	back.Coord = stallingLeases{coordBackend: back.Coord, gone: gone, pass: pass, stalls: record}
+	back.Fleet = stallingFleet{fleet: back.Fleet, gone: gone, stalls: record}
 
 	e, err := engine.New(t.Context(), engine.Options{
 		Bootstrap: b, Company: parsedCompany(t, companyDoc), Backends: back,
@@ -84,12 +105,14 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 	if err := e.Start(t.Context()); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	// THE PREMISE IS WAITED FOR, never read once: Start returns before the
-	// seat host's first claim lands — its sweep withholds claims until the
-	// state log is hydrated — so a single read straight after it raced the
-	// claim, and failed the case whenever hydration lagged (alone, under
-	// -race) before anything it is about had happened.
-	waitHeld(t, e, 1)
+	// THE PREMISE IS WAITED FOR, never read once: a node claims its seats
+	// once its appliers are level with their logs, which on a loaded
+	// machine or under -race comes after Start returns. Read straight
+	// after it, the case failed its premise whenever the claim gate opened
+	// a moment late, before anything it is about had happened.
+	waitFor(t, "both seats to be claimed", func() bool {
+		return len(e.Node().Host().Held()) == 2
+	})
 	select {
 	case <-pass.granted:
 	case <-time.After(30 * time.Second):
@@ -97,32 +120,182 @@ func TestAStopAgainstAnUnreachableStoreSpendsOneAllowance(t *testing.T) {
 			"so no pass is in flight for the stop to wait on")
 	}
 
-	started := time.Now()
 	e.Stop(context.Background())
-	took := time.Since(started)
-	allowance := seat.StopAllowance(3 * time.Second)
-	// THE ALLOWANCE, and room for the local teardown around it: one stalled
-	// round trip alone is five seconds, so a stop that left even one of its
-	// steps to a bound of its own would be past this.
-	if limit := allowance + 3*time.Second; took > limit {
-		t.Fatalf("the stop took %v against a store that answers nothing, past "+
-			"its %v allowance and %v of local teardown: its round trips each "+
-			"waited out a bound of their own", took, allowance, limit-allowance)
+	calls := record.all()
+
+	// THE PREMISE: the stop made every kind of round trip the verdict is
+	// about — a lease given back by the drain, the duties' read, the
+	// admission's withdrawal — and the held pass gave its hold back as a
+	// step of the stop, ended when the allowance ran out. Without the last,
+	// the case would pass with the give-back it exists for never reached.
+	for _, want := range []struct {
+		what string
+		is   func(stalled) bool
+	}{
+		{"a presence or seat lease given back", func(c stalled) bool {
+			return c.op == "release" && (coord.ClassNode.Holds(c.resource) ||
+				coord.ClassSeat.Holds(c.resource))
+		}},
+		{"a duty read before its release", func(c stalled) bool {
+			return c.op == "get" && coord.ClassWorker.Holds(c.resource)
+		}},
+		{"the admission withdrawn", func(c stalled) bool { return c.op == "forget_admission" }},
+		{"the held pass's hold given back and ended by the stop", func(c stalled) bool {
+			return c.op == "release" && c.ended == endedByCaller &&
+				strings.HasPrefix(c.resource, coord.WorkerResource("setup-provision-"))
+		}},
+	} {
+		if !slices.ContainsFunc(calls, want.is) {
+			t.Errorf("the premise: the stop made no round trip that is %s; it made %v",
+				want.what, calls)
+		}
+	}
+	// NO ROUND TRIP WAITED OUT A BOUND OF ITS OWN: one stalled call is a
+	// whole TTL, three times the whole allowance.
+	for _, c := range calls {
+		if c.ended == endedByOwnBound {
+			t.Errorf("%s %s carried no deadline and waited out the store's own %v: "+
+				"the stop left it a bound of its own", c.op, c.resource, record.ownBound)
+		}
+	}
+	// AND THE STEPS' DEADLINES COVER ONE ALLOWANCE BETWEEN THEM.
+	allowance := seat.StopAllowance(startedLeaseTTL)
+	if covered := coveredByDeadlines(calls); covered > allowance {
+		t.Errorf("the stop's round trips were handed deadlines covering %v between "+
+			"them, past its %v allowance: its steps did not share one: %v",
+			covered, allowance, calls)
 	}
 }
 
 // errGone is what the stalled store answers once its stall is over.
 var errGone = errors.New("the coordination store has lost quorum")
 
-// stall waits out a round trip to a store that has gone away: until the
-// request's context ends, or five seconds — a client's own timeout.
-func stall(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(5 * time.Second):
+// stallEnd is how a round trip to the gone store ended.
+type stallEnd int
+
+const (
+	// endedByDeadline is a round trip whose context's deadline passed:
+	// the bound the stop handed it.
+	endedByDeadline stallEnd = iota
+	// endedByCaller is one whose context was cancelled before any
+	// deadline — a loop the teardown stopped, or a give-back whose step of
+	// the allowance ran out — which is its caller's bound, not one of its
+	// own.
+	endedByCaller
+	// endedByOwnBound is one that carried no deadline and waited out the
+	// stand-in's own bound ([stalls.ownBound]).
+	endedByOwnBound
+)
+
+func (e stallEnd) String() string {
+	switch e {
+	case endedByDeadline:
+		return "deadline"
+	case endedByCaller:
+		return "caller"
+	default:
+		return "own bound"
+	}
+}
+
+// stalled is one round trip the gone store answered: what it was, when it
+// began, the deadline its context carried (zero for none) and how it ended.
+type stalled struct {
+	op, resource string
+	start        time.Time
+	deadline     time.Time
+	ended        stallEnd
+}
+
+func (c stalled) String() string {
+	span := "no deadline"
+	if !c.deadline.IsZero() {
+		span = c.deadline.Sub(c.start).Round(time.Millisecond).String()
+	}
+	return fmt.Sprintf("%s %s (%s, ended by %s)", c.op, c.resource, span, c.ended)
+}
+
+// stalls records every round trip the gone store answers.
+type stalls struct {
+	// ownBound is how long a request whose context carries no deadline is
+	// held before it fails on its own: the stand-in for a client's own
+	// timeout, set far past every wait a caller ends. The longest of those
+	// is a give-back the teardown ends when the allowance runs out, an
+	// allowance and the stop's own local steps after the stall began, so a
+	// request held a whole TTL — three allowances — is one the stop left a
+	// bound of its own.
+	ownBound time.Duration
+
+	mu    sync.Mutex
+	calls []stalled
+}
+
+// stall waits out a round trip to a store that has gone away and records it.
+//
+// A CONTEXT WITH A DEADLINE IS ANSWERED ONLY WHEN IT ENDS — no timer of the
+// stand-in's races it, so a goroutine the scheduler starves cannot pick the
+// stand-in's own bound over the deadline it was handed. One with none ends
+// with its context or [stalls.ownBound], whichever comes first.
+func (s *stalls) stall(ctx context.Context, op, resource string) error {
+	c := stalled{op: op, resource: resource, start: time.Now()}
+	c.deadline, _ = ctx.Deadline()
+	if !c.deadline.IsZero() {
+		<-ctx.Done()
+		c.ended = endedByCaller
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			c.ended = endedByDeadline
+		}
+	} else {
+		select {
+		case <-ctx.Done():
+			c.ended = endedByCaller
+		case <-time.After(s.ownBound):
+			c.ended = endedByOwnBound
+		}
+	}
+	s.mu.Lock()
+	s.calls = append(s.calls, c)
+	s.mu.Unlock()
+	if c.ended == endedByOwnBound {
 		return errGone
 	}
+	return ctx.Err()
+}
+
+// all is every round trip recorded so far.
+func (s *stalls) all() []stalled {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.calls)
+}
+
+// coveredByDeadlines is the measure of the union of the spans from each round
+// trip's start to the deadline it ended on: how much time the stop's bounds
+// covered between them, however they overlapped. A span whose deadline is not
+// after its start — a step begun with nothing of the allowance left, handed a
+// context already ended — covers nothing.
+func coveredByDeadlines(calls []stalled) time.Duration {
+	type span struct{ from, to time.Time }
+	spans := make([]span, 0, len(calls))
+	for _, c := range calls {
+		if c.ended == endedByDeadline && c.deadline.After(c.start) {
+			spans = append(spans, span{c.start, c.deadline})
+		}
+	}
+	slices.SortFunc(spans, func(a, b span) int { return a.from.Compare(b.from) })
+	var covered time.Duration
+	var reach time.Time
+	for _, sp := range spans {
+		from := sp.from
+		if from.Before(reach) {
+			from = reach
+		}
+		if sp.to.After(from) {
+			covered += sp.to.Sub(from)
+			reach = sp.to
+		}
+	}
+	return covered
 }
 
 type coordBackend = coord.Backend
@@ -132,8 +305,9 @@ type coordBackend = coord.Backend
 // surface's hold until then ([heldPass]).
 type stallingLeases struct {
 	coordBackend
-	gone func() bool
-	pass *heldPass
+	gone   func() bool
+	pass   *heldPass
+	stalls *stalls
 }
 
 // heldPass is the reconcile pass a stop begins in the middle of: granted is
@@ -167,14 +341,14 @@ func (l stallingLeases) TryAcquire(ctx context.Context, resource string,
 
 func (l stallingLeases) Release(ctx context.Context, resource, owner string, epoch int64) (bool, error) {
 	if l.gone() {
-		return false, stall(ctx)
+		return false, l.stalls.stall(ctx, "release", resource)
 	}
 	return l.coordBackend.Release(ctx, resource, owner, epoch)
 }
 
 func (l stallingLeases) Get(ctx context.Context, resource string) (*coord.Lease, error) {
 	if l.gone() {
-		return nil, stall(ctx)
+		return nil, l.stalls.stall(ctx, "get", resource)
 	}
 	return l.coordBackend.Get(ctx, resource)
 }
@@ -183,12 +357,13 @@ func (l stallingLeases) Get(ctx context.Context, resource string) (*coord.Lease,
 // gone answers true.
 type stallingFleet struct {
 	fleet
-	gone func() bool
+	gone   func() bool
+	stalls *stalls
 }
 
 func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation string) error {
 	if f.gone() {
-		return stall(ctx)
+		return f.stalls.stall(ctx, "forget_admission", nodeID)
 	}
 	return f.fleet.ForgetAdmission(ctx, nodeID, incarnation)
 }
@@ -223,13 +398,21 @@ func (f stallingFleet) ForgetAdmission(ctx context.Context, nodeID, incarnation 
 // AND THE ANNOUNCEMENT RUNS BESIDE THE DRAIN, so the stream's silence costs
 // the stop one of its bounds while the seats' run, not one after the other.
 //
-// The lease TTL is fifteen seconds — an allowance of five — so a lease a stop
-// failed to give back is still held when the case reads it, seconds later.
+// The lease TTL is [startedLeaseTTL] — an allowance of a third of it — so a
+// lease a stop failed to give back is still held when the case reads it,
+// seconds later.
+//
+// EACH "BESIDE" IS READ OFF THE RECORDED WAITS, never off the stop's clock: the
+// seat's last event and its held memory publish overlap, and the announcement
+// overlaps every seat's last event — where one in front of the other ends
+// before the other begins. Judged by how long the lease took after the release
+// began, or how long the whole stop took, against a slack of seconds, a loaded
+// machine's scheduling decided the verdict as much as the order did.
 func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 	t.Parallel()
 	b := bootstrap(t, func(b *config.Bootstrap) {
 		brokertest.StoreIn(&b.Stream, filepath.Join(t.TempDir(), "stream"))
-		b.Coordination.LeaseTTLSeconds = 15
+		b.Coordination.LeaseTTLSeconds = startedLeaseTTL.Seconds()
 	})
 	back, err := engine.OpenBackends(t.Context(), b, parsedCompany(t, companyDoc))
 	if err != nil {
@@ -288,9 +471,7 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 		}
 	}
 
-	started := time.Now()
 	e.Stop(ctx)
-	took := time.Since(started)
 
 	if live, err := back.Coord.ListLive(ctx, coord.ClassNode); err != nil || len(live) != 0 {
 		t.Errorf("after the stop the node's presence is %v (%v), want none: the "+
@@ -325,50 +506,63 @@ func TestAStopOnAStreamThatWillNotAcknowledgeLeavesNothingHeld(t *testing.T) {
 			len(duties), err, duties)
 	}
 
+	announced, said := stream.announced()
+	if !said {
+		t.Error("the stop asked for no `org_stopped`")
+	}
 	for role, handle := range map[string]string{"CEO": "ceo", "CTO": "cto"} {
 		id, ok := seatID(e, handle)
 		if !ok {
 			t.Fatalf("the premise: the running company has no seat %s", handle)
 		}
-		began, ended, published := stream.terminated(role)
-		flushed, carried := stream.flushed(id.String())
+		event, published := stream.terminated(role)
+		flush, carried := stream.flushed(id.String())
 		released, gaveBack := leases.released(coord.SeatResource(id))
 		switch {
 		case !published:
 			t.Errorf("seat %s was released with no `agent_terminated` asked for", handle)
+			continue
 		case !carried:
 			t.Errorf("the premise: seat %s's release published no memory, so its "+
 				"teardown held nothing for its last event to run beside", handle)
+			continue
 		case !gaveBack:
 			t.Errorf("seat %s's lease was never given back", handle)
-		case released.Before(ended):
+			continue
+		}
+		if released.Before(event.to) {
 			t.Errorf("seat %s's lease was given back %v before its last event was "+
 				"over: a peer taking it over could announce it first",
-				handle, ended.Sub(released))
-		default:
-			// THE EVENT'S BOUND FROM THE SEAT'S FIRST HELD RECORD TO ITS
-			// LEASE, and half the teardown's hold for the machine: beside
-			// each other the teardown ends inside the event's wait, and one
-			// after the other the lease waits for the sum of them.
-			start := began
-			if flushed.Before(start) {
-				start = flushed
-			}
-			if took, limit := released.Sub(start), streamClientTimeout+teardownHold/2; took >= limit {
-				t.Errorf("seat %s's lease was given back %v after its release began, "+
-					"past %v: its last event and its teardown waited one after the "+
-					"other rather than beside each other", handle, took, limit)
-			}
+				handle, event.to.Sub(released))
+		}
+		// BESIDE ITS TEARDOWN: the event's wait and the seat's held memory
+		// publish overlap. One in front of the other ends before the other
+		// begins, and the lease waits for the sum of the two.
+		if !event.overlaps(flush) {
+			t.Errorf("seat %s's last event waited %v and its teardown's memory "+
+				"publish %v, one after the other rather than beside each other",
+				handle, event, flush)
+		}
+		// AND THE ANNOUNCEMENT BESIDE THE DRAIN, whose give-backs wait for
+		// every seat's last event: in front of the drain, it is over before
+		// any seat's release begins.
+		if said && !announced.overlaps(event) {
+			t.Errorf("the announcement waited %v and seat %s's last event %v, one "+
+				"after the other rather than beside the drain",
+				announced, handle, event)
 		}
 	}
-	// TWO OF THE STREAM'S BOUNDS separate the outcomes: beside the drain the
-	// announcement's runs while the seats' do, and in front of it the two run
-	// one after the other.
-	if limit := 2 * streamClientTimeout; took >= limit {
-		t.Errorf("the stop took %v on a stream that answers nothing, past %v: "+
-			"its events waited one after another rather than beside its "+
-			"give-backs", took, limit)
-	}
+}
+
+// wait is an interval a stand-in held a request for, from when it was asked to
+// when it answered.
+type wait struct{ from, to time.Time }
+
+// overlaps reports whether w and o were held at some instant together.
+func (w wait) overlaps(o wait) bool { return w.from.Before(o.to) && o.from.Before(w.to) }
+
+func (w wait) String() string {
+	return fmt.Sprintf("[%s, %s]", w.from.Format("15:04:05.000"), w.to.Format("15:04:05.000"))
 }
 
 // streamClientTimeout is what the JetStream client waits for a request whose
@@ -384,25 +578,26 @@ var errNoQuorum = errors.New("the event stream has lost quorum")
 // SHORTER THAN THE EVENT'S BOUND BY SECONDS, and seconds long itself, so each
 // order the case tells apart misses by seconds rather than by a scheduler's
 // whim: a lease given back without waiting for the seat's event comes two
-// seconds before the event is over, and an event published in front of the
-// teardown makes the lease three seconds late. A hold that ran to the flush's
-// own deadline would end with the event, and the first of those would be told
-// apart by microseconds.
+// seconds before the event is over, and a teardown run after the event, or the
+// event after the teardown, holds a wait of its own seconds long that the other
+// is over before or begins after. A hold that ran to the flush's own deadline
+// would end with the event, and the first of those would be told apart by
+// microseconds.
 const teardownHold = 3 * time.Second
 
 // unacknowledgedLastRecords is the engine's own broker with an event stream
 // that never acknowledges a stop's last events — `org_stopped` and
 // `agent_terminated` — and a memory changelog that acknowledges each seat's
-// last memory publish only after [teardownHold], recording when each seat's
-// were asked for and when its event was over. Every other publish is the
-// broker's.
+// last memory publish only after [teardownHold], recording how long each was
+// held. Every other publish is the broker's.
 type unacknowledgedLastRecords struct {
 	*jetstream.Queue
 	engine atomic.Pointer[engine.Engine]
 
-	terminating sync.Map // role name → time.Time its event was asked for
-	ended       sync.Map // role name → time.Time its event was over
-	flushing    sync.Map // seat id → time.Time its memory was first published
+	mu           sync.Mutex
+	announcement *wait            // the node's `org_stopped`
+	lasts        map[string]wait  // role name → its seat's `agent_terminated`
+	flushes      map[string]*wait // seat id → its memory publishes, first to last
 }
 
 func (q *unacknowledgedLastRecords) Publish(ctx context.Context, subject string, ev *events.Event) error {
@@ -410,13 +605,22 @@ func (q *unacknowledgedLastRecords) Publish(ctx context.Context, subject string,
 		ev.Type != (types.AgentTerminated{}).EventType() {
 		return q.Queue.Publish(ctx, subject, ev)
 	}
-	terminated := ev.Type == (types.AgentTerminated{}).EventType()
-	if terminated {
-		q.terminating.LoadOrStore(ev.Source, time.Now())
-	}
+	held := wait{from: time.Now()}
 	unacknowledged(ctx)
-	if terminated {
-		q.ended.Store(ev.Source, time.Now())
+	held.to = time.Now()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if ev.Type == (types.OrgStopped{}).EventType() {
+		if q.announcement == nil {
+			q.announcement = &held
+		}
+		return errNoQuorum
+	}
+	if q.lasts == nil {
+		q.lasts = map[string]wait{}
+	}
+	if _, seen := q.lasts[ev.Source]; !seen {
+		q.lasts[ev.Source] = held
 	}
 	return errNoQuorum
 }
@@ -427,25 +631,54 @@ func (q *unacknowledgedLastRecords) stopping() bool {
 	return e != nil && e.ShuttingDown()
 }
 
-// terminated is when role's last event was asked for and when it was over, if
-// one was asked for.
-func (q *unacknowledgedLastRecords) terminated(role string) (began, ended time.Time, ok bool) {
-	b, asked := q.terminating.Load(role)
-	e, over := q.ended.Load(role)
-	if !asked || !over {
-		return time.Time{}, time.Time{}, false
+// announced is how long the node's `org_stopped` was held, if one was asked
+// for.
+func (q *unacknowledgedLastRecords) announced() (wait, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.announcement == nil {
+		return wait{}, false
 	}
-	return b.(time.Time), e.(time.Time), true
+	return *q.announcement, true
 }
 
-// flushed is when the seat's memory was first published once the stop began,
-// if it was — by the seat's id, which its changelog subjects are named by.
-func (q *unacknowledgedLastRecords) flushed(seat string) (time.Time, bool) {
-	at, ok := q.flushing.Load(seat)
-	if !ok {
-		return time.Time{}, false
+// terminated is how long role's last event was held, if one was asked for.
+func (q *unacknowledgedLastRecords) terminated(role string) (wait, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	held, ok := q.lasts[role]
+	return held, ok
+}
+
+// flushed is how long the seat's memory publishes were held once the stop
+// began, from the first asked for to the last answered, if there were any —
+// by the seat's id, which its changelog subjects are named by.
+func (q *unacknowledgedLastRecords) flushed(seat string) (wait, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	held, ok := q.flushes[seat]
+	if !ok || held.to.IsZero() {
+		return wait{}, false
 	}
-	return at.(time.Time), true
+	return *held, true
+}
+
+// flushing records that a publish of seat's memory was asked for at from and
+// answered at to.
+func (q *unacknowledgedLastRecords) flushing(seat string, from, to time.Time) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.flushes == nil {
+		q.flushes = map[string]*wait{}
+	}
+	held, ok := q.flushes[seat]
+	if !ok {
+		held = &wait{from: from}
+		q.flushes[seat] = held
+	}
+	if to.After(held.to) {
+		held.to = to
+	}
 }
 
 // heldMemory is the coordination connection's JetStream client, whose
@@ -461,12 +694,14 @@ func (j heldMemory) Publish(ctx context.Context, subject string, data []byte,
 	rest, memory := strings.CutPrefix(subject, topics.MemoryPrefix)
 	if memory && j.records.stopping() {
 		seat, _, _ := strings.Cut(rest, ".")
-		j.records.flushing.LoadOrStore(seat, time.Now())
+		asked := time.Now()
 		select {
 		case <-ctx.Done():
+			j.records.flushing(seat, asked, time.Now())
 			return nil, ctx.Err()
 		case <-time.After(teardownHold):
 		}
+		j.records.flushing(seat, asked, time.Now())
 	}
 	return j.JetStream.Publish(ctx, subject, data, opts...)
 }

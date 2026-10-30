@@ -1,6 +1,7 @@
 package worklet_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"strings"
@@ -202,9 +203,9 @@ func TestRecordTurnRefusesATaskItCannotSee(t *testing.T) {
 //
 // A turn is additive: nothing at the broker orders it against a purge of the
 // same task, so a turn decided while the task existed can land after the purge
-// that removed it. Its spend update then finds no row — and every node applies
-// the same log in the same order, so an applier that stopped there stopped the
-// whole fleet. The deletion gate is what reads it past.
+// that removed it. Its spend update then finds no row — and every data node
+// applies the same log in the same order, so an applier that stopped there
+// stopped the whole fleet. The deletion gate is what reads it past.
 func TestATurnOnAPurgedTaskIsReadPastNotFatal(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
@@ -490,5 +491,154 @@ func TestATurnLandingAfterItsTasksPurgeIsRefusedDeleted(t *testing.T) {
 	}
 	if got := r.strings(`SELECT id FROM tracker_turns WHERE task_id = ?`, task.ID); len(got) != 0 {
 		t.Fatalf("a turn that landed after its task's purge wrote %v", got)
+	}
+}
+
+// movedTask files a task into ENG and moves it to OPS, so a turn charged to
+// it after the move has a project its caller may have read before it.
+func movedTask(t *testing.T) (*roundTrip, worklet.Task) {
+	t.Helper()
+	r := newRoundTrip(t)
+	seedProject(t, r, worklet.Project{Key: "OPS", Name: "Operations"})
+	task := r.createTask("charged after it moved")
+	if _, err := r.writer.MoveTaskToProject(t.Context(), "op-move", task.ID, "OPS", nil); err != nil {
+		t.Fatalf("move: %v", err)
+	}
+	r.drain()
+	return r, task
+}
+
+// turnRecords is every turn record on the harness's log for one task.
+func (r *roundTrip) turnRecords(t *testing.T, task string) []worklet.MutationRecord {
+	t.Helper()
+	var out []worklet.MutationRecord
+	for seq := uint64(1); seq <= r.logEnd(t); seq++ {
+		if rec := r.recordAt(t, seq); rec.Subject == worklet.TurnSubject(task) {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+// A TURN IS SCOPED TO THE PROJECT ITS TASK IS IN, which is the project the
+// task's own row names now — never the one the turn was woken in.
+//
+// The scope is what a deferral is probed with and filed under, so a record
+// scoped to the project a task left is one a deferral in the project it is in
+// does not see. The project is read off the task's row and confirmed in the
+// decide by one shared statement, so a wrong column there would agree with
+// itself; reading the record back is what holds it to the task's project.
+//
+// Mutations: the statement reading `key` scopes the record to OPS-1; the
+// record's scope losing its container scopes it to no project.
+func TestATurnIsScopedToTheProjectItsTaskIsIn(t *testing.T) {
+	t.Parallel()
+	r, task := movedTask(t)
+	// A DEFERRAL IN THE PROJECT IT LEFT does not hold its turn back.
+	r.deferRecordAt("t-other", worklet.ScopeTerm{Kind: worklet.TermContainer, ID: "ENG"}.Path())
+	turn := sampleTurn(task.ID)
+	if _, err := r.writer.RecordTurn(t.Context(), "turn/run-1/dispatch", turn); err != nil {
+		t.Fatalf("RecordTurn beside a deferral in the project the task left: %v", err)
+	}
+	records := r.turnRecords(t, task.ID)
+	if len(records) != 1 {
+		t.Fatalf("the turn wrote %d records, want one", len(records))
+	}
+	rec := records[0]
+	if rec.Scope.Container != "OPS" {
+		t.Errorf("the turn is scoped to %q, want OPS — the project its task is in",
+			rec.Scope.Container)
+	}
+	want := worklet.ScopeTerm{Kind: worklet.TermObject, Container: "OPS", ID: task.ID}.Path()
+	if got := rec.Scope.Resolve(rec.Subject).Paths; len(got) != 1 || got[0] != want {
+		t.Errorf("the turn's scope resolves to %v, want [%s]", got, want)
+	}
+
+	// AND A DEFERRAL IN THE PROJECT IT IS IN DOES, which is what the scope
+	// is for.
+	held, task := movedTask(t)
+	held.deferRecordAt("t-other", worklet.ScopeTerm{Kind: worklet.TermContainer, ID: "OPS"}.Path())
+	_, err := held.writer.RecordTurn(t.Context(), "turn/run-1/dispatch", sampleTurn(task.ID))
+	var unavailable *statelog.Unavailable
+	if !errors.As(err, &unavailable) || unavailable.Reason != statelog.ReasonDeferred {
+		t.Errorf("a turn beside a deferral in its task's project answered %v, want "+
+			"it held back as deferred", err)
+	}
+}
+
+// A TURN WHOSE TASK MOVED UNDER IT IS SCOPED AGAIN.
+//
+// The project is read outside the snapshot to form the scope, so a move can
+// land between the read and the decide; the decide refuses the stale scope and
+// the write reads again, rather than publishing a record scoped to the project
+// the task just left.
+//
+// Mutations: deleting the decide's comparison accepts the stale scope (one
+// read, a record under ENG); deleting the retry refuses the turn.
+func TestATurnWhoseTaskMovedUnderItIsScopedAgain(t *testing.T) {
+	t.Parallel()
+	r, task := movedTask(t)
+	reads := 0
+	stale := func(context.Context, string) (string, error) {
+		reads++
+		if reads == 1 {
+			return "ENG", nil
+		}
+		return "OPS", nil
+	}
+	if _, err := r.writer.RecordTurnReading(t.Context(), "turn/run-1/dispatch",
+		sampleTurn(task.ID), stale); err != nil {
+		t.Fatalf("a turn whose task moved after its project was read: %v", err)
+	}
+	r.drain()
+	if reads != 2 {
+		t.Errorf("the project was read %d time(s), want twice — once stale, once again", reads)
+	}
+	records := r.turnRecords(t, task.ID)
+	if len(records) != 1 || records[0].Scope.Container != "OPS" {
+		t.Fatalf("the turn wrote %d record(s), the first scoped to %+v; want one "+
+			"under OPS", len(records), records)
+	}
+	if got := r.taskSpend(task.ID)["spend_turns"]; got != 1 {
+		t.Errorf("the task counts %d turns, want the one", got)
+	}
+}
+
+// A TASK MOVED ON EVERY ATTEMPT REFUSES ITS TURN, after the bound and not
+// before: three moves in a row is a task being moved continuously, and the
+// charge is refused naming it rather than chased for ever.
+//
+// Mutations: a bound of one, or none at all, reads a number of times other
+// than the bound; deleting the decide's comparison records the stale scope.
+func TestATaskMovedOnEveryAttemptRefusesItsTurn(t *testing.T) {
+	t.Parallel()
+	r, task := movedTask(t)
+	end := r.logEnd(t)
+	reads := 0
+	stale := func(context.Context, string) (string, error) {
+		reads++
+		if reads > worklet.RecordTurnAttempts {
+			// NEVER STALE AGAIN, so an unbounded loop ends — and fails
+			// the count — rather than hanging the suite.
+			return "OPS", nil
+		}
+		return "ENG", nil
+	}
+	_, err := r.writer.RecordTurnReading(t.Context(), "turn/run-1/dispatch",
+		sampleTurn(task.ID), stale)
+	if !errors.Is(err, worklet.ErrTurnTaskMoved) {
+		t.Fatalf("a turn whose task moved on every attempt answered %v, want "+
+			"the moved-task refusal", err)
+	}
+	if reads != worklet.RecordTurnAttempts {
+		t.Errorf("the project was read %d times, want the bound of %d", reads,
+			worklet.RecordTurnAttempts)
+	}
+	if now := r.logEnd(t); now != end {
+		t.Errorf("a refused turn published %d record(s)", now-end)
+	}
+	r.drain()
+	if got := r.taskSpend(task.ID)["spend_turns"]; got != 0 {
+		t.Errorf("a refused turn counted %d turns on its task", got)
 	}
 }

@@ -3,6 +3,8 @@ package dashspec
 import (
 	"slices"
 	"strconv"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE ENGINE SOURCE CATALOGUE (D62): the named reads a dashboard's `engine`
@@ -286,7 +288,7 @@ func (p SourceParam) check(value string) string {
 	switch p.Type {
 	case ParamEnum:
 		if !slices.Contains(p.Enum, value) {
-			return "is one of " + quoteList(p.Enum)
+			return "is one of " + words.Or(p.Enum)
 		}
 	case ParamNumber:
 		f, err := strconv.ParseFloat(value, 64)

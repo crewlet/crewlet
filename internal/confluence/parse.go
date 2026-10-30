@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Turning a page change into a woken seat.
@@ -513,6 +514,25 @@ func (p *Parser) base(body, page, comment map[string]any, event, space, pageID s
 	text := Flatten(firstOf(storageOf(comment), storageOf(page)))
 	if len(comment) > 0 {
 		meta["comment_id"] = str(comment, "id")
+	}
+	if text != "" {
+		// WHAT THE BODY IS AND WHO WROTE IT, for the fence the spine puts
+		// it in (ADR-0040). A remark when the event carries a comment, and
+		// the page's own text otherwise; its author only where the event
+		// is the one that wrote every word — a comment just made, a page
+		// just created — since an edit's extract is everybody's who ever
+		// saved the page.
+		source := provenance.SourcePageBody
+		if storageOf(comment) != "" {
+			source = provenance.SourcePageComment
+		}
+		meta[notify.BodySourceField] = string(source)
+		switch event {
+		case "comment_created", "page_created", "blog_created":
+			if account != "" {
+				meta[notify.BodyAuthorField] = account
+			}
+		}
 	}
 	subject := title
 	if subject == "" {

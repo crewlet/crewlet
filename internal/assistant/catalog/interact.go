@@ -216,6 +216,7 @@ var probes = map[string]struct {
 	"project":  {"GET /worklet/projects/{key}", "key", "key"},
 	"page":     {"GET /doclet/pages/{id}", "id", "id"},
 	"artifact": {"GET /artifacts/{id}", "id", "id"},
+	"chatlet":  {"GET /chatlet/channels/{channel_id}", "channel_id", "id"},
 	"seat":     {"GET /agents/{id}", "id", "handle"},
 }
 

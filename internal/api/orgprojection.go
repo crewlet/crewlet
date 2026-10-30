@@ -132,7 +132,7 @@ type OrgProjection struct {
 	// gives; how much of each window is spent is the /budgets answer.
 	TokenBudget *OrgTokenBudget `json:"token_budget,omitempty"`
 
-	// Services is which tracker and which knowledge base the company runs,
+	// Services is which tracker, knowledge base and chat the company runs,
 	// as the engine resolves them: see [OrgServices].
 	Services *OrgServices `json:"services,omitempty"`
 
@@ -159,20 +159,29 @@ type OrgProjection struct {
 	Derived *config.Derived `json:"derived,omitempty"`
 }
 
-// OrgServices is which tracker and which knowledge base the company runs, each
-// as [config.Company.TrackerBackendFor] and [config.Company.KnowledgeBackendFor]
+// OrgServices is which tracker, which knowledge base and which chat the
+// company runs, each as [config.Company.TrackerBackendFor],
+// [config.Company.KnowledgeBackendFor] and [config.Company.ChatBackendFor]
 // resolve it: the backend the document names, else the vendor whose block is
-// connected, else Worklet and Doclet.
+// connected, else the engine's own: Worklet, Doclet and Chatlet (`chatlet`).
 //
-// AN OVERVIEW FIELD, and the one narrow exception to the `tracker:` and
-// `knowledge:` blocks being guarded. What decides which of the dashboard's own
-// surfaces exist is whether the company runs Worklet and Doclet at all: a
-// company on Jira or on none has no Worklet, no My work and no task to file, and a reader shown those surfaces is shown screens
-// whose every question is refused. Every reader learns the first half already,
-// from that refusal, and the vendor's name is the one fact a screen needs to
-// say where the work went instead. NOTHING ELSE of either block reaches this
-// audience: no project or space key, no site, no URL and no credential, which
-// is what the blocks were guarded for (see the classification test).
+// AN OVERVIEW FIELD, and the one narrow exception to the `tracker:`,
+// `knowledge:` and `chat:` blocks being guarded. What decides which of the
+// dashboard's own surfaces exist is whether the company runs Worklet, Doclet and Chatlet
+// at all: a company on Jira or on none has no
+// Worklet, no My work and no task to file, one on Slack has no Chat, and a
+// reader shown those surfaces is shown screens whose every question is
+// refused. Every reader learns the first half already, from that refusal, and
+// the vendor's name is the one fact a screen needs to say where the work went
+// instead. NOTHING ELSE of any block reaches this audience: no project or
+// space key, no site, no URL, no room policy and no credential, which is what
+// the blocks were guarded for (see the classification test).
+//
+// CHAT NAMES A POSTURE, NOT A PRODUCT: `vendor` is a company talking on the
+// Mattermost or Slack it declares, either or both, so which of them is not a
+// closed set this field could carry. A reader holding Chat is told the
+// vendors on the `viewer` answer (`chat_vendors`); nobody else needs them,
+// since the place they would be named is hidden from everybody.
 //
 // A CLOSED SET on the wire, each member the backend's own constant: the
 // document's `backend` is refused at parse outside it, and a derived one is
@@ -183,6 +192,8 @@ type OrgServices struct {
 	Tracker string `json:"tracker"`
 	// Knowledge is `doclet`, `confluence` or `none`.
 	Knowledge string `json:"knowledge"`
+	// Chat is `chatlet`, `vendor` or `none`.
+	Chat string `json:"chat"`
 }
 
 // servicesOf is the company's resolved backends.
@@ -190,6 +201,7 @@ func servicesOf(c *config.Company) *OrgServices {
 	return &OrgServices{
 		Tracker:   string(c.TrackerBackendFor()),
 		Knowledge: string(c.KnowledgeBackendFor()),
+		Chat:      string(c.ChatBackendFor()),
 	}
 }
 

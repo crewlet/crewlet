@@ -239,8 +239,7 @@ func TestASignedInPersonIsResolvedFromTheirCookie(t *testing.T) {
 		t.Errorf("unit %q, want platform", got.principal.Position)
 	}
 	// THE ROW'S OWN, EXPANDED: admin, and every app it includes.
-	if !slices.Equal(got.principal.Grants, append([]iam.Grant{iam.GrantAdmin},
-		iam.Apps...)) {
+	if !slices.Equal(got.principal.Grants, iam.AllGrants) {
 		t.Errorf("grants %v are not the row's own admin, expanded",
 			got.principal.Grants)
 	}

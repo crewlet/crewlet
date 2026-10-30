@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/clientsource"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 // heldDoc is a company with three people's seats — two at the root, one in a
@@ -49,6 +50,9 @@ units:
         handle: ana
         kind: human
 `
+
+// heldHandles is every seat handle heldDoc names, its agents' included.
+var heldHandles = []string{"ceo", "jane", "sam", "cto", "ana"}
 
 // withoutSeat is heldDoc with one seat's three lines taken out.
 func withoutSeat(t *testing.T, name string) string {
@@ -153,6 +157,15 @@ func TestRemovingAHeldSeatIsRefusedNamingThePerson(t *testing.T) {
 		s, before := heldSurface(t)
 		res := s.do(t, http.MethodPut, "/config", withoutSeat(t, "Jane Doe"), summaryHeader)
 		assertSeatHeld(t, s, before, res.Code, res.Body.String(), "jane", "jane.doe")
+		// A REMOVAL SAYS SO, read off the revision it replaces; only a
+		// replacement of one nothing was read from is worded otherwise
+		// (TestReplacingAnUnsealedRevisionKeepsEveryHeldSeat).
+		body := decode(t, res)
+		if detail := str(body["detail"]); !strings.Contains(detail,
+			`removes human seats that somebody still holds: jane (held by jane.doe)`) {
+			t.Errorf("the refusal says %q, want the seat it removes and who holds it",
+				detail)
+		}
 	})
 
 	t.Run("a patch", func(t *testing.T) {
@@ -217,8 +230,10 @@ func TestRemovingAHeldSeatIsRefusedNamingThePerson(t *testing.T) {
 		if s.activeID(t) == before {
 			t.Error("the write landed and the active revision did not move")
 		}
-		if len(s.asked) != 1 || strings.Join(s.asked[0], ",") != "sam" {
-			t.Errorf("the directory was asked about %v, want the one seat leaving", s.asked)
+		if len(s.asked) != 1 || !slices.Equal(s.admitted(0, heldHandles...), []string{"sam"}) {
+			t.Errorf("the directory was asked %d times, the first about %v of %v, "+
+				"want once about the one seat leaving", len(s.asked),
+				s.admitted(0, heldHandles...), heldHandles)
 		}
 	})
 }
@@ -243,6 +258,45 @@ func TestTurningAHeldHumanSeatIntoAnAgentIsRefused(t *testing.T) {
 	}
 }
 
+// A DIRECTORY READ THE LOG REFUSED FOR GOOD IS TOLD WHAT CLEARS IT.
+//
+// An evicted node's identity read is refused until somebody readmits it, so no
+// wait helps: the answer carries no Retry-After, and its detail is the
+// identity estate's own sentence for that refusal, as every identity 503 is
+// told, rather than a fixed one saying only that waiting won't change it.
+// Mutation: answer the fixed sentence again and this fails.
+func TestAStuckDirectoryReadIsToldWhatClearsIt(t *testing.T) {
+	t.Parallel()
+	s, before := heldSurface(t)
+	stuck := &statelog.Unavailable{Reason: statelog.ReasonEvicted}
+	s.directoryDown = stuck
+	res := s.do(t, http.MethodPut, "/config", withoutSeat(t, "Sam Lee"), summaryHeader)
+	if res.Code != http.StatusServiceUnavailable || res.Header().Get("Retry-After") != "" {
+		t.Fatalf("a removal over a directory read no wait clears = %d (Retry-After %q), "+
+			"want 503 with none: %s", res.Code, res.Header().Get("Retry-After"), res.Body)
+	}
+	var refusal map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &refusal); err != nil {
+		t.Fatalf("the answer is not JSON: %v", err)
+	}
+	want, _ := statelog.ConditionSentence(stuck)
+	if detail, _ := refusal["detail"].(string); want == "" ||
+		!strings.Contains(detail, strings.TrimSuffix(want, ".")[1:]) {
+		t.Errorf("the refusal's detail is %q, want the identity estate's own sentence %q",
+			detail, want)
+	}
+	// AND ITS MESSAGE SAYS WAITING WON'T HELP, which the code's waitless
+	// sentence is for: "try again in a moment" beside no Retry-After told a
+	// person to wait for something no wait brings. Mutation: drop the code's
+	// waitless entry and this fails.
+	if message, _ := refusal["message"].(string); !strings.Contains(message, "Waiting won't change that") {
+		t.Errorf("a stuck read's message is %q, want the code's waitless sentence", message)
+	}
+	if s.activeID(t) != before {
+		t.Error("a removal nobody could check landed")
+	}
+}
+
 // A DIRECTORY THIS NODE CANNOT READ REFUSES A REMOVAL AND NOTHING ELSE.
 //
 // A removal may not proceed on evidence this node does not have: read as
@@ -256,11 +310,32 @@ func TestAnUnreadableDirectoryRefusesARemovalAndNothingElse(t *testing.T) {
 
 	res := s.do(t, http.MethodPut, "/config", withoutSeat(t, "Sam Lee"), summaryHeader)
 	if res.Code != http.StatusServiceUnavailable ||
-		!strings.Contains(res.Body.String(), "identity_unavailable") ||
+		!strings.Contains(res.Body.String(), `"seat_holders_unavailable"`) ||
 		res.Header().Get("Retry-After") == "" {
 		t.Fatalf("a removal over an unreadable directory = %d (Retry-After %q), "+
-			"want 503 identity_unavailable with a hint: %s", res.Code,
+			"want 503 seat_holders_unavailable with a hint: %s", res.Code,
 			res.Header().Get("Retry-After"), res.Body)
+	}
+	// ITS SENTENCE IS ABOUT THE SEATS' HOLDERS, never the caller, who was
+	// resolved: identity_unavailable's "Can't check who you are" told an
+	// administrator their own sign-in was the trouble. Mutation: answer
+	// identity_unavailable again and this fails.
+	if strings.Contains(res.Body.String(), "who you are") ||
+		!strings.Contains(res.Body.String(), "who holds the seats") {
+		t.Errorf("the refusal speaks about the caller, not the seats: %s", res.Body)
+	}
+	// AND A DETAIL SAYING WHAT CLEARS IT, which a fixed hint did not: the
+	// seats the write removes, and that nothing was written.
+	var refusal map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &refusal); err != nil {
+		t.Fatalf("the answer is not JSON: %v", err)
+	}
+	if detail, _ := refusal["detail"].(string); !strings.Contains(detail, "nothing was written") ||
+		!strings.HasPrefix(detail, "This node") {
+		t.Errorf("the refusal's detail is %q, want a sentence saying nothing was written", detail)
+	}
+	if seats, _ := refusal["seats"].([]any); len(seats) != 1 || seats[0] != "sam" {
+		t.Errorf("the refusal names seats %v, want the one the write removes", refusal["seats"])
 	}
 	if s.activeID(t) != before {
 		t.Error("a removal nobody could check landed")
@@ -280,7 +355,7 @@ func TestAnUnreadableDirectoryRefusesARemovalAndNothingElse(t *testing.T) {
 	}
 	if len(s.asked) != asked {
 		t.Errorf("an edit that removes nobody's seat asked the directory about %v",
-			s.asked[asked:])
+			s.admitted(asked, heldHandles...))
 	}
 }
 
@@ -420,9 +495,9 @@ func TestAnInvitedSeatCannotBeTakenOutOfTheCompany(t *testing.T) {
 		})
 		res := s.do(t, http.MethodPut, "/config", withoutSeat(t, "Sam Lee"), summaryHeader)
 		if res.Code != http.StatusServiceUnavailable ||
-			!strings.Contains(res.Body.String(), "identity_unavailable") {
+			!strings.Contains(res.Body.String(), `"seat_holders_unavailable"`) {
 			t.Errorf("a seat this node cannot say the holder of = %d, want 503 "+
-				"identity_unavailable: %s", res.Code, res.Body)
+				"seat_holders_unavailable: %s", res.Code, res.Body)
 		}
 		if s.activeID(t) != before {
 			t.Error("a removal nobody could check landed")

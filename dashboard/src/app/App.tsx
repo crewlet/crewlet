@@ -89,6 +89,7 @@ const UnitScreen = lazyScreen("agents", (m) => m.UnitScreen);
 const Schedules = lazyScreen("agents", (m) => m.Schedules);
 const SeatScreen = lazyScreen("agents", (m) => m.SeatScreen);
 const OrgEdit = lazyScreen("org", (m) => m.OrgEdit);
+const Chat = lazyScreen("chatlet", (m) => m.Chat);
 const LiveNow = lazyScreen("live", (m) => m.LiveNow);
 const Turns = lazyScreen("live", (m) => m.Turns);
 const TurnScreen = lazyScreen("live", (m) => m.TurnScreen);
@@ -188,6 +189,17 @@ export function screenFor(route: Resolved): ReactNode {
       return <OrgEdit />;
     case "seat":
       return <SeatScreen key={route.handle} handle={route.handle} />;
+    // CHATLET IS NOT KEYED ON THE ROOM, the one screen with a subject that is
+    // not: its rail and its read-cursor writer belong to the tab rather than
+    // to a room, and a switch between rooms is a flush rather than a new
+    // writer that has forgotten what the last one wrote. The room itself is
+    // keyed one level down, inside the screen.
+    case "chatlet":
+      return <Chat channel={route.id ?? ""} />;
+    case "chatlet-mentions":
+      return <Chat view="mentions" />;
+    case "chatlet-search":
+      return <Chat view="search" />;
     case "live":
       return <LiveNow />;
     case "turns":

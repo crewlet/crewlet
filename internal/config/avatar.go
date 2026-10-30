@@ -4,6 +4,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // RoleAvatar is how an AGENT seat is drawn wherever the dashboard shows who
@@ -125,11 +126,11 @@ func (c *Company) validateAvatars() error {
 		}
 		if a.Character != "" && !a.Character.Valid() {
 			p.add(at(at(path, "avatar"), "character"), ErrUnknownValue,
-				"%q (want %s)", a.Character, names(AvatarCharacters))
+				"%q (want %s)", a.Character, words.Or(AvatarCharacters))
 		}
 		if a.Color != "" && !a.Color.Valid() {
 			p.add(at(at(path, "avatar"), "color"), ErrUnknownValue,
-				"%q (want %s)", a.Color, names(AvatarColors))
+				"%q (want %s)", a.Color, words.Or(AvatarColors))
 		}
 	}
 	return p.err()

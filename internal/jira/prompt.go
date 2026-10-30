@@ -5,6 +5,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is what a Jira webhook asks of the seat it reached.
@@ -115,7 +116,7 @@ func (Prompt) WorkItem(metadata map[string]string) (types.WorkItem, bool) {
 // copy at the door. The exception exists for a third-party app that reports a
 // consequence the actor could not have seen coming, which is a code host's
 // failing pipeline, not an issue whose description was just saved.
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(notify.Inbound) bool { return false }
 
 // DigestBody implements [notify.Prompt]: comments keep their body, issue
 // snapshots collapse.
@@ -131,6 +132,18 @@ func (Prompt) DigestBody(eventType, body string) string {
 		return body
 	}
 	return ""
+}
+
+// Provenance implements [notify.Prompt]: what the parser stated — a comment by
+// its author while nobody else has edited it, or the issue's description by
+// nobody it can name — and, for a notification built without the parser, the
+// surface its event carries.
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	fallback := provenance.SourceWorkDescription
+	if commentEvents[n.Metadata["event_type"]] {
+		fallback = provenance.SourceWorkComment
+	}
+	return notify.Stated(n, parties, fallback)
 }
 
 // Build implements [notify.Prompt].

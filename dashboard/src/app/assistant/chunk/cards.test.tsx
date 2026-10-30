@@ -1,14 +1,19 @@
 /**
  * What the drawer draws of the engine's cards: a read's peek (the columns the
  * engine chose for its width, values worded by their type as the screens word
- * them, the facts kept for the model left out), a failed step's reason,
- * "Prepare it again" on a card that moved, and a run that took no step drawn
- * without a count.
+ * them, the facts kept for the model left out), a refusal that claims a
+ * missing permission only where one is the way past it, a failed step's
+ * reason, "Prepare it again" on a card that moved, and a run that took no step
+ * drawn without a count.
  */
 
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
-import type { AssistantCardEvent, AssistantProposalCard } from "~/contract/assistant.ts";
+import type {
+  AssistantCardEvent,
+  AssistantErrorCard,
+  AssistantProposalCard,
+} from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
 import {
   CardBlock,
@@ -157,6 +162,100 @@ test("a read handed to the card drawer is a caller's mistake, said as one", () =
   expect(() =>
     draw({ type: "entity", entity: { kind: "task", id: "FAIR-1", title: "Settle up" } }),
   ).toThrow(/drawn by its answer/);
+});
+
+/** A read of the fleet the engine refused with `refusal`, as its error card. */
+function refused(refusal: AssistantErrorCard["refusal"]) {
+  return draw({ type: "error", error: { refusal, phrase: "read the fleet" } });
+}
+
+test("a refusal access would clear names the access, and offers a request for it", async () => {
+  let written = "";
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: (t: string) => ((written = t), Promise.resolve()) },
+  });
+  refused({
+    code: "unauthorized",
+    message: "You don't have the access this needs (Admin). Ask an admin for it.",
+    reason: "no_grant",
+    grants: ["admin"],
+  });
+  expect(screen.getByText("You do not have permission to read the fleet.")).toBeTruthy();
+  expect(screen.getByText(/^You need Admin access for this\. The assistant acts/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Copy a request to an admin" }));
+  await waitFor(() => expect(written).toBe("Please give me Admin access to read the fleet."));
+});
+
+// THE RULE DECIDES WHETHER ACCESS IS THE WAY PAST, NEVER THE GRANTS ALONE: a
+// stale proof names the grants that admitted the person, an artifact the admin
+// override beside its owner's share, and the rest name none. Each is the
+// engine's own sentence for its rule, with no missing permission claimed and
+// nothing to ask an admin for. Mutation: decide by the grants alone and the
+// first two rows fail; claim the permission or offer the request whatever the
+// rule, and every row fails.
+test.each<[string, AssistantErrorCard["refusal"]]>([
+  [
+    "a proof to confirm",
+    {
+      code: "step_up_required",
+      message: "Confirm it's you to do this, then try again.",
+      reason: "step_up",
+      grants: ["admin"],
+    },
+  ],
+  [
+    "a role on an artifact below the verb's",
+    {
+      code: "unauthorized",
+      message:
+        "Your role on this doesn't allow that. Whoever owns it can share it with you at a higher one.",
+      reason: "role",
+      grants: ["admin"],
+    },
+  ],
+  [
+    "a verb the assistant never takes",
+    {
+      code: "unauthorized",
+      message: "The assistant never does this, so it stays with you.",
+      reason: "assist_refused",
+      grants: [],
+    },
+  ],
+  [
+    "a change the assistant can only propose",
+    {
+      code: "unauthorized",
+      message: "The assistant can do this only as a change you approve.",
+      reason: "assist_scope",
+      grants: [],
+    },
+  ],
+  [
+    "a verb only an agent takes",
+    {
+      code: "unauthorized",
+      message: "Only an agent can do this.",
+      reason: "seat_only",
+      grants: [],
+    },
+  ],
+  [
+    "an agent acting for somebody who may not",
+    {
+      code: "unauthorized",
+      message: "The person this agent is working for can't do this, so the agent can't either.",
+      reason: "ceiling",
+      grants: [],
+    },
+  ],
+])("%s is the engine's own sentence, with no request for access", (_, refusal) => {
+  refused(refusal);
+  expect(screen.getByText(refusal.message)).toBeTruthy();
+  expect(screen.queryByText(/permission to/)).toBeNull();
+  expect(screen.queryByText(/acts with your access/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Copy a request to an admin" })).toBeNull();
 });
 
 const proposal = {

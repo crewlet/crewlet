@@ -22,7 +22,7 @@ import {
 } from "~/contract/assistant.ts";
 import { RestError, isAbort } from "~/protocol/rest.ts";
 import { fmtBytes } from "~/lib/format.ts";
-import { conversation, uploadAttachment } from "./session.ts";
+import { conditionWords, conversation, uploadAttachment } from "./session.ts";
 
 /** Each type a person may attach, by its name in a sentence. */
 const ATTACHABLE: Record<AssistantAttachmentMediaType, string> = {
@@ -103,11 +103,16 @@ export interface Attachments {
   take: () => AssistantFileRef[];
 }
 
-/** Why an upload did not land, in words. */
+/**
+ * Why an upload did not land, in words: for a condition of the node the
+ * engine's words for it (`conditionWords`), which say who clears it and ask
+ * for a wait only where one helps, and the code's own sentence for anything
+ * else.
+ */
 function uploadRefusal(name: string, err: unknown): string {
   const why =
-    err instanceof RestError && !err.unanswered && err.sentence !== ""
-      ? err.sentence
+    err instanceof RestError && !err.unanswered
+      ? conditionWords(err) || err.sentence || "Check your connection and try again."
       : "Check your connection and try again.";
   return `${name} could not be attached. ${why}`;
 }

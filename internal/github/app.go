@@ -835,7 +835,7 @@ func (c *AppClient) send(ctx context.Context, bearer, method, path string, body,
 		// with nothing to say so.
 		return &APIError{
 			Method: method, Path: path, Status: res.StatusCode,
-			Detail: httpx.ReadRefusal(res),
+			Detail: httpx.ReadRefusal(res), RateLimited: rateLimited(res),
 		}
 	}
 	if out == nil {

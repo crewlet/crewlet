@@ -10,7 +10,7 @@ Three things make this work, and you can use any of them on their own:
 | Piece | What it gives you |
 |---|---|
 | **`crewlet schema`** | JSON Schema generated from the models — the authoritative field list, for your editor, your CI, or an agent |
-| **`crewlet validate -json`** | Machine-readable problems with exact field paths and kinds, so a fix loop converges |
+| **`crewlet validate -json`** | Machine-readable problems with exact field paths and kinds, their text as written, so a fix loop converges |
 | **The `company-architect` skill** | An interview script, the invariants, and the write → validate → fix loop |
 
 ---
@@ -82,6 +82,9 @@ empty string and fails later, deep in a turn.
 ```bash
 # nothing to bring up: the engine embeds its stream and creates its store
 
+crewlet secrets keygen -key-id 2026-01   # the id crewlet.yaml's secrets: names;
+                                         #   prints the export line below
+export CREWLET_SECRET_KEY_2026_01="<the base64 key it printed>"
 export CREWLET_API_TOKEN_FOUNDER="$(openssl rand -hex 32)"
 export ANTHROPIC_API_KEY="sk-ant-..."             # a Claude Code entry on auth.mode api-key
 export OPENAI_API_KEY="sk-..."                    # embeddings
@@ -249,7 +252,7 @@ crewlet validate company.yaml -json
   "problems": [
     { "path": "roles[1].llm", "segments": ["roles", 1, "llm"],
       "kind": "unknown_value", "seat": "cto",
-      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider: providers.llm has primary. A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" },
+      "message": "roles[1].llm: value not in the allowed set: \"nonexistent\" is not a configured provider. Use one of providers.llm's: \"primary\". A key that misses is not an error at run time: the seat falls back to another model and bills against it, so this is the only place the typo can be seen" },
     { "path": "units[0].roles[0].name", "segments": ["units", 0, "roles", 0, "name"],
       "kind": "conflict", "seat": "software-engineer",
       "message": "duplicate handle \"software-engineer\": 2 seats derive it (seat \"Software Engineer\" in unit \"Engineering\"; seat \"Software Engineer\" in unit \"Engineering\"). The handle is the canonical seat identity, naming its inbox, its agent id and its external accounts, so give each of these seats a distinct name or an explicit handle" },

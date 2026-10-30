@@ -108,7 +108,7 @@ func TestACanvasOutsideTheFormatIsRefusedAtItsPlace(t *testing.T) {
 		"a stray cover":     {wrap(`"boards": {` + board + `}, "order": ["a.html"], "cover": "z.html"`), pages, `cover: "z.html" is not a board`},
 		"a bad note id":     {wrap(`"boards": {` + board + `}, "order": ["a.html"], "notes": [{"id": "Note 1", "kind": "sticky", "x": 0, "y": 0, "w": 100, "h": 100, "text": "hi"}]`), pages, "notes[0].id"},
 		"a duplicate id":    {wrap(`"boards": {` + board + `}, "order": ["a.html"], "notes": [{"id": "n", "kind": "sticky", "x": 0, "y": 0, "w": 100, "h": 100, "text": "a"}, {"id": "n", "kind": "sticky", "x": 0, "y": 0, "w": 100, "h": 100, "text": "b"}]`), pages, "names another note"},
-		"an unknown kind":   {wrap(`"boards": {` + board + `}, "order": ["a.html"], "notes": [{"id": "n", "kind": "arrow", "x": 0, "y": 0, "w": 100, "h": 100, "text": "a"}]`), pages, "a note is title or sticky"},
+		"an unknown kind":   {wrap(`"boards": {` + board + `}, "order": ["a.html"], "notes": [{"id": "n", "kind": "arrow", "x": 0, "y": 0, "w": 100, "h": 100, "text": "a"}]`), pages, `a note is "title" or "sticky"`},
 		"a coloured title":  {wrap(`"boards": {` + board + `}, "order": ["a.html"], "notes": [{"id": "n", "kind": "title", "x": 0, "y": 0, "w": 100, "h": 100, "text": "a", "color": "pink"}]`), pages, "a title has no colour"},
 		"a literal colour":  {wrap(`"boards": {` + board + `}, "order": ["a.html"], "notes": [{"id": "n", "kind": "sticky", "x": 0, "y": 0, "w": 100, "h": 100, "text": "a", "color": "#ff0000"}]`), pages, "a sticky is yellow, pink"},
 		"an empty note":     {wrap(`"boards": {` + board + `}, "order": ["a.html"], "notes": [{"id": "n", "kind": "sticky", "x": 0, "y": 0, "w": 100, "h": 100, "text": "  "}]`), pages, "a note says something"},

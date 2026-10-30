@@ -270,26 +270,26 @@ func New(opts Options) (*Service, error) {
 		return nil, errors.New("iamapi: this surface needs the identity " +
 			"directory's read side")
 	case opts.Authority == nil:
-		return nil, errors.New("iamapi: this surface needs an authority — a " +
+		return nil, errors.New("iamapi: this surface needs an authority: a " +
 			"writer per caller, because an identity record's author is a " +
 			"property of the writer and never of the call")
 	case opts.Opener == nil:
 		return nil, errors.New("iamapi: this surface needs the keyring's " +
-			"opener — without it every person in the directory would render " +
+			"opener, since without it every person in the directory would render " +
 			"as sealed")
 	case opts.Audit == nil:
-		return nil, errors.New("iamapi: this surface needs an audit trail — it " +
+		return nil, errors.New("iamapi: this surface needs an audit trail: it " +
 			"mints and revokes credentials and ends other people's sessions, " +
 			"and a directory that announced none of it would leave the live " +
 			"feed silent about exactly those writes")
 	case opts.TokenIDs == nil:
 		return nil, errors.New("iamapi: this surface needs this node's Tier A " +
-			"token labels — /iam/node-tokens answers which directory row each " +
+			"token labels: /iam/node-tokens answers which directory row each " +
 			"one acts through, and an empty list would read as a node with no " +
 			"token to bind")
 	case opts.Seats == nil:
 		return nil, errors.New("iamapi: this surface needs the company this " +
-			"node runs — /iam/seats lists its human seats, and an empty list " +
+			"node runs: /iam/seats lists its human seats, and an empty list " +
 			"would read as a company with none")
 	}
 	s := &Service{

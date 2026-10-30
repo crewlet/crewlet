@@ -219,7 +219,7 @@ describe("two tabs on one origin", () => {
  *
  * It was per workspace while a sidebar drew one workspace's share; with the
  * palette the only reader, that let an empty palette open on up to eight rows
- * for each of nine workspaces.
+ * for every workspace there is.
  */
 describe("the cap", () => {
   it("is one bound over every workspace", () => {

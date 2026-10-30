@@ -56,7 +56,7 @@ type ScopeTerm struct {
 // at its widest.
 func (t ScopeTerm) Path() string {
 	if t.Kind == TermStore && strings.TrimSpace(t.ID) != "" {
-		return strings.Join([]string{pathDomain, pathStore, t.ID}, statelog.ScopeSeparator)
+		return statelog.ScopePath(pathDomain, pathStore, t.ID)
 	}
 	return pathDomain
 }

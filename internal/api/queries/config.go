@@ -6,7 +6,10 @@ import (
 	"fmt"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The config family, answered through the SAME functions the /config routes
@@ -16,6 +19,24 @@ import (
 
 // ConfigAuditLimit bounds the revision history a dashboard asks for.
 const ConfigAuditLimit = 50
+
+// revisionRefusal is err as the socket tells it when it is a revision this
+// node cannot open ([configapi.UnreadableRevisionError]): the REST route's own
+// code, and its detail and hint as one sentence, since the frame has one key
+// for words. The keyring's own error goes to the log, as the REST route sends
+// it. Any other err comes back as it was.
+func revisionRefusal(what string, err error) error {
+	var unreadable *configapi.UnreadableRevisionError
+	if !errors.As(err, &unreadable) {
+		return err
+	}
+	log.Warn("config_revision_unreadable", "what", what,
+		"revision", unreadable.ID, "fleet", unreadable.Fleet, "error", err)
+	return &stream.RevisionError{
+		What: what, Code: unreadable.Code(),
+		Detail: unreadable.Said() + " " + httpjson.Sentence(unreadable.Remedy()),
+	}
+}
 
 // configDocument answers the active company, redacted.
 //
@@ -28,7 +49,7 @@ func (s Sources) configDocument(ctx context.Context, _ Params) (any, error) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, revisionRefusal("config", err)
 	}
 	return company, nil
 }
@@ -43,22 +64,27 @@ func (s Sources) configDocument(ctx context.Context, _ Params) (any, error) {
 func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	kind := p.String("kind")
 	if kind == "" {
-		return nil, fmt.Errorf("%w: config_entities needs a kind (one of %v)",
-			ErrBadParams, configapi.EntityKinds())
+		return nil, fmt.Errorf("%w: config_entities needs a kind, one of %s",
+			ErrBadParams, words.Or(configapi.EntityKinds()))
 	}
+	// THE REFUSALS IN WORDS OF THIS SURFACE'S: the document service's open
+	// with its package's name and list the kinds as Go prints a slice.
+	unknownKind := fmt.Errorf("%w: the kind parameter is one of %s, and %q isn't", ErrBadParams,
+		words.Or(configapi.EntityKinds()), kind)
 	if id := p.String("id"); id != "" {
 		entity, err := s.Config.Entity(ctx, kind, id)
 		switch {
 		case errors.Is(err, configapi.ErrNoActiveRevision):
 			return nil, nil
-		case errors.Is(err, configapi.ErrUnknownEntityKind),
-			errors.Is(err, configapi.ErrNoSuchEntity):
-			// A BAD REQUEST, not a server fault: both are things the
-			// caller named, and reporting them as failures would have the
-			// room show "the query failed" for a typo.
-			return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		// A BAD REQUEST, not a server fault: both are things the caller
+		// named, and reporting them as failures would have the room show
+		// "the query failed" for a typo.
+		case errors.Is(err, configapi.ErrUnknownEntityKind):
+			return nil, unknownKind
+		case errors.Is(err, configapi.ErrNoSuchEntity):
+			return nil, fmt.Errorf("%w: %s", ErrBadParams, configapi.NotFound(kind, id))
 		case err != nil:
-			return nil, err
+			return nil, revisionRefusal("config_entities", err)
 		}
 		return map[string]any{"kind": kind, "id": id, "entity": entity}, nil
 	}
@@ -67,9 +93,9 @@ func (s Sources) configEntities(ctx context.Context, p Params) (any, error) {
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		return nil, nil
 	case errors.Is(err, configapi.ErrUnknownEntityKind):
-		return nil, fmt.Errorf("%w: %w", ErrBadParams, err)
+		return nil, unknownKind
 	case err != nil:
-		return nil, err
+		return nil, revisionRefusal("config_entities", err)
 	}
 	return map[string]any{"kind": kind, "ids": ids}, nil
 }
@@ -96,7 +122,7 @@ func (s Sources) configDiff(ctx context.Context, p Params) (any, error) {
 		// rather than fail the screen.
 		return nil, nil
 	case err != nil:
-		return nil, err
+		return nil, revisionRefusal("config_diff", err)
 	default:
 		return body, nil
 	}

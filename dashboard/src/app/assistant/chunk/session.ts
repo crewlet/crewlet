@@ -114,7 +114,8 @@ export function useConversation(): ConversationView {
 /** What a refusal of a question says to the person, from the engine's answer. */
 export function sendRefusalOf(err: RestError): SendRefusal {
   // THE WAIT THE ENGINE NAMED, on a 429 (the person's question limit) or a
-  // 503 (no model answering): a countdown the person can read, never a guess.
+  // 503 (no model answering, or a condition of the node a wait clears): a
+  // countdown the person can read, never a guess.
   const retry = err.retryAfterSeconds;
   return {
     code: err.code,
@@ -123,6 +124,21 @@ export function sendRefusalOf(err: RestError): SendRefusal {
     retryAfterSeconds: typeof retry === "number" && retry > 0 ? Math.ceil(retry) : null,
     remedy: err.code === "budget_exhausted" ? err.remedy : null,
   };
+}
+
+/**
+ * The engine's own words for a CONDITION of the node, or null for any other
+ * refusal: a `503 unavailable` carrying a `detail` the engine wrote for the
+ * person, which says what happened and what to do in step with the answer's
+ * `Retry-After` (a log at its byte ceiling says who makes room, and asks for
+ * no wait). The code's own sentence beside it says only whether waiting
+ * helps. A write whose outcome is unknown is no condition: its `detail` is
+ * written for a program, which sends the same key again.
+ */
+export function conditionWords(err: RestError): string | null {
+  return err.code === "unavailable" && err.body.outcome !== "unknown" && err.detail !== ""
+    ? err.detail
+    : null;
 }
 
 /** The sentence for a question the engine would not take. */
@@ -135,7 +151,12 @@ function refusalWords(err: RestError): string {
     case "assistant_protocol_mismatch":
       return "Crewlet was updated. Reload the page to keep asking.";
     case "assistant_unavailable":
-      return "The assistant cannot answer right now. Try again in a moment.";
+      // THE ENGINE'S OWN SENTENCE, which says waiting won't change it: the
+      // engine answers this code for a reason of the assistant's own (a model
+      // chain it can't build, a node shutting down) with no `Retry-After`. A
+      // fixed "Try again in a moment" told the person the opposite of the
+      // answer it was drawn over.
+      return err.sentence || "The assistant can't answer here.";
     case "assistant_model_not_ready":
       // THE ENGINE'S OWN SENTENCE for the model's state (signed out, its plan
       // spent), the one a failed answer would have carried.
@@ -149,7 +170,9 @@ function refusalWords(err: RestError): string {
     default:
       if (err.unanswered)
         return "The question could not be sent. Check your connection and try again.";
-      return err.sentence || err.detail || "The engine refused the question.";
+      return (
+        conditionWords(err) ?? (err.sentence || err.detail || "The engine refused the question.")
+      );
   }
 }
 
@@ -433,6 +456,18 @@ export async function openConversation(id: string): Promise<void> {
   }
 }
 
+/**
+ * What a Clear the engine did not take says: a condition of the node in the
+ * engine's words for it (`conditionWords`), which ask for a wait only where
+ * one helps, and otherwise where to try again.
+ */
+export function clearRefusal(err: unknown): string {
+  const condition = err instanceof RestError ? conditionWords(err) : null;
+  return condition === null
+    ? "The conversation could not be cleared. Try again from Conversations."
+    : `The conversation could not be cleared. ${condition}`;
+}
+
 /** Remove the open conversation from the person's history, and go home. */
 export async function clearConversation(): Promise<void> {
   const id = view.id;
@@ -530,13 +565,18 @@ function undecided(proposal: AssistantProposalCard, err: unknown): void {
  * What a decision the engine refused, or nobody answered, says on its card
  * while the card still waits on one (ProposalCard's `decisionRefusal`): the
  * refusal's own sentence and the route's next step, never "Nothing changed.",
- * which is the card's to say, and only of a failed change.
+ * which is the card's to say, and only of a failed change. A condition of the
+ * node is said in the engine's words for it (`conditionWords`): a fixed
+ * sentence for its code asked for a wait whatever the condition was.
  */
 export function decisionFailure(err: unknown): { refusal: DecisionRefusal; unknown: boolean } {
   if (err instanceof RestError) {
     const failed = writeFailed(err);
     if (failed.kind !== "unknown") {
-      return { refusal: { sentence: failed.sentence, hint: failed.hint || null }, unknown: false };
+      return {
+        refusal: { sentence: conditionWords(err) ?? failed.sentence, hint: failed.hint || null },
+        unknown: false,
+      };
     }
   }
   return {

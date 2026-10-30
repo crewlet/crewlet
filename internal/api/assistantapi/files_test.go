@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/opkey"
@@ -26,6 +29,8 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tabular"
 )
 
@@ -45,6 +50,8 @@ type fileStore struct {
 	files  map[uuid.UUID]keptFile
 	stored []assistant.NewFile
 	full   bool
+	// fail, when set, is what every later Store answers.
+	fail error
 }
 
 func newFileStore() *fileStore {
@@ -59,6 +66,9 @@ func (s *fileStore) Store(_ context.Context, w assistant.Write, f assistant.NewF
 	}
 	if s.full {
 		return wire.FileRef{}, fmt.Errorf("%w: %w", assistant.ErrInvalid, assistantdomain.ErrTooManyFiles)
+	}
+	if s.fail != nil {
+		return wire.FileRef{}, s.fail
 	}
 	s.stored = append(s.stored, f)
 	ref := wire.FileRef{FileID: f.ID, Name: f.Name, MediaType: f.MediaType,
@@ -256,6 +266,67 @@ func TestAnUploadIntoAFullOrForeignConversationIsRefused(t *testing.T) {
 	rec := s.upload(s.rig.Person, "chart.png", "image/png", pngBytes, nil)
 	if rec.Code != http.StatusConflict || envelope(t, rec) != "assistant_file_limit" {
 		t.Errorf("an upload into a full conversation = %d %s", rec.Code, rec.Body)
+	}
+}
+
+// AN UPLOAD THE FILE STORE DID NOT TAKE IS TOLD BY ITS CAUSE, as every surface
+// that stores a person's file tells it: a full store in the words that say
+// who makes room, with no Retry-After, since no wait clears it; a store that
+// did not take the bytes under an election's wait; a record the log refused in
+// the state log's own words; a write nobody can account for as the unknown it
+// is; and a fault as a fault. Each of the first three was `500
+// internal_error`, saying the engine had broken. Mutation: drop the condition
+// arm from fail and the first three rows answer 500.
+func TestAnUploadTheStoreDidNotTakeIsToldByItsCause(t *testing.T) {
+	t.Parallel()
+	kept := func(cause error) error {
+		said, _ := builtin.Condition(cause)
+		return &assistant.Unkept{Said: said, Cause: cause}
+	}
+	refused := &statelog.Unavailable{Reason: statelog.ReasonLogFull,
+		Detail: "raise stream.assistant_log_max_bytes"}
+	unanswered := fmt.Errorf("assistantdomain: upload file x: %w: %w", objstore.ErrUnanswered,
+		errors.New("nats: timeout"))
+	refusedSaid, _ := builtin.ConditionSentence(refused)
+	unansweredSaid, _ := builtin.ConditionSentence(unanswered)
+	for name, c := range map[string]struct {
+		err     error
+		status  int
+		code    string
+		says    string
+		retry   string
+		outcome bool
+	}{
+		"a full store": {kept(fmt.Errorf("assistantdomain: upload file x: %w", objstore.ErrFull)),
+			http.StatusServiceUnavailable, "unavailable", objstore.FullWords, "", false},
+		"a store that did not take the bytes": {kept(unanswered), http.StatusServiceUnavailable,
+			"unavailable", unansweredSaid,
+			strconv.Itoa(int(statelog.ElectionRetryHint / time.Second)), false},
+		"a record the log refused": {kept(refused), http.StatusServiceUnavailable, "unavailable",
+			refusedSaid, "", false},
+		"a write nobody can account for": {fmt.Errorf("%w: operation x", assistant.ErrOutcomeUnknown),
+			http.StatusServiceUnavailable, "unavailable", "", "2", true},
+		"a fault": {errors.New("open /var/lib/crewlet/objects: disk I/O error"),
+			http.StatusInternalServerError, "internal_error", "", "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s, files := fileSite(t)
+			files.fail = c.err
+			rec := s.upload(s.rig.Person, "chart.png", "image/png", pngBytes, nil)
+			var body map[string]any
+			_ = json.Unmarshal(rec.Body.Bytes(), &body)
+			if rec.Code != c.status || body["error"] != c.code ||
+				(c.says != "" && body["detail"] != c.says) ||
+				rec.Header().Get("Retry-After") != c.retry || (body["outcome"] == "unknown") != c.outcome {
+				t.Errorf("answered %d %v (Retry-After %q), want %d %s saying %q (Retry-After %q)",
+					rec.Code, body, rec.Header().Get("Retry-After"), c.status, c.code, c.says, c.retry)
+			}
+			if text := rec.Body.String(); strings.Contains(text, "nats") ||
+				strings.Contains(text, "/var/lib") || strings.Contains(text, "assistant_log_max_bytes") {
+				t.Errorf("the answer carried its error's own text: %s", text)
+			}
+		})
 	}
 }
 

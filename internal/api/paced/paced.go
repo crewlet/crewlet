@@ -46,6 +46,16 @@ const Pace = objstore.MiBPace
 // connection, not the store, so a surface answers it 400 rather than 503.
 var ErrBody = errors.New("the body could not be read")
 
+// Unread is [ErrBody] as the person whose upload it was reads it, on every
+// surface that streams a file in.
+//
+// NEVER THE ERROR ITSELF, whose words after the sentinel are the read's own
+// failure as Go and net/http spell it — "unexpected EOF", "read tcp
+// 10.0.0.4:443->203.0.113.9:51234: i/o timeout", "a mebibyte of it took more
+// than 30s to arrive" — which a surface logs. Every one has the same remedy.
+const Unread = "The upload didn't arrive in full, so nothing was stored. " +
+	"Send it again."
+
 // Body is an upload's body, every mebibyte of it read inside a budget of
 // [Pace]; see [Body.Read].
 type Body struct {

@@ -3,6 +3,7 @@ package kv
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,12 +118,15 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 // coord.DocumentKey(class, id), whose separator is a dot because a key IS a
 // subject token path, so the class is a token the broker can match.
 //
-// What this asserts is the OUTCOME rather than the wire: with keys of every
-// class in the bucket, each class read must see its own and nothing else. A
-// filter that narrowed to the wrong token would return nothing; one that
-// narrowed to nothing at all would return everything — and the client-side
-// class test that remains would hide the second, so the count is checked from
-// the inside of the walk rather than from the rows it produced.
+// What this asserts is the NARROWING, through the walk every class listing
+// takes ([FleetStore.eachPositionKey]): with keys of every class in the bucket,
+// each class read must see its own and nothing else, AND the filter the walk
+// asks the broker to watch must hand back its own key and nothing else. The
+// walk's own class test drops a neighbour's key, so its rows stay right
+// whether or not the broker narrowed; only the filter it asked for says
+// whether every class was moved over the wire for one. Counted through a walk
+// the test built itself, with a filter of its own, it held the grammar and
+// never the listing.
 func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -146,13 +150,14 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 			t.Fatalf("seed %s: %v", class, err)
 		}
 	}
+	spy := &watchSpy{KeyValue: store.positions}
+	store.positions = spy
 
 	for _, class := range classes {
-		var reached, kept int
-		err := store.eachUnder(ctx, store.positions, coord.DocumentFilter(class), class,
-			func(kve jetstream.KeyValueEntry) error {
-				reached++
-				if segs, ok := coord.DocumentSegments(kve.Key()); ok && segs[0] == class {
+		var kept int
+		err := store.eachPositionKey(ctx, class, class,
+			func(key string, _ []byte) error {
+				if segs, ok := coord.DocumentSegments(key); ok && segs[0] == class {
 					kept++
 				}
 				return nil
@@ -163,13 +168,14 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 		if kept != 1 {
 			t.Errorf("class %s saw %d of its own keys, want 1", class, kept)
 		}
-		// THE NARROWING ITSELF. Every record that reaches the walk was moved
-		// over the wire, so a filter that did not narrow shows up here as the
-		// whole bucket even though the rows it yields are still correct.
-		if reached != 1 {
-			t.Errorf("class %s was handed %d records for the 1 it wanted; the broker "+
-				"is not filtering and the walk is moving the other classes too",
-				class, reached)
+		// THE NARROWING ITSELF. Every record the broker hands back for the
+		// filter the walk asked for is moved over the wire, so a filter that
+		// did not narrow shows up here as the whole bucket even though the
+		// rows the walk yields are still correct.
+		if reached := spy.handedBack(ctx, t, store); reached != 1 {
+			t.Errorf("class %s's walk asks the broker for %d records for the 1 it "+
+				"wanted; the broker is not filtering and the walk is moving the "+
+				"other classes too", class, reached)
 		}
 	}
 }
@@ -178,9 +184,11 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 // between the `>` [coord.DocumentFilter] ends in and the `*` that would look
 // equivalent today.
 //
-// Every key class in this register is two segments deep right now, so `*`
-// matches all of them and the difference is invisible — until the first class
-// that composes a third segment, whose listing then silently returns nothing.
+// Most key classes in this register are two segments deep, and a class
+// filtered with `*` would match those and silently return nothing for the
+// classes that compose a third segment: the operator's backup
+// acknowledgements, filed under their log, and a log's maintenance
+// acknowledgements.
 // A walk that finds no rows and a class that has no rows are the same answer
 // at every caller, so the day that happens there is no symptom to notice.
 func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
@@ -220,4 +228,92 @@ func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
 				"an empty listing is indistinguishable from an empty class", key)
 		}
 	}
+}
+
+// ONE LOG'S MAINTENANCE ACKNOWLEDGEMENTS ARE NARROWED BY THE BROKER, on the
+// log's own segment of the key ([coord.MaintenanceAckKey]).
+//
+// A window is per log and two can be open at once, so the seal reads one log's
+// acknowledgements, and it is the broker that has to pick them out: a listing
+// handed every log's and dropping the rest still answers right, which is why
+// the count is taken from the filter MaintenanceAcks itself asks the broker to
+// watch, never from a filter the test builds. A log whose name begins with
+// another's is the adversarial neighbour for a filter built by concatenation
+// rather than by the grammar.
+//
+// Mutation: have the walk filter on the class alone and every log's records
+// are handed back to each log's listing, while its rows stay right.
+func TestALogsAcknowledgementsAreNarrowedByTheBroker(t *testing.T) {
+	t.Parallel()
+	nc := embeddedNATS(t)
+	prefix := fmt.Sprintf("p%d", bucketSeq.Add(1))
+	store := openFleetForTest(t, nc, prefix)
+	ctx := context.Background()
+
+	logs := []string{"CREWLET_TRACKER_LOG", "CREWLET_TRACKER_LOG_2", "CREWLET_PAGES_LOG"}
+	for _, stream := range logs {
+		for _, node := range []string{"node-1", "node-2"} {
+			if err := store.PutMaintenanceAck(ctx, coord.MaintenanceAck{
+				Stream: stream, NodeID: node, Incarnation: node + ":1", Mode: "seal",
+			}); err != nil {
+				t.Fatalf("PutMaintenanceAck(%s, %s): %v", stream, node, err)
+			}
+		}
+	}
+	spy := &watchSpy{KeyValue: store.positions}
+	store.positions = spy
+	for _, stream := range logs {
+		acks, err := store.MaintenanceAcks(ctx, stream)
+		if err != nil {
+			t.Fatalf("MaintenanceAcks(%s): %v", stream, err)
+		}
+		if len(acks) != 2 || acks[0].Stream != stream || acks[1].Stream != stream {
+			t.Errorf("MaintenanceAcks(%s) = %+v, want its own two", stream, acks)
+		}
+		if reached := spy.handedBack(ctx, t, store); reached != 2 {
+			t.Errorf("MaintenanceAcks(%s) asks the broker for %d records, want "+
+				"its own 2: the broker is not narrowing on the log", stream, reached)
+		}
+	}
+}
+
+// watchSpy is the positions register as a listing reaches it, keeping the
+// filter each pass asks the broker to watch.
+type watchSpy struct {
+	jetstream.KeyValue
+	mu      sync.Mutex
+	watched []string
+}
+
+func (s *watchSpy) Watch(ctx context.Context, keys string, opts ...jetstream.WatchOpt) (
+	jetstream.KeyWatcher, error) {
+
+	s.mu.Lock()
+	s.watched = append(s.watched, keys)
+	s.mu.Unlock()
+	return s.KeyValue.Watch(ctx, keys, opts...)
+}
+
+// handedBack is how many records the broker hands back for the one filter the
+// listing since the last call watched: a walk of the register over that same
+// filter, counted from inside the walk, before any class test of the
+// listing's could drop one.
+func (s *watchSpy) handedBack(ctx context.Context, t *testing.T, store *FleetStore) int {
+	t.Helper()
+	s.mu.Lock()
+	watched := s.watched
+	s.watched = nil
+	s.mu.Unlock()
+	if len(watched) != 1 {
+		t.Fatalf("the listing watched %q, want exactly one filter", watched)
+	}
+	var reached int
+	if err := store.eachUnder(ctx, s.KeyValue, watched[0], "the spy's count",
+		func(jetstream.KeyValueEntry) error {
+			reached++
+			return nil
+		}); err != nil {
+		t.Fatalf("walk %q: %v", watched[0], err)
+	}
+	return reached
 }

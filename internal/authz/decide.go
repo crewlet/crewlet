@@ -37,10 +37,12 @@ const (
 	// administrator holds through [iam.Expand].
 	ClassApp Class = "app"
 
-	// ClassAnyApp — a gesture that draws on whichever apps the caller uses:
-	// a question answered from the company's pages and its work, which
-	// searches each half only for a caller who holds its app. Whoever holds
-	// any one app; a caller with none is told every app would do.
+	// ClassAnyApp — a gesture that draws on whichever of SEVERAL apps the
+	// caller uses: a question answered from the company's pages and its
+	// work, which searches each half only for a caller who holds its app.
+	// Whoever holds any one of the row's apps ([rule.anyOf]); a caller with
+	// none of them is told that any one of THEM would do — never an app the
+	// gesture draws nothing from.
 	ClassAnyApp Class = "any_app"
 
 	// ClassAppOrAsked — a work item somebody may be ASKED about. Whoever
@@ -114,8 +116,11 @@ const (
 
 	// ClassTidy — taking one's own work out of circulation and putting it
 	// back: trashing, restoring and renaming a page, removing and restoring
-	// a work item. Its container's lead, the admin path, OR whoever WROTE
-	// it ([Object.Author]: a page's creator, an item's reporter).
+	// a work item, archiving a chat room and opening it again. Its
+	// container's lead, the admin path, OR whoever WROTE it ([Object.Author]:
+	// a page's creator, an item's reporter, a room's creator). A unit's room
+	// has its UNIT as its container, so the unit's lead is the lead asked; a
+	// named room has none, so nobody but its creator and admin tidies it.
 	//
 	// THE AUTHOR ARM IS WHAT MAKES IT ITS OWN CLASS rather than
 	// [ClassDestructive]. Somebody who filed a duplicate or drafted a page in
@@ -158,8 +163,10 @@ const (
 	// may file work in a project and may not carry it away again.
 	ClassDestructive Class = "destructive"
 
-	// ClassAuthored — editing and removing a comment, on a page or on a
-	// work item. Whoever wrote it, or the admin path.
+	// ClassAuthored — editing and removing a remark: a comment on a page or
+	// on a work item, a chat message. Whoever wrote it, or the admin path —
+	// and the admin path decides on the UNREAD remark ([Object.Unresolved]),
+	// so a moderator never has to read a message to take it down.
 	ClassAuthored Class = "authored"
 
 	// ClassAdmin — running the company: configuration, secrets,
@@ -234,9 +241,10 @@ var relationClasses = []Class{
 // never succeed, on every retry, for ever. The reason is a closed value a
 // caller can branch on; that is what it is for.
 //
-// THEN THE HUMAN-ONLY AND SEAT-ONLY BARS, which are facts about the VERB and
-// therefore decided before any class reads any relation — see
-// [rule.humanOnly] and [rule.seatOnly] — and the PERSON-PRESENT bar where it
+// THEN THE HUMAN-ONLY, SEAT-ONLY AND SEATED BARS, which are facts about the
+// VERB and therefore decided before any class reads any relation — see
+// [rule.humanOnly], [rule.seatOnly] and [rule.seated] — and the PERSON-PRESENT
+// bar where it
 // covers every arm, for the same reason: a machine token is refused a verb
 // that needs somebody at a keyboard before any class weighs what it carries
 // ([rule.presence]). Where the bar spares the self arm it is asked once the
@@ -266,6 +274,9 @@ var relationClasses = []Class{
 // identity refuses an ADMITTED principal whose proof is older than that
 // window ([ReasonStepUp], naming the window in [Decision.Recency]). Last,
 // because every earlier answer is one a fresher proof would not change.
+//
+// A GESTURE OF SEVERAL DECISIONS is answered in this same order by [Combine],
+// so a write decided part by part is refused as one question would have been.
 func Decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Chart,
 	now time.Time) Decision {
 
@@ -317,6 +328,12 @@ func decide(ctx context.Context, p iam.Principal, a Action, o Object, chart Char
 	// [rule.seatOnly].
 	if r.seatOnly && p.Kind != iam.KindSeat {
 		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonSeatOnly})
+	}
+	// AND A VERB MADE AS A SEAT IS NOT A CREDENTIAL'S ACTING AS ITSELF,
+	// whatever it holds: no permission gives it a seat to be answered or
+	// attributed as. See [rule.seated].
+	if r.seated && !seated(p) {
+		return concealed(ctx, p, r, o, chart, Decision{Reason: ReasonUnseated})
 	}
 	_, throughToken := p.MachineToken()
 	if throughToken && r.presence == PresenceRequired {
@@ -420,11 +437,13 @@ func readMethod(method string) bool {
 	return method == http.MethodGet || method == http.MethodHead
 }
 
-// concealed is a bar on the VERB (an agent taking a person's verb, a token
-// taking one that needs somebody present) answered for the object it was
-// asked of: the bar itself, except where the object is an artifact the caller
-// holds NO RELATION to, which is answered exactly as [ClassShared] answers
-// such a caller, not found.
+// concealed is a bar on the VERB (an agent taking a person's verb, a person
+// taking an agent's, a credential acting as no seat taking a verb made as
+// one, a token taking one that needs somebody present) answered for the
+// object it was asked of: the bar itself, except where the object is an
+// artifact the caller holds NO RELATION to, which is answered exactly as
+// [ClassShared] answers such a caller, not found. Every bar takes it, so a
+// bar on any verb passes one rule whichever verbs carry it today.
 //
 // THE BAR WOULD OTHERWISE BE AN EXISTENCE ORACLE. A surface reads the head
 // before it decides, so an id nothing holds is answered 404 there, and a bar
@@ -485,15 +504,17 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 		return granted(p, r.app)
 
 	case ClassAnyApp:
-		// ANY ONE APP, and a refusal names every one of them: holding
-		// either would admit, and admin is left out because it covers
-		// both ([Decision.Grants]).
-		for _, app := range iam.Apps {
+		// ANY ONE OF THE ROW'S APPS, and a refusal names every one of
+		// them: holding any would admit, and admin is left out because it
+		// covers them all ([Decision.Grants]). A row naming none admits
+		// nobody and names nothing, on [granted]'s reasoning about an
+		// empty permission — a walk refuses such a row.
+		for _, app := range r.anyOf {
 			if p.Can(app) {
-				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, iam.Apps...)
+				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, r.anyOf...)
 			}
 		}
-		return consulting(Decision{Reason: ReasonNoGrant}, iam.Apps...)
+		return consulting(Decision{Reason: ReasonNoGrant}, r.anyOf...)
 
 	case ClassAppOrAsked:
 		if p.Can(r.app) {
@@ -639,6 +660,14 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 			return Decision{Reason: ReasonNotLead, Err: ErrUnresolved}
 		}
 		if o.Container == "" {
+			if o.Kind == KindChannel {
+				// A NAMED ROOM BELONGS TO NO UNIT, which is its shape
+				// rather than a field nobody filled: there is no lead
+				// to ask, so it is its creator's and admin's. Refused
+				// as unnamed, a colleague was told the call named no
+				// container — a fix nobody could make.
+				return consulting(Decision{Reason: ReasonNotAuthor}, adminGrant)
+			}
 			return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 		}
 		return consulting(leadsByKind(ctx, chart, actorOf(p), o), adminGrant)
@@ -669,7 +698,18 @@ func decideClass(ctx context.Context, p iam.Principal, r rule, o Object,
 
 	case ClassAuthored:
 		if o.Author == "" {
-			return Decision{Reason: ReasonUnnamed}
+			if !o.Unresolved {
+				return Decision{Reason: ReasonUnnamed}
+			}
+			// NOBODY HAS READ THE REMARK, so nobody knows who wrote it:
+			// admin is admitted on the unread row — which is what lets a
+			// moderator take down a message in a room they cannot read,
+			// never shown it — and anybody else reads it and decides
+			// again on its author.
+			if p.Can(adminGrant) {
+				return consulting(Decision{Allowed: true, Reason: ReasonGrant}, adminGrant)
+			}
+			return Decision{Reason: ReasonNotAuthor, Err: ErrUnresolved}
 		}
 		if p.Login != "" && p.Login == o.Author {
 			return consulting(Decision{Allowed: true, Reason: ReasonAuthor}, adminGrant)
@@ -880,18 +920,39 @@ func leadsProject(ctx context.Context, chart Chart, actor, project string) Decis
 	return Decision{Reason: ReasonNotLead}
 }
 
-// leadsByKind asks the chart about the container a task, a project, a page or
-// a page container is filed in, by the relation its KIND names.
+// leadsByKind asks the chart about the container a task, a project, a page, a
+// page container or a unit's chat room is filed in, by the relation its KIND
+// names.
 //
 // THE KIND PICKS THE RELATION, for [Chart.LeadsContainer]'s reason: a page
-// container and a tracker project are two key classes a unit declares in two
-// fields, and one relation asked with the other's key matches only a company
-// that spelled them the same.
+// container, a tracker project and a unit are three key classes, and one
+// relation asked with another's key matches only a company that spelled them
+// the same — a unit's room asked as a project refused its unit's lead
+// everywhere a project was not spelt like the unit.
 func leadsByKind(ctx context.Context, chart Chart, actor string, o Object) Decision {
-	if o.Kind == KindContainer || o.Kind == KindPage {
+	switch o.Kind {
+	case KindContainer, KindPage:
 		return leadsContainer(ctx, chart, actor, o.Container)
+	case KindChannel:
+		return leadsUnit(ctx, chart, actor, o.Container)
 	}
 	return leadsProject(ctx, chart, actor, o.Container)
+}
+
+// seated reports whether p acts AS A SEAT — the one question [rule.seated]
+// asks.
+//
+// [iam.ActorFor]'s ANSWER, never a field read here: a principal is seated
+// exactly when the one attribution function names it by a seat — an agent by
+// its own, a person by the human seat the identity directory binds them to —
+// so the bar refuses exactly the principals whose writes would be attributed
+// to a credential rather than a seat, and nobody else.
+func seated(p iam.Principal) bool {
+	switch iam.ActorFor(p).Kind {
+	case iam.ActorAgent, iam.ActorHuman:
+		return true
+	}
+	return false
 }
 
 // actorOf is the handle the CHART knows this principal by.

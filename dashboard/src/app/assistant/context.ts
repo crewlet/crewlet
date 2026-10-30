@@ -119,6 +119,7 @@ const NOUN_OF_KIND: Partial<Record<ResourceKind, AssistantRecordNoun>> = {
   artifact: "artifact",
   turn: "turn",
   run: "run",
+  room: "room",
 };
 
 /** A selection with its noun: the screen's own, or its kind's. */
@@ -133,8 +134,9 @@ function withNoun(ref: {
 
 /**
  * The record a record's own screen is of, by the route parameter that names
- * it: a task's page is that task, a seat's page that agent. A list screen is
- * of no one record and answers null.
+ * it: a task's page is that task, a seat's page that agent, a Chatlet room's
+ * page that room, which a brief then cites. A list screen is of no one record
+ * and answers null.
  */
 const SUBJECT_OF_SCREEN: Readonly<Record<string, { kind: ResourceKind; param: string }>> = {
   item: { kind: "task", param: "id" },
@@ -144,6 +146,7 @@ const SUBJECT_OF_SCREEN: Readonly<Record<string, { kind: ResourceKind; param: st
   artifact: { kind: "artifact", param: "id" },
   turn: { kind: "turn", param: "id" },
   runs: { kind: "run", param: "id" },
+  chatlet: { kind: "room", param: "id" },
 };
 
 /** The record `page` is the screen of, or null. */

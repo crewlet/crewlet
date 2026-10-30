@@ -173,6 +173,17 @@ describe("classifyCheck", () => {
         { status: 413, body: { error: "body_too_large" }, fromEngine: false },
         { status: "unchecked", why: "unanswered", answerStatus: 413, detail: "body_too_large" },
       ],
+      // A seat-holder read waiting clears is asked about again, never a
+      // problem that keeps Save off until the draft changes.
+      [
+        {
+          status: 503,
+          body: { error: "seat_holders_unavailable", detail: "try again", seats: ["sre"] },
+          retryAfter: 2,
+          fromEngine: true,
+        },
+        { status: "unchecked", why: "unavailable", answerStatus: 503, detail: "try again" },
+      ],
       [
         { status: 503, body: { error: "draining", detail: "restarting" }, fromEngine: true },
         { status: "unchecked", why: "draining", answerStatus: 503, detail: "restarting" },

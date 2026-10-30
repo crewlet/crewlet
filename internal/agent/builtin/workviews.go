@@ -58,7 +58,7 @@ func (t *listWorkViews) Description() string {
 		"and your pins first. Every container has a list, a board and a " +
 		"calendar without anybody saving one; what comes back beyond those " +
 		"is what somebody arranged. To run one, pass its `id` as `view` to " +
-		"list_work_items — its `params` are in the query grammar's own " +
+		ListWorkItemsTool + " — its `params` are in the query grammar's own " +
 		"names and are not this tool's arguments."
 }
 
@@ -112,10 +112,17 @@ func (t *listWorkViews) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return readFailure(ctx, worklet.ListWorkViewsTool, err), nil
 	}
-	return jsonResult(map[string]any{
+	// A VIEW'S NAME AND ITS SAVED FILTER are words whoever saved it wrote
+	// (ADR-0040), and a row records the view's owner rather than who named
+	// it: a shared view is anybody's who may keep one in its container.
+	read := newForeignRead(turn, actor.Handle)
+	if len(listing.Views) > 0 {
+		namesBy(read)
+	}
+	return read.answer(ctx, worklet.ListWorkViewsTool, map[string]any{
 		"count": len(listing.Views), "views": listing.Views,
 		"read_level": listing.Level, "complete": listing.Complete,
-	})
+	}, "Narrow it with `container`.")
 }
 
 type saveWorkView struct{ deps WorkDeps }
@@ -128,7 +135,7 @@ func (t *saveWorkView) Description() string {
 	return "Save a view — a named query with a shape — on a project, unit, " +
 		"person or the workspace. Pass an existing view's `id` to replace " +
 		"it, or omit it to create one. `params` is the QUERY GRAMMAR, not " +
-		"this surface's arguments: four of list_work_items' arguments are " +
+		"this surface's arguments: four of " + ListWorkItemsTool + "' arguments are " +
 		"spelled differently there, and the view is refused if any key " +
 		"does not parse."
 }
@@ -138,8 +145,10 @@ func (t *saveWorkView) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"id": map[string]any{
-				"type":        "string",
-				"description": "The view to replace. Omit to create a new one.",
+				"type": "string",
+				"description": "The view to replace: an id " + worklet.ListWorkViewsTool + " " +
+					"lists, or that a save answered. Omit to create a new " +
+					"one, whose id is minted and answered back.",
 			},
 			"container": containerParameter(),
 			"name": map[string]any{
@@ -167,7 +176,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 				"type":                 "object",
 				"additionalProperties": map[string]any{"type": "string"},
 				"description": "The query, in the grammar's own parameter " +
-					"names — which list_work_items spells differently for " +
+					"names — which " + ListWorkItemsTool + " spells differently for " +
 					"four of its arguments: " + AliasSentence() + ". A " +
 					"custom field is `f.<ref>`. Everything else — assignee, " +
 					"type, priority, due, updated, created, reporter, " +
@@ -195,7 +204,7 @@ func (t *saveWorkView) Parameters() map[string]any {
 				"description": "True makes it the container's landing tab, " +
 					"taking that from whichever view held it. Only a SHARED " +
 					"view can be: nobody but its owner sees a personal one, " +
-					"so pin that instead with set_pins.",
+					"so pin that instead with " + worklet.SetPinsTool + ".",
 			},
 			"icon": map[string]any{"type": "string"},
 		},
@@ -264,7 +273,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	opID := opIDFor(actor, t.Name(), "view", viewObjectKey(id), args)
 	var prior worklet.ViewPrior
 	if id == "" {
-		id = createdViewID(opID)
+		id = createdViewID(actor, t.Name(), args)
 	} else {
 		// A SAVE UNDER AN ID IT DID NOT MINT MAY REPLACE SOMEBODY ELSE'S
 		// VIEW, so the view it would overwrite is decided on as well as
@@ -279,12 +288,24 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if prior, err = writer.ViewPrior(ctx, id); err != nil {
 			return readFailure(ctx, worklet.SaveWorkViewTool, err), nil
 		}
-		if prior.Held {
-			if denied := t.deps.mayWrite(ctx, authz.ActionViewSave,
-				viewObject(prior.Owner, prior.Container)); denied != nil {
+		if !prior.Held {
+			// AN ID IS ONLY EVER ONE THIS ENGINE MINTED: a view's id is
+			// its create's ([createdViewID]), answered back by the save
+			// that made it and listed by list_work_views. A save naming
+			// an id no view holds CREATED a view under whatever the
+			// caller typed — dots, spaces, a path — as its primary key
+			// and the subject its writes arbitrate on, where "the view
+			// to replace" was what the argument promised.
+			return refused(tools.RefusalNotFound, fmt.Sprintf(
+				worklet.SaveWorkViewTool+": there is no view %q to replace. Name a "+
+					"view "+worklet.ListWorkViewsTool+" lists, or omit `id` to create a "+
+					"new one — its id is minted and answered back.",
+				clip(id))), nil
+		}
+		if denied := t.deps.mayWrite(ctx, authz.ActionViewSave,
+			viewObject(prior.Owner, prior.Container)); denied != nil {
 
-				return *denied, nil
-			}
+			return *denied, nil
 		}
 	}
 	view := worklet.View{
@@ -313,7 +334,7 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			fmt.Sprintf("the view %q was saved", view.Name), opID,
 			result.Unvouched, unknownNext(result.Unvouched,
 				sameCall(actor, worklet.SaveWorkViewTool),
-				fmt.Sprintf("List the views in %s with list_work_views", where),
+				fmt.Sprintf("List the views in %s with "+worklet.ListWorkViewsTool, where),
 				"it saves a second view")), nil
 	}
 	t.deps.settle(ctx, result.Position)
@@ -323,11 +344,12 @@ func (t *saveWorkView) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 }
 
 // createdViewID is the id a new view is saved under: a UUIDv5 over the
-// operation that saves it, for [createdTaskID]'s reason — the same operation
-// made again (a brought-back `op_id`, an `Idempotency-Key` retried, a re-run
-// turn) addresses the view its first attempt saved, and where the operation is
-// fresh, so is the view.
-func createdViewID(opID string) string {
+// operation that saves it as the work began, for [createdTaskID]'s reasons —
+// the same operation made again (a brought-back `op_id`, an `Idempotency-Key`
+// retried, a re-run turn, a rebased one included) addresses the view its first
+// attempt saved, and where the operation is fresh, so is the view.
+func createdViewID(actor Actor, tool string, args map[string]any) string {
+	opID := opIDFor(actor.asBegun(), tool, "view", viewObjectKey(""), args)
 	return uuid.NewSHA1(createdViewNamespace, []byte(opID)).String()
 }
 

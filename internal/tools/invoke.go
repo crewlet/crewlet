@@ -53,9 +53,11 @@ type Invocation struct {
 
 // ArgsOf is a call's arguments as its caller's entry hands them on, made
 // ONCE, before anything else reads them ([toolargs]): a first-party tool's
-// closed-set members spelt as its schema spells them, the one rule the check
-// reads by, so a tool keeps no normalisation of its own; a third-party tool's
-// as sent, since it holds its own schema.
+// closed-set members spelt as its schema spells them and its arguments sent
+// as null left out where its schema does not declare null, the rules the
+// check reads by, so a tool keeps no normalisation of its own and reads a
+// null as an argument nobody sent; a third-party tool's as sent, since it
+// holds its own schema.
 func ArgsOf(tool Callable, thirdParty bool, raw map[string]any) toolargs.Args {
 	if thirdParty || tool == nil {
 		return toolargs.Of(nil, raw)

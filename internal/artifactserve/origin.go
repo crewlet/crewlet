@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE ORIGIN, as one value both halves read: the frame the API mints names a
@@ -77,8 +78,8 @@ type Origins struct {
 // NewOrigins reads the origin from Tier A's values.
 func NewOrigins(c OriginsConfig) (Origins, error) {
 	if !c.Mode.Valid() {
-		return Origins{}, fmt.Errorf("%w: origin mode %q is not one of %v", ErrOrigin,
-			c.Mode, artifacts.OriginModes)
+		return Origins{}, fmt.Errorf("%w: origin mode %q is not one of %s", ErrOrigin,
+			c.Mode, words.Or(artifacts.OriginModes))
 	}
 	external := strings.TrimRight(strings.TrimSpace(c.External), "/")
 	templated := strings.Contains(external, Placeholder)

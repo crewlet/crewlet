@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -180,8 +181,8 @@ func TestACallInAnExtensionIsToldThePhasesRound(t *testing.T) {
 	r := runnerOver(t, prov, pub, alwaysExtend{}, loopCaps{
 		rounds: 2, ceiling: 8, extensionOn: true, step: 4,
 	}, []tools.Callable{
-		roundWitness{stubTool: stubTool{name: runner.ReflectAndPersistTool, out: "noted"}, told: told},
-		roundWitness{stubTool: stubTool{name: runner.MarkOnboardedTool, out: "marked"}, told: told},
+		roundWitness{stubTool: stubTool{name: toolname.ReflectAndPersist, out: "noted"}, told: told},
+		roundWitness{stubTool: stubTool{name: toolname.MarkOnboarded, out: "marked"}, told: told},
 	})
 
 	onboard(t, r)
@@ -253,13 +254,13 @@ func sayAndCall(t *testing.T, name, argsJSON, prose string) llmtest.Response {
 // persist is an onboarding round that says something and keeps a note.
 func persist(t *testing.T, note, prose string) llmtest.Response {
 	t.Helper()
-	return sayAndCall(t, runner.ReflectAndPersistTool, `{"note":"`+note+`"}`, prose)
+	return sayAndCall(t, toolname.ReflectAndPersist, `{"note":"`+note+`"}`, prose)
 }
 
 // markDone is the round that finishes the onboarding pass.
 func markDone(t *testing.T, prose string) llmtest.Response {
 	t.Helper()
-	return sayAndCall(t, runner.MarkOnboardedTool, `{"notes":"read the pages"}`, prose)
+	return sayAndCall(t, toolname.MarkOnboarded, `{"notes":"read the pages"}`, prose)
 }
 
 // onboard runs r's onboarding pass, which the case needs to have run.
@@ -309,8 +310,8 @@ func cappedRunner(
 ) *runner.Runner {
 	t.Helper()
 	return runnerOver(t, prov, pub, judge, caps, []tools.Callable{
-		stubTool{name: runner.ReflectAndPersistTool, out: "noted"},
-		stubTool{name: runner.MarkOnboardedTool, out: "marked"},
+		stubTool{name: toolname.ReflectAndPersist, out: "noted"},
+		stubTool{name: toolname.MarkOnboarded, out: "marked"},
 	}, meter...)
 }
 
@@ -318,6 +319,18 @@ func cappedRunner(
 // stated by the case, for one whose subject is what those calls are told.
 func runnerOver(
 	t *testing.T, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
+	caps loopCaps, pair []tools.Callable, meter ...toolloop.BudgetMeter,
+) *runner.Runner {
+	t.Helper()
+	return runnerIn(t, runner.Turn{RunID: "t-rounds", WorkKey: "wk-rounds", AgentID: "agent-1"},
+		prov, pub, judge, caps, pair, meter...)
+}
+
+// runnerIn is runnerOver in a turn the case states, for one whose subject is
+// what the turn hands the pass: the token its fences carry, which the judge is
+// told.
+func runnerIn(
+	t *testing.T, turn runner.Turn, prov llm.Provider, pub queue.Publisher, judge extension.Judge,
 	caps loopCaps, pair []tools.Callable, meter ...toolloop.BudgetMeter,
 ) *runner.Runner {
 	t.Helper()
@@ -341,7 +354,7 @@ func runnerOver(
 		Publisher: pub,
 		Judge:     judge,
 		Budget:    budgetOf(meter),
-		Turn:      runner.Turn{RunID: "t-rounds", WorkKey: "wk-rounds", AgentID: "agent-1"},
+		Turn:      turn,
 		Sessions:  sessions,
 		Onboarding: runner.Onboarding{
 			Markers: &markers{claimHeld: true}, Latch: runner.NewLatch(),
@@ -794,8 +807,8 @@ func bigResultRunner(
 	reg := tools.NewRegistry()
 	for _, tl := range []stubTool{
 		{name: "read_file", out: out},
-		{name: runner.ReflectAndPersistTool, out: "noted"},
-		{name: runner.MarkOnboardedTool, out: "marked"},
+		{name: toolname.ReflectAndPersist, out: "noted"},
+		{name: toolname.MarkOnboarded, out: "marked"},
 	} {
 		if err := reg.Register(tl, tools.OriginBuiltin); err != nil {
 			t.Fatalf("Register: %v", err)

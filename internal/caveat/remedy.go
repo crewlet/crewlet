@@ -80,9 +80,15 @@ func CompanyTokenBudget() Remedy { return Remedy{Setting: SettingCompanyTokenBud
 // dashboard composes a seat's remedy from the row's own current handle, in this
 // same vocabulary.
 
-// NO MODELS CONSTRUCTOR either, for the seat's reason: a model at its usage
-// limit reaches a person as the seat's live `provider_limit`, and the
-// dashboard composes the remedy from it, in this same vocabulary.
+// A SEAT AT A MODEL'S LIMIT is the same: it reaches a person as the seat's
+// live `provider_limit`, and the dashboard composes the remedy from it, in
+// this same vocabulary. A REFUSAL a model's limit caused has nothing live
+// beside it, so it names the company's models itself ([ModelProviders]).
+
+// ModelProviders is the remedy of a refusal a model's usage limit caused: the
+// company's models, where the model is given a fallback or its plan changed
+// (ADR-0064).
+func ModelProviders() Remedy { return Remedy{Setting: SettingModelProviders} }
 
 // AssistantTokenBudget is the remedy of a refusal a person's own assistant
 // ceilings caused.

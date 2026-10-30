@@ -33,6 +33,7 @@ import { useNow } from "~/lib/clock.ts";
 import { fmtBytes, fmtDateTime, relTime } from "~/lib/format.ts";
 import { refusalText } from "~/lib/refusal.ts";
 import { needsWords } from "~/lib/access.ts";
+import { remedyFor } from "~/lib/authorityRemedy.ts";
 import { pathSegments } from "~/lib/segment.ts";
 import { pathSegment, rest, RestError } from "~/protocol/rest.ts";
 import type { WorkFile } from "~/protocol/index.ts";
@@ -134,9 +135,10 @@ function FileRow({ file }: { file: WorkFile }) {
       // either way nothing was saved, and the row says so where the button
       // was pressed rather than failing silently. A refusal on AUTHORITY names
       // the access the engine said would admit the reader (Worklet, the
-      // listing's own), and anything else is the engine's own words.
+      // listing's own) where the rule makes that access the way past it
+      // ([remedyFor]), and anything else is the engine's own words.
       setRefusal(
-        err instanceof RestError && err.status === 403 && err.grants.length > 0
+        err instanceof RestError && remedyFor(err.reason, err.grants).namesAccess
           ? needsWords("Downloading a project's file", err.grants)
           : refusalText(err),
       );

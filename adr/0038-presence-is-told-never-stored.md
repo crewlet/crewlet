@@ -2,14 +2,14 @@
 
 - **Status:** accepted
 - **Authority:** `internal/presence`
-- **Enforced-by:** `internal/presence.TestPresenceWritesNoRowAnywhere`, `internal/presence.TestAPresenceFrameTheFleetDidNotSealShowsNobody`, `internal/presence.TestPresenceExpiresAfterThreeMissedHeartbeats`, `internal/presence.TestABroadcastIsNeverRetained`
+- **Enforced-by:** `internal/presence.TestPresenceWritesNoRowAnywhere`, `internal/presence.TestAPresenceFrameTheFleetDidNotSealShowsNobody`, `internal/presence.TestPresenceExpiresAfterThreeMissedHeartbeats`, `internal/presence.TestABroadcastIsNeverRetained`, `internal/presence.TestARoomIsItsKindAndItsID`, `internal/api/stream.TestPresenceNeitherReachesNorNamesSomebodyOutsideTheRoom`
 - **Tag-status:** unreleased
 
 ## The decision
 
-Presence answers one question, "who is in this artifact right now, and what
-are they looking at", and the answer is worthless forty-five seconds after it
-stops being refreshed. So **who has to agree on it is nobody**: no row, no log
+Presence answers one question, "who is in this room right now, and what are
+they doing there" — an artifact's room or a chat room — and the answer is
+worthless forty-five seconds after it stops being refreshed. So **who has to agree on it is nobody**: no row, no log
 record and no coordination key holds it. That is a different answer from every
 one the earlier records give (the coordination store of
 [ADR-0003](0003-fleet-agreement-state-lives-in-coordination.md), the compacted
@@ -19,6 +19,15 @@ the shared store of
 and it is written down as one so that nobody later "fixes" it into durable
 storage.
 
+- **A room is its kind and its id.** An artifact's room is named by the
+  artifact and a chat room's by the room, and every kind rides the one hub:
+  one wire, one seal, one fan-out and one set of timings, so the way a
+  presence frame is sealed, coalesced and expired is decided once whatever
+  the room is of. What a kind owns is what its members can look at (an
+  artifact's version, region, record or field; the thread a chat member types
+  or answers under) and the one rule a kind adds: a chat room's typing member
+  is put back to viewing six seconds after nothing re-asserted it, because a
+  lid closed mid-word must not leave somebody typing for forty-five.
 - **A roster lives in the memory of the node holding the sockets.** A browser
   tells its node its focus and activity in a client frame on the socket,
   throttled at the client and coalesced by the node, each room on two clocks
@@ -32,8 +41,9 @@ storage.
   `Broadcast` and `Listen`, are core publish and subscribe on the broker: at
   most once, unordered, no stream, no consumer, no acknowledgement, and
   refused with `queue.ErrUnavailable` when the broker cannot be reached, so a
-  frame is never buffered into a reconnect. A node listens on an artifact's
-  presence subject only while one of its sockets is in that artifact's room.
+  frame is never buffered into a reconnect. A node listens on a room's
+  presence subject (`crewlet.rooms.<kind>.<id>`) only while one of its sockets
+  is in that room.
 - **A roster heals itself.** Each node rebroadcasts its local roster every
   fifteen seconds; an entry expires forty-five seconds after the last frame
   that named it, which is three missed rebroadcasts; and a node gaining its
@@ -48,12 +58,20 @@ storage.
   rosters below forty.
 - **Agents are present.** A tool session reading or writing an artifact
   announces itself as a person's tab does, so a person sees which agent is
-  editing which row.
+  editing which row; and a seat working on an answer in a chat room is its
+  member of that room's presence — editing, under the thread its answer will
+  land in, naming its turn and the phrase the room shows — raised by the node
+  running the turn and withdrawn when the turn lets go. The working indicator
+  is presence, never a record and never a channel of its own.
 
-Who may be in a room is decided like a read: joining asks `get_artifact`,
-three-valued, and the decision is taken again on every credential change and
-every share, unshare, trash, transfer and purge of that artifact. A refusal
-withdraws the room on a socket that stays open.
+Who may be in a room is decided like a read of what the room is of. Joining an
+artifact's room asks `get_artifact`, three-valued, and the decision is taken
+again on every credential change and every share, unshare, trash, transfer and
+purge of that artifact; a refusal withdraws the room on a socket that stays
+open. Joining a chat room asks the room's own visibility (`chatlet.Visible`), the
+rule every committed chat frame is filtered by, and a record that narrows the
+room takes out of its presence every socket whose reader it shuts out; a
+refusal leaves nothing, in the words a room that does not exist gets.
 
 ## Why the obvious alternatives are wrong
 
@@ -70,10 +88,16 @@ read back.
 **Each node polling every other** turns a room into many-to-many requests on a
 timer, which is the broadcast with worse latency and more traffic.
 
-**Unsigned frames**, as the inbox relay sends, would let anything on the broker
-put a colleague in a room they are not in. The relay is unsigned for its stated
-reason, that a forged answer only causes a re-read; a presence frame causes a
-display, so that reasoning does not carry over.
+**Unsigned frames** would let anything on the broker put a colleague in a room
+they are not in. A presence frame IS the display, with no read behind it to
+correct it, so nothing short of a seal makes it believable. Chat's presence was
+once exactly that: an unsigned fleet-wide scatter, `crewlet.chat.presence`, each
+node answering from its own sockets, so anybody who could reach the cluster port
+could show anybody typing in any room. It is gone, and a chat room is a room
+here. The live relay once leaned on the opposite reasoning — a read whose answer
+each socket's own filters decide and a screen's next read undoes — and is sealed
+now too, because what it relays is likewise shown as somebody's words
+([ADR-0031](0031-every-state-log-record-is-signed.md)'s amendment).
 
 ## Amendments to earlier records
 

@@ -12,8 +12,8 @@
  *     agents make looks and sounds), the Org chart, Schedules, Integrations
  *     (the services built into Crewlet above the third-party apps it
  *     connects) and Budgets, last.
- *   - WORKSPACE: what the company does with it. Worklet, Doclet, Artifacts and
- *     Live.
+ *   - WORKSPACE: what the company does with it. Worklet, Chatlet, Doclet,
+ *     Artifacts and Live.
  *   - The FOOT: Settings, the engine's state and the reader. Account has no
  *     row: the user block IS the reader, and opens it from its name and menu.
  *
@@ -30,8 +30,8 @@
  * Every Company row lives under `#/company`, so the first segment cannot say
  * which row a page is in. A row owns a prefix (`owns`, its landing unless it
  * says otherwise) and an address is in the row owning the LONGEST prefix of
- * it: `#/company/org/roster` is the Org chart's, `#/company` alone is the
- * Overview's. Settings lands on its first section, `#/settings/models`, and
+ * it: `#/company/org/roster` is the Org chart's, `#/company` alone is
+ * Principles'. Settings lands on its first section, `#/settings/models`, and
  * owns all of `#/settings`.
  *
  * # Addresses that moved
@@ -48,8 +48,9 @@
  *     Worklet, switched where the trail names it.
  *   - A SECTION is a PATH segment inside a workspace, drawn by one renderer:
  *     `tabs` in the page header, `lenses` beside Worklet's scope in the trail,
- *     `column` for Settings, or `none` where the workspace's own screens lead
- *     to it (Doclet's landing).
+ *     `column` for Settings, `rail` for Chatlet, whose screen draws them beside
+ *     its rooms, or `none` where the workspace's own screens lead to it
+ *     (Doclet's landing).
  *   - An OBJECT TAB is a `tab=` query on an object's own page, bound to 1-9.
  *
  * Nothing is two of those. A section is never a sidebar row and never a
@@ -59,7 +60,7 @@
  * # Hidden for a service the company does not run, locked for access
  *
  * A row or section that reads one of Crewlet's own services (its tracker,
- * Worklet, or its knowledge base, Doclet) names it
+ * Worklet, its knowledge base, Doclet, or its chat, Chatlet) names it
  * ([WorkspaceRow.service], [Section.service]). Where the company runs that
  * service elsewhere or not at all, the place is HIDDEN, never locked: there is
  * nothing to ask an admin for, and its addresses say so in place, to every
@@ -84,6 +85,7 @@ export type Workspace =
   | "integrations"
   | "budgets"
   | "worklet"
+  | "chatlet"
   | "doclet"
   | "artifacts"
   | "live"
@@ -93,33 +95,44 @@ export type Workspace =
 /**
  * A service built into Crewlet that a company may run elsewhere or not at
  * all: `tracker` is Worklet (projects, tasks, the Inbox's updates and My
- * work), `knowledge` is Doclet (spaces and pages). Named here
- * because the navigation hides what reads one the company does not run.
+ * work), `knowledge` is Doclet (spaces and pages), `chat` is
+ * Chatlet (rooms, threads and direct messages). Named here because the
+ * navigation hides what reads one the company does not run.
  */
-export type Service = "tracker" | "knowledge";
+export type Service = "tracker" | "knowledge" | "chat";
 
 /** Whether the company runs each of Crewlet's own services: what `lib/services.ts` reads off the wire. */
 export type ServicesRun = Readonly<Record<Service, boolean>>;
 
 /**
  * How a workspace draws its sections: `tabs` in the page header, a `column`
- * of them beside the screen (Settings), or `none`, where the workspace's own
- * screens lead to its sections (Home, Inbox, and Doclet, whose landing links
+ * of them beside the screen (Settings), a `rail`, or `none`, where the
+ * workspace's own screens lead to its sections (Home, Inbox, and Doclet,
+ * whose landing links
  * its two sections under "For the agents").
  *
  * `lenses` is Worklet's. Its sections are the lenses of the scope the trail
  * names, All projects, drawn beside the trail's switcher the way a project
  * draws its own lenses, so the bar reads one way in either scope and Worklet
  * keeps no row of tabs of its own.
+ *
+ * `rail` is Chatlet's, whose SCREEN draws its sections at the head of the list
+ * of its objects, the rooms (`routes/chatlet/Chat.tsx`), from this table. The
+ * frame draws nothing for a rail, neither a strip nor a column, because the
+ * tabs are drawn on a section's own page and never on an object's, and a room
+ * is the object page a chat reader spends their time on. It is not `none`
+ * because the screen that draws it reads the renderer: Chatlet's rail is drawn
+ * from the row that says `rail`, every section of it, and a `none` row says
+ * no frame or screen owes it a strip.
  */
-export type SectionRenderer = "tabs" | "lenses" | "column" | "none";
+export type SectionRenderer = "tabs" | "lenses" | "column" | "rail" | "none";
 
 /**
  * Where a workspace's row sits in the sidebar: the unlabelled run at the top
  * (`you`), the Company and Workspace groups, the foot, or `menu` for the one
- * with no row: the reader's own Account, which the user block at the sidebar's
- * foot links from its name and its menu, since that block already IS the
- * reader.
+ * with no row: the reader's own Account, which the menu the reader's name
+ * opens in the user block at the sidebar's foot links to, since that block
+ * already IS the reader.
  */
 export type SidebarPlace = "you" | "company" | "workspace" | "foot" | "menu";
 
@@ -241,8 +254,8 @@ export interface WorkspaceRow {
   personal?: boolean;
   /**
    * The service built into Crewlet the whole workspace reads, as
-   * [Section.service]: the Worklet workspace and My work read Worklet, and the
-   * Doclet workspace reads Doclet.
+   * [Section.service]: the Worklet workspace and My work read Worklet, the
+   * Doclet workspace reads Doclet, and Chatlet reads Chatlet.
    */
   service?: Service;
   /**
@@ -686,6 +699,63 @@ export const WORKSPACES: WorkspaceRow[] = [
     ],
   },
   {
+    // SECOND IN WORKSPACE, after Worklet and before what the company knows: the
+    // work, then the talking, then what the talking produced (Doclet and
+    // Artifacts).
+    //
+    // A RAIL, and the screen draws it. Chatlet's rooms are its own object list,
+    // drawn beside the transcript because they carry unread counts, mute
+    // state and a preview that no tab can hold — and a room is an OBJECT
+    // page, where the header draws no section tabs, so tabs would leave the
+    // mention feed two presses from every room. The two lists that are not a
+    // room sit at the head of the rail instead, drawn from the sections
+    // below: the landing's label heads the rooms, and every other section is
+    // a link under the name it has here.
+    key: "chatlet",
+    label: "Chatlet",
+    icon: "message-square",
+    path: ["chatlet"],
+    hint: "The company's own rooms, threads and direct messages",
+    keywords: ["messages", "rooms", "channels", "direct message", "dm"],
+    // THE LETTER OF CHATLET NO OTHER ROW HOLDS: `g c` is Company's Principles.
+    chord: "t",
+    place: "workspace",
+    renderer: "rail",
+    // THE CHATLET APP'S, every section and every room: each reads somebody's
+    // rooms as the seat the session holds, so the frame draws its one refusal
+    // in place of every chat page for a reader without it. What the screen
+    // answers is only what is chat's own: a credential acting as no seat.
+    grants: ["chatlet"],
+    // AND CHATLET'S: a company talking on Mattermost or Slack, or on
+    // nothing, has no room here to read, so the row is hidden as Worklet is on
+    // Jira, and its addresses say where the company's chat is instead
+    // (`ServiceNotice.tsx`).
+    service: "chat",
+    sections: [
+      {
+        key: "rooms",
+        label: "Rooms",
+        icon: "hash",
+        path: ["chatlet"],
+        hint: "Your rooms, newest activity first",
+      },
+      {
+        key: "mentions",
+        label: "Mentions",
+        icon: "bell",
+        path: ["chatlet", "mentions"],
+        hint: "Every message that named you, kept here since nothing is sent to you",
+      },
+      {
+        key: "search",
+        label: "Search chat",
+        icon: "search",
+        path: ["chatlet", "search"],
+        hint: "Rank what has been said in every room you can read",
+      },
+    ],
+  },
+  {
     key: "doclet",
     label: "Doclet",
     icon: "book-open",
@@ -1056,7 +1126,7 @@ export function ownedBy(row: WorkspaceRow): readonly string[] {
  * Which workspace a route belongs to, so the sidebar marks the right row.
  *
  * The row owning the LONGEST PREFIX of the address decides ([ownedBy]):
- * `#/company/org/roster` is the Org chart's, `#/company` the Overview's. The
+ * `#/company/org/roster` is the Org chart's, `#/company` Principles'. The
  * empty fragment is Home, which is the landing screen. An address no row owns
  * answers "", never the first row: a sidebar that marked a workspace for a
  * path it does not hold would tell the reader they are somewhere they are not.
@@ -1122,6 +1192,7 @@ export const RESERVED_SEGMENTS: string[] = [
   "views",
   "history",
   "search",
+  "mentions",
   "asked-of-me",
   "asked-by-me",
   "unblocked",
@@ -1173,6 +1244,13 @@ export const RESERVED_SEGMENTS: string[] = [
  * section moves. A section whose path IS its workspace's landing page is one
  * destination under the workspace's name, found by that section's words too:
  * Settings opens on Models, and "models" finds it.
+ *
+ * IT CARRIES NO GRANTS: what closes one is its ADDRESS's, decided by
+ * [closedBy] — the workspace's permissions first, then the section's — the
+ * rule the frame's refusal and the sidebar's locks read. A section's own
+ * list said nothing of the workspace around it, so every section of Worklet,
+ * My work and Chatlet was offered with no lock to a reader its workspace was
+ * closed to, and the press opened onto the refusal.
  */
 export interface Destination {
   key: string;
@@ -1186,8 +1264,6 @@ export interface Destination {
    * own for its landing, the section's for a section ([Section.keywords]).
    */
   keywords?: readonly string[];
-  /** What opens it, as [Section.grants]. */
-  grants?: readonly Grant[];
   /** The service built into Crewlet it reads, as [Section.service]: hidden where it is not run. */
   service?: Service;
 }
@@ -1202,12 +1278,10 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
     path: row.path,
     hint: row.hint,
     // A LANDING PAGE IS ALSO ITS LANDING SECTION, so it is found by that
-    // section's words as well as the workspace's, and its grants are what
-    // opens THAT PAGE (a Home widget summarising it reads them). The
-    // palette's entry for the workspace is locked as the workspace is, and
-    // opens where the reader may read ([landingPath], `palette/hits.ts`).
+    // section's words as well as the workspace's. The palette's entry for the
+    // workspace is locked as the workspace is, and opens where the reader may
+    // read ([landingPath], `palette/hits.ts`).
     ...keywordsOf([...(row.keywords ?? []), ...(own?.keywords ?? [])]),
-    ...grantsOf(row.grants ?? own?.grants),
     ...serviceOf(row.service ?? own?.service),
   };
   const sections = row.sections
@@ -1220,7 +1294,6 @@ export const DESTINATIONS: Destination[] = WORKSPACES.flatMap((row) => {
       path: s.path,
       hint: s.hint,
       ...keywordsOf(s.keywords),
-      ...grantsOf(s.grants),
       ...serviceOf(row.service ?? s.service),
     }));
   return [landing, ...sections];
@@ -1243,10 +1316,6 @@ export function sectionOf(path: readonly string[]): Section | undefined {
     if (!best || section.path.length > best.path.length) best = section;
   }
   return best;
-}
-
-function grantsOf(needs: readonly Grant[] | undefined): { grants?: readonly Grant[] } {
-  return needs && needs.length > 0 ? { grants: needs } : {};
 }
 
 function keywordsOf(words: readonly string[] | undefined): { keywords?: readonly string[] } {

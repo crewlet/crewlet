@@ -63,9 +63,10 @@ const (
 	// on purpose: both blocks are frozen into the same system prompt and
 	// re-sent on every round of every phase, and this one must not
 	// dominate the one carrying the seat's own cross-turn history. A third
-	// is roughly 2k tokens — thirty chat messages, which is the item cap
-	// above, and the ceiling bites only on a thread whose messages are
-	// documents rather than replies.
+	// is roughly 2k tokens — about thirty ordinary chat messages, the count
+	// the bound above replaced — so the ceiling bites on a thread longer
+	// than that or one whose messages are documents rather than replies,
+	// and what it bites is condensed rather than dropped.
 	//
 	// NOT A CONFIG FIELD. config.ConversationSession's doc records what
 	// happened the last time a render bound here was exposed: two knobs
@@ -83,11 +84,28 @@ const (
 	//
 	// ITS OWN, and deliberately NOT [AuxTimeout]: thirty seconds is
 	// justified for an LLM round trip and is nowhere near justified here.
-	// Five seconds is under the self-hosted client's own 10s retry budget,
-	// so that client's automatic 429 retry cannot turn a prefetch into a
-	// ten-second stall at the start of every chat turn — and the
-	// prefetch's wall clock is its SLOWEST block, which is latency a
-	// person is sitting through.
+	// The prefetch's wall clock is its SLOWEST block, which is latency a
+	// person is sitting through, so five seconds is decided against what
+	// each backend's read can cost:
+	//
+	//   - A VENDOR read is one HTTP call, and five seconds is under the
+	//     self-hosted client's own 10s retry budget, so that client's
+	//     automatic 429 retry cannot turn a prefetch into a ten-second
+	//     stall at the start of every chat turn.
+	//   - The ENGINE'S OWN chat is a linearizable estate read, routed to a
+	//     data node where this one holds none. The serving node may wait a
+	//     statelog.ReadBudget (2s) for the floor and another for the level,
+	//     then runs one indexed query — so a holder that is answering at
+	//     all answers inside four seconds, and the second that remains is
+	//     the query and the round trip. A test holds the two together.
+	//     What it does NOT cover is a FAILOVER: the router gives one node
+	//     ten seconds (estate.ReadAttempt) before asking the next, so a
+	//     first holder that is gone renders the unreadable hint — which
+	//     sends the seat to read the thread with its own tools — rather
+	//     than holding the turn a person is waiting on for the ten-plus
+	//     seconds a failover takes. Every other read the turn makes goes
+	//     through the same router with its own budget, so the thread is
+	//     still one tool call away.
 	ThreadTimeout = 5 * time.Second
 )
 
@@ -329,7 +347,10 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	// and only left out, and counted, where no rewrite can be had.
 	condensed := ""
 	if len(middle) > 0 {
-		res, err := f.src.Compact.For(r.Seat, r.Aux).Fit(ctx, compact.KindThread,
+		// THE REWRITE READS THEM AS THEIR WORDS, fenced under who said
+		// them, exactly as the seat reads the rest of the thread.
+		label := threadLabel(r.Seat.Handle(), authorsMiddle, read.Hosted)
+		res, err := f.src.Compact.For(r.Seat, r.Aux).Labelled(label).Fit(ctx, compact.KindThread,
 			strings.Join(middle, "\n"), threadMaxChars/threadEarlierShare)
 		switch {
 		case err == nil && !res.Compacted:
@@ -376,8 +397,8 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 		for _, line := range lines[1:] {
 			said.WriteString("\n" + line)
 		}
-		b.WriteString("\n" + provenance.Fence(r.Boundary, provenance.SourceChatThread,
-			provenance.TrustFor(r.Seat.Handle(), authors), authors, said.String()))
+		b.WriteString("\n" + threadLabel(r.Seat.Handle(), authors, read.Hosted).Fence(
+			r.Boundary, said.String()))
 	}
 	if dropped > 0 {
 		// SAID OUT LOUD, and OUTSIDE THE FENCE, because it is the engine
@@ -466,6 +487,18 @@ func (f *Fetcher) renderPost(m notify.Message, backend string) string {
 	return "- **" + f.speaker(m, backend) + "**: " + text
 }
 
+// threadLabel is what a thread's lines are fenced under: who said them, at the
+// trust they earn from the seat self. On the engine's own chat it is the rule
+// every door to a hosted surface reads by ([provenance.LabelForHosted]), so a
+// line whose sender nobody can name is a colleague's there — as the same
+// message is when it wakes the seat — and on a vendor's an outside party's.
+func threadLabel(self string, authors []provenance.Author, hosted bool) provenance.Label {
+	if hosted {
+		return provenance.LabelForHosted(self, provenance.SourceChatThread, authors, true)
+	}
+	return provenance.LabelFor(self, provenance.SourceChatThread, authors)
+}
+
 // author is who said it, as the fence names them: the seat itself for its own
 // replies, a colleague's seat where the party registry knows the sender, and
 // otherwise somebody nothing vouches for. The SAME lookup [Fetcher.speaker]
@@ -477,15 +510,14 @@ func (f *Fetcher) author(r Request, m notify.Message, backend string) provenance
 	if f.src.Parties != nil && backend != "" && m.SenderID != "" {
 		if party, ok := f.src.Parties.ByExternalID(backend, m.SenderID); ok &&
 			strings.TrimSpace(party.Handle) != "" {
-			kind := iam.ActorAgent
-			if party.Human {
-				kind = iam.ActorHuman
-			}
-			return provenance.Author{Kind: kind, Seat: strings.TrimSpace(party.Handle)}
+			party.Handle = strings.TrimSpace(party.Handle)
+			return notify.PartyAuthor(party)
 		}
 	}
-	// AN OUTSIDE PARTY: a person or a bot in a shared channel the company
-	// does not know. Its kind is not something the backend's answer proves.
+	// NOBODY THE ANSWER PROVES: on a vendor's backend a person or a bot in a
+	// shared channel the company does not know, and on the engine's own chat
+	// a sender the roster no longer names, which [threadLabel] reads as a
+	// writer the record could not name rather than as an outside party.
 	return provenance.Author{}
 }
 

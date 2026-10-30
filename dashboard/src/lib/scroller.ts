@@ -11,14 +11,16 @@
  *
  * IT IS NOT THE ONLY SCROLLER, and two others are worth knowing about before
  * reasoning about where a wheel goes or what `reveal` moves. A FULL-HEIGHT
- * screen (`useFillScreen`: a task, the Inbox, a knowledge page) holds this
- * element still and lets its own columns scroll — each exactly this element's
- * height, so `100cqb` is their view too, and on those screens THEY are the
- * page's scrollers. And a box inside the page may scroll its own content (a
- * running phase's transcript, a seat's thread list, a board lane, a long
- * record): none of those is the page, and each is bounded by the view and
- * hands the wheel back, at either end, to whichever of the two scrolls it
- * (see "The document does not scroll" in docs/reference/dashboard-design.md).
+ * screen (`useFillScreen`, whose doc in `app/fill.tsx` names the screens that
+ * ask and when each withdraws) holds this element still: a canvas fills it and
+ * pans rather than scrolls, and a two-column screen (Chatlet's rail and its
+ * transcript among them) lets its own columns scroll — each exactly this
+ * element's height, so `100cqb` is their view too, and on those screens THEY
+ * are the page's scrollers. And a box inside the page may scroll its own
+ * content (a running phase's transcript, a seat's thread list, a board lane, a
+ * long record): none of those is the page, and each is bounded by the view and
+ * hands the wheel back, at either end, to whichever of the two scrolls it (see
+ * "The document does not scroll" in docs/reference/dashboard-design.md).
  *
  * It had two spellings. The router restored a remembered position through
  * `getElementById("screen-scroll")` and the settled-list hook asked whether

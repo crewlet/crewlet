@@ -61,6 +61,7 @@ import {
 } from "react";
 import { Button, Callout, Card, CodeBlock, Tag, cx, InlineCode } from "@crewlethq/ui";
 import { ClockGlyph, CircleAlertGlyph, SquareTerminalGlyph, XGlyph } from "@crewlethq/icons/glyphs";
+import { QueryState } from "~/components/common.tsx";
 import { NowLine } from "~/components/time/NowLine.tsx";
 import { SpanBar } from "~/components/time/SpanBar.tsx";
 import { TimeAxis } from "~/components/time/TimeAxis.tsx";
@@ -338,7 +339,7 @@ export function Waterfall({
                     data-span={s.id}
                     tabIndex={s.id === stop ? 0 : -1}
                     aria-pressed={s.id === selected}
-                    title={`${s.label}${s.sub ? ` · ${s.sub}` : ""} — ${
+                    title={`${s.label}${s.sub ? ` · ${s.sub}` : ""}: ${
                       s.open
                         ? `running for ${fmtDuration(now - s.start)}`
                         : fmtDuration(s.end - s.start)
@@ -581,7 +582,7 @@ function InvocationDetail({ span, record }: { span: Span; record: PhaseRecord })
   if (!run) {
     return (
       <span className="t-caption">
-        Still running — what it made and spent lands when its CLI exits.
+        Still running: what it made and spent lands when its CLI exits.
       </span>
     );
   }
@@ -595,14 +596,14 @@ function InvocationDetail({ span, record }: { span: Span; record: PhaseRecord })
         [
           "Rounds",
           made === 0
-            ? "none — it made no model request"
+            ? "none (it made no model request)"
             : made === 1
               ? `round ${run.firstRound}`
               : `rounds ${run.firstRound}–${run.lastRound}`,
         ],
         [
           "Requests",
-          run.requestsObserved ? "" : "not shown by its CLI — the whole run is one round",
+          run.requestsObserved ? "" : "not shown by its CLI, so the whole run is one round",
         ],
         [
           "Tokens",
@@ -862,14 +863,15 @@ export function LiveOutput({
   }, [tail.text]);
 
   let notice: ReactNode = null;
-  if (!answer) {
-    notice = tail.error ? (
-      <Callout variant="warning">The run&rsquo;s output could not be read: {tail.error}.</Callout>
-    ) : (
-      <span className="t-caption">Asking the node that runs it…</span>
-    );
-  } else if (tail.error) {
-    notice = <Callout variant="warning">Last read failed ({tail.error}). Retrying.</Callout>;
+  // A FAILED READ IS TOLD IN THE ENGINE'S WORDS (`QueryState`, every screen's
+  // one reading of a failure): its sentence for what happened and whether
+  // waiting changes it. It printed the code, so a person read "unavailable"
+  // or "query_failed" and nothing they could act on. What the view holds stays
+  // under it, stamped with when it was read.
+  if (tail.error) {
+    notice = <QueryState error={tail.error} refusal={tail.refusal} loading={false} />;
+  } else if (!answer) {
+    notice = <span className="t-caption">Asking the node that runs it…</span>;
   } else if (answer.outcome === "owner_silent") {
     notice = (
       <Callout variant="warning">
@@ -880,6 +882,13 @@ export function LiveOutput({
     notice = <span className="t-caption">Setting up. Output appears when the agent starts.</span>;
   } else if (answer.outcome === "box_paused") {
     notice = <span className="t-caption">Finished. Output appears on the run&rsquo;s record.</span>;
+  } else if (answer.outcome === "box_gone") {
+    notice = (
+      <span className="t-caption">
+        The run&rsquo;s box is gone, so no more output will come from this job. Its record will say
+        what happens next.
+      </span>
+    );
   } else if (answer.outcome === "not_running") {
     notice = (
       <span className="t-caption">
@@ -977,6 +986,8 @@ export function liveState(answer: SandboxTailAnswer | null | undefined, failed: 
       return "The job is being set up.";
     case "box_paused":
       return "The run's box is paused; its job has finished.";
+    case "box_gone":
+      return "The run's box is gone.";
     case "not_running":
       return "The run is no longer running.";
     default:

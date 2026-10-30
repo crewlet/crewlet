@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/llmtest"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // THE WITHHELD FINISHING CORRECTIVE, on the one engine-driven phase whose
@@ -42,7 +43,7 @@ func declining() llmtest.Response { return text("I have read everything I need."
 func finishingCorrectivesIn(req llm.Request) int {
 	n := 0
 	for _, m := range req.Messages {
-		if isFinishingCorrective(m, runner.MarkOnboardedTool) {
+		if isFinishingCorrective(m, toolname.MarkOnboarded) {
 			n++
 		}
 	}
@@ -84,7 +85,7 @@ func TestADeclineOnTheBudgetsLastRoundIsAskedAgainWithinTheCeiling(t *testing.T)
 	if len(reqs) != 2 {
 		t.Fatalf("the pass took %d CLI runs, want the declined one and the corrected one", len(reqs))
 	}
-	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, runner.MarkOnboardedTool) {
+	if last := reqs[1].Messages[len(reqs[1].Messages)-1]; !isFinishingCorrective(last, toolname.MarkOnboarded) {
 		t.Errorf("round 3 opened on %q, want the withheld finishing corrective", last.Content)
 	}
 	if n := judge.calls.Load(); n != 0 {

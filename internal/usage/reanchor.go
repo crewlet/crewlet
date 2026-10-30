@@ -29,10 +29,31 @@ import "github.com/crewlet/crewlet/internal/statelog"
 // the generation, the stream and the instant it was keyed to.
 //
 // Nor does it reset any row: every row below the new generation is below every
-// record the adopted log will carry, and the publisher republishes today and
-// yesterday at its next boot ([Publisher]) — so the days that can still move
-// move, and an older day stays exactly as true as it was until the horizon
-// takes it.
+// record the adopted log will carry.
+//
+// # And every day is published again, by every data node
+//
+// A RECREATED log holds none of what the rows came from and is followed from
+// its first record, so everything published onto it is applied. A RESTORED one
+// is followed from its END — replayed into the new generation, the copy's older
+// records would outrank every row and roll each day back (statelog's
+// [statelog.ReanchorRestored]) — so the node that re-anchors never applies what
+// the data nodes published after the restore and before its reanchor. A day
+// published in that tail and not moved since would stay at its pre-restore
+// value on that node for the 181 days the history holds it, since a publisher
+// sends a day only when it moves.
+//
+// So a reanchor of this log, in either case, is followed by every data node
+// publishing every day its own event log still holds again (republish.go): the
+// re-anchoring node's generation rises in the positions register — its own
+// publisher reads it off its runner, and is woken when the applier the
+// reanchor relaunched first drains — and every other data node's publisher
+// sees the rise on its next heartbeat. The records go out under operation ids
+// no copy from before the rise carries, so the broker cannot collapse an
+// unchanged day onto the copy the reanchor skipped. A day past the event log's
+// floor is not derived again, so a day republished in the tail more than the
+// event log's history before the reanchor keeps its pre-restore value on the
+// re-anchoring node.
 
 // GenerationRecord is the usage domain's [statelog.GenerationEncoder], and it
 // reports that the domain keeps none.

@@ -249,16 +249,18 @@ func (c *secretsClient) Values(ctx context.Context, names []string) (map[string]
 	return out, nil
 }
 
-// Unset removes one value, reporting whether it was there.
-func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
+// Unset removes one value, reporting whether it was there and what the
+// node's re-activation of the revision that read it did (ADR-0070).
+func (c *secretsClient) Unset(ctx context.Context, name string) (removedSecret, error) {
 	var body struct {
-		Removed bool `json:"removed"`
+		Removed bool                `json:"removed"`
+		Reload  *configapi.Reloaded `json:"reload"`
 	}
 	err := c.call(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, &body)
 	if err != nil {
-		return false, err
+		return removedSecret{}, err
 	}
-	return body.Removed, nil
+	return removedSecret{Removed: body.Removed, Reload: body.Reload}, nil
 }
 
 // Rekey re-seals every stale row on the node.
@@ -424,9 +426,8 @@ const maxListingBytes = 64 << 20
 func (c *secretsClient) refusal(status int, path string, header http.Header, raw []byte) error {
 	own := ownBody(header, raw)
 	var body struct {
-		Error  string `json:"error"`
-		Detail string `json:"detail"`
-		Hint   string `json:"hint"`
+		refusalWords
+		Error string `json:"error"`
 	}
 	_ = json.Unmarshal(own, &body)
 	switch {
@@ -445,7 +446,7 @@ func (c *secretsClient) refusal(status int, path string, header http.Header, raw
 		// as a missing grant would go and ask for one.
 		return fmt.Errorf("%w: %s", secrets.ErrReservedName,
 			withRefusalDetail(strings.TrimPrefix(
-				strings.SplitN(path, "?", 2)[0], "/secrets/"), "", body.Hint))
+				strings.SplitN(path, "?", 2)[0], "/secrets/"), refusalWords{Hint: body.Hint}))
 	}
 	if own != nil {
 		if msg, ok := credentialRefusal(status, own, true); ok {
@@ -459,9 +460,9 @@ func (c *secretsClient) refusal(status int, path string, header http.Header, raw
 	// A [nodeRefusal], so a caller can tell a refused credential from a
 	// node that is failing ([refusedTheToken]): the remedy for the first is
 	// the token, and for the second the node.
-	return &nodeRefusal{Status: status, Code: body.Error, detail: body.Detail, hint: body.Hint,
+	return &nodeRefusal{Status: status, Code: body.Error, words: body.refusalWords,
 		msg: fmt.Sprintf("%s answered %d for %s: %s",
-			c.base, status, path, withRefusalDetail(msg, body.Detail, body.Hint))}
+			c.base, status, path, withRefusalDetail(msg, body.refusalWords))}
 }
 
 // refusedTheToken reports whether err is the node refusing the credential

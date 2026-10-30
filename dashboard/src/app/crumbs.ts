@@ -307,6 +307,21 @@ export function crumbsFor(path: string[], labels: Labels = {}): Crumb[] {
           ]
         : [root(row, true), object];
     }
+    case "chatlet":
+      // A ROOM IS A UUID, so the fallback is `mono` — the crumb is an address
+      // until the screen publishes the room's name, and drawn in the
+      // proportional face an unresolved id reads as something somebody called
+      // a channel.
+      //
+      // THE THREAD IS NOT A SEGMENT and so is not a crumb: it is `?thread=` on
+      // the room, which the trail deliberately ignores the way it ignores every
+      // other query — a pane open beside a room is not a place the reader has
+      // gone.
+      return where.id ? inside("rooms", named(labels, where.id)) : [root(row, false)];
+    case "chatlet-mentions":
+      return sectionPage("mentions");
+    case "chatlet-search":
+      return sectionPage("search");
     case "turns":
       return sectionPage("turns");
     case "turn": {

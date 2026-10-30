@@ -81,6 +81,7 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("tracing")
@@ -426,7 +427,7 @@ func newExporter(ctx context.Context, opts Options, endpoint string) (sdktrace.S
 		return exp, nil
 	default:
 		return nil, fmt.Errorf("%s=%q is not a protocol this build speaks; use one of %s",
-			ProtocolVar, p, strings.Join(Protocols, ", "))
+			ProtocolVar, p, words.Or(Protocols))
 	}
 }
 

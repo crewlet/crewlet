@@ -92,7 +92,7 @@ func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 	authorize(&b, config.APIToken{ID: "founder", Token: "founder-secret"},
 		config.APIToken{ID: "ci", Token: "ci-secret",
 			Grants: []iam.Grant{iam.GrantDoclet}})
-	operators, err := operator.New(operator.Options{
+	operators, err := operator.New(withSeatControls(operator.Options{
 		Halves: func() (operator.Halves, bool) {
 			return operator.Halves{Work: builtin.WorkDeps{
 				Reader: stubWorkReader{},
@@ -101,7 +101,7 @@ func auditedApp(t *testing.T, taker *fakeBackup) (*api.App, *recordedAudit) {
 		},
 		Authorize: builtin.Decide(authz.NoChart{}),
 		Audit:     audit,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
 	}

@@ -53,11 +53,11 @@ var ReproducibleTables = []string{
 //
 // THEY DO NOT ALL TRAVEL. The deferred record and its scope are this node's
 // own verdict about bytes this build could not decode, and are scrubbed out of
-// every donated snapshot. The operation ledger (pages_ops) TRAVELS: its rows are
-// what every node's applier writes from the same records, so the donor's are
-// exactly the ones this node would have written, and an adopter without them
-// cannot tell a first attempt from a retry of anything the donor applied — see
-// [statelog.Domain.OpsTable].
+// every donated snapshot. The operation ledger (pages_ops) TRAVELS: its rows
+// are what every data node's applier writes from the same records, so the
+// donor's are exactly the ones this node would have written, and an adopter
+// without them cannot tell a first attempt from a retry of anything the donor
+// applied — see [statelog.Domain.OpsTable].
 var MachineryTables = []string{
 	"pages_ops", "pages_log_deferred", "pages_log_deferred_scope",
 }

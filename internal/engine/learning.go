@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/compact"
@@ -135,8 +136,8 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 			synthesizerOptions(cfg.SkillSynthesis))
 		if err != nil {
 			log.Warn("skill_synthesizer_unavailable", "error", err,
-				"detail", "no skill will ever be drafted, so use_skill and the "+
-					"skill catalogue stay empty")
+				"detail", "no skill will ever be drafted, so "+builtin.UseSkillTool+
+					" and the skill catalogue stay empty")
 		} else {
 			workers = append(workers, synth)
 		}
@@ -162,7 +163,7 @@ func (e *Engine) buildReflectionWorkers(c *Company) []learning.Worker {
 			if err != nil {
 				log.Warn("skill_refiner_unavailable", "error", err,
 					"detail", "no skill will be refined after a turn; only the "+
-						"refine_skill tool will ever change one")
+						builtin.RefineSkillTool+" tool will ever change one")
 			} else {
 				workers = append(workers, refiner)
 			}

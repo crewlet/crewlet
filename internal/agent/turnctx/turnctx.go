@@ -221,10 +221,11 @@ type Turn struct {
 	// product a person would recognise it by.
 	Transport string
 
-	// Task is the ask this turn is working on, and Reply says who is
-	// waiting for it — [turn.Reply]'s wire value, carried as a plain
-	// string so this package does not import the turn engine it is
-	// carried through.
+	// Task is the ask this turn is working on, as its executor is briefed
+	// with it (somebody else's words in it fenced under [Turn.Boundary]),
+	// and Reply says who is waiting for it — [turn.Reply]'s wire value,
+	// carried as a plain string so this package does not import the turn
+	// engine it is carried through.
 	//
 	// Both travel for the same reason the two conversation values do: work
 	// this turn STARTS can outlive it. A detached coding run is resumed in another
@@ -234,6 +235,17 @@ type Turn struct {
 	// request somebody is still waiting for.
 	Task  string
 	Reply string
+
+	// Title is what a person reads this turn's work by: what the turn was
+	// asked, in its trigger's own words and with no fence (the turn's
+	// record of it, [types.TurnCompleted.Ask]), or where the trigger stated
+	// no ask, the line a feed shows the trigger by ([types.Trigger.Summary]).
+	// A coding run the turn launches is listed under it (the run's
+	// description and its label), on the dashboard and in its announcement
+	// alike, where [Turn.Task], the model's brief, would show a person the
+	// fence lines and the escapes that are written for a model alone. A
+	// resumed segment carries the line its run is already listed under.
+	Title string
 
 	// Requester is the handle of the seat whose message, notice or ask woke
 	// this turn, and empty when no seat did — a schedule, a sender the org

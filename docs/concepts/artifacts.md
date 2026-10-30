@@ -20,7 +20,7 @@ Seven kinds ship in this release:
 
 The motivating case is a review table an agent hands to a team: the agent
 publishes it, three reviewers and the agent tick boxes and pick statuses in it
-at the same time, every edit lands on every node in the same order, and
+at the same time, every edit lands on every data node in the same order, and
 everybody sees who is in which row.
 
 ```mermaid
@@ -202,7 +202,7 @@ uploads_outstanding`, naming when the oldest reservation expires.
 
 **The quotas are Tier A**, because a tenant administrator must not raise their
 own, and each record that consumes quota carries the limits it was decided
-under, so every node applies it identically:
+under, so every data node applies it identically:
 
 | Key | Default | Bounds |
 |---|---|---|
@@ -274,7 +274,11 @@ What an **agent** may do is narrower than its shares, on purpose:
 - every artifact tool passes the **requester ceiling**: an agent reads for
   somebody only what that somebody could read, and writes for them only what
   they could write, except on an artifact the agent owns, which anybody who
-  can message the agent may ask it to change.
+  can message the agent may ask it to change. The somebody is whoever woke the
+  turn: a colleague's ask, or the first speaker of the message, comment or
+  remark it answers, on a vendor's surface or on the engine's own tracker,
+  knowledge base and chat alike. A turn woken by somebody the company does not
+  know does nothing on an artifact beyond those changes to the agent's own.
 
 "**Seen by**" lists who has opened an artifact, to its editors and above. It is
 on by default, and a company turns it off with `artifacts.seen_by: nobody`.
@@ -503,9 +507,9 @@ flowchart LR
 **The write is decided where it is applied.** Each store is one sequenced log:
 the API decides what needs identity or the org chart (the caller's role on the
 artifact, whether the caller is an agent, the quotas in force) and stamps it
-into the record; every node's applier then decides the rest from the record
+into the record; every data node's applier then decides the rest from the record
 and its own rows (names, schema, field rules, version guards, caps), in log
-order, so every node reaches the same verdict: `applied`, `conflict`,
+order, so every data node reaches the same verdict: `applied`, `conflict`,
 `invalid`, `forbidden`, `quota` or `gone`. The writer reads its own verdict
 back; a `conflict` answer carries the current documents to merge with. A sheet
 in the dashboard shows an edit at once as pending and makes it solid when the
@@ -561,6 +565,10 @@ flowchart LR
 - Each node rebroadcasts its roster every 15 seconds; an entry expires 45
   seconds after the last frame naming it. A node gaining its first member of a
   room asks its peers once, so a newcomer sees the room at once.
+- A tab joining a room is handed the room as the node's other tabs are being
+  shown it, with itself beside them, and every change after that in the order
+  the node took it — never one ahead of the room it changes — so no tab goes on
+  showing somebody who has left, or somebody as they were before they moved.
 - Every frame between nodes is sealed under the fleet keyring with a
   60-second validity; a frame the fleet did not seal shows nobody.
 - Past 50 members a room shows the 50 most recently active plus counts of

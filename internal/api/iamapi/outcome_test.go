@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -345,6 +346,67 @@ func TestADirectoryWriteThatFaultedKeepsItsWordsInTheLog(t *testing.T) {
 	}
 }
 
+// THE STATE LOG'S REFUSALS ARE TOLD IN WORDS FOR A PERSON.
+//
+// Each is the state log's refusal, and its error names the subject it met: the
+// directory answered a lost race with "statelog: conflict:
+// crewlet.iam.directory kept changing under this write", and a person removed
+// under the route, or a key whose operation already names another write, with
+// the framework's whole refusal, as the `detail` an administrator reads. A lost
+// race and a reused key are told in the words every surface tells them in
+// ([statelog.Sentence], [opkey.Reused]), and a removal as the removal it is —
+// the framework's own words for it say "deleted", which nobody does to a
+// person here — each under the status it always had. So is a CONDITION of the
+// node, in the state log's sentence for its code
+// ([statelog.ConditionSentence]): it was "statelog: unavailable (behind): "
+// and the position the write needed.
+//
+// Mutation: answer any arm's `detail` with the error's own text again and its
+// row goes red.
+func TestTheStateLogsRefusalsAreToldInWordsForAPerson(t *testing.T) {
+	t.Parallel()
+	behindSaid, _ := statelog.ConditionSentence(&statelog.Unavailable{Reason: statelog.ReasonBehind})
+	fullSaid, _ := statelog.ConditionSentence(&statelog.Unavailable{Reason: statelog.ReasonLogFull})
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+		says   string
+	}{
+		{"a lost race", fmt.Errorf("%w: crewlet.iam.directory kept changing under "+
+			"this write", statelog.ErrConflict), http.StatusConflict, statelog.LostRace},
+		{"a removal", fmt.Errorf("iamdomain: publish: %w", &statelog.Unavailable{
+			Reason: statelog.ReasonDeleted,
+			Detail: "crewlet.iam.person.p-1 was deleted and stays deleted"}),
+			http.StatusNotFound, "This person was removed, so nothing was written."},
+		{"a reused key", fmt.Errorf("%w: %w", iamdomain.ErrOperationReused,
+			&statelog.Unavailable{Reason: statelog.ReasonOpReused,
+				Detail: `operation "op" landed on crewlet.iam.directory at 3:4, and ` +
+					`this write is to crewlet.iam.person.p-1`}),
+			http.StatusConflict, opkey.Reused},
+		{"a node behind its log", fmt.Errorf("iamdomain: publish: %w", &statelog.Unavailable{
+			Reason: statelog.ReasonBehind,
+			Detail: "the write needs this node to have applied 3:4182"}),
+			http.StatusServiceUnavailable, behindSaid},
+		{"a log at its ceiling", fmt.Errorf("iamdomain: publish: %w", &statelog.Unavailable{
+			Reason: statelog.ReasonLogFull,
+			Detail: "raise stream.identity_max_bytes"}),
+			http.StatusServiceUnavailable, fullSaid},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.err = tc.err
+			got := r.as(administrator(), http.MethodDelete,
+				"/iam/people/"+bob.String()+"/sessions", nil)
+			if got.status != tc.status || got.body["detail"] != tc.says {
+				t.Errorf("answered %d with detail %q, want %d with %q", got.status,
+					got.body["detail"], tc.status, tc.says)
+			}
+		})
+	}
+}
+
 // A LINK WITH NO ADDRESS TO POINT AT IS A FAULT, NOT AN OUTAGE — an
 // invitation's, and a created person's first password link alike.
 //
@@ -499,5 +561,142 @@ func TestEveryUnavailableAnswerHereSaysWhetherToComeBack(t *testing.T) {
 	// THE CONTROL: a glob that matched nothing would pass every rule.
 	if checked < 5 {
 		t.Fatalf("checked %d source files, which is not this package", checked)
+	}
+}
+
+// A REUSED KEY IS ANSWERED AS EVERY SURFACE THAT TAKES A KEY ANSWERS ONE:
+// `409 invalid_input` naming the header as the field to change, with the
+// operation it was sent under. It was `bad_params` here, whose sentence is about
+// a query parameter, while the act route answered the same refusal
+// `invalid_input`, so one gesture read two ways under two codes. Both of the
+// directory's reused keys are held: the state log's, told in [opkey.Reused],
+// and the directory's own decide's, told in its own sentence, which says what
+// the key already did.
+//
+// Mutation: answer either with `bad_params` again, or drop the field, and its
+// row goes red.
+func TestAReusedKeyIsAnsweredAsEverySurfaceTakingAKeyAnswersIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		err  error
+		says string
+	}{
+		{"the state log's", fmt.Errorf("%w: %w", iamdomain.ErrOperationReused,
+			&statelog.Unavailable{Reason: statelog.ReasonOpReused,
+				Detail: `operation "op" landed on crewlet.iam.directory at 3:4`}), opkey.Reused},
+		{"the directory's own", fmt.Errorf("%w: the invitation it sent has "+
+			"expired. Send a new one with a new key", iamdomain.ErrOperationReused),
+			"Send a new one with a new key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.err = tc.err
+			got := r.as(administrator(), http.MethodDelete,
+				"/iam/people/"+bob.String()+"/sessions", nil)
+			detail, _ := got.body["detail"].(string)
+			if got.status != http.StatusConflict || got.body["error"] != "invalid_input" ||
+				got.body["field"] != opkey.Header || got.body["op_id"] == nil ||
+				!strings.Contains(detail, tc.says) {
+				t.Errorf("answered %d %v, want 409 invalid_input naming %s and the "+
+					"op_id, with a detail saying %q", got.status, got.body, opkey.Header,
+					tc.says)
+			}
+		})
+	}
+}
+
+// A CREATE THAT LANDED AND CANNOT BE READ BACK HERE IS TOLD AS LANDED — a
+// person's, and an invitation's.
+//
+// The retry of a create, on a node that has not applied it, finds the person
+// (or the invitation) it made absent here: the link it carried cannot be
+// handed back until the rows arrive. It was a bare state-log sentinel behind a
+// sentence, which this surface told as a condition of the node ("couldn't do
+// this right now"), so an administrator read that a create that had landed
+// had not; and a client that replaces its key after anything but an unknown
+// outcome sent its retry under a new key, refused by the address and the seat
+// the first attempt now held — the link lost. It says what landed, carries the
+// write's own outcome, never `unknown`, beside the op id the same request is
+// sent again under, and names the person it made.
+//
+// Mutation: drop the NotReadBack arm from answer, and both rows answer the
+// condition's sentence with no outcome.
+func TestACreateThatLandedAndCannotBeReadBackIsToldAsLanded(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, target string
+		invitation   bool
+		says         string
+	}{
+		{"a person's create", "/iam/people", false, "They were added, but this " +
+			"node can't show their first password link yet. Send the same " +
+			"request again in a moment to get it."},
+		{"an invitation", "/iam/invitations", true, "The invitation was sent, " +
+			"but this node can't show its link yet. Send the same request " +
+			"again in a moment to get it."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.writer.err = &iamdomain.NotReadBack{Invitation: tc.invitation,
+				Result: statelog.Result{Outcome: statelog.OutcomePending}}
+			got := r.as(administrator(), http.MethodPost, tc.target,
+				map[string]any{"email": "dana@example.com", "seat": "sre",
+					"grants": iam.Apps})
+			if got.status != http.StatusServiceUnavailable ||
+				got.body["detail"] != tc.says ||
+				got.body["outcome"] != string(statelog.OutcomePending) ||
+				got.body["op_id"] == nil || got.header.Get("Retry-After") == "" {
+				t.Errorf("answered %d %v (Retry-After %q), want 503 saying %q with "+
+					"the outcome, the op id and a hint", got.status, got.body,
+					got.header.Get("Retry-After"), tc.says)
+			}
+			if _, named := got.body["id"]; named == tc.invitation {
+				t.Errorf("the answer names the person it made: %v, want %v",
+					named, !tc.invitation)
+			}
+		})
+	}
+}
+
+// A READ THE STATE LOG REFUSED IS TOLD IN ITS OWN WORDS TOO, as a write is.
+//
+// The directory's reads answered every refusal "Can't check who you are right
+// now. Try again in a moment.", which on a listing was not about who the
+// caller is, and for a refusal no wait clears asked for a wait under no
+// Retry-After — while a write of the same surface told the same refusal in the
+// state log's sentence. Reads keep their code and now carry that sentence,
+// whose advice agrees with the hint; the control clears and keeps one.
+//
+// Mutation: answer the read's 503 without the refusal's sentence and both rows
+// go red.
+func TestAReadTheStateLogRefusedIsToldInItsOwnWords(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		err   error
+		retry bool
+	}{
+		{"a log at its ceiling", &statelog.Refused{Code: statelog.RefuseLogFull,
+			Level: statelog.ReadSession, Detail: "raise stream.identity_max_bytes"}, false},
+		{"a node behind its log", &statelog.Refused{Code: statelog.RefuseBehind,
+			Level: statelog.ReadSession, Detail: "400 records behind",
+			RetryAfter: 3 * time.Second}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t)
+			r.directory.err = fmt.Errorf("iamdomain: list people: %w", tc.err)
+			got := r.as(administrator(), http.MethodGet, "/iam/people", nil)
+			said, _ := statelog.ConditionSentence(tc.err)
+			if got.status != http.StatusServiceUnavailable ||
+				got.body["error"] != "identity_unavailable" || got.body["detail"] != said ||
+				(got.header.Get("Retry-After") != "") != tc.retry {
+				t.Errorf("answered %d %v (Retry-After %q), want 503 identity_unavailable "+
+					"saying %q", got.status, got.body, got.header.Get("Retry-After"), said)
+			}
+		})
 	}
 }

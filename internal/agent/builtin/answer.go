@@ -1,9 +1,9 @@
 package builtin
 
 import (
-	"encoding/json"
 	"fmt"
 
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -39,7 +39,21 @@ const ToolAnswerBytes = 64 << 10
 // what would make its own answer smaller — `include` on a detail read, a
 // filter on a listing, a page size on a catalogue.
 func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
-	data, err := json.MarshalIndent(v, "", "  ")
+	// NOT AN ANSWER THAT CARRIES SOMEBODY'S WORDS: a record declaring a field
+	// another principal wrote ([provenance.FieldTag]) is answered through a
+	// [foreignRead], which fences and labels it, and never here, where it
+	// would reach the model bare and unattributed.
+	switch declared, err := declaredIn(v); {
+	case err != nil:
+		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
+		return refused(tools.RefusalInternalError, "The result could not be rendered."), nil
+	case len(declared) > 0:
+		log.Error("builtin_answer_unlabelled", "field", readablePath(declared[0].path.id()),
+			"kind", declared[0].kind)
+		return refused(tools.RefusalInternalError, "The result could not be rendered: it "+
+			"carries text somebody else wrote that this tool does not label."), nil
+	}
+	data, err := encodeAnswer(v)
 	if err != nil {
 		// A tool failure is a RESULT the model reads: the surface's Go
 		// error aborts the whole tool loop (see internal/agent/toolloop),
@@ -47,7 +61,7 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 		// that would not encode, instead of letting the model ask for a
 		// narrower one.
 		//nolint:nilerr // A tool failure is a RESULT the model reads, not a Go error.
-		return refused(tools.RefusalUnavailable, "The result could not be rendered."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), "The result could not be rendered."), nil
 	}
 	if len(data) > ToolAnswerBytes {
 		return failed(fmt.Sprintf("That answer is %d KiB and the limit for one "+
@@ -66,3 +80,10 @@ func jsonAnswer(v any, narrowWith string) (tools.Result, error) {
 // KiB", which reads as a refusal of something AT its limit and tells the
 // reader nothing about how much to cut.
 func kib(n int) int { return (n + 1<<10 - 1) >> 10 }
+
+// encodeAnswer is a tool answer as its reader is handed it: indented JSON,
+// with what a person wrote left as they wrote it — [plainjson.Marshal], whose
+// package doc says why that is not [json.MarshalIndent] — and these are the
+// bytes [ToolAnswerBytes] weighs, so a page of markup weighs what the page of
+// prose beside it does rather than four times it.
+func encodeAnswer(v any) ([]byte, error) { return plainjson.Marshal(v, "  ") }

@@ -206,6 +206,43 @@ func TestASecondAxisIsSubgroups(t *testing.T) {
 	}
 }
 
+// A SWIMLANE ON A CLOSED SET IS IN THE SET'S DECLARED ORDER, as a column is.
+//
+// A lane is the second axis drawn inside a column, and the reason a closed
+// set's columns keep its declared order ([TestAClosedSetsColumnsAreInItsDeclaredOrder])
+// is the reason its lanes do: ordered by size, a status lane board reshuffles
+// every time work moves between statuses, and nobody can learn its shape. The
+// lanes were counted over an axis rebuilt from the inner one without its
+// order, so they came back largest first. Here a column holds more in-progress
+// work than to-do work, so the two orders disagree.
+func TestASwimlaneOnAClosedSetIsInItsDeclaredOrder(t *testing.T) {
+	t.Parallel()
+	h := newReadHarness(t)
+	for i, status := range []worklet.Status{
+		worklet.StatusTodo,
+		worklet.StatusInProgress, worklet.StatusInProgress,
+		worklet.StatusInProgress,
+	} {
+		h.seed("ana-"+itoa(i), func(task *worklet.Task) {
+			task.Assignee = "ana"
+			task.Status, task.StatusGroup = status, status.Group()
+		})
+	}
+	answer := h.ask(map[string]any{
+		"container": "project:ENG", "group_by": "assignee",
+		"group_by2": "status",
+	})
+	var lanes []string
+	for _, lane := range groupOf(t, answer, "ana").Subgroups {
+		lanes = append(lanes, lane.Key)
+	}
+	want := []string{string(worklet.StatusTodo), string(worklet.StatusInProgress)}
+	if !equalKeys(lanes, want) {
+		t.Fatalf("ana's lanes are %v, want %v — the order the status set "+
+			"DECLARES, not the order the counts happen to fall in", lanes, want)
+	}
+}
+
 // A GROUPING NOTHING COULD MEAN IS REFUSED.
 func TestAGroupingThatMeansNothingIsRefused(t *testing.T) {
 	t.Parallel()

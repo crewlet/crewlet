@@ -64,6 +64,7 @@ import {
   type AssistantBriefCard,
   type AssistantCardEvent,
   type AssistantDeepProgress,
+  type AssistantErrorCard,
   type AssistantProposalCard,
   type AssistantStepEvent,
   type AssistantTableCard,
@@ -72,7 +73,8 @@ import { narrowCard } from "~/protocol/assistantWire.ts";
 import { statusLabel } from "~/lib/work.ts";
 import { ASSISTANT_WORDS, renderMarkdown } from "~/lib/markdown.ts";
 import { fmtCount, fmtDateTime, fmtDuration, fmtElapsed, fmtExact, fmtTime } from "~/lib/format.ts";
-import { youNeedWords } from "~/lib/access.ts";
+import { accessNames, youNeedWords } from "~/lib/access.ts";
+import { remedyFor } from "~/lib/authorityRemedy.ts";
 import { crumbsFor } from "../../crumbs.ts";
 import { href as hrefOf } from "../../router.tsx";
 import { openInApp, type InAppTarget } from "./openInApp.ts";
@@ -192,10 +194,15 @@ export function factText(fact: { value: string; type?: WireColumnType }): string
 }
 
 /**
- * Whether a refusal is about the person's access: the API's permission codes,
- * or a refusal naming the grants that would admit them. Every other refusal
- * (a value not accepted, a record not found, a request the assistant wrote
- * wrong) is not a permission problem and is never drawn as one.
+ * Whether a refusal refused the person access, which the drawer draws as "Not
+ * permitted": the API's permission codes, or a refusal naming grants, which
+ * only the authority table names. Every other refusal (a value not accepted, a
+ * record not found, a request the assistant wrote wrong) is not a permission
+ * problem and is never drawn as one.
+ *
+ * NOT WHETHER ACCESS IS THE WAY PAST IT, which the rule that refused says
+ * ([refusalWords]): a stale proof names the grants that admitted the person,
+ * and a verb the assistant never takes stays with them whatever they hold.
  */
 export function isAccessRefusal(refusal: { code: string; grants?: string[] } | undefined): boolean {
   if (!refusal) return false;
@@ -203,7 +210,7 @@ export function isAccessRefusal(refusal: { code: string; grants?: string[] } | u
   return ACCESS_CODES.has(refusal.code);
 }
 
-/** The refusal codes that are about the person's access. */
+/** The refusal codes that refuse the person access. */
 const ACCESS_CODES: ReadonlySet<string> = new Set([
   "unauthorized",
   "forbidden",
@@ -808,9 +815,27 @@ export function placeOf(target: InAppTarget): string {
     .join(" › ");
 }
 
-/** The words a refusal says about the person's own access. */
-function refusalBody(grants: readonly string[] | undefined, message: string): string {
-  return grants && grants.length > 0 ? youNeedWords(grants) : message;
+/**
+ * What a refusal card says, and whether a permission is the way past it.
+ *
+ * THE RULE'S REASON DECIDES, through the dashboard's remedy table
+ * ([remedyFor]), never the grants alone: a stale proof names the grants that
+ * admitted the person, and an artifact names the admin override beside its
+ * owner's share. Deciding by the code and the grants, the card said "You do
+ * not have permission", offered a request to an admin and said the assistant
+ * acts with the person's access for every refusal on authority, a proof to
+ * confirm and a verb the assistant never takes among them, and told an admin
+ * whose proof had gone stale that they needed Admin.
+ *
+ * WHERE ACCESS IS NOT THE WAY PAST, THE ENGINE'S OWN SENTENCE (`message`),
+ * which follows the rule. Not `REFUSAL_SENTENCES`, which word a screen's own
+ * requests (an `unnamed` there is a bug in the screen): this request was the
+ * assistant's.
+ */
+function refusalWords(refusal: AssistantErrorCard["refusal"]): { access: boolean; why: string } {
+  const grants = refusal.grants ?? [];
+  const access = remedyFor(refusal.reason ?? "", grants).namesAccess;
+  return { access, why: access ? youNeedWords(grants) : refusal.message };
 }
 
 /**
@@ -925,11 +950,12 @@ export function CardBlock({
     }
     case "error": {
       const { refusal, phrase } = card.error;
-      // THE CARD'S OWN NEXT STEP, or else the route's (the envelope's `hint`).
+      // THE CARD'S OWN NEXT STEP, or else the refusal's: the engine's words,
+      // never the route's `hint`, which only the model reads.
       const hint = card.error.hint ?? refusal.hint;
       const asked = phrase ? `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}` : undefined;
-      // A REFUSAL THAT IS NOT ABOUT ACCESS (a value not accepted, a record
-      // not found) is never drawn as "You do not have permission".
+      // A REFUSAL THAT REFUSED NO ACCESS (a value not accepted, a record not
+      // found) is a warning, never a refusal card.
       if (!isAccessRefusal(refusal)) {
         return (
           <Callout variant="warning" title={asked ?? "This could not be done"}>
@@ -938,24 +964,29 @@ export function CardBlock({
           </Callout>
         );
       }
+      const { access, why } = refusalWords(refusal);
       return (
         <RefusalCard
           // THE HEAD NAMES WHAT WAS ASKED FOR ("Read the fleet"), and the
           // card's own tag says it was not permitted; the sentence says why.
           title={asked ?? "Not permitted"}
-          heading={phrase ? `You do not have permission to ${phrase}.` : undefined}
+          heading={access && phrase ? `You do not have permission to ${phrase}.` : undefined}
           actions={
-            <CopyButton
-              size="small"
-              text={`Please grant me the access I need${phrase ? ` to ${phrase}` : ""}. ${refusalBody(refusal.grants, refusal.message)}`}
-              label="Copy a request to an admin"
-            />
+            // A REQUEST FOR ACCESS ONLY WHERE ACCESS CLEARS IT: anywhere else
+            // an admin could grant nothing that changes the answer.
+            access ? (
+              <CopyButton
+                size="small"
+                text={`Please give me ${accessNames(refusal.grants ?? [])} access${phrase ? ` to ${phrase}` : ""}.`}
+                label="Copy a request to an admin"
+              />
+            ) : undefined
           }
         >
-          {refusalBody(refusal.grants, refusal.message)}
+          {why}
+          {hint ? ` ${hint}` : ""}
           {/* A REFUSED READ IS NOT A CHANGE: the sentence fits a read and a write. */}
-          {hint ? ` ${hint}` : ""} The assistant acts with your access only, so it cannot do this
-          for you.
+          {access ? " The assistant acts with your access only, so it cannot do this for you." : ""}
         </RefusalCard>
       );
     }

@@ -22,11 +22,13 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	llmchain "github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/workkey"
 )
@@ -150,6 +152,14 @@ type Dispatcher struct {
 	// no integrations, and it is what keeps a bare &Dispatcher{} in a test
 	// coalescing rather than degrading.
 	Prompts func() notify.Prompts
+
+	// Parties resolves who the company's parties are, which a reply offered
+	// to a parked run is labelled by as its trigger was ([replyOf]): the
+	// writer's seat, at the trust it earns from the seat.
+	//
+	// nil is no registry, which names no writer, so a reply is read as words
+	// nothing vouches for.
+	Parties func() notify.Parties
 
 	// Conversation resolves the conversation-ledger policy for the turn
 	// about to run.
@@ -1183,6 +1193,11 @@ func (d *Dispatcher) mayOfferAnswer(ctx context.Context, handle string, evs []*e
 // the same reason they travel in: a NAK carries a cause, and the cause a
 // caller would otherwise invent is the one thing it does not know.
 //
+// WHAT IS OFFERED IS WHAT THE DELIVERY SAYS, in its writers' own words
+// ([replyWords]), never the prompt it would wake the seat with: the run reads
+// it as its question's answer, and the person who gave it reads it back as
+// their reply.
+//
 // AN UNUSABLE DISPOSITION FALLS BACK TO [sandbox.AnswerNotMine], not to a
 // requeue. Nothing in this build produces one — the seam has a single
 // implementation — so it means a wiring that answered nothing, and the honest
@@ -1201,9 +1216,8 @@ func (d *Dispatcher) answered(ctx context.Context, handle string, evs []*events.
 	if conv.Identity == "" {
 		return sandbox.AnswerNotMine, nil
 	}
-	disposition, err := d.Answer(ctx, handle, sandbox.Reply{
-		Conv: conv, Text: DescribeTrigger(evs), Events: evs,
-	})
+	disposition, err := d.Answer(ctx, handle,
+		replyOf(d.promptRegistry(), d.parties(), handle, conv, evs))
 	if err != nil {
 		// BOTH KEYS, for the reason the offer carries both: a line naming
 		// the identity alone cannot say which of its runs was picked.
@@ -1409,7 +1423,7 @@ func (d *Dispatcher) recordWorked(ctx context.Context, handle string, req Reques
 		}
 	}
 	d.RecordSession(ctx, handle, req.ConversationKey, req.RunID, req.WorkKey,
-		DescribeTrigger(req.Ask()), res, now)
+		DescribeTrigger(req.Ask(), ""), res, now)
 }
 
 // RecordSession appends what this turn said to the conversation it served.
@@ -1476,7 +1490,7 @@ func (d *Dispatcher) RecordSession(ctx context.Context, handle, conversation,
 		// against a reply that was never sent.
 		Delivered: res.Delivered,
 		Decision:  res.Decision.String(),
-		Skip:      MetaToolNames(),
+		Skip:      toolname.Discovery(),
 	}
 	if w := res.LastWork; w != nil {
 		// The LAST round's, which is the one the reply came out of. The
@@ -1659,20 +1673,51 @@ func partitionKeyOf(evs []*events.Event) string { return notify.KeyOfAll(evs) }
 // turn states its ask through Briefer; the summary and the type name are for a
 // wake that does not — a successor's type this build decodes with no typed
 // payload still names itself rather than reaching a seat as a blank ask.
-func DescribeTrigger(evs []*events.Event) string {
+//
+// A NOTIFICATION'S FENCES ARE MOVED ONTO fence, the turn's own token: its
+// body was fenced under a token minted for the wake, because no turn existed
+// where it was built, and everything around those fences — a display name, a
+// room's name — is neutralised, as a tool answer's other strings are
+// ([provenance.Rekey]). A reader with no turn of its own (the conversation
+// ledger) passes no token, which keeps the wake's and still neutralises the
+// rest. A parked run's answer is no reader of the trigger: it records what the
+// reply says ([replyWords]), and the run it carries on fences those words under
+// its own turn's token.
+//
+// EVERY OTHER WAKE IS RENDERED HERE, so its fences are the turn's from the
+// start: a colleague's ask and a colleague's answer put the colleague's words
+// inside a fence of fence ([fencedBriefer]) — a reader with no turn of its own
+// gets a token minted for that one rendering — and every other brief, a
+// schedule's task among them, is neutralised whole: it is the company's own
+// instruction to the seat, which no fence labels as somebody else's, and which
+// nothing it says may open or close one.
+func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 	var parts []string
 	for _, ev := range evs {
 		if ev == nil {
 			continue
 		}
+		if n, ok := events.DataAs[*types.ExternalNotification](ev); ok && n != nil {
+			if b := strings.TrimSpace(provenance.Rekey(n.Body,
+				provenance.Boundary(n.FenceBoundary), fence)); b != "" {
+				parts = append(parts, b)
+				continue
+			}
+		}
+		if brief, ok := ev.Data.(fencedBriefer); ok {
+			if b := strings.TrimSpace(brief.FencedBrief(fence)); b != "" {
+				parts = append(parts, b)
+				continue
+			}
+		}
 		if brief, ok := ev.Data.(events.Briefer); ok {
-			if b := strings.TrimSpace(brief.Brief()); b != "" {
+			if b := strings.TrimSpace(provenance.Neutralise(fence, brief.Brief())); b != "" {
 				parts = append(parts, b)
 				continue
 			}
 		}
 		if summary, ok := ev.Data.(events.Summarizer); ok {
-			if s := summary.Summary(); s != "" {
+			if s := provenance.Neutralise(fence, summary.Summary()); s != "" {
 				parts = append(parts, s)
 				continue
 			}
@@ -1686,6 +1731,12 @@ func DescribeTrigger(evs []*events.Event) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// fencedBriefer is a wake whose ask carries somebody else's words: its brief,
+// with those words inside a fence of the token it is handed (ADR-0040).
+type fencedBriefer interface {
+	FencedBrief(provenance.Boundary) string
 }
 
 // wallClockOf is the cap this partition's triggers carried.

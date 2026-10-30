@@ -132,10 +132,10 @@ func runGitHubProvision(inv invocation, args []string, stdout, stderr io.Writer)
 		// that — a run with no credential could only report the seat
 		// logins it resolved and leave the deployment delivering nothing.
 		return fmt.Errorf(
-			"github: integrations.github.token (%q) resolved empty — this run "+
-				"registers the webhooks with it, and a token that can do that "+
-				"needs admin on each repository (or admin:org_hook for one "+
-				"organization-level hook)", cfg.Token)
+			"github: integrations.github.token (%q) resolved empty. Set it: this "+
+				"run registers the webhooks with it, so it needs admin on each "+
+				"repository (or admin:org_hook for one organization-level hook)",
+			cfg.Token)
 	}
 	client, err := github.NewClient(github.ClientOptions{
 		APIBase: resolved.APIBase(), WebBase: resolved.WebURL(), Token: token,
@@ -222,7 +222,7 @@ func printGitHubResult(w io.Writer, res *github.Result) {
 	if len(refused) > 0 {
 		fmt.Fprintf(w, "\n%d seat(s) name a credential this run could not resolve:\n", len(refused))
 		for _, seat := range refused {
-			fmt.Fprintf(w, "  %-16s REFUSED — %s\n", seat.Handle, seat.Reason)
+			fmt.Fprintf(w, "  %-16s REFUSED: %s\n", seat.Handle, seat.Reason)
 		}
 	}
 
@@ -238,10 +238,10 @@ func printGitHubResult(w io.Writer, res *github.Result) {
 				// NOTHING TO HOOK, not a refusal. Printed as NOT HOOKED
 				// it reads as a problem and sends somebody to fix a
 				// repository that is finished.
-				fmt.Fprintf(w, "  %-28s skipped — %s\n",
+				fmt.Fprintf(w, "  %-28s skipped: %s\n",
 					hook.Target, orDash(hook.Detail))
 			default:
-				fmt.Fprintf(w, "  %-28s NOT HOOKED — %s\n",
+				fmt.Fprintf(w, "  %-28s NOT HOOKED: %s\n",
 					hook.Target, orDash(hook.Detail))
 			}
 		}

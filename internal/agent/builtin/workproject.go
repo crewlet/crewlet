@@ -62,7 +62,7 @@ func (t *writeProject) Name() string { return worklet.WriteProjectTool }
 func (t *writeProject) Description() string {
 	return "Change a project's own settings. `tags` is the one part any seat " +
 		"may add to — declare a label before filing work under it, because " +
-		"create_work_item refuses one this project does not have. Renaming or " +
+		worklet.CreateWorkItemTool + " refuses one this project does not have. Renaming or " +
 		"archiving a tag, declaring project fields, setting the default " +
 		"assignee and setting the target date are the project lead's; archiving " +
 		"the project itself takes a person. A project's name, purpose and " +
@@ -116,7 +116,7 @@ func (t *writeProject) Parameters() map[string]any {
 			"fields": map[string]any{
 				"type": "array",
 				"description": "REPLACES this project's own field " +
-					"declarations — send the whole set, read describe_project " +
+					"declarations — send the whole set, read " + worklet.DescribeProjectTool + " " +
 					"first. These sit beside the workspace's, they do not " +
 					"replace them. Each declaration is whole too: a key left " +
 					"out is cleared, `config` and its options included. The " +
@@ -250,7 +250,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if result.Outcome == statelog.OutcomeUnknown {
 			// See [writeWorkCatalogue]: the second half waits for the
 			// first, and the whole call is harmless to repeat.
-			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
+			next := restateNext(fmt.Sprintf("Read %s with "+worklet.DescribeProjectTool, key))
 			if !edit.Empty() {
 				next = "The policy change was NOT written: the call stopped " +
 					"here, before it. " + next
@@ -280,7 +280,7 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			return failure, nil
 		}
 		if result.Outcome == statelog.OutcomeUnknown {
-			next := restateNext(fmt.Sprintf("Read %s with describe_project", key))
+			next := restateNext(fmt.Sprintf("Read %s with "+worklet.DescribeProjectTool, key))
 			if !tagEdit.Empty() {
 				next = "The tag change WAS written. " + next
 			}

@@ -451,6 +451,25 @@ func TestACharterBodyNamesAllThreeFieldsAndNothingElse(t *testing.T) {
 	}
 }
 
+// A BODY THAT DOES NOT DECODE IS TOLD IN WORDS, as every body on this surface
+// is, never in encoding/json's. Mutation: answer the decoder's own error and
+// the field name goes missing behind Go's type names.
+func TestACharterBodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
+	t.Parallel()
+	for body, want := range map[string]string{
+		`{"mission":"m","vision":"v","policies":[],"name":"Other"}`: `In the body, "name" isn't a field this takes.`,
+		`{"mission":"m","vision":"v","policies":[]} {}`:             "The body has more after its JSON value, which is all it may hold.",
+	} {
+		s := newSurface(t)
+		s.seed(t, charterDoc)
+		_, tag := s.readCharter(t)
+		res := s.do(t, http.MethodPut, "/config/charter", body, map[string]string{"If-Match": tag})
+		if got := decode(t, res)["detail"]; res.Code != http.StatusBadRequest || got != want {
+			t.Errorf("%s = %d %v, want 400 saying %q", body, res.Code, got, want)
+		}
+	}
+}
+
 // NOTHING TO WRITE IS WRITTEN AS NOTHING: a revision that changes nothing
 // still re-activates on every node and rebuilds every seat. The comparison is
 // of the TRIMMED draft, which is what would be stored.
@@ -528,7 +547,7 @@ func TestTheCharterIsAnAdministratorsToReadAndWrite(t *testing.T) {
 	s := newSurface(t)
 	s.seed(t, charterDoc)
 	_, tag := s.readCharter(t)
-	s.grants = []iam.Grant{iam.GrantWorklet, iam.GrantDoclet}
+	s.grants = slices.Clone(iam.Apps)
 	for _, req := range []struct{ method, body string }{
 		{http.MethodGet, ""},
 		{http.MethodPut, `{"mission":"m","vision":"","policies":[]}`},

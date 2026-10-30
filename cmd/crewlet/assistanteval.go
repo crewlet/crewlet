@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // `crewlet assistant eval`: what the Dashboard Assistant does with the tools
@@ -79,7 +80,7 @@ func runAssistantEval(environ config.Source, args []string, stdout, stderr io.Wr
 	case *trials < 1:
 		return fmt.Errorf("crewlet assistant eval: -trials %d runs nothing; pass 1 or more", *trials)
 	case fs.NArg() > 0:
-		return fmt.Errorf("crewlet assistant eval takes no arguments, got %q", fs.Args())
+		return fmt.Errorf("crewlet assistant eval takes no arguments, got %s", words.And(fs.Args()))
 	case *model != "" && !*paid:
 		// A MODEL IS NEVER CALLED BY ACCIDENT: a suite run with -model is
 		// one paid completion per round of every trial, so the spend is

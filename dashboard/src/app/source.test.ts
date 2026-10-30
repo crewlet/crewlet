@@ -326,6 +326,9 @@ test("a link to a head no route owns is reported, and the live address is not", 
 const READS_ITS_PARAMS: { path: string[]; module: string }[] = [
   { path: ["live"], module: "routes/live/LiveNow.tsx" },
   { path: ["live", "events"], module: "routes/live/Activity.tsx" },
+  // A SEAT'S DIRECT MESSAGE opens chat's landing with the seat chosen, and
+  // the landing's one parameter is read where the gesture is drawn.
+  { path: ["chatlet"], module: "routes/chatlet/Chat.tsx" },
 ];
 
 /** Every link written as a literal path with a literal query, in one module. */
@@ -906,7 +909,7 @@ describe("every read names its question", () => {
   // refused and listed "No task matches". A new picker cannot skip the bound,
   // because this is where it would have to.
   test("and every ranked search goes through the search bound", () => {
-    const ranked = new Set(["work_search", "knowledge"]);
+    const ranked = new Set(["work_search", "knowledge", "chat_search"]);
     const bypassing = tree
       .filter(({ path }) => !/\.test\.tsx?$/.test(path))
       .flatMap(({ path, calls }) =>
@@ -916,7 +919,7 @@ describe("every read names its question", () => {
       );
     expect(
       bypassing,
-      "ask work_search and knowledge with useSearchQuery (lib/useSearchQuery.ts), which sends " +
+      "ask work_search, knowledge and chat_search with useSearchQuery (lib/useSearchQuery.ts), which sends " +
         "nothing past the engine's search bound and says why",
     ).toEqual([]);
   });

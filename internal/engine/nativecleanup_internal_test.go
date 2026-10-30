@@ -29,8 +29,9 @@ import (
 // underneath appliers that were still committing into it, and a caller that
 // retried ran a second runtime beside the first.
 
-// nativeCleanupCompany is the smallest company that runs both native backends,
-// which is what puts every construction below the state log on the path.
+// nativeCleanupCompany is the smallest company that runs every native backend —
+// the tracker, the knowledge base and chat, none of them on a vendor — which is
+// what puts every construction below the state log on the path.
 const nativeCleanupCompany = `
 name: Acme
 providers:

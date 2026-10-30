@@ -195,7 +195,7 @@ func TestAnAnswerNamesTheOptionItChoseAsTheRunAskedIt(t *testing.T) {
 	}
 
 	if _, err := AnswerText(d, "develop", "use develop"); !errors.Is(err, decision.ErrInvalid) ||
-		!strings.Contains(err.Error(), "main, release-2") {
+		!strings.Contains(err.Error(), `it offers "main" or "release-2"`) {
 		t.Errorf("a choice the decision does not offer = %v; want a refusal listing what it offers", err)
 	}
 	if _, err := AnswerText(nil, "main", ""); !errors.Is(err, decision.ErrInvalid) {

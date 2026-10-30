@@ -274,7 +274,7 @@ func TestWritingSomebodyElsesPrioritiesWakesThem(t *testing.T) {
 		t.Errorf("the wake names %q, want the task at the top (%q)",
 			wake.Snapshot.Key, task.Key)
 	}
-	candidates := worklet.Candidates(wake, false)
+	candidates := worklet.Candidates(wake)
 	if len(candidates) != 1 || candidates[0].Handle != "alice" {
 		t.Fatalf("candidates = %+v, want alice alone", candidates)
 	}
@@ -423,7 +423,7 @@ func (r *roundTrip) lastWake() *worklet.Notify {
 
 func candidateHandles(wake *worklet.Notify) []string {
 	var out []string
-	for _, c := range worklet.Candidates(wake, false) {
+	for _, c := range worklet.Candidates(wake) {
 		out = append(out, c.Handle)
 	}
 	return out

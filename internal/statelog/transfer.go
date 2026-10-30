@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The transfer's subjects. Infrastructure names in an infrastructure estate:
@@ -181,7 +183,7 @@ func (o Offer) Usable(req OfferRequest, build map[string]Registered, known []str
 	}
 	if ahead := aheadOf(o.Manifest.Migrations, known); len(ahead) > 0 {
 		return fmt.Errorf("the artefact carries migrations this binary does not: "+
-			"%v — its rows are shaped by code this node does not run", ahead)
+			"%s — its rows are shaped by code this node does not run", words.And(ahead))
 	}
 	for name, reg := range build {
 		pos, ok := o.Manifest.Domains[name]

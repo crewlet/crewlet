@@ -75,8 +75,8 @@ func (s Sources) colleague(ctx context.Context, p Params) (any, error) {
 		return nil, badParams("q", "", nil)
 	}
 	if len(text) > ColleagueQueryMax {
-		return nil, fmt.Errorf("%w: q is %d bytes, and a colleague is found by a name of at "+
-			"most %d — send the name, not the sentence around it",
+		return nil, fmt.Errorf("%w: the q parameter is %d bytes, and a colleague is found "+
+			"by a name of at most %d. Send the name, not the sentence around it",
 			ErrBadParams, len(text), ColleagueQueryMax)
 	}
 	principal, how := iam.From(ctx)

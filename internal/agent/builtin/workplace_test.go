@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -168,12 +169,15 @@ func TestADropThatMeansNothingIsRefused(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		args map[string]any
+		says string
 	}{
-		{"no if_match", map[string]any{"item": "ENG-1", "before": "ENG-2"}},
-		{"both neighbours", map[string]any{"item": "ENG-1", "before": "ENG-2", "after": "ENG-3", "if_match": 7}},
-		{"beside itself", map[string]any{"item": "ENG-1", "before": "ENG-1", "if_match": 7}},
-		{"no neighbour and no lane", map[string]any{"item": "ENG-1", "if_match": 7}},
-		{"a lane that is not one", map[string]any{"item": "ENG-1", "status": "shipped", "if_match": 7}},
+		{"no if_match", map[string]any{"item": "ENG-1", "before": "ENG-2"}, ""},
+		{"both neighbours", map[string]any{"item": "ENG-1", "before": "ENG-2", "after": "ENG-3", "if_match": 7}, ""},
+		{"beside itself", map[string]any{"item": "ENG-1", "before": "ENG-1", "if_match": 7}, ""},
+		{"no neighbour and no lane", map[string]any{"item": "ENG-1", "if_match": 7}, ""},
+		// The lanes there are, every one, each quoted as the refused one is.
+		{"a lane that is not one", map[string]any{"item": "ENG-1", "status": "shipped", "if_match": 7},
+			`"shipped" is not a status. The statuses are: ` + words.And(worklet.Statuses) + "."},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -184,6 +188,9 @@ func TestADropThatMeansNothingIsRefused(t *testing.T) {
 			}
 			if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid {
 				t.Fatalf("answered %+v, want an invalid refusal", got)
+			}
+			if !strings.Contains(got.Output, c.says) {
+				t.Errorf("the refusal does not say %q: %s", c.says, got.Output)
 			}
 			if place := spy.last(); place != nil {
 				t.Errorf("a refused drop still reached the tracker: %+v", *place)

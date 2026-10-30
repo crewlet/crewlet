@@ -93,31 +93,46 @@ type surface struct {
 	caller *iam.Principal
 
 	// held is what the directory this surface asks says holds each seat,
-	// and directoryDown makes every read of it fail; asked is every list of
-	// seats the surface asked about, in order, and askedAt the instant it
-	// asked at.
+	// and directoryDown makes every read of it fail; asked is every question
+	// the surface put to it, in order (the seats each admits, read with
+	// [surface.admitted]), and askedAt the instant each was asked at.
 	held          map[string]configapi.SeatHolder
 	directoryDown error
-	asked         [][]string
+	asked         []func(string) bool
 	askedAt       []time.Time
 }
 
 // holders is the directory a case's surface asks, answering from s.held.
-func (s *surface) holders(_ context.Context, seats []string, now time.Time) (
+func (s *surface) holders(_ context.Context, asked func(string) bool, now time.Time) (
 	map[string]configapi.SeatHolder, error) {
 
-	s.asked = append(s.asked, slices.Clone(seats))
+	s.asked = append(s.asked, asked)
 	s.askedAt = append(s.askedAt, now)
 	if s.directoryDown != nil {
 		return nil, s.directoryDown
 	}
 	out := map[string]configapi.SeatHolder{}
-	for _, seat := range seats {
-		if held, ok := s.held[seat]; ok {
+	for seat, held := range s.held {
+		if asked(seat) {
 			out[seat] = held
 		}
 	}
 	return out, nil
+}
+
+// admitted is which of seats the i-th question this surface put to the
+// directory asked about, in the order given; none when there was no i-th.
+func (s *surface) admitted(i int, seats ...string) []string {
+	if i >= len(s.asked) {
+		return nil
+	}
+	var out []string
+	for _, seat := range seats {
+		if s.asked[i](seat) {
+			out = append(out, seat)
+		}
+	}
+	return out
 }
 
 // newSurface is the service over a store, a plane and a KEYRING of the case's
@@ -601,7 +616,7 @@ func TestEveryConfigRefusalCarriesItsSentence(t *testing.T) {
 	check("a write somebody else's beat", s.do(t, http.MethodPut, "/config",
 		strings.Replace(companyDoc, "Acme", "Ours", 1),
 		map[string]string{"X-Summary": "ours", "If-Match": base}),
-		http.StatusConflict, httpjson.CodeRevisionAdvanced)
+		http.StatusPreconditionFailed, httpjson.CodeRevisionAdvanced)
 }
 
 func TestAWriteActivatesANewRevision(t *testing.T) {
@@ -741,8 +756,8 @@ func TestConcurrentEditorsAreToldRatherThanOverwritten(t *testing.T) {
 	// Ours was based on the revision they replaced.
 	res := s.do(t, http.MethodPut, "/config", strings.Replace(companyDoc, "Acme", "Ours", 1),
 		map[string]string{"X-Summary": "ours", "If-Match": base})
-	if res.Code != http.StatusConflict {
-		t.Fatalf("got %d, want 409", res.Code)
+	if res.Code != http.StatusPreconditionFailed {
+		t.Fatalf("got %d, want 412: the revision If-Match named is not the active one", res.Code)
 	}
 	body := decode(t, res)
 	if body["error"] != "revision_advanced" {
@@ -1297,7 +1312,7 @@ func TestNewRefusesAMissingStorePlaneOrKeyring(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	fleet, cipher := coordmemory.NewFleet(), testCipher(t)
 
-	nobody := func(context.Context, []string, time.Time) (
+	nobody := func(context.Context, func(string) bool, time.Time) (
 		map[string]configapi.SeatHolder, error) {
 
 		return nil, nil
@@ -1510,8 +1525,8 @@ func TestTheDocumentReadCarriesAnEntityTag(t *testing.T) {
 	// The tag moved with the document, so the stale one is now refused.
 	stale := s.do(t, http.MethodPut, "/config", s.activeDocument(t),
 		map[string]string{"X-Summary": "stale write", "If-Match": tag})
-	if stale.Code != http.StatusConflict {
-		t.Errorf("PUT with a superseded tag = %d, want 409", stale.Code)
+	if stale.Code != http.StatusPreconditionFailed {
+		t.Errorf("PUT with a superseded tag = %d, want 412", stale.Code)
 	}
 }
 
@@ -1540,7 +1555,9 @@ func TestAnUnchangedDocumentAnswers304(t *testing.T) {
 // there". `If-None-Match: *` is the reverse, and the only create-only
 // precondition: every other If-Match value is an entity-tag, whatever word it
 // happens to be, and one no revision carries matches nothing, configured or
-// not.
+// not. A condition that is false is 412 (§13.1.1) whichever it is: an
+// entity-tag the active revision does not carry was answered 409, the status
+// of a race the request never stated a condition about.
 func TestThePreconditionsFollowTheSpec(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1554,7 +1571,7 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 		{"if-none-match:* is create-only", "If-None-Match", "*", false, http.StatusCreated, ""},
 		{"if-none-match:* refuses an existing document", "If-None-Match", "*", true, http.StatusPreconditionFailed, "already_configured"},
 		{"a word is an entity-tag an unconfigured node cannot match", "If-Match", "none", false, http.StatusPreconditionFailed, "no_active_revision"},
-		{"a word is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusConflict, "revision_advanced"},
+		{"a word is an entity-tag a configured node does not carry", "If-Match", "none", true, http.StatusPreconditionFailed, "revision_advanced"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1574,6 +1591,32 @@ func TestThePreconditionsFollowTheSpec(t *testing.T) {
 				if got := decode(t, res)["error"]; got != tc.code {
 					t.Errorf("%s: error = %v, want %s", tc.name, got, tc.code)
 				}
+			}
+		})
+	}
+}
+
+// IF-MATCH BESIDE IF-NONE-MATCH IS REFUSED, as an entity write refuses the
+// pair: the two ask opposite things of one company, and answering either alone
+// judged a condition the caller stated as though it had not been sent, so a
+// stale If-Match beside `If-None-Match: *` was never refused.
+func TestIfMatchBesideIfNoneMatchIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodPut, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			s := newSurface(t)
+			s.seed(t, companyDoc)
+			body := s.activeDocument(t)
+			if method == http.MethodPatch {
+				body = `{"mission": "mine"}`
+			}
+			res := s.do(t, method, "/config", body, map[string]string{
+				"X-Summary": "both", "If-Match": `"stale"`, "If-None-Match": "*",
+			})
+			if res.Code != http.StatusBadRequest || decode(t, res)["error"] != "conflicting_preconditions" {
+				t.Errorf("%s /config with both = %d %s, want 400 conflicting_preconditions",
+					method, res.Code, res.Body.String())
 			}
 		})
 	}

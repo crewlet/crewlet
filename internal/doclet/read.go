@@ -1,6 +1,7 @@
 package doclet
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/keyset"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -42,14 +44,18 @@ import (
 // every multi-statement answer runs inside one `BEGIN DEFERRED`, and the
 // framework's read is where that transaction now comes from.
 type Reader struct {
-	db  store.ReplicatedReader
 	log *statelog.Reader
 }
 
 // ReaderOptions configure a reader.
+//
+// NO STORE HANDLE, and that is the point rather than an omission: every
+// statement a page read issues runs inside the transaction the framework's
+// read opens ([statelog.Reader]), which is what the read level, the snapshot
+// and the coverage probe all rest on. A handle beside it is a door a
+// statement can leave through, outside all three — one the reader carried
+// and never read, which kept the door shut by luck rather than by design.
 type ReaderOptions struct {
-	DB store.ReplicatedReader
-
 	// Log is this domain's read authority. REQUIRED: without it every read
 	// level is a label rather than a guarantee, which is silent at every
 	// surface that renders one.
@@ -58,16 +64,13 @@ type ReaderOptions struct {
 
 // NewReader builds the knowledge base's read side.
 func NewReader(opts ReaderOptions) (*Reader, error) {
-	if opts.DB.IsZero() {
-		return nil, errors.New("doclet: a store is required")
-	}
 	if opts.Log == nil {
 		return nil, errors.New("doclet: a reader needs its domain's read " +
 			"authority — without it every read level is a label rather than " +
 			"a guarantee, and a degradation invisible in the answer is worse " +
 			"than a refusal")
 	}
-	return &Reader{db: opts.DB, log: opts.Log}, nil
+	return &Reader{log: opts.Log}, nil
 }
 
 // Filter narrows a page listing.
@@ -94,6 +97,10 @@ type Filter struct {
 	// Onboarding narrows to the pages a seat's reading chain starts at.
 	Onboarding bool
 
+	// Order is the order the listing is read in: [OrderTitle], the knowledge
+	// base's own, when empty.
+	Order ListOrder
+
 	Limit int
 
 	// After is the [Listing.After] of the page before this one, or empty for
@@ -107,6 +114,38 @@ type Filter struct {
 // ErrBadCursor refuses an [Filter.After] this reader did not mint.
 var ErrBadCursor = errors.New("doclet: that cursor is not one this listing minted")
 
+// ListOrder is the order a listing is read in.
+type ListOrder string
+
+const (
+	// OrderTitle is the knowledge base's own order — container, title, id
+	// ([listOrder]) — which every tree and space is drawn in, and the order
+	// an empty [Filter.Order] reads.
+	OrderTitle ListOrder = "title"
+
+	// OrderNewest is the most recently changed first ([newestOrder]),
+	// served for the tool-skill pages alone ([ErrUnservedOrder]).
+	OrderNewest ListOrder = "newest"
+)
+
+// ListOrders is every order a listing is read in.
+func ListOrders() []ListOrder { return []ListOrder{OrderTitle, OrderNewest} }
+
+// Valid reports whether this build reads a listing in o.
+func (o ListOrder) Valid() bool { return o == OrderTitle || o == OrderNewest }
+
+// ErrUnservedOrder refuses [OrderNewest] on a listing that is not of the
+// tool-skill pages alone.
+//
+// AN ORDER IS SERVED ONLY WHERE AN INDEX HOLDS IT. The newest-first order is
+// held by the skill rows' own index (replicated 0067), because the skill flag
+// is a derived row of its own and not a column of the head; read over any
+// other listing it would sort every page that listing matches to return a
+// window, which is the cost the listing's own order exists to avoid. So it is
+// refused rather than served slowly, naming what it is served for.
+var ErrUnservedOrder = errors.New("doclet: a newest-first listing is served for " +
+	"the tool-skill pages alone (skills=true)")
+
 // DefaultLimit and MaxLimit bound a listing.
 const (
 	DefaultLimit = 50
@@ -119,13 +158,13 @@ type Summary struct {
 	ID         string    `json:"id"`
 	Container  string    `json:"container"`
 	ParentID   string    `json:"parent_id,omitempty"`
-	Title      string    `json:"title"`
+	Title      string    `json:"title" untrusted:"name"`
 	Status     Status    `json:"status"`
 	Author     string    `json:"author,omitempty"`
 	Version    int       `json:"version"`
 	Skill      bool      `json:"skill,omitempty"`
 	Onboarding bool      `json:"onboarding,omitempty"`
-	Labels     []string  `json:"labels,omitempty"`
+	Labels     []string  `json:"labels,omitempty" untrusted:"name"`
 	Updated    time.Time `json:"updated_at"`
 	Revision   uint64    `json:"revision"`
 
@@ -164,10 +203,17 @@ const savedKinds = `'created', 'saved', 'renamed'`
 // one statement for the whole page of rows. FROM THE HISTORY because the head
 // keeps who CREATED the page and when anything last moved it, and neither is
 // who last changed what it says.
+//
+// THE LAST IN LOG ORDER, which `pages_history_page_idx` (page_id, version
+// DESC) holds, so the subquery seeks the page and stops at its newest save.
+// Ordered by the broker instant and the row's id instead, it sorted the page's
+// whole history once per listed row (measured, replicated 0063). And `ORDER
+// BY … LIMIT 1` rather than an aggregate, because no planner rule unnests it
+// (`storetest.Decorrelated`, in internal/store/storetest).
 const summarySaved = `
 		       (SELECT h.id FROM pages_history h
 		         WHERE h.page_id = p.id AND h.kind IN (` + savedKinds + `)
-		         ORDER BY h.created_at DESC, h.id DESC LIMIT 1)`
+		         ORDER BY h.version DESC LIMIT 1)`
 
 // Listing is a page listing and what it is true as of.
 //
@@ -222,6 +268,50 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 			"surface resolves an absent read_level to its own default (a seat " +
 			"tool linearizable, a dashboard poll stale) before it reads")
 	}
+	if f.Order == "" {
+		f.Order = OrderTitle
+	}
+	if !f.Order.Valid() {
+		return Listing{}, fmt.Errorf("doclet: no listing is read in the order %q", f.Order)
+	}
+	if f.Order == OrderNewest && (f.Skills == nil || !*f.Skills) {
+		return Listing{}, ErrUnservedOrder
+	}
+	spec, child := compileListing(f)
+	limit := f.Limit
+	if limit <= 0 {
+		limit = DefaultLimit
+	}
+	if limit > MaxLimit {
+		limit = MaxLimit
+	}
+	resume := listFromStart
+	if f.After != "" {
+		c, err := parseListCursor(f.After, f.Order)
+		if err != nil {
+			return Listing{}, err
+		}
+		resume = listResumes(c, f.Container != "", f.Order)
+	}
+	var out listPage
+	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container), true), func(tx *sql.Tx) error {
+		var err error
+		out, err = r.list(ctx, tx, spec, child, limit, resume)
+		return err
+	})
+	if err != nil {
+		return Listing{}, err
+	}
+	return Listing{
+		Pages: out.rows, Total: out.total, After: out.after,
+		Level: served.Level, Complete: served.Complete,
+		Position: served.Position, LogLag: served.Lag,
+	}, nil
+}
+
+// compileListing is the predicate a filter's listing is, and the one each of
+// its pages' children is counted under.
+func compileListing(f Filter) (spec, child listSpec) {
 	where := []string{"1 = 1"}
 	var args []any
 	if f.Container != "" {
@@ -240,15 +330,25 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 		}
 		where = append(where, "p.status IN ("+strings.Join(marks, ",")+")")
 	}
+	// A LABEL AND A WATCHER NARROW FROM THEIR OWN ROWS: the pages carrying
+	// one label, through `pages_labels_label_idx`, and the pages one person
+	// watches, through `pages_watchers_handle_idx`, each read by a seek of the
+	// filter's own index, with every page it names then read by its key and
+	// the window sorted from those alone. Written as a probe of each listed
+	// page's own rows, the filter walked the listing's order and asked every
+	// page in it, and the total counted the same way — measured, one person's
+	// watched pages read, and counted, every page in the company to find the
+	// few they follow, on every load. The cost is now the filter's own
+	// matches, and a sort of them, whatever the knowledge base holds.
 	if f.Label != "" {
 		where = append(where,
-			"EXISTS (SELECT 1 FROM pages_labels l WHERE l.page_id = p.id AND l.label = ?)")
+			"p.id IN (SELECT l.page_id FROM pages_labels l WHERE l.label = ?)")
 		args = append(args, f.Label)
 	}
 	if f.Watcher != "" {
 		where = append(where,
-			"EXISTS (SELECT 1 FROM pages_watchers w WHERE w.page_id = p.id "+
-				"AND w.handle = ? AND w.muted = 0)")
+			"p.id IN (SELECT w.page_id FROM pages_watchers w "+
+				"WHERE w.handle = ? AND w.muted = 0)")
 		args = append(args, f.Watcher)
 	}
 	if title := strings.TrimSpace(f.Title); title != "" {
@@ -262,8 +362,8 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 	// WHAT A CHILD IS COUNTED UNDER: the listing's own status and skill
 	// narrowing, on the child. Only those two — a label or a title filter
 	// selects which pages are LISTED, and a child that does not share its
-	// parent's label is still under it.
-	child := listSpec{where: []string{"c.parent_id = p.id"}}
+	// parent's label is still under it. Which parents it is counted for is
+	// the window's rows, which [childCountStatement] names.
 	if len(f.Status) > 0 {
 		marks := make([]string, len(f.Status))
 		for i, s := range f.Status {
@@ -273,10 +373,17 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 		child.where = append(child.where, "c.status IN ("+strings.Join(marks, ",")+")")
 	}
 	if f.Skills != nil {
-		if *f.Skills {
+		switch {
+		case *f.Skills && f.Order == OrderNewest:
+			// THE NEWEST-FIRST LISTING IS DRIVEN FROM THE SKILL ROWS'
+			// index, which is partial on exactly this term: stated as
+			// the index states it, so the planner can use it.
+			where = append(where, "k.skill = 1")
+			child.where = append(child.where, "COALESCE(ck.skill, 0) = 1")
+		case *f.Skills:
 			where = append(where, "COALESCE(k.skill, 0) = 1")
 			child.where = append(child.where, "COALESCE(ck.skill, 0) = 1")
-		} else {
+		default:
 			where = append(where, "COALESCE(k.skill, 0) = 0")
 			child.where = append(child.where, "COALESCE(ck.skill, 0) = 0")
 		}
@@ -287,43 +394,23 @@ func (r *Reader) List(ctx context.Context, f Filter, fresh statelog.Freshness) (
 	if f.Roots {
 		where = append(where, "p.parent_id = ''")
 	}
-
-	limit := f.Limit
-	if limit <= 0 {
-		limit = DefaultLimit
-	}
-	if limit > MaxLimit {
-		limit = MaxLimit
-	}
-	var after *listCursor
-	if f.After != "" {
-		c, err := parseListCursor(f.After)
-		if err != nil {
-			return Listing{}, err
-		}
-		after = &c
-	}
-	var out listPage
-	served, err := r.log.Read(ctx, fresh.Query(ReadScope(f.Container), true), func(tx *sql.Tx) error {
-		var err error
-		out, err = r.list(ctx, tx, listSpec{where: where, args: args}, child, limit, after)
-		return err
-	})
-	if err != nil {
-		return Listing{}, err
-	}
-	return Listing{
-		Pages: out.rows, Total: out.total, After: out.after,
-		Level: served.Level, Complete: served.Complete,
-		Position: served.Position, LogLag: served.Lag,
-	}, nil
+	return listSpec{where: where, args: args, order: f.Order}, child
 }
 
 // listSpec is one set of predicates and the arguments they bind, in order.
 type listSpec struct {
 	where []string
 	args  []any
+
+	// order is the order a LISTING is read in, empty being [OrderTitle].
+	// Only a listing's own predicate carries one: an arm of a resume and a
+	// child count are read in the listing's.
+	order ListOrder
 }
+
+// newest reports whether the listing is read newest first, from the skill
+// rows' own index rather than the heads'.
+func (s listSpec) newest() bool { return s.order == OrderNewest }
 
 // listPage is one window of a listing: its rows, how many the predicate
 // matches in all, and where the next window starts.
@@ -333,14 +420,19 @@ type listPage struct {
 	after string
 }
 
-// listCursor is where a listing window stopped: the ORDER's own columns, so
-// the next window is everything strictly after it in that order. The id is the
-// tie-break, because a title is unique only among a container's LIVE pages —
-// a trashed page keeps its title while a new one claims it.
+// listCursor is where a listing window stopped: the ORDER's own columns
+// ([listOrder], or [newestOrder]'s instant and id), so the next window is
+// everything strictly after it in that order.
+//
+// IT NAMES ITS ORDER, because a cursor is a place in ONE order: a title
+// listing's place handed to a newest-first listing names no row of it, and
+// read as one it would resume from wherever the zero instant falls.
 type listCursor struct {
-	Container string `json:"c"`
-	Title     string `json:"t"`
-	ID        string `json:"i"`
+	Order     ListOrder `json:"o,omitempty"`
+	Container string    `json:"c,omitempty"`
+	Title     string    `json:"t,omitempty"`
+	Updated   int64     `json:"u,omitempty"`
+	ID        string    `json:"i"`
 }
 
 func (c listCursor) String() string {
@@ -351,7 +443,7 @@ func (c listCursor) String() string {
 	return base64.RawURLEncoding.EncodeToString(body)
 }
 
-func parseListCursor(raw string) (listCursor, error) {
+func parseListCursor(raw string, order ListOrder) (listCursor, error) {
 	body, err := base64.RawURLEncoding.DecodeString(raw)
 	if err != nil {
 		return listCursor{}, fmt.Errorf("%w: %w", ErrBadCursor, err)
@@ -360,59 +452,219 @@ func parseListCursor(raw string) (listCursor, error) {
 	if err := json.Unmarshal(body, &c); err != nil || c.ID == "" {
 		return listCursor{}, fmt.Errorf("%w: it decodes to no position", ErrBadCursor)
 	}
+	if minted := cmp.Or(c.Order, OrderTitle); minted != order {
+		return listCursor{}, fmt.Errorf("%w: it is a place in the %s order, and "+
+			"this listing is read in the %s order", ErrBadCursor, minted, order)
+	}
 	return c, nil
 }
 
-// list is the listing inside one transaction, so [Reader.Get] can take the
-// children it reports from the same snapshot as the page itself.
+// childListing is the listing of one page's children a [Detail] carries —
+// every one of them, whatever its status, so their own children are counted
+// under no narrowing either.
+func childListing(id string) listSpec {
+	return listSpec{where: []string{"p.parent_id = ?"}, args: []any{id}}
+}
+
+// listOrder is the order every listing is read in, as the terms a later
+// window resumes through: the container, the title, and the id, which keeps
+// the order total. The knowledge base's own arbitration keeps one container's
+// titles apart — a create claims its title's normalised form, and a trashed
+// page keeps its claim — so two rows tied on both are rows that arbitration
+// failed to keep out, a restore's residue, and a cursor with nothing to break
+// the tie would skip one of them. Every column is NOT NULL, so no arm of a
+// resume reads a NULL tail. Replicated 0062 holds the
+// order in `pages_heads_container_idx` (container, title, id) and in
+// `pages_heads_parent_idx` (parent_id, container, title, id), so a window is a
+// walk of one of them that its LIMIT stops, never a sort of everything the
+// listing matches.
+var listOrder = []keyset.Term{
+	{Column: "p.container", NeverNull: true},
+	{Column: "p.title", NeverNull: true},
+	{Column: "p.id", NeverNull: true},
+}
+
+// newestOrder is [OrderNewest] as the terms a later window resumes through:
+// the instant the page last changed, newest first, and its id, which keeps the
+// order total — two pages changed by one batch share an instant. Both are the
+// SKILL ROW's (`pages_skills`), the copy of the head's `updated_at` its apply
+// writes beside the flag, because replicated 0067's `pages_skills_newest_idx`
+// (updated_at, page_id) — partial on the flag — is what holds the order: a
+// window is a backward walk of it that its LIMIT stops. Both NOT NULL.
+var newestOrder = []keyset.Term{
+	{Column: "k.updated_at", Descending: true, NeverNull: true},
+	{Column: "k.page_id", Descending: true, NeverNull: true},
+}
+
+// listFromStart is a listing's first window: the listing itself, from its
+// first row.
+var listFromStart = []listSpec{{}}
+
+// listResumes is where the window after the row a cursor names is read: the
+// arms of the order strictly after that row ([keyset.After]), nearest first,
+// each an equality prefix and one bound — one seek of the index the order is
+// served by — read in turn until the window is full.
 //
-// THE BOUND IS BOUND HERE, not by the caller. The placeholders are positional,
-// so a caller that appended the window to `args` itself would be one
-// reordering away from paging the listing by a filter value — and the caller
-// that got it right would still be stating the same numbers twice. The child
-// count's arguments come FIRST because its subquery is in the SELECT list,
-// which a statement binds before its WHERE.
+// NOT ONE PREDICATE. Spelled as the nested disjunction `container > ? OR
+// (container = ? AND (title > ? OR …))`, no conjunct bounds the leading
+// column, and the planner seeks nothing: measured, a later window read every
+// page the listing matched from the address index and sorted them all, so
+// paging a knowledge base cost the square of its size. The keyset package's
+// doc has the rest.
+//
+// A LISTING PINNED TO ONE CONTAINER resumes on its title and id alone. Its
+// container is the same on every row, so the order's leading arm — every
+// container after this one — holds nothing, and stated beside the listing's
+// own `p.container = ?` it is a predicate no index range can express: the
+// planner seeks the container and reads every page in it to find none past it,
+// on exactly the last window of a container, where the arms before it ran
+// out. A tree level under one parent keeps all three terms, because there
+// the container is no equality of the listing's and its arm is an empty
+// range of the parent index.
+func listResumes(after listCursor, pinned bool, by ListOrder) []listSpec {
+	order, keys := listOrder, []any{after.Container, after.Title, after.ID}
+	switch {
+	case by == OrderNewest:
+		// NOTHING TO PIN: the newest-first order does not lead with the
+		// container, so a listing pinned to one resumes on the same two
+		// terms as any other.
+		order, keys = newestOrder, []any{after.Updated, after.ID}
+	case pinned:
+		order, keys = order[1:], keys[1:]
+	}
+	arms := keyset.After(order, keys)
+	out := make([]listSpec, len(arms))
+	for i, arm := range arms {
+		clause, args := arm.SQL(order)
+		out[i] = listSpec{where: []string{clause}, args: args}
+	}
+	return out
+}
+
+// list is the listing inside one transaction, so [Reader.Get] can take the
+// children it reports from the same snapshot as the page itself: the total,
+// and then the rows of one window, read through each of resume in turn until
+// the window is full, and what each of them carries beyond its head — its
+// labels, its last save and how many children it has under child — read for
+// the window's rows at once.
 //
 // THE TOTAL IS THE PREDICATE WITHOUT THE CURSOR, counted in the same
 // transaction: it describes the whole listing rather than what is left of it.
 func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
-	limit int, after *listCursor) (listPage, error) {
+	limit int, resume []listSpec) (listPage, error) {
 
 	var page listPage
-	where := strings.Join(spec.where, " AND ")
-	if err := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		  FROM pages_heads p
-		  LEFT JOIN pages_skills k ON k.page_id = p.id
-		 WHERE `+where, spec.args...).Scan(&page.total); err != nil {
+	statement, args := listTotalStatement(spec)
+	if err := tx.QueryRowContext(ctx, statement, args...).Scan(&page.total); err != nil {
 		return listPage{}, fmt.Errorf("doclet: count pages: %w", err)
 	}
 
-	args := append(slices.Clip(child.args), spec.args...)
-	if after != nil {
-		// EXPANDED rather than a row-value comparison: the order is three
-		// columns deep and each leg says which one it is breaking a tie on.
-		where += ` AND (p.container > ? OR (p.container = ? AND (p.title > ? OR (p.title = ? AND p.id > ?))))`
-		args = append(args, after.Container, after.Container, after.Title, after.Title, after.ID)
+	var out []Summary
+	for _, from := range resume {
+		// ONE MORE THAN THE WINDOW, which is how the answer knows whether
+		// there is a next one without a second statement — and what is
+		// left of it, once an arm before this one has answered some of it.
+		statement, args := listRowsStatement(spec, from, limit+1-len(out))
+		read, err := listRows(ctx, tx, statement, args)
+		if err != nil {
+			return listPage{}, err
+		}
+		out = append(out, read...)
+		if len(out) > limit {
+			break
+		}
 	}
-	// ONE MORE THAN THE WINDOW, which is how the answer knows whether there
-	// is a next one without a second statement.
-	args = append(args, limit+1)
-	rows, err := tx.QueryContext(ctx, `
+	if len(out) > limit {
+		out = out[:limit]
+		last := out[len(out)-1]
+		after := listCursor{Container: last.Container, Title: last.Title, ID: last.ID}
+		if spec.newest() {
+			// THE ROW'S OWN PLACE IN THE ORDER: its row's instant, which
+			// the window read from the skill row the order is held on.
+			after = listCursor{Order: OrderNewest, Updated: store.EncodeTime(last.Updated), ID: last.ID}
+		}
+		page.after = after.String()
+	}
+	page.rows = out
+	if err := r.attachLabels(ctx, tx, out); err != nil {
+		return listPage{}, err
+	}
+	if err := attachChildren(ctx, tx, out, child); err != nil {
+		return listPage{}, err
+	}
+	return page, r.attachSaves(ctx, tx, out)
+}
+
+// listTotalStatement counts what the listing matches, and its arguments —
+// from the skill rows for a newest-first listing, which reads nothing but
+// skills ([listRowsStatement] says why).
+func listTotalStatement(spec listSpec) (string, []any) {
+	return `
+		SELECT COUNT(*)
+		  FROM ` + listFrom(spec) + `
+		 WHERE ` + strings.Join(spec.where, " AND "), spec.args
+}
+
+// listFrom is the tables a listing reads, in the order the planner should
+// drive them: the heads, with each page's skill row beside it where it has
+// one; or, for a newest-first listing, the skill rows and the head each names.
+//
+// INNER, AND THE SKILL ROWS FIRST, for the newest order: every row it lists is
+// a skill, so a page with no skill row is no row of it, and the order is held
+// on the skill rows' index ([newestOrder]), which a walk can only follow from
+// the table it indexes. CROSS JOIN is what keeps them first: joined plainly,
+// the planner is free to drive on the heads, and with no statistics it does —
+// measured, every window read every page from the heap, looked each one's
+// skill row up and sorted what matched.
+func listFrom(spec listSpec) string {
+	if spec.newest() {
+		return "pages_skills k CROSS JOIN pages_heads p ON p.id = k.page_id"
+	}
+	return "pages_heads p LEFT JOIN pages_skills k ON k.page_id = p.id"
+}
+
+// listRowsStatement is one read of a window — the listing narrowed by from,
+// which is nothing for a first window and one arm of a resume for a later one
+// ([listResumes]) — in the listing's order, and its arguments.
+//
+// THE BOUND IS BOUND HERE, not by the caller. The placeholders are positional,
+// so a caller that appended the window to its arguments itself would be one
+// reordering away from paging the listing by a filter value — and the caller
+// that got it right would still be stating the same numbers twice.
+//
+// NO CHILD COUNT IN IT: a count of each row's children written here as a
+// correlated subquery is one the planner may unnest, by cost, into a grouped
+// read of every page head in the company (`storetest.Decorrelated`, in
+// internal/store/storetest, states the rule) — measured, it did on the
+// workspace's listing. So the count is read for the window's rows after them
+// ([attachChildren]).
+//
+// A NEWEST-FIRST LISTING is read from the skill rows' own index
+// ([newestOrder]), and its instant is the skill row's copy of the head's, so
+// the cursor a window mints is the very value the next window resumes from.
+func listRowsStatement(spec, from listSpec, limit int) (string, []any) {
+	where := strings.Join(append(slices.Clip(spec.where), from.where...), " AND ")
+	args := append(slices.Clip(spec.args), from.args...)
+	updated, order := "p.updated_at", "p.container, p.title, p.id"
+	if spec.newest() {
+		updated, order = "k.updated_at", "k.updated_at DESC, k.page_id DESC"
+	}
+	return `
 		SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
 		       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
-		       p.updated_at, MAX(p.version, p.scoped_through),
-		       (SELECT COUNT(*) FROM pages_heads c
-		          LEFT JOIN pages_skills ck ON ck.page_id = c.id
-		         WHERE `+strings.Join(child.where, " AND ")+`),
-		       p.body = '',`+summarySaved+`
-		  FROM pages_heads p
-		  LEFT JOIN pages_skills k ON k.page_id = p.id
-		 WHERE `+where+`
-		 ORDER BY p.container, p.title, p.id
-		 LIMIT ?`, args...)
+		       ` + updated + `, MAX(p.version, p.scoped_through),
+		       p.body = '',` + summarySaved + `
+		  FROM ` + listFrom(spec) + `
+		 WHERE ` + where + `
+		 ORDER BY ` + order + `
+		 LIMIT ?`, append(args, limit)
+}
+
+// listRows reads the rows of one window read.
+func listRows(ctx context.Context, tx *sql.Tx, statement string, args []any) ([]Summary, error) {
+	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
-		return listPage{}, fmt.Errorf("doclet: list pages: %w", err)
+		return nil, fmt.Errorf("doclet: list pages: %w", err)
 	}
 	defer rows.Close()
 
@@ -426,8 +678,8 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		)
 		if err := rows.Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status,
 			&s.Author, &s.Version, &skill, &onboarding, &updated, &revision,
-			&s.Children, &folder, &savedID); err != nil {
-			return listPage{}, fmt.Errorf("doclet: scan page: %w", err)
+			&folder, &savedID); err != nil {
+			return nil, fmt.Errorf("doclet: scan page: %w", err)
 		}
 		s.Skill, s.Onboarding, s.Folder = skill != 0, onboarding != 0, folder != 0
 		s.savedID = savedID.String
@@ -436,18 +688,61 @@ func (r *Reader) list(ctx context.Context, tx *sql.Tx, spec, child listSpec,
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		return listPage{}, fmt.Errorf("doclet: list pages: %w", err)
+		return nil, fmt.Errorf("doclet: list pages: %w", err)
 	}
-	if len(out) > limit {
-		out = out[:limit]
-		last := out[len(out)-1]
-		page.after = listCursor{Container: last.Container, Title: last.Title, ID: last.ID}.String()
+	return out, nil
+}
+
+// attachChildren fills each row's child count — the pages directly under it
+// that the listing's narrowing (child) admits — in one statement for the whole
+// page of rows ([childCountStatement]). A row no child is counted under keeps
+// its zero, which is its count.
+func attachChildren(ctx context.Context, tx *sql.Tx, items []Summary, child listSpec) error {
+	if len(items) == 0 {
+		return nil
 	}
-	page.rows = out
-	if err := r.attachLabels(ctx, tx, out); err != nil {
-		return listPage{}, err
+	ids := make([]string, len(items))
+	at := make(map[string]int, len(items))
+	for i, item := range items {
+		ids[i] = item.ID
+		at[item.ID] = i
 	}
-	return page, r.attachSaves(ctx, tx, out)
+	statement, args := childCountStatement(ids, child)
+	rows, err := tx.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return fmt.Errorf("doclet: count the children: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var parent string
+		var n int
+		if err := rows.Scan(&parent, &n); err != nil {
+			return fmt.Errorf("doclet: scan a child count: %w", err)
+		}
+		if i, ok := at[parent]; ok {
+			items[i].Children = n
+		}
+	}
+	return rows.Err()
+}
+
+// childCountStatement counts the children of the pages named, under the
+// listing's narrowing, and its arguments: one seek of `pages_heads_parent_idx`
+// per page, which the IN list's bound values keep a seek whatever the planner
+// decides — there is no correlation for it to unnest.
+func childCountStatement(ids []string, child listSpec) (string, []any) {
+	where := append([]string{"c.parent_id IN (" + placeholders(len(ids)) + ")"},
+		child.where...)
+	args := make([]any, 0, len(ids)+len(child.args))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	return `
+		SELECT c.parent_id, COUNT(*)
+		  FROM pages_heads c
+		  LEFT JOIN pages_skills ck ON ck.page_id = c.id
+		 WHERE ` + strings.Join(where, " AND ") + `
+		 GROUP BY c.parent_id`, append(args, child.args...)
 }
 
 // attachSaves fills each row's last save from the history row the listing
@@ -465,9 +760,7 @@ func (r *Reader) attachSaves(ctx context.Context, tx *sql.Tx, items []Summary) e
 	if len(ids) == 0 {
 		return nil
 	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id, actor, created_at FROM pages_history WHERE id IN (`+
-			placeholders(len(ids))+`)`, ids...)
+	rows, err := tx.QueryContext(ctx, lastSavesStatement(len(ids)), ids...)
 	if err != nil {
 		return fmt.Errorf("doclet: read who last saved: %w", err)
 	}
@@ -496,9 +789,7 @@ func (r *Reader) attachLabels(ctx context.Context, tx *sql.Tx, items []Summary) 
 		ids[i] = item.ID
 		at[item.ID] = i
 	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT page_id, label FROM pages_labels WHERE page_id IN (`+
-			placeholders(len(ids))+`) ORDER BY label`, ids...)
+	rows, err := tx.QueryContext(ctx, pageLabelsStatement(len(ids)), ids...)
 	if err != nil {
 		return fmt.Errorf("doclet: read labels: %w", err)
 	}
@@ -567,7 +858,7 @@ type Detail struct {
 type RevisionSummary struct {
 	Version   int       `json:"version"`
 	Author    string    `json:"author,omitempty"`
-	Message   string    `json:"message,omitempty"`
+	Message   string    `json:"message,omitempty" untrusted:"name"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -608,8 +899,7 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 		}
 		detail = Detail{Page: page, Revision: revision}
 		var skill, onboarding int
-		switch serr := tx.QueryRowContext(ctx,
-			`SELECT skill, onboarding FROM pages_skills WHERE page_id = ?`, id).
+		switch serr := tx.QueryRowContext(ctx, derivedAsStatement, id).
 			Scan(&skill, &onboarding); {
 		case errors.Is(serr, sql.ErrNoRows):
 		case serr != nil:
@@ -623,9 +913,8 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 		if detail.History, err = r.history(ctx, tx, id); err != nil {
 			return err
 		}
-		children, err := r.list(ctx, tx,
-			listSpec{where: []string{"p.parent_id = ?"}, args: []any{id}},
-			listSpec{where: []string{"c.parent_id = p.id"}}, DefaultLimit, nil)
+		children, err := r.list(ctx, tx, childListing(id), listSpec{}, DefaultLimit,
+			listFromStart)
 		if err != nil {
 			return err
 		}
@@ -658,13 +947,13 @@ func (r *Reader) Get(ctx context.Context, ref string, fresh statelog.Freshness) 
 // exactly the term such a create is filed under, and an id is decided by
 // [absentPageScope].
 func pageReadScope(ctx context.Context, tx *sql.Tx, ref string) (statelog.ScopeSet, error) {
-	query := `SELECT id, container FROM pages_heads WHERE id = ?`
+	query := scopeByIDStatement
 	args := []any{ref}
 	var address *ScopeTerm
 	if container, title, ok := strings.Cut(ref, "/"); ok {
 		container = ContainerKey(container)
 		address = &ScopeTerm{Kind: TermTitle, Container: container, ID: TitleToken(title)}
-		query = `SELECT id, container FROM pages_heads WHERE container = ? AND title_norm = ?`
+		query = scopeByAddressStatement
 		args = []any{container, NormalizeTitle(title)}
 	}
 	var id, container string
@@ -784,7 +1073,7 @@ func mintedID(ref string) (uuid.UUID, bool) {
 // locate resolves a reference to a page row.
 func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document string, revision uint64, id string, err error) {
 	var rev int64
-	query := `SELECT id, document, ` + HeadRevision + ` FROM pages_heads WHERE id = ?`
+	query := locateByIDStatement
 	args := []any{ref}
 	if container, title, ok := strings.Cut(ref, "/"); ok {
 		// "CONTAINER/Title", which is how a person and a model name a page
@@ -797,8 +1086,7 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 		// address, because the claim lowercased it with Go's Unicode case
 		// tables and the lookup did not. It also could not use an index,
 		// so every address lookup scanned the container.
-		query = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads
-		          WHERE container = ? AND title_norm = ?`
+		query = locateByAddressStatement
 		args = []any{ContainerKey(container), NormalizeTitle(title)}
 	}
 	err = tx.QueryRowContext(ctx, query, args...).Scan(&id, &document, &rev)
@@ -813,10 +1101,7 @@ func (r *Reader) locate(ctx context.Context, tx *sql.Tx, ref string) (document s
 
 // comments reads a page's thread.
 func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Comment, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT document FROM pages_comments
-		  WHERE page_id = ? ORDER BY created_at, id`,
-		pageID)
+	rows, err := tx.QueryContext(ctx, threadStatement, pageID)
 	if err != nil {
 		return nil, fmt.Errorf("doclet: read the thread on %s: %w", pageID, err)
 	}
@@ -839,9 +1124,7 @@ func (r *Reader) comments(ctx context.Context, tx *sql.Tx, pageID string) ([]Com
 }
 
 func (r *Reader) history(ctx context.Context, tx *sql.Tx, pageID string) ([]RevisionSummary, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT edit_version, author, message, created_at FROM pages_revisions
-		  WHERE page_id = ? ORDER BY version DESC LIMIT ?`, pageID, RevisionsKept)
+	rows, err := tx.QueryContext(ctx, revisionListStatement, pageID, RevisionsKept)
 	if err != nil {
 		return nil, fmt.Errorf("doclet: read the history of %s: %w", pageID, err)
 	}
@@ -871,13 +1154,7 @@ func (r *Reader) ancestors(ctx context.Context, tx *sql.Tx, parentID string) ([]
 		var s Summary
 		var skill, onboarding int
 		var updated, revision int64
-		err := tx.QueryRowContext(ctx, `
-			SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
-			       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
-			       p.updated_at, MAX(p.version, p.scoped_through)
-			  FROM pages_heads p
-			  LEFT JOIN pages_skills k ON k.page_id = p.id
-			 WHERE p.id = ?`, id).
+		err := tx.QueryRowContext(ctx, ancestorStatement, id).
 			Scan(&s.ID, &s.Container, &s.ParentID, &s.Title, &s.Status, &s.Author,
 				&s.Version, &skill, &onboarding, &updated, &revision)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -956,13 +1233,11 @@ func (r *Reader) Containers(ctx context.Context, fresh statelog.Freshness) (
 // listing this reader serves, so counting it would put a number on the rail
 // that the list beside it cannot account for — a reader clicks "12" and finds
 // nine. The predicate restates the status rather than reading `trashed_at`,
-// because the container index is on `(container, status, title)` and this walk
-// is meant to use it.
+// because the container index carries the status after the listing's order
+// (`(container, title, id, status)`, replicated 0062), so this walk reads the
+// index alone and never a page's row.
 func (r *Reader) pageCounts(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT container, COUNT(*) FROM pages_heads
-		  WHERE status != ?
-		  GROUP BY container`, string(StatusTrashed))
+	rows, err := tx.QueryContext(ctx, pageCountsStatement, string(StatusTrashed))
 	if err != nil {
 		return nil, fmt.Errorf("doclet: count pages per container: %w", err)
 	}
@@ -1044,12 +1319,8 @@ func (r *Reader) SkillPages(ctx context.Context, container string,
 func (r *Reader) skillPages(ctx context.Context, tx *sql.Tx,
 	container string) ([]Page, error) {
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT p.document
-		  FROM pages_heads p
-		  JOIN pages_skills k ON k.page_id = p.id
-		 WHERE p.container = ? AND k.skill = 1 AND p.status <> ?
-		 ORDER BY p.title`, container, string(StatusTrashed))
+	rows, err := tx.QueryContext(ctx, skillPagesStatement, container,
+		string(StatusTrashed))
 	if err != nil {
 		return nil, fmt.Errorf("doclet: list the skills in %s: %w", container, err)
 	}
@@ -1072,3 +1343,59 @@ func (r *Reader) skillPages(ctx context.Context, tx *sql.Tx,
 	}
 	return out, rows.Err()
 }
+
+// lastSavesStatement reads the history rows a window's rows named as their last
+// saves ([Reader.attachSaves]), by their keys, for n of them.
+func lastSavesStatement(n int) string {
+	return `SELECT id, actor, created_at FROM pages_history WHERE id IN (` +
+		placeholders(n) + `)`
+}
+
+// pageLabelsStatement reads the labels of a window's n rows
+// ([Reader.attachLabels]), by the pages' keys.
+func pageLabelsStatement(n int) string {
+	return `SELECT page_id, label FROM pages_labels WHERE page_id IN (` +
+		placeholders(n) + `) ORDER BY label`
+}
+
+// The reader's statements over one page or one link at a time, named for the
+// plan gate: what a page was derived as; a reference resolved to the scope a
+// read is about, by id and by address; a reference resolved to the page's
+// document, by id and by address; the page's thread and its revision list; one
+// step of its breadcrumb; the per-container counts of the rail; and the skill
+// pages of a container.
+//
+// THE REVISION LIST IS IN ITS KEY'S ORDER, newest first by the page's own
+// version number, which `pages_revisions`' key (page_id, edit_version) holds:
+// revision N is the body at version N, written in that order, so it is the
+// order of the log positions too. Ordered by the position column instead,
+// which no index of the table holds, it sought the page's revisions and then
+// sorted them all (measured).
+const (
+	derivedAsStatement       = `SELECT skill, onboarding FROM pages_skills WHERE page_id = ?`
+	scopeByIDStatement       = `SELECT id, container FROM pages_heads WHERE id = ?`
+	scopeByAddressStatement  = `SELECT id, container FROM pages_heads WHERE container = ? AND title_norm = ?`
+	locateByIDStatement      = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads WHERE id = ?`
+	locateByAddressStatement = `SELECT id, document, ` + HeadRevision + ` FROM pages_heads
+		          WHERE container = ? AND title_norm = ?`
+	threadStatement = `SELECT document FROM pages_comments
+		  WHERE page_id = ? ORDER BY created_at, id`
+	revisionListStatement = `SELECT edit_version, author, message, created_at FROM pages_revisions
+		  WHERE page_id = ? ORDER BY edit_version DESC LIMIT ?`
+	ancestorStatement = `
+			SELECT p.id, p.container, p.parent_id, p.title, p.status, p.author,
+			       p.edit_version, COALESCE(k.skill, 0), COALESCE(k.onboarding, 0),
+			       p.updated_at, MAX(p.version, p.scoped_through)
+			  FROM pages_heads p
+			  LEFT JOIN pages_skills k ON k.page_id = p.id
+			 WHERE p.id = ?`
+	pageCountsStatement = `SELECT container, COUNT(*) FROM pages_heads
+		  WHERE status != ?
+		  GROUP BY container`
+	skillPagesStatement = `
+		SELECT p.document
+		  FROM pages_heads p
+		  JOIN pages_skills k ON k.page_id = p.id
+		 WHERE p.container = ? AND k.skill = 1 AND p.status <> ?
+		 ORDER BY p.title`
+)

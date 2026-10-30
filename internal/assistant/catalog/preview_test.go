@@ -134,6 +134,12 @@ var completedArgs = map[string]map[string]any{
 	"update_company_principles": {"mission": "Help friends share costs fairly.",
 		"vision": "Settling up takes seconds.", "policies": []any{"Miles is the final " +
 			"authority.", "Money is an integer number of cents."}},
+	// A MEMBERSHIP STATES EVERY MEMBER'S FOLLOWING: pm, named by handle
+	// alone, keeps following the whole room.
+	"set_chat_room_members": {"channel": assistanttest.RecordID, "members": []any{
+		map[string]any{"handle": "pm", "follow_all": true},
+		map[string]any{"handle": "engineer", "follow_all": false}},
+		"removes": []any{"ada"}},
 }
 
 // objectBodies are the bodies of the writes that send the object as the

@@ -55,11 +55,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 var log = logging.Get("learning.memsync")
@@ -177,7 +179,8 @@ func decodeCell(cell any) (any, error) {
 	}
 	encoded, ok := wrapper["$blob"].(string)
 	if !ok {
-		return nil, fmt.Errorf("memsync: a value is an object that is not a blob: %v", wrapper)
+		return nil, fmt.Errorf("memsync: a value is an object with the keys %s rather than a blob",
+			words.And(slices.Sorted(maps.Keys(wrapper))))
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {

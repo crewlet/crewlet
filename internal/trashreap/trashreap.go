@@ -111,8 +111,17 @@ type Source interface {
 // under [MinTerm] fails that source's pass and purges nothing: the floor is
 // the reaper's guard against a mistake destroying what people expected to keep,
 // whichever source states the term.
+//
+// A TERM MAY BE UNKNOWN, and Term then answers why. The assistant's is the
+// term of the revision the fleet's activation pointer names, which a node that
+// does not run that very revision cannot know, and a term guessed in its
+// place is one the company may have lengthened: every item between the two
+// would be purged for good. An unknown term fails that source's pass the way a
+// term under the floor does, and purges nothing of it, so what it would have
+// purged waits for a pass that can read the term. The other sources keep the
+// reaper's term and are reaped as ever.
 type Termed interface {
-	Term() time.Duration
+	Term(ctx context.Context) (time.Duration, error)
 }
 
 // Reports is where the reaper keeps its last report: the coordination store's
@@ -422,7 +431,7 @@ func (r *Reaper) Pass(ctx context.Context) (Report, error) {
 	}
 	var failures []error
 	for _, src := range r.sources {
-		cutoff, own, err := sourceCutoff(src, slot, report.Cutoff)
+		cutoff, own, err := sourceCutoff(ctx, src, slot, report.Cutoff)
 		if err != nil {
 			report.Sources = append(report.Sources, SourceReport{Source: src.Name(),
 				Error: err.Error()})
@@ -465,13 +474,20 @@ func (r *Reaper) Pass(ctx context.Context) (Report, error) {
 }
 
 // sourceCutoff is the cutoff src is reaped at in the pass of slot: its own
-// term's ([Termed]), or the reaper's, and whether it is its own.
-func sourceCutoff(src Source, slot, reaperCutoff time.Time) (time.Time, bool, error) {
+// term's ([Termed]), or the reaper's, and whether it is its own. A term the
+// source cannot state is an error, and so no cutoff at all.
+func sourceCutoff(ctx context.Context, src Source, slot,
+	reaperCutoff time.Time) (time.Time, bool, error) {
+
 	termed, ok := src.(Termed)
 	if !ok {
 		return reaperCutoff, false, nil
 	}
-	term := termed.Term()
+	term, err := termed.Term(ctx)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("the source's term is unknown, so nothing "+
+			"of it is purged until a pass can read it: %w", err)
+	}
 	if term < MinTerm {
 		return time.Time{}, false, fmt.Errorf("the source's term of %v is under the %v "+
 			"minimum, so nothing is purged until it states one a person could take an "+

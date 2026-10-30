@@ -11,13 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AskAndWaitTool is the tool's wire name, the run record's own
-// ([sandbox.AskAndWaitTool]).
-const AskAndWaitTool = sandbox.AskAndWaitTool
+// AskAndWaitTool is the tool's wire name, declared in internal/toolname: no
+// authority row names the run's own ending, so the walk that holds every tool
+// name to one declaration reads it there ([toolname.AskAndWait]). The run
+// record reads the same constant ([sandbox.AskAndWaitTool]): its call log's
+// bound keeps the call by that name, and the bridge's nudge reads it there
+// ([sandbox.EndsRun]).
+const AskAndWaitTool = toolname.AskAndWait
 
 // RunAskDesk is the run record a coding run asks through: the write that
 // records its question onto the job's row ([sandbox.PendingStore.RecordAsk])
@@ -99,7 +104,7 @@ func (t *AskAndWait) Description() string {
 		fmt.Sprintf("%d", decision.MaxOptions) + " `options`, the one you " +
 		"`recommended` and your `rationale`, never options written into the " +
 		"context. After it is recorded, END YOUR TURN at once: do not call " +
-		"`submit_work`. Their answer arrives as your next prompt in this session, " +
+		"`" + toolname.SubmitWork + "`. Their answer arrives as your next prompt in this session, " +
 		"or, if this machine is gone by then, a fresh run starts from your branch " +
 		"with your question and their answer."
 }
@@ -173,9 +178,9 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		// NOT A RUN'S CALL: nothing names the job to park. The tool is
 		// offered on an executor run's surface alone, so this is a
 		// wiring fault, said as one rather than as the model's mistake.
-		return refused(tools.RefusalUnavailable, AskAndWaitTool+" is unavailable here: "+
-			"it parks a coding run, and this call was not made by one. Ask on the work "+
-			"item with `"+CommentOnWorkTool+"` and `ask` instead."), nil
+		return refusedBy(tools.RefusalUnavailable, waitless(), AskAndWaitTool+
+			" is unavailable here: it parks a coding run, and this call was not made by "+
+			"one. Ask on the work item with `"+CommentOnWorkTool+"` and `ask` instead."), nil
 	}
 	ask, refusal := t.readAsk(ctx, args)
 	if refusal != nil {
@@ -198,7 +203,7 @@ func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"nothing can wait on a question here. End your turn."), nil
 	}
 	return tools.Result{Output: "Your question is recorded and has been put to a person. " +
-		"END YOUR TURN NOW: stop working and do not call `" + "submit_work" + "`. Their " +
+		"END YOUR TURN NOW: stop working and do not call `" + toolname.SubmitWork + "`. Their " +
 		"answer arrives as your next prompt in this session, or, if this machine is gone " +
 		"by then, a fresh run starts from your branch with your question and their answer."}, nil
 }

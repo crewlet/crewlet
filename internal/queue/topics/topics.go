@@ -145,7 +145,7 @@ const (
 	SearchSlice = SearchPrefix + "slice"
 
 	// ObservePrefix prefixes the observability read scatter's subjects —
-	// the fleet's turn-level history, asked of every node's own event
+	// the fleet's turn-level history, asked of every data node's own event
 	// store at query time (internal/eventfan, ADR-0021).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a history read is the
@@ -208,20 +208,24 @@ const (
 	HeldRead = HeldPrefix + "read"
 
 	// RelayPrefix prefixes the subjects a data node RELAYS what its own
-	// applier announced on, to a peer whose own copy is out of service
-	// (internal/engine, inboxrelay.go).
+	// appliers announced on, to a peer whose own copy is out of service
+	// (internal/engine, liverelay.go).
 	//
 	// NOT EVENTS, for SearchPrefix's reason: a relay is the ephemeral
-	// request and reply of [queue.EventQueue.Ask], and what it carries —
-	// whose inbox moved — is a hint about rows every data node already
-	// holds, so a durable copy would be a second record of the same facts.
-	// And NOT under AgentInboxPrefix, whose `.inbox` subjects are seats'
-	// durable mailboxes: nothing here is anybody's mail.
+	// request and reply of [queue.EventQueue.AskEach], and what it carries —
+	// whose inbox moved, what landed in a room, what moved on an artifact —
+	// is what every data node's own rows already hold, so a durable copy
+	// would be a second record of the same facts. Every ask and answer is
+	// SIGNED (internal/signedask), because what it carries is shown on a
+	// screen as somebody's words. And NOT under AgentInboxPrefix, whose
+	// `.inbox` subjects are seats' durable mailboxes: nothing here is
+	// anybody's mail.
 	RelayPrefix = "crewlet.relay."
-	// InboxRelayPrefix is followed by one data node's id, escaped as a
+	// LiveRelayPrefix is followed by one data node's id, escaped as a
 	// subject token, and that node alone serves it: a follower reads ONE
-	// server's sequence of announced batches.
-	InboxRelayPrefix = RelayPrefix + "inbox."
+	// server's sequence of announced batches, every domain's in one
+	// sequence.
+	LiveRelayPrefix = RelayPrefix + "live."
 )
 
 // AgentInbox returns the inbox subject for the seat with this id.

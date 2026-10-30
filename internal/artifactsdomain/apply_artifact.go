@@ -291,7 +291,7 @@ func (a *Applier) applyCreate(ctx context.Context, tx *sql.Tx, c applyContext, i
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveVersion, 0, 1, c.position)
+	a.move(c, id, MoveVersion, 0, 1)
 	return rows, nil
 }
 
@@ -400,7 +400,7 @@ func (a *Applier) applyPublish(ctx context.Context, tx *sql.Tx, c applyContext, 
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveVersion, head.epoch, v.Number, c.position)
+	a.move(c, id, MoveVersion, head.epoch, v.Number)
 	return rows, nil
 }
 
@@ -528,7 +528,7 @@ func (a *Applier) applyPatch(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveMeta, head.epoch, head.head, c.position)
+	a.move(c, id, MoveMeta, head.epoch, head.head)
 	return rows, nil
 }
 
@@ -579,7 +579,7 @@ func (a *Applier) applyShare(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveShare, epoch, head.head, c.position)
+	a.move(c, id, MoveShare, epoch, head.head)
 	return rows, nil
 }
 
@@ -625,7 +625,7 @@ func (a *Applier) applyUnshare(ctx context.Context, tx *sql.Tx, c applyContext, 
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveShare, epoch, head.head, c.position)
+	a.move(c, id, MoveShare, epoch, head.head)
 	return rows, nil
 }
 
@@ -687,7 +687,7 @@ func (a *Applier) applyTransfer(ctx context.Context, tx *sql.Tx, c applyContext,
 		return 0, err
 	}
 	rows += n
-	a.move(id, MoveTransfer, epoch, head.head, c.position)
+	a.move(c, id, MoveTransfer, epoch, head.head)
 	return rows, nil
 }
 
@@ -760,7 +760,7 @@ func (a *Applier) applyTrash(ctx context.Context, tx *sql.Tx, c applyContext, id
 	if err != nil {
 		return 0, err
 	}
-	a.move(id, MoveTrash, epoch, head.head, c.position)
+	a.move(c, id, MoveTrash, epoch, head.head)
 	return 1 + n, nil
 }
 
@@ -797,7 +797,7 @@ func (a *Applier) applyRestore(ctx context.Context, tx *sql.Tx, c applyContext, 
 	if err != nil {
 		return 0, err
 	}
-	a.move(id, MoveRestore, head.epoch, head.head, c.position)
+	a.move(c, id, MoveRestore, head.epoch, head.head)
 	return 1 + n, nil
 }
 
@@ -846,7 +846,7 @@ func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContex
 	if err != nil {
 		return 0, err
 	}
-	a.move(id, MoveTrash, epoch, head.head, c.position)
+	a.move(c, id, MoveTrash, epoch, head.head)
 	return 1 + n, nil
 }
 
@@ -857,7 +857,7 @@ func (a *Applier) applyPurgeBegin(ctx context.Context, tx *sql.Tx, c applyContex
 // objects (which become unnamed, and the collector reclaims their files after
 // its grace), its assets, shares, pins, reads, source claim and history. The
 // MARKER IS WRITTEN WHETHER OR NOT THE ROW IS HERE, so a record about the
-// artifact that arrives later is gated on every node alike. A purge writes no
+// artifact that arrives later is gated on every data node alike. A purge writes no
 // history row of its own: the history goes with the artifact, and the marker
 // names the purge's operation, which is what its writer reads back.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id string) (int, error) {
@@ -921,7 +921,7 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, c applyContext, id
 		return 0, err
 	}
 	rows += n
-	a.move(id, MovePurge, head.epoch+1, head.head, c.position)
+	a.move(c, id, MovePurge, head.epoch+1, head.head)
 	return rows, nil
 }
 
@@ -1236,7 +1236,7 @@ func planObjects(ctx context.Context, tx *sql.Tx, id string, adds, removes []art
 		if after < 0 {
 			// A REFERENCE COUNT BELOW ZERO is rows that disagree with the
 			// versions they count, which no record can produce: stopping
-			// here is the honest answer, and every node stops on it alike.
+			// here is the honest answer, and every data node stops on it alike.
 			return objectPlan{}, nil, fmt.Errorf("artifactsdomain: %s's object %s "+
 				"would be named %d times: the reference table disagrees with the "+
 				"versions it counts", id, k, after)

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -434,8 +435,14 @@ func TestTheTypingCadenceComesFromTheServer(t *testing.T) {
 	if tr.SupportsStatusText() {
 		t.Fatal("the transport claims it can render status text")
 	}
-	if tr.DMChannelPrefix() != "" {
-		t.Fatalf("a channel-id prefix is declared: %q", tr.DMChannelPrefix())
+	if got := tr.AddressRule().DMPrefix; got != "" {
+		t.Fatalf("a channel-id prefix is declared: %q", got)
+	}
+	// AND IT IS THE PROMPT'S OWN RULE. Two declarations would raise a
+	// spinner on messages the prompt tells the agent it may ignore.
+	if got := tr.AddressRule(); !reflect.DeepEqual(got, mattermost.Prompt().Address) {
+		t.Fatalf("the transport addresses by %+v, the prompt by %+v",
+			got, mattermost.Prompt().Address)
 	}
 	if tr.StatusBackend() != mattermost.Backend {
 		t.Fatalf("StatusBackend = %q", tr.StatusBackend())
@@ -452,7 +459,8 @@ func TestTheIndicatorIsRaisedAndLapses(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	if !tr.SetStatus(t.Context(), "swe", "C1", "root-1", "ignored") {
+	if !tr.SetStatus(t.Context(), notify.StatusPost{Handle: "swe", Channel: "C1", Thread: "root-1",
+		Text: "ignored"}) {
 		t.Fatal("the indicator was not raised")
 	}
 	if inst.typings() != 1 {
@@ -466,7 +474,7 @@ func TestTheIndicatorIsRaisedAndLapses(t *testing.T) {
 		t.Fatal("clearing an indicator that lapses reported a failure")
 	}
 	// A seat this node does not run cannot be raised for.
-	if tr.SetStatus(t.Context(), "nobody", "C1", "", "") {
+	if tr.SetStatus(t.Context(), notify.StatusPost{Handle: "nobody", Channel: "C1"}) {
 		t.Fatal("an indicator was raised for a seat this node does not run")
 	}
 }

@@ -40,7 +40,7 @@
 }
 /* THE COLUMN SPACES ITS PARTS, so prose and headings inside it carry no
    margin of their own, and a lone control keeps its own width. */
-:where(.int-detail, .int-tab, .int-service-off, .int-before, .int-soon-copy) > :where(p, h3) {
+:where(.int-detail, .int-tab, .int-service-off, .int-before) > :where(p, h3) {
   margin: 0;
 }
 :where(.int-detail, .int-tab) > :where(a, button) {
@@ -193,35 +193,6 @@ a.int-feed-what:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* CREWLET CHAT, still to come: its mark large on the brand's soft ground. */
-.int-soon {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--spacing-6);
-  align-items: start;
-  padding: var(--spacing-6);
-  border-radius: var(--radius-xl);
-  background: var(--color-brand-accent-soft);
-}
-.int-soon-copy {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-4);
-  min-width: 0;
-}
-@media (width < 640px) {
-  .int-soon {
-    grid-template-columns: minmax(0, 1fr);
-    padding: var(--spacing-4);
-  }
-}
-.int-step-title {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
-}
-
-/* THE ADDRESS APPS DELIVER TO, at the foot of the directory: a small label
-   over the address, cut to fit, with the whole of it in its title. */
 /* THE HOME, with nothing chosen: what is in use, in one close column. One
    small step between its parts, so a section heading reads as the head of what
    it names rather than a band between two runs of cards. */
@@ -245,6 +216,9 @@ a.int-feed-what:hover {
   text-decoration: underline;
 }
 
+/* THE ADDRESS APPS DELIVER TO, at the foot of the home (.int-landing-foot):
+   a small label over the address, cut to fit, with the whole of it in its
+   title. */
 .int-engine-address {
   display: flex;
   flex-direction: column;

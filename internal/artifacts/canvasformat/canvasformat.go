@@ -43,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Path is where a design version keeps its canvas: the kind's entry.
@@ -335,7 +336,7 @@ func check(c Canvas, m artifacts.Manifest) []Problem {
 		}
 		ids[n.ID] = true
 		if !n.Kind.Valid() {
-			add(at+".kind", "a note is %s", strings.Join(noteKindNames(), " or "))
+			add(at+".kind", "a note is %s", words.Or(noteKindNames()))
 		}
 		switch {
 		case n.Kind == NoteTitle && n.Color != "":

@@ -92,14 +92,14 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	res, err := tx.ExecContext(ctx, `
 		INSERT INTO tracker_history
 			(id, subject_kind, subject_id, project_key, kind, actor, actor_kind,
-			 operator_id, comment_id, batch_id, excerpt, fields_json, turn_id,
+			 operator_id, comment_id, excerpt, fields_json, turn_id,
 			 notified, late, log_seq, log_stream, log_generation, created_at,
 			 broker_at, effective_at, skew_ms, document)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT (id) DO NOTHING`,
 		historyID(c), string(subject.Kind), subject.ID, keys.Project, kind,
 		c.record.Actor, string(c.record.ActorKind), c.record.OperatorID,
-		commentID, batchOf(c.record), excerpt, fields, c.record.TurnID,
+		commentID, excerpt, fields, c.record.TurnID,
 		notified, late, c.packed, c.position.Stream, c.position.Generation,
 		store.EncodeTime(c.authored()), store.EncodeTime(c.brokerAt),
 		store.EncodeTime(effective), c.skewMs(), []byte(c.record.Mutation))
@@ -235,6 +235,13 @@ func (a *Applier) stampProjectChange(ctx context.Context, tx *sql.Tx,
 	return affected(res)
 }
 
+// raiseHistoryStatement is [Applier.raiseSuccessors]' statement over the
+// history rows, named for the plan test: an UPDATE finds its rows by its WHERE
+// exactly as a SELECT does, on every late record.
+const raiseHistoryStatement = `
+		UPDATE tracker_history SET effective_at = MAX(effective_at, ?)
+		WHERE subject_id = ? AND log_seq > ? AND effective_at < ?`
+
 // raiseSuccessors re-derives the effective instant of every row ABOVE this
 // one.
 //
@@ -257,8 +264,7 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 	broker := store.EncodeTime(c.brokerAt)
 	var rows int
 	for _, statement := range []struct{ sql, column string }{
-		{`UPDATE tracker_history SET effective_at = MAX(effective_at, ?)
-		  WHERE subject_id = ? AND log_seq > ? AND effective_at < ?`, "history"},
+		{raiseHistoryStatement, "history"},
 		{`UPDATE tracker_turns SET effective_at = MAX(effective_at, ?)
 		  WHERE task_id = ? AND log_seq > ? AND effective_at < ?`, "turns"},
 	} {
@@ -275,6 +281,20 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 	}
 	return rows, nil
 }
+
+// newestStatusStatement is [Applier.stampStatusEntered]'s read, named for the
+// plan test.
+const newestStatusStatement = `
+		SELECT h.effective_at
+		FROM tracker_history h
+		WHERE h.subject_id = ?
+		  AND json_extract(h.fields_json, '$.status.to') IS NOT NULL
+		ORDER BY h.log_seq DESC
+		LIMIT 1`
+
+// statusEnteredStatement is [Applier.stampStatusEntered]'s write, named for
+// the plan test.
+const statusEnteredStatement = `UPDATE tracker_tasks SET status_entered_at = ? WHERE id = ?`
 
 // stampStatusEntered rewrites a task's `status_entered_at` from its history.
 //
@@ -310,13 +330,7 @@ func (a *Applier) raiseSuccessors(ctx context.Context, tx *sql.Tx, subjectID str
 // actually last made.
 func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID string) (int, error) {
 	var at int64
-	switch err := tx.QueryRowContext(ctx, `
-		SELECT h.effective_at
-		FROM tracker_history h
-		WHERE h.subject_id = ?
-		  AND json_extract(h.fields_json, '$.status.to') IS NOT NULL
-		ORDER BY h.log_seq DESC
-		LIMIT 1`, taskID).Scan(&at); {
+	switch err := tx.QueryRowContext(ctx, newestStatusStatement, taskID).Scan(&at); {
 	case errors.Is(err, sql.ErrNoRows):
 		// NO STATUS CHANGE IN THE HISTORY AT ALL, which is not an error:
 		// a task whose every applied record was quiet about its status
@@ -325,9 +339,7 @@ func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID str
 	case err != nil:
 		return 0, fmt.Errorf("worklet: read the newest status of %s: %w", taskID, err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE tracker_tasks SET status_entered_at = ? WHERE id = ?`,
-		at, taskID); err != nil {
+	if _, err := tx.ExecContext(ctx, statusEnteredStatement, at, taskID); err != nil {
 		return 0, fmt.Errorf("worklet: stamp the entered instant of %s: %w",
 			taskID, err)
 	}
@@ -426,7 +438,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			return 0, nil
 		}
 	}
-	candidates := Candidates(notify, c.record.Batched())
+	candidates := Candidates(notify)
 	// THE TASK THE NOTICE IS ABOUT, beside the subject it was written on.
 	// For a task commit they are one task; for a lead's priorities write
 	// the subject is the PERSON and the key stored beside it is the TASK's,
@@ -474,7 +486,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			a.noteInbox(inboxNote{
 				record: historyID(c), handle: candidate.Handle,
 				subject: c.subject().ID, reason: candidate.Reason,
-				position: c.packed,
+				position: c.packed, at: c.brokerAt,
 			})
 		}
 		written += n
@@ -536,13 +548,4 @@ func statedDeltas(c applyContext) map[string]Delta {
 		return nil
 	}
 	return c.record.Notify.Fields
-}
-
-// batchOf answers the batch id or nil, so the column distinguishes "not part
-// of a batch" from "part of a batch with an empty name".
-func batchOf(rec MutationRecord) any {
-	if rec.BatchID == nil {
-		return nil
-	}
-	return *rec.BatchID
 }

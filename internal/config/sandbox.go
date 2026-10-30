@@ -8,6 +8,7 @@ import (
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Placement is WHERE an executor run happens: one cell of the
@@ -378,12 +379,12 @@ func (s *SandboxProvider) validate(path Path) error {
 		// every entry its own run_in") could never pass.
 	case !slices.Contains(Placements, s.DefaultRunIn):
 		p.add(at(path, "default_run_in"), ErrUnknownValue, "%q (want %s)",
-			s.DefaultRunIn, names(Placements))
+			s.DefaultRunIn, words.Or(Placements))
 	case !s.Configured(s.DefaultRunIn):
 		p.add(at(path, "default_run_in"), ErrConflict,
 			"%q needs the %s backend configured under providers.sandbox (this "+
 				"catalogue has %s)",
-			s.DefaultRunIn, s.DefaultRunIn.backend(), names(s.available()))
+			s.DefaultRunIn, s.DefaultRunIn.backend(), words.And(s.available()))
 	}
 
 	if s.DefaultTimeoutSeconds < 0 {
@@ -578,7 +579,7 @@ func (l *LocalSandbox) unsuppliedEnvArgs() []struct {
 func (l *LocalSandbox) validate(path Path) error {
 	var p problems
 	if l.Runtime != "" && !slices.Contains(ContainerRuntimes, l.Runtime) {
-		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, names(ContainerRuntimes))
+		p.add(at(path, "runtime"), ErrUnknownValue, "%q (want %s)", l.Runtime, words.Or(ContainerRuntimes))
 	}
 	// A NAME OUTSIDE THE ENVIRONMENT'S OWN GRAMMAR is refused rather than
 	// handed on: `A=B` as a key would set a variable called A to `B=…`, and

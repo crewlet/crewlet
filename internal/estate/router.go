@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
@@ -133,9 +134,9 @@ type Router struct {
 
 // admission is one cached answer to [Router.Serves].
 type admission struct {
-	at             time.Time
-	tracker, pages bool
-	err            error
+	at     time.Time
+	served Served
+	err    error
 }
 
 // NewRouter builds a router.
@@ -247,10 +248,37 @@ type exchange struct {
 	// asks the next node after an unvouched one. Nil where the actor holds
 	// none; an in-process run reports into it directly.
 	written worklet.WriteLog
+
+	// here asks THIS node's copy first even while it lags its logs — see
+	// [callHere]. False for every other call, which passes over a lagging
+	// copy of its own for one that does not lag.
+	here bool
 }
 
 // call runs one operation on a data node whose copy serves.
 func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, args A) (R, error) {
+	return callAs(ctx, r, o, actor, args, false)
+}
+
+// callHere is [call] asked of THIS node's own copy first, even while that copy
+// lags its logs, and of the other data nodes only where it cannot answer.
+//
+// FOR A CALLER WHOSE QUESTION IS ABOUT THIS NODE'S OWN COPY: a decision about
+// a record this node's applier has just committed, which that copy holds by
+// construction and a peer may not yet. The ordinary walk passes a lagging copy
+// over for a peer's — the fresher answer, when "fresher" is what is wanted —
+// and for such a caller that turns every decision during a burst (the burst
+// that made the copy lag) into a network round trip to a node that may not
+// have applied the record at all. A copy that is out of service is still
+// passed over: lagging is distance, and this is a caller that does not mind
+// distance; a wrong copy is never an answer.
+func callHere[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, args A) (R, error) {
+	return callAs(ctx, r, o, actor, args, true)
+}
+
+// callAs is [call] and [callHere], here saying which.
+func callAs[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, args A,
+	here bool) (R, error) {
 	var zero R
 	spec := o.spec
 	var written worklet.WriteLog
@@ -292,6 +320,7 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 			return out, caveat.RebuildFromPeer(raw, &out)
 		},
 		written: written,
+		here:    here,
 	}
 	answer, err := r.route(ctx, spec, actor, x)
 	if out, ok := answer.(R); ok {
@@ -302,8 +331,13 @@ func call[A, R any](ctx context.Context, r *Router, o op[A, R], actor *Actor, ar
 
 // ErrUnserved is an operation no data node ran: every node the asker's view
 // named — this node among them where it holds the estate — answered that its
-// copy is out of service, could not run it, was behind, or did not answer at
-// all.
+// copy is out of service, could not run it, or was behind, or (for a READ) did
+// not answer at all.
+//
+// AND NEVER A WRITE SOMEBODY MAY HAVE RUN. A write sent to a node that did not
+// answer may have landed there, so a walk that sent one and heard no answer
+// from any node is [ErrOutcomeUnknown] instead ([walk.unserved]): this error
+// is the claim that nothing ran, and a caller acts on it by writing again.
 //
 // NEVER A FALSE "NOT FOUND". An operation nobody answered for is refused
 // saying so, because a read reported as empty would say the company has none
@@ -339,10 +373,50 @@ type walk struct {
 	// laggingHere whether this node's own copy did.
 	lagging     []string
 	laggingHere bool
+
+	// unanswered is every node a repeatable WRITE was sent to that gave no
+	// answer this node believes — one that may have run it. See
+	// [walk.unserved].
+	unanswered []string
 }
 
 func (w *walk) note(format string, args ...any) {
 	w.reasons = append(w.reasons, fmt.Sprintf(format, args...))
+}
+
+// unserved is the answer to a walk that found no node to answer: the estate
+// unserved, or — where a write was sent to a node that never answered —
+// unknown.
+//
+// THE DIFFERENCE IS WHETHER ANYBODY MAY HAVE RUN IT. A node that answered "I
+// did not run it" ran nothing, and a walk of nodes that all said so is a
+// refusal the caller may act on by writing again. A node that did not answer
+// at all may have committed the write and lost only its acknowledgement —
+// which is exactly the case an [opIdempotentWrite]'s operation id exists for —
+// so reporting that walk as unserved told the caller nothing had happened: a
+// purge was answered "no data node could serve it" while its record sat on the
+// log, a seat was told its change was NOT made, and the retry each was then
+// entitled to make under a FRESH id was a second write. Unknown is the honest
+// answer, and the same operation id is the safe retry.
+func (w *walk) unserved(spec *opSpec) error {
+	detail := strings.Join(w.reasons, "; ")
+	if len(w.unanswered) > 0 {
+		return fmt.Errorf("%w (%s, asked of %s: %s)", ErrOutcomeUnknown, spec.name,
+			strings.Join(w.unanswered, ", "), detail)
+	}
+	return &ErrUnserved{Detail: detail}
+}
+
+// askFailed is the answer to a walk whose next request could not be made at
+// all: that failure — unless a repeatable write was already SENT to a node
+// that never answered, which may have run it. Then the walk's answer is
+// unknown, whatever stopped it asking the next one ([walk.unserved]).
+func (w *walk) askFailed(spec *opSpec, err error) error {
+	if len(w.unanswered) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w (%s, asked of %s): %w", ErrOutcomeUnknown, spec.name,
+		strings.Join(w.unanswered, ", "), err)
 }
 
 // route runs one operation — this node first where its copy serves, then the
@@ -366,8 +440,10 @@ func (w *walk) note(format string, args ...any) {
 func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchange) (any, error) {
 	w := &walk{}
 	// THIS NODE FIRST, where its copy serves — in-process, with the node's
-	// floors enforced exactly as a remote node enforces them.
-	if value, final, ranErr := r.tryLocal(ctx, spec, x, false, w); final {
+	// floors enforced exactly as a remote node enforces them; and even
+	// while it lags, where the caller asked for this node's copy
+	// ([callHere]).
+	if value, final, ranErr := r.tryLocal(ctx, spec, x, x.here, w); final {
 		return value, ranErr
 	}
 	budget := r.budgetFor(ctx, spec)
@@ -398,7 +474,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 	for _, node := range r.order(nodes) {
 		rep, got, err := r.askFor(ctx, spec, actor, x, node, budget, false)
 		if err != nil {
-			return nil, err
+			return nil, w.askFailed(spec, err)
 		}
 		if !got.answered() {
 			if err := r.unheard(ctx, spec, node, got, w); err != nil {
@@ -406,7 +482,7 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 			}
 			continue
 		}
-		if value, final, ranErr := r.settle(spec, x, node, rep, w); final {
+		if value, final, ranErr := r.settle(ctx, spec, x, node, rep, w); final {
 			return value, ranErr
 		}
 	}
@@ -417,13 +493,18 @@ func (r *Router) route(ctx context.Context, spec *opSpec, actor *Actor, x exchan
 		return w.fallback.value, w.fallback.err
 	}
 	// WHO WAS ASKED AND WHAT EACH SAID GOES TO THE LOG HERE, the one place
-	// that knows it: every reader of the refusal tells its caller in fixed
-	// words (internal/agent/builtin's Condition), because the detail names
-	// nodes and their copies' faults, and a model's prompt or a person's
-	// screen can act on neither.
+	// that knows it: every reader of the answer tells its caller in fixed
+	// words (internal/agent/builtin's Condition and Unanswered), because the
+	// detail names nodes and their copies' faults, and a model's prompt or a
+	// person's screen can act on neither.
 	detail := strings.Join(w.reasons, "; ")
-	log.WarnContext(ctx, "estate_unserved", "op", spec.name, "detail", detail)
-	return nil, &ErrUnserved{Detail: detail}
+	if len(w.unanswered) > 0 {
+		log.WarnContext(ctx, "estate_outcome_unknown", "op", spec.name,
+			"unanswered", strings.Join(w.unanswered, ", "), "detail", detail)
+	} else {
+		log.WarnContext(ctx, "estate_unserved", "op", spec.name, "detail", detail)
+	}
+	return nil, w.unserved(spec)
 }
 
 // lastResort asks the copies the walk passed over for lagging their logs —
@@ -444,7 +525,7 @@ func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x e
 	for _, node := range lagging {
 		rep, got, askErr := r.askFor(ctx, spec, actor, x, node, budget, true)
 		if askErr != nil {
-			return nil, true, askErr
+			return nil, true, w.askFailed(spec, askErr)
 		}
 		if !got.answered() {
 			if unheardErr := r.unheard(ctx, spec, node, got, w); unheardErr != nil {
@@ -452,7 +533,7 @@ func (r *Router) lastResort(ctx context.Context, spec *opSpec, actor *Actor, x e
 			}
 			continue
 		}
-		if value, final, ranErr := r.settle(spec, x, node, rep, w); final {
+		if value, final, ranErr := r.settle(ctx, spec, x, node, rep, w); final {
 			return value, true, ranErr
 		}
 	}
@@ -516,8 +597,9 @@ type heard struct {
 	// replied is whether anything came back.
 	replied bool
 
-	// unbelieved is why what came back is not believed, empty for a reply
-	// that verified and answers this request ([Envelopes.openReply]).
+	// unbelieved is why what came back is not believed — unsigned, signed
+	// for another request, or undecodable — and empty for a reply that
+	// verified, decoded and answers this request ([Envelopes.openReply]).
 	unbelieved string
 }
 
@@ -525,9 +607,16 @@ type heard struct {
 func (h heard) answered() bool { return h.replied && h.unbelieved == "" }
 
 // unheard is what a node that gave no reply this node believes costs the walk:
-// nothing more for a class that may be repeated, the request itself for a
-// once-write — which that node may have run, whatever it said or did not say
-// — and the caller's own ending.
+// nothing more for a read, the request itself for a once-write — which that
+// node may have run, whatever it said or did not say — and the caller's own
+// ending.
+//
+// A REPEATABLE WRITE IS REPEATED, AND REMEMBERED: the next node is asked under
+// the same operation id, and should none answer, the walk ends unknown rather
+// than unserved ([walk.unserved]) — this node may have run it. So does a
+// repeatable write whose caller's context ended while it waited: the request
+// was sent, and the caller stopping listening says nothing about whether it
+// ran.
 //
 // A REPLY THAT IS NOT BELIEVED IS NO ANSWER, never an answer of "did not run":
 // a refusal the fleet signed for another request is exactly what somebody
@@ -548,7 +637,15 @@ func (r *Router) unheard(ctx context.Context, spec *opSpec, node string, h heard
 		return fmt.Errorf("%w (%s, asked of %s)", ErrOutcomeUnknown, spec.name, node)
 	}
 	if ctx.Err() != nil {
+		if spec.class == opIdempotentWrite {
+			w.unanswered = append(w.unanswered, node)
+			return fmt.Errorf("%w (%s, asked of %s): %w", ErrOutcomeUnknown,
+				spec.name, strings.Join(w.unanswered, ", "), ctx.Err())
+		}
 		return fmt.Errorf("estate: %s: %w", spec.name, ctx.Err())
+	}
+	if spec.class == opIdempotentWrite {
+		w.unanswered = append(w.unanswered, node)
 	}
 	if h.replied {
 		w.note("%s: %s", node, h.unbelieved)
@@ -561,8 +658,8 @@ func (r *Router) unheard(ctx context.Context, spec *opSpec, node string, h heard
 // settle is what one node's reply decides: final when it is the answer, and
 // otherwise noted on the walk — a node that ran nothing, or an answer not final
 // for its class, kept in case no node gives a better one.
-func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *walk) (
-	value any, final bool, err error) {
+func (r *Router) settle(ctx context.Context, spec *opSpec, x exchange, node string,
+	rep reply, w *walk) (value any, final bool, err error) {
 
 	if rep.Unserved != "" {
 		if rep.Unserved == unservedLagging {
@@ -578,6 +675,19 @@ func (r *Router) settle(spec *opSpec, x exchange, node string, rep reply, w *wal
 			w.fallback = &held{err: failure}
 			w.note("%s: unvouched", node)
 			return nil, false, nil
+		}
+		// A CONDITION ANOTHER NODE MET IS NAMED HERE, the one place that
+		// knows whose it was: it is handed back as this node's answer, and
+		// every surface tells the person "the node answering this" and
+		// logs the error — which carries the refusal and not the node that
+		// made it, so an administrator sent to the logs by "the logs name
+		// it" would otherwise check the node they asked rather than the one
+		// that refused. At the level the surface logs the condition at
+		// ([statelog.ConditionLevel]).
+		if errors.Is(failure, statelog.ErrUnavailable) {
+			log.Log(ctx, statelog.ConditionLevel(failure, slog.LevelDebug),
+				"estate_peer_refused", "node", node, "op", spec.name,
+				"error", failure.Error())
 		}
 		return nil, true, failure
 	}
@@ -656,10 +766,9 @@ func (r *Router) floorsFor(spec *opSpec) []statelog.Position {
 // ask sends one request to one node, signed and bound to an id of its own.
 // heard says whether anything came back and whether it is believed: a node
 // that said nothing is suspected and reported to the placement, and one whose
-// reply does not verify, or answers another request, is heard and not
-// believed. err is set only where the request could not be made at all, which
-// no other node would fare better with, or where the fleet signed a reply this
-// build cannot decode.
+// reply does not verify, answers another request or cannot be decoded is
+// heard and not believed. err is set only where the request could not be made
+// at all, which no other node would fare better with.
 func (r *Router) ask(ctx context.Context, node string, req request, budget time.Duration) (
 	reply, heard, error) {
 
@@ -683,8 +792,13 @@ func (r *Router) ask(ctx context.Context, node string, req request, budget time.
 	}
 	rep, why, err := r.env.openReply(replies[0], req.ID)
 	if err != nil {
-		return reply{}, heard{}, fmt.Errorf("%s answered something this build cannot decode: %w",
-			node, err)
+		// A SIGNED REPLY THIS BUILD CANNOT DECODE IS NO ANSWER, as one it
+		// cannot believe is ([Router.unheard]) — never a request that could
+		// not be made. The node took the request and may have run it, so a
+		// write is not "failed" because its acknowledgement was unreadable:
+		// a once-write is unknown, and any other class asks the next node.
+		return reply{}, heard{replied: true,
+			unbelieved: "its reply cannot be decoded by this build: " + err.Error()}, nil
 	}
 	return rep, heard{replied: true, unbelieved: why}, nil
 }
@@ -838,26 +952,30 @@ func findResults(v reflect.Value, out []statelog.Result) []statelog.Result {
 // to it would act on rows that are behind. Where it does not — a node without
 // data, or one whose copy is out of service — it is the first data node that
 // answers, and that answer is trusted for [admissionTrust].
-func (r *Router) Serves(ctx context.Context) (tracker, pages bool, err error) {
+//
+// A COPY THAT ADMITS NO SEAT ANSWERS NO HALF, which is the zero [Served]: the
+// caller compares the halves its company runs against the halves served, and
+// an unadmitting copy serves none of them.
+func (r *Router) Serves(ctx context.Context) (Served, error) {
 	if r.local != nil {
 		if b, ok := r.local.For(ctx); ok {
 			if b.Admits != nil && !b.Admits(ctx) {
-				return false, false, nil
+				return Served{}, nil
 			}
-			return b.Tracker != nil, b.Pages != nil, nil
+			return b.served(), nil
 		}
 	}
 	r.mu.Lock()
 	cached := r.admitted
 	r.mu.Unlock()
 	if cached != nil && r.now().Sub(cached.at) < admissionTrust {
-		return cached.tracker, cached.pages, cached.err
+		return cached.served, cached.err
 	}
 	asked, cancel := context.WithTimeout(ctx, r.admissionBudget)
 	defer cancel()
 	out, err := call(asked, r, opPing, nil, struct{}{})
 	r.mu.Lock()
-	r.admitted = &admission{at: r.now(), tracker: out.Tracker, pages: out.Pages, err: err}
+	r.admitted = &admission{at: r.now(), served: out, err: err}
 	r.mu.Unlock()
-	return out.Tracker, out.Pages, err
+	return out, err
 }

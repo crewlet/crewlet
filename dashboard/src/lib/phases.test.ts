@@ -770,7 +770,7 @@ describe("what a coding run's record left out", () => {
       transcriptElidedLines: 0,
       transcriptElidedBytes: 307_200,
     };
-    expect(transcriptLength(partial)).toBe("2 lines, 300 KB left out");
+    expect(transcriptLength(partial)).toBe("2 lines, 300 KiB left out");
   });
 
   test("refs the record does not list are counted even when it lists none", () => {

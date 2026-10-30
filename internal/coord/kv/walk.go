@@ -41,9 +41,9 @@
 // `node.n3@8 pending=0`; n0, n2 and n4 — all three live throughout — arrived
 // after the marker at revisions 353 to 355. Every membership read is a listing
 // (seat placement divides by ListLive(ClassNode)), so a miss is a live node
-// that looks gone; and the
-// trim takes a MINIMUM across the positions rows every node heartbeats, so a
-// missed row raises the floor and deletes log records that node still needs.
+// that looks gone; and the trim takes a MINIMUM across the positions rows
+// every data node heartbeats, so a missed row raises the floor and deletes log
+// records that node still needs.
 //
 // The one exact "the cursor is at the tail" fact is the consumer's own store
 // EOF, and the broker does not hand it to a pass that could use it: a push

@@ -1,7 +1,6 @@
 package usage
 
 import (
-	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,12 +16,16 @@ import (
 // record, so each runs once per changed object per tick on every data node.
 // With no statistics the planner prefers the one-column day index over a
 // primary key that does not cover what a statement reads, and a statement that
-// takes it walks every node's day — every seat's spend cells, every person's —
-// to read one object. Each statement here is the package's own text, so the
-// plan read is the plan run.
+// takes it walks every data node's day — every seat's spend cells, every
+// person's — to read one object. Each statement here is the package's own text,
+// so the plan read is the plan run, and it is read through storetest's one
+// reading of a plan, which also asks whether the planner unnested a correlated
+// aggregate ([storetest.Decorrelated]): a guard rewritten that way reads every
+// row of its table however many objects it is asked about.
 //
 // Mutation: drop either `INDEXED BY` from the spend reads, or from the person
-// guard, and its plan names `_day_idx (day=?)`.
+// guard, and its plan names `_day_idx (day=?)`; write the schedule guard as an
+// unfiltered correlated MAX and the decorrelation refusal names it.
 func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 	t.Parallel()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)
@@ -64,29 +67,12 @@ func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 			for i := range args {
 				args[i] = "x"
 			}
-			var steps []string
-			// A WRITE TRANSACTION, because the clears are writes and the
-			// estate refuses one in a read — EXPLAIN runs nothing.
-			if err := db.Replicated().Tx(t.Context(), func(tx *sql.Tx) error {
-				rows, err := tx.QueryContext(t.Context(), "EXPLAIN QUERY PLAN "+c.query, args...)
-				if err != nil {
-					return err
-				}
-				defer func() { _ = rows.Close() }()
-				for rows.Next() {
-					var id, parent, unused int
-					var detail string
-					if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-						return err
-					}
-					steps = append(steps, detail)
-				}
-				return rows.Err()
-			}); err != nil {
-				t.Fatalf("explain: %v", err)
-			}
-			if len(steps) == 0 {
-				t.Fatal("the plan has no steps, so this guard reads nothing")
+			// A WRITE IS PLANNED IN A WRITE TRANSACTION, by Plan itself:
+			// the clears are writes and the estate refuses one in a read.
+			steps := storetest.Plan(t, db.Replicated(), c.query, args)
+			if line, ok := storetest.Decorrelated(steps); ok {
+				t.Errorf("the planner unnested a correlated aggregate into a "+
+					"read of the whole table: %s", line)
 			}
 			for _, step := range steps {
 				if !strings.HasPrefix(step, "SEARCH ") {

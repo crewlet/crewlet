@@ -3,6 +3,8 @@ package catalog
 import (
 	"fmt"
 	"slices"
+
+	"github.com/crewlet/crewlet/internal/authz"
 )
 
 // The exposure table: which surface each CURATED tool is built on, one row per
@@ -18,8 +20,10 @@ func asked(question, tool string) Exposure {
 	return Exposure{Question: question, As: AsReadTool, Name: tool}
 }
 
-func proposed(tool, name string) Exposure {
-	return Exposure{Tool: tool, As: AsWriteTool, Name: name}
+// proposed is a curated write executing as verb's operator tool, which the
+// row names by the verb, as [write] does.
+func proposed(verb authz.Action, name string) Exposure {
+	return Exposure{Tool: string(verb), As: AsWriteTool, Name: name}
 }
 
 func routed(route, tool string) Exposure {
@@ -42,48 +46,64 @@ var questionExposures = []Exposure{
 	asked("backups", "get_fleet_health"),
 	asked("budgets", "list_budgets"),
 	asked("integrations", "list_integrations"),
-	asked("knowledge", "search_knowledge"),
+	asked("knowledge", searchKnowledgeTool),
 	asked("containers", "list_spaces"),
 	asked("sandbox_runs", "list_coding_runs"),
 	asked("work_items", "list_tasks"),
 	asked("work_item", "get_task"),
 	asked("work_comments", "get_task_thread"),
 	asked("work_item_turns", "get_task_cost"),
-	asked("work_projects", "list_projects"),
-	asked("work_project", "list_projects"),
+	asked("work_projects", listProjectsTool),
+	asked("work_project", listProjectsTool),
 	asked("work_workload", "get_workload"),
 	asked("work_my_work", "get_my_work"),
 	asked("work_inbox", "get_my_work"),
 	asked("company_feed", "get_company_feed"),
 	asked("decisions", "list_decisions"),
-	asked("page", "get_page"),
+	asked("page", getPageTool),
 	asked("work_search", "search_work"),
 	asked("config_audit", "list_config_changes"),
-	asked("artifacts", "list_artifacts"),
-	asked("artifact", "get_artifact"),
+	asked("artifacts", listArtifactsTool),
+	asked("artifact", getArtifactTool),
+	asked("chat_channels", "list_chat_rooms"),
+	asked("chat_channel", "get_chat_room"),
+	asked("chat_messages", "read_chat_messages"),
+	asked("chat_thread", "get_chat_thread"),
+	asked("chat_mentions", "list_chat_mentions"),
+	asked("chat_search", "search_chat"),
 	// READ BY A PREVIEW ONLY: a priority change is bound to the person's
-	// record at the version its preview read.
+	// record at the version its preview read. (The room and the thread every
+	// chat write's preview reads are read by get_chat_room and
+	// get_chat_thread above.)
 	{Question: "work_person", As: AsPreviewRead, Name: "set_my_priorities"},
 }
 
 // toolExposures are the operator catalogue tools a curated write executes as.
 var toolExposures = []Exposure{
-	proposed("create_work_item", "create_task"),
-	proposed("update_work_item", "update_task"),
+	proposed(authz.ActionWorkCreate, "create_task"),
+	proposed(authz.ActionWorkUpdate, "update_task"),
 	// ONE ROW, TWO TOOLS: comment_on_task and answer_decision both
 	// execute as this one, an answer being a comment that closes a
 	// question.
-	proposed("comment_on_work_item", "comment_on_task"),
-	proposed("set_priorities", "set_my_priorities"),
-	proposed("mark_inbox", "mark_inbox"),
-	proposed("write_page", "create_page"),
-	proposed("save_page", "edit_page"),
-	proposed("answer_run", "answer_coding_run"),
-	proposed("pause_seat", "pause_agent"),
-	proposed("resume_seat", "resume_agent"),
-	proposed("steer_turn", "steer_turn"),
-	proposed("share_artifact", "share_artifact"),
-	proposed("unshare_artifact", "unshare_artifact"),
+	proposed(authz.ActionWorkComment, "comment_on_task"),
+	proposed(authz.ActionPrioritiesSet, "set_my_priorities"),
+	proposed(authz.ActionInboxMark, markInboxTool),
+	proposed(authz.ActionPageCreate, "create_page"),
+	proposed(authz.ActionPageSave, "edit_page"),
+	proposed(authz.ActionRunAnswer, "answer_coding_run"),
+	proposed(authz.ActionSeatPause, "pause_agent"),
+	proposed(authz.ActionSeatResume, "resume_agent"),
+	proposed(authz.ActionTurnSteer, steerTurnTool),
+	proposed(authz.ActionArtifactShare, shareArtifactTool),
+	proposed(authz.ActionArtifactUnshare, unshareArtifactTool),
+	proposed(authz.ActionChatPost, "post_chat_message"),
+	proposed(authz.ActionChatReply, "reply_in_chat_thread"),
+	proposed(authz.ActionChatDirect, "send_direct_message"),
+	proposed(authz.ActionChatEdit, "edit_chat_message"),
+	proposed(authz.ActionChatDelete, "delete_chat_message"),
+	proposed(authz.ActionChatUpdate, "update_chat_room"),
+	proposed(authz.ActionChatMembers, "set_chat_room_members"),
+	proposed(authz.ActionChatLeave, "leave_chat_room"),
 }
 
 // routeExposures are the routes a curated tool reads or proposes on directly,
@@ -94,8 +114,8 @@ var routeExposures = []Exposure{
 	routed("GET /agents", "list_agents"),
 	routed("GET /org", "get_org_chart"),
 	routed("GET /iam/seats", "get_org_chart"),
-	routeProposed(ShareRoute, "share_artifact"),
-	routeProposed(UnshareRoute, "unshare_artifact"),
+	routeProposed(ShareRoute, shareArtifactTool),
+	routeProposed(UnshareRoute, unshareArtifactTool),
 	routed(PrinciplesRoute, "get_company_principles"),
 	routeProposed(PrinciplesWriteRoute, "update_company_principles"),
 	// A CEILING IS WRITTEN AS BUDGETS WRITES IT: a seat's through the seat,

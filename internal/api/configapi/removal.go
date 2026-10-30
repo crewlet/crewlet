@@ -493,7 +493,7 @@ func (s *Service) deleteEntity(kind string) http.HandlerFunc {
 				return
 			}
 		}
-		s.refuseApply(w, raced)
+		s.refuseApply(w, r, raced)
 	}
 }
 
@@ -515,7 +515,7 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 	ctx := r.Context()
 	cur, found, err := s.current(ctx)
 	if err != nil {
-		s.fail(w, "read the fleet's revision", err)
+		s.fail(w, r, "read the fleet's revision", err)
 		return true, nil
 	}
 	if !found {
@@ -524,23 +524,23 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 		return true, nil
 	}
 	active := cur.revision
-	company, err := s.open(active)
+	company, err := s.open(cur)
 	if err != nil {
 		if !RefuseUnreadable(w, err) {
-			s.fail(w, "open the active revision", err)
+			s.fail(w, r, "open the active revision", err)
 		}
 		return true, nil
 	}
 	current, held := entityKinds[e.kind].find(company.Redact(), e.id)
 	if !held {
-		s.refuseEntity(w, e.kind, e.id, &EntityError{Err: ErrNoSuchEntity})
+		s.refuseEntity(w, r, e.kind, e.id, &EntityError{Err: ErrNoSuchEntity})
 		return true, nil
 	}
 	// THE PRECONDITION IS THE ENTRY'S, as an edit's is: what its GET served.
 	if e.expected != "" {
 		tag, tagErr := entityTag(e.kind, current)
 		if tagErr != nil {
-			s.fail(w, "tag the entity", tagErr)
+			s.fail(w, r, "tag the entity", tagErr)
 			return true, nil
 		}
 		if !matchesTag(e.expected, tag) {
@@ -567,7 +567,7 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 		refuseRemoval(w, refused)
 		return true, nil
 	case err != nil:
-		s.refuseRemovalApply(w, e.kind, e.id, err)
+		s.refuseRemovalApply(w, r, e.kind, e.id, err)
 		return true, nil
 	}
 	if e.dryRun {
@@ -584,7 +584,7 @@ func (s *Service) removeEntity(w http.ResponseWriter, r *http.Request, e removal
 	case errors.As(err, &lost):
 		return false, err
 	case err != nil:
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 		return true, nil
 	}
 	writeApplied(w, applied)
@@ -609,7 +609,7 @@ func refuseRemoval(w http.ResponseWriter, e *RemovalError) {
 // problems for a company the removal leaves invalid (an executor job moved to
 // a CLI that cannot run one, an assistant target that allows web tools), the
 // entity's own refusals, and every other as any write's.
-func (s *Service) refuseRemovalApply(w http.ResponseWriter, kind, id string, err error) {
+func (s *Service) refuseRemovalApply(w http.ResponseWriter, r *http.Request, kind, id string, err error) {
 	var invalid *ValidationError
 	var entityErr *EntityError
 	switch {
@@ -620,8 +620,8 @@ func (s *Service) refuseRemovalApply(w http.ResponseWriter, kind, id string, err
 			"repoint the company cannot run is refused at its field"
 		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeValidationError, fields)
 	case errors.As(err, &entityErr):
-		s.refuseEntity(w, kind, id, err)
+		s.refuseEntity(w, r, kind, id, err)
 	default:
-		s.refuseApply(w, err)
+		s.refuseApply(w, r, err)
 	}
 }

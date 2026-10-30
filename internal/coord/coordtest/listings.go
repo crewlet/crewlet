@@ -109,6 +109,45 @@ var listingCases = []fleetCase{{
 		})
 		c.verdict(h.t, "Mailboxes", raced, wrong)
 	},
+}, {
+	// The retention sweep lists everybody holding chat read state to decide
+	// whose to forget, while people go on reading: every flush rewrites the
+	// reader's one record. A reader listed twice is judged twice in a tick;
+	// one missed is not judged at all.
+	name: "a chat read record flushed throughout a listing is in every listing, once",
+	fn: func(h *fleetHarness) {
+		handles := []string{"ceo", "cto", "eng", "ops", "pm"}
+		for _, handle := range handles {
+			h.advanceChatRead(handle, "general", 1)
+		}
+		// A cursor per writer, moved only by that writer.
+		cursors := map[string]*int64{}
+		for _, handle := range handles {
+			cursors[handle] = new(int64)
+		}
+		c := startChurn([]string{"ceo", "eng", "pm"}, func(handle string) error {
+			*cursors[handle]++
+			_, err := h.f.AdvanceChatRead(h.ctx, handle, coord.ChatReadDelta{
+				Cursors: map[string]int64{"general": 1 + *cursors[handle]}, At: h.now(),
+			})
+			return err
+		})
+		raced, wrong := c.readThrough(h.ctx, func() (string, bool) {
+			readers, err := h.f.ChatReaders(h.ctx)
+			if err != nil {
+				return fmt.Sprintf("ChatReaders: %v", err), true
+			}
+			got := make([]string, 0, len(readers))
+			for _, r := range readers {
+				got = append(got, r.Handle)
+			}
+			if !slices.Equal(got, handles) {
+				return strings.Join(got, ","), false
+			}
+			return "", false
+		})
+		c.verdict(h.t, "ChatReaders", raced, wrong)
+	},
 }}
 
 func (h *fleetHarness) putPositions(node string, seq uint64) {

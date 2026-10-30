@@ -125,7 +125,7 @@ func TestOutsideAndUnknownAreNamedAndLeftToTheTool(t *testing.T) {
 		says    string
 	}{
 		`{"status": "done"}`:                               {tools.Outside, "`title` is required: a string"},
-		`{"title": "t", "status": "doing"}`:                {tools.Outside, "`status` is \"doing\", and make_thing takes one of todo, done"},
+		`{"title": "t", "status": "doing"}`:                {tools.Outside, "`status` is \"doing\", and make_thing takes one of \"todo\" or \"done\""},
 		`{"title": "t", "limit": 0}`:                       {tools.Outside, "`limit` is 0, and make_thing takes at least 1"},
 		`{"title": "t", "limit": "500"}`:                   {tools.Outside, "`limit` is 500, and make_thing takes at most 100"},
 		`{"title": "t", "labels": "a, b, c, d"}`:           {tools.Outside, "`labels` holds 4 entries, and make_thing takes at most 3"},

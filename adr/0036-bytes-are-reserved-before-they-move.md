@@ -54,7 +54,7 @@ no later record names it) is kept by three facts:
 
 - the applier performs a carry only by finding the artifact's own reference
   row for that object, with a live reference count, **in the apply transaction
-  itself**; finding none, it skips the record identically on every node and
+  itself**; finding none, it skips the record identically on every data node and
   the writer, reading its own rows, answers `409 carried_object_gone` naming
   the paths to upload again;
 - every record that adds or removes an object reference (a publish, a

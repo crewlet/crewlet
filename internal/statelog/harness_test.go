@@ -160,6 +160,12 @@ type applier struct {
 	// budgets is what was left of each wait's context when the wait began —
 	// the budget a write handed its applier — in order.
 	budgets []time.Duration
+
+	// beforeOp, when set, runs as a ledger read begins — which is how a
+	// case ends a caller's context between a wait that succeeded and the
+	// read after it — and an error it returns fails that read, as a store
+	// that is busy or closed fails it.
+	beforeOp func() error
 }
 
 // noteBudget records what is left of ctx's deadline as a wait begins. The
@@ -318,7 +324,19 @@ func (a *applier) WaitApplied(ctx context.Context, _ statelog.ScopeSet, p statel
 	return ctx.Err()
 }
 
-func (a *applier) Op(_ context.Context, opID string) (statelog.OpEntry, bool, error) {
+func (a *applier) Op(ctx context.Context, opID string) (statelog.OpEntry, bool, error) {
+	a.mu.Lock()
+	before := a.beforeOp
+	a.mu.Unlock()
+	if before != nil {
+		if err := before(); err != nil {
+			return statelog.OpEntry{}, false, err
+		}
+	}
+	// A READ ON AN ENDED CONTEXT FAILS, as the store's own does.
+	if err := ctx.Err(); err != nil {
+		return statelog.OpEntry{}, false, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	entry, ok := a.ops[opID]
@@ -578,11 +596,17 @@ type faultyRecords struct {
 	inner statelog.LogReader
 	mu    sync.Mutex
 	err   error
+	// once clears err after the first read it fails, which is what a
+	// transient fault looks like to the read after it.
+	once bool
 }
 
 func (r *faultyRecords) At(ctx context.Context, seq uint64) (string, []byte, time.Time, bool, error) {
 	r.mu.Lock()
 	err := r.err
+	if r.once {
+		r.err, r.once = nil, false
+	}
 	r.mu.Unlock()
 	if err != nil {
 		return "", nil, time.Time{}, false, err
@@ -594,6 +618,13 @@ func (r *faultyRecords) fail(err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.err = err
+}
+
+// failOnce fails the next read with err, and only that one.
+func (r *faultyRecords) failOnce(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err, r.once = err, true
 }
 
 // sweep is this node's retention sweep deleting every ledger row, as a sweep

@@ -101,7 +101,7 @@ type TrimFloor struct {
 	// asks "what may be gone" reads it.
 	TrimTo uint64 `json:"trim_to"`
 
-	// Floor is the first sequence every node must hold: every record below
+	// Floor is the first sequence every data node must hold: every record below
 	// it may have been removed, by this tick or any earlier one at this
 	// generation. It is never lower than TrimTo, never lower than the
 	// previous row's Floor at the same generation, and never lower than
@@ -143,6 +143,12 @@ type TrimFloor struct {
 // log delete — and all four need the same retention, which is none. A second
 // bucket would cost a retention decision, a replica count and a place in every
 // sweep for a fact that is always read with the other three.
+//
+// NOTHING REMOVES A FLOOR. The domains are a static register compiled into the
+// build, with no gesture that retires one at run time, so there is never a
+// domain whose floor has stopped meaning anything — and each trim tick
+// replaces its domain's row wholesale, so the register holds one row per
+// domain a build has run.
 type FloorRegister interface {
 	// PutFloor writes one domain's floor, replacing it wholesale.
 	//
@@ -158,9 +164,6 @@ type FloorRegister interface {
 	// status` prints one line per registered domain, and a per-domain read
 	// would be one round trip per line.
 	Floors(ctx context.Context) ([]TrimFloor, error)
-
-	// ForgetFloor removes one, for a domain that no longer exists.
-	ForgetFloor(ctx context.Context, domain string) error
 }
 
 // FloorKey is a domain's key in the register.

@@ -18,13 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
-	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
-// The SIX sequences that stay genuinely cross-object — a create (1), a
-// cross-project move (7), a merge (13) and a bulk edit (26) here, a dependency
-// in depend.go and a board drag across lanes in place.go — and the one
-// property that makes them tolerable.
+// The FIVE sequences that stay genuinely cross-object — a create (1), a
+// cross-project move (7) and a merge (13) here, a dependency in depend.go and
+// a board drag across lanes in place.go — and the one property that makes
+// them tolerable.
 //
 // # Why a multi-append sequence is not a transaction, and must not pretend
 //
@@ -56,21 +56,16 @@ import (
 // re-derives the same identities is refused rather than duplicated.
 
 const (
-	// MaxBulkTasks is how many distinct task subjects one bulk gesture
-	// may carry.
+	// MaxTasksNamed is how many other tasks one call may name: a
+	// dependency change's counterparties ([Writer.Depend]) and a rank
+	// order's own moves, beside the neighbours a re-spread adds to them
+	// ([Writer.MoveTasks]).
 	//
-	// THE SAME 64 as every other fan-out in this design — a merge batch,
-	// the scope term cap — because they are the same quantity: how much
-	// work one durable claim covers before it has to heartbeat.
-	MaxBulkTasks = 64
-
-	// MaxBulkBytes is the pre-flight ceiling over the commits a bulk
-	// patch will write, checked BEFORE the first append.
-	//
-	// A bulk gesture is the one write whose refusal has to come before any
-	// of it lands: a partial batch is reported and re-run, and a batch
-	// refused halfway is a caller told "failed" about tasks that changed.
-	MaxBulkBytes = 8 << 20
+	// THE SAME 64 as every other fan-out in this design — a walk's batch
+	// ([WalkBatch]), the scope term cap ([MaxScopeTerms]) — because they
+	// are one quantity: how many objects one step may name before the work
+	// is a batch rather than a gesture.
+	MaxTasksNamed = 64
 
 	// WalkBatch is one batch of a paced walk — a merge's children, a
 	// re-spread's placements — and of every duty selection that finishes
@@ -101,9 +96,10 @@ const (
 // FOUR METHODS OF [coord.Backend], named by the consumer as this package uses
 // them. Three-valued by construction and that is the whole reason it is not a
 // bool: a lease is held, a (nil, nil) says a peer holds it, and an error says
-// NOTHING IS KNOWN — which is what lets the bulk admission fail OPEN over the
-// third while a cross-project move fails closed over it. Collapsed to two
-// values, one of those two behaviours would have to be wrong.
+// NOTHING IS KNOWN. A walk fails closed over both of the last two, and tells
+// its caller which it was ([Writer.hold]): a peer's hold is the walk already
+// running, while an unknown is a store that did not answer. Collapsed to two
+// values, one of those two answers would have to be a guess.
 type Claims interface {
 	TryAcquire(ctx context.Context, resource string, opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error)
 	Renew(ctx context.Context, resource, owner string, epoch int64, ttl time.Duration) (bool, error)
@@ -124,19 +120,17 @@ type Claims interface {
 // AND HELD TO THE CONTRACT'S CEILING, NEVER TO THE SEAT LEASE TTL: a class
 // that is not a seat or a node's presence is honoured at any TTL up to
 // [coord.MaxDutyTTL] on every backend ([coord.HeldToSeatTTL]), so [ClaimTTL]
-// and a bulk admission's projection are this package's own arithmetic and
-// move with nothing an operator tunes for failover. Until that was the
-// contract's, the KV store held these to its seat lease bucket's age, and at
-// the shipped 45 seconds refused the 60-second walk claim on every fleet.
+// is this package's own arithmetic and moves with nothing an operator tunes
+// for failover. Until that was the contract's, the KV store held these to its
+// seat lease bucket's age, and at the shipped 45 seconds refused the 60-second
+// walk claim on every fleet.
 const (
-	classBulk  coord.Class = "bulk"
 	classMove  coord.Class = "move"
 	classMerge coord.Class = "merge"
 )
 
-func bulkClaim(domain string) string { return classBulk.Resource(domain) }
-func moveClaim(task string) string   { return classMove.Resource(task) }
-func mergeClaim(task string) string  { return classMerge.Resource(task) }
+func moveClaim(task string) string  { return classMove.Resource(task) }
+func mergeClaim(task string) string { return classMerge.Resource(task) }
 
 // stepID derives one append's operation id from the gesture's own.
 //
@@ -245,24 +239,25 @@ type WriteResult struct {
 	// queue. Empty on every other path.
 	Assignee string
 
-	// Applied and Failed are a bulk gesture's per-task outcome. A bulk
-	// write is NOT atomic and never was: Applied is every task whose change
-	// is durable — applied here, or pending — and Failed says, per task,
-	// why the rest are not, including a change whose outcome is unknown.
-	// The caller re-runs the gesture under the same operation id.
-	Applied []string
-	Failed  map[string]string
-
 	// Declared are the tags a write brought into existence, reported from
 	// inside the snapshot that decided them rather than from a read before
 	// it — so a caller is never told it created a word a colleague
 	// declared a moment earlier.
 	Declared []string
 
+	// Posted is the remark a post found already on its task under its id —
+	// the call that posted it, made again — which the write answered from
+	// that row with nothing published ([PostedRemark]). Read in the snapshot
+	// that decided the write, because what the remark asked and answered is
+	// the row's: a caller reporting what its own read resolved before the
+	// write could name a question the post never closed, where the first
+	// attempt landed after that read. Nil on every other path.
+	Posted *PostedRemark
+
 	// Caveats are what the caller should know and was not refused for: a
 	// body carrying more task keys than the applier will resolve, a tag
 	// that nearly matched an existing one. THE APPLY MUST NEVER DEPEND ON
-	// ONE: every node applies the same record, and only this node saw the
+	// ONE: every data node applies the same record, and only this node saw the
 	// caveat. Each carries a model's phrasing and a person's
 	// ([caveat.Caveat]), because the same write answers both.
 	//
@@ -300,6 +295,20 @@ type WriteResult struct {
 // that landed is answered with its own key, and only a task that never did
 // is filed on a FRESH mint — leaving the gap the crash residue already
 // describes, and never a second task or a shared key.
+//
+// # A create whose task is already filed
+//
+// THE TASK'S ID NAMES THE CREATE, so a create meeting a task already under it
+// is that create, made before, and is answered with that task from its row:
+// no number minted, nothing published. That is a retry the ledger cannot
+// answer — a rebased re-run (ADR-0029) mints its operations afresh, so its
+// operation is new, while the builtin derives the id as the work began and
+// names the task the first attempt filed. It is asked inside the counter's own
+// snapshot, before the mint, so the re-run spends no number; and the task
+// step answers the same way where the guarding row only appears after the mint
+// (the first attempt landing in between), leaving the gap the crash residue
+// above already describes. It used to be refused `ErrExists` there — after a
+// number was spent — and told a re-run that its own item could not be filed.
 //
 // THE RANK COMES FROM THE COUNTER VALUE and nothing arbitrates it a second
 // time. n is unique and increasing under the counter row's own arbitration, so
@@ -398,6 +407,8 @@ func (w *Writer) createTask(ctx context.Context, opID string, task Task,
 	switch {
 	case errors.Is(err, errMintLanded):
 		return w.resumeCreate(ctx, opID, task, ask, notify)
+	case errors.Is(err, errTaskFiled):
+		return w.filedTask(ctx, opID, task.ID)
 	case minted.Outcome == statelog.OutcomeUnknown && minted.Unvouched:
 		return w.unvouchedCreate(ctx, opID, task, minted)
 	case err != nil:
@@ -506,6 +517,12 @@ func (w *Writer) fileTask(ctx context.Context, opID string, task Task,
 		ask.CreatedAt = at
 	}
 	result, err := w.writeTask(ctx, stepID(opID, "task"), task, ask, notify, at)
+	if errors.Is(err, statelog.ErrExists) {
+		// THE TASK WAS FILED BETWEEN THE MINT AND THIS APPEND, under the
+		// create's own id — see [Writer.CreateTask], "A create whose task
+		// is already filed" — so it is this create's, and n is a gap.
+		return w.filedTask(ctx, opID, task.ID)
+	}
 	if err == nil && result.Collapsed {
 		// THE TASK STEP LANDED UNDER AN EARLIER COPY of this operation —
 		// found once a fresh mint's append met it on the task's subject
@@ -567,10 +584,27 @@ func (w *Writer) resumeCreate(ctx context.Context, opID string, task Task,
 	var settled settledCreate
 	n, minted, err := w.mintFresh(ctx, task.Project, 1,
 		w.settleCreate(ctx, task, &settled))
-	if err != nil {
+	switch {
+	case errors.Is(err, errTaskFiled):
+		return w.filedTask(ctx, opID, task.ID)
+	case err != nil:
 		return WriteResult{Result: minted}, err
 	}
 	return w.fileTask(ctx, opID, task, ask, n, settled, notify)
+}
+
+// errTaskFiled is a create's mint finding the task already filed under the
+// create's own id: the create was made before, and is answered with its task
+// ([Writer.filedTask]) rather than minted again.
+var errTaskFiled = errors.New("worklet: the create's task is already filed")
+
+// filedTask answers a create whose task is already filed under its id — see
+// [Writer.CreateTask], "A create whose task is already filed" — from the
+// task's row: applied, with nothing published, under the key the task holds.
+func (w *Writer) filedTask(ctx context.Context, opID, id string) (WriteResult, error) {
+	return w.landedTask(ctx, statelog.Result{
+		Outcome: statelog.OutcomeApplied, OpID: stepID(opID, "task"),
+	}, id)
 }
 
 // errTaskNotApplied is a resumed create's task step finding no ledger row to
@@ -718,8 +752,8 @@ func checkCreateAsk(task *Task, ask *Comment) error {
 	switch {
 	case ask.ID == "":
 		return invalid("the ask filed with task %s names no comment "+
-			"id — the id is the row's key on every node, so it is derived by "+
-			"the writer rather than minted at apply", task.ID)
+			"id — the id is the row's key on every data node, so it is "+
+			"derived by the writer rather than minted at apply", task.ID)
 	case ask.Ask == "":
 		return invalid("the comment filed with task %s asks nobody — "+
 			"a create carries a comment only as the question it was filed as",
@@ -763,6 +797,10 @@ type TaskCreate struct {
 	Origin *Origin `json:"origin,omitempty"`
 }
 
+// taskPresentStatement is [Writer.writeTask]'s read of a create's guarding
+// row, named for the plan test.
+const taskPresentStatement = `SELECT COUNT(*) FROM tracker_tasks WHERE id = ?`
+
 // writeTask is sequence 1's second append: a whole task at expectation zero,
 // guarded by its own row — carrying the ask the task was filed as, where it is
 // one.
@@ -794,8 +832,7 @@ func (w *Writer) writeTask(ctx context.Context, opID string, task Task,
 			// below the trim floor has no record left on the log to
 			// prove it existed and its own row is what still says so.
 			var present int
-			if err := tx.QueryRowContext(ctx,
-				`SELECT COUNT(*) FROM tracker_tasks WHERE id = ?`, task.ID).
+			if err := tx.QueryRowContext(ctx, taskPresentStatement, task.ID).
 				Scan(&present); err != nil {
 				return statelog.Decision{}, fmt.Errorf("worklet: read the "+
 					"guarding row for %s: %w", task.ID, err)
@@ -1003,6 +1040,19 @@ type settledCreate struct {
 func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 	settledCreate, error) {
 
+	// THE TASK ALREADY FILED UNDER THIS CREATE'S ID is the create made
+	// before, asked before anything else — before the project's state is,
+	// since a project archived since the item was filed is no reason to
+	// refuse the create that filed it. See [Writer.CreateTask].
+	var present int
+	if err := tx.QueryRowContext(ctx, taskPresentStatement, task.ID).
+		Scan(&present); err != nil {
+		return settledCreate{}, fmt.Errorf("worklet: read whether task %s is "+
+			"already filed: %w", task.ID, err)
+	}
+	if present > 0 {
+		return settledCreate{}, errTaskFiled
+	}
 	project, held, err := readProject(ctx, tx, task.Project)
 	switch {
 	case err != nil:
@@ -1011,8 +1061,8 @@ func (w *Writer) refuseCreate(ctx context.Context, tx *sql.Tx, task Task) (
 		return settledCreate{}, fmt.Errorf("worklet: project %s is not on this "+
 			"node: %w", task.Project, statelog.ErrUnavailable)
 	case project.Archived:
-		return settledCreate{}, invalid("project %s is archived, so "+
-			"it takes no new work; unarchive it first", task.Project)
+		return settledCreate{}, refusedByState("project %s is archived, so "+
+			"it takes no new work. %s", task.Project, unarchiveProject)
 	}
 	if task.Parent != nil && *task.Parent != "" {
 		if err = refuseParent(ctx, tx, task, *task.Parent); err != nil {
@@ -1159,6 +1209,14 @@ func refuseMidMove(ctx context.Context, tx *sql.Tx, task Task, role, why string)
 		task.ID, task.Project, target, why, target, statelog.ErrUnavailable)
 }
 
+// movingAwayStatement is [movingAway]'s read, named for the plan test: the
+// task's ancestors by the closure, each read by its key.
+const movingAwayStatement = `
+		SELECT a.project_key
+		FROM tracker_task_closure c JOIN tracker_tasks a ON a.id = c.ancestor_id
+		WHERE c.descendant_id = ? AND a.moving = 1 AND a.project_key <> ?
+		ORDER BY c.distance DESC LIMIT 1`
+
 // movingAway reports the project a move is carrying a task into when a task
 // ABOVE it is marked mid-move and in another project than it is, and "" when
 // none is — see [refuseMidMove].
@@ -1172,11 +1230,7 @@ func refuseMidMove(ctx context.Context, tx *sql.Tx, task Task, role, why string)
 // into, so it is never its own answer.
 func movingAway(ctx context.Context, tx *sql.Tx, id, project string) (string, error) {
 	var target string
-	err := tx.QueryRowContext(ctx, `
-		SELECT a.project_key
-		FROM tracker_task_closure c JOIN tracker_tasks a ON a.id = c.ancestor_id
-		WHERE c.descendant_id = ? AND a.moving = 1 AND a.project_key <> ?
-		ORDER BY c.distance DESC LIMIT 1`, id, project).Scan(&target)
+	err := tx.QueryRowContext(ctx, movingAwayStatement, id, project).Scan(&target)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", nil
@@ -1186,6 +1240,14 @@ func movingAway(ctx context.Context, tx *sql.Tx, id, project string) (string, er
 	}
 	return target, nil
 }
+
+// uncarriedStatement is [carriedAll]'s read, named for the plan test: the
+// root's descendants by the closure, each read by its key.
+const uncarriedStatement = `
+		SELECT d.id, d.key, d.project_key
+		FROM tracker_task_closure c JOIN tracker_tasks d ON d.id = c.descendant_id
+		WHERE c.ancestor_id = ? AND c.distance > 0 AND d.project_key <> ?
+		ORDER BY c.distance, d.id LIMIT 1`
 
 // carriedAll is the amendment a move's last append is decided under: the mark
 // comes down only in a snapshot where nothing beneath the root is outside the
@@ -1209,11 +1271,7 @@ func carriedAll(ctx context.Context, tx *sql.Tx, current Task,
 	patch TaskPatch) (TaskPatch, error) {
 
 	var id, key, project string
-	err := tx.QueryRowContext(ctx, `
-		SELECT d.id, d.key, d.project_key
-		FROM tracker_task_closure c JOIN tracker_tasks d ON d.id = c.descendant_id
-		WHERE c.ancestor_id = ? AND c.distance > 0 AND d.project_key <> ?
-		ORDER BY c.distance, d.id LIMIT 1`, current.ID, current.Project).
+	err := tx.QueryRowContext(ctx, uncarriedStatement, current.ID, current.Project).
 		Scan(&id, &key, &project)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -1291,8 +1349,8 @@ func declaredType(ctx context.Context, tx *sql.Tx, task Task) error {
 	}
 	sort.Strings(live)
 	return invalid("%q is not a task type this company declares — "+
-		"the types are %v, and a new one is declared in the workspace "+
-		"catalogue rather than invented at the create", task.Type, live)
+		"the types are %s, and a new one is declared in the workspace "+
+		"catalogue rather than invented at the create", task.Type, words.And(live))
 }
 
 // requiredFields refuses a task missing a field its company or its project
@@ -1342,13 +1400,13 @@ func requiredFields(ctx context.Context, tx *sql.Tx, project Project, task Task)
 		return nil
 	}
 	sort.Strings(missing)
-	return invalid("a %s in project %s requires %v, which this task "+
-		"does not set", task.Type, project.Key, missing)
+	return invalid("a %s in project %s requires %s, which this task "+
+		"does not set", task.Type, project.Key, words.And(missing))
 }
 
 // bodyCaveats is what a writer is told and not refused for.
 //
-// THE APPLY MUST NOT DEPEND ON IT. Every node applies the same record and
+// THE APPLY MUST NOT DEPEND ON IT. Every data node applies the same record and
 // resolves the same first [MaxReferencesPerBody] keys in document order, so
 // the cap is deterministic without this — the warning exists so the person who
 // wrote a body full of keys learns that most of them link nothing, rather than
@@ -1608,9 +1666,10 @@ func (e *MoveStopped) Unwrap() error { return e.Err }
 // a key assignment anybody can reproduce.
 //
 // Each descendant's step is named by the DESCENDANT, never by its place in the
-// walk, for the reason [Writer.UpdateTasks] gives: the ledger answers a step's
-// id with whatever it recorded under it, and a re-run's walk is shorter than
-// the first run's.
+// walk: the ledger answers a step's id with whatever it recorded under it, and
+// a re-run's walk is shorter than the first run's, so a step numbered by
+// position would answer one descendant with another's record and report it
+// moved when nothing had touched it.
 //
 // # When nobody re-runs it
 //
@@ -1709,10 +1768,7 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 				"task moves between projects — moving a subtask alone would "+
 				"leave it in a project its parent is not in", taskID)
 		case current.Removed != nil:
-			return invalid("task %s was removed by %s at %s; "+
-				"restore it before moving it", taskID,
-				current.Removed.By,
-				current.Removed.At.Format(time.RFC3339))
+			return inTheTrash(current, "moving it")
 		}
 		root = current
 		if current.Project == target {
@@ -1746,11 +1802,11 @@ func (w *Writer) MoveTaskToProject(ctx context.Context, opID, taskID, target str
 		}
 		for _, descendant := range subtree {
 			if descendant.Removed != nil {
-				return invalid("task %s under %s is in the trash, "+
-					"and a removed task is frozen, so the move could not carry "+
-					"it and would leave it in %s under a root in %s — restore "+
-					"it or purge it, then move again", descendant.ID, taskID,
-					current.Project, target)
+				// A REMOVED TASK IS FROZEN, so the move could not carry
+				// it and would leave it under a root in another project.
+				return refusedByState("%s, under this task, is in the trash, "+
+					"and a move can't carry it. Restore it or purge it, then "+
+					"move again", nameOf(descendant))
 			}
 		}
 		carried, err = carriedTags(ctx, tx, current.Project,
@@ -2109,11 +2165,10 @@ func (w *Writer) followRoot(ctx context.Context, opID string, root Task,
 	}
 	if len(frozen) > 0 {
 		return stop(carried+len(left), w.addressOf(ctx, frozen[0]),
-			invalid("task %s (%s) under %s is in the trash and still in "+
-				"project %s, and a removed task is frozen — the move waits for "+
-				"it: restore it and the next pass carries it into %s, or purge "+
-				"it", frozen[0].Key, frozen[0].ID, root.ID, frozen[0].Project,
-				root.Project))
+			// A REMOVED TASK IS FROZEN, so the move waits for it.
+			refusedByState("%s, under this task, is in the trash and still in "+
+				"%s. Restore it and the next pass moves it into %s, or purge it",
+				nameOf(frozen[0]), frozen[0].Project, root.Project))
 	}
 	// AFTER WHAT THIS PASS MOVED, for the reason the sequence's own last
 	// append waits: [carriedAll] asks this node's rows whether anything
@@ -2468,10 +2523,7 @@ func (w *Writer) MergeDuplicates(ctx context.Context, opID, duplicate, into stri
 		case !held:
 			return missingTask(ctx, tx, duplicate, "it cannot be merged")
 		case current.Removed != nil:
-			return invalid("task %s was removed by %s at %s; "+
-				"restore it before merging it", duplicate,
-				current.Removed.By,
-				current.Removed.At.Format(time.RFC3339))
+			return inTheTrash(current, "merging it")
 		}
 		task = current
 		survivor, held, err := readTask(ctx, tx, into)
@@ -2668,252 +2720,3 @@ func (w *Writer) reparentOnto(ctx context.Context, opID, duplicate, into string)
 // subtasks onto an item in another project. See [Writer.MergeDuplicates].
 var ErrReparentAcrossProjects = errors.New("worklet: a merge cannot carry " +
 	"subtasks into another project")
-
-// ErrBulkInFlight refuses a bulk gesture while another is applying.
-var ErrBulkInFlight = errors.New("worklet: a bulk edit is already applying")
-
-// UpdateTasks changes up to [MaxBulkTasks] tasks. SEQUENCE 26.
-//
-//	Take bulk/<domain> → Rs every listed task; pre-flight MaxBulkBytes
-//	over the commits the patch will write → one A per DISTINCT task
-//	subject, each at its own expectation, sharing one batch id.
-//
-// CRASH RESIDUE: a partial batch — some tasks committed, some not. REPAIRER:
-// NOBODY, AND IT NEVER WAS ATOMIC. The result reports applied and failed per
-// task and the caller re-runs.
-//
-// # Re-running it
-//
-// Under the SAME operation id, and each task's own step answers for that task:
-// a change that landed is answered from the ledger, and only what did not is
-// decided. The step is named by the TASK rather than by its place in the list,
-// because the ledger answers a step's id with whatever record it recorded
-// under it — so a step numbered by position answered a re-run that named the
-// tasks in another order, or only the ones that failed, with ANOTHER task's
-// record, and reported that task changed when nothing had touched it.
-//
-// A task whose outcome is UNKNOWN is a failure, not an application: its record
-// may or may not be on the log, and the one answer that is true is that the
-// re-run will say. Counting it applied told a caller to stop retrying a change
-// that may never have landed.
-//
-// # Why it is admitted through a lease, and why that lease FAILS OPEN
-//
-// A maximal bulk edit occupies every peer's serial applier for seconds, during
-// which every linearizable read fleet-wide is behind and every write is
-// pending. The plan bounded how many rows one call may carry and nothing about
-// how often — so six in a row are a rolling read outage on every node, which is
-// what the admission bounds.
-//
-// It fails open because a refused bulk on a coordination blip is a seat told a
-// colleague is editing when nobody is, and the log is CORRECT with two bulks in
-// flight and merely slow. That is coordination's founding rule applied to
-// admission: unknown is not "somebody else holds it". But a bulk let through
-// that way runs outside the bound, so it is counted as `fail_open` rather than
-// `admitted` and warned about (`tracker_bulk_admitted_unbounded`): failing
-// open is a decision about the caller, never a reason to stop telling the
-// operator the bound is not being kept.
-//
-// # What this costs the caller's NEXT write, stated because it is the ordinary case
-//
-// Every append here advances this caller's own session mark, so its next write
-// on this stream — any subject — waits for the bulk to apply on this node and
-// may be refused as behind, naming its own record. That is correct and it is
-// what read-your-writes means: the alternative is a write that cannot see the
-// write before it.
-func (w *Writer) UpdateTasks(ctx context.Context, opID string, ids []string,
-	project string, patch TaskPatch, kind ChangeKind,
-	notify *Notify) (WriteResult, error) {
-
-	switch {
-	case len(ids) == 0:
-		return WriteResult{}, invalid("a bulk edit names no task")
-	case len(ids) > MaxBulkTasks:
-		return WriteResult{}, invalid("a bulk edit names %d tasks "+
-			"and one call carries at most %d — split it, and the second call "+
-			"waits for the first to apply", len(ids), MaxBulkTasks)
-	case project == "":
-		return WriteResult{}, invalid("a bulk edit names no project")
-	}
-
-	// DISTINCT SUBJECTS, in the caller's own order. One id named twice is
-	// two appends on one subject at one expectation, so the second is
-	// rejected against the first — a conflict the caller reads as a
-	// colleague editing, produced entirely by its own list.
-	seen := make(map[string]bool, len(ids))
-	subjects := make([]string, 0, len(ids))
-	for _, id := range ids {
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		subjects = append(subjects, id)
-	}
-
-	// THE PRE-FLIGHT IS BEFORE THE FIRST APPEND. A bulk refused halfway
-	// is a caller told "failed" about tasks that changed.
-	body, err := json.Marshal(patch)
-	if err != nil {
-		return WriteResult{}, fmt.Errorf("worklet: encode the bulk patch: %w", err)
-	}
-	if total := len(body) * len(subjects); total > MaxBulkBytes {
-		return WriteResult{}, invalid("this patch over %d tasks "+
-			"writes %d bytes of commits and a bulk edit carries at most %d — "+
-			"the ceiling is on what the batch APPLIES, so a large patch takes "+
-			"fewer tasks per call", len(subjects), total, MaxBulkBytes)
-	}
-
-	release, admission, err := w.admit(ctx, len(subjects))
-	w.count(metrics.TrackerBulkCalls, metrics.Attrs{"result": string(admission)})
-	if err != nil {
-		return WriteResult{}, err
-	}
-	defer release()
-
-	result := WriteResult{Failed: map[string]string{}}
-	for _, id := range subjects {
-		one, err := w.UpdateTask(ctx, stepID(opID, "task-"+id),
-			id, project, NoIfMatch, patch, kind, notify)
-		switch {
-		case err != nil:
-			result.Failed[id] = err.Error()
-			continue
-		case one.Outcome == statelog.OutcomeUnknown:
-			result.Failed[id] = fmt.Sprintf("whether this task's change landed "+
-				"is unknown (operation %s); re-run the edit under the same "+
-				"operation id, which answers what landed and applies what did "+
-				"not", one.OpID)
-			continue
-		}
-		result.Applied = append(result.Applied, id)
-		result.Result = one.Result
-	}
-	return result, nil
-}
-
-// bulkAdmission is how a bulk edit's admission was answered, and the `result`
-// the bulk calls counter ([metrics.TrackerBulkCalls]) records — a closed set,
-// as every attribute there is.
-type bulkAdmission string
-
-const (
-	// bulkAdmitted is a bulk running under the fleet's bulk lease, the one
-	// shape in which the fleet-wide bound holds.
-	bulkAdmitted bulkAdmission = "admitted"
-
-	// bulkRefused is a bulk turned away because another is applying.
-	bulkRefused bulkAdmission = "refused"
-
-	// bulkFailedOpen is a bulk let through with NO lease held: the
-	// coordination store did not answer the claim, the mixed-version gate
-	// refused it, or the writer has no coordination at all. Admitting it is
-	// right (see [Writer.UpdateTasks]) and counting it `admitted` was not:
-	// it runs outside the bound, and a store that refused every admission
-	// looked exactly like a fleet whose bulks never collided.
-	bulkFailedOpen bulkAdmission = "fail_open"
-)
-
-// admit takes the fleet-wide bulk lease, or reports why it did not.
-//
-// THREE ANSWERS AND THREE BEHAVIOURS, which is why [Claims] is not a bool: a
-// held lease runs, a peer's lease refuses with the holder's remaining time as
-// the caller's hint, and a coordination store that cannot be reached ADMITS —
-// see the sequence's own doc for why those last two must differ. A claim the
-// mixed-version gate refused admits too: it is a refusal that names no peer,
-// and the admission bounds a rate rather than guarding a correctness.
-//
-// AN ADMISSION THAT FAILED OPEN SAYS SO, in the answer it hands back
-// ([bulkFailedOpen]) and in a warning naming why, because it is the one
-// outcome that leaves nothing else behind: the bulk applies exactly as a
-// bounded one does, and a fleet whose store refused every admission's TTL ran
-// with no bulk bound and no sign of it.
-func (w *Writer) admit(ctx context.Context, rows int) (func(), bulkAdmission, error) {
-	if w.claims == nil {
-		return func() {}, bulkFailedOpen, nil
-	}
-	resource := bulkClaim(trackerStream)
-	// TWICE THE PROJECTED APPLY TIME, so the lease outlives the work it
-	// admits without outliving it by so much that a crashed holder blocks
-	// the company. The projection is rows over the applier's own measured
-	// drain, which is the same divisor every retry hint in this design is
-	// computed from.
-	projected := float64(rows) / w.drainRows()
-	if w.metrics != nil {
-		// THE PROJECTION IS WHAT IS SUMMED, not the wall clock: it is the
-		// applier occupancy this call is about to impose on EVERY node,
-		// and the wall clock here would measure only this one.
-		w.metrics.AddValue(metrics.TrackerBulkApplySeconds, projected, nil)
-	}
-	ttl := 2 * time.Duration(projected*float64(time.Second))
-	if ttl < ClaimHeartbeat {
-		ttl = ClaimHeartbeat
-	}
-	// AN OWNER OF ITS OWN, for the reason [Writer.claimOwner] gives: under
-	// the node id a second bulk on this node renewed the first one's lease
-	// rather than being refused, and whichever finished first released the
-	// other's.
-	owner := w.claimOwner()
-	lease, refused, err := w.claims.TryAcquire(ctx, resource, coord.AcquireOptions{
-		Owner: owner, TTL: ttl,
-	})
-	switch {
-	case err != nil:
-		// FAIL OPEN. See the doc above: the log is correct with two
-		// bulks in flight and merely slow, and refusing here on an
-		// unknown is a seat told a colleague is editing when nobody is.
-		log.WarnContext(ctx, "tracker_bulk_admitted_unbounded",
-			"resource", resource, "rows", rows, "ttl", ttl, "cause", "unknown", "error", err,
-			"detail", "the coordination store did not answer the bulk admission, so this bulk "+
-				"edit runs outside the fleet-wide bound on bulk edits; the log stays correct "+
-				"with two in flight, and every node's reads are behind for longer")
-		//nolint:nilerr // Deliberate fail-open: see the paragraph above.
-		return func() {}, bulkFailedOpen, nil
-	case lease == nil && refused != coord.RefusedHeld:
-		// FAIL OPEN, for the unknown's reason: the protocol gate refused
-		// the claim, which says a node on a lower lease protocol is live
-		// and nothing about a colleague editing. Refused as a bulk in
-		// flight, every seat's bulk edit would be told to retry "in about
-		// a second" — the hint reading the remaining time off a holder
-		// there is none of — for as long as that node stayed.
-		log.WarnContext(ctx, "tracker_bulk_admitted_unbounded",
-			"resource", resource, "rows", rows, "ttl", ttl, "cause", "refused",
-			"refused", string(refused),
-			"detail", "the bulk admission was refused by a rule that names no bulk in flight "+
-				"(a node on a lower lease protocol is live, and this node takes no claim beside "+
-				"it), so this bulk edit runs outside the fleet-wide bound on bulk edits until "+
-				"that node has left")
-		return func() {}, bulkFailedOpen, nil
-	case lease == nil:
-		remaining := time.Duration(0)
-		if held, err := w.claims.Get(ctx, resource); err == nil && held != nil {
-			remaining = time.Until(held.ExpiresAt)
-		}
-		// THE WAIT AS A PERSON PLANS BY ("retry in about 10m"), rounded up so
-		// it never reads shorter than it is: never a count of seconds.
-		return nil, bulkRefused, fmt.Errorf("%w; retry in about %s: %w",
-			ErrBulkInFlight, statelog.SpokenWait(remaining),
-			statelog.ErrUnavailable)
-	}
-	epoch := lease.Epoch
-	return func() {
-		_, _ = w.claims.Release(context.WithoutCancel(ctx), resource, owner, epoch)
-	}, bulkAdmitted, nil
-}
-
-// drainRows is the applier's measured rows a second, and the divisor of every
-// projection computed from it.
-//
-// A FLOOR RATHER THAN A DEFAULT, because dividing by a drain that has not been
-// measured yet — zero — is an infinite lease, which is worse than any wrong
-// number. One row a second is deliberately pessimistic: it makes the first
-// projection too long rather than too short, and a lease held too long delays a
-// caller where one held too briefly admits the concurrency it exists to stop.
-func (w *Writer) drainRows() float64 {
-	if w.Drain == nil {
-		return 1
-	}
-	if rows := w.Drain(); rows > 1 {
-		return rows
-	}
-	return 1
-}

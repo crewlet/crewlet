@@ -1,9 +1,11 @@
 package worklet_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -118,56 +120,20 @@ func TestASecondWalkOnTheSameNodeIsRefused(t *testing.T) {
 	}
 }
 
-// A SECOND BULK ON THE SAME NODE IS REFUSED rather than renewing the first
-// one's admission — and releasing either names only its own.
-func TestASecondBulkOnTheSameNodeIsRefused(t *testing.T) {
-	t.Parallel()
-	r := newRoundTrip(t)
-	release, err := r.writer.Admit(t.Context(), 10)
-	if err != nil {
-		t.Fatalf("admit the first bulk: %v", err)
-	}
-	_, err = r.writer.Admit(t.Context(), 10)
-	if !errors.Is(err, worklet.ErrBulkInFlight) {
-		t.Fatalf("a second bulk on the node already running one got %v, want "+
-			"ErrBulkInFlight", err)
-	}
-	// THE WAIT IS SAID AS A DURATION ("retry in about 9m 58s"), never as a
-	// count of seconds a person has to divide.
-	if msg := err.Error(); strings.Contains(msg, " seconds") || !strings.Contains(msg, "retry in about ") {
-		t.Fatalf("the refusal says its wait as %q, want a spoken duration", msg)
-	}
-	release()
-	again, err := r.writer.Admit(t.Context(), 10)
-	if err != nil {
-		t.Fatalf("admit a bulk once the first finished: %v", err)
-	}
-	again()
-}
-
-// A CLAIM THE MIXED-VERSION GATE REFUSED IS NOT ANOTHER WALK OR ANOTHER BULK.
+// A CLAIM THE MIXED-VERSION GATE REFUSED IS NOT ANOTHER WALK.
 //
 // The gate refuses every claim a node makes while a node on a lower lease
 // protocol is live, and a tracker claim that read every refusal as a peer's
-// hold would tell a bulk that a colleague's edit was in flight and to retry
-// "in about a second" — the hint reading the remaining time off a holder there
-// is none of — and tell a walk it was already running. So a lower-protocol
-// lease is staged, and a bulk is admitted (it bounds a rate, and fails open
-// exactly as it does on an unknown) while a walk fails closed naming the
+// hold would tell a walk it was already running, and its caller would wait
+// for a walk nobody had started for as long as that node stayed. So a
+// lower-protocol lease is staged, and a walk fails closed naming the
 // lower-protocol node rather than a walk.
 func TestAClaimTheGateRefusedIsNotAnotherWalk(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)
 	stageAnOlderNode(t, r)
 
-	release, err := r.writer.Admit(t.Context(), 10)
-	if err != nil {
-		t.Fatalf("a bulk beside a lower-protocol node got %v, want it admitted — the gate's "+
-			"refusal names no colleague editing", err)
-	}
-	release()
-
-	_, err = r.writer.Hold(t.Context(), worklet.MoveClaim("t-1"))
+	_, err := r.writer.Hold(t.Context(), worklet.MoveClaim("t-1"))
 	switch {
 	case !errors.Is(err, statelog.ErrUnavailable):
 		t.Fatalf("a walk beside a lower-protocol node got %v, want a refusal wrapping "+
@@ -186,4 +152,34 @@ func claimOf(t *testing.T, r *roundTrip, resource string) *coord.Lease {
 		t.Fatalf("read %s: %v", resource, err)
 	}
 	return lease
+}
+
+// stageAnOlderNode puts this rig's writer one lease protocol AHEAD of a live
+// node, which is the arrangement the mixed-version gate refuses every claim
+// in: a node on this build's protocol holds its presence lease, and the
+// writer claims as the build after it.
+//
+// THE WRITER IS MOVED UP rather than the peer staged below, because this build
+// may already speak the lowest protocol there is — and a protocol of zero or
+// less is not "older", it is "this build" ([coord.AcquireOptions.Protocol]),
+// so a peer staged one below the first version is a peer the gate never sees.
+func stageAnOlderNode(t *testing.T, r *roundTrip) {
+	t.Helper()
+	if lease, _, err := r.claims.TryAcquire(t.Context(), coord.NodeResource("old"), coord.AcquireOptions{
+		Owner: "old:1", TTL: time.Hour, Protocol: coord.ProtocolVersion, Ungated: true,
+	}); err != nil || lease == nil {
+		t.Fatalf("stage a node on this build's protocol: (%v, %v)", lease, err)
+	}
+	r.claimOn(newerClaims{Backend: r.claims})
+}
+
+// newerClaims is a coordination store this rig's writer reaches as the build
+// after this one: every claim it makes states the next lease protocol.
+type newerClaims struct{ coord.Backend }
+
+func (n newerClaims) TryAcquire(ctx context.Context, resource string,
+	opts coord.AcquireOptions) (*coord.Lease, coord.Refusal, error) {
+
+	opts.Protocol = coord.ProtocolVersion + 1
+	return n.Backend.TryAcquire(ctx, resource, opts)
 }

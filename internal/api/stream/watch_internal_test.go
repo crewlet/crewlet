@@ -82,7 +82,8 @@ func TestARecheckWithdrawsOnlyTheWatchItDecided(t *testing.T) {
 	client := NewClient(NewAudience(workletPrincipal, nil))
 	hub.Register(client)
 	chart := &heldChart{asked: make(chan struct{}), release: make(chan struct{})}
-	w := &watching{hub: hub, client: client, chart: chart, holders: blindHolders{}}
+	w := &watching{hub: hub, client: client, chart: chart, holders: blindHolders{},
+		now: time.Now}
 	hub.Watch(client, "sarah-chen")
 
 	ctx := iam.WithPrincipal(t.Context(), person("platform-lead"))

@@ -14,7 +14,7 @@
 // as a pure function of the record and the rows it holds: grammar, schema,
 // field rules, guards, caps and the stamped limits. A batch is all or nothing,
 // and the verdict (applied, conflict, invalid, forbidden or quota) is written
-// for every record, refused ones included, so every node reaches the same
+// for every record, refused ones included, so every data node reaches the same
 // verdict and the writer reads its own back by operation id. A schema change
 // is arbitrated on the same subject instead, decided in a snapshot of the
 // schema it replaces, so it is ordered against every write it judges.
@@ -24,7 +24,7 @@
 // Whatever needs IAM or the org chart (the caller's role on the artifact,
 // whether the caller is an agent, the plan quotas in force) is decided at the
 // API and carried in the record; the applier never reads another domain, whose
-// log applies at its own pace on each node. A share revoked between the decide
+// log applies at its own pace on each data node. A share revoked between the decide
 // and the apply lets at most that one write through, the window every
 // arbitrated write in the engine accepts.
 //

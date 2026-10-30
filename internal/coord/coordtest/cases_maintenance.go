@@ -305,18 +305,19 @@ var maintenanceCases = []fleetCase{
 				h.t.Fatalf("PutAdmission: %v", err)
 			}
 			ack := coord.MaintenanceAck{
-				NodeID: "node-1", OperationID: "op-1", Attempt: 1,
-				Incarnation: "node-1:new", Mode: "seal",
+				Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1", OperationID: "op-1",
+				Attempt: 1, Incarnation: "node-1:new", Mode: "seal",
 			}
 			if err := h.f.PutMaintenanceAck(h.ctx, ack); err != nil {
 				h.t.Fatalf("PutMaintenanceAck: %v", err)
 			}
 
-			acks, err := h.f.MaintenanceAcks(h.ctx)
+			acks, err := h.f.MaintenanceAcks(h.ctx, "CREWLET_TRACKER_LOG")
 			if err != nil || len(acks) != 1 {
 				h.t.Fatalf("MaintenanceAcks = %v (err %v)", acks, err)
 			}
-			if acks[0].Incarnation != "node-1:new" || acks[0].Mode != "seal" {
+			if acks[0].Incarnation != "node-1:new" || acks[0].Mode != "seal" ||
+				acks[0].Stream != "CREWLET_TRACKER_LOG" {
 				h.t.Fatalf("the acknowledgement came back %+v", acks[0])
 			}
 			// AND EVERY OTHER CLASS STILL READS ITS OWN.
@@ -337,20 +338,117 @@ var maintenanceCases = []fleetCase{
 			name string
 			ack  coord.MaintenanceAck
 		}{
+			{"no log", coord.MaintenanceAck{
+				NodeID: "node-1", OperationID: "op-1", Attempt: 1, Incarnation: "x"}},
+			{"no log and no window", coord.MaintenanceAck{
+				NodeID: "node-1", Incarnation: "x", Mode: "maintenance"}},
 			{"no node", coord.MaintenanceAck{
-				OperationID: "op-1", Attempt: 1, Incarnation: "x"}},
-			{"no operation", coord.MaintenanceAck{
-				NodeID: "node-1", Attempt: 1, Incarnation: "x"}},
+				Stream: "S", OperationID: "op-1", Attempt: 1, Incarnation: "x"}},
+			{"an attempt of no operation", coord.MaintenanceAck{
+				Stream: "S", NodeID: "node-1", Attempt: 1, Incarnation: "x"}},
 			{"attempt zero", coord.MaintenanceAck{
-				NodeID: "node-1", OperationID: "op-1", Incarnation: "x"}},
+				Stream: "S", NodeID: "node-1", OperationID: "op-1", Incarnation: "x"}},
 			{"no incarnation", coord.MaintenanceAck{
-				NodeID: "node-1", OperationID: "op-1", Attempt: 1}},
+				Stream: "S", NodeID: "node-1", OperationID: "op-1", Attempt: 1}},
+			{"no incarnation and no window", coord.MaintenanceAck{
+				Stream: "S", NodeID: "node-1", Mode: "maintenance"}},
 		} {
 			if err := h.f.PutMaintenanceAck(h.ctx, c.ack); err == nil {
 				h.t.Errorf("an acknowledgement with %s was written", c.name)
 			}
 		}
 	}},
+
+	{name: "a restart made before any window round-trips as one",
+		fn: func(h *fleetHarness) {
+			// NO OPERATION AND NO ATTEMPT is the record of a node that
+			// restarted into a maintenance mode while no window was
+			// open. It has to be written, because a baseline reads which
+			// process each node is from it, and it has to come back
+			// naming no window, because a seal must never take it for an
+			// acknowledgement of one.
+			ack := coord.MaintenanceAck{
+				Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1",
+				Incarnation: "node-1:new", Mode: "maintenance",
+			}
+			if err := h.f.PutMaintenanceAck(h.ctx, ack); err != nil {
+				h.t.Fatalf("a restart made before any window was refused: %v", err)
+			}
+			acks, err := h.f.MaintenanceAcks(h.ctx, "CREWLET_TRACKER_LOG")
+			if err != nil || len(acks) != 1 {
+				h.t.Fatalf("MaintenanceAcks = %v (err %v)", acks, err)
+			}
+			if !acks[0].Windowless() || acks[0].Incarnation != "node-1:new" {
+				h.t.Fatalf("the restart came back %+v", acks[0])
+			}
+		}},
+
+	{name: "one node's acknowledgements of two logs' windows are kept apart",
+		fn: func(h *fleetHarness) {
+			// A WINDOW IS PER LOG, AND TWO CAN BE OPEN AT ONCE: a fleet
+			// resizing two logs restarts once for both, and each boot
+			// acknowledges each window. Kept under one key per node, the
+			// second write replaced the first, and the window it replaced
+			// read "acknowledged another operation" from that node for as
+			// long as both were open. A log whose name begins with another's
+			// is the adversarial pair for a filter built by concatenation.
+			acks := []coord.MaintenanceAck{
+				{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-1", OperationID: "op-t",
+					Attempt: 1, Incarnation: "node-1:seal", Mode: "seal"},
+				{Stream: "CREWLET_TRACKER_LOG_2", NodeID: "node-1", OperationID: "op-u",
+					Attempt: 2, Incarnation: "node-1:seal", Mode: "seal"},
+				{Stream: "CREWLET_PAGES_LOG", NodeID: "node-1",
+					Incarnation: "node-1:seal", Mode: "seal"},
+				{Stream: "CREWLET_TRACKER_LOG", NodeID: "node-2", OperationID: "op-t",
+					Attempt: 1, Incarnation: "node-2:seal", Mode: "seal"},
+			}
+			for _, ack := range acks {
+				if err := h.f.PutMaintenanceAck(h.ctx, ack); err != nil {
+					h.t.Fatalf("PutMaintenanceAck(%s, %s): %v", ack.Stream, ack.NodeID, err)
+				}
+			}
+			for stream, want := range map[string][]coord.MaintenanceAck{
+				"CREWLET_TRACKER_LOG":   {acks[0], acks[3]},
+				"CREWLET_TRACKER_LOG_2": {acks[1]},
+				"CREWLET_PAGES_LOG":     {acks[2]},
+				"CREWLET_USAGE_LOG":     nil,
+			} {
+				got, err := h.f.MaintenanceAcks(h.ctx, stream)
+				if err != nil {
+					h.t.Fatalf("MaintenanceAcks(%s): %v", stream, err)
+				}
+				if len(got) != len(want) {
+					h.t.Fatalf("%s's window reads %d acknowledgement(s), want %d: %+v",
+						stream, len(got), len(want), got)
+				}
+				for i := range want {
+					if got[i].Stream != stream || got[i].NodeID != want[i].NodeID ||
+						got[i].OperationID != want[i].OperationID ||
+						got[i].Attempt != want[i].Attempt {
+						h.t.Errorf("%s's window reads %+v at %d, want %s's "+
+							"acknowledgement of %q attempt %d", stream, got[i], i,
+							want[i].NodeID, want[i].OperationID, want[i].Attempt)
+					}
+				}
+			}
+
+			// AND A LATER BOOT REPLACES ITS OWN LOG'S, NEVER ANOTHER'S.
+			again := coord.MaintenanceAck{Stream: "CREWLET_PAGES_LOG", NodeID: "node-1",
+				OperationID: "op-p", Attempt: 1, Incarnation: "node-1:seal-2", Mode: "seal"}
+			if err := h.f.PutMaintenanceAck(h.ctx, again); err != nil {
+				h.t.Fatalf("PutMaintenanceAck: %v", err)
+			}
+			tracker, err := h.f.MaintenanceAcks(h.ctx, "CREWLET_TRACKER_LOG")
+			if err != nil || len(tracker) != 2 || tracker[0].OperationID != "op-t" {
+				h.t.Fatalf("the tracker's window reads %+v after the pages log's "+
+					"acknowledgement moved (err %v)", tracker, err)
+			}
+			pages, err := h.f.MaintenanceAcks(h.ctx, "CREWLET_PAGES_LOG")
+			if err != nil || len(pages) != 1 || pages[0].Incarnation != "node-1:seal-2" {
+				h.t.Fatalf("the pages log's window reads %+v, want the later boot's "+
+					"acknowledgement alone (err %v)", pages, err)
+			}
+		}},
 }
 
 // window is a capacity operation as a coordinator first writes it.

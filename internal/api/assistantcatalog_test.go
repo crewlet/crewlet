@@ -13,10 +13,13 @@ import (
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
+	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/authapi"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/iamapi"
 	"github.com/crewlet/crewlet/internal/api/llmapi"
+	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
@@ -24,27 +27,44 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
 // everySurfaceApp is an App with every surface it can mount mounted: each
-// guarded surface as its real type (its zero value, since mounting reads
-// nothing but the surface's own route table), the datasets surface and the
-// operator surface, so the route table it keeps is the one a node serves.
+// guarded surface, the sign-in surface and the assistant's as its real type
+// (its zero value, since mounting reads nothing but the surface's own route
+// table), the datasets surface, the operator surface and the two signed-token
+// edges (the telemetry receiver and the tool bridge), so the route table it
+// keeps is the one a node serves. The assistant's zero value leaves out the
+// approval and file routes its optional halves add, every one beneath
+// /assistant/, which the edge refuses a grant and the architecture page names
+// whole: no walk here would answer differently with them mounted.
 //
-// A SURFACE OPTIONS GAINS IS A SURFACE THIS FIXTURE MUST MOUNT: every
-// interface field of api.Options that a guarded surface mounts through (a
-// `Routes(authz.Mux)` method) must be set here, or the walks below would certify a table that
-// is missing a surface's routes. Mutation: leave Work unset and this fails
-// naming it.
+// A SURFACE OPTIONS GAINS IS A SURFACE THIS FIXTURE MUST MOUNT: every field of
+// api.Options whose type mounts its own routes (a `Routes` method, over an
+// authz.Mux for a guarded surface or an auth.Mux for the sign-in surface) must
+// be set here, or the walks below would certify a table that is missing a
+// surface's routes. The edges the App mounts itself (the operator surface and
+// the two signed-token edges) have no such method; each is held instead by the
+// architecture page's table, which names their routes
+// ([TestTheArchitecturePageNamesEveryRouteANodeServes]). Mutation: leave Work
+// or Auth unset and this fails naming it.
 func everySurfaceApp(t *testing.T) *api.App {
 	t.Helper()
-	operators, err := operator.New(operator.Options{
+	operators, err := operator.New(withSeatControls(operator.Options{
 		Halves:    func() (operator.Halves, bool) { return operator.Halves{}, false },
 		Authorize: builtin.Decide(authz.NoChart{}),
 		Audit:     &recordedAudit{},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("operator.New: %v", err)
+	}
+	// THE ASSISTANT IS MOUNTED ONLY BESIDE THE GRANTS ITS TURNS CARRY, and
+	// api.New refuses it without them.
+	keys := runtoken.OneKey("k1", "the every-surface fixture's key material")
+	delegations, err := auth.NewDelegations(keys, assistStanding{}, nil)
+	if err != nil {
+		t.Fatalf("auth.NewDelegations: %v", err)
 	}
 	opts := api.Options{
 		Config: &configapi.Service{}, Secrets: &secretsapi.Service{}, Setup: &setupapi.Service{},
@@ -54,18 +74,20 @@ func everySurfaceApp(t *testing.T) *api.App {
 		Datasets: &api.DatasetsSource{Boards: &artifactsapi.Service{},
 			Data: boardData{mu: &sync.Mutex{}, deals: &[]float64{}}},
 		Operator: operators,
+		Auth:     &authapi.Service{}, Assistant: &assistantapi.Surface{},
+		Delegations: delegations, Dispatcher: auth.NewDispatcher(delegations),
+		OtelReceiver: otlpReceiver(t, "http://127.0.0.1:1"),
+		Bridge:       bridgeFor(t, mcpbridge.Options{Material: keys, BaseURL: "http://x"}),
 	}
 	v := reflect.ValueOf(opts)
 	for i := range v.NumField() {
 		f, field := v.Type().Field(i), v.Field(i)
-		if f.Type.Kind() != reflect.Interface {
+		if kind := f.Type.Kind(); kind != reflect.Interface && kind != reflect.Pointer {
 			continue
 		}
-		routes, mounts := f.Type.MethodByName("Routes")
-		if mounts && routes.Type.NumIn() == 1 &&
-			routes.Type.In(0) == reflect.TypeFor[authz.Mux]() && field.IsNil() {
+		if _, mounts := f.Type.MethodByName("Routes"); mounts && field.IsNil() {
 			t.Fatalf("api.Options.%s mounts a surface and this fixture does not set it, so the "+
-				"assistant's route walks would not see its routes", f.Name)
+				"route walks would not see its routes", f.Name)
 		}
 	}
 	return newApp(t, opts)

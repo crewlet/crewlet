@@ -121,7 +121,7 @@ func (t *listProjectFiles) Name() string { return worklet.ListProjectFilesTool }
 func (t *listProjectFiles) Description() string {
 	return "List the files kept in a project — reports, specs, notes and " +
 		"anything else its work produced — in path order, a page at a time. " +
-		"Read one with read_project_file."
+		"Read one with " + worklet.ReadProjectFileTool + "."
 }
 
 func (t *listProjectFiles) Parameters() map[string]any {
@@ -172,10 +172,23 @@ func (t *listProjectFiles) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if err != nil {
 		return fileReadFailure(ctx, t.Name(), project, "", err), nil
 	}
-	return jsonResult(map[string]any{
+	// A FILE'S PATH is a name its writers chose (ADR-0040): each row names
+	// who created the file and who wrote it last, and a path renamed between
+	// them had a writer neither names.
+	read := newForeignRead(turn, actor.Handle)
+	for _, f := range listing.Files {
+		var named []provenance.Author
+		for _, handle := range []string{f.CreatedBy, f.UpdatedBy} {
+			if handle = strings.TrimSpace(handle); handle != "" {
+				named = append(named, read.writer(handle, ""))
+			}
+		}
+		namesBy(read, named...)
+	}
+	return read.answer(ctx, t.Name(), map[string]any{
 		"project": project, "count": len(listing.Files), "files": listing.Files,
 		"next": listing.Next, "read_level": listing.Level, "complete": listing.Complete,
-	})
+	}, "Ask for fewer with `limit`, or narrow with `folder`.")
 }
 
 type readProjectFile struct{ deps WorkDeps }
@@ -241,7 +254,7 @@ func (t *readProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	filePath, err = worklet.NormalizeFilePath(filePath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	encoding := strings.TrimSpace(argString(args, "encoding"))
 	if encoding != "" && encoding != "text" && encoding != "base64" {
@@ -410,7 +423,7 @@ func (t *writeProjectFile) Description() string {
 	return "Write a file into a project, creating it or replacing what is " +
 		"there. Use it for what the work produced — the report, the plan, the " +
 		"notes — so everybody on the project finds it in one place. Pass the " +
-		"`version` read_project_file gave you as `if_version` to refuse the " +
+		"`version` " + worklet.ReadProjectFileTool + " gave you as `if_version` to refuse the " +
 		"write if somebody changed the file since."
 }
 
@@ -466,7 +479,7 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	filePath, err := worklet.NormalizeFilePath(rawPath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	content := []byte(argString(args, "content"))
 	encoding := strings.TrimSpace(argString(args, "encoding"))
@@ -505,11 +518,27 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s: %s was not "+
 			"written: its content is over the %d bytes a project's file may hold",
 			t.Name(), filePath, int64(worklet.MaxFileBytes))), nil
-	case err != nil:
+	case errors.Is(err, objstore.ErrFull):
+		// NO RETRY LANDS until somebody makes room, so the model is told
+		// to stop rather than to try again shortly.
 		return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
-			fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+
-				"content could not be stored in the object store right now. Try "+
-				"again shortly.", t.Name(), filePath)), nil
+			fmt.Sprintf("%s: %s was not written, and nothing was recorded: the "+
+				"company's file storage is full. Don't try again: say the file "+
+				"couldn't be saved and that an administrator needs to make room.",
+				t.Name(), filePath)), nil
+	case err != nil:
+		// A STORE THAT DID NOT TAKE THE BYTES is a condition, told as one
+		// and invited back ([objstore.ErrUnanswered]); anything else is a
+		// fault of this node, whose words are the log's — the reading
+		// every surface storing a file gives the same failure.
+		if why, ok := Condition(err); ok {
+			return objectFailure(ctx, t.Name(), tools.RefusalUnavailable, err,
+				fmt.Sprintf("%s: %s was not written, and nothing was recorded: its "+
+					"content could not be stored (%s). %s", t.Name(), filePath, why,
+					conditionNext(err, "Try again shortly.", stuckWrite))), nil
+		}
+		return faulted(ctx, t.Name(), err, fmt.Sprintf("%s: %s was not written, and "+
+			"nothing was recorded: %s.", t.Name(), filePath, faultSaid)), nil
 	}
 	// NOTHING IS DELETED ON A REFUSAL BELOW: a retry under one operation can
 	// be refused on one node after another committed it, and the object
@@ -521,10 +550,13 @@ func (t *writeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		IfMatch: ifVersion,
 	})
 	if errors.Is(err, worklet.ErrUploadStale) {
-		// THE ONE WRITE REFUSAL THE SAME CALL FIXES: the call uploads the
-		// content anew, under a fresh key.
-		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s: %s was not "+
-			"written: %v. Make the same call again.", t.Name(), filePath, err)), nil
+		// THE UPLOAD'S STATE, which no wait changes — a conflict, as the
+		// artifacts' stale upload and this file route's own 409
+		// `upload_expired` are — and the one the same call fixes, since
+		// it uploads the content anew, under a fresh key.
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: %s was not "+
+			"written: %s. Make the same call again.", t.Name(), filePath,
+			worklet.Sentence(err))), nil
 	}
 	if err != nil {
 		return writeFailure(ctx, actor, t.Name(), err), nil
@@ -644,7 +676,7 @@ func (t *removeProjectFile) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	filePath, err := worklet.NormalizeFilePath(rawPath)
 	if err != nil {
-		return failed(fmt.Sprintf("%s: %v", t.Name(), err)), nil
+		return failed(fmt.Sprintf("%s: %s.", t.Name(), worklet.Sentence(err))), nil
 	}
 	// THE PROJECT IT IS KEPT IN DECIDES, once the call has settled which
 	// that is — see the `inTool` entries in authority.go. A colleague may

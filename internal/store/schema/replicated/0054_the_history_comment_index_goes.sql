@@ -1,0 +1,21 @@
+-- The history's index on the comment a commit wrote goes.
+--
+-- # tracker_history_comment_idx
+--
+-- 0002 declared it for "resolving a comment back to the commit that wrote it",
+-- and one statement did: the seat behind a comment a bound operator token
+-- wrote, read off `actor_seat` by the comment's id. That column went at 0041,
+-- because a principal's author is now the seat itself, and the statement went
+-- with it. No statement this build runs selects history rows by `comment_id`:
+-- the feed, a task's own history and the inbox read the column off rows they
+-- found by their subject, their project, their position or their own id.
+--
+-- An index no plan reaches is a write cost on every commit on every node for
+-- ever, on a table nothing sweeps — and a purge's skeleton, which blanks the
+-- column on every row it keeps, rewrote this index's entry for each of them.
+--
+-- The column stays: every one of those reads selects it.
+--
+-- 0002 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- that applied it would never see the change.
+DROP INDEX IF EXISTS tracker_history_comment_idx;

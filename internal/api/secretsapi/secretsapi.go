@@ -120,6 +120,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -127,6 +128,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
@@ -339,13 +341,19 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// way round they are declared — so the method is doing the work: a
 	// GET, PUT or DELETE of that name reaches the {name} routes, and no
 	// spelling of a secret's name can reach the rekey handler.
-	mount("POST /secrets/rekey", authz.ActionSecretWrite, s.rekey)
+	if err := router.Handle("POST /secrets/rekey", authz.Policy{Action: authz.ActionSecretWrite}.
+		Rewriting(), http.HandlerFunc(s.rekey)); err != nil {
+		failures = append(failures, err)
+	}
 	// THE VALUES OF SEVERAL NAMES, for a reader resolving one company
 	// document — a POST for the reason rekey is one, since no POST reaches
 	// the {name} routes, and because the names it asks for travel in a body
 	// rather than in a URL a proxy logs and bounds. The reveal's own verb
 	// on the route itself, since there is no metadata half to admit first.
-	mount("POST /secrets/reveal", authz.ActionSecretReveal, s.revealMany)
+	if err := router.Handle("POST /secrets/reveal", authz.Policy{Action: authz.ActionSecretReveal}.
+		Reading(), http.HandlerFunc(s.revealMany)); err != nil {
+		failures = append(failures, err)
+	}
 	// SEVERAL VALUES, ONE ACTIVATION: a rotation of every credential one
 	// entry or integration reads, sealed together and re-activated once.
 	// The collection's PUT, which no {name} route can reach.
@@ -377,19 +385,19 @@ func (s *Service) Routes(mux authz.Mux) error {
 func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.store.List(r.Context())
 	if err != nil {
-		s.fail(w, "list the secrets", err)
+		s.fail(w, r, "list the secrets", err)
 		return
 	}
 	engine, err := s.store.EngineKeys(r.Context())
 	if err != nil {
-		s.fail(w, "count the engine's keys", err)
+		s.fail(w, r, "count the engine's keys", err)
 		return
 	}
 	var identity *iamdomain.SealedCount
 	if s.identity != nil {
 		counted, err := s.identity.SealedKeys(r.Context())
 		if err != nil {
-			s.fail(w, "count the identity estate's sealed values", err)
+			s.fail(w, r, "count the identity estate's sealed values", err)
 			return
 		}
 		identity = &counted
@@ -398,7 +406,7 @@ func (s *Service) list(w http.ResponseWriter, r *http.Request) {
 	if s.assistant != nil {
 		counted, err := s.assistant.SealedKeys(r.Context())
 		if err != nil {
-			s.fail(w, "count the assistant's sealed values", err)
+			s.fail(w, r, "count the assistant's sealed values", err)
 			return
 		}
 		assistant = &counted
@@ -449,7 +457,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		row, found, err := s.store.Describe(r.Context(), name)
 		switch {
 		case err != nil:
-			s.fail(w, "read the secret", err)
+			s.fail(w, r, "read the secret", err)
 		case !found:
 			httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		default:
@@ -471,7 +479,7 @@ func (s *Service) get(w http.ResponseWriter, r *http.Request) {
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		return
 	case err != nil:
-		s.fail(w, "open the secret", err)
+		s.fail(w, r, "open the secret", err)
 		return
 	}
 	caller, ok := auth.Caller(w, r)
@@ -531,7 +539,7 @@ func (s *Service) revealMany(w http.ResponseWriter, r *http.Request) {
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(&req); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
-			"detail": "the body is not {\"names\": [...]}: " + err.Error(),
+			"detail": plainjson.Unreadable("the body", err),
 			"hint":   "send the variables to read as a JSON list under names",
 		})
 		return
@@ -568,7 +576,7 @@ func (s *Service) revealMany(w http.ResponseWriter, r *http.Request) {
 	}
 	values, err := s.store.Values(r.Context(), names)
 	if err != nil {
-		s.fail(w, "open the secrets", err)
+		s.fail(w, r, "open the secrets", err)
 		return
 	}
 	caller, ok := auth.Caller(w, r)
@@ -783,7 +791,7 @@ func (s *Service) write(w http.ResponseWriter, r *http.Request, values map[strin
 	names := slices.Sorted(maps.Keys(values))
 	readBy, err := s.config.Reads(ctx, names)
 	if err != nil {
-		s.fail(w, "read which paths read the secret", err)
+		s.fail(w, r, "read which paths read the secret", err)
 		return written{}, false
 	}
 	if reactivates && len(readBy) > 0 &&
@@ -955,7 +963,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	// row goes, as a write asks.
 	readBy, err := s.config.Reads(r.Context(), []string{name})
 	if err != nil {
-		s.fail(w, "read which paths read the secret", err)
+		s.fail(w, r, "read which paths read the secret", err)
 		return
 	}
 	if len(readBy) > 0 && !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionConfigWrite}) {
@@ -963,7 +971,7 @@ func (s *Service) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	removed, err := s.store.Unset(r.Context(), name)
 	if err != nil {
-		s.fail(w, "remove the secret", err)
+		s.fail(w, r, "remove the secret", err)
 		return
 	}
 	caller, ok := auth.Caller(w, r)
@@ -1108,7 +1116,17 @@ func render(row secrets.Record) map[string]any {
 // The reason reaches the LOG, never the caller: a coordination error can
 // carry a bucket name and a broker address, and an error from the cipher can
 // name a key id. None of that belongs in a response body on this surface.
-func (s *Service) fail(w http.ResponseWriter, what string, err error) {
-	log.Error("secret_request_failed", "what", what, "error", err)
+//
+// A CONDITION OF THE NODE IS NOT A FAULT, and is answered as the condition it
+// is ([operator.AnswerCondition]): a coordination store that did not answer
+// (every secret is kept there), or the identity estate refusing the read the
+// listing counts its sealed values by, on a node behind its log. Both were
+// `500 internal_error`, which told an administrator the engine had broken.
+func (s *Service) fail(w http.ResponseWriter, r *http.Request, what string, err error) {
+	if operator.AnswerCondition(r.Context(), w, log, "secret_request_unavailable", err, nil,
+		"what", what) {
+		return
+	}
+	log.ErrorContext(r.Context(), "secret_request_failed", "what", what, "error", err)
 	httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 }

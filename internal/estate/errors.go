@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
@@ -25,11 +26,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// ErrOutcomeUnknown is a write that was sent and never answered, of a kind a
-// repeat is not safe for — see [opOnceWrite]. It may have landed.
+// ErrOutcomeUnknown is a write that was sent and never answered. It may have
+// landed.
+//
+// TWO CLASSES REACH IT, and they differ in what makes the retry safe, which is
+// why the sentence names neither. A write a repeat is not safe for
+// ([opOnceWrite]) is reported at the first node that did not answer, and is
+// read back before it is written again. A write carrying its caller's
+// operation id ([opIdempotentWrite]) is asked of every other data node first,
+// and reported only when none of them ran it either — where repeating it
+// under that SAME id is the safe retry, and a fresh one is a second write.
 var ErrOutcomeUnknown = errors.New("estate: the write was sent to a data node " +
-	"that did not answer, so whether it landed is unknown — read it back " +
-	"before writing again")
+	"that did not answer, so whether it landed is unknown")
 
 // sentinel is one error value whose identity crosses the wire.
 type sentinel struct {
@@ -56,7 +64,6 @@ var sentinels = []sentinel{
 
 	{"worklet.ErrAlreadyAnswered", worklet.ErrAlreadyAnswered},
 	{"worklet.ErrBadQuery", worklet.ErrBadQuery},
-	{"worklet.ErrBulkInFlight", worklet.ErrBulkInFlight},
 	{"worklet.ErrForbidden", worklet.ErrForbidden},
 	{"worklet.ErrInboxFull", worklet.ErrInboxFull},
 	{"worklet.ErrInvalid", worklet.ErrInvalid},
@@ -73,8 +80,10 @@ var sentinels = []sentinel{
 	{"worklet.ErrReparentAcrossProjects", worklet.ErrReparentAcrossProjects},
 	{"worklet.ErrRestoresOthers", worklet.ErrRestoresOthers},
 	{"worklet.ErrStaleVersion", worklet.ErrStaleVersion},
+	{"worklet.ErrState", worklet.ErrState},
 	{"worklet.ErrStepUnresolved", worklet.ErrStepUnresolved},
 	{"worklet.ErrStepUnvouched", worklet.ErrStepUnvouched},
+	{"worklet.ErrTaken", worklet.ErrTaken},
 	{"worklet.ErrTooBroad", worklet.ErrTooBroad},
 	{"worklet.ErrUploadStale", worklet.ErrUploadStale},
 
@@ -88,6 +97,18 @@ var sentinels = []sentinel{
 	{"doclet.ErrReserved", doclet.ErrReserved},
 	{"doclet.ErrStaleVersion", doclet.ErrStaleVersion},
 	{"doclet.ErrTitleTaken", doclet.ErrTitleTaken},
+	{"doclet.ErrUnservedOrder", doclet.ErrUnservedOrder},
+
+	{"chatlet.ErrArchived", chatlet.ErrArchived},
+	{"chatlet.ErrConflict", chatlet.ErrConflict},
+	{"chatlet.ErrForbidden", chatlet.ErrForbidden},
+	{"chatlet.ErrInvalid", chatlet.ErrInvalid},
+	{"chatlet.ErrNameTaken", chatlet.ErrNameTaken},
+	{"chatlet.ErrNoActivation", chatlet.ErrNoActivation},
+	{"chatlet.ErrNotFound", chatlet.ErrNotFound},
+	{"chatlet.ErrReactionsFull", chatlet.ErrReactionsFull},
+	{"chatlet.ErrRoomExists", chatlet.ErrRoomExists},
+	{"chatlet.ErrUnknownKind", chatlet.ErrUnknownKind},
 
 	{"statelog.ErrAdoptionUnrecorded", statelog.ErrAdoptionUnrecorded},
 	{"statelog.ErrAheadOfLog", statelog.ErrAheadOfLog},
@@ -153,6 +174,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrBrandContrast", artifactsdomain.ErrBrandContrast},
 	{"artifactsdomain.ErrBrandIncomplete", artifactsdomain.ErrBrandIncomplete},
 	{"artifactsdomain.ErrConflict", artifactsdomain.ErrConflict},
+	{"artifactsdomain.ErrExists", artifactsdomain.ErrExists},
 	{"artifactsdomain.ErrInvalid", artifactsdomain.ErrInvalid},
 	{"artifactsdomain.ErrFolderCycle", artifactsdomain.ErrFolderCycle},
 	{"artifactsdomain.ErrFolderDepth", artifactsdomain.ErrFolderDepth},
@@ -160,6 +182,7 @@ var sentinels = []sentinel{
 	{"artifactsdomain.ErrFolderNameTaken", artifactsdomain.ErrFolderNameTaken},
 	{"artifactsdomain.ErrFolderNotFound", artifactsdomain.ErrFolderNotFound},
 	{"artifactsdomain.ErrLabelTaken", artifactsdomain.ErrLabelTaken},
+	{"artifactsdomain.ErrLabelsFull", artifactsdomain.ErrLabelsFull},
 	{"artifactsdomain.ErrNotFound", artifactsdomain.ErrNotFound},
 	{"artifactsdomain.ErrNotInTrash", artifactsdomain.ErrNotInTrash},
 	{"artifactsdomain.ErrPurged", artifactsdomain.ErrPurged},
@@ -219,6 +242,7 @@ var typedKinds = []typedKind{
 	{"worklet.ErrAmbiguousAnswer", reflect.TypeFor[*worklet.ErrAmbiguousAnswer]()},
 	{"worklet.ErrFutureVersion", reflect.TypeFor[*worklet.ErrFutureVersion]()},
 	{"worklet.MoveStopped", reflect.TypeFor[*worklet.MoveStopped]()},
+	{"worklet.Refusal", reflect.TypeFor[*worklet.Refusal]()},
 	{"worklet.SubtreeStopped", reflect.TypeFor[*worklet.SubtreeStopped]()},
 	{"worklet.TagClash", reflect.TypeFor[*worklet.TagClash]()},
 	{"worklet.TagsFull", reflect.TypeFor[*worklet.TagsFull]()},
@@ -226,21 +250,32 @@ var typedKinds = []typedKind{
 
 	{"doclet.ErrFutureVersion", reflect.TypeFor[*doclet.ErrFutureVersion]()},
 	{"doclet.ErrUnknownVersion", reflect.TypeFor[doclet.ErrUnknownVersion]()},
+	{"doclet.InvalidError", reflect.TypeFor[*doclet.InvalidError]()},
+
+	{"chatlet.ErrFutureVersion", reflect.TypeFor[*chatlet.ErrFutureVersion]()},
+	{"chatlet.ErrUnknownVersion", reflect.TypeFor[chatlet.ErrUnknownVersion]()},
+	{"chatlet.InvalidError", reflect.TypeFor[*chatlet.InvalidError]()},
 
 	{"statelog.CallerOpIDError", reflect.TypeFor[*statelog.CallerOpIDError]()},
 	{"statelog.ErrSkipped", reflect.TypeFor[*statelog.ErrSkipped]()},
+	{"statelog.FreshnessError", reflect.TypeFor[*statelog.FreshnessError]()},
 	{"statelog.EvictionRefusal", reflect.TypeFor[*statelog.EvictionRefusal]()},
 	{"statelog.ReadmissionRefusal", reflect.TypeFor[*statelog.ReadmissionRefusal]()},
+	{"statelog.ReanchorNotApplied", reflect.TypeFor[*statelog.ReanchorNotApplied]()},
 	{"statelog.Refused", reflect.TypeFor[*statelog.Refused]()},
+	{"statelog.Telling", reflect.TypeFor[*statelog.Telling]()},
 	{"statelog.Unavailable", reflect.TypeFor[*statelog.Unavailable]()},
 
 	{"iamdomain.ErrFutureVersion", reflect.TypeFor[*iamdomain.ErrFutureVersion]()},
 	{"iamdomain.ErrTaken", reflect.TypeFor[*iamdomain.ErrTaken]()},
 	{"iamdomain.ErrUnknownVersion", reflect.TypeFor[iamdomain.ErrUnknownVersion]()},
 	{"iamdomain.InvitationRedeemed", reflect.TypeFor[*iamdomain.InvitationRedeemed]()},
+	{"iamdomain.NotReadBack", reflect.TypeFor[*iamdomain.NotReadBack]()},
+	{"iamdomain.Refusal", reflect.TypeFor[*iamdomain.Refusal]()},
 
 	{"iam.LookRefused", reflect.TypeFor[*iam.LookRefused]()},
 
+	{"artifactsdomain.AlreadyExists", reflect.TypeFor[*artifactsdomain.AlreadyExists]()},
 	{"artifactsdomain.BrandContrast", reflect.TypeFor[*artifactsdomain.BrandContrast]()},
 	{"artifactsdomain.BrandIncomplete", reflect.TypeFor[*artifactsdomain.BrandIncomplete]()},
 	{"artifactsdomain.CarriedObjectGone", reflect.TypeFor[*artifactsdomain.CarriedObjectGone]()},

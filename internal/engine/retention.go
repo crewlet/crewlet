@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -202,8 +203,15 @@ type retention struct {
 	// floor, for `floor_unknown`. See floorwatch.go.
 	floors *floorWatch
 
-	// now is the clock every evaluation and every report reads. Nil reads
-	// the wall clock; a case sets it to put a log's first days behind it.
+	// windows is what this node last read of each log's capacity window,
+	// which `maintenance_open` judges a log it can't read now on. Nil
+	// remembers nothing. See capacitywindows.go.
+	windows *windowWatch
+
+	// now is the clock every evaluation, every report, every trim tick, the
+	// backup gauge and the alarm tracker's ages read ([retention.clock]) —
+	// the duty's one clock. Nil reads the wall clock; a case sets it to put a
+	// log's first days, or an eviction's fence window, behind it.
 	now func() time.Time
 
 	// beating serialises one alarm evaluation against another: the
@@ -247,7 +255,6 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		objectives:  e.objectives,
 		claim:       e.workerDuty(retentionDutyName, retentionDutyTTL),
 		nodeID:      s.nodeID,
-		alarms:      statelog.NewTracker(e.metrics, nil),
 		coverage:    e.vectorCoverage,
 		index:       e.indexReading,
 		objects:     e.objectsReading,
@@ -256,7 +263,13 @@ func (e *Engine) startRetention(ctx context.Context, boot *config.Bootstrap, s *
 		background:  e.backgroundBarriers,
 		pooled:      map[string]poolCounters{},
 		floors:      newFloorWatch(e.backends.Fleet.Floors),
+		windows:     newWindowWatch(),
 	}
+	// ON THE DUTY'S OWN CLOCK, which every report and evaluation reads: an
+	// alarm's age is the tracker's clock less the instant it was raised, and
+	// a tracker on the wall clock aged an alarm the evaluations beside it
+	// had raised on another.
+	r.alarms = statelog.NewTracker(e.metrics, r.clock)
 	// DETACHED from the caller's context, for the reason every other
 	// long-running loop here is: a loop bound to a signal context stops at
 	// SIGTERM, which would make its lifetime differ from the appliers it
@@ -399,6 +412,98 @@ func (r *retention) tick(ctx context.Context) {
 			log.WarnContext(ctx, "retention_trim_failed", "domain", running.domain.Name(), "err", err)
 		}
 	}
+	r.forgetEvicted(ctx, shared)
+}
+
+// forgetEvicted removes the backup point of every node the fleet has stopped
+// counting on every log that counts nodes — evicted there, past the fence
+// window — so neither a log's backup term nor `GET /backups` counts a copy the
+// operator has said is on a host that is gone.
+//
+// # Why the point goes, when the node's position row stays
+//
+// The position row is what a READMISSION is judged by, so an eviction keeps it,
+// and so does everything else ([coord.PositionRegister]). A backup point is judged by
+// nothing: it is a claim that a verified copy of the logs exists in a directory
+// on that node, and eviction is the operator's word that the node is not
+// coming back. Left standing, it was listed on `/backups` for the life of the
+// fleet, and under `backup_floor: engine` the trim went on counting it — the
+// newest copy of a log could be one on a host that had left, so a log was
+// trimmed against a backup nobody could restore from. Forgetting it is the
+// safe direction whatever the operator does next: a log no surviving copy
+// covers blocks and raises `backup_age` until a live node backs up, and a node
+// readmitted later records its next backup afresh.
+//
+// # Every log, past the window, and nothing guessed
+//
+// ON EVERY IDENTITY-CLAIMING LOG this node runs, because that is the set an
+// eviction is written to and the one a node is counted on: one that a single
+// log still counts is not gone. PAST [statelog.EvictionFenceWindow], the
+// instant [statelog.CountedSet] stops counting the node, so a backup stops
+// counting exactly when its node does. A log whose evictions could not be read
+// forgets nobody, on the trim's own conservative rule. The operator's
+// acknowledgements are never a node's and are never forgotten here.
+//
+// THE DUTY'S, and once per tick: the fleet singleton is the one reader of
+// both halves, the points it already read for this tick and the evictions
+// every data node applies identically. A forget that fails is said and asked
+// again on the next tick, which reads the same evictions.
+func (r *retention) forgetEvicted(ctx context.Context, shared fleetInputs) {
+	var logs []logEvictions
+	for _, running := range r.state.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		tombs, read := r.tombstones(ctx, running, running.runner.Committed().Generation)
+		logs = append(logs, logEvictions{tombs: tombs, read: read})
+	}
+	for _, point := range evictedPoints(shared.at, logs, shared.backups) {
+		if err := r.fleet.ForgetBackupPoint(ctx, point.Owner); err != nil {
+			log.WarnContext(ctx, "retention_backup_point_unforgotten",
+				"node", point.Owner, "err", err)
+			continue
+		}
+		log.InfoContext(ctx, "retention_backup_point_forgotten",
+			"node", point.Owner, "taken_at", point.At, "dir", point.Dir)
+	}
+}
+
+// logEvictions is one identity-claiming log's evictions as this node applied
+// them, and whether they could be read at all.
+type logEvictions struct {
+	tombs []statelog.Tombstone
+	read  bool
+}
+
+// evictedPoints is the backup points [retention.forgetEvicted] forgets: every
+// node's whose owner a tombstone older than [statelog.EvictionFenceWindow]
+// uncounts on EVERY log in logs — one entry per log that counts nodes — and
+// none at all when a log's evictions were not read or no log counts nodes. An
+// operator acknowledgement is never a node's, whatever a node is called.
+func evictedPoints(now time.Time, logs []logEvictions, points []coord.BackupPoint) []coord.BackupPoint {
+	if len(logs) == 0 {
+		return nil
+	}
+	uncounted := map[string]int{}
+	for _, l := range logs {
+		if !l.read {
+			return nil
+		}
+		seen := map[string]bool{}
+		for _, tomb := range l.tombs {
+			if now.Sub(tomb.At) > statelog.EvictionFenceWindow && !seen[tomb.NodeID] {
+				seen[tomb.NodeID] = true
+				uncounted[tomb.NodeID]++
+			}
+		}
+	}
+	var out []coord.BackupPoint
+	for _, point := range points {
+		if point.Owner != coord.OperatorBackupOwner && uncounted[point.Owner] == len(logs) {
+			out = append(out, point)
+		}
+	}
+	return out
 }
 
 // evaluate records what one trim tick can measure about this node's own
@@ -498,7 +603,7 @@ type fleetInputs struct {
 // register can disagree about who is counted, so one domain's floor would be
 // published against a fleet the other's was not.
 func (r *retention) read(ctx context.Context) (fleetInputs, error) {
-	in := fleetInputs{at: time.Now().UTC(), previous: map[string]coord.TrimFloor{}}
+	in := fleetInputs{at: r.clock(), previous: map[string]coord.TrimFloor{}}
 
 	// THE HOLDS ARE READ FIRST, BEFORE WHAT EACH ONE IS HANDED OVER TO, and
 	// the order is the only thing keeping a handover from falling between
@@ -886,28 +991,32 @@ func holdsFor(holds []coord.TrimHold, stream string) []statelog.Hold {
 func (r *retention) backupTerm(points []coord.BackupPoint, stream string) (
 	seq uint64, at time.Time, generation uint32, have bool) {
 
-	newest, ok := r.newestCounted(points)
+	newest, ok := r.newestCounted(points, stream)
 	if !ok {
-		return 0, time.Time{}, 0, false
-	}
-	reach, covers := newest.Streams[stream]
-	if !covers {
-		// A BACKUP THAT DOES NOT COVER THIS LOG IS NOT A BACKUP AT
-		// SEQUENCE ZERO — it is no backup of this domain at all, which
+		// NO COUNTED BACKUP COVERS THIS LOG, which is not a backup at
+		// sequence zero — it is no backup of this domain at all, which
 		// blocks. The distinction is the whole reason the term is
 		// three-valued.
 		return 0, time.Time{}, 0, false
 	}
+	reach := newest.Streams[stream]
 	return reach.Seq, newest.At, reach.Generation, true
 }
 
-// newestCounted is the newest verified backup the operator's policy takes the
-// word of — the one point both the trim's backup term and the backup-age alarm
-// read, through [coord.CountedBackups], so the alarm can never age a backup the
-// trim does not count.
-func (r *retention) newestCounted(points []coord.BackupPoint) (coord.BackupPoint, bool) {
-	return coord.NewestBackup(coord.CountedBackups(points,
-		r.cfg.Floor() == config.BackupFloorOperator))
+// newestCounted is the newest verified backup covering one log that the
+// operator's policy takes the word of — the one point both the trim's backup
+// term and the backup-age alarm read for that log, through
+// [coord.CountedBackups] and [coord.NewestBackupOf], so the alarm can never
+// age a backup the trim does not count.
+//
+// PER LOG, and the order of the two questions is the fix. Taking the newest
+// counted point and THEN asking whether it covered the log blocked every log it
+// did not: under `backup_floor: operator` an acknowledgement names one log, so
+// the newest one covered the log acknowledged last and every other log's trim
+// stopped, while the alarm aged that newest row and stayed green.
+func (r *retention) newestCounted(points []coord.BackupPoint, stream string) (coord.BackupPoint, bool) {
+	return coord.NewestBackupOf(coord.CountedBackups(points,
+		r.cfg.Floor() == config.BackupFloorOperator), stream)
 }
 
 // feedTerm is how far this domain's wake feed has acknowledged.
@@ -968,7 +1077,7 @@ type evictionLister interface {
 	Evictions(ctx context.Context, db store.ReplicatedReader) ([]statelog.EvictionRow, error)
 }
 
-// The six identity-claiming domains this build registers, held to the
+// The seven identity-claiming domains this build registers, held to the
 // interface — and to the log probe a stranded node asks
 // ([statelog.EvictionProbe]) — at compile time, so a reshaped method is a
 // build failure rather than a boot refusal.
@@ -979,6 +1088,7 @@ var (
 	_ evictionLister = artifactsdomain.Domain{}
 	_ evictionLister = artifactdata.Domain{}
 	_ evictionLister = assistantdomain.Domain{}
+	_ evictionLister = chatlet.Domain{}
 
 	// AND EVERY ONE READS ITS GATE RECORDS OFF THE LOG — an eviction and the
 	// readmission that lifts it — which [checkRegister] refuses a registered
@@ -989,14 +1099,15 @@ var (
 	_ statelog.EvictionProbe = artifactsdomain.Domain{}
 	_ statelog.EvictionProbe = artifactdata.Domain{}
 	_ statelog.EvictionProbe = assistantdomain.Domain{}
+	_ statelog.EvictionProbe = chatlet.Domain{}
 )
 
 // tombstones is every eviction this node has applied for one domain's log.
 //
 // READ FROM THE REPLICATED ROWS rather than from coordination, because that is
 // where an eviction actually lives: it is a record on the log like any other,
-// so every node's copy is identical and the applier's own gate depends on this
-// same table. A second copy in a bucket would give the fleet two answers.
+// so every data node's copy is identical and the applier's own gate depends on
+// this same table. A second copy in a bucket would give the fleet two answers.
 //
 // A read failure yields NO tombstones, which is the conservative direction: an
 // evicted node stays counted and pins the floor, rather than the trim

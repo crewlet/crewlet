@@ -375,11 +375,21 @@ describe("a keyed answer", () => {
       verdict: "forbidden",
       reason: "You can view this but not change it.",
     });
-    expect(refused(410, { error: "data_gone" })).toEqual({
+    expect(refused(409, { error: "artifact_trashed" })).toEqual({
       verdict: "gone",
       reason: "This artifact is in the trash, so nothing can be changed.",
     });
-    expect(refused(413, { error: "data_quota" })).toMatchObject({ verdict: "quota" });
+    expect(refused(410, { error: "data_gone" })).toEqual({
+      verdict: "gone",
+      reason: "This artifact was deleted, so nothing can be changed.",
+    });
+    // A QUOTA IS THE APPLIER'S VERDICT and the engine's one 409 for it, read
+    // by its code where the verdict is missing — never a conflict.
+    expect(refused(409, { error: "quota_exceeded", verdict: "quota" })).toMatchObject({
+      verdict: "quota",
+    });
+    expect(refused(409, { error: "quota_exceeded" })).toMatchObject({ verdict: "quota" });
+    expect(refused(409, { error: "stale_version" })).toMatchObject({ verdict: "conflict" });
     expect(refused(409, { error: "not_undoable" })).toMatchObject({ verdict: "invalid" });
     // THE APPLIER'S DETAIL IS NEVER SAID: it names op indices and protocol
     // terms for the agent tools, and the reader is told the verdict in words.

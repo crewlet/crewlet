@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -409,10 +410,6 @@ func TestAResumeOfAnUnmeasuredParkStatesNoTally(t *testing.T) {
 	}
 }
 
-// THE PARK CARRIES WHAT THE TURN ASKED AND SPENT, through the real launch every
-// turn's executor takes: the turn parks the moment its run is launched, and the
-// segment that finishes it is woken by the run's completion — which carries
-// none of this.
 // A SCHEDULED TURN PARKS WITH ITS DEADLINE, and launches its run with it. The
 // fire's cap is fixed when the turn begins, on the turn and not on any one
 // segment: the segment that collects the run reads it off the park, and the
@@ -445,6 +442,10 @@ func TestAScheduledTurnParksWithItsDeadline(t *testing.T) {
 	}
 }
 
+// THE PARK CARRIES WHAT THE TURN ASKED AND SPENT, through the real launch every
+// turn's executor takes: the turn parks the moment its run is launched, and the
+// segment that finishes it is woken by the run's completion — which carries
+// none of this.
 func TestAParkCarriesWhatTheTurnAskedAndSpent(t *testing.T) {
 	t.Parallel()
 	e, _ := indicating(t, notify.StatusAlways)
@@ -473,12 +474,19 @@ func TestAParkCarriesWhatTheTurnAskedAndSpent(t *testing.T) {
 	if want := turnAsk([]*events.Event{chatTrigger("D0ANA")}); want == "" || state.Ask != want {
 		t.Errorf("the suspension parks the ask %q, want %q", state.Ask, want)
 	}
-	// AND WHO SAID IT, for the segment that finishes the turn: its
-	// completed-turn event is the one the post-turn workers that wait for a
-	// settled turn read, and its refresh_memory calls read who asked off
-	// these. That segment re-reads no trigger.
-	if want := e.interactionsOf([]*events.Event{chatTrigger("D0ANA")}); len(want) == 0 ||
-		!slices.Equal(state.Interactions, want) {
+	// AND WHO WROTE IT, for that segment's record of the ask to say so
+	// (ADR-0040): nothing it reads could decide the label again.
+	asked := e.askOf(Request{Handle: "swe", Events: []*events.Event{chatTrigger("D0ANA")}})
+	if want := asked.Label(); want == nil || !reflect.DeepEqual(state.AskProvenance, want) {
+		t.Errorf("the suspension parks the ask's label %+v, want %+v", state.AskProvenance, want)
+	}
+	// AND WHO SAID IT, each body under the label the turn read it with, for
+	// the segment that finishes the turn: its completed-turn event is the one
+	// the post-turn workers that wait for a settled turn read, and its
+	// refresh_memory calls read who asked off these. That segment re-reads no
+	// trigger.
+	if want := e.interactionsOf([]*events.Event{chatTrigger("D0ANA")}, "swe"); len(want) == 0 ||
+		!reflect.DeepEqual(state.Interactions, want) {
 		t.Errorf("the suspension parks the interactions %+v, want %+v", state.Interactions, want)
 	}
 	// AND WHAT THE HALF BEFORE THE PARK SPENT, charged to nothing yet: a
@@ -635,7 +643,7 @@ func TestASettledTurnCarriesTheInteractionsItParkedWith(t *testing.T) {
 		Events: []*events.Event{trigger},
 	})
 
-	want := e.interactionsOf([]*events.Event{trigger})
+	want := e.interactionsOf([]*events.Event{trigger}, "swe")
 	if len(want) == 0 {
 		t.Fatal("the trigger resolves to no interaction, so this asserts nothing")
 	}
@@ -653,11 +661,11 @@ func TestASettledTurnCarriesTheInteractionsItParkedWith(t *testing.T) {
 		t.Fatalf("published %d parked and %d settled completions for the turn, want one "+
 			"of each: the case needs the turn to park and then settle", len(parked), len(settled))
 	}
-	if !slices.Equal(parked[0].Interactions, want) {
+	if !reflect.DeepEqual(parked[0].Interactions, want) {
 		t.Errorf("the park's completion carries %+v, want the dispatch's %+v",
 			parked[0].Interactions, want)
 	}
-	if !slices.Equal(settled[0].Interactions, want) {
+	if !reflect.DeepEqual(settled[0].Interactions, want) {
 		t.Errorf("the settling completion carries %+v, want the %+v its turn parked with",
 			settled[0].Interactions, want)
 	}

@@ -16,9 +16,13 @@
 // the dashboard's own suite through its own decoder, so a change to either
 // side is a failing test until the other follows it.
 //
-// It imports the standard library and the uuid package only, which is what
-// lets every assistant package, the API surface and the domain depend on it
-// without depending on each other.
+// It imports the standard library, the uuid package, internal/caveat and
+// internal/words only, which is what lets every assistant package, the API
+// surface and the domain depend on it without depending on each other. caveat
+// holds the Remedy an error frame carries (ADR-0060). words is a leaf over the
+// standard library, and a refusal here names the closed set a value comes
+// from through it, as a sentence says one ("a", "b" or "c") rather than as
+// Go prints a slice.
 //
 // # The stream
 //

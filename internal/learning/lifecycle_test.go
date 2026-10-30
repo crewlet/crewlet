@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
@@ -1304,7 +1305,7 @@ func TestRenderClusterFlattensAndCarriesEveryFieldWhole(t *testing.T) {
 	second := rawEp("b", t0.Add(-time.Hour))
 	second.ReviewOutcome = "failed"
 
-	got := RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first, second}}, nil)
+	got := RenderCluster(provenance.NewBoundary(), Cluster{Handle: "ceo", Episodes: []Episode{first, second}}, nil)
 
 	if !strings.Contains(got, "Cluster of 2 similar agent turns") {
 		t.Errorf("the count is not stated:\n%s", got)
@@ -1343,7 +1344,7 @@ func TestRenderClusterFlattensAndCarriesEveryFieldWhole(t *testing.T) {
 	// A REWRITE IS LABELLED, so the compactor reading it knows the wording
 	// is not the turn's own — and only a field past the budget takes one.
 	condensed := map[string]string{long: "posted the release notes to #eng", "line one line two": "nope"}
-	got = RenderCluster(Cluster{Handle: "ceo", Episodes: []Episode{first}}, condensed)
+	got = RenderCluster(provenance.NewBoundary(), Cluster{Handle: "ceo", Episodes: []Episode{first}}, condensed)
 	if !strings.Contains(got, "did: (condensed) posted the release notes to #eng\n") || strings.Contains(got, long) {
 		t.Errorf("the rewrite was not rendered in the field's place:\n%s", got)
 	}

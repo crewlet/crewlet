@@ -37,6 +37,11 @@ func (c *countingRevisions) InsertOn(ctx context.Context, base, r store.Revision
 	return c.RevisionStore.InsertOn(ctx, base, r)
 }
 
+func (c *countingRevisions) Insert(ctx context.Context, r store.Revision) (string, error) {
+	c.inserts.Add(1)
+	return c.RevisionStore.Insert(ctx, r)
+}
+
 func (c *countingRevisions) NoteActivation(ctx context.Context, revisionID string, at time.Time) error {
 	c.noted.Add(1)
 	return c.RevisionStore.NoteActivation(ctx, revisionID, at)
@@ -403,8 +408,8 @@ func TestADryRunIsRefusedForWhatTheWriteIsRefusedFor(t *testing.T) {
 	s.seed(t, companyDoc)
 	stale := s.do(t, http.MethodPatch, "/config?dry_run=true", `{"mission": "x"}`,
 		map[string]string{"If-Match": `"a-revision-that-moved-on"`})
-	if stale.Code != http.StatusConflict || decode(t, stale)["error"] != "revision_advanced" {
-		t.Errorf("a stale patch check = %d %s, want 409 revision_advanced", stale.Code, stale.Body)
+	if stale.Code != http.StatusPreconditionFailed || decode(t, stale)["error"] != "revision_advanced" {
+		t.Errorf("a stale patch check = %d %s, want 412 revision_advanced", stale.Code, stale.Body)
 	}
 	created := s.do(t, http.MethodPut, "/config?dry_run=true", companyDoc,
 		map[string]string{"If-None-Match": "*"})
@@ -576,16 +581,20 @@ func TestAnEntityDryRunChecksTheWholeCompanyAndStoresNothing(t *testing.T) {
 	}
 }
 
-// A DRY RUN MARKS THE WARNINGS ITS WRITE INTRODUCES. A company whose people's
-// seats already have no chat contact is warned about each of them on every
-// check; a write adding an agent seat introduces none of those, and a write
-// adding a person's seat with no contact introduces exactly that one, even
-// though it moves every seat after it down the list. Mutation: compare by
-// path, or mark every warning introduced, and this fails.
+// A DRY RUN MARKS THE WARNINGS ITS WRITE INTRODUCES. A company on a vendor chat
+// surface whose people's seats have no account there is warned about each of
+// them on every check; a write adding an agent seat introduces none of those,
+// and a write adding a person's seat with no account introduces exactly that
+// one, even though it moves every seat after it down the list. Mutation:
+// compare by path, or mark every warning introduced, and this fails.
+//
+// ON A VENDOR SURFACE (Slack here), the one chat a person's seat can be
+// unreachable on: on the engine's own chat nobody is warned about, since a
+// person reads its rooms as their seat.
 func TestADryRunMarksTheWarningsItIntroduces(t *testing.T) {
 	t.Parallel()
 	s := newCountedSurface(t)
-	s.seed(t, heldDoc)
+	s.seed(t, heldDoc+"integrations:\n  slack: {typing_status: addressed}\n")
 	introduced := func(body string) map[string]bool {
 		t.Helper()
 		res := s.do(t, http.MethodPatch, "/config?dry_run=true", body, nil)

@@ -159,14 +159,13 @@ const answeredStatement = `
 // followUpStatement is the asker's first record on the task after the commit
 // that closed the ask.
 //
-// THAT COMMIT IS FOUND BY THE RECORD THAT LAST WROTE THE CLOSING COMMENT: a
-// comment row carries its record's operation id (`record_id`), which is the
-// history row's key, so the position is one primary-key read whether or not
-// the commit woke anybody (only a loud commit names its comment in the
-// history). The closing comment is the answer, or for an ask resolved without
-// one, the ask itself. An answer edited later is last written by the edit, so
-// "after" is then after the edit: what the asker did in between is still on
-// the task's history, and an answer is rarely edited.
+// THAT COMMIT IS NAMED BY ITS RECORD, the history row's key, so the position
+// is one primary-key read whether or not the commit woke anybody (only a loud
+// commit names its comment in the history). For an answer it is the record
+// that posted it, which the answer's row carries (`record_id`, which an edit
+// leaves alone, so an answer reworded later still closed its ask when it was
+// posted). For an ask resolved without one it is the newest record that
+// resolved it, which no row carries ([resolvedStatement]).
 //
 // IN LOG ORDER, not by clock: "after" is the position, which is a total order
 // over the task's commits, where two writers' authored instants can tie or run
@@ -178,6 +177,23 @@ const followUpStatement = `
 	  AND h.log_seq > (SELECT x.log_seq FROM tracker_history x WHERE x.id = ?)
 	ORDER BY h.log_seq
 	LIMIT 1`
+
+// resolvedStatement is every record on one task that resolved a remark after
+// a commit, newest first, each with its mutation: the commit that closed an
+// ask resolved without an answer is the newest of them about that ask.
+//
+// READ FROM THE HISTORY because no row says where a resolve landed: it writes
+// the resolution and nothing else ([resolveComment]), and the ask's own
+// `record_id` is the record that posted it. A history row keeps its record's
+// mutation, and a resolve's names the remark it resolved, so the rows are read
+// newest first until one names this ask ([readResolve]). After the ask's own
+// post, since nothing resolved before it was posted closed it.
+const resolvedStatement = `
+	SELECT h.id, h.document
+	FROM tracker_history h
+	WHERE h.subject_id = ? AND h.subject_kind = 'task' AND h.kind = ?
+	  AND h.log_seq > (SELECT x.log_seq FROM tracker_history x WHERE x.id = ?)
+	ORDER BY h.log_seq DESC`
 
 // AnsweredAsks answers the asks put to one person and closed within
 // [AnsweredWindow] of now.
@@ -290,7 +306,7 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 		}
 		c := closings[i]
 		var answer AskAnswer
-		closedBy := c.askRecord
+		var closedBy string
 		if c.id.Valid {
 			answer = AskAnswer{
 				By: c.author.String, ByKind: AuthorKind(c.authorKind.String),
@@ -309,6 +325,11 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 		} else {
 			answer = AskAnswer{By: c.resolvedBy.String, At: store.DecodeTime(c.resolvedAt.Int64),
 				Resolved: true}
+			var resolveErr error
+			if closedBy, resolveErr = readResolve(ctx, tx, rec.task, rec.comment,
+				c.askRecord); resolveErr != nil {
+				return nil, false, resolveErr
+			}
 		}
 		followUp, err := readFollowUp(ctx, tx, rec.task, rec.author, closedBy)
 		if err != nil {
@@ -320,8 +341,45 @@ func readAnswered(ctx context.Context, tx *sql.Tx, handle string, since,
 	return out, truncated, nil
 }
 
+// readResolve answers the newest record on the task that resolved this ask
+// after the record that posted it (posted), or none where the history holds
+// no such record.
+//
+// A ROW WHOSE MUTATION DOES NOT DECODE NAMES NO REMARK rather than failing the
+// read, for [statedHandOffs]' reason: its record decoded once already, when it
+// was applied, and where a resolve landed is what the answer shows, never a
+// reason to refuse it.
+func readResolve(ctx context.Context, tx *sql.Tx, task, ask, posted string) (string, error) {
+	rows, err := tx.QueryContext(ctx, resolvedStatement, task,
+		string(ChangeCommentResolved), posted)
+	if err != nil {
+		return "", fmt.Errorf("worklet: read what resolved the ask %s: %w", ask, err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		var document []byte
+		if err = rows.Scan(&id, &document); err != nil {
+			return "", fmt.Errorf("worklet: scan what resolved the ask %s: %w", ask, err)
+		}
+		var stated struct {
+			Comment *struct {
+				ID string `json:"id"`
+			} `json:"comment"`
+		}
+		if json.Unmarshal(document, &stated) == nil && stated.Comment != nil &&
+			stated.Comment.ID == ask {
+			return id, nil
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return "", fmt.Errorf("worklet: read what resolved the ask %s: %w", ask, err)
+	}
+	return "", nil
+}
+
 // readFollowUp reads the asker's first record on the task after the commit
-// closedBy names (its operation id), or nil when there is none yet.
+// closedBy names (its history row's key), or nil when there is none yet.
 func readFollowUp(ctx context.Context, tx *sql.Tx, task, asker,
 	closedBy string) (*AskFollowUp, error) {
 

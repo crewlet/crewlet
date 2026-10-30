@@ -262,11 +262,11 @@ func TestOnlyAFailedWorkflowRunWakesItsActor(t *testing.T) {
 	// somebody did, which that somebody already knows — so the actor is
 	// suppressed unless the prompt says otherwise, and this is the one
 	// exception in the engine.
-	if !(github.Prompt{}).WakesActor(github.WorkflowFailed) {
+	if !(github.Prompt{}).WakesActor(notify.Inbound{Source: github.Backend, EventType: github.WorkflowFailed}) {
 		t.Error("the one self-action exception is not declared, so the only " +
 			"person who can fix a red build is never told")
 	}
-	if (github.Prompt{}).WakesActor(github.CommentAdded) {
+	if (github.Prompt{}).WakesActor(notify.Inbound{Source: github.Backend, EventType: github.CommentAdded}) {
 		t.Error("a comment wakes its own author")
 	}
 }

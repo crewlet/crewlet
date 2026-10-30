@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // MCP is how a CLI is handed one run's tools.
@@ -1161,7 +1163,7 @@ func (p *Profile) validateRequests(add func(string, ...any)) {
 	}
 	for _, from := range slices.Sorted(maps.Keys(r.Stops)) {
 		if !slices.Contains(StopValues, r.Stops[from]) {
-			add("requests.stops.%s is %q (want one of %s)", from, r.Stops[from], strings.Join(StopValues, ", "))
+			add("requests.stops.%s is %q, which is not one of %s", from, r.Stops[from], words.Or(StopValues))
 		}
 	}
 }

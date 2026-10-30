@@ -40,14 +40,15 @@ func decisionSchema() map[string]any {
 	properties["inform"] = map[string]any{
 		"type": "object",
 		"description": "The chat channel you will report the outcome in " +
-			"once it is decided: a surface you hold a bot on, and a " +
-			"channel a team in the org chart declares. The person " +
-			"answering is told you will post it there, and your turn " +
-			"woken by their answer is not finished until you have.",
+			"once it is decided: a surface you can post on — `chat` is " +
+			"the company's own — and a channel a team in the org chart " +
+			"declares. The person answering is told you will post it " +
+			"there, and your turn woken by their answer is not finished " +
+			"until you have.",
 		"properties": map[string]any{
 			"surface": map[string]any{
 				"type": "string",
-				"enum": []any{string(decision.InformMattermost), string(decision.InformSlack)},
+				"enum": informSurfaces(),
 			},
 			"channel": map[string]any{"type": "string"},
 		},
@@ -200,15 +201,27 @@ func (d WorkDeps) readDecision(ctx context.Context, tool string, actor Actor,
 	return &checked, nil
 }
 
+// informSurfaces is the schema's enum: every surface this build knows, so the
+// list a model is offered is the list the value layer accepts.
+func informSurfaces() []any {
+	out := make([]any, 0, len(decision.InformSurfaces()))
+	for _, surface := range decision.InformSurfaces() {
+		out = append(out, string(surface))
+	}
+	return out
+}
+
 // ChannelDirectory is the chart's answer to WHERE an asker may promise to
 // report a decision — declared here, by the one caller that asks, and
 // implemented by the engine over the epoch current when the tool runs.
 type ChannelDirectory interface {
 	// ChatSurfaces is the chat surfaces the seat `handle` can post on:
-	// the ones this company runs AND that seat holds a bot on. Both,
-	// because a promise to post where the seat has no identity is one it
-	// can never keep, and the engine would hold its turn open for a post
-	// no tool of its can make.
+	// the ones this company runs AND that seat has an identity on — a bot
+	// on a vendor surface, and on the engine's own chat
+	// ([decision.InformChat]) the seat itself, which every agent seat
+	// posts as. Both, because a promise to post where the seat has no
+	// identity is one it can never keep, and the engine would hold its
+	// turn open for a post no tool of its can make.
 	ChatSurfaces(handle string) []decision.InformSurface
 
 	// UnitChannels is every channel a unit of the chart declares, as the
@@ -263,7 +276,7 @@ func (d WorkDeps) checkInform(tool string, actor Actor, inform decision.Inform) 
 		}
 		return decision.Inform{}, refusalOf(failed(fmt.Sprintf("%s: "+
 			"`decision.inform.surface` is %q, which you cannot post on — the "+
-			"chat surfaces you hold a bot on here are: %s. Name one of them, "+
+			"chat surfaces you can post on here are: %s. Name one of them, "+
 			"or ask without `inform`. Nothing was posted.", tool,
 			string(inform.Surface), held)))
 	}

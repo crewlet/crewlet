@@ -92,7 +92,7 @@ export function recentsKey(reader: string): string {
  * difference between recents and a history. ONE BOUND OVER THE WHOLE LIST,
  * because the palette draws the whole list: counted per workspace, as it was
  * while a sidebar drew one workspace's share, it let an empty palette open on
- * up to eight rows for each of nine workspaces.
+ * up to eight rows for every workspace there is.
  */
 export const MaxRecents = 8;
 

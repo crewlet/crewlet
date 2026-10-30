@@ -8,7 +8,8 @@ import (
 )
 
 // A BACKUP POINT is what one owner's newest backup covers, and when it was
-// taken.
+// taken — or, for the operator, what its newest acknowledgement of one log
+// asserts.
 //
 // # Why the trim cannot work this out for itself
 //
@@ -25,7 +26,7 @@ import (
 // record the term has no input at all, and a term nobody could read BLOCKS —
 // which is a fleet whose log never trims, correct and useless.
 //
-// # One key per owner, and the reader takes the NEWEST
+// # One key per owner, and the reader takes the NEWEST that covers each log
 //
 // A single shared key would be last-writer-wins across nodes, and the last
 // writer is not the one with the newest backup: two nodes backing up on their
@@ -34,7 +35,15 @@ import (
 // a reason nothing recorded. One key per owner makes the register a SET, and
 // the reader picks by [BackupPoint.At] — which is a comparison it can make.
 //
-// # Why the operator is an owner like any other
+// It picks PER LOG ([NewestBackupOf]): the newest point that covers the log
+// being asked about, rather than the newest point and then whether it covers
+// it. The trim's backup term, the backup-age alarm and the backups screen all
+// ask about one log at a time, and a point that does not reach a log says
+// nothing about that log's copy — so the newest point overall, read as the
+// answer for every log, blocks every log it happens not to cover however fresh
+// an older point that does cover it is.
+//
+// # Why the operator is an owner like any other, filed per log
 //
 // Under `backup_floor: operator` the trim follows an explicit acknowledgement
 // rather than the engine's own copy, because a backup is not a backup until it
@@ -42,6 +51,17 @@ import (
 // row here under [OperatorBackupOwner], written by `crewlet retention ack`,
 // with the same shape and the same reader — so the two policies differ in
 // WHICH rows are counted and in nothing else.
+//
+// AN ACKNOWLEDGEMENT NAMES ONE LOG, because a sequence belongs to the number
+// space of the stream it came from, and so it is keyed by that log as well as
+// by its owner ([BackupPointKey]). Keyed by the owner alone, as a node's copy
+// is, each acknowledgement REPLACED the last: an operator who acknowledged the
+// tracker's log, then the knowledge base's, then chat's, was left with chat's
+// alone, the other two blocked again, and the alarm — aging that one row —
+// green. No sequence of acknowledgements ever covered more than one log.
+// Merging them into one row instead would need a compare-and-set to keep two
+// acknowledgements from losing each other, and an instant per log to age
+// each, which is exactly what a row per log already is.
 //
 // # It has no TTL, for the register's own reason
 //
@@ -52,15 +72,22 @@ import (
 // against the operator's own `backup_max_age`.
 
 // OperatorBackupOwner is the owner an operator acknowledgement is written
-// under. It is not a node id, and cannot collide with one: a node id is a
-// derived identifier and this is a reserved word.
+// under. It is not a node id, and cannot collide with one only because no node
+// may take it: it has a node id's shape, and config.ValidNodeID refuses it
+// wherever a node takes its id. A node running under it would announce its own
+// copies here as the operator's, and nothing reading a row could tell the two
+// apart.
 const OperatorBackupOwner = "operator"
 
-// BackupPoint is one owner's newest backup, as the register holds it.
+// BackupPoint is one node's newest backup, or the operator's newest
+// acknowledgement of one log, as the register holds it.
 type BackupPoint struct {
 	// Owner is whose backup this is: a node id, or [OperatorBackupOwner].
-	// It is the key, so a second backup by the same owner replaces the
-	// first — which is correct, because only the newest one counts.
+	// It is the key — with the one stream it reaches, for an operator
+	// acknowledgement ([BackupPointKey]) — so a second backup by the same
+	// node replaces the first, and a second acknowledgement of the same
+	// log replaces that log's first, which is correct: only the newest
+	// one counts.
 	Owner string `json:"owner"`
 
 	// At is when the backup was TAKEN, not when this row was written. The
@@ -105,22 +132,49 @@ type BackupPoint struct {
 // them answers what the log may delete, and every one needs the same
 // retention, which is none.
 type BackupRegister interface {
-	// PutBackupPoint writes or replaces one owner's newest backup.
+	// PutBackupPoint writes or replaces the row at the point's key
+	// ([BackupPointKey]): one node's newest backup, or the operator's
+	// newest acknowledgement of one log — leaving its acknowledgements of
+	// every other log standing.
 	PutBackupPoint(ctx context.Context, p BackupPoint) error
 
-	// BackupPoints reads every owner's row.
+	// BackupPoints reads every row: one per node that has backed up, and
+	// one per log the operator has acknowledged.
 	//
 	// The whole set, because the reader takes a maximum over it by
 	// instant: a per-owner read would need to know the owners, and the
 	// question is exactly "who has backed up".
 	BackupPoints(ctx context.Context) ([]BackupPoint, error)
 
-	// ForgetBackupPoint removes one, for an owner that has gone.
+	// ForgetBackupPoint removes every row an owner holds, for an owner
+	// that has gone — under [OperatorBackupOwner], the operator's
+	// acknowledgement of every log.
+	//
+	// The trim's duty calls it for a node the fleet has evicted from
+	// every log that counts nodes: a copy in a directory on a host the
+	// operator has let go is not one a log can be trimmed against, and
+	// nothing else would ever remove its row.
 	ForgetBackupPoint(ctx context.Context, owner string) error
 }
 
-// BackupPointKey is an owner's key in the register.
-func BackupPointKey(owner string) string { return DocumentKey("backup", owner) }
+// BackupPointKey is a point's key in the register: its owner's, and for an
+// operator acknowledgement its owner's and the one log it acknowledges.
+//
+// A NODE'S POINT IS ONE ARTEFACT, which covers every log the node ran at one
+// instant, so the node is the identity and its next backup replaces the row.
+// The operator's is not an artefact at all but an assertion about ONE log,
+// made whenever that log's copy left the host — so the log is part of its
+// identity, and acknowledging another log writes another row rather than
+// withdrawing this one. [BackupPoint.Validate] is what holds an
+// acknowledgement to the one log its key names.
+func BackupPointKey(p BackupPoint) string {
+	if p.Owner == OperatorBackupOwner {
+		for stream := range p.Streams {
+			return DocumentKey("backup", p.Owner, stream)
+		}
+	}
+	return DocumentKey("backup", p.Owner)
+}
 
 // Validate reports why a backup point cannot be written.
 func (p BackupPoint) Validate() error {
@@ -148,6 +202,14 @@ func (p BackupPoint) Validate() error {
 				"reanchor names a dead number space", p.Owner, name)
 		}
 	}
+	// AN ACKNOWLEDGEMENT IS FILED UNDER THE ONE LOG IT NAMES
+	// ([BackupPointKey]), so one reaching two would be filed under either
+	// and replace that log's own acknowledgement with a claim about both.
+	if p.Owner == OperatorBackupOwner && len(p.Streams) != 1 {
+		return fmt.Errorf("coord: an operator acknowledgement reaches %d streams: "+
+			"it is filed under the one log it acknowledges, so it must name "+
+			"exactly one — acknowledge each log on its own", len(p.Streams))
+	}
 	return nil
 }
 
@@ -174,19 +236,30 @@ func CountedBackups(points []BackupPoint, operatorOnly bool) []BackupPoint {
 	return out
 }
 
-// NewestBackup is the freshest point in a set, and whether there is one.
+// NewestBackupOf is the freshest point in a set that covers one stream, and
+// whether there is one.
 //
 // THE READER'S HALF of the one-key-per-owner decision, written once here
-// rather than at each caller: the trim takes it, `crewlet retention status`
-// prints it and the backup alarm ages it, and three copies of "pick the
-// newest" is three places for one of them to pick the last instead.
+// rather than at each caller: the trim takes it, the backup alarm ages it and
+// the `backups` answer marks it, and three copies of "pick the newest" is
+// three places for one of them to pick the last instead.
+//
+// PER STREAM, because every one of those questions is about one log: the
+// trim's backup term bounds one log's purge, and a point that does not reach
+// that log is no backup of it at all. Taking the newest point first and then
+// asking whether it covers the log answers "no backup" for every log a newer
+// point happens to leave out — which, with the operator's acknowledgements
+// filed one log apiece, is every log but the last one acknowledged.
 //
 // An UNVERIFIED point is skipped, on [BackupPoint.Verified]'s own reason.
-func NewestBackup(points []BackupPoint) (BackupPoint, bool) {
+func NewestBackupOf(points []BackupPoint, stream string) (BackupPoint, bool) {
 	var best BackupPoint
 	var found bool
 	for _, p := range points {
 		if !p.Verified {
+			continue
+		}
+		if _, covers := p.Streams[stream]; !covers {
 			continue
 		}
 		if !found || p.At.After(best.At) {

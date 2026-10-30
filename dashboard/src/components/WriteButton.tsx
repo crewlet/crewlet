@@ -27,7 +27,7 @@ import { Button, RefusalStrip, type ButtonProps } from "@crewlethq/ui";
 import type { ActionTool } from "~/protocol/act.ts";
 import type { Act } from "~/lib/useAct.ts";
 import { marked } from "~/ui/Problems.tsx";
-import { youNeedWords } from "~/lib/access.ts";
+import { accessToAsk } from "~/lib/authorityRemedy.ts";
 import { LimitRemedy } from "./LimitRemedy.tsx";
 
 export interface WriteButtonProps<T extends ActionTool> extends Omit<
@@ -124,7 +124,10 @@ export function WriteButton<T extends ActionTool>({
  * rule would have admitted this person on ("needs Worklet access"), from the
  * answer itself and never written here — a permission named in this file is
  * a second statement of the rule, and the one that goes stale the day the
- * rule moves.
+ * rule moves. Only where that access IS the way past the rule ([accessToAsk]):
+ * a proof gone stale names the access that admitted the person, and an
+ * artifact's role is cleared by its owner's share, so each says its own
+ * sentence.
  */
 export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) {
   const { refusal, busy } = write;
@@ -142,9 +145,7 @@ export function RefusalNote<T extends ActionTool>({ write }: { write: Act<T> }) 
     >
       {/* ONE SENTENCE where access would admit: the refusal and its remedy
           said the same thing twice. */}
-      {refusal.grants.length > 0
-        ? `${youNeedWords(refusal.grants)} Ask an admin.`
-        : marked(refusal.sentence, "inherit")}
+      {accessToAsk(refusal) ?? marked(refusal.sentence, "inherit")}
       {/* WHERE THE LIMIT THAT REFUSED IT IS RAISED, for a refusal a limit
           caused, behind the gate of the editor it opens. */}
       <LimitRemedy remedy={refusal.remedy} />

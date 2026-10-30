@@ -1,8 +1,9 @@
 # Service Objectives
 
-What the engine promises about artifacts, as numbers an alarm can hold it to:
-publishing, serving a document, a frame becoming ready in a viewer's browser,
-and the datastore's verdicts. Each objective is declared once, in
+What the engine promises, as numbers an alarm can hold it to: publishing an
+artifact, serving a document, a frame becoming ready in a viewer's browser,
+the datastore's verdicts, a committed change reaching the screens watching it,
+a wake leaving the change feed, and presence crossing the fleet. Each objective is declared once, in
 `internal/objectives`, with its reason; every recording site, the
 `objective_burn` [alarm](alarms.md) and the
 `crewlet.objectives.events` [metric](metrics.md) read the same constants, so a
@@ -31,10 +32,10 @@ good event; a `5xx`, or an outcome nobody could establish, is a bad one.
 | `artifact_ready` | Artifact ready, reported by the viewer's browser | the dashboard, through `POST /artifacts/ready` | the frame's ticket minted to the page's bridge hello | 3 s | 99.5% |
 | `data_round_trip` | Datastore op round trip | the datastore writer (`internal/artifactdata`), every write and undo | a verdict, not an unknown outcome | 250 ms | 95% |
 | `data_resolved` | Datastore op resolution | the datastore writer, every write and undo | a verdict, not an unknown outcome | 5 s | 99.9% |
-| `change_visibility` | Change visibility | the stream push of a committed artifact or datastore change | the applier's commit to the frame written to the socket | 1 s | 99% |
-| `wake_latency` | Wake latency | the changefeed, for a watch that fired or a mention | the end of the debounce window to the woken turn's start | 10 s | 95% |
-| `presence_join` | Presence join | the presence hub | a join to the first roster | 1 s | best effort, no budget |
-| `presence_cursor` | Presence cursor | the presence hub, across nodes | a cursor frame to its delivery on another node | 150 ms | best effort, no budget |
+| `change_visibility` | Change visibility | the socket's push of a committed batch (`internal/api/stream`): a seat's inbox movement, an artifact's movement, a datastore's changed documents and a chat record, on every node pushing to a watching socket, whether from its own applier or a peer's relayed | the broker storing the record to its push to the sockets watching it | 1 s | 99% |
+| `wake_latency` | Wake latency | the change feed (`internal/changefeed`), for every wake of every domain that wakes: the tracker, the knowledge base and chat | the broker storing the record that wakes somebody to its wake published on the inbound edge | 10 s | 95% |
+| `presence_join` | Presence join | the presence hub (`internal/presence`), for a node's first socket in a room | the room's first socket on the node to its peers' members shown (the last answer to its ask applied, or the ask sent where nobody answers) | 1 s | best effort, no budget |
+| `presence_cursor` | Presence cursor | the presence hub, for every member a peer's frame says moved | the member's move on its node to the frame naming it heard on this one | 150 ms | best effort, no budget |
 
 A best-effort indicator has a bound and no budget: it is counted and exported,
 and it never burns. Presence is best effort by design, since it is told and
@@ -49,12 +50,18 @@ never stored, and degrades silently.
 | `view_first_byte` | the artifact origin's handler, for every request it answers as a document (a frame's page, or a page the frame loads as one) | the request to the instant the handler committed to its status |
 | `artifact_ready` | `POST /artifacts/ready`, reported by the dashboard for every frame it opens | the frame handed to the dashboard to the page's bridge hello, or to the frame failing |
 | `data_round_trip`, `data_resolved` | the datastore writer, for every write and undo | the request to the verdict read back from this node's rows; a write still pending on this node delivered no verdict and is a bad event |
+| `change_visibility` | the socket's push, on every node, of a committed batch's inbox movements, artifact movement, datastore documents and chat records — from its own appliers, or a sound peer's relayed while its own copy is out of service | the broker storing the record to its push to the sockets watching it; an inbox movement is one push for every record the batch routed to that seat, and is timed from the oldest of them. A change no socket was handed — an inbox nobody watches, a room nobody is in, a private room nobody watching may read, a datastore row no reader in the room may see — is no event, and neither is the re-read a switch of source asks every watched inbox for |
+| `wake_latency` | the change feed, for every wake it publishes, whichever domain's record it came from (the tracker, the knowledge base, chat) | the broker storing the record to its wake published on the inbound edge. A record that wakes nobody, or that another node already claimed, is no event; a publish that failed is timed by the redelivery that lands it, from the same stored instant |
+| `presence_join` | the presence hub, once for each room a node starts listening on | the room's first socket on the node to its peers' members shown: the last answer to the node's ask applied, or the ask sent where nobody answers. A socket joining a room the node already listens on is shown everybody at once and is no event |
+| `presence_cursor` | the presence hub, for every member a peer's frame says moved | the move, by the instant the peer stamped it (a typing line's lapse included), to the frame heard here. A full roster — a rebroadcast, an answer to an ask — restates members rather than moving them and is no event |
 
-`change_visibility`, `wake_latency`, `presence_join` and `presence_cursor`
-are declared with their bounds and targets so that their recording sites (the
-stream's push of a committed change, the wake of a fired watch or a mention,
-and the presence hub) borrow them rather than invent their own. An objective
-nothing records counts no events, exports no series and never burns.
+**Three are measured across two clocks**: change visibility and wake latency
+start at the broker's own instant for a record, and a presence move at the
+peer's instant for it, while each ends on the measuring node's clock. A start
+a little after the end is the clocks' skew and counts as zero rather than as a
+bad event; skew the other way is inside the bound, which no skew a healthy
+fleet runs with comes near. A clock badly off on one node shows as that node's
+burn alone.
 
 ## Burn-rate alarms
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Prompt is what a hosted code-host event asks of the seat it reached.
@@ -112,7 +113,7 @@ func (Prompt) Addressed(n notify.Inbound) bool {
 // The test is "did something happen BECAUSE of me that I do not yet know
 // about". A build is the answer because it runs asynchronously, minutes
 // after the push, and reports a result nobody could have predicted.
-func (Prompt) WakesActor(eventType string) bool { return eventType == WorkflowFailed }
+func (Prompt) WakesActor(n notify.Inbound) bool { return n.EventType == WorkflowFailed }
 
 // DigestBody implements [notify.Prompt]: comments and reviews keep their
 // body, item snapshots collapse.
@@ -159,6 +160,20 @@ func (Prompt) PartitionKey(metadata map[string]string, _ string) string {
 // together.
 func (p Prompt) ConversationIdentity(metadata map[string]string, subject string) string {
 	return p.PartitionKey(metadata, subject)
+}
+
+// Provenance implements [notify.Prompt]: what the parser stated — a remark by
+// its writer while it is fresh, an issue's or pull request's description by
+// its opener on the event that opened it and by nobody named after — and, for
+// a notification built without the parser, a remark for a comment's or a
+// review's reasons and a description for every other.
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	fallback := provenance.SourceWorkDescription
+	switch reason := n.Metadata["event_type"]; reason {
+	case CommentMention, CommentAdded, PRApproved, PRChangesRequested, PRReviewed:
+		fallback = provenance.SourceWorkComment
+	}
+	return notify.Stated(n, parties, fallback)
 }
 
 // Build implements [notify.Prompt].

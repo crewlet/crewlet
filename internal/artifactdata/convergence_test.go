@@ -10,7 +10,7 @@ import (
 )
 
 // THREE PEOPLE AND AN AGENT EDIT ONE SHEET AT ONCE, THROUGH TWO NODES, AND
-// EVERY NODE CONVERGES, byte for byte, with a third node replaying the log
+// EVERY DATA NODE CONVERGES, byte for byte, with a third node replaying the log
 // from nothing rebuilding the same estate: the Phase 2 exit criterion, held
 // across ticks, chips, counters, guarded edits, deletes and a refused write.
 //

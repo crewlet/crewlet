@@ -247,7 +247,7 @@ type turns struct {
 func (s *turns) run(_ context.Context, req engine.Request) (turn.Result, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.asks = append(s.asks, engine.DescribeTrigger(req.Events))
+	s.asks = append(s.asks, engine.DescribeTrigger(req.Events, ""))
 	return turn.Result{Decision: phase.Done}, nil
 }
 

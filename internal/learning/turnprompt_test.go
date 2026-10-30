@@ -28,7 +28,7 @@ func TestTheSynthesisPromptShowsWhatTheTurnWasAsked(t *testing.T) {
 	prompt := p.prompt(t, 0)
 	for _, want := range []string{
 		"- Woken by: cto asked a colleague on ch-1",
-		`- Asked: "A colleague (CTO) asks: How do we cut a hotfix release?"`,
+		"- Asked: A colleague (CTO) asks: How do we cut a hotfix release?",
 		"- What it did: cut, tag, announce",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -50,7 +50,7 @@ func TestThePersistPromptCarriesTheAskOnlyWhereNoInteractionDoes(t *testing.T) {
 	p := says(`{"kind":"NOOP"}`)
 	mustDecide(t, decider(t, p, &fakeDiary{}), asked)
 	if prompt := p.prompt(t, 0); !strings.Contains(prompt,
-		`- Asked: "A colleague (CTO) asks: Which region do we fail over to?"`) {
+		"- Asked: A colleague (CTO) asks: Which region do we fail over to?") {
 		t.Errorf("a colleague's question did not reach the decider:\n%s", prompt)
 	}
 

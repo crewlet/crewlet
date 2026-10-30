@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/crewlet/crewlet/internal/agent/prompts"
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools/argval"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
@@ -42,12 +43,12 @@ import (
 // A misauthored trigger can then cost a phase some tools; it can never cost
 // the phase.
 var ExemptTools = []string{
-	LoaderTool,
-	"activate_tool",
-	"list_mcp_server_tools",
-	"submit_work",
-	"submit_review",
-	"mark_onboarded",
+	toolname.LoadToolSkill,
+	toolname.Activate,
+	toolname.ListMCPServerTools,
+	toolname.SubmitWork,
+	toolname.SubmitReview,
+	toolname.MarkOnboarded,
 }
 
 // Blocked is a refused call, and what the model must do to proceed.
@@ -73,7 +74,7 @@ func (b Blocked) Error() string {
 		about = " (" + b.Title + ")"
 	}
 	return fmt.Sprintf("%s is covered by the required tool skill %q%s, which "+
-		"has not been loaded in this session. Call load_tool_skill(key=%q) "+
+		"has not been loaded in this session. Call "+toolname.LoadToolSkill+"(key=%q) "+
 		"first, then retry %s.", b.Tool, b.Skill, about, b.Skill, b.Tool)
 }
 
@@ -98,7 +99,7 @@ type Guard struct {
 // The surface it is given is the SAME one the catalogue was built from, so
 // what is enforced and what the model was shown cannot disagree.
 func NewGuard(r *Registry, phase prompts.Phase, surface prompts.Surface) *Guard {
-	if r == nil || !slices.Contains(surface.Tools, LoaderTool) {
+	if r == nil || !slices.Contains(surface.Tools, toolname.LoadToolSkill) {
 		return nil
 	}
 	// REVIEW IS EXEMPT ENTIRELY: it has no domain tools and no loader, so
@@ -167,9 +168,6 @@ func (g *Guard) Loaded(key string) {
 	g.loaded[key] = true
 }
 
-// LoaderTool is the tool whose successful call unlocks a skill.
-const LoaderTool = "load_tool_skill"
-
 // Observe implements [tools.Guard]: it watches for the unlock.
 //
 // Reading the key back off the ARGUMENTS rather than the result, because the
@@ -177,7 +175,7 @@ const LoaderTool = "load_tool_skill"
 // guessing at a format nothing promises. The arguments are what the model
 // asked for and what the tool resolved.
 func (g *Guard) Observe(tool string, args toolargs.Args) {
-	if g == nil || tool != LoaderTool {
+	if g == nil || tool != toolname.LoadToolSkill {
 		return
 	}
 	key, _ := argval.String(args.Map()["key"])

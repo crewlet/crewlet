@@ -49,8 +49,15 @@ export async function answerOf(call: Promise<RestResponse>): Promise<ConfigAnswe
     return { status, body, etag, fromEngine: marked };
   } catch (err) {
     if (isAbort(err)) throw err;
-    if (err instanceof RestError)
-      return { status: err.status, body: err.body, etag: null, fromEngine: err.marked };
+    if (err instanceof RestError) {
+      return {
+        status: err.status,
+        body: err.body,
+        etag: null,
+        fromEngine: err.marked,
+        retryAfter: err.retryAfterSeconds,
+      };
+    }
     return {
       status: 0,
       body: {

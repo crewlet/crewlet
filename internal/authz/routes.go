@@ -1,10 +1,12 @@
 package authz
 
 import (
+	"context"
 	"maps"
 	"net/http"
 	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +42,12 @@ type Policy struct {
 	// holds nothing: it creates it, or it is refused and the member is added
 	// elsewhere. Nil for every other route. See [Absent].
 	Absent *Absent
+
+	// Effect is what a POST to this route does to what its path names: it
+	// creates, rewrites, destroys or only reads it. Every POST declares one
+	// (a walk in internal/api holds them), and no other method may. See
+	// [Effect].
+	Effect Effect
 
 	// DryRun says the write answers `?dry_run=true` as a check: the same
 	// request, judged in the same order, that stores, activates and publishes
@@ -93,6 +101,76 @@ func AddedElsewhere(where string) *Absent { return &Absent{Elsewhere: where} }
 // WhenAbsent is p declaring what a PUT to an empty address does.
 func (p Policy) WhenAbsent(a *Absent) Policy {
 	p.Absent = a
+	return p
+}
+
+// Effect is what a POST does to what its path names, DECLARED WHERE THE ROUTE
+// IS MOUNTED beside [Absent], for the same reader: the Dashboard Assistant's
+// preview of a generic change (internal/assistant/catalog) titles a change and
+// rates its risk by it.
+//
+// THE METHOD SAYS IT FOR EVERY OTHER WRITE: a PUT replaces what its address
+// holds, a PATCH merges into it and a DELETE takes it away. A POST's says
+// nothing, and read off its method the assistant called every POST a create,
+// so a person approving a purge read "Create purge" under "Approve and
+// create", in the ordinary tone, with no word that anything goes for good.
+// Only the route knows which it is, so the route says.
+type Effect string
+
+const (
+	// EffectCreates is a POST that adds a record: a member of the collection
+	// its path names (a task, a page, a view), or one beneath the record it
+	// names (a comment, a version, an upload).
+	EffectCreates Effect = "creates"
+	// EffectRewrites is a POST that acts on what its path names and keeps
+	// it: a rename, a restore, a move, a revert, a fleet gesture that can be
+	// taken back.
+	EffectRewrites Effect = "rewrites"
+	// EffectDestroys is a POST that destroys what its path names, or a part
+	// of it, for good: a purge, an erase, a prune, a member taken out of the
+	// fleet's broker, sessions ended.
+	EffectDestroys Effect = "destroys"
+	// EffectReads is a POST that changes nothing: its body is a question too
+	// large or too sensitive for a URL (the files a publish would take, the
+	// names of the secrets to reveal, a credential to try at its vendor).
+	EffectReads Effect = "reads"
+	// EffectCalls is the act route's: a POST that calls the tool its path
+	// names, which alone decides what changes. The act route decides inside
+	// its handler and is mounted outside every [Router], so the table that
+	// binds it says so (internal/api's AssistantRoutes), and no route
+	// mounted here may.
+	EffectCalls Effect = "calls"
+)
+
+// Effects are the five, in declaration order.
+var Effects = []Effect{EffectCreates, EffectRewrites, EffectDestroys, EffectReads, EffectCalls}
+
+// Valid reports whether e is an effect this build knows.
+func (e Effect) Valid() bool { return slices.Contains(Effects, e) }
+
+// Creating is p declaring that its POST adds a record ([EffectCreates]).
+func (p Policy) Creating() Policy {
+	p.Effect = EffectCreates
+	return p
+}
+
+// Rewriting is p declaring that its POST acts on what its path names and keeps
+// it ([EffectRewrites]).
+func (p Policy) Rewriting() Policy {
+	p.Effect = EffectRewrites
+	return p
+}
+
+// Destroying is p declaring that its POST destroys what its path names, or a
+// part of it, for good ([EffectDestroys]).
+func (p Policy) Destroying() Policy {
+	p.Effect = EffectDestroys
+	return p
+}
+
+// Reading is p declaring that its POST changes nothing ([EffectReads]).
+func (p Policy) Reading() Policy {
+	p.Effect = EffectReads
 	return p
 }
 
@@ -195,6 +273,23 @@ func absentProblem(pattern string, a *Absent) string {
 	return ""
 }
 
+// effectProblem says why a route's [Effect] cannot be mounted, or "": only a
+// POST's method says nothing of what it does, and a route mounted here never
+// calls a tool ([EffectCalls] is the act route's alone).
+func effectProblem(pattern string, e Effect) string {
+	method, _, _ := strings.Cut(pattern, " ")
+	switch {
+	case e == "":
+		return ""
+	case method != http.MethodPost:
+		return "declares what a POST does, which its method already says"
+	case !e.Valid() || e == EffectCalls:
+		return "declares the effect " + strconv.Quote(string(e)) + ", which a route " +
+			"mounted here does not have"
+	}
+	return ""
+}
+
 // Guard decides a request, and is what [Handle] wraps a route with.
 //
 // A SEAM RATHER THAN A CALL TO [Decide]: the principal comes from the request
@@ -236,11 +331,59 @@ func ContextGuard(chart Chart) Guard {
 		if p.Object != nil {
 			object = p.Object(r)
 		}
-		// NOW, at the request: how recently the caller proved who they
-		// are is judged at the instant they ask, against the deadlines
-		// the guard composed for this very request.
-		return decide(r.Context(), principal, p.Action, object, chart, time.Now(), check)
+		// AT THE REQUEST'S INSTANT: how recently the caller proved who
+		// they are is judged when they asked, against the deadlines the
+		// guard composed for this very request — and every later check
+		// of the same request is judged at that same instant
+		// ([DecidedAt]).
+		return decide(r.Context(), principal, p.Action, object, chart,
+			DecidedAt(r.Context()), check)
 	}
+}
+
+// decidedAtKey carries the instant a request's route was decided at.
+type decidedAtKey struct{}
+
+// DecidedAt is the instant a request is decided at: the one its route was
+// decided at, which every [Router] route stamps on the request before its
+// guard runs, or the current time for a context no route decided.
+//
+// ONE INSTANT FOR EVERY CHECK OF ONE REQUEST. A handler decides more than its
+// route did — a verb only the body names ([Admit]), every part of a
+// configuration write once the document is built — and each of those asked
+// for a recent proof at its own `time.Now()`. A proof the route accepted could
+// lapse while the body was read, and the handler then refused, as stale, the
+// request the route had just admitted on it: an administrator was told on
+// every part of their write that they needed admin. The request is one
+// gesture, so it is judged at one instant.
+//
+// FOR A DECISION ABOUT THE REQUEST ITSELF, never one made later on its
+// behalf: an open socket's watch is decided again whenever a credential moves,
+// at that moment, and is not a check of the handshake.
+func DecidedAt(ctx context.Context) time.Time {
+	if at, ok := RouteInstant(ctx); ok {
+		return at
+	}
+	return time.Now()
+}
+
+// RouteInstant is the instant a [Router] route stamped on the request, and
+// whether one did: [DecidedAt] for a surface whose own clock stands in where
+// no route decided — a gate a tool reaches too, whose clock a test sets —
+// rather than the current time.
+func RouteInstant(ctx context.Context) (time.Time, bool) {
+	at, ok := ctx.Value(decidedAtKey{}).(time.Time)
+	return at, ok
+}
+
+// decidedNow stamps a request's context with the instant its route is decided
+// at, keeping one an outer route already stamped: a surface mounted behind
+// another router is the same request, decided at the first.
+func decidedNow(ctx context.Context) context.Context {
+	if _, stamped := RouteInstant(ctx); stamped {
+		return ctx
+	}
+	return context.WithValue(ctx, decidedAtKey{}, time.Now())
 }
 
 // Admit decides one more verb from INSIDE a handler the router already
@@ -373,52 +516,42 @@ const RetryUndecidedSeconds = 2
 //     it holds no company yet — so it is `503 unavailable` with a
 //     `Retry-After`, never a 403 that sends somebody to ask for an authority
 //     they already hold. See the package doc.
-//   - A REFUSAL is `403 unauthorized`, carrying the rule's reason and the
-//     grants that would have admitted the caller ([RefusalDetail]).
-//   - A STALE PROOF is `403 step_up_required` — the code the sign-in surface
-//     already answers for the same fact, so a client learns ONE spelling —
-//     carrying the window it needs ([StepUpDetail]): the rule admitted the
-//     caller, and confirming who they are and replaying the request is the
-//     whole remedy, which a client can do without asking anybody.
-//   - A MACHINE TOKEN on a verb that needs a person present is `403
-//     token_refused`, its own code for step_up_required's reason: the
-//     `unauthorized` code's sentence is about a grant the credential lacks,
-//     and no grant on a token would admit it. It was that code with a
-//     sentence of its own as `detail`, so the envelope's `message` and its
-//     `detail` contradicted each other.
+//   - A REFUSAL is a 403 in the code [RefusalFields] gives it: `unauthorized`
+//     carrying the rule's reason and the grants that would have admitted the
+//     caller; `step_up_required` for a stale proof — the code the sign-in
+//     surface already answers for the same fact, so a client learns ONE
+//     spelling — carrying the window it needs, which a client can clear
+//     without asking anybody; and `token_refused` for a machine token on a
+//     verb that needs a person present, since the `unauthorized` code's
+//     sentence is about a grant the credential lacks and no grant on a token
+//     would admit it. It was that code with a sentence of its own as
+//     `detail`, so the envelope's `message` and its `detail` contradicted
+//     each other.
 //   - THE DASHBOARD ASSISTANT on a verb of the human-only list is `403
 //     unauthorized` with the `assist_refused` reason, and its `detail` is the
-//     sentence the list gives that verb's family ([AssistNeverSentence]), so
-//     the person reads why it stays with them and where they do it.
+//     sentence the list gives that verb's family ([AssistNeverSentence]): the
+//     assistant's model reads it to tell the person why it stays with them
+//     and where they do it, while the card they read says the reason's own
+//     sentence, since a route's `detail` is the model's alone.
 //   - A CALLER WITH NO RELATION to an artifact is `404 not_found` with
-//     nothing beside it ([Decision.NotFound]): no reason and no grants, the
-//     answer a surface gives for an id nothing holds, so the refusal cannot
-//     say whether the artifact exists.
+//     nothing beside it ([Decision.NotFound]), the same mapping's answer: no
+//     reason and no grants, the answer a surface gives for an id nothing
+//     holds, so the refusal cannot say whether the artifact exists.
 func EnvelopeRefusal(w http.ResponseWriter, _ *http.Request, p Policy, d Decision) {
-	switch {
-	case d.Unknown():
+	if d.Unknown() {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, RetryUndecidedSeconds)
-	case d.NotFound():
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
-	case d.Reason == ReasonStepUp:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-			StepUpDetail(d))
-	case d.Reason == ReasonTokenRefused:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeTokenRefused,
-			RefusalDetail(d.Reason, d.Grants))
-	case d.Reason == ReasonAssistRefused:
+		return
+	}
+	status, code, detail := RefusalFields(d)
+	if d.Reason == ReasonAssistRefused {
 		// THE PERSON IS TOLD WHY IT STAYS WITH THEM, and where they do it,
 		// in the sentence the human-only list gives the verb's family: the
-		// drawer shows `detail` as the refusal's words.
-		detail := RefusalDetail(d.Reason, d.Grants)
+		// assistant hands `detail` to its model, which tells them in its reply.
 		if tell := AssistNeverSentence(p.Action); tell != "" {
 			detail["detail"] = tell
 		}
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized, detail)
-	default:
-		httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-			RefusalDetail(d.Reason, d.Grants))
 	}
+	httpjson.FailWithFields(w, status, code, detail)
 }
 
 // Handle mounts one guarded route.
@@ -440,6 +573,9 @@ func (t *Router) Handle(pattern string, p Policy, h http.Handler) error {
 			"names the action "+string(p.Action)+", which this build has no rule for")
 	}
 	if problem := absentProblem(pattern, p.Absent); problem != "" {
+		return newPolicyError(pattern, problem)
+	}
+	if problem := effectProblem(pattern, p.Effect); problem != "" {
 		return newPolicyError(pattern, problem)
 	}
 	if problem := writeFormProblem(pattern, p); problem != "" {
@@ -481,14 +617,19 @@ func (t *Router) PolicyFor(pattern string) (Policy, bool) {
 	return p, ok
 }
 
-// wrap is the guard around one route's handler.
+// wrap is the guard around one route's handler, stamping the request with the
+// instant it is decided at first ([DecidedAt]).
 func (t *Router) wrap(p Policy, h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// ONE CONTEXT, derived from the request's own and set once: the
+		// instant the route is decided at, and whether the request is a check.
+		ctx := decidedNow(r.Context())
 		if IsCheck(r, p) {
 			// A CHECK FOR THE WHOLE REQUEST, so the handler's own decisions
 			// are asked as the route's was ([WithCheck]).
-			r = r.WithContext(WithCheck(r.Context()))
+			ctx = WithCheck(ctx)
 		}
+		r = r.WithContext(ctx)
 		d := t.guard(r, p)
 		if d.Unknown() || !d.Allowed {
 			t.refuse(w, r, p, d)

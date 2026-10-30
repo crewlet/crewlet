@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +21,129 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
+
+// ONE CONCEPT, ONE FLAG, REGISTERED IN ONE PLACE.
+//
+// The running node a command reaches, and a retry's operation id, each had
+// two names in this CLI, because each flag set registered its own and two of
+// them spelt it differently ([nodeAPIFlag] and [opIDFlag] say which). So each
+// name is registered by one helper that every flag set calls, and this reads
+// the package's source for a registration of either name anywhere else — a
+// second site is where a second spelling starts, since it can be typed
+// differently from the first.
+//
+// Mutation: register `fs.String("api", ...)` directly in secrets.go, or
+// `fs.String("op-id", ...)` in seats.go, and this fails naming the line.
+func TestEachConceptsFlagIsRegisteredByOneHelper(t *testing.T) {
+	t.Parallel()
+	helpers := map[string]string{
+		nodeAPIFlagName: "nodeAPIFlag",
+		opIDFlagName:    "opIDFlag",
+	}
+
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var parsed []*ast.File
+	consts := map[string]string{}
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		parsed = append(parsed, f)
+		for _, decl := range f.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				vs := spec.(*ast.ValueSpec)
+				for i, id := range vs.Names {
+					if i < len(vs.Values) {
+						if v, ok := stringLiteral(vs.Values[i]); ok {
+							consts[id.Name] = v
+						}
+					}
+				}
+			}
+		}
+	}
+
+	registered := map[string]int{}
+	for _, f := range parsed {
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			ast.Inspect(fn, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				name, ok := flagRegistered(call, consts)
+				if !ok {
+					return true
+				}
+				helper, guarded := helpers[name]
+				switch {
+				case !guarded:
+				case fn.Name.Name == helper:
+					registered[name]++
+				default:
+					t.Errorf("%s registers -%s in %s rather than through %s, "+
+						"which is how one flag comes to be spelt two ways",
+						fset.Position(call.Pos()), name, fn.Name.Name, helper)
+				}
+				return true
+			})
+		}
+	}
+	for name, helper := range helpers {
+		if registered[name] != 1 {
+			t.Errorf("%s registers -%s %d times, want once — the guard "+
+				"cannot tell where the one registration is", helper, name,
+				registered[name])
+		}
+	}
+}
+
+// flagRegistered is the name a [flag.FlagSet] registration call defines, read
+// from a literal or a package constant, or false for any other call.
+func flagRegistered(call *ast.CallExpr, consts map[string]string) (string, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	var at int
+	switch sel.Sel.Name {
+	case "String", "Bool", "Int", "Int64", "Uint", "Uint64", "Float64",
+		"Duration", "Func", "BoolFunc":
+		at = 0
+	case "StringVar", "BoolVar", "IntVar", "Int64Var", "UintVar", "Uint64Var",
+		"Float64Var", "DurationVar", "Var", "TextVar":
+		at = 1
+	default:
+		return "", false
+	}
+	if len(call.Args) <= at {
+		return "", false
+	}
+	if v, ok := stringLiteral(call.Args[at]); ok {
+		return v, true
+	}
+	if id, ok := call.Args[at].(*ast.Ident); ok {
+		v, ok := consts[id.Name]
+		return v, ok
+	}
+	return "", false
+}
 
 // `GET /iam/check` NAMES A DANGLING BINDING THROUGH THE SEAM THIS NODE WIRES,
 // not through one a case builds.

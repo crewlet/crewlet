@@ -14,6 +14,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A FILE'S TYPE IS READ FROM ITS BYTES, never taken from a browser's claim or
@@ -48,7 +49,7 @@ func SniffFile(name string, content []byte, allowed []string) (mediaType, kept s
 			shown = "an unrecognised type"
 		}
 		return "", "", fmt.Errorf("%w: %q is %s, and only %s are kept here",
-			ErrFileRefused, kept, shown, strings.Join(allowed, ", "))
+			ErrFileRefused, kept, shown, words.And(allowed))
 	}
 	return mediaType, kept, nil
 }

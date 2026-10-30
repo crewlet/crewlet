@@ -1,5 +1,7 @@
 package prompts
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // OnboardingHeader is the one-time setup contract, run on a seat's first turn
 // before the executor.
 //
@@ -19,8 +21,8 @@ const OnboardingHeader = "\n## ONBOARDING phase" +
 	"\nThis is a one-time setup pass with its **own** budget. Do ONLY the " +
 	"steps below now — not the task you were triggered on, which runs next. " +
 	"Your knowledge-base tools are among the tools to discover below: " +
-	"`activate_tool` makes one callable (an MCP server's are named by " +
-	"`list_mcp_server_tools` first)."
+	"`" + toolname.Activate + "` makes one callable (an MCP server's are " +
+	"named by `" + toolname.ListMCPServerTools + "` first)."
 
 // OnboardingInput is what the onboarding pass renders beyond the seat.
 type OnboardingInput struct {

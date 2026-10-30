@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/assistant/cards"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/proposal"
@@ -514,6 +515,38 @@ func TestARefusalsToolSentenceReachesTheModelAlone(t *testing.T) {
 	}
 }
 
+// A STATE IS TOLD IN A PERSON'S WORDS, NEVER AS A RACE. An approved write the
+// route refused for the state of what it was about, in the words its refusal
+// carries for a person (ADR-0060) with the tool's own told beside it in
+// process ([exec.Response.ModelDetail]), fails with a card in those words and
+// a next step that promises no change, since only whoever changes the state
+// clears it. Mutation: leave the person's words behind, or stop reading the
+// mark that makes them a person's, and the card reads the conflict's own
+// sentence.
+func TestAStateIsToldInAPersonsWords(t *testing.T) {
+	t.Parallel()
+	f := approvaltest.NewFleet()
+	trashed := "This artifact is in the trash. Restore it first, then try again."
+	body, _ := json.Marshal(map[string]any{"error": "conflict",
+		"message": httpjson.CodeConflict.Message(), "detail": trashed})
+	f.API.AnswerNext(exec.Response{Status: http.StatusConflict, Body: body,
+		ModelDetail: "update_artifact refused that: the artifact is in the trash"})
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	p := f.Propose(t, ada, nil)
+	got, err := f.Node(t).Approve(approvaltest.As(t.Context(), ada), approvaltest.Approve(p))
+	if err != nil || got.Proposal.State != wire.ProposalFailed {
+		t.Fatalf("a refused write answered %v, %v", got.Proposal.State, err)
+	}
+	r := f.Turns.Resumed()
+	if len(r) != 1 || r[0].Card.Proposal == nil || r[0].Card.Proposal.Failure == nil {
+		t.Fatalf("the turn was handed %+v, want the failure and its card", r)
+	}
+	shown := r[0].Card.Proposal.Failure.Refusal
+	if shown.Code != "conflict" || shown.Message != trashed || shown.Hint != cards.RefusalResumes {
+		t.Errorf("the card's failure is %+v, want the person's words %q", shown, trashed)
+	}
+}
+
 // AN APPLIED WRITE HANDS THE TURN ITS RECEIPT and the position open screens
 // raise their read floor to.
 func TestAnAppliedWriteHandsTheTurnItsReceipt(t *testing.T) {
@@ -759,6 +792,71 @@ func TestARepeatedDecisionTheStoreCannotAnswerIsUnconfirmed(t *testing.T) {
 	}
 }
 
+// A DECISION THE STORE REFUSED IS THE STORE'S OWN ERROR, never one nobody can
+// confirm: the record was not written, so the surface tells the refusal as
+// the condition or the fault it is. Every store error once came back as
+// Unconfirmed, and a person whose approval a full log refused was told it may
+// have landed and asked to approve again into the same refusal. So is a read
+// of the proposal, or of whether its turn may carry on, that failed before
+// anything was decided. A settlement the store refuses after the write was
+// SENT is still unconfirmed, because the write's own outcome stands whatever
+// kept its record out.
+//
+// Mutation: answer a failed move as Unconfirmed (as move did) and the first
+// two rows go red; answer either failed read as Unconfirmed and its row does;
+// return a failed settlement's error as it is and the last case does.
+func TestADecisionTheStoreRefusedIsTheStoresOwnError(t *testing.T) {
+	t.Parallel()
+	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))
+	ctx := approvaltest.As(t.Context(), ada)
+	refused := errors.New("the log refused the record")
+	approve := func(a *approval.Approver, ap approval.Approval) error {
+		_, err := a.Approve(ctx, ap)
+		return err
+	}
+	for _, tc := range []struct {
+		name   string
+		fail   func(*approvaltest.Fleet)
+		decide func(*approval.Approver, approval.Approval) error
+	}{
+		{"an approval", func(f *approvaltest.Fleet) { f.Store.FailMoves(refused) }, approve},
+		{"a decline", func(f *approvaltest.Fleet) { f.Store.FailMoves(refused) },
+			func(a *approval.Approver, ap approval.Approval) error {
+				_, err := a.Decline(ctx, ap)
+				return err
+			}},
+		{"a read of the proposal", func(f *approvaltest.Fleet) { f.Store.FailReads(refused) },
+			approve},
+		{"a read of whether its turn carries on",
+			func(f *approvaltest.Fleet) { f.Turns.FailCarries(refused) }, approve},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := approvaltest.NewFleet()
+			p := f.Propose(t, ada, nil)
+			tc.fail(f)
+			err := tc.decide(f.Node(t), approvaltest.Approve(p))
+			var unconfirmed *approval.Unconfirmed
+			if !errors.Is(err, refused) || errors.As(err, &unconfirmed) {
+				t.Errorf("a decision the store refused answered %v, want the store's own error", err)
+			}
+			if len(f.API.Sent()) != 0 || f.Store.State(p.ID) != wire.ProposalProposed {
+				t.Errorf("a refused decision sent %d writes and left the proposal %s",
+					len(f.API.Sent()), f.Store.State(p.ID))
+			}
+		})
+	}
+	f := approvaltest.NewFleet()
+	p := f.Propose(t, ada, nil)
+	f.Store.FailMovesAfter(2, refused)
+	_, err := f.Node(t).Approve(ctx, approvaltest.Approve(p))
+	var unconfirmed *approval.Unconfirmed
+	if !errors.As(err, &unconfirmed) || len(f.API.Sent()) != 1 {
+		t.Errorf("a settlement the store refused after the write was sent answered %v "+
+			"after %d sends, want Unconfirmed after one", err, len(f.API.Sent()))
+	}
+}
+
 // A SETTLEMENT HAS A DEADLINE OF ITS OWN: the settle record and the
 // resumption run detached from the approving request, which has none, and
 // within SettleTimeout, so a store that hangs never pins the approval for
@@ -868,8 +966,9 @@ func TestARacedCreateIsRefusedAsStale(t *testing.T) {
 // every note a turn takes answers its next one `409 notes_spent`: the failed
 // proposal reads as what happened — the turn has taken all it takes, the rest
 // belongs on its work item — never as a change that collided with another, and
-// its hint does not say the assistant will suggest a change that can apply,
-// since none can. The turn is handed the route's own refusal.
+// its hint is the settled one, which says what can still be done, never the
+// one for a state whoever changes it clears, since nothing clears it for that
+// turn. The turn is handed the route's own refusal.
 //
 // Mutation: hint every refusal with cards.RefusalResumes, or word every 409 as
 // a collision, and this goes red.

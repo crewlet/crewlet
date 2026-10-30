@@ -116,13 +116,16 @@ func (r *Reader) Decisions(ctx context.Context, q DecisionsQuery, now time.Time,
 	return out, nil
 }
 
+// oldestAskStatement is [oldestAsk]'s read, named for the plan test.
+const oldestAskStatement = `
+		SELECT MIN(c.created_at) FROM ` + openAsksFrom + `
+		WHERE ` + openAsksWhere
+
 // oldestAsk is when the longest-waiting open ask was put to this person, over
 // the same predicate [readAsks] pages.
 func oldestAsk(ctx context.Context, tx *sql.Tx, handle string) (*time.Time, error) {
 	var oldest sql.NullInt64
-	if err := tx.QueryRowContext(ctx, `
-		SELECT MIN(c.created_at) FROM `+openAsksFrom+`
-		WHERE `+openAsksWhere, handle).Scan(&oldest); err != nil {
+	if err := tx.QueryRowContext(ctx, oldestAskStatement, handle).Scan(&oldest); err != nil {
 		return nil, fmt.Errorf("worklet: read the oldest ask waiting on %s: %w", handle, err)
 	}
 	if !oldest.Valid {

@@ -1366,11 +1366,14 @@ function SeatEditor({
           content: (
             <>
               {/* OPTIONAL, AND SAID SO: a person who works only through the
-                  dashboard has no chat account to declare, and the engine
-                  warns rather than refuses a human seat with none. */}
+                  dashboard has no other system's account to declare, and the
+                  engine admits a human seat with none — warning only where it
+                  costs something, on a company talking on Mattermost or
+                  Slack. Not "how agents mention them": on the engine's own
+                  chat an agent mentions a person by their seat. */}
               <EditorSection
                 title="Contact identities"
-                hint={`How agents mention and reach the person, and how their activity is attributed. Optional: with none, the person is reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
+                hint={`The accounts other systems know the person by (a chat vendor's, a code host's or the tracker's), so agents there can reach them and their activity there is attributed to them. Optional: with none, the person is reached through the dashboard only.${keyLimit ? ` ${keyLimit}` : ""}`}
               >
                 {errorFor(["contact"]) && (
                   <Callout variant="danger" role="alert">

@@ -60,8 +60,8 @@ func read(via string, count int64, at time.Time, turn, query string) usage.Read 
 		LastAt: at, LastTurnID: turn, LastQuery: query}
 }
 
-// A PAGE'S READERS ARE EVERY NODE'S, summed per seat and way of reading, with
-// the newest read's details — and "today" is the COMPANY's day. spendNow is
+// A PAGE'S READERS ARE EVERY DATA NODE'S, summed per seat and way of reading,
+// with the newest read's details — and "today" is the COMPANY's day. spendNow is
 // 09:00 on the 25th in Tokyo and still the 24th in UTC, so a count cut on the
 // wrong clock reads yesterday's seats as today's.
 func TestPageReadsSumsEveryNodeAndCutsTodayOnTheCompanyClock(t *testing.T) {
@@ -324,7 +324,7 @@ func TestLinkedFromTasksNeedWorklet(t *testing.T) {
 		tasks   bool
 	}{
 		{"the knowledge base alone", []iam.Grant{iam.GrantDoclet}, false},
-		{"both apps", iam.Apps, true},
+		{"every app", iam.Apps, true},
 		{"an admin", []iam.Grant{iam.GrantAdmin}, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {

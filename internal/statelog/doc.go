@@ -13,7 +13,7 @@
 // journal_mode=WAL is the database engine's own local transaction journal:
 // per file, invisible to any peer, and a thing the store manages without
 // anybody here knowing. This is an APPLICATION log — a fleet-wide, ordered
-// record of committed mutations from which every node derives its own SQL
+// record of committed mutations from which every data node derives its own SQL
 // state. The two are different layers and the only thing they share is a
 // word.
 //
@@ -208,13 +208,13 @@
 // A build retains what it can file: the envelope must decode. A kind whose
 // envelope an older build REFUSES — one that validated a field a newer build
 // widened — is a stop on that build, not a deferral, and no version number on
-// the record changes that. So every node's position heartbeat names, per log,
-// the highest record version its build reads ([NodePosition].RecordVersion),
-// and [Readers] reads it across the trim's own counted set: a writer about to
-// publish such a kind waits until every node that applies the log reads it —
-// a node that has not reported yet reading as one that reads nothing newer.
-// No record this build writes is such a kind: the advertisement is what a
-// successor's writer of one reads.
+// the record changes that. So every data node's position heartbeat names, per
+// log, the highest record version its build reads
+// ([NodePosition].RecordVersion), and [Readers] reads it across the trim's own
+// counted set: a writer about to publish such a kind waits until every node
+// that applies the log reads it — a node that has not reported yet reading as
+// one that reads nothing newer. No record this build writes is such a kind: the
+// advertisement is what a successor's writer of one reads.
 //
 // # A record is stamped with the lowest version that reads it
 //
@@ -542,14 +542,16 @@
 // hold — and ONE evaluation feeds every surface, so a gauge, a log line and a
 // screen cannot disagree about whether something is wrong. A condition that
 // is a property of ONE LOG — its headroom, its ceiling against its window, a
-// blocked trim, a record held past the deferral grace, a floor this node
-// cannot read, a read rate past its census — is evaluated once per log
-// ([Report]), because its consequence and its remedy are that log's: the
-// grace takes a node's copy out of service for one log and nothing for
-// another, and a node behind two re-anchors needs two. The kind is still ONE
-// ALARM, listing every log it stands on with that log's own measurement
-// ([Alarm.Domains]), because the count, the gauge and the screen read one
-// cause on four logs as one problem; and each log's onset and clearing is
+// blocked trim, the age of the backup its trim counts, a record held past the
+// deferral grace, a floor this node cannot read, a read rate past its census
+// — is evaluated once per log ([Report]), because its consequence and its
+// remedy are that log's: the grace takes a node's copy out of service for one
+// log and nothing for another, a node behind two re-anchors needs two, and an
+// operator acknowledgement covers the one log it names. The kind is still ONE
+// ALARM, listing every log it stands on with that log's own measurement — a
+// measurement taken in the same words on several logs carried once, naming
+// them ([Alarm.Domains]) — because the count, the gauge and the screen read one
+// cause on several logs as one problem; and each log's onset and clearing is
 // still its own pair of log lines ([Tracker]), since a log joining a kind that
 // is already up, and one leaving it, are things an operator has to be told
 // started and ended. The model kinds are the same move over MODEL ENTRIES

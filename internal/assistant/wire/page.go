@@ -11,6 +11,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // PageContext is what a screen tells a turn about itself: WHICH things are on
@@ -322,8 +324,8 @@ const (
 func (d PageDraft) validate() error {
 	switch {
 	case !d.Kind.Valid():
-		return fmt.Errorf("%w: page context draft kind %q is not one of %v", ErrInvalid, d.Kind,
-			DraftKinds)
+		return fmt.Errorf("%w: page context draft kind %q is not one of %s", ErrInvalid, d.Kind,
+			words.Or(DraftKinds))
 	case d.Kind == DraftServer && d.ID == "":
 		return fmt.Errorf("%w: page context draft is saved and names no id", ErrInvalid)
 	case !plain(d.ID, draftIDMaxBytes) || !plain(d.Revision, draftIDMaxBytes):
@@ -360,8 +362,8 @@ func (d PageDraft) validate() error {
 			return fmt.Errorf("%w: page context draft field %q hint is not plain text of at "+
 				"most %d characters", ErrInvalid, f.Path, draftHintMaxRunes)
 		case !f.Kind.Valid():
-			return fmt.Errorf("%w: page context draft field %q kind %q is not one of %v",
-				ErrInvalid, f.Path, f.Kind, DraftFieldKinds)
+			return fmt.Errorf("%w: page context draft field %q kind %q is not one of %s",
+				ErrInvalid, f.Path, f.Kind, words.Or(DraftFieldKinds))
 		case f.Redacted && (f.Value != "" || f.Editable):
 			return fmt.Errorf("%w: page context draft field %q is redacted and carries a value "+
 				"or takes one", ErrInvalid, f.Path)
@@ -395,15 +397,16 @@ func text(s string, max int) bool {
 
 func (r ResourceRef) validate() error {
 	if !r.Kind.Valid() {
-		return fmt.Errorf("%w: resource kind %q is not one of %v", ErrInvalid, r.Kind, ResourceKinds)
+		return fmt.Errorf("%w: resource kind %q is not one of %s", ErrInvalid, r.Kind,
+			words.Or(ResourceKinds))
 	}
 	if r.ID == "" || !plain(r.ID, pageIDMaxBytes) {
 		return fmt.Errorf("%w: a %s resource id is empty or not plain text of at most %d bytes",
 			ErrInvalid, r.Kind, pageIDMaxBytes)
 	}
 	if r.Noun != "" && !r.Noun.Valid() {
-		return fmt.Errorf("%w: resource noun %q is not one of %v", ErrInvalid, r.Noun,
-			RecordNouns)
+		return fmt.Errorf("%w: resource noun %q is not one of %s", ErrInvalid, r.Noun,
+			words.Or(RecordNouns))
 	}
 	return nil
 }

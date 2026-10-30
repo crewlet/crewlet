@@ -578,7 +578,7 @@ integrations:
 
 # Which tracker and which knowledge base this company runs.  Nimbus runs
 # Worklet and Doclet: its work items and its pages live in the fleet's own
-# store, replicated to every node, with no third-party account behind
+# store, replicated to every data node, with no third-party account behind
 # either.  ONE OF EACH: naming ``worklet`` or ``doclet`` beside an
 # ``integrations.jira`` or ``integrations.confluence`` block is refused,
 # because work would be filed in two places with nothing keeping them in

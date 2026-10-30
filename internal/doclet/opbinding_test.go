@@ -114,6 +114,75 @@ func TestAKeySentWithOtherContentIsAnotherOperation(t *testing.T) {
 		}
 	})
 
+	// A COMMENT IS WHERE IT GOES AS WELL AS WHAT IT SAYS: the same words
+	// under the key in another thread were the first comment's operation,
+	// answered as posted with nothing posted where they were asked to go.
+	// Its mentions are not what it asks — a seat's tool reads them off the
+	// words against the roster — so a retry whose roster moved is still the
+	// same comment.
+	t.Run("a comment", func(t *testing.T) {
+		const words = "is this still current?"
+		thread, _, err := r.store.Comment(t.Context(), author("jane"), id,
+			doclet.NewComment{Body: "the runbook is stale"})
+		if err != nil {
+			t.Fatalf("the thread's first remark: %v", err)
+		}
+		r.drain()
+		first, _, err := r.store.Comment(t.Context(), keyed, id,
+			doclet.NewComment{Body: words})
+		if err != nil {
+			t.Fatalf("first comment: %v", err)
+		}
+		r.drain()
+		again, _, err := r.store.Comment(t.Context(), keyed, id,
+			doclet.NewComment{Body: words, Mentions: []string{"sam"}})
+		if err != nil {
+			t.Fatalf("the retry: %v", err)
+		}
+		if again.ID != first.ID {
+			t.Errorf("the same comment under the same key, its roster moved, was "+
+				"two comments, %q and %q: a retry would post twice", first.ID, again.ID)
+		}
+		reply, _, err := r.store.Comment(t.Context(), keyed, id,
+			doclet.NewComment{Body: words, ReplyTo: thread.ID})
+		if err != nil {
+			t.Fatalf("the same words in a thread under the key: %v", err)
+		}
+		r.drain()
+		if reply.ID == first.ID {
+			t.Errorf("the same words in a thread under the key were the first "+
+				"comment's operation %q", first.ID)
+		}
+		var replied bool
+		for _, c := range r.get(id).Comments {
+			replied = replied || (c.Body == words && c.ReplyTo == thread.ID)
+		}
+		if !replied {
+			t.Error("no comment answers the thread after the reply under the " +
+				"key — the ledger answered it as the first and posted nothing")
+		}
+		// RETRIED WHERE NO ROW HOLDS IT ANY MORE — taken down since — the
+		// answer is the remark the operation pins, and the thread it
+		// answers is part of what it pins.
+		if _, err := r.store.RemoveComment(t.Context(), author("jane"), id,
+			reply.ID, doclet.CommentAuthority{}); err != nil {
+			t.Fatalf("take the reply down: %v", err)
+		}
+		r.drain()
+		echoed, written, err := r.store.Comment(t.Context(), keyed, id,
+			doclet.NewComment{Body: words, ReplyTo: thread.ID})
+		switch {
+		case err != nil:
+			t.Fatalf("the reply retried after it was taken down: %v", err)
+		case !written.Outcome.Collapsed:
+			t.Fatalf("the premise: the retried reply was answered as its first "+
+				"copy, got %+v", written.Outcome)
+		case echoed.ID != reply.ID || echoed.ReplyTo != thread.ID:
+			t.Errorf("the retried reply answered %q in reply to %q, want %q in "+
+				"reply to %q", echoed.ID, echoed.ReplyTo, reply.ID, thread.ID)
+		}
+	})
+
 	// A CREATE's object is its address, so another body at the same address
 	// under the key is the one case the address cannot tell apart: bound to
 	// the key alone it was the first create's operation, answered as made

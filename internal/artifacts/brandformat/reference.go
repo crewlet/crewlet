@@ -7,6 +7,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/artifacts/svgsafe"
 	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- the reference -------------------------------------------------------- //
@@ -164,12 +165,14 @@ func familyRule() string {
 		"spaces and hyphens, at most %d bytes; it carries files and licensed: true", MaxFamilyNameBytes)
 }
 
+// adoptionList is every field an adoption needs, each written as the
+// reference writes a key, with what it is ([words.Said]).
 func adoptionList() string {
-	parts := make([]string, len(AdoptionFields))
+	parts := make([]words.Said, len(AdoptionFields))
 	for i, f := range AdoptionFields {
-		parts[i] = "`" + f.Name + "` (" + f.What + ")"
+		parts[i] = words.Said("`" + f.Name + "` (" + f.What + ")")
 	}
-	return strings.Join(parts, " and ")
+	return words.And(parts)
 }
 
 // size is a byte bound as a reader says it.

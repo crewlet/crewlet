@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE PREVIEW: what a write tool's call would change, read by the server from
@@ -114,8 +115,8 @@ func (p Preview) Check(changesVisibility bool) error {
 	}
 	for _, c := range p.Changes {
 		if !c.Kind.Valid() || c.Field == "" || c.Label == "" {
-			return fmt.Errorf("%w: change %q is a kind of %v with a field and a label",
-				ErrInvalid, c.Field, wire.ChangeKinds)
+			return fmt.Errorf("%w: change %q is a kind of %s with a field and a label",
+				ErrInvalid, c.Field, words.Or(wire.ChangeKinds))
 		}
 	}
 	return nil

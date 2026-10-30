@@ -35,6 +35,23 @@ func (f *rosterFleet) Target(ctx context.Context) (coord.Activation, bool, error
 	return f.memoryFleet.Target(ctx)
 }
 
+// activate moves the fleet's pointer to a revision, as an operator's write
+// does, and answers the activation it made: the instant a node that applied it
+// carries ([Company.ActivatedAt]).
+func activate(t *testing.T, fleet *rosterFleet, revision string) coord.Activation {
+	t.Helper()
+	// EVERY ACTIVATION CARRIES ITS ORIGIN: the store refuses one without.
+	activation, err := fleet.Activate(t.Context(), coord.ActivationRequest{
+		RevisionID: revision, Payload: []byte("{}"), At: time.Now(),
+		Origin: coord.RevisionOrigin{Author: "maya", AuthorKind: iam.ActorHuman,
+			Source: "api", CreatedAt: time.Now()},
+	})
+	if err != nil {
+		t.Fatalf("activate %s: %v", revision, err)
+	}
+	return activation
+}
+
 // THE ROSTER A MAILBOX IS RETIRED AGAINST IS THE FLEET'S CURRENT REVISION, and
 // only that. Every other answer is unknown, because a retirement deletes mail
 // that cannot be recovered and a seat judged absent against a stale revision

@@ -46,6 +46,16 @@ func answerRows(answer *Answer) []*TaskRow {
 	return out
 }
 
+// dependentsCountStatement is [fillRowFields]' count of the live work each of
+// n tasks blocks, named for the plan test.
+func dependentsCountStatement(n int) string {
+	return `
+		SELECT d.blocker_id, COUNT(*) FROM tracker_task_deps d
+		JOIN tracker_tasks w ON w.id = d.task_id AND w.removed_at IS NULL
+		WHERE d.blocker_id IN (` + placeholders(n) + `)
+		GROUP BY d.blocker_id`
+}
+
 // fillRowFields answers the row facts a query asked for, over the rows in
 // hand, in the read's own transaction — see [RowField].
 //
@@ -77,11 +87,8 @@ func fillRowFields(ctx context.Context, tx *sql.Tx, q Query,
 			}
 		}
 		if q.Wants(RowFieldDependentsCount) {
-			if err := readRowCounts(ctx, tx, `
-				SELECT d.blocker_id, COUNT(*) FROM tracker_task_deps d
-				JOIN tracker_tasks w ON w.id = d.task_id AND w.removed_at IS NULL
-				WHERE d.blocker_id IN (`+placeholders(len(batch))+`)
-				GROUP BY d.blocker_id`, batch, dependents); err != nil {
+			if err := readRowCounts(ctx, tx, dependentsCountStatement(len(batch)),
+				batch, dependents); err != nil {
 				return fmt.Errorf("worklet: count what each row blocks: %w", err)
 			}
 		}
@@ -126,14 +133,20 @@ func fillRowFields(ctx context.Context, tx *sql.Tx, q Query,
 	return nil
 }
 
+// rowTagsStatement is [readRowTags]' read of n tasks' labels, named for the
+// plan test.
+func rowTagsStatement(n int) string {
+	return `
+		SELECT task_id, slug FROM tracker_task_tags
+		WHERE task_id IN (` + placeholders(n) + `)
+		ORDER BY task_id, slug`
+}
+
 // readRowTags reads the labels of one batch, sorted per task.
 func readRowTags(ctx context.Context, tx *sql.Tx, ids []string,
 	into map[string][]string) error {
 
-	rows, err := tx.QueryContext(ctx, `
-		SELECT task_id, slug FROM tracker_task_tags
-		WHERE task_id IN (`+placeholders(len(ids))+`)
-		ORDER BY task_id, slug`, anyOf(ids)...)
+	rows, err := tx.QueryContext(ctx, rowTagsStatement(len(ids)), anyOf(ids)...)
 	if err != nil {
 		return fmt.Errorf("worklet: read each row's labels: %w", err)
 	}
@@ -171,6 +184,15 @@ func readRowCounts(ctx context.Context, tx *sql.Tx, query string, ids []string,
 	return rows.Err()
 }
 
+// rowSpendStatement is [spendOf]'s read of n tasks' running totals, named for
+// the plan test.
+func rowSpendStatement(n int) string {
+	return `
+		SELECT id, spend_tokens, spend_turns, spend_workers, spend_sent_back,
+		       reopens
+		FROM tracker_tasks WHERE id IN (` + placeholders(n) + `)`
+}
+
 // spendOf is what each of these tasks has cost, keyed by id — exactly the ids
 // asked for that exist, and nothing else.
 //
@@ -184,11 +206,7 @@ func spendOf(ctx context.Context, tx *sql.Tx, ids []string) (map[string]RowSpend
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id, spend_tokens, spend_turns, spend_workers, spend_sent_back,
-		       reopens
-		FROM tracker_tasks WHERE id IN (`+placeholders(len(ids))+`)`,
-		anyOf(ids)...)
+	rows, err := tx.QueryContext(ctx, rowSpendStatement(len(ids)), anyOf(ids)...)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read what each row cost: %w", err)
 	}
@@ -220,7 +238,7 @@ func listOrdered(q Query) bool {
 
 // listCursorOrder is the order a list-ordered cursor is minted under, and it
 // is not one [renderOrder] can produce — so a list cursor handed to a keyset
-// query, or a keyset cursor handed to a list, is refused by [cursorClause]'s
+// query, or a keyset cursor handed to a list, is refused by [cursorArms]'s
 // own order check rather than resumed against the wrong sequence.
 const listCursorOrder = "priority-list"
 

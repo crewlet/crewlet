@@ -3,6 +3,8 @@ package catalog
 import (
 	"strconv"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE SCOPES: what each read's arguments narrowed it to, as the person reads
@@ -66,15 +68,21 @@ var dueScope = map[string]string{
 
 // taskScope is list_tasks' filters, in the order a person says them.
 func taskScope(a Args) string {
-	var said []string
+	var said []words.Said
 	for _, s := range a.Strings("status") {
-		said = append(said, strings.ReplaceAll(s, "_", " "))
+		said = append(said, words.Said(strings.ReplaceAll(s, "_", " ")))
+	}
+	// NO STATUS NAMED IS NO PART of the scope, never "none": scopeOf leaves
+	// an empty part out.
+	status := ""
+	if len(said) > 0 {
+		status = words.Or(said)
 	}
 	closed := ""
 	if a.Bool("show_closed") {
 		closed = "including finished"
 	}
-	return scopeOf(a.String("priority"), strings.Join(said, " or "),
+	return scopeOf(a.String("priority"), status,
 		dueScope[a.String("due")], labelled(a, "assignee", "assigned to"),
 		labelled(a, "project", "in"), labelled(a, "type", "type"),
 		labelled(a, "tag", "tagged"), quoted(a), closed)

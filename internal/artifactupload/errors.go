@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/crewlet/crewlet/internal/artifacts/canvasformat"
+	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
 )
 
 // The sentinels. Each is a fact a surface answers differently, which is why
@@ -46,6 +50,39 @@ var (
 	// ship a broken page.
 	ErrCredential = errors.New("artifactupload: the content carries a credential")
 )
+
+// Sentence is a refusal of the publish pipeline, as a person and a model read
+// it: the sentence, without the package names and the class words a Go error
+// carries in front of it — this package's, those of the packages a publish
+// passes through (a media type, the policy linter, an edit, a vendored file, a
+// format's reader and its starter), and the domain's writer's
+// ([artifactsdomain.Sentence]), since every refusal of that writer passes
+// through here unchanged.
+//
+// THE ONE FUNCTION EVERY SURFACE WORDS AN ARTIFACT'S REFUSAL BY: the tools
+// and the artifacts API each kept a list of package names to strip, which knew
+// no class word, so a refusal read "publish_artifact refused that: invalid:
+// kind …".
+func Sentence(err error) string {
+	text := artifactsdomain.Sentence(err)
+	for _, cut := range sentenceCuts {
+		text = strings.ReplaceAll(text, cut, "")
+	}
+	return text
+}
+
+// sentenceCuts are what [Sentence] removes beyond the domain's own, the class
+// words before the package names they open with. A media type's refusal is
+// two classes deep (this package's [ErrMediaType] over the table's
+// [mediatype.ErrRefused], each saying the type isn't one an artifact may
+// publish) above a sentence that says it a third time with the file and the
+// extensions to use, so both class texts go and the sentence is told once.
+var sentenceCuts = []string{
+	ErrMediaType.Error() + ": ", mediatype.ErrRefused.Error() + ": ",
+	ErrInvalid.Error() + ": ", canvasformat.ErrInvalid.Error() + ": ",
+	"artifactupload: ", "mediatype: ", "lint: ", "edits: ", "vendor: ",
+	"slideformat: ", "canvasformat: ", "dashspec: ", "docindex: ",
+}
 
 // UploadMismatch is a file whose stored bytes are not the ones its upload
 // declared (422 `upload_mismatch`): its object is left for the collector, and

@@ -1139,11 +1139,25 @@ const (
 	// `landed`, which says when a note is read, in the seats chunk the entry
 	// loads), measured 350.9 KiB with it (359,293 bytes), under 351 KiB:
 	// 351 KiB again, still under two seconds on that link.
-	initialBudget = 351 << 10
+	// Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client,
+	// its routes and its rail are the frame's, because a reader is told of a
+	// mention on whatever screen they are on, and no part of it is fetched
+	// later without a reader waiting for it. The frame it joined measured
+	// 349.0 KiB (357,410 bytes): the steering above came to 348.8 KiB once
+	// merged beside the flattening that drawing what prose names moved out of
+	// the renderer (`lib/markdownText.ts`), and a coding run's question asked
+	// as a decision added 0.2 KiB. With Chatlet the load measured 355.0 KiB
+	// (363,549 bytes), 29 bytes past 355 KiB, so it moved to 356 KiB, which is
+	// 1.94 seconds on that link. Merged beside Settings › Models, whose frame
+	// measured 351.0 KiB (359,385 bytes), the load measured 357.0 KiB (365,596
+	// bytes), 28 bytes past 357 KiB, so it moved to 358 KiB, which is 1.96
+	// seconds on that link.
+	initialBudget = 358 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
-	// has not reached yet, so it gets half the initial budget. The largest,
+	// has not reached yet, so it got half the initial budget, set when that
+	// was 300 KiB, and stayed put as the initial budget grew. The largest,
 	// Settings, measured about 60 KB when this was set.
 	lazyChunkBudget = 150 << 10
 	// fontBudget is every face the build embeds, counted as served: woff2 is
@@ -1372,24 +1386,20 @@ const (
 	// through one rule; rgb channels and trailing slashes read in linear
 	// time; and uilet 0.77.0, its compact cards and CheckGrid in place of the
 	// seat grid) took it to 4773.5 KiB. 4774 KiB, which still refuses a
-	// doubled baseline. Per-seat integration access (each integration's
-	// Agents tab and an agent's Access tab: the table in the vendor's own
-	// terms, the review of the engine's plan, the permissions and removal
-	// dialogs, their readings and copy, and their stylesheet), with uilet
-	// 0.78.0's tab-row actions and uniform description lists, took it to
-	// 4807.1 KiB (+33.7 KiB), each module once, in one chunk the
-	// integrations screen and the agent page share and the first load does
-	// not fetch. Its styles and the integrations screen's left the entry
-	// stylesheet for that chunk, so the first load stayed within its budget.
-	// 4808 KiB, which still refuses a doubled baseline. The access review's
-	// fixes (an account turned off by hand offering its two choices, a wait
-	// said in the sync's own words, a stale save planned again, Keep stating
-	// its revision, each seat action's own pending state and answer, Rotate
-	// confirmed with what it does at the vendor, a blocked install drawn as
-	// a link, and Check now saying the loop's answer) took it from 4807.3 KiB
-	// to 4810.0 KiB (+2.7 KiB). 4811 KiB, which still refuses a doubled
-	// baseline.
-	treeBudget = 4<<20 + 715<<10
+	// doubled baseline.
+	// Chatlet (its workspace, its rail and its screens) took it from 4773.6
+	// KiB to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline:
+	// the 2.3 MiB the tree measured when this budget was first set, doubled,
+	// is about 4710 KiB. From here the budget holds the tree to what each
+	// change says it costs rather than refusing a bundle that doubled.
+	// Per-seat integration access (each integration's Agents tab and an
+	// agent's Access tab on uilet 0.79.0's DataTable: the table in the
+	// vendor's own terms, the review of the engine's plan, the permissions,
+	// rotate and removal dialogs, their readings and copy, and their
+	// stylesheet) took it from 4912.3 KiB to 4947.1 KiB (+34.8 KiB), each
+	// module once, in one chunk the integrations screen and the agent page
+	// share and the first load does not fetch. 4948 KiB.
+	treeBudget = 4<<20 + 852<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

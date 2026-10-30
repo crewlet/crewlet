@@ -31,6 +31,11 @@ type askedTracker struct {
 	// open is each task's open asks, by the seat each is addressed to.
 	open map[string]map[string]string
 
+	// posted is each remark already on a task, by its id, with the ask it
+	// answered: a thread read naming one as its own comment is resolved from
+	// it, as the reader resolves the call made again from the remark's row.
+	posted map[string]string
+
 	// down, when set, is what every thread read fails with — a node that
 	// cannot read the item's asks right now.
 	down error
@@ -42,6 +47,9 @@ func (a *askedTracker) Thread(_ context.Context, q worklet.ThreadQuery,
 	a.threadQuery = q
 	if a.down != nil {
 		return worklet.ResolvedThread{}, a.down
+	}
+	if answered, ok := a.posted[q.Comment]; ok && q.Comment != "" {
+		return worklet.ResolvedThread{Answers: answered}, nil
 	}
 	out := worklet.ResolvedThread{ThreadParties: worklet.ThreadParties{Asked: q.Ask},
 		Answers: q.Answers}
@@ -71,6 +79,14 @@ func askedRigDown(t *testing.T, down error) (map[string]tools.Callable, *fakeTra
 	trk := newFakeTracker()
 	reader := &askedTracker{fakeTracker: trk, down: down,
 		open: map[string]map[string]string{"i1": {"legal": "c-ask"}}}
+	return askedSurface(t, reader), trk
+}
+
+// askedSurface is the operator surface [askedRig] builds, over a tracker a
+// case holds on to.
+func askedSurface(t *testing.T, reader *askedTracker) map[string]tools.Callable {
+	t.Helper()
+	trk := reader.fakeTracker
 	out := map[string]tools.Callable{}
 	for _, tool := range builtin.OperatorTools(builtin.OperatorDeps{
 		Work: builtin.WorkDeps{
@@ -80,7 +96,7 @@ func askedRigDown(t *testing.T, down error) (map[string]tools.Callable, *fakeTra
 	}) {
 		out[tool.Name()] = tool
 	}
-	return out, trk
+	return out
 }
 
 // callAs calls one of the rig's tools as a principal, outside any turn.
@@ -196,6 +212,72 @@ func TestAnAskedPersonMayOnlyAnswer(t *testing.T) {
 	if len(trk.patched) != 1 || trk.patched[0].Watch == nil {
 		t.Errorf("a tracker holder's comment did not follow the item as ever: %+v",
 			trk.patched)
+	}
+}
+
+// AN ANSWER MADE AGAIN AFTER IT LANDED IS ADMITTED AS THE ANSWER IT IS.
+//
+// The answer closes the ask that admitted its author, so a probe of the asks
+// open now refused the same call made again — a retry after an unknown, an
+// approval retried — as though nobody had asked them anything: told, after
+// their answer had landed, that it needed the tracker. The probe carries the id
+// the comment will carry, and a remark already posted under it is resolved from
+// its row, so the ask it answered admits it, and the writer answers it from
+// that row. A new remark is not admitted by it, and neither is somebody else
+// bringing the same operation back: the id is derived from the caller's own
+// call.
+//
+// Mutation: probe without the comment's id and the call made again is refused
+// for the tracker.
+func TestAnAnswerMadeAgainAfterItLandedIsAdmitted(t *testing.T) {
+	t.Parallel()
+	trk := newFakeTracker()
+	reader := &askedTracker{fakeTracker: trk,
+		open: map[string]map[string]string{"i1": {"legal": "c-ask"}}}
+	surface := askedSurface(t, reader)
+	legal := boundTo("legal")
+	args := map[string]any{"item": "ENG-1", "body": "Yes, the clause stands."}
+
+	first := callAs(t, surface[worklet.CommentOnWorkTool], legal, args)
+	if first.Failed || len(trk.patched) != 1 {
+		t.Fatalf("the person asked could not answer: %s", first.Output)
+	}
+	posted := trk.patched[0].Comment
+	// THE ANSWER LANDED: the ask is closed, and the remark is on the item.
+	reader.open = map[string]map[string]string{}
+	reader.posted = map[string]string{posted.ID: "c-ask"}
+
+	op, _ := answerOf(t, first)["op_id"].(string)
+	again := map[string]any{"item": "ENG-1", "body": "Yes, the clause stands.",
+		"op_id": op}
+	got := callAs(t, surface[worklet.CommentOnWorkTool], legal, again)
+	if got.Failed {
+		t.Fatalf("the answer made again was refused: %s", got.Output)
+	}
+	if answered, _ := answerOf(t, got)["answered"].(string); answered != "c-ask" {
+		t.Errorf("the answer made again says it answered %q, want c-ask", answered)
+	}
+	if n := len(trk.patched); n != 2 || trk.patched[1].Comment.ID != posted.ID {
+		t.Errorf("the answer made again wrote %d patches, the last %+v, want "+
+			"the first remark's id %s, which the writer answers from its row",
+			n, trk.patched[n-1].Comment, posted.ID)
+	}
+
+	// A NEW REMARK IS NOT THE ANSWER, and nobody else's call is legal's.
+	for name, call := range map[string]struct {
+		who  string
+		args map[string]any
+	}{
+		"legal's new remark":                  {"legal", args},
+		"finance bringing the operation back": {"finance", again},
+	} {
+		if got := callAs(t, surface[worklet.CommentOnWorkTool], boundTo(call.who),
+			call.args); !refusedForTracker(got) {
+			t.Errorf("%s was not refused for the tracker: %+v", name, got)
+		}
+	}
+	if len(trk.patched) != 2 {
+		t.Errorf("a refused comment wrote: %d patches", len(trk.patched))
 	}
 }
 

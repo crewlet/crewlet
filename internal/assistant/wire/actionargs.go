@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ActionArgs is the shape a page action's arguments take on the screen that
@@ -217,7 +219,8 @@ func (s *ActionArgs) validate(path string, depth int, nodes *int) error {
 	}
 	for _, t := range s.Type {
 		if !t.Valid() {
-			return fmt.Errorf("%w: %s type %q is not one of %v", ErrInvalid, path, t, ArgTypeNames)
+			return fmt.Errorf("%w: %s type %q is not one of %s", ErrInvalid, path, t,
+				words.Or(ArgTypeNames))
 		}
 	}
 	for _, v := range s.Enum {
@@ -309,7 +312,7 @@ func (s *ActionArgs) problems(path string, v any) []error {
 			add("%s is %q", path, *s.Const)
 		}
 		if len(s.Enum) > 0 && !slices.Contains(s.Enum, value) {
-			add("%s is one of %s, not %q", path, quoted(s.Enum), value)
+			add("%s is one of %s, not %q", path, words.Or(s.Enum), value)
 		}
 		if s.MinLength != nil && n < *s.MinLength {
 			add("%s is at least %d characters", path, *s.MinLength)
@@ -377,7 +380,7 @@ func (s *ActionArgs) oneOfProblems(path string, v any) []error {
 				return variant.problems(path, v)
 			}
 		}
-		return []error{fmt.Errorf("%s.%s is one of %s", path, key, quoted(values))}
+		return []error{fmt.Errorf("%s.%s is one of %s", path, key, words.Or(values))}
 	}
 	var first []error
 	for _, variant := range s.OneOf {
@@ -464,23 +467,14 @@ func numberOf(v any) (float64, bool) {
 
 // typeWords names the types a value takes, as a sentence ends with them.
 func typeWords(types ArgTypes) string {
-	words := map[ArgType]string{ArgObject: "an object", ArgArray: "a list",
+	said := map[ArgType]words.Said{ArgObject: "an object", ArgArray: "a list",
 		ArgString: "text", ArgNumber: "a number", ArgInteger: "a whole number",
 		ArgBoolean: "true or false", ArgNull: "null"}
-	out := make([]string, 0, len(types))
+	out := make([]words.Said, 0, len(types))
 	for _, t := range types {
-		out = append(out, words[t])
+		out = append(out, said[t])
 	}
-	return strings.Join(out, " or ")
-}
-
-// quoted lists values the way a refusal names them.
-func quoted(values []string) string {
-	out := make([]string, len(values))
-	for i, v := range values {
-		out[i] = fmt.Sprintf("%q", v)
-	}
-	return strings.Join(out, ", ")
+	return words.Or(out)
 }
 
 // utf16Len is a string's length as JSON Schema (and the dashboard) count it.

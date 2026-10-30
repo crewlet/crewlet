@@ -15,7 +15,7 @@ import { noteReader } from "~/lib/reader.ts";
 import { useRef, type ReactNode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useSearchTarget } from "./searchTarget.ts";
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { Shell, usePageCoverage, usePublishFleet, useSectionCounts } from "./Shell.tsx";
 import { loadChunk } from "./lazyScreen.ts";
 import { Router, buildHash } from "./router.tsx";
@@ -28,6 +28,8 @@ import { Inbox } from "~/routes/inbox/Inbox.tsx";
 import { installWindow } from "~/testing.tsx";
 import { PAGE_ACTIONS_SLOT, PAGE_LENSES_SLOT } from "./frame/PageActions.tsx";
 import { Project } from "~/routes/worklet/Project.tsx";
+import { ReadCursors, packPosition } from "~/routes/chatlet/cursor.ts";
+import { LoneRoom } from "~/routes/chatlet/testkit.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { withDerived } from "~/test/org.ts";
@@ -1597,6 +1599,231 @@ describe("the assistant", () => {
       expect(
         screen.getByRole("group", { name: "Attached to this question" }).textContent,
       ).toContain("Worklet");
+    } finally {
+      win.restore();
+    }
+  });
+
+  // ⌘. FROM THE COMPOSER CLOSES IT WHEREVER IT STANDS OVER THE PAGE. As the
+  // whole window it is a modal, so the frame's own binding stands aside and
+  // the panel answers the press itself; over the page's end edge it is not a
+  // modal, so the binding answers it there, as it does beside the column.
+  test.each([
+    ["over the page's end edge", 1100, "overlay"],
+    ["as the whole window", 600, "sheet"],
+  ])("⌘. from its composer closes it %s", async (_, width, shape) => {
+    const { win, app } = await open(width, "#/worklet", {
+      login: "U0FOUNDER",
+      grants: ["admin", "worklet", "doclet"],
+      handle: "ada",
+      owner: "ada",
+      name: "Ada Lovelace",
+      kind: "human",
+      assistant: { available: true },
+    });
+    try {
+      expect(app.getAttribute("data-aside")).toBe(shape);
+      const box = await screen.findByRole("textbox", { name: "Ask the assistant" });
+      act(() => box.focus());
+      fireEvent.keyDown(box, { key: ".", ctrlKey: true });
+      await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
+    } finally {
+      win.restore();
+    }
+  });
+});
+
+// A ROOM READS ONLY WHAT SOMEBODY COULD SEE. On a phone the assistant is the
+// whole window, so a message that arrives while the reader talks to it is
+// drawn for nobody, and counted as seen it cleared the room's badge on every
+// device. Over the page's end edge it stands over the transcript, a dialog's
+// veil stands over the whole page, and a tab in the background shows nothing
+// at all. Each such message counts once the room is on screen again; beside
+// the assistant's column the room stays in view and reads on.
+describe("what a chat room in the frame counts as read", () => {
+  afterEach(() => {
+    sessionStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  const at = (seq: number) => ({ stream: "CREWLET_CHAT_LOG", generation: 1, seq });
+  const served = { read_level: "session", complete: true, position: at(40) };
+  const said = (seq: number) => ({
+    message: {
+      v: 1,
+      id: `m-${seq}`,
+      channel_id: "room-1",
+      author: "bo",
+      author_kind: "agent",
+      body: `line ${seq}`,
+      created_at: "2026-01-01T00:00:00Z",
+    },
+    channel_seq: seq,
+    position: at(seq),
+  });
+
+  /**
+   * A room in the frame at `width`, with its read cursor watched: `say` has
+   * the next message arrive and waits until it is drawn and reported, and
+   * `read` is whether the room ever counted that message as seen.
+   */
+  async function roomAt(width: number) {
+    const win = installWindow(width);
+    const answers: Record<string, unknown> = {
+      fleet: { nodes: [] },
+      chat_channel: {
+        ...served,
+        channel: {
+          v: 1,
+          id: "room-1",
+          kind: "public",
+          name: "general",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        revision: 3,
+        message_seq: 1,
+        member: true,
+        members: [],
+      },
+      chat_messages: { ...served, channel_id: "room-1", messages: [said(1)] },
+    };
+    const { store, socket } = answering(answers);
+    const cursors = new ReadCursors({ flush: async () => undefined });
+    const see = vi.spyOn(cursors, "see");
+    mountShell(
+      store,
+      socket,
+      <LoneRoom channelID="room-1" viewer="ada" nameOf={(handle) => handle} cursors={cursors} />,
+    );
+    await screen.findByText("line 1");
+    await loadChunk("assistant");
+    const say = async (seq: number) => {
+      answers.chat_messages = {
+        ...served,
+        channel_id: "room-1",
+        messages: [said(seq), said(seq - 1)],
+      };
+      act(() => {
+        store.applyChatChange({
+          channel_id: "room-1",
+          op: "post",
+          op_id: `op-${seq}`,
+          message_id: `m-${seq}`,
+          channel_seq: seq,
+          at: "2026-01-01T00:01:00Z",
+          position: at(seq),
+        } as never);
+      });
+      await screen.findByText(`line ${seq}`);
+      // AND FOR THE TRANSCRIPT TO REPORT IT, which React does in a task of its
+      // own once the row is drawn: a case that read the cursor before that
+      // task ran would pass whether or not the room counted the row.
+      await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
+    };
+    const read = (seq: number) =>
+      see.mock.calls.some(
+        ([room, packed]) => room === "room-1" && packed === packPosition(at(seq)),
+      );
+    return { win, say, read };
+  }
+
+  /** ⌘. opens the assistant, in the shape the frame's arithmetic gives it. */
+  async function openAssistant(): Promise<HTMLElement> {
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: ".", ctrlKey: true }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Crewlet Assistant" })).toBeDefined(),
+    );
+    return document.querySelector<HTMLElement>(".app")!;
+  }
+
+  /** Escape from inside the panel closes it, whatever its shape. */
+  async function closeAssistant(app: HTMLElement): Promise<void> {
+    const heading = screen.getByRole("heading", { name: "Crewlet Assistant" });
+    act(() => heading.focus());
+    fireEvent.keyDown(heading, { key: "Escape" });
+    await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
+  }
+
+  test("under the assistant as the whole window, a message is read only once it closes", async () => {
+    const { win, say, read } = await roomAt(390);
+    try {
+      expect(read(1)).toBe(true);
+      const app = await openAssistant();
+      expect(app.getAttribute("data-aside")).toBe("sheet");
+      await say(2);
+      expect(read(2), "a message drawn under the sheet was counted as seen").toBe(false);
+      await closeAssistant(app);
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
+  });
+
+  // NOT MODAL, AND STILL OVER THE TRANSCRIPT: the overlay leaves the page live
+  // beside it, with no veil and nothing on the layer stack, so only the
+  // frame's own state can say it stands there.
+  test("under the assistant over the page's end edge, the same", async () => {
+    const { win, say, read } = await roomAt(1100);
+    try {
+      const app = await openAssistant();
+      expect(app.getAttribute("data-aside")).toBe("overlay");
+      await say(2);
+      expect(read(2), "a message drawn under the overlay was counted as seen").toBe(false);
+      await closeAssistant(app);
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("beside the assistant's column, a message is read as it arrives", async () => {
+    const { win, say, read } = await roomAt(1440);
+    try {
+      const app = await openAssistant();
+      expect(app.getAttribute("data-aside")).toBe("column");
+      await say(2);
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
+  });
+
+  // A DIALOG STANDS OVER THE PAGE TOO, whatever the assistant is doing: the
+  // frame reads the kit's layer stack, so the palette over a room covers it
+  // as the assistant's sheet does.
+  test("behind the palette, a message is read only once it closes", async () => {
+    const { win, say, read } = await roomAt(1440);
+    try {
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }));
+      });
+      const palette = await screen.findByRole("dialog", { name: "Search" });
+      await say(2);
+      expect(read(2), "a message drawn behind the palette was counted as seen").toBe(false);
+      fireEvent.keyDown(palette.querySelector("input")!, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Search" })).toBeNull());
+      await waitFor(() => expect(read(2)).toBe(true));
+    } finally {
+      win.restore();
+    }
+  });
+
+  test("in a tab in the background, a message is read once the tab is in front again", async () => {
+    const { win, say, read } = await roomAt(1440);
+    const shown = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await say(2);
+      expect(read(2), "a message drawn in a hidden tab was counted as seen").toBe(false);
+      shown.mockReturnValue("visible");
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await waitFor(() => expect(read(2)).toBe(true));
     } finally {
       win.restore();
     }

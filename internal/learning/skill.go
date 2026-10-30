@@ -246,6 +246,53 @@ type Refinement struct {
 	At           time.Time
 }
 
+// SkillOrder is the order one seat's skills are listed in.
+//
+// THE ORDER IS THE STORE'S, and a listing is a page: a screen that read the
+// newest page and sorted it by use answered "the most used of the newest
+// fifty", which reads exactly like the most used. So a caller that wants
+// another order asks for it, and the store orders the whole set before it
+// cuts the page.
+type SkillOrder string
+
+const (
+	// SkillsNewest is the newest drafted first. The zero value reads the
+	// same, because it is what every reader but a screen wants: the
+	// prefetch's offer, the refiner's and the promotion pass's views.
+	SkillsNewest SkillOrder = "newest"
+	// SkillsMostUsed is the most used first, the most recently used
+	// breaking a tie.
+	SkillsMostUsed SkillOrder = "uses"
+	// SkillsUpdated is the most recently changed first.
+	SkillsUpdated SkillOrder = "updated"
+)
+
+// SkillOrders is every order a listing can be asked for, the default first.
+func SkillOrders() []SkillOrder {
+	return []SkillOrder{SkillsNewest, SkillsMostUsed, SkillsUpdated}
+}
+
+// Valid reports whether the order is one a listing is read in; the zero value
+// is, and reads as [SkillsNewest].
+func (o SkillOrder) Valid() bool {
+	return o == "" || o == SkillsNewest || o == SkillsMostUsed || o == SkillsUpdated
+}
+
+// orderBy is the ORDER BY a listing in o reads — every one ending on the id,
+// so two skills that tie are in the same order on every read and a page
+// boundary never moves one between pages. An order this build does not know
+// is refused at the edge ([SkillOrder.Valid]) and reads as the default here.
+func (o SkillOrder) orderBy() string {
+	switch o {
+	case SkillsMostUsed:
+		return " ORDER BY use_count DESC, last_used_at DESC, id DESC"
+	case SkillsUpdated:
+		return " ORDER BY updated_at DESC, id DESC"
+	default:
+		return " ORDER BY created_at DESC, id DESC"
+	}
+}
+
 // ListOptions narrows a skill listing by lifecycle state, and bounds how much
 // of it a listing reads.
 //
@@ -280,6 +327,9 @@ type ListOptions struct {
 	// sequence the seat already holds, or it re-synthesizes a skill sitting
 	// just past the bound.
 	Limit int
+	// Order is the order the listing is read in; the zero value is
+	// [SkillsNewest]. [Skills.Count] ignores it.
+	Order SkillOrder
 }
 
 // filter renders the exclusions as SQL.
@@ -409,14 +459,13 @@ func (s *Skills) ByID(ctx context.Context, id string) (Skill, bool, error) {
 	return s.one(ctx, s.db.SQL(), `WHERE id = ?`, id)
 }
 
-// List returns a seat's skills, newest first, bounded by
-// [ListOptions.Limit].
+// List returns a seat's skills in [ListOptions.Order] — newest first unless
+// asked otherwise — bounded by [ListOptions.Limit].
 func (s *Skills) List(ctx context.Context, handle string, opts ListOptions) ([]Skill, error) {
 	bound, args := opts.limit()
 	rows, err := s.db.SQL().QueryContext(ctx,
 		`SELECT `+skillColumns+` FROM synthesized_skills
-		 WHERE agent_handle = ?`+opts.filter()+`
-		 ORDER BY created_at DESC, id DESC`+bound,
+		 WHERE agent_handle = ?`+opts.filter()+opts.Order.orderBy()+bound,
 		append([]any{handle}, args...)...)
 	if err != nil {
 		return nil, fmt.Errorf("learning: list skills for %s: %w", handle, err)
@@ -424,7 +473,8 @@ func (s *Skills) List(ctx context.Context, handle string, opts ListOptions) ([]S
 	return collectSkills(rows)
 }
 
-// ListFor returns every skill owned by any of the seats, newest first.
+// ListFor returns every skill owned by any of the seats, in
+// [ListOptions.Order] — newest first unless asked otherwise.
 //
 // The cross-agent promotion pass assembles a unit's candidate set with this,
 // so it deliberately spans owners where every other read is single-seat.
@@ -444,8 +494,7 @@ func (s *Skills) ListFor(ctx context.Context, handles []string, opts ListOptions
 	bound, bindings := opts.limit()
 	rows, err := s.db.SQL().QueryContext(ctx,
 		`SELECT `+skillColumns+` FROM synthesized_skills
-		 WHERE agent_handle IN (`+list+`)`+opts.filter()+`
-		 ORDER BY created_at DESC, id DESC`+bound,
+		 WHERE agent_handle IN (`+list+`)`+opts.filter()+opts.Order.orderBy()+bound,
 		append(args, bindings...)...)
 	if err != nil {
 		return nil, fmt.Errorf("learning: list skills for %d seat(s): %w", len(handles), err)

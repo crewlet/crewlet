@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/period"
 	"github.com/crewlet/crewlet/internal/queue"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Company is Tier B — founder-owned, live-editable, versioned in the store.
@@ -67,6 +68,9 @@ type Company struct {
 	// Knowledge is which knowledge base this company runs, and the read
 	// search.
 	Knowledge Knowledge `yaml:"knowledge,omitempty" json:"knowledge"`
+
+	// Chat is which chat surface this company talks on.
+	Chat Chat `yaml:"chat,omitempty" json:"chat,omitempty"`
 
 	// Artifacts is the company's artifacts policy. See [CompanyArtifacts].
 	Artifacts CompanyArtifacts `yaml:"artifacts,omitempty" json:"artifacts,omitzero"`
@@ -281,6 +285,7 @@ func (c *Company) ValidateRunnable() error {
 // file a box it reaches refuses ([Company.validateSetupFileHomes]), an
 // executor box's `optional_keys` entry leaving nothing out
 // ([Company.validateRunOptionalKeys]),
+// two units declaring one channel on Chatlet ([Company.validateUnitRooms]),
 // and the five WHOLE-DOCUMENT rules in [Company.validateFileRules] — an
 // `mcp_env` key naming no server, an `optional_keys` entry leaving nothing
 // out, one http header spelled two ways where nothing says which is sent, two
@@ -301,7 +306,7 @@ func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
 		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
-		c.validateRunOptionalKeys(), c.validateFileRules(), c.validateAssistant(),
+		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateAssistant(),
 		c.validateSeatAccess())
 }
 
@@ -510,7 +515,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			p.add(field("integrations.datadog.route_to"), ErrUnknownValue,
 				"%q is not an agent seat in this company. An alert naming no "+
 					"owner wakes this handle, and one that resolves to nothing "+
-					"— or to a human seat, which is dropped as a self-action — "+
+					"(or to a human seat, which is dropped as a self-action) "+
 					"is coverage that is not there. The agent seats are: %s",
 				fallback, strings.Join(handles, ", "))
 		}
@@ -527,7 +532,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 			p.add(entry(field("skill_variables"), key), ErrConflict,
 				"%s is reserved: the engine sets it from "+
 					"`api.external_url` in the OPERATOR's own Tier A file, "+
-					"which is where this deployment's address belongs — one "+
+					"which is where this deployment's address belongs: one "+
 					"company document then runs at staging's address and at "+
 					"production's without carrying either. Set it there and "+
 					"delete this line",
@@ -567,6 +572,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	p.wrap(c.Scheduling.validate(field("scheduling")))
 	p.wrap(c.Integrations.validate(field("integrations")))
 	p.wrap(c.validateKnowledgeBackend())
+	p.wrap(c.validateChat())
 	p.wrap(c.validateContainerKeys())
 	p.wrap(c.validateProviderKeys())
 	p.wrap(c.validateWorkers())
@@ -610,6 +616,7 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 		p.wrap(c.Units[i].validate(idx(field("units"), i)))
 	}
 	p.wrap(c.Tracker.Worklet.validate(field("tracker.worklet")))
+	p.wrap(c.Chat.Chatlet.validate(field("chat.chatlet")))
 	// A WORKLET BLOCK ON A COMPANY THAT DOES NOT RUN WORKLET describes
 	// nothing, and the failure that produces is silence: an operator sets an
 	// inbox horizon for inbox rows somebody else's tracker will never write.
@@ -620,9 +627,8 @@ func (c *Company) validateRunnable(o *org.Organization) error {
 	// of the intent.
 	if c.Tracker.Worklet != nil && c.TrackerBackendFor() != TrackerWorklet {
 		p.add(field("tracker.worklet"), ErrConflict,
-			"this company's tracker is %q, and `tracker.worklet` is Worklet's "+
-				"policy, so nothing would read it. Remove the block, or run "+
-				"Worklet", c.TrackerBackendFor())
+			"this company's tracker is %q, so nothing reads `tracker.worklet`. "+
+				"Remove the block, or use Worklet", c.TrackerBackendFor())
 	}
 
 	// The hierarchy's own rules (duplicate handles, human seats carrying
@@ -682,8 +688,8 @@ func (c *Company) validateKnowledgeBackend() error {
 	// path so the message names what to delete.
 	if c.Knowledge.Backend == KnowledgeDoclet && c.Integrations.Confluence != nil {
 		p.add(field("knowledge.backend"), ErrConflict,
-			"Doclet and integrations.confluence cannot both run: pages would "+
-				"live in two places and nothing would keep them in step. Remove one")
+			"Doclet and integrations.confluence can't both run, because "+
+				"pages would be split between them. Remove one")
 	}
 	if c.Knowledge.Backend == KnowledgeConfluence && c.Integrations.Confluence == nil {
 		p.add(field("knowledge.backend"), ErrConflict,
@@ -691,9 +697,8 @@ func (c *Company) validateKnowledgeBackend() error {
 	}
 	if c.Tracker.Backend == TrackerWorklet && c.Integrations.Jira != nil {
 		p.add(field("tracker.backend"), ErrConflict,
-			"Worklet and integrations.jira cannot both run: work would be filed "+
-				"in two places and a unit's project key would name two trackers. "+
-				"Remove one")
+			"Worklet and integrations.jira can't both run, because work "+
+				"would be split between them. Remove one")
 	}
 	if c.Tracker.Backend == TrackerJira && c.Integrations.Jira == nil {
 		p.add(field("tracker.backend"), ErrConflict,
@@ -714,14 +719,12 @@ func (c *Company) validateKnowledgeBackend() error {
 		if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors &&
 			c.TrackerBackendFor() != TrackerWorklet {
 			p.add(field("knowledge.vectors"), ErrConflict,
-				"vectors need a knowledge backend or Worklet; with neither "+
-					"there is no corpus to embed")
+				"vectors need a knowledge backend or Worklet to search")
 		}
 	}
 	if c.Knowledge.Vectors != nil && *c.Knowledge.Vectors && c.Providers.Embeddings == nil {
 		p.add(field("knowledge.vectors"), ErrConflict,
-			"vector recall needs providers.embeddings — there is nothing to "+
-				"compute an embedding with")
+			"vectors need providers.embeddings to compute embeddings with")
 	}
 	return p.err()
 }
@@ -892,9 +895,10 @@ func (t *WorkletConfig) validate(path Path) error {
 	}
 	if d := t.InboxRetentionDays; d != 0 && (d < MinInboxRetentionDays || d > MaxInboxRetentionDays) {
 		p.add(at(path, "inbox_retention_days"), ErrOutOfRange,
-			"%d is outside %d..%d — below a month an inbox stops being one, and "+
-				"past ten years it is a second copy of the history it points at",
-			d, MinInboxRetentionDays, MaxInboxRetentionDays)
+			"%d is outside %d..%d. Under a month, notices are gone before "+
+				"people see them, and past ten years they only repeat the "+
+				"history they point at", d, MinInboxRetentionDays,
+			MaxInboxRetentionDays)
 	}
 	return p.err()
 }
@@ -1066,11 +1070,11 @@ func (c *Company) validateProviderKeys() error {
 		for _, key := range ref.Chain {
 			if _, ok := c.Providers.LLM[key]; !ok {
 				p.add(ref.Segments, ErrUnknownValue,
-					"%q is not a configured provider: providers.llm has %s. "+
+					"%q is not a configured provider. Use one of providers.llm's: %s. "+
 						"A key that misses is not an error at run time: the seat "+
 						"falls back to another model and bills against it, so this "+
 						"is the only place the typo can be seen",
-					key, strings.Join(known, ", "))
+					key, words.Or(known))
 			}
 		}
 	}
@@ -1116,14 +1120,18 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 	if c == nil {
 		return false
 	}
+	// A CHAT VENDOR IS DECLARED WHERE [chatVendors] SAYS, which is the one
+	// statement of it the chat backend is derived from too: Slack counts on
+	// a seat's own app as well as on the org block.
+	if vendor, ok := chatVendorNamed(surface); ok {
+		return vendor.declaredAt(c) != ""
+	}
 	in := c.Integrations
 	switch surface {
 	case "jira":
 		return in.Jira != nil
 	case "confluence":
 		return in.Confluence != nil
-	case "mattermost":
-		return in.Mattermost != nil
 	case "github":
 		return in.GitHub != nil
 	case "gitlab":
@@ -1132,16 +1140,6 @@ func (c *Company) DeclaresIntegration(surface string) bool {
 		return in.Datadog != nil
 	case "atlassian":
 		return in.Atlassian != nil
-	case "slack":
-		if in.Slack != nil {
-			return true
-		}
-		for role := range c.EachRole() {
-			if role.Integrations.Slack != nil {
-				return true
-			}
-		}
-		return false
 	default:
 		// A SURFACE THIS BUILD DOES NOT KNOW, which on a rolling upgrade is
 		// a peer's. True rather than false, because the only caller deletes
@@ -1419,7 +1417,7 @@ func (c *Company) validateExecutors() error {
 					"opencode (and keep these entries for the reviewer, workers and "+
 					"side passes with llm_review, llm_subagent, llm_auxiliary or "+
 					"llm_judge), or move one of them to claude-code or opencode",
-				c.describeChain(seat.chain), names(CodingAgents))
+				c.describeChain(seat.chain), words.And(CodingAgents))
 			continue
 		}
 		if seat.named {
@@ -1460,7 +1458,7 @@ func (c *Company) validateExecutors() error {
 				"coding CLI's own run, which only %s have. %s. Move this entry to "+
 				"claude-code or opencode, or point those seats' `llm` at an entry "+
 				"that drives one",
-			which, entry.AgentName(), names(CodingAgents), seats)
+			which, entry.AgentName(), words.And(CodingAgents), seats)
 	}
 	return p.err()
 }
@@ -1494,7 +1492,7 @@ func (c *Company) executorWarnings() []Warning {
 			"so a launch skips it and runs on %s alone. That is fine if it is there "+
 			"for the reviewer, workers and side passes, which fall back to `llm`; "+
 			"otherwise take it out",
-			handle, c.describeChain(skipped), names(CodingAgents), c.describeChain(runners)))
+			handle, c.describeChain(skipped), words.And(CodingAgents), c.describeChain(runners)))
 		w.Seat = handle
 		out = append(out, w)
 	}
@@ -1547,7 +1545,7 @@ func (c *Company) validateSandboxPlacement() error {
 			p.add(field("providers.sandbox"), ErrMissing,
 				"every agent seat's executor runs as its coding CLI's own run, in a "+
 					"box this block configures, and this company configures none: %s. "+
-					"Add providers.sandbox — `local: {}` with `default_run_in: direct` "+
+					"Add providers.sandbox: `local: {}` with `default_run_in: direct` "+
 					"runs it on this host as the engine's user, `e2b:` in a remote box",
 				seats)
 		}
@@ -1578,14 +1576,14 @@ func (c *Company) validateSandboxPlacement() error {
 				"a seat's executor launches on this entry, in a box, and the "+
 					"catalogue offers more than one place to run one (%s), so this "+
 					"entry has to name one: or providers.sandbox.default_run_in has to",
-				names(catalogue.available()))
+				words.And(catalogue.available()))
 		case !slices.Contains(Placements, run):
 			// Spelling is the entry's own rule; it already reported.
 		case !catalogue.Configured(run):
 			p.add(where, ErrConflict,
 				"%q needs the %s backend configured under providers.sandbox "+
 					"(this catalogue has %s)",
-				run, run.backend(), names(catalogue.available()))
+				run, run.backend(), words.And(catalogue.available()))
 		}
 	}
 
@@ -1608,7 +1606,7 @@ func (c *Company) validateSandboxPlacement() error {
 				"and nothing names one, so no backend is built and a seat added later "+
 				"has nowhere to run. Name the default, or remove the block while no "+
 				"agent seat runs on a model",
-			names(catalogue.available()))
+			words.And(catalogue.available()))
 	}
 	if local := catalogue.localBlock(); local != nil {
 		// THE IMAGE IS ONLY NEEDED WHERE A CONTAINER IS ACTUALLY RUN, and

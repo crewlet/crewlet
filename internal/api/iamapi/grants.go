@@ -3,11 +3,10 @@ package iamapi
 import (
 	"net/http"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // requireGrants answers whether a create or an invitation STATED what it
@@ -38,9 +37,9 @@ import (
 func requireGrants(w http.ResponseWriter, grants *[]iam.Grant, what string) bool {
 	if grants == nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"field": "grants", "detail": "Send `grants` " +
-				"with " + what + ": any of " + grantSet() + ", or [] for " +
-				"overview only."})
+			map[string]string{"field": "grants", "detail": "Send `grants` with " +
+				what + ": the permissions it gives, from " + words.And(iam.AllGrants) +
+				", or [] for the overview only."})
 		return false
 	}
 	return refuseUnknown(w, "grants", *grants, nil)
@@ -68,19 +67,7 @@ func refuseUnknown(w http.ResponseWriter, field string, added,
 }
 
 // unknownGrant is the refusal of a permission this build does not know,
-// naming the set it does.
-func unknownGrant(g iam.Grant) string {
-	return strconv.Quote(string(g)) + " isn't a permission. Use one of " +
-		grantSet() + "."
-}
-
-// grantSet is every permission this build knows, as a sentence names them —
-// read off [iam.AllGrants], so a permission added to the vocabulary is named
-// by every refusal here without anybody remembering to.
-func grantSet() string {
-	names := make([]string, len(iam.AllGrants))
-	for i, g := range iam.AllGrants {
-		names[i] = string(g)
-	}
-	return strings.Join(names, ", ")
-}
+// naming the set it does, in the words every surface refusing one uses
+// ([iam.NotAGrant]): this route answers before the identity record would, so
+// a sentence of its own here was the only one /iam ever told.
+func unknownGrant(g iam.Grant) string { return iam.NotAGrant(g) + "." }

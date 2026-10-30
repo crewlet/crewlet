@@ -589,6 +589,9 @@ type sessionEstate struct {
 	epochs   map[string]uint64
 	bindings map[string]session.PersonRow
 	closed   []closed
+
+	// openErr, set, is what every session start answers.
+	openErr error
 }
 
 type sessionRow struct {
@@ -642,6 +645,9 @@ func (e *sessionEstate) OpenSession(_ context.Context, in iamdomain.SessionStart
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.openErr != nil {
+		return iamdomain.SessionOpened{}, e.openErr
+	}
 	e.seq++
 	epoch := e.epochs[in.Person]
 	e.sessions[in.Lineage] = sessionRow{person: in.Person, epoch: epoch}

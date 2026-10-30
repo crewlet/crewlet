@@ -307,7 +307,7 @@ func (s *CoordStore) FileNote(ctx context.Context, turnID string, filing NoteFil
 		filed NoteFiled
 		read  PendingRun
 	)
-	run, won, found, err := s.writeFound(ctx, turnID, true, func(run *PendingRun) bool {
+	run, won, found, err := s.writeFound(ctx, turnID, true, Fence{}, func(run *PendingRun) bool {
 		read = *run
 		notes := run.Steer.Notes
 		waiting := 0

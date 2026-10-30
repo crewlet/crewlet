@@ -136,7 +136,7 @@ func (s *Service) Session(w http.ResponseWriter, r *http.Request) {
 		// discards the cookie, so answering it during an identity
 		// outage signs the whole company out and sends everybody back
 		// to the sign-in form at once.
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
+		auth.UnavailableIdentity(w, iam.Reason(r.Context()))
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -512,7 +512,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 	switch resolution {
 	case iam.Resolved:
 	case iam.Unknown:
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(iam.Reason(r.Context())))
+		auth.UnavailableIdentity(w, iam.Reason(r.Context()))
 		return
 	default:
 		httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
@@ -526,7 +526,7 @@ func (s *Service) LogoutOne(w http.ResponseWriter, r *http.Request) {
 
 	owner, live, err := s.directory.SessionStanding(r.Context(), lineage, s.now())
 	if err != nil {
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return
 	}
 	if owner == "" {

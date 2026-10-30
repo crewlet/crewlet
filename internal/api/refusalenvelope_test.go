@@ -181,3 +181,135 @@ func isSelector(expr ast.Expr, pkg, name string) bool {
 	ident, ok := sel.X.(*ast.Ident)
 	return ok && ident.Name == pkg
 }
+
+// A REFUSAL ON AUTHORITY IS WRITTEN BY THE ONE MAPPING.
+//
+// The authority table answers every refusal it makes through ONE function —
+// authz.RefusalFields, which [authz.EnvelopeRefusal] and every surface that
+// adds fields of its own call — and that function is what chooses between
+// `unauthorized`, `step_up_required` and `token_refused`. A surface that spells
+// one of those codes for itself agrees with the mapping only until the mapping
+// answers its refusal another way, and then answers it wrongly without a test
+// noticing: the overview's mirrors, the socket's handshake and its query and
+// watch frames, the query surface's REST answer and the sign-in surface's
+// step-up each wrote `unauthorized` or `step_up_required` themselves, and two
+// of them were already wrong — a machine token was told to step up. So no
+// non-test file under internal/api hands one of the three codes to a call,
+// assigns it, or returns it; the readers — a list of the codes a transport can
+// answer, a comparison against one — are left alone. The socket's own
+// vocabulary spells `unauthorized` as an untyped constant of its own, so in
+// internal/api/stream that constant may be named only where it is declared and
+// in RefusedFor, the one place the mapping's code meets the vocabulary.
+//
+// Mutation: answer serveFrom's stage refusal with httpjson.CodeUnauthorized
+// again and this goes red naming rest.go; reply a query refusal
+// queryError(req, CodeUnauthorized) in the socket and it names socket.go.
+func TestARefusalOnAuthorityIsWrittenByTheOneMapping(t *testing.T) {
+	t.Parallel()
+	const httpjsonPath = "github.com/crewlet/crewlet/internal/api/httpjson"
+	codes := map[string]bool{"CodeUnauthorized": true, "CodeStepUpRequired": true,
+		"CodeTokenRefused": true}
+	walked := 0
+	err := sourcetree.Walk(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		walked++
+		// HOW THIS FILE NAMES ONE OF THE THREE: through the import, under
+		// whatever name it gives the package, or bare inside httpjson.
+		as := ""
+		for _, spec := range file.Imports {
+			if imported, _ := strconv.Unquote(spec.Path.Value); imported == httpjsonPath {
+				as = "httpjson"
+				if spec.Name != nil {
+					as = spec.Name.Name
+				}
+			}
+		}
+		spells := func(expr ast.Expr) bool {
+			switch e := ast.Unparen(expr).(type) {
+			case *ast.SelectorExpr:
+				pkg, ok := e.X.(*ast.Ident)
+				return ok && as != "" && pkg.Name == as && codes[e.Sel.Name]
+			case *ast.Ident:
+				return file.Name.Name == "httpjson" && codes[e.Name]
+			}
+			return false
+		}
+		refuse := func(n ast.Node, how string) {
+			t.Errorf("%s: %s one of the codes a refusal on authority is "+
+				"answered with — answer the decision through "+
+				"authz.RefusalFields or authz.EnvelopeRefusal",
+				fset.Position(n.Pos()), how)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.CallExpr:
+				for _, arg := range node.Args {
+					if spells(arg) {
+						refuse(arg, "hands a call")
+					}
+				}
+			case *ast.AssignStmt:
+				for _, rhs := range node.Rhs {
+					if spells(rhs) {
+						refuse(rhs, "assigns")
+					}
+				}
+			case *ast.ValueSpec:
+				for _, value := range node.Values {
+					if spells(value) {
+						refuse(value, "declares")
+					}
+				}
+			case *ast.ReturnStmt:
+				for _, result := range node.Results {
+					if spells(result) {
+						refuse(result, "returns")
+					}
+				}
+			}
+			return true
+		})
+		if file.Name.Name == "stream" {
+			for _, decl := range file.Decls {
+				if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.CONST {
+					continue
+				}
+				if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil &&
+					fn.Name.Name == "RefusedFor" {
+					continue
+				}
+				ast.Inspect(decl, func(n ast.Node) bool {
+					if id, ok := n.(*ast.Ident); ok && id.Name == "CodeUnauthorized" {
+						t.Errorf("%s: the socket's own `unauthorized` named outside "+
+							"its declaration and RefusedFor — answer the decision "+
+							"through stream.RefusedFor", fset.Position(id.Pos()))
+					}
+					return true
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/api: %v", err)
+	}
+	if walked < 50 {
+		t.Fatalf("walked %d source files, which is not internal/api", walked)
+	}
+}

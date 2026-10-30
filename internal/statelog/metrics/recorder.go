@@ -13,7 +13,8 @@ import (
 //
 // TWENTY-ONE POWER-OF-TWO BUCKETS from 64 µs to 64 s, which resolves a
 // percentile to within a factor of two at every scale this engine measures —
-// from a 40 µs index probe to a 16 s bulk apply. Fixed rather than
+// from a 40 µs index probe to a record applied tens of seconds after its
+// commit behind a catch-up. Fixed rather than
 // configurable: a boundary set that differs between nodes cannot be merged,
 // and merging across a fleet is most of what these are for.
 //
@@ -193,17 +194,6 @@ func (r *Recorder) AddAt(name string, n uint64, at time.Time, attrs Attrs) {
 	s := r.seriesFor(inst, attrs)
 	s.total += n
 	r.window.AddAt(seriesKey(inst.Name, inst.Attributes, attrs), n, at)
-}
-
-// AddValue increments a counter by a fractional amount.
-//
-// A COUNTER NEED NOT COUNT EVENTS. Some of what is summed here is a duration
-// or a projection — seconds of applier occupancy a bulk edit imposes, where
-// one call's contribution is a few hundredths — and rounding each to a whole
-// number sums a company's whole day to zero, which is the one answer that
-// looks like a healthy fleet.
-func (r *Recorder) AddValue(name string, v float64, attrs Attrs) {
-	r.record(name, KindCounter, v, attrs)
 }
 
 // Set writes a gauge.

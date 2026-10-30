@@ -15,9 +15,9 @@ and a unit of the org chart that owns it. Every task filed into it gets a key
 of the form `ENG-412`, minted from the project's own counter.
 
 **Projects come from the org chart.** Declaring a unit with a project key in
-the company config creates the project on the next apply, on every node, with
-no gesture from anybody. That is what lets a fresh company file its first task
-in its first minute.
+the company config creates the project on the next apply, on every data node,
+with no gesture from anybody. That is what lets a fresh company file its first
+task in its first minute.
 
 A project's name, purpose and unit follow the configuration that was
 **activated last**, whichever node applies what when: each project is stamped
@@ -303,7 +303,7 @@ answer is that there is no such work.
 | **reporter** | who filed it. |
 | **unit** | the team the work belongs to, and the team it routes to — see [Which team an item belongs to](#which-team-an-item-belongs-to). |
 | **collaborators**, **watchers** | who is on the thread and who is listening. |
-| **parent**, **subtasks** | a tree, with a depth cap, inside ONE project: a subtask is filed in its parent's project, and a create or a re-parent that would put it anywhere else is refused, because a board draws a project's roots with their subtrees and a subtask filed elsewhere would be on neither board. A parent in the trash takes no new subtask, a purged one is refused as gone for good, and a task is never filed under itself or one of its own subtasks, which would make a cycle with no root to draw it from. A query filters ROOTS by default and lets their subtrees ride along; `subtasks=separate` filters every task on its own. |
+| **parent**, **subtasks** | a tree, with a depth cap, inside ONE project: a subtask is filed in its parent's project, and a create or a re-parent that would put it anywhere else is refused, because a board draws a project's roots with their subtrees and a subtask filed elsewhere would be on neither board. A parent in the trash takes no new subtask, a purged one is refused as gone for good, and a task is never filed under itself or one of its own subtasks, which would make a cycle with no root to draw it from. Two re-parents made at the same moment on two nodes can still close a loop neither saw; it is applied rather than refused, flagged `cycle` (`flag=cycle` lists it), and a gesture on one of its tasks' subtrees — a move, a removal, a restore — takes the loop's other tasks and everything hanging from them, each once. A query filters ROOTS by default and lets their subtrees ride along; `subtasks=separate` filters every task on its own. In the trash the unit is the removal rather than the tree — see [Views](#views) — and a task whose root, or in the trash whose removal, is on the other side of the trash is filtered on its own as the root of what is left. Rolled up, the question is asked of each row's root by the root's key, so a page or a count costs the rows it reads rather than every task in the company or the project. Asking about the tree — `parent` for one item's subtasks, `has_children` for the items that have some — reads it through an index of the tree, so it costs those subtasks rather than the project's board or the company's tasks. |
 | **start / due**, **estimate**, **points** | scheduling and sizing. |
 | **tags** | from a per-project tag set — see [Tags](#tags). A tag the project has not declared is REFUSED at the write. |
 | **custom fields** | declared per project and at the workspace, typed, with option lists — see [the catalogue](#the-catalogue). Filter on one with `f.<slug>`, and see [the operators](#filtering-a-custom-field). |
@@ -382,9 +382,9 @@ of the next data node after one did not answer is still counted once.
 **Removed versus purged.** A task in the trash is still charged: removing a
 task hides it and destroys nothing, and the work was done on it. A **purged**
 task is not — the charge is refused, and a charge that was already on its way
-when the purge landed is dropped on every node rather than stopping them. The
-tokens are still on the seat's own counters and in the spend history; only the
-task's share is gone, with the task.
+when the purge landed is dropped on every data node rather than stopping them.
+The tokens are still on the seat's own counters and in the spend history; only
+the task's share is gone, with the task.
 
 **A task lists its own turns.** Every charged segment is a row the task keeps
 for good — in the replicated estate, beside the counters it added to — so the
@@ -489,7 +489,12 @@ catalogue tools take them:
 
 Beside them on the declaration itself, `applies_to` names the **type slugs**
 that carry the field; empty means every type. A task of a type a field does not
-apply to cannot hold a value for it, and cannot be required to.
+apply to cannot hold a value for it, and cannot be required to. Changing
+`applies_to`, or archiving the field, settles the values tasks already hold —
+out of every filter, total and board where the field no longer applies, back in
+where it does — and that reads only what can move: a field restricted to some
+types re-reads its own values, an archived or unrestricted one only those still
+on the side it moves them from, and never the values of any other field.
 
 **A field records who declared it.** `created_by` and `created_at` are the
 *write's*, never the document's — the same two columns a tag carries — so a
@@ -526,7 +531,7 @@ refused naming the rule. The check is at the write because that is where it can
 be refused: by the time a record is applied the value is durable, and the
 applier deliberately salvages — a value it cannot decode writes no row and the
 change carries on, because refusing it would let one malformed field stop that
-task's every later edit on every node.
+task's every later edit on every data node.
 
 | Type | Accepts | Refuses |
 |---|---|---|
@@ -595,8 +600,14 @@ declared by a person would be a company whose tags were never declared.
 A tag has a **slug** and a **label**. The slug is what every task's row holds
 and what a filter compares, so it is normalised on the way in — `Regression`,
 `regression` and `needs design` arrive as `regression` and `needs-design` — and
-it never changes. The label is what a person reads, and renaming a tag moves
-only that.
+it never changes. A filter normalises what it is given the same way, so
+`tag=Needs Design` finds the work filed under `needs-design`, and a value that
+normalises to no slug at all is refused naming it rather than answered as an
+empty board. A filter on tags (`any:` or `all:`) reads the work that carries
+them — inside a project, that project's — rather than every task in scope, so
+a rare tag is as cheap to ask about at the workspace as on one board; `none:`,
+a question about tags a task does *not* carry, reads each task's own. The label
+is what a person reads, and renaming a tag moves only that.
 
 **A tag is declared before it is used.** A write naming a label the project does
 not have is refused, listing the ones it does and the nearest match, because
@@ -731,8 +742,12 @@ question it asks:
   the order counts **cards** and a task is placed at the first column it is
   on. A task the answer does not hold — filtered out, finished, or in a column
   the board did not draw — is `around: null`, never a refusal, and `position`
-  is null past the 10 000 the total stops counting at. A saved view cannot
-  carry `around`: which task somebody is standing on is theirs.
+  is null past the 10 000 the total stops counting at. Both neighbours are
+  found by seeking the order outwards from the task — through the order's
+  index wherever one serves it — so stepping through a long board reads the
+  cards beside the one open rather than the board, and the position counts
+  the rows ahead of it the same way. A saved view cannot carry `around`:
+  which task somebody is standing on is theirs.
 - **`fields=tags,dependents_count,open_asks,spend`** puts facts a board CARD
   draws on each row, and only on an answer that asked: its labels; how many
   live tasks wait on it (the authored `waiting_on` edges `blocking=` reads);
@@ -749,6 +764,19 @@ the tasks on somebody's list in the order they arranged, and a page smaller
 than the list now carries on in that order: the whole list (at most 32 tasks)
 is read on every page and the cursor is a place in it.
 
+**Every other answer resumes where its last page stopped.** `next_cursor`,
+handed back as `cursor=`, names the last row's place in the order, and the next
+page is read from that place onwards: the tasks tied with that row on every
+sort column and later by id, then those tied on all but the last column, and
+so on out to the tasks past it on the first — each read as a seek of the index
+the order is served by. So page fifty of a board, of the workspace, of a
+project by its last update, of the company by spend or of the trash costs what
+page one does, and paging through a tie — every task at zero spend, or updated
+in the same instant — returns each task once, in the order one read draws. An
+order no index serves reads its scope for every page, as its first page does.
+A cursor belongs to the order that minted it, and re-sorting starts again from
+the first page.
+
 ### What a board groups on
 
 Any of these, as `group_by=` — and a second one as `group_by2=`, which splits
@@ -756,7 +784,7 @@ each column into swimlanes:
 
 | Axis | Columns |
 |---|---|
-| `status` · `status_group` · `priority` | The closed sets, in the order they mean rather than by size |
+| `status` · `status_group` · `priority` | The closed sets, in the order they mean rather than by size — as columns and as swimlanes |
 | `assignee` · `type` · `tag` · `project` · `unit` · `routing_unit` · `parent` | A column per distinct value, biggest first |
 | `f.<slug>` | A custom field's own values |
 | `due:day` · `due:week` · `start:week` | The calendar day or week a date falls in, headed `2031-04-16` or `2031-W16` |
@@ -875,8 +903,18 @@ without it the one tab whose job is "what did my assistant delete" would hide
 every deletion of anything already done. It is ordered by **when work was
 removed**, newest first, and `sort=removed` asks for the other end of it — a
 removed task's rank is its position on a board it has left, so ordering the
-trash by rank orders it by a stale number. What a removal, a deletion and a
-purge each mean is [below](#removing-deleting-and-purging).
+trash by rank orders it by a stale number. Every read of it — the page, the
+count beside it, its totals, a board drawn over it — goes through an index that
+holds only removed work, one for the whole workspace and one inside each
+project, so opening the trash costs what is in it rather than what the company
+holds, and a column you sort it by sorts the trash alone. In the default
+subtask mode it lists each **removal** under the task the removal was made on,
+with what went with it riding along — what a restore of that task brings back —
+so a subtask removed on its own is a removal of its own and is listed as one,
+whatever became of its parent, and a task whose removal has been restored
+without it is listed on its own too; `subtasks=separate` lists every removed
+task on its own row. What a removal, a deletion and a purge each mean is
+[below](#removing-deleting-and-purging).
 
 **A view is a set of defaults, never a lock.** Opening one loads its
 parameters and every key you then set overrides them, so picking a different
@@ -932,6 +970,12 @@ comma-separated list (`any:api,ui`) and `range` takes both ends
 own text begins `<scheme>://` is a value rather than an operator call, so a
 `url` field can be filtered by what it holds.
 
+A filter finds the tasks holding a value from that field's own values, so a
+rare value is cheap to ask about anywhere. **Sorting, grouping or totalling by
+a field** is the other question — what the tasks being listed hold — and reads
+each listed task's own value, so it costs the board or the list in front of
+you rather than every value the company has ever set on that field.
+
 **A saved view's query is parsed when it is saved**, not when it is opened. A
 view that cannot be run is otherwise discovered by whoever opens it, weeks
 later, with no way to tell a typo from a grammar change — so a save runs the
@@ -977,6 +1021,11 @@ may keep a personal view could name a project's shared tab, or a colleague's
 personal view, and overwrite it with their own. The write then refuses, as a
 conflict to re-read on, a save whose stored view moved or changed hands after
 that decision was taken.
+
+**An `id` names a view that exists** — one `list_work_views` lists, or that a
+save answered — and a save naming an id no view holds is refused `not_found`
+rather than creating a view under whatever was typed. A new view is saved with
+no `id`: its id is minted from the call and answered back.
 
 `default: true` takes the container's landing tab from whichever view held it,
 which is why a shared view is its container's decision rather than whoever
@@ -1068,6 +1117,33 @@ over the project's [files](#a-projects-files):
 | `write_project_file` | put a file at a path — created, or its content replaced — with `if_version` to refuse the write if somebody changed it since you read it |
 | `remove_project_file` | take a file out of a project; its content is deleted from storage |
 
+### Whose words a read hands over
+
+Most of what these tools answer was written by somebody other than the seat
+reading it, and every read labels it so (see [Text somebody else
+wrote](../concepts/agent-runtime.md#text-somebody-else-wrote)):
+
+- **A change's text** — a feed row's in `task_activity`, a history entry's in
+  `get_work_item`, a notice's in `work_inbox` — is the comment, the description
+  or the note (a hand-off's reason, a purge's line) the change carried, and is
+  fenced under **whoever made the change**, as `work_comment`,
+  `work_description` or `change_note` by the change's kind. A line summing up an
+  answer that chose an option quotes the asker's option too, so it is never the
+  answerer's own words alone.
+- **An ask** in `my_work` is fenced under the person who asked it, and its
+  decision is theirs; **a description and a comment** in `get_work_item` under
+  who wrote them.
+- **A name** — a task's title, a project's name and purpose, a view's name and
+  saved filter, a file's path, a checklist line, what a change moved — is
+  somebody's words too, and no row records who wrote it (a title may have been
+  edited by anybody since it was filed). It is defused in place rather than
+  fenced, and the answer's `provenance` envelope reads it as a colleague's with
+  nobody named. So a task the seat filed and commented on alone is never
+  labelled wholly its own: its title may not be.
+
+The catalogue (`get_work_catalogue`) is the company's own configuration, which
+only an administrator writes, and is defused but not labelled as anybody's.
+
 ### When a task is due and how big it is
 
 Both write tools take four scheduling arguments, and every one of them is the
@@ -1158,7 +1234,7 @@ commit may move several of these, and the row names each one it moved:
 
 Three things the values are deliberately not. They are the **stored** form — a
 status slug, a whole timestamp, an item's id — rather than what a screen shows,
-because the same row is written identically by every node in a fleet and a
+because the same row is written identically by every data node in a fleet and a
 rendering would depend on the reader's time zone and on the company's current
 vocabulary; the dashboard resolves them. Nothing is **cut**: a row is a line in
 a log rather than a copy of the object, so a set records only what joined and
@@ -1192,7 +1268,8 @@ nothing else — "The status changed by ana." — and the seat had to read the
 task to learn what the status now was, which still left the value it moved
 **from** unrecoverable, because that side is nowhere on the task. A comment is
 the exception: its body is the comment, and the opener has already quoted it —
-**whole**. The card a change leaves in an inbox carries a 600-byte excerpt,
+**whole**, to every seat the comment reached, whether it named them, asked
+them, answered them or simply landed on a task they hold, filed or watch. The card a change leaves in an inbox carries a 600-byte excerpt,
 marked where it was cut, because an inbox is a list read to choose what to
 open; the wake is the one message a seat acts on, so it is given the comment
 (or a new task's description) whole from the change record itself, and never
@@ -1284,7 +1361,10 @@ leaves no trace: the board simply has one fewer item on it. Removing an item
 with `subtree: true` takes its children with it, and each child's tombstone
 names the removal that took it — so restoring the parent brings back exactly
 what that gesture removed, and never a child that was already in the trash for
-its own reasons.
+its own reasons. Removing an item **alone** — all its reporter may do — leaves
+its children where they are: each stays on every list and board it is on,
+standing as the root of what is left and filtered on its own, until its parent
+comes back.
 
 Both are one commit per item, parent first, so a subtree gesture can stop part
 of the way through — a step whose outcome is unknown, or the stream refusing an
@@ -1299,15 +1379,16 @@ second restore brings back whatever is still in the trash with a parent that
 is already back. A restore of an item that is not in the trash and has nothing
 in the trash with it says there is nothing to restore.
 
-Neither is `purge`, which destroys every row on every node and has no inverse.
-That one is `crewlet worklet purge`, with a typed confirmation and a required
-reason, and it is deliberately not a tool at all.
+Neither is `purge`, which destroys every row on every data node and has no
+inverse. That one is `crewlet worklet purge`, with a typed confirmation and a
+required reason, and it is deliberately not a tool at all.
 
-Five of those count as a **delivery**: create, update, comment, merge and move. A turn
-woken by an assignment answers by moving the task, commenting on it, or filing
-the follow-up — and the delivery gate knows that, so such a turn is not
-corrected and looped for "having done nothing". Reading is not delivering,
-which is exactly the turn the gate exists to catch.
+Five of those count as a **delivery**: create, update, comment, merge and
+move. A turn woken by an assignment answers by moving the task, commenting on
+it, filing the follow-up, or merging it into the item it duplicates — and the
+delivery gate knows that, so such a turn is not corrected and looped for
+"having done nothing". Reading is not delivering, which is exactly the turn the
+gate exists to catch.
 
 Seat tools read at the **`linearizable`** level: a seat that files a task and
 then lists its project sees the task it just filed, because every read
@@ -1611,11 +1692,14 @@ no seat reaches those only through `admin`.
 
 **An argument a tool does not take is refused, naming it** — on this surface,
 in a seat's turn and on the HTTP routes alike, because the refusal is the
-tools' own rather than any one surface's. A tool reads what its schema
-declares and nothing else, so an argument it does not declare used to be
-dropped: an assistant still sending `save_work_view`'s retired `owner` had a
-personal view saved as a shared tab under an answer saying it had worked, and
-a model that misspelt an argument was never told which one.
+tools' own rather than any one surface's. One sent as `null` is read as one
+nobody sent, and is not refused (see
+[how a call is read](tools-and-mcp.md#a-call-is-held-to-the-schema-its-tool-advertises)).
+A tool reads what its schema declares and nothing else, so an argument it does
+not declare used to be dropped: an assistant still sending `save_work_view`'s
+retired `owner` had a personal view saved as a shared tab under an answer
+saying it had worked, and a model that misspelt an argument was never told
+which one.
 
 A credential the identity directory **binds** to a human seat acts as that
 seat everywhere a tool asks about the caller: who wrote, which project a
@@ -1698,7 +1782,9 @@ the caller, and admits only that answer, which Worklet's writer checks
 again is theirs; a plain comment, a new ask and a decision of their own stay
 Worklet's, and a task that does not exist is refused exactly as one they
 were not asked on is. Once they have answered, the task is Worklet's
-again. Your own asks are always listed among your decisions, with or without
+again, except to send that same answer once more: the call made again after
+it landed is admitted and answered from the answer that landed, and writes
+nothing. Your own asks are always listed among your decisions, with or without
 the app.
 
 **A node that cannot read its chart does not say no.** Every relation above is
@@ -1812,6 +1898,20 @@ than only in the read before it, so of two answers sent at once exactly one
 lands; the other is refused rather than posted beside it claiming to answer a
 question it did not close.
 
+Its author may correct a question's wording afterwards
+(`PATCH /worklet/items/{key}/comments/{cid}`), and that changes its words and
+nothing else: an answered question stays answered and nobody is asked it
+again, and the person it asks, the answer it closed and the decision it carries
+stay what its post made them. A remark is posted once: a re-run of the call
+that posted it finds it on the thread and changes nothing — not its words, not
+its answer, not who follows the item — whatever has happened to it since, the
+item having been trashed included. And it is answered as that remark: the
+question it answered, with its choice, is the one its post closed, never one
+asked since, and a remark that answered nothing still answers nothing — so an
+answer sent again after it landed (a retry, or an approval retried once its
+outcome was unknown) is neither refused for a question it closed itself nor
+told it closed another.
+
 `my_work` reads both sides: `asked_of_me` is the questions waiting on this
 seat, and the `has_open_asks` filter finds the items carrying any. The board
 asks the other two ways round: `asked_of=` is whose answer an item's open ask
@@ -1835,7 +1935,7 @@ may say why in its body.
 | `rationale` | optional, at most 1,500 bytes |
 | `evidence` | at most 8, each `{kind, ref, label?}`: `task` (by key or id, stored as the task's id, since a key moves; the Inbox shows its current key before its label, so a label that starts with one of the task's keys is stored without it), `page` (by id or `CONTAINER/Title`; it must exist and not be in the trash, and is stored as its id, since a rename moves the title; a company not on Doclet cites a page as a `url`), `turn`, `run`, or `url` (an absolute `https://` address) |
 | `role` | `approver` — the answer **is** the decision — or `contributor` — it is an input to one somebody else makes |
-| `inform` | optional `{surface, channel}`: the chat channel the asker will report the outcome in, and a promise the engine keeps (see below). Only an **agent seat** may ask with one — a person has no turn to hold to it, so it is refused `forbidden` for an operator and `invalid` at the tracker for any author that is not an agent. `surface` is `mattermost` or `slack`, and must be one the company runs **and** the asking seat holds a bot on; `channel` must be one a unit in the org chart declares (`units[].channel`). A leading `#` is accepted and the chart's own spelling is stored |
+| `inform` | optional `{surface, channel}`: the chat channel the asker will report the outcome in, and a promise the engine keeps (see below). Only an **agent seat** may ask with one — a person has no turn to hold to it, so it is refused `forbidden` for an operator and `invalid` at the tracker for any author that is not an agent. `surface` is `mattermost`, `slack` or `chat` (the engine's own), and must be one the company runs **and** the asking seat can post on — a bot it holds on a vendor surface, or the seat itself on `chat`; `channel` must be one a unit in the org chart declares (`units[].channel`). A leading `#` is accepted and the chart's own spelling is stored |
 
 What the engine enforces is deliberately small: that a decision is well formed,
 that it rides only the comment that **asks** (a remark cannot carry one, and it
@@ -1875,8 +1975,8 @@ question, the option chosen by its label, and — when the decision named an
 `inform` channel — where it said it would report the outcome.
 
 **An inform is enforced.** The asker's `answered` wake **owes** the chat
-surface its decision named: the notification carries `owes` (`slack` or
-`mattermost`), and the turn it wakes is held to a delivery on that surface
+surface its decision named: the notification carries `owes` (`mattermost`,
+`slack` or `chat`), and the turn it wakes is held to a delivery on that surface
 rather than on the tracker the wake came from. A round that only comments on
 the item is sent back with a correction naming the surface, and the turn ends
 once a tool there has posted — because the person who answered was told the
@@ -1981,6 +2081,12 @@ The single exception is **`unblocked`**, and it is the exception because it is
 about a *different* task: closing a blocker is exactly the moment to be told
 that your own other work became workable.
 
+Every wake names its author under the actor key every integration stamps, so
+the notification service applies the same rule a second time before it wakes
+a seat — and lets through the same one reason, read off the copy each person
+was sent rather than off the kind of change, since every copy of one status
+change is the same kind.
+
 **A task's wakes are one conversation, named by the task's id.** Wakes about
 one task that queue up while a seat is busy are merged into one digest turn,
 and every turn a seat takes on a task is filed in that task's
@@ -2025,11 +2131,11 @@ than what it is about:
 
 | Wake | Who hears it | What it asks |
 |---|---|---|
-| `purged` | the lead of the project the task was filed in | nothing — the task is gone from every node and nothing restores it |
+| `purged` | the lead of the project the task was filed in | nothing — the task is gone from every data node and nothing restores it |
 
 `purge_task` is the one operation in this engine with no inverse, and for a
 long time it told **nobody**: a task, its comments and its revisions were
-destroyed on every node and the person accountable for that project heard
+destroyed on every data node and the person accountable for that project heard
 nothing. The wake names the key, who ran it and their
 stated reason — and nothing else. It quotes neither the title nor the body,
 because the record outlives the rows: an excerpt of what was purged would keep
@@ -2041,8 +2147,8 @@ from a message that was lost. It names the tool that answers its own question �
 `my_work` — rather than pointing at the object it is written on, because a
 person's handle is not a task key and a pointer at one costs a round and a
 failed tool call to discover. A `purged` wake sends you nowhere for the sharper
-version of the same reason: the row is gone from every node, so the tool would
-answer `not_found`.
+version of the same reason: the row is gone from every data node, so the tool
+would answer `not_found`.
 
 ## A person's own state
 
@@ -2226,11 +2332,15 @@ Queue, Asked of me, Asked by me, Unblocked, Collaborating, Watching,
 Checklist), each carrying the engine's own total on its tab so an unanswered
 question is visible without opening it. A section shows at most twenty rows of
 its claim, and one that holds fewer than its total says which twenty ("the 20
-most recently changed of 130"). The Queue is read by due date or in the order
-somebody put it (`order=due|priorities`). Above the list a band says whose day
-is on screen, links to that person's seat, and carries the one thing here that
-asks to be answered — a queue somebody *else* put in order, named by the
-person who did, with a flag on the Priorities choice. A caller the directory
+most recently changed of 130"). Collaborating, Watching and Checklist are read
+from that person's own rows — the items they collaborate on, watch, or own a
+checklist item of — and so are the `collaborator`, `watcher` and
+`checklist_assignee` filters on a listing, so what they cost is what the person
+is on rather than everything the company holds. The Queue is read by due date
+or in the order somebody put it (`order=due|priorities`). Above the list a band
+says whose day is on screen, links to that person's seat, and carries the one
+thing here that asks to be answered — a queue somebody *else* put in order,
+named by the person who did, with a flag on the Priorities choice. A caller the directory
 binds to no seat — an API token's session, or a service account — is an
 ordinary state: its day is the one kept under its own login — the name its
 assistant writes its marks and priorities under — and the screen says what
@@ -2355,13 +2465,14 @@ company. `swept` means the change is older than the retention horizon below, so
 the rows may have existed and been cleared — their absence is not evidence.
 `unknown` means the caller stated no horizon, so nothing can date the absence.
 And `quiet` means the commit carried no notification at all, which is most
-field edits and every bulk one. The history row's own `notified` flag cannot
-tell these apart: it says the commit *carried* a notification, never that
-anybody was woken — the applier deliberately holds no roster, because two nodes
-briefly on different epochs would then write different rows for one record.
+field edits and every subtask a merge re-parents. The history row's own
+`notified` flag cannot tell these apart: it says the commit *carried* a
+notification, never that anybody was woken — the applier deliberately holds
+no roster, because two nodes briefly on different epochs would then write
+different rows for one record.
 
 **Inbox rows age out; the history does not.** `tracker.worklet.inbox_retention_days`
-(default 365, 30..3650) is how long an entry lives. A sweep on every node
+(default 365, 30..3650) is how long an entry lives. A sweep on every data node
 deletes what is past the horizon — per data node rather than once across the fleet,
 because each data node applies the log into its own copy. It is **live**: a
 revision that changes it reaches every data node's applier at its next batch and its
@@ -2497,9 +2608,10 @@ Three different gestures, and the difference matters:
   **Removed items**, which is the same parameter reached the same way: a trash
   of one project's bugs is a narrowing like any other, where a tab would have
   been a place you leave your arrangement to get to.
-- **Delete** writes a marker. Every node drops every record about that task for
-  ever, which is what stops a redelivery months later resurrecting it — and it
-  is also how a write that names the task is told it is **gone for good**:
+- **Delete** writes a marker. Every data node drops every record about that
+  task for ever, which is what stops a redelivery months later resurrecting
+  it — and it is also how a write that names the task is told it is **gone for
+  good**:
   an update, a removal, a restore, a second purge, a dependency of it or on it,
   a subtask filed under it and a merge naming it are all refused as purged,
   never as "not on this node", which is the answer for a task this node has

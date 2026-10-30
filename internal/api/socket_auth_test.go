@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/iam"
 )
@@ -173,5 +174,62 @@ func TestACookieAuthenticatesTheHandshake(t *testing.T) {
 	}
 	if first["kind"] != string(stream.KindSnapshot) {
 		t.Errorf("first frame = %v, want the snapshot", first["kind"])
+	}
+}
+
+// A HANDSHAKE MADE FOR ANOTHER READER IS REFUSED BEFORE IT UPGRADES, through
+// the whole app the way a browser arrives.
+//
+// The dashboard's dial names the tab's reader in its URL, since a browser sets
+// no header on a WebSocket. A redial under a cookie a sign-in in another tab
+// moved names the reader the tab was drawn for, and the guard refuses it `409
+// reader_changed` before the stream handler runs: no upgrade, no snapshot, no
+// frame of the new person's company. Control: the same cookie naming its own
+// principal opens and is sent the snapshot, so the refusal is the reader's
+// doing and nothing else's.
+func TestAHandshakeForAnotherReaderIsRefusedBeforeItUpgrades(t *testing.T) {
+	t.Parallel()
+	b := closedPosture()
+	b.API.ExternalURL = "http://127.0.0.1:8080"
+	cookies := newCookieArm(t, &b)
+	live := cookies.person(t, []iam.Grant{iam.GrantWorklet}, clock)
+	var holder string
+	for person := range cookies.rows {
+		holder = person
+	}
+	srv := httptest.NewServer(newApp(t, api.Options{Bootstrap: &b, Sessions: cookies.arm}))
+	t.Cleanup(srv.Close)
+	dial := func(reader string) (*websocket.Conn, *http.Response, error) {
+		return websocket.Dial(t.Context(),
+			"ws"+strings.TrimPrefix(srv.URL, "http")+"/ws/stream?"+
+				auth.ReaderParam+"="+reader,
+			&websocket.DialOptions{HTTPHeader: http.Header{
+				"Cookie": {live.String()},
+				"Origin": {b.API.ExternalURL},
+			}})
+	}
+
+	conn, res, err := dial("018f3a9c-0000-7000-8000-0000000000bb")
+	if err == nil {
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+		t.Fatal("a handshake made for somebody else opened")
+	}
+	if res == nil || res.StatusCode != http.StatusConflict {
+		t.Fatalf("a handshake made for somebody else was answered %v (%v), want 409", res, err)
+	}
+
+	conn, _, err = dial(holder)
+	if err != nil {
+		t.Fatalf("the control — a handshake naming its own reader — was refused: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close(websocket.StatusNormalClosure, "") })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	_, raw, err := conn.Read(ctx)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !strings.Contains(string(raw), `"kind":"`+string(stream.KindSnapshot)+`"`) {
+		t.Errorf("the control's first frame = %s, want the snapshot", raw)
 	}
 }

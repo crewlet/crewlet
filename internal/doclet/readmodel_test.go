@@ -1,6 +1,7 @@
 package doclet_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -107,5 +108,33 @@ func TestTheLastSaveIsAChangeToWhatThePageSays(t *testing.T) {
 	if labelled.SavedBy != "bob" || !labelled.SavedAt.Equal(saved.SavedAt) {
 		t.Fatalf("a label change moved the last save to %q at %v, want bob's at %v",
 			labelled.SavedBy, labelled.SavedAt, saved.SavedAt)
+	}
+}
+
+// A PAGE'S REVISIONS ARE LISTED NEWEST FIRST, by the page's own version
+// number: the detail's history is what a reader scrolls back through, so its
+// first entry is the body the page has now and each after it is the one
+// before.
+//
+// Mutation: list the revisions oldest first, and the order comes back
+// reversed.
+func TestAPagesRevisionsAreListedNewestFirst(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	page := r.write(author("jane"), doclet.NewPage{Title: "Runbook", Body: "v1"})
+	for version, body := range []string{"v2", "v3"} {
+		if _, err := r.store.SavePage(t.Context(), author("jane"), page.Page.ID,
+			doclet.Save{BaseVersion: version + 1, Body: ptr(body)}); err != nil {
+			t.Fatalf("save %s: %v", body, err)
+		}
+	}
+	r.drain()
+	var got []int
+	for _, revision := range r.get(page.Page.ID).History {
+		got = append(got, revision.Version)
+	}
+	if want := []int{3, 2, 1}; !slices.Equal(got, want) {
+		t.Errorf("the page's revisions are listed %v, want %v — newest first",
+			got, want)
 	}
 }

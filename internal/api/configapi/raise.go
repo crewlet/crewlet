@@ -102,16 +102,13 @@ func refuseRaise(w http.ResponseWriter, err *RaiseError) {
 		httpjson.Unavailable(w, httpjson.CodeUnavailable, authz.RetryUndecidedSeconds)
 		return
 	}
-	code, detail := httpjson.CodeUnauthorized, authz.RefusalDetail(d.Reason, d.Grants)
-	switch d.Reason {
-	case authz.ReasonStepUp:
-		code, detail = httpjson.CodeStepUpRequired, authz.StepUpDetail(d)
-	case authz.ReasonTokenRefused:
-		code = httpjson.CodeTokenRefused
+	status, code, detail := authz.RefusalFields(d)
+	if detail == nil {
+		detail = httpjson.Detail{}
 	}
 	detail["raises"] = err.Raises
 	detail["hint"] = "this change gives an agent an administration role at a vendor, " +
 		"which a person decides at a fresh step-up; confirm who you are and send it " +
 		"again, or leave the agent at a lower level"
-	httpjson.FailWithFields(w, http.StatusForbidden, code, detail)
+	httpjson.FailWithFields(w, status, code, detail)
 }

@@ -113,6 +113,15 @@ func (k FeedKind) half() string {
 const DefaultFeedPage = 20
 
 // The three sources, as the cursor names them.
+//
+// AND NOT CHAT'S, deliberately. The feed is what the company DID — a task
+// finished, filed or handed on, a page written, a schedule run — and a message
+// is conversation: a busy company says thousands a day, so merged here they
+// would bury every row the landing screen exists to show. And a room's
+// contents are decided by its membership, which this question has no viewer
+// to resolve: an unscoped merge of every room's messages would put a private
+// room's words on the screen of everybody who may read the feed. Chat has its
+// own reads, each scoped to who is asking (chat_mentions is the away story).
 const (
 	feedSourceWork     = "work"
 	feedSourcePages    = "pages"

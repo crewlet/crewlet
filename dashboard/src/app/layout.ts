@@ -1,6 +1,7 @@
 /**
- * The frame's breakpoints: READ from the kit's tokens, and the one width the
- * dashboard derives for itself.
+ * The frame's breakpoints: READ from the kit's tokens, and the widths the
+ * dashboard derives for itself: where the peek, the assistant, Settings'
+ * column and Chatlet's columns each change shape.
  *
  * # Read, never redeclared
  *
@@ -14,7 +15,7 @@
  * literal; `styles/frame.test.ts` holds every literal it writes against the
  * values here.
  *
- * # The one width that is ours: where the peek becomes a column
+ * # Where the peek becomes a column
  *
  * The peek is a column of the sheet while the window can hold everything in
  * front of the list, the peek, AND a list still wide enough to read beside
@@ -127,6 +128,20 @@ export const PEEK_MIN = CANVAS_PEEK_WIDTH;
 
 /** The narrowest list a peek may stand beside: a key, a title, an assignee. */
 export const LIST_FLOOR = 444;
+
+/**
+ * The narrowest TRANSCRIPT Chatlet draws beside its rail or an open thread: the
+ * width WCAG 2.1's Reflow criterion (1.4.10) asks every page to read at
+ * without scrolling sideways. A transcript is text that wraps, and a phone
+ * already draws a room about this wide; a column that would leave it less
+ * stacks instead ([CHAT_RAIL_FOLD], [CHAT_THREAD_FOLD]).
+ *
+ * NOT 360, the thread's own width and the assistant's narrowest. That floor
+ * stacks a thread under the room on a 1280 window, where the two fit side by
+ * side with a 332px transcript, and stacks the rail over the room beside the
+ * assistant's column on the same window.
+ */
+export const TRANSCRIPT_FLOOR = 320;
 
 /**
  * The width the screen's scroller keeps for its scrollbar, whether or not
@@ -251,8 +266,9 @@ export function peekColumnMin(frame: Frame): number {
  *     +   8  the inset it is held off the window's edge by
  *
  * = 1168 on a screen and 1404 beside Settings' column, at the normal density.
- * Below that it stands OVER the page's end edge (an overlay, modal), and
- * below the phone breakpoint it is the whole window (a sheet).
+ * Below that it stands OVER the page's end edge (an overlay, not a modal: the
+ * page beside it stays live, with no veil and no Tab trap), and below the
+ * phone breakpoint it is the whole window (a sheet, which is a modal).
  *
  * A PEEK BESIDE AN OPEN ASSISTANT BECOMES A DRAWER FIRST: the assistant's
  * track is one more term of [peekColumnMin], so both are columns only where
@@ -366,6 +382,69 @@ export function assistantOccupied(
 export function sectionColumnMin(assistant: number): number {
   return Math.ceil(SECTION_COLUMN_MIN + assistant);
 }
+
+/*
+ * # Chatlet: three columns, folded by the screen's own width
+ *
+ * Chatlet draws up to three columns side by side: its rail, a room's transcript
+ * and an open thread (`.chat-frame` and `.chat-room` in `styles/screens.css`).
+ * They give way by the SCREEN'S width (`@container page`), never the
+ * window's, because the sidebar, a peek column and the assistant's track each
+ * take a share of the window that no media query can see. Folded at the
+ * phone's window width, all three stood beside the assistant's column on a
+ * 1280 window, and the transcript beside an open thread was 0px wide.
+ *
+ * The room's track starts at [TRANSCRIPT_FLOOR], so the rail gives way first,
+ * from its widest to its narrowest, and stacks above the room only where even
+ * that would cut the transcript. Nothing gives way to a thread: its track has
+ * a maximum, which a grid fills before a `1fr` track takes anything, so its
+ * fold counts the rail at its widest:
+ *
+ *       200 or 260  the rail, narrowest or widest  ([CHAT_RAIL_MIN], [CHAT_RAIL_MAX])
+ *     +  18.56      the gap (`spacing.4`, at the widest density)
+ *     + 320         the transcript, at its floor   ([TRANSCRIPT_FLOOR])
+ *     +  18.56      the gap
+ *     + 360         the thread                     ([CHAT_THREAD_WIDTH])
+ *
+ * = 539 for the rail beside the room ([CHAT_RAIL_FOLD]: the first three terms,
+ * at the rail's narrowest) and 978 for a thread beside it ([CHAT_THREAD_FOLD]:
+ * all five, at the rail's widest), each rounded up. The gaps are counted at
+ * the widest density, because a container query can no more read the
+ * reader's density than a media query can, and a transcript a fraction under
+ * its floor is the defect.
+ *
+ * Below 978 the thread stacks under the room, never in its place: the room is
+ * the conversation still going on. Below 539 the rail stacks above it too, as
+ * on a phone. Beside the assistant's column at its resting width, a 1280
+ * window leaves the screen 556px at the normal density, so the rail narrows
+ * to 220 and an open thread goes under the room; at 1168, where the column
+ * first fits, the screen is the list's floor of 444 and the rail stacks as
+ * well. A column the reader drags wider leaves the screen narrower still, and
+ * the folds follow it, because they ask the screen rather than the window.
+ * `styles/screenwidth.test.ts` holds the literals the stylesheet writes
+ * against these, beside every other screen whose shape follows the screen's
+ * width.
+ */
+
+/** Chatlet's rail at its narrowest and its widest: `.chat-frame`'s first track. */
+export const CHAT_RAIL_MIN = 200;
+export const CHAT_RAIL_MAX = 260;
+
+/** An open thread's track beside the room: `.chat-room.with-thread`'s second. */
+export const CHAT_THREAD_WIDTH = 360;
+
+/** The gap between Chatlet's columns (`spacing.4`), at the widest density. */
+const CHAT_GAP =
+  px(spacing["4"]) *
+  Math.max(...(Object.keys(density) as (keyof typeof density)[]).map(densityScale));
+
+/** Below this screen width the rail stacks above the room. */
+export const CHAT_RAIL_FOLD = Math.ceil(CHAT_RAIL_MIN + CHAT_GAP + TRANSCRIPT_FLOOR);
+
+/** Below this screen width an open thread stacks under the room. */
+export const CHAT_THREAD_FOLD = Math.ceil(
+  CHAT_RAIL_MAX + CHAT_GAP + TRANSCRIPT_FLOOR + CHAT_GAP + CHAT_THREAD_WIDTH,
+);
 
 /**
  * The window's width, as a value a component re-renders on. For the one

@@ -33,7 +33,7 @@ func TestAMissedToolSkillNamesTheKeysThatExist(t *testing.T) {
 			t.Fatalf("%q answered %q", asked, res.Output)
 		}
 		for _, want := range []string{`Did you mean "skill:artifacts"?`,
-			"The keys are: skill:artifacts, skill:deploys, skill:github."} {
+			`The keys are: "skill:artifacts", "skill:deploys" and "skill:github".`} {
 			if !strings.Contains(res.Output, want) {
 				t.Errorf("%q answered %q, which does not say %q", asked, res.Output, want)
 			}
@@ -53,7 +53,7 @@ func TestAMissedToolSkillsListIsBounded(t *testing.T) {
 	}
 	res := callFor(t, registered(t, builtin.Deps{ToolSkills: many}, builtin.LoadToolSkillTool),
 		executing(t), map[string]any{"key": "nope"})
-	if !strings.Contains(res.Output, "skill:k29, and 15 more.") || strings.Contains(res.Output, "skill:k30") {
+	if !strings.Contains(res.Output, `"skill:k29" and 15 more.`) || strings.Contains(res.Output, "skill:k30") {
 		t.Errorf("a long catalogue answered %q", res.Output)
 	}
 	none := callFor(t, registered(t, builtin.Deps{ToolSkills: keyedSkills{}}, builtin.LoadToolSkillTool),

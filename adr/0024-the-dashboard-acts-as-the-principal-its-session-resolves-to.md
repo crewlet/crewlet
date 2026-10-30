@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/api/operator`
-- **Enforced-by:** `internal/api/operator.TestAnActWriteIsMadeAsItsPrincipal`, `internal/api/operator.TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs`, `internal/api/operator.TestAnyResolvedPrincipalMayAct`, `internal/api/operator.TestARetriedActIsOneWrite`
+- **Enforced-by:** `internal/api/operator.TestAnActWriteIsMadeAsItsPrincipal`, `internal/api/operator.TestACallIsMadeAndAuditedAsThePrincipalItWasAdmittedAs`, `internal/api/operator.TestAnyResolvedPrincipalMayAct`, `internal/api/operator.TestARetriedActIsOneWrite`, `internal/api/auth.TestARequestMadeForAnotherReaderIsRefusedBeforeItRuns`, `internal/api/auth.TestASocketHandshakeIsRefusedForAnotherReaderNamedInItsURL`
 - **Measured:** the largest legal page is 512 KiB of text, and a page of nothing but quotes, backslashes and newlines is 1 MiB once `JSON.stringify` has escaped it — so the act body is capped at twice the page plus 64 KiB for the envelope (`operator.MaxActBody`, 1 114 112 bytes), and a cap at the page's own size refused a page the store accepts.
 - **Cost-when-tried:** the dashboard wrote nothing, on the argument that a browser form would write as "the dashboard", an actor no audit can ask why. Every change was a pre-filled tool call a person copied into an assistant connected to `/operator/mcp` — a gesture of four steps for "mark this read", checked by a test that each call named a real tool and never by anybody pressing it; the Inbox, the priorities list and the board each showed state no control on screen could change.
 - **Tag-status:** unreleased
@@ -34,6 +34,26 @@ and the `operator_acted` record all read that one value. A directory rebind or
 a revision applied while a call runs changes the next request, never this
 one, so a call cannot be admitted as one person, written as another and
 audited as a third.
+
+**And it is the principal the screen was drawn for.** The tabs of one browser
+share one session cookie, and a sign-in as somebody else in any of them moves
+it under the rest; the close of the session those tabs were opened with is
+best effort, so a window left open beside the sign-in can go on drawing the
+last person's screen while every request it sends carries the new person's
+cookie — and a retry of the last person's change sends their operation key,
+which the key's scope would then read as the new person's. So the dashboard
+names its tab's reader on every request it makes for them (`X-Crewlet-Reader`,
+the principal id `GET /auth/session` answered it), and the request guard serves
+such a request only to that principal: anybody else is `409 reader_changed`,
+before any handler runs, so nothing is admitted, written, audited or keyed.
+The dashboard hands the tab to whoever the session is on that answer, as a
+sign-in by them in that tab would. The socket's handshake, the one request a
+browser cannot put a header on, names the reader in its URL instead (the
+`reader` parameter, read on an upgrade alone), so a socket that redials under a
+cookie that moved is refused before it draws anybody's company. A request
+naming no reader — every script, assistant and command — is decided as it
+always was, and the two the dashboard makes to learn or change who the session
+is (the session read and the token exchange) name none.
 
 **The request names its operation.** The key travels in the `Idempotency-Key`
 header (`internal/api/opkey`), a UUIDv7 the client mints per gesture and
@@ -76,6 +96,16 @@ The third is to write over the socket. A frame sent into a socket that drops
 has no answer at all; a request that loses its answer is retried under the same
 key, as the same operations as whatever landed.
 
+The fourth is to leave "whose tab is this" to the signals that already carry
+it: the socket closing `4401` when the session it was opened with ends, and the
+frame reading the session again when the tab becomes visible. Both are about
+the SESSION, and neither is there at the one moment that has to be right — the
+request. The close rides a sign-in that is never refused over it, a window
+side by side with the one signing in never stops being visible, and a press
+made in between was a change as the new person from the last person's screen.
+Only a request that says who it is for can be refused for being for somebody
+else.
+
 ## What this does not decide
 
 It does not decide what the dashboard renders for a write in flight, how it
@@ -84,9 +114,13 @@ outcome and position the answer carries. It does not move `/config`,
 `/secrets`, `/setup` or `/backup`, which stay credential-scoped surfaces of
 their own, nor the verbs no seat is given and so no tool serves — a work item's
 purge, a page's rename, trash, restore and purge, a comment's take-down,
-rewriting one's own remark — which stay routes of the human write surface. And
-it does not change who may do what once admitted: every authority rule is the
-tool's, exactly as on `/operator/mcp`.
+rewriting one's own remark, chat's erase and prune and a room's own horizon —
+which stay routes of the human write surface. And it does not change who may
+do what once admitted: every authority rule is the tool's, exactly as on
+`/operator/mcp`. That includes a verb made AS A SEAT, which the table's own
+row refuses a credential acting as itself (`seated`, refused `unseated`) — a
+fact about that verb, decided where every other is, and not the refusal of
+every unbound caller rejected above.
 
 Nor does it decide **who can be unbound**. That is
 [ADR-0032](0032-every-person-holds-a-human-seat.md)'s: every person holds a

@@ -191,7 +191,8 @@ describe("the dialog", () => {
   test("a key a project already has holds Continue with the reason", async () => {
     mount(["OLD"]);
     await screen.findByRole("dialog", { name: "New project" });
-    fireEvent.change(screen.getByRole("textbox", { name: "Project key" }), {
+    // THE FIELD ONCE IT IS DRAWN, which is a commit after the dialog's.
+    fireEvent.change(await screen.findByRole("textbox", { name: "Project key" }), {
       target: { value: "old" },
     });
     await screen.findByText("OLD is already a project.", {

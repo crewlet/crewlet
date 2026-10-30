@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The tracker's half of the company feed — the completions, the creates and
@@ -62,8 +63,9 @@ func (k FeedKind) Valid() bool { return slices.Contains(FeedKinds, k) }
 // anything reads it. Absent for a task filed by anything that was not woken on
 // a chat surface — a schedule, an assignment, a person at the dashboard.
 type Origin struct {
-	// Surface is the chat backend's transport name (`slack`, `mattermost`)
-	// — the value [notify.TransportField] carries.
+	// Surface is the chat backend's transport name (`slack`, `mattermost`,
+	// or `chat` for the engine's own) — the value [notify.TransportField]
+	// carries.
 	Surface string `json:"surface"`
 
 	// Conversation is the durable conversation identity the turn served.
@@ -222,7 +224,7 @@ func (r *Reader) CompanyFeed(ctx context.Context, q FeedQuery) (FeedPage, error)
 	for _, kind := range kinds {
 		if !kind.Valid() {
 			return FeedPage{}, invalid("%q is not a feed kind; Worklet "+
-				"answers %v", kind, FeedKinds)
+				"answers %s", kind, words.And(FeedKinds))
 		}
 	}
 	var out FeedPage

@@ -222,7 +222,7 @@ func (s *surface) answerBrief(ctx context.Context, tool catalog.Tool,
 			reason+". Call answer_brief again with every one of these fixed; this is the "+
 			"last attempt."), nil
 	}
-	step := s.t.stepStart(tool, args, nil, "")
+	step := s.t.stepStart(tool, args, s.cardOptions(ctx), nil, "")
 	card, err := s.resolveBrief(ctx, draft)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -318,6 +318,8 @@ func openLabel(ref wire.ResourceRef) string {
 		return "Open the page"
 	case wire.ResourceArtifact:
 		return "Open the artifact"
+	case wire.ResourceRoom:
+		return "Open the room"
 	}
 	return "Open"
 }
@@ -331,10 +333,24 @@ func toneOf(asked wire.BriefTone, urgent bool) wire.BriefTone {
 	return asked
 }
 
-// briefNames resolves a cited seat or project to its key the way open_in_app
-// does, through the turn's own directory reads.
-var briefNames = catalog.Tool{Kind: catalog.KindNavigate,
-	Names: map[string]catalog.Directory{"handle": catalog.DirSeat, "key": catalog.DirProject}}
+// briefNames resolves a cited record of kind given by its name to its key, the
+// way open_in_app does, through the turn's own reads: a seat by its name to
+// its handle, a project by its name to its key, and a chat room by its name
+// with its "#" to its id, which is the one value the room's link takes. A
+// kind's parameter is its alone here, since a task's, a page's and a room's
+// are all `id`.
+func briefNames(kind wire.ResourceKind) catalog.Tool {
+	names := map[string]catalog.Directory{}
+	switch kind {
+	case wire.ResourceSeat:
+		names["handle"] = catalog.DirSeat
+	case wire.ResourceProject:
+		names["key"] = catalog.DirProject
+	case wire.ResourceRoom:
+		names["id"] = catalog.DirRoom
+	}
+	return catalog.Tool{Kind: catalog.KindNavigate, Names: names}
+}
 
 // rowDropped is a cited record a brief may not draw a row for, and why: a
 // reason the drop is counted and logged by, and the error that decided it
@@ -369,7 +385,7 @@ func (s *surface) resolveRecord(ctx context.Context, ref wire.ResourceRef) (*bri
 	if !ok {
 		return nil, drop("no_link", nil)
 	}
-	resolved, err := s.names.Resolve(ctx, briefNames, args)
+	resolved, err := s.names.Resolve(ctx, briefNames(ref.Kind), args)
 	if err != nil {
 		return nil, drop("unresolved", err)
 	}

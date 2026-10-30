@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"io"
 	"maps"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/dashspec"
 	"github.com/crewlet/crewlet/internal/artifactupload"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // fakeArtifactsNode answers the artifacts surface, recording what it was sent.
@@ -38,6 +41,9 @@ type fakeArtifactsNode struct {
 	shares    []map[string]any
 	purges    int
 	refuse    map[string]any
+
+	// outcome is what a create or a publish answers, `applied` unset.
+	outcome string
 }
 
 const cliArtifact = "0a6f1c8e-6a41-5b6e-9d8c-3f1e2d4c5b6a"
@@ -89,8 +95,9 @@ func newFakeArtifactsNode(t *testing.T) *fakeArtifactsNode {
 			*into = append(*into, body)
 			n.keys = append(n.keys, r.Header.Get(opkey.Header))
 			n.ifMatch = append(n.ifMatch, r.Header.Get("If-Match"))
+			outcome := cmp.Or(n.outcome, "applied")
 			n.mu.Unlock()
-			out := map[string]any{"artifact": cliArtifact, "number": number, "outcome": "applied"}
+			out := map[string]any{"artifact": cliArtifact, "number": number, "outcome": outcome}
 			if n.files != nil {
 				out["files"] = n.files
 			}
@@ -118,7 +125,7 @@ func newFakeArtifactsNode(t *testing.T) *fakeArtifactsNode {
 		n.mu.Unlock()
 		answer(w, http.StatusOK, map[string]any{"outcome": "applied"})
 	})
-	n.server = httptest.NewServer(mux)
+	n.server = httptest.NewServer(asEngine(mux))
 	t.Cleanup(n.server.Close)
 	return n
 }
@@ -288,6 +295,22 @@ func TestArtifactsPublishWalksALinkedRoot(t *testing.T) {
 	}
 	if got := node.declaredPaths(); !slices.Equal(got, []string{"css/app.css", "index.html"}) {
 		t.Errorf("declared %v", got)
+	}
+}
+
+// AN UNKNOWN KIND IS REFUSED BEFORE ANYTHING IS SENT, offering the kinds this
+// build serves as the alternatives they are, the kind it was given quoted as
+// they are.
+func TestArtifactsPublishRefusesAnUnknownKind(t *testing.T) {
+	t.Parallel()
+	node := newFakeArtifactsNode(t)
+	_, _, err := cli(t, "artifacts", "publish", site(t), "-kind", "page", bootstrapForURL(t, node.server.URL))
+	want := `-kind "page" is not a kind; name one of ` + words.Or(artifacts.Kinds)
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("publish -kind page = %v, want it refused as %q", err, want)
+	}
+	if len(node.intents) != 0 || len(node.publishes) != 0 {
+		t.Errorf("sent %d intents and %d publishes before refusing", len(node.intents), len(node.publishes))
 	}
 }
 
@@ -505,15 +528,58 @@ func TestArtifactsPurgeAsksForTheIDTwice(t *testing.T) {
 	}
 }
 
-// AN UNKNOWN OUTCOME PRINTS THE OPERATION TO RETRY UNDER, never a fresh one.
-func TestArtifactsAnUnknownOutcomeNamesTheOperation(t *testing.T) {
+// A PUBLISH FINISHES AN OPEN OUTCOME UNDER THE OPERATION IT SENT, by the rule
+// every keyed write follows ([keyedWrite]): the upload intent goes under the
+// invocation's key and the publish under a step of it, so the retry an open
+// answer offers is -op-id with the INTENT's key — answered the same upload,
+// and landing the same version — never the step's, which the command derives
+// again, and never a fresh one. A 2xx whose outcome nobody can vouch for
+// fails rather than printing "published", and a 503 unknown says to retry.
+//
+// Mutation: drop the publish's confirmed check and the 2xx row exits zero;
+// settle the publish's error under its step key and both rows name the wrong
+// operation.
+func TestArtifactsPublishFinishesAnOpenOutcomeUnderItsOperation(t *testing.T) {
 	t.Parallel()
-	node := newFakeArtifactsNode(t)
-	node.refuse = map[string]any{"error": "unavailable", "outcome": "unknown", "op_id": "x"}
-	_, _, err := cli(t, "artifacts", "share", cliArtifact, "seat:bob", "viewer",
-		bootstrapForURL(t, node.server.URL))
-	if err == nil || !strings.Contains(err.Error(), "-op-id") {
-		t.Errorf("an unknown outcome: %v", err)
+	for _, tc := range []struct {
+		name    string
+		outcome string
+		refuse  map[string]any
+		says    string
+	}{
+		{name: "a 2xx unknown", outcome: "unknown", says: "could not confirm the write"},
+		{name: "a 503 unknown", refuse: map[string]any{"error": "unavailable",
+			"outcome": "unknown", "op_id": "the-scoped-key.k0123456789abcdef"},
+			says: "No acknowledgement"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			node := newFakeArtifactsNode(t)
+			node.outcome, node.refuse = tc.outcome, tc.refuse
+			stdout, stderr, err := cli(t, "artifacts", "publish", site(t),
+				bootstrapForURL(t, node.server.URL))
+			if err == nil {
+				t.Fatalf("an open outcome exited zero: %s", stdout)
+			}
+			said := err.Error() + "\n" + stderr
+			if len(node.keys) == 0 {
+				t.Fatal("the publish sent no operation key")
+			}
+			offered := regexp.MustCompile(`-op-id ([^\s,]+)`).FindAllStringSubmatch(said, -1)
+			if !strings.Contains(said, tc.says) || len(offered) == 0 {
+				t.Errorf("answered %q, want %q and a retry under the intent's key %s", said,
+					tc.says, node.keys[0])
+			}
+			for _, m := range offered {
+				if m[1] != node.keys[0] {
+					t.Errorf("offered a retry under %s, want the intent's key %s:\n%s", m[1],
+						node.keys[0], said)
+				}
+			}
+			if strings.Contains(stdout, "published") {
+				t.Errorf("printed %q for a publish nobody could vouch for", stdout)
+			}
+		})
 	}
 }
 
@@ -660,7 +726,7 @@ func TestArtifactsPublishRefusesTwoCandidateEntries(t *testing.T) {
 	node := newFakeArtifactsNode(t)
 	dir := writeTree(t, map[string]string{"index.html": "<!doctype html>", "index.md": "# Plan"})
 	_, _, err := cli(t, "artifacts", "publish", dir, bootstrapForURL(t, node.server.URL))
-	if err == nil || !strings.Contains(err.Error(), "index.html and index.md") {
+	if err == nil || !strings.Contains(err.Error(), `"index.html" and "index.md"`) {
 		t.Fatalf("publish of two entries answered %v", err)
 	}
 	if len(node.intents) != 0 {

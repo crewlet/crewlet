@@ -8,8 +8,9 @@ import (
 	"io/fs"
 	"slices"
 	"strconv"
-	"strings"
 	"unicode/utf8"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- the starter deck ----------------------------------------------------- //
@@ -361,7 +362,7 @@ func (p Plan) resolve() (Theme, []PlanSlide, error) {
 	theme, ok := ThemeByID(id)
 	if !ok {
 		return Theme{}, nil, fmt.Errorf("%w: theme %q is not one of %s", ErrPlan, id,
-			strings.Join(themeIDs(), ", "))
+			words.Or(themeIDs()))
 	}
 	slides, err := p.slides()
 	if err != nil {
@@ -384,7 +385,7 @@ func (p Plan) slides() ([]PlanSlide, error) {
 	for i, s := range slides {
 		if _, ok := layoutByID(s.Layout); !ok {
 			return nil, fmt.Errorf("%w: slide %d's layout %q is not one of %s", ErrPlan, i+1,
-				s.Layout, strings.Join(layoutIDs(), ", "))
+				s.Layout, words.Or(layoutIDs()))
 		}
 		if len(s.Title) > MaxSlideTitleBytes || !utf8.ValidString(s.Title) {
 			return nil, fmt.Errorf("%w: slide %d's title is longer than %d bytes", ErrPlan,

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -359,8 +358,12 @@ func (f *liveFeed) current(ctx context.Context) (liveSnapshot, error) {
 	case f.err != nil:
 		return liveSnapshot{}, f.err
 	}
-	return liveSnapshot{}, fmt.Errorf("sandbox: reading the box of run %s took longer than this "+
-		"request could wait; it goes on, and the next request reads what it found", f.run.TurnID)
+	// THE BOX HAS NOT ANSWERED YET, which is the box not answering in the
+	// time this request had: the read goes on, and the next request is
+	// answered from what it finds.
+	return liveSnapshot{}, unanswered(ctx, fmt.Errorf("sandbox: reading the box of run %s "+
+		"took longer than this request could wait; it goes on, and the next request reads "+
+		"what it found: %w", f.run.TurnID, ctx.Err()))
 }
 
 // refresh reads the box once, under the reading's own budget rather than any
@@ -389,16 +392,20 @@ func (f *liveFeed) refresh(done chan struct{}) {
 func (f *liveFeed) readBox(ctx context.Context) (LiveRead, error) {
 	// A reading that ended — the node stopped, or the launch was let go —
 	// reads nothing, whatever a backend would make of a dead context.
+	//
+	// A WAIT CLEARS IT ([ErrTailUnanswered]): the node is stopping and its
+	// seats go elsewhere, or the launch stopped running and the next request
+	// reads that.
 	if err := ctx.Err(); err != nil {
-		return LiveRead{}, fmt.Errorf("sandbox: the reading of run %s has ended: %w", f.run.TurnID, err)
+		return LiveRead{}, fmt.Errorf("sandbox: the reading of run %s has ended: %w: %w",
+			f.run.TurnID, ErrTailUnanswered, err)
 	}
 	var m *Manager
 	if f.feeds.manager != nil {
 		m = f.feeds.manager()
 	}
 	if m == nil {
-		return LiveRead{}, errors.New("sandbox: this node owns the run and has no sandbox " +
-			"backend to reach its box with — providers.sandbox was removed by an apply")
+		return LiveRead{}, errNoBackend()
 	}
 	run := f.run
 	// ATTACHED, NEVER RECONNECTED: a read changes nothing, and Connect wakes

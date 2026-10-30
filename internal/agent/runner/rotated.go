@@ -1,5 +1,7 @@
 package runner
 
+import "github.com/crewlet/crewlet/internal/provenance"
+
 // Rotated is a run whose job ended refused by its vendor on a SIGN-IN THAT WAS
 // REPLACED WHILE IT RAN: what a resume carries the round on from
 // ([Resume.Rotated]).
@@ -57,10 +59,11 @@ func (r Rotated) Reseed() string {
 		"doing any of it again. Then finish the task as it asks."
 }
 
-func (r *Rotated) session() string      { return r.SessionID }
-func (r *Rotated) continuation() string { return RotatedContinuation }
-func (r *Rotated) reseed() string       { return r.Reseed() }
-func (r *Rotated) refusal() error       { return nil }
+// A rotated round's words are the engine's own, which no fence token touches.
+func (r *Rotated) session() string                         { return r.SessionID }
+func (r *Rotated) continuation(provenance.Boundary) string { return RotatedContinuation }
+func (r *Rotated) reseed(provenance.Boundary) string       { return r.Reseed() }
+func (r *Rotated) refusal() error                          { return nil }
 func (r *Rotated) what() string {
 	return "carrying on the round a replaced sign-in cut off"
 }

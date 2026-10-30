@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // counted is one counter of the metrics catalogue as this package records
@@ -27,8 +28,8 @@ func mustCount(name string, attrs ...string) counted {
 	}
 	inst := metrics.Catalogue()[i]
 	if inst.Kind != metrics.KindCounter || !slices.Equal(inst.Attributes, attrs) {
-		panic(fmt.Sprintf("tools: %s records %v, and the catalogue declares a %s with %v",
-			name, attrs, inst.Kind, inst.Attributes))
+		panic(fmt.Sprintf("tools: %s records %s, and the catalogue declares a %s with %s",
+			name, words.And(attrs), inst.Kind, words.And(inst.Attributes)))
 	}
 	return counted{name: name}
 }

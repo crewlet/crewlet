@@ -348,16 +348,18 @@ type TaskRef struct {
 	// that task and this one is reached by its id. See [ItemAddress].
 	KeyCollision bool `json:"key_collision,omitempty"`
 
-	Title  string `json:"title"`
+	Title  string `json:"title" untrusted:"name"`
 	Status Status `json:"status"`
 }
+
+// taskRefStatement is [readTaskRef]'s read, named for the plan test.
+const taskRefStatement = `SELECT key, key_collision, title, status FROM tracker_tasks WHERE id = ?`
 
 // readTaskRef names one task, or nil for an id this node holds no row for.
 func readTaskRef(ctx context.Context, tx *sql.Tx, id string) (*TaskRef, error) {
 	ref := TaskRef{ID: id}
 	var collision int
-	err := tx.QueryRowContext(ctx,
-		`SELECT key, key_collision, title, status FROM tracker_tasks WHERE id = ?`, id).
+	err := tx.QueryRowContext(ctx, taskRefStatement, id).
 		Scan(&ref.Key, &collision, &ref.Title, &ref.Status)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -389,7 +391,7 @@ type DetailLink struct {
 	// Key, Title and Status are the other end's, resolved here so a
 	// renderer does not fetch a row per link.
 	Key    string `json:"key,omitempty"`
-	Title  string `json:"title,omitempty"`
+	Title  string `json:"title,omitempty" untrusted:"name"`
 	Status Status `json:"status,omitempty"`
 
 	// KeyCollision is the other end's [TaskRow.KeyCollision]: its key is
@@ -398,7 +400,7 @@ type DetailLink struct {
 	// [ItemAddress]. Always false on a page link, which has no task row.
 	KeyCollision bool `json:"key_collision,omitempty"`
 
-	Note string `json:"note,omitempty"`
+	Note string `json:"note,omitempty" untrusted:"name"`
 
 	// Derived marks the half nobody authored, so an editor knows which end
 	// to change and a renderer can say so.
@@ -418,11 +420,11 @@ type HistoryEntry struct {
 	ActorKind  AuthorKind `json:"actor_kind,omitempty"`
 	OperatorID string     `json:"operator_id,omitempty"`
 	CommentID  string     `json:"comment_id,omitempty"`
-	Excerpt    string     `json:"excerpt,omitempty"`
+	Excerpt    string     `json:"excerpt,omitempty" untrusted:"fence"`
 	TurnID     string     `json:"turn_id,omitempty"`
 
 	// Fields is what changed, as the notification snapshot recorded it.
-	Fields map[string]any `json:"fields,omitempty"`
+	Fields map[string]any `json:"fields,omitempty" untrusted:"name"`
 
 	// Reassignments is the task's hand-off counter as this commit left it
 	// — the "3" of "hand-off 3 of 8" on a row that moved the assignee, and
@@ -433,8 +435,8 @@ type HistoryEntry struct {
 
 	// Quiet marks a commit that ANNOUNCED NOTHING — one that carried no
 	// notification at all. It is a fact about the change rather than
-	// about its importance — a bulk edit is quiet by construction — and
-	// it is what an activity feed renders differently.
+	// about its importance — every subtask a merge re-parents is quiet by
+	// construction — and it is what an activity feed renders differently.
 	//
 	// A LOUD COMMIT MAY STILL HAVE REACHED NOBODY: who was told is
 	// resolved against the live roster at wake time, and every candidate
@@ -451,6 +453,14 @@ type HistoryEntry struct {
 	// from another.
 	LogSeq uint64 `json:"log_seq"`
 }
+
+// detailFlagsStatement is [Reader.Task]'s read of the two badges a board row
+// carries beside its own, named for the plan test.
+const detailFlagsStatement = `
+		SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
+		         WHERE d.task_id = ? AND d.blocker_open = 1),
+		       COALESCE((SELECT key_collision FROM tracker_tasks
+		                 WHERE id = ?), 0) = 1`
 
 // Task reads one task by id or by key, with whatever else was asked for.
 //
@@ -552,11 +562,7 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		// flag beside it, from the same column the row reads, for the
 		// same reason.
 		//nolint:govet // shadow: scoped to this block; see .golangci.yml
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM tracker_task_deps d
-			         WHERE d.task_id = ? AND d.blocker_open = 1),
-			        COALESCE((SELECT key_collision FROM tracker_tasks
-			                  WHERE id = ?), 0) = 1`,
+		if err := tx.QueryRowContext(ctx, detailFlagsStatement,
 			id, id).Scan(&out.Blocked, &out.KeyCollision); err != nil {
 			return fmt.Errorf("worklet: read %s's open blockers: %w", id, err)
 		}
@@ -620,6 +626,17 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 	return out, nil
 }
 
+// taskReadScopeStatement is [taskReadScope]'s resolution, named for the plan
+// test.
+const taskReadScopeStatement = `
+		SELECT id, project_key FROM tracker_tasks WHERE id = ?
+		UNION ALL
+		SELECT t.id, t.project_key FROM tracker_task_keys k
+		  JOIN tracker_tasks t ON t.id = k.task_id WHERE k.key = ?
+		UNION ALL
+		SELECT id, project_key FROM tracker_tasks WHERE key = ?
+		LIMIT 1`
+
 // taskReadScope is what a point read of one task is about, resolved from the
 // reference the caller named.
 //
@@ -648,14 +665,7 @@ func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.Sc
 		named = &term
 	}
 	var id, project string
-	err := tx.QueryRowContext(ctx, `
-		SELECT id, project_key FROM tracker_tasks WHERE id = ?
-		UNION ALL
-		SELECT t.id, t.project_key FROM tracker_task_keys k
-		  JOIN tracker_tasks t ON t.id = k.task_id WHERE k.key = ?
-		UNION ALL
-		SELECT id, project_key FROM tracker_tasks WHERE key = ?
-		LIMIT 1`,
+	err := tx.QueryRowContext(ctx, taskReadScopeStatement,
 		ref, strings.ToUpper(ref), strings.ToUpper(ref)).Scan(&id, &project)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
@@ -677,6 +687,32 @@ func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.Sc
 	return statelog.ScopeSet{Paths: paths}.Normalised(), nil
 }
 
+// resolveTaskIn is [resolveTaskID] with the project the task is filed in,
+// resolved in the same order by the one statement [taskReadScope] resolves a
+// reference with.
+func resolveTaskIn(ctx context.Context, tx *sql.Tx, idOrKey string) (id, project string, err error) {
+	key := strings.ToUpper(idOrKey)
+	err = tx.QueryRowContext(ctx, taskReadScopeStatement, idOrKey, key, key).
+		Scan(&id, &project)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", "", fmt.Errorf("%w: %s", ErrNoTask, idOrKey)
+	case err != nil:
+		return "", "", fmt.Errorf("worklet: resolve %q: %w", idOrKey, err)
+	}
+	return id, project, nil
+}
+
+// resolveTaskStatement is [resolveTaskID]'s one statement, named for the plan
+// test.
+const resolveTaskStatement = `
+		SELECT id FROM tracker_tasks WHERE id = ?
+		UNION ALL
+		SELECT task_id FROM tracker_task_keys WHERE key = ?
+		UNION ALL
+		SELECT id FROM tracker_tasks WHERE key = ?
+		LIMIT 1`
+
 // resolveTaskID turns an id or a key — current or former — into an id.
 //
 // THE FORMER KEY RESOLVES TOO, and that is not a nicety: a task moved between
@@ -686,19 +722,13 @@ func taskReadScope(ctx context.Context, tx *sql.Tx, idOrKey string) (statelog.Sc
 //
 // A KEY RESOLVES THROUGH THE DIRECTORY FIRST, so a key two tasks hold opens the
 // one that claimed it — the task every earlier reference was written against —
-// on every node, rather than whichever row an index happened to return first.
+// on every data node, rather than whichever row an index happened to return
+// first.
 // The task row is the fallback for a key whose claim has not been written yet.
 func resolveTaskID(ctx context.Context, tx *sql.Tx, idOrKey string) (string, error) {
 	var id string
 	key := strings.ToUpper(idOrKey)
-	err := tx.QueryRowContext(ctx, `
-		SELECT id FROM tracker_tasks WHERE id = ?
-		UNION ALL
-		SELECT task_id FROM tracker_task_keys WHERE key = ?
-		UNION ALL
-		SELECT id FROM tracker_tasks WHERE key = ?
-		LIMIT 1`,
-		idOrKey, key, key).Scan(&id)
+	err := tx.QueryRowContext(ctx, resolveTaskStatement, idOrKey, key, key).Scan(&id)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("%w: %s", ErrNoTask, idOrKey)
@@ -732,6 +762,13 @@ func keyOpensAnother(key, id string) string {
 	          SELECT 1 FROM tracker_task_keys kd
 	          WHERE kd.key = ` + key + ` AND kd.task_id <> ` + id + `))`
 }
+
+// taskDocumentStatement is [readTaskDocument]'s read, named for the plan test.
+const taskDocumentStatement = `
+		SELECT document, status_entered_at, rank, spend_turns, spend_rounds,
+		       spend_input, spend_output, spend_cache_read, spend_cache_write,
+		       spend_wall_ms, spend_tokens, spend_workers, spend_sent_back
+		  FROM tracker_tasks WHERE id = ?`
 
 // readTaskDocument decodes the task's own record.
 //
@@ -769,11 +806,7 @@ func readTaskDocument(ctx context.Context, tx *sql.Tx, id string) (Task, error) 
 	var entered int64
 	var rank string
 	var spend Spend
-	err := tx.QueryRowContext(ctx,
-		`SELECT document, status_entered_at, rank, spend_turns, spend_rounds,
-		        spend_input, spend_output, spend_cache_read, spend_cache_write,
-		        spend_wall_ms, spend_tokens, spend_workers, spend_sent_back
-		   FROM tracker_tasks WHERE id = ?`,
+	err := tx.QueryRowContext(ctx, taskDocumentStatement,
 		id).Scan(&body, &entered, &rank, &spend.Turns, &spend.Rounds, &spend.Input,
 		&spend.Output, &spend.CacheRead, &spend.CacheWrite, &spend.WallMs,
 		&spend.Tokens, &spend.Workers, &spend.SentBack)
@@ -996,16 +1029,20 @@ func cursorID(cursor string) string {
 	return id
 }
 
-// readHistory is the activity feed, NEWEST FIRST and capped.
-func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, error) {
-	rows, err := tx.QueryContext(ctx, `
+// taskHistoryStatement is [readHistory]'s one statement, named so the plan
+// test explains exactly what the reader issues.
+const taskHistoryStatement = `
 		SELECT id, kind, actor, actor_kind, operator_id, comment_id,
 		       excerpt, fields_json, turn_id, notified, effective_at,
 		       log_seq, reassignments
 		FROM tracker_history
 		WHERE subject_id = ?
 		ORDER BY log_seq DESC
-		LIMIT ?`, taskID, limit)
+		LIMIT ?`
+
+// readHistory is the activity feed, NEWEST FIRST and capped.
+func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]HistoryEntry, error) {
+	rows, err := tx.QueryContext(ctx, taskHistoryStatement, taskID, limit)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read the history of %s: %w", taskID, err)
 	}
@@ -1050,6 +1087,24 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 	return out, rows.Err()
 }
 
+// linksStatement is one half of [readLinks], named for the plan test: the
+// edges this task owns, or with mirror the edges pointing at it, each with the
+// task at its other end.
+func linksStatement(mirror bool) string {
+	other, own := "r.other_id", "r.task_id"
+	if mirror {
+		other, own = "r.task_id", "r.other_id"
+	}
+	return `
+		SELECT r.kind, ` + other + `, r.derived, r.one_sided, r.one_sided_final, r.note,
+		       COALESCE(t.key, ''), COALESCE(t.title, ''), COALESCE(t.status, ''),
+		       COALESCE(t.key_collision, 0)
+		FROM tracker_relations r
+		LEFT JOIN tracker_tasks t ON t.id = ` + other + `
+		WHERE ` + own + ` = ?
+		ORDER BY r.kind, ` + other
+}
+
 // readLinks is both directions of every relation.
 //
 // TWO QUERIES RATHER THAN A UNION, because the two halves mean different
@@ -1058,22 +1113,14 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 // in SQL would make a renderer re-derive which end authored the edge from a
 // column that no longer says.
 func readLinks(ctx context.Context, tx *sql.Tx, taskID string) ([]DetailLink, error) {
-	const columns = `
-		SELECT r.kind, %s, r.derived, r.one_sided, r.one_sided_final, r.note,
-		       COALESCE(t.key, ''), COALESCE(t.title, ''), COALESCE(t.status, ''),
-		       COALESCE(t.key_collision, 0)
-		FROM tracker_relations r
-		LEFT JOIN tracker_tasks t ON t.id = %s
-		WHERE %s = ?
-		ORDER BY r.kind, %s`
 	// NEVER NIL — see [readHistory] and [readProjectRows].
 	out := []DetailLink{}
 	for _, q := range []struct {
 		statement string
 		derived   bool
 	}{
-		{fmt.Sprintf(columns, "r.other_id", "r.other_id", "r.task_id", "r.other_id"), false},
-		{fmt.Sprintf(columns, "r.task_id", "r.task_id", "r.other_id", "r.task_id"), true},
+		{linksStatement(false), false},
+		{linksStatement(true), true},
 	} {
 		rows, err := tx.QueryContext(ctx, q.statement, taskID)
 		if err != nil {

@@ -47,9 +47,11 @@ import (
 // # And why a custom field's total reads a different table
 //
 // A declared field's values live in `tracker_field_values`, keyed by field id
-// and typed per column, so `f.<slug>:sum` is a correlated aggregate over that
-// table rather than a column of the task. Its two indexes say so — the numeric
-// one names "their totals" and the date one "their earliest/latest totals".
+// and typed per column, so `f.<slug>:sum` is an aggregate over that table
+// rather than a column of the task — taken over the answer's own tasks' rows,
+// each read by the table's key ([matchedValues]). The value indexes 0002
+// declared name "their totals", and a total driven from them read every value
+// the field holds in the company to keep the answer's.
 
 // The aggregate operations.
 //
@@ -245,24 +247,20 @@ func totalExpr(column, op string, fields map[string]resolvedField) (
 			// A COUNT OF A FIELD IS "HOW MANY TASKS SET IT", which is
 			// the honest reading and the one a header wants — never
 			// how many VALUE ROWS a multi-valued field produced.
-			return `(SELECT COUNT(DISTINCT v.task_id) FROM tracker_field_values v
-			         WHERE v.field_id = ? AND ` + liveFieldValue + `
-			           AND v.task_id IN (SELECT id FROM matched))`,
+			return `(SELECT COUNT(DISTINCT v.task_id) ` + matchedValues + `
+			         WHERE v.field_id = ? AND ` + liveFieldValue + `)`,
 				[]any{field.ID}, false, nil
 		}
 		if _, ranked := rankOf[op]; ranked {
 			// THE COUNT OF THE VALUES, which is this statement's column
 			// for an order statistic — see [readRanked].
-			return `(SELECT COUNT(v.` + value + `)
-			         FROM tracker_field_values v
-			         WHERE v.field_id = ? AND ` + liveFieldValue + `
-			           AND v.task_id IN (SELECT id FROM matched))`,
+			return `(SELECT COUNT(v.` + value + `) ` + matchedValues + `
+			         WHERE v.field_id = ? AND ` + liveFieldValue + `)`,
 				[]any{field.ID}, value == "at", nil
 		}
-		return `(SELECT ` + strings.ToUpper(op) + `(v.` + value + `)
-		         FROM tracker_field_values v
-		         WHERE v.field_id = ? AND ` + liveFieldValue + `
-		           AND v.task_id IN (SELECT id FROM matched))`,
+		return `(SELECT ` + strings.ToUpper(op) + `(v.` + value + `) ` +
+				matchedValues + `
+		         WHERE v.field_id = ? AND ` + liveFieldValue + `)`,
 			[]any{field.ID}, value == "at", nil
 	}
 	if op == TotalCount && column == "tasks" {
@@ -289,6 +287,26 @@ func totalExpr(column, op string, fields map[string]resolvedField) (
 	return strings.ToUpper(op) + "(" + expr + ")", nil, instantColumns[column], nil
 }
 
+// matchedValues is where a total over a custom field reads its values from:
+// each task of the answer's set, and that task's own rows of the field, read
+// by the table's key ([fieldValuesKey]) — so a total costs the set it totals
+// rather than every value the field holds in the company, which is what
+// driving it from the field's value index read, inside one project as at the
+// workspace.
+//
+// A CROSS JOIN, which in this engine as in SQLite is an inner join whose
+// tables are read in the order written: the matched set first, then each
+// task's values. Written as a plain JOIN the planner chose the order by its
+// estimates, which no statistics anchor and any clause of the answer's
+// predicate moves — and measured at the workspace, once the subtask rollup's
+// probe of each row's root changed the matched set's estimate, it read the
+// value table's whole key index first and scanned the matched set again for
+// every value, which is every value of every field in the company for one
+// header.
+const matchedValues = `FROM matched m
+		         CROSS JOIN tracker_field_values v INDEXED BY ` + fieldValuesKey + `
+		           ON v.task_id = m.id`
+
 // rankedValues is the value expression and the FROM … WHERE clause an order
 // statistic reads its values from, with the clause's arguments. Called only
 // for a column [totalExpr] has already accepted.
@@ -296,9 +314,8 @@ func rankedValues(column string, fields map[string]resolvedField) (string, strin
 	if ref, ok := strings.CutPrefix(column, FieldKeyPrefix); ok && ref != "" {
 		field := fields[ref]
 		value := "v." + FieldValueColumn(field.Type)
-		return value, `FROM tracker_field_values v
+		return value, matchedValues + `
 		         WHERE v.field_id = ? AND ` + liveFieldValue + `
-		           AND v.task_id IN (SELECT id FROM matched)
 		           AND ` + value + ` IS NOT NULL`, []any{field.ID}
 	}
 	expr := totalColumns[column]
@@ -310,18 +327,17 @@ func rankedValues(column string, fields map[string]resolvedField) (string, strin
 // A COMMON TABLE EXPRESSION HOLDS THE MATCHED SET, so a custom field's
 // correlated aggregate and a task column's plain one read the same rows — and
 // the predicate is evaluated once rather than once per total.
-func readTotals(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
+func readTotals(ctx context.Context, tx *sql.Tx, set taskSet,
 	totals []Total, exprs []string, exprArgs []any) ([]Total, error) {
 
 	if len(totals) == 0 {
 		return nil, nil
 	}
-	query := matchedSet(where) + `
-	          SELECT ` + strings.Join(exprs, ", ") + ` FROM matched t`
+	query := totalsStatement(set, exprs)
 	// THE EXPRESSION ARGUMENTS COME AFTER THE PREDICATE'S, because the
 	// common table expression is written first and its placeholders are
 	// bound in statement order.
-	args := append(append([]any{}, whereArgs...), exprArgs...)
+	args := append(append([]any{}, set.args...), exprArgs...)
 
 	cells := make([]any, len(totals))
 	targets := make([]any, len(totals))
@@ -338,7 +354,7 @@ func readTotals(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
 			// THE CELL IS A COUNT, and the value is the one at its
 			// nearest-rank position.
 			var err error
-			if number, held, err = readRanked(ctx, tx, where, whereArgs, total, int64(number)); err != nil {
+			if number, held, err = readRanked(ctx, tx, set, total, int64(number)); err != nil {
 				return nil, err
 			}
 		}
@@ -372,17 +388,14 @@ func (t Total) answered(number float64, held bool) Total {
 // matched", measured), and a window function would number every row of the
 // set to read one. An EMPTY set has no position to read and answers absent,
 // like every other aggregate over nothing.
-func readRanked(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
+func readRanked(ctx context.Context, tx *sql.Tx, set taskSet,
 	total Total, n int64) (float64, bool, error) {
 
 	if n <= 0 {
 		return 0, false, nil
 	}
 	offset := (n*int64(total.rank)+rankDenominator-1)/rankDenominator - 1
-	query := matchedSet(where) + `
-	          SELECT ` + total.value + ` ` + total.ranked + `
-	          ORDER BY ` + total.value + ` LIMIT 1 OFFSET ?`
-	args := append(append(append([]any{}, whereArgs...), total.rankArgs...), offset)
+	query, args := rankedStatement(set, total, offset)
 	var cell any
 	switch err := tx.QueryRowContext(ctx, query, args...).Scan(&cell); {
 	case errors.Is(err, sql.ErrNoRows):
@@ -395,9 +408,25 @@ func readRanked(ctx context.Context, tx *sql.Tx, where string, whereArgs []any,
 	return number, held, nil
 }
 
+// rankedStatement is [readRanked]'s read of the value at one position of the
+// set's values in order, named for the plan test.
+func rankedStatement(set taskSet, total Total, offset int64) (string, []any) {
+	return matchedSet(set) + `
+	          SELECT ` + total.value + ` ` + total.ranked + `
+	          ORDER BY ` + total.value + ` LIMIT 1 OFFSET ?`,
+		append(append(append([]any{}, set.args...), total.rankArgs...), offset)
+}
+
+// totalsStatement is the one statement [readTotals] reads every total with,
+// one column per expression — named for the plan test.
+func totalsStatement(set taskSet, exprs []string) string {
+	return matchedSet(set) + `
+	          SELECT ` + strings.Join(exprs, ", ") + ` FROM matched t`
+}
+
 // matchedSet is the common table expression every total is read over: the
-// answer's own predicate, and every column a total may name.
-func matchedSet(where string) string {
+// answer's own set, and every column a total may name.
+func matchedSet(set taskSet) string {
 	return `WITH matched AS (SELECT t.id, t.spend_tokens, t.spend_turns,
 	                                  t.spend_rounds, t.spend_input,
 	                                  t.spend_output, t.spend_cache_read,
@@ -407,7 +436,7 @@ func matchedSet(where string) string {
 	                                  t.reassignments, t.reopens, t.depth, t.due_at,
 	                                  t.start_at, t.created_at, t.updated_at,
 	                                  t.finished_at
-	                             FROM tracker_tasks t WHERE ` + where + `)`
+	                             FROM ` + set.from + ` WHERE ` + set.where + `)`
 }
 
 // asFloat reads whatever the driver handed back for an aggregate.

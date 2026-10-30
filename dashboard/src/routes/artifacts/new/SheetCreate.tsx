@@ -48,7 +48,7 @@ import { Columns3Glyph, FileTextGlyph, PlusGlyph, UploadGlyph } from "@crewlethq
 import { useNavigator } from "~/app/router.tsx";
 import { COLLECTION_PRESETS } from "~/contract/artifacts.ts";
 import { TASK_BODY_MAX_BYTES } from "~/contract/work.ts";
-import { plural, utf8Bytes } from "~/lib/format.ts";
+import { fmtBytes, plural, utf8Bytes } from "~/lib/format.ts";
 import { useArtifactAccess } from "~/lib/artifacts/access.ts";
 import { useArtifactPeople } from "~/lib/artifacts/people.ts";
 import {
@@ -255,7 +255,7 @@ export function SheetCreate() {
     setStart("import");
     if (file.size > IMPORT_BYTES_MAX) {
       setImportProblem(
-        `${file.name} is ${(file.size / 1024 / 1024).toFixed(1)} MB and a file read here is at most ${IMPORT_BYTES_MAX / 1024 / 1024} MB. Ask an agent to load a larger table.`,
+        `${file.name} is ${fmtBytes(file.size)} and a file read here is at most ${fmtBytes(IMPORT_BYTES_MAX)}. Ask an agent to load a larger table.`,
       );
       return;
     }

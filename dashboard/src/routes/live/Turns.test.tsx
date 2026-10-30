@@ -318,7 +318,8 @@ test("sort=-tokens asks the engine for the costliest turns first", async () => {
 });
 
 // A NODE THAT DID NOT ANSWER IS NAMED. The fleet's turns are read from every
-// node at query time, and a short list with no note reads as a quiet company.
+// data node at query time, and a short list with no note reads as a quiet
+// company.
 test("a node missing from the answer is named above the list", async () => {
   mountWith({
     turns: {

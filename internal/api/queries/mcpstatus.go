@@ -49,7 +49,8 @@ const (
 	// or a server no node has applied yet.
 	MCPNotStarted MCPServerState = "not_started"
 	// MCPUnreported — no live node's latest heartbeat carried its MCP
-	// report (its status hook overran the beat, or no node is live), so
+	// report (its status hook did not answer within its share of the beat,
+	// or no node is live), so
 	// nothing can be said about any server. Not "not started", which would
 	// be a claim nobody made.
 	MCPUnreported MCPServerState = "unreported"
@@ -78,8 +79,8 @@ type MCPStatusAnswer struct {
 type MCPStatusNode struct {
 	ID string `json:"id"`
 	// Reported is whether the node's latest heartbeat carried its status.
-	// False when its status hook did not finish inside the beat's budget,
-	// and its cells are UNKNOWN, never zero.
+	// False when its status hook did not answer within its share of the
+	// beat, and its cells are UNKNOWN, never zero.
 	Reported bool `json:"reported"`
 }
 

@@ -67,6 +67,25 @@ func ShardOf(source, id string) int {
 	return int(h.Sum64() % uint64(SearchShards))
 }
 
+// ChatShardOf is a chat message's bucket.
+//
+// ONE RULE FOR BOTH ESTATES that file a message: the chat applier stamps it on
+// the replicated row, and the chat keyword index ([ChatIndexer]) on its own
+// document. Two copies of the namespace beside two calls to [ShardOf] are two
+// answers that agree only while nobody edits one of them, and a fan-out that
+// assigned a node the range [16, 32) over two estates that disagreed would read
+// a message in one bucket and look for it in another — a search returning one
+// fewer hit, which looks exactly like a corpus holding one fewer message.
+//
+// A NAMESPACE OF ITS OWN rather than a member of [Source], deliberately: that
+// enum is the list the embedding duty walks, and a value added there to name
+// chat's bucket would enrol the whole transcript in the semantic half. What the
+// bucket needs is a stable string, and this is one.
+func ChatShardOf(messageID string) int { return ShardOf(chatShardSource, messageID) }
+
+// chatShardSource is the namespace [ChatShardOf] hashes a message under.
+const chatShardSource = "message"
+
 // Assignment is the set of buckets one scan may read.
 //
 // EMPTY MEANS EVERY BUCKET, which is what a single node has and what every

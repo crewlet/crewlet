@@ -46,8 +46,8 @@
  * the turns that ENDED — `agent_turn_completed` with `suspended=false`, one
  * record per turn, since a turn that parked on a coding run writes a
  * completion for the segment that parked it — counted by the engine over the
- * whole window on every node, with the failed share of each bar drawn at its
- * foot. The list is paged; the axis is not.
+ * whole window on every data node, with the failed share of each bar drawn at
+ * its foot. The list is paged; the axis is not.
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -336,8 +336,8 @@ export function Turns() {
             bucket={bucket}
             total={total}
             noun="turn"
-            // THE ENGINE'S COUNT, over the whole window and every node that
-            // answered — never the page this screen happens to hold.
+            // THE ENGINE'S COUNT, over the whole window and every data node
+            // that answered — never the page this screen happens to hold.
             over="window"
             axis
             now={now}

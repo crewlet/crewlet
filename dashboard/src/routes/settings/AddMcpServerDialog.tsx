@@ -99,6 +99,8 @@ function addRefusalWords(refusal: ConfigRefusal, name: string, stage: "check" | 
       return `This node is draining and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
     case "starting":
       return `This node is still starting and stored nothing${refusal.detail ? `: ${refusal.detail}` : "."}`;
+    case "unavailable":
+      return refusal.detail;
     case "unsettled":
       return stage === "check"
         ? `${unsettledSentence(refusal)} Nothing was added. Try again.`

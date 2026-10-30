@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -62,7 +63,7 @@ func (a assistantFiles) Store(ctx context.Context, w assistant.Write,
 		Name: f.Name, MediaType: f.MediaType, Content: f.Content,
 	})
 	if err = settled(res, err); err != nil {
-		return wire.FileRef{}, fileRefusal(err)
+		return wire.FileRef{}, unkept(fileRefusal(err))
 	}
 	return stored.Ref(), nil
 }
@@ -89,6 +90,19 @@ func (a assistantFiles) Stat(ctx context.Context, owner, conversation,
 func assistantStoredFile(f assistantdomain.File) assistant.StoredFile {
 	return assistant.StoredFile{FileRef: f.Ref(), Owner: f.Owner,
 		Conversation: f.Conversation, Turn: f.Turn, Origin: f.Origin, CreatedAt: f.CreatedAt}
+}
+
+// unkept is a file the store did not keep, as the orchestrator is told it: a
+// condition of the node (the company's file storage full, a store that did not
+// take the bytes, a log that refused the file's record) carries the words a
+// model is told it in ([assistant.Unkept], from [builtin.Condition], which
+// nothing under internal/assistant may reach), its error kept beneath for the
+// route that tells a person; anything else is returned as it is.
+func unkept(err error) error {
+	if said, ok := builtin.Condition(err); ok {
+		return &assistant.Unkept{Said: said, Cause: err}
+	}
+	return err
 }
 
 // fileRefusal is a domain refusal told as the orchestrator's sentinel, the

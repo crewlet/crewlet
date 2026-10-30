@@ -831,9 +831,13 @@ function RunPane({
   const [unused, setUnused] = useState<string | null>(null);
   // ANSWERED BY SOMEBODY ELSE FIRST: nothing is left to answer here.
   const [superseded, setSuperseded] = useState(false);
-  // THE ENGINE REFUSED THIS ANSWER because the question was answered: said
-  // here off the run's record, on the reader's own clock.
-  const [refusedAnswered, setRefusedAnswered] = useState(false);
+  // THE ENGINE REFUSED THIS ANSWER because the question was answered, and
+  // whether it said so in its own sentence (`worded`), the refusal's
+  // `detail`, which names who answered. An older node may send none, and
+  // the dashboard's sentence for the code, which names nobody, is drawn.
+  // When it was answered is said beside it off the run's record, on the
+  // reader's own clock.
+  const [refusedAnswered, setRefusedAnswered] = useState<{ worded: boolean } | null>(null);
   const runs = useQuery("sandbox_runs", undefined, { pollMs: RUNS_POLL_MS });
   const record = runs.data?.runs.find((r) => r.turn_id === run.turn_id);
   // WHETHER THIS ANSWER WAS SEEN ON THE RUN, so a record that then goes away
@@ -933,7 +937,11 @@ function RunPane({
     // sandbox_runs and decisions among it. Who answered and when arrive
     // without a read of this pane's own, and so does the question the run
     // asks now, which this pane then draws under the engine's sentence.
-    setRefusedAnswered(result?.kind === "refused" && result.code === "already_answered");
+    setRefusedAnswered(
+      result?.kind === "refused" && result.code === "already_answered"
+        ? { worded: result.detail !== "" }
+        : null,
+    );
     if (result && (result.kind === "applied" || result.kind === "pending")) {
       const receipt = (result.receipt ?? {}) as { launch_id?: unknown; answer_id?: unknown };
       setUnused(null);
@@ -967,6 +975,11 @@ function RunPane({
       },
     );
   };
+  // WHO ANSWERED IS SAID ONCE. The engine's sentence for the refusal names
+  // them while it is drawn, so the line beside it says only when; where the
+  // strip is the dashboard's own sentence, or the reader dismissed it,
+  // nothing else on the pane names them, and the line does.
+  const answererNamed = refusedAnswered?.worded === true && write.refusal !== null;
   return (
     <TokenScope texts={runAskTexts(run)}>
       <ReadingPane>
@@ -1034,11 +1047,13 @@ function RunPane({
             )}
           </ReadingPaneOutcome>
         ) : superseded ? (
+          // THE PANE'S OWN SENTENCE names nobody, so the line beside it says
+          // whose answer was used as well as when.
           <Stack gap={2}>
             {unused && <RefusalStrip onDismiss={() => setUnused(null)}>{unused}</RefusalStrip>}
             {record?.answered_at && (
               <Text as="p" variant="caption">
-                {answeredAt(record, now)}
+                {answeredAt(record, now, true)}
               </Text>
             )}
           </Stack>
@@ -1090,8 +1105,8 @@ function RunPane({
                     </>
                   }
                 />
-                {/* THE ENGINE'S SENTENCE (the refusal catalog's), and only the
-                    time beside it on the reader's clock, off the run's record. */}
+                {/* THE REFUSAL'S SENTENCE, drawn here under the field and by
+                    `AnswerChoices` under the options. */}
                 <RefusalNote write={write} />
               </>
             ) : (
@@ -1105,9 +1120,12 @@ function RunPane({
                 onSomethingElse={() => setOpen(true)}
               />
             )}
+            {/* BESIDE THE REFUSAL'S SENTENCE, when the question was
+                answered, on the reader's clock, off the run's record, naming
+                who answered only where nothing above it does ([answererNamed]). */}
             {refusedAnswered && record?.answered_at && (
               <Text as="p" variant="caption">
-                {answeredAt(record, now)}
+                {answeredAt(record, now, !answererNamed)}
               </Text>
             )}
           </Stack>
@@ -1119,12 +1137,15 @@ function RunPane({
 }
 
 /**
- * When the answer that was used was recorded, and by whom, on the READER's
- * clock ([moment]): a value beside the engine's own sentence, never a second
- * wording of it.
+ * When the answer that was used was recorded, on the READER's clock
+ * ([moment]), and by whom where `who`: a value beside the sentence drawn
+ * above it, never a second wording of it. Who answered is left to that
+ * sentence where it names them, as the engine's sentence for a question
+ * already answered does (`caveat.AnsweredAlready`, which leaves the time to
+ * the screen), so a person is told it once.
  */
-function answeredAt(record: SandboxRun, now: number): string {
-  const by = record.answered_by ? ` by @${record.answered_by}` : "";
+function answeredAt(record: SandboxRun, now: number, who: boolean): string {
+  const by = who && record.answered_by ? ` by @${record.answered_by}` : "";
   return `Answered${by} at ${moment(record.answered_at ?? "", now)}.`;
 }
 

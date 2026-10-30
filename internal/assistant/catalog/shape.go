@@ -94,7 +94,7 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 			t.Phrase, cards.Retryable(resp.Status))}, Model: model, Refusal: &refusal}, nil
 	}
 	if resp.Truncated {
-		return oversize(t, args, b)
+		return oversize(t, args, b, o)
 	}
 	if t.Infer {
 		return shapeAnswer(t, args, resp, b, now)
@@ -107,7 +107,7 @@ func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now tim
 	if err != nil {
 		return Result{}, err
 	}
-	built, err := cards.BuildWith(scoped(spec, t.ScopeOf(args)), body, now, o)
+	built, err := cards.BuildWith(scoped(spec, t.ScopeOf(args, o)), body, now, o)
 	if err != nil {
 		return Result{}, fmt.Errorf("catalog: card %s's answer: %w", t.Name, err)
 	}
@@ -287,7 +287,7 @@ var narrowingQuery = map[string]bool{
 	"priority": true, "project": true, "container": true, "unit": true, "kind": true,
 	"kinds": true, "task": true, "unread": true, "primary_only": true, "folder": true,
 	"label": true, "title": true, "asked_of": true, "asked_by": true, "has_open_asks": true,
-	"collection": true, "field": true, "due": true,
+	"collection": true, "field": true, "due": true, "author": true,
 }
 
 // narrowWords are the arguments a person reads by other words than their
@@ -340,13 +340,13 @@ const cutNote = "None of this answer reached you or the person: it is larger tha
 // text nobody vouched for. The fact goes through [modelFact], fenced or
 // defused as every result of the tool is, held to the same bound and labelled
 // with the trust the call earns.
-func oversize(t Tool, args Args, b provenance.Boundary) (Result, error) {
-	title := t.StepLabel(args)
+func oversize(t Tool, args Args, b provenance.Boundary, o cards.Options) (Result, error) {
+	title := t.StepLabel(args, o)
 	var open *wire.Link
 	if spec, ok := t.CardFor(args); ok {
 		switch {
 		case spec.Table != nil:
-			title = withScope(spec.Table.Title, t.ScopeOf(args))
+			title = withScope(spec.Table.Title, t.ScopeOf(args, o))
 			open = cards.OpenFor(spec.Table.Open, args)
 		case spec.Entity != nil:
 			open = cards.OpenFor(spec.Entity.Open, args)

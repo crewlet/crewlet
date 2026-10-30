@@ -1,5 +1,7 @@
 package config
 
+import "github.com/crewlet/crewlet/internal/toolname"
+
 // Learning configures the agent-learning subsystem: what a seat remembers
 // from a turn, what it distils into reusable skills, and what it eventually
 // forgets.
@@ -95,7 +97,17 @@ type Reflect struct {
 	// entries. Falls back to the raw entries when no auxiliary model
 	// answers. query_episodes' answer is never summarised: a seat that asked
 	// for its turns gets them.
-	SummarizeEpisodes Toggle `yaml:"summarize_episodes,omitempty" json:"summarize_episodes,omitzero" desc:"Summarise the turn-start Similar prior work block's hits into one briefing through the auxiliary model (default on); query_episodes is never summarised."`
+	SummarizeEpisodes Toggle `yaml:"summarize_episodes,omitempty" json:"summarize_episodes,omitzero"`
+}
+
+// fieldDescriptions is the schema's description of each of Reflect's fields
+// whose text names a tool, which a `desc` tag cannot read from its constant.
+func (Reflect) fieldDescriptions() map[string]string {
+	return map[string]string{
+		"summarize_episodes": "Summarise the turn-start Similar prior work " +
+			"block's hits into one briefing through the auxiliary model " +
+			"(default on); " + toolname.QueryEpisodes + " is never summarised.",
+	}
 }
 
 // Runs reports whether reflection runs, applying the true default.

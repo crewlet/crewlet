@@ -814,7 +814,7 @@ func (s *Service) proveSecondFactor(w http.ResponseWriter, r *http.Request,
 		// record that it was used. Signing somebody in on a code that
 		// stays usable is the replay the spend exists to close, so the
 		// honest answer is that this node cannot finish the sign-in now.
-		writeFailed(w, r, "api_second_factor_unspent", spend.OpID, err)
+		gestureFailed(w, r, "api_second_factor_unspent", spend.OpID, err)
 		return factorUse{}, false
 	case !built(spend):
 		// AND NOT A SPEND EITHER: nothing can establish whether it is on
@@ -1031,7 +1031,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 				s.personRemoved(w, r, how)
 				return loginResponse{}, false
 			}
-			writeFailed(w, r, "api_step_up_close_failed", closeOp, closeErr)
+			gestureFailed(w, r, "api_step_up_close_failed", closeOp, closeErr)
 			return loginResponse{}, false
 		}
 		if !landed(closed) {
@@ -1090,7 +1090,7 @@ func (s *Service) openSignIn(w http.ResponseWriter, r *http.Request,
 		// the epoch and the generation a bearer carries are the decide's,
 		// and nothing can prove they are the landed record's — so no
 		// bearer, and signing in again opens a session of its own.
-		writeFailed(w, r, "api_sign_in_session_failed", sessionOpID(lineage), err)
+		gestureFailed(w, r, "api_sign_in_session_failed", sessionOpID(lineage), err)
 		return loginResponse{}, false
 	}
 	if !landed(opened.Result) {

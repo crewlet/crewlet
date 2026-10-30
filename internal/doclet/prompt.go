@@ -72,7 +72,18 @@ func (p Prompt) ConversationIdentity(metadata map[string]string, subject string)
 
 // WakesActor implements [notify.Prompt]: never. Every change here is one the
 // actor already knows about.
-func (Prompt) WakesActor(string) bool { return false }
+func (Prompt) WakesActor(notify.Inbound) bool { return false }
+
+// Provenance implements [notify.Prompt]: the remark, the page's opening line or
+// the note saved with it, as the change kind says ([excerptSource]), by the
+// author the parser stated ([notify.StatedHosted]). HOSTED, because only
+// company principals write the engine's own knowledge base: a change whose
+// record names nobody reads as a colleague's — as the same page does as a
+// search hit ([HitLabel]) and through get_page — rather than a stranger's
+// ([provenance.TrustForHosted]).
+func (Prompt) Provenance(n notify.Inbound, parties notify.Parties) notify.Provenance {
+	return notify.StatedHosted(n, parties, excerptSource(ChangeKind(n.EventType)))
+}
 
 // DigestBody implements [notify.Prompt]: comments keep their text, saves
 // collapse.
@@ -195,7 +206,7 @@ func promptGetContext(b *strings.Builder, meta map[string]string) {
 		return
 	}
 	b.WriteString("\n## Get full context" +
-		"\nRead the page with `get_page` before deciding whether anything is " +
+		"\nRead the page with `" + GetPageTool + "` before deciding whether anything is " +
 		"needed of you: this notice carries what changed, not the page.\n")
 	if url := meta["url"]; url != "" {
 		b.WriteString("Link: " + url + "\n")
@@ -220,9 +231,9 @@ func promptHandling(b *strings.Builder, meta map[string]string) {
 	}
 	if meta[RoutedViaField] == ViaMention {
 		b.WriteString("\n## How to handle this" +
-			"\nAnswer on the page with `comment_on_page`, so the answer sits " +
+			"\nAnswer on the page with `" + CommentOnPageTool + "`, so the answer sits " +
 			"beside the question. If the answer is a change to the page, make " +
-			"it with `save_page`, passing the `version` you read as " +
+			"it with `" + SavePageTool + "`, passing the `version` you read as " +
 			"`base_version`, and say in your comment what you changed.\n")
 		return
 	}

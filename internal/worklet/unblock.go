@@ -89,14 +89,56 @@ type UnblockScan struct {
 	Through uint64
 }
 
+// unblockHorizonStatement is the repair's own horizon: the newest status row
+// past the last one it read. Named, like [unblockedDependentsStatement], so the
+// plan test explains exactly what [ScanUnblocked] issues.
+const unblockHorizonStatement = `
+		SELECT COALESCE(MAX(log_seq), ?) FROM tracker_history
+		WHERE log_seq > ?
+		  AND json_extract(fields_json, '$.status.to') IS NOT NULL`
+
+// unblockedDependentsStatement is every ready dependent of a blocker whose
+// status moved between two positions, read by [ScanUnblocked].
+//
+// THE WINDOW DRIVES IT, which is why the dependents are an IN over the
+// window's rows rather than a join beside them: the window's status rows are
+// a range on the repair's own partial index, each blocker's edges a seek on
+// the dependency key, and each dependent one primary-key read. Written as a
+// three-way join, the planner — with no statistics, as on every node — chose
+// to drive from the TASKS instead: a walk of every live task in the company
+// through `tracker_tasks_type_idx`, seeking each one's edges and then the
+// history, on every tick of the duty, and never touching the index replicated
+// 0008 built for this read. An IN also needs no DISTINCT, since each task row
+// is read once whatever number of its blockers moved.
+const unblockedDependentsStatement = `
+		SELECT t.id, t.key, t.project_key, t.assignee,
+		       (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
+		        WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
+		FROM tracker_tasks t
+		WHERE t.id IN (SELECT d.task_id FROM tracker_history h
+		               JOIN tracker_task_deps d ON d.blocker_id = h.subject_id
+		               WHERE json_extract(h.fields_json, '$.status.to') IS NOT NULL
+		                 AND h.log_seq > ? AND h.log_seq <= ?)
+		  AND t.removed_at IS NULL
+		  -- AN UNASSIGNED DEPENDENT HAS NOBODY TO TELL: see the
+		  -- comment on ScanUnblocked.
+		  AND t.assignee <> ''
+		  AND NOT EXISTS (SELECT 1 FROM tracker_task_deps o
+		                  WHERE o.task_id = t.id AND o.blocker_open = 1)
+		  AND (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
+		       WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
+		      > COALESCE(t.unblocked_told_at, 0)
+		ORDER BY t.id LIMIT ?`
+
 // ScanUnblocked finds every dependent that became workable since a position.
 //
 // # The query, and why each clause is there
 //
-// It reads status changes at `log_seq > since` — a keyset range on the
-// (log_seq) index — restricted to subjects that are BLOCKERS, collects their
-// dependents, and keeps a dependent only when it has no open blocker left and
-// the newest clearing among its blockers is later than what it was last told.
+// It reads status changes at `log_seq > since` — a range on the repair's own
+// partial index, `tracker_history_status_seq_idx` — restricted to subjects
+// that are BLOCKERS, collects their dependents, and keeps a dependent only when
+// it has no open blocker left and the newest clearing among its blockers is
+// later than what it was last told.
 //
 // # THE ROW'S OWN STATUS DELTA DECIDES, NOT ITS KIND
 //
@@ -107,17 +149,17 @@ type UnblockScan struct {
 // change that moved the status and something else is filed under the something
 // else and was invisible here.
 //
-// The reachable case is a BULK CANCEL — `StatusCancelled` is in the `done`
-// group, whose own description names this path — so the apply stamps each task
-// finished and clears every edge naming it as a blocker, and its dependents
-// become workable. Such a record is quiet by design, and nothing outside
-// [Writer.TellUnblocked] ever fills `Snapshot.Unblocked`, so this scan is the
-// ONLY path by which those people hear. Filed under whatever else the patch
-// moved, the join never reached them — and the horizon below, computed from
-// the same predicate, then advanced past the record on the next status row
-// anywhere in the log, so it was never reconsidered. "A gap of any length is
-// caught up on the next tick" does not hold for a row the predicate cannot
-// name.
+// The case it exists for is a QUIET CANCEL filed under another word —
+// `StatusCancelled` is in the `done` group, whose own description names this
+// path — so the apply stamps each task finished and clears every edge naming
+// it as a blocker, and its dependents become workable. A quiet record wakes
+// nobody, and nothing outside [Writer.TellUnblocked] ever fills
+// `Snapshot.Unblocked`, so this scan is the ONLY path by which those people
+// hear. Filed under whatever else the patch moved, the join never reached them
+// — and the horizon below, computed from the same predicate, then advanced
+// past the record on the next status row anywhere in the log, so it was never
+// reconsidered. "A gap of any length is caught up on the next tick" does not
+// hold for a row the predicate cannot name.
 //
 // A dependent with any open edge is not ready. A dependent already told about
 // a later clearing is not owed anything. Both are the difference between a
@@ -133,42 +175,20 @@ func ScanUnblocked(ctx context.Context, db store.ReplicatedReader, since uint64,
 		// THE HORIZON IS OVER THE SAME PREDICATE AS THE ROWS, which is
 		// what makes advancing it safe: a horizon computed over a WIDER
 		// set steps past records the scan below never looked at.
-		if err := tx.QueryRowContext(ctx, `
-			SELECT COALESCE(MAX(log_seq), ?) FROM tracker_history
-			WHERE log_seq > ?
-			  AND json_extract(fields_json, '$.status.to') IS NOT NULL`,
+		if err := tx.QueryRowContext(ctx, unblockHorizonStatement,
 			since, since).Scan(&scan.Through); err != nil {
 			return fmt.Errorf("worklet: read the repair's own horizon: %w", err)
 		}
 		// THE TWO PREDICATES ABOUT THE DEPENDENT ARE SUBQUERIES OVER
-		// ALL ITS EDGES, never aggregates over the joined ones.
+		// ALL ITS EDGES, never aggregates over the window's.
 		//
-		// The join reaches only the blockers whose status changed in
-		// this window, so an aggregate over it answers "has every
-		// blocker THAT MOVED cleared" — which is true the moment one of
-		// two closes, and wakes somebody for work they still cannot
-		// start. The same is true of the clearing instant: the newest
-		// clearing among the blockers that moved is not the newest among
-		// the blockers.
-		rows, err := tx.QueryContext(ctx, `
-			SELECT DISTINCT t.id, t.key, t.project_key, t.assignee,
-			       (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
-			        WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
-			FROM tracker_history h
-			JOIN tracker_task_deps d ON d.blocker_id = h.subject_id
-			JOIN tracker_tasks t ON t.id = d.task_id
-			WHERE json_extract(h.fields_json, '$.status.to') IS NOT NULL
-			  AND h.log_seq > ? AND h.log_seq <= ?
-			  AND t.removed_at IS NULL
-			  -- AN UNASSIGNED DEPENDENT HAS NOBODY TO TELL: see the
-			  -- comment on ScanUnblocked.
-			  AND t.assignee <> ''
-			  AND NOT EXISTS (SELECT 1 FROM tracker_task_deps o
-			                  WHERE o.task_id = t.id AND o.blocker_open = 1)
-			  AND (SELECT MAX(o.cleared_at) FROM tracker_task_deps o
-			       WHERE o.task_id = t.id AND o.cleared_at IS NOT NULL)
-			      > COALESCE(t.unblocked_told_at, 0)
-			ORDER BY t.id LIMIT ?`,
+		// The window reaches only the blockers whose status changed in
+		// it, so an aggregate over those answers "has every blocker THAT
+		// MOVED cleared" — which is true the moment one of two closes,
+		// and wakes somebody for work they still cannot start. The same
+		// is true of the clearing instant: the newest clearing among the
+		// blockers that moved is not the newest among the blockers.
+		rows, err := tx.QueryContext(ctx, unblockedDependentsStatement,
 			since, scan.Through, limit)
 		if err != nil {
 			return fmt.Errorf("worklet: read the unblocked dependents since "+

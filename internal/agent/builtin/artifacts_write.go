@@ -21,10 +21,13 @@ import (
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/objstore"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tools"
 	"github.com/crewlet/crewlet/internal/tools/argval"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The stale answer's budget for the live version's text: the first
@@ -41,7 +44,7 @@ func filesParam(patch bool) map[string]any {
 		"default, or `base64`), `{from_sandbox: \"dist/app.js\"}` (a file your coding run " +
 		"wrote in this turn, relative to its workspace), `{from_project_file: {project, " +
 		"path}}` or `{from_brand: \"logo.primary\"}` (a logo or typeface of your company's " +
-		"adopted brand, copied in; get_company_brand gives each ready to paste). Inline " +
+		"adopted brand, copied in; " + CompanyBrandTool + " gives each ready to paste). Inline " +
 		"content is at most 1 MiB in all."
 	if patch {
 		desc += " Null removes a file; files you leave out are kept."
@@ -94,8 +97,8 @@ func capabilitiesArg(tool string, args map[string]any) ([]artifacts.Capability, 
 		name, _ := argval.String(v)
 		c := artifacts.Capability(strings.TrimSpace(name))
 		if !c.Valid() {
-			return nil, fmt.Sprintf("%s: %q is not a capability; the page may use %v.",
-				tool, clip(fmt.Sprint(v)), artifacts.Capabilities)
+			return nil, fmt.Sprintf("%s: %q is not a capability; the page may use %s.",
+				tool, clip(fmt.Sprint(v)), words.Or(artifacts.Capabilities))
 		}
 		if !slices.Contains(out, c) {
 			out = append(out, c)
@@ -175,8 +178,8 @@ func (t *createArtifact) Description() string {
 		"brand kit, a deck's index, a design's canvas, a dashboard or a doc's index, read " +
 		"its exact format with " + ArtifactFormatTool + ". When a person asked for it, " +
 		"they are made an editor. Begin a deck with `starter` rather than writing every slide. " +
-		"When your company has a brand, read get_company_brand before writing slides, " +
-		"logos or typefaces. To change an existing artifact use publish_artifact; the " +
+		"When your company has a brand, read " + CompanyBrandTool + " before writing slides, " +
+		"logos or typefaces. To change an existing artifact use " + PublishArtifactTool + "; the " +
 		"answer carries the `url` to send people."
 }
 
@@ -289,7 +292,7 @@ func starterArg(args map[string]any) (*slideformat.Plan, string) {
 	}
 	m, ok := raw.(map[string]any)
 	if !ok {
-		return nil, "create_artifact takes `starter` as `{theme, slides: [{layout, title}]}`."
+		return nil, CreateArtifactTool + " takes `starter` as `{theme, slides: [{layout, title}]}`."
 	}
 	plan := &slideformat.Plan{}
 	for field, v := range m {
@@ -297,22 +300,22 @@ func starterArg(args map[string]any) (*slideformat.Plan, string) {
 		case "theme":
 			theme, ok := argval.String(v)
 			if !ok || v == nil {
-				return nil, "create_artifact: `starter.theme` is a theme's id."
+				return nil, CreateArtifactTool + ": `starter.theme` is a theme's id."
 			}
 			plan.Theme = strings.TrimSpace(theme)
 		case "slides":
 			list, ok := argval.List(v)
 			if !ok {
-				return nil, "create_artifact: `starter.slides` is a list of `{layout, title}`."
+				return nil, CreateArtifactTool + ": `starter.slides` is a list of `{layout, title}`."
 			}
 			for i, item := range list {
 				slide, ok := item.(map[string]any)
 				if !ok {
-					return nil, fmt.Sprintf("create_artifact: starter slide %d is not an object.", i+1)
+					return nil, fmt.Sprintf(CreateArtifactTool+": starter slide %d is not an object.", i+1)
 				}
 				for key := range slide {
 					if key != "layout" && key != "title" {
-						return nil, fmt.Sprintf("create_artifact: starter slide %d carries %q, and "+
+						return nil, fmt.Sprintf(CreateArtifactTool+": starter slide %d carries %q, and "+
 							"a slide takes `layout` and `title`.", i+1, key)
 					}
 				}
@@ -321,7 +324,7 @@ func starterArg(args map[string]any) (*slideformat.Plan, string) {
 					Title:  strings.TrimSpace(argString(slide, "title"))})
 			}
 		default:
-			return nil, fmt.Sprintf("create_artifact: `starter` carries %q, and takes `theme` "+
+			return nil, fmt.Sprintf(CreateArtifactTool+": `starter` carries %q, and takes `theme` "+
 				"and `slides`.", field)
 		}
 	}
@@ -342,11 +345,11 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	kind := artifacts.Kind(strings.TrimSpace(argString(args, "kind")))
 	spec, ok := kind.Spec()
 	if !ok {
-		return failed(fmt.Sprintf("create_artifact takes `kind` as one of %v.", artifacts.Kinds)), nil
+		return failed(fmt.Sprintf(CreateArtifactTool+" takes `kind` as one of %s.", words.Or(artifacts.Kinds))), nil
 	}
 	title := strings.TrimSpace(argString(args, "title"))
 	if title == "" {
-		return failed("create_artifact needs a `title`: two to four words."), nil
+		return failed(CreateArtifactTool + " needs a `title`: two to four words."), nil
 	}
 	caps, why := capabilitiesArg(t.Name(), args)
 	if why != "" {
@@ -381,19 +384,19 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	switch {
 	case plan != nil && spec.Format != artifacts.FormatSlides:
-		return failed(fmt.Sprintf("create_artifact: `starter` begins a slide deck, and a %s "+
+		return failed(fmt.Sprintf(CreateArtifactTool+": `starter` begins a slide deck, and a %s "+
 			"begins from its `content` or `files`.", kind)), nil
 	case plan != nil && (hasContent || hasFiles || hasSource || entry != ""):
-		return failed("create_artifact takes `starter` alone: the engine composes the deck's " +
+		return failed(CreateArtifactTool + " takes `starter` alone: the engine composes the deck's " +
 			"files and its entry, so `content`, `files`, `source` and `entry` are not " +
-			"combined with it. Change the slides with publish_artifact `edits` afterwards."), nil
+			"combined with it. Change the slides with " + PublishArtifactTool + " `edits` afterwards."), nil
 	case hasSource && (hasContent || hasFiles):
-		return failed("create_artifact takes `source` alone: a build's output is the " +
+		return failed(CreateArtifactTool + " takes `source` alone: a build's output is the " +
 			"whole file set, so `content` and `files` are not combined with it."), nil
 	case spec.Store == artifacts.StoreContent && (hasContent || hasFiles || hasSource):
-		return failed(fmt.Sprintf("create_artifact: a %s's content is its datastore, so it "+
+		return failed(fmt.Sprintf(CreateArtifactTool+": a %s's content is its datastore, so it "+
 			"publishes no files. Create it with a title and declare its collections "+
-			"with set_artifact_schema.", kind)), nil
+			"with "+SetArtifactSchemaTool+".", kind)), nil
 	}
 	if hasContent {
 		p := entry
@@ -418,7 +421,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 	}
 	if spec.Store != artifacts.StoreContent && len(files.files) == 0 && plan == nil {
-		return failed("create_artifact needs the page: `content` for the entry page, " +
+		return failed(CreateArtifactTool + " needs the page: `content` for the entry page, " +
 			"`files`, a build's `source`, or a deck's `starter`."), nil
 	}
 	if entry == "" {
@@ -445,7 +448,7 @@ func (t *createArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	if published.Result.Outcome == statelog.OutcomeUnknown {
 		return artifactUnknown(t.Name(), c, published.Result, "Read your artifacts with "+
-			"list_artifacts before creating it a different way: if it landed, it is there."), nil
+			ListArtifactsTool+" before creating it a different way: if it landed, it is there."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
 	out := t.deps.publishedAnswer(c, published, "created")
@@ -586,12 +589,12 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		quota    *artifactsdomain.QuotaExceeded
 		gone     *artifactsdomain.CarriedObjectGone
 	)
-	said := domainSentence(err)
+	said := artifactupload.Sentence(err)
 	switch {
 	case errors.Is(err, estate.ErrOutcomeUnknown):
 		return tools.Result{Output: fmt.Sprintf("%s: %s. It may have landed and it may "+
 			"not: do not report it as done, and do not report it as failed. Read the "+
-			"artifact with get_artifact before publishing again.", tool, Unanswered),
+			"artifact with "+GetArtifactTool+" before publishing again.", tool, Unanswered),
 			Failed: true, Cause: UnknownCause(c.opID, err)}
 	case errors.As(err, &turn):
 		// THE TURN HAS DONE WHAT IT SHOULD: a thrashing loop of publishes is
@@ -610,18 +613,29 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused edit %d on "+
 			"%q (%s), so nothing was published. An `old_str` must be quoted exactly from "+
 			"the version you based on and occur in it exactly once: read the file's "+
-			"source with get_artifact and `offset`, then quote more of it.", tool,
+			"source with "+GetArtifactTool+" and `offset`, then quote more of it.", tool,
 			edit.Index, edit.Path, edit.Reason))
 	case errors.As(err, &content), errors.As(err, &mismatch),
 		errors.Is(err, artifactupload.ErrMediaType), errors.Is(err, artifactupload.ErrCredential),
 		errors.Is(err, artifactupload.ErrCapabilityUnknown),
 		errors.Is(err, artifactupload.ErrContractUnknown),
-		errors.Is(err, artifactupload.ErrInvalid), errors.Is(err, artifactsdomain.ErrInvalid),
-		errors.Is(err, artifactsdomain.ErrLabelTaken):
+		errors.Is(err, artifactupload.ErrInvalid), errors.Is(err, artifactsdomain.ErrInvalid):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
+	case errors.Is(err, artifactsdomain.ErrLabelTaken):
+		// A COLLISION: another version holds the label, which another
+		// label avoids now and which lands once that version gives it up.
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s refused that: %s. "+
+			"Read the artifact's versions with "+GetArtifactTool+" and choose another label, "+
+			"or publish without one.", tool, said))
+	case errors.Is(err, artifactsdomain.ErrLabelsFull):
+		// THE ARTIFACT'S STATE: every label it keeps is in use, so no other
+		// label would land either until one is removed.
+		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s refused that: %s. "+
+			"A label is removed with "+UpdateArtifactTool+", naming its `version` with an "+
+			"empty `label`; or publish without one.", tool, said))
 	case errors.As(err, &quota):
-		return toPerson(refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused "+
+		return toPerson(refusedBy(tools.RefusalQuotaExceeded, err, fmt.Sprintf("%s refused "+
 			"that: the company's artifact quota is reached (%d in use of %d, `%s`). "+
 			"Nothing was published. Say so: an operator raises the quota, or somebody "+
 			"removes artifacts the company no longer needs.", tool, quota.Usage,
@@ -638,24 +652,43 @@ func publishFailure(ctx context.Context, tool string, c artifactCaller, err erro
 			"Nothing was published; make the call again.", tool, said))
 	case errors.Is(err, artifactsdomain.ErrSourceTaken):
 		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s", tool, said))
+	case errors.Is(err, artifactsdomain.ErrExists):
+		// WHAT AN EARLIER ATTEMPT OF THIS CREATE MADE, most often: read it
+		// rather than make a second one.
+		return refusedBy(tools.RefusalExists, err, fmt.Sprintf("%s: %s. Read it with "+
+			GetArtifactTool+" or "+ListArtifactsTool+" rather than making it again.", tool, said))
 	case errors.Is(err, artifactsdomain.ErrAgentCompanyShare),
 		errors.Is(err, artifactsdomain.ErrAboveOwnRole):
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s",
 			tool, said))
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		return toPerson(refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s: the "+
+		return toPerson(refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s: the "+
 			"artifact is in the trash, and only a person restores it. Nothing was "+
 			"changed.", tool)), caveat.ArtifactTrashed())
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: %s", tool, said))
 	case errors.Is(err, artifactsdomain.ErrConflict):
 		return refusedBy(tools.RefusalConflict, err, fmt.Sprintf("%s could not land: "+
-			"somebody else kept changing the artifact. Read it again with get_artifact "+
+			"somebody else kept changing the artifact. Read it again with "+GetArtifactTool+" "+
 			"before retrying.", tool))
+	case errors.Is(err, objstore.ErrFull):
+		// NO RETRY LANDS until somebody makes room, as write_project_file
+		// tells it: read as a fault, the model was told only that the
+		// publish failed, with nothing to say about why or who can fix it.
+		return objectFailure(ctx, tool, tools.RefusalUnavailable, err, fmt.Sprintf("%s: "+
+			"nothing was saved: the company's file storage is full. Don't try again: "+
+			"say it couldn't be saved and that an administrator needs to make room.", tool))
+	}
+	if class, ok := WriterClass(err); ok {
+		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
+		// [writeFailure]'s same arm: a write the log refused because the
+		// artifact's purge had begun, which no arm above names.
+		return refusedBy(class, err, domainRefusal(tool, err))
 	}
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s did not land "+
-			"(%s). Nothing was changed: do not report it as done. Try again shortly.", tool, why))
+			"(%s). Nothing was changed: do not report it as done. %s", tool, why,
+			conditionNext(err, "Try again shortly.", stuckWrite)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s failed: %s. Do not report it as done, "+
 		"and do not make it again by other means: say it could not be made.", tool, faultSaid))
@@ -674,13 +707,13 @@ func (t *publishArtifact) Name() string { return PublishArtifactTool }
 
 func (t *publishArtifact) Description() string {
 	return "Publish a new version of an artifact in this Crewlet company. You MUST " +
-		"pass the `base_version` you read with get_artifact: a publish over a version " +
+		"pass the `base_version` you read with " + GetArtifactTool + ": a publish over a version " +
 		"somebody else made since is refused and hands you that version to merge onto. " +
 		"Prefer `edits` (exact old_str and new_str pairs) for a change to an existing " +
 		"page; `content` replaces the entry page whole; `files` adds, replaces or " +
 		"removes files; `source` publishes a build's whole output from your coding run; " +
 		"`restore_version` rolls back. When your company has a brand, read " +
-		"get_company_brand before writing slides, logos or typefaces. Publishing reaches " +
+		CompanyBrandTool + " before writing slides, logos or typefaces. Publishing reaches " +
 		"nobody by itself: send the `url` to whoever is waiting."
 }
 
@@ -755,8 +788,8 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	}
 	base := argInt(args, "base_version", 0)
 	if base < 1 {
-		return failed("publish_artifact needs a `base_version`: read the artifact with " +
-			"get_artifact and pass its `head_version` back, so a version somebody else " +
+		return failed(PublishArtifactTool + " needs a `base_version`: read the artifact with " +
+			GetArtifactTool + " and pass its `head_version` back, so a version somebody else " +
 			"published in the meantime is a refusal rather than a silent overwrite."), nil
 	}
 	caps, why := capabilitiesArg(t.Name(), args)
@@ -776,16 +809,16 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	contract := strings.TrimSpace(argString(args, "contract"))
 	switch {
 	case restore < 0:
-		return failed("publish_artifact takes a `restore_version` of 1 or more."), nil
+		return failed(PublishArtifactTool + " takes a `restore_version` of 1 or more."), nil
 	case restore > 0 && (hasContent || hasEdits || hasFiles || hasSource || entry != ""):
-		return failed("publish_artifact: a rollback names the version it restores and " +
+		return failed(PublishArtifactTool + ": a rollback names the version it restores and " +
 			"nothing else beside `label`, `contract` and `capabilities`."), nil
 	case hasSource && (hasContent || hasEdits || hasFiles):
-		return failed("publish_artifact takes `source` alone: a build's output is the " +
+		return failed(PublishArtifactTool + " takes `source` alone: a build's output is the " +
 			"whole file set, so `content`, `edits` and `files` are not combined with it."), nil
 	case restore == 0 && !hasContent && !hasEdits && !hasFiles && !hasSource && entry == "" &&
 		label == "" && contract == "" && caps == nil:
-		return failed("publish_artifact has nothing to publish: send `edits`, `content`, " +
+		return failed(PublishArtifactTool + " has nothing to publish: send `edits`, `content`, " +
 			"`files`, `source`, `restore_version`, or a change of `entry`, `label`, " +
 			"`contract` or `capabilities`."), nil
 	}
@@ -802,7 +835,7 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal != nil {
 		return *refusal, nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{Version: h.HeadNumber})
+	t.deps.present(c, h.ID, presence.Editing, presence.Focus{Version: h.HeadNumber})
 
 	files := newFileSources(t.deps, c, t.Name())
 	mode := manifest.ModePatch
@@ -849,7 +882,7 @@ func (t *publishArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return publishFailure(ctx, t.Name(), c, err), nil
 	case published.Result.Outcome == statelog.OutcomeUnknown:
 		return artifactUnknown(t.Name(), c, published.Result, "Read the artifact with "+
-			"get_artifact: if its head moved past your base, the publish landed."), nil
+			GetArtifactTool+": if its head moved past your base, the publish landed."), nil
 	}
 	t.deps.settle(ctx, published.Result.Position)
 	out := t.deps.publishedAnswer(c, published, "published")
@@ -863,23 +896,23 @@ func (t *publishArtifact) baseEntry(ctx context.Context, h artifactsdomain.Head,
 	ref string) (string, *tools.Result) {
 
 	if base > h.HeadNumber {
-		r := failed(fmt.Sprintf("publish_artifact: artifact %s is at version %d, and "+
-			"`base_version` %d is past it.", h.ID, h.HeadNumber, base))
+		r := failed(fmt.Sprintf(PublishArtifactTool+": artifact %q is at version %d, and "+
+			"`base_version` %d is past it.", clip(ref), h.HeadNumber, base))
 		return "", &r
 	}
 	v, err := t.deps.Reader.Version(ctx, h.ID, base)
 	if err != nil {
 		if errors.Is(err, artifactsdomain.ErrNotFound) {
-			r := failed(fmt.Sprintf("publish_artifact: artifact %s no longer keeps "+
-				"version %d. Read the head with get_artifact and publish based on it.",
-				h.ID, base))
+			r := failed(fmt.Sprintf(PublishArtifactTool+": artifact %q no longer keeps "+
+				"version %d. Read the head with "+GetArtifactTool+" and publish based on it.",
+				clip(ref), base))
 			return "", &r
 		}
 		r := artifactReadFailure(ctx, t.Name(), ref, err)
 		return "", &r
 	}
 	if v.Manifest.Entry == "" {
-		r := failed("publish_artifact: the version has no entry page for `content` to " +
+		r := failed(PublishArtifactTool + ": the version has no entry page for `content` to " +
 			"replace; name the file with `entry`.")
 		return "", &r
 	}
@@ -894,10 +927,10 @@ func editsArg(args map[string]any) ([]edits.Edit, string) {
 	}
 	list, ok := argval.List(raw)
 	if !ok {
-		return nil, "publish_artifact takes `edits` as a list of `{path, old_str, new_str}`."
+		return nil, PublishArtifactTool + " takes `edits` as a list of `{path, old_str, new_str}`."
 	}
 	if len(list) > artifacts.MaxEditsPerPublish {
-		return nil, fmt.Sprintf("publish_artifact takes at most %d `edits`; publish the "+
+		return nil, fmt.Sprintf(PublishArtifactTool+" takes at most %d `edits`; publish the "+
 			"rest in another version, or replace the page with `content`.",
 			artifacts.MaxEditsPerPublish)
 	}
@@ -905,12 +938,12 @@ func editsArg(args map[string]any) ([]edits.Edit, string) {
 	for i, v := range list {
 		m, ok := v.(map[string]any)
 		if !ok {
-			return nil, fmt.Sprintf("publish_artifact: edit %d is not an object.", i)
+			return nil, fmt.Sprintf(PublishArtifactTool+": edit %d is not an object.", i)
 		}
 		old, hasOld := argval.String(m["old_str"])
 		repl, hasNew := argval.String(m["new_str"])
 		if !hasOld || !hasNew || m["old_str"] == nil || m["new_str"] == nil {
-			return nil, fmt.Sprintf("publish_artifact: edit %d needs `old_str` and "+
+			return nil, fmt.Sprintf(PublishArtifactTool+": edit %d needs `old_str` and "+
 				"`new_str`, both strings.", i)
 		}
 		out = append(out, edits.Edit{Path: strings.TrimSpace(argString(m, "path")),
@@ -954,7 +987,8 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 	var omitted []string
 	budget := staleTextBudget
 	inline := changed
-	if !t.deps.discloses(ctx, c, moved.Head, moved.Head.HeadNumber) {
+	discloses := t.deps.discloses(ctx, c, moved.Head, moved.Head.HeadNumber)
+	if !discloses {
 		inline = nil
 		out["live_files_withheld"] = "The live version's text is not shown in this answer: " +
 			"this turn may not read the artifact's content. Merge from what you published " +
@@ -999,12 +1033,21 @@ func (t *publishArtifact) stale(ctx context.Context, turn *turnctx.Turn, c artif
 		out["url"] = url
 	}
 	rendered, err := read.answer(ctx, t.Name(), out, "Read the changed files one at a "+
-		"time with get_artifact.")
+		"time with "+GetArtifactTool+".")
 	if err != nil || rendered.Failed {
-		return refusedBy(tools.RefusalStaleVersion, cause, fmt.Sprintf("publish_artifact "+
-			"refused: artifact %s is at version %d and you based on %d. Read it with "+
-			"get_artifact, merge your change onto it, and publish again with base_version %d.",
-			moved.Head.ID, moved.Head.HeadNumber, base, moved.Head.HeadNumber))
+		// THE ONE SENTENCE, told as the answer it stands in for tells it: a
+		// turn that may not read the live version is told to merge from
+		// what it published, since the read this sentence would send it to
+		// is the one the requester ceiling refuses.
+		merge := "Read it with " + GetArtifactTool + ", merge your change onto it"
+		if !discloses {
+			merge = "This turn may not read its content, so merge your change from " +
+				"what you published"
+		}
+		return refusedBy(tools.RefusalStaleVersion, cause, fmt.Sprintf(PublishArtifactTool+" "+
+			"refused: the artifact is at version %d and you based on %d. %s, and publish "+
+			"again with base_version %d.", moved.Head.HeadNumber, base, merge,
+			moved.Head.HeadNumber))
 	}
 	return tools.Result{Output: rendered.Output, Failed: true,
 		Cause: tools.Classify(tools.RefusalStaleVersion, cause)}
@@ -1058,7 +1101,7 @@ func (t *updateArtifact) Name() string { return UpdateArtifactTool }
 
 func (t *updateArtifact) Description() string {
 	return "Rename an artifact in this Crewlet company, or change its description, its " +
-		"icon or one version's label. Its content changes with publish_artifact."
+		"icon or one version's label. Its content changes with " + PublishArtifactTool + "."
 }
 
 func (t *updateArtifact) Parameters() map[string]any {
@@ -1104,12 +1147,12 @@ func (t *updateArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	p.Title, p.Description, p.Icon = text("title"), text("description"), text("icon")
 	if _, versioned := args["version"]; versioned {
 		if _, labelled := args["label"]; !labelled {
-			return failed("update_artifact: `version` names the version a `label` is for; " +
+			return failed(UpdateArtifactTool + ": `version` names the version a `label` is for; " +
 				"send the `label` too."), nil
 		}
 	}
 	if p.Title != nil && *p.Title == "" {
-		return failed("update_artifact: an artifact keeps a title; send two to four words."), nil
+		return failed(UpdateArtifactTool + ": an artifact keeps a title; send two to four words."), nil
 	}
 	h, ref, refusal := t.deps.head(ctx, t.Name(), args)
 	if refusal != nil {
@@ -1120,21 +1163,21 @@ func (t *updateArtifact) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			Label: *label}
 	}
 	if p.Title == nil && p.Description == nil && p.Icon == nil && p.Label == nil {
-		return failed("update_artifact has nothing to change: send `title`, " +
+		return failed(UpdateArtifactTool + " has nothing to change: send `title`, " +
 			"`description`, `icon` or `label`."), nil
 	}
 	dec, refusal := t.deps.decide(ctx, c, t.Name(), authz.ActionArtifactUpdate, h, ref)
 	if refusal != nil {
 		return *refusal, nil
 	}
-	t.deps.present(c, h.ID, artifacts.PresenceEditing, artifacts.Focus{})
+	t.deps.present(c, h.ID, presence.Editing, presence.Focus{})
 	written, err := t.deps.Writer.Patch(ctx, t.deps.call(c, dec.Standing.Role, dec.Elevated), h.ID, p)
 	if err != nil {
 		return publishFailure(ctx, t.Name(), c, err), nil
 	}
 	if written.Result.Outcome == statelog.OutcomeUnknown {
 		return artifactUnknown(t.Name(), c, written.Result, "Read the artifact with "+
-			"get_artifact: it says whether the change landed."), nil
+			GetArtifactTool+": it says whether the change landed."), nil
 	}
 	t.deps.settle(ctx, written.Result.Position)
 	out := map[string]any{"artifact": h.ID.String(), "outcome": outcomeOf(written.Result),

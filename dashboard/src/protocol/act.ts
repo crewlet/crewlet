@@ -18,6 +18,9 @@
  * session that needs a sign-in, and a `403 step_up_required` is confirmed and
  * the SAME request replayed there — so a press refused for a stale proof is
  * made once the person has confirmed who they are, under the same operation.
+ * And every press names the tab's reader there, so a press — or a Retry —
+ * from a tab whose browser somebody else has signed in to since is refused
+ * `reader_changed` unrun rather than made as them, and the tab is handed over.
  *
  * # What an answer can be, and what each tells a person
  *
@@ -111,6 +114,15 @@ export type ActResult =
       code: ActErrorCode | "";
       /** The sentence a person is shown. */
       sentence: string;
+      /**
+       * The engine's `detail` where it is written for the person
+       * (`writeOutcome.ts`'s `WORDED_FOR_A_PERSON`, ADR-0060), and `""` where
+       * it sent none or wrote it for whoever built the request. Where there is
+       * one it is also the sentence above (`writeOutcome.ts`'s `sentenceOf`); a
+       * screen that shows the engine's words for every refusal reads it here
+       * (`answer_knowledge`).
+       */
+      detail: string;
       /** The engine's own remedy, where it sent one. */
       hint: string;
       /**
@@ -120,12 +132,17 @@ export type ActResult =
        */
       grants: string[];
       /**
+       * On a refusal on AUTHORITY, the rule that decided it; "" everywhere
+       * else. Beside the grants it says whether they are a way past it.
+       */
+      reason: string;
+      /**
        * Whether sending it again may succeed: the engine refused for the
        * NODE rather than the request, and said waiting can change that. A
        * retry sends the same operation.
        */
       retryable: boolean;
-      /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget). */
+      /** Where the limit that caused it is changed, for a refusal a limit caused (a spent budget, a model at its usage limit). */
       remedy: Remedy | null;
     };
 

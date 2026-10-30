@@ -1,7 +1,7 @@
 package topics
 
 // The usage domain's log: what each node's seats and schedules did each company
-// day, and why its grammar sits beside the other four domains'.
+// day, and why its grammar sits beside the other domains'.
 //
 // The usage domain is the state-log framework's FIFTH, and its second
 // COMPACTED one: one message per subject, so the stream is a keyed table of

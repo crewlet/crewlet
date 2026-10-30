@@ -50,6 +50,12 @@
 //     nothing to learn but what the apply already knew. At most one such
 //     pass per interval, so the rate limit above still bounds a node to
 //     two passes' claims in any interval however many applies arrive.
+//   - And so does the claim gate OPENING ([Config.Ready]), asked for by the
+//     gate's owner, since the host cannot see the gate change. A node that
+//     booted behind its logs claimed nothing at [Host.Start] and then
+//     waited for the tick with every seat it could run unclaimed. An asked
+//     pass the gate withheld, giving nothing back either, changed nothing,
+//     so it does not count against the one ask an interval honours.
 //
 // # Losing a seat is as important as gaining one
 //
@@ -150,8 +156,8 @@ const (
 	// fleet. A display column must never be able to delay that. One fifth
 	// of the interval (3 s at the shipped TTL) is far more than two
 	// indexed reads need and still leaves four fifths of the beat for the
-	// renewal itself; a hook that overruns publishes nothing, which reads
-	// as "did not say" rather than as an idle node.
+	// renewal itself; a hook that does not answer within it publishes
+	// nothing, which reads as "did not say" rather than as an idle node.
 	//
 	// A RATIO for the same reason [HeartbeatRatio] is one: a deployment
 	// that shortens its TTL shortens this with it, instead of leaving a
@@ -166,7 +172,7 @@ const (
 	// absorbed within ~TTL plus a few sweeps, without polling the store
 	// hard enough to matter. It is the cadence for what changes in the
 	// FLEET; a change to the seats themselves asks for a pass at once
-	// ([Host.Resweep]).
+	// ([Host.Resweep]), and so does the claim gate opening ([Config.Ready]).
 	SweepInterval = 5 * time.Second
 
 	// ClaimLimitPerSweep is how many seats one sweep may newly claim.
@@ -218,10 +224,13 @@ const (
 	// and then never again: a seat could be out of service for a week with
 	// the only evidence a single line that had long since rotated out.
 	//
-	// Twenty heartbeats. Frequent enough that the alarm outlives log
+	// Five minutes: twenty heartbeats at the shipped TTL, and a DURATION
+	// rather than a count of this host's heartbeats, because both of its
+	// reasons are about time. Frequent enough that the alarm outlives log
 	// rotation and that a stranded seat is still visible to whoever comes
 	// on shift next; rare enough that one stuck seat cannot fill a log with
-	// its own retries.
+	// its own retries — which at the 15 s floor a count of twenty would
+	// have made every minute and forty seconds.
 	UndeadAlarmInterval = HeartbeatInterval * 20
 )
 
@@ -234,7 +243,7 @@ var ErrInvalidConfig = errors.New("seat: invalid host configuration")
 // nothing errors — which is why they need saying out loud.
 var unmannedHints = map[placement.NodeRole]string{
 	placement.RoleData: "no live node holds the company's durable state, so nothing " +
-		"can read or write Worklet or Doclet, and every node " +
+		"can read or write Worklet, Doclet or Chatlet, and every node " +
 		"without the role is waiting on one that does. Give a node the 'data' role.",
 	placement.RoleIngress: "no live node serves the HTTP API, so no webhook from any " +
 		"integration reaches this company and the dashboard is down. " +
@@ -502,7 +511,8 @@ type SweepResult struct {
 	// run new seats — see [Config.Ready]. Distinct from every other reason
 	// a pass claims nothing, and the one that is otherwise invisible: a
 	// node at capacity, a node whose peers hold everything and a node
-	// waiting on its own projection all report an identical empty sweep.
+	// waiting for its own copy to catch up with its logs all report an
+	// identical empty sweep.
 	Withheld bool
 	// FleetFull says this node had room and tried no claim, because the
 	// live seat-running nodes' own counts say they hold every seat any of
@@ -515,6 +525,13 @@ type SweepResult struct {
 // Blocked reports whether the mixed-version gate is what stopped this pass
 // from claiming.
 func (r SweepResult) Blocked() bool { return r.BlockedByProtocol > 0 }
+
+// idle reports whether this pass changed nothing because the claim gate
+// withheld it: it claimed nothing and gave nothing back, so it spent none of
+// the rate the per-sweep limits bound ([Host.sweepLoop]).
+func (r SweepResult) idle() bool {
+	return r.Withheld && len(r.Claimed) == 0 && len(r.Lost) == 0
+}
 
 // clone returns a SweepResult that shares no backing array with the
 // original.

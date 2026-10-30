@@ -393,11 +393,3 @@ func SourceArgs(src EngineSource, sent map[string]string) (map[string]string, er
 	}
 	return out, nil
 }
-
-func quoteList(values []string) string {
-	q := make([]string, len(values))
-	for i, v := range values {
-		q[i] = strconv.Quote(v)
-	}
-	return strings.Join(q, ", ")
-}

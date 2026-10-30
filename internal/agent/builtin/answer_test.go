@@ -58,7 +58,7 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			encoded, err := json.MarshalIndent(c.answer, "", "  ")
+			encoded, err := builtin.EncodeAnswer(c.answer)
 			if err != nil {
 				t.Fatalf("encode: %v", err)
 			}
@@ -93,7 +93,7 @@ func TestEveryToolAnswerFitsToolAnswerBytes(t *testing.T) {
 // EITHER direction.
 func TestAMaximalItemIsRefusedRatherThanTruncated(t *testing.T) {
 	t.Parallel()
-	encoded, err := json.MarshalIndent(maximalDetail(), "", "  ")
+	encoded, err := builtin.EncodeAnswer(maximalDetail())
 	if err != nil {
 		t.Fatalf("encode: %v", err)
 	}
@@ -263,4 +263,36 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(digits)
+}
+
+// A TOOL ANSWER CARRIES WHAT A PERSON WROTE AS THEY WROTE IT.
+//
+// The standard encoder escapes `<`, `>` and `&` for JSON spliced into an HTML
+// page, and a tool answer is spliced into nothing: its reader is a model, shown
+// `if a < b && c > d` as six-byte escapes it has to decode back into the code
+// it is reasoning about, each one five more bytes of the turn's context and of
+// the answer's ceiling. And the answer ends where its value does, with no
+// newline the encoder appends.
+func TestAToolAnswerCarriesMarkupAsWritten(t *testing.T) {
+	t.Parallel()
+	const said = `if a < b && c > d { return "<ok>" }`
+	encoded, err := builtin.EncodeAnswer(map[string]any{"body": said, "n": 1})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	text := string(encoded)
+	if !strings.Contains(text, `if a < b && c > d { return \"<ok>\" }`) ||
+		strings.Contains(text, `\u003c`) || strings.Contains(text, `\u0026`) {
+		t.Errorf("the answer carries %s, want the body's own `<`, `>` and `&`", text)
+	}
+	if strings.HasSuffix(text, "\n") {
+		t.Errorf("the answer ends in a newline the encoder appended: %q", text)
+	}
+	if !strings.Contains(text, "\n  \"body\": ") {
+		t.Errorf("the answer is not indented as every tool answer is: %s", text)
+	}
+	var back map[string]any
+	if err := json.Unmarshal(encoded, &back); err != nil || back["body"] != said {
+		t.Errorf("the answer does not decode to what was said: %v, %v", back, err)
+	}
 }

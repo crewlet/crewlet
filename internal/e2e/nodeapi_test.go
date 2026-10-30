@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
+	"github.com/crewlet/crewlet/internal/api/stream"
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/backup"
 	"github.com/crewlet/crewlet/internal/config"
@@ -80,10 +81,11 @@ func bridgeListener(t *testing.T, addr string) net.Listener {
 // goroutine. A fleet member is built on a goroutine of its own and may have to
 // be torn down before the test ends, so it calls [wireAPI] directly.
 func serveAPI(
-	t *testing.T, e *engine.Engine, boot *config.Bootstrap, ln net.Listener, amend func(*api.Options),
+	t *testing.T, e *engine.Engine, boot *config.Bootstrap, chatLive *stream.ChatHub,
+	ln net.Listener, amend func(*api.Options),
 ) (*api.App, *httptest.Server) {
 	t.Helper()
-	app, srv, stops, err := wireAPI(t.Context(), e, boot, ln, amend)
+	app, srv, stops, err := wireAPI(t.Context(), e, boot, chatLive, ln, amend)
 	// REGISTERED BEFORE THE ERROR IS RAISED, so a wiring that failed halfway
 	// still stops the half that came up.
 	t.Cleanup(func() { stopInReverse(stops) })
@@ -150,9 +152,15 @@ func serveAPI(
 // file byte routes are IN too, served by the human write surface, because a
 // file's bytes crossing between members is something only a fleet here can
 // exercise.
+//
+// chatLive IS THE HUB THE NODE'S BOOT ATTACHED to its engine ([newEngine]),
+// and the socket is mounted over it, as `crewlet run` hands its own to
+// serveAPI. It is the process's rather than this surface's — built beside the
+// engine on a node that serves no API as well — so it is neither built nor
+// stopped here: its teardown is the engine's half, after this one.
 func wireAPI(
-	ctx context.Context, e *engine.Engine, boot *config.Bootstrap, ln net.Listener,
-	amend func(*api.Options),
+	ctx context.Context, e *engine.Engine, boot *config.Bootstrap,
+	chatLive *stream.ChatHub, ln net.Listener, amend func(*api.Options),
 ) (*api.App, *httptest.Server, []func(), error) {
 	var stops []func()
 	fail := func(what string, err error) (*api.App, *httptest.Server, []func(), error) {
@@ -255,13 +263,14 @@ func wireAPI(
 		stops = append(stops, func() { humans.SignIn.Stop(context.WithoutCancel(ctx)) })
 	}
 
-	workSource, pageSource, backlinkSource, searchSource, fileSource := api.NativeSources(e)
 	opts := api.Options{
 		Bootstrap:    boot,
 		SeatBindings: auth.SeatBindings{Directory: e, Chart: engine.SeatViewOf(e)},
 		Runtime:      runtime,
 		Inbox:        e,
 		Credentials:  e,
+		ChatLive:     chatLive,
+		Objectives:   e.Objectives(),
 		QueueBackend: backends.Queue.Backend(),
 		Sources: queries.Sources{
 			// THE ENGINE'S OWN fleet reader, as cmd/crewlet wires it, so
@@ -296,10 +305,6 @@ func wireAPI(
 			// THE FLEET'S TOKEN COUNTERS, which the `budgets` question
 			// and every seat's live meter read.
 			Budget: backends.Fleet,
-			// AND THE NATIVE HALVES, per question, as cmd/crewlet hands
-			// them.
-			Work: workSource, Pages: pageSource, Backlinks: backlinkSource,
-			WorkSearch: searchSource, Files: fileSource,
 		},
 		Config:    configSurface,
 		Secrets:   secretSurface,
@@ -343,6 +348,9 @@ func wireAPI(
 	// THE SAME HAND-OVER cmd/crewlet makes, which is the one place an
 	// absent surface stays absent rather than being mounted over a nil.
 	humans.Mount(&opts)
+	// AND THE NATIVE HALVES, per question, as cmd/crewlet hands them —
+	// through the one constructor, which sets every one or none.
+	api.NativeSources(e).Into(&opts.Sources)
 	// AND SETTINGS › MODELS, through the one constructor cmd/crewlet calls.
 	modelSurface, err := api.NewModelSurface(e, configSurface, cipher, backends.Queue)
 	if err != nil {

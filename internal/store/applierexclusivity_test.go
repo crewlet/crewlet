@@ -594,7 +594,7 @@ var allowedReplicatedWriter = []allowance{
 		Prefix: "internal/artifactdata/configure.go", Kind: mechanism,
 		Why: "The datastore applier's schema change: the collections and the " +
 			"bounded migration it rewrites are decided from the record and the " +
-			"store's own rows, in log order, identically on every node.",
+			"store's own rows, in log order, identically on every data node.",
 	},
 	{
 		Prefix: "internal/artifactdata/history.go", Kind: mechanism,
@@ -630,6 +630,16 @@ var allowedReplicatedWriter = []allowance{
 			"identity-claimed: two nodes sweeping on their own clocks would " +
 			"hold different bytes, and the claim that N copies are identical " +
 			"would become a claim about how synchronised they are.",
+	},
+	{
+		Prefix: "internal/chatlet/apply", Kind: mechanism,
+		Why: "The chat domain's applier, across the files it is split " +
+			"over: the record and the gate, the channel half and the " +
+			"message half and the verdict it writes for every message. It " +
+			"is the domain with TWO disciplines on one stream, and neither " +
+			"of them changes who writes: a message is sequenced rather than " +
+			"arbitrated, and it still reaches these tables only from a " +
+			"committed record.",
 	},
 
 	{

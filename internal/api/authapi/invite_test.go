@@ -32,9 +32,10 @@ const invitationID = "018f3a9c-4d2e-7000-8000-0000000001d1"
 // what every view presents in its header and every redemption in its body.
 const invitationSecret = "the-links-own-secret-beside-its-id"
 
-// secretHeader is the header an invitation's view reads the secret from — the
-// dashboard's own spelling of it, which a case holds the surface to.
-const secretHeader = "X-Crewlet-Invite-Secret"
+// secretHeader is the header an invitation's view reads the secret from, which
+// [TestTheDashboardSendsALinksSecretInTheHeaderItsViewReads] holds to the
+// dashboard's own spelling.
+const secretHeader = authapi.InviteSecretHeader
 
 // viewInvite is a GET of an invitation's view presenting its link's secret, as
 // the dashboard's screen asks it.
@@ -221,6 +222,11 @@ func (w refusingWriter) Redeem(context.Context, iamdomain.Redemption) (statelog.
 // THE 409 DOES NOT NAME THE HOLDER. The domain's own refusal carries the
 // holder's person id, which is right for an administrator and wrong for a
 // caller whose only credential is an invitation link.
+//
+// AND THE 400 IS THE DOMAIN'S SENTENCE ALONE ([iamdomain.Sentence]), without
+// the sentinel in front of it ("invalid login: …"), which says what errors.Is
+// finds and nothing the invitee acts on. Mutation: answer err.Error() as the
+// detail again and both 400 rows go red.
 func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 	t.Parallel()
 	const holder = "018f3a9c-0000-7000-8000-0000000000a1"
@@ -254,24 +260,32 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 		// lookup and the enrolment — answers what the lookup would have:
 		// one refusal for every way a link stops working.
 		{"an invitation the record no longer honours",
-			fmt.Errorf("%w: invitation inv-1 has already been used",
+			fmt.Errorf("%w: this invitation has already been used",
 				iamdomain.ErrRefused),
 			http.StatusGone, ""},
 		// A SEAT THE CHART RETIRED SINCE THE ISSUE — removed, or made an
 		// agent's — is the link's refusal too, as the record words it:
 		// never a 400 asking the invitee for a seat they could not give.
 		{"a seat the chart no longer holds as a human seat",
-			fmt.Errorf("%w: invitation inv-1 binds a seat it can no longer "+
-				"bind (seat \"eng-lead\" is an agent's)", iamdomain.ErrRefused),
+			fmt.Errorf("%w: this invitation is for a seat that's no longer "+
+				"available", iamdomain.ErrRefused),
 			http.StatusGone, ""},
 		// A NODE THAT RUNS NO COMPANY YET has not applied the one the
 		// invitation was issued against, which another node has: the
 		// record says so as a condition, and a retry clears it.
 		{"a node that runs no company yet",
-			fmt.Errorf("%w: invitation inv-1 binds seat \"eng-lead\" and this "+
-				"node runs no company yet to find it in — another node can "+
-				"redeem it", statelog.ErrUnavailable),
+			fmt.Errorf("%w: this invitation is for seat \"eng-lead\", and "+
+				"this node has no company yet. Try again shortly",
+				statelog.ErrUnavailable),
 			http.StatusServiceUnavailable, ""},
+		// A REDEMPTION WHOSE RECORD LOST ITS RACE is the gesture made
+		// again, told in this surface's words for a gesture: the invitee
+		// has nothing to look at again, which the state log's words for
+		// an edit would send them to do.
+		{"a redemption whose record lost its race",
+			fmt.Errorf("iamdomain: publish: %w: iam.directory kept "+
+				"changing under this write", statelog.ErrConflict),
+			http.StatusConflict, authapi.GestureRaced},
 		// THE CONTROL: a failure that is not the caller's stays 503, or the
 		// cases above would pass on a surface that answered 400 to
 		// everything.
@@ -299,6 +313,14 @@ func TestARefusedRedemptionSaysWhoseProblemItIs(t *testing.T) {
 			detail, _ := body["detail"].(string)
 			if !strings.Contains(detail, tc.detail) {
 				t.Errorf("detail %q, want it to carry %q", detail, tc.detail)
+			}
+			for _, sentinel := range []error{iamdomain.ErrInvalidLogin,
+				iamdomain.ErrInvalid} {
+				if strings.Contains(strings.ToLower(detail),
+					sentinel.Error()+":") {
+					t.Errorf("detail %q opens with its sentinel %q", detail,
+						sentinel)
+				}
 			}
 			if strings.Contains(rec.Body.String(), holder) {
 				t.Errorf("the refusal names the holder %s to somebody holding "+

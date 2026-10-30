@@ -32,7 +32,9 @@ import (
 //   - the values the call filled in follow, so two reads of one route are
 //     told apart (`Seat · engineer`, `File · ENG › docs/plan.md`);
 //   - a route family whose path says it wrong is named as a person calls it
-//     ([resources]): a `/config/roles/{id}` is a seat.
+//     ([resources]): a `/config/roles/{id}` is a seat;
+//   - a call on the act route is named for the tool it calls ("React to
+//     message"), which is what it reaches: the route only carries it.
 
 // titleValueBytes bounds one path value in a title: a handle, a key or a short
 // path reads whole, and a value the model wrote longer than a line is cut
@@ -45,6 +47,9 @@ const titleValueBytes = 80
 // is the model's to write, and a credential it pasted into a path is a
 // credential in a heading.
 func RequestTitle(pattern string, path map[string]string) string {
+	if tool := oneLineValue(path["tool"]); strings.TrimSpace(pattern) == ActRoute && tool != "" {
+		return cards.Humanise(tool)
+	}
 	_, template, found := strings.Cut(strings.TrimSpace(pattern), " ")
 	if !found {
 		template = pattern

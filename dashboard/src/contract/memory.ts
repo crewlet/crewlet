@@ -164,6 +164,9 @@ export interface AgentMemory {
   /** The newest episode rows — a page of `episodes_total`. */
   episodes: Episode[];
   episodes_total: number;
+  /** A page of the seat's skills, in the order `skills_order` asked for
+   *  (newest drafted first when the question names none) — the holder orders
+   *  the whole set before it cuts the page. */
   skills: SynthesizedSkill[];
   /** How many the seat HAS, which is not how many `skills` carries: the
    *  listing is cut at the page limit, and this is what says so. ALWAYS
@@ -186,6 +189,20 @@ export interface AgentMemory {
    *  because no copy anywhere is current. */
   held_by: string;
 }
+
+/**
+ * The orders a screen asks `agent_memory` to read a seat's skills in, as its
+ * `skills_order`: `uses`, the most used first, and `updated`, the most
+ * recently changed first. Agent skills' Learned grid offers both. A question
+ * that names none reads them newest drafted first, which is the engine's
+ * `newest` and the order every other screen draws them in.
+ *
+ * Held against the engine's list by `internal/learning`'s
+ * `TestTheDashboardAsksForExactlyTheOrdersASeatsSkillsAreReadIn`: an order
+ * the engine does not read is a `bad_params` refusal of the whole answer, and
+ * one it grew that nothing here names is an order nobody can ask for.
+ */
+export const LEARNED_SKILL_ORDERS = ["uses", "updated"] as const;
 
 /** One agent seat's row of `memory_overview`: its totals and newest note,
  *  counted by the node holding it. */

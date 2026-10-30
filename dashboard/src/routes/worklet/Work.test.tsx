@@ -931,11 +931,14 @@ test("a column chip takes its name from the effective axis", async () => {
     work_projects: oneProject,
   });
   const { container } = mountWork();
-  await waitFor(() => expect(container.querySelector(".work-chips")).toBeTruthy());
-  const chips = container.querySelector(".work-chips")?.textContent ?? "";
-  expect(chips).toContain("Assignee");
-  expect(chips).toContain("Ada Okonkwo");
-  expect(chips).not.toContain("Column");
+  // THE CHIP NAMES ITS AXIS ONCE THE SAVED VIEW HAS ANSWERED, which can be a
+  // commit after the chips themselves are drawn: the whole chip is waited for.
+  await waitFor(() => {
+    const chips = container.querySelector(".work-chips")?.textContent ?? "";
+    expect(chips).toContain("Assignee");
+    expect(chips).toContain("Ada Okonkwo");
+  });
+  expect(container.querySelector(".work-chips")?.textContent).not.toContain("Column");
 });
 
 // ---------------------------------------------------------------------------

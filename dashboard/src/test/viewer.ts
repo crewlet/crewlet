@@ -8,14 +8,15 @@
  * reader the frame is still asking about.
  */
 
-/** An admin, bound to the seat `jane`: every app is included. */
+/** An admin, bound to the seat `jane`: every app is included — and listed, as
+ *  the engine reports an admin's grants, expanded. */
 export const ADMIN_VIEWER = {
   login: "founder",
   owner: "jane",
   handle: "jane",
   name: "Jane Founder",
   kind: "human",
-  grants: ["admin", "worklet", "doclet"],
+  grants: ["admin", "worklet", "doclet", "chatlet"],
   acts: [],
 };
 

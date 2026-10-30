@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/jsonform"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // Reference is the slide format as an agent reads it before writing a deck:
@@ -21,8 +22,9 @@ func Reference() string {
 	fmt.Fprintf(&b, "# A slide deck: %s and its slides\n\n", IndexPath)
 	fmt.Fprintf(&b, "A deck is `%s` at the version's root and one HTML file per slide under "+
 		"`%s` (`%sintro.html` is the slide `intro`). A key not listed is refused, and so is "+
-		"a value of another type. Begin a deck with create_artifact `starter` rather than "+
-		"writing this by hand where you can.\n\n", IndexPath, SlidesDir, SlidesDir)
+		"a value of another type. Begin a deck with %s `starter` rather than "+
+		"writing this by hand where you can.\n\n", IndexPath, SlidesDir, SlidesDir,
+		toolname.CreateArtifact)
 	b.WriteString("## Every key of " + IndexPath + "\n\n")
 	b.WriteString(IndexForm.Outline(map[string]string{
 		"title": fmt.Sprintf("required, at most %d bytes", MaxTitleBytes),

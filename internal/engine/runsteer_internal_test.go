@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -303,9 +304,14 @@ func TestANoteUnderAnUnheldKeyWaitsAndNamesTheHeldKeys(t *testing.T) {
 // AN ANCHOR THAT DOES NOT OPEN DECIDES NO AUTHORITY: a person's authority to
 // steer a turn is decided on the seat the run's record names, so a record with
 // no anchor, one that does not verify, or one sealed for another turn names no
-// seat anybody can decide on — and says why, rather than naming one.
+// seat anybody can decide on — and says why, rather than naming one. The why is
+// a VERDICT the steer tool words for its readers, never a sentence of this
+// node's: one sealed under a key this node does not hold is the condition the
+// fleet's keys clear ([steer.ErrSeatKeyUnknown]), and the rest a record no
+// keyring opens.
 //
-// Mutation: answer an unverified anchor's agent, and the planted seat decides.
+// Mutation: answer an unverified anchor's agent, and the planted seat decides;
+// answer the unheld key as an anchor that does not verify, and its row fails.
 func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 	t.Parallel()
 	store := sandbox.NewCoordStore(coordmem.NewFleet())
@@ -314,16 +320,18 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		anchor func(turnID string) []byte
-		why    string
+		why    error
 	}{
-		{"no anchor", func(string) []byte { return nil }, "names no seat"},
+		{"no anchor", func(string) []byte { return nil }, steer.ErrSeatUnnamed},
 		{"an anchor in the clear", func(turnID string) []byte {
 			return []byte(`{"turn_id":"` + turnID + `","agent_id":"x","handle":"ceo"}`)
-		}, "does not verify"},
-		{"another turn's anchor", func(string) []byte { return runs.anchor("run-9", "x", "ceo") }, "does not verify"},
+		}, steer.ErrSeatUnverified},
+		{"another turn's anchor", func(string) []byte {
+			return runs.anchor("run-9", "x", "ceo")
+		}, steer.ErrSeatUnverified},
 		{"an anchor under an unheld key", func(turnID string) []byte {
 			return stranger.anchor(turnID, "x", "ceo")
-		}, "secrets.keys"},
+		}, steer.ErrSeatKeyUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			turnID := "run-" + strings.ReplaceAll(tc.name, " ", "-")
@@ -337,14 +345,60 @@ func TestAnAnchorThatDoesNotOpenDecidesNoAuthority(t *testing.T) {
 			if err != nil || !found {
 				t.Fatalf("Seat = %v, %v", found, err)
 			}
-			if seat.Agent != "" || seat.Handle != "" || !strings.Contains(seat.Unverified, tc.why) {
-				t.Errorf("the record's seat read as %+v, want no seat and why (%q)", seat, tc.why)
+			if seat.Agent != "" || seat.Handle != "" || !errors.Is(seat.Unverified, tc.why) {
+				t.Errorf("the record's seat read as %+v, want no seat and why (%v)", seat, tc.why)
 			}
 		})
 	}
 	launchedRun(t, store, runs, "run-good", nil, nil)
-	if seat, _, _ := runs.Seat(t.Context(), "run-good"); seat.Agent != sweAgent || seat.Unverified != "" {
+	if seat, _, _ := runs.Seat(t.Context(), "run-good"); seat.Agent != sweAgent || seat.Unverified != nil {
 		t.Errorf("a sealed anchor read as %+v", seat)
+	}
+}
+
+// AN ANCHOR UNDER A KEY THIS NODE DOES NOT HOLD NAMES THE KEYS IT HOLDS IN ITS
+// LOG, at WARN and with the turn, where whoever administers the keyring reads
+// them: steer_turn's caller is told only who fixes it, and an anchor in a key
+// this node lacks is no forgery, so nothing is said at ERROR.
+//
+// Mutation: drop held_keys from the line, or log it as steer_seat_unverified,
+// and this fails. Not parallel: it installs the process's log sink.
+func TestAnAnchorUnderAnUnheldKeyNamesTheHeldKeysInTheLog(t *testing.T) {
+	logs := captureSteerLogs(t)
+	store := sandbox.NewCoordStore(coordmem.NewFleet())
+	runs, _ := steersOver(t, steerRing, store)
+	stranger, _ := steersOver(t, statelog.OneKey("k-x", "another fleet's key material"), store)
+	if _, err := store.BeginLaunch(t.Context(), sandbox.PendingRun{
+		TurnID: "run-1", AgentID: sweAgent, AgentHandle: "swe", Role: "SWE",
+		CodingAgent: "claude-code", Steer: sandbox.RunSteer{Seat: stranger.anchor("run-1", sweAgent, "swe")},
+	}, sandbox.Fence{}); err != nil {
+		t.Fatal(err)
+	}
+	if seat, found, err := runs.Seat(t.Context(), "run-1"); err != nil || !found ||
+		!errors.Is(seat.Unverified, steer.ErrSeatKeyUnknown) {
+
+		t.Fatalf("Seat = %+v, %v, %v, want the anchor unopened", seat, found, err)
+	}
+	var warned []map[string]any
+	for line := range strings.SplitSeq(logs.String(), "\n") {
+		var rec map[string]any
+		if json.Unmarshal([]byte(line), &rec) != nil {
+			continue
+		}
+		switch rec["msg"] {
+		case "steer_seat_key_unknown":
+			warned = append(warned, rec)
+		case "steer_seat_unverified":
+			t.Errorf("an anchor under an unheld key was reported as one that does not verify: %v", rec)
+		}
+	}
+	if len(warned) != 1 {
+		t.Fatalf("steer_seat_key_unknown was logged %d times, want once: %v", len(warned), warned)
+	}
+	held, _ := warned[0]["held_keys"].([]any)
+	if warned[0]["level"] != "WARN" || warned[0]["turn_id"] != "run-1" ||
+		!slices.Equal(held, []any{"k1"}) {
+		t.Errorf("the line %v doesn't name the turn and the one key this node holds, at WARN", warned[0])
 	}
 }
 

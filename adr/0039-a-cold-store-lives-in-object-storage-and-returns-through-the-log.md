@@ -9,7 +9,7 @@
 
 Every data node holds the whole replicated estate, and a datastore lives in
 it. That is the right shape for the stores people are using and the wrong one
-for the stores nobody has opened in a month, which still ride every node's
+for the stores nobody has opened in a month, which still ride every data node's
 file, every snapshot a joiner adopts and every backup, for ever. **Tiering is
 the decided answer, and it is built in a later phase**; this record accepts its
 design now because four of its rules constrain what this release builds, and
@@ -19,7 +19,7 @@ The design:
 
 1. **The log stays the only way into the estate.** No applier reads an object
    store. A store that left the estate returns by being written back onto its
-   own log, in chunks, so every node rebuilds it exactly as it built it the
+   own log, in chunks, so every data node rebuilds it exactly as it built it the
    first time ([ADR-0002](0002-the-stream-is-the-write-ahead-log.md)).
 2. **Residency is a fleet decision made by a record.** A store is hot on every
    data node or on none, so `ClaimsIdentity`, wholesale snapshot adoption and
@@ -40,7 +40,7 @@ What this release builds for it:
   of every live document's canonical encoding, updated by each write
   (subtracting the old document's hash and adding the new one), kept on the
   store's row and carried as `digest_after` on **every history row**. Any
-  checkpoint at a position is then verifiable by every node against the
+  checkpoint at a position is then verifiable by every data node against the
   history row at that position, even after the store has moved on.
 - **Compact keys**: a store, a collection and a field path are each a
   surrogate integer, so the field index is small enough to keep hot and a

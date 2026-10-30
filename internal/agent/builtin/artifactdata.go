@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/mcp"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -82,7 +83,7 @@ type ArtifactDataStore interface {
 
 // ArtifactPresence is this node's presence hub as these tools touch it.
 type ArtifactPresence interface {
-	Touch(id artifacts.ID, seat, turn string, activity artifacts.PresenceActivity, focus artifacts.Focus)
+	Touch(room presence.Room, a presence.Agent)
 }
 
 // ArtifactDataDeps are what the datastore tools act through beyond the
@@ -220,7 +221,7 @@ func (d dataTools) admit(ctx context.Context, turn *turnctx.Turn, tool string,
 	// content (D03), which stops being served the moment it is trashed.
 	// A write is refused on the same status by the tool, naming the write.
 	if !writes && h.Status == artifactsdomain.StatusTrashed {
-		r := artifactTrashed(tool, h)
+		r := artifactTrashed(tool, ref, h)
 		return dataAdmission{}, &r
 	}
 	a := dataAdmission{head: h, ref: ref, c: c, dec: dec}
@@ -310,8 +311,8 @@ func requesterRecord(c artifactCaller) string {
 
 // touch puts a seat calling on id in the artifact's room, through the
 // artifacts half's presence ([ArtifactDeps.present]).
-func (d dataTools) touch(c artifactCaller, id artifacts.ID, activity artifacts.PresenceActivity,
-	focus artifacts.Focus) {
+func (d dataTools) touch(c artifactCaller, id artifacts.ID, activity presence.Activity,
+	focus presence.Focus) {
 
 	d.art.present(c, id, activity, focus)
 }
@@ -336,10 +337,10 @@ func dataFailure(ctx context.Context, tool string, err error) tools.Result {
 		errors.Is(err, artifactdata.ErrMigrationTooLarge), errors.Is(err, query.ErrInvalid),
 		errors.Is(err, query.ErrNotIndexed):
 		return refusedBy(tools.RefusalInvalid, err, fmt.Sprintf("%s refused that: %s", tool,
-			dataSentence(err)))
+			artifactdata.Sentence(err)))
 	case errors.Is(err, artifactdata.ErrForbidden):
 		return refusedBy(tools.RefusalForbidden, err, fmt.Sprintf("%s refused that: %s", tool,
-			dataSentence(err)))
+			artifactdata.Sentence(err)))
 	case errors.Is(err, artifactdata.ErrNotFound):
 		return refusedBy(tools.RefusalNotFound, err, fmt.Sprintf("%s: there is no such "+
 			"collection or document you can read. Read the schema with %s and no "+
@@ -352,6 +353,11 @@ func dataFailure(ctx context.Context, tool string, err error) tools.Result {
 			"somebody kept writing the datastore under this schema change. Read the "+
 			"schema again and send the change once more.", tool))
 	}
+	if class, ok := WriterClass(err); ok {
+		// ANY OTHER REFUSAL A DOMAIN DECIDED, in its own class — see
+		// [writeFailure]'s same arm.
+		return refusedBy(class, err, domainRefusal(tool, err))
+	}
 	return dataConditionOrFault(ctx, tool, err)
 }
 
@@ -360,8 +366,9 @@ func dataFailure(ctx context.Context, tool string, err error) tools.Result {
 func dataConditionOrFault(ctx context.Context, tool string, err error) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err, fmt.Sprintf("%s could not reach the "+
-			"datastore right now (%s). This is NOT an empty result and nothing was "+
-			"changed. Try again shortly.", tool, why))
+			"datastore%s (%s). This is NOT an empty result and nothing was "+
+			"changed. %s", tool, rightNow(err), why,
+			conditionNext(err, "Try again shortly.", stuckWrite)))
 	}
 	return faulted(ctx, tool, err, fmt.Sprintf("%s failed: %s. This is NOT an empty "+
 		"result, and nothing is known to have changed: say it could not be done.", tool,

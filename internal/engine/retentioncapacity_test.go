@@ -2,14 +2,21 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/backup"
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/objstore/collect"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -271,8 +278,11 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 		metrics.Attrs{"gate": "deleted", "subject_kind": "task"})
 	recorder.Add(metrics.TrackerFeedUnreadable, 3, metrics.Attrs{"source": "tracker"})
 	trackerLog := statelog.Domain(worklet.Domain{})
+	trackerCensus := statelog.Census{
+		Reads: statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay}, Seats: 100,
+	}
 	recorder.Add(metrics.StatelogBarriersApplied,
-		uint64(3*statelog.Census{Seats: 100}.Expected()),
+		uint64(3*trackerCensus.Expected()),
 		metrics.Attrs{"domain": "tracker", "stream": worklet.Domain{}.Stream().Name})
 
 	r := &retention{metrics: recorder, state: censusLogs(trackerLog),
@@ -294,7 +304,7 @@ func TestTheWindowedCountersReachTheAlarmsThatFireOnThem(t *testing.T) {
 	// THE CENSUS IS EACH LOG'S, as the report evaluates it
 	// ([statelog.DomainInputs.LinearizableReads]).
 	held, counted := r.census(r.state.running())[trackerLog.Name()]
-	if !counted || held.expected != (statelog.Census{Seats: 100}).Expected() ||
+	if !counted || held.expected != trackerCensus.Expected() ||
 		held.reads != 3*held.expected {
 		t.Errorf("the tracker's log reached its census as %d read against %d (counted "+
 			"%v), so `census_drift` compares against nothing", held.reads,
@@ -461,8 +471,8 @@ func censusLogs(domains ...statelog.Domain) *stateLog {
 // work per seat read as drifting. And it was compared with the barriers THIS
 // NODE appended, which on a fleet is only this node's share of the reads — the
 // rate the log receives, from every node, is what its sizing is about, and it
-// is what every node's applier sees. The vector log, which no read appends to,
-// is held to nothing.
+// is what every data node's applier sees. The vector log, which no read
+// appends to, is held to nothing.
 //
 // AND THE ENGINE'S OWN READS ARE PART OF WHAT A LOG TAKES. The object store's
 // collector pins the tracker's estate on a fixed cadence, whatever the seats
@@ -472,6 +482,8 @@ func censusLogs(domains ...statelog.Domain) *stateLog {
 func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 	t.Parallel()
 	var trackerLog, vectorLog statelog.Domain = worklet.Domain{}, search.Domain{}
+	var pagesLog, iamLog statelog.Domain = doclet.Domain{}, iamdomain.Domain{}
+	var chatLog statelog.Domain = chatlet.Domain{}
 
 	for _, tc := range []struct {
 		name       string
@@ -527,6 +539,47 @@ func TestALogIsHeldToItsOwnCensus(t *testing.T) {
 			logs: []statelog.Domain{trackerLog}, seats: 100,
 			applied: map[statelog.Domain]int{trackerLog: 30_000}, appended: 10_000,
 			fires: true, log: "tracker", expected: 12_500,
+		},
+		{
+			name: "Doclet's log, held to the whole per-seat rate",
+			logs: []statelog.Domain{pagesLog}, seats: 100,
+			applied: map[statelog.Domain]int{pagesLog: 12_500},
+			fires:   false, log: "pages", expected: 12_500,
+		},
+		{
+			name: "the identity estate's log, whose domain declares no read, quiet",
+			// HUNDREDS OF SEATS AND NOT ONE BARRIER: no read of the
+			// estate takes one, so its census is zero however many
+			// seats the company has — the whole company's figure,
+			// charged here, was a census its ceiling was never sized for.
+			logs: []statelog.Domain{iamLog}, seats: 300,
+			fires: false, log: "iam", expected: 0,
+		},
+		{
+			name: "the identity estate's log on its first barrier",
+			// A DECLARED ZERO IS A CENSUS: the first barrier is a
+			// linearizable reader nobody counted, and the log's ceiling
+			// has no bytes for it.
+			logs: []statelog.Domain{iamLog}, seats: 300,
+			applied: map[statelog.Domain]int{iamLog: 1},
+			fires:   true, log: "iam", expected: 0,
+		},
+		{
+			name: "the chat log, held to its own per-seat rate",
+			// 120 a seat a day, chat's own declaration, rather than the
+			// tracker's 125 borrowed: 12 000 for 100 seats.
+			logs: []statelog.Domain{chatLog}, seats: 100,
+			applied: map[statelog.Domain]int{chatLog: 12_500},
+			fires:   false, log: "chat", expected: 12_000,
+		},
+		{
+			name: "the chat log past twice its own census, inside twice the tracker's",
+			// 24 500 a day is under twice the tracker's 12 500 and over
+			// twice chat's 12 000, so a census that held the chat log to
+			// the tracker's rate stays quiet here.
+			logs: []statelog.Domain{chatLog}, seats: 100,
+			applied: map[statelog.Domain]int{chatLog: 24_500},
+			fires:   true, log: "chat", expected: 12_000,
 		},
 		{
 			name: "the vector log, which no read appends to",
@@ -657,5 +710,94 @@ func TestTheEnginesOwnReadsAreTheCollectorsPins(t *testing.T) {
 		t.Errorf("the collector pins %d times a day, and a collection every %v and an "+
 			"audit every %v is %d", collect.PinsPerDay, collect.CollectInterval,
 			collect.AuditInterval, perDay)
+	}
+}
+
+// THE BACKUP GAUGE IS THIS NODE'S OWN MANIFESTS, AGED ON THE DUTY'S CLOCK.
+//
+// `crewlet.backup.age` reads the directories of the points THIS node announced
+// — the only ones whose disk this process can see — and nothing else: another
+// node's fresher point and the operator's acknowledgement name directories on
+// other hosts. A node whose own manifest is gone publishes no series rather
+// than an age, since zero is the freshest backup imaginable. And the age is
+// taken against the duty's clock, which every report beside it reads, so a
+// manifest from a host whose clock runs ahead is zero rather than negative.
+//
+// Mutation: drop the owner check, and the gauge ages node-b's fresher copy;
+// read the wall clock instead of [retention.clock], and a manifest finished in
+// 2041 is in the wall clock's future and reads zero; set the gauge where no
+// manifest was found, and the absent case reads a value.
+func TestTheBackupGaugeAgesThisNodesOwnManifestsOnTheDutysClock(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	// FAR FROM ANY WALL CLOCK a test machine has, so an age read off the
+	// wall clock cannot pass for one read off the duty's.
+	at := time.Date(2041, 3, 9, 12, 0, 0, 0, time.UTC)
+	manifest := func(t *testing.T, finished time.Time) string {
+		t.Helper()
+		dir := t.TempDir()
+		body, err := json.Marshal(backup.Manifest{
+			TakenAt: finished.Add(-time.Minute), FinishedAt: finished,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, backup.ManifestName), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	gauge := func(recorder *metrics.Recorder) (float64, bool) {
+		for _, snapshot := range recorder.Read() {
+			if snapshot.Name == metrics.BackupAge {
+				return snapshot.Value, true
+			}
+		}
+		return 0, false
+	}
+	point := func(owner, dir string) coord.BackupPoint {
+		return coord.BackupPoint{Owner: owner, At: at.Add(-time.Hour), Dir: dir,
+			Verified: true, Streams: map[string]coord.Position{
+				"CREWLET_TRACKER_LOG": {Stream: "CREWLET_TRACKER_LOG", Seq: 1}}}
+	}
+	measure := func(t *testing.T, points ...coord.BackupPoint) (float64, bool) {
+		t.Helper()
+		fleet := coordmem.NewFleet()
+		for _, p := range points {
+			if err := fleet.PutBackupPoint(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+		}
+		recorder, err := metrics.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := &retention{fleet: fleet, nodeID: "node-a", metrics: recorder,
+			now: func() time.Time { return at }}
+		r.backupGauges(ctx)
+		return gauge(recorder)
+	}
+
+	own := manifest(t, at.Add(-6*time.Hour))
+	theirs := manifest(t, at.Add(-time.Minute))
+	operator := manifest(t, at.Add(-2*time.Minute))
+	age, ok := measure(t, point("node-a", own), point("node-b", theirs),
+		point(coord.OperatorBackupOwner, operator))
+	if !ok || age != (6*time.Hour).Seconds() {
+		t.Fatalf("the gauge reads %v (published: %v), want %v — this node's "+
+			"own manifest, six hours old on the duty's clock",
+			age, ok, (6 * time.Hour).Seconds())
+	}
+
+	if age, ok := measure(t, point("node-a", manifest(t, at.Add(time.Hour)))); !ok || age != 0 {
+		t.Errorf("a manifest an hour in the duty's future reads %v (published: "+
+			"%v), want zero — a negative age compares below every threshold",
+			age, ok)
+	}
+
+	if age, ok := measure(t, point("node-a", t.TempDir()), point("node-b", theirs)); ok {
+		t.Errorf("a node whose own directory holds no manifest published %v, "+
+			"want no series: zero is the freshest backup imaginable and "+
+			"another node's copy is on a disk this node cannot see", age)
 	}
 }

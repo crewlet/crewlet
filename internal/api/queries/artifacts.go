@@ -109,11 +109,13 @@ func artifactFailure(what string, err error) error {
 	case errors.Is(err, artifactsapi.ErrNoSuchArtifact):
 		return fmt.Errorf("%w: no such artifact", ErrNotFound)
 	case errors.As(err, &refusal):
-		return refused(what, refusal.Decision)
+		return NewRefusal(what, refusal.Decision)
 	case errors.Is(err, artifactsdomain.ErrTrashed):
-		// IN THE TRASH, ITS CONTENT IS NOT SERVED: the record is not one
-		// this question answers until the owner restores the artifact.
-		return fmt.Errorf("%w: %w", ErrNotFound, err)
+		// IN THE TRASH, ITS CONTENT IS NOT SERVED until the owner restores
+		// the artifact — and the caller, whom the admission already
+		// decided the artifact is disclosed to, is told so rather than
+		// that it does not exist.
+		return fmt.Errorf("%w: %w", ErrArtifactTrashed, err)
 	case errors.Is(err, artifactsapi.ErrRecordUnwritten), errors.Is(err, artifactsapi.ErrNoRoster):
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	case errors.Is(err, artifactsdomain.ErrNotFound), errors.Is(err, artifactsdomain.ErrPurged):
@@ -130,7 +132,7 @@ func artifactFailure(what string, err error) error {
 		return fmt.Errorf("%w: %q names %d folders you can see; list one of them by folder id "+
 			"(%s)", ErrBadParams, ambiguous.Path, len(ids), strings.Join(ids, ", "))
 	case errors.Is(err, artifactsdomain.ErrInvalid), errors.Is(err, artifactsdomain.ErrBadCursor):
-		return fmt.Errorf("%w: %w", ErrBadParams, err)
+		return refusedBy(err, artifactsdomain.Sentence(err))
 	}
 	return err
 }
@@ -149,7 +151,7 @@ func artifactID(p Params) (artifacts.ID, error) {
 func versionNumber(p Params) (int, error) {
 	n, ok := p.WholeInt("n")
 	if !ok || n < 1 {
-		return 0, fmt.Errorf("%w: n is a version number, 1 or more", ErrBadParams)
+		return 0, fmt.Errorf("%w: the n parameter is a version number, 1 or more", ErrBadParams)
 	}
 	return int(n), nil
 }
@@ -340,7 +342,7 @@ func (s artifactsAnswers) usage(ctx context.Context, _ Params) (any, error) {
 	case d.Unknown():
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
 	case !d.Allowed:
-		return nil, refused("artifact_usage", d)
+		return nil, NewRefusal("artifact_usage", d)
 	}
 	usage, err := s.Reads.Usage(ctx)
 	if err != nil {
@@ -366,7 +368,7 @@ func (s artifactsAnswers) trail(ctx context.Context, p Params) (any, error) {
 	case d.Unknown():
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, d.Err)
 	case !d.Allowed:
-		return nil, refused("artifact_trail", d)
+		return nil, NewRefusal("artifact_trail", d)
 	}
 	page, err := s.Reads.Trail(ctx, artifactsdomain.TrailQuery{
 		Op: artifactsdomain.OpKind(p.String("op")), Cursor: p.String("cursor"),

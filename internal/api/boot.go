@@ -292,8 +292,8 @@ func (b *Boot) refuse(w http.ResponseWriter, r *http.Request) {
 			})
 		return
 	}
-	detail := "this node is recovering what it holds — its store, its broker and " +
-		"its copy of the estate — and serves nothing until it has started"
+	detail := "this node is recovering what it holds (its store, its broker and " +
+		"its copy of the estate) and serves nothing until it has started"
 	if b.recovered.Load() {
 		detail = "this node has recovered what it holds and is bringing up what " +
 			"its company configures; it serves nothing until it has started"

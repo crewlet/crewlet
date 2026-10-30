@@ -15,6 +15,8 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/plainjson"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE CHARTER: the company's mission, vision and standing policies, read and
@@ -112,10 +114,10 @@ func readCharter(body []byte) (config.Charter, error) {
 	decoder.DisallowUnknownFields()
 	var sent charterBody
 	if err := decoder.Decode(&sent); err != nil {
-		return config.Charter{}, fmt.Errorf("the body is not a charter: %w", err)
+		return config.Charter{}, errors.New(plainjson.Unreadable("the body", err))
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return config.Charter{}, errors.New("the body carries more than one JSON value")
+		return config.Charter{}, errors.New(plainjson.Unreadable("the body", plainjson.ErrTrailing))
 	}
 	if sent.Mission == nil || sent.Vision == nil || sent.Policies == nil {
 		return config.Charter{}, errCharterField
@@ -148,7 +150,7 @@ func charterPatch(ch config.Charter) ([]byte, error) {
 // charterSummary is the revision summary a charter write records when its
 // caller names none: which of the three it changed.
 func charterSummary(was, is config.Charter) string {
-	var parts []string
+	var parts []words.Said
 	if was.Mission != is.Mission {
 		parts = append(parts, "mission")
 	}
@@ -158,15 +160,10 @@ func charterSummary(was, is config.Charter) string {
 	if !slices.Equal(was.Policies, is.Policies) {
 		parts = append(parts, "policies")
 	}
-	switch len(parts) {
-	case 0:
+	if len(parts) == 0 {
 		return "left the company's principles as they were"
-	case 1:
-		return "edited the company's " + parts[0]
-	default:
-		return "edited the company's " + strings.Join(parts[:len(parts)-1], ", ") +
-			" and " + parts[len(parts)-1]
 	}
+	return "edited the company's " + words.And(parts)
 }
 
 // getCharter serves GET /config/charter: the active document's charter, its
@@ -175,11 +172,11 @@ func (s *Service) getCharter(w http.ResponseWriter, r *http.Request) {
 	company, _, err := s.documentOf(r.Context())
 	switch {
 	case errors.Is(err, ErrNoActiveRevision):
-		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNoActiveRevision)
+		refuseNoCompany(w)
 		return
 	case err != nil:
 		if !RefuseUnreadable(w, err) {
-			s.fail(w, "read the active revision", err)
+			s.fail(w, r, "read the active revision", err)
 		}
 		return
 	}
@@ -244,14 +241,14 @@ func (s *Service) putCharter(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if err != nil {
-			s.refuseApply(w, err)
+			s.refuseApply(w, r, err)
 			return
 		}
 		if done {
 			return
 		}
 	}
-	s.refuseApply(w, raced)
+	s.refuseApply(w, r, raced)
 }
 
 // charterWrite is one attempt of a charter write.
@@ -278,7 +275,7 @@ func (s *Service) writeCharter(w http.ResponseWriter, r *http.Request, c charter
 		return false, ErrNoActiveRevision
 	}
 	active := cur.revision
-	prior, err := s.open(active)
+	prior, err := s.open(cur)
 	if err != nil {
 		if RefuseUnreadable(w, err) {
 			return true, nil

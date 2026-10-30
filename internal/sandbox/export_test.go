@@ -3,6 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"os"
+	"testing"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 )
@@ -20,6 +21,14 @@ func NewContainerBoxAt(root string) (Sandbox, string) {
 		panic(fmt.Sprintf("NewContainerBoxAt: %v", err))
 	}
 	return &containerBox{layout: layout, cli: containerCLI{path: "docker"}, container: "contract"}, layout.home()
+}
+
+// WriteExecutable is [writeExecutable], for the stubs the package's external
+// suite writes and its shell runs (setuprecipe_test.go): those cases share
+// this binary, and so every fork its other cases make.
+func WriteExecutable(t *testing.T, path, script string) {
+	t.Helper()
+	writeExecutable(t, path, script)
 }
 
 // CapReads holds a local box's whole reads to n bytes, for the file contract

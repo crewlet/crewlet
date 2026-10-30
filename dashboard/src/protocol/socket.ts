@@ -21,9 +21,10 @@
  *
  * # What a close means
  *
- * The handshake carries the session cookie and nothing else, and the engine
- * decides it once. After that it CLOSES the socket when the identity estate
- * moves under it — and the code says what the tab should do:
+ * The handshake carries the session cookie, and the tab's reader in its URL
+ * (a browser sets no header on a WebSocket), and the engine decides it once.
+ * After that it CLOSES the socket when the identity estate moves under it —
+ * and the code says what the tab should do:
  *
  *  - 4401 (`CLOSE_UNAUTHENTICATED`): the session the socket was opened with
  *    ended — a sign-out here or everywhere, a suspension, a removal, a
@@ -52,7 +53,14 @@ import { api } from "./api.ts";
 import { auth } from "./auth.ts";
 import { RestError, retryHintOf, whenRequestsSettle } from "./rest.ts";
 import { retryAfterMs } from "./retry.ts";
-import { needSession } from "./signin.ts";
+import {
+  needSession,
+  READER_CHANGED,
+  readerHeaders,
+  readerMoved,
+  readerQuery,
+  readerUnlearned,
+} from "./signin.ts";
 import type { Store } from "./store.ts";
 import type {
   ArtifactChangedPush,
@@ -63,6 +71,7 @@ import type {
   LogRefusal,
   PresenceActivity,
   PresenceFocus,
+  PresenceRoomKind,
   QueryMap,
   QueryName,
   QueryRefusal,
@@ -110,7 +119,8 @@ const ARTIFACT_JOIN_WHAT = "artifact_join";
  * be caught up from the `through` it held or the datastore must be read whole.
  * `refused` is a join the engine refused or a room it withdrew, with the code
  * (`not_found` for both, in the words an artifact nobody holds is answered
- * with), after which no push arrives until the listener joins again.
+ * with, or `artifact_trashed` for an artifact disclosed to the reader and in
+ * the trash), after which no push arrives until the listener joins again.
  */
 export interface RoomListener {
   joined?: (answer: ArtifactJoined) => void;
@@ -153,6 +163,12 @@ const QUERY_ERROR_CODES: Record<QueryErrorCode, true> = {
   bad_params: true,
   not_found: true,
   unavailable: true,
+  artifact_trashed: true,
+  unreadable_revision: true,
+  unsealed_revision: true,
+  unreadable_fleet_revision: true,
+  unsealed_fleet_revision: true,
+  unknown_seal_revision: true,
   timeout: true,
   closed: true,
 };
@@ -188,11 +204,12 @@ export class QueryError extends Error {
    */
   readonly refusal: QueryRefusal | LogRefusal | null;
   /**
-   * The refusal's own sentence on a `bad_params` refusal — the parameter to
-   * change and what it accepts — and null everywhere else. The engine writes
-   * that one refusal FOR the caller and keeps every other failure's text in
-   * its log, so this is never a path or a driver's message. An `unavailable`
-   * answer's words are its {@link LogRefusal}'s.
+   * The refusal's own sentence where the engine wrote one for the reader
+   * ({@link DETAILED_QUERY_ERRORS}): on `bad_params`, the parameter to change
+   * and what it accepts; on a revision the node cannot open, the key or the
+   * document that brings it back. Null everywhere else: the engine keeps every
+   * other failure's text in its log, so this is never a path or a driver's
+   * message. An `unavailable` answer's words are its {@link LogRefusal}'s.
    */
   readonly detail: string | null;
 
@@ -234,12 +251,31 @@ export function unavailableRetryMs(refusal: QueryRefusal | LogRefusal | null): n
 }
 
 /**
- * A `bad_params` frame's sentence, or null for any other frame. The engine
- * writes that one refusal for the caller; an `unavailable` frame's words are
- * its refusal's ({@link refusalOf}), and every other frame carries none.
+ * The {@link QueryErrorCode}s whose frame carries the engine's own sentence in
+ * `detail`: a refusal written for the reader, which a screen shows rather than
+ * a line of its own. Every other code's text stays in the engine's log.
  */
-function badParamsDetail(msg: Frame): string | null {
-  return msg.error === "bad_params" && typeof msg.detail === "string" && msg.detail !== ""
+export const DETAILED_QUERY_ERRORS: ReadonlySet<QueryErrorCode> = new Set<QueryErrorCode>([
+  "bad_params",
+  "unreadable_revision",
+  "unsealed_revision",
+  "unreadable_fleet_revision",
+  "unsealed_fleet_revision",
+  "unknown_seal_revision",
+]);
+
+/**
+ * The sentence a refusal written for the reader carries — a `bad_params`
+ * frame's, or a revision the node cannot open ({@link DETAILED_QUERY_ERRORS})
+ * — or null for any other frame. An `unavailable` frame's words are its
+ * refusal's ({@link refusalOf}), and every other frame carries none.
+ */
+function framedDetail(msg: Frame): string | null {
+  const code = queryErrorCode(msg.error);
+  return code !== null &&
+    DETAILED_QUERY_ERRORS.has(code) &&
+    typeof msg.detail === "string" &&
+    msg.detail !== ""
     ? msg.detail
     : null;
 }
@@ -345,6 +381,16 @@ export class LiveSocket {
   private rooms = new Map<string, Room>();
   /** Join frames out now, by their id, to the artifact each names. */
   private joins = new Map<number, string>();
+  /**
+   * Which room a tab has open, and whether somebody is typing in it.
+   *
+   * HELD RATHER THAN SENT AND FORGOTTEN, for the reason the watch is: it is
+   * state the SERVER keeps per socket, so a reconnect gets a new socket that
+   * knows nothing, and a reader sitting in a room through a thirty-second
+   * backoff would come back invisible to everybody else in it and see nobody.
+   */
+  private focused = "";
+  private typing = false;
   /** Seats, by AGENT ID, whose live call is being fetched whole, each with
    *  whether a push found the call behind again while the fetch was out — see
    *  `fetchCalls`. */
@@ -530,6 +576,44 @@ export class LiveSocket {
   }
 
   /**
+   * Say which chat room this tab is looking at, and whether it is being typed
+   * in: the chat room's `presence` frame, which names the room by its kind and
+   * its id like every room's (ADR-0038).
+   *
+   * THE FRAME ITSELF JOINS, unlike an artifact's, because a tab looks at one
+   * chat room at a time: naming a room puts this socket in its presence (once
+   * the engine has decided the room is one this reader may see) and takes it
+   * out of the room it was in, and an empty room id takes it out of the one it
+   * was in. The engine answers with the room's members (`chat_presence`) and
+   * every change after; typing is EDITING, which the engine puts back to
+   * viewing once nothing has re-asserted it inside its lapse.
+   *
+   * It is not delivered while the socket is down and is not queued: presence
+   * is about now. The reconnect re-sends what this tab is looking at, which is
+   * the state above, since the new socket is in no room. Only the chat screen
+   * sends it, and the frame mounts that screen only for a reader holding
+   * Chatlet, so a tab without it never names a room.
+   */
+  focus(channelID: string, typing: boolean): void {
+    this.focused = channelID;
+    this.typing = typing;
+    this.sendFocus();
+  }
+
+  private sendFocus(): void {
+    if (!this.connected || !this.sock) return; // `onopen` sends it
+    const activity: PresenceActivity = this.focused !== "" && this.typing ? "editing" : "viewing";
+    const room: PresenceRoomKind = "chat";
+    try {
+      this.sock.send(
+        JSON.stringify({ kind: "presence", room, channel_id: this.focused, activity }),
+      );
+    } catch {
+      // The close handler owns recovery, and the next open re-sends it.
+    }
+  }
+
+  /**
    * The engine refused a watch.
    *
    * `unavailable` means this node could not read the chart that decides it,
@@ -606,7 +690,8 @@ export class LiveSocket {
     const room = this.rooms.get(artifact);
     if (!room?.joined || !this.connected || !this.sock) return;
     try {
-      this.sock.send(JSON.stringify({ kind: "presence", artifact, activity, focus }));
+      const room: PresenceRoomKind = "artifact";
+      this.sock.send(JSON.stringify({ kind: "presence", room, artifact, activity, focus }));
     } catch {
       // The close handler owns recovery, and the next join says it again.
     }
@@ -691,7 +776,7 @@ export class LiveSocket {
         }, wait);
       }
     }
-    const error = new QueryError(code, refusal, badParamsDetail(msg));
+    const error = new QueryError(code, refusal, framedDetail(msg));
     for (const listener of [...room.listeners]) listener.refused?.(error);
   }
 
@@ -715,24 +800,54 @@ export class LiveSocket {
 
   // ---- connection --------------------------------------------------------
 
-  private connect(): void {
+  /**
+   * Dial, for the tab's reader.
+   *
+   * `learned` is a caller that has just read the session and taken it
+   * ([learnReader], [redialIfSignedIn]): the reader is whatever that left,
+   * and asking again could not learn more — a browser refusing storage
+   * records nobody however often it is asked.
+   */
+  private connect(learned = false): void {
     if (
       this.isClosed ||
       this.refused ||
       this.held ||
+      this.learning ||
       (this.sock &&
         (this.sock.readyState === WebSocket.OPEN || this.sock.readyState === WebSocket.CONNECTING))
     ) {
       return;
     }
+    // A TAB THAT HAS RECORDED NOBODY LEARNS WHO BEFORE IT DIALS. The frame
+    // dials once its `GET /auth/session` has answered, and that read records
+    // the reader — but it dials when the read FAILED too, and a reconnect or
+    // a signed-out tab coming back into view dials on its own. A dial naming
+    // nobody is served as whoever holds the cookie, so a sign-in in another
+    // tab between that dial and the tab's next session read was ADOPTED as
+    // this tab's reader by a tab still drawing the company it had been
+    // served for the last one.
+    if (!learned && readerUnlearned()) {
+      void this.learnReader();
+      return;
+    }
     const proto = location.protocol === "https:" ? "wss" : "ws";
     // THE HANDSHAKE CARRIES THE SESSION COOKIE, which the browser attaches to
-    // a same-origin upgrade as it does to any request, and nothing else. There
-    // is deliberately no query-string credential: a URL is written into every
-    // proxy's access log, and the engine reads none there.
+    // a same-origin upgrade as it does to any request, and no credential
+    // beside it: a URL is written into every proxy's access log, and the
+    // engine reads none there.
+    //
+    // WHAT IT DOES CARRY IN ITS URL IS THE TAB'S READER (`readerQuery`), the
+    // one thing every other request says in a header and a handshake cannot:
+    // a browser sets no header on a WebSocket. A dial made under a cookie a
+    // sign-in in another tab moved is then refused before any frame of the
+    // new person's company is drawn — as 1006, which the refusal probe reads
+    // as `reader_changed` and hands the tab over on — rather than served
+    // until the tab's next request was refused. The id is not a secret; it is
+    // in the access log of the socket's path.
     let sock: WebSocket;
     try {
-      sock = new WebSocket(`${proto}://${location.host}${PATH}`);
+      sock = new WebSocket(`${proto}://${location.host}${PATH}${readerQuery()}`);
     } catch {
       this.scheduleReconnect();
       return;
@@ -762,6 +877,10 @@ export class LiveSocket {
       // `through` it last held so the engine can say whether a catch-up is
       // enough.
       for (const artifact of this.rooms.keys()) this.sendJoin(artifact);
+      // AND WHERE THIS TAB IS LOOKING, which the new socket does not know
+      // either: a reader who sat in a room through a reconnect would otherwise
+      // be invisible to everybody else in it until they clicked something.
+      if (this.focused !== "") this.sendFocus();
     };
     sock.onmessage = (e: MessageEvent) => this.onMessage(String(e.data));
     sock.onclose = (e: CloseEvent) => {
@@ -847,8 +966,43 @@ export class LiveSocket {
         this.authRejected();
         return;
       }
+      // ANY OTHER FAILURE says nothing about the session, and the dial's
+      // own handshake decides — for the reader this tab already has; a tab
+      // that recorded nobody learns who first ([learnReader]).
+      this.connect();
+      return;
     }
-    this.connect();
+    this.connect(true);
+  }
+
+  /** Whether [learnReader]'s session read is out, which a dial waits for. */
+  private learning = false;
+
+  /**
+   * Read who this browser is signed in as, take it, and only then dial.
+   *
+   * THE READ FIRST, so the dial names the reader the tab has just recorded
+   * and the engine refuses it if the cookie moves before it lands. A `401`
+   * is nobody, the sign-in need every transport raises. ANY OTHER FAILURE
+   * DIALS NOTHING and asks again on the backoff: the read says nothing about
+   * who this is, and a dial now would be served as whoever holds the cookie
+   * to a tab that could not tell them from its next reader. A session the
+   * app hands the tab over for dials nothing: the tab is being reloaded.
+   */
+  private async learnReader(): Promise<void> {
+    this.learning = true;
+    let person: string;
+    try {
+      person = (await auth.session()).person;
+    } catch (err) {
+      this.learning = false;
+      if (err instanceof RestError && err.status === 401) this.authRejected();
+      else this.scheduleReconnect();
+      return;
+    }
+    this.learning = false;
+    if (this.isClosed || this.held || !this.takeSession(person)) return;
+    this.connect(true);
   }
 
   /**
@@ -874,12 +1028,23 @@ export class LiveSocket {
   private async probeRefusal(): Promise<void> {
     if (this.isClosed) return;
     try {
-      const res = await fetch(PATH, { credentials: "same-origin", cache: "no-store" });
+      // NAMING THE TAB'S READER in the header a plain GET can carry. A dial
+      // refused while the browser is somebody else's — for the reader its
+      // URL named, or for that person's own session — is then told so here,
+      // and the tab handed to them, rather than re-asked as them.
+      const res = await fetch(PATH, {
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: readerHeaders(),
+      });
       // Not `!res.ok`: 426 is the healthy answer here, and every other failure
       // is the network or a proxy, neither of which the reader fixes by
       // signing in.
       if (res.status === 401) this.authRejected();
-      else if (res.status === 503) await this.redialWhenSaid(res);
+      else if (res.status === 409) {
+        const body = (await res.json().catch(() => null)) as { error?: unknown } | null;
+        if (body?.error === READER_CHANGED) readerMoved();
+      } else if (res.status === 503) await this.redialWhenSaid(res);
       else if (res.status === 403) {
         const body = (await res.json().catch(() => null)) as {
           error?: string;
@@ -1041,6 +1206,35 @@ export class LiveSocket {
       case "artifact_presence":
         this.roomPush("presence", msg.data);
         break;
+      // THE CHAT ARM. Six kinds, ONE store method: the frame carries the
+      // record's own `op` (`post`, `edit`, `react`, …) and the kind is a
+      // routing label the server derived from it, so passing the kind as well
+      // would be a second vocabulary for one fact — and the two would
+      // disagree on exactly the op somebody adds next.
+      //
+      // Every one of these was already filtered by the engine against whether
+      // this viewer may read the room, failing closed, so nothing below this
+      // line decides who may see what. The one frame sent past that rule is
+      // the membership change that took this viewer OUT of a room: it names
+      // the room and the record and no member, and the rail's re-read on it
+      // is how the room leaves the rail.
+      case "chat_posted":
+      case "chat_edited":
+      case "chat_deleted":
+      case "chat_reacted":
+      case "chat_room_changed":
+      case "chat_membership_changed":
+        this.store.applyChatChange(msg.data as never);
+        break;
+      case "chat_presence":
+        this.store.applyChatPresence(msg.data as never);
+        break;
+      // NOT ABOUT A ROOM AT ALL: where the seat this tab reads as has read
+      // to, sent to that seat's own sockets and nobody else's, so a badge
+      // cleared in one window clears in the other.
+      case "chat_cursor_moved":
+        this.store.applyChatRead(msg.data as never);
+        break;
       case "result":
         if (msg.id !== undefined && this.joins.has(msg.id)) {
           this.joinAnswered(msg.id, msg.data as ArtifactJoined);
@@ -1062,13 +1256,7 @@ export class LiveSocket {
         }
         // An error frame always carries a code. One that does not is still
         // a failure nobody explained, which is what `query_failed` means.
-        this.settle(
-          msg.id,
-          msg.error || "query_failed",
-          null,
-          refusalOf(msg),
-          badParamsDetail(msg),
-        );
+        this.settle(msg.id, msg.error || "query_failed", null, refusalOf(msg), framedDetail(msg));
         break;
       case "pong":
         break;

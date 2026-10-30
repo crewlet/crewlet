@@ -98,6 +98,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/statelog"
 )
 
 var log = logging.Get("doclet")
@@ -276,33 +277,57 @@ func nowUTC() time.Time { return time.Now().UTC() }
 // ErrInvalid reports a value this knowledge base refuses.
 var ErrInvalid = fmt.Errorf("doclet: invalid")
 
-// invalidError is a refusal naming the field and what to do, marked
+// InvalidError is a refusal naming the field and what to do, marked
 // [ErrInvalid]. The field and the sentence are held apart so [Sentence] can
-// say them to a PERSON — a write surface prints this class as it stands — while
-// the Go error keeps the form every log and model has read.
-type invalidError struct{ field, why string }
-
-func (e *invalidError) Error() string {
-	return fmt.Sprintf("%v: %s: %s", ErrInvalid, e.field, e.why)
+// say them without the package prefix (a page tool tells a model this class
+// in those words alone; the act route and the human write surface answer it
+// in a person's words or in its code's own, ADR-0060) while the Go error
+// keeps the form every log and model has read.
+//
+// EXPORTED, FIELDS AND ALL, because a refusal crosses the estate router's wire
+// (internal/estate) whenever the node that decided it is not the node whose
+// caller is told: the wire rebuilds an error TYPE from its exported fields, and
+// an unexported one arrived as its message alone — so [Sentence] on the asking
+// node found no refusal and handed its reader the whole "doclet: invalid: …".
+// Only this package builds one.
+type InvalidError struct {
+	// Field is the argument refused, as the caller named it.
+	Field string
+	// Why is what is wrong with it and what to do, without the package
+	// prefix.
+	Why string
 }
-func (e *invalidError) Unwrap() error { return ErrInvalid }
+
+func (e *InvalidError) Error() string {
+	return fmt.Sprintf("%v: %s: %s", ErrInvalid, e.Field, e.Why)
+}
+func (e *InvalidError) Unwrap() error { return ErrInvalid }
 
 // invalid builds a refusal naming the field and what to do.
 func invalid(field, why string, args ...any) error {
-	return &invalidError{field: field, why: fmt.Sprintf(why, args...)}
+	return &InvalidError{Field: field, Why: fmt.Sprintf(why, args...)}
 }
 
 // Sentence is a refusal this package wrote, as a person reads it: the
 // argument it names, as a value, and what to do, without the "doclet:
 // invalid:" a Go error opens with, which says where the error came from and
-// nothing about what to change. Any other error, or a refusal a caller
-// wrapped in context of its own, is its whole message.
+// nothing about what to change. Any other error this package wrote loses the
+// "doclet:" it opens with and keeps every word after it; one a caller wrapped
+// in context of its own is its whole message. THE FRAMEWORK'S OWN THREE — a
+// lost race ([ErrConflict] wraps it), a create of what is there and a write a
+// deletion keeps deleted — are told in the state log's words for a person
+// ([statelog.Sentence]), as every surface that asks the state log first tells
+// them, so a caller asking only this one never prints the framework's words
+// after the mark.
 func Sentence(err error) string {
-	var r *invalidError
-	if errors.As(err, &r) && r.Error() == err.Error() {
-		return "`" + r.field + "`: " + r.why
+	if said, ok := statelog.Sentence(err); ok {
+		return said
 	}
-	return err.Error()
+	var r *InvalidError
+	if errors.As(err, &r) && r.Error() == err.Error() {
+		return "`" + r.Field + "`: " + r.Why
+	}
+	return strings.TrimPrefix(err.Error(), "doclet: ")
 }
 
 // badParent builds the refusal of a page's `parent_id`, which is both a field

@@ -197,18 +197,30 @@ export interface Waiting {
   count: number;
   floor: boolean;
   oldestAt: string | null;
+  /**
+   * The answer could not account for everything (the board kit's `gapsOf`),
+   * so the count may be wrong in either direction and "nothing" is no claim
+   * to make over it.
+   */
+  partial: boolean;
 }
 
 export function waitingOf(
   answer: DecisionsAnswer | null,
   seatConditions: readonly { at?: string }[],
+  partial: boolean,
 ): Waiting | null {
   if (!answer || typeof answer.total !== "number") return null;
   let oldest = answer.oldest_at ?? null;
   for (const c of seatConditions) {
     if (c.at && (!oldest || Date.parse(c.at) < Date.parse(oldest))) oldest = c.at;
   }
-  return { count: answer.total + seatConditions.length, floor: answer.capped, oldestAt: oldest };
+  return {
+    count: answer.total + seatConditions.length,
+    floor: answer.capped,
+    oldestAt: oldest,
+    partial,
+  };
 }
 
 /** "2h 10m", "38m", "3d" — how long something has waited. */
@@ -291,8 +303,12 @@ export function statusSentence(input: {
   const clauses: Segment[][] = [];
   const w = input.waiting;
   if (w) {
-    if (w.count === 0) clauses.push([{ text: "nothing needs your decision" }]);
-    else {
+    // NOTHING IS A CLAIM, made only over an answer that accounted for
+    // everything; over one that could not, the clause is left out and the
+    // decisions tile says why.
+    if (w.count === 0) {
+      if (!w.partial) clauses.push([{ text: "nothing needs your decision" }]);
+    } else {
       const one = w.count === 1 && !w.floor;
       clauses.push([
         {

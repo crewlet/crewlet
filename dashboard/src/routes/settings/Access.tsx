@@ -94,8 +94,8 @@
  * A row's ACCESS column says what it amounts to: "Admin" (which includes
  * every app), the apps it holds ("Worklet · Doclet"), or "Overview only",
  * through `lib/access.ts`'s one reading, so a row stored as `[admin]` and one
- * stored as `[admin, worklet, doclet]` read the same, as the engine treats
- * them.
+ * stored as `[admin, worklet, doclet, artifacts, chatlet]` read the same, as the
+ * engine treats them.
  */
 
 import { ORG_EDIT_PATH } from "~/app/routes.ts";
@@ -314,7 +314,12 @@ export interface DirectoryFinding {
   detail: string;
 }
 
-interface DirectoryCheck {
+/**
+ * `GET /iam/check`, as every screen that reads it takes it: this page's
+ * Needs attention card and Home's People & access widget read ONE type, so a
+ * field one of them reads is a field the other cannot lose.
+ */
+export interface DirectoryCheck {
   findings: DirectoryFinding[] | null;
   /**
    * Active, enrolled PERSONS holding Admin — never a service account, whose
@@ -322,6 +327,10 @@ interface DirectoryCheck {
    * reads.
    */
   people_with_admin: number;
+  /**
+   * Bindings this node could not check against its own chart just now, which
+   * is "could not say" and never "no dangling binding".
+   */
   bindings_unchecked: number;
 }
 

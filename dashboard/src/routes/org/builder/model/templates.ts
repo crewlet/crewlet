@@ -17,12 +17,16 @@
  *   one tree, rather than a root per unit, which is what a template that only
  *   set unit leads produced: the engine's lead manages that unit's direct
  *   members and never the lead of a child unit.
- * - NEVER AN INVENTED CONTACT. A human seat reaches people through the
- *   contact identity it holds, and a made-up one would mention a stranger. The
- *   only identity a template writes is the one the operator typed for their
- *   own seat, if any; a "Leads are people" lead is created without one, and
- *   [seatsWithoutContact] lists it in the review: the engine admits it, and
- *   until it has one the person is reached through the dashboard only.
+ * - NEVER AN INVENTED CONTACT. A contact identity is how another system — a
+ *   chat vendor, a code host, an issue tracker — finds the person a human
+ *   seat is, and a made-up one would mention a stranger there. The only
+ *   identity a template writes is the one the operator typed for their own
+ *   seat, if any; a "Leads are people" lead is created without one. The
+ *   engine admits that, and where it costs something — a company talking on
+ *   Mattermost or Slack, where nothing addressed to the seat there reaches
+ *   anybody — its own check warns at the seat's `contact`, which the review
+ *   lists with every other warning. On the engine's own chat an agent
+ *   mentions a person by their seat, and nothing is missing.
  * - NEUTRAL TITLES. Seats are named for the role ("Chief Executive"), never a
  *   person, because a seat outlives whoever holds it.
  * - EVERY NODE CARRIES ITS IDENTITY. Each seat is given a handle and each unit
@@ -32,9 +36,9 @@
  */
 
 import type { HumanContactKey } from "~/protocol/index.ts";
-import { allSeats, type Draft, type DraftSeat, type DraftUnit } from "./draft.ts";
+import type { DraftSeat, DraftUnit } from "./draft.ts";
 import { mintHandle, mintUnitKey } from "./identity.ts";
-import { mintKey, type KeySource, type NodeKey } from "./keys.ts";
+import { mintKey, type KeySource } from "./keys.ts";
 import type { Intent, TemplateId } from "./operations.ts";
 
 /** The identities a create form offers for the operator's own seat, in the order it lists them. */
@@ -294,25 +298,4 @@ export function templateIntent(options: TemplateOptions, keys: KeySource): Templ
       units: shape.units.map(unit),
     },
   };
-}
-
-/**
- * The human seats of a draft that hold no contact identity, in walk order.
- *
- * A NOTICE, NOT A RULE. The engine admits a human seat with no contact
- * identity — a person who works only through the dashboard has no chat
- * account to declare — and warns about it on every write; the review names
- * each one, because until it has one no agent can @-mention that person.
- */
-export function seatsWithoutContact(draft: Draft): NodeKey[] {
-  const out: NodeKey[] = [];
-  for (const { seat } of allSeats(draft)) {
-    if (seat.data.kind !== "human") continue;
-    const contact = seat.data.contact;
-    const hasOne =
-      contact !== undefined &&
-      Object.values(contact).some((v) => typeof v === "string" && v.trim() !== "");
-    if (!hasOne) out.push(seat.key);
-  }
-  return out;
 }

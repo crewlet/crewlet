@@ -27,7 +27,8 @@ import (
 // screen showed the same path under "try again in a moment".
 //
 // The control beside it is a read the STATE LOG refused: a condition waiting
-// clears, which keeps `unavailable`, its own words and the hint it derived.
+// clears, which keeps `unavailable`, the hint it derived and the state log's
+// words for its code — never its detail, which is the log's too.
 //
 // NOT PARALLEL: it reads the process's log, which [logging.Configure] owns,
 // and Go resumes every parallel test only after the sequential ones end.
@@ -78,9 +79,13 @@ func TestAStoreFaultInAReadToolIsAFault(t *testing.T) {
 	if hint := statelog.RetryAfter(got.Cause, 0); hint != 9*time.Second {
 		t.Errorf("the refusal's hint reads %s through the result, want its own 9s", hint)
 	}
-	if !strings.Contains(got.Output, "40 records behind") || !strings.Contains(got.Output, "Try again") {
+	if !strings.Contains(got.Output, "hasn't caught up") || !strings.Contains(got.Output, "Try again") {
 		t.Errorf("a condition's sentence %q does not say what it is and that a "+
 			"retry clears it", got.Output)
+	}
+	if strings.Contains(got.Output, "40 records behind") || strings.Contains(got.Output, "statelog") {
+		t.Errorf("a condition's sentence %q carries the refusal's own text, which "+
+			"is the node's log's", got.Output)
 	}
 }
 

@@ -97,6 +97,31 @@ test("a seat is matched by its name, whole and in its own case", () => {
   expect(mark("A QAT or qa run, @qa", reads).named.size).toBe(0);
 });
 
+test("a chat room is matched by its name with its #, which is its key", () => {
+  // THE ENGINE KEYS A ROOM BY ITS NAME (`#launch`), so the rule is the key's:
+  // exact, at the edges of its token, and never inside a longer name.
+  const room = event({
+    type: "entity",
+    entity: { kind: "room", id: "r1", key: "#launch", title: "#launch" },
+  });
+  const { reads } = readsOf([room]);
+  expect(mark("#launch is waiting on the launch copy.", reads).text).toBe(
+    "[room:r1|#launch] is waiting on the launch copy.",
+  );
+  expect(mark("The launch copy waits in #launch-plan.", reads).named.size).toBe(0);
+});
+
+test("a direct conversation, which has no name, is never matched by its heading", () => {
+  // A ROOM WITH NO NAME HAS NO KEY: it is headed by its people, which are
+  // words an answer writes about anything, so it is listed under the answer.
+  const direct = event({
+    type: "entity",
+    entity: { kind: "room", id: "r2", title: "Direct conversation with Ada Lovelace" },
+  });
+  const { reads } = readsOf([direct]);
+  expect(mark("Direct conversation with Ada Lovelace is quiet.", reads).named.size).toBe(0);
+});
+
 test("a table and a record of no kind are never matched in words", () => {
   const { reads } = readsOf([
     table("Workload"),
@@ -127,6 +152,20 @@ test("a record read twice is one read, in the order first read, with the fresher
   expect(reads[2]!.label).toBe("Workload (0)");
   expect(reads[0]!.event).toBe(fresher);
   expect(others).toEqual([]);
+});
+
+test("two reads of one tool, told apart by their scope, are two reads", () => {
+  // THE ENGINE SAYS A READ'S SCOPE IN ITS TITLE (two direct conversations by
+  // their people, one search by two authors), and the drawer keeps one read
+  // per title, so the whole title, scope and all, is what tells them apart.
+  const { reads } = readsOf([
+    table("Messages, with Ada Lovelace"),
+    table("Messages, with Backend engineer"),
+  ]);
+  expect(reads.map((r) => r.id)).toEqual([
+    "table:Messages, with Ada Lovelace\u0000",
+    "table:Messages, with Backend engineer\u0000",
+  ]);
 });
 
 test("every card that is not a read is left as it came", () => {

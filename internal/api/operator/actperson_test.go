@@ -9,13 +9,18 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/caveat"
 	"github.com/crewlet/crewlet/internal/caveat/caveattest"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
@@ -103,12 +108,14 @@ func wordedForAPerson(t *testing.T, what string, answer map[string]any) {
 }
 
 // drawsTheEnginesWords reports whether the dashboard shows this answer in the
-// engine's words: the two refusal classes its `contract/errors.ts` keeps no
-// sentence for, because only their detail names what to change or whom to ask.
-// Every other code it shows in a sentence of its own.
+// engine's words: the four refusal classes its `contract/errors.ts` keeps no
+// sentence for, because only the engine's words say what to change, whom to
+// ask, the state that refused the change, or what is already there. Every
+// other code it shows in a sentence of its own.
 func drawsTheEnginesWords(answer map[string]any) bool {
 	code, _ := answer["error"].(string)
-	return code == string(httpjson.CodeInvalid) || code == string(httpjson.CodeForbidden)
+	return code == string(httpjson.CodeInvalid) || code == string(httpjson.CodeForbidden) ||
+		code == string(httpjson.CodeConflict) || code == string(httpjson.CodeExists)
 }
 
 // EVERY REFUSAL THE ACT ROUTE ANSWERS IS WORDED FOR A PERSON (ADR-0060).
@@ -291,8 +298,17 @@ func (placingWork) PlaceTask(context.Context, string, worklet.Place,
 // depth, outside the value fields a screen reads as values, and holds it to a
 // person's words: a new field of prose fails here whatever it is named.
 //
+// AND A RECEIPT ECHOING WORDS SOMEBODY ELSE WROTE ANSWERS THEM AS THEY WERE
+// STORED: `update_channel` answers a model the room's topic and purpose
+// fenced, since the one it left alone is whoever set it last, and `answer_run`
+// the question the parked run asked, in the seat's name; read off those
+// answers the act route handed a person the topic and the question between a
+// fence's two lines, under value fields no walk read.
+//
 // Mutation, run when this was written: answer the missed place as the
-// receipt's `unplaced` again and the drag's row goes red on the tool's name.
+// receipt's `unplaced` again and the drag's row goes red on the tool's name;
+// answer a receipt from the model's Output again and the room's and the run's
+// rows go red on the fence round the topic, the purpose and the question.
 func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 	t.Parallel()
 	created := &recordingWork{caveats: []caveat.Caveat{
@@ -324,4 +340,57 @@ func TestEveryAnswerTheActRouteGivesIsWordedForAPerson(t *testing.T) {
 			t.Errorf("%s: %s", tc.name, problem)
 		}
 	}
+
+	status, answer := act(t, guarded(chatSurface(t, &chatDesk{}, nil)), "founder",
+		chatlet.UpdateChannelTool, "application/json",
+		`{"args":{"channel":"`+room+`","topic":"Q3 launch"}}`, newKey())
+	if status != http.StatusOK {
+		t.Fatalf("a room's new topic answered %d %v", status, answer)
+	}
+	if receipt, _ := answer["receipt"].(map[string]any); receipt["topic"] != "Q3 launch" ||
+		receipt["purpose"] != roomPurpose {
+
+		t.Errorf("a room's new topic answered the receipt %v, want its topic and its "+
+			"purpose as they were stored", answer["receipt"])
+	}
+	for _, problem := range caveattest.AnswerProblems(chatlet.UpdateChannelTool, answer) {
+		t.Errorf("a room's new topic: %s", problem)
+	}
+
+	runs := guarded(newSurface(t, operator.Options{Halves: fixed(operator.Halves{}),
+		Org: company, Runs: builtin.RunDeps{Desk: parkedRun{}}}))
+	status, answer = act(t, runs, "founder", builtin.AnswerRunTool, "application/json",
+		`{"args":{"turn_id":"t1","launch_id":"launch-t1","answer":"use main"}}`, newKey())
+	if status != http.StatusOK {
+		t.Fatalf("an answer to a parked run answered %d %v", status, answer)
+	}
+	if receipt, _ := answer["receipt"].(map[string]any); receipt["question"] != "which branch?" {
+		t.Errorf("an answer to a parked run answered the receipt %v, want the question "+
+			"as the run asked it", answer["receipt"])
+	}
+	for _, problem := range caveattest.AnswerProblems(builtin.AnswerRunTool, answer) {
+		t.Errorf("an answer to a parked run: %s", problem)
+	}
 }
+
+// parkedRun is a run desk holding one coding run, t1, parked on a question its
+// requester, the founder's seat, is to answer, which takes every answer.
+type parkedRun struct{}
+
+func (parkedRun) Run(_ context.Context, turnID string) (sandbox.PendingRun, bool, error) {
+	if turnID != "t1" {
+		return sandbox.PendingRun{}, false, nil
+	}
+	return sandbox.PendingRun{TurnID: "t1", AgentHandle: "cto",
+		AgentID:   uuid.NewSHA1(uuid.NameSpaceOID, []byte("cto")).String(),
+		Requester: "jane-founder", Status: sandbox.StatusAwaiting,
+		Question: "which branch?", LaunchID: "launch-t1"}, true, nil
+}
+
+func (parkedRun) Deliver(context.Context, types.SandboxAnswerGiven) (uuid.UUID, error) {
+	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("answer-t1")), nil
+}
+
+// Answerer names nobody: t1 is still waiting, so it holds no answer whose seal
+// could name who gave it.
+func (parkedRun) Answerer(sandbox.PendingRun) string { return "" }

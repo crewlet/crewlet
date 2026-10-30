@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/slideformat"
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/tools"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ---- get_artifact_format ------------------------------------------------ //
@@ -97,12 +98,12 @@ func (t *artifactFormat) CallForTurn(_ context.Context, _ *turnctx.Turn,
 	spec, ok := kind.Spec()
 	if !ok {
 		return refused(tools.RefusalInvalid, fmt.Sprintf("%s takes `kind` as one of %s.",
-			ArtifactFormatTool, strings.Join(formatKinds(), ", "))), nil
+			ArtifactFormatTool, words.Or(formatKinds()))), nil
 	}
 	reference, ok := formatReferences[spec.Format]
 	if !ok {
 		return refused(tools.RefusalInvalid, fmt.Sprintf("A %s artifact has no closed format: "+
-			"%s. The kinds with one are %s.", kind, spec.Summary, strings.Join(formatKinds(), ", "))), nil
+			"%s. The kinds with one are %s.", kind, spec.Summary, words.And(formatKinds()))), nil
 	}
 	return tools.Result{Output: reference()}, nil
 }

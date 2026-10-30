@@ -3,13 +3,13 @@ package cliagent
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
 )
@@ -191,6 +191,12 @@ func renderPriorCalls(calls []llm.ToolCall) string {
 
 // callArguments renders one call's arguments as JSON, or says why there are
 // none to show.
+//
+// WRITTEN AS TEXT ([plainjson.Marshal]), with `<`, `>` and `&` as themselves:
+// the model reads the transcript as written, not through a JSON decoder, and
+// an HTML-safe encoder hands back the call it made with `\u003c` and `\u0026`
+// in place of what it typed, five bytes each of a prompt charged by its size
+// where a CLI reports no usage.
 func callArguments(call llm.ToolCall) string {
 	if call.ArgumentsError != "" {
 		return "arguments that could not be read (" + call.ArgumentsError + ")"
@@ -199,7 +205,7 @@ func callArguments(call llm.ToolCall) string {
 	if args == nil {
 		args = map[string]any{}
 	}
-	encoded, err := json.Marshal(args)
+	encoded, err := plainjson.Marshal(args, "")
 	if err != nil {
 		// Arguments came off a decoded JSON document, so this cannot
 		// happen; saying so keeps the transcript honest if it ever does,

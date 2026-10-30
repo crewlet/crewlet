@@ -16,6 +16,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // DigestDomain opens every proposal digest's preimage, so a proposal digest
@@ -68,7 +69,8 @@ func (f Fields) check() error {
 		f.Proposal == uuid.Nil:
 		return fmt.Errorf("%w: a proposal names its owner, conversation, turn and id", ErrInvalid)
 	case !f.Scope.Valid():
-		return fmt.Errorf("%w: scope %q is not one of %v", ErrInvalid, f.Scope, wire.ProposalScopes)
+		return fmt.Errorf("%w: scope %q is not one of %s", ErrInvalid, f.Scope,
+			words.Or(wire.ProposalScopes))
 	case f.Tool == "":
 		return fmt.Errorf("%w: a proposal names the tool that made it", ErrInvalid)
 	case f.Scope == wire.ScopeServer && f.Act == "":

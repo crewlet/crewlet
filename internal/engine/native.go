@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/colleague"
 	"github.com/crewlet/crewlet/internal/agent/skills"
 	"github.com/crewlet/crewlet/internal/changefeed"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/decision"
@@ -65,9 +66,10 @@ import (
 // fault, so taking a copy out of service for one would be the outage the number
 // exists to avoid.
 
-// native holds this node's native-backend runtime: the tracker's and the
-// knowledge base's read and write sides over the core's logs, the lexical index
-// both are searched through, and the change feeds.
+// native holds this node's native-backend runtime: the tracker's, the
+// knowledge base's and chat's read and write sides over the core's logs, the
+// lexical index the first two are searched through and chat's own, and the
+// change feeds.
 //
 // EVERY FIELD IS WRITTEN ONCE, by [Engine.startNative], before the struct is
 // published to [Engine.native] — which is why there is no mutex here and why
@@ -81,16 +83,26 @@ import (
 // without `data` holds neither: it runs [remoteNative] instead, and reaches the
 // halves through a data node.
 type native struct {
-	// indexer keeps the lexical search index behind the page projection.
+	// indexer keeps the lexical search index behind this node's applied
+	// pages and tasks.
 	indexer *search.Indexer
 
-	// writer is the tracker's write authority and pages the wiki's.
+	// writer is the tracker's write authority, pages the wiki's and chat
+	// the company's own rooms'.
 	writer *worklet.Writer
 	pages  *doclet.Store
+	chat   *chatlet.Store
 
-	// trackerReader and pageReader are the read paths.
+	// trackerReader, pageReader and chatReader are the read paths.
 	trackerReader *worklet.Reader
 	pageReader    *doclet.Reader
+	chatReader    *chatlet.Reader
+
+	// chatIndex is the chat corpus's own keyword index, separate from
+	// [native.indexer] for the reason ADR-0071 gives: chat is in neither
+	// half of the knowledge corpus, so it has its own inverted list, its
+	// own forward-only walk and its own loop.
+	chatIndex *search.ChatIndexer
 
 	// searcher is Doclet's answer to the knowledge seam.
 	searcher *doclet.Searcher
@@ -123,8 +135,8 @@ type native struct {
 
 // errNoCore is what the native halves refuse to start without on a data node:
 // every one of their writers and readers is over one of the core's logs.
-var errNoCore = errors.New("engine: Worklet and Doclet run over the core " +
-	"runtime's state log, and this engine has not started one")
+var errNoCore = errors.New("engine: Worklet, Doclet and Chatlet run over the " +
+	"core runtime's state log, and this engine has not started one")
 
 // startNative opens this node's native backends, once per process, over the
 // core runtime [Engine.startCore] already published.
@@ -158,12 +170,13 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	if core == nil || core.log == nil {
 		return errNoCore
 	}
-	// WHICH HALVES THIS COMPANY RUNS. The logs behind both run whatever
-	// this says — they are the core's — so a company on Jira and Confluence
-	// still applies the tracker's and the knowledge base's logs, and simply
-	// has no writer or reader over either.
+	// WHICH HALVES THIS COMPANY RUNS. The logs behind every one run
+	// whatever this says — they are the core's — so a company on Jira,
+	// Confluence and Slack still applies the tracker's, the knowledge base's
+	// and chat's logs, and simply has no writer or reader over any of them.
 	runTracker := c.Config.TrackerBackendFor() == config.TrackerWorklet
 	wiki := c.Config.KnowledgeBackendFor() == config.KnowledgeDoclet
+	rooms := c.Config.ChatBackendFor() == config.ChatChatlet
 	nodeID, sl := core.nodeID, core.log
 
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -192,15 +205,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		}
 		n.writer, err = worklet.NewWriter(worklet.WriterDeps{
 			Publisher: running.publisher,
-			// THE APPLIER'S OWN MEASURED RATE, so a refusal's
-			// `retry_after_seconds` is derived from what this node
-			// actually applies rather than from the one-record-a-second
-			// floor a nil reader falls back to — which reported a node
-			// two thousand records behind as half an hour behind.
-			Drain:  running.runner.Drain,
-			DB:     sl.estate().Reader(),
-			Claims: e.backends.Coord,
-			NodeID: nodeID,
+			DB:        sl.estate().Reader(),
+			Claims:    e.backends.Coord,
+			NodeID:    nodeID,
 			// THE CHART, read PER CALL. A project's lead is the one
 			// fact a wake's fallback recipient needs that the rows
 			// cannot give — `tracker_projects` carries no column for
@@ -229,9 +236,6 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// housekeeping indistinguishable from somebody's decision.
 			Actor:     nodeID,
 			ActorKind: worklet.AuthorSystem,
-			// The process's one recorder, so every write outcome and
-			// every rejection is counted rather than merely declared.
-			Metrics: e.metrics,
 		})
 		if err != nil {
 			return fmt.Errorf("engine: Worklet writer: %w", err)
@@ -332,7 +336,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			return fmt.Errorf("engine: pages store: %w", err)
 		}
 		if n.pageReader, err = doclet.NewReader(doclet.ReaderOptions{
-			DB: sl.estate().Reader(), Log: running.reader,
+			Log: running.reader,
 		}); err != nil {
 			return fmt.Errorf("engine: pages reader: %w", err)
 		}
@@ -356,15 +360,70 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 		})
 	}
 
-	// NO PROJECTOR LOOP HERE ANY MORE. Both native backends are state-log
-	// domains, and their apply loops are the state log's own — the core's,
-	// started at boot and stopped with it, and reporting their position
+	if rooms {
+		running := sl.Domain(chatlet.Domain{}.Name())
+		if running == nil {
+			return fmt.Errorf("engine: this node runs no chat domain, so the " +
+				"company's own rooms have nowhere to write — the domain is in " +
+				"the register and its stream failed to come up")
+		}
+		if n.chat, err = chatlet.NewStore(chatlet.Options{
+			Publisher: running.publisher, DB: sl.estate().Reader(),
+			// THE CHART, READ PER CALL. Who a message wakes is resolved
+			// at WRITE time and carried on the record, so the roster is
+			// what stands between a routing snapshot and handles the
+			// company no longer has. A captured chart would go on waking
+			// a seat that left, for the life of a process.
+			Roster: liveRoster{engine: e},
+			// THE VISIBILITY A CREATE THAT NAMES NONE GETS. Founder
+			// policy, converted once at this edge so the domain's
+			// vocabulary needs no dependency on config: the domain
+			// decides what an unstated kind resolves to and the company
+			// decides which way. A nil block answers false — public —
+			// which is the field's own documented default.
+			DefaultPrivate: c.Config.Chat.Chatlet.DefaultPrivate(),
+		}); err != nil {
+			return fmt.Errorf("engine: chat store: %w", err)
+		}
+		if n.chatReader, err = chatlet.NewReader(chatlet.ReaderOptions{
+			Log: running.reader, Committed: running.runner.Committed,
+		}); err != nil {
+			return fmt.Errorf("engine: chat reader: %w", err)
+		}
+		// AND THE KEYWORD INDEX OVER THE ROOMS, which is what makes
+		// `search_messages` a tool this node can serve at all: the
+		// builtin is registered on a non-nil searcher and OMITTED
+		// otherwise, so a node that built the store and not the index
+		// runs chat with one of its nine tools permanently missing.
+		//
+		// BUILT WITH THE ROOMS rather than beside the knowledge indexer
+		// above, because its corpus is the chat domain's: a company on
+		// `chat.backend: vendor` has no `chat_messages` to walk, and an
+		// indexer over an empty table is a loop that wakes every two
+		// seconds for the life of the process to establish that chat is
+		// still switched off.
+		n.chatIndex = search.NewChatIndexer(e.backends.Store, e.domainEstate())
+	}
+
+	// NO PROJECTOR LOOP HERE ANY MORE. Every native backend is a state-log
+	// domain, and its apply loop is the state log's own — the core's,
+	// started at boot and stopped with it, and reporting its position
 	// rather than a hydration flag.
 	n.done.Add(1)
 	go func() {
 		defer n.done.Done()
 		n.indexer.Run(runCtx)
 	}()
+	// AND THE CHAT INDEX'S OWN LOOP, on the same terms and stopped by the
+	// same context: two loops rather than one because the two walks are
+	// not alike — see [search.ChatIndexer.Run].
+	if n.chatIndex != nil {
+		n.done.Add(1)
+		go func() {
+			defer n.done.Done()
+			n.chatIndex.Run(runCtx)
+		}()
+	}
 
 	// PUBLISHED, whole: every field above is written before the store,
 	// which is what lets every reader load it without a lock.
@@ -375,7 +434,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 	// built in a capacity window must not ([Engine.startNativeCollector]).
 	started = true
 	log.InfoContext(ctx, "native_backends_started",
-		"tracker", runTracker, "knowledge", wiki)
+		"tracker", runTracker, "knowledge", wiki, "chat", rooms)
 	return nil
 }
 
@@ -387,6 +446,11 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 // the sources from this list against internal/objstore/references, so a
 // consumer declaring a table in a new domain fails the build here rather
 // than leaving the passes unstarted in production.
+//
+// THE TRACKER'S ALONE, because it is the only domain whose rows name an object
+// — a project's file row. Chat's do not: a message LINKS a file rather than
+// holding one, so no row of chat's ever pins an object, and the knowledge
+// base's pages carry their bodies whole.
 func (n *native) objectEstates() []collect.Estate {
 	if n.trackerReader == nil {
 		return nil
@@ -436,8 +500,8 @@ func (n *native) objectEstates() []collect.Estate {
 // The halves are NOT taken down if the apply is refused after this. They
 // follow the fleet's logs rather than the revision, so a node running them
 // with the previous epoch still serves that epoch correctly — and the retry
-// finds them already up. Which halves it has (the tracker, the knowledge base)
-// are the ones this company declared; a later revision that changes them
+// finds them already up. Which halves it has (the tracker, the knowledge base,
+// chat) are the ones this company declared; a later revision that changes them
 // takes effect on restart, as switching a backend always has.
 func (e *Engine) startNativeFor(ctx context.Context, c *Company) (bool, error) {
 	if e.native.Load() != nil || e.remote.Load() != nil || c == nil {
@@ -501,11 +565,12 @@ func (e *Engine) startNativeCollector(ctx context.Context) {
 
 // startNativeDuties arms the native half's fleet-singleton duties: the vector
 // domain's one writer, which turns the tracker's and the knowledge base's
-// sources into vector records, and the trash reaper, which purges what has
-// been in a trash past its term ([Engine.startTrashReaper]). ONE CALL FOR BOTH
-// CALLERS, [New] and [Engine.startNativeFor], so halves met at an apply cannot
-// be missing a duty a boot would have armed. The trim and the identity
-// estate's duties are the core's, armed at boot by [Engine.startCoreDuties].
+// sources into vector records, the trash reaper, which purges what has been
+// in a trash past its term ([Engine.startTrashReaper]), and the chat domain's
+// horizon ([Engine.startChatRetention]). ONE CALL FOR BOTH CALLERS, [New] and
+// [Engine.startNativeFor], so halves met at an apply cannot be missing a duty
+// a boot would have armed. The trim and the identity estate's duties are the
+// core's, armed at boot by [Engine.startCoreDuties].
 func (e *Engine) startNativeDuties(ctx context.Context) {
 	c := e.core.Load()
 	if e.native.Load() == nil || c == nil {
@@ -516,6 +581,14 @@ func (e *Engine) startNativeDuties(ctx context.Context) {
 	// rather than as a missing one.
 	e.startEmbedding(ctx, c.log)
 	e.startTrashReaper(ctx)
+	// AND THE CHAT DOMAIN'S HORIZON. Chat's retention is the one that
+	// cannot be a sweep: a message is replicated content, so "older than a
+	// year" read off each node's own clock deletes a different set on every
+	// node for ever. Without this duty nothing ever publishes the cutoff,
+	// and a company's rooms grow without bound while
+	// `message_retention_days` says otherwise in its config, its schema and
+	// its dashboard.
+	e.startChatRetention(ctx)
 }
 
 // stopNative ends this node's native halves. Nil-safe, which is the node that
@@ -579,16 +652,28 @@ func (e *Engine) NativeStarted() bool {
 	return e.native.Load() != nil || e.remote.Load() != nil
 }
 
+// halves is which of the estate's surfaced domains a company runs natively: the
+// ones a seat's tools and the operator's surfaces read and write through the
+// router.
+type halves struct {
+	tracker, wiki, chat bool
+}
+
+// any reports a company that runs at least one of them natively — a company on
+// Jira, Confluence and a vendor's chat runs none, and routes nothing.
+func (h halves) any() bool { return h.tracker || h.wiki || h.chat }
+
 // nativeHalves is which halves this company runs natively here, however this
 // node reaches them — false where it runs no native runtime at all.
-func (e *Engine) nativeHalves() (runTracker, wiki, ok bool) {
+func (e *Engine) nativeHalves() (halves, bool) {
 	if r := e.remote.Load(); r != nil {
-		return r.tracker, r.wiki, true
+		return halves{tracker: r.tracker, wiki: r.wiki, chat: r.chat}, true
 	}
 	if n := e.native.Load(); n != nil {
-		return n.trackerReader != nil, n.pageReader != nil, true
+		return halves{tracker: n.trackerReader != nil, wiki: n.pageReader != nil,
+			chat: n.chatReader != nil}, true
 	}
-	return false, false, false
+	return halves{}, false
 }
 
 // Tracker is this node's OWN copy's tracker read side, or nil — what this
@@ -606,8 +691,7 @@ func (e *Engine) Tracker() *worklet.Reader {
 // TrackerWriter is this node's tracker write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
 func (e *Engine) TrackerWriter() *worklet.Writer {
-	writer, _ := e.writeSide()
-	return writer
+	return e.writeSide().tracker
 }
 
 // Pages is this node's OWN copy's knowledge read side, or nil — see
@@ -635,8 +719,35 @@ func (e *Engine) Backlinks() *search.Indexer {
 // PagesStore is this node's knowledge write side, or nil — nil in a
 // maintenance mode too; see [Engine.writeSide].
 func (e *Engine) PagesStore() *doclet.Store {
-	_, store := e.writeSide()
-	return store
+	return e.writeSide().pages
+}
+
+// Chat is this node's OWN copy's chat read side, or nil — see
+// [Engine.Tracker]; a surface reads through [OperatorChat].
+func (e *Engine) Chat() *chatlet.Reader {
+	n := e.native.Load()
+	if n == nil {
+		return nil
+	}
+	return n.chatReader
+}
+
+// ChatStore is this node's chat write side, or nil — nil in a maintenance mode
+// too; see [Engine.writeSide]. A surface writes through [OperatorChatWriter].
+func (e *Engine) ChatStore() *chatlet.Store {
+	return e.writeSide().chat
+}
+
+// ChatIndex is this node's OWN chat keyword index, or nil — what this node's
+// router answers a chat search from while its copy serves. A surface searches
+// through [OperatorChatSearch], which resolves the viewer's rooms beside
+// whichever index answers.
+func (e *Engine) ChatIndex() *search.ChatIndexer {
+	n := e.native.Load()
+	if n == nil {
+		return nil
+	}
+	return n.chatIndex
 }
 
 // DocletSearcher is Doclet's knowledge searcher, or nil.
@@ -701,7 +812,7 @@ func (e *Engine) startNativeFeeds(ctx context.Context) {
 		feed, err := changefeed.New(changefeed.Options{
 			Opener: opener, Publisher: e.backends.Queue,
 			Claims: e.backends.Fleet, Translator: translator,
-			Metrics: e.metrics,
+			Metrics: e.metrics, Objectives: e.objectives,
 		})
 		if err != nil {
 			log.ErrorContext(ctx, "changefeed_unavailable",
@@ -739,11 +850,11 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 	// parser reads a record's own routing snapshot and the chart, never a
 	// row, so a node that holds no data routes a native change exactly as
 	// a data node does.
-	var runTracker, runWiki bool
+	var runTracker, runWiki, runChat bool
 	if r := e.remote.Load(); r != nil {
-		runTracker, runWiki = r.tracker, r.wiki
+		runTracker, runWiki, runChat = r.tracker, r.wiki, r.chat
 	} else if n := e.native.Load(); n != nil {
-		runTracker, runWiki = n.writer != nil, n.pages != nil
+		runTracker, runWiki, runChat = n.writer != nil, n.pages != nil, n.chat != nil
 	} else {
 		return nil, nil
 	}
@@ -768,6 +879,25 @@ func (e *Engine) nativeParsers(c *Company) ([]notify.Parser, []notify.Prompt) {
 			Leads: containerLeads(c.Org), BaseURL: e.publicBase(c),
 		}))
 		prompts = append(prompts, doclet.Prompt{})
+	}
+	if runChat {
+		// NOTHING TO CONFIGURE, and that is the record rather than a
+		// shortcut. The lead a `lead_fallback` wake names is resolved at
+		// WRITE time, inside the decide, and rides the record — so a
+		// parser handed a lead map here would answer with whoever holds
+		// the role now, which for a message somebody sent last week is a
+		// different person. It is the tracker's arm's reasoning rather
+		// than the wiki's, and it is why this arm takes nothing of the
+		// company at all.
+		parsers = append(parsers, chatlet.NewParser())
+		// A CONSTRUCTOR RATHER THAN `chatlet.Prompt{}`, unlike the two arms
+		// above it, and the difference is the EMBEDDED value: this prompt
+		// is a [notify.ChatPrompt] with fields, so a zero literal carries
+		// a zero addressing rule — which reads a direct conversation as
+		// an ordinary room, and lands a person's consecutive messages in
+		// a DM in as many turns as they typed. Nothing reports that; the
+		// wakes keep arriving.
+		prompts = append(prompts, chatlet.NewPrompt())
 	}
 	return parsers, prompts
 }
@@ -1202,16 +1332,16 @@ func parentOf(o *org.Organization, child *org.Unit) *org.Unit {
 	return nil
 }
 
-// skillDetector answers whether a page body is a tool skill, for the
-// projection's derived flag.
+// skillDetector answers whether a page body is a tool skill, for the flag the
+// pages applier derives.
 type skillDetector struct{}
 
 // IsSkill reports a body that parses as a tool skill.
 //
-// THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the projected flag
+// THROUGH THE SKILLS PACKAGE'S OWN ADMISSION TEST, so the derived flag
 // means exactly what the registry means by it: a page the sync would admit.
-// A second heuristic here would let one page be a skill to the projection
-// and prose to the loader — and the disagreement is silent, because each
+// A second heuristic here would let one page be a skill to the applier and
+// prose to the loader — and the disagreement is silent, because each
 // half is self-consistent.
 func (skillDetector) IsSkill(body string) bool { return skills.IsSkill(body) }
 
@@ -1373,8 +1503,7 @@ func (e *Engine) trackerHalves() (trackerSeams, bool) {
 		}
 	} else {
 		n := e.native.Load()
-		writer, _ := e.writeSide()
-		if n == nil || n.trackerReader == nil || writer == nil {
+		if n == nil || n.trackerReader == nil || e.writeSide().tracker == nil {
 			return trackerSeams{}, false
 		}
 	}
@@ -1493,6 +1622,13 @@ var _ builtin.ChannelDirectory = liveChannels{}
 // transport or tool server is started for. Mattermost's company block is
 // switched by `enabled`; Slack's is on by being declared — the rule
 // [Engine.startNotifications] starts each transport by.
+//
+// THE ENGINE'S OWN CHAT NEEDS NO BOT: every agent seat of a company whose chat
+// is Chatlet posts as itself, with the posting tools that deliver to
+// [decision.InformChat], and a unit room a decision is reported in is public,
+// so no membership stands between the seat and the post. Left out, every
+// inform a Chatlet company's seat promised was refused as a surface it
+// could not post on — the only surface it had.
 func (c liveChannels) ChatSurfaces(handle string) []decision.InformSurface {
 	company := c.engine.Company()
 	if company == nil || company.Org == nil || company.Config == nil {
@@ -1509,6 +1645,9 @@ func (c liveChannels) ChatSurfaces(handle string) []decision.InformSurface {
 	}
 	if company.Config.Integrations.Slack != nil && seat.Slack.BotToken != "" {
 		out = append(out, decision.InformSlack)
+	}
+	if company.Config.ChatBackendFor() == config.ChatChatlet && !seat.IsHuman() {
+		out = append(out, decision.InformChat)
 	}
 	return out
 }
@@ -1530,6 +1669,57 @@ func (c liveChannels) UnitChannels() []string {
 		}
 	}
 	return out
+}
+
+// liveRoster is chat's two-method view of the company, resolved against the
+// epoch current when the WRITE runs.
+//
+// PER CALL, for every other live seam's reason here: a chat store is built
+// once per node and outlives every revision, so a captured chart would go on
+// admitting a colleague who has left — and in chat that is not a stale label
+// but a wake published to a seat nothing runs.
+//
+// NEITHER METHOD BLOCKS, which [chatlet.Roster] requires rather than prefers:
+// both are called from inside the decide's own read transaction, where the
+// framework forbids anything that can wait. Both are a walk of the chart this
+// process already holds in memory, and nothing here reaches the broker, the
+// coordination store or a model.
+type liveRoster struct{ engine *Engine }
+
+// Seat reports whether the company still has this handle, and whether it is a
+// PERSON.
+//
+// BOTH FROM ONE LOOKUP, because the routing needs both and they are one fact
+// about one row: a handle the company no longer has is a wake nothing can run,
+// and a person is addressable but never woken.
+//
+// [org.Organization.SeatByHandle] rather than the agent-only lookup beside it:
+// a human seat is exactly what the second answer is about, and resolving
+// through the agent one would report every person in the company as somebody
+// it does not employ.
+func (l liveRoster) Seat(handle string) (exists, human bool) {
+	company := l.engine.Company()
+	if company == nil || company.Org == nil {
+		return false, false
+	}
+	seat := company.Org.SeatByHandle(handle)
+	if seat == nil {
+		return false, false
+	}
+	return true, seat.IsHuman()
+}
+
+// Lead names the seat that answers for a unit's room, or empty.
+//
+// [unitRoomLead], against the CURRENT epoch: the lead of the unit the chart
+// says the room belongs to — by [unitRoomOwner], the rule [applyChartRooms]
+// staffs it by, so a room the chart staffs with nobody wakes no lead either.
+func (l liveRoster) Lead(unit, room string) string {
+	company := l.engine.Company()
+	if company == nil {
+		return ""
+	}
+	return unitRoomLead(company.Org, unit, room)
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.
@@ -1572,11 +1762,22 @@ func UnitLeadOf(o *org.Organization, unit string) string {
 	if o == nil {
 		return ""
 	}
-	found := o.UnitByRef(unit)
-	if found == nil {
+	return leadOfUnit(o, o.UnitByRef(unit))
+}
+
+// leadOfUnit is the handle of the seat that leads a unit the chart has
+// already resolved, or empty — for nil, or for a unit that leads nobody.
+//
+// ONE ANSWER TO "WHO ANSWERS FOR THIS TEAM", read by the tracker's unit
+// fallback and the chat room's alike ([unitRoomLead]): two resolutions of it
+// would let a person posting in a unit's room address somebody different from
+// the one an unassigned task in that unit wakes. What differs between the two
+// is only which unit they ask about.
+func leadOfUnit(o *org.Organization, unit *org.Unit) string {
+	if unit == nil {
 		return ""
 	}
-	if lead := o.EffectiveLead(found); lead != nil {
+	if lead := o.EffectiveLead(unit); lead != nil {
 		return lead.Handle()
 	}
 	return ""
@@ -1619,12 +1820,67 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 		}
 	} else {
 		n := e.native.Load()
-		_, store := e.writeSide()
-		if n == nil || n.pageReader == nil || store == nil {
+		if n == nil || n.pageReader == nil || e.writeSide().pages == nil {
 			return nil, nil, nil, false
 		}
 	}
 	return e.router.Pages(), e.router.Pages(), e.router.Await, true
+}
+
+// chatDeps is the rooms half, on the same terms as the two above.
+//
+// NO ACTOR AND NO READ STATE, which is what tells a seat's deps from the
+// operator surface's. The actor is nil so a write is attributed to the turn's
+// own seat — a model that could name its author could speak as anybody — and
+// the read state is nil because a cursor is a PERSON's attention: a seat is
+// woken rather than browsing, and reporting a room's whole tail as unread to
+// one is how a turn spends itself catching up on a conversation it was never
+// reading. See [builtin.ChatDeps.ReadState].
+func (e *Engine) chatDeps(c *Company) builtin.ChatDeps {
+	rooms, ok := e.chatHalves()
+	if !ok {
+		return builtin.ChatDeps{}
+	}
+	return builtin.ChatDeps{
+		Reader: rooms,
+		Writer: rooms,
+		// THE SAME INTERSECTION THE WIKI TAKES: `notify.Mentions` is
+		// deliberately permissive, and this is where the company is
+		// known, so a handle nobody holds is dropped rather than
+		// becoming a wake that can never be delivered.
+		Mentions: seatMentions{org: c.Org},
+		// THE ROUTER'S SEARCH, which resolves the rooms the viewer may
+		// read on the serving data node, beside the index it reads — the
+		// visible set is never something a tool hands in
+		// ([builtin.ChatSearcher]).
+		Search: e.router.ChatSearch(),
+		// THE SESSION FLOOR IS THE WAIT, as for the tracker's and the
+		// wiki's halves: what a seat's next read needs is that whichever
+		// holder answers it has applied this far.
+		Await: e.router.Await,
+	}
+}
+
+// chatHalves is this node's chat seams, on the terms [Engine.trackerHalves]
+// gives: the router's on every node, so a seat on a node that holds no data
+// reads and writes its rooms through a data node, and a data node whose copy is
+// out of service answers its seats' chat from a peer's copy rather than from
+// the one it stopped serving. False where the company's chat is not the
+// engine's own, and on a data node that hands out no chat writer — one in a
+// maintenance mode ([Engine.writeSide]) — which hands out no chat tools either,
+// rather than tools whose every write is taken to a peer.
+func (e *Engine) chatHalves() (estate.Chat, bool) {
+	if r := e.remote.Load(); r != nil {
+		if !r.chat {
+			return estate.Chat{}, false
+		}
+	} else {
+		n := e.native.Load()
+		if n == nil || n.chatReader == nil || e.writeSide().chat == nil {
+			return estate.Chat{}, false
+		}
+	}
+	return e.router.Chat(), true
 }
 
 // ---- what the operator's surfaces are given ------------------------------ //
@@ -1643,8 +1899,8 @@ func (e *Engine) pageHalves() (builtin.PageReader, builtin.PageWriter,
 // operator is answered as the seats are, from this node's copy while it serves
 // and from another data node's while it does not.
 func OperatorWork(e *Engine) (estate.Work, bool) {
-	runTracker, _, ok := e.nativeHalves()
-	if !ok || !runTracker || e.router == nil {
+	runs, ok := e.nativeHalves()
+	if !ok || !runs.tracker || e.router == nil {
 		return estate.Work{}, false
 	}
 	return e.router.Work(), true
@@ -1665,8 +1921,8 @@ func OperatorWorkWriter(e *Engine) (func(estate.Actor) estate.WorkWriter, bool) 
 // reach it, through the router for [OperatorWork]'s reason — or false where
 // this company runs no Doclet here.
 func OperatorPages(e *Engine) (estate.Pages, bool) {
-	_, wiki, ok := e.nativeHalves()
-	if !ok || !wiki || e.router == nil {
+	runs, ok := e.nativeHalves()
+	if !ok || !runs.wiki || e.router == nil {
 		return estate.Pages{}, false
 	}
 	return e.router.Pages(), true
@@ -1681,11 +1937,44 @@ func OperatorPageWriter(e *Engine) (estate.Pages, bool) {
 	return e.router.Pages(), true
 }
 
-// AwaitEstate waits until whichever holder answers this node's next read has
-// applied at — the router's session floor, which a surface's write raises so
-// its own next read sees it ([estate.Router.Await]) — the same wait a seat's
-// tools are handed, and for the same reason: this node's own applier is not the
-// one that answers once its copy is out of service.
+// OperatorChat is chat's read side as the operator's surfaces reach it, through
+// the router for [OperatorWork]'s reason — or false where this company's chat
+// is not the engine's own here.
+func OperatorChat(e *Engine) (estate.Chat, bool) {
+	runs, ok := e.nativeHalves()
+	if !ok || !runs.chat || e.router == nil {
+		return estate.Chat{}, false
+	}
+	return e.router.Chat(), true
+}
+
+// OperatorChatWriter is chat's write side for those surfaces — the act
+// transport's chat tools, the erase, the prune and a room's retention — or
+// false where this node hands out none ([Engine.chatHalves]'s rule).
+func OperatorChatWriter(e *Engine) (estate.Chat, bool) {
+	if _, ok := e.chatHalves(); !ok {
+		return estate.Chat{}, false
+	}
+	return e.router.Chat(), true
+}
+
+// OperatorChatSearch is the chat search those surfaces reach, through the
+// router — the viewer's rooms resolved on whichever data node reads its index —
+// or false where this company's chat is not the engine's own here.
+func OperatorChatSearch(e *Engine) (estate.ChatSearch, bool) {
+	runs, ok := e.nativeHalves()
+	if !ok || !runs.chat || e.router == nil {
+		return estate.ChatSearch{}, false
+	}
+	return e.router.ChatSearch(), true
+}
+
+// AwaitEstate raises the router's session floor to at ([estate.Router.Await]),
+// so whichever holder answers this node's next read waits until it has applied
+// that far — the seam a seat's tools are handed, and for the same reason: this
+// node's own applier is not the one that answers once its copy is out of
+// service. It waits for nothing itself and returns at once; the wait is the
+// next read's, on whichever copy takes it.
 func (e *Engine) AwaitEstate(ctx context.Context, at statelog.Position) error {
 	if e.router == nil {
 		return nil
@@ -1869,8 +2158,8 @@ func (m seatMentions) Mentions(text string) []string {
 // every such node to walk its container through a data node. Several data
 // nodes announce one edit; a hearer coalesces them into one walk.
 //
-// NAMED AS DOCLET'S, because the projection outlives an apply that moves the
-// company's skills to Confluence, and the loop ignores a refresh from a
+// NAMED AS DOCLET'S, because the pages applier outlives an apply that moves
+// the company's skills to Confluence, and the loop ignores a refresh from a
 // backend its source is not on.
 func (e *Engine) nudgeSkills() { e.skillSync.Announce(skillBackend(config.KnowledgeDoclet)) }
 
@@ -1900,8 +2189,8 @@ func (e *Engine) walkRemoteSkills(ctx context.Context, container string) ([]skil
 	return out, nil
 }
 
-// walkDocletSkills reads the tool-skill container out of this node's own page
-// projection.
+// walkDocletSkills reads the tool-skill container out of this node's own
+// applied pages.
 //
 // # It waits for hydration first
 //
@@ -1952,8 +2241,8 @@ func (e *Engine) awaitHydration(ctx context.Context) bool {
 	return true
 }
 
-// hydrationPoll is how often the first skill read checks whether the
-// projection has caught up.
+// hydrationPoll is how often the first skill read checks whether this node's
+// copy has caught up with its logs.
 //
 // A quarter-second. The wait is bounded by a boot reconcile, which is
 // hundreds of milliseconds on an ordinary company and minutes on a large one

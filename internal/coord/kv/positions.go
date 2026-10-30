@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
@@ -171,22 +173,16 @@ func (f *FleetStore) Floors(ctx context.Context) ([]coord.TrimFloor, error) {
 	return out, err
 }
 
-// ForgetFloor removes one domain's row.
-//
-// PURGED, on this estate's standing rule (markers.go, "Every removal is a
-// purge").
-func (f *FleetStore) ForgetFloor(ctx context.Context, domain string) error {
-	if err := f.positions.Purge(ctx, coord.FloorKey(domain)); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("forget a domain's trim floor", err)
-	}
-	return nil
-}
-
-// PutBackupPoint writes one owner's newest backup.
+// PutBackupPoint writes one node's newest backup, or the operator's newest
+// acknowledgement of one log, at the point's own key ([coord.BackupPointKey]).
 //
 // IN THE POSITIONS BUCKET, under a fourth key class — see [coord.BackupPoint]
 // for why an expiring row here would silently become a retention policy.
+//
+// A PLAIN PUT, with no compare-and-set: every row has one writer whose newest
+// value is the whole of it. A node's next backup supersedes its last, and an
+// acknowledgement of one log is keyed by that log, so acknowledging another
+// writes another row rather than racing this one.
 func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) error {
 	if err := p.Validate(); err != nil {
 		return err
@@ -195,13 +191,13 @@ func (f *FleetStore) PutBackupPoint(ctx context.Context, p coord.BackupPoint) er
 	if err != nil {
 		return fmt.Errorf("coord: encode the backup point held by %s: %w", p.Owner, err)
 	}
-	if _, err := f.positions.Put(ctx, coord.BackupPointKey(p.Owner), body); err != nil {
+	if _, err := f.positions.Put(ctx, coord.BackupPointKey(p), body); err != nil {
 		return unavailable("write a backup point", err)
 	}
 	return nil
 }
 
-// BackupPoints reads every owner's row.
+// BackupPoints reads every row: one per node, one per acknowledged log.
 //
 // A DECODE FAILURE IS RAISED, for the reason its three neighbours give with
 // the sign of the hold's: a point silently dropped LOWERS the newest backup
@@ -225,14 +221,25 @@ func (f *FleetStore) BackupPoints(ctx context.Context) ([]coord.BackupPoint, err
 	return out, err
 }
 
-// ForgetBackupPoint removes one owner's row.
+// ForgetBackupPoint removes every row one owner holds: its own key, and each
+// per-log key beneath it — which is where the operator's acknowledgements are.
 //
 // PURGED, on this estate's standing rule (markers.go, "Every removal is a
 // purge").
 func (f *FleetStore) ForgetBackupPoint(ctx context.Context, owner string) error {
-	if err := f.positions.Purge(ctx, coord.BackupPointKey(owner)); err != nil &&
-		!errors.Is(err, jetstream.ErrKeyNotFound) {
-		return unavailable("forget a backup point", err)
+	keys := []string{coord.BackupPointKey(coord.BackupPoint{Owner: owner})}
+	if err := f.eachUnder(ctx, f.positions, coord.DocumentFilter("backup", owner),
+		"an owner's backup points", func(kve jetstream.KeyValueEntry) error {
+			keys = append(keys, kve.Key())
+			return nil
+		}); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := f.positions.Purge(ctx, key); err != nil &&
+			!errors.Is(err, jetstream.ErrKeyNotFound) {
+			return unavailable("forget a backup point", err)
+		}
 	}
 	return nil
 }
@@ -430,7 +437,7 @@ func (f *FleetStore) ForgetAdmission(ctx context.Context, nodeID, incarnation st
 	return nil
 }
 
-// PutMaintenanceAck records one participant's restart.
+// PutMaintenanceAck records one participant's restart for one log's window.
 func (f *FleetStore) PutMaintenanceAck(ctx context.Context, ack coord.MaintenanceAck) error {
 	if err := ack.Validate(); err != nil {
 		return err
@@ -443,16 +450,21 @@ func (f *FleetStore) PutMaintenanceAck(ctx context.Context, ack coord.Maintenanc
 		return fmt.Errorf("coord: encode node %s's maintenance acknowledgement: %w",
 			ack.NodeID, err)
 	}
-	if _, err := f.positions.Put(ctx, coord.MaintenanceAckKey(ack.NodeID), body); err != nil {
+	if _, err := f.positions.Put(ctx, coord.MaintenanceAckKey(ack.Stream, ack.NodeID),
+		body); err != nil {
 		return unavailable("record a maintenance acknowledgement", err)
 	}
 	return nil
 }
 
-// MaintenanceAcks reads every participant's.
-func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAck, error) {
+// MaintenanceAcks reads every participant's for one log's window, filtered by
+// the broker on the log's segment of the key ([coord.MaintenanceAckKey]).
+func (f *FleetStore) MaintenanceAcks(ctx context.Context, stream string) (
+	[]coord.MaintenanceAck, error) {
+
 	var out []coord.MaintenanceAck
-	err := f.eachPositionKey(ctx, "maintenance-ack", "the maintenance acknowledgements",
+	err := f.eachPositionPrefix(ctx, []string{"maintenance-ack", stream},
+		"the maintenance acknowledgements",
 		func(key string, value []byte) error {
 			var ack coord.MaintenanceAck
 			if err := json.Unmarshal(value, &ack); err != nil {
@@ -464,6 +476,9 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAc
 			out = append(out, ack)
 			return nil
 		})
+	slices.SortFunc(out, func(a, b coord.MaintenanceAck) int {
+		return strings.Compare(a.NodeID, b.NodeID)
+	})
 	return out, err
 }
 
@@ -476,11 +491,23 @@ func (f *FleetStore) MaintenanceAcks(ctx context.Context) ([]coord.MaintenanceAc
 func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	fn func(key string, value []byte) error) error {
 
+	return f.eachPositionPrefix(ctx, []string{class}, what, fn)
+}
+
+// eachPositionPrefix walks the keys of the positions register whose leading
+// segments are prefix, the class first: [FleetStore.eachPositionKey] for a
+// whole class, and one log's acknowledgements, filed under the class and then
+// the log ([coord.MaintenanceAckKey]).
+func (f *FleetStore) eachPositionPrefix(ctx context.Context, prefix []string, what string,
+	fn func(key string, value []byte) error) error {
+
 	// THE CLASS IS A SUBJECT TOKEN, so the broker filters. A key here is
-	// coord.DocumentKey(class, id) — two segments joined by the separator,
-	// which is a dot because a key IS a subject token path — and the class
-	// segment escapes to itself, so `<class>.>` is a filter the broker can
-	// match. EIGHT classes share this register; reading all of them and
+	// coord.DocumentKey(class, id) — two segments, or three for an operator
+	// acknowledgement, which is filed under its log as well
+	// ([coord.BackupPointKey]), joined by the separator, which is a dot
+	// because a key IS a subject token path — and the class segment escapes
+	// to itself, so `<class>.>` is a filter the broker can match whatever
+	// depth follows it. EIGHT classes share this register; reading all of them and
 	// discarding seven was the shape this replaced, and the state-log write
 	// fence takes this read, for the floors, on every write at an
 	// expectation of zero.
@@ -494,10 +521,11 @@ func (f *FleetStore) eachPositionKey(ctx context.Context, class, what string,
 	// what SELECTS the class — it is what catches a filter and a grammar
 	// that have drifted apart, along with a key this grammar did not write,
 	// which is the rule the rest of the package already follows.
-	return f.eachUnder(ctx, f.positions, coord.DocumentFilter(class), what,
+	return f.eachUnder(ctx, f.positions, coord.DocumentFilter(prefix...), what,
 		func(kve jetstream.KeyValueEntry) error {
 			segments, ok := coord.DocumentSegments(kve.Key())
-			if !ok || len(segments) < 2 || segments[0] != class {
+			if !ok || len(segments) <= len(prefix) ||
+				!slices.Equal(segments[:len(prefix)], prefix) {
 				return nil
 			}
 			return fn(kve.Key(), kve.Value())

@@ -69,3 +69,6 @@ func Brings(files map[string]bool, path string) bool {
 	}
 	return r.brings(path)
 }
+
+// ReasonOf is the refusals counter's reason for err.
+func ReasonOf(err error) string { return reasonOf(err) }

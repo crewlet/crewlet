@@ -306,15 +306,13 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 			"answered", got)
 	}
 
-	// AND AN EDIT REPLACES THE ROW rather than adding one: a comment is
-	// edited, resolved and removed in place, and an insert-only write
-	// would leave the thread showing the first version for ever.
-	if _, err := r.writer.UpdateTask(t.Context(), "op-edit", created.ID, "ENG",
-		worklet.NoIfMatch, worklet.TaskPatch{Comment: &worklet.Comment{
-			ID: "cm-1", Task: created.ID, Author: "ana",
-			AuthorKind: worklet.AuthorHuman, Body: "who owns the rollback now?",
-			Ask: "bob", CreatedAt: wednesday, UpdatedAt: wednesday,
-		}}, worklet.ChangeComment, nil); err != nil {
+	// AND AN EDIT REWRITES THE ROW rather than adding one, and rewrites
+	// its WORDS alone: an author correcting a question somebody answered
+	// changes what it says, never whether it is answered — the edit wrote
+	// NULL over the answer, and the question was open again on every board
+	// and in the answerer's own queue.
+	if _, err := r.writer.EditComment(t.Context(), "op-edit", created.ID, "ENG",
+		"cm-1", "who owns the rollback now?", nil); err != nil {
 		t.Fatalf("edit: %v", err)
 	}
 	r.drain()
@@ -331,6 +329,18 @@ func TestACommentIsARowAndAnAnswerClosesItsAsk(t *testing.T) {
 		if comment.ID == "cm-1" && comment.Body != "who owns the rollback now?" {
 			t.Errorf("the edited comment still reads %q", comment.Body)
 		}
+	}
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "has_open_asks": "true",
+	})); len(got) != 0 {
+		t.Errorf("has_open_asks answers %v after the answered question's words "+
+			"were edited — the edit reopened it", got)
+	}
+	if got := ids(r.ask(map[string]any{
+		"container": "project:ENG", "asked_of": "bob",
+	})); len(got) != 0 {
+		t.Errorf("asked_of=bob answers %v after the edit, asking bob again a "+
+			"question he answered", got)
 	}
 }
 

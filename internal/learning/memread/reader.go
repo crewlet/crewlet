@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -143,11 +144,12 @@ func (r *Reader) budget() time.Duration {
 }
 
 // Memory is one seat's memory, answered by its holder.
-func (r *Reader) Memory(ctx context.Context, seat Seat, limit int) (Memory, error) {
-	req := request{Version: WireVersion, Question: QuestionMemory, Seat: seat, Limit: limit}
+func (r *Reader) Memory(ctx context.Context, seat Seat, q MemoryQuery) (Memory, error) {
+	req := request{Version: WireVersion, Question: QuestionMemory, Seat: seat,
+		Limit: q.Limit, SkillsOrder: q.Skills}
 	var out Memory
 	holder, err := r.read(ctx, req, &out, func(ctx context.Context) (any, error) {
-		return r.Local.Memory(ctx, seat, limit)
+		return r.Local.Memory(ctx, seat, q)
 	})
 	if err != nil {
 		return Memory{}, err
@@ -293,6 +295,8 @@ type request struct {
 	Owner        string   `json:"owner,omitempty"`
 	Limit        int      `json:"limit,omitempty"`
 	Conversation string   `json:"conversation,omitempty"`
+	// SkillsOrder is the order a [QuestionMemory] read lists the skills in.
+	SkillsOrder learning.SkillOrder `json:"skills_order,omitempty"`
 	// Episode names the one episode a [QuestionEpisode] read is about.
 	Episode string            `json:"episode,omitempty"`
 	Seats   map[string][]Seat `json:"seats,omitempty"`
@@ -350,7 +354,8 @@ func Serve(ctx context.Context, q Server, owner string, attached func() []uuid.U
 		)
 		switch req.Question {
 		case QuestionMemory:
-			answer, err = local.Memory(ctx, req.Seat, req.Limit)
+			answer, err = local.Memory(ctx, req.Seat,
+				MemoryQuery{Limit: req.Limit, Skills: req.SkillsOrder})
 		case QuestionThreads:
 			answer, err = local.Threads(ctx, req.Seat, req.Conversation, req.Limit)
 		case QuestionEpisode:

@@ -120,9 +120,10 @@ func keyed(began time.Time) builtin.Actor {
 // ATTEMPT'S END, AND ASKS NOBODY; PAST THAT IT REBASES ONTO ITSELF AND RECORDS
 // IT.
 //
-// Every node's operation ledger deletes the rows it applied thirty days ago and
-// records how far back it deleted, and an operation minted before that point
-// whose row is gone is answered `unknown` and never published, on every node.
+// Every data node's operation ledger deletes the rows it applied thirty days
+// ago and records how far back it deleted, and an operation minted before that
+// point whose row is gone is answered `unknown` and never published, on every
+// data node.
 // Short of the horizon the start is kept, because a write an earlier attempt
 // made and this one repeats — the retry an `unknown` asks for — collapses onto
 // the first copy only under the same id: a rule that always rebased is red

@@ -245,7 +245,7 @@ func (s *Service) StoredDocument(ctx context.Context) (map[string]any, string, e
 	if !found {
 		return nil, "", ErrNoActiveRevision
 	}
-	document, _, err := s.openDocument(cur.revision)
+	document, _, err := s.openDocument(cur)
 	if err != nil {
 		return nil, "", fmt.Errorf("configapi: open the active revision: %w", err)
 	}

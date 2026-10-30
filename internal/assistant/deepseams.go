@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -143,7 +144,8 @@ type DeepFile struct {
 // conversation (ADR-0053), and purged with it. A draft change that names a
 // file is held to it too ([turn.draftChange]).
 type Files interface {
-	// Store keeps one file, refusing one past [wire.FileMaxBytes].
+	// Store keeps one file, refusing one past [wire.FileMaxBytes]. A file a
+	// condition of the node kept out is answered as [*Unkept].
 	Store(ctx context.Context, w Write, f NewFile) (wire.FileRef, error)
 	// Open is one file and its bytes, read as its owner: another person's,
 	// or one of another conversation, is [ErrNotFound].
@@ -151,6 +153,28 @@ type Files interface {
 	// Stat is one file's record without its bytes, by the same rule as Open.
 	Stat(ctx context.Context, owner, conversation, file uuid.UUID) (StoredFile, error)
 }
+
+// Unkept is a file [Files.Store] did not keep because of a condition of the
+// node: the company's file storage full, a store that did not take the bytes,
+// a log that refused the file's record. Said is that condition as a model is
+// told it, a clause with nothing of the error's own text, and Cause is the
+// failure itself, beneath for the log and for the surface that tells a person
+// (the upload's route answers it through the cause).
+//
+// WORDED BY WHOEVER STORES THE FILE (internal/engine, through the condition
+// table internal/agent/builtin keeps), because nothing under
+// internal/assistant may reach that table, and a deep run's delivery note
+// said only that a file "could not be kept" whatever kept it out, so the model
+// could tell the person neither why nor whether a later run would fare better.
+type Unkept struct {
+	Said  string
+	Cause error
+}
+
+func (e *Unkept) Error() string { return fmt.Sprintf("assistant: file not kept: %v", e.Cause) }
+
+// Unwrap makes [Unkept] errors.Is-comparable with its cause.
+func (e *Unkept) Unwrap() error { return e.Cause }
 
 // NewFile is one file to keep.
 type NewFile struct {

@@ -1,7 +1,9 @@
 // Package provenance is the ONE fence around text a model reads that somebody
 // other than the reading seat wrote: page bodies, work item comments, project
-// files, chat threads, artifact files, datastore rows and the adopted brand's
-// voice.
+// files, chat messages and a chat room's topic and purpose, artifact files,
+// datastore rows, the adopted brand's voice, the body of every wake — a note
+// about a change, a monitor's alert, an integration's notification among them —
+// and a colleague's ask and answer.
 //
 // Such text is data, never an instruction. Each read result wraps it in a fence
 // bounded by a per-turn random token, so content cannot close the fence by
@@ -20,10 +22,13 @@
 //	[/untrusted:K7Q2M4XWB3ZP6TNA]
 //
 // SQUARE BRACKETS AND NO QUOTES, because nearly every fenced field reaches the
-// model inside a JSON tool answer: the encoder rewrites `<` and `>` as `<`
-// and `>` and backslashes every quote, so an XML-shaped marker would read
-// as escape soup exactly where it has to be unmistakable. `[REDACTED:` set the
-// precedent for an engine marker inside foreign text (internal/redact).
+// model inside a JSON tool answer, which backslashes every quote: a marker
+// carrying a quoted attribute would read as escape soup exactly where it has
+// to be unmistakable, and JSON writes a square bracket as itself. (A tool
+// answer writes `<` and `>` as themselves too — internal/plainjson — so an
+// XML-shaped marker would survive the encoding; the bracket is kept because it
+// is what foreign text is least likely to be full of, and `[REDACTED:` set the
+// precedent for an engine marker inside foreign text, internal/redact.)
 //
 // # Why the content cannot close it
 //
@@ -58,6 +63,86 @@
 // fields it fences, at the [Least] trust of those fields, and carries the
 // sentence an assistant without the seat prompt needs to read the fences
 // correctly.
+//
+// # One rule for the engine's own surfaces
+//
+// Text on a surface the ENGINE hosts — its tracker, knowledge base, chat,
+// artifacts, project files and agent-to-agent channels — is trusted by
+// [TrustForHosted] ([LabelForHosted]) whichever door it reaches a model
+// through: a wake, a read tool, a search hit, the thread a turn is handed.
+// Named in full, it earns what its writers earn; short of that it is
+// [TrustForPartial] — a colleague's when nobody is named, because only company
+// principals write there — and a writer its record carries no handle and no
+// kind for is one the record could not name, never an outside party. The
+// one hosted text read otherwise is what an administrator adopted as the
+// company's own, the adopted brand's voice: it is [TrustCompany], which no set
+// of writers is ever inferred to be; and what a page's script reports it
+// applied, which the engine cannot verify, is [TrustPage] alone. A vendor's
+// surface takes [TrustFor], where nobody named is `external`. Every
+// door that decides a trust is found by a walk of the tree and held to the
+// rule its surface takes, so one page cannot be a stranger's through its wake
+// and a colleague's through a search, as it was.
+//
+// # Which fields are somebody's words
+//
+// A record says so where the field is declared, with [FieldTag]:
+// `untrusted:"fence"` on words at length (a body, a comment, a change's text),
+// `untrusted:"name"` on a short line somebody chose (a title, a name, a
+// label), which a reader neutralises in place and names the writers of on its
+// envelope rather than fencing. The tag is the declaration everything that
+// answers a record reads, so a field added to a record is labelled because it
+// was declared, not because somebody remembered to add it to a list; a walk
+// holds every tag in the tree to [FieldKinds] and to a shape that holds text,
+// and the agent runtime's read tools refuse to answer a declared field they
+// did not label.
+//
+// # A label travels with its text
+//
+// A fence's three facts — the surface, the trust, the writers — are a value,
+// [Label], so the label a text was read under can be kept beside it and the
+// text fenced again later under the same label, by a reader that could not
+// decide it: a learning worker running after the turn, a seat recalling a past
+// turn, a node rendering a search hit another node's backend found. Several
+// labelled texts read as one take ONE label ([Merge]): the least trust any of
+// them earns, every writer once, the surface they share or
+// [SourceNotification] where they differ. [Present] is how any such text
+// reaches a model: fenced under its label, or, with none — the company's or
+// the reader's own words — neutralised.
+//
+// # Text fenced before its reader had a token
+//
+// A wake's trigger is built where the delivery is routed, before the turn
+// that will read it exists, so the body in it is fenced under a token minted
+// for that wake alone; [Rekey] moves such fences onto the turn's own token and
+// applies the two escapes to everything around them, and [Fences] lifts them
+// out whole for a reader that renders the rest otherwise (a merged burst's
+// digest).
+//
+// # A model that judges for a seat
+//
+// Before a turn starts, auxiliary models decide what the seat is shown — which
+// of its memories, which pages, and a briefing of its past work written into
+// its prompt — each from what the turn was asked, which is on most wakes
+// somebody else's words. They read those words fenced like the seat does,
+// labelled as the trigger labels them, and their system prompts carry
+// [StandingInstruction]; but under a [Boundary] minted for each call rather
+// than the turn's, because a model can echo the token it is handed into what it
+// writes, and what the summary writes lands in the seat's prompt — which
+// [Neutralise] then defuses under the turn's own token. A defused copy alone
+// would not do there: these prompts hold no fence to forge, and what such a
+// model needs is to be told the task is somebody's words, which only a fence
+// and the sentence say.
+//
+// The same holds for EVERY model call that reads somebody else's words on a
+// seat's or a person's behalf — the models that learn from a turn after it
+// ends, the one that answers a person from the company's pages, the judge
+// that decides whether a phase gets more rounds, a rewrite — and for what each
+// writes back where a seat reads it (a memory, a trait, a skill, a judge's
+// reason), which is defused under the turn's token. Which calls those are is
+// not a list anybody keeps: a walk of the tree finds every function that
+// builds a model's input, a provider request or the launch of a coding CLI's
+// run (every seat's executor is one), and refuses one that does not say which
+// test holds its fences, or why it reads nobody's words.
 //
 // # Writing back
 //

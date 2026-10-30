@@ -115,7 +115,7 @@ func TestOneRefusalIsOneDecisionOnAllThreeSurfaces(t *testing.T) {
 	if !errors.As(fromSeat.Cause, &refused) {
 		t.Fatalf("the seat's refusal carries no decision: %v", fromSeat.Cause)
 	}
-	want := authz.RefusalDetail(refused.Decision.Reason, refused.Decision.Grants)
+	_, _, want := authz.RefusalFields(refused.Decision)
 	routeGrants, _ := fromHTTP.body[authz.DetailGrants].([]any)
 	gateGrants, _ := want[authz.DetailGrants].([]string)
 	if fromHTTP.body[authz.DetailReason] != want[authz.DetailReason] ||

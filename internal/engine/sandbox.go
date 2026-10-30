@@ -45,6 +45,7 @@ import (
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
 	"github.com/crewlet/crewlet/internal/tracing"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The sandbox's engine-side wiring: which concrete thing satisfies which seam.
@@ -234,8 +235,8 @@ func buildSandboxProvider(spec *config.SandboxProvider, env *config.Resolver, pl
 		//
 		// Answered rather than panicked: an embedder building a spec by
 		// hand is a caller, not an operator to be crashed at.
-		return nil, fmt.Errorf("providers.sandbox: %q is not one of %v",
-			placement, config.Placements)
+		return nil, fmt.Errorf("providers.sandbox: %q is not one of %s",
+			placement, words.Or(config.Placements))
 	}
 }
 
@@ -565,7 +566,7 @@ func (r runEnv) logFacts(ctx context.Context, seat string) {
 	}
 	attrs := append([]any{"seat", seat, "keys", r.facted}, r.facts.logAttrs()...)
 	attrs = append(attrs, "detail", "the run starts without the engine's own "+
-		plural(r.facted, "fact", "facts")+" from "+joined(r.facted)+": "+r.facts.reason())
+		plural(r.facted, "fact", "facts")+" from "+asWritten(r.facted)+": "+r.facts.reason())
 	if r.facts.waiting() {
 		log.InfoContext(ctx, "sandbox_env_unresolved", attrs...)
 		return
@@ -1400,6 +1401,7 @@ func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
 	return &runner.Asked{
 		Question: asked.Question, Answer: asked.Answer, By: asked.By,
 		Branch: asked.Branch, SessionID: asked.SessionID, BoxKept: asked.BoxKept,
+		Label: asked.Label,
 	}
 }
 
@@ -1503,12 +1505,14 @@ func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Resu
 //
 // Taken from the STATE rather than rebuilt from the trigger: the trigger may
 // no longer be readable days later, and the task the turn was working on is a
-// fact the suspension already captured.
+// fact the suspension already captured, as the model read it, with somebody
+// else's words in it fenced. EVERY PARKED RUN'S STATE CARRIES IT
+// (runner.Runner.recordAgentSuspension), so the row's description is never
+// read in its place: that is the turn's ask in a person's words, with no
+// fence ([sandbox.PendingRun.TaskDescription]), and a model handed it as its
+// brief would read somebody else's words bare.
 func resumeTask(in resumeInput) string {
-	if in.State.Task != "" {
-		return in.State.Task
-	}
-	return in.Run.TaskDescription
+	return in.State.Task
 }
 
 // resumeInputFor renders a parked run coming back as the loop's own
@@ -1602,10 +1606,12 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 // turn has measured of itself so far (execstate.State.SoFar), for the record
 // that ends it to state the whole turn. And so does what
 // the turn was ASKED (execstate.State.Ask), which the finishing segment's
-// completed-turn event carries and is woken by something else entirely — and
-// who said it, its interactions (execstate.State.Interactions), which that
-// event carries for the post-turn workers that read a settled turn, and which
-// every later segment reads who asked off, as a dispatch does.
+// completed-turn event carries and is woken by something else entirely, with
+// who wrote it (execstate.State.AskProvenance), which nothing the finishing
+// segment reads could say again — and who said it, its interactions
+// (execstate.State.Interactions), which that event carries for the post-turn
+// workers that read a settled turn, and which every later segment reads who
+// asked off, as a dispatch does.
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
 	tel turnTelemetry, charge segmentCharge,
 ) (bool, error) {
@@ -1625,6 +1631,7 @@ func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID
 	suspension.State.Uncharged = charge.carry
 	suspension.State.SoFar = charge.soFar
 	suspension.State.Ask = tel.ask
+	suspension.State.AskProvenance = tel.askLabel
 	suspension.State.Interactions = tel.interactions
 	suspension.State.Deadline = tel.deadline
 	blob, err := execstate.Encode(suspension.State)
@@ -3518,6 +3525,17 @@ func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
 	return false
 }
 
+// saidNames is variable names as a refusal writes them, bare beside the
+// variable the api-key arm names: [words.Or] quotes a value and leaves a
+// [words.Said] as it is.
+func saidNames(names []string) []words.Said {
+	said := make([]words.Said, len(names))
+	for i, name := range names {
+		said[i] = words.Said(name)
+	}
+	return said
+}
+
 // credentialRefusal is the [SandboxCredentialError] for a remote run nothing
 // in whose environment signs its CLI in, carrying the remedy for THIS entry.
 //
@@ -3548,7 +3566,7 @@ func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
 //
 // Its own function rather than the tail of [sandboxCredentials] so that the
 // guard's VERDICT — which runs are refused — reads apart from its wording.
-func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) *SandboxCredentialError {
+func credentialRefusal(agent *cliagent.Provider, key, seat string, placement sandbox.Placement) error {
 	// THE ENTRY'S CELL, which is what places an executor: its own run_in,
 	// or the catalogue's default for an entry that names none. A seat has
 	// no cell of its own to move.
@@ -3567,32 +3585,32 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 			// No login either way, so a local cell is no remedy here: the
 			// env is, the entry's or the seat's.
 			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; or set %s in this seat's role.sandbox.env", lead, strings.Join(sign.Variables, " or "))}
+				"%s; or set %s in this seat's role.sandbox.env", lead, words.Or(sign.Variables))}
 		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 			// The mode hands the CLI nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.
-			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; that login reaches the box only in a local cell (%s)", lead, localCell)}
+			return refusedCredential(fmt.Sprintf(
+				"%s; that login reaches the box only in a local cell (%s)", lead, localCell))
 		case len(sign.Variables) == 0 && sign.Mode == cliagent.AuthAPIKey:
 			// Its one variable is outside the grammar, and the lead names
 			// that field as the remedy. Not role.sandbox.env: every write
 			// refuses the entry until the field changes, and a name
 			// carrying `=` sets a different variable wherever it is placed.
-			return &SandboxCredentialError{msg: lead}
+			return refusedCredential(lead)
 		case len(sign.Variables) == 0:
 			// inherit-env whose every variable is such a name: the login
 			// it seeds is the one sign-in left, and only a local cell has it.
-			return &SandboxCredentialError{msg: fmt.Sprintf(
+			return refusedCredential(fmt.Sprintf(
 				"%s; or run the entry in a local cell (%s), which is seeded with its login",
-				lead, localCell)}
+				lead, localCell))
 		case sign.Mode == cliagent.AuthAPIKey:
-			return &SandboxCredentialError{msg: fmt.Sprintf(
-				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0])}
+			return refusedCredential(fmt.Sprintf(
+				"%s; or give this seat its own %s in role.sandbox.env", lead, sign.Variables[0]))
 		default:
-			return &SandboxCredentialError{msg: fmt.Sprintf(
+			return refusedCredential(fmt.Sprintf(
 				"%s; or set %s in this seat's role.sandbox.env, or run the entry in a local cell "+
 					"(%s), which is seeded with its login",
-				lead, strings.Join(sign.Variables, " or "), localCell)}
+				lead, words.Or(saidNames(sign.Variables)), localCell))
 		}
 	}
 	// A token variable no store can hold: `-capture-token` refuses to mint
@@ -3635,12 +3653,23 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		remedy = fmt.Sprintf("No headless token can travel: %s. Name the variable your build "+
 			"of the CLI reads there, or run the entry in a local cell (%s)", misnamedToken, localCell)
 	}
-	return &SandboxCredentialError{msg: fmt.Sprintf(
+	return refusedCredential(fmt.Sprintf(
 		"seat %q's executor runs on %q in %q, where its subscription login cannot follow it: "+
 			"the login stays on the engine host because it carries a refresh token whose "+
 			"rotation is fleet state, and nothing in this run's environment "+
 			"authenticates. %s",
-		seat, key, placement, remedy)}
+		seat, key, placement, remedy))
+}
+
+// refusedCredential is a [SandboxCredentialError] saying msg, CLASSED AT THE
+// SOURCE as the configuration it is ([sandbox.WhyConfiguration]), so whoever
+// is told the run did not start is told that a person's edit clears it, not a
+// wait. Every branch of [credentialRefusal] goes through it, whichever auth
+// mode decided the remedy. The executor that meets it fails its phase
+// whatever the class ([runner.AgentLauncher]): its run is the turn's executor
+// itself, and the sentence is for whoever reads the turn's failure.
+func refusedCredential(msg string) error {
+	return sandbox.Because(sandbox.WhyConfiguration, &SandboxCredentialError{msg: msg})
 }
 
 // underlay adds defaults to env WITHOUT overwriting what is already there.

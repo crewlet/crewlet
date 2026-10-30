@@ -30,7 +30,7 @@ func TestANodeServingNoAPIPublishesNoAdminPosture(t *testing.T) {
 	if quiet.ServesAPI() {
 		t.Fatal("the worker's bootstrap serves the API, so this half certifies nothing")
 	}
-	status := worker.nodeStatus(t.Context())
+	status := statusOf(t.Context(), t, worker)
 	if status.AdminPosture != "" {
 		t.Errorf("a node serving no API published the admin posture %q, want none",
 			status.AdminPosture)
@@ -60,7 +60,7 @@ func TestANodeServingNoAPIPublishesNoAdminPosture(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	t.Cleanup(func() { ingress.Stop(context.Background()) })
-	status = ingress.nodeStatus(t.Context())
+	status = statusOf(t.Context(), t, ingress)
 	if status.AdminPosture != iam.AdminRefuse {
 		t.Errorf("a node serving the API published the admin posture %q, want %q",
 			status.AdminPosture, iam.AdminRefuse)

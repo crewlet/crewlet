@@ -20,10 +20,11 @@
  * import of one from the frame would pull it back into the entry without a
  * sound. Which chunk draws a screen is [SCREEN_CHUNKS], keyed by the screen
  * rather than by the sidebar row it is in, because the two are different
- * questions: Company's rows draw screens from three directories (the
- * Overview, Policies and Integrations are `routes/settings`, the Org chart and
- * Schedules `routes/agents`, Budgets `routes/spend`), and a row that moves
- * moves no code. `routes/org` is the builder, bigger than any other directory,
+ * questions: Company's rows draw screens from four directories (Principles
+ * and Integrations are `routes/settings`, Brand `routes/brand`, the Org
+ * chart and Schedules `routes/agents`, Budgets `routes/spend`), and a row
+ * that moves moves no
+ * code. `routes/org` is the builder, bigger than any other directory,
  * so it is its own (see `routes/org/OrgEdit.tsx`). `routes/signin` is the
  * screens drawn outside the frame, which a reader who is signed in never
  * needs, so it is the one chunk the idle prefetch leaves alone ([CHUNKS]): a
@@ -73,6 +74,7 @@ const LOADERS = {
   worklet: () => import("~/routes/worklet/index.ts"),
   agents: () => import("~/routes/agents/index.ts"),
   org: () => import("~/routes/org/index.ts"),
+  chatlet: () => import("~/routes/chatlet/index.ts"),
   live: () => import("~/routes/live/index.ts"),
   doclet: () => import("~/routes/doclet/index.ts"),
   artifacts: () => import("~/routes/artifacts/index.ts"),
@@ -100,6 +102,7 @@ type ScreenDir =
   | "inbox"
   | "me"
   | "worklet"
+  | "chatlet"
   | "agents"
   | "live"
   | "doclet"
@@ -150,6 +153,9 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   "worklet-search": "worklet",
   project: "worklet",
   item: "worklet",
+  chatlet: "chatlet",
+  "chatlet-mentions": "chatlet",
+  "chatlet-search": "chatlet",
   doclet: "doclet",
   container: "doclet",
   page: "doclet",
@@ -204,6 +210,7 @@ export const CHUNKS: readonly Chunk[] = [
   "agents",
   "spend",
   "worklet",
+  "chatlet",
   "doclet",
   "artifacts",
   "live",
@@ -222,6 +229,7 @@ const CHUNK_LABELS: Readonly<
   inbox: "Inbox",
   me: "My work",
   worklet: "Worklet",
+  chatlet: "Chatlet",
   agents: "Org chart",
   live: "Live",
   doclet: "Doclet",

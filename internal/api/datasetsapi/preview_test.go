@@ -97,8 +97,8 @@ func TestAPreviewAnswersASourcesRowsAsTheViewer(t *testing.T) {
 // and the grants that would admit them, never as rows and never as an HTTP
 // failure: the builder draws the source as closed to this reader.
 func TestAPreviewOfASourceTheViewerMayNotReadIsItsRefusal(t *testing.T) {
-	q := &answeringQuestions{refusal: &queries.Refusal{What: "work_items", Reason: authz.ReasonNoGrant,
-		Grants: []iam.Grant{iam.GrantWorklet}}}
+	q := &answeringQuestions{refusal: queries.NewRefusal("work_items", authz.Decision{
+		Reason: authz.ReasonNoGrant, Grants: []iam.Grant{iam.GrantWorklet}})}
 	s := previewService(t, q)
 	bo := iam.Principal{ID: uuid.New(), Login: "bo.k", Kind: iam.KindPerson}
 

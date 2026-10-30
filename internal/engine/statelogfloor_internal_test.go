@@ -5,15 +5,22 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/artifactdata"
+	"github.com/crewlet/crewlet/internal/artifactsdomain"
+	"github.com/crewlet/crewlet/internal/assistantdomain"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/estate"
+	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/iamdomain"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/search"
@@ -570,7 +577,9 @@ func TestANodeBelowTheLogIsRefusedZeroWhateverThePublishedFloorSays(t *testing.T
 // stream's first sequence with the floor at zero — because the fence the node
 // becomes subject to reads the higher of the two, and a readmission judged
 // against either alone clears a node that fence refuses. And every
-// identity-claiming domain is judged while the compacted one is not.
+// identity-claiming domain is judged — each of them refusing on its own, and
+// each written on the readmission that finally succeeds — while the compacted
+// one is not.
 func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	t.Parallel()
 	e, back, running := trimmedTracker(t)
@@ -579,11 +588,20 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	if gate == nil {
 		t.Fatal("the node runs no node gate")
 	}
-	wiki := s.Domain(doclet.Domain{}.Name())
 	vectors := s.Domain(search.Domain{}.Name())
-	if wiki == nil || vectors == nil {
-		t.Fatal("the pages or the vector domain is not running")
+	if vectors == nil {
+		t.Fatal("the vector domain is not running")
 	}
+	// EVERY IDENTITY-CLAIMING LOG, the tracker's first: the gesture judges
+	// and writes each, and a case naming two of them left the identity
+	// estate's unasked.
+	identity := identityLogs(t, s)
+	if identity[0] != running || len(identity) < 7 {
+		t.Fatalf("the identity-claiming logs are %v, want the tracker's first and "+
+			"at least the knowledge base's, the identity estate's, the artifacts "+
+			"log's, the artifact datastore's, the assistant's and chat's after it", logNames(identity))
+	}
+	others := identity[1:]
 
 	const away = "node-away"
 	if res, err := gate.Evict(t.Context(), GateRequest{
@@ -595,21 +613,28 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 		t.Fatalf("this node is at %d, too near the start of the log for a floor "+
 			"to pass anybody", at.Seq)
 	}
-	// THE ABSENT NODE'S LAST HEARTBEAT, from before the fleet moved on.
-	report := func(trackerSeq uint64) {
+	// THE ABSENT NODE'S LAST HEARTBEAT, from before the fleet moved on: the
+	// tracker at trackerSeq, every other log it runs at its start.
+	reportIn := func(generation uint32, trackerSeq uint64) {
 		t.Helper()
+		domains := map[string]coord.DomainPosition{
+			running.domain.Name(): {Generation: generation, Seq: trackerSeq,
+				AppliedThrough: trackerSeq},
+			vectors.domain.Name(): {Generation: vectors.runner.Committed().Generation},
+		}
+		for _, r := range others {
+			domains[r.domain.Name()] = coord.DomainPosition{
+				Generation: r.runner.Committed().Generation}
+		}
 		if err := back.Fleet.PutPositions(t.Context(), coord.NodePositions{
-			NodeID: away, At: time.Now().UTC(),
-			Domains: map[string]coord.DomainPosition{
-				running.domain.Name(): {Generation: at.Generation, Seq: trackerSeq,
-					AppliedThrough: trackerSeq},
-				wiki.domain.Name(): {Generation: wiki.runner.Committed().Generation},
-				vectors.domain.Name(): {
-					Generation: vectors.runner.Committed().Generation},
-			},
+			NodeID: away, At: time.Now().UTC(), Domains: domains,
 		}); err != nil {
 			t.Fatalf("publish %s's position: %v", away, err)
 		}
+	}
+	report := func(trackerSeq uint64) {
+		t.Helper()
+		reportIn(at.Generation, trackerSeq)
 	}
 	floor := func(r *runningLog, f uint64) {
 		t.Helper()
@@ -620,11 +645,11 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 			t.Fatalf("publish %s's floor: %v", r.domain.Name(), err)
 		}
 	}
-	// BOTH LOGS' ENDS, because a refusal writes nothing to EITHER.
-	end := func() [2]uint64 {
+	// EVERY LOG'S END, because a refusal writes nothing to ANY.
+	end := func() []uint64 {
 		t.Helper()
-		var out [2]uint64
-		for i, r := range []*runningLog{running, wiki} {
+		out := make([]uint64, len(identity))
+		for i, r := range identity {
 			_, last, err := r.log.Bounds(t.Context())
 			if err != nil {
 				t.Fatalf("read %s's end: %v", r.domain.Name(), err)
@@ -649,7 +674,7 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 				"against %d / %d", refusal.Domain, refusal.Seq, refusal.Bound.Floor,
 				refusal.Bound.First, domain, seq, floorWant, firstWant)
 		}
-		if last := end(); last != before {
+		if last := end(); !slices.Equal(last, before) {
 			t.Fatalf("the logs moved from %v to %v on a refused readmission", before, last)
 		}
 	}
@@ -671,32 +696,72 @@ func TestANodeBelowTheFloorIsNotReadmitted(t *testing.T) {
 	}
 	refusedIn(running.domain.Name(), 1, 0, at.Seq)
 
-	// CAUGHT UP ON THE TRACKER, BEHIND ON THE PAGES: a node is a replica
-	// of every log it runs or of none.
+	// CAUGHT UP ON THE TRACKER, BEHIND ON ANOTHER LOG — each in turn: a node
+	// is a replica of every log it runs or of none.
 	report(at.Seq - 1)
-	floor(wiki, 5)
-	refusedIn(wiki.domain.Name(), 0, 5, logFirstOf(t, wiki))
+	for _, r := range others {
+		floor(r, 5)
+		refusedIn(r.domain.Name(), 0, 5, logFirstOf(t, r))
+		floor(r, 0)
+	}
 
-	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK.
-	floor(wiki, 0)
+	// A LOG THE FLEET RE-ANCHORED PAST THIS NODE: the absent node last ran
+	// the tracker at a later generation than this node does, so this node
+	// can't judge it there, and says so as a condition a node that has
+	// applied the re-anchor clears, writing nothing. It was a plain error,
+	// answered as a 500 fault with that remedy in this node's log alone.
+	// Mutation: drop the mapping in Readmissible and this fails.
+	reportIn(at.Generation+1, 1)
+	before := end()
+	_, behindErr := gate.Readmit(t.Context(), readmit)
+	var unjudged *ReadmissionUnjudged
+	if !errors.As(behindErr, &unjudged) || !unjudged.Behind ||
+		unjudged.Log != running.domain.Name() {
+		t.Fatalf("readmitting %s past a re-anchor answered %v, want it unjudged "+
+			"on %s as behind", away, behindErr, running.domain.Name())
+	}
+	if last := end(); !slices.Equal(last, before) {
+		t.Fatalf("the logs moved from %v to %v on an unjudged readmission", before, last)
+	}
+	report(at.Seq - 1)
+
+	// AND ONCE IT HOLDS EVERYTHING THAT MAY BE GONE, IT IS TAKEN BACK — on
+	// every log.
 	res, err := gate.Readmit(t.Context(), readmit)
 	if err != nil {
 		t.Fatalf("a node one record short of every floor was refused: %v", err)
+	}
+	if len(res.Domains) != len(identity) {
+		t.Fatalf("the readmission answered for %d log(s), want every "+
+			"identity-claiming one (%d)", len(res.Domains), len(identity))
 	}
 	for _, d := range res.Domains {
 		if d.Err != nil || d.Outcome != statelog.OutcomeApplied {
 			t.Fatalf("the readmission answered %+v on %s, want applied", d, d.Domain)
 		}
 	}
-	for _, lister := range []evictionLister{worklet.Domain{}, doclet.Domain{}} {
+	for _, r := range identity {
+		lister, ok := r.domain.(evictionLister)
+		if !ok {
+			t.Fatalf("%s claims identity and cannot list its evictions", r.domain.Name())
+		}
 		rows, err := lister.Evictions(t.Context(), back.Store.Replicated().Reader())
 		if err != nil {
-			t.Fatalf("read the evictions: %v", err)
+			t.Fatalf("read %s's evictions: %v", r.domain.Name(), err)
 		}
 		if len(rows) != 1 || rows[0].NodeID != away || !rows[0].Back {
-			t.Fatalf("evictions = %+v, want %s readmitted on every log", rows, away)
+			t.Fatalf("%s's evictions = %+v, want %s readmitted", r.domain.Name(), rows, away)
 		}
 	}
+}
+
+// logNames is each running log's domain name, for a message.
+func logNames(logs []*runningLog) []string {
+	out := make([]string, 0, len(logs))
+	for _, r := range logs {
+		out = append(out, r.domain.Name())
+	}
+	return out
 }
 
 // logFirstOf is a domain log's own first surviving sequence.
@@ -752,7 +817,7 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 }
 
 // THE WRITE FENCES AS THE ENGINE WIRES THEM REFUSE ON THE PUBLISHED FLOOR
-// ALONE, in both identity-claiming domains, while the log still holds
+// ALONE, in every identity-claiming domain, while the log still holds
 // everything.
 //
 // The fence takes the higher of two witnesses, and every other case here that
@@ -764,12 +829,23 @@ func TestAWriteFenceReadsTheFloorAtTheGenerationItNames(t *testing.T) {
 // asked here with a floor one past its next record and a log that has lost
 // nothing, which the floor alone refuses, and then with the floor AT its next
 // record, which clears — the boundary [statelog.Replayable] draws.
+//
+// EVERY IDENTITY-CLAIMING LOG THE NODE RUNS, read off the running set: a
+// domain whose fence is wired and has no zero write here fails the case, so a
+// log added to the register is held to its own floor the day it is added — a
+// fence bound to ANOTHER log's floor reads a number in the wrong sequence
+// space, refuses nothing this log needs refused, and is caught by nothing but
+// this case. The identity estate's fence was wired that way and asked by
+// nobody until the list here stopped being typed.
 func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	t.Parallel()
 	e, back, _ := trimmedTracker(t)
-	s := e.core.Load().log
-	if e.native.Load().writer == nil || e.native.Load().pages == nil {
-		t.Fatal("the node runs no tracker writer or no page store")
+	n, c := e.native.Load(), e.core.Load()
+	s := c.log
+	if n.writer == nil || n.pages == nil || n.chat == nil || c.iamWriter == nil ||
+		c.artifactsWriter == nil || c.artifactDataWriter == nil || c.assistantWriter == nil {
+		t.Fatal("the node runs no tracker writer, page store, chat store, identity " +
+			"writer, artifacts writer, datastore writer or assistant writer")
 	}
 	// THE HEARTBEAT IS WATCHED RATHER THAN OBEYED: a node below a
 	// published floor may ask the fleet for a snapshot, and an adoption
@@ -778,21 +854,70 @@ func TestTheWiredWriteFencesRefuseOnThePublishedFloorAlone(t *testing.T) {
 	s.rejoin = func(context.Context) error { return nil }
 	s.rejoinMu.Unlock()
 
-	for _, tc := range []struct {
+	// zero is, per domain, a write on a subject nobody has written, which
+	// is a write at an expectation of zero.
+	zero := map[string]func(ctx context.Context, key string) error{
+		worklet.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := n.writer.EvictNode(ctx, "op-"+key, "node-"+key)
+			return err
+		},
+		doclet.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, _, err := n.pages.EnsureContainer(ctx, testActivation, key, key, "")
+			return err
+		},
+		iamdomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.iamWriter.EvictNode(ctx,
+				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
+			return err
+		},
+		// A ROOM'S NAME IS ITS ADDRESS, so a create on a name nobody holds
+		// arbitrates on a subject nobody has written.
+		chatlet.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := n.chat.CreateChannel(ctx,
+				chatlet.Actor{Handle: "ceo", Kind: chatlet.AuthorAgent},
+				chatlet.NewChannel{Name: "floor-" + strings.ToLower(key), Kind: chatlet.KindPublic})
+			return err
+		},
+		// AN EVICTION OF A NODE NOBODY HAS EVICTED is a write on its own
+		// subject, which nobody has written, on each of the artifacts logs.
+		artifactsdomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.artifactsWriter.EvictNode(ctx, iam.ActorFor(gateOperator),
+				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
+			return err
+		},
+		artifactdata.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := c.artifactDataWriter.EvictNode(ctx, iam.ActorFor(gateOperator),
+				statelog.NewOpID(time.Now(), "op-"+key), "node-"+key)
+			return err
+		},
+		// A CONVERSATION NOBODY HAS STARTED is a subject nobody has written,
+		// so a person starting one through the writer the dashboard's
+		// assistant records with is a write at zero.
+		assistantdomain.Domain{}.Name(): func(ctx context.Context, key string) error {
+			_, err := createConversation(ctx, c.assistantWriter, key)
+			return err
+		},
+	}
+	var cases []struct {
 		domain string
-		// zero is a write on a subject nobody has written, which is a
-		// write at an expectation of zero.
-		zero func(ctx context.Context, key string) error
-	}{
-		{domain: worklet.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, err := e.native.Load().writer.EvictNode(ctx, "op-"+key, "node-"+key)
-			return err
-		}},
-		{domain: doclet.Domain{}.Name(), zero: func(ctx context.Context, key string) error {
-			_, _, err := e.native.Load().pages.EnsureContainer(ctx, testActivation, key, key, "")
-			return err
-		}},
-	} {
+		zero   func(ctx context.Context, key string) error
+	}
+	for _, running := range s.running() {
+		if !running.domain.ClaimsIdentity() {
+			continue
+		}
+		name := running.domain.Name()
+		if zero[name] == nil {
+			t.Fatalf("%s claims identity and this case holds no zero write for it, "+
+				"so the floor its write fence reads is certified by nothing: add "+
+				"its row", name)
+		}
+		cases = append(cases, struct {
+			domain string
+			zero   func(ctx context.Context, key string) error
+		}{name, zero[name]})
+	}
+	for _, tc := range cases {
 		running := s.Domain(tc.domain)
 		if running == nil {
 			t.Fatalf("the %s domain is not running", tc.domain)

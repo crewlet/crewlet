@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
@@ -99,12 +100,14 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 		iam.TokenLogin("bob"):   "bob-seat",
 		iam.TokenLogin("carol"): "carol-seat",
 	}
+	judge := &pushTimes{}
 	a := newApp(t, api.Options{
 		Bootstrap: &b,
 		Inbox:     feed,
 		SeatBindings: auth.SeatBindings{
 			Directory: inboxBindings(seats), Chart: inboxChart(seats),
 		},
+		Objectives: judge,
 	})
 	srv := httptest.NewServer(a)
 	t.Cleanup(srv.Close)
@@ -128,11 +131,14 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 
 	// Two batches IN ORDER, so a socket that received alice's frame would
 	// have it queued in front of its own.
+	stored := time.Date(2026, 10, 18, 9, 0, 0, 0, time.UTC)
 	feed.fire(t, worklet.InboxMovement{
 		Handle: "alice-seat", UnreadDelta: 1, Subject: "task:1f0c", Reason: worklet.ReasonAssignee,
+		At: stored,
 	})
 	feed.fire(t, worklet.InboxMovement{
 		Handle: "bob-seat", UnreadDelta: -2, Subject: "task:9a1e", Reason: worklet.ReasonMention,
+		At: stored.Add(time.Second),
 	})
 
 	got := alice.nextInbox(t)
@@ -152,6 +158,36 @@ func TestInboxChangedReachesOnlyTheSocketsHoldingThatSeat(t *testing.T) {
 			"person's screen learned about somebody else's inbox", other.Seat)
 	}
 	carol.drainUntilPong(t)
+	// AND THE PUSH IS TIMED, from the instant the movement's record was
+	// stored and through the node's own meter — whatever rooms the node
+	// serves, which here is none — while the frame says nothing of when.
+	if got := judge.seen(); len(got) != 2 || !got[0].Equal(stored) ||
+		!got[1].Equal(stored.Add(time.Second)) {
+		t.Errorf("the inbox pushes were timed from %v, want alice's from %s and bob's "+
+			"a second after", got, stored)
+	}
+}
+
+// pushTimes is an objective meter keeping the instant each change visibility
+// event was timed from.
+type pushTimes struct {
+	mu     sync.Mutex
+	stamps []time.Time
+}
+
+func (p *pushTimes) RecordSince(n objectives.Name, stamp time.Time, _ bool) {
+	if n != objectives.ChangeVisibility {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.stamps = append(p.stamps, stamp)
+}
+
+func (p *pushTimes) seen() []time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]time.Time(nil), p.stamps...)
 }
 
 // A GAP IN WHAT THIS NODE HEARS IS EVERY WATCHED INBOX READ AGAIN.

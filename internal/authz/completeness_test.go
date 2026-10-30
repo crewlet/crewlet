@@ -128,6 +128,15 @@ func TestARouteWithNoPolicyIsRefusedAtTheMount(t *testing.T) {
 			authz.Policy{Action: authz.ActionOrgWrite}.WhenAbsent(
 				&authz.Absent{Creates: true, Elsewhere: "PUT /config"}),
 			"or neither"},
+		// WHAT A WRITE DOES is a POST's to say, since its method does not,
+		// and a route mounted here never calls a tool.
+		{"what a POST does on a PUT", "PUT /config/units/{id}",
+			authz.Policy{Action: authz.ActionOrgWrite}.Destroying(), "its method already says"},
+		{"a mounted POST that calls a tool", "POST /worklet/items",
+			authz.Policy{Action: authz.ActionWorkCreate, Effect: authz.EffectCalls},
+			"does not have"},
+		{"an effect this build does not know", "POST /worklet/items",
+			authz.Policy{Action: authz.ActionWorkCreate, Effect: "vanishes"}, "does not have"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -335,7 +344,13 @@ func TestTheRoutersOwnRefusalIsTheEnvelope(t *testing.T) {
 				t.Fatalf("answered %d, want %d", rec.Code, c.status)
 			}
 			body := envelope(t, rec)
-			if body["error"] != string(c.code) || body["message"] != c.code.Message() {
+			// THE SENTENCE FOR THIS REFUSAL, which for `unauthorized` is
+			// the one its reason chooses — built the way the envelope
+			// builds it rather than typed here.
+			_, _, detail := authz.RefusalFields(c.d)
+			sentence := httpjson.Envelope(c.code, detail)["message"]
+			if body["error"] != string(c.code) || body["message"] != sentence ||
+				sentence == "" {
 				t.Errorf("answered %v, want %s with its sentence", body, c.code)
 			}
 			if c.status == http.StatusServiceUnavailable {
@@ -454,7 +469,10 @@ func policyFor(pattern string) authz.Policy {
 
 // grantedOnly is an active person carrying exactly one permission.
 func grantedOnly(g iam.Grant) iam.Principal {
+	// BOUND TO A SEAT, as every person is (ADR-0032), so a verb made as one
+	// is asked of its permission rather than refused before it.
 	p := person("jane.doe", g)
+	p.Seat = "jane"
 	return p
 }
 

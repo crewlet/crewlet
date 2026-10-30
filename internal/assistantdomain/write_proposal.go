@@ -16,6 +16,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ProposalMethods are the methods a proposal's request may carry: the HTTP
@@ -64,9 +65,9 @@ func (p NewProposal) validate() error {
 	case len(p.Act) > TitleMaxBytes:
 		return invalid("the act is at most %d bytes", TitleMaxBytes)
 	case !p.Scope.Valid():
-		return invalid("scope %q is not one of %v", p.Scope, wire.ProposalScopes)
+		return invalid("scope %q is not one of %s", p.Scope, words.Or(wire.ProposalScopes))
 	case !slices.Contains(ProposalMethods, p.Method):
-		return invalid("method %q is not one of %v", p.Method, ProposalMethods)
+		return invalid("method %q is not one of %s", p.Method, words.Or(ProposalMethods))
 	case !strings.HasPrefix(p.Path, "/") || len(p.Path) > QueryMaxBytes:
 		return invalid("the path is a route's own path, from its leading slash, " +
 			"of at most a query's bound")
@@ -230,7 +231,7 @@ func (w *Writer) MoveProposal(ctx context.Context, c Call, proposal uuid.UUID,
 	}
 	if !m.From.Valid() || !m.To.Valid() {
 		return statelog.Result{}, invalid("a move names the state it is decided from "+
-			"and the state it moves to, of %v", wire.ProposalStates)
+			"and the state it moves to, each one of %s", words.Or(wire.ProposalStates))
 	}
 	op, ok := moveOp(m.From, m.To)
 	if !ok {

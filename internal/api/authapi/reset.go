@@ -29,7 +29,7 @@ import (
 //   - A GET SAYS WHOSE PASSWORD IT SETS AND SPENDS NOTHING, because a link is
 //     followed by mail clients prefetching, scanners and preview cards.
 //   - THE LINK IS AN ID AND A SECRET and only the id is ever in a path: the
-//     view takes the secret in [resetSecretHeader], the spend in its body.
+//     view takes the secret in [ResetSecretHeader], the spend in its body.
 //   - EVERY WAY A LINK FAILS TO OPEN IS ONE 410, in the same bytes — an id
 //     that is no link, a secret that is not the id's, a link spent, revoked
 //     or aged out, a person the reset no longer reaches — and only a link
@@ -47,9 +47,11 @@ import (
 // session handed out here would skip. A first password link signs nobody in
 // for the same reason, and ends nothing because there was nothing to end.
 
-// resetSecretHeader carries a reset link's secret to the view, for
-// [inviteSecretHeader]'s reason.
-const resetSecretHeader = "X-Crewlet-Reset-Secret"
+// ResetSecretHeader carries a reset link's secret to the view, for
+// [InviteSecretHeader]'s reason — and is spelled twice and held equal for it
+// too: the dashboard's reset screen declares it as `contract/identity.ts`
+// `RESET_SECRET_HEADER`.
+const ResetSecretHeader = "X-Crewlet-Reset-Secret"
 
 // resetView is what the reset screen renders from.
 type resetView struct {
@@ -85,7 +87,7 @@ var errResetSpent = errors.New("authapi: this reset link no longer opens")
 func (s *Service) ViewReset(w http.ResponseWriter, r *http.Request) {
 	adm := s.uncounted(r)
 	held, ok := s.presentedReset(w, r, adm, r.PathValue("id"),
-		r.Header.Get(resetSecretHeader))
+		r.Header.Get(ResetSecretHeader))
 	if !ok {
 		return
 	}
@@ -172,7 +174,7 @@ func (s *Service) SpendReset(w http.ResponseWriter, r *http.Request) {
 		s.refuseReset(w, r, adm, true)
 		return
 	case err != nil:
-		writeFailed(w, r, "api_reset_failed", opID, err)
+		gestureFailed(w, r, "api_reset_failed", opID, err)
 		return
 	case !landed(set):
 		unresolved(w, r, "api_reset_unresolved", set)
@@ -202,7 +204,7 @@ func (s *Service) presentedReset(w http.ResponseWriter, r *http.Request,
 	held, err := s.directory.ResetByID(r.Context(), id)
 	if err != nil {
 		log.WarnContext(r.Context(), "api_reset_lookup_failed", "error", err)
-		httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable, auth.RetryIdentity(err))
+		auth.UnavailableIdentity(w, err)
 		return iamdomain.ResetRow{}, false
 	}
 	if held.Opens(secret, s.now()) {
@@ -227,8 +229,7 @@ func (s *Service) presentedReset(w http.ResponseWriter, r *http.Request,
 // nothing is for any 503.
 func (s *Service) unvouched(w http.ResponseWriter, r *http.Request, link, id string) {
 	log.InfoContext(r.Context(), "api_link_unvouched", "link", link, "id", id)
-	httpjson.Unavailable(w, httpjson.CodeIdentityUnavailable,
-		auth.RetryIdentity(iamdomain.ErrNotCurrent))
+	auth.UnavailableIdentity(w, iamdomain.ErrNotCurrent)
 }
 
 // refuseReset is every 410 a reset link answers, in the same bytes — a failed

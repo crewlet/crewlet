@@ -15,8 +15,14 @@ package notify
 //     the transport, by app id.
 //   - A webhook names an actor who happens to be the recipient. Caught at
 //     the inbound service.
-//   - A parser fanning out to watchers includes the actor among them.
-//     Caught at parse time, by comparing usernames.
+//   - A first-party parser fanning out to watchers includes the actor
+//     among them. Caught at parse time, where the record's author and every
+//     candidate are handles in one namespace — Worklet's router
+//     and Doclet's both drop the author there, under the same
+//     exception their prompt declares. A vendor parser does NOT: its
+//     payload names accounts in the vendor's namespace, which only the
+//     registry resolves, so it stamps the actor and leaves the comparison to
+//     the inbound service.
 //
 // Three implementations meant three chances to disagree, and they did: the
 // service read only `actor_account_id`, which one third-party app stamps,
@@ -68,16 +74,15 @@ func ActorOf(metadata map[string]string) string { return metadata[ActorField] }
 // learns. A comment the actor wrote is the opposite — they already know.
 //
 // The distinction is "did something happen BECAUSE of me that I do not yet
-// know about", and only the third-party app can name which of its event types are
-// which, so it is asked through the prompt registry. A source with no
-// registered prompt gets the safe answer, which is no: an unrecognised event
-// type that loops is worse than one that goes unheard, because the loop
-// takes the company down with it.
-func WakesActor(prompts Prompts, source, eventType string) bool {
-	if eventType == "" {
-		return false
-	}
-	return prompts.For(source).WakesActor(eventType)
+// know about", and only the third-party app can name which of its
+// notifications are which, so it is asked through the prompt registry —
+// with the whole notification, because a source may answer from what its
+// parser stamped on this recipient's copy rather than from the event type
+// ([Prompt.WakesActor]). A source with no registered prompt gets the safe
+// answer, which is no: an unrecognised event type that loops is worse than
+// one that goes unheard, because the loop takes the company down with it.
+func WakesActor(prompts Prompts, n Inbound) bool {
+	return prompts.For(n.Source).WakesActor(n)
 }
 
 // Deliverable reports whether a notification should wake a recipient, and
@@ -94,36 +99,8 @@ func Deliverable(prompts Prompts, r *Registry, n Inbound, recipient Party) (bool
 		return false, ReasonHumanSeat
 	}
 	actor := ActorOf(n.Metadata)
-	if SelfAction(r, n.Source, actor, recipient) && !WakesActor(prompts, n.Source, n.EventType) {
+	if SelfAction(r, n.Source, actor, recipient) && !WakesActor(prompts, n) {
 		return false, ReasonSelfAction
 	}
 	return true, ""
-}
-
-// SuppressSelf filters an actor out of a fan-out target list.
-//
-// The parse-time face of the same rule, applied where the identifiers are
-// still the third-party app's own usernames and nothing has been resolved yet. It
-// takes the same [WakesActor] exception, so a failed pipeline still reaches
-// the person who pushed it while their own comment does not come back to
-// them.
-//
-// Order is preserved: a target list is in priority order, and the first
-// reason per target wins downstream.
-func SuppressSelf(targets []string, actor string, wakesActor bool) []string {
-	if actor == "" || wakesActor {
-		return targets
-	}
-	out := make([]string, 0, len(targets))
-	for _, t := range targets {
-		if t != actor {
-			out = append(out, t)
-		}
-	}
-	if len(out) == 0 {
-		// nil rather than an empty slice, so "nobody to tell" is one
-		// value everywhere instead of two that compare differently.
-		return nil
-	}
-	return out
 }

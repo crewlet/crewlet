@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
 // readBodyWithin reads a JSON body into v: declared JSON, within max bytes,
@@ -26,15 +27,18 @@ func readBodyWithin(w http.ResponseWriter, r *http.Request, v any, max int64) bo
 		httpjson.Refuse(w, err)
 		return false
 	}
+	// IN WORDS, never the decoder's own ([plainjson.Unreadable]): its error
+	// names Go's types and struct fields, which a person reading the detail
+	// can do nothing with.
 	switch err := httpjson.DecodeStrict(raw, v); {
 	case errors.Is(err, httpjson.ErrTrailingData):
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": err.Error()})
+			httpjson.Detail{"detail": plainjson.Unreadable("the body", plainjson.ErrTrailing)})
 		return false
 	case err != nil:
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			httpjson.Detail{"detail": "the body must be one JSON object of the route's " +
-				"own fields: " + err.Error()})
+			httpjson.Detail{"detail": plainjson.Unreadable("the body", err) +
+				". Send one JSON object of the route's own fields"})
 		return false
 	}
 	return true

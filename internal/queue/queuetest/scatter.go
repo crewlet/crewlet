@@ -199,6 +199,30 @@ func (s *suite) runScatter(t *testing.T) {
 		}
 	})
 
+	t.Run("a_request_sent_as_its_deadline_passed_is_not_a_failed_ask", func(t *testing.T) {
+		t.Parallel()
+		q := s.start(ctx, t)
+		subject := ns(t) + ".ask"
+		serve(ctx, t, q, subject, echo("here"))
+
+		// A DEADLINE ALREADY PAST WHEN THE REQUEST GOES OUT: the backend
+		// takes the request — on the real one it is in the connection's
+		// outbound buffer, and goes out with it — and then its wait for the
+		// broker to confirm it ends at once. An error says the ask could
+		// not be made at all, which a caller reads as "nobody received it":
+		// a write routed through it told a person it was NOT made, and a
+		// note to a running turn that nothing was sent, when either may
+		// have reached its server. Whatever arrived, which is nothing, is
+		// the answer, as every deadline's is.
+		past, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+		defer cancel()
+		if _, err := q.Ask(past, subject, []byte("q"), 1); err != nil {
+			t.Fatalf("an ask whose deadline passed as it was sent answered %v — "+
+				"the request may have reached its server, so it is not one "+
+				"that could not be made", err)
+		}
+	})
+
 	t.Run("an_answerers_error_is_a_missing_answer_not_a_failed_ask", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)

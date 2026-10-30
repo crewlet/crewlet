@@ -262,7 +262,7 @@ test("each phase's prompt size is rendered rather than banded and dropped", asyn
   // THE TOOL ARRAY IS ON THE PAGE, which is the term this panel was blind to
   // and the dominant one: a measured turn read ~6,900 tokens here against the
   // provider's 205,000.
-  expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KB");
+  expect(screen.getByTitle("11 tool definitions, as compact JSON").textContent).toBe("3.7 KiB");
 });
 
 // TWO MEASUREMENTS ARE TWO ROWS, NEVER ONE MERGED ROW.
@@ -289,7 +289,7 @@ test("two measurements under one phase key draw two rows, not one merged row", a
   expect(tokens.map((t) => t.textContent)).toEqual(["1,753", "1,814"]);
   // EACH ROW KEEPS ITS OWN FIGURES: merged, the second's replaced the first's.
   const systems = screen.getAllByTitle("bytes in the system prompt");
-  expect(systems.map((s) => s.textContent)).toEqual(["23 KB", "900 B"]);
+  expect(systems.map((s) => s.textContent)).toEqual(["23 KiB", "900 B"]);
 });
 
 // EVERY FIGURE COLUMN SHARES ONE BOX WITH THE ROWS AROUND IT.

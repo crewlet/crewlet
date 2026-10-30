@@ -2,18 +2,23 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/iam.TestEveryAppIsAGrantAndAdminIsNot`, `internal/iam.TestExpandAddsEveryAppExactlyWhenAdminIsHeld`, `internal/iam.TestARefusingNodeKeepsEveryApp`, `internal/authz.TestEveryAppIsNamedByARow`, `internal/authz.TestEveryAppRowAdmitsAHolderAndRefusesANonHolder`, `internal/authz.TestSeatOnlyAndHumanOnlyAreCheckedBeforeTheClass`, `internal/authz.TestEveryDottedVerbIsAskedByANonTestCallSite`, `internal/iamdomain.TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken`, `internal/agent/turnctx.TestASeatHoldsEveryAppAndNeverAdmin`
+- **Enforced-by:** `internal/iam.TestEveryAppIsAGrantAndAdminIsNot`, `internal/iam.TestExpandAddsEveryAppExactlyWhenAdminIsHeld`, `internal/iam.TestARefusingNodeKeepsEveryApp`, `internal/authz.TestEveryAppIsNamedByARow`, `internal/authz.TestEveryAppRowAdmitsAHolderAndRefusesANonHolder`, `internal/authz.TestSeatOnlyHumanOnlyAndSeatedAreCheckedBeforeTheClass`, `internal/authz.TestEveryDottedVerbIsAskedByANonTestCallSite`, `internal/iamdomain.TestAnAdministrativeRecordIsNeverWrittenThroughAMachineToken`, `internal/agent/turnctx.TestASeatHoldsEveryAppAndNeverAdmin`
 - **Cost-when-tried:** the vocabulary before this was ELEVEN grants — a company read, an audit read, a read and a write for configuration, a read and a write for secrets, a write for work, a write for knowledge, a deployment operator, a manager of people and a sandbox run — and the people choosing them could not tell most of them apart, so neither could the code. The node's own writer held the operator grant while the identity domain asked the configuration write of the same record, so every invitation redemption was refused on a real deployment while the surface's suite, built on a stub writer, stayed green. The company read once gated nothing at all, and the walk that caught it existed only because nobody reading the table could see it. And a person invited with nothing ticked could open nothing — not the org chart, not the socket, not their own seat — and landed on a "no access yet" panel with no step they could take, because reading the company was itself a grant.
 - **Tag-status:** unreleased
 
 ## The decision
 
-There are three permissions. **`admin`** runs the company and the engine: its
+There are five permissions. **`admin`** runs the company and the engine: its
 configuration, its credentials, its people, its deployment and its
-company-wide trail. **`worklet`** and **`doclet`** each use one APP, Worklet
-and Doclet, reading and writing.
+company-wide trail. **`worklet`**, **`doclet`**, **`artifacts`** and
+**`chatlet`** each use one APP: Worklet, Doclet and Chatlet,
+reading and writing, and the company's artifacts, authoring them (what opens
+an artifact is its shares,
+[ADR-0034](0034-an-artifact-is-shared-and-a-share-is-a-relation.md)).
 `iam.Apps` is the one place an app is declared, and admin includes every app
 through `iam.Expand`, which every comparison of permissions goes through.
+`chatlet` is the fourth app and was appended LAST, so every list drawn in the
+vocabulary's order kept its first members where they were.
 
 **Everything else is everybody's.** Every principal the request guard resolves
 sees the read-only overview — the org chart, the agents' status, spend,
@@ -22,12 +27,15 @@ all. What a lead may do to their own team, an author to their own work and a
 person to their own record are RELATIONS, not permissions, and on an app's
 verb each is asked beside the app.
 
-Two facts about a verb are fields on its row rather than permissions anybody
-holds: `humanOnly` keeps an agent off a person's gesture, and `seatOnly` keeps
-a person off an agent's — asking a colleague and starting a coding run, which
-the seat's role offers or does not. An agent seat holds every app and never
-admin. A node either serves admin or clamps it away (`api.auth.admin`), and a
-node that clamps it keeps every app.
+Three facts about a verb are fields on its row rather than permissions anybody
+holds: `humanOnly` keeps an agent off a person's gesture, `seatOnly` keeps a
+person off an agent's — asking a colleague and starting a coding run, which
+the seat's role offers or does not — and `seated` keeps a credential acting as
+itself off a verb made as a seat: a question answered on the asker's seat's
+model, and every chat verb, because a room renders a speaker by seat and its
+membership is seats. An agent seat holds every app and never admin. A node
+either serves admin or clamps it away (`api.auth.admin`), and a node that
+clamps it keeps every app.
 
 The table that says which verb needs what is `internal/authz`'s, row by row;
 this record does not restate it.
@@ -44,8 +52,9 @@ them was a person being given too much — each was the engine refusing what
 everybody involved intended, or granting nothing while looking like it did.
 
 A finer vocabulary also cannot say what a company actually decides about a
-colleague. "Uses Worklet", "uses Doclet" and "runs the place"
-are the three questions a founder answers when somebody joins; a reader of the
+colleague. "Uses Worklet", "uses Doclet", "makes artifacts"
+and "runs the place" — and, where the company runs its own chat, "talks in
+it" — are the questions a founder answers when somebody joins; a reader of the
 trail, a manager of people and an operator of the deployment were three grants
 nobody could tell apart, and they are one.
 
@@ -78,6 +87,8 @@ unchanged, and a purge asks for a recent proof. It does not decide **who may wri
 ([ADR-0030](0030-a-managed-company-document-names-its-writers.md)) or **that a
 person holds a human seat**
 ([ADR-0032](0032-every-person-holds-a-human-seat.md)); both compose with it.
-And it does not decide **which apps exist**: a third app is a new member of
+And it does not decide **which apps exist**: a new app is a new member of
 `iam.Apps` and a new set of rows, and the walks named above fail until both
-are there.
+are there — which is how `artifacts`
+([ADR-0034](0034-an-artifact-is-shared-and-a-share-is-a-relation.md)) and
+`chatlet` arrived.

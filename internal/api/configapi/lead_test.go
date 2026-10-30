@@ -155,6 +155,13 @@ func refusedParts(t *testing.T, res *httptest.ResponseRecorder) []string {
 		r, _ := item.(map[string]any)
 		out = append(out, strings.Join([]string{str(r["kind"]), str(r["id"]),
 			str(r["side"]), str(r["place"]), str(r["why"]), str(r["reason"])}, "/"))
+		// EACH PART NAMES ITS OWN REMEDY, which for a lead's refused part
+		// is admin.
+		if grants, _ := r[authz.DetailGrants].([]any); !slices.Equal(grants,
+			[]any{string(iam.GrantAdmin)}) {
+			t.Errorf("the refused part %v names grants %v, want admin", r,
+				r[authz.DetailGrants])
+		}
 	}
 	if len(out) == 0 {
 		t.Fatalf("a 403 named no refused part: %v", body)
@@ -877,5 +884,47 @@ func TestALeadsWriteAsksForARecentProof(t *testing.T) {
 		decode(t, res)["error"] != string(httpjson.CodeStepUpRequired) {
 		t.Errorf("a stale lead's write = %d %s, want step_up_required",
 			res.Code, res.Body.String())
+	}
+}
+
+// slowBody is a request body whose first read waits until an instant has
+// passed, as a body still arriving does.
+type slowBody struct {
+	until time.Time
+	body  *strings.Reader
+}
+
+func (b *slowBody) Read(p []byte) (int, error) {
+	time.Sleep(time.Until(b.until))
+	return b.body.Read(p)
+}
+
+// A WRITE IS ADMITTED AT THE INSTANT ITS ROUTE WAS.
+//
+// The route asks the caller's proof before the body is read, and the admission
+// asks again once the document is built. An administrator whose proof was
+// fresh when the request arrived and lapsed while its body was still arriving
+// was admitted by the route and then refused by the admission, every part of
+// the write named as needing admin. The admission decides at the route's
+// instant, so the write that arrived on a fresh proof is judged on it.
+// Mutation: decide the admission at `time.Now()` again and the write is
+// refused.
+func TestAWriteIsAdmittedAtTheInstantItsRouteWas(t *testing.T) {
+	t.Parallel()
+	s := leadSurface(t)
+	proof := time.Now().Add(time.Second)
+	admin := iam.Principal{ID: uuid.New(), Login: "ops.admin", Kind: iam.KindPerson,
+		Stage: iam.StageActive, Grants: []iam.Grant{iam.GrantAdmin}, ReauthAt: proof}
+	req := httptest.NewRequest(http.MethodPatch, "/config?dry_run=true", &slowBody{
+		until: proof.Add(300 * time.Millisecond),
+		body:  strings.NewReader(`{"mission": "make tools"}`),
+	})
+	req.Header.Set("X-Summary", "mission")
+	req = req.WithContext(iam.WithPrincipal(req.Context(), admin))
+	res := httptest.NewRecorder()
+	s.mux.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Errorf("a write that arrived on a fresh proof = %d: %s", res.Code,
+			res.Body.String())
 	}
 }

@@ -326,7 +326,9 @@ test("the Sources rail lists every dataset with how it is kept current", async (
   // One card, headed by its own title, as a panel beside a board is.
   expect(within(rail).getByRole("heading", { level: 2, name: "Sources" })).toBeTruthy();
   expect(rail.querySelector(".crewlet-card")).not.toBeNull();
-  expect(within(rail).getAllByText("Live").length).toBeGreaterThan(0);
+  // A DATASET IS LIVE ONCE ITS FIRST ROWS HAVE ANSWERED, a commit after its
+  // row is drawn: waited for, not read at once.
+  expect((await within(rail).findAllByText("Live")).length).toBeGreaterThan(0);
   expect(within(rail).getByText("As its rows are written")).toBeTruthy();
   expect(within(rail).getByText("When its inputs change")).toBeTruthy();
   expect(within(rail).getByText("The deals collection of this dashboard's data")).toBeTruthy();

@@ -28,9 +28,22 @@
  * take instead. A call that must present something else — the API token
  * exchange at `POST /auth/token` — sets its own `Authorization` header for
  * that one request, and nothing keeps it.
+ *
+ * AND EVERY REQUEST SAYS WHO IT IS FOR — the tab's reader, in the header
+ * `signin.ts` reads it into — unless it is one of the two whose point is to
+ * learn or change who the session is ([RequestOptions.forReader]). The cookie
+ * is the browser's and the screen is the tab's, and a request the engine
+ * would serve to somebody the tab was not drawn for is refused `409
+ * reader_changed` before it runs, which hands the tab over ([noteSession]).
  */
 
-import { confirmStepUp, needSession } from "./signin.ts";
+import {
+  confirmStepUp,
+  needSession,
+  READER_CHANGED,
+  readerHeaders,
+  readerMoved,
+} from "./signin.ts";
 import type { LogRefusal, QueryRefusal } from "./types.ts";
 import { answeredByEngine, markedByEngine } from "./engineAnswer.ts";
 import { remedyOf, type Remedy } from "./remedy.ts";
@@ -123,6 +136,17 @@ export class RestError extends Error {
   }
 
   /**
+   * The rule a refusal on authority was decided by (the envelope's `reason`),
+   * or "" where the answer named none. Beside [grants] it says whether the
+   * access they name is a way past the refusal, which they cannot say alone:
+   * a stale proof names the grants that admitted the person
+   * (`lib/authorityRemedy.ts` decides by both).
+   */
+  get reason(): string {
+    return typeof this.body.reason === "string" ? this.body.reason : "";
+  }
+
+  /**
    * This refusal in the shape `QueryState` renders from — the one the
    * socket's error frame carries, under the same keys and on the same terms:
    * a `403 unauthorized`'s rule and the grants that would have admitted the
@@ -134,8 +158,8 @@ export class RestError extends Error {
    * ONLY `unauthorized` IS A RULE'S REFUSAL. Every 403 used to be read as one,
    * with its code standing in for the rule, so a read refused
    * `seat_unavailable` or `csrf_origin` reached the banner as a refusal naming
-   * no grant — which says "no grant would change that: the rule asks a
-   * relation the org chart does not hold", a claim about neither.
+   * no grant — which says no access would change it, of a rule that never
+   * decided: a claim about neither.
    */
   get refusal(): QueryRefusal | LogRefusal | null {
     if (
@@ -217,14 +241,17 @@ const TYPED_REFUSALS = new Set(["sign_in_refused", "second_factor_required"]);
  * A `401` that is not an answer about typed details is a browser signed in as
  * nobody the engine accepts: never signed in, its session ended, expired or
  * revoked. A `403 second_factor_enrolment_required` is a session that may do
- * nothing but enrol the second factor the deployment requires. Every other
- * refusal is about the REQUEST, and the session is fine.
+ * nothing but enrol the second factor the deployment requires. A `409
+ * reader_changed` is a session that is somebody else's than the tab that
+ * sent the request — whoever signed in in another tab — and the tab is handed
+ * to them. Every other refusal is about the REQUEST, and the session is fine.
  */
 function noteSession(refusal: RestError): void {
   if (refusal.status === 401 && !TYPED_REFUSALS.has(refusal.code)) needSession("sign_in");
   if (refusal.status === 403 && refusal.code === "second_factor_enrolment_required") {
     needSession("second_factor");
   }
+  if (refusal.status === 409 && refusal.code === READER_CHANGED) readerMoved();
 }
 
 /**
@@ -351,6 +378,16 @@ export interface RequestOptions {
    * JSON either way, because every refusal the engine writes is one.
    */
   read?: "json" | "text";
+  /**
+   * Whether this request is made FOR THE TAB'S READER, and so names them
+   * (`readerHeaders`) and is refused `reader_changed` when the browser's
+   * session is somebody else's. True unless the request's whole point is to
+   * learn or change who the session is: the read of who it is, which is how
+   * a tab refused for its reader learns who to be handed to, and the token
+   * exchange, which signs somebody in. Either refused for naming the reader
+   * would leave a tab nothing to be handed over with.
+   */
+  forReader?: boolean;
   /**
    * How long this request may take before it is abandoned, in milliseconds —
    * [REQUEST_TIMEOUT_MS] unless the caller's path is genuinely longer and
@@ -547,6 +584,7 @@ async function attempt(
     signal,
     read = "json",
     timeoutMs = REQUEST_TIMEOUT_MS,
+    forReader = true,
   } = options;
   const contentType = options.contentType ?? (body === undefined ? undefined : "application/json");
   let encoded: string | Blob | undefined;
@@ -575,6 +613,9 @@ async function attempt(
     headers: {
       ...(contentType ? { "Content-Type": contentType } : {}),
       ...headers,
+      // READ AT EACH ATTEMPT, a step-up's replay included, and LAST, so no
+      // caller's header can name somebody else in its place.
+      ...(forReader ? readerHeaders() : {}),
     },
     ...(encoded === undefined ? {} : { body: encoded }),
   };
@@ -754,6 +795,9 @@ async function blob(path: string, signal?: AbortSignal): Promise<Blob> {
         cache: "no-store",
         // The whole of how this download is authenticated, as for [request].
         credentials: "same-origin",
+        // MADE FOR THE TAB'S READER, as every request is (see [request]):
+        // the file is one their screen listed.
+        headers: readerHeaders(),
         signal: controller.signal,
       });
     } catch (err) {
@@ -805,7 +849,10 @@ export interface TextStream {
  * turn stream (`assistant.ts`), whose bytes are server-sent events.
  *
  * THE SAME CREDENTIAL AND THE SAME REFUSALS as every request here: the
- * session cookie and nothing else, no browser cache in front of it, and a
+ * session cookie and nothing else, the tab's reader named last
+ * ([readerHeaders], so a browser that changed hands is refused
+ * `reader_changed` and the tab handed over), no browser cache in front of it,
+ * and a
  * refusal read as the engine's JSON ([RestError]), a `401` reaching
  * [noteSession] exactly as a request's does. Only the STATUS LINE has a
  * deadline ([REQUEST_TIMEOUT_MS]); the body runs for as long as the engine
@@ -846,7 +893,7 @@ async function stream(
       cache: "no-store",
       // The whole of how this stream is authenticated, as for [request].
       credentials: "same-origin",
-      headers: { Accept: "text/event-stream", ...headers },
+      headers: { Accept: "text/event-stream", ...headers, ...readerHeaders() },
       signal: controller.signal,
     });
   } catch (err) {

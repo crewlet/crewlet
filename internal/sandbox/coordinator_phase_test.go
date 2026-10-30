@@ -39,7 +39,7 @@ func (r *coordRig) phases() []types.AgentPhaseCompleted {
 // executor that launched it publishes nothing when it suspends, and its
 // resumed record states the executor's own rounds. So every token a coding run
 // spent reached the budget counter and nothing a person reads — the spend
-// rollup and each node's daily usage are folded from these records alone.
+// rollup and each data node's daily usage are folded from these records alone.
 //
 // ONCE, however often the tail is retried: the first resume here fails, the
 // claim is handed back and the completion comes round again, and a second copy

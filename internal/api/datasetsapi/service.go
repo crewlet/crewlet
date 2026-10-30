@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/artifactdataapi"
 	"github.com/crewlet/crewlet/internal/api/artifactsapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -384,17 +385,41 @@ func settle(w http.ResponseWriter, r *http.Request, res result, out *Reading, wh
 		httpjson.ThrottledWith(w, httpjson.CodeReadBudget, budget.refusal.RetryAfter,
 			httpjson.Detail{"detail": spent})
 		return false
-	case errors.Is(res.err, queries.ErrUnavailable):
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(statelog.ElectionRetryHint),
-			httpjson.Detail{"detail": "this node could not read " + what + " right now"})
+	case errors.Is(res.err, queries.ErrUnavailable) || isCondition(res.err):
+		// A CONDITION OF THE NODE — a source's question it could not answer
+		// here, or a store dataset whose read the state log refused — in a
+		// person's words for it where there are any
+		// ([builtin.ConditionSentence]) and under its own hint, which is
+		// none where no wait clears it: every one of these was "could not
+		// read X right now" under an election's four seconds, so a log at
+		// its ceiling was polled for ever and a refusal's error, wrapped
+		// in nothing, fell to the arm below and was logged as a failure.
+		operator.LogCondition(r.Context(), log, "dashboard_dataset_unavailable", res.err,
+			logged...)
+		said, ok := builtin.ConditionSentence(res.err)
+		if !ok {
+			said = "this node could not read " + what + " right now"
+		}
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			httpjson.RetrySeconds(builtin.RetryAfter(res.err, statelog.ElectionRetryHint)),
+			httpjson.Detail{"detail": said})
 		return false
 	default:
-		log.WarnContext(r.Context(), "dashboard_dataset_failed", append(logged, "error", res.err.Error())...)
-		httpjson.UnavailableWith(w, httpjson.CodeUnavailable, httpjson.RetrySeconds(statelog.ElectionRetryHint),
-			httpjson.Detail{"detail": "this node could not read " + what + " right now"})
+		// A FAILURE NO CONDITION CLAIMS is this node's own fault, which no
+		// wait clears: it was a 503 under an election's four seconds, so a
+		// board polled a fault for ever.
+		log.ErrorContext(r.Context(), "dashboard_dataset_failed", append(logged, "error", res.err.Error())...)
+		httpjson.Fail(w, http.StatusInternalServerError, httpjson.CodeInternalError)
 		return false
 	}
 	return true
+}
+
+// isCondition reports a condition of the node waiting may clear, which is no
+// fault of the board or of the node ([builtin.Condition]).
+func isCondition(err error) bool {
+	_, ok := builtin.Condition(err)
+	return ok
 }
 
 // read answers dataset id of rd's board, memoised for the request.
@@ -563,14 +588,19 @@ func (s *Service) ask(ctx context.Context, src dashspec.EngineSource, args map[s
 }
 
 // sourceFailure is a source's failure in the answer's vocabulary.
+//
+// A DATASET IS CLOSED ONLY BY A REFUSAL THAT NAMES ITS DECISION — the
+// question's own [queries.Refusal], whose reason and grants are the rule's.
+// A bare [queries.ErrUnauthorized] names none (only a Refusal produces it),
+// and a question asked by nobody cannot reach here, since every dataset is
+// read on a request its artifact's gate admitted: closing the dataset as a
+// missing grant for either told the viewer a permission would open what no
+// permission decided, so both are the fault they would be.
 func sourceFailure(dataset string, src dashspec.EngineSource, err error) error {
 	var refusal *queries.Refusal
 	switch {
 	case errors.As(err, &refusal):
 		return &closed{refusal: Refusal{Dataset: dataset, Reason: refusal.Reason, Grants: refusal.Grants},
-			detail: "You cannot read " + string(src.Domain) + ": " + src.Access + "."}
-	case errors.Is(err, queries.ErrUnauthorized), errors.Is(err, queries.ErrUnauthenticated):
-		return &closed{refusal: Refusal{Dataset: dataset, Reason: authz.ReasonNoGrant},
 			detail: "You cannot read " + string(src.Domain) + ": " + src.Access + "."}
 	case errors.Is(err, queries.ErrUnknown):
 		return &unanswered{detail: "This node does not run " + string(src.Domain) + ", so " +

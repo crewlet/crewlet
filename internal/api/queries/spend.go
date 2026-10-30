@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE SPEND ANSWERS, `tokens` and `token_series`, and where each one reads.
@@ -94,17 +95,20 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 			"not both", ErrBadParams)
 	case since != "" || until != "":
 		if since == "" || until == "" {
-			return w, fmt.Errorf("%w: since and until come as a pair — two company "+
+			return w, fmt.Errorf("%w: since and until come as a pair: two company "+
 				"dates, both inclusive (since=2026-06-01&until=2026-06-08)", ErrBadParams)
 		}
 		r, err := tokens.DaysBetween(since, until, loc)
 		if err != nil {
+			// WHAT WAS SENT, NEVER THE PARSER'S ERROR, which opens with a
+			// package's name ("tokens: 2026-06-08 is before …").
 			return w, fmt.Errorf("%w: since and until are company dates written "+
-				"2026-06-01, the first no later than the second: %w", ErrBadParams, err)
+				"2026-06-01, the first no later than the second, and %q to %q "+
+				"isn't", ErrBadParams, since, until)
 		}
 		if n := r.Days(); n > tokens.MaxSpendRangeDays {
 			return w, refuseAs(tokens.ErrWindowLength, "%s to %s is %d days, and a "+
-				"spend window is at most %d — bring since and until closer together",
+				"spend window is at most %d. Bring since and until closer together",
 				r.First.Label, r.Last.Label, n, tokens.MaxSpendRangeDays)
 		}
 		w.Range = r
@@ -114,15 +118,15 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 			days = p.Int("days", 0)
 			if days < 1 || days > tokens.MaxSpendRangeDays {
 				return w, refuseAs(tokens.ErrWindowLength, "days is %v, and a spend "+
-					"window is 1 to %d company days — ask for at most %d",
+					"window is 1 to %d company days. Ask for at most %d",
 					p.Values()["days"], tokens.MaxSpendRangeDays, tokens.MaxSpendRangeDays)
 			}
 		}
 		w.Range = tokens.LastDays(days, now, loc)
 	}
 	if !w.Horizon.Admits(w.Range) {
-		return w, refuseAs(tokens.ErrOutOfRange, "the window starts %s, before %s — "+
-			"the oldest day the %d-day spend history still holds on any node; move "+
+		return w, refuseAs(tokens.ErrOutOfRange, "the window starts %s, before %s, "+
+			"the oldest day the %d-day spend history still holds on any node. Move "+
 			"since to %s or later", w.Range.First.Label, w.Horizon.Floor,
 			w.Horizon.Days, w.Horizon.Floor)
 	}
@@ -133,8 +137,8 @@ func (s Sources) spendWindowOf(p Params) (spendWindow, error) {
 			// window before a long enough one starts past the floor, and
 			// the fix is a shorter window, not a different comparison.
 			return w, refuseAs(tokens.ErrOutOfRange, "the window before these %d "+
-				"days starts %s, before %s — the oldest day the %d-day spend history "+
-				"holds; ask for fewer days", w.Range.Days(), prev.First.Label,
+				"days starts %s, before %s, the oldest day the %d-day spend history "+
+				"holds. Ask for fewer days", w.Range.Days(), prev.First.Label,
 				w.Horizon.Floor, w.Horizon.Days)
 		}
 		w.Range = prev
@@ -344,24 +348,25 @@ func (s Sources) tokenSeries(ctx context.Context, p Params) (any, error) {
 		group = tokens.GroupPhase
 	}
 	if !group.Valid() {
-		return nil, fmt.Errorf("%w: group must be one of %v, and %q is not — a "+
-			"chart legended by one dimension over another's bands is worse "+
-			"than an error", ErrBadParams, tokens.Groups, group)
+		return nil, fmt.Errorf("%w: the group parameter is one of %s, and %q isn't",
+			ErrBadParams, words.Or(tokens.Groups), group)
 	}
 	if group.AdminOnly() && !readsConfig(ctx) {
 		// ITS BANDS ARE THE COMPANY'S ENTRIES, which only an admin reads
 		// (see [Sources.tokens]); every other grouping is everybody's.
-		return nil, &Refusal{What: "token_series by " + string(group), Reason: authz.ReasonNoGrant,
-			Grants: []iam.Grant{iam.GrantAdmin}}
+		return nil, NewRefusal("token_series by "+string(group), authz.Decision{
+			Reason: authz.ReasonNoGrant, Grants: []iam.Grant{iam.GrantAdmin}})
 	}
 	interval := tokens.Interval(p.String("bucket"))
 	if interval == "" {
 		interval = tokens.IntervalDay
 	}
 	if !interval.Valid() {
-		return nil, fmt.Errorf("%w: bucket must be one of %v, and %q is not — a "+
-			"company day is the finest thing every node's usage agrees on",
-			ErrBadParams, tokens.Intervals, interval)
+		// IN WORDS, never Go's slice ("[day week month]"): internal/words
+		// says every closed set.
+		return nil, fmt.Errorf("%w: the bucket parameter is one of %s, and %q isn't. "+
+			"Spend is counted by the company day, so nothing finer is kept",
+			ErrBadParams, words.Or(tokens.Intervals), interval)
 	}
 	w, err := s.spendWindowOf(p)
 	if err != nil {

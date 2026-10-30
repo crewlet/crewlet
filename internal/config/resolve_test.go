@@ -363,7 +363,7 @@ logging:
   level: ${LEVEL}
 `)), NewResolver(MapSource{
 		"API_PORT": "9090", "STREAM_DEBUG": "true", "MAX": "0x10",
-		"LEASE": "12.5", "STORE_NAME": "null", "LEVEL": "debug",
+		"LEASE": "22.5", "STORE_NAME": "null", "LEVEL": "debug",
 	}))
 	if err != nil {
 		t.Fatalf("a Tier A file taking every kind of field from the environment was refused: %v", err)
@@ -377,8 +377,8 @@ logging:
 	if cfg.Node.MaxConcurrent != 16 {
 		t.Errorf("node.max_concurrent = %d, want 16 — 0x10 is read as the literal it spells", cfg.Node.MaxConcurrent)
 	}
-	if cfg.Coordination.LeaseTTLSeconds != 12.5 {
-		t.Errorf("coordination.lease_ttl_seconds = %v, want 12.5", cfg.Coordination.LeaseTTLSeconds)
+	if cfg.Coordination.LeaseTTLSeconds != 22.5 {
+		t.Errorf("coordination.lease_ttl_seconds = %v, want 22.5", cfg.Coordination.LeaseTTLSeconds)
 	}
 	if cfg.Store.Path != "null" {
 		t.Errorf("store.path = %q, want the text \"null\": a resolved value is data, "+

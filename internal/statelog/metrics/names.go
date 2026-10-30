@@ -61,8 +61,6 @@ const (
 	StoreBytes                       = "crewlet.store.bytes"
 	StorePoolWait                    = "crewlet.store.pool.wait"
 	StoreWalBytes                    = "crewlet.store.wal.bytes"
-	TrackerBulkApplySeconds          = "crewlet.tracker.bulk.apply_seconds"
-	TrackerBulkCalls                 = "crewlet.tracker.bulk.calls"
 	TrackerFeedUnreadable            = "crewlet.tracker.feed.unreadable"
 	TrackerSearchAnswers             = "crewlet.tracker.search.answers"
 	TrackerSearchConcurrency         = "crewlet.tracker.search.concurrency"

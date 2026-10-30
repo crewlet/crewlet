@@ -49,6 +49,15 @@
  * sign-in by somebody other than the person this tab was read by
  * (`lib/reader.ts`) hands the tab over exactly as a sign-out does, and only
  * the same person coming back carries on where they were.
+ *
+ * # Nor does a browser somebody else signed in to
+ *
+ * A sign-in in another tab moves the cookie this tab shares, and the close of
+ * the session this tab was opened with is best effort. Every request the tab
+ * makes names its reader, the engine refuses one made for anybody but the
+ * cookie's principal (`reader_changed`), and the transport says so
+ * ([sessionMoved]) — which reads who the session is and hands the tab to them
+ * as their sign-in here would.
  */
 
 import { useCallback } from "react";
@@ -252,6 +261,36 @@ export function takeSession(person: string): boolean {
   }
   handOver(person, safeNext(location.hash));
   return false;
+}
+
+/** The read [sessionMoved] is waiting on, joined by every refusal that lands meanwhile. */
+let moving: Promise<void> | null = null;
+
+/**
+ * The engine refused a request this tab made for its reader: the browser's
+ * session is somebody else's (`protocol/signin.ts`'s `readerMoved`, which
+ * `main.tsx` installs this behind).
+ *
+ * READ WHO, ONCE, AND TAKE IT ([takeSession]): the session read names no
+ * reader (`auth.session`), so it is answered for whoever holds the cookie,
+ * and a tab read by anybody else is handed to them — emptied and reloaded
+ * where it was. However many requests were refused together, that is one
+ * read and one hand-over. A read that fails hands nothing over: a `401` is
+ * noted where every refusal is (`rest.ts`) and sends the reader to sign in,
+ * and anything else leaves the tab as it was, refused again by its next
+ * request.
+ */
+export function sessionMoved(): Promise<void> {
+  moving ??= auth
+    .session()
+    .then(
+      (session) => void takeSession(session.person),
+      () => undefined,
+    )
+    .finally(() => {
+      moving = null;
+    });
+  return moving;
 }
 
 /**

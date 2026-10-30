@@ -2,6 +2,9 @@ package engine
 
 import (
 	"errors"
+	"maps"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -166,6 +169,75 @@ func TestARunWaitingForAMintedCredentialSaysWhatItWaitsFor(t *testing.T) {
 	if declared.gap == nil || !declared.gap.waiting() {
 		t.Errorf("gap = %+v: a key a pass mints, declared optional, must still wait for it",
 			declared.gap)
+	}
+}
+
+// A MINT GITHUB DID NOT ANSWER IS A WAIT, AND ONE IT REFUSED IS A PERSON'S, in
+// the sentence the run's gap is logged with and a seat's tool server is held
+// back with. The seat's GitHub App token is issued as the run's environment is
+// read, and a mint that met GitHub failing on its side, at its rate limit or
+// not reached at all is asked for again on the restart schedule, which the gap
+// says. One GitHub refused (a suspended installation, a revoked key) is
+// refused again at every ask until somebody fixes the app, and the gap says
+// that rather than a wait that ends nothing; beside a variable nobody set, the
+// gap tells both.
+//
+// Mutation: read every unissued mint as passing and the refused rows go red;
+// read every one as refused and the waiting rows do; read a 403 by its status
+// alone and the rate limit's row does.
+func TestAMintGitHubDidNotAnswerIsAWaitAndOneItRefusedIsAPersons(t *testing.T) {
+	t.Parallel()
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+	const (
+		askedAgain = "GitHub is asked for it again on the restart schedule"
+		fixTheApp  = "until somebody fixes the agent's GitHub App"
+	)
+	for name, c := range map[string]struct {
+		// status is what the token endpoint answers, with its rate limit's
+		// header where limited is set, and url where GitHub is when it is
+		// not the fixture: one nothing listens on.
+		status  int
+		limited bool
+		url     string
+		also    map[string]string
+		says    []string
+	}{
+		"a 503":                        {status: http.StatusServiceUnavailable, says: []string{askedAgain}},
+		"a 429":                        {status: http.StatusTooManyRequests, says: []string{askedAgain}},
+		"a 403 at GitHub's rate limit": {status: http.StatusForbidden, limited: true, says: []string{askedAgain}},
+		"GitHub not reached":           {url: closed.URL, says: []string{askedAgain}},
+		"a suspended installation":     {status: http.StatusForbidden, says: []string{fixTheApp}},
+		"a revoked key":                {status: http.StatusUnauthorized, says: []string{fixTheApp}},
+		"a 503 beside a variable nobody set": {status: http.StatusServiceUnavailable,
+			also: map[string]string{"OTHER_TOKEN": "${BUILDER_NOBODY_SETS}"},
+			says: []string{"${BUILDER_NOBODY_SETS} is not set", askedAgain}},
+	} {
+		gh := newAppGitHub(t)
+		gh.status, gh.limited = c.status, c.limited
+		at := gh.url
+		if c.url != "" {
+			at = c.url
+		}
+		co := appCompany(t, at, true)
+		builder := co.Org.AgentSeatByHandle("builder")
+		env := map[string]string{"GITHUB_TOKEN": "${GITHUB_APP_TOKEN_BUILDER}"}
+		maps.Copy(env, c.also)
+		run := appEngine(t, co).runEnvironment(t.Context(), co, builder,
+			&org.RoleSandbox{Env: env}, nil)
+		if run.gap == nil {
+			t.Errorf("%s: the run was given a token GitHub did not issue", name)
+			continue
+		}
+		said := run.gap.reason()
+		if !strings.Contains(said, "${GITHUB_APP_TOKEN_BUILDER} could not be issued") {
+			t.Errorf("%s: the gap says %q, want the mint's failure", name, said)
+		}
+		for _, want := range c.says {
+			if !strings.Contains(said, want) {
+				t.Errorf("%s: the gap says %q, want %q", name, said, want)
+			}
+		}
 	}
 }
 

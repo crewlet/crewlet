@@ -37,7 +37,7 @@ func handles(cands []worklet.Candidate) []string {
 // an inbox fills with changes the company deliberately did not announce.
 func TestAQuietCommitConcernsNobody(t *testing.T) {
 	t.Parallel()
-	if got := worklet.Candidates(nil, false); got != nil {
+	if got := worklet.Candidates(nil); got != nil {
 		t.Fatalf("a nil notification produced %d candidate(s)", len(got))
 	}
 }
@@ -55,7 +55,7 @@ func TestTheFirstReasonPerHandleWins(t *testing.T) {
 			Watchers:      []string{"ana", "bo"},
 			Collaborators: []string{"ana"},
 		},
-	}, false)
+	})
 	if got := reasonOf(cands, "ana"); got != worklet.ReasonMention {
 		t.Fatalf("ana hears under %q; a mention outranks a watch and a "+
 			"collaboration", got)
@@ -74,29 +74,27 @@ func TestTheFirstReasonPerHandleWins(t *testing.T) {
 	}
 }
 
-// A BATCH COPY IS NEVER ADDRESSED.
-//
-// A bulk re-tag is thirty facts to absorb, not thirty asks — and an
-// addressed wake is one a turn is required to answer.
-func TestABatchCopyIsNeverAddressed(t *testing.T) {
+// A MENTION AND A NEW ASSIGNEE ARE ADDRESSED: each is somebody the change
+// asks something of, and an addressed wake is one a turn is required to
+// answer.
+func TestAMentionAndANewAssigneeAreAddressed(t *testing.T) {
 	t.Parallel()
 	n := &worklet.Notify{
 		Kind:     worklet.ChangeAssignee,
 		Mentions: []string{"ana"},
 		Snapshot: worklet.Snapshot{Assignee: "bo"},
 	}
-	for _, c := range worklet.Candidates(n, false) {
+	reached := 0
+	for _, c := range worklet.Candidates(n) {
 		if c.Reason == worklet.ReasonMention || c.Reason == worklet.ReasonAssignee {
+			reached++
 			if !c.Addressed {
-				t.Fatalf("%s is not addressed under %q on a single write",
-					c.Handle, c.Reason)
+				t.Errorf("%s is not addressed under %q", c.Handle, c.Reason)
 			}
 		}
 	}
-	for _, c := range worklet.Candidates(n, true) {
-		if c.Addressed {
-			t.Errorf("%s is addressed under %q inside a batch", c.Handle, c.Reason)
-		}
+	if reached != 2 {
+		t.Fatalf("the mention and the assignee are %d candidate(s), want 2", reached)
 	}
 }
 
@@ -115,7 +113,7 @@ func TestALeadFilingAStrayStillReachesSomebody(t *testing.T) {
 			ProjectLead:     "vp-engineering",
 		},
 	}
-	cands := worklet.Candidates(n, false)
+	cands := worklet.Candidates(n)
 	if len(cands) != 2 {
 		t.Fatalf("the fallback was offered as %d candidate(s): %+v", len(cands), cands)
 	}
@@ -152,7 +150,7 @@ func TestAFallbackYieldsToAnyOrdinaryCandidate(t *testing.T) {
 			RoutingUnitLead: "backend-lead",
 			ProjectLead:     "vp-engineering",
 		},
-	}, false)
+	})
 	routed := worklet.Route(cands, everyone, "bo")
 	if got := handles(routed); len(got) != 1 || got[0] != "ana" {
 		t.Fatalf("routed to %v; a fallback survives only when nothing ordinary "+
@@ -174,7 +172,7 @@ func TestTheNewUnitsLeadHearsEvenOnAWatchedTask(t *testing.T) {
 			Watchers: []string{"bo"},
 			RoutedTo: "platform-lead",
 		},
-	}, false), everyone, "cy")
+	}), everyone, "cy")
 	if !slices.Contains(handles(routed), "platform-lead") {
 		t.Fatalf("routed to %v and the new unit's lead is not among them",
 			handles(routed))
@@ -197,7 +195,7 @@ func TestOnlyAnUnblockedNoticeReachesTheActor(t *testing.T) {
 			StatusGroup:     worklet.GroupDone,
 			Unblocked:       []worklet.TaskParty{{Task: "t-2", Assignee: "ana"}},
 		},
-	}, false)
+	})
 	// ANA APPEARS TWICE, and that is the point: one commit legitimately
 	// tells her "your task is done" and "this other one is now workable".
 	// Deduping the second away under the first is how the person who
@@ -235,7 +233,7 @@ func TestAnUnwatchIsRecordedAndNotRouted(t *testing.T) {
 	cands := worklet.Candidates(&worklet.Notify{
 		Kind:     worklet.ChangeWatchers,
 		Snapshot: worklet.Snapshot{RemovedWatchers: []string{"ana"}},
-	}, false)
+	})
 	if reasonOf(cands, "ana") != worklet.ReasonUnwatched {
 		t.Fatalf("the removed watcher is not a candidate at all: %+v", cands)
 	}
@@ -255,7 +253,7 @@ func TestADepartedHandleKeepsItsRowAndLosesItsWake(t *testing.T) {
 	cands := worklet.Candidates(&worklet.Notify{
 		Kind:     worklet.ChangeComment,
 		Snapshot: worklet.Snapshot{Watchers: []string{"ana", "gone"}},
-	}, false)
+	})
 	if reasonOf(cands, "gone") == "" {
 		t.Fatal("a departed handle is missing from the record of who the change " +
 			"concerned")
@@ -281,7 +279,7 @@ func TestOnlyAHumanCommentAddressesTheAssignee(t *testing.T) {
 			Snapshot: worklet.Snapshot{
 				Assignee: "ana", CommentAuthorKind: kind,
 			},
-		}, false)
+		})
 		var got bool
 		for _, c := range cands {
 			if c.Handle == "ana" {
@@ -305,7 +303,7 @@ func TestAnAnswerWakesTheAsker(t *testing.T) {
 	routed := worklet.Route(worklet.Candidates(&worklet.Notify{
 		Kind:     worklet.ChangeCommentResolved,
 		Snapshot: worklet.Snapshot{AnsweredAuthor: "founder"},
-	}, false), everyone, "eng-1")
+	}), everyone, "eng-1")
 	if got := handles(routed); len(got) != 1 || got[0] != "founder" {
 		t.Fatalf("an answer routed to %v rather than to whoever asked", got)
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE ASSISTANT WRITE PATH: one record per step of a turn, published to the
@@ -68,7 +69,7 @@ func (c Call) validate(owned bool) error {
 	case strings.TrimSpace(c.By.Name) == "":
 		return invalid("the call names no actor: every record names who wrote it")
 	case !c.By.Kind.Valid():
-		return invalid("actor kind %q is not one of %v", c.By.Kind, iam.ActorKinds)
+		return invalid("actor kind %q is not one of %s", c.By.Kind, words.Or(iam.ActorKinds))
 	}
 	if err := statelog.CheckCallerOpID(c.OpID); err != nil {
 		return fmt.Errorf("%w: the operation id %w", ErrInvalid, err)

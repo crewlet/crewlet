@@ -14,11 +14,13 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/seat/placement"
 	"github.com/crewlet/crewlet/internal/secrets"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Bootstrap is Tier A — ops-owned, on disk, restart-only.
@@ -30,8 +32,8 @@ import (
 // A Tier A naming a broker, a database DSN and a vector store under one
 // `providers:` block is the obvious shape, and none of it is what this engine
 // runs on: the stream is NATS JetStream (embedded by
-// default, so a company needs no external service at all), the store is one
-// local file, and coordination is its own slot. Tier A therefore names the
+// default, so a company needs no external service at all), the store is two
+// local files, and coordination is its own slot. Tier A therefore names the
 // two SLOTS and the store directly rather than a provider bag — see
 // [Stream], [Coordination] and [Store], and [Bootstrap.Validate] for the
 // combinations that are refused.
@@ -223,11 +225,11 @@ func (l *Logging) validate(path Path) error {
 	var p problems
 	if l.Level != "" && !l.Level.Valid() {
 		p.add(at(path, "level"), ErrUnknownValue, "%q (want %s)",
-			l.Level, names(logging.Levels))
+			l.Level, words.Or(logging.Levels))
 	}
 	if l.Format != "" && !l.Format.Valid() {
 		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
-			l.Format, names(logging.Formats))
+			l.Format, words.Or(logging.Formats))
 	}
 	p.wrap(l.File.validate(at(path, "file")))
 	// A NODE THAT LOGS NOWHERE. `stderr: false` is a statement about the
@@ -248,11 +250,11 @@ func (f *LogFile) validate(path Path) error {
 	var p problems
 	if f.Format != "" && !f.Format.Valid() {
 		p.add(at(path, "format"), ErrUnknownValue, "%q (want %s)",
-			f.Format, names(logging.Formats))
+			f.Format, words.Or(logging.Formats))
 	}
 	if f.Level != "" && !f.Level.Valid() {
 		p.add(at(path, "level"), ErrUnknownValue, "%q (want %s)",
-			f.Level, names(logging.Levels))
+			f.Level, words.Or(logging.Levels))
 	}
 	// THE CAPS ARE CHECKED WHETHER OR NOT A PATH IS SET. A block carrying
 	// `max_size_mb: 0` and no path is a half-written setting, and reporting
@@ -269,8 +271,8 @@ func (f *LogFile) validate(path Path) error {
 	// is what a `-log-file` run reaches.
 	if f.MaxSizeMB != nil && (*f.MaxSizeMB < 1 || *f.MaxSizeMB > logging.MaxSizeMBCeiling) {
 		p.add(at(path, "max_size_mb"), ErrOutOfRange,
-			"%d (want 1..%d). Rotation cannot be disabled — a log file with no "+
-				"ceiling fills the disk the store is on — and a cap above %d MB "+
+			"%d (want 1..%d). Rotation cannot be disabled, since a log file with no "+
+				"ceiling fills the disk the store is on, and a cap above %d MB "+
 				"(a pebibyte) wraps in the byte arithmetic and rotates every line",
 			*f.MaxSizeMB, logging.MaxSizeMBCeiling, logging.MaxSizeMBCeiling)
 	}
@@ -463,7 +465,7 @@ func (b *Bootstrap) ValidateListeners() error {
 		p.add(field("api.public.port"), ErrConflict,
 			"api.port is 0, so this ingress node serves no HTTP surface, and the "+
 				"public listener moves routes off api.port rather than serving "+
-				"without it — no probe would answer. Set api.port (bind it to a "+
+				"without it, so no probe would answer. Set api.port (bind it to a "+
 				"private address to keep it unreachable from outside), or remove "+
 				"api.public")
 	}
@@ -581,7 +583,7 @@ func (b *Bootstrap) ValidateRoles() error {
 		if !b.Store.Scratch {
 			p.add(field("store.scratch"), ErrMissing,
 				"a node without %q keeps no durable state, so its store is "+
-					"deleted at every boot — set store.scratch: true to say so, "+
+					"deleted at every boot. Set store.scratch: true to say so, "+
 					"since it is the one setting here that deletes something",
 				placement.RoleData)
 		}
@@ -618,8 +620,8 @@ func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 	case !data && kind == placement.BrokerMember:
 		p.add(field("stream.leaf.urls"), ErrMissing,
 			"a node without %q runs its embedded broker as a MEMBER here, and a "+
-				"node without %q joins the fleet as a LEAF of the members' — no "+
-				"JetStream, no replica, no vote. Name the members' leaf listeners "+
+				"node without %q joins the fleet as a LEAF of the members' (no "+
+				"JetStream, no replica, no vote). Name the members' leaf listeners "+
 				"here, or add %q to node.roles", placement.RoleData,
 			placement.RoleData, placement.RoleData)
 	}
@@ -640,8 +642,8 @@ func (b *Bootstrap) checkRolesAndBroker(p *problems, roles placement.RoleSet) {
 // needsData is why each role a node without data cannot run needs `data` — see
 // [Bootstrap.checkRolesAndBroker].
 var needsData = map[placement.NodeRole]string{
-	placement.RoleWorkers: "the company-wide duties — the log trim, the " +
-		"embedding pass, the maintenance sweep, the scheduler — read and " +
+	placement.RoleWorkers: "the company-wide duties (the log trim, the " +
+		"embedding pass, the maintenance sweep, the scheduler) read and " +
 		"write this node's own copy of the replicated estate directly",
 	placement.RoleIngress: "the API's retention report, capacity, reanchor, " +
 		"eviction and backup surfaces read this node's own copy of the " +
@@ -763,8 +765,8 @@ func (b *Bootstrap) validateTopology() error {
 	if b.Stream.Type != StreamNATS && len(b.Stream.Cluster.Peers) > 0 && peers == 0 {
 		p.add(field("stream.cluster.peers"), ErrConflict,
 			"names no member but this one: %s. A member that seeds a cluster "+
-				"lists no peers, and one that joins lists the members it joins — "+
-				"remove the list, or name the other members",
+				"lists no peers, and one that joins lists the members it joins. "+
+				"Remove the list, or name the other members",
 			members.discountedList())
 	}
 
@@ -993,7 +995,29 @@ var nodeIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 // ValidNodeID reports whether id is one a node could run under — the rule
 // [Node.ID] is resolved against, for a caller naming some OTHER node, such as
 // the operator gesture that evicts one.
-func ValidNodeID(id string) bool { return nodeIDPattern.MatchString(id) }
+func ValidNodeID(id string) bool {
+	return nodeIDPattern.MatchString(id) && reservedNodeID(id) == ""
+}
+
+// reservedNodeID is why id, which has a node id's shape, names something
+// other than a node — and empty for every id a node may take.
+//
+// THE OPERATOR'S BACKUP OWNER ([coord.OperatorBackupOwner]) is the one. The
+// fleet's backup register files a node's newest copy under the node's id and
+// the operator's acknowledgement of each log under that word, so a node
+// running under it announced its own copies as the operator's: under
+// `backup_floor: operator` they were counted as the off-host acknowledgement
+// the policy exists to wait for, and a copy reaching more than one log is
+// refused as an acknowledgement, so the node could not record a backup at all.
+// Refused here, where a node takes its id, rather than told apart in the
+// register, because nothing downstream can tell which of the two wrote a row.
+func reservedNodeID(id string) string {
+	if id == coord.OperatorBackupOwner {
+		return fmt.Sprintf("%q is reserved for the operator's backup "+
+			"acknowledgements. Choose another id", id)
+	}
+	return ""
+}
 
 // Node is Tier A identity of THIS process within the company.
 //
@@ -1091,6 +1115,8 @@ func (n *Node) validate(path Path) error {
 			"%q must start alphanumeric and contain only letters, digits, "+
 				"'.', '_' or '-' (max 64 chars): it lands in log fields and "+
 				"broker consumer names", n.ID)
+	} else if reserved := reservedNodeID(n.ID); reserved != "" {
+		p.add(at(path, "id"), ErrUnknownValue, "%s", reserved)
 	}
 
 	// An explicitly empty list is refused rather than read as "every
@@ -1102,11 +1128,11 @@ func (n *Node) validate(path Path) error {
 		p.add(at(path, "roles"), ErrMissing,
 			"name at least one of %s: a node with no roles does nothing at "+
 				"all. Omit the key to run every role, which is the "+
-				"single-process default", strings.Join(nodeRoleNames, ", "))
+				"single-process default", words.Or(nodeRoleNames))
 	}
 	if _, err := placement.ParseRoles(n.Roles); err != nil {
 		p.add(at(path, "roles"), ErrUnknownValue, "%s (want %s)",
-			err, strings.Join(nodeRoleNames, ", "))
+			err, words.Or(nodeRoleNames))
 	}
 
 	// THE KEY GRAMMAR IS THE PLACEMENT VOCABULARY'S, not this file's: a
@@ -1209,6 +1235,9 @@ func ResolveNodeID(b *Bootstrap, r *Resolver) (string, error) {
 		return "", fault(field("node.id"), ErrUnknownValue,
 			"%q must start alphanumeric and contain only letters, digits, "+
 				"'.', '_' or '-' (max 64 chars)", value)
+	}
+	if reserved := reservedNodeID(value); reserved != "" {
+		return "", fault(field("node.id"), ErrUnknownValue, "%s", reserved)
 	}
 	return value, nil
 }
@@ -1348,7 +1377,8 @@ func (s *Store) validate(path Path) error {
 	var p problems
 	if s.Path == "" {
 		p.add(at(path, "path"), ErrMissing,
-			"the store is a local file this node owns; name one (e.g. %q)",
+			"the node's own store is a local file this node owns; name one "+
+				"(e.g. %q)",
 			DefaultStorePath)
 	}
 	// THE SAME FILE TWICE IS TWO EXCLUSIVE LOCKS ON ONE PATH, which this
@@ -1668,12 +1698,14 @@ type Stream struct {
 	IamLogMaxBytes int64 `yaml:"iam_log_max_bytes,omitempty" json:"iam_log_max_bytes,omitempty" js:"min=67108864;max=17179869184" desc:"Byte ceiling on the identity estate's log; unset takes a flat 512 MiB, 64 MiB..16 GiB."`
 
 	// UsageLogMaxBytes is the byte ceiling on the usage log — the compacted
-	// stream every node publishes its own company days to, so that spend,
-	// turn and read history is answered fleet-wide and outlives the node
-	// that spent it.
+	// stream every data node publishes its own company days to (a node
+	// without `data` publishes none: its events are kept in one data node's
+	// log by custody and counted in that node's day), so that spend, turn
+	// and read history is answered fleet-wide and outlives the node that
+	// spent it.
 	//
 	// SIZED BY A CENSUS, NOT A RATE: the stream keeps one message per
-	// (node, day, seat or schedule) for 181 days, so its size is the
+	// (node, day, seat, schedule or person) for 181 days, so its size is the
 	// number of those objects rather than how busy they were. A three-node
 	// fleet of forty seats and twenty schedules is about 217 MB; the 1 GiB
 	// default is four times that. Unset takes the default rather than a
@@ -1691,7 +1723,7 @@ type Stream struct {
 	// CREATED with, and crossing it refuses the append — the day's figures
 	// stop replicating and the log's headroom alarm names this domain —
 	// rather than dropping the oldest day.
-	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."`
+	UsageLogMaxBytes int64 `yaml:"usage_log_max_bytes,omitempty" json:"usage_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the usage log, the compacted stream each data node's company days replicate on; default 1 GiB, sized for 181 days of a fleet's seats and schedules, 64 MiB..64 GiB."`
 
 	// ArtifactsLogMaxBytes is the byte ceiling on the artifacts log, the
 	// ordered stream every create, publish, share and trash of an artifact
@@ -1731,6 +1763,76 @@ type Stream struct {
 	// conversation's own retention is set in the company document and does
 	// not depend on this.
 	AssistantLogMaxBytes int64 `yaml:"assistant_log_max_bytes,omitempty" json:"assistant_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the Dashboard Assistant's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
+
+	// ChatLogMaxBytes is the byte ceiling on the chat log, the ordered
+	// stream every Chatlet message, reaction and membership change goes
+	// through.
+	//
+	// UNSET ASKS FOR 8 GiB, capped at a quarter of what an unset mutation
+	// log derives from the stream volume ([DerivedChatLogDivisor]) — a
+	// sixteenth of its free space, so 4 GiB is asked on a 64 GiB volume
+	// and the whole 8 GiB from 128 GiB free, never below
+	// [ChatLogMaxBytesFloor]. What is asked is then scaled with every other
+	// derived ask to fit the one budget, so a 64 GiB first boot creates the
+	// log at about 1.4 GiB and the whole 8 GiB is created only where the
+	// broker can back every derived ask unscaled (about 662 GiB free under
+	// an embedded broker that sizes itself). The cap is what keeps this
+	// log's ask from taking more of the vector changelog's room for a model
+	// change than it must; the constant states the figures and what it
+	// costs this log.
+	//
+	// IT DOES NOT FOLLOW THE MUTATION LOG'S CEILING, and that is a
+	// departure, not an oversight. This log holds what the mutation log and
+	// the knowledge base's hold — a trailing window of records, as long as
+	// a blocked trim lasts — and the knowledge base's follows the mutation
+	// log's ceiling, set or derived, so that a blocked trim fills both in
+	// the same time. Chat does not, because of the ONE BUDGET: it grows
+	// faster than the mutation log (about 32 MB a day at the census below,
+	// its read barriers included, against the reference company's 22), so
+	// following it at that ratio makes this the largest ask of the nine —
+	// nearly half as much again as the mutation log's, 93 GiB beside its
+	// 64 GiB clamp — and the budget scales every derived ask in proportion.
+	// On a 64 GiB volume that creates the vector changelog at 3.9 GiB, half
+	// the 7.9 GiB the reference company's fifth-year model change puts in
+	// it, which is the one failure that log is sized to rule out, and a
+	// first boot gives it room for that change clear of the headroom alarm
+	// only from about 136 GiB free; with this log's ask capped as above it
+	// is created at 5.4 GiB on that volume, and has the room from about
+	// 100 GiB free.
+	//
+	// WHAT THAT COSTS, stated: an operator who sizes tracker_log_max_bytes
+	// for a long blocked trim has to size this field for the same horizon,
+	// or this log refuses first — beside a 512 GiB mutation log, which
+	// outlasts decades of blocked trim, an unset chat log lasts about eight
+	// months, and on a small volume less ([DerivedChatLogDivisor]).
+	//
+	// WHY EIGHT GIBIBYTES, when the steady state is two orders below it.
+	// At the declared census (`chatlet.ChatMessagesPerDay`, 20 000 messages a
+	// day) and a mean record near a kibibyte and a half, the log grows
+	// about 31 MB a day, and its read barriers add about 1.7 MB more
+	// (`chatlet.LinearizableReadsPerSeatDay` × the reference company's 100
+	// seats × the ≈ 140 bytes a signed barrier costs) — about 32 MB a day,
+	// so a healthily-trimming fleet holds roughly 225 MB, one `min_age`
+	// window's worth, the same order as the mutation log's own. This
+	// ceiling is therefore not sized for the steady state: it is what a
+	// COMPLETELY BLOCKED TRIM may spend before appends start being refused
+	// — at fifteen sixteenths of it, since the log keeps the gate reserve
+	// every identity-claiming log keeps — which is about eight months at
+	// the declared census and about three and a half at the 50 000/day
+	// supported ceiling, on a volume that creates the whole of it. Both are
+	// far past any backup gap or donor outage the retention gates tolerate,
+	// which is what makes a blocked trim here an alarm somebody answers
+	// rather than a company that cannot talk to itself.
+	//
+	// It shares the state logs' one budget, and everything the mutation
+	// log's field says about that holds here unchanged: the value is what
+	// the stream is CREATED with, a derived value is scaled with the
+	// others to fit the broker and a set one is not, and crossing it
+	// refuses the append rather than shedding history — which for a
+	// transcript is the only acceptable direction, since the pruning of
+	// old messages is a RECORD every data node applies and never a stream
+	// bound.
+	ChatLogMaxBytes int64 `yaml:"chat_log_max_bytes,omitempty" json:"chat_log_max_bytes,omitempty" js:"min=1073741824;max=274877906944" desc:"Byte ceiling on the chat log; unset asks for 8 GiB, capped at a sixteenth of the stream volume's free space (a quarter of what an unset tracker_log_max_bytes derives, so the whole 8 GiB is asked from 128 GiB free), 1 GiB..256 GiB, and does not follow tracker_log_max_bytes - size it for the same blocked-trim horizon, about 32 MB a day at the declared census."`
 
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
@@ -1788,13 +1890,15 @@ type TrackerRetention struct {
 
 	// BackupFloor is whose word the trim takes for what is backed up.
 	//
-	// `engine` follows the newest backup the engine itself wrote and
-	// verified. `operator` follows an explicit acknowledgement, for a
-	// company whose policy is "trim only what is off-site" — which the
-	// engine cannot see for itself, because a backup is not a backup until
-	// it leaves the host. Under `operator` the trim does not advance until
-	// that acknowledgement has been given at least once, which is a state
-	// worth being warned about rather than discovering.
+	// PER LOG, under either value: each log's trim follows the newest
+	// counted backup that covers THAT log. `engine` counts the backups the
+	// engine itself wrote and verified. `operator` counts an explicit
+	// acknowledgement, for a company whose policy is "trim only what is
+	// off-site" — which the engine cannot see for itself, because a backup
+	// is not a backup until it leaves the host — and an acknowledgement
+	// names one log and is kept per log. Under `operator` a log's trim
+	// does not advance until that log has been acknowledged at least once,
+	// which is a state worth being warned about rather than discovering.
 	BackupFloor BackupFloor `yaml:"backup_floor,omitempty" json:"backup_floor,omitempty" js:"enum=engine|operator" desc:"Whose word the trim takes for what is backed up: engine (default) or operator."`
 
 	// SnapshotInterval is how stale a node's newest snapshot may be before
@@ -1819,12 +1923,13 @@ type TrackerRetention struct {
 type BackupFloor string
 
 const (
-	// BackupFloorEngine follows the newest backup the engine wrote and
-	// verified itself.
+	// BackupFloorEngine follows, for each log, the newest backup of it
+	// the engine wrote and verified itself.
 	BackupFloorEngine BackupFloor = "engine"
 
-	// BackupFloorOperator follows an explicit acknowledgement, for a
-	// company that trims only what has left the host.
+	// BackupFloorOperator follows, for each log, an explicit
+	// acknowledgement of that log, for a company that trims only what has
+	// left the host.
 	BackupFloorOperator BackupFloor = "operator"
 )
 
@@ -1949,7 +2054,7 @@ func (l *StreamLeaf) validate(path Path, s *Stream, external bool) error {
 		if l.Port != 0 || l.Host != "" || l.Advertise != "" {
 			p.add(at(path, "port"), ErrConflict,
 				"port, host and advertise are a MEMBER's leaf listener, and "+
-					"urls joins this node as a leaf — a node is one side of "+
+					"urls joins this node as a leaf, and a node is one side of "+
 					"the link")
 		}
 		if !s.Cluster.IsZero() {
@@ -2049,8 +2154,8 @@ func (s *Stream) durable(path Path) error {
 	var p problems
 	p.add(at(path, "store_dir"), ErrMissing,
 		"this node's broker is a MEMBER, and a member keeps the estate's state "+
-			"logs on this stream from boot — the identity estate among them, "+
-			"whatever company it runs, or none — and in a fleet the seats' "+
+			"logs on this stream from boot (the identity estate among them, "+
+			"whatever company it runs, or none), and in a fleet the seats' "+
 			"mailboxes and every coordination bucket too. An embedded stream with "+
 			"no store directory keeps its streams in memory: a restart recreates "+
 			"every log empty and this node refuses to serve them permanently. "+
@@ -2061,7 +2166,7 @@ func (s *Stream) durable(path Path) error {
 func (s *Stream) validate(path Path) error {
 	var p problems
 	if s.Type != "" && !slices.Contains(StreamTypes, s.Type) {
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, names(StreamTypes))
+		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", s.Type, words.Or(StreamTypes))
 		return p.err() // the rest of the rules key on the type
 	}
 	external := s.Type == StreamNATS
@@ -2183,8 +2288,8 @@ func (s *Stream) validate(path Path) error {
 		for i, raw := range s.Cluster.Peers {
 			if _, ok := routeAddress(raw); !ok {
 				p.add(idx(at(path, "cluster.peers"), i), ErrUnknownValue,
-					"%q is not a member's route URL: want nats://host:port — "+
-						"the embedded server dials each entry's host and port, "+
+					"%q is not a member's route URL: want nats://host:port. "+
+						"The embedded server dials each entry's host and port, "+
 						"and one it cannot dial is never routed to", raw)
 			}
 		}
@@ -2206,6 +2311,8 @@ func (s *Stream) validate(path Path) error {
 		ArtifactDataLogMaxBytesFloor, ArtifactDataLogMaxBytesCeiling)
 	bytesInRange(&p, path, "assistant_log_max_bytes", s.AssistantLogMaxBytes,
 		AssistantLogMaxBytesFloor, AssistantLogMaxBytesCeiling)
+	bytesInRange(&p, path, "chat_log_max_bytes", s.ChatLogMaxBytes,
+		ChatLogMaxBytesFloor, ChatLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal
@@ -2214,6 +2321,12 @@ func (s *Stream) validate(path Path) error {
 	// node fails naming whichever one it reached last. Every value is the
 	// operator's own, on the same page of the same file, so the honest
 	// moment to say so is now.
+	//
+	// EVERY STATE LOG IS IN THE SUM, the identity, usage and chat logs
+	// included. The sum is what the broker will be asked to back, so a log
+	// left out of it is a limit this check passes and the boot refuses —
+	// which is the one outcome the check exists to prevent, arriving with a
+	// message that says the configuration was fine.
 	//
 	// ONLY THE EXPLICIT ONES ARE SUMMED. A derived ceiling is already
 	// scaled to fit inside whatever limit is in force (see
@@ -2236,17 +2349,17 @@ func (s *Stream) validate(path Path) error {
 				"(tracker_log_max_bytes %d + tracker_vectors_max_bytes %d + "+
 				"pages_log_max_bytes %d + iam_log_max_bytes %d + "+
 				"usage_log_max_bytes %d + artifacts_log_max_bytes %d + "+
-				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d = %d): "+
-				"the broker "+
-				"refuses a stream whose ceiling it cannot back, so this node would "+
-				"fail to provision one of them. Raise store_max_bytes, or lower the "+
-				"ceilings — and leave headroom, because the state logs reserve only "+
+				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d + "+
+				"chat_log_max_bytes %d = %d): the broker refuses a stream whose "+
+				"ceiling it cannot back, so this node would fail to provision one "+
+				"of them. Raise store_max_bytes, or lower the "+
+				"ceilings, and leave headroom, because the state logs reserve only "+
 				"a share of this limit and every other stream on the broker grows "+
 				"inside it",
 			s.StoreMaxBytes, s.TrackerLogMaxBytes, s.TrackerVectorsMaxBytes,
 			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
-			declared)
+			s.ChatLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an
@@ -2326,14 +2439,51 @@ type Coordination struct {
 	// LeaseTTLSeconds overrides how long a seat or presence lease survives
 	// without a renew. 0 takes the coordination layer's own measured
 	// default; shortening it speeds up failover at the cost of shedding
-	// seats over a store blip.
+	// seats over a store blip. Anything else is at least [MinLeaseTTL],
+	// and a fraction above it is as good as a whole number: the engine
+	// reads the duration it spells, once, at the edge.
 	//
 	// It bounds nothing else (coord.HeldToSeatTTL): a fleet duty's TTL
 	// follows its own tick and a tracker walk's claim its own heartbeat, each
 	// up to coord.MaxDutyTTL, which is why every lease but a seat's and a
 	// presence lease is kept in a lease bucket of its own.
-	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
+	LeaseTTLSeconds float64 `yaml:"lease_ttl_seconds,omitempty" json:"lease_ttl_seconds,omitempty" js:"min=0" desc:"Seat and presence lease TTL; 0 takes the measured default, anything else is at least 15. Every other lease (a fleet duty, a Worklet walk's claim) sizes its own."`
 }
+
+// MinLeaseTTL is the shortest seat and presence lease TTL a deployment may
+// set: fifteen seconds.
+//
+// THE TTL IS FOUR THINGS AT ONCE, and the floor is where the first one stops
+// being survivable:
+//
+//   - THE WATCHDOG'S THRESHOLD. A node whose heartbeat goes a TTL without a
+//     beat ends itself with status 75 (internal/seat's Watchdog says why the
+//     two are one number), so the TTL has to sit well past the longest a
+//     busy but healthy node goes between beats. Measured across 126 started
+//     engines under the race detector on four CPUs at a load average of 10
+//     to 33: 5.1 s at worst, every gap past 2 s the start's first placement
+//     pass — which the heartbeat no longer sits out — and 2.0 s at worst
+//     between beats. Fifteen seconds is nearly three times the first and more
+//     than seven times the second; at three, a quarter of those starts went
+//     longer than their TTL without a beat.
+//   - A STORE OUTAGE A LEASE RIDES OUT. Renews go out every heartbeat less a
+//     beat (a third of the TTL, less a second), so in its worst phase a lease
+//     survives an outage of a third of the TTL plus two beats: 7 s here,
+//     which covers the coordination bucket's own leader election at its
+//     shortest (four seconds, nats-server's raft default; it may take nine)
+//     with room, where a TTL of 6 s would only just cover it.
+//   - THE BEAT AT ITS FULL SECOND. From a 5 s TTL up a beat is the watchdog's
+//     whole second and the renew is given that second to land in; below it
+//     both shrink with the TTL, which is a regime for a test's host, not a
+//     deployment's.
+//   - FAILOVER. A dead node's seats move a TTL and a sweep after it died:
+//     about 20 s here, against about 50 s at the shipped 45.
+//
+// A floor rather than a warning, because what a TTL below it costs is a node
+// that ends itself under load, which a warning nobody reads does not prevent.
+// A judgment call on the margin: a deployment that measures its own beat gaps
+// may defend less, but nothing here has measured a shorter one safe.
+const MinLeaseTTL = 15 * time.Second
 
 // NATSTLS is the transport material for an external NATS server.
 //
@@ -2390,11 +2540,22 @@ func (t NATSTLS) validate(path Path) error {
 func (c *Coordination) validate(path Path) error {
 	var p problems
 	if c.Type != "" && !slices.Contains(CoordinationTypes, c.Type) {
-		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", c.Type, names(CoordinationTypes))
+		p.add(at(path, "type"), ErrUnknownValue, "%q (want %s)", c.Type, words.Or(CoordinationTypes))
 	}
-	if c.LeaseTTLSeconds < 0 {
+	// THE js TAG CANNOT EXPRESS "0 OR AT LEAST 15", so the schema publishes
+	// min=0 and the floor lives here, in a message naming both forms.
+	switch ttl := c.LeaseTTL(); {
+	case c.LeaseTTLSeconds < 0:
 		p.add(at(path, "lease_ttl_seconds"), ErrOutOfRange,
-			"must be 0 (the default) or positive, got %v", c.LeaseTTLSeconds)
+			"must be 0 (the default) or at least %v, got %v",
+			MinLeaseTTL.Seconds(), c.LeaseTTLSeconds)
+	case c.LeaseTTLSeconds > 0 && ttl < MinLeaseTTL:
+		p.add(at(path, "lease_ttl_seconds"), ErrOutOfRange,
+			"%v is below the %v-second floor: leave it unset to take the measured "+
+				"default, or set at least %v: the lease TTL is also how long the node's "+
+				"heartbeat may go without a beat before its watchdog ends it (exit 75), "+
+				"and a busy but healthy node goes seconds",
+			c.LeaseTTLSeconds, MinLeaseTTL.Seconds(), MinLeaseTTL.Seconds())
 	}
 	return p.err()
 }

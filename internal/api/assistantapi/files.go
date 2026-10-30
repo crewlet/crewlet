@@ -18,8 +18,8 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // A CONVERSATION'S FILES OVER HTTP: the person's upload of an image to ask
@@ -80,7 +80,7 @@ func (s *Surface) upload(w http.ResponseWriter, r *http.Request) {
 		!slices.Contains(uploadTypes, declared) {
 		httpjson.FailWithFields(w, http.StatusUnsupportedMediaType,
 			httpjson.CodeAssistantFileRefused, httpjson.Detail{"detail": "send the file's " +
-				"bytes as the body, declared as one of " + strings.Join(uploadTypes, ", ")})
+				"bytes as the body, declared as one of " + words.Or(uploadTypes)})
 		return
 	}
 	if r.ContentLength > wire.FileMaxBytes {
@@ -121,14 +121,8 @@ func (s *Surface) upload(w http.ResponseWriter, r *http.Request) {
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeAssistantFileLimit,
 			httpjson.Detail{"limit": assistantdomain.AttachmentsPerConversation})
 		return
-	case errors.Is(err, assistant.ErrOutcomeUnknown):
-		s.log.WarnContext(r.Context(), "assistant_upload_unconfirmed",
-			"conversation", conversation, "op_id", key, "error", err)
-		httpjson.UnknownOutcome(w, authz.RetryUndecidedSeconds, key, false,
-			httpjson.Detail{"detail": opkey.UnknownDetail(false)})
-		return
 	case err != nil:
-		s.fail(w, r, err)
+		s.failWrite(w, r, key, err)
 		return
 	}
 	httpjson.Write(w, http.StatusCreated, wire.FileStored{File: ref})

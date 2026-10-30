@@ -644,8 +644,8 @@ type budgetReader interface {
 // objectsReservation is the byte reservation the nats bucket is created with,
 // and whether an operator wrote it (store.objects.nats_max_bytes). An unset
 // one is derived from the broker's limit ([derivedObjectsReservation]); where
-// the broker states none this node can read, from the stream volume's free
-// space, which is the one figure it has, as the logs' sizing does.
+// the broker states none this node can read, from the cap such a server holds
+// ([unstatedLimit]), as the logs' sizing does.
 func objectsReservation(ctx context.Context, b *config.Bootstrap, q any) (int64, bool) {
 	if set := b.Store.Objects.NatsMaxBytes; set > 0 {
 		return set, true
@@ -673,13 +673,29 @@ func objectsReservation(ctx context.Context, b *config.Bootstrap, q any) (int64,
 				"detail", "the nats bucket is reserved at its smallest; set "+
 					"store.objects.nats_max_bytes to choose it")
 		}
-		limit = free
+		limit = unstatedLimit(free)
 	}
 	reservation := derivedObjectsReservation(limit, b.Stream.DeclaredLogCeilings())
 	log.InfoContext(ctx, "objects_reservation_derived", "bytes", reservation,
 		"broker_limit", limit, "detail", "a bucket created now reserves this much "+
 			"of the broker; one that exists keeps the ceiling it holds")
 	return reservation, false
+}
+
+// unstatedLimit is the limit this node sizes against where the broker states
+// none it can read, on a stream volume with free bytes free: the share of it
+// [embeddedShareNum]/[embeddedShareDen] names, which is the cap nats-server
+// holds every reservation to when no max_file_store is set — and the limit
+// this engine's own embedded broker derives on the same volume.
+//
+// THE SHARE AND NEVER THE WHOLE VOLUME. The whole free space stood in for it
+// once, which overstated the cap by a third: the bucket reserved a quarter of
+// the volume — a third of the cap — and the logs half of what that left, so on
+// a 16 GiB volume the bucket took 4 GiB of a 12 GiB cap, the logs' floors came
+// out of the remaining 8, and every log the register gained at its 1 GiB floor
+// came out of the coordination remainder every mailbox and bucket grows into.
+func unstatedLimit(free int64) int64 {
+	return free / embeddedShareDen * embeddedShareNum
 }
 
 // derivedObjectsReservation is the reservation an unset

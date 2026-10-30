@@ -717,8 +717,9 @@ func TestTokenIDsAreTheLabelsTheGuardAccepts(t *testing.T) {
 // and this fails.
 func TestATierATokenCarriesWhatTheNodesAdminPostureAllows(t *testing.T) {
 	t.Parallel()
-	every := append([]iam.Grant{iam.GrantAdmin}, iam.Apps...)
-	apps := slices.Clone(iam.Apps)
+	// EVERY APP THIS BUILD DECLARES, read from the declaration rather than
+	// spelled: an app added to internal/iam is one more an admin confers.
+	every, apps := iam.AllGrants, iam.Apps
 	for _, tc := range []struct {
 		posture iam.AdminPosture
 		listed  []iam.Grant

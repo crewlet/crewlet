@@ -94,6 +94,33 @@ func TestPriorToolCallsRenderWithTheirArguments(t *testing.T) {
 	}
 }
 
+// A PRIOR CALL IS SHOWN TO THE MODEL AS IT WROTE IT. The transcript is text
+// the model reads as written, not through a JSON decoder: an HTML-safe encoder
+// would hand back the call it made with `\u003c` and `\u0026` in place of what
+// it typed. Mutation: put json.Marshal back in callArguments and the escapes
+// appear.
+func TestAPriorCallIsShownToTheModelAsItWroteIt(t *testing.T) {
+	t.Parallel()
+	got, err := RenderPrompt(llm.Request{Messages: []llm.Message{
+		{Role: llm.RoleAssistant, Content: "checking", ToolCalls: []llm.ToolCall{
+			{ID: "toolu_0", Name: "run", Arguments: map[string]any{
+				"code": "if a < b && c > d", "url": "https://example.com/?a=1&b=2"}},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("RenderPrompt: %v", err)
+	}
+	const want = `called run (call toolu_0) with {"code":"if a < b && c > d","url":"https://example.com/?a=1&b=2"}`
+	if !strings.Contains(got, want) {
+		t.Errorf("the prior call is not shown as written, want %q:\n%s", want, got)
+	}
+	for _, escape := range []string{`\u003c`, `\u003e`, `\u0026`} {
+		if strings.Contains(got, escape) {
+			t.Errorf("the prior call carries %s, an escape the model never wrote:\n%s", escape, got)
+		}
+	}
+}
+
 // The estimate is the fallback budgets run on when a CLI reports nothing, so
 // it has to be in the right order of magnitude rather than merely non-zero.
 func TestTheTokenEstimateIsAboutFourCharactersAToken(t *testing.T) {

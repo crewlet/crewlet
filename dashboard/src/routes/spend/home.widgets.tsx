@@ -19,7 +19,6 @@ import {
   SlidersVerticalGlyph,
   TriangleAlertGlyph,
 } from "@crewlethq/icons/glyphs";
-import { QueryState } from "~/components/common.tsx";
 import { BUDGET_WINDOWS } from "~/contract/config.ts";
 import { PERIOD_ADJECTIVE, windowOf } from "~/lib/budget.ts";
 import { fmtCount, fmtExact } from "~/lib/format.ts";
@@ -35,7 +34,7 @@ import { ExpensiveTasksCard } from "~/routes/spend/ExpensiveTasks.tsx";
 import { Hero } from "~/routes/spend/Hero.tsx";
 import { windowWords } from "~/routes/spend/model.ts";
 import type { BudgetWindow } from "~/protocol/types.ts";
-import { WidgetCard, defineWidgets, useHomeRange } from "~/routes/home/board/kit.tsx";
+import { WidgetCard, WidgetQuery, defineWidgets, useHomeRange } from "~/routes/home/board/kit.tsx";
 
 /** As Company › Budgets re-reads the counters: the gate reports every 15s. */
 const BUDGETS_POLL_MS = 30_000;
@@ -62,11 +61,12 @@ function Overview() {
     return (
       <WidgetCard title="Token spend" from="settings-spend">
         <div className="home-widget-pad">
-          <QueryState
+          <WidgetQuery
             error={tokens.error}
             refusal={tokens.refusal}
             detail={tokens.detail}
             loading={false}
+            gaps={[]}
           />
         </div>
       </WidgetCard>
@@ -121,10 +121,13 @@ function NearLimit() {
   const unread = answer !== null && answer.durable === false;
   return (
     <WidgetCard title="Seats near a limit" from="budgets">
-      <QueryState
+      <WidgetQuery
         error={budgets.error}
         refusal={budgets.refusal}
         loading={budgets.loading && !answer}
+        // A COUNTER THAT COULD NOT BE READ IS THE ANSWER'S OWN `durable`,
+        // said as the empty state above rather than as a gap line.
+        gaps={[]}
         empty={
           unread
             ? { title: "Couldn’t read current spend", hint: "Try again shortly." }
@@ -154,7 +157,7 @@ function NearLimit() {
             ))}
           </List>
         </div>
-      </QueryState>
+      </WidgetQuery>
     </WidgetCard>
   );
 }

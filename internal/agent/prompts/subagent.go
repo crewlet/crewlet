@@ -1,6 +1,9 @@
 package prompts
 
-import "github.com/crewlet/crewlet/internal/provenance"
+import (
+	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/toolname"
+)
 
 // SubagentPreamble is the mandated runtime contract every sub-agent carries,
 // appended after the parent's task prompt.
@@ -20,8 +23,8 @@ const SubagentPreamble = "You are a short-lived worker. Do not delegate further.
 // nothing to discover — or no discovery tools at all — told to discover is
 // told to call a tool that can only refuse it.
 const subagentDiscoveryRule = "To use one of the tools to discover above, call " +
-	"`activate_tool` (an MCP server's tools are named by " +
-	"`list_mcp_server_tools` first)."
+	"`" + toolname.Activate + "` (an MCP server's tools are named by " +
+	"`" + toolname.ListMCPServerTools + "` first)."
 
 // SubagentSubmitRule is how a worker ends when it has a submission tool.
 //
@@ -30,7 +33,7 @@ const subagentDiscoveryRule = "To use one of the tools to discover above, call "
 // beats none, is `submit_result`'s own description, which reaches the worker
 // with the tool. The name stays here because a worker that never learns its
 // answer is a call writes it as prose, and costs a corrective round to be told.
-const SubagentSubmitRule = "End by calling `submit_result` with your answer."
+const SubagentSubmitRule = "End by calling `" + toolname.SubmitResult + "` with your answer."
 
 // SubagentProseRule is how a worker ends when it has no submission tool.
 //

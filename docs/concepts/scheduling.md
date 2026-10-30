@@ -143,7 +143,7 @@ units:
     id: backend                          # the unit's key; `name` above is display
     type: team
     lead: backend-lead                   # the lead seat's handle
-    channel: C_BACKEND
+    channel: backend                     # a channel NAME, not an id or `#backend`
     schedules:
       # target defaults to `each` → every direct member posts their own update
       - name: daily-standup

@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/jsonform`
-- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`, `internal/tools/argval.TestEachReadIsItsHelpers`, `internal/tools.TestEachLossyValueIsAMisreadAtItsPath`, `internal/tools.TestEachLosslessValueIsNoFinding`, `internal/tools.TestOutsideAndUnknownAreNamedAndLeftToTheTool`, `internal/tools.TestAMisreadIsRefusedBeforeTheToolRuns`, `internal/tools.TestTheToolsAnswerCarriesEveryFinding`, `internal/agent/builtin.TestEveryBuiltinSchemaIsOneTheCheckKeeps`, `internal/agent/builtin.TestNoArgumentIsReadAsTextAgainstItsType`, `internal/agent/structured.TestEveryFaultOfASubmissionIsNamedAtOnce`, `internal/decision.TestEveryFaultOfADecisionIsNamedAtOnce`, `internal/assistant/catalog.TestEveryAssistantToolNamesEveryFaultAtOnce`, `internal/assistant/wire.TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`, `internal/tools.TestEveryToolIsCalledThroughInvoke`, `internal/api/mcpbridge.TestABridgedCallIsHeldToItsToolsSchema`, `internal/api/operator.TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns`, `internal/agent/builtin.TestASetIsNeverReadAsNoList`, `internal/agent/builtin.TestIncludeIsNeverReadAsNoList`, `internal/agent/builtin.TestNoArgumentIsReadByARuleOfItsOwn`, `internal/tools.TestANoteNeverTouchesTheToolsOutput`, `internal/api/operator.TestTheArgumentsNoteIsTheModelsAndNeverAPersons`, `internal/api/operator.TestTheActRouteTellsTheModelTheNoteAndNeverThePerson`, `internal/api/workapi.TestTheWorkAPITellsTheModelTheNoteAndNeverThePerson`, `internal/tools/argval.TestAWholeNumberIsReadWithinItsRange`, `internal/tools.TestAClosedSetIsReadByOneRule`, `internal/tools.TestEveryCounterRecordsTheCataloguesLabels`, `internal/tools.TestAFindingIsANamedValue`, `internal/agent/builtin.TestWhatTheCheckAdmitsIsWhatTheToolReads`, `internal/agent/builtin.TestADeclaredNumberIsReadByItsTypesReader`, `internal/tools.TestARetrySpeltAnotherWayIsTheSameWrite`, `internal/tools.TestALoopSpeltSeveralWaysIsStillOneLoop`, `internal/api/operator.TestAnOperatorsRetrySpeltAnotherWayIsTheSameWrite`, `internal/agent/builtin.TestANullSetIsAbsent`, `internal/tools.TestTheInvokeGateSeesEveryShape`, `internal/agent/builtin.TestTheArgumentGateSeesEveryShape`, `internal/agent/runner.TestAResumedRunsRepeatSpeltAnotherWayIsTheSameWrite`, `internal/agent/runner.TestASeededSubmissionIsReadByTheSurfacesUniverse`
+- **Enforced-by:** `internal/jsonform.TestEveryFaultComesBackInOnePass`, `internal/jsonform.TestAKeyIsMatchedExactly`, `internal/artifacts/brandformat.TestTheReferenceCoversEveryKeyOfTheIndex`, `internal/artifacts/brandformat.TestSixFaultsComeBackInOneRefusal`, `internal/artifacts/brandformat.TestTheBrandsOwnDomainIsItsName`, `internal/artifactupload.TestTheGP38KitGetsEveryFaultInOneRefusalAndLandsNext`, `internal/artifactupload.TestAKitWrittenFromTheFormatReferenceLandsFirstTime`, `internal/agent/builtin.TestEveryValidatedKindsFormatIsOneReadAway`, `internal/agent/builtin.TestAMissedToolSkillNamesTheKeysThatExist`, `internal/agent/runner.TestTheGP38LoopIsStoppedAndCounted`, `internal/tools.TestARunOfPolicyRefusalsIsStoppedInWordsAndCountedOnce`, `internal/tools.TestASuccessEndsTheRun`, `internal/tools.TestARunIsCountedPerTarget`, `internal/tools.TestParallelRefusalsCountEachCallOnce`, `internal/agent/builtin.TestAWriteNamesTheTargetItsRefusalsAreCountedOn`, `internal/jsonform.TestTheKeysAreEncodingJSONs`, `internal/jsonform.TestAnOwnReadersRefusalIsAFaultAtItsPath`, `internal/artifacts/canvasformat.TestACanvasStoredWithAStrayBracketStillReads`, `internal/jsonform.TestOnlyThePublishReadsAVersionStrictly`, `internal/jsonform.TestThePublishReadRefusesWhatTheStoredReadAdmits`, `internal/artifacts/brandformat.TestTheBrandIndexAdmitsTheKeysItAlwaysDid`, `internal/artifactupload.TestOnlyAnIndexThePublishWritesIsHeldToTheExactKeys`, `internal/tools/argval.TestEachReadIsItsHelpers`, `internal/tools.TestEachLossyValueIsAMisreadAtItsPath`, `internal/tools.TestEachLosslessValueIsNoFinding`, `internal/tools.TestOutsideAndUnknownAreNamedAndLeftToTheTool`, `internal/tools.TestAMisreadIsRefusedBeforeTheToolRuns`, `internal/tools.TestTheToolsAnswerCarriesEveryFinding`, `internal/agent/builtin.TestEveryBuiltinSchemaIsOneTheCheckKeeps`, `internal/agent/builtin.TestNoArgumentIsReadAsTextAgainstItsType`, `internal/agent/structured.TestEveryFaultOfASubmissionIsNamedAtOnce`, `internal/decision.TestEveryFaultOfADecisionIsNamedAtOnce`, `internal/assistant/catalog.TestEveryAssistantToolNamesEveryFaultAtOnce`, `internal/assistant/catalog.TestEveryFaultOfACallNamingRecordsIsOneRefusal`, `internal/assistant/catalog.TestEveryFaultOfAMembershipIsOneRefusal`, `internal/assistant/catalog.TestAReplaceNeverRemovesByOmission`, `internal/assistant/wire.TestEveryFaultOfAnActionsArgumentsIsNamedAtOnce`, `cmd/crewlet.TestTheShippedAssistantEvalSuitePasses`, `internal/tools.TestEveryToolIsCalledThroughInvoke`, `internal/api/mcpbridge.TestABridgedCallIsHeldToItsToolsSchema`, `internal/api/operator.TestAnOperatorsMisreadIsRefusedBeforeTheToolRuns`, `internal/agent/builtin.TestASetIsNeverReadAsNoList`, `internal/agent/builtin.TestIncludeIsNeverReadAsNoList`, `internal/agent/builtin.TestNoArgumentIsReadByARuleOfItsOwn`, `internal/tools.TestANoteNeverTouchesTheToolsOutput`, `internal/api/operator.TestTheArgumentsNoteIsTheModelsAndNeverAPersons`, `internal/api/operator.TestTheActRouteTellsTheModelTheNoteAndNeverThePerson`, `internal/api/workapi.TestTheWorkAPITellsTheModelTheNoteAndNeverThePerson`, `internal/tools/argval.TestAWholeNumberIsReadWithinItsRange`, `internal/tools.TestAClosedSetIsReadByOneRule`, `internal/tools.TestEveryCounterRecordsTheCataloguesLabels`, `internal/tools.TestAFindingIsANamedValue`, `internal/agent/builtin.TestWhatTheCheckAdmitsIsWhatTheToolReads`, `internal/agent/builtin.TestADeclaredNumberIsReadByItsTypesReader`, `internal/tools.TestARetrySpeltAnotherWayIsTheSameWrite`, `internal/tools.TestALoopSpeltSeveralWaysIsStillOneLoop`, `internal/api/operator.TestAnOperatorsRetrySpeltAnotherWayIsTheSameWrite`, `internal/agent/builtin.TestANullSetIsAbsent`, `internal/tools.TestTheInvokeGateSeesEveryShape`, `internal/agent/builtin.TestTheArgumentGateSeesEveryShape`, `internal/agent/runner.TestAResumedRunsRepeatSpeltAnotherWayIsTheSameWrite`, `internal/agent/runner.TestASeededSubmissionIsReadByTheSurfacesUniverse`, `internal/tools/toolargs.TestANullArgumentIsLeftOut`, `internal/tools/toolargs.TestANullItsSchemaDeclaresIsKept`, `internal/tools/toolargs.TestANilSchemaHandsEveryNullOnAsSent`, `internal/tools/toolargs.TestANestedNullIsLeftAsSent`, `internal/tools.TestANullIsTheSameWriteAsNoArgument`, `internal/agent/builtin.TestANullReachesNoBuiltinAsAValue`
 - **Measured:** GP-38 (brand kit): 14 refusals, rounds 11 to 24 and beyond, more than eight minutes of one turn, 12 distinct structural faults learned one per attempt. The brief (#407): 4 of 4 briefs ended `brief_invalid` at 7 steps. Replayed after this change: the GP-38 version gets all 14 of its findings in one refusal and its fixed version lands on the next attempt; a kit written from the format reference lands on the first.
 - **Cost-when-tried:** the brief fix (#407) repaired one tool: its caps went into its schema and its validator started naming every fault. Two days later the brand kit failed the same way through a different tool, because nothing had changed for any other tool.
 - **Tag-status:** unreleased
@@ -101,7 +101,9 @@ through `operator.Server.run`, skipped it.
 - **An unknown argument is noted, never refused here.** At the top level,
   the builtin authority gate already refuses an argument the tool does not
   declare (`builtin.ErrUndeclaredArgument`), and that refusal now carries
-  every finding. Inside an object argument, an unknown key was ignored. A
+  every finding; one sent as null is left out at the entry, which keeps a
+  null only where a schema declares one, so it is neither refused nor noted.
+  Inside an object argument, an unknown key was ignored. A
   call the tool answered successfully while outside its schema (an unknown
   key it ignored, a value it tolerated) carries a note naming each one in
   `Result.Note`, never in `Output`, which a caller may decode as a JSON
@@ -130,9 +132,11 @@ through `operator.Server.run`, skipped it.
 (`tools.Surface`, `operator.Server.run`, the runner's replay of a submission)
 makes the call's canonical arguments before anything reads them
 (`tools.ArgsOf`): a closed set's member spelt as its set spells it (`" Draft"`
-is `"draft"`). Every step after that reads only this form, as the distinct
-type `toolargs.Args`, which the run's call log (`CallLog.Admit`,
-`CallLog.Record`), the skill guard, `tools.Invoke` and the tool all require:
+is `"draft"`), and an argument sent as null left out unless its schema
+declares null (why is under the next heading). Every step after that reads
+only this form, as the distinct type `toolargs.Args`, which the run's call
+log (`CallLog.Admit`, `CallLog.Record`), the skill guard, `tools.Invoke` and
+the tool all require:
 the repeat count an operation id carries, the refusal-loop target, the check,
 the ledger and the metrics. A collected, continued or reopened executor run
 seeds its call log with the turn's closed rounds and the calls its bridge
@@ -153,9 +157,21 @@ value is one and returns the value read (`String`, `Strings`, `Whole`,
 helper (`argString`, `argStrings`, `argInt`, `argIntValue`, `argFloat`,
 `argFloatValue`, `argBool`) calls the same function to read, so a value the
 check admits is read as exactly what it spells. Null is absent to both,
-`{"set": null}` included (`argval.Object`). The one exception is a custom
-field's value in `fields`, where null is the value that clears the field by
-its declared meaning, and is passed on as null. Two readers for one type is
+`{"set": null}` included (`argval.Object`), and the entry makes it so for
+every tool: it leaves an argument sent as null out of the canonical
+arguments. Most tools name what a call changes by the arguments it sends,
+testing each for presence, and while the entry handed a null on they read it
+as the value the check had read as nothing: a null `body` emptied a page and
+a null `title` renamed it `<nil>`, a null `assignee` unassigned a work item, a
+null `archived` took a project out of the archive, and a call carrying a null
+was another operation than the same call without it. A guard in each tool
+fixes that tool and leaves the next one written to read a null as sent. A
+null is a value only where it is declared one: an argument whose schema
+declares null keeps it at the entry and clears by its declared meaning (an
+update's `due`, `start`, `estimate_minutes` and `points`, a project's
+`target_date`), and so does a custom field's value in `fields`, a nested null
+the entry leaves as sent. A third-party tool holds its own schema and is
+handed every null as sent. Two readers for one type is
 the root cause this closes: a set written as `"GP-12"` passed the check as a
 list and the tool read no list, and `"1e3"` passed as an integer and the tool
 read it as 1. A property test holds the check and every helper to the exact
@@ -186,7 +202,12 @@ read:
 The structured submissions (`structured.Remarshal`), a work item's
 `decision`, the assistant catalogue's `Tool.Check` and a page action's
 `ActionArgs.Check` keep exactly what they accepted, and now name every fault
-of a refused call at once.
+of a refused call at once. An assistant call that names a seat, a unit, a
+project or a space by its name is checked and resolved in one pass
+(`Resolver.Prepare`): every name it cannot place, in every argument and every
+entry of a list, is named by its path beside the schema's faults, each
+directory's choices once, and a membership's and a replace's previews name
+every fault of theirs at once.
 
 ## The class, and why a per-tool patch recurs
 
@@ -230,7 +251,7 @@ passes.
 | A dashboard's `dashboard.json` | `get_artifact_format`, generated | yes, here; an engine argument or a calc operand is read by its own reader, which names its own fault |
 | A page (`html`) | the design contract in `skill:artifacts` | yes, the linter already listed every finding |
 | `answer_brief` | the catalogue schema, which is also its validator (#407) | yes (#407) |
-| Other assistant catalogue tools, and a page action's arguments | the catalogue schema, which is also its validator | yes: `Tool.Check` and `ActionArgs.Check` name every problem |
+| Other assistant catalogue tools, and a page action's arguments | the catalogue schema, which is also its validator | yes: `Tool.Check` and `ActionArgs.Check` name every problem, and `Resolver.Prepare` names every name a call cannot place beside them |
 | `submit_work`, `submit_review`, a worker's submit (`structured.Remarshal`) | the hand-written schema, held to its struct by a walk, and checked through `tools.Invoke`, whoever calls | yes: accepted as before, every fault named |
 | A `decision` on a work item (`comment_on_work_item`, `create_work_item`) | the tool's schema, checked through `tools.Invoke`, whoever calls | yes: every rule's fault and every missing reference named |
 | `create_work_item`, `update_work_item`, `write_work_catalogue`, `set_artifact_schema`, `write_artifact_data` and the other first-party seat tools | the advertised schema, checked through `tools.Invoke`, whoever calls | yes: a misread refused before the tool runs; every other finding on its answer |

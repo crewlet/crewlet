@@ -4,7 +4,8 @@ import "fmt"
 
 // THE REFUSAL CATALOG: the person's words for the refusals a person meets most
 // often on the dashboard, answering a decision, filing or editing a work item,
-// and publishing an artifact an assistant drafted. Every other refusal is
+// publishing an artifact an assistant drafted, and writing its data past a
+// limit on what the data may hold. Every other refusal is
 // answered with its code's own sentence until it has a phrasing here
 // (ADR-0060 names the rest). Each names only what a person sees: a handle as
 // `@handle`, a question, an option, a title.
@@ -104,6 +105,19 @@ func ArtifactQuotaReached() Refusal {
 		"raise the limit."}
 }
 
+// DatastoreQuotaReached is a write to an artifact's data, or a change to the
+// collections it keeps, past a limit on what that data may hold: the
+// company's storage settings, a collection's own row caps, or the engine's
+// caps on one store's collections and documents. ONE PHRASING FOR EVERY ONE
+// OF THEM, and true of each, because the refusal names which only in the
+// datastore's reason, which is written for a model and never parsed for a
+// person's words.
+func DatastoreQuotaReached() Refusal {
+	return Refusal{person: "This artifact's data has reached a limit on what " +
+		"it can hold, so nothing was saved. Remove what is no longer needed, " +
+		"or ask whoever sets the limit to raise it."}
+}
+
 // ArtifactTrashed is a change to an artifact that is in the trash.
 func ArtifactTrashed() Refusal {
 	return Refusal{person: "This artifact is in the trash. Restore it first, " +
@@ -143,4 +157,18 @@ func TokenBudgetSpent(where Remedy) Refusal {
 	}
 	return Refusal{person: whose + " for this window is spent, so nothing was " +
 		"sent." + back, remedy: where}
+}
+
+// ModelAtLimit is a question no model was asked, because the model that
+// answers it has reached a usage limit it reported, carrying the company's
+// models as where it is given a fallback or its plan changed (ADR-0064). NO
+// TIME, for [AnsweredAlready]'s reason: an instant in these words is on no
+// reader's clock, and when the model is tried again rides beside them as the
+// answer's Retry-After, for a screen to say on its own. And NEVER "WAIT"
+// ALONE, for [TokenBudgetSpent]'s.
+func ModelAtLimit() Refusal {
+	return Refusal{person: "The model that answers questions has reached its " +
+		"usage limit, so this wasn't answered and nothing was spent. It answers " +
+		"again once the limit lifts, or sooner if the company's models change.",
+		remedy: ModelProviders()}
 }

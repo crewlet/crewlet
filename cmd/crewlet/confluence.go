@@ -224,7 +224,7 @@ func runConfluenceResync(inv invocation, args []string, stdout, stderr io.Writer
 	key := skillsContainer(*space, "CREWLET_TOOL_SKILLS_SPACE", company.SkillsContainerKey())
 	if key == "" {
 		return errors.New(
-			"confluence: this company has no tool-skills container — " +
+			"confluence: this company has no tool-skills container: " +
 				"knowledge.skills_container is set to the empty string, which " +
 				"turns tool skills off. Pass -space KEY to read one anyway, " +
 				"or remove that setting")

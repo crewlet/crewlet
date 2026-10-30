@@ -131,12 +131,12 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 	// removal permanent rather than a race a redelivery can undo.
 	//
 	// A TURN IS GATED TOO, on its task's marker — a turn's subject id IS its
-	// task's id. A turn is additive and carries no expectation, so nothing
-	// at the broker orders it against a purge of the same task: a turn
-	// decided while the task existed can land after the purge that removed
-	// it. Ungated, its spend update found no row and stopped the applier on
-	// EVERY node, since every node applies the same log in the same order —
-	// a fleet-wide wedge from one ordinary race. Gated, it is read past and
+	// task's id. A turn is additive and carries no expectation, so nothing at
+	// the broker orders it against a purge of the same task: a turn decided
+	// while the task existed can land after the purge that removed it. Ungated,
+	// its spend update found no row and stopped the applier on EVERY data node,
+	// since every data node applies the same log in the same order — a
+	// fleet-wide wedge from one ordinary race. Gated, it is read past and
 	// counted as a hit on the marker like any other late write.
 	if taskID, ok := markedTask(rec.Subject); ok {
 		var author sql.NullString
@@ -273,6 +273,19 @@ func (c applyContext) skewMs() int64 {
 	return c.brokerAt.Sub(c.authored()).Milliseconds()
 }
 
+// turnSpendStatement is [Applier.applyTurn]'s write of a turn's spend onto
+// its task's running totals, named for the plan test.
+const turnSpendStatement = `
+		UPDATE tracker_tasks SET
+			spend_turns = spend_turns + ?, spend_rounds = spend_rounds + ?,
+			spend_input = spend_input + ?, spend_output = spend_output + ?,
+			spend_cache_read = spend_cache_read + ?,
+			spend_cache_write = spend_cache_write + ?,
+			spend_wall_ms = spend_wall_ms + ?, spend_tokens = spend_tokens + ?,
+			spend_workers = spend_workers + ?,
+			spend_sent_back = spend_sent_back + ?
+		WHERE id = ?`
+
 // applyTurn records a turn and adds its spend to the task.
 //
 // THE ONE ADDITIVE OP. The insert is what gates the addition — the counters
@@ -322,16 +335,7 @@ func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (in
 		// A REDELIVERY, and the whole point of gating on the insert.
 		return 0, nil
 	}
-	spend, err := tx.ExecContext(ctx, `
-		UPDATE tracker_tasks SET
-			spend_turns = spend_turns + ?, spend_rounds = spend_rounds + ?,
-			spend_input = spend_input + ?, spend_output = spend_output + ?,
-			spend_cache_read = spend_cache_read + ?,
-			spend_cache_write = spend_cache_write + ?,
-			spend_wall_ms = spend_wall_ms + ?, spend_tokens = spend_tokens + ?,
-			spend_workers = spend_workers + ?,
-			spend_sent_back = spend_sent_back + ?
-		WHERE id = ?`,
+	spend, err := tx.ExecContext(ctx, turnSpendStatement,
 		turn.Spend.Turns, turn.Spend.Rounds, turn.Spend.Input, turn.Spend.Output,
 		turn.Spend.CacheRead, turn.Spend.CacheWrite, turn.Spend.WallMs,
 		turn.Spend.Tokens(), turn.Spend.Workers, turn.Spend.SentBack, turn.Task)
@@ -352,6 +356,19 @@ func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (in
 	return int(inserted + moved), nil
 }
 
+// effectiveAtStatement is [effectiveAt]'s one statement, named for the plan
+// test.
+const effectiveAtStatement = `
+		SELECT MAX(broker_at) FROM (
+			SELECT broker_at FROM tracker_history
+			WHERE subject_id = ? AND log_seq <= ?
+			UNION ALL
+			SELECT broker_at FROM tracker_turns
+			WHERE task_id = ? AND log_seq <= ?
+			UNION ALL
+			SELECT ?
+		)`
+
 // effectiveAt is D141's closed form: the fleet-agreed instant for a subject at
 // a position.
 //
@@ -365,16 +382,8 @@ func (a *Applier) applyTurn(ctx context.Context, tx *sql.Tx, c applyContext) (in
 // chain because a turn is something that happened to the task.
 func effectiveAt(ctx context.Context, tx *sql.Tx, subjectID string, c applyContext) (time.Time, error) {
 	var highest sql.NullInt64
-	err := tx.QueryRowContext(ctx, `
-		SELECT MAX(broker_at) FROM (
-			SELECT broker_at FROM tracker_history
-			WHERE subject_id = ? AND log_seq <= ?
-			UNION ALL
-			SELECT broker_at FROM tracker_turns
-			WHERE task_id = ? AND log_seq <= ?
-			UNION ALL
-			SELECT ?
-		)`, subjectID, c.packed, subjectID, c.packed, store.EncodeTime(c.brokerAt)).
+	err := tx.QueryRowContext(ctx, effectiveAtStatement,
+		subjectID, c.packed, subjectID, c.packed, store.EncodeTime(c.brokerAt)).
 		Scan(&highest)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("worklet: compute the effective instant "+

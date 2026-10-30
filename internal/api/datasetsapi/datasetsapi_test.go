@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -243,5 +244,33 @@ func TestAStoreDocumentIsARowOfItsDeclaredColumns(t *testing.T) {
 	row := storeRow(artifactdata.Doc{ID: "d1", Fields: json.RawMessage(`{"amount":"lots","stage":"won","x":1}`)}, shape)
 	if row[dashspec.StoreIDColumn] != "d1" || row["amount"] != nil || row["stage"] != "won" || len(row) != 3 {
 		t.Errorf("row = %v", row)
+	}
+}
+
+// A DATASET IS CLOSED ONLY BY A REFUSAL THAT NAMES ITS DECISION.
+//
+// A question's refusal carries the rule that decided it, and the dataset is
+// closed with that reason and those grants; a bare refusal sentinel, or a
+// question asked by nobody, names no decision, so neither closes the dataset
+// as a grant the viewer lacks.
+//
+// Mutation: close the dataset on a bare queries.ErrUnauthorized again and this
+// goes red.
+func TestADatasetIsClosedOnlyByARefusalNamingItsDecision(t *testing.T) {
+	src := dashspec.EngineSource{Name: "tracker.items", Domain: "tracker", Access: "the tracker"}
+	err := sourceFailure("items", src, fmt.Errorf("asking: %w", queries.NewRefusal("work_items",
+		authz.Decision{Reason: authz.ReasonNoGrant, Grants: []iam.Grant{iam.GrantWorklet}})))
+	var refused *closed
+	if !errors.As(err, &refused) || refused.refusal.Reason != authz.ReasonNoGrant ||
+		!slices.Equal(refused.refusal.Grants, []iam.Grant{iam.GrantWorklet}) {
+		t.Fatalf("a question's refusal = %v, want the dataset closed with its reason and grants", err)
+	}
+	for name, bare := range map[string]error{
+		"a bare refusal sentinel":    queries.ErrUnauthorized,
+		"a question asked by nobody": queries.ErrUnauthenticated,
+	} {
+		if err := sourceFailure("items", src, fmt.Errorf("asking: %w", bare)); errors.As(err, &refused) {
+			t.Errorf("%s closed the dataset as %s, which no decision said", name, refused.refusal.Reason)
+		}
 	}
 }

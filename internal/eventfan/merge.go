@@ -299,7 +299,7 @@ func once[T any](parts []Counted[T], named func(T) []store.UnsettledRow) []store
 }
 
 // identities is every row any part named unsettled, once each, by identity
-// alone — what the second question asks every node about.
+// alone — what the second question asks every data node about.
 func identities[T any](parts []Counted[T], named func(T) []store.UnsettledRow) []store.UnsettledRow {
 	var out []store.UnsettledRow
 	seen := map[store.RowKey]bool{}
@@ -432,8 +432,9 @@ func FirstFound(parts []eventPart) (store.EventRecord, bool) {
 	return *best, true
 }
 
-// MergeTrace is one trace from several nodes: the oldest [store.MaxTraceEvents]
-// of every node's rows, and how many the fleet holds.
+// MergeTrace is one trace from several data nodes: the oldest
+// [store.MaxTraceEvents] of every answering node's rows, and how many the fleet
+// holds.
 //
 // EXACT FOR [MergeListing]'s REASON, and cut where it cuts. Each node sent its
 // own oldest rows, so the fleet's oldest are among them — up to the point a

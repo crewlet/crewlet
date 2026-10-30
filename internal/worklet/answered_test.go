@@ -129,10 +129,11 @@ func TestAnAskResolvedWithoutAnAnswerIsListedAsResolved(t *testing.T) {
 	ask := worklet.Comment{ID: "c-1", Task: "a", Author: "bo", AuthorKind: worklet.AuthorAgent,
 		Body: "still needed?", Ask: "jane", CreatedAt: wednesday.Add(-3 * time.Hour)}
 	askOn(t, r, "op-ask", "a", ask)
+	// BY ITS ASKER, the one who may resolve it, at the writer's clock.
 	resolvedAt := wednesday.Add(-time.Hour)
-	ask.Resolved, ask.ResolvedBy, ask.ResolvedAt = true, "bo", &resolvedAt
-	if _, err := r.writer.UpdateTask(t.Context(), "op-resolve", "a", "ENG",
-		worklet.NoIfMatch, worklet.TaskPatch{Comment: &ask}, worklet.ChangeCommentResolved,
+	r.at = resolvedAt
+	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{})
+	if _, err := bo.ResolveComment(t.Context(), "op-resolve", "a", "ENG", "c-1",
 		nil); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -191,6 +192,64 @@ func TestAnsweredAsksSayWhatTheAskerDidNext(t *testing.T) {
 	if f.Kind != worklet.ChangeStatus || f.Fields["status"].To != string(worklet.StatusInProgress) {
 		t.Errorf("the follow-up is %+v, want the asker's FIRST record after the answer: "+
 			"its move to in progress", f)
+	}
+}
+
+// AN ASK RESOLVED WITHOUT AN ANSWER IS FOLLOWED UP FROM ITS RESOLVE, the commit
+// that closed it, which no row records: a resolve writes the resolution alone,
+// and the ask's own record is the one that posted it. What the asker did before
+// the resolve is not what it did next, and another remark's resolve is not
+// this one's.
+func TestAResolvedAskIsFollowedUpFromItsResolve(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	assign(t, r, "a", "bo")
+	asked := wednesday.Add(-3 * time.Hour)
+	for _, id := range []string{"c-1", "c-2"} {
+		askOn(t, r, "op-"+id, "a", worklet.Comment{ID: id, Task: "a", Author: "bo",
+			AuthorKind: worklet.AuthorAgent, Body: "still needed?", Ask: "jane",
+			CreatedAt: asked})
+	}
+	bo := r.writer.As("bo", worklet.AuthorAgent, worklet.Provenance{})
+	move := func(opID string, status worklet.Status) {
+		t.Helper()
+		if _, err := bo.UpdateTask(t.Context(), opID, "a", "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Status: &status}, worklet.ChangeStatus, nil); err != nil {
+			t.Fatalf("%s: %v", opID, err)
+		}
+		r.drain()
+	}
+	resolve := func(opID, id string) {
+		t.Helper()
+		if _, err := bo.ResolveComment(t.Context(), opID, "a", "ENG", id,
+			nil); err != nil {
+			t.Fatalf("%s: %v", opID, err)
+		}
+		r.drain()
+	}
+	move("op-before", worklet.StatusInProgress)
+	resolve("op-resolve-1", "c-1")
+	resolve("op-resolve-2", "c-2")
+	move("op-after", worklet.StatusInReview)
+
+	got := map[string]worklet.AnsweredAsk{}
+	for _, a := range r.answered("jane").Asks {
+		got[a.Ask.Comment] = a
+	}
+	for _, id := range []string{"c-1", "c-2"} {
+		if a, ok := got[id]; !ok || !a.Answer.Resolved || a.Answer.By != "bo" ||
+			a.FollowedUp == nil {
+			t.Fatalf("ask %s reads %+v, want it resolved by bo and followed up", id, a)
+		}
+	}
+	if f := got["c-1"].FollowedUp; f.Kind != worklet.ChangeCommentResolved {
+		t.Errorf("c-1 was followed up by %+v, want the asker's first record after "+
+			"its resolve: the resolve of c-2, not the move before it", f)
+	}
+	if f := got["c-2"].FollowedUp; f.Kind != worklet.ChangeStatus ||
+		f.Fields["status"].To != string(worklet.StatusInReview) {
+		t.Errorf("c-2 was followed up by %+v, want the move to in review after its "+
+			"resolve", f)
 	}
 }
 

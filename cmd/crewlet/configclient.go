@@ -156,9 +156,8 @@ const maxConfigResponseBytes = 16 * configapi.MaxBodyBytes
 func (c *configClient) refusal(status int, header http.Header, raw []byte) error {
 	own := ownBody(header, raw)
 	var body struct {
+		refusalWords
 		Error   string `json:"error"`
-		Detail  string `json:"detail"`
-		Hint    string `json:"hint"`
 		Reason  string `json:"reason"`
 		Current string `json:"current_revision_id"`
 		Stored  string `json:"stored_revision_id"`
@@ -182,6 +181,15 @@ func (c *configClient) refusal(status int, header http.Header, raw []byte) error
 		return lostRace(c.base, body.Current, body.Stored, body.Node)
 	case status == http.StatusServiceUnavailable && body.Outcome == httpjson.OutcomeUnknown:
 		return unansweredImport(c.base, body.Stored, body.Node)
+	case status == http.StatusServiceUnavailable && body.Error == string(httpjson.CodeUnavailable) &&
+		body.Reason == "" && body.Detail != "":
+		// ANY OTHER CONDITION OF THE NODE — a store too busy to take the
+		// revision, one closed for a snapshot, a log at its ceiling — is told
+		// in the node's own words for a person, which say whether waiting
+		// clears it: blaming every 503 on a leader election sent an operator
+		// waiting for one that was never coming.
+		return fmt.Errorf("%s could not take the import, so nothing was written. %s",
+			c.base, body.Detail)
 	case status == http.StatusServiceUnavailable && body.Error == string(httpjson.CodeUnavailable):
 		// THE FLEET'S POINTER COULD NOT BE READ, which every write is built
 		// on: nothing was written, and it clears within a leader election.
@@ -208,7 +216,7 @@ func (c *configClient) refusal(status int, header http.Header, raw []byte) error
 		msg = foreignAnswer(header.Get("Content-Type"), raw)
 	}
 	return fmt.Errorf("%s answered %d for PUT /config: %s", c.base, status,
-		withRefusalDetail(msg, body.Detail, body.Hint))
+		withRefusalDetail(msg, body.refusalWords))
 }
 
 // unansweredImport is an import the node stored and whose activation the
@@ -246,7 +254,7 @@ func holderOf(node string) string {
 	if node == "" {
 		return "the node that answered, which alone holds it"
 	}
-	return "node " + node + ", which alone holds it — by its own address if -api " +
+	return "node " + node + ", which alone holds it, by its own address if -api " +
 		"names one several nodes share, since any other answers 404 for it"
 }
 

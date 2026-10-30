@@ -357,7 +357,7 @@ describe("the engine's hierarchy", () => {
             type: "team",
             lead: "bo",
             lead_inherited: false,
-            channel: "#p2",
+            channel: "p2",
             channel_inherited: false,
             seats: ["bo"],
           },
@@ -367,7 +367,7 @@ describe("the engine's hierarchy", () => {
             type: "team",
             lead: "ada",
             lead_inherited: false,
-            channel: "#p1",
+            channel: "p1",
             channel_inherited: false,
             seats: ["ada"],
           },
@@ -375,8 +375,8 @@ describe("the engine's hierarchy", () => {
       },
     });
     expect(twins.units.map((u) => [u.id, u.effectiveLead?.handle, u.channel])).toEqual([
-      ["platform", "ada", "#p1"],
-      ["platform-2", "bo", "#p2"],
+      ["platform", "ada", "p1"],
+      ["platform-2", "bo", "p2"],
     ]);
     expect(twins.byHandle.get("bo")?.unit?.id).toBe("platform-2");
   });

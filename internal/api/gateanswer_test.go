@@ -24,10 +24,46 @@ import (
 // see [api.GateAnswer].
 const gateAnswerGolden = "testdata/gate_answer.json"
 
+// gateLogs is every log a node's gate gesture writes: each identity-claiming
+// domain of the register, in its order.
+//
+// DERIVED FROM THE REGISTER rather than typed in each fake: the fakes and the
+// golden stood for a node with two identity logs while every node writes three,
+// so the dashboard's dialog and the command line were never shown the identity
+// estate's line, and a domain the register gains would have stayed out of them
+// too. [TestTheGateAnswerMatchesItsGoldenFile] holds the count.
+func gateLogs() []statelog.Domain {
+	var out []statelog.Domain
+	for _, domain := range engine.Domains() {
+		if domain.ClaimsIdentity() {
+			out = append(out, domain)
+		}
+	}
+	return out
+}
+
+// appliedOn is the i-th of [gateLogs] applied by one gesture on node, under the
+// operation id the engine derives for that log, at a position of its own: the
+// first log's at the fixtures' usual height, every later one's a multiple of
+// the knowledge base's.
+func appliedOn(i int, domain statelog.Domain, gesture, verb, node string) engine.DomainGate {
+	stream := domain.Stream().Name
+	seq := uint64(918280002)
+	if i > 0 {
+		seq = uint64(4410 * i)
+	}
+	return engine.DomainGate{Domain: domain.Name(), Stream: stream,
+		OpID:     statelog.StepOpID(gesture, verb, domain.Name()+":"+statelog.OpNamePart(node)),
+		Outcome:  statelog.OutcomeApplied,
+		Position: statelog.Position{Stream: stream, Generation: 1, Seq: seq}}
+}
+
 // gateAnswerScenarios is one gesture per shape a log's answer can take, each
-// over two of the three identity-claiming logs a real node runs — the tracker's
-// and the knowledge base's, standing for all three: every log's entry has the
-// one shape, and what the file pins is that shape, not how many logs there are.
+// over every identity-claiming log a node writes ([gateLogs]): every log
+// applied but the SECOND, which takes the scenario's answer — a gesture that
+// reached the logs before it and the logs after it and not this one is what
+// every scenario but `applied` describes, and an index the dashboard's suite
+// reads by.
 //
 // The ids are the engine's own grammar and DERIVED, so the file is stable: a
 // dashboard fixture carrying `op-7` is an id no node sends and the route
@@ -35,22 +71,21 @@ const gateAnswerGolden = "testdata/gate_answer.json"
 func gateAnswerScenarios() map[string]engine.GateResult {
 	gesture := statelog.DeriveOpID(time.UnixMilli(1_790_000_000_000), "evict-node-4",
 		"internal/api", "gate_answer.json")
-	step := func(domain string) string {
-		return statelog.StepOpID(gesture, "evict", domain+":node-4")
+	logs := gateLogs()
+	result := func(answer engine.DomainGate) engine.GateResult {
+		domains := make([]engine.DomainGate, 0, len(logs))
+		for i, domain := range logs {
+			applied := appliedOn(i, domain, gesture, "evict", "node-4")
+			if i == 1 {
+				answer.Domain, answer.Stream, answer.OpID =
+					applied.Domain, applied.Stream, applied.OpID
+				applied = answer
+			}
+			domains = append(domains, applied)
+		}
+		return engine.GateResult{Node: "node-4", OpID: gesture, Domains: domains}
 	}
-	tracker := engine.DomainGate{Domain: "tracker", Stream: "CREWLET_TRACKER_LOG",
-		OpID: step("tracker"), Outcome: statelog.OutcomeApplied,
-		Position: statelog.Position{Stream: "CREWLET_TRACKER_LOG", Generation: 1,
-			Seq: 918280002}}
-	pages := func(d engine.DomainGate) engine.DomainGate {
-		d.Domain, d.Stream, d.OpID = "pages", "CREWLET_PAGES_LOG", step("pages")
-		return d
-	}
-	at := statelog.Position{Stream: "CREWLET_PAGES_LOG", Generation: 1, Seq: 4410}
-	result := func(pagesAnswer engine.DomainGate) engine.GateResult {
-		return engine.GateResult{Node: "node-4", OpID: gesture,
-			Domains: []engine.DomainGate{tracker, pages(pagesAnswer)}}
-	}
+	at := appliedOn(1, logs[1], gesture, "evict", "node-4").Position
 	return map[string]engine.GateResult{
 		"applied": result(engine.DomainGate{
 			Outcome: statelog.OutcomeApplied, Position: at}),
@@ -59,10 +94,10 @@ func gateAnswerScenarios() map[string]engine.GateResult {
 		"unknown": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown}),
 		"unvouched": result(engine.DomainGate{Outcome: statelog.OutcomeUnknown,
 			Unvouched: true}),
-		"log_full": result(engine.DomainGate{Err: fmt.Errorf("pages: %w",
+		"log_full": result(engine.DomainGate{Err: fmt.Errorf("%s: %w", logs[1].Name(),
 			&statelog.Unavailable{Reason: statelog.ReasonLogFull,
 				Detail: "the broker refused to store it"})}),
-		"superseded": result(engine.DomainGate{Err: fmt.Errorf("pages: %w",
+		"superseded": result(engine.DomainGate{Err: fmt.Errorf("%s: %w", logs[1].Name(),
 			&statelog.Unavailable{Reason: statelog.ReasonSuperseded,
 				Detail: "a later gate record on node-4 has undone it"})}),
 	}
@@ -74,14 +109,17 @@ func gateRefusalScenarios() map[string]error {
 	live := statelog.PermitEviction("node-4", []statelog.Presence{{NodeID: "node-4"}}, false)
 	return map[string]error{
 		"eviction_refused": fmt.Errorf("engine: evict node node-4: %w", live),
-		"not_publishing": fmt.Errorf("%w: an eviction appends a record to the "+
-			"state log, and this node runs in seal mode", engine.ErrNotPublishing),
+		"not_publishing":   engine.NotPublishing("an eviction", statelog.ModeSeal),
 		"eviction_unjudged": &engine.GateUnjudged{Node: "node-4",
 			Err: errors.New("list the live nodes: coordination is unreachable")},
 		"readmission_unjudged": fmt.Errorf("engine: readmit node node-4: %w",
 			&engine.ReadmissionUnjudged{Node: "node-4", Log: "tracker",
 				Err: errors.New("read its readmission bound: engine: read tracker's " +
 					"first surviving sequence: the stream has no leader")}),
+		"readmission_unjudged_behind": fmt.Errorf("engine: readmit node node-4: %w",
+			&engine.ReadmissionUnjudged{Node: "node-4", Log: "tracker", Behind: true,
+				Err: &statelog.ReanchorNotApplied{Node: "node-4", Domain: "tracker",
+					Reported: 3, Runs: 2}}),
 		"readmission_unjudged_register": fmt.Errorf("engine: readmit node node-4: %w",
 			&engine.ReadmissionUnjudged{Node: "node-4",
 				Err: errors.New("read the positions register: coordination is unreachable")}),
@@ -147,6 +185,14 @@ func renderGateScenarios(t *testing.T) []byte {
 // gate-answer`) and a failing Vitest suite until the dialog follows it.
 func TestTheGateAnswerMatchesItsGoldenFile(t *testing.T) {
 	t.Parallel()
+	// A FLOOR, so a register that lost a domain reads as a failure here
+	// rather than as a golden that quietly lost its line.
+	if logs := gateLogs(); len(logs) < 7 {
+		t.Fatalf("the register holds %d identity-claiming log(s), fewer than the "+
+			"tracker's, the knowledge base's, the identity estate's, the "+
+			"artifacts log's, the artifact datastore's, the assistant's and chat's",
+			len(logs))
+	}
 	got := renderGateScenarios(t)
 	if os.Getenv("CREWLET_REGENERATE_GATE_ANSWER") == "1" {
 		if err := os.MkdirAll(filepath.Dir(gateAnswerGolden), 0o755); err != nil {
@@ -178,7 +224,7 @@ func TestTheGateAnswerOmitsWhatALogDidNotSay(t *testing.T) {
 	scenarios := gateAnswerScenarios()
 	for name, result := range scenarios {
 		for _, d := range api.RenderGate(true, result).Domains {
-			for _, flag := range []string{"-force", "-op-id", "-url", "crewlet "} {
+			for _, flag := range []string{"-force", "-op-id", "-api", "crewlet "} {
 				if strings.Contains(d.Hint, flag) {
 					t.Errorf("%s: %s's hint names %q, which only the command line "+
 						"has — the dashboard renders it word for word: %s",
@@ -191,21 +237,32 @@ func TestTheGateAnswerOmitsWhatALogDidNotSay(t *testing.T) {
 	if unknown.Complete {
 		t.Error("a gesture with an unknown log reads complete")
 	}
-	pages := unknown.Domains[1]
-	if pages.Position != nil {
+	missed := unknown.Domains[1]
+	if missed.Position != nil {
 		t.Errorf("the unknown log carries position %+v — a zero position reads as a "+
-			"record at the log's origin", *pages.Position)
+			"record at the log's origin", *missed.Position)
 	}
-	if len(pages.Actions) == 0 || pages.Actions[0] != statelog.GateRetrySameOp {
+	if len(missed.Actions) == 0 || missed.Actions[0] != statelog.GateRetrySameOp {
 		t.Errorf("the unknown log offers %v, want the same gesture again first",
-			pages.Actions)
+			missed.Actions)
 	}
-	tracker := unknown.Domains[0]
-	if tracker.Position == nil || tracker.Position.Seq != 918280002 {
-		t.Errorf("the applied log's position is %+v", tracker.Position)
+	// EVERY OTHER LOG, before the missed one and after it, is applied at a
+	// position of its own and carries no remedy.
+	if len(unknown.Domains) != len(gateLogs()) {
+		t.Errorf("the gesture answers for %d log(s), want every identity-claiming "+
+			"one (%d)", len(unknown.Domains), len(gateLogs()))
 	}
-	if tracker.Actions != nil || tracker.Hint != "" {
-		t.Errorf("the applied log carries a remedy: %v %q", tracker.Actions, tracker.Hint)
+	for i, applied := range unknown.Domains {
+		if i == 1 {
+			continue
+		}
+		if applied.Position == nil || applied.Position.Seq == 0 {
+			t.Errorf("the applied log %s's position is %+v", applied.Domain, applied.Position)
+		}
+		if applied.Actions != nil || applied.Hint != "" {
+			t.Errorf("the applied log %s carries a remedy: %v %q", applied.Domain,
+				applied.Actions, applied.Hint)
+		}
 	}
 
 	// AN UNKNOWN THIS NODE CANNOT SETTLE SAYS SO, and is sent elsewhere:
@@ -216,7 +273,7 @@ func TestTheGateAnswerOmitsWhatALogDidNotSay(t *testing.T) {
 		t.Errorf("the unvouched log rendered %+v, want unvouched, no position and "+
 			"only another node", unvouched)
 	}
-	if pages.Unvouched {
+	if missed.Unvouched {
 		t.Error("a lost acknowledgement renders as unvouched")
 	}
 
@@ -248,6 +305,9 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 		// fleet's register — is asked again, here or through another node.
 		"readmission_unjudged":          {statelog.GateRetrySameOp, statelog.GateOtherNode},
 		"readmission_unjudged_register": {statelog.GateRetrySameOp, statelog.GateOtherNode},
+		// AND A LOG THE FLEET RE-ANCHORED PAST THIS NODE is asked again
+		// once this node applies it, or through a node that has.
+		"readmission_unjudged_behind": {statelog.GateRetrySameOp, statelog.GateOtherNode},
 	}
 	for name, err := range gateRefusalScenarios() {
 		refusal, ok := api.RenderGateRefusal("node-4", refusalOpID(name), err)
@@ -268,7 +328,7 @@ func TestEveryGateRefusalCarriesItsActions(t *testing.T) {
 		}
 		if hint, _ := body["hint"].(string); hint == "" ||
 			strings.Contains(hint, "-force") || strings.Contains(hint, "-op-id") ||
-			strings.Contains(hint, "-url") {
+			strings.Contains(hint, "-api") {
 			t.Errorf("%s's hint %q is empty or names a command-line flag — the "+
 				"dashboard renders it word for word", name, hint)
 		}

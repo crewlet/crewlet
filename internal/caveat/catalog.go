@@ -3,6 +3,8 @@ package caveat
 import (
 	"fmt"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // THE CATALOG: one constructor per code, each writing both phrasings from the
@@ -32,8 +34,8 @@ func DefaultAssigneeGone(project, handle string) Caveat {
 	return Caveat{code: CodeDefaultAssigneeGone,
 		agent: fmt.Sprintf("%s's default assignee %q is not a seat on the org "+
 			"chart any more, so this task was filed to nobody and lands in "+
-			"triage. The project lead sets another with write_project "+
-			"`default_assignee`.", project, handle),
+			"triage. The project lead sets another with %s "+
+			"`default_assignee`.", project, handle, toolname.WriteProject),
 		person: fmt.Sprintf("%s's default assignee, @%s, is no longer on the "+
 			"org chart, so this item is unassigned and waiting in triage. "+
 			"Assign it to someone, and ask %s's lead to choose a new default "+

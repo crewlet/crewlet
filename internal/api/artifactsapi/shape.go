@@ -58,7 +58,8 @@ type Detail struct {
 
 // detail is the reader's view of the artifact a admitted.
 func (g Gate) detail(ctx context.Context, a Admission) (Detail, error) {
-	d := authz.Decide(ctx, a.Principal, authz.ActionArtifactPublish, g.object(a.Head), g.Chart, g.now())
+	d := authz.Decide(ctx, a.Principal, authz.ActionArtifactPublish, g.object(a.Head), g.Chart,
+		g.decidedAt(ctx))
 	if d.Unknown() {
 		return Detail{}, d.Err
 	}

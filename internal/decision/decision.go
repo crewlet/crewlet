@@ -40,7 +40,10 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The decision caps. Each is refused at write naming the field, never cut,
@@ -85,8 +88,8 @@ const (
 	// use still carries whole.
 	MaxEvidenceRef = 2048
 
-	// MaxInformChannel is Slack's own channel-name ceiling, the longer of
-	// the two chat surfaces' (Mattermost's is 64).
+	// MaxInformChannel is Slack's own channel-name ceiling, the longest of
+	// the three chat surfaces' (Mattermost's and Chatlet's are both 64).
 	MaxInformChannel = 80
 )
 
@@ -102,7 +105,7 @@ var optionIDPattern = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 // Decision is the structure an ask carries when it needs somebody to choose.
 type Decision struct {
 	// Question is what is being decided, in one sentence.
-	Question string `json:"question"`
+	Question string `json:"question" untrusted:"name"`
 
 	// Options are the choices, in the order the asker put them.
 	Options []Option `json:"options"`
@@ -112,7 +115,7 @@ type Decision struct {
 	Recommended string `json:"recommended,omitempty"`
 
 	// Rationale is why it recommends that one.
-	Rationale string `json:"rationale,omitempty"`
+	Rationale string `json:"rationale,omitempty" untrusted:"name"`
 
 	// Evidence is what the asker looked at.
 	Evidence []Evidence `json:"evidence,omitempty"`
@@ -128,8 +131,8 @@ type Decision struct {
 // Option is one choice.
 type Option struct {
 	ID     string `json:"id"`
-	Label  string `json:"label"`
-	Detail string `json:"detail,omitempty"`
+	Label  string `json:"label" untrusted:"name"`
+	Detail string `json:"detail,omitempty" untrusted:"name"`
 }
 
 // Role is what the person asked is being asked as.
@@ -183,7 +186,7 @@ func (k EvidenceKind) Valid() bool {
 type Evidence struct {
 	Kind  EvidenceKind `json:"kind"`
 	Ref   string       `json:"ref"`
-	Label string       `json:"label,omitempty"`
+	Label string       `json:"label,omitempty" untrusted:"name"`
 }
 
 // Inform is the chat channel the asker will report the decision in.
@@ -191,13 +194,14 @@ type Evidence struct {
 // A PROMISE THE ENGINE KEEPS, and only where a turn can be held to it: the
 // tracker accepts one only on an agent seat's ask, and the asker's `answered`
 // wake then owes that surface (internal/worklet). Here it is only a value: a
-// surface is one of the two chat integrations and a channel is a name.
+// surface is one of the chat surfaces (the two vendor integrations, or the
+// engine's own chat) and a channel is a name.
 type Inform struct {
 	Surface InformSurface `json:"surface"`
 	Channel string        `json:"channel"`
 }
 
-// InformSurface is a chat integration an asker may report a decision in.
+// InformSurface is a chat surface an asker may report a decision in.
 type InformSurface string
 
 const (
@@ -205,12 +209,26 @@ const (
 	InformMattermost InformSurface = "mattermost"
 	// InformSlack is Slack.
 	InformSlack InformSurface = "slack"
+	// InformChat is the engine's own chat (`chat.backend: chatlet`).
+	//
+	// ITS VALUE IS CHATLET'S FEED SOURCE, `chat`, and has to be: an inform
+	// is kept by OWING the surface ([worklet.Owes]), the asker's answered
+	// turn held until a tool that DELIVERS there has run, and Chatlet's
+	// posting tools declare their delivery as that source. Any other
+	// spelling is a promise no tool could ever discharge. This package
+	// cannot import the chat domain, so a test where both are visible holds
+	// the two equal.
+	InformChat InformSurface = "chat"
 )
 
-// Valid reports whether s is a chat surface this build knows.
-func (s InformSurface) Valid() bool {
-	return s == InformMattermost || s == InformSlack
+// InformSurfaces is every chat surface this build knows, in the order a
+// refusal lists them.
+func InformSurfaces() []InformSurface {
+	return []InformSurface{InformMattermost, InformSlack, InformChat}
 }
+
+// Valid reports whether s is a chat surface this build knows.
+func (s InformSurface) Valid() bool { return slices.Contains(InformSurfaces(), s) }
 
 // Option is the option with this id, or false.
 func (d Decision) Option(id string) (Option, bool) {
@@ -306,8 +324,7 @@ func (d Decision) ValidateAt(prefix string) error {
 	}
 	if d.Recommended != "" && !seen[d.Recommended] {
 		note(invalid("%srecommended is %q, which is not one "+
-			"of its options (%s)", prefix, d.Recommended,
-			strings.Join(d.OptionIDs(), ", ")))
+			"of its options (%s)", prefix, d.Recommended, words.Or(d.OptionIDs())))
 	}
 	note(CheckText(prefix+"rationale", d.Rationale, MaxRationale, false))
 	if len(d.Evidence) > MaxEvidence {
@@ -325,8 +342,8 @@ func (d Decision) ValidateAt(prefix string) error {
 	}
 	if d.Inform != nil {
 		if !d.Inform.Surface.Valid() {
-			note(invalid("%sinform.surface is %q and must be "+
-				"%q or %q", prefix, d.Inform.Surface, InformMattermost, InformSlack))
+			note(invalid("%sinform.surface is %q and must be one of "+
+				"%s", prefix, d.Inform.Surface, words.Or(InformSurfaces())))
 		}
 		note(CheckText(prefix+"inform.channel", d.Inform.Channel,
 			MaxInformChannel, true))
@@ -344,7 +361,7 @@ func (d Decision) CheckChoice(choice string) error {
 	}
 	if _, ok := d.Option(choice); !ok {
 		return invalid("the choice %q is not an option of this decision: it offers %s",
-			choice, strings.Join(d.OptionIDs(), ", "))
+			choice, words.Or(d.OptionIDs()))
 	}
 	return nil
 }

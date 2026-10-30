@@ -105,15 +105,15 @@ type Event struct {
 	// handed back, a dead letter — carries the origin forward rather than
 	// claiming the event as its own.
 	//
-	// It is the STORE-ROUTING FACT, which is why it is on the envelope
-	// rather than on the payloads that happened to need it. The event
-	// store is written by a publish listener inline on the publishing node,
-	// so each node's database holds what that node published and nothing
-	// else; a reader holding a row — or a live frame — has only this to
-	// say which node's store holds the rest of that node's record, and
-	// where the work it describes ran. Empty only on an event published
-	// through a queue client built with no node, which only a test harness
-	// builds.
+	// It is WHERE THE WORK RAN, which is why it is on the envelope rather
+	// than on the payloads that happened to need it — and why the event
+	// store keeps it as a column of every row (node/0054) rather than
+	// leaving a reader to infer it from which store answered. Those two
+	// stopped being one fact with custody (ADR-0025): a data node's log
+	// holds what it published AND the events it keeps for a node without
+	// the `data` role, which keeps no log of its own. Empty only on an
+	// event published through a queue client built with no node, which
+	// only a test harness builds.
 	Node string `json:"node,omitempty"`
 
 	// Data is the typed body, non-nil when Type is registered in this

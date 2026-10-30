@@ -47,7 +47,7 @@ mcp_servers:
 
 // presentNode puts one node on the lease table with the heartbeat it
 // publishes, or — with no status — the placement half alone, which is what a
-// beat whose status hook overran its budget carries.
+// beat whose status hook did not answer within its share of the beat carries.
 func presentNode(t *testing.T, backend coord.Backend, id string, status *coord.NodeStatus) {
 	t.Helper()
 	meta := map[string]any{"roles": []string{"seats"}}
@@ -161,10 +161,10 @@ func TestEachServerIsJudgedAcrossEveryNodesReport(t *testing.T) {
 }
 
 // A SILENT NODE'S CELLS ARE UNKNOWN, NEVER ZERO. Its last heartbeat carried no
-// status (the status hook overran the beat), and a row of zeros under its name
-// would read as "started nothing here" — the confident zero the fleet answer is
-// written to avoid. A node that published a status naming no server DID say:
-// it started none.
+// status (the status hook did not answer within the beat), and a row of zeros
+// under its name would read as "started nothing here" — the confident zero the
+// fleet answer is written to avoid. A node that published a status naming no
+// server DID say: it started none.
 func TestANodeThatDoesNotReportIsUnknownNotIdle(t *testing.T) {
 	t.Parallel()
 	got := askMCPStatus(t, mcpSources(t, mcpFleet(t)))

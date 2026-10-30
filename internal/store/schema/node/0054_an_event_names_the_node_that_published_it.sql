@@ -1,0 +1,35 @@
+-- An event row names the node that PUBLISHED it, which is no longer the node
+-- that holds it.
+--
+-- Until custody (ADR-0025) the two were one: the event log was written by a
+-- publish listener inline on the publishing node, so the node a row was READ
+-- from was the node it happened on, and every reader that wanted "where did
+-- this run" answered it with "whose store answered". A node without the
+-- `data` role keeps no event log of its own — its store is scratch — and
+-- hands everything it publishes to exactly ONE data node, which writes it into
+-- its own log. From then on "whose store answered" names the keeper, and the
+-- turn page told an operator debugging a turn that ran on an agent host to
+-- read the logs of whichever data node happened to keep its events.
+--
+-- THE ORIGIN WAS NEVER LOST, only unread: every event carries `node` on its
+-- envelope, stamped by the queue of the node that first published it and
+-- carried forward by every re-publish (internal/events), and a custody batch
+-- carries each event whole. This column is that field, promoted so a reader
+-- asks it of the rows rather than of the store that answered.
+--
+-- WHO HAS TO AGREE ON IT: this node alone, like every column of the audit log.
+-- It is a fact about the row, written by the writer from the event it stores
+-- (internal/observe's Record, the one function both the publishing node's
+-- listener and a custody keeper write through), so a row kept for another
+-- node and a row this node published are one shape.
+--
+-- An empty string, never NULL, for a row no node published: the shape every
+-- promoted column has (0015, 0029, 0033). Only an event published through a
+-- queue client built with no node — which only a test harness builds — has
+-- none.
+ALTER TABLE crewlet_events ADD COLUMN node TEXT NOT NULL DEFAULT '';
+
+-- NO BACKFILL. Every row this build writes carries its origin from the first,
+-- and a row without one could only have been written by a build before this
+-- column, of which no release ever shipped one: a repair here would be code
+-- for a deployment that does not exist.

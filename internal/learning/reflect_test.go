@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/toolname"
 )
 
 // --- fixtures -------------------------------------------------------------
@@ -673,7 +674,7 @@ func TestTheDeciderRunsUnderTheDispatcher(t *testing.T) {
 	// suppresses the duplicate if the model recognises its own paraphrase.
 	self := settledTurn()
 	self.TurnID = "t2"
-	self.AllToolNames = []string{learning.ReflectTool}
+	self.AllToolNames = []string{toolname.ReflectAndPersist}
 	out = reflectOnce(r, self)
 	if out.Skipped["persist_decider"] != "self_persisted" {
 		t.Errorf("pass = %+v, want the decider skipped", out)

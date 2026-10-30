@@ -43,8 +43,9 @@
 // # The rule every caller honours
 //
 // A QUERY IS BOUNDED, and the bound is declared here ([MaxQueryBytes]) for
-// both of the engine's ranked searches — this seam's and the tracker's item
-// search, which share this package's vocabulary. Every surface refuses a
+// every one of the engine's ranked searches — this seam's, the tracker's item
+// search, which shares this package's vocabulary, and chat's message search,
+// which ranks its own corpus on the same terms. Every surface refuses a
 // longer one in its own words before it reaches a backend, because best effort
 // would answer "could not be searched" and send the asker back with the same
 // paste; nothing cuts one, because a search on part of a question answers a
@@ -57,6 +58,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -134,6 +136,16 @@ type Hit struct {
 	// backend with no such chain, which is why the auto-draft title
 	// prefix exists as a backstop.
 	Ancestors []string
+
+	// Provenance is what the hit's title and snippet are and who wrote them,
+	// as a model reads them ([Render], ADR-0040) — DECIDED BY THE BACKEND
+	// THAT FOUND THE PAGE, stamped on every hit like [Hit.Backend] and
+	// carried with it between nodes, because only the backend knows who can
+	// write there: a caller holds a hit and nothing else, and a hit read on
+	// a node that did not search is a hit whose backend it cannot ask. A
+	// backend that names nobody says so, and the trust says how far the
+	// surface itself vouches for whoever wrote it.
+	Provenance provenance.Label
 }
 
 // ReadPages is a ranked answer as a `knowledge_read` records it: each hit in

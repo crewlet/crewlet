@@ -51,7 +51,7 @@ export function actionName(words: string, name: string): string {
 
 /** A built-in service's own mark. */
 export function ServiceMark({ service, size }: { service: BuiltInService; size: "md" | number }) {
-  return <ProductMark product={service.key} size={size} soon={service.soon} />;
+  return <ProductMark product={service.key} size={size} />;
 }
 
 /** A tool's state as one tag, only where it carries meaning. */
@@ -71,15 +71,6 @@ export function ServiceState({ service }: { service: BuiltInService }) {
   // company would be a guess. A SERVICE IS IN USE, never connected: it is
   // Crewlet's own, so there is nothing to connect.
   if (!service.known) return null;
-  // SOON IS A FACT, CARRIED BY ITS WORD: the accent means where the reader
-  // is, so it is not spent on a service that has not shipped.
-  if (service.soon) {
-    return (
-      <Tag size="sm" variant="neutral">
-        Soon
-      </Tag>
-    );
-  }
   return service.on ? (
     <Tag size="sm" variant="success">
       In use

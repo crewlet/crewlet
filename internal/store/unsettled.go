@@ -25,9 +25,9 @@ import (
 // who reads the count:
 //
 //   - A count that is ANSWERED — to a fleet read, whose asker sums every
-//     node's answer — names those rows beside the count, as [UnsettledRow]s:
-//     by identity, with whatever each count needs to add the row in. The
-//     asker asks every node which of the named rows it keeps
+//     data node's answer — names those rows beside the count, as
+//     [UnsettledRow]s: by identity, with whatever each count needs to add the
+//     row in. The asker asks every data node which of the named rows it keeps
 //     ([EventLog.KeptRows]) and counts each once (internal/eventfan). The
 //     named rows are read in the SAME SNAPSHOT as the count they are taken out
 //     of: read apart, a batch settled between the two is counted as kept and
@@ -188,8 +188,8 @@ func readUnsettled(ctx context.Context, q querier, where []string, args []any) (
 // The other half of every count's unsettled rows (see the file doc). A row one
 // node names unsettled may be kept by another — the batch's keeper, which
 // settled first — and that node's count already holds it, while one no node
-// keeps is in no count at all. So whoever sums the fleet asks every node this
-// about the rows named unsettled, and counts a row once unless a node that
+// keeps is in no count at all. So whoever sums the fleet asks every data node
+// this about the rows named unsettled, and counts a row once unless a node that
 // keeps it counted it already. Only the identity of each row is read. ONE
 // STATEMENT for the rows held and the batches unsettled — each named row a seek
 // of the log, and its in-flight key probed from it ([keptRowSQL]) — so the two

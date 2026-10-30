@@ -36,6 +36,14 @@
 // delete that cannot be undone is not idempotent in the way a range delete is,
 // so it does not lean on the duty at all. Every write is a compare-and-set,
 // and the retirement claims the seat's own lease while it deletes.
+//
+// A human seat's chat read state is judged the same way and for the same
+// reason ([ChatReadJobs], chatreads.go): it lives in a coordination bucket with
+// no age, so the record of a seat that left is forgotten only by a decision
+// taken against the human seats of the company the fleet is pointed at —
+// stamped when a sweep first finds the seat gone, forgotten
+// [ChatReadForgetGrace] later, the mailbox's grace, so a seat restored inside
+// it gets back its mail and its rooms together.
 package maintenance
 
 import (
@@ -56,8 +64,10 @@ var log = logging.Get("maintenance")
 // Fifteen minutes, deliberately SHORTER than every retention below it. That
 // ordering is the module's invariant: a tick longer than a retention would
 // let a table sit past its horizon for the difference, and the retention
-// would stop describing the table. [New] enforces it rather than trusting
-// it, because the one configurable retention can be set by an operator.
+// would stop describing the table. Every sweep enforces it rather than
+// trusting it ([Worker.horizon] raises a horizon at or below the tick, and
+// says so), because two of the retentions are the company's and an apply can
+// move them under a running worker.
 //
 // It does not need to be much shorter. These are range deletes on indexed
 // columns answering a question nothing reads back, so a faster tick buys
@@ -332,7 +342,15 @@ func (w *Worker) Jobs() []string {
 }
 
 // horizon is how far back a job keeps rows on THIS sweep: its own answer,
-// asked now, raised to the tick when it asks for less.
+// asked now, raised to the tick when it asks for no more than the tick.
+//
+// AT OR BELOW, because the invariant [Interval] states is that the tick is
+// SHORTER than every horizon. A horizon exactly on the tick does not move when
+// it is raised — the value already is the floor — so the warning is the whole
+// of the behaviour there, and that is the point: a retention sitting on the
+// sweep's own cadence is one the SWEEP decides rather than the caller, and the
+// caller is the only one who will size a table from it. Strictly below was the
+// condition, which let the boundary pass in silence.
 //
 // A horizon that answers zero or less is refused for the sweep — the cutoff
 // it makes is the sweep's own instant, which deletes every row the table
@@ -346,7 +364,7 @@ func (w *Worker) horizon(ctx context.Context, j Job) (time.Duration, error) {
 		return 0, fmt.Errorf("%s: its horizon answered %v, which would delete every "+
 			"row it holds; the job was skipped this sweep", j.Name, asked)
 	}
-	if asked >= w.interval {
+	if asked > w.interval {
 		return asked, nil
 	}
 	w.raisedMu.Lock()

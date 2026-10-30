@@ -13,6 +13,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/presence"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -180,14 +181,16 @@ type touches struct {
 	turns []string
 }
 
-func (p *touches) Touch(id artifacts.ID, seat, turn string, activity artifacts.PresenceActivity,
-	focus artifacts.Focus) {
-
+func (p *touches) Touch(room presence.Room, a presence.Agent) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.got = append(p.got, fmt.Sprintf("%s %s %s %s/%s", id.Label(), seat, activity,
-		focus.Collection, focus.Doc))
-	p.turns = append(p.turns, turn)
+	if room.Kind != presence.RoomArtifact {
+		p.got = append(p.got, "a "+string(room.Kind)+" room")
+		return
+	}
+	p.got = append(p.got, fmt.Sprintf("%s %s %s %s/%s", artifacts.ID(room.ID).Label(), a.Seat,
+		a.Activity, a.Focus.Collection, a.Focus.Doc))
+	p.turns = append(p.turns, a.Turn)
 }
 
 func (p *touches) all() []string {

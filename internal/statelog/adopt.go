@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go"
 
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // AdoptPartSuffix is what a fetched artefact is called while it is being
@@ -282,9 +283,9 @@ var ErrAdoptionUnrecorded = errors.New("statelog: the artefact is installed " +
 
 // ErrJoinerFault reports a join that ended before anything was installed, on a
 // fault of THIS NODE'S OWN rather than of the offer — the trim-hold register it
-// pins through refusing the pin, its disk refusing the copy, its own store
-// refusing the adoption's first row, a close or an install that failed and was
-// rolled back to the live file.
+// pins through refusing the pin, its disk refusing the copy or the stamp that
+// names it, its own store refusing the adoption's first row, a close or an
+// install that failed and was rolled back to the live file.
 //
 // NEITHER A DONOR'S REFUSAL NOR [ErrNoOffer], and the join ends at the offer
 // that met it: every other offer would be fetched in full only to meet the same
@@ -369,8 +370,12 @@ func ownFault(err error) error {
 //  7. RE-CHECK that every adopted position is still above the floor. The hold
 //     makes this a belt; a fleet that trimmed anyway is one this node must not
 //     follow into a hole.
-//  8. INSTALL, which is the one place the engine replaces a live database.
-//  9. COMPLETE, and hand the hold to the caller, who releases it once this
+//  8. NAME THE COPY: mint the artefact a fresh estate instance, so whatever
+//     this node derives from the rows by a forward walk sees the replacement
+//     from the file itself — whether or not the process that installed it is
+//     still running when it next looks ([EstateInstance]).
+//  9. INSTALL, which is the one place the engine replaces a live database.
+//  10. COMPLETE, and hand the hold to the caller, who releases it once this
 //     node's own position counts the tail ([AdoptDeps.Hold]).
 //
 // # Which side of the install a failure fell on
@@ -505,7 +510,7 @@ func (a *Adopter) Join(ctx context.Context) (Adoption, error) {
 	return Adoption{}, fmt.Errorf("%w: %w", ErrNoOffer, errors.Join(refusals...))
 }
 
-// adopt runs steps 1 and 3 through 9 for one chosen offer, recording each
+// adopt runs steps 1 and 3 through 10 for one chosen offer, recording each
 // phase under the adoption's start, began. It reports whether the artefact was
 // installed — the rename happened — by handing back the release of the pin on
 // its tail, beside any failure; nil means nothing was installed, and the pin
@@ -580,8 +585,8 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (keep
 	// forward either.
 	if ahead := aheadOf(schema.Applied, known); len(ahead) > 0 {
 		return nil, fmt.Errorf("statelog: the artefact carries migrations "+
-			"this binary does not: %v — its rows are shaped by code this node "+
-			"does not run", ahead)
+			"this binary does not: %s — its rows are shaped by code this node "+
+			"does not run", words.And(ahead))
 	}
 
 	// 5. VERIFY the bytes — hashed as the transfer wrote them, rather than
@@ -604,10 +609,10 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (keep
 		return nil, err
 	}
 	if len(empty) != len(offer.Manifest.Scrubbed) {
-		return nil, fmt.Errorf("statelog: the artefact claims %v scrubbed "+
-			"and only %v are empty — the safety argument for accepting it at all "+
+		return nil, fmt.Errorf("statelog: the artefact claims %s scrubbed "+
+			"and only %s are empty — the safety argument for accepting it at all "+
 			"is that everything still in it is fleet-visible",
-			offer.Manifest.Scrubbed, empty)
+			words.And(offer.Manifest.Scrubbed), words.And(empty))
 	}
 	// THIS NODE'S OWN STORE, and nothing is installed yet: a write it
 	// refuses is refused for every offer, so the join ends here rather than
@@ -626,7 +631,14 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (keep
 		}
 	}
 
-	// 8. INSTALL. Both databases must be closed: this process's claim is
+	// 8. NAME THE COPY, after every check of the file and before the
+	// rename — see [stampEstateInstance] for why on both counts.
+	instance, stampErr := stampEstateInstance(ctx, part, a.now())
+	if stampErr != nil {
+		return nil, stampErr
+	}
+
+	// 9. INSTALL. Both databases must be closed: this process's claim is
 	// on the PATH rather than the inode, so an open handle would be
 	// writing into a file that is no longer at that name.
 	// A CLOSE OR AN INSTALL THAT FAILED IS THIS NODE'S — its own database
@@ -660,7 +672,7 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (keep
 		return release, fmt.Errorf("%w: the artefact is installed and "+
 			"opening it failed: %w", ErrEstateNotRestored, err)
 	}
-	// 9. COMPLETE, through the installed phase. A write refused here is the
+	// 10. COMPLETE, through the installed phase. A write refused here is the
 	// node estate's — the history row's — and the database it describes is
 	// live and open, so the adoption stands and only its record is short.
 	phase, recordErr := AdoptionInstalled, a.deps.Record(ctx, began,
@@ -674,11 +686,14 @@ func (a *Adopter) adopt(ctx context.Context, offer Offer, began time.Time) (keep
 	// and the instant it was taken is how old the history it installed is.
 	// The engine wrote a second `statelog_adopted` holding those two, and
 	// one adoption read as two. Written whether or not the row could be
-	// advanced, because the adoption happened either way.
+	// advanced, because the adoption happened either way. The instance is the
+	// copy's new name, which a reader that rebuilds on seeing it will log
+	// beside its own line.
 	a.log.InfoContext(ctx, "statelog_adopted",
 		"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,
 		"sha256", offer.Manifest.SHA256, "taken_at", offer.Manifest.TakenAt,
-		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains))
+		"bytes", offer.Manifest.Bytes, "domains", len(offer.Manifest.Domains),
+		"instance", instance)
 	if recordErr != nil {
 		a.log.ErrorContext(ctx, "statelog_adoption_unrecorded",
 			"node", a.deps.NodeID, "donor", offer.Manifest.NodeID,

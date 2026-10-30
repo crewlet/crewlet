@@ -56,13 +56,15 @@
  * control nested in a control, which neither a keyboard nor a screen reader
  * can reach as itself. So it is the chart's card, then this link.
  *
- * # Message is a task that asks
+ * # Message is a task that asks, and a direct message is chat's
  *
- * There is no person-to-seat chat channel. Message opens the one New task
- * sheet with the seat as assignee and `ask` set, so the question is filed as
- * work the seat owes an answer on, and the answer lands in the asker's Inbox.
- * On the reader's own seat it is held, by the button itself, exactly as on the
- * seat's page — an ask only they could answer.
+ * Message opens the one New task sheet with the seat as assignee and `ask`
+ * set, so the question is filed as work the seat owes an answer on, and the
+ * answer lands in the asker's Inbox. Where the company runs the engine's own
+ * chat and the reader holds it, Direct message beside it opens a conversation
+ * with the seat instead — a remark that obliges nothing, in the room the two
+ * of them share. On the reader's own seat each is held, by the button itself,
+ * exactly as on the seat's page.
  *
  * # Your own seat points at your Account
  *
@@ -88,6 +90,7 @@ import {
 import { UserGlyph } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { MessageSeatButton } from "~/components/writes.tsx";
+import { DirectMessageSeatButton } from "./DirectMessage.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { fmtCount, fmtElapsed, fmtMinute, fmtTime, plural, readerDay } from "~/lib/format.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
@@ -495,6 +498,7 @@ function SeatPeekBody({
           Open profile
         </ButtonLink>
         <MessageSeatButton handle={seat.handle} />
+        <DirectMessageSeatButton handle={seat.handle} />
         {holding &&
           gestures.map((gesture) => (
             <Button

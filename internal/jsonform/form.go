@@ -28,6 +28,8 @@ import (
 	"slices"
 	"strings"
 	"unicode"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Type is what one value of a form is.
@@ -397,7 +399,8 @@ func (f *Form) paths(prefix string, out *[]Path, on map[*Form]bool) {
 // format's own test of its reference fails on the change that broke it.
 func (f *Form) Outline(rules map[string]string) string {
 	if _, unknown := f.Unruled(rules); len(unknown) > 0 {
-		panic(fmt.Sprintf("jsonform: a reference rules keys its form does not have: %v", unknown))
+		panic(fmt.Sprintf("jsonform: a reference rules keys its form does not have: %s",
+			words.And(unknown)))
 	}
 	var b strings.Builder
 	for _, p := range f.Paths() {
@@ -454,11 +457,12 @@ func keysOf(f *Form) []string {
 	return f.Keys()
 }
 
-// OneOf is a closed set as a reference names it: "one of `a`, `b`, `c`".
+// OneOf is a closed set as a reference names it: "one of `a`, `b` or `c`",
+// each member in the backticks the reference writes a value in ([words.Said]).
 func OneOf[T ~string](values []T) string {
-	parts := make([]string, len(values))
+	parts := make([]words.Said, len(values))
 	for i, v := range values {
-		parts[i] = "`" + string(v) + "`"
+		parts[i] = words.Said("`" + string(v) + "`")
 	}
-	return "one of " + strings.Join(parts, ", ")
+	return "one of " + words.Or(parts)
 }

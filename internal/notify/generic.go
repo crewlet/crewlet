@@ -4,6 +4,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Generic is the prompt for a source nobody has written one for.
@@ -16,7 +18,7 @@ import (
 //     nothing about, the body is all the context there is.
 //   - It therefore reports no recon needed: the trigger IS the context, so
 //     the turn-start filters have something real to filter against.
-//   - It derives no conversation key, so its events are never merged. Merging
+//   - It derives no partition key, so its events are never merged. Merging
 //     two triggers the spine cannot tell apart loses one of them.
 //   - It supersedes nothing, because it has no idea which of this
 //     third-party app's bodies are state and which are messages.
@@ -57,7 +59,14 @@ func (Generic) ConversationIdentity(map[string]string, string) string { return "
 // WakesActor is false for an unrecognised source: an event type nobody has
 // classified that turns out to loop takes the company down with it, while
 // one that goes unheard costs a single notification.
-func (Generic) WakesActor(string) bool { return false }
+func (Generic) WakesActor(Inbound) bool { return false }
+
+// Provenance is what the source's parser stated, and otherwise an integration's
+// notification by nobody named: a source the spine knows nothing about writes
+// no surface this build can name, and nothing in it vouches for its author.
+func (Generic) Provenance(n Inbound, parties Parties) Provenance {
+	return Stated(n, parties, provenance.SourceNotification)
+}
 
 // DigestBody passes the body through unchanged: a backend with no message
 // format of its own has nothing to render a digest into.

@@ -36,16 +36,19 @@ func TestEveryEnvelopeDecodesBackToItsValues(t *testing.T) {
 	}, {
 		name: "an authority refusal",
 		write: func(w http.ResponseWriter) {
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeUnauthorized,
-				authz.RefusalDetail(authz.ReasonAssistScope, []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}))
+			status, code, fields := authz.RefusalFields(authz.Decision{Reason: authz.ReasonAssistScope,
+				Grants: []iam.Grant{iam.GrantWorklet, iam.GrantAdmin}})
+			httpjson.FailWithFields(w, status, code, fields)
 		},
 		want: httpjson.Refused{Code: httpjson.CodeUnauthorized,
-			Reason: string(authz.ReasonAssistScope), Grants: []string{"worklet", "admin"}},
+			Message: unauthorizedSays(authz.ReasonAssistScope, iam.GrantWorklet, iam.GrantAdmin),
+			Reason:  string(authz.ReasonAssistScope), Grants: []string{"worklet", "admin"}},
 	}, {
 		name: "a step-up",
 		write: func(w http.ResponseWriter) {
-			httpjson.FailWithFields(w, http.StatusForbidden, httpjson.CodeStepUpRequired,
-				authz.StepUpDetail(authz.Decision{Reason: authz.ReasonStepUp, Recency: iam.RecencyStepUp}))
+			status, code, fields := authz.RefusalFields(authz.Decision{Reason: authz.ReasonStepUp,
+				Recency: iam.RecencyStepUp})
+			httpjson.FailWithFields(w, status, code, fields)
 		},
 		want: httpjson.Refused{Code: httpjson.CodeStepUpRequired,
 			Reason: string(authz.ReasonStepUp), Grants: []string{}},
@@ -54,7 +57,11 @@ func TestEveryEnvelopeDecodesBackToItsValues(t *testing.T) {
 		rec := httptest.NewRecorder()
 		tc.write(rec)
 		got, ok := httpjson.Decode(rec.Body.Bytes())
-		tc.want.Message = tc.want.Code.Message()
+		// THE CODE'S OWN SENTENCE, but where a case names the one its
+		// refusal chose: `unauthorized` says the rule its reason names.
+		if tc.want.Message == "" {
+			tc.want.Message = tc.want.Code.Message()
+		}
 		if !ok || got.Code != tc.want.Code || got.Message != tc.want.Message ||
 			got.Detail != tc.want.Detail || got.Hint != tc.want.Hint ||
 			got.Reason != tc.want.Reason || !slices.Equal(got.Grants, tc.want.Grants) {

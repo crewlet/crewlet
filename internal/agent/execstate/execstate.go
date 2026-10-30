@@ -59,6 +59,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/agent/ledger"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // Version is the format this build writes, and the one it reads.
@@ -214,9 +215,19 @@ type State struct {
 	// embedded as its label and what it did.
 	Ask string `json:"ask,omitempty"`
 
+	// AskProvenance is who wrote Ask ([types.TurnCompleted.AskProvenance]),
+	// parked beside it for the same reason: the segment that records the
+	// ask reads no trigger, so the label the first segment read it under is
+	// one nothing else could rebuild. Nil where Ask is the company's or the
+	// seat's own words, or empty.
+	AskProvenance *provenance.Label `json:"ask_provenance,omitempty"`
+
 	// Interactions is who spoke to the seat and what they said — one per
 	// constituent of the trigger, as the dispatch read them — parked for the
 	// reason Ask is: the segment that settles the turn re-reads no trigger.
+	// Each keeps the label its body was read under
+	// ([types.InboundInteraction.Provenance]), which that segment could no
+	// more decide again than it could AskProvenance.
 	//
 	// TWO READERS, both in that segment. Its completed-turn event carries
 	// them, and that event is the one every post-turn worker that waits for

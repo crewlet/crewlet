@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/api/httpjson"
+	"github.com/crewlet/crewlet/internal/api/operator"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/api/paced"
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -25,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifactupload/lint"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -62,7 +64,7 @@ func decodeWithin(w http.ResponseWriter, r *http.Request, out any, empty bool, l
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(out); err != nil {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody,
-			map[string]string{"detail": err.Error()})
+			map[string]string{"detail": plainjson.Unreadable("the body", err)})
 		return false
 	}
 	return true
@@ -195,9 +197,9 @@ func (s *Service) transfer(w http.ResponseWriter, r *http.Request) {
 	c := lookup
 	if u.Artifact.IsZero() {
 		d := authz.Decide(r.Context(), p, authz.ActionArtifactCreate,
-			authz.Object{Kind: authz.KindArtifact}, s.gate.Chart, s.gate.now())
+			authz.Object{Kind: authz.KindArtifact}, s.gate.Chart, s.gate.decidedAt(r.Context()))
 		if d.Unknown() || !d.Allowed {
-			refuseDecision(w, r, authz.ActionArtifactCreate, d)
+			operator.RefuseDecision(w, r, authz.ActionArtifactCreate, d)
 			return
 		}
 	} else {
@@ -222,8 +224,12 @@ func (s *Service) transfer(w http.ResponseWriter, r *http.Request) {
 	body := paced.NewBody(r.Body, http.NewResponseController(w), s.pace)
 	if err := pipe.Transfer(r.Context(), c, upload, r.PathValue("path"), body, size); err != nil {
 		if errors.Is(err, paced.ErrBody) {
+			// THE READ'S OWN FAILURE TO THE LOG, as Go spelled it; the
+			// person is told what to do ([paced.Unread]).
+			log.InfoContext(r.Context(), "api_artifact_body_unread",
+				"upload", upload, "error", err.Error())
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeUnreadableBody,
-				map[string]string{"detail": err.Error()})
+				map[string]string{"detail": paced.Unread})
 			return
 		}
 		writeFailed(w, r, "", "transfer the file", err)

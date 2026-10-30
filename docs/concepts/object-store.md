@@ -159,8 +159,18 @@ logs reserve their ceilings, and every seat's mailbox and every coordination
 bucket (the leases, ledgers and budget counters the fleet runs on) share what
 is left. A bucket allowed to grow into that remainder would, once full, refuse
 a lease heartbeat, which stops the fleet; a bucket at its reservation refuses
-**uploads, and only uploads**. The collector does not bound the bucket: it
-deletes what no row names, never the files a company keeps.
+**uploads, and only uploads**. A person uploading is told there's no room left
+and that an administrator needs to make room, as a `503` with no
+`Retry-After`, since no wait clears it, and an agent's file and artifact tools
+are told not to try again. An upload the store simply did not take (a request
+that ran out of time, a broker or a provider that didn't answer) is a `503`
+under an election's wait instead, and the tools are told to try again
+shortly: the object store classes every put it could not finish once, so a
+project file's upload, an artifact's, an image attached to a question for the
+[Dashboard Assistant](../guides/assistant.md) and both kinds of tool answer each
+the same way, and the assistant is told what kept out a file a deep-work run
+delivered. The collector does not bound the bucket: it deletes what no row
+names, never the files a company keeps.
 
 ```yaml
 store:
@@ -174,10 +184,11 @@ store:
   quarter of the limit, and what the limit leaves once the state logs' half
   (or the log ceilings you set, where they are larger) and a 1 GiB floor for
   the coordination remainder are taken out. It is never below 1 GiB, the
-  smallest value the field accepts. Where the broker states no limit, the
-  stream volume's free space stands in for it. The bucket is created before
+  smallest value the field accepts. Where the broker states no limit, three
+  quarters of the stream volume's free space stands in for it: the cap
+  nats-server holds a store to when none is set. The bucket is created before
   the state logs are sized, so the logs size themselves from what the broker
-  has left, or from the free space less the bucket's reservation where the
+  has left, or from that stand-in less the bucket's reservation where the
   broker states no limit.
 - **A broker needs room for it.** On a host whose broker can reserve only a
   few gibibytes, the bucket's gibibyte is on top of the state logs' floors;
@@ -463,7 +474,7 @@ lock-free deletion sound:
 
 - the applier performs a carry only by finding the artifact's own live
   reference to that object **in its own apply transaction**; finding none, it
-  skips the record identically on every node, and the publisher is told `409
+  skips the record identically on every data node, and the publisher is told `409
   carried_object_gone`, naming the files to send again;
 - every record that adds or removes an artifact's object reference is ordered
   on that artifact's own subject, so no carry can race a removal;

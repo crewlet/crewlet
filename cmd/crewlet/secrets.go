@@ -66,7 +66,7 @@ import (
 // rows against the `secrets.active_key_id` that file names, and so needs it
 // ([secretsBootstrap]).
 
-const secretsUsage = `crewlet secrets — read and rotate the encrypted secret store
+const secretsUsage = `crewlet secrets: read and rotate the encrypted secret store
 
 Usage:
   crewlet secrets list                     What is set, and when it was last written
@@ -87,7 +87,7 @@ The company's secrets live in the fleet's store, which every node reads. While
 this node's engine runs, these commands go through its authenticated /secrets
 surface; while it is stopped, they reach the store through this node's own
 broker, or the external one it dials. Through a node, export CREWLET_API_TOKEN
-to authenticate. It is the only source — the Tier A api.auth.tokens list is
+to authenticate. It is the only source: the Tier A api.auth.tokens list is
 what the node ACCEPTS, not a wallet this command helps itself from.
 
 Through -api, a machine with no Tier A file at -config runs every command
@@ -120,7 +120,7 @@ func runSecrets(environ config.Source, args []string, stdout, stderr io.Writer) 
 		"the id the generated key is installed under (keygen only)")
 	dryRun := fs.Bool("dry-run", false,
 		"report what would be re-sealed without writing (rekey only)")
-	apiURL := fs.String("api", "",
+	apiURL := nodeAPIFlag(fs,
 		"a running node to go through; default is this node's engine at the "+
 			"api.host:port in -config when it runs, and the fleet's store "+
 			"itself when it is stopped")
@@ -292,7 +292,7 @@ type secretBackend interface {
 	// name.
 	Values(ctx context.Context, names []string) (map[string]string, error)
 
-	Unset(ctx context.Context, name string) (bool, error)
+	Unset(ctx context.Context, name string) (removedSecret, error)
 	Rekey(ctx context.Context, activeKeyID string) (rotation, error)
 
 	// EngineKeys counts what the keyring seals that no command names —
@@ -310,6 +310,15 @@ type storedSecret struct {
 	Author secrets.Author
 	ReadBy map[string][]string
 	Reload *configapi.Reloaded
+}
+
+// removedSecret is what an unset did: whether the name was there, and
+// (through a running node) the re-activation the node made of the revision
+// that read it (ADR-0070), nil where nothing reads it or the store was reached
+// directly.
+type removedSecret struct {
+	Removed bool
+	Reload  *configapi.Reloaded
 }
 
 // rotation is what one rekey moved: the store's rows, and the identity
@@ -489,7 +498,7 @@ func (r storeRun) unreachable() string {
 	if r.offline {
 		return "Otherwise either fix that, " + node + ", or stop `crewlet run` on " +
 			"this node and re-run: with its engine stopped, the command reaches " +
-			"the fleet's store itself — unless the node is a member of a cluster, " +
+			"the fleet's store itself, unless the node is a member of a cluster, " +
 			"which is sent to a running member"
 	}
 	return "Otherwise fix that, or " + node
@@ -598,7 +607,7 @@ func throughTheRunningNode(environ config.Source, boot *config.Bootstrap, bootst
 		// were holding the store.
 		return nil, fmt.Errorf("%w\n\n%s's database is held by the process "+
 			"named above. While that is its engine, %s has to go through its "+
-			"API — and it cannot: %w%s\n\n%s", err, bootstrapPath, run.command,
+			"API, and it cannot: %w%s\n\n%s", err, bootstrapPath, run.command,
 			cerr, heldByACommand, run.unreachable())
 	}
 	return &secretTarget{secretBackend: client, throughNode: true,
@@ -842,6 +851,22 @@ func (t *secretTarget) writtenNote(written storedSecret) string {
 	return secretsStoppedNote
 }
 
+// removalNote is [secretTarget.writtenNote] for an unset: who stops resolving
+// the removed value, and when. Through a node, what the node's re-activation
+// did ([removalReloadNote]); on the store reached directly,
+// [secretsStoppedRemovalNote].
+func (t *secretTarget) removalNote(removed removedSecret) string {
+	if t.throughNode {
+		return removalReloadNote(removed.Reload)
+	}
+	return secretsStoppedRemovalNote
+}
+
+// secretsStoppedRemovalNote is [secretsStoppedNote] for an unset.
+const secretsStoppedRemovalNote = "This node's engine starts without it; a node " +
+	"already running on the same store stops resolving it at its next configuration " +
+	"apply, and POST /config/reload to it re-activates the current revision now."
+
 // secretsUnreadNote is a write through a node of a value nothing the running
 // company reads: nothing was re-activated, because nothing that runs changes.
 const secretsUnreadNote = "Nothing the running company reads names it, so nothing " +
@@ -863,6 +888,37 @@ func reloadNote(reload *configapi.Reloaded) string {
 			"company as revision %s, epoch %d.", reload.RevisionID, reload.Epoch)
 	default:
 		return fmt.Sprintf("It is stored and was NOT re-activated (%s): %s. POST "+
+			"/config/reload to a node re-activates the current revision once that is fixed.",
+			reload.Error, strings.TrimSuffix(reload.Detail, "."))
+	}
+}
+
+// secretsUnreadRemovalNote is [secretsUnreadNote] for an unset: nothing the
+// running company reads named the value, so nothing that runs changes, and a
+// revision that names it resolves it from the environment.
+const secretsUnreadRemovalNote = "Nothing the running company reads names it, so " +
+	"nothing was re-activated; a revision that names it reads it from the environment " +
+	"when that revision applies."
+
+// removalReloadNote is [reloadNote] for an unset, which re-activates the
+// revision that reads the name as a write does (ADR-0070): the revision and
+// epoch the running fleet stopped resolving the value at, or why it was not
+// re-activated, which leaves the running fleet resolving the removed value
+// until a re-activation succeeds. The row is gone in every case.
+func removalReloadNote(reload *configapi.Reloaded) string {
+	switch {
+	case reload == nil:
+		return secretsUnreadRemovalNote
+	case reload.Deferred:
+		return "It is removed, and the running company goes on resolving it until the " +
+			"next re-activation."
+	case reload.Error == "":
+		return fmt.Sprintf("The running fleet stopped resolving it: the node "+
+			"re-activated the company as revision %s, epoch %d.", reload.RevisionID,
+			reload.Epoch)
+	default:
+		return fmt.Sprintf("It is removed and was NOT re-activated (%s): %s. The "+
+			"running fleet goes on resolving it until a re-activation succeeds; POST "+
 			"/config/reload to a node re-activates the current revision once that is fixed.",
 			reload.Error, strings.TrimSuffix(reload.Detail, "."))
 	}
@@ -908,16 +964,24 @@ func getSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Wri
 	return err
 }
 
+// unsetSecret removes a secret, and says which store it reached and who stops
+// resolving the value when: the two lines a write prints ([setSecret]),
+// because a removal is as invisible afterwards. The engine resolves a `${VAR}`
+// through the snapshot its last apply took, so a value removed from a running
+// fleet goes on being used until the next apply, and an unset that said only
+// "removed" read as one that failed.
 func unsetSecret(ctx context.Context, sv *secretTarget, name string, stdout io.Writer) error {
-	gone, err := sv.Unset(ctx, name)
+	removed, err := sv.Unset(ctx, name)
 	if err != nil {
 		return err
 	}
-	if !gone {
-		fmt.Fprintf(stdout, "%s was not set\n", name)
+	if !removed.Removed {
+		fmt.Fprintf(stdout, "%s was not set in %s\n", name, sv.where)
 		return nil
 	}
 	fmt.Fprintf(stdout, "removed %s\n", name)
+	fmt.Fprintf(stdout, "written to %s\n", sv.where)
+	fmt.Fprintln(stdout, sv.removalNote(removed))
 	return nil
 }
 
@@ -1095,7 +1159,7 @@ secrets:
 
   export %s=%s
 
-Key generation is always explicit — a silently generated key that nobody
+Key generation is always explicit: a silently generated key that nobody
 captured makes every encrypted row unrecoverable. Keep the id stable across
 restarts: it is stamped into every envelope this key seals, and only a
 rotation should introduce a new one.

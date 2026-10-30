@@ -27,7 +27,7 @@ knowledge:
 
 | | `doclet` | `confluence` |
 |---|---|---|
-| Where pages live | the fleet's own ordered log, applied into every node's database | a Confluence site |
+| Where pages live | the fleet's own ordered log, applied into every data node's database | a Confluence site |
 | How search works | keyword (BM25 over the node's own lexical index), semantic (two-stage 1-bit retrieval — an index over the codes, then an exact rerank), or `hybrid` — both, fused | CQL against the site's search API, live at query time |
 | Who it searches as | the engine — every seat reads every page, so there is no per-seat credential to be missing | **the agent's own user**, so Confluence enforces its page permissions natively |
 | Staleness | the index is built behind the node's own applied rows; a node still indexing SAYS SO rather than answering empty | none — there is no local copy at all |
@@ -68,8 +68,9 @@ The driver this engine ships has **no approximate-nearest-neighbour index** —
 `internal/store/caps.go` measures for one once per process and reports what it
 found on every open — and the alternatives to building one were a full exact
 scan of every vector on every query, or embedding a search library with its
-own index format, file and backup story on every node. Instead the search is
-**two stages**, which is the shape every production vector engine uses anyway:
+own index format, file and backup story on every data node. Instead the
+search is **two stages**, which is the shape every production vector engine
+uses anyway:
 
 1. **Stage one** ranks a narrow table of **1-bit sign codes** — one bit per
    dimension, 387 bytes at 3 072 dimensions against 12 KB for the vector — and
@@ -234,11 +235,11 @@ index        measured on 118432 sources: 0.9812 against a 0.9800 floor in its wo
 recall       0.9761  (floor 0.9312 for this corpus size)
 worst query  0.9467
 head misses  0  (documents dropped from the exact top ten)
-scan recall  0.9803 with 0 head miss(es) — the same search with the full scan as its first stage
-narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  — scan 0.9950, 0 head miss(es)
-narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  — scan 0.9810, 0 head miss(es)
-narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  — scan 0.9967, 0 head miss(es)
-narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  — scan 1.0000, 0 head miss(es)
+scan recall  0.9803 with 0 head miss(es), from the same search with the full scan as its first stage
+narrowed     source:page      recall 0.9950  floor 0.9800  head misses 0  (25 of 25 scanned)  (scan 0.9950, 0 head miss(es))
+narrowed     source:task      recall 0.9772  floor 0.9368  head misses 0  (scan 0.9810, 0 head miss(es))
+narrowed     container:task   recall 0.9967  floor 0.9800  head misses 0  (19 of 21 scanned)  (scan 0.9967, 0 head miss(es))
+narrowed     container:page   recall 1.0000  floor 0.9800  head misses 0  (4 of 4 scanned)  (scan 1.0000, 0 head miss(es))
 verdict      the two-stage search recovers the exact ranking at the shipped depth, in every shape
 window       8192 bytes a source (the corpus's opening): a semantic search sees each source's title and body up to it, a keyword search the whole body
 past window  task  2110 of 104208 sources (2.0%), 7.4 MiB of 196.0 MiB of text (3.8%)
@@ -306,8 +307,8 @@ Embedding a document costs a provider call, and it is the one thing in the
 search path a node cannot recompute on its own. So it is not done per node and
 not on the write path — a page save would otherwise carry a third-party HTTP
 round trip inside its own transaction. One **fleet-singleton duty** embeds each
-source once and publishes a record; every data node applies it. The company pays the
-bill once and holds the answer everywhere.
+source once and publishes a record; every data node applies it. The company
+pays the bill once and every data node holds the answer.
 
 The duty ticks **every minute** and embeds at most **1 024 sources in at most
 32 provider requests** per tick, 128 sources a request at most — so a tick on a
@@ -519,11 +520,11 @@ independence is the point:
   function of the id rather than of anything derived from it.
 
 **A single node reads every bucket**, exactly as it did before the column
-existed. A fleet above 10 000 documents divides them: each live node scans a
-contiguous range, returns its best candidates *with scores*, and the asking node
-merges. There is no routing plan to compute and nothing to configure — the
-division is a sorted roster and a remainder, and every node computes the same
-one. See [Search](../guides/search.md) for the merge order, why BM25 stays
+existed. A fleet above 10 000 documents divides them: each live data node scans
+a contiguous range, returns its best candidates *with scores*, and the asking
+data node merges. There is no routing plan to compute and nothing to configure —
+the division is a sorted roster of the data nodes and a remainder, and every
+node computes the same one. See [Search](../guides/search.md) for the merge order, why BM25 stays
 comparable across a divided scan, and what a partial answer names.
 
 The count is fixed for the life of a deployment and is deliberately not
@@ -623,7 +624,7 @@ An empty `backend` **derives** rather than defaulting blindly: a company that de
 
 ### Doclet backend: the engine's own pages
 
-`internal/doclet` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside the tracker's and the vector index's inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
+`internal/doclet` + `internal/search`. The knowledge base is a [state-log domain](../guides/replication.md): every change is one record on `CREWLET_PAGES_LOG`, a deterministic applier writes it into every data node's replicated database, and a lexical index is built behind those rows. The log's byte ceiling is `stream.pages_log_max_bytes`, reserved beside every other state log's — the tracker's, the vector index's, the identity estate's, usage's and chat's — inside one budget (see [how the byte ceilings are sized](../guides/replication.md#how-the-byte-ceilings-are-sized)). A search is BM25 over that index: term-frequency saturation and length normalisation, so a long runbook that mentions a word thirty times does not outrank the short page that is about it.
 
 A search here is **hybrid by default**: the query is embedded once through the company's embeddings provider, and the BM25 ranking and the [two-stage semantic scan](#semantic-search-two-stages-the-first-one-indexed-no-new-dependency) are fused by reciprocal rank fusion. With no provider, or with `knowledge.vectors: false`, it is BM25 alone — and the answer says `served_mode: keyword` with `degraded: no_embeddings` rather than presenting the words as the whole of it.
 
@@ -660,10 +661,21 @@ Two properties differ from the vendor path and both are visible:
   (`pages{parent}`), each read when its row opens, in windows of 500 with the
   listing's `total` and an `after` cursor, and each page saying how many
   `children` the same listing would show under it, so an expander never opens
-  onto a level whose pages are all in the trash. A search there reads THIS
+  onto a level whose pages are all in the trash. A later window resumes the
+  listing's order where the last one stopped — by space, title and id — so
+  the tenth window of a large space costs what its first does. A search there reads THIS
   NODE'S OWN COPY (the rows, the lexical index and the replicated vectors), and
   the screen says so: it is as current as this node's place on the pages log.
   See [the dashboard's Doclet](../reference/dashboard-design.md#doclet-the-spaces-a-landing-and-search-with-real-modes).
+- **THE NEWEST TOOL SKILLS ARE READ IN THEIR OWN ORDER.** `pages{skills:
+  true, order: "newest"}` lists the tool skills by when each last changed,
+  newest first, from an index of the skill rows' own (replicated migration
+  0067), and pages by a cursor in that order — so the first window is the
+  skills that really changed last, however many the company keeps; Agent
+  skills' **Newest** and Home's Agent skills widget read it. Whether a
+  page is a skill is derived from its body on every node rather than stored on
+  the page, so no other listing has an index in that order and `newest` is
+  refused anywhere but beside `skills=true`.
 - **A PAGE KNOWS WHO READ IT AND WHO LINKS TO IT.** Every read a seat makes
   is a recorded `knowledge_read`, and the replicated `usage` domain keeps it
   per company day, so `page_reads` names each seat, how the page reached it
@@ -737,8 +749,8 @@ Two properties differ from the vendor path and both are visible:
   that is not there, or two pages filed under each other, are pages no walk of
   the container ever reaches. An empty parent is the container's top.
   Two moves that are each sound can still race — A under B on one node, B
-  under A on another — and so can a move and its parent's purge. Every node
-  then files the page where it can, identically: a move whose parent it can no
+  under A on another — and so can a move and its parent's purge. Every data
+  node then files the page where it can, identically: a move whose parent it can no
   longer hold leaves the page where it was, a create lands at the top, and a
   `pages_parent_salvaged` warning names the page. **Purging a page re-files
   its children** under its own parent (or the top) rather than leaving them
@@ -837,6 +849,18 @@ Shared knowledge **is** the backend — there is no separate engine-managed stor
 | `crewlet confluence import` ([below](#publishing-knowledge-docs)) | `knowledge.Searcher` (live query) | Same |
 | Agents via `reflect_and_persist` (in-flight) and `PersistDecider` (post-turn) | `agent_diary` (hybrid vector ∪ recency selection → aux-LLM filter) | The writing agent only |
 
+**The company's chat is not in this corpus, and it is not a gap.** Chat has an
+index of its own and a tool of its own (`search_messages`), and a knowledge
+query never reaches it. Two reasons, and the first is one this page already
+acts on: a work item's comment thread is not indexed either, because a thread
+is a conversation *about* something rather than a statement of it, and one busy
+conversation would outrank every page written on purpose for any word said in
+passing. The second is arithmetic — chat has no semantic half at all, because
+a year of it at the declared census needs several times the whole supported
+vector corpus, and what would pay for it is the embeddings on this page. See
+[Chatlet § Search](chatlet.md#search) and
+[ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md).
+
 Static org configuration (mission, vision, policies, role profile, team roster, unit context, integration hints) is a third source, but it is not "knowledge" in the read-path sense: it renders straight into the executor's system prompt via the section builders in `internal/agent/prompts`. There is no startup seed step and no reconcile pass, because the prompt **is** the configuration. Documents that change frequently (procedures, ADRs, runbooks) live in the knowledge base, where humans and agents already author them.
 
 ---
@@ -872,8 +896,18 @@ sequenceDiagram
 
 - **From the sources and nothing else.** The model is told to say only what the
   numbered sources say, to cite each claim as `[n]`, and to say so in one
-  sentence when they do not answer the question. Source `[n]` is the n-th entry
-  of the answer's `sources`, so a screen links every citation. A question
+  sentence when they do not answer the question. Each source reaches it inside a
+  [fence](agent-runtime.md#text-somebody-else-wrote) of a token minted for the
+  call — a page labelled as the search that found it labels it, a work item's
+  description as a colleague's with nobody named — with the standing sentence
+  on what a fence means, so a page that addresses the model is read as the
+  page's words; a long source is condensed reading it under the same label, and
+  the answer has the fence's two escapes applied before anybody reads it. Source `[n]` is the n-th entry
+  of the answer's `sources`, so a screen links every citation; each source's
+  title is its writers' words and has the same escapes applied, and the
+  answer's `provenance` envelope says what the sources were read as — the
+  least trust among them and every writer they name — since a person's
+  assistant reading the answer reads those titles too. A question
   nothing matches is answered without a model at all, and costs nothing.
 - **A person's, not a seat's, and only what the asker uses.** It takes either
   app and a caller who holds a seat: it searches the pages only for a
@@ -897,6 +931,13 @@ sequenceDiagram
   whatever becomes of the answer — an empty reply the tool declines to show
   ("The model wrote no answer") included, since its tokens are spent the moment
   the CLI replies.
+- **A model at its usage limit is a wait.** Where the asker's auxiliary model
+  has reached a usage limit its CLI reported, nothing is launched and nothing is
+  spent: the person is told the model has reached its limit, with the
+  company's models as where an administrator gives it a fallback, and the
+  answer carries the time until the model is tried again as its
+  `Retry-After`, as every caller of a model at its limit reads it
+  ([ADR-0064](https://github.com/crewlet/crewlet/blob/main/adr/0064-a-model-at-its-limit-parks-the-seats-it-holds-and-a-seat-says-one-steady-thing.md)).
 - **Cached at a corpus position.** Each node keeps 256 answers, keyed on the
   question (case and spacing folded) and where its tracker, pages and vector
   logs are applied through. Any write that could change an answer moves the
@@ -1022,7 +1063,7 @@ The two are independent: an org can have knowledge search without reflection, or
 
 ## Relevant-knowledge prefetch
 
-Beyond agents calling the backend's search tools directly, the executor's prompt carries a `## Relevant knowledge` block that pre-runs a knowledge-base search for the seat. Once per turn, the auxiliary LLM generates a short plain-text search query from the trigger context, the searcher runs it live (scoped to the role's accessible containers), and the executor sees title + snippet bullets without having to think to call a tool. When the block is thin — a pointer trigger gates the search off — the executor searches the same seam itself with the `search_knowledge` builtin, once it knows what the task actually needs. The `CanSearch` pre-gate skips the aux-LLM call entirely when a search could not return anything. Because the search runs as the agent's own backend user, restricted pages the agent cannot see never appear — there is no draft-page or restriction filter to apply engine-side.
+Beyond agents calling the backend's search tools directly, the executor's prompt carries a `## Relevant knowledge` block that pre-runs a knowledge-base search for the seat. Once per turn, the auxiliary LLM generates a short plain-text search query from the trigger context, the searcher runs it live (scoped to the role's accessible containers), and the executor sees title + snippet bullets without having to think to call a tool — inside one [fence](agent-runtime.md#text-somebody-else-wrote) of the turn's token, under the label the backend stamped on each hit (`knowledge.Hit.Provenance`: a Doclet page is a colleague's with nobody named, a Confluence page `external` with nobody named), which `search_knowledge` renders through the same function. When the block is thin — a pointer trigger gates the search off — the executor searches the same seam itself with the `search_knowledge` builtin, once it knows what the task actually needs. The `CanSearch` pre-gate skips the aux-LLM call entirely when a search could not return anything. Because the search runs as the agent's own backend user, restricted pages the agent cannot see never appear — there is no draft-page or restriction filter to apply engine-side.
 
 Full page bodies open via the backend's page-read MCP tool; further searches via its search MCP tool (`confluence_get_page` / `confluence_search`).
 

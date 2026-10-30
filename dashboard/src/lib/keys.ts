@@ -26,10 +26,16 @@
  * rather than a chain of ifs. The `g`-prefix grammar is here too, because a
  * prefix is state between two events and every component that wanted one grew
  * its own timer.
+ *
+ * # The layer stack
+ *
+ * Every page key stands aside while a modal surface is open, and the kit's
+ * stack is what says one is. A press reads it at the press; what has to know
+ * when it CHANGES reads it as a value ([useModalLayerOpen]).
  */
 
 import { useEffect, useRef } from "react";
-import { isComposing, isModalLayerOpen } from "@crewlethq/ui";
+import { isComposing, isModalLayerOpen, usePopupLayer } from "@crewlethq/ui";
 
 /**
  * Whether the keyboard currently belongs to something the reader is typing in.
@@ -60,6 +66,32 @@ export function isTyping(): boolean {
   // which is what an interactive role means.
   return el.hasAttribute("tabindex") && el.hasAttribute("role");
 }
+
+/**
+ * Whether a modal surface is open on the kit's layer stack, as a value a
+ * component re-renders on: a dialog, a sheet, the navigation drawer, the
+ * palette, the assistant as the whole window. For a screen that has to know
+ * when the page is covered and when it is not, such as a chat room that counts
+ * a message as seen only while somebody can see it (`app/Shell.tsx`'s
+ * `usePageInView`).
+ *
+ * [isModalLayerOpen] is the stack's answer at one moment, which is all a press
+ * needs, and the kit publishes no feed of the stack's changes. A surface ON the
+ * stack has one: the kit keeps its place in the band current (`usePopupLayer`'s
+ * `zIndex` and `isTopmost`) by re-rendering it on every change, and a popup
+ * that is never open takes no place and registers nothing. So this reads that
+ * feed and nothing else. `keys.test.tsx` holds that a component nothing else
+ * re-renders follows a modal opening and closing, so a kit that stopped
+ * re-rendering a closed popup fails there rather than leaving the answer
+ * stale.
+ */
+export function useModalLayerOpen(): boolean {
+  usePopupLayer({ open: false, onDismiss: neverOpen });
+  return isModalLayerOpen();
+}
+
+/** A popup that never opens is never dismissed. */
+function neverOpen(): void {}
 
 /**
  * Whether the focused element is a control the platform activates on Enter:

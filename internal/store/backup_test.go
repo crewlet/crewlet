@@ -162,3 +162,56 @@ func TestABackupIsNotReadableByTheWholeHost(t *testing.T) {
 		t.Errorf("the backup directory is mode %04o", mode)
 	}
 }
+
+// A BACKUP THAT CANNOT MAKE ITS TEMPORARY FILES NAMES WHERE THEY GO: the
+// variable that places them and the directory it names. The driver builds the
+// copy on a connection of its own, which keeps a temporary database under the
+// first of TURSO_TMPDIR and SQLITE_TMPDIR that is set, else TMPDIR, for as
+// long as the copy runs, so a directory there that is missing or read-only
+// fails every backup, and the driver's words for it, "I/O error (tempdir):
+// entity not found", name no variable and no path.
+//
+// THE CHECK IS THE VARIABLE AND ITS DIRECTORY TOGETHER, because every
+// t.TempDir path carries the test's name, so the variable's name alone would
+// be found there whatever the refusal said.
+func TestABackupThatCannotMakeItsTemporaryFilesNamesWhereTheyGo(t *testing.T) {
+	// One case per variable the driver can take the directory from, each
+	// with the one it reads missing and every other one writable or unset:
+	// the error must name the variable that placed the temporary database
+	// and its directory, since the driver's own label is the same for all.
+	for _, refused := range []string{"TMPDIR", "TURSO_TMPDIR", "SQLITE_TMPDIR"} {
+		t.Run(refused, func(t *testing.T) {
+			db := open(t)
+			missing := filepath.Join(t.TempDir(), "missing")
+			writable := t.TempDir()
+			t.Setenv("TMPDIR", writable)
+			for _, name := range []string{"TURSO_TMPDIR", "SQLITE_TMPDIR"} {
+				unsetEnv(t, name)
+			}
+			t.Setenv(refused, missing)
+
+			_, err := db.Backup(t.Context(), filepath.Join(t.TempDir(), "copy.db"))
+			if err == nil {
+				t.Fatalf("a backup succeeded with %s naming a directory that "+
+					"does not exist, so this case no longer stages the failure "+
+					"it is about", refused)
+			}
+			if want := refused + " (" + missing + ")"; !strings.Contains(err.Error(), want) {
+				t.Errorf("the refusal does not name %q, so it does not say "+
+					"what to change: %v", want, err)
+			}
+		})
+	}
+}
+
+// unsetEnv unsets name for the rest of the test and puts it back after,
+// which is what t.Setenv does for a value: an unset variable and one set to
+// nothing are different things to the driver, which takes a set
+// TURSO_TMPDIR or SQLITE_TMPDIR as the directory whatever it holds.
+func unsetEnv(t *testing.T, name string) {
+	t.Helper()
+	t.Setenv(name, "")
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
+}

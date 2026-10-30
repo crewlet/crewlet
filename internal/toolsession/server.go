@@ -2,9 +2,6 @@ package toolsession
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +9,7 @@ import (
 
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
 )
 
 // Dispatcher is the phase's side of a session: what is offered, and how a call
@@ -251,7 +249,7 @@ func (s *Server) awaitRelist(ctx context.Context, after uint64) {
 func (s *Server) handler(name string) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		call := Call{Name: name, Meta: req.Params.Meta}
-		args, err := decodeArgs(req.Params.Arguments)
+		args, err := toolargs.Decode(req.Params.Arguments)
 		if err != nil {
 			// HANDED ON, NOT ANSWERED HERE: a call whose arguments did not
 			// parse is still a call the phase records, and the dispatcher is
@@ -276,27 +274,4 @@ func (s *Server) handler(name string) mcp.ToolHandler {
 			Content: []mcp.Content{&mcp.TextContent{Text: res.Output}},
 		}, nil
 	}
-}
-
-// decodeArgs turns a call's raw arguments into the map a tool takes.
-//
-// THROUGH json.Number, so a large id survives: Go's default decodes every JSON
-// number to float64, which silently rounds an issue id past 2^53 and sends the
-// wrong one to a tracker.
-func decodeArgs(raw json.RawMessage) (map[string]any, error) {
-	// A tool with no arguments arrives as an absent or empty message, which is
-	// a call with an empty object rather than a malformed one.
-	if len(raw) == 0 || string(raw) == "null" {
-		return map[string]any{}, nil
-	}
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.UseNumber()
-	var out map[string]any
-	if err := dec.Decode(&out); err != nil {
-		return nil, fmt.Errorf("the arguments are not a JSON object: %w", err)
-	}
-	if out == nil {
-		out = map[string]any{}
-	}
-	return out, nil
 }

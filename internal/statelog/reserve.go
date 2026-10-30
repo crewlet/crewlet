@@ -56,9 +56,9 @@ import (
 // # Where it applies
 //
 // Only on a log that claims identity ([ReservationOf]), because only such a
-// log carries gate records. The vector changelog claims none: a reserve there
-// would refuse its ordinary writes early to keep room nothing is ever written
-// into.
+// log carries gate records. The vector changelog and the usage log claim none:
+// a reserve there would refuse their ordinary writes early to keep room nothing
+// is ever written into.
 
 // GateReserveDivisor and GateReserveFleet size the reserve, which is the
 // larger of two terms ([Reservation.Bytes]): a SIXTEENTH of the log's byte
@@ -160,10 +160,10 @@ func (s StreamSpec) MaxAppendBytes() int64 { return s.MaxRecordBytes + appendOve
 // Reservation is how one log's byte ceiling divides between its ordinary
 // appends and the records that install or lift a gate.
 //
-// THE ZERO VALUE KEEPS NO RESERVE, which is the vector changelog's shape and a
-// real setting rather than an absent one: a log that claims no identity
-// carries no gate record, and a reserve there would refuse its ordinary writes
-// early to keep room nothing is ever written into.
+// THE ZERO VALUE KEEPS NO RESERVE, which is the vector changelog's and the
+// usage log's shape and a real setting rather than an absent one: a log that
+// claims no identity carries no gate record, and a reserve there would refuse
+// its ordinary writes early to keep room nothing is ever written into.
 type Reservation struct {
 	// Kept reports that the log keeps a reserve: that it claims identity,
 	// which is what carries gate records ([ReservationOf]).

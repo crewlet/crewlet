@@ -317,7 +317,7 @@ export function CreateCompany({
             />
             <span className="t-caption">
               {leads === "people"
-                ? "Each team lead is a person, with no contact identity until you add one, so no agent can mention them yet."
+                ? "Each team lead is a person, reached through the dashboard until you give them a contact identity in another system."
                 : "Each team lead is an agent."}
             </span>
           </div>
@@ -354,7 +354,7 @@ export function CreateCompany({
               onChange={setValue}
               required={false}
               disabled={disabled}
-              help="Leave it empty if you will work only through the dashboard: no agent can then mention you."
+              help="Leave it empty if you will work only through the dashboard: no other system will then know you."
             />
           </div>
         )}

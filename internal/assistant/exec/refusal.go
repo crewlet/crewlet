@@ -10,9 +10,22 @@ import (
 
 // RefusalOf is a refused answer as the engine reads it: the API's own code,
 // the sentence the envelope says to a person (`message`), the route's `hint`
-// where it gave one, the permissions that would have admitted the person, and
+// where it gave one, where the authority table refused the deciding rule's
+// `reason` beside the permissions that would have admitted the person, and
 // the route's `detail` (what happened to this request, in the terms of the
 // request) as [wire.Refusal.Detail], which only the model reads.
+//
+// AND A DETAIL THE ROUTE WROTE FOR A PERSON as [wire.Refusal.Said] too: a
+// route answering a tool's refusal to a person (ADR-0060) answers it in the
+// words the refusal carries for a person, where it carries any, and tells the
+// tool's own sentence beside them in process
+// ([Response.ModelDetail]), never on the answer. Only that mark makes a detail
+// a person's: unmarked, a detail names tools, fields and the values to send,
+// and is the model's alone.
+//
+// THE REASON TRAVELS WITH THE PERMISSIONS, because they alone cannot say
+// whether access is the way past: a stale proof names the permissions that
+// admitted the person.
 //
 // READ THROUGH internal/api/httpjson's decoder, the one reader of the envelope,
 // so the keys are spelled where they are written. An answer that is not the
@@ -28,6 +41,11 @@ func RefusalOf(resp Response) wire.Refusal {
 		return wire.Refusal{Code: fmt.Sprintf("http_%d", resp.Status),
 			Message: http.StatusText(resp.Status)}
 	}
+	said := ""
+	if resp.ModelDetail != "" {
+		said = refused.Detail
+	}
 	return wire.Refusal{Code: string(refused.Code), Message: refused.Message,
-		Hint: refused.Hint, Grants: refused.Grants, Detail: refused.Detail}
+		Hint: refused.Hint, Reason: refused.Reason, Grants: refused.Grants,
+		Detail: refused.Detail, Said: said}
 }

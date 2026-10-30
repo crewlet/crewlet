@@ -27,7 +27,7 @@ func TestLLMListNamesAnEnvSignInAsEnv(t *testing.T) {
 			entry("plan", "      auth: {token: fake-headless-token}\n")+
 			entry("nothing", "      auth: {mode: subscription}\n"))
 	var out, notes bytes.Buffer
-	if err := runLLM(noEnviron, append([]string{"list"}, flags...), &out, &notes); err != nil {
+	if err := runLLM(noEnviron, append([]string{"list"}, flags...), strings.NewReader(""), &out, &notes); err != nil {
 		t.Fatalf("llm list: %v\n%s%s", err, out.String(), notes.String())
 	}
 	rows := map[string][]string{}

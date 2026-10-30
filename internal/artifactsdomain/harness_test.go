@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifacts/manifest"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -483,4 +485,26 @@ func (n *node) table(name string) string {
 		n.t.Fatalf("read table %s: %v", name, err)
 	}
 	return out
+}
+
+// seedAssets writes count asset rows naming size bytes each straight into this
+// node's copy of artifact id, the state a decide meets on an asset store at its
+// caps — rows no test could otherwise reach without a thousand writes.
+func (n *node) seedAssets(id artifacts.ID, count int, size int64) {
+	n.t.Helper()
+	if err := n.db.Tx(n.t.Context(), func(tx *sql.Tx) error {
+		for i := range count {
+			if _, err := tx.ExecContext(n.t.Context(), `
+				INSERT INTO artifact_assets (artifact_id, asset_id, name, content_type,
+					object, size, added_by, added_by_kind, added_at, version)
+				VALUES (?,?,?,?,?,?,?,?,?,?)`, id.String(), uuid.NewString(),
+				fmt.Sprintf("seeded-%d.png", i), "image/png",
+				fmt.Sprintf("seeded-%s-%d", id, i), size, "jane", "human", 0, 1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		n.t.Fatalf("seed %d assets on %s: %v", count, id, err)
+	}
 }

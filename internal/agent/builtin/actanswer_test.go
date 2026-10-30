@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/mcp"
@@ -61,6 +62,65 @@ var everyWriteCall = map[string]map[string]any{
 	builtin.WritePageTool:     {"title": "Runbook", "body": "step one", "container": "ENG"},
 	builtin.SavePageTool:      {"page": "p1", "base_version": 4, "body": "step two", "title": "Deploy Book"},
 	builtin.CommentOnPageTool: {"page": "p1", "body": "is this current?"},
+	// THE CHAT GESTURES, every one the dashboard makes — the read-state
+	// flush included, which appends nothing ([appendsNoRecord]).
+	builtin.PostMessageTool:   {"channel": chatRoomID, "body": "standup moved"},
+	builtin.ReplyInThreadTool: {"channel": chatRoomID, "reply_to": "m1", "body": "ok"},
+	builtin.SendDMTool:        {"to": []any{"agent-ceo"}, "body": "a word"},
+	builtin.ReactToMessageTool: {"channel": chatRoomID, "message_id": "m1",
+		"emoji": ":+1:"},
+	builtin.JoinChannelTool:  {"channel": chatRoomID},
+	builtin.LeaveChannelTool: {"channel": chatRoomID},
+	chatlet.EditMessageTool: {"channel": chatRoomID, "message_id": "m1",
+		"body": "on it, by noon"},
+	chatlet.DeleteMessageTool: {"channel": chatRoomID, "message_id": "m1"},
+	chatlet.CreateChannelTool: {"channel": "launch", "kind": "private",
+		"members": []any{"agent-ceo"}},
+	chatlet.OpenDMTool:        {"to": []any{"agent-ceo"}},
+	chatlet.UpdateChannelTool: {"channel": chatRoomID, "topic": "the launch"},
+	chatlet.SetChannelMembersTool: {"channel": chatRoomID, "members": []any{"jane",
+		map[string]any{"handle": "agent-ceo", "follow_all": true}}},
+	chatlet.MarkChatReadTool: {"cursors": map[string]any{chatRoomID: 12.0},
+		"mute": []any{chatRoomID}},
+}
+
+// appendsNoRecord are the operator writes that append nothing to any log, each
+// with why — and every gate below holds them to THAT, explicitly, rather than
+// leaving them out: an answer at the top is still what the act transport lifts,
+// so it must say `applied` at no position, and no record may reach a writer.
+//
+// `mark_chat_read` writes a person's read state to the coordination store, a
+// compare-and-set that has landed when it answers: there is no record whose
+// outcome could be pending, no position a read could wait for, and no
+// operation to derive — a cursor only advances and a mute states one room's,
+// so the same flush twice is the same state. Its one `unknown` is a put whose
+// answer was lost, which is the store's to report rather than a record's
+// (TestAFlushWhoseAnswerWasLostIsUnknown).
+var appendsNoRecord = map[string]string{
+	chatlet.MarkChatReadTool: "a read-state flush is a compare-and-set in the " +
+		"coordination store, on no log",
+}
+
+// answersAppliedAtNoPosition is the receipt a write that appends no record
+// must answer with, and that it appended none.
+func answersAppliedAtNoPosition(t *testing.T, name string, answer map[string]any,
+	w *ledgerFake, callsBefore int) {
+
+	t.Helper()
+	if answer["outcome"] != string(statelog.OutcomeApplied) {
+		t.Errorf("%s answered outcome %v, want applied — it landed when it "+
+			"answered: %v", name, answer["outcome"], answer)
+	}
+	if position, stated := answer["position"]; !stated || position != nil {
+		t.Errorf("%s answered position %v, want null at the top — there is no "+
+			"record a read could wait for: %v", name, answer["position"], answer)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.calls != callsBefore {
+		t.Errorf("%s (%s) appended %d records", name, appendsNoRecord[name],
+			w.calls-callsBefore)
+	}
 }
 
 // EVERY WRITE ANSWERS FOR EVERY RECORD IT APPENDED, AT THE TOP. The writers
@@ -74,7 +134,14 @@ func TestEveryOperatorWriteAnswersForEveryRecordItAppended(t *testing.T) {
 	catalogue := writeSurface(w)
 	for name, tool := range catalogue {
 		t.Run(name, func(t *testing.T) {
+			w.mu.Lock()
+			before := w.calls
+			w.mu.Unlock()
 			answer, last := w.call(t, tool, request(1), everyWriteCall[name])
+			if _, none := appendsNoRecord[name]; none {
+				answersAppliedAtNoPosition(t, name, answer, w, before)
+				return
+			}
 			if answer["outcome"] != string(statelog.OutcomePending) {
 				t.Errorf("%s answered outcome %v at the top, want pending — its "+
 					"records were all pending, and the transport lifts this key "+
@@ -102,6 +169,15 @@ func TestARetriedOperatorWriteDerivesTheSameOperations(t *testing.T) {
 			first := w.opsOf(t, tool, request(11), everyWriteCall[name])
 			retry := w.opsOf(t, tool, request(11), everyWriteCall[name])
 			other := w.opsOf(t, tool, request(22), everyWriteCall[name])
+			if why, none := appendsNoRecord[name]; none {
+				// NOTHING TO DERIVE, AND NOTHING DERIVED: a repeat is
+				// the same state rather than the same operation.
+				if len(first)+len(retry)+len(other) != 0 {
+					t.Errorf("%s (%s) derived operations %v, %v, %v", name,
+						why, first, retry, other)
+				}
+				return
+			}
 			if len(first) == 0 {
 				t.Fatalf("%s reached no writer at all, so this case certifies nothing", name)
 			}
@@ -141,6 +217,13 @@ func TestARequestsAnswerNamesTheRequestNotAnOpID(t *testing.T) {
 
 			w := newLedgerFake(statelog.OutcomeUnknown)
 			tool := writeSurface(w)[name]
+			if _, none := appendsNoRecord[name]; none {
+				// NO LEDGER TO LOSE AN ACKNOWLEDGEMENT: a log whose every
+				// write is unknown leaves this one applied at no position.
+				answer, _ := w.call(t, tool, request(67), args)
+				answersAppliedAtNoPosition(t, name, answer, w, 0)
+				return
+			}
 			got, err := tool.Call(w.asked(t, tool, request(67), args), args)
 			if err != nil {
 				t.Fatalf("call: %v", err)
@@ -337,6 +420,20 @@ func writeSurface(w *ledgerFake) map[string]tools.Callable {
 					OperatorID: "ops", OpKey: requestKeyOf(ctx)}, nil
 			},
 		},
+		// THE BOUND SEAT AS AUTHOR, KIND HUMAN AND THE CREDENTIAL BESIDE
+		// IT, with the request's key on the actor — the attribution the
+		// operator surface's chat actor builds. A reader, which the
+		// gestures decided after a read are served with; every call here
+		// names its room by id, and the caller holds admin, so none reads.
+		// And a read-state store, so the one write that appends no record
+		// is served and held to that ([appendsNoRecord]).
+		Chat: builtin.ChatDeps{
+			Reader: newFakeChat(), Writer: w, Cursors: fakeCursors{},
+			Actor: func(ctx context.Context, _ *turnctx.Turn) (chatlet.Actor, error) {
+				return chatlet.Actor{Handle: "jane", Kind: chatlet.AuthorHuman,
+					OperatorID: "ops", OpKey: requestKeyOf(ctx)}, nil
+			},
+		},
 		Authorize: builtin.Decide(chartLeads),
 	}) {
 		if !mcp.ReadOnlyProven(builtin.AnnotationsFor(tool.Name())) {
@@ -406,8 +503,9 @@ func (f *ledgerFake) asked(t *testing.T, _ tools.Callable, request string,
 		t.Fatalf("request key %q: %v", request, err)
 	}
 	// A PERSON, because the operator surface's callers are people and
-	// machines and never a seat — and place_work_item is human-only.
-	return withRequestKey(personHolding(iam.AllGrants...), request)
+	// machines and never a seat — and place_work_item is human-only —
+	// BOUND TO A HUMAN SEAT, because every chat verb is made as one.
+	return withRequestKey(personBoundTo("jane", iam.AllGrants...), request)
 }
 
 // call runs one tool under a request and answers its decoded result and the
@@ -557,8 +655,11 @@ func (f *ledgerFake) WriteView(_ context.Context, opID string, _ worklet.View,
 	return f.written(opID)
 }
 
+// ViewPrior holds every view a case names, as a shared tab on ENG: a save
+// naming an id no view holds is refused before it writes anything.
 func (f *ledgerFake) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
-	return worklet.ViewPrior{}, nil
+	return worklet.ViewPrior{Held: true,
+		Container: worklet.Container{Kind: worklet.ContainerProject, ID: "ENG"}}, nil
 }
 
 func (f *ledgerFake) WriteTypes(_ context.Context, opID string, _ []worklet.TaskType) (worklet.WriteResult, error) {
@@ -605,6 +706,90 @@ func (f *ledgerFake) EnsureTags(_ context.Context, opID, _ string, tags []string
 // from the actor's key ([doclet.Actor.OpKey]), so the key is what is recorded,
 // keyed with the verb, so a save and its rename under one key are still two
 // entries.
+
+// The chat writes. Their operation is derived INSIDE the store from the
+// actor's key, as a page write's is, so the key is what is recorded — with the
+// verb, so a direct message's open and post under one key are two entries.
+
+func (f *ledgerFake) chatWrite(verb string, actor chatlet.Actor) (chatlet.Written, error) {
+	r, err := f.record(verb + ":" + actor.OpKey)
+	return chatlet.Written{
+		Channel:  chatlet.Channel{ID: chatRoomID, Name: chatRoomName, Kind: chatlet.KindPublic},
+		Revision: uint64(r.Position.Packed()), ChangeID: r.OpID, Outcome: r,
+	}, err
+}
+
+func (f *ledgerFake) Post(_ context.Context, actor chatlet.Actor, _ string,
+	_ chatlet.NewMessage) (chatlet.Written, error) {
+	return f.chatWrite("post", actor)
+}
+
+func (f *ledgerFake) Reply(_ context.Context, actor chatlet.Actor, _, _ string,
+	_ chatlet.NewMessage) (chatlet.Written, error) {
+	return f.chatWrite("reply", actor)
+}
+
+func (f *ledgerFake) OpenDirect(_ context.Context, actor chatlet.Actor, _ []string) (
+	chatlet.Written, bool, error) {
+	w, err := f.chatWrite("open", actor)
+	return w, err == nil, err
+}
+
+func (f *ledgerFake) React(_ context.Context, actor chatlet.Actor, _, _, _ string) (
+	chatlet.Written, error) {
+	return f.chatWrite("react", actor)
+}
+
+func (f *ledgerFake) Unreact(_ context.Context, actor chatlet.Actor, _, _, _ string) (
+	chatlet.Written, error) {
+	return f.chatWrite("unreact", actor)
+}
+
+func (f *ledgerFake) Join(_ context.Context, actor chatlet.Actor, _ string) (chatlet.Written, error) {
+	return f.chatWrite("join", actor)
+}
+
+func (f *ledgerFake) Leave(_ context.Context, actor chatlet.Actor, _ string) (chatlet.Written, error) {
+	return f.chatWrite("leave", actor)
+}
+
+func (f *ledgerFake) CreateChannel(_ context.Context, actor chatlet.Actor,
+	_ chatlet.NewChannel) (chatlet.Written, error) {
+	return f.chatWrite("create", actor)
+}
+
+// PatchChannel answers the room as the patch leaves it: the settings the call
+// named, and the purpose the room already had where it named none, which is
+// somebody else's — so the receipt echoing the room's settings has words other
+// principals wrote in it, labelled for a model and answered to a person as
+// they were stored.
+func (f *ledgerFake) PatchChannel(_ context.Context, actor chatlet.Actor, _ string,
+	patch chatlet.ChannelPatch, _ chatlet.ChannelAuthority) (chatlet.Written, error) {
+	written, err := f.chatWrite("patch", actor)
+	written.Channel.Purpose = "Ship the launch on time."
+	if patch.Topic != nil {
+		written.Channel.Topic = *patch.Topic
+	}
+	if patch.Purpose != nil {
+		written.Channel.Purpose = *patch.Purpose
+	}
+	return written, err
+}
+
+func (f *ledgerFake) SetMembers(_ context.Context, actor chatlet.Actor, _ string,
+	_ []chatlet.Member) (chatlet.Written, error) {
+	return f.chatWrite("members", actor)
+}
+
+func (f *ledgerFake) Edit(_ context.Context, actor chatlet.Actor, _, _ string,
+	_ chatlet.EditMessage) (chatlet.Written, error) {
+	return f.chatWrite("edit", actor)
+}
+
+func (f *ledgerFake) Delete(_ context.Context, actor chatlet.Actor, _, _ string,
+	_ chatlet.MessageAuthority) (chatlet.Written, error) {
+	return f.chatWrite("delete", actor)
+}
 
 func (f *ledgerFake) pageWrite(verb, key string) (doclet.Written, error) {
 	r, err := f.record(verb + ":" + key)

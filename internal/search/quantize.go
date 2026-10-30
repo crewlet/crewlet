@@ -45,6 +45,34 @@
 // exact ranking at sufficient depth — and never recall on a particular
 // company's documents. `crewlet search eval` is what answers that, against
 // that company's own vectors.
+//
+// # Which corpora are in the semantic half at all
+//
+// [Sources] is the whole of it: the knowledge base's pages and the native
+// tracker's work items. It is a BUDGET rather than a list of what would be
+// useful — every member is a vector per document in the replicated estate,
+// a record per document on the log, and a share of an embedding duty that
+// runs about a thousand sources a minute for every corpus a company has.
+//
+// The company's CHAT is deliberately outside it, with a lexical index of its
+// own in this package ([ChatIndexer]) and no semantic half at all: a year at
+// the declared census is several times the entire supported vector corpus,
+// and the knowledge base's own embeddings are what would pay for it. ADR-0071
+// is the record of that decision and of what admitting chat to one half and
+// not the other cost the last time it happened.
+//
+// # A read of another domain's table is a named, exported statement
+//
+// This package reads tables it does not own — the tracker's tasks and
+// relations, the knowledge base's page heads — for the lexical index, the
+// embedding duty, the backlinks and the window report. Each of those
+// statements is a function returning the statement and its arguments
+// ([TaskVersionsRead], [PageSelection], [LinkedTasksRead] and the rest), and
+// it is the one the reader runs, so the gate of the package that owns the
+// table — the one that owns its indexes — plans exactly what runs. Written
+// inline, none of them could be planned by anything but a copy, and a copy
+// certifies a statement nobody runs: the embedding duty's task selection had
+// drifted from its copy by two columns and a predicate before it was named.
 package search
 
 import "math/bits"

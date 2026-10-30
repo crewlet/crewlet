@@ -19,6 +19,7 @@ import (
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // THE ARTIFACTS WRITE PATH: one record per gesture step, published to the
@@ -263,17 +264,17 @@ func validCall(c Call) error {
 	case strings.TrimSpace(a.Actor.Name) == "":
 		return fmt.Errorf("%w: the call names no actor: every record names who wrote it", ErrInvalid)
 	case !a.Actor.Kind.Valid():
-		return fmt.Errorf("%w: actor kind %q is not one of %v", ErrInvalid, a.Actor.Kind, iam.ActorKinds)
+		return fmt.Errorf("%w: actor kind %q is not one of %s", ErrInvalid, a.Actor.Kind, words.Or(iam.ActorKinds))
 	case a.Role != "" && !a.Role.Valid():
-		return fmt.Errorf("%w: role %q is not one of %v", ErrInvalid, a.Role, artifacts.Roles)
+		return fmt.Errorf("%w: role %q is not one of %s", ErrInvalid, a.Role, words.Or(artifacts.Roles))
 	case a.Origin != "" && !a.Origin.Valid():
-		return fmt.Errorf("%w: origin %q is not one of %v", ErrInvalid, a.Origin, artifacts.WriteOrigins)
+		return fmt.Errorf("%w: origin %q is not one of %s", ErrInvalid, a.Origin, words.Or(artifacts.WriteOrigins))
 	}
 	return nil
 }
 
 // quotaCall refuses a quota-consuming write whose authority carries no limits:
-// the applier refuses such a record on every node, so it is refused here first.
+// the applier refuses such a record on every data node, so it is refused here first.
 func quotaCall(c Call) error {
 	if !stampedLimits(c.Authority) {
 		return fmt.Errorf("%w: the call's authority carries no quota limits: the API "+
@@ -318,10 +319,47 @@ func (w *Writer) decision(stamp statelog.Stamp, c Call, subject Subject, op OpKi
 // this package's conflict: somebody else keeps changing the artifact.
 func (w *Writer) publish(ctx context.Context, req statelog.Request) (statelog.Result, error) {
 	res, err := w.publisher.Publish(ctx, req)
-	if errors.Is(err, statelog.ErrConflict) {
-		return res, fmt.Errorf("%w: %s: %w", ErrConflict, req.Subject.ID, err)
+	return res, publishError(req.Subject, err)
+}
+
+// publishError is the framework's refusal of a publish on subject, in this
+// domain's terms: a lost race is an artifact somebody kept changing, and a
+// create the framework found already made ([statelog.ErrExists]) is a
+// COLLISION — on a source address, another artifact holds it
+// ([ErrSourceTaken]); on anything else, what the create makes is there
+// ([ErrExists]). The framework's bare sentinel reached the artifacts API's
+// fallback and was answered as this node's fault.
+//
+// AND A WRITE THE DELETION GATE DROPPED IS A PURGE ([ErrPurged]): the decide
+// passed, and the artifact's purge landed ahead of the record, so its deletion
+// marker held the record on every node ([Gates.GatedAt]). That is the same
+// fact the decide reports when it is the one that finds the marker, and it is
+// told the same way — the framework states it as one of its conditions, which
+// the artifacts API answered `503` "try again" and a tool "try again
+// shortly", about an artifact nothing will ever write again.
+func publishError(subject statelog.Subject, err error) error {
+	var refused *statelog.Unavailable
+	switch {
+	case errors.As(err, &refused) && refused.Reason == statelog.ReasonDeleted:
+		artifact, ok := gatedArtifact(subject.Kind, subject.ID)
+		if !ok {
+			artifact = subject.ID
+		}
+		return fmt.Errorf("%w: %s", ErrPurged, artifact)
+	case errors.Is(err, statelog.ErrConflict):
+		// THE FRAMEWORK'S SENTINEL AND NOT ITS ERROR, whose text names the
+		// subject the race was lost on, and not the subject either: a
+		// caller that printed this error would show a person a broker path.
+		return fmt.Errorf("%w: %w", ErrConflict, statelog.ErrConflict)
+	// THE COLLISION IS THE WHOLE OF WHAT HAPPENED, so the framework's own
+	// words, which name the subject's broker path, are not carried after
+	// it: a person reads this error on the artifacts API.
+	case errors.Is(err, statelog.ErrExists) && ObjectKind(subject.Kind) == KindSource:
+		return ErrSourceTaken
+	case errors.Is(err, statelog.ErrExists):
+		return &AlreadyExists{What: subject.ID}
 	}
-	return res, err
+	return err
 }
 
 // request is one write's framework request on subject, its scope resolved.
@@ -380,14 +418,25 @@ func (w *Writer) refused(ctx context.Context, id string, e HistoryEntry) error {
 	if e.Outcome != OutcomeRefused {
 		return nil
 	}
-	return w.refusal(ctx, id, e.Reason, e.Summary)
+	return w.refusal(ctx, id, e.Reason, e.Summary, e.Number)
 }
 
-// refusal translates an apply's refusal into the error a caller acts on.
-func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s HistorySummary) error {
+// refusal translates an apply's refusal into the error a caller acts on:
+// number is the version the refused record was about, where it was about one.
+//
+// A VERSION THE ARTIFACT DOES NOT KEEP IS SAID AS ONE, in the words the decide
+// says the same fact in ("this artifact doesn't keep version N"): answered as
+// the bare sentinel it was told as "no such artifact", about the artifact the
+// person was looking at.
+func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s HistorySummary,
+	number int) error {
+
 	switch reason {
-	case RefusedNotFound, RefusedVersionNotFound:
+	case RefusedNotFound:
 		return fmt.Errorf("%w: %s", ErrNotFound, id)
+	case RefusedVersionNotFound:
+		return fmt.Errorf("%w: %s: this artifact doesn't keep version %d", ErrNotFound,
+			id, number)
 	case RefusedTrashed:
 		return fmt.Errorf("%w: %s", ErrTrashed, id)
 	case RefusedPurged:
@@ -413,9 +462,10 @@ func (w *Writer) refusal(ctx context.Context, id string, reason Refusal, s Histo
 		return fmt.Errorf("%w: %s name objects another artifact or an asset already "+
 			"names; upload them again", ErrInvalid, strings.Join(s.Paths, ", "))
 	case RefusedExists:
-		return fmt.Errorf("%w: the object this write creates already exists", ErrInvalid)
+		return &AlreadyExists{What: id}
 	case RefusedLive:
-		return fmt.Errorf("%w: artifact %s is not in the trash", ErrInvalid, id)
+		return fmt.Errorf("%w: %s: this artifact isn't in the trash, so there's "+
+			"nothing to restore", ErrInvalid, id)
 	case RefusedPurging:
 		return fmt.Errorf("%w: %s", ErrPurging, id)
 	case RefusedFolderGone:
@@ -533,8 +583,8 @@ func checkText(field, value string, max int, required bool) error {
 func checkCapabilities(caps []artifacts.Capability) error {
 	for _, c := range caps {
 		if !c.Valid() {
-			return fmt.Errorf("%w: capability %q is not one of %v", ErrInvalid, c,
-				artifacts.Capabilities)
+			return fmt.Errorf("%w: capability %q is not one of %s", ErrInvalid, c,
+				words.Or(artifacts.Capabilities))
 		}
 	}
 	return nil

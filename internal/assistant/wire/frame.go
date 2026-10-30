@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/caveat"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // ErrInvalid is wrapped by every refusal of a value this package validates.
@@ -131,8 +132,9 @@ type StepRequest struct {
 }
 
 // Refusal is a refusal in the engine's own words: the API's code, its
-// sentence, what to do about it where the route said, and the grants that
-// would have admitted the caller where the authority table names them.
+// sentence, what to do about it where the route said, and, where the
+// authority table refused, the rule that decided and the grants that would
+// have admitted the caller.
 //
 // TWO READERS, TWO CHANNELS. Message and Hint are what a person reads, and
 // Detail is the route's own account of this one refusal (the envelope's
@@ -145,10 +147,26 @@ type Refusal struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	// Hint is the next step, shown on its own line.
-	Hint   string   `json:"hint,omitempty"`
+	Hint string `json:"hint,omitempty"`
+	// Reason is the deciding rule's own word (the envelope's `reason`, an
+	// authz.Reason) where the authority table refused, and empty for any
+	// other refusal. THE GRANTS ALONE CANNOT SAY WHETHER ACCESS IS THE WAY
+	// PAST: a stale proof names the grants that admitted the caller. So the
+	// sentence a person reads follows the rule rather than the grants, and
+	// the rule travels with them: they are a way past it only where it says
+	// so.
+	Reason string   `json:"reason,omitempty"`
 	Grants []string `json:"grants,omitempty"`
 	// Detail is the route's own account of the refusal, for the model only.
 	Detail string `json:"-"`
+	// Said is the route's `detail` where the route marked it as written for a
+	// person, by telling the tool's own sentence beside it in process, never
+	// on the answer (internal/assistant/exec's Response.ModelDetail): a
+	// refusal in the words internal/caveat's refusal catalog wrote for a
+	// person (ADR-0060). Empty for every other refusal, whose detail is the
+	// model's. Never serialised: the assistant decides once whether a person
+	// reads it (internal/assistant/cards.PersonRefusal).
+	Said string `json:"-"`
 }
 
 // ForModel is the refusal as the model reads it: the route's own account where
@@ -261,7 +279,8 @@ func (f Frame) Validate() error {
 	case f.At.IsZero():
 		return fmt.Errorf("%w: frame at is the zero instant", ErrInvalid)
 	case !f.Kind.Valid():
-		return fmt.Errorf("%w: frame kind %q is not one of %v", ErrInvalid, f.Kind, EventKinds)
+		return fmt.Errorf("%w: frame kind %q is not one of %s", ErrInvalid, f.Kind,
+			words.Or(EventKinds))
 	}
 	for kind, set := range f.payloads() {
 		if set != (kind == f.Kind) {
@@ -278,8 +297,8 @@ func (f Frame) validatePayload() error {
 	switch f.Kind {
 	case EventStatus:
 		if !f.Status.State.Valid() {
-			return fmt.Errorf("%w: status state %q is not one of %v", ErrInvalid,
-				f.Status.State, StatusStates)
+			return fmt.Errorf("%w: status state %q is not one of %s", ErrInvalid,
+				f.Status.State, words.Or(StatusStates))
 		}
 	case EventDelta:
 		if f.Delta.MessageID == uuid.Nil {
@@ -300,8 +319,8 @@ func (f Frame) validatePayload() error {
 		}
 	case EventError:
 		if !f.Error.Code.Valid() {
-			return fmt.Errorf("%w: error code %q is not one of %v", ErrInvalid,
-				f.Error.Code, ErrorCodes)
+			return fmt.Errorf("%w: error code %q is not one of %s", ErrInvalid,
+				f.Error.Code, words.Or(ErrorCodes))
 		}
 	case EventSnapshot:
 		for _, s := range f.Snapshot.Steps {
@@ -319,8 +338,8 @@ func (f Frame) validatePayload() error {
 		}
 		for _, m := range f.Snapshot.Messages {
 			if !m.Role.Valid() {
-				return fmt.Errorf("%w: message role %q is not one of %v", ErrInvalid,
-					m.Role, MessageRoles)
+				return fmt.Errorf("%w: message role %q is not one of %s", ErrInvalid,
+					m.Role, words.Or(MessageRoles))
 			}
 		}
 	}
@@ -337,7 +356,8 @@ func (s StepEvent) Validate() error {
 	case s.Tool == "" || s.Label == "":
 		return fmt.Errorf("%w: step %d names no tool or no label", ErrInvalid, s.Index)
 	case !s.State.Valid():
-		return fmt.Errorf("%w: step state %q is not one of %v", ErrInvalid, s.State, StepStates)
+		return fmt.Errorf("%w: step state %q is not one of %s", ErrInvalid, s.State,
+			words.Or(StepStates))
 	case s.State == StepRefused && s.Refusal == nil:
 		return fmt.Errorf("%w: a refused step carries no refusal", ErrInvalid)
 	case s.Parent < 0 || s.Parent >= s.Index && s.Parent != 0:
@@ -384,8 +404,8 @@ func (a ActionEvent) Validate() error {
 	case a.ProposalID == nil:
 		return fmt.Errorf("%w: page action %s names no proposal_id", ErrInvalid, a.Name)
 	case !a.Confirm.Valid():
-		return fmt.Errorf("%w: page action %s confirm %q is not one of %v", ErrInvalid,
-			a.Name, a.Confirm, ActionConfirms)
+		return fmt.Errorf("%w: page action %s confirm %q is not one of %s", ErrInvalid,
+			a.Name, a.Confirm, words.Or(ActionConfirms))
 	}
 	return nil
 }

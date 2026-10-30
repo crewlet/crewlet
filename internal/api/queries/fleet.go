@@ -134,9 +134,10 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 		row["config_reported_at"] = isoOrEmpty(status.UpdatedAt)
 		// WHAT THAT NODE IS DOING, off its own presence heartbeat.
 		// Absent when the node's heartbeat carried no status (a host
-		// built without a Status hook, or a status read that overran its
-		// share of the beat), and absent is NOT zero: a confident 0 would
-		// draw an idle row for a process that is simply not saying.
+		// built without a Status hook, or a status read that did not
+		// answer within its share of the beat), and absent is NOT zero: a
+		// confident 0 would draw an idle row for a process that is simply
+		// not saying.
 		if live, ok := coord.StatusFromMeta(lease.Meta); ok {
 			row["in_flight"] = live.InFlight
 			row["draining"] = live.Draining
@@ -155,9 +156,9 @@ func (s Sources) fleet(ctx context.Context, _ Params) (any, error) {
 			// — for the reason `in_flight` is absent: a confident 0
 			// of 0 reads as "ready" for a process that is simply not
 			// saying.
-			if live.ProjectionsTotal > 0 {
-				row["projections_ready"] = live.ProjectionsReady
-				row["projections_total"] = live.ProjectionsTotal
+			if live.AppliersTotal > 0 {
+				row["appliers_ready"] = live.AppliersReady
+				row["appliers_total"] = live.AppliersTotal
 			}
 			// AND WHETHER THIS NODE SERVES ADMIN — its own
 			// `api.auth.admin`, `serve` or `refuse`.

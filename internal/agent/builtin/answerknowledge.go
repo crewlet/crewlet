@@ -23,6 +23,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/knowledge"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -38,16 +39,18 @@ import (
 // Nobody's seat runs this and no turn exists: a person typed a question into
 // the dashboard and is waiting for a paragraph. So it is an OPERATOR tool, and
 // one only a PERSON BOUND TO A SEAT may call ([authz.ActionKnowledgeAnswer]
-// admits whoever uses either app and is human-only; this tool refuses the
-// rest): it runs on the
-// auxiliary model of the seat the identity directory binds them to — the
+// admits whoever uses either app, and is human-only and SEATED): it runs on
+// the auxiliary model of the seat the identity directory binds them to — the
 // human seat every person holds (ADR-0032). A principal no seat binds — a
 // pipeline's token or a service account, never a person (ADR-0032) — has no
-// seat whose model to run on, and is refused
-// rather than answered on the company's default model, because "a CI token"
-// is not somebody the spend can be attributed to. A seat is never given it: a seat has `search_knowledge`
-// and its own model, and an answer written by a second model into its context
-// would be one it could not check.
+// seat whose model to run on, and the table refuses it `unseated` rather than
+// letting it be answered on the company's default model, because "a CI token"
+// is not somebody the spend can be attributed to; a refusal there is also what
+// keeps a screen from offering the control to such a caller at all. The tool
+// asks the same of the actor it is handed, as the arm a surface wired without
+// the table would otherwise reach. A seat is never given it: a seat has
+// `search_knowledge` and its own model, and an answer written by a second
+// model into its context would be one it could not check.
 //
 // # Why it is a write
 //
@@ -241,11 +244,18 @@ type AnswerSource struct {
 	// Kind is [AnswerSourcePage] or [AnswerSourceTask].
 	Kind string `json:"kind"`
 	// Ref addresses it: a page's id, a work item's key.
-	Ref   string `json:"ref"`
-	Title string `json:"title"`
+	Ref string `json:"ref"`
+	// Title is its writers' words, as every source's text is.
+	Title string `json:"title" untrusted:"name"`
 	// URL is a page's own link where its backend has one — an external
 	// wiki's page, which the dashboard has no route for.
 	URL string `json:"url,omitempty"`
+
+	// Written is what the source was read as — the label the door that found
+	// it gave it, which the model writing the answer read it under — and
+	// what the answer's envelope says of it ([answerKnowledge.answered]).
+	// Not on the wire: the envelope says it once for the whole answer.
+	Written provenance.Label `json:"-"`
 }
 
 // AnswerTokens is what THIS call spent. Zero on a cached answer.
@@ -320,7 +330,10 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			" answers the person whose credential calls it, and this call carries none."), nil
 	}
 	// A PERSON BOUND TO A SEAT, and nobody else: [iam.ActorFor] names
-	// exactly that asker kind human, by the seat. See the file head.
+	// exactly that asker kind human, by the seat. The table's seated row
+	// refuses everybody else first; this is the arm that keeps the rule
+	// where the actor is read, so a surface wired without the table is not
+	// the one that answers an unbound credential. See the file head.
 	if actor.Kind != worklet.AuthorHuman || strings.TrimSpace(actor.Handle) == "" {
 		return refused(tools.RefusalForbidden, fmt.Sprintf("%s runs on the auxiliary "+
 			"model of the seat its asker is bound to, and %q is bound to no seat, so "+
@@ -346,7 +359,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	company := t.org()
 	if company == nil {
-		return refused(tools.RefusalUnavailable,
+		return refusedBy(tools.RefusalUnavailable, waits(),
 			"No organization is loaded, so there is no knowledge to answer from."), nil
 	}
 	role := company.SeatByHandle(actor.Handle)
@@ -375,7 +388,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			hit.Cached, hit.Tokens = true, AnswerTokens{}
 			log.InfoContext(ctx, "knowledge_answered", "seat", actor.Handle,
 				"cached", true, "sources", len(hit.Sources))
-			return jsonResult(hit)
+			return t.answered(ctx, turn, actor, hit)
 		}
 	}
 
@@ -384,10 +397,15 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// through.
 	refusal, refusing, err := t.deps.Budget.Refusing(ctx)
 	if err != nil {
-		log.WarnContext(ctx, "knowledge_answer_budget_unreadable", "seat", actor.Handle,
-			"error", err.Error())
-		return refused(tools.RefusalUnavailable, "The company's token counter could not "+
-			"be read, so no answer was written and nothing was spent. Try again shortly."), nil
+		// A CONDITION IS WRITTEN HERE, with the seat, since [nodeFailure]
+		// logs only a fault: a counter the coordination store did not
+		// answer for is a wait, and one this node cannot read is its fault.
+		if _, condition := Condition(err); condition {
+			log.WarnContext(ctx, "knowledge_answer_budget_unreadable", "seat", actor.Handle,
+				"error", err.Error())
+		}
+		return nodeFailure(ctx, AnswerKnowledgeTool, err, "Could not read the company's "+
+			"token counter", "No answer was written and nothing was spent."), nil
 	}
 	if refusing {
 		// THE COMPANY'S CEILING, the one this gate reads, named to a person
@@ -398,7 +416,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 	sources, excerpts, searched := t.retrieve(ctx, question, company, role, reach)
 	if !searched {
-		return refused(tools.RefusalUnavailable, "The company's knowledge could not be "+
+		return refusedBy(tools.RefusalUnavailable, waits(), "The company's knowledge could not be "+
 			"searched just now, so this says nothing about whether it is written down. "+
 			"Nothing was spent; try again shortly."), nil
 	}
@@ -412,7 +430,7 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if cacheable {
 			t.deps.Cache.put(key, answer)
 		}
-		return jsonResult(answer)
+		return t.answered(ctx, turn, actor, answer)
 	}
 
 	// THE OPERATOR STAGE, which the seam charges to the company's windows
@@ -420,19 +438,39 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	// the tokens are spent at the vendor the moment it replies.
 	member, err := t.deps.Models.Auxiliary(role, answerUse.For(types.AuxAnswerKnowledge))
 	if err != nil {
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("No model is configured "+
-			"to answer with (%v). Nothing was spent.", err)), nil
+		// WHY IS THE LOG'S: the seam's error names the chain it resolved and
+		// the configuration it read, nothing the person asking acts on.
+		log.WarnContext(ctx, "knowledge_answer_no_model", "seat", actor.Handle,
+			"error", err.Error())
+		return refusedBy(tools.RefusalUnavailable, waitless(), "No model is set up to "+
+			"answer questions, so nothing was spent. An administrator needs to set one up."), nil
 	}
 	call, cancel := context.WithTimeout(ctx, AnswerTimeout)
 	defer cancel()
+	// ONE TOKEN FOR THE CALL, never a turn's: every source is fenced under
+	// it as who wrote it ([prompts.BuildKnowledgeAnswer]).
 	completion, err := member.Provider.Complete(call, llm.Request{
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: prompts.KnowledgeAnswerSystem},
-			{Role: llm.RoleUser, Content: prompts.BuildKnowledgeAnswer(question, excerpts)},
+			{Role: llm.RoleUser, Content: prompts.BuildKnowledgeAnswer(provenance.NewBoundary(),
+				question, excerpts)},
 		},
 		// No tools: the answer is the content, and a tool on the surface
 		// invites a model to call it and write nothing.
 	})
+	if retryAt, resetsAt, limited := llm.LimitedUntil(err); limited {
+		// A LIMIT ALREADY REPORTED IS A WAIT, NOT A FAILURE, as every
+		// auxiliary caller reads one: the backend sat the entry out and
+		// launched nothing. Logged at warn as a failure, each press during
+		// the limit was another line burying the one that reported it, and
+		// answered as "busy" under this node's two-second hint, a person was
+		// sent back every two seconds to a limit that lifts in an hour.
+		log.InfoContext(ctx, "knowledge_answer_limited", "seat", actor.Handle,
+			"model", member.Key, "retry_at", instantOrNone(retryAt),
+			"resets_at", instantOrNone(resetsAt))
+		return toPerson(refusedBy(tools.RefusalUnavailable, waitsUntil(retryAt),
+			limitedSentence(retryAt, resetsAt)), caveat.ModelAtLimit()), nil
+	}
 	if err != nil || completion == nil {
 		reason := "it answered nothing"
 		if err != nil {
@@ -440,16 +478,22 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		}
 		log.WarnContext(ctx, "knowledge_answer_failed", "seat", actor.Handle,
 			"model", member.Key, "error", reason)
-		return refused(tools.RefusalUnavailable, fmt.Sprintf("The model could not "+
-			"answer (%s). Try again shortly.", reason)), nil
+		words, waiting := modelFailed(err)
+		if !waiting {
+			return refusedBy(tools.RefusalUnavailable, waitless(), words), nil
+		}
+		return refusedBy(tools.RefusalUnavailable, waits(), words), nil
 	}
-	text := strings.TrimSpace(completion.Content)
+	// THE ANSWER IS DEFUSED under the caller's token: it is a model's
+	// rewording of pages somebody else wrote, read next by a person or by
+	// their assistant, and nothing in it may open or close a fence.
+	text := provenance.Neutralise(turn.FenceBoundary(), strings.TrimSpace(completion.Content))
 	if text == "" {
 		// Output spent reasoning, usually. Reported with the count,
 		// because nothing else says the model worked.
 		log.WarnContext(ctx, "knowledge_answer_empty", "seat", actor.Handle,
 			"model", completion.Model, "output_tokens", completion.OutputTokens)
-		return refused(tools.RefusalUnavailable, "The model wrote no answer. Try again, "+
+		return refusedBy(tools.RefusalUnavailable, waits(), "The model wrote no answer. Try again, "+
 			"or ask the question more narrowly."), nil
 	}
 	answer := KnowledgeAnswer{
@@ -464,7 +508,23 @@ func (t *answerKnowledge) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	log.InfoContext(ctx, "knowledge_answered", "seat", actor.Handle, "cached", false,
 		"model", answer.Model, "input_tokens", answer.Tokens.Input,
 		"output_tokens", answer.Tokens.Output, "sources", len(sources))
-	return jsonResult(answer)
+	return t.answered(ctx, turn, actor, answer)
+}
+
+// answered is the tool's answer, labelled with whose words it carries: each
+// source's title is its writers', and the answer itself a model's account of
+// them — so it goes out through a [foreignRead], every string defused and the
+// envelope saying what the sources were read as, each by the label the door
+// that found it gave it (ADR-0040). A person asking at the dashboard is the
+// usual caller, and the reader of this answer is often their assistant.
+func (t *answerKnowledge) answered(ctx context.Context, turn *turnctx.Turn, actor Actor,
+	answer KnowledgeAnswer) (tools.Result, error) {
+
+	read := newForeignRead(turn, actor.Handle)
+	for _, source := range answer.Sources {
+		read.adopt(source.Written)
+	}
+	return read.answer(ctx, AnswerKnowledgeTool, answer, "")
 }
 
 // answerReach is which of the two corpora one asker may be answered from.
@@ -549,9 +609,13 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 			}
 			sources = append(sources, AnswerSource{
 				Kind: AnswerSourcePage, Ref: hit.PageID, Title: title, URL: hit.URL,
+				Written: hit.Provenance,
 			})
 			excerpts = append(excerpts, prompts.KnowledgeSource{
 				Kind: "page", Label: title, Text: t.pageText(ctx, hit),
+				// AS THE BACKEND THAT FOUND IT LABELS IT, the label the
+				// seat's own search reads the same page under.
+				Written: hit.Provenance,
 			})
 		}
 	}
@@ -575,10 +639,11 @@ func (t *answerKnowledge) retrieve(ctx context.Context, question string,
 				}
 				sources = append(sources, AnswerSource{
 					Kind: AnswerSourceTask, Ref: ref, Title: hit.Title,
+					Written: workDescription,
 				})
 				excerpts = append(excerpts, prompts.KnowledgeSource{
 					Kind: "work item", Label: strings.TrimSpace(ref + " " + hit.Title),
-					Text: t.taskText(ctx, hit),
+					Text: t.taskText(ctx, hit), Written: workDescription,
 				})
 			}
 		}
@@ -612,7 +677,8 @@ func (t *answerKnowledge) condense(ctx context.Context, question string, asker *
 				keep[i] = true
 				return nil
 			}
-			res, err := fit.Focused(ctx, compact.KindSource, text, AnswerSourceBytes, question)
+			res, err := fit.Labelled(excerpts[i].Written).Focused(ctx, compact.KindSource, text,
+				AnswerSourceBytes, question)
 			if err != nil {
 				log.WarnContext(ctx, "knowledge_answer_source_dropped", "source", sources[i].Ref,
 					"bytes", len(text), "error", err.Error(),
@@ -672,6 +738,13 @@ func (t *answerKnowledge) taskText(ctx context.Context, hit worklet.Ranked) stri
 	}
 	return snippetOnly(hit.Snippet)
 }
+
+// workDescription is the label a work item's description is read under here:
+// a colleague's words with nobody named, as `search_work_items` reads the same
+// text — the engine hosts the tracker, so only the company's principals write
+// it, and neither the index nor the search says which of them wrote what it
+// holds ([provenance.LabelForHosted]).
+var workDescription = provenance.LabelForHosted("", provenance.SourceWorkDescription, nil, false)
 
 func snippetOnly(snippet string) string {
 	if strings.TrimSpace(snippet) == "" {
@@ -759,4 +832,58 @@ func (c *AnswerCache) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.order.Len()
+}
+
+// limitedSentence is a question no model was asked because the model that
+// answers it is at a usage limit, as the model reading the answer is told it:
+// when the limit lifts where its vendor said, and otherwise when the model is
+// tried again, each as an instant ([budgetSentence]'s form).
+func limitedSentence(retryAt, resetsAt time.Time) string {
+	const said = "The model that answers questions has reached its usage limit, so " +
+		"no answer was written and nothing was spent."
+	switch {
+	case !resetsAt.IsZero():
+		return said + " The limit lifts at " + resetsAt.UTC().Format(time.RFC3339) + "."
+	case !retryAt.IsZero():
+		return said + " Its vendor named no time it lifts; the model is tried again at " +
+			retryAt.UTC().Format(time.RFC3339) + "."
+	}
+	return said + " Its vendor named no time it lifts."
+}
+
+// instantOrNone is an instant for a log line, or "" where it is unknown.
+func instantOrNone(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339)
+}
+
+// modelFailed is a failed answer as the person who asked reads it, by the
+// kind of failure the provider layer classified ([llm.KindOf]) — what
+// happened, and whether trying again can help — and whether a wait can clear
+// it, which the answer's Retry-After follows: a model that took too long and a
+// CLI that ran and gave no usable answer may answer next time, while no retry
+// gets past a login the CLI reports expired or missing, or a call the engine
+// itself cannot make ([llm.KindFatal]). A model at its usage limit is not one
+// of these: it is the wait [limitedSentence] tells.
+//
+// NEVER THE ERROR ITSELF, which went to the log: it names the provider entry,
+// the model and what the CLI said, which was the whole of the sentence ("The
+// model could not answer (llm cli-agent/claude-code/aux-small: rate_limit:
+// usage limit reached …). Try again shortly.") and nothing a person acts on.
+func modelFailed(err error) (string, bool) {
+	if err == nil {
+		return "The model answered nothing. Try again shortly.", true
+	}
+	switch llm.KindOf(err) {
+	case llm.KindTimeout:
+		return "The model took too long to answer. Try again shortly.", true
+	case llm.KindAuth:
+		return "The model's service refused the company's credentials. An " +
+			"administrator needs to check them.", false
+	case llm.KindServer:
+		return "The model's service failed. Try again shortly.", true
+	}
+	return "The model couldn't answer this question.", false
 }

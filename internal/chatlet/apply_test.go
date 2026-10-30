@@ -1,0 +1,1417 @@
+package chatlet_test
+
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/crewlet/crewlet/internal/chatlet"
+	"github.com/crewlet/crewlet/internal/queue/topics"
+	"github.com/crewlet/crewlet/internal/search"
+	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
+)
+
+// The applier's own guards, over a real replicated estate.
+//
+// [statelogtest] certifies what the FRAMEWORK relies on — that an applier is
+// deterministic, that it is idempotent at a position, the deferral contract,
+// the table classes. What it cannot know is what a CONVERSATION means, and
+// every case here is one of those: the room's minted sequence, the tombstone
+// that keeps a thread's root, the marker that makes an erase permanent, the
+// prune's time range, and the live batch a re-run transaction must not push
+// twice.
+//
+// THE HELPERS ARE PREFIXED `apply…` because this package's suites are several
+// files written against one test package, and a `harness` here would be a
+// collision with the write path's rather than a shared fixture.
+
+// applyBrokerAt is the broker's own instant for a record, which is the ONLY
+// clock this domain writes. Every case that needs a second instant states it.
+var applyBrokerAt = time.Date(2031, 4, 2, 3, 14, 0, 0, time.UTC)
+
+// applyHarness is one node's estate, its applier and its live observer.
+type applyHarness struct {
+	t            *testing.T
+	db           store.ReplicatedHandle
+	applier      *chatlet.Applier
+	live         *applyRecorder
+	seq          uint64
+	maxVariables int
+}
+
+// applyRecorder is the live seam, captured.
+type applyRecorder struct{ batches [][]chatlet.Applied }
+
+func (r *applyRecorder) Applied(batch []chatlet.Applied) {
+	r.batches = append(r.batches, batch)
+}
+
+// frames is every [chatlet.Applied] the observer has been handed, in the order
+// it was handed them.
+func (r *applyRecorder) frames() []chatlet.Applied {
+	var out []chatlet.Applied
+	for _, batch := range r.batches {
+		out = append(out, batch...)
+	}
+	return out
+}
+
+func newApplyHarness(t *testing.T) *applyHarness {
+	t.Helper()
+	node, db := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"),
+		store.Options{}, 1)
+	t.Cleanup(func() {
+		if err := node.Close(); err != nil {
+			t.Errorf("close the store: %v", err)
+		}
+	})
+	live := &applyRecorder{}
+	return &applyHarness{
+		t: t, db: db, applier: chatlet.NewApplier("node-a", live), live: live,
+		maxVariables: db.Caps().MaxVariables,
+	}
+}
+
+// apply runs one record at the next position and commits it.
+func (h *applyHarness) apply(rec chatlet.MutationRecord) (int, statelog.Reason, error) {
+	h.t.Helper()
+	return h.applyStoredAt(rec, applyBrokerAt)
+}
+
+// applyStoredAt runs one record at the next position with a stated broker
+// instant, which is what the retention prune's range is decidable against.
+func (h *applyHarness) applyStoredAt(rec chatlet.MutationRecord, storedAt time.Time) (
+	int, statelog.Reason, error) {
+
+	h.t.Helper()
+	h.seq++
+	return h.applyAt(rec, h.seq, storedAt)
+}
+
+// applyAt runs one record at a stated position, so a case can REDELIVER a
+// record at a later one — which is what a reanchor and a redelivered
+// acknowledgement both look like from here.
+func (h *applyHarness) applyAt(rec chatlet.MutationRecord, seq uint64,
+	storedAt time.Time) (rows int, gate statelog.Reason, err error) {
+
+	h.t.Helper()
+	err = h.db.Tx(h.t.Context(), func(tx *sql.Tx) error {
+		n, reason, _, aErr := h.applyIn(tx, rec, seq, storedAt)
+		rows, gate = n, reason
+		return aErr
+	})
+	if err == nil {
+		h.applier.Committed(h.t.Context())
+	}
+	return rows, gate, err
+}
+
+// applyIn is the transaction body: the gate, then the apply. It is separate so
+// a case can run it TWICE — once in a transaction it rolls back and once in
+// one it commits, which is exactly what the store does to a conflicted
+// transaction.
+func (h *applyHarness) applyIn(tx *sql.Tx, rec chatlet.MutationRecord, seq uint64,
+	storedAt time.Time) (rows int, gate statelog.Reason, gated bool, err error) {
+
+	h.t.Helper()
+	record := applyStatelogRecord(h.t, rec, seq, storedAt)
+	reason, dropped, err := h.applier.Gated(h.t.Context(), tx, record)
+	if err != nil {
+		return 0, "", false, err
+	}
+	if dropped {
+		return 0, reason, true, nil
+	}
+	n, err := h.applier.Apply(h.t.Context(), tx, record, statelog.ApplyOptions{
+		Now: storedAt, StoredAt: storedAt, MaxVariables: h.maxVariables,
+	})
+	return n, "", false, err
+}
+
+// applyStatelogRecord is what the framework hands an applier.
+func applyStatelogRecord(t *testing.T, rec chatlet.MutationRecord, seq uint64,
+	storedAt time.Time) statelog.Record {
+
+	t.Helper()
+	body, err := chatlet.Encode(rec)
+	if err != nil {
+		t.Fatalf("encode the record: %v", err)
+	}
+	return statelog.Record{
+		Envelope: statelog.Envelope{
+			V: rec.V, Kind: string(rec.Subject.Kind),
+			Subject: statelog.Subject{
+				Kind: string(rec.Subject.Kind), ID: rec.Subject.ID,
+			},
+			Op: string(rec.Op), OpID: rec.OpID, Gen: rec.Gen,
+			Writer: rec.Writer, Scope: rec.Scope.Resolve(rec.Subject),
+		},
+		Position: statelog.Position{
+			Stream: topics.ChatLogStream, Generation: rec.Gen, Seq: seq,
+		},
+		Payload:  body,
+		StoredAt: storedAt,
+	}
+}
+
+// applyRecord builds one record with its payload encoded.
+func applyRecord(subject chatlet.Subject, op chatlet.OpKind, opID string, payload any,
+	scope chatlet.ScopeSet) chatlet.MutationRecord {
+
+	rec := chatlet.MutationRecord{
+		RecordEnvelope: chatlet.RecordEnvelope{
+			V: chatlet.RecordVersion, OpID: opID, Subject: subject, Op: op,
+			CreatedAt: applyBrokerAt, Gen: 1, Writer: "node-a", Scope: scope,
+		},
+		Actor: "ada", ActorKind: chatlet.AuthorHuman,
+	}
+	if payload != nil {
+		body, err := json.Marshal(payload)
+		if err != nil {
+			panic(err)
+		}
+		rec.Mutation = body
+	}
+	return rec
+}
+
+// applyCreateRoom builds the create of one named public room.
+//
+// THE SCOPE NAMES BOTH OBJECTS, which is what a create actually touches: the
+// address it claimed and the room it made. Everything else in this file
+// touches exactly its own subject.
+func applyCreateRoom(channelID, name string, members ...chatlet.Member) chatlet.MutationRecord {
+	return applyRecord(chatlet.ChannelNameSubject(name), chatlet.OpCreate,
+		"op-create-"+channelID, chatlet.ChannelCreate{
+			V: chatlet.DocumentVersion, ChannelID: channelID, Kind: chatlet.KindPublic,
+			Name: name, Topic: "shipping", Members: members,
+			CreatedBy: "ada", CreatedByKind: chatlet.AuthorHuman,
+		}, chatlet.ScopeSet{Terms: []chatlet.ScopeTerm{
+			{Kind: chatlet.TermName, ID: chatlet.ChannelToken(name)},
+			{Kind: chatlet.TermChannel, ID: channelID},
+		}})
+}
+
+// applyPostRecord builds one post into a room.
+func applyPostRecord(channelID, messageID, body, threadRoot string,
+	mentions ...string) chatlet.MutationRecord {
+
+	return applyRecord(chatlet.MessageSubject(channelID), chatlet.OpPost,
+		"op-post-"+messageID, chatlet.MessagePost{
+			V: chatlet.DocumentVersion, MessageID: messageID, Body: body,
+			ThreadRoot: threadRoot, Mentions: mentions, Author: "ada",
+			AuthorKind: chatlet.AuthorHuman,
+		}, chatlet.ScopeSet{Subject: true})
+}
+
+// applyEraseRecord builds one operator erase.
+func applyEraseRecord(channelID, opID, by string, ids ...string) chatlet.MutationRecord {
+	rec := applyRecord(chatlet.ChannelSubject(channelID), chatlet.OpErase, opID,
+		chatlet.MessageErase{
+			V: chatlet.DocumentVersion, MessageIDs: ids, Reason: "leaked a key",
+			By: by, ByKind: chatlet.AuthorHuman,
+		}, chatlet.ScopeSet{Subject: true})
+	rec.Actor, rec.ActorKind = by, chatlet.AuthorHuman
+	return rec
+}
+
+// ---- reading the estate back ------------------------------------------- //
+
+func (h *applyHarness) count(table string) int {
+	h.t.Helper()
+	var n int
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(),
+			`SELECT COUNT(*) FROM `+table).Scan(&n)
+	}); err != nil {
+		h.t.Fatalf("count %s: %v", table, err)
+	}
+	return n
+}
+
+func (h *applyHarness) scalar(query string, args ...any) string {
+	h.t.Helper()
+	var out sql.NullString
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(), query, args...).Scan(&out)
+	}); err != nil {
+		return ""
+	}
+	return out.String
+}
+
+func (h *applyHarness) number(query string, args ...any) int64 {
+	h.t.Helper()
+	var out sql.NullInt64
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(h.t.Context(), query, args...).Scan(&out)
+	}); err != nil {
+		h.t.Fatalf("read %q: %v", query, err)
+	}
+	return out.Int64
+}
+
+// capOf is the cap a writer of this build stamps on a reaction: its own on an
+// add, none on a take-back.
+func capOf(removed bool) int {
+	if removed {
+		return 0
+	}
+	return chatlet.MaxReactionEmoji
+}
+
+// lastVerdict is what the applier decided about the latest message record it
+// consumed: the verdict at the highest position.
+func (h *applyHarness) lastVerdict() chatlet.Verdict {
+	h.t.Helper()
+	return chatlet.Verdict(h.scalar(
+		`SELECT verdict FROM chat_verdicts ORDER BY position DESC LIMIT 1`))
+}
+
+// applyReplicatedTables is every table this domain's records rebuild, and it
+// is [chatlet.ReproducibleTables] rather than a list of its own — a table added
+// there and forgotten here would be one the determinism cases never compared.
+var applyReplicatedTables = chatlet.ReproducibleTables
+
+// dump renders one table's rows IN ROWID ORDER, which is insertion order.
+//
+// THE ORDER IS PART OF WHAT IS COMPARED, not an artefact of the query: the
+// identity claim is a checksum over the replicated FILE, so a collection
+// written in whatever order a writer's map produced is a divergence although
+// every row is the same. Comparing sets would pass on exactly that bug.
+func (h *applyHarness) dump(table string) string {
+	h.t.Helper()
+	var out strings.Builder
+	if err := h.db.Read(h.t.Context(), func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(h.t.Context(),
+			`SELECT * FROM `+table+` ORDER BY rowid`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = rows.Close() }()
+		columns, err := rows.Columns()
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			cells := make([]any, len(columns))
+			into := make([]any, len(columns))
+			for i := range cells {
+				into[i] = &cells[i]
+			}
+			if err := rows.Scan(into...); err != nil {
+				return err
+			}
+			for i, name := range columns {
+				fmt.Fprintf(&out, "%s=%v ", name, cells[i])
+			}
+			out.WriteString("\n")
+		}
+		return rows.Err()
+	}); err != nil {
+		h.t.Fatalf("dump %s: %v", table, err)
+	}
+	return out.String()
+}
+
+// estate is every replicated table, rendered.
+func (h *applyHarness) estate() string {
+	h.t.Helper()
+	var out strings.Builder
+	for _, table := range applyReplicatedTables {
+		fmt.Fprintf(&out, "-- %s\n%s", table, h.dump(table))
+	}
+	return out.String()
+}
+
+// ---- the cases --------------------------------------------------------- //
+
+// TestACreateWritesTheClaimTheRoomAndItsMembersTogether.
+//
+// THE WHOLE REASON THIS DOMAIN EXISTS. On a coordination bucket a create was a
+// two-key sequence — claim the name, then write the room — with an orphan
+// claim as its crash state and a grace rule for stepping over the debris.
+// Here it is one record and one transaction, so there is no window in which a
+// name is held by a room that was never written.
+func TestACreateWritesTheClaimTheRoomAndItsMembersTogether(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, gate, err := h.apply(applyCreateRoom("room-1", "launch",
+		chatlet.Member{Handle: "ada"},
+		chatlet.Member{Handle: "grace", FollowAll: true})); err != nil || gate != "" {
+		t.Fatalf("apply a create: %v (gate %q)", err, gate)
+	}
+	for table, want := range map[string]int{
+		"chat_channel_names": 1, "chat_channels": 1, "chat_members": 2,
+	} {
+		if got := h.count(table); got != want {
+			t.Errorf("%s holds %d rows, want %d — a create is ONE transaction "+
+				"and a half-written one is the crash state this domain removes",
+				table, got, want)
+		}
+	}
+	// THE CLAIM CARRIES THE NORMALISED NAME BESIDE ITS TOKEN, because a
+	// digest has no inverse and an operator asking "why can this name not
+	// be used" needs the name.
+	if got := h.scalar(`SELECT name_norm FROM chat_channel_names`); got != "launch" {
+		t.Errorf("the claim holds %q, so nothing can say what address is taken", got)
+	}
+	// A PUBLIC ROOM IS NOT PRIVATE, and the column is what every
+	// visibility filter is a predicate on.
+	if got := h.number(`SELECT private FROM chat_channels`); got != 0 {
+		t.Errorf("a public room stored private=%d", got)
+	}
+}
+
+// TestARecordThatArbitratedOneAddressAndClaimsAnotherIsRefused.
+//
+// THE SUBJECT IS THE ADDRESS, and this is what makes that true rather than
+// conventional. Without it a writer takes one name at the broker — where
+// exactly one writer can — and writes a different one into every node's row,
+// leaving the arbitrated name held by nothing and the written name held by
+// two rooms.
+func TestARecordThatArbitratedOneAddressAndClaimsAnotherIsRefused(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	rec := applyCreateRoom("room-1", "launch")
+	// The subject stays; the payload's name moves.
+	var payload chatlet.ChannelCreate
+	if err := json.Unmarshal(rec.Mutation, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.Name = "something-else"
+	body, _ := json.Marshal(payload)
+	rec.Mutation = body
+
+	if _, _, err := h.apply(rec); err == nil {
+		t.Fatal("a record took one address at the broker and wrote another — " +
+			"the arbitrated name is now held by nothing")
+	}
+	if got := h.count("chat_channels"); got != 0 {
+		t.Errorf("%d rooms were written anyway", got)
+	}
+}
+
+// A POSTED MESSAGE IS FILED IN THE BUCKET THE SEARCH PACKAGE FILES IT IN.
+//
+// The replicated row carries a search bucket, and the chat keyword index files
+// the same message under one of its own. A bucket stamped here by a rule of
+// this package's would agree with the index's only while nobody edited either,
+// and a fan-out over the two would read the message in one bucket and look for
+// it in another — so the applier stamps [search.ChatShardOf] and nothing else.
+func TestAPostIsFiledInTheBucketSearchFilesItIn(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, id := range []string{"msg-1", "msg-2", "msg-3", "msg-4"} {
+		if _, _, err := h.apply(applyPostRecord("room-1", id, "we ship friday", "")); err != nil {
+			t.Fatalf("post %s: %v", id, err)
+		}
+		got := h.number(`SELECT shard FROM chat_messages WHERE id = ?`, id)
+		if want := int64(search.ChatShardOf(id)); got != want {
+			t.Errorf("%s was stored in bucket %d and search files it in %d — "+
+				"the two estates disagree about where the message is", id, got, want)
+		}
+	}
+}
+
+// TestTheRoomsSequenceIsContiguousAndARedeliveredPostConsumesNoNumber.
+//
+// The per-channel sequence is what lets a browser tell a live frame it can
+// apply from a HOLE it must refetch: holding 41 and handed 43, it asks for 42.
+// A redelivery that consumed a number would put a hole in that sequence which
+// no message will ever fill, so every viewer refetches a message that does not
+// exist, for ever.
+func TestTheRoomsSequenceIsContiguousAndARedeliveredPostConsumesNoNumber(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	first := applyPostRecord("room-1", "msg-1", "we ship friday", "")
+	if _, _, err := h.apply(first); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-2", "confirmed", "")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	for id, want := range map[string]int64{"msg-1": 1, "msg-2": 2} {
+		if got := h.number(
+			`SELECT channel_seq FROM chat_messages WHERE id = ?`, id); got != want {
+			t.Errorf("%s landed at sequence %d, want %d — the numbers are "+
+				"contiguous per room or a browser cannot tell a dropped frame "+
+				"from the end of the conversation", id, got, want)
+		}
+	}
+
+	// THE REDELIVERY, at a LATER position: the same message id, which is
+	// what a re-acknowledged publish looks like after a reanchor.
+	rows, _, err := h.applyAt(first, h.seq+1, applyBrokerAt)
+	if err != nil {
+		t.Fatalf("redeliver a post: %v", err)
+	}
+	// NOTHING BUT ITS VERDICT: the copy is decided `repeated`, and the
+	// operation's own verdict is the first copy's.
+	if rows != 1 || h.lastVerdict() != chatlet.VerdictRepeated {
+		t.Errorf("a redelivered post wrote %d rows and was decided %q, want its "+
+			"verdict alone, %q", rows, h.lastVerdict(), chatlet.VerdictRepeated)
+	}
+	if got := h.number(`SELECT message_seq FROM chat_channels WHERE id = ?`,
+		"room-1"); got != 2 {
+		t.Fatalf("the room's high-water mark is %d after a redelivery, want 2 "+
+			"— a redelivered post must NOT consume a second number", got)
+	}
+	if got := h.count("chat_messages"); got != 2 {
+		t.Errorf("the room holds %d messages after a redelivery, want 2", got)
+	}
+}
+
+// TestAPostMovesTheRoomsScopedThroughAndNeverItsVersion.
+//
+// A post arbitrates on the room's MESSAGE subject, so the room's own broker
+// expectation is still its last CHANNEL record. A post that stamped `version`
+// would poison that expectation — every later patch would be decided against a
+// sequence the room's own subject never reached — and the room's topic could
+// not be changed again until somebody posted.
+func TestAPostMovesTheRoomsScopedThroughAndNeverItsVersion(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	created := h.number(`SELECT version FROM chat_channels WHERE id = ?`, "room-1")
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-1", "hello", "")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if got := h.number(`SELECT version FROM chat_channels WHERE id = ?`,
+		"room-1"); got != created {
+		t.Errorf("a post moved the room's version from %d to %d — the room's "+
+			"own expectation is now a position its subject never reached",
+			created, got)
+	}
+	if got := h.number(`SELECT scoped_through FROM chat_channels WHERE id = ?`,
+		"room-1"); got <= created {
+		t.Errorf("a post left scoped_through at %d — a read barrier compares "+
+			"MAX of the two, so a room that took a foreign-subject write and "+
+			"said nothing is one a linearizable read serves stale", got)
+	}
+}
+
+// TestATombstoneKeepsTheRowSoAReplyStillResolves.
+//
+// THE ROW STAYS. A thread is one level deep and hangs off its root, so a
+// delete that removed the row would make every reply in that thread
+// unreachable — a conversation that loses its first message loses all of it.
+// The mentions go with the body, because a mention row IS the @-mention feed
+// and an empty message sitting in somebody's list of things that named them is
+// a notification for text that no longer exists.
+func TestATombstoneKeepsTheRowSoAReplyStillResolves(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-1",
+		"@grace can you check the key rotation", "", "grace")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-2", "on it",
+		"msg-1")); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	if got := h.count("chat_mentions"); got != 1 {
+		t.Fatalf("a mention wrote %d rows", got)
+	}
+
+	tombstone := applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpDelete,
+		"op-delete-1", chatlet.MessageDelete{
+			V: chatlet.DocumentVersion, MessageID: "msg-1", DeletedBy: "ada",
+			DeletedByKind: chatlet.AuthorHuman,
+		}, chatlet.ScopeSet{Subject: true})
+	if _, gate, err := h.apply(tombstone); err != nil || gate != "" {
+		t.Fatalf("tombstone: %v (gate %q)", err, gate)
+	}
+	if got := h.count("chat_messages"); got != 2 {
+		t.Fatalf("the room holds %d messages after a tombstone, want 2 — the "+
+			"reply hung off msg-1 has lost its root", got)
+	}
+	if got := h.scalar(`SELECT body FROM chat_messages WHERE id = ?`, "msg-1"); got != "" {
+		t.Errorf("a tombstoned message still reads %q", got)
+	}
+	if got := h.number(`SELECT deleted_at FROM chat_messages WHERE id = ?`,
+		"msg-1"); got != store.EncodeTime(applyBrokerAt) {
+		t.Errorf("a tombstone stamped deleted_at=%d, want the broker's own "+
+			"instant", got)
+	}
+	if got := h.count("chat_mentions"); got != 0 {
+		t.Errorf("%d mention rows survive a tombstone, so a message with no "+
+			"body is still in somebody's mention feed", got)
+	}
+	// THE REPLY STILL RESOLVES ITS ROOT, which is the whole of what the
+	// row is kept for.
+	if got := h.scalar(`SELECT thread_root FROM chat_messages WHERE id = ?`,
+		"msg-2"); got != "msg-1" {
+		t.Errorf("the reply's root reads %q", got)
+	}
+
+	// AND AN EDIT OF A TOMBSTONE WRITES NOTHING BUT ITS REFUSAL: the body
+	// was removed on purpose, and restoring text into it would undo a
+	// deletion nobody asked to undo.
+	edit := applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpEdit, "op-edit-1",
+		chatlet.MessageEdit{
+			V: chatlet.DocumentVersion, MessageID: "msg-1", Body: "back again",
+			EditedBy: "ada", EditedByKind: chatlet.AuthorHuman,
+		}, chatlet.ScopeSet{Subject: true})
+	if rows, _, err := h.apply(edit); err != nil || rows != 1 {
+		t.Fatalf("an edit of a tombstone wrote %d rows (%v), want its verdict alone",
+			rows, err)
+	}
+	if got := h.lastVerdict(); got != chatlet.VerdictDeleted {
+		t.Errorf("an edit of a tombstone was decided %q, want %q", got, chatlet.VerdictDeleted)
+	}
+	if got := h.scalar(`SELECT body FROM chat_messages WHERE id = ?`, "msg-1"); got != "" {
+		t.Errorf("an edit restored %q into a tombstone", got)
+	}
+}
+
+// TestAnErasedMessageIsNeverResurrectedByAReplay.
+//
+// An erase is the one gesture that destroys a message row. The marker is what
+// makes that permanent: without it a redelivered post — or a replay from zero
+// on a node that was away — writes the message straight back, and a company
+// that redacted a leaked credential still has it on one member.
+func TestAnErasedMessageIsNeverResurrectedByAReplay(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	post := applyPostRecord("room-1", "msg-1", "the key is in the runbook", "",
+		"grace")
+	if _, _, err := h.apply(post); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if _, gate, err := h.apply(applyEraseRecord("room-1", "op-erase-a", "ops-on-call",
+		"msg-1")); err != nil || gate != "" {
+		t.Fatalf("erase: %v (gate %q)", err, gate)
+	}
+	for table, want := range map[string]int{
+		"chat_messages": 0, "chat_mentions": 0, "chat_deletions": 1,
+	} {
+		if got := h.count(table); got != want {
+			t.Fatalf("%s holds %d rows after an erase, want %d", table, got, want)
+		}
+	}
+
+	// THE REPLAY. Same record, later position — which is what a
+	// redelivered acknowledgement and a reanchored stream both look like.
+	// Its operation is already decided, so it is a copy that does nothing.
+	h.seq++
+	rows, _, err := h.applyAt(post, h.seq, applyBrokerAt)
+	if err != nil {
+		t.Fatalf("replay the post: %v", err)
+	}
+	if rows != 1 || h.count("chat_messages") != 0 {
+		t.Fatalf("a replayed post wrote %d rows and the room holds %d "+
+			"messages — an erased message came back", rows, h.count("chat_messages"))
+	}
+
+	// AND THE MARKER STOPS WHAT THE VERDICT CANNOT: a post of the erased
+	// id whose operation no verdict names — the copy of one whose verdict
+	// the horizon has let go — writes nothing but its refusal.
+	stale := post
+	stale.OpID = "op-post-msg-1-past-the-horizon"
+	h.seq++
+	rows, _, err = h.applyAt(stale, h.seq, applyBrokerAt)
+	if err != nil {
+		t.Fatalf("post an erased id under an undecided operation: %v", err)
+	}
+	if rows != 1 || h.count("chat_messages") != 0 || h.lastVerdict() != chatlet.VerdictGone {
+		t.Fatalf("a post of an erased id wrote %d rows, the room holds %d messages "+
+			"and it was decided %q — an erased message came back", rows,
+			h.count("chat_messages"), h.lastVerdict())
+	}
+}
+
+// TestTheErasingRecordIsNotBlockedByItsOwnMarker, and a SECOND erase does not
+// restate the first erasure's attribution.
+//
+// Two facts about the marker, which the applier consults BY OPERATION ID
+// rather than by presence. A record must not read its OWN effect as somebody
+// else's: a redelivered erase re-asserts its deletes and its marker rather
+// than being turned away by them, and it is not gated either — a gesture whose
+// acknowledgement was lost must not resolve as "applied nowhere" while the
+// destruction it asked for did happen.
+//
+// And the first erasure is the FACT: who removed somebody's words, and when,
+// is what the marker records, so a later erase naming the same message
+// leaves it alone. TWO GUARDS HOLD THAT ONE — the skip in [applyErase] and the
+// marker's own conflict clause — so the assertion below survives either being
+// removed alone, which is defence in depth rather than a case that cannot
+// fail: remove the marker write, restate it on conflict AND drop the skip, or
+// gate the erase on its own marker, and it goes red.
+func TestTheErasingRecordIsNotBlockedByItsOwnMarker(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, id := range []string{"msg-1", "msg-2"} {
+		if _, _, err := h.apply(applyPostRecord("room-1", id, "said "+id, "")); err != nil {
+			t.Fatalf("post %s: %v", id, err)
+		}
+	}
+	first := applyEraseRecord("room-1", "op-erase-a", "ops-alice", "msg-1")
+	if _, _, err := h.apply(first); err != nil {
+		t.Fatalf("erase: %v", err)
+	}
+	// THE MARKER CARRIES THE ERASE'S OWN POSITION, which the search index
+	// walks forward over to follow it (replicated 0055) — the record's, so
+	// every node writes the same value, and the redelivery below at a later
+	// position must not move it.
+	erasedAt := statelog.Position{Stream: topics.ChatLogStream, Generation: first.Gen,
+		Seq: h.seq}.Packed()
+	markedAt := func() int64 {
+		return h.number(`SELECT version FROM chat_deletions WHERE message_id = ?`, "msg-1")
+	}
+	if got := markedAt(); got != erasedAt {
+		t.Errorf("msg-1's marker carries position %d, want the erase's own %d — "+
+			"the search index's erase walk resumes from it", got, erasedAt)
+	}
+
+	// THE RECORD'S OWN REDELIVERY IS NOT GATED BY THE MARKER IT WROTE.
+	if _, gate, err := h.applyAt(first, h.seq+1, applyBrokerAt); err != nil {
+		t.Fatalf("redeliver the erase: %v", err)
+	} else if gate != "" {
+		t.Fatalf("the erase was gated by the marker it wrote (%q)", gate)
+	}
+	if got := h.count("chat_deletions"); got != 1 {
+		t.Fatalf("a redelivered erase left %d markers, want 1", got)
+	}
+	if got := markedAt(); got != erasedAt {
+		t.Errorf("a redelivered erase moved msg-1's marker to position %d from %d", got, erasedAt)
+	}
+
+	// A SECOND ERASE, BY SOMEBODY ELSE, naming one message the first
+	// destroyed and one it did not.
+	second := applyEraseRecord("room-1", "op-erase-b", "ops-bob", "msg-1", "msg-2")
+	if _, _, err := h.apply(second); err != nil {
+		t.Fatalf("second erase: %v", err)
+	}
+	if got := h.scalar(`SELECT by FROM chat_deletions WHERE message_id = ?`,
+		"msg-1"); got != "ops-alice" {
+		t.Errorf("msg-1's marker names %q — the first erasure is the fact an "+
+			"audit reads, and a second gesture must not take credit for it", got)
+	}
+	if got := h.scalar(`SELECT by FROM chat_deletions WHERE message_id = ?`,
+		"msg-2"); got != "ops-bob" {
+		t.Errorf("msg-2's marker names %q, want the operator who erased it", got)
+	}
+	if got := h.count("chat_messages"); got != 0 {
+		t.Errorf("%d messages survive two erases", got)
+	}
+}
+
+// TestTwoEstatesFedOneLogHoldIdenticalRowsAndApplyingTwiceEqualsOnce.
+//
+// THE IDENTITY CLAIM, exercised. Two nodes deriving one SQL state from one
+// ordered stream must produce byte-identical tables — including the ORDER rows
+// were inserted in, because the claim is a checksum over the file rather than
+// over a set — and a redelivered record must change nothing at all.
+//
+// The second estate is fed the same records with a REDELIVERY spliced into
+// them, which is the shape a real fleet sees: one node's broker replays an
+// acknowledgement the other's did not.
+func TestTwoEstatesFedOneLogHoldIdenticalRowsAndApplyingTwiceEqualsOnce(t *testing.T) {
+	t.Parallel()
+	log := func(h *applyHarness, redeliver bool) {
+		h.t.Helper()
+		create := applyCreateRoom("room-1", "launch",
+			chatlet.Member{Handle: "grace", FollowAll: true},
+			chatlet.Member{Handle: "ada"},
+			chatlet.Member{Handle: "alan"})
+		if _, _, err := h.apply(create); err != nil {
+			h.t.Fatalf("create: %v", err)
+		}
+		root := applyPostRecord("room-1", "msg-1", "who owns the rotation?", "",
+			"grace", "alan")
+		if _, _, err := h.apply(root); err != nil {
+			h.t.Fatalf("post: %v", err)
+		}
+		if redeliver {
+			// A REDELIVERY IN THE MIDDLE OF THE LOG, of the record at
+			// its own position — the one log both nodes are fed. It
+			// must consume no sequence number and write no row, its
+			// verdict included, or the two estates diverge from here
+			// on. (A copy at a LATER position is another record of
+			// the log, decided `repeated`, which
+			// TestTheRoomsSequenceIsContiguousAndARedeliveredPostConsumesNoNumber
+			// holds.)
+			if _, _, err := h.applyAt(root, h.seq, applyBrokerAt); err != nil {
+				h.t.Fatalf("redeliver: %v", err)
+			}
+		}
+		reply := applyPostRecord("room-1", "msg-2", "I do", "msg-1")
+		reply.Actor, reply.ActorKind = "grace", chatlet.AuthorAgent
+		var payload chatlet.MessagePost
+		if err := json.Unmarshal(reply.Mutation, &payload); err != nil {
+			h.t.Fatal(err)
+		}
+		payload.Author, payload.AuthorKind = "grace", chatlet.AuthorAgent
+		body, _ := json.Marshal(payload)
+		reply.Mutation = body
+		if _, _, err := h.apply(reply); err != nil {
+			h.t.Fatalf("reply: %v", err)
+		}
+		topic := "rotation"
+		patch := applyRecord(chatlet.ChannelSubject("room-1"), chatlet.OpPatch,
+			"op-patch-1", chatlet.ChannelPatch{V: chatlet.DocumentVersion, Topic: &topic},
+			chatlet.ScopeSet{Subject: true})
+		if _, _, err := h.apply(patch); err != nil {
+			h.t.Fatalf("patch: %v", err)
+		}
+		members := applyRecord(chatlet.ChannelSubject("room-1"), chatlet.OpMembers,
+			"op-members-1", chatlet.MemberSet{
+				V: chatlet.DocumentVersion,
+				Members: []chatlet.Member{
+					{Handle: "grace", FollowAll: true}, {Handle: "alan"},
+				},
+			}, chatlet.ScopeSet{Subject: true})
+		if _, _, err := h.apply(members); err != nil {
+			h.t.Fatalf("members: %v", err)
+		}
+	}
+
+	one, two := newApplyHarness(t), newApplyHarness(t)
+	log(one, false)
+	log(two, true)
+	if got, want := two.estate(), one.estate(); got != want {
+		t.Errorf("two estates fed one log hold different rows.\n"+
+			"--- the node with no redelivery\n%s\n--- the node with one\n%s",
+			want, got)
+	}
+	// AND THE MEMBERSHIP CONVERGED IN BOTH DIRECTIONS: the record carried
+	// the set whole, so `ada` — who is in the founding set and not in the
+	// second — has lost her row on both.
+	if got := one.count("chat_members"); got != 2 {
+		t.Errorf("the room holds %d members after a whole-set replacement, "+
+			"want 2 — a membership that only ever grows is a private room "+
+			"somebody was removed from and can still read", got)
+	}
+}
+
+// A MEMBERSHIP RECORD SAYS WHO IT TOOK OUT.
+//
+// The live surface decides who may see a frame at the batch's own position,
+// and at that position the people a membership record removed may not read the
+// room — so they were the one audience its change never reached. Only the
+// applier holds both sides of the replacement, so it is the one that can say
+// who left: the frame names them, sorted, and a record that removed nobody
+// names nobody.
+func TestAMembershipRecordSaysWhoItTookOut(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch",
+		chatlet.Member{Handle: "ada"}, chatlet.Member{Handle: "zed"},
+		chatlet.Member{Handle: "grace"})); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	set := func(opID string, handles ...string) chatlet.Applied {
+		t.Helper()
+		members := make([]chatlet.Member, 0, len(handles))
+		for _, handle := range handles {
+			members = append(members, chatlet.Member{Handle: handle})
+		}
+		before := len(h.live.frames())
+		if _, _, err := h.apply(applyRecord(chatlet.ChannelSubject("room-1"), chatlet.OpMembers,
+			opID, chatlet.MemberSet{V: chatlet.DocumentVersion, Members: members},
+			chatlet.ScopeSet{Subject: true})); err != nil {
+			t.Fatalf("members %s: %v", opID, err)
+		}
+		frames := h.live.frames()[before:]
+		if len(frames) != 1 {
+			t.Fatalf("membership %s produced %d frames, want one", opID, len(frames))
+		}
+		return frames[0]
+	}
+
+	if got := set("op-remove", "grace").Removed; !slices.Equal(got, []string{"ada", "zed"}) {
+		t.Errorf("a record that kept only grace says it removed %v, want [ada zed]", got)
+	}
+	if got := set("op-add", "grace", "alan").Removed; len(got) != 0 {
+		t.Errorf("a record that only added somebody says it removed %v", got)
+	}
+}
+
+// TestAPruneDeletesTheSameRowsInTwoEstates.
+//
+// Chat is the first domain that DELETES CONTENT on a horizon, and the prune is
+// a RECORD carrying a cutoff instant rather than a local sweep. "Older than a
+// year" evaluated against each node's own clock deletes a different set on
+// every node, for ever, and nothing would ever report it — where a cutoff on
+// the log is one number every applier compares against the broker's own stored
+// timestamps.
+func TestAPruneDeletesTheSameRowsInTwoEstates(t *testing.T) {
+	t.Parallel()
+	old := applyBrokerAt.Add(-400 * 24 * time.Hour)
+	cutoff := applyBrokerAt.Add(-365 * 24 * time.Hour)
+
+	log := func(h *applyHarness) {
+		h.t.Helper()
+		if _, _, err := h.applyStoredAt(applyCreateRoom("room-1", "launch"),
+			old); err != nil {
+			h.t.Fatalf("create: %v", err)
+		}
+		// TWO MESSAGES BELOW THE CUTOFF, one of them a thread with a
+		// reply, a mention and a reaction hanging off it — so every
+		// table the prune ranges over has a row to lose.
+		if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-1",
+			"last year's incident", "", "grace"), old); err != nil {
+			h.t.Fatalf("post: %v", err)
+		}
+		if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-2",
+			"and the follow-up", "msg-1"), old); err != nil {
+			h.t.Fatalf("reply: %v", err)
+		}
+		react := applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpReact,
+			"op-react-1", chatlet.Reaction{
+				V: chatlet.DocumentVersion, MessageID: "msg-1", Emoji: ":eyes:",
+				By: "grace", Cap: chatlet.MaxReactionEmoji,
+			}, chatlet.ScopeSet{Subject: true})
+		if _, _, err := h.applyStoredAt(react, old); err != nil {
+			h.t.Fatalf("react: %v", err)
+		}
+		// AND ONE ABOVE IT, which must survive.
+		if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-3",
+			"this year's", ""), applyBrokerAt); err != nil {
+			h.t.Fatalf("post: %v", err)
+		}
+		prune := applyRecord(chatlet.ChannelSubject("room-1"), chatlet.OpPrune,
+			"op-prune-1", chatlet.Prune{V: chatlet.DocumentVersion, Cutoff: cutoff},
+			chatlet.ScopeSet{Subject: true})
+		if _, _, err := h.applyStoredAt(prune, applyBrokerAt); err != nil {
+			h.t.Fatalf("prune: %v", err)
+		}
+	}
+
+	one, two := newApplyHarness(t), newApplyHarness(t)
+	log(one)
+	log(two)
+	if got, want := two.estate(), one.estate(); got != want {
+		t.Errorf("a prune left two estates holding different rows.\n"+
+			"--- one\n%s\n--- two\n%s", want, got)
+	}
+	if got := one.count("chat_messages"); got != 1 {
+		t.Fatalf("%d messages survive the prune, want the one above the "+
+			"cutoff", got)
+	}
+	if got := one.scalar(`SELECT id FROM chat_messages`); got != "msg-3" {
+		t.Errorf("the surviving message is %q, want the one stored above the "+
+			"cutoff", got)
+	}
+	for _, table := range []string{
+		"chat_mentions", "chat_reactions", "chat_thread_participants",
+		"chat_follows",
+	} {
+		if got := one.count(table); got != 0 {
+			t.Errorf("%s holds %d rows after the prune — each carries the "+
+				"parent message's own channel and instant precisely so the "+
+				"range delete reaches it on an index", table, got)
+		}
+	}
+	// THE MARKERS ARE NOT PRUNED, and nothing here wrote one — but the
+	// rule is worth stating where the table list is: a horizon on a
+	// deletion marker is the day a replayed post resurrects what a company
+	// erased.
+	if got := one.count("chat_deletions"); got != 0 {
+		t.Errorf("a prune wrote %d deletion markers", got)
+	}
+}
+
+// TestARerunTransactionBodyObservesOneChangePerPosition.
+//
+// The store's transactions are OPTIMISTIC: a conflicted one is rolled back and
+// its body runs again with the same records in the same order. An accumulator
+// that appended would then hand a live surface the same message twice — which
+// every viewer renders as the same remark said twice — so it is keyed on the
+// record's own position, where a re-run overwrites its own earlier entry.
+//
+// And the other half: a batch that FAILED must leave nothing behind.
+// [Applier.Committed] runs only on success, so an entry gathered by a
+// transaction that never committed would drain on a LATER commit and announce
+// rows nobody wrote.
+func TestARerunTransactionBodyObservesOneChangePerPosition(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	h.live.batches = nil
+
+	post := applyPostRecord("room-1", "msg-1", "we ship friday", "")
+	seq := h.seq + 1
+	// THE FIRST RUN IS ROLLED BACK, which is exactly what the store does
+	// to a conflicted transaction: the rows go, and the body runs again.
+	rollback := errors.New("conflict")
+	if err := h.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		if _, _, _, err := h.applyIn(tx, post, seq, applyBrokerAt); err != nil {
+			return err
+		}
+		return rollback
+	}); !errors.Is(err, rollback) {
+		t.Fatalf("the rolled-back transaction returned %v", err)
+	}
+	if err := h.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		_, _, _, err := h.applyIn(tx, post, seq, applyBrokerAt)
+		return err
+	}); err != nil {
+		t.Fatalf("the re-run transaction: %v", err)
+	}
+	h.applier.Committed(t.Context())
+
+	frames := h.live.frames()
+	if len(frames) != 1 {
+		t.Fatalf("a re-run transaction body pushed %d live frames for one "+
+			"record, want 1 — every viewer renders the second as the same "+
+			"message said twice", len(frames))
+	}
+	if frames[0].MessageID != "msg-1" || frames[0].ChannelSeq != 1 {
+		t.Errorf("the frame names message %q at sequence %d, want msg-1 at 1",
+			frames[0].MessageID, frames[0].ChannelSeq)
+	}
+
+	// A FAILED BATCH LEAVES NOTHING TO DRAIN. The post below names a room
+	// this node does not have, which is a malformed record under a strict
+	// replay — so the transaction fails after the good record in it
+	// already noted a frame.
+	h.live.batches = nil
+	if err := h.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		if _, _, _, err := h.applyIn(tx,
+			applyPostRecord("room-1", "msg-2", "second", ""), h.seq+2,
+			applyBrokerAt); err != nil {
+			return err
+		}
+		_, _, _, err := h.applyIn(tx,
+			applyPostRecord("room-404", "msg-3", "nowhere", ""), h.seq+3,
+			applyBrokerAt)
+		return err
+	}); err == nil {
+		t.Fatal("a post into a room this node has no row for was applied")
+	}
+	h.applier.Committed(t.Context())
+	if got := h.live.frames(); len(got) != 0 {
+		t.Errorf("a transaction that never committed drained %d live frames, "+
+			"which announce rows nobody wrote", len(got))
+	}
+}
+
+// TestAnEvictedNodesRecordsApplyNowhere, and a readmission takes it back.
+//
+// The fence depends on nothing but the log's own order and the record's
+// envelope, which is what makes it hold when coordination cannot be reached at
+// all — and a wedged coordination path is a precondition of an eviction being
+// permitted in the first place.
+func TestAnEvictedNodesRecordsApplyNowhere(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	evict := applyRecord(chatlet.EvictionSubject("node-b"), chatlet.OpEviction,
+		"op-evict", chatlet.Eviction{
+			V: chatlet.GateRecordVersion, NodeID: "node-b", EvictedBy: "ops",
+			EvictedAt: applyBrokerAt,
+		}, chatlet.ScopeSet{Subject: true})
+	if _, _, err := h.apply(evict); err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+
+	from := applyCreateRoom("room-1", "launch")
+	from.Writer = "node-b"
+	_, gate, err := h.apply(from)
+	if err != nil {
+		t.Fatalf("apply an evicted node's record: %v", err)
+	}
+	if gate != statelog.ReasonEvicted {
+		t.Fatalf("an evicted node's record applied (gate %q)", gate)
+	}
+	if got := h.count("chat_channels"); got != 0 {
+		t.Fatalf("%d rooms were written by an evicted node", got)
+	}
+
+	readmit := applyRecord(chatlet.EvictionSubject("node-b"), chatlet.OpEviction,
+		"op-readmit", chatlet.Eviction{
+			V: chatlet.GateRecordVersion, NodeID: "node-b", EvictedBy: "ops",
+			EvictedAt: applyBrokerAt, Readmitted: true,
+		}, chatlet.ScopeSet{Subject: true})
+	if _, _, err := h.apply(readmit); err != nil {
+		t.Fatalf("readmit: %v", err)
+	}
+	if _, gate, err := h.apply(from); err != nil || gate != "" {
+		t.Fatalf("a readmitted node's record was still fenced: %v (gate %q)",
+			err, gate)
+	}
+	if got := h.count("chat_channels"); got != 1 {
+		t.Errorf("a readmitted node wrote %d rooms, want 1", got)
+	}
+}
+
+// A SECOND COPY OF AN OPERATION DOES NOTHING, even where its effect would.
+//
+// Two publishers that each found an operation's ledger silent append it twice,
+// and the copy lands at a later position — after whatever happened in between.
+// An edit copied past the edit made after it would put the older words back,
+// and a reaction copied past its own take-back would put the mark back; both
+// are decided `repeated`, by the first copy's verdict, before either case runs.
+//
+// Mutation: make decidedBefore answer false and the older words and the mark
+// come back.
+func TestASecondCopyOfAnOperationDoesNothing(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-1", "ship friday", "")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	edit := func(opID, body string) chatlet.MutationRecord {
+		return applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpEdit, opID,
+			chatlet.MessageEdit{V: chatlet.DocumentVersion, MessageID: "msg-1", Body: body,
+				EditedBy: "ada", EditedByKind: chatlet.AuthorHuman},
+			chatlet.ScopeSet{Subject: true})
+	}
+	first := edit("op-edit-1", "ship monday")
+	for _, rec := range []chatlet.MutationRecord{first, edit("op-edit-2", "ship tuesday"), first} {
+		if _, _, err := h.apply(rec); err != nil {
+			t.Fatalf("apply %s: %v", rec.OpID, err)
+		}
+	}
+	if got := h.scalar(`SELECT body FROM chat_messages WHERE id = ?`, "msg-1"); got !=
+		"ship tuesday" {
+		t.Errorf("a copy of the first edit, applied after the second, left %q", got)
+	}
+	if got := h.lastVerdict(); got != chatlet.VerdictRepeated {
+		t.Errorf("the copy was decided %q, want %q", got, chatlet.VerdictRepeated)
+	}
+
+	react := func(opID string, removed bool) chatlet.MutationRecord {
+		return applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpReact, opID,
+			chatlet.Reaction{V: chatlet.DocumentVersion, MessageID: "msg-1", Emoji: ":+1:",
+				By: "ada", Removed: removed, Cap: capOf(removed)},
+			chatlet.ScopeSet{Subject: true})
+	}
+	add := react("op-react-1", false)
+	for _, rec := range []chatlet.MutationRecord{add, react("op-unreact-1", true), add} {
+		if _, _, err := h.apply(rec); err != nil {
+			t.Fatalf("apply %s: %v", rec.OpID, err)
+		}
+	}
+	if got := h.count("chat_reactions"); got != 0 {
+		t.Errorf("a copy of a reaction, applied after it was taken back, put %d "+
+			"marks back", got)
+	}
+}
+
+// A VERDICT IS KEPT FOR THE LEDGER'S HORIZON, BY THE BROKER'S CLOCK, and the
+// prune is part of a record's own apply: every node removes the same rows at
+// the same position, a batch at a time so a quiet month costs one record
+// nothing it cannot afford.
+//
+// Mutation: prune by the record's own broker instant without the horizon, or
+// without the batch bound, and the counts below move.
+func TestAVerdictIsKeptForTheLedgersHorizonAndPrunedABatchAtATime(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	const old = 70
+	for i := range old {
+		id := fmt.Sprintf("msg-%d", i)
+		if _, _, err := h.apply(applyPostRecord("room-1", id, "said", "")); err != nil {
+			t.Fatalf("post %s: %v", id, err)
+		}
+	}
+	// ONE INSTANT INSIDE THE HORIZON prunes nothing.
+	inside := applyBrokerAt.Add(chatlet.VerdictRetention)
+	if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-inside", "said", ""),
+		inside); err != nil {
+		t.Fatalf("post inside the horizon: %v", err)
+	}
+	if got := h.count("chat_verdicts"); got != old+1 {
+		t.Fatalf("%d verdicts after a record at the horizon, want %d", got, old+1)
+	}
+	past := applyBrokerAt.Add(chatlet.VerdictRetention + time.Second)
+	if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-past", "said", ""),
+		past); err != nil {
+		t.Fatalf("post past the horizon: %v", err)
+	}
+	if got, want := h.count("chat_verdicts"), old+2-64; got != want {
+		t.Fatalf("%d verdicts after the first record past the horizon, want %d: "+
+			"sixty-four go, oldest first", got, want)
+	}
+	if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-later", "said", ""),
+		past); err != nil {
+		t.Fatalf("post past the horizon again: %v", err)
+	}
+	if got := h.count("chat_verdicts"); got != 3 {
+		t.Errorf("%d verdicts once the backlog is gone, want the three inside the "+
+			"horizon", got)
+	}
+}
+
+// A REACTION IS DECLINED AT THE CAP ITS WRITER STAMPED, never at the applying
+// node's own: the cap is a rule a later build may change, and two builds
+// deciding one record from their own constants would write different rows.
+// So a record stamped below this build's cap is declined at the stamp, and one
+// stamped above it is taken past it.
+//
+// Mutation: decide reactionsFull from MaxReactionEmoji rather than the
+// record's Cap and both halves go red.
+func TestAReactionIsDeclinedAtTheCapItsWriterStamped(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-1", "ship it", "")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	react := func(emoji string, stamped int) chatlet.MutationRecord {
+		return applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpReact, "op-react-"+emoji,
+			chatlet.Reaction{V: chatlet.DocumentVersion, MessageID: "msg-1", Emoji: emoji,
+				By: "ada", Cap: stamped}, chatlet.ScopeSet{Subject: true})
+	}
+	const lower = 2
+	for _, emoji := range []string{":a:", ":b:"} {
+		if _, _, err := h.apply(react(emoji, lower)); err != nil {
+			t.Fatalf("react %s: %v", emoji, err)
+		}
+	}
+	if _, _, err := h.apply(react(":c:", lower)); err != nil {
+		t.Fatalf("react past a stamp of %d: %v", lower, err)
+	}
+	if got := h.lastVerdict(); got != chatlet.VerdictReactionsFull {
+		t.Errorf("a third emoji under a stamp of %d was decided %q, want %q", lower, got,
+			chatlet.VerdictReactionsFull)
+	}
+	// TWO ON IT ALREADY, so thirty-one more is one past this build's cap.
+	for i := range chatlet.MaxReactionEmoji - 1 {
+		if _, _, err := h.apply(react(fmt.Sprintf(":e%d:", i), chatlet.MaxReactionEmoji+1)); err != nil {
+			t.Fatalf("react %d: %v", i, err)
+		}
+	}
+	if got := h.lastVerdict(); got != chatlet.VerdictApplied {
+		t.Errorf("an emoji under a stamp above this build's cap was decided %q — the "+
+			"writer's build allows it, so every node takes it", got)
+	}
+	if got := h.number(`SELECT COUNT(DISTINCT emoji) FROM chat_reactions WHERE message_id = ?`,
+		"msg-1"); got != int64(chatlet.MaxReactionEmoji+1) {
+		t.Errorf("the message carries %d distinct emoji, want %d", got, chatlet.MaxReactionEmoji+1)
+	}
+}
+
+// TestTheThirtyThirdDistinctReactionIsDeclinedDeterministically.
+//
+// [chatlet.MaxReactionEmoji] is the applier's to enforce, and the record's shape
+// is what forces it there: a reaction is a single TOGGLE so that two people
+// reacting never overwrite each other, and a toggle cannot see the set it is
+// joining. The applier holds the message's rows in its own transaction, so it
+// reaches the same answer on every node — which a cap read from one node's
+// rows at write time could not promise.
+func TestTheThirtyThirdDistinctReactionIsDeclinedDeterministically(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-1", "ship it", "")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	react := func(emoji, by string, removed bool) chatlet.MutationRecord {
+		// THE SIGN IS PART OF THE OPERATION, as the writer derives it: a
+		// reaction taken back is a second operation, never a copy of the
+		// first.
+		verb := "op-react-"
+		if removed {
+			verb = "op-unreact-"
+		}
+		return applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpReact,
+			verb+emoji+"-"+by, chatlet.Reaction{
+				V: chatlet.DocumentVersion, MessageID: "msg-1", Emoji: emoji,
+				By: by, Removed: removed, Cap: capOf(removed),
+			}, chatlet.ScopeSet{Subject: true})
+	}
+	for i := range chatlet.MaxReactionEmoji {
+		if _, _, err := h.apply(react(fmt.Sprintf(":e%d:", i), "ada", false)); err != nil {
+			t.Fatalf("react %d: %v", i, err)
+		}
+	}
+	// ONE MORE PERSON ON AN EMOJI THE MESSAGE ALREADY CARRIES IS STILL
+	// ADMITTED: the cap is on how many MARKS a message carries, and a
+	// hundred people agreeing with one thumb is one mark.
+	if rows, _, err := h.apply(react(":e0:", "grace", false)); err != nil || rows != 2 ||
+		h.lastVerdict() != chatlet.VerdictApplied {
+		t.Fatalf("a second reactor on an existing emoji wrote %d rows (%v) and was "+
+			"decided %q, want its reaction and its verdict", rows, err, h.lastVerdict())
+	}
+	rows, _, err := h.apply(react(":one-too-many:", "ada", false))
+	if err != nil {
+		t.Fatalf("the thirty-third emoji: %v", err)
+	}
+	if rows != 1 {
+		t.Errorf("the thirty-third distinct emoji wrote %d rows beside its verdict — "+
+			"every one is a row replicated to every node, and past the cap a "+
+			"message's reactions are longer than the message", rows-1)
+	}
+	// AND THE WRITER IS TOLD: the refusal is the verdict it reads back.
+	if got := h.lastVerdict(); got != chatlet.VerdictReactionsFull {
+		t.Errorf("the thirty-third distinct emoji was decided %q, want %q", got,
+			chatlet.VerdictReactionsFull)
+	}
+	if got := h.number(
+		`SELECT COUNT(DISTINCT emoji) FROM chat_reactions WHERE message_id = ?`,
+		"msg-1"); got != int64(chatlet.MaxReactionEmoji) {
+		t.Errorf("the message carries %d distinct emoji, want %d",
+			got, chatlet.MaxReactionEmoji)
+	}
+
+	// AND A TOGGLE REMOVES EXACTLY ONE PERSON'S MARK, not the emoji.
+	if _, _, err := h.apply(react(":e0:", "ada", true)); err != nil {
+		t.Fatalf("unreact: %v", err)
+	}
+	if got := h.number(
+		`SELECT COUNT(*) FROM chat_reactions WHERE message_id = ? AND emoji = ?`,
+		"msg-1", ":e0:"); got != 1 {
+		t.Errorf("%d marks survive one person removing theirs, want grace's", got)
+	}
+}
+
+// TestATypoFixDoesNotWriteBackAFollowThePruneTook.
+//
+// An edit writes a follow only for a name the words before it did not have —
+// the moment [chatlet.Store.Edit] wakes somebody for — because fixing the words
+// around a name is not naming them again. The case where the difference shows
+// is a thread the retention prune cut at its root: the root went, its follows
+// went with it (they range on the root's own instant), and a reply above the
+// cutoff survived still naming somebody. An edit of that reply which wrote a
+// follow for every name it carries would put back the subscription the prune
+// took, and every node would start waking that seat again over a typo.
+func TestATypoFixDoesNotWriteBackAFollowThePruneTook(t *testing.T) {
+	t.Parallel()
+	old := applyBrokerAt.Add(-400 * 24 * time.Hour)
+	recent := applyBrokerAt.Add(-30 * 24 * time.Hour)
+	cutoff := applyBrokerAt.Add(-365 * 24 * time.Hour)
+
+	h := newApplyHarness(t)
+	if _, _, err := h.applyStoredAt(applyCreateRoom("room-1", "launch"), old); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-1",
+		"last year's incident", ""), old); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if _, _, err := h.applyStoredAt(applyPostRecord("room-1", "msg-2",
+		"@grace is this still open?", "msg-1", "grace"), recent); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	if got := h.count("chat_follows"); got != 1 {
+		t.Fatalf("being named in the reply wrote %d follows, want 1", got)
+	}
+	prune := applyRecord(chatlet.ChannelSubject("room-1"), chatlet.OpPrune,
+		"op-prune-1", chatlet.Prune{V: chatlet.DocumentVersion, Cutoff: cutoff},
+		chatlet.ScopeSet{Subject: true})
+	if _, _, err := h.applyStoredAt(prune, applyBrokerAt); err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if got := h.count("chat_follows"); got != 0 {
+		t.Fatalf("%d follows survive a prune that took the thread's root", got)
+	}
+
+	edit := applyRecord(chatlet.MessageSubject("room-1"), chatlet.OpEdit, "op-edit-1",
+		chatlet.MessageEdit{
+			V: chatlet.DocumentVersion, MessageID: "msg-2",
+			Body: "@grace is this still open?!", Mentions: []string{"grace"},
+			EditedBy: "ada", EditedByKind: chatlet.AuthorHuman,
+		}, chatlet.ScopeSet{Subject: true})
+	if _, _, err := h.apply(edit); err != nil {
+		t.Fatalf("edit: %v", err)
+	}
+	if got := h.count("chat_follows"); got != 0 {
+		t.Errorf("a typo fix wrote back %d follows the prune took — an edit "+
+			"that still names somebody is not naming them again", got)
+	}
+}
+
+// TestAThreadSubscribesWhoSpokeInItAndWhoWasNamedInIt.
+//
+// TWO TABLES, BECAUSE THEY ANSWER TWO QUESTIONS. A participant has SPOKEN in
+// the thread and a reply reaches them as [chatlet.ReasonReply], which obliges
+// nothing; a follower was NAMED in it and hears the replies without having
+// said anything. Collapsing them would make every remark in a thread a
+// standing subscription to it — a room of a hundred people answering a
+// heading fix.
+//
+// Both are DERIVED HERE rather than authored by the writer, because
+// participation is a fact about rows rather than a claim a record can make.
+func TestAThreadSubscribesWhoSpokeInItAndWhoWasNamedInIt(t *testing.T) {
+	t.Parallel()
+	h := newApplyHarness(t)
+	if _, _, err := h.apply(applyCreateRoom("room-1", "launch")); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	// A ROOT NAMING SOMEBODY. Nobody has spoken in the thread yet, so
+	// there is no participant row — and a room's every post is not a
+	// thread.
+	if _, _, err := h.apply(applyPostRecord("room-1", "msg-1",
+		"@grace who owns this?", "", "grace")); err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if got := h.count("chat_thread_participants"); got != 0 {
+		t.Errorf("a room post wrote %d participant rows — a second row per "+
+			"message in the highest-volume table in the engine, for a thread "+
+			"that mostly never happens", got)
+	}
+	if got := h.count("chat_follows"); got != 1 {
+		t.Fatalf("being named wrote %d follow rows, want 1", got)
+	}
+	if got := h.scalar(`SELECT reason FROM chat_follows`); got != string(chatlet.ReasonMention) {
+		t.Errorf("the follow's reason is %q, want %q — the row says why it "+
+			"exists, and being named is the only reason this build writes one",
+			got, chatlet.ReasonMention)
+	}
+
+	// THE FIRST REPLY makes it a thread, and brings the root's author in
+	// with it: they have spoken in it, and a reply to the thread they
+	// started is a question put back to them.
+	reply := applyPostRecord("room-1", "msg-2", "I do", "msg-1")
+	var payload chatlet.MessagePost
+	if err := json.Unmarshal(reply.Mutation, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.Author, payload.AuthorKind = "grace", chatlet.AuthorAgent
+	body, _ := json.Marshal(payload)
+	reply.Mutation = body
+	if _, _, err := h.apply(reply); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	if got := h.count("chat_thread_participants"); got != 2 {
+		t.Fatalf("a reply wrote %d participant rows, want the replier and the "+
+			"root's author", got)
+	}
+	// THE ROOT'S OWN INSTANT IS WHAT THE PRUNE RANGES ON, carried onto
+	// every child row precisely so the delete is an index seek.
+	if got := h.number(`SELECT DISTINCT root_at FROM chat_thread_participants`); got !=
+		store.EncodeTime(applyBrokerAt) {
+		t.Errorf("a participant row carries root_at=%d, want the root "+
+			"message's own instant", got)
+	}
+}

@@ -185,10 +185,10 @@ func (d *DB) OpenReplicated(ctx context.Context, logs int) (*DB, error) {
 // has LEARNED since it was opened.
 //
 // THE PINS ARE ADDED, NEVER TAKEN OUT OF THE READERS, configured or not: a
-// pool bounded at the configured figure with four writers pinned in it leaves
-// a read burst queueing behind them — and a figure at or below the pin count
-// leaves the last apply loop waiting for a connection none of the others
-// will ever give back.
+// pool bounded at the configured figure with a writer pinned in it per log
+// leaves a read burst queueing behind them — and a figure at or below the pin
+// count leaves the last apply loop waiting for a connection none of the
+// others will ever give back.
 func (d *DB) replicatedOptions(logs int) Options {
 	opts := d.opened
 	opts.Scratch = false

@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // The company's ONE status set, and why nothing declares another.
@@ -244,7 +246,7 @@ type ErrAmbiguous struct {
 
 func (e *ErrAmbiguous) Error() string {
 	return fmt.Sprintf("worklet: %q matches %s; name one of them exactly",
-		e.Query, strings.Join(e.Matches, " and "))
+		e.Query, words.And(e.Matches))
 }
 
 // Resolve finds the one candidate a query names.

@@ -51,7 +51,7 @@ func (s *Service) workRoutes(mount mounter) {
 		}}
 	}
 
-	route("POST /worklet/items", task(authz.ActionWorkCreate), (*served).postItem)
+	route("POST /worklet/items", task(authz.ActionWorkCreate).Creating(), (*served).postItem)
 	route("PATCH /worklet/items/{key}", task(authz.ActionWorkUpdate), (*served).patchItem)
 	// WHO MAY POST TO A THREAD IS A ROW: a tracker holder may say anything
 	// there, and somebody an OPEN ASK on the item names may post the answer
@@ -61,7 +61,7 @@ func (s *Service) workRoutes(mount mounter) {
 	// exactly as it decides the same call made through the act route or an
 	// assistant. Decided here as `comment_on_work_item` on the bare kind, a
 	// person asked a question without Worklet could never answer it.
-	route("POST /worklet/items/{key}/comments", task(authz.ActionWorkThread),
+	route("POST /worklet/items/{key}/comments", task(authz.ActionWorkThread).Creating(),
 		(*served).postItemComment)
 	// WHO WROTE THE REMARK IS A ROW, so the route admits whoever may comment
 	// with the tracker and the handler decides the edit once it has read
@@ -71,28 +71,33 @@ func (s *Service) workRoutes(mount mounter) {
 		(*served).patchItemComment)
 	// A PLACE ON A BOARD IS `place_work_item`, decided on the task's kind
 	// as the tool's own gate decides it.
-	route("POST /worklet/items/{key}/rank", task(authz.ActionWorkPlace), (*served).postRank)
+	route("POST /worklet/items/{key}/rank", task(authz.ActionWorkPlace).Rewriting(),
+		(*served).postRank)
 	// DEPENDING AND RELATING ARE EDITS OF THE ITEM, made through
 	// update_work_item's own set-valued arguments; the routes are narrower
 	// doors onto the same verb.
-	route("POST /worklet/items/{key}/depend", task(authz.ActionWorkUpdate), (*served).postDepend)
-	route("POST /worklet/items/{key}/relate", task(authz.ActionWorkUpdate), (*served).postRelate)
+	route("POST /worklet/items/{key}/depend", task(authz.ActionWorkUpdate).Rewriting(),
+		(*served).postDepend)
+	route("POST /worklet/items/{key}/relate", task(authz.ActionWorkUpdate).Rewriting(),
+		(*served).postRelate)
 	// THE TRASH IS THE ITEM'S PROJECT LEAD'S OR ITS REPORTER'S, and both the
 	// project and the reporter come out of the row: the route admits a
 	// tracker holder — nobody is ASKED to remove an item, so the asked arm
 	// admits nobody here — and the tool decides the verb once it has read
 	// the item. Every arm of that verb needs the tracker too.
 	route("DELETE /worklet/items/{key}", task(authz.ActionWorkRead), (*served).deleteItem)
-	route("POST /worklet/items/{key}/restore", task(authz.ActionWorkRead), (*served).postRestore)
+	route("POST /worklet/items/{key}/restore", task(authz.ActionWorkRead).Rewriting(),
+		(*served).postRestore)
 	// A MOVE IS THE LEAD'S OF THE PROJECT THE ITEM IS IN, which is the row's
 	// for the trash's reason — and a move into the project it is already in
 	// is the retry of one that landed, which the tool answers from the
 	// move's own ledger rather than asking anybody's authority again.
-	route("POST /worklet/items/{key}/move", task(authz.ActionWorkRead), (*served).postMove)
+	route("POST /worklet/items/{key}/move", task(authz.ActionWorkRead).Rewriting(),
+		(*served).postMove)
 	// THE PURGE NEEDS NO ROW TO DECIDE: it is admin's, after a recent
 	// sign-in, and never an agent's, whatever the item is — an author tidies
 	// their own item into the trash and back, never out of the estate.
-	route("POST /worklet/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge},
+	route("POST /worklet/items/{key}/purge", authz.Policy{Action: authz.ActionWorkPurge}.Destroying(),
 		(*served).postPurge)
 	// A PROJECT IS THE CHART'S, declared in the company document, so this
 	// route writes the policy of one that exists and creates none.
@@ -100,12 +105,13 @@ func (s *Service) workRoutes(mount mounter) {
 		authz.AddedElsewhere("A project is declared in the company configuration "+
 			"(PATCH /config), and its policy is written here once it exists.")),
 		(*served).putProject)
-	route("POST /worklet/projects/{key}/tags", project(authz.ActionProjectWrite),
+	route("POST /worklet/projects/{key}/tags", project(authz.ActionProjectWrite).Rewriting(),
 		(*served).postProjectTags)
 	// A VIEW'S AUTHORITY IS IN ITS BODY — personal to its owner or shared on
 	// its container — so the route admits a reader of the views and the
 	// tool's own gate decides the save on what the body says.
-	route("POST /worklet/views", kinded(authz.ActionViewList, authz.KindView), (*served).postView)
+	route("POST /worklet/views", kinded(authz.ActionViewList, authz.KindView).Creating(),
+		(*served).postView)
 	route("PUT /worklet/catalogue", authz.Policy{Action: authz.ActionCatalogueWrite},
 		(*served).putCatalogue)
 	route("PUT /worklet/people/{handle}/inbox", person(authz.ActionInboxMark), (*served).putInbox)
@@ -126,11 +132,10 @@ func (s *served) postItem(w http.ResponseWriter, r *http.Request) {
 
 func (s *served) patchItem(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
-	if !ok || !fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+	if !ok || !fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, worklet.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, worklet.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
@@ -144,21 +149,19 @@ func (s *served) postItemComment(w http.ResponseWriter, r *http.Request) {
 func (s *served) postDepend(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "waiting_on", "blocking", "dependency_note", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, worklet.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, worklet.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) postRelate(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "linked", "linked_pages", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, worklet.UpdateWorkItemTool, args)
+	s.callIfMatched(w, r, worklet.UpdateWorkItemTool, args, "if_match")
 }
 
 func (s *served) deleteItem(w http.ResponseWriter, r *http.Request) {
@@ -288,7 +291,7 @@ func (s *served) personRecord(w http.ResponseWriter, r *http.Request, tool strin
 	}, handle, write)
 	about := operator.About(tool, args)
 	about["handle"] = handle
-	s.answerDispatched(w, r, key, tool, about, result, err)
+	s.answerDispatched(w, r, key, tool, about, result, err, false)
 }
 
 // ---- the gestures no tool makes ---------------------------------------- //
@@ -307,11 +310,10 @@ func (s *served) personRecord(w http.ResponseWriter, r *http.Request, tool strin
 func (s *served) postRank(w http.ResponseWriter, r *http.Request) {
 	args, ok := readArgs(w, r)
 	if !ok || !only(w, args, "after", "before", "status", "if_match") ||
-		!fromPath(w, args, "item", r.PathValue("key")) ||
-		!ifMatch(w, r, args, "if_match") {
+		!fromPath(w, args, "item", r.PathValue("key")) {
 		return
 	}
-	s.call(w, r, worklet.PlaceWorkItemTool, args)
+	s.callIfMatched(w, r, worklet.PlaceWorkItemTool, args, "if_match")
 }
 
 // patchItemComment rewrites one remark on a work item, AS ITS AUTHOR.
@@ -350,7 +352,7 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
@@ -360,10 +362,12 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 		Kind: worklet.ChangeCommentEdited, Before: detail.Task, After: detail.Task,
 		Comment: &edited, Mentions: edited.Mentions,
 	}.Notify(s.Work.Leads)
-	result, err := s.Tracker(actor).EditComment(r.Context(),
-		keyedOp(key, "comment-edit", cid, args), detail.Task.ID, detail.Task.Project,
-		cid,
-		body, notify)
+	opID, ok := keyedOp(w, r, key, "comment-edit", cid, args)
+	if !ok {
+		return
+	}
+	result, err := s.Tracker(actor).EditComment(r.Context(), opID, detail.Task.ID,
+		detail.Task.Project, cid, body, notify)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionWorkCommentEdit), key, result.Outcome, result.Position, err)
 	if err != nil {
@@ -377,7 +381,7 @@ func (s *served) patchItemComment(w http.ResponseWriter, r *http.Request) {
 	}, detail))
 }
 
-// postPurge destroys an item and every row it produced, on every node.
+// postPurge destroys an item and every row it produced, on every data node.
 //
 // # The confirmation is the item's KEY, and it is CHECKED
 //
@@ -412,13 +416,13 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case confirm == "":
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": "repeat the item's KEY in ?confirm= — " +
-				"a purge removes the item and every row it produced on every " +
-				"node, and there is nothing that undoes it"})
+			map[string]string{"detail": "repeat the item's KEY in ?confirm=. " +
+				"A purge removes the item and every row it produced on every " +
+				"data node, and there is nothing that undoes it"})
 		return
 	case reason == "":
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
-			map[string]string{"detail": "state why in ?reason= — the rows are " +
+			map[string]string{"detail": "state why in ?reason=. The rows are " +
 				"destroyed and the marker's reason is the only account of them " +
 				"that survives"})
 		return
@@ -430,20 +434,23 @@ func (s *served) postPurge(w http.ResponseWriter, r *http.Request) {
 	if !strings.EqualFold(confirm, detail.Task.Key) {
 		httpjson.FailWith(w, http.StatusUnprocessableEntity, httpjson.CodeInvalid,
 			map[string]string{"detail": fmt.Sprintf("?confirm= says %q and the "+
-				"item is %s — nothing was destroyed", confirm, detail.Task.Key)})
+				"item is %s, so nothing was destroyed", confirm, detail.Task.Key)})
 		return
 	}
 	key, ok := operationKey(w, r)
 	if !ok {
 		return
 	}
-	actor, ok := s.actor(w, r, key)
+	actor, ok := s.actor(w, r)
 	if !ok {
 		return
 	}
-	result, err := s.Tracker(actor).PurgeTask(r.Context(),
-		keyedOp(key, "purge", detail.Task.ID, purgeArgs(confirm, reason)),
-		detail.Task.ID, detail.Task.Project, reason)
+	opID, ok := keyedOp(w, r, key, "purge", detail.Task.ID, purgeArgs(confirm, reason))
+	if !ok {
+		return
+	}
+	result, err := s.Tracker(actor).PurgeTask(r.Context(), opID, detail.Task.ID,
+		detail.Task.Project, reason)
 	operator.AuditGesture(r.Context(), s.audit, types.TransportWork,
 		string(authz.ActionWorkPurge), key, result.Outcome, result.Position, err)
 	if err != nil {

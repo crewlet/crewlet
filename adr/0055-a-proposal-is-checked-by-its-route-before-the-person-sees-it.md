@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/authz`
-- **Enforced-by:** `internal/authz.TestACheckIsTheWriteDecidedAtTheReadsProof`, `internal/api/configapi.TestEveryWriteThatReadsDryRunDeclaresIt`, `internal/assistant/catalog.TestAChangeTheRouteWouldRefuseIsNeverACard`, `internal/assistant/catalog.TestAWriteThatKeepsAHistoryCarriesTheLineThePersonApproved`, `internal/assistant/catalog.TestACreatesCardNamesWhereItLandsOrIsNoCard`, `internal/api.TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt`
+- **Enforced-by:** `internal/authz.TestACheckIsTheWriteDecidedAtTheReadsProof`, `internal/api/configapi.TestEveryWriteThatReadsDryRunDeclaresIt`, `internal/assistant/catalog.TestAChangeTheRouteWouldRefuseIsNeverACard`, `internal/assistant/catalog.TestAWriteThatKeepsAHistoryCarriesTheLineThePersonApproved`, `internal/assistant/catalog.TestACreatesCardNamesWhereItLandsOrIsNoCard`, `internal/api.TestASeatTheUnitWouldRefuseIsRefusedBeforeThePersonSeesIt`, `internal/assistant/catalog.TestARoomMembershipChangeRemovesOnlyWhatItNames`
 - **Cost-when-tried:** three proposals in one browser session reached the person, were approved and stepped up for, and were refused only then: a unit carrying seat fields the route does not take, the same unit with no revision summary, and a page whose card said "Your team's space" for a person whose team owns none
 - **Tag-status:** unreleased
 
@@ -44,7 +44,10 @@ card, above every row, never only as a struck-through row among the others.
 The removals are computed from the body and the object the source revision
 names, both bound by the digest, so the argument admits the call and the card
 never echoes it. A field the address itself states (a unit's `id`) is the
-route's to fill and is not a removal.
+route's to fill and is not a removal. A curated write that states a whole set
+holds the same rule: a chat room's membership is sent whole, so a member the
+call leaves out is taken out only where its `removes` names them, and the card
+leads with everyone it takes out.
 
 A catalogue write whose call leaves a place implicit (a task's project, a page's
 container) is previewed with the place the write would default to, read from

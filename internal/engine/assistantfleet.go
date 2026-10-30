@@ -50,6 +50,8 @@ type assistantWires struct {
 
 // newAssistantWires builds the three, where [AssistantFleet] builds them and
 // where the gate that holds every signed channel's domains apart reads them.
+// The keyring is required on every node, so this fails only on a bootstrap
+// [config.Bootstrap.Validate] would already have refused.
 func newAssistantWires(ring statelog.Keyring) (assistantWires, error) {
 	var (
 		w   assistantWires

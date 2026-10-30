@@ -659,3 +659,54 @@ func TestAnAdmittedCompanyHasNoAdmissionWarnings(t *testing.T) {
 		t.Errorf("warnings = %+v, want the one dangling manages entry", got)
 	}
 }
+
+// WITHOUT FAULTS AT THE PLACES A CALLER NAMES, EVERY OTHER FAULT STAYS.
+//
+// A write that knows why a masked credential could not be restored says so in
+// its own words, and drops the validator's fault there rather than reporting
+// one place twice. What it may not drop is anything else: a document with a
+// masked key and a blank name is told about both. The validator places every
+// fault it finds (a located error per fault), so the walk has to see through
+// that as [config.Problems] does.
+//
+// Mutation: match only a bare fault, never a located one, and the masked key
+// is reported twice; drop a whole join on its first match, and the blank name
+// goes too.
+func TestWithoutFaultsAtLeavesEveryOtherFault(t *testing.T) {
+	t.Parallel()
+	company := parsed(t, `
+name: ""
+providers:
+  llm:
+    zulu:
+      model: claude-sonnet-5
+      auth:
+        token: "`+config.Redacted+`"
+        credential_bundle: "${KEY}"
+`)
+	masked := company.UnresolvedMasks()
+	if len(masked) != 1 {
+		t.Fatalf("masks = %v, want the one key", masked)
+	}
+	invalid := company.Validate()
+	pathsOf := func(err error) []string {
+		var out []string
+		for _, p := range config.Problems(err) {
+			out = append(out, p.Path)
+		}
+		slices.Sort(out)
+		return out
+	}
+	want := []string{"name", "providers.llm.zulu.auth.token"}
+	if got := pathsOf(invalid); !slices.Equal(got, want) {
+		t.Fatalf("the document's problems are at %v, want %v", got, want)
+	}
+	if got := pathsOf(config.WithoutFaultsAt(invalid, masked)); !slices.Equal(got,
+		[]string{"name"}) {
+		t.Errorf("without the masked key the problems are at %v, want the blank "+
+			"name alone", got)
+	}
+	if got := pathsOf(config.WithoutFaultsAt(invalid, nil)); !slices.Equal(got, want) {
+		t.Errorf("naming no place left the problems at %v, want %v", got, want)
+	}
+}

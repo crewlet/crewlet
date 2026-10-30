@@ -1,0 +1,56 @@
+-- Three indexes of the pages domain go, because no statement this build runs
+-- reaches any of them.
+--
+-- Found by planning every statement that reads a page table on the pages plan
+-- fixture: each of the three is absent from every plan. An index no plan
+-- reaches is a write on every apply of every page record on every data node,
+-- carried in every snapshot and every catch-up, for no reader.
+--
+-- # pages_heads_trashed_idx STAYS
+--
+-- 0005 declared it, partial on `trashed_at IS NOT NULL`, for "the thirty-day
+-- trash sweep", and that sweep is the trash reaper: its listing of the pages
+-- trashed before the term's cutoff (`doclet.Store.TrashedBefore`) seeks it, and
+-- the trashed pages are the only rows it holds. The trash a person reads is a
+-- listing at `status = 'trashed'`, which walks the listing's own order on the
+-- container index (0062); the reaper's is the one read that needs this one.
+--
+-- # pages_history_created_idx
+--
+-- 0005 declared it for "the company-wide digest". The digest that exists is
+-- the change feed, and it reads the history in LOG order, newest first, through
+-- `pages_history_version_idx` and `pages_history_actor_kind_version_idx`
+-- (0012); one page's history reads `pages_history_page_idx` (0063). Nothing
+-- orders or bounds the history by `created_at`.
+--
+-- # pages_revisions_page_idx
+--
+-- (page_id, edit_version DESC) is the table's own primary key in the other
+-- direction. One page's revision list reads its newest versions first by
+-- walking that key backwards, and a single revision is a seek of it, so the
+-- index was a second copy of the key with nothing choosing it.
+--
+-- # pages_skills_container_idx, and pages_skills.container
+--
+-- (container, skill) for "the tool-skill registry's re-read". The re-read is
+-- driven from the container's pages in `pages_heads` — the container index
+-- returns them in title order, the order the registry is built in — and joins
+-- each page's derived marks by its key. Driven from this index it would have
+-- sorted the container's skills by title instead.
+--
+-- The column goes with it. It was a copy of the head's own container, kept on
+-- the derived row for this index alone: every reader of `pages_skills` reaches
+-- it by the page's key from the head, which already says which container the
+-- page is in, so with the index gone the copy is a write on every apply that
+-- nothing reads. The index goes first, because Turso drops a column no index,
+-- view or trigger names, as 0053 did. Dropping is safe across a rolling
+-- upgrade for the reason 0053 gives: the only statement naming the column was
+-- the applier's own insert, which is this binary's, and the row is DIVERGENT —
+-- each build derives its own, so no peer's apply depends on this one's.
+--
+-- 0005 IS NOT EDITED: `schema_migrations` keys on the filename, so a database
+-- that applied it would never see the change.
+DROP INDEX IF EXISTS pages_history_created_idx;
+DROP INDEX IF EXISTS pages_revisions_page_idx;
+DROP INDEX IF EXISTS pages_skills_container_idx;
+ALTER TABLE pages_skills DROP COLUMN container;

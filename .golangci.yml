@@ -59,10 +59,12 @@ linters:
       enable:
         - shadow
     staticcheck:
-      # `all` is every check, which is more than staticcheck's default: the
-      # SA (correctness) and ST (style) families including the ST checks it
-      # leaves off unless asked (a receiver named two ways, ST1016, among
-      # them), and the QF quickfix suggestions. Two QF checks are off
+      # `all` is every check, in all four families: SA (correctness), S
+      # (simplification), ST (style) and QF (quickfix suggestions). That is
+      # more than golangci-lint's default only by the six ST checks the
+      # default leaves off unless asked — ST1000, ST1003, ST1016 (a
+      # receiver named two ways), ST1020, ST1021 and ST1022; every SA, S
+      # and QF check is in the default already. Two QF checks are off
       # because they argue with how this tree writes code on purpose:
       # QF1008 ("you could remove the embedded field from this selector")
       # — it writes `db.Conn.Begin` rather than `db.Begin`, because naming

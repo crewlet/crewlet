@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/doclet"
@@ -526,44 +527,56 @@ func TestANodeServingItsSeatsItselfNeedsNoViewToKeepOrClaimThem(t *testing.T) {
 	}
 }
 
-// BOTH HALVES THE COMPANY RUNS NATIVELY MUST BE SERVED BY THE COPY THAT WILL
-// SERVE THE SEAT, because a seat's tools reach both: a node holding no data
-// that admitted a seat on a data node running only the tracker would hand that
-// seat a wiki whose every call is answered "not here" — and a node admitting
-// on the wiki alone, a tracker the same. And a half the company runs on a
-// vendor is not asked for at all, or a company with its pages on Confluence
-// would never admit a seat anywhere.
+// EVERY HALF THE COMPANY RUNS NATIVELY MUST BE SERVED BY THE COPY THAT WILL
+// SERVE THE SEAT, because a seat's tools reach each of them: a node holding no
+// data that admitted a seat on a data node running only the tracker would hand
+// that seat a wiki and rooms whose every call is answered "not here" — and a
+// node admitting on the wiki alone, a tracker the same. A half the company runs
+// on a vendor is not asked for at all, or a company with its pages on
+// Confluence would never admit a seat anywhere. And a company whose ONLY native
+// half is chat — its tracker and its wiki both a vendor's — gates on chat
+// rather than admitting every seat unconditionally.
 //
 // Each step moves the clock past the window [estate.Router.Serves] trusts a
 // data node's answer for, so every step is a fresh ask of the fleet.
-func TestASeatIsAdmittedOnlyWhereBothHalvesItRunsAreServed(t *testing.T) {
+//
+// Mutation: drop chat from StateLogHydrated's comparison, or from
+// [halves.any], and the steps where chat alone is missing admit a seat.
+func TestASeatIsAdmittedOnlyWhereEveryHalfItRunsIsServed(t *testing.T) {
 	t.Parallel()
+	all := remoteNative{tracker: true, wiki: true, chat: true}
 	for _, step := range []struct {
-		name           string
-		runs           remoteNative
-		tracker, pages bool
-		want           bool
+		name   string
+		runs   remoteNative
+		served estate.Served
+		want   bool
 	}{
-		{name: "the data node runs the wiki and not the tracker",
-			runs: remoteNative{tracker: true, wiki: true}, tracker: false, pages: true},
-		{name: "the data node runs the tracker and not the wiki",
-			runs: remoteNative{tracker: true, wiki: true}, tracker: true, pages: false},
-		{name: "the data node runs both",
-			runs: remoteNative{tracker: true, wiki: true}, tracker: true, pages: true, want: true},
-		{name: "the company's wiki is on a vendor",
-			runs: remoteNative{tracker: true}, tracker: true, pages: false, want: true},
+		{name: "the data node runs the wiki and chat and not the tracker",
+			runs: all, served: estate.Served{Pages: true, Chat: true}},
+		{name: "the data node runs the tracker and chat and not the wiki",
+			runs: all, served: estate.Served{Tracker: true, Chat: true}},
+		{name: "the data node runs the tracker and the wiki and not chat",
+			runs: all, served: estate.Served{Tracker: true, Pages: true}},
+		{name: "the data node runs every half",
+			runs: all, served: estate.Served{Tracker: true, Pages: true, Chat: true}, want: true},
+		{name: "the company's wiki and chat are on vendors",
+			runs: remoteNative{tracker: true}, served: estate.Served{Tracker: true}, want: true},
 		{name: "the company's tracker is on a vendor",
-			runs: remoteNative{wiki: true}, tracker: false, pages: true, want: true},
+			runs:   remoteNative{wiki: true, chat: true},
+			served: estate.Served{Pages: true, Chat: true}, want: true},
+		{name: "only chat is native, and the data node serves it",
+			runs: remoteNative{chat: true}, served: estate.Served{Chat: true}, want: true},
+		{name: "only chat is native, and the data node does not serve it",
+			runs: remoteNative{chat: true}, served: estate.Served{Tracker: true, Pages: true}},
 	} {
 		t.Run(step.name, func(t *testing.T) {
 			t.Parallel()
 			e, answer := statelessOver(t)
 			e.remote.Store(&step.runs)
-			answer(step.tracker, step.pages)
+			answer(step.served)
 			if got := e.StateLogHydrated(t.Context()); got != step.want {
-				t.Fatalf("a node running tracker=%v wiki=%v, asking a data node serving "+
-					"tracker=%v pages=%v, admitted a seat: %v, want %v",
-					step.runs.tracker, step.runs.wiki, step.tracker, step.pages, got, step.want)
+				t.Fatalf("a node running %+v, asking a data node serving %+v, admitted "+
+					"a seat: %v, want %v", step.runs, step.served, got, step.want)
 			}
 		})
 	}
@@ -571,14 +584,14 @@ func TestASeatIsAdmittedOnlyWhereBothHalvesItRunsAreServed(t *testing.T) {
 	// AND THE ANSWER IS ASKED AGAIN once its trust has run out: a data node
 	// that comes to serve the half it lacked admits the next sweep's seat.
 	e, answer := statelessOver(t)
-	e.remote.Store(&remoteNative{tracker: true, wiki: true})
-	answer(true, false)
+	e.remote.Store(&all)
+	answer(estate.Served{Tracker: true, Pages: true})
 	if e.StateLogHydrated(t.Context()) {
-		t.Fatal("a seat was admitted on a data node that does not run the wiki the company runs")
+		t.Fatal("a seat was admitted on a data node that does not run the chat the company runs")
 	}
-	answer(true, true)
+	answer(estate.Served{Tracker: true, Pages: true, Chat: true})
 	if !e.StateLogHydrated(t.Context()) {
-		t.Fatal("a seat was withheld after the data node came to serve both halves")
+		t.Fatal("a seat was withheld after the data node came to serve every half")
 	}
 }
 
@@ -587,7 +600,7 @@ func TestASeatIsAdmittedOnlyWhereBothHalvesItRunsAreServed(t *testing.T) {
 // admission's ping through the estate's own server, over a broker both share,
 // under one keyring — and moves the router's clock past the trust it holds an
 // answer for.
-func statelessOver(t *testing.T) (*Engine, func(tracker, pages bool)) {
+func statelessOver(t *testing.T) (*Engine, func(estate.Served)) {
 	t.Helper()
 	var clock atomic.Int64
 	clock.Store(time.Unix(1_700_000_000, 0).UnixNano())
@@ -619,8 +632,8 @@ func statelessOver(t *testing.T) (*Engine, func(tracker, pages bool)) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Engine{router: router}, func(tracker, pages bool) {
-		data.set(tracker, pages)
+	return &Engine{router: router}, func(served estate.Served) {
+		data.set(served)
 		clock.Add(int64(time.Minute))
 	}
 }
@@ -634,25 +647,28 @@ func (oneDataNode) Unanswered(string)          {}
 // servedHalves is a data node's copy serving the halves it is told it runs,
 // admitting a seat — what admission's ping reads of it.
 type servedHalves struct {
-	mu            sync.Mutex
-	tracker, wiki bool
+	mu     sync.Mutex
+	served estate.Served
 }
 
-func (h *servedHalves) set(tracker, wiki bool) {
+func (h *servedHalves) set(served estate.Served) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.tracker, h.wiki = tracker, wiki
+	h.served = served
 }
 
 func (h *servedHalves) For(context.Context) (estate.Backend, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	var b estate.Backend
-	if h.tracker {
+	if h.served.Tracker {
 		b.Tracker = &worklet.Reader{}
 	}
-	if h.wiki {
+	if h.served.Pages {
 		b.Pages = &doclet.Reader{}
+	}
+	if h.served.Chat {
+		b.Chat = &chatlet.Reader{}
 	}
 	return b, true
 }

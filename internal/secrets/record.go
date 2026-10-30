@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/words"
 )
 
 // Record is one stored secret's row, whichever way it was reached.
@@ -129,7 +130,7 @@ func CheckSource(s Source) error {
 		return nil
 	}
 	return fmt.Errorf("secrets: %q is not a write path's source; a row "+
-		"records one of %q, stamped by the path that wrote it", string(s), Sources)
+		"records one of %s, stamped by the path that wrote it", string(s), words.Or(Sources))
 }
 
 // Author is who writes a secret: the three facts every other trail in the

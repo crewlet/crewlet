@@ -264,7 +264,7 @@ function Trace({ traceId }: { traceId: string }) {
       {/* THE SKELETON STANDS WHERE THE BODY WILL BE, under a header the id
           alone is enough to draw — see the same note on the turn screen. */}
       {loading && <Skeleton variant="text" rows={6} label="Loading the trace" />}
-      {/* A TRACE IS ASSEMBLED FROM EVERY NODE, and a node that did not answer
+      {/* A TRACE IS ASSEMBLED FROM EVERY DATA NODE, and a node that did not answer
           is a gap in the causal chain that would otherwise read as its end. */}
       <CoverageNote coverage={[data?.coverage]} what="this trace" />
       <QueryState

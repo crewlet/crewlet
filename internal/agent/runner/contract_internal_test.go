@@ -3,6 +3,7 @@ package runner
 import (
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/toolname"
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
@@ -15,10 +16,10 @@ import (
 func TestTheRunnersSchemasAreOnesTheCheckKeeps(t *testing.T) {
 	t.Parallel()
 	for name, schema := range map[string]map[string]any{
-		SubmitWorkTool:   workSchema,
-		SubmitReviewTool: reviewSchema,
-		ListMCPToolsTool: (&listMCPTools{}).Parameters(),
-		ActivateTool:     (&activateTool{}).Parameters(),
+		SubmitWorkTool:              workSchema,
+		SubmitReviewTool:            reviewSchema,
+		toolname.ListMCPServerTools: (&listMCPTools{}).Parameters(),
+		toolname.Activate:           (&activateTool{}).Parameters(),
 	} {
 		if bad := tools.UnsupportedSchema(schema); len(bad) > 0 {
 			t.Errorf("%s advertises what the check cannot keep: %v", name, bad)

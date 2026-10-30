@@ -163,12 +163,12 @@ func (f *FleetStore) MutateSandboxRun(ctx context.Context, turnID string,
 // # The first state is a certified answer, and the call waits for it
 //
 // [watchUnder]'s, certified against the bucket's key index exactly as a
-// listing is, for the reason [FleetStore.WatchSeatPauses] gives: the client's
-// own end of the initial values ends them on a guess, and never at all for a
-// consumer whose pending messages were removed before it reached them. A
-// record live throughout is therefore never answered absent. The pass is a
-// replica's copy (walk.go), so a record it delivered can be a revision behind
-// the leader; the consumer then delivers the newer one, as the next update.
+// listing is, for the reason [watchRecords] gives: the client's own end of the
+// initial values ends them on a guess, and never at all for a consumer whose
+// pending messages were removed before it reached them. A record live
+// throughout is therefore never answered absent. The pass is a replica's copy
+// (walk.go), so a record it delivered can be a revision behind the leader; the
+// consumer then delivers the newer one, as the next update.
 //
 // # A change after it is the consumer's, and filtered by revision
 //
