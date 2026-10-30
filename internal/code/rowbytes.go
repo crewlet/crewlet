@@ -1,6 +1,8 @@
 package code
 
 import (
+	"encoding/json"
+	"fmt"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -355,7 +357,26 @@ func (c ChangeDue) encodedBytes() int {
 	if !c.Checked.IsZero() {
 		n += field("checked", timeBytes(c.Checked), false)
 	}
+	if c.Checks != nil {
+		n += field("checks", encodedLen(c.Checks), false)
+	}
 	return n
+}
+
+// encodedLen is v's encoding's length, ENCODED: the one value counted this
+// way, a `checks_due` change's [CheckWork] — lists of names and keys and the
+// definitions of the checks a requeue repeats, a count of which would only
+// restate the encoder's — on the home's own listing, a page of the changes
+// owing their checks work in one repository, never a principal's page of
+// every row.
+func encodedLen(v any) int {
+	b, err := json.Marshal(v)
+	if err != nil {
+		// Every field of what is counted this way encodes; reaching here is a
+		// broken encoder, against which no page could be measured.
+		panic(fmt.Sprintf("code: encoding %T: %v", v, err))
+	}
+	return len(b)
 }
 
 // encodedBytes is the length of the candidate's JSON encoding.

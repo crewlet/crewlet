@@ -643,7 +643,8 @@ type ChangeDue struct {
 	// page of a `changes_due` read's due changes — its head revision's facts,
 	// its merge, and a refresh of the readiness its mergeability holds
 	// ([Mergeability.Refresh]); a recheck owes its merge alone, and says
-	// none, and so does a `checks_due` read's change.
+	// none, and so does a `checks_due` read's change, which says what it owes
+	// in Checks.
 	//
 	// RefreshDue is AN ESTATE ANSWER'S FIELD, NOT A RECORD'S, so it takes no
 	// versionedFields row. AS A STATED CONDITION, as [ReadQuery.Push]'s: no
@@ -656,6 +657,9 @@ type ChangeDue struct {
 	// Checked is a recheck's: the broker instant its mergeability was
 	// recorded at, which orders the rechecks; zero for every other.
 	Checked time.Time `json:"checked,omitzero"`
+	// Checks is what a `checks_due` read's change owes its checks
+	// ([CheckWork]); nil on every `changes_due` read's.
+	Checks *CheckWork `json:"checks,omitempty"`
 }
 
 // MaxRunRepos is the most repositories one [RunPushesQuery] names: the most a
@@ -855,13 +859,14 @@ const (
 	// ReadChecksDue is the check work a repository's HOME git node owes
 	// ([ChecksDueQuery]): with no repository, the active repositories holding
 	// a LIVE change whose head no dispatch for its target names the checks
-	// file its target's row holds, or a target due a reading of its checks
-	// file again, by id; with one, those changes of that repository, by
-	// source branch, each with its target's tip as the rows hold it
-	// ([ChangeDue]) — the tip whose checks file defines what the home
-	// dispatches — and on its first page the targets due a reading
-	// ([CheckTargetDue]). The engine's own read, as `changes_due` is
-	// (checksdispatch.go).
+	// file its target's row holds, or whose head's latest attempt of a check
+	// its infrastructure ended below [AutoRequeueAttempts], or a target due a
+	// reading of its checks file again, by id; with one, those changes of
+	// that repository, by source branch, each with its target's tip as the
+	// rows hold it ([ChangeDue]) — the tip whose checks file defines what the
+	// home dispatches — and what it owes ([CheckWork]), and on its first page
+	// the targets due a reading ([CheckTargetDue]). The engine's own read, as
+	// `changes_due` is (checksdispatch.go).
 	ReadChecksDue ReadKind = "checks_due"
 	// ReadCheckBox is the ONE attempt a check's box's token names, by its key
 	// ([ReadQuery.CheckBox]): its row as the rows hold it, in the answer's
@@ -1189,9 +1194,10 @@ type ReadAnswer struct {
 	// and, on its first page, Rechecks: the changes whose merge is due again,
 	// the oldest recorded first ([ChangesDueQuery.Rechecks]). A `checks_due`
 	// read answers in the same two fields — its repositories in DueRepos, one
-	// repository's heads due a dispatch in DueChanges, with no owners and no
-	// rechecks — and, on a repository's first page, DueTargets: its target
-	// branches due a reading of their checks file again.
+	// repository's heads owing their checks work in DueChanges, each with what
+	// it owes ([ChangeDue.Checks]), with no owners and no rechecks — and, on a
+	// repository's first page, DueTargets: its target branches due a reading
+	// of their checks file again.
 	DueRepos   []string         `json:"due_repos,omitempty"`
 	DueChanges []ChangeDue      `json:"due_changes,omitempty"`
 	DueTargets []CheckTargetDue `json:"due_targets,omitempty"`

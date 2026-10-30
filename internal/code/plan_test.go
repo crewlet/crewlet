@@ -663,12 +663,14 @@ func registeredStatements() map[string]statement {
 		"due repositories": {dueReposSQL, []any{"", MaxSnapshotItems, int64(3000)},
 			[]string{"code_changes_open_idx (repo_id>?)", factsKey + " (change_id=? AND n=?)",
 				mergeabilityKey + " (change_id=?)", conversationKey + " (change_id=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
 				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
 		"due repository": {dueRepoSQL, []any{"repo-1"}, []string{repoKey + " (id=?)"}},
 		"due changes": {dueChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				factsKey + " (change_id=? AND n=?)", mergeabilityKey + " (change_id=?)",
-				conversationKey + " (change_id=?)"}},
+				conversationKey + " (change_id=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)"}},
 		"due rechecks": {dueRechecksSQL, []any{"repo-1", int64(3000), MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				mergeabilityKey + " (change_id=?)"}},
@@ -679,8 +681,13 @@ func registeredStatements() map[string]statement {
 			[]string{mergeabilityKey + " (change_id=?)"}},
 		"mergeability row": {mergeabilityRowSQL, []any{"repo-1-change-000001"},
 			[]string{mergeabilityKey + " (change_id=?)"}},
-		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, true, false, "repo-1-change-000001", 2,
-			"refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
+		"refresh mergeability": {refreshMergeabilitySQL, []any{4, 3, 5000, true, false, "repo-1-change-000001",
+			2, "refs/heads/main", 3000}, []string{mergeabilityKey + " (change_id=?)"}},
+		// THE POSITION OF A HEAD'S CHECKS a mergeability's decide stamps: every
+		// attempt at the commit for the change's target, a range of
+		// code_checks' key.
+		"head checks position": {headChecksPositionSQL, []any{"repo-1", oid("c"), "refs/heads/main"},
+			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)"}},
 		// A CHANGE'S READINESS (readiness.go): the counters, the authors, the
 		// standing verdicts that approve, the standing asks and the
 		// mergeabilities of a page of changes, each driven from the list of
@@ -1001,15 +1008,38 @@ func registeredStatements() map[string]statement {
 		"checks of a repo next": {checksOfRepoAfterSQL, []any{"repo-1", 1000, oid("c"), "refs/heads/main", "unit", 1, 50}, []string{checksEndedKey + " (repo_id=? AND finished_at<=?)"}},
 		"checks window":         {checksWindowSQL, []any{1, 50}, []string{"code_checks_recent_idx (finished_at>=?)"}},
 		"checks window next":    {checksWindowAfterSQL, []any{1, 1000, "repo-1", oid("c"), "refs/heads/main", "unit", 1, 50}, []string{"code_checks_recent_idx (finished_at<=? AND finished_at>=?)"}},
-		"due check repositories": {dueCheckReposSQL, []any{"", MaxSnapshotItems, 1000},
+		// THE HOME'S CHECK WORK (checksread.go, checksdispatch.go): a head's
+		// dispatch by the two rows' keys, its requeue by the partial index
+		// holding only the attempts their infrastructure ended and the next
+		// attempt by code_checks' key, in the listing of repositories and in
+		// one repository's; then what a listed head owes — its attempts for
+		// its target, a range of code_checks' key; its change's attempts not
+		// yet ended, by the partial index holding only those, each kept unless
+		// a live change into its target heads its commit; and the next
+		// attempt of each its infrastructure ended.
+		"due check repositories": {dueCheckReposSQL, []any{"", MaxSnapshotItems, 1000, AutoRequeueAttempts},
 			[]string{"code_changes_open_idx (repo_id>?)", refsKey + " (repo_id=? AND ref=?)",
 				checkDispatchesKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
-				checkTargetsKey + " (repo_id=? AND target_ref=?)", repoKey + " (id=?)"}},
+				checkTargetsKey + " (repo_id=? AND target_ref=?)",
+				"code_checks_requeue_idx (repo_id=? AND commit_oid=? AND target_ref=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)",
+				repoKey + " (id=?)"}},
 		"checks backlog": {checksBacklogSQL, []any{1000, BacklogScan + 1}, []string{"code_checks_overdue_idx (overdue_at>? AND overdue_at<?)", repoKey + " (id=?)"}},
-		"due check heads": {dueCheckChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
+		"due check heads": {dueCheckChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems,
+			AutoRequeueAttempts},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				checkDispatchesKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
-				checkTargetsKey + " (repo_id=? AND target_ref=?)"}},
+				checkTargetsKey + " (repo_id=? AND target_ref=?)",
+				"code_checks_requeue_idx (repo_id=? AND commit_oid=? AND target_ref=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
+		"head attempts": {headAttemptsSQL, []any{"repo-1", oid("c"), "refs/heads/main"},
+			[]string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=?)"}},
+		"stale checks": {staleChecksSQL, []any{"repo-1-change-000001", oid("c"), "refs/heads/main", "repo-1"},
+			[]string{"code_checks_live_idx (change_id=?)",
+				"code_changes_target_idx (repo_id=? AND target_ref=? AND head_oid=?)"}},
+		"requeues": {requeuesSQL, []any{"repo-1", oid("c"), "refs/heads/main", AutoRequeueAttempts},
+			[]string{"code_checks_requeue_idx (repo_id=? AND commit_oid=? AND target_ref=?)",
+				checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
 		"due check targets": {dueCheckTargetsSQL, []any{"repo-1", 1000, MaxSnapshotItems},
 			[]string{checkTargetsKey + " (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
 				"code_changes_target_idx (repo_id=? AND target_ref=?)"}},

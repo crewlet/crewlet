@@ -1690,12 +1690,14 @@ one head share theirs: the same commit, judged by the same file.
 | `check_started` | A runner claims the attempt — and, once it has made one, names its box |
 | `check_finished` | The attempt ended: its state and why, its exit status, how long it ran, its summary (at most 4 KiB), the last 16 KiB of its output, the failures its reports named (at most 200, weighing at most 64 KiB, the rest counted), the link a person's CI reported, and the log a failed run kept |
 | `checks_sweep` | The rows that ended before an instant are removed — the `code-retention` duty's, for a repository whose checks stopped ending, swept back to the 30 days once a row of it outlived them by a day ([How long a check is kept](#how-long-a-check-is-kept)) |
+| `check_dispatched` | The home read a target's checks file at its tip — or found none there — and **dispatched** the heads it names under it: their checks queued for that target, the record their dispatch's last; with no heads, a moved target's reading refreshed ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)) |
 
 An attempt's **state** is one of seven: `queued`; `running`; and the five
 endings — `passed` and `failed`, which measured the commit (a run past its
 timeout fails, since the timeout is the check's own), and `errored`
 (its runner was lost, its box or its setup failed, or its definition could not
-be read), `cancelled` and `skipped`, which did not.
+be read — an attempt its home records errored as it queues it, `defs_invalid`,
+saying why), `cancelled` and `skipped`, which did not.
 
 **A check's records commute.** They carry no expectation: many runners claim
 and end one repository's checks at once, and arbitrating each would put every
@@ -1741,7 +1743,10 @@ there, so:
   a commit's first attempt, and one already queued — a second dispatch of the
   same head — is answered from its row, queuing nothing; the next attempt is
   queued only once the one before it ended (`not_finished` before), and none
-  passes the tenth (`attempts_exhausted`);
+  passes the tenth (`attempts_exhausted`). The home's dispatch queues a next
+  attempt only after one a dispatch errored for a checks file that did not
+  run — nothing of the commit was measured — and is refused `rerun_genuine`
+  after any other ending;
 - **the home queues again only what its infrastructure ended** — an attempt
   whose runner was lost or whose box or setup failed — and only while that
   attempt is below the third: a dead runner's check runs at most three
@@ -1802,13 +1807,41 @@ writing one repository's checks at once ([metrics](../reference/metrics.md)).
 
 A change's head is checked by its **target's** checks file, read at the
 target's tip — never the head's own, so no change narrows the checks that
-judge it. The repository's home reads `.crewlet/checks.yaml` there, queues
-every check it defines at the head for that target (or records it skipped),
-and then records that it did: a `check_dispatched` record naming the target,
-the tip it read, the file it found there — or none — and the heads it
+judge it. Its checks are queued by its repository's
+[home git node](#the-home-git-node) — the same loop that reads its facts and
+merges it ([The home's change work](#the-homes-change-work)), working a second
+worker, `checks`, from the rows. The home reads `.crewlet/checks.yaml` at the
+tip through the git reads (`checks_file`, the engine's own read of the file
+at one commit, whole), queues every check it defines at the head for that
+target, and then records that it did: a `check_dispatched` record naming the
+target, the tip it read, the file it found there — or none — and the heads it
 dispatched under it. Two tables keep what those records say: each target's
 checks file as the home last read it, and the file each head was dispatched
 under.
+
+What a dispatch queues:
+
+- **every check the file defines that the head holds no attempt of** for its
+  target. A check with `paths` is queued where the change touches a path one
+  of its globs matches, judged against what the head touches against that
+  tip, and recorded **skipped** where it touches none; one with no `paths`,
+  or a change touching more paths than a list holds, runs. A check the
+  target's protection rule requires is queued marked required;
+- where the file is **none that runs** — unparsable, or something at its
+  path that is no file — every name the rule requires is recorded
+  **errored**, `defs_invalid`, the file's refusal its summary, and nothing
+  else is queued, since nothing else of the file is known. Once the target's
+  file runs again, the next dispatch of the head queues each of those checks
+  as its next attempt, under the mended file;
+- and before it queues a head's checks, the home ends every attempt of the
+  change still queued or running at a head it moved on from, or for a target
+  it was retargeted from — `cancelled`, `superseded` — unless a live change
+  into that attempt's target heads its commit and shares it.
+
+The dispatch record is the **last**: a dispatch cut short leaves the head
+listed, and the next turn queues what is missing — every queue that landed
+already answered from its row — before recording it. The heads one turn
+dispatches under one target's tip share a record, up to 500 of them.
 
 The home's work list is read from those rows alone. A live change's head is
 due a dispatch while no dispatch of it for its target names the file the
@@ -1818,11 +1851,35 @@ checks at all leaves the list after one record, as one whose target defines
 many does: the list never asks whether an attempt exists, which a repository
 that has not adopted checks never has. A target is due a reading again once
 its branch has moved past the tip it was read at and that reading is older
-than the home's refresh, so a target pushed to on every landing is read at
-the home's pace, and only a file that changed makes its waiting heads due —
-which is how a check added to a target's file reaches the changes waiting on
-it. Two homes recording one target's reading at once, across a failover,
-leave one row: each row keeps the reading of the later tip.
+than the home's refresh — ten minutes — so a target pushed to on every
+landing is read at the home's pace, and only a file that changed makes its
+waiting heads due — which is how a check added to a target's file reaches the
+changes waiting on it. A new change needs no refresh: it is dispatched at its
+target's tip as it is listed, and its record moves the target's reading
+there. A name the target's rule requires that its file does not define leaves
+the merge gate waiting on it, until the file defines it. Two homes recording
+one target's reading at once, across a failover, leave one row: each row
+keeps the reading of the later tip.
+
+A head is due a **requeue** too, where the latest attempt of a check at it
+for its target ended `errored` for its infrastructure — its runner lost, its
+box or its setup failed — below the third attempt
+(`code.AutoRequeueAttempts`): the same check queued again as the next
+attempt, under the definition it ran under. Past the third, only a rerun runs
+it again. A record on a repository's **checks** subject nudges its home as a
+record on the repository's own does, so a requeue follows an ending at once
+rather than at the next pass.
+
+**A finished check refreshes the change's readiness.** The checks of a
+change's head are an input of its [merge readiness](#merge-readiness), and a
+record on the checks subject moves neither version a stored readiness is
+judged at. So the stored readiness also remembers the position of the latest
+record that queued or ended an attempt at the head for its target as its
+writer read it, and an attempt queued, requeued or ended past it makes the
+change due a **refresh** from its home: recorded above the stored row, never
+refused `superseded` as one judged at its inputs already is. The
+`mergeability` record that stores it names the repository's checks in its
+scope, so a node holding a check record it could not decode decides none.
 
 ### Reading a repository's checks
 
@@ -1842,8 +1899,9 @@ grant on the repository as every other read of it is:
 - **`checks_due`**: the engine's own, which no person or seat may make — the
   work the repository's home polls for: the live changes whose head has no
   **dispatch** for its target naming the checks file the target's reading
-  holds, and the targets whose branch moved past the tip their checks file
-  was read at, once that reading is older than the home's refresh
+  holds, or owes a **requeue** of an attempt its infrastructure ended — each
+  with what it owes — and the targets whose branch moved past the tip their
+  checks file was read at, once that reading is older than the home's refresh
   ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched));
 - **`check_box`**: the engine's own too — the one attempt a check's box's
   token names, by its key, as its row stands, which the box's admission reads
@@ -4468,11 +4526,12 @@ nothing.
 
 Two things put a repository's work in front of its home:
 
-- **A nudge.** Every git node watches the code log's repository subjects —
-  each record's subject and position, never its body — and a record on a
-  repository it is home to schedules that repository's work at once, read at
-  the record's position so the node's copy holds the record before the rows
-  are read.
+- **A nudge.** Every git node watches the code log's repository subjects and
+  its repositories' checks subjects — each record's subject and position,
+  never its body — and a record on a repository it is home to, or on that
+  repository's checks, schedules that repository's work at once, read at the
+  record's position so the node's copy holds the record before the rows are
+  read.
 - **The backstop.** Once a minute, and at once when it starts, every git node
   lists the repositories holding a due change and works the ones it is home
   to, judged against one reading of who serves git. A nudge only shortens the
@@ -4624,10 +4683,13 @@ row of a listing, judges the readiness again from the read's own snapshot.
 Each [mergeability](#mergeability) record judges it too — from its writer's
 own snapshot, with the merge it records — and stores whether the change was
 ready and whether it waited on a person, beside the versions of the change's
-row and of what the readiness reads that it was judged at. That stored answer
-is what a wake that a change became ready reads, and what `needs=person`
-seeks. When either version moves past it — a review, an ask for review, an
-answer to a finding, a revision's facts, an edit, a retarget, a draft flag —
+row and of what the readiness reads that it was judged at, and the position of
+its head's checks. That stored answer is what a wake that a change became
+ready reads, and what `needs=person` seeks. When either version moves past
+it — a review, an ask for review, an answer to a finding, a revision's facts,
+an edit, a retarget, a draft flag — or an attempt of its head's checks is
+queued or ends past that position
+([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched)),
 the change is due a **refresh** from its home: a mergeability record that
 merges nothing, judging the readiness again over the merge the row holds,
 which leaves the merge's own instant — what a moved target's recheck is paced

@@ -30,8 +30,12 @@ import (
 //     was judged at versions its own row (code_changes.version) or its
 //     conversation's readiness inputs (code_conversations.readiness_version)
 //     have moved past since — a review, an ask, an answer to findings, its
-//     facts, an edit of its row — which the home records over the merge the
-//     row holds, running none;
+//     facts, an edit of its row — or at a position of its head's checks
+//     (code_mergeability.checks_position) an attempt at its head commit for
+//     its target was queued or ended past since — THE CHECK TERM: a finished
+//     head check, a requeue (code_checks' key, one seek of the commit and the
+//     target) — which the home
+//     records over the merge the row holds, running none;
 //   - and a RECHECK of that merge — the change's mergeability is of its head
 //     revision against its branch, and its target has moved past the tip it
 //     merged into since, or the merge was undecided — once the mergeability
@@ -302,8 +306,10 @@ func dueRechecks(ctx context.Context, tx *sql.Tx, q ReadQuery, pg *page, out *Re
 // what the listing of repositories asks of every live change it walks, where a
 // repository's own read asks the two halves of it apart. A REFRESH IS DUE
 // where that mergeability's readiness was judged at versions the change's row
-// or its conversation have moved past — [refreshDue], its conversation's
-// readiness version read by the conversations' key.
+// or its conversation have moved past, or at a position its head's checks
+// have moved past — [refreshDue], its conversation's readiness version read
+// by the conversations' key, its head's attempts for its target by
+// code_checks' (repo_id, commit_oid, target_ref) prefix.
 const (
 	dueReposSQL = `SELECT c.repo_id FROM code_changes AS c INDEXED BY code_changes_open_idx
 		WHERE c.repo_id > ?1 AND ` + liveChanges + `
@@ -353,8 +359,13 @@ const (
 	// refreshDue is a change's mergeability, m, as one its home owes a
 	// refresh of: of the change's head revision against its branch, its
 	// readiness judged at a version of the change's row, c, or of its
-	// conversation's readiness inputs, that each has moved past since.
+	// conversation's readiness inputs, that each has moved past since — or at
+	// a position of its head's checks an attempt at the head commit for its
+	// target was queued or ended past since (Mergeability.ChecksPosition).
 	refreshDue = `m.change_id = c.id AND m.revision = c.revision AND m.target_ref = c.target_ref
 		AND (m.change_version < c.version OR m.readiness_version < (SELECT v.readiness_version
-			FROM code_conversations AS v WHERE v.change_id = c.id))`
+			FROM code_conversations AS v WHERE v.change_id = c.id)
+			OR EXISTS (SELECT 1 FROM code_checks AS k INDEXED BY ` + checksKey + `
+				WHERE k.repo_id = c.repo_id AND k.commit_oid = c.head_oid AND k.target_ref = c.target_ref
+					AND (k.queued_position > m.checks_position OR k.finished_position > m.checks_position)))`
 )

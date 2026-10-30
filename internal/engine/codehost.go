@@ -412,7 +412,8 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 
 	// 10. THE HOME'S CHANGE WORK (internal/code/home): every live change's
 	// facts read and recorded, its merge into its target recorded, or the
-	// change landed, by the repository's HOME git node — listing and asking
+	// change landed, and its head's checks queued from its target's checks
+	// file, by the repository's HOME git node — listing and asking
 	// through the router's code seam, whose writes raise this node's floors
 	// past what they landed, asking the router who is home, nudged by a watch
 	// on this node's own code log, each record's position read as this node's

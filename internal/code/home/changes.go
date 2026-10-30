@@ -16,19 +16,21 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Estate is the code log and the git reads as the home's change work reaches
-// them — the router's code seam satisfies it (estate.CodeSeam): the due
-// listing (Read), a revision's facts (GitRead, asked of the repository's git
-// nodes, its home first), a record of them, of a change's mergeability or of
-// its readiness on the change (Converse, asked of the repository's committing
-// data node's change writer) and a landing (Change, asked of its committer).
-// Each raises this node's floors past what it landed, so the next listing
-// reads it wherever it is answered.
+// Estate is the code log and the git reads as the home's work reaches them —
+// the router's code seam satisfies it (estate.CodeSeam): the due listings
+// (Read), a revision's facts and a commit's checks file (GitRead, asked of the
+// repository's git nodes, its home first), a record of a revision's facts, of
+// a change's mergeability or of its readiness on the change (Converse, asked
+// of the repository's committing data node's change writer), a landing
+// (Change, asked of its committer) and a record of its checks (Checks, asked
+// of the same node's checks writer). Each raises this node's floors past what
+// it landed, so the next listing reads it wherever it is answered.
 type Estate interface {
 	Read(ctx context.Context, q code.ReadQuery) (code.ReadAnswer, error)
 	GitRead(ctx context.Context, q code.GitQuery) (code.GitAnswer, error)
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
 	Change(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
+	Checks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
 }
 
 // Cache is this node's git cache as the home's merges reach it —

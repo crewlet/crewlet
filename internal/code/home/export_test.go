@@ -22,6 +22,13 @@ func SetBackstop(l *Loop, d time.Duration) {
 // than [MergeabilityPerPass] of them. Before Start.
 func SetMergesPerPass(l *Loop, n int) { l.changes.rechecks.perPass = n }
 
+// CheckWork is l's check work's turn of repoID, its rows read at floor: what
+// a nudge or a pass schedules for the checks worker, run on the case's own
+// goroutine.
+func CheckWork(ctx context.Context, l *Loop, repoID string, floor statelog.Position) error {
+	return l.checks.Work(ctx, repoID, floor)
+}
+
 // MergeChange is l's merge step for one due change of repoID, read at the
 // listing's position at — its ancestry, then its merge recorded through the
 // loop's estate — answering whether it landed the change: what

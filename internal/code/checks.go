@@ -283,7 +283,10 @@ func (p CheckPurpose) Valid() bool { return slices.Contains(CheckPurposes(), p) 
 type QueueReason string
 
 const (
-	// QueueDispatch is a commit's first attempt, queued by the home.
+	// QueueDispatch is a commit's first attempt for its target, queued by
+	// the home — or the next after one an earlier dispatch errored for a
+	// checks file that did not run ([CheckReasonDefsInvalid]), which its
+	// dispatch under a file that runs queues.
 	QueueDispatch QueueReason = "dispatch"
 	// QueueRerun is an attempt a seat or a person asked for again.
 	QueueRerun QueueReason = "rerun"
@@ -416,7 +419,8 @@ const (
 	// CheckRefusalRerunGenuine is an attempt asked again of a check whose
 	// latest attempt the home may not queue again: one that measured the
 	// commit — passed or failed — or ended for any reason its infrastructure
-	// did not cause ([CheckReason.Requeued]).
+	// did not cause ([CheckReason.Requeued]) — and, for its dispatch, for any
+	// reason but its dispatch's own error ([CheckReasonDefsInvalid]).
 	CheckRefusalRerunGenuine CheckRefusal = "rerun_genuine"
 	// CheckRefusalClaimed is a claim of an attempt another runner holds, or
 	// one that has ended — naming the runner that holds it
@@ -565,6 +569,19 @@ type CheckQueued struct {
 	// Skipped records the attempt skipped rather than queued: its change
 	// touched none of its paths ([CheckReasonPaths]).
 	Skipped bool `json:"skipped,omitempty"`
+	// Invalid records the attempt ERRORED at its dispatch rather than queued
+	// — a check the target's gate requires, which its checks file defines
+	// in no form that runs ([CheckReasonDefsInvalid]): the file unparsable,
+	// or something at its path that is no file — and says why, at most
+	// CheckSummaryBytes, which the row keeps as its summary. Such an attempt
+	// carries no definition, there being none that runs.
+	//
+	// BASE FORMAT, under the condition the subject states: once a build
+	// without it has run it takes {Name: "CheckQueued.Invalid", Since: 2, Op:
+	// "check_queued", Path: []string{"mutation", "invalid"}}, which an older
+	// build defers the record by rather than queue an attempt with no
+	// definition.
+	Invalid string `json:"invalid,omitempty"`
 	// QueuedAt is the queuing node's instant.
 	QueuedAt time.Time `json:"queued_at"`
 }
@@ -593,9 +610,15 @@ func (q CheckQueued) Validate() error {
 		return checkField("base", "%q is not a commit's whole id", q.Base)
 	case q.DefsOID != "" && (!gitref.ValidOID(q.DefsOID) || q.DefsOID == ZeroOID):
 		return checkField("defs_oid", "%q is not a blob's whole id", q.DefsOID)
-	case (q.Def == nil) != (q.Reason == QueueReport):
+	case (q.Def == nil) != (q.Reason == QueueReport || q.Invalid != ""):
 		return checkField("def", "every attempt the engine runs carries its definition, and one a "+
-			"person's CI reports carries none")
+			"person's CI reports, or one errored at its dispatch for want of one, carries none")
+	case q.Invalid != "" && (q.Purpose != PurposeHead || q.Reason != QueueDispatch || q.Skipped || !q.Required):
+		return checkField("invalid", "only a change head's required check is errored at its dispatch, for a "+
+			"checks file defining it in no form that runs")
+	case len(q.Invalid) > CheckSummaryBytes || !utf8.ValidString(q.Invalid):
+		return checkField("invalid", "%d bytes: at most %d of valid UTF-8 (code.CheckSummaryBytes)",
+			len(q.Invalid), CheckSummaryBytes)
 	case q.Def != nil && q.Def.Name != q.Name:
 		return checkField("def.name", "%q is not the check's name, %q", q.Def.Name, q.Name)
 	case q.Skipped && (q.Purpose != PurposeHead || q.Reason != QueueDispatch):

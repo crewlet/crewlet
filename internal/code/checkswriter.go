@@ -60,8 +60,10 @@ import (
 //
 //   - An attempt is QUEUED only after the one before it ended — the attempts
 //     of one check of one commit FOR ONE TARGET BRANCH, its key's ([CheckKey]):
-//     the home's dispatch is a commit's first attempt for its target, and its
-//     requeue the next after an attempt its infrastructure ended
+//     the home's dispatch is a commit's first attempt for its target — or
+//     the next after an attempt its dispatch errored for a checks file that
+//     did not run ([CheckReasonDefsInvalid]), once the target's file runs —
+//     and its requeue the next after an attempt its infrastructure ended
 //     ([CheckReason.Requeued]) while that attempt is below
 //     [AutoRequeueAttempts]; no attempt passes [MaxCheckAttempts]; an attempt
 //     already queued is answered from its row, unchanged, so a home's second
@@ -281,8 +283,8 @@ func (r ChecksRequest) Validate() error {
 			return badField("queued.reason", "%q: a rerun and a report are a principal's, decided only "+
 				"judged by the asker's grant, and this writer decides the engine's own dispatch and requeue",
 				p.Reason)
-		case p.Reason == QueueDispatch && p.Attempt != 1:
-			return badField("queued.attempt", "%d: a dispatch is a commit's first attempt", p.Attempt)
+		case p.Reason == QueueDispatch && p.Attempt < 1:
+			return badField("queued.attempt", "%d: attempts count from 1", p.Attempt)
 		case p.Reason == QueueRequeue && p.Attempt < 2:
 			return badField("queued.attempt", "%d: a requeue follows an attempt that ended", p.Attempt)
 		}
@@ -679,6 +681,15 @@ func decideQueued(ctx context.Context, tx *sql.Tx, q CheckQueued, d checksDecisi
 		d.row = &latest
 		return d.refuse(CheckRefusalAttemptsExhausted, fmt.Sprintf("%s was the last: a check of a commit "+
 			"runs at most %d attempts (code.MaxCheckAttempts)", named(prev), MaxCheckAttempts)), nil
+	case q.Reason == QueueDispatch && (latest.State != CheckStateErrored || latest.Reason != CheckReasonDefsInvalid):
+		// A DISPATCH FOLLOWS ONLY ITS OWN ERROR: the head's dispatch under a
+		// checks file that runs, after an earlier one errored the check for a
+		// file that did not — which nobody ran, so nothing of the commit was
+		// measured. Any other ending is a rerun's to follow.
+		d.row = &latest
+		return d.refuse(CheckRefusalRerunGenuine, fmt.Sprintf("%s ended %s (%s); the home's dispatch queues "+
+			"again only an attempt a dispatch errored for a checks file that did not run, and a rerun runs any "+
+			"other", named(prev), latest.State, latest.Reason)), nil
 	case q.Reason == QueueRequeue && (latest.State != CheckStateErrored || !latest.Reason.Requeued()):
 		d.row = &latest
 		return d.refuse(CheckRefusalRerunGenuine, fmt.Sprintf("%s ended %s (%s), which its infrastructure "+
@@ -841,8 +852,8 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 	// THE ENDING ANNOUNCED IS THE ONE THE ROW KEEPS: an ending the join set
 	// aside is no ending of the attempt's.
 	ours := !row.Finished.IsZero() && row.Finished.Packed() == at.Packed()
-	if (r.Finished != nil && ours) || (r.Queued != nil && r.Queued.Skipped && row.State == CheckStateSkipped &&
-		ours) {
+	if (r.Finished != nil && ours) || (r.Queued != nil && (r.Queued.Skipped || r.Queued.Invalid != "") &&
+		row.State.Ended() && ours) {
 		own.ending = &types.CodeCheckFinished{RepoID: key.RepoID, RepoName: repoName, OID: key.OID,
 			Name: key.Name, Attempt: key.Attempt, Purpose: string(row.Purpose), State: string(row.State),
 			Reason: string(row.Reason), Placement: string(row.Placement), ChangeID: row.ChangeID,
@@ -956,7 +967,7 @@ func (w *ChecksWriter) count(r ChecksRequest, res ChecksResult, err error, own c
 	if err != nil || !own.fresh || res.Row == nil {
 		return
 	}
-	if r.Queued != nil && !r.Queued.Skipped {
+	if r.Queued != nil && !r.Queued.Skipped && r.Queued.Invalid == "" {
 		w.metrics.Add(metrics.CodeChecksQueued, 1, metrics.Attrs{"purpose": string(r.Queued.Purpose)})
 	}
 	if own.ending != nil {

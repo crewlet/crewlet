@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -399,6 +400,43 @@ func TestAChecksRecordNamesItsOwnRepository(t *testing.T) {
 	if err := e.applyErr(queuedRec(t, stray, applyClock)); err == nil ||
 		!strings.Contains(err.Error(), "may write only that repository's checks") {
 		t.Fatalf("a record about another repository's checks applied: %v", err)
+	}
+}
+
+// A REPOSITORY'S DISPATCHES GO WITH ITS PURGE: a purge part with room takes
+// a deleted repository's heads' dispatches and its targets' readings of their
+// checks files (code_check_dispatches, code_check_targets) once its checks
+// are gone, as it takes every other row the repository's records wrote.
+//
+// Mutation: leave the dispatches out of a purge part — the part leaves them
+// for the final purge, red.
+func TestAPurgePartTakesARepositorysDispatches(t *testing.T) {
+	t.Parallel()
+	e := openChecksEstate(t)
+	tip := statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 2}
+	dispatched := func(target string, heads ...string) built {
+		t.Helper()
+		named := make([]DispatchedHead, 0, len(heads))
+		for i, h := range heads {
+			named = append(named, DispatchedHead{OID: oid(h),
+				ChangeID: fmt.Sprintf("0190f3c4-0000-7000-8000-0000000000e%d", i), Revision: 1})
+		}
+		return checkRec(t, OpCheckDispatched, CheckDispatched{RepoID: checkRepo, Target: target, Tip: oid("tip"),
+			TipPosition: tip, DefsOID: oid("defs"), Heads: named, DispatchedAt: applyClock})
+	}
+	held := func() int64 {
+		t.Helper()
+		return e.num(`SELECT COUNT(*) FROM code_check_dispatches`) + e.num(`SELECT COUNT(*) FROM code_check_targets`)
+	}
+	e.apply(dispatched("refs/heads/main", "a", "b"), dispatched("refs/heads/release", "c"))
+	if n := held(); n != 5 {
+		t.Fatalf("two targets' readings and three heads' dispatches left %d rows, want 5", n)
+	}
+	e.apply(rec(t, RepoSubject(checkRepo), OpDelete, Scope{RepoPath(checkRepo)},
+		LifecycleRecord{RepoID: checkRepo, ConfigEpoch: 1}))
+	e.apply(partOf(t, checkRepo, 1))
+	if n := held(); n != 0 {
+		t.Fatalf("a purge part with room left %d of the repository's dispatches and readings", n)
 	}
 }
 

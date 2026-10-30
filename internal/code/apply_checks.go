@@ -118,9 +118,10 @@ type checkQueue struct {
 // falls overdue — waits for a runner longer than its own definition's
 // timeout, which the code_checks_backlog alarm counts — or 0 for an attempt
 // with no timeout: one a person's CI reports, which no runner of the engine
-// claims, and so is never overdue. code_checks_overdue_idx holds the queued
-// attempts by it, so the backlog's walk reads them in the order they fell
-// overdue (replicated 0083).
+// claims, and one errored at its dispatch for a checks file that does not
+// run, which ends as it is queued — neither of which is ever overdue.
+// code_checks_overdue_idx holds the queued attempts by it, so the backlog's
+// walk reads them in the order they fell overdue (replicated 0083).
 func (q checkQueue) overdueAt() int64 {
 	if q.timeoutSeconds <= 0 {
 		return 0
@@ -153,8 +154,9 @@ type checkPart struct {
 	ending *checkEnding
 }
 
-// queuedPart is a queued attempt's part — and, for one recorded skipped, its
-// ending too, at the queuing instant and position.
+// queuedPart is a queued attempt's part — and, for one recorded skipped or
+// errored at its dispatch, its ending too, at the queuing instant and
+// position.
 func queuedPart(q CheckQueued, at applyContext) checkPart {
 	part := checkPart{queue: &checkQueue{
 		purpose: string(q.Purpose), changeID: q.ChangeID, revision: int64(q.Revision),
@@ -168,9 +170,13 @@ func queuedPart(q CheckQueued, at applyContext) checkPart {
 		part.queue.def, part.queue.runIn, part.queue.timeoutSeconds = string(def), string(q.Def.RunIn),
 			int64(q.Def.TimeoutSeconds)
 	}
-	if q.Skipped {
+	switch {
+	case q.Skipped:
 		part.ending = &checkEnding{state: string(CheckStateSkipped), reason: string(CheckReasonPaths),
 			finishedAt: part.queue.queuedAt, position: at.packed}
+	case q.Invalid != "":
+		part.ending = &checkEnding{state: string(CheckStateErrored), reason: string(CheckReasonDefsInvalid),
+			summary: q.Invalid, finishedAt: part.queue.queuedAt, position: at.packed}
 	}
 	return part
 }

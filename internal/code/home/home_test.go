@@ -99,6 +99,9 @@ func (e *estate) Read(_ context.Context, q code.ReadQuery) (code.ReadAnswer, err
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
+	case q.Kind == code.ReadChecksDue:
+		// THE CHECK WORK'S LISTING: these cases hold no change owing any.
+		return code.ReadAnswer{Position: e.at}, nil
 	case q.Kind != code.ReadChangesDue:
 		return code.ReadAnswer{}, errors.New("the home asked a read that is not its listing")
 	case q.ChangesDue == nil || q.ChangesDue.RecheckBefore.IsZero():
@@ -160,6 +163,11 @@ func (e *estate) Converse(_ context.Context, w code.ConversationWrite) (code.Con
 		})
 	}
 	return code.ConversationResult{Outcome: statelog.OutcomeApplied, Position: e.at}, nil
+}
+
+// Checks is no write these cases' changes owe: they owe no check work.
+func (e *estate) Checks(context.Context, code.ChecksRequest) (code.ChecksResult, error) {
+	return code.ChecksResult{}, errors.New("a case owing no check work was asked a write of its checks")
 }
 
 func (e *estate) Change(_ context.Context, p code.ChangeProposal) (code.ChangeResult, error) {
@@ -302,11 +310,13 @@ func (a asNode) HomeOf(repos []string) (map[string]bool, error) {
 	return a.placement.HomeOfFor(a.node, repos)
 }
 
-// nudges is the code log's watch, its handler kept for the case to call — or
-// a watch that does not begin, while failing is set.
+// nudges is the code log's watches, the repositories' subjects' handler kept
+// for the case to call, and the checks subjects' — or watches that do not
+// begin, while failing is set.
 type nudges struct {
 	mu      sync.Mutex
 	h       *home.Nudged
+	checks  *home.Nudged
 	failing bool
 	began   chan struct{}
 }
@@ -319,11 +329,16 @@ func (n *nudges) Watch(_ context.Context, filter string, h home.Nudged) (home.Wa
 	if n.failing {
 		return nil, errors.New("the consumer could not be made")
 	}
-	if filter != topics.CodeLogPrefix+"."+string(code.KindRepo)+".>" {
-		return nil, errors.New("the home watched " + filter + ", not every repository's subject")
+	switch filter {
+	case topics.CodeLogPrefix + "." + string(code.KindRepo) + ".>":
+		n.h = &h
+		close(n.began)
+	case topics.CodeLogPrefix + "." + string(code.KindChecks) + ".>":
+		n.checks = &h
+	default:
+		return nil, errors.New("the home watched " + filter + ", neither every repository's subject nor every " +
+			"repository's checks")
 	}
-	n.h = &h
-	close(n.began)
 	return stopped{}, nil
 }
 

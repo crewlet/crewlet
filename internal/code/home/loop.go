@@ -131,10 +131,16 @@ const (
 	nudgeGap       = "gap"
 )
 
-// repoSubjects is the filter the loop watches the code log under: every
-// record on a repository's subject — a push, a change's open, edit, retarget,
-// close, reopen and landing.
-var repoSubjects = topics.CodeLogPrefix + "." + string(code.KindRepo) + ".>"
+// nudgeFilters are the filters the loop watches the code log under, a watch
+// each: every record on a repository's subject — a push, a change's open,
+// edit, retarget, close, reopen and landing — and every record on a
+// repository's CHECKS subject — an attempt queued, claimed or ended, a
+// head's dispatch — which moves the check work and, through the readiness
+// a change's head's checks are an input of, the change work.
+var nudgeFilters = []string{
+	topics.CodeLogPrefix + "." + string(code.KindRepo) + ".>",
+	topics.CodeLogPrefix + "." + string(code.KindChecks) + ".>",
+}
 
 // Loop is one git node's home work: its registered workers' repositories,
 // scheduled by the nudges and the backstop, worked [Concurrency] at a time.
@@ -145,8 +151,10 @@ type Loop struct {
 	// backstop is the passes' interval and a turn's bound: [Backstop], a
 	// suite's own (export_test.go).
 	backstop time.Duration
-	// changes is the change work, the worker every loop is built with.
+	// changes and checks are the change work and the check work, the two
+	// workers every loop is built with.
 	changes *changes
+	checks  *checks
 
 	mu      sync.Mutex
 	workers []Worker
@@ -163,9 +171,10 @@ type Loop struct {
 	busy    map[turnKey]bool
 	again   map[turnKey]statelog.Position
 	// gap is the furthest position a Gap reached that no pass has read at
-	// yet, and watch the watch while it runs.
-	gap   statelog.Position
-	watch Watching
+	// yet, and watches each filter's watch while it runs — nil for one that
+	// has not begun.
+	gap     statelog.Position
+	watches []Watching
 
 	// ready says a pair is queued, kick that a Gap asks for a pass before
 	// its tick; each holds one signal, which is all either needs.
@@ -183,8 +192,9 @@ type turnKey struct {
 	repo   string
 }
 
-// New builds a Loop with the change work registered, refusing every required
-// field missing, by name, in one error. It starts nothing: [Loop.Start] does.
+// New builds a Loop with the change work and the check work registered,
+// refusing every required field missing, by name, in one error. It starts
+// nothing: [Loop.Start] does.
 func New(o Options) (*Loop, error) {
 	var missing []string
 	need := func(absent bool, name string) {
@@ -201,7 +211,7 @@ func New(o Options) (*Loop, error) {
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("%w: %s missing", ErrOptions, strings.Join(missing, ", "))
 	}
-	l := &Loop{o: o, log: o.Logger, now: o.Now, backstop: Backstop,
+	l := &Loop{o: o, log: o.Logger, now: o.Now, backstop: Backstop, watches: make([]Watching, len(nudgeFilters)),
 		pending: map[turnKey]statelog.Position{}, busy: map[turnKey]bool{}, again: map[turnKey]statelog.Position{},
 		ready: make(chan struct{}, 1), kick: make(chan struct{}, 1)}
 	if l.log == nil {
@@ -213,7 +223,8 @@ func New(o Options) (*Loop, error) {
 	l.life, l.end = context.WithCancel(context.Background())
 	l.changes = &changes{estate: o.Estate, cache: o.Cache, git: o.Git, node: o.NodeID, metrics: o.Metrics,
 		log: l.log, now: l.now, rechecks: newRecheckBudget(Backstop)}
-	l.workers = []Worker{l.changes}
+	l.checks = &checks{estate: o.Estate, node: o.NodeID, log: l.log, now: l.now}
+	l.workers = []Worker{l.changes, l.checks}
 	return l, nil
 }
 
@@ -282,12 +293,14 @@ func (l *Loop) Start() {
 func (l *Loop) Stop(ctx context.Context) {
 	l.mu.Lock()
 	l.stopped = true
-	started, w := l.started, l.watch
-	l.watch = nil
+	started, watches := l.started, l.watches
+	l.watches = make([]Watching, len(nudgeFilters))
 	l.mu.Unlock()
 	l.end()
-	if w != nil {
-		w.Stop()
+	for _, w := range watches {
+		if w != nil {
+			w.Stop()
+		}
 	}
 	if !started {
 		return
@@ -326,34 +339,36 @@ func (l *Loop) passes() {
 	}
 }
 
-// ensureWatch begins the watch where none runs, and leaves none where it
-// cannot begin — the backstop passes the work meanwhile, and the next pass
-// asks again.
+// ensureWatch begins each filter's watch where none runs, and leaves none
+// where it cannot begin — the backstop passes the work meanwhile, and the
+// next pass asks again.
 func (l *Loop) ensureWatch() {
-	l.mu.Lock()
-	running := l.watch != nil
-	l.mu.Unlock()
-	if running || l.life.Err() != nil {
-		return
-	}
-	w, err := l.o.Nudges.Watch(l.life, repoSubjects, Nudged{Subject: l.nudged, Gap: l.gapped})
-	if err != nil {
-		if l.life.Err() == nil {
-			l.log.Warn("code_home_watch_failed", "error", err, "detail", "the home's change work waits for its "+
-				"backstop, a minute at the most, until the watch begins")
-		}
-		return
-	}
-	l.mu.Lock()
-	if l.life.Err() != nil {
-		// STOPPED WHILE IT BEGAN: Stop read no watch to stop, so this one
-		// is stopped here.
+	for i, filter := range nudgeFilters {
+		l.mu.Lock()
+		running := l.watches[i] != nil
 		l.mu.Unlock()
-		w.Stop()
-		return
+		if running || l.life.Err() != nil {
+			continue
+		}
+		w, err := l.o.Nudges.Watch(l.life, filter, Nudged{Subject: l.nudged, Gap: l.gapped})
+		if err != nil {
+			if l.life.Err() == nil {
+				l.log.Warn("code_home_watch_failed", "filter", filter, "error", err, "detail", "the home's "+
+					"work waits for its backstop, a minute at the most, until the watch begins")
+			}
+			continue
+		}
+		l.mu.Lock()
+		if l.life.Err() != nil {
+			// STOPPED WHILE IT BEGAN: Stop read no watch to stop, so this
+			// one is stopped here.
+			l.mu.Unlock()
+			w.Stop()
+			return
+		}
+		l.watches[i] = w
+		l.mu.Unlock()
 	}
-	l.watch = w
-	l.mu.Unlock()
 }
 
 // takeGap is the furthest position a Gap reached since the last pass, zero
@@ -442,13 +457,13 @@ func listing(ctx context.Context, w Worker, floor statelog.Position) ([]string, 
 	}
 }
 
-// nudged is the watch's word that a record landed on subject at at: the
-// repository it names scheduled for every worker at that position, where this
-// node is its home. Called on the queue's delivery path, so it schedules work
+// nudged is a watch's word that a record landed on subject at at: the
+// repository it names — a repository's subject, or its checks' — scheduled
+// for every worker at that position, where this node is its home. Called on the queue's delivery path, so it schedules work
 // and does none.
 func (l *Loop) nudged(subject string, at statelog.Position) {
 	kind, repoID, ok := topics.CodeLogPath(subject)
-	if !ok || kind != string(code.KindRepo) {
+	if !ok || (kind != string(code.KindRepo) && kind != string(code.KindChecks)) {
 		l.nudge(nudgeIgnored)
 		return
 	}

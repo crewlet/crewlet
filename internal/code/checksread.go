@@ -36,8 +36,10 @@ import (
 //     ran under, its tail, the failures its ending named, and the log a
 //     failed run kept.
 //   - `checks_due` ([ReadChecksDue]) is the home's: the live changes whose head
-//     no dispatch for its target names its target's checks file, and the
-//     targets due a reading of it again (dueCheckWork's doc).
+//     no dispatch for its target names its target's checks file, or whose
+//     head's attempt its infrastructure ended is due a requeue, each with
+//     what it owes, and the targets due a reading of their checks file again
+//     (dueCheckWork's doc).
 //   - `check_box` ([ReadCheckBox]) is a check's box's admission's: the one
 //     attempt its token names, by its key (code_checks' own), as its row
 //     stands — the engine's own read, held to no grant, since the box is no
@@ -540,20 +542,25 @@ func (r *Reader) check(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roste
 // defined many checks or none: the rows are the work list, and it converges
 // on what the home decided, never on whether an attempt exists — a target with
 // no checks file, every repository that has not adopted checks, has none for
-// ever. And a target branch of a live change owes its home a READING of its
-// checks file again where its branch moved past the tip its row was read at
-// and that reading was recorded at or before [ChecksDueQuery.RefreshBefore] —
-// the home's clock less its refresh — so a target pushed to on every landing
-// is read at the home's pace, and only a file that changed makes its heads due.
+// ever. A live change owes its home a REQUEUE too, where its head's latest
+// attempt of a check for its target ended errored for its infrastructure
+// below [AutoRequeueAttempts], until the next attempt's row is there. And a
+// target branch of a live change owes its home a READING of its checks file
+// again where its branch moved past the tip its row was read at and that
+// reading was recorded at or before [ChecksDueQuery.RefreshBefore] — the
+// home's clock less its refresh — so a target pushed to on every landing is
+// read at the home's pace, and only a file that changed makes its heads due.
 //
 // TWO SHAPES, as `changes_due`'s, and over the same index: with no repository
 // it pages the repositories holding such a change or such a target, by id,
 // walking code_changes_open_idx grouped on its leading column; with one it
 // pages that repository's due heads by source branch, each with its target's
 // tip and the position that moved it there — the tip whose checks file the
-// home reads — and on its FIRST PAGE its targets due a reading
-// ([ReadAnswer.DueTargets]), walking its targets' rows by their key. Every
-// change is tested by its dispatch's key and its target's, one seek of each.
+// home reads — and what it owes ([CheckWork], read in the same snapshot), and
+// on its FIRST PAGE its targets due a reading ([ReadAnswer.DueTargets]),
+// walking its targets' rows by their key. Every change is tested by its
+// dispatch's key and its target's, one seek of each, and by
+// code_checks_requeue_idx, which holds only the attempts a requeue reads.
 //
 // READ STALE BY DEFAULT, as every duty listing is: a head listed a moment late
 // is dispatched at the next pass, and one listed after its dispatch landed is
@@ -564,7 +571,7 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 		if q.Cursor != "" && !canonicalUUID(q.Cursor) {
 			return fmt.Errorf("%w: %q", ErrBadCursor, q.Cursor)
 		}
-		rows, err := tx.QueryContext(ctx, dueCheckReposSQL, q.Cursor, r.pageRows, refresh)
+		rows, err := tx.QueryContext(ctx, dueCheckReposSQL, q.Cursor, r.pageRows, refresh, AutoRequeueAttempts)
 		if err != nil {
 			return fmt.Errorf("code: list the repositories check work is due in: %w", err)
 		}
@@ -596,6 +603,10 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 	case RepoStatus(status) != RepoStatusActive:
 		return nil
 	}
+	required, err := requiredIn(ctx, tx, repoID)
+	if err != nil {
+		return err
+	}
 	pg := page{maxRows: r.pageRows, maxB: r.pageBytes}
 	if q.Cursor == "" {
 		// THE TARGETS DUE A READING, on the first page alone: at most one a
@@ -604,28 +615,24 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 			return err
 		}
 	}
-	rows, err := tx.QueryContext(ctx, dueCheckChangesSQL, repoID, q.Cursor, r.pageRows)
+	heads, err := dueCheckHeadsIn(ctx, tx, repoID, q.Cursor, r.pageRows)
 	if err != nil {
-		return fmt.Errorf("code: list repository %s's heads due their checks: %w", repoID, err)
+		return err
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var (
-			c  ChangeDue
-			at int64
-		)
-		if err := rows.Scan(&c.ID, &c.Number, &c.Revision, &c.Head, &c.SourceRef, &c.TargetRef, &c.Tip,
-			&at); err != nil {
-			return fmt.Errorf("code: list repository %s's heads due their checks: %w", repoID, err)
+	for _, h := range heads {
+		work, err := checkWorkOf(ctx, tx, repoID, h, required)
+		if err != nil {
+			return err
 		}
-		c.TipPosition = unpacked(at)
+		c := h.due
+		c.Checks = &work
 		out.DueChanges = append(out.DueChanges, c)
 		if pg.add(c.encodedBytes()) {
 			out.Next = c.SourceRef
 			break
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // dueCheckTargets files a repository's targets due a reading of their checks
@@ -926,36 +933,46 @@ const (
 				AND r.status IN ('active', 'archived'))
 		ORDER BY k.overdue_at, k.repo_id, k.commit_oid, k.target_ref, k.name, k.attempt LIMIT ?2`
 	// THE HOME'S LISTING, changes_due's two statements with the facts' test
-	// replaced by the dispatch's: a head is due while no dispatch of it for
+	// replaced by the checks' work: a head is due while no dispatch of it for
 	// its target names the checks file its target's row holds — one seek of
-	// each key — and, in the listing of repositories, a target due a reading
-	// beside it, by its row's key, where its branch moved past the tip it was
-	// read at and the reading is no later than ?3. The targets due a reading
-	// of one repository walk its targets' rows by their key, each tested
-	// against its branch and a live change into it, which
+	// each key — or while its latest attempt of a check for its target is
+	// one its infrastructure ended below ?4 (AutoRequeueAttempts) and no next
+	// attempt follows it — code_checks_requeue_idx, then code_checks' key —
+	// and, in the listing of repositories, a target due a reading beside it,
+	// by its row's key, where its branch moved past the tip it was read at
+	// and the reading is no later than ?3. A repository's page answers both
+	// tests of each change it lists, which say what its home owes it. The
+	// targets due a reading of one repository walk its targets' rows by their
+	// key, each tested against its branch and a live change into it, which
 	// code_changes_target_idx holds the live changes of by target.
 	headUndispatched = `NOT EXISTS (SELECT 1 FROM code_check_dispatches AS d INDEXED BY ` +
 		checkDispatchesKey + `
 		CROSS JOIN code_check_targets AS g INDEXED BY ` + checkTargetsKey + `
 		WHERE d.repo_id = c.repo_id AND d.commit_oid = c.head_oid AND d.target_ref = c.target_ref
 			AND g.repo_id = c.repo_id AND g.target_ref = c.target_ref AND g.defs_oid = d.defs_oid)`
+	headRequeueDue = `EXISTS (SELECT 1 FROM code_checks AS k INDEXED BY code_checks_requeue_idx
+		WHERE k.repo_id = c.repo_id AND k.commit_oid = c.head_oid AND k.target_ref = c.target_ref
+			AND ` + requeuedRows + ` AND k.attempt < ?4
+			AND NOT EXISTS (SELECT 1 FROM code_checks AS n INDEXED BY ` + checksKey + `
+				WHERE n.repo_id = k.repo_id AND n.commit_oid = k.commit_oid AND n.target_ref = k.target_ref
+					AND n.name = k.name AND n.attempt = k.attempt + 1))`
 	dueCheckReposSQL = `SELECT c.repo_id FROM code_changes AS c INDEXED BY code_changes_open_idx
 		CROSS JOIN code_refs AS t INDEXED BY ` + refsKey + `
 		WHERE c.repo_id > ?1 AND ` + liveChanges + `
 			AND t.repo_id = c.repo_id AND t.ref = c.target_ref AND t.target != ''
-			AND (` + headUndispatched + `
+			AND (` + headUndispatched + ` OR ` + headRequeueDue + `
 				OR EXISTS (SELECT 1 FROM code_check_targets AS g INDEXED BY ` + checkTargetsKey + `
 					WHERE g.repo_id = c.repo_id AND g.target_ref = c.target_ref AND g.tip_position < t.position
 						AND g.at <= ?3))
 			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = c.repo_id AND r.status = 'active')
 		GROUP BY c.repo_id ORDER BY c.repo_id LIMIT ?2`
 	dueCheckChangesSQL = `SELECT c.id, c.number, c.revision, c.head_oid, c.source_ref, c.target_ref, t.target,
-			t.position
+			t.position, ` + headUndispatched + `, ` + headRequeueDue + `
 		FROM code_changes AS c INDEXED BY code_changes_open_idx
 		CROSS JOIN code_refs AS t INDEXED BY ` + refsKey + `
 		WHERE c.repo_id = ?1 AND c.source_ref > ?2 AND ` + liveChanges + `
 			AND t.repo_id = c.repo_id AND t.ref = c.target_ref AND t.target != ''
-			AND ` + headUndispatched + `
+			AND (` + headUndispatched + ` OR ` + headRequeueDue + `)
 		ORDER BY c.source_ref LIMIT ?3`
 	dueCheckTargetsSQL = `SELECT g.target_ref, t.target, t.position
 		FROM code_check_targets AS g INDEXED BY ` + checkTargetsKey + `

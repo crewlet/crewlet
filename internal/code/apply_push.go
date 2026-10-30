@@ -1054,8 +1054,9 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // repository's pushes, refs, packs, retired packs, ref drops, changes'
 // revisions, authors, bodies and rows and their conversations' rows — its
 // reviewers, participants, comments, reviews, findings, revisions' facts and
-// mergeability among them — its checks and their logs, and its merge queues'
-// entries, candidates, landings and green rows remain AND the
+// mergeability among them — its checks and their logs, its heads' dispatches
+// and its targets' readings, and its merge queues' entries, candidates,
+// landings and green rows remain AND the
 // pushes, the bodies, the conversations' text and the checks among them
 // weigh at most PurgePartBytes — a part's own bounds — and it holds at most
 // MaxProtectionsPerRepo rules, MaxPathOwners path owners (one row each, their

@@ -19,20 +19,23 @@
 //
 // A [Loop] runs on every git node and schedules REPOSITORIES — a (worker,
 // repository) pair a turn — onto a few goroutines of its own ([Concurrency]),
-// for every [Worker] registered with it: the changes worker now
-// ([WorkerChanges]), and M5's checks and merge queue and M6's mirrors after
-// it, each a listing of the repositories it has work in (Worker.Due) and the
-// work of one (Worker.Work), each read from the rows. A repository is worked
+// for every [Worker] registered with it: the changes worker
+// ([WorkerChanges]) and the checks worker ([WorkerChecks]), and M5's merge
+// queue and M6's mirrors after them, each a listing of the repositories it
+// has work in (Worker.Due) and the work of one (Worker.Work), each read from
+// the rows. A repository is worked
 // by ONE turn of a worker at a time; asked again while it is being worked, it
 // is worked once more after, at the furthest floor it was asked at, so a
 // burst of records costs a repository a turn or two, never one a record.
 //
 // # Two ways a repository is scheduled, and the rows decide either
 //
-// A NUDGE: one watch on the code log's repository subjects (`crewlet.code.log.
-// repo.>`, [Nudges]) tells the loop the subject and the position of every
+// A NUDGE: a watch on the code log's repository subjects (`crewlet.code.log.
+// repo.>`) and one on its repositories' checks subjects (`crewlet.code.log.
+// checks.>`, [Nudges]) tell the loop the subject and the position of every
 // record a repository's subject takes — a push, a change's open, edit or
-// retarget — as the broker stores it, headers alone; the loop asks its
+// retarget — and every one its checks take — an attempt queued, claimed or
+// ended, a head's dispatch — as the broker stores it, headers alone; the loop asks its
 // placement whether this node is the repository's home ([Placement.Home]) and
 // schedules it only where it is, AT THE RECORD'S POSITION, so the read that
 // follows waits for this node's copy to hold the record before it reads the
@@ -91,6 +94,33 @@
 // reason of the writer's or the log's — busy, the record refused or dropped —
 // or a merge that could not run fails the turn, and the next pass lists the
 // repository again.
+//
+// # What a turn of the checks worker does
+//
+// It reads the repository's check work — the `checks_due` listing
+// (internal/code's ReadChecksDue), a target's reading due again once it is
+// [ChecksFileRefresh] old — and asks the repository's checks writer
+// (code.checks): on its first page, for each TARGET whose branch moved past
+// the tip its checks file was read at, the file read at its tip and recorded,
+// so only a file that changed makes the heads waiting on it due again; then
+// for each change, each with what it owes (code.CheckWork), in order: the next
+// attempt of each check its head's infrastructure ended (a requeue); where its
+// DISPATCH is owed, the attempts its change moved on from ended cancelled
+// superseded, then every check the checks file at its TARGET'S TIP defines —
+// never the head's: a change is never measured by a definition it brought —
+// that the head holds no attempt of queued, or recorded skipped where what
+// the head touches against that tip matches none of its paths, one an
+// earlier dispatch errored for a file that did not run queued as its next
+// attempt, and every name the target's gate requires errored defs_invalid
+// where the file is none that runs. The page's dispatches are recorded LAST
+// (code.CheckDispatched, a target's heads in records of at most
+// code.MaxDispatchHeads), so a dispatch cut short is the next turn's, every
+// queue that landed answered from its row. The tip's file is read through the
+// git reads (internal/code's GitChecksFile, the engine's own read), once a
+// tip and parsed once a blob a turn; what a head touches is its revision's
+// facts, read as the change work reads them. Its refusals are the change
+// work's: the rows moving is the next pass's, a write deciding nothing the
+// turn's failure.
 //
 // # Merge previews, beside the loop
 //

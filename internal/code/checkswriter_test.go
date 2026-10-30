@@ -211,9 +211,15 @@ func TestASecondClaimIsRefusedBeforeItAppends(t *testing.T) {
 
 // AN ATTEMPT FOLLOWS THE ONE BEFORE IT, ENDED: a dispatch is a commit's first
 // attempt, answered from its row when it is queued already; the next is queued
-// only once the one before it ended, and the home's requeue only after its
+// only once the one before it ended, the home's requeue only after its
 // infrastructure ended it and while that attempt is below
-// AutoRequeueAttempts; and no attempt passes MaxCheckAttempts.
+// AutoRequeueAttempts, and the home's dispatch only after its own dispatch
+// errored it for a checks file that did not run; and no attempt passes
+// MaxCheckAttempts.
+//
+// Mutation: let a dispatch follow any ending — the dispatch after a failure
+// is queued, red; refuse a dispatch past the first attempt — the mended
+// file's is refused, red.
 func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -261,6 +267,31 @@ func TestAnAttemptFollowsTheOneBeforeIt(t *testing.T) {
 	other.Attempt = 2
 	res, err = w.Publish(ctx, queueing(other, code.QueueRequeue))
 	requireCheckRefused(t, "a requeue of a failure", res, err, code.CheckRefusalRerunGenuine)
+	res, err = w.Publish(ctx, queueing(other, code.QueueDispatch))
+	requireCheckRefused(t, "a dispatch after a failure", res, err, code.CheckRefusalRerunGenuine)
+
+	// A DISPATCH FOLLOWS ITS OWN ERROR: a head's required check errored at
+	// its dispatch for a checks file that did not run is queued again by the
+	// head's dispatch under a file that runs, as the next attempt.
+	broken := code.CheckKey{RepoID: repo, OID: oidOf("B"), Target: mainRef, Name: "lint", Attempt: 1}
+	headDispatch := func(key code.CheckKey) code.ChecksRequest {
+		req := queueing(key, code.QueueDispatch)
+		req.Queued.Purpose, req.Queued.ChangeID, req.Queued.Revision = code.PurposeHead,
+			"0190f3c4-0000-7000-8000-0000000000d1", 1
+		req.Queued.Required = true
+		return req
+	}
+	errored := headDispatch(broken)
+	errored.Queued.Def, errored.Queued.Invalid = nil, "the checks file is not YAML"
+	res, err = w.Publish(ctx, errored)
+	requireChecked(t, "lint errored at its dispatch", res, err)
+	mended := broken
+	mended.Attempt = 2
+	res, err = w.Publish(ctx, headDispatch(mended))
+	requireChecked(t, "lint's dispatch under the mended file", res, err)
+	if res.Row.State != code.CheckStateQueued || res.Row.Attempt != 2 {
+		t.Fatalf("lint's dispatch under the mended file is %+v, want attempt 2 queued", res.Row)
+	}
 
 	// NO ATTEMPT PASSES THE LAST: one held at MaxCheckAttempts, which no
 	// writer of this build reaches but by reruns, is followed by none.
@@ -439,8 +470,8 @@ func waitAnnounced(t *testing.T, stream *announced, n int) {
 
 // THE HOME'S DUE CHECK WORK IS THE ENGINE'S OWN: a checks_due read names no
 // asker and no seat it reads for — a principal's read of the home's listing
-// would be held to nothing — and lists a live change whose head no attempt of
-// any check was queued at, until one is.
+// would be held to nothing — and lists a live change whose head is not
+// dispatched, until its dispatch is recorded.
 //
 // Mutation: let the read take an asker, and a person's read of the listing is
 // answered — red.
