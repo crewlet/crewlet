@@ -45,6 +45,17 @@ type Options struct {
 	// the route checks. Empty skips registration for the same reason an
 	// empty base does: a definition that cannot deliver is worse than none.
 	WebhookToken string
+
+	// Managed are the agent accounts the per-seat access sync manages, each
+	// a Datadog user id the access ledger records or the address a document
+	// seat's account is created under ([AccountEmail]).
+	//
+	// THE ORPHAN ADVISORY NEVER REPORTS THEM. Since each agent's account
+	// moved to the access sync, the plan this pass is handed no longer names
+	// the seats, and an advisory judged against the plan alone would call
+	// every agent's live account an orphan. What is managed is what the
+	// ledger and the document say, so that is what is passed here.
+	Managed []string
 }
 
 // Result is what one pass found.
@@ -258,7 +269,7 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 	// AND WHAT THE LISTING HOLDS THAT THE PLAN DOES NOT. Read off the same
 	// listing the seats were matched against, so it costs no extra request.
-	res.Orphaned = orphanedAccounts(existing, opts.Plan, emailDomainOf(opts.Config))
+	res.Orphaned = orphanedAccounts(existing, opts.Plan, opts.Managed, emailDomainOf(opts.Config))
 	// FLUSHED AFTER THE WHOLE PLAN, AND ON EVERY PATH THAT MINTED.
 	//
 	// [provision.TokenSink] hands nothing to the fleet until Flush, so a
@@ -615,20 +626,24 @@ func roleIDOf(ctx context.Context, opts Options, name string) (string, error) {
 // account that can still act — a changed handle's old identity, live,
 // holding whatever it held, matching nothing any pass will ever ask for
 // again.
-func orphanedAccounts(existing []User, plan *provision.Plan, domain string) []User {
+func orphanedAccounts(existing []User, plan *provision.Plan, managed []string, domain string) []User {
 	if plan == nil {
 		return nil
 	}
-	claimed := make(map[string]bool, len(plan.Seats))
+	claimed := make(map[string]bool, len(plan.Seats)+len(managed))
 	for _, seat := range plan.Seats {
 		claimed[strings.ToLower(strings.TrimSpace(seat.Email))] = true
+	}
+	for _, account := range managed {
+		claimed[strings.ToLower(strings.TrimSpace(account))] = true
 	}
 	var out []User
 	for _, user := range existing {
 		if user.Disabled {
 			continue
 		}
-		if claimed[strings.ToLower(strings.TrimSpace(user.Email))] {
+		if claimed[strings.ToLower(strings.TrimSpace(user.Email))] ||
+			claimed[strings.ToLower(strings.TrimSpace(user.ID))] {
 			continue
 		}
 		if !madeHere(user.Email, domain) {
@@ -658,10 +673,10 @@ func madeHere(email, domain string) bool {
 }
 
 func emailDomainOf(cfg *config.Datadog) string {
-	if cfg != nil && cfg.Provisioning != nil && cfg.Provisioning.EmailDomain != "" {
-		return cfg.Provisioning.EmailDomain
+	if cfg == nil {
+		return DefaultEmailDomain
 	}
-	return DefaultEmailDomain
+	return emailDomain(cfg.Provisioning)
 }
 
 // Findings is what a pass observed, in the shared vocabulary.
