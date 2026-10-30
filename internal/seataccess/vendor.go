@@ -6,6 +6,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // Vendor is one integration's half of per-seat access: what it offers, the
@@ -50,6 +51,19 @@ type OpenInput struct {
 	// ([setup.PassInput.Operator]), empty where the vendor needs none or the
 	// run is the loop's.
 	Operator string
+
+	// Sink seals a COMPANY value the session itself must keep current
+	// before it can act: Slack's app-configuration token, whose refresh
+	// token is single use, so a rotation is sealed before it is used. A
+	// seat's credentials never go through it (the sync seals [Minted]).
+	// Nil on a preview, where the session rotates nothing.
+	Sink provision.TokenSink
+
+	// WebhookBase is the public address vendors reach this deployment at
+	// ([setup.PassInput.WebhookBase]), which Slack builds each app's
+	// request and redirect URLs from. Empty on a preview, where the
+	// session creates and restores nothing.
+	WebhookBase string
 }
 
 // Session is one pass's connection to the vendor.

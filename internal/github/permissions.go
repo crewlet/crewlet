@@ -5,6 +5,8 @@ import (
 	"maps"
 	"slices"
 	"strings"
+
+	"github.com/crewlet/crewlet/internal/config"
 )
 
 // What one agent's GitHub App may do, in GitHub's own terms.
@@ -28,22 +30,23 @@ import (
 // grants it to every app and every token needs it ([Permissions.Token]).
 
 // Level is how much of one permission an app holds, as GitHub's API spells
-// it. The zero value is No access.
-type Level string
+// it. The zero value is No access. It is the company document's own type, so
+// the document, the wire and this package cannot spell a grant two ways.
+type Level = config.GitHubAccess
 
 const (
 	// LevelNone is No access: the key is absent from what GitHub is sent.
 	LevelNone Level = ""
 
 	// LevelRead is Read-only.
-	LevelRead Level = "read"
+	LevelRead = config.GitHubRead
 
 	// LevelWrite is Read and write.
-	LevelWrite Level = "write"
+	LevelWrite = config.GitHubWrite
 )
 
-// Label is the level as GitHub's settings page names it.
-func (l Level) Label() string {
+// LevelLabel is a level as GitHub's settings page names it.
+func LevelLabel(l Level) string {
 	switch l {
 	case LevelRead:
 		return "Read-only"
@@ -51,21 +54,6 @@ func (l Level) Label() string {
 		return "Read and write"
 	default:
 		return "No access"
-	}
-}
-
-// rank orders levels so a raise can be told from a narrowing. An unknown
-// level ranks below No access, so it never reads as a raise.
-func (l Level) rank() int {
-	switch l {
-	case LevelNone:
-		return 0
-	case LevelRead:
-		return 1
-	case LevelWrite:
-		return 2
-	default:
-		return -1
 	}
 }
 
@@ -227,7 +215,7 @@ func (p Permissions) Describe() string {
 	var parts []string
 	for _, perm := range SeatPermissions {
 		if level := p[perm.Key]; level != LevelNone {
-			parts = append(parts, perm.Name+": "+level.Label())
+			parts = append(parts, perm.Name+": "+LevelLabel(level))
 		}
 	}
 	if len(parts) == 0 {
@@ -243,7 +231,7 @@ func (p Permissions) Describe() string {
 func (p Permissions) Raises(next Permissions) []string {
 	var out []string
 	for key, level := range next {
-		if level.rank() > p[key].rank() {
+		if level.Rank() > p[key].Rank() {
 			out = append(out, key)
 		}
 	}
@@ -280,7 +268,7 @@ func (p Permissions) AdministrationRaises(next Permissions) []string {
 func (p Permissions) Short(held map[string]string) []string {
 	var out []string
 	for key, want := range p.Token() {
-		if Level(strings.TrimSpace(held[key])).rank() < Level(want).rank() {
+		if Level(strings.TrimSpace(held[key])).Rank() < Level(want).Rank() {
 			out = append(out, key)
 		}
 	}
@@ -342,9 +330,9 @@ func catalogueNames() string {
 
 // offered is the levels one permission offers, in GitHub's names.
 func offered(perm Permission) string {
-	labels := []string{LevelNone.Label()}
+	labels := []string{LevelLabel(LevelNone)}
 	for _, level := range perm.Levels {
-		labels = append(labels, level.Label())
+		labels = append(labels, LevelLabel(level))
 	}
 	if len(labels) == 2 {
 		return labels[0] + " or " + labels[1]
