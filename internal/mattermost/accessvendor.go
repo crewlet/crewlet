@@ -214,12 +214,6 @@ type accessSession struct {
 	client *Client
 	cfg    *config.Mattermost
 
-	// minted is the token id this session minted for each seat, by handle.
-	// A rotation's second step needs it: it revokes every other token this
-	// engine minted and never that one, and Mattermost lists no creation
-	// time to tell them apart. A step that finds none revokes nothing.
-	minted sync.Map
-
 	teamOnce sync.Once
 	team     Team
 	teamErr  error
@@ -488,9 +482,11 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 			if in.Step.Verb == seataccess.VerbMint {
 				return s.mint(ctx, in, bot, false)
 			}
-			keep, _ := s.minted.Load(in.Seat.Handle)
-			id, _ := keep.(string)
-			_, err := s.client.RetireTokens(ctx, bot, in.Seat.Handle, id)
+			// THE TOKEN THE FIRST STEP MINTED is kept, and every other
+			// token this engine minted is revoked; with none minted,
+			// nothing is.
+			_, err := s.client.RetireTokens(ctx, bot, in.Seat.Handle,
+				in.PriorCredentialID(BotTokenField))
 			return seataccess.StepResult{}, s.refused(in, err)
 		default:
 			return seataccess.StepResult{}, fmt.Errorf("mattermost: no step for %q", in.Step.Op)
@@ -518,7 +514,7 @@ func (s *accessSession) grant(
 		return s.refused(in, err)
 	}
 	if !member {
-		if err := s.client.AddTeamMember(ctx, teamID, bot.ID); err != nil {
+		if err = s.client.AddTeamMember(ctx, teamID, bot.ID); err != nil {
 			return s.refused(in, err)
 		}
 	}
@@ -565,10 +561,9 @@ func (s *accessSession) mint(
 	if err != nil {
 		return seataccess.StepResult{}, s.refused(in, err)
 	}
-	s.minted.Store(in.Seat.Handle, token.ID)
 	tokenID := token.ID
 	return seataccess.StepResult{Minted: []seataccess.Minted{{
-		Field: BotTokenField, Value: token.Value,
+		Field: BotTokenField, Value: token.Value, CredentialID: tokenID,
 		Revoke: func(ctx context.Context) error { return s.client.RevokeToken(ctx, tokenID) },
 	}}}, nil
 }

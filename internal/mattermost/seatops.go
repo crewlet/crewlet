@@ -59,10 +59,10 @@ func (c *Client) ObserveBot(ctx context.Context, userID, teamID string) (BotAcco
 		// ASKED ONLY OF A DEACTIVATED BOT: the description is a second
 		// request, and the question it answers has no meaning for a bot
 		// that is running.
-		record, err := c.BotRecord(ctx, user.ID)
-		if err != nil {
+		record, recordErr := c.BotRecord(ctx, user.ID)
+		if recordErr != nil {
 			return BotAccount{}, true, fmt.Errorf(
-				"mattermost: read whether this engine deactivated %s: %w", user.Username, err)
+				"mattermost: read whether this engine deactivated %s: %w", user.Username, recordErr)
 		}
 		out.DeactivatedHere = strings.TrimSpace(record.Description) == DisconnectedDescription
 	}
