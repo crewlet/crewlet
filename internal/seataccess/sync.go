@@ -49,6 +49,10 @@ type SyncInput struct {
 	// to record, so the sync makes no vendor call at all and reports it.
 	Unmigrated bool
 
+	// UnmigratedReason is why the migration has not finished, where it
+	// said ([UnmigratedFinding]); empty where it did not.
+	UnmigratedReason string
+
 	// Now is the clock; nil is the wall clock in UTC.
 	Now func() time.Time
 
@@ -96,13 +100,9 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 	if in.Unmigrated {
 		// NOT EVEN OPENED: a session may write a company value of its own
 		// on the way in (Slack's configuration token).
-		return SyncReport{Findings: []integration.Finding{{
-			Kind: integration.FindingIdentityMissing,
-			Detail: "the migration onto per-seat access has not finished for this " +
-				"integration, so its agents' accounts are left exactly as they are",
-			Remedy: "It is retried every minute; the log's seat_access_migration_pending " +
-				"line says what it is waiting on, usually the vendor not answering",
-		}}}, nil
+		return SyncReport{Findings: []integration.Finding{
+			UnmigratedFinding(in.Vendor.Kind(), in.UnmigratedReason),
+		}}, nil
 	}
 	now := in.Now
 	if now == nil {

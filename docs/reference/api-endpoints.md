@@ -3769,8 +3769,13 @@ company credential must be replaced until it is.
 The document lists the integrations it has moved in `seat_access_migrated`,
 and the access sync for an integration acts on no agent until it is listed. An
 integration whose vendor does not answer stays unlisted, with its seats exactly
-as they were, and the engine tries again every minute
-(`seat_access_migration_pending` in the log names the reason). Reverting to a
+as they were, and the engine tries again every minute. Its access pass reports
+an `identity_missing` finding that names the integration, says its access
+migration has not finished, and gives the reason the last attempt gave (for
+example, that the lookup of Datadog's role failed); the log's
+`seat_access_migration_pending` line carries the same reason. An integration
+the company does not connect is not waiting on the migration and reports
+nothing. Reverting to a
 revision written before the migration closes the gate again, and the next
 attempt migrates that document.
 
