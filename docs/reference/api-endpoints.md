@@ -3754,8 +3754,9 @@ said what it could do once for the whole company (`provisioning.role`,
 document, one integration at a time, in one revision attributed to
 `seat access migration`: each agent seat states `enabled` per integration, the
 company's role is copied into each seat in the vendor's own terms (a Datadog
-role is looked up at Datadog by name), a Mattermost bot's channels are written
-out, each credential the engine minted is re-sealed under the agent's own name,
+role is looked up at Datadog by name), a Jira or Confluence agent keeps
+product access only (no project or space role, which is all the earlier engine
+granted), a Mattermost bot's channels are written out, each credential the engine minted is re-sealed under the agent's own name,
 every account the engine made is recorded, and the retired fields are removed.
 A credential that named a variable a company setting also uses is never moved:
 the agent gets a new one from its next sync, and the Agents tab warns that the

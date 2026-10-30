@@ -21,8 +21,9 @@
 //   - The company role copied into each enabled seat's access, in the vendor's
 //     own terms: a Datadog role id looked up live by the old role's name (D7),
 //     a GitLab access level, GitHub permissions from the tier's own table,
-//     and a Mattermost bot's channels written out, since an empty list now
-//     means none.
+//     a Mattermost bot's channels written out, since an empty list now means
+//     none, and Jira and Confluence as "Product access only" (the empty
+//     level), which is all the old engine granted: no role is invented.
 //   - Where the engine provisions the integration, each seat's credential
 //     re-sealed under the name the engine derives for it
 //     ([seataccess.SinkName]). Where the old variable is also named by a
