@@ -321,15 +321,10 @@ func (e *Engine) githubSeatApps(company *Company, env *config.Resolver) []github
 // the token a seat's own values are resolved with ([Engine.seatResolver]).
 func githubSeatApp(seat *org.Role, env *config.Resolver) github.SeatApp {
 	app := seat.GitHub
-	// PARSED FROM THE RAW VALUE, not through a "or default" helper:
-	// [github.ParseTier] already answers the default for an empty string
-	// and for a typo, and it is the package that OWNS the closed set, so
-	// there is one place that decides what an unrecognised tier runs at.
-	tier, _ := github.ParseTier(app.Tier)
 	return github.SeatApp{
-		Handle: seat.Handle(), Name: seat.Name, Tier: tier, Repos: app.Repos,
-		Workflows: app.Workflows,
-		AppID:     app.AppID, Slug: app.AppSlug,
+		Handle: seat.Handle(), Name: seat.Name, Off: !app.Enabled,
+		Permissions: github.PermissionsOf(app.Permissions), Repos: app.Repos,
+		AppID: app.AppID, Slug: app.AppSlug,
 		InstallationID: app.InstallationID,
 		Key:            strings.TrimSpace(env.Value(app.PrivateKey)),
 	}
@@ -345,7 +340,8 @@ func githubAppsPending(c *Company) []string {
 		return out
 	}
 	for seat := range c.Org.AllRoles() {
-		if seat.IsAgent() && seat.GitHub != nil && github.NormalizeLogin(seat.GitHub.AppSlug) == "" {
+		if seat.IsAgent() && seat.GitHub != nil && seat.GitHub.Enabled &&
+			github.NormalizeLogin(seat.GitHub.AppSlug) == "" {
 			out = append(out, seat.Handle())
 		}
 	}

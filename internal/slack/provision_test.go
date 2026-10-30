@@ -64,7 +64,7 @@ func (s *sink) value(name string) string {
 func plans() []slack.SeatPlan {
 	o := &org.Organization{Name: "nimbus", Roles: []*org.Role{
 		{Name: "Engineer", DeclaredHandle: "swe", Slack: org.SlackIdentity{
-			BotToken: "${SWE_SLACK_TOKEN}", SigningSecret: "${SWE_SLACK_SIGNING}",
+			BotToken: "${SLACK_BOT_TOKEN_SWE}", SigningSecret: "${SLACK_SIGNING_SECRET_SWE}",
 		}},
 	}}
 	o.Normalize()
@@ -145,7 +145,7 @@ func TestTheSigningSecretIsRecordedIntoItsVariable(t *testing.T) {
 	if _, _, _, err := run(t, ws, func(o *slack.Options) { o.Sink = recorder }); err != nil {
 		t.Fatal(err)
 	}
-	if got := recorder.value("SWE_SLACK_SIGNING"); got != "ss" {
+	if got := recorder.value("SLACK_SIGNING_SECRET_SWE"); got != "ss" {
 		t.Fatalf("signing secret = %q", got)
 	}
 }
@@ -400,7 +400,7 @@ func TestAnInstallMintsTheBotTokenAndRecordsTheIdentity(t *testing.T) {
 	if len(res.Installed) != 1 {
 		t.Fatalf("installed %v", res.Installed)
 	}
-	if got := recorder.value("SWE_SLACK_TOKEN"); got != "xoxb-minted" {
+	if got := recorder.value("SLACK_BOT_TOKEN_SWE"); got != "xoxb-minted" {
 		t.Fatalf("bot token = %q", got)
 	}
 	reloaded, err := slack.LoadLedger(path)
@@ -438,7 +438,7 @@ func TestARerunDoesNotReinstallAWorkingSeat(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
 	withCreate(ws)
-	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+	ws.replies["oauth.v2.access"] = `{"ok":true,"app_id":"A0SWE","access_token":"xoxb-minted",
 		"bot_user_id":"U0BOTSWE","team":{"id":"T0ACME"}}`
 	recorder := newSink()
 	installs := 0
@@ -473,7 +473,7 @@ func TestAnUnreadableSinkDoesNotTriggerAnInstall(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
 	withCreate(ws)
-	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+	ws.replies["oauth.v2.access"] = `{"ok":true,"app_id":"A0SWE","access_token":"xoxb-minted",
 		"bot_user_id":"U0BOTSWE","team":{"id":"T0ACME"}}`
 	recorder := newSink()
 
@@ -519,7 +519,7 @@ func TestAnAppNobodyInstalledIsInstalledWhateverItsSinkCanSay(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
 	withCreate(ws)
-	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+	ws.replies["oauth.v2.access"] = `{"ok":true,"app_id":"A0SWE","access_token":"xoxb-minted",
 		"bot_user_id":"U0BOTSWE","team":{"id":"T0ACME"}}`
 	recorder := newSink()
 	recorder.err = errUnreadable
@@ -537,7 +537,7 @@ func TestAnAppNobodyInstalledIsInstalledWhateverItsSinkCanSay(t *testing.T) {
 		t.Fatalf("created %v, installed %v — want the app created and installed",
 			res.Created, res.Installed)
 	}
-	if got := recorder.value("SWE_SLACK_TOKEN"); got != "xoxb-minted" {
+	if got := recorder.value("SLACK_BOT_TOKEN_SWE"); got != "xoxb-minted" {
 		t.Errorf("recorded %q as the bot token, want the install's", got)
 	}
 }
@@ -548,7 +548,7 @@ func TestALiteralCredentialIsReportedAndSkipped(t *testing.T) {
 	t.Parallel()
 	o := &org.Organization{Name: "nimbus", Roles: []*org.Role{
 		{Name: "Engineer", DeclaredHandle: "swe", Slack: org.SlackIdentity{
-			BotToken: "xoxb-managed-by-hand", SigningSecret: "${SWE_SLACK_SIGNING}",
+			BotToken: "xoxb-managed-by-hand", SigningSecret: "${SLACK_SIGNING_SECRET_SWE}",
 		}},
 	}}
 	o.Normalize()
@@ -680,14 +680,14 @@ func TestOneSeatsFailureDoesNotCostTheOthers(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
 	withCreate(ws)
-	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-minted",
+	ws.replies["oauth.v2.access"] = `{"ok":true,"app_id":"A0SWE","access_token":"xoxb-minted",
 		"bot_user_id":"U0BOTSWE","team":{"id":"T0ACME"}}`
 
 	o := &org.Organization{Name: "nimbus", Roles: []*org.Role{
 		{Name: "Engineer", DeclaredHandle: "swe", Slack: org.SlackIdentity{
-			BotToken: "${SWE_SLACK_TOKEN}", SigningSecret: "${SWE_SLACK_SIGNING}"}},
+			BotToken: "${SLACK_BOT_TOKEN_SWE}", SigningSecret: "${SLACK_SIGNING_SECRET_SWE}"}},
 		{Name: "Reviewer", DeclaredHandle: "qa", Slack: org.SlackIdentity{
-			BotToken: "${QA_SLACK_TOKEN}", SigningSecret: "${QA_SLACK_SIGNING}"}},
+			BotToken: "${SLACK_BOT_TOKEN_QA}", SigningSecret: "${SLACK_SIGNING_SECRET_QA}"}},
 	}}
 	o.Normalize()
 	recorder := newSink()
@@ -717,7 +717,7 @@ func TestOneSeatsFailureDoesNotCostTheOthers(t *testing.T) {
 	if len(res.Installed) != 1 || res.Installed[0] != "qa" {
 		t.Fatalf("the healthy seat did not finish: %+v", res.Installed)
 	}
-	if got := recorder.value("QA_SLACK_TOKEN"); got != "xoxb-minted" {
+	if got := recorder.value("SLACK_BOT_TOKEN_QA"); got != "xoxb-minted" {
 		t.Errorf("the healthy seat's token = %q", got)
 	}
 	// And what completed is durable, so a re-run resumes rather than
@@ -742,9 +742,9 @@ func TestNarrowingTheRunSkipsEveryOtherSeat(t *testing.T) {
 
 	o := &org.Organization{Name: "nimbus", Roles: []*org.Role{
 		{Name: "Engineer", DeclaredHandle: "swe", Slack: org.SlackIdentity{
-			BotToken: "${SWE_SLACK_TOKEN}", SigningSecret: "${SWE_SLACK_SIGNING}"}},
+			BotToken: "${SLACK_BOT_TOKEN_SWE}", SigningSecret: "${SLACK_SIGNING_SECRET_SWE}"}},
 		{Name: "Reviewer", DeclaredHandle: "qa", Slack: org.SlackIdentity{
-			BotToken: "${QA_SLACK_TOKEN}", SigningSecret: "${QA_SLACK_SIGNING}"}},
+			BotToken: "${SLACK_BOT_TOKEN_QA}", SigningSecret: "${SLACK_SIGNING_SECRET_QA}"}},
 	}}
 	o.Normalize()
 	path := filepath.Join(t.TempDir(), slack.LedgerName)
@@ -842,7 +842,7 @@ func TestReplacingADeadAppForcesAFreshInstall(t *testing.T) {
 	if len(res.Installed) != 1 {
 		t.Fatalf("the replacement was not installed: %+v", res)
 	}
-	if got := s.value("SWE_SLACK_TOKEN"); got != "xoxb-second" {
+	if got := s.value("SLACK_BOT_TOKEN_SWE"); got != "xoxb-second" {
 		t.Errorf("the seat still holds %q", got)
 	}
 }
@@ -929,7 +929,7 @@ func TestAFullyHandSeededEntryIsAdopted(t *testing.T) {
 	if len(res.Created) != 0 {
 		t.Errorf("an adopted app was re-created: %+v", res)
 	}
-	if got := s.value("SWE_SLACK_TOKEN"); got != "xoxb-adopted" {
+	if got := s.value("SLACK_BOT_TOKEN_SWE"); got != "xoxb-adopted" {
 		t.Errorf("the adopted app's token is %q", got)
 	}
 }
@@ -958,20 +958,22 @@ func TestACodeBelongingToAnotherAppIsRefusedAndRecordsNothing(t *testing.T) {
 	if !strings.Contains(err.Error(), "A0CTO") || !strings.Contains(err.Error(), "A0SWE") {
 		t.Errorf("the error names neither app: %v", err)
 	}
-	if got := s.value("SWE_SLACK_TOKEN"); got != "" {
+	if got := s.value("SLACK_BOT_TOKEN_SWE"); got != "" {
 		t.Errorf("the wrong app's token was recorded: %q", got)
 	}
 }
 
-// AN INSTANCE THAT SERVES NO app_id IS NOT A MISMATCH. The guard has to be a
-// comparison, not a requirement — an unknown answer must not fail an install
-// that is fine.
-func TestAnExchangeThatNamesNoAppStillInstalls(t *testing.T) {
+// AN EXCHANGE THAT NAMES NO APP IS REFUSED, and its token revoked: the check
+// is what keeps one agent's token out of another's seat, and an answer that
+// cannot say whose token it minted has not passed it. Slack's oauth.v2.access
+// names the app on every install.
+func TestAnExchangeThatNamesNoAppIsRefused(t *testing.T) {
 	t.Parallel()
 	ws := newWorkspace(t)
 	withCreate(ws)
-	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-fine",
+	ws.replies["oauth.v2.access"] = `{"ok":true,"access_token":"xoxb-unnamed",
 		"bot_user_id":"U0BOT","team":{"id":"T0"}}`
+	ws.replies["auth.revoke"] = `{"ok":true,"revoked":true}`
 	s := newSink()
 	res, _, _, err := run(t, ws, func(o *slack.Options) {
 		o.Sink = s
@@ -979,11 +981,11 @@ func TestAnExchangeThatNamesNoAppStillInstalls(t *testing.T) {
 			return "code", nil
 		}
 	})
-	if err != nil {
-		t.Fatalf("Reconcile: %v", err)
+	if err == nil || len(res.Installed) != 0 || s.value("SLACK_BOT_TOKEN_SWE") != "" {
+		t.Errorf("an unnamed app's token: err %v, result %+v", err, res)
 	}
-	if len(res.Installed) != 1 || s.value("SWE_SLACK_TOKEN") != "xoxb-fine" {
-		t.Errorf("result = %+v, token = %q", res, s.value("SWE_SLACK_TOKEN"))
+	if ws.called("auth.revoke") != 1 {
+		t.Error("the token nobody could place was left live")
 	}
 }
 

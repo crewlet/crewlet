@@ -418,9 +418,16 @@ func (s SlackIdentity) IsZero() bool { return s == SlackIdentity{} }
 // returns its id, slug, key and webhook secret exactly once, at conversion
 // time. What a person does is click through the creation and the install.
 type GitHubApp struct {
-	// Tier is how much of a repository this seat may do. Empty is the
-	// least this engine hands out, which is the right answer for a seat
-	// nobody has thought about yet.
+	// Enabled is the seat's stored on or off. Off suspends the installation
+	// and keeps the app (D1), and an off seat is issued no token.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
+	// Permissions are the App permissions this seat's tokens carry, by
+	// GitHub's key, each `read` or `write`; a key left out is No access.
+	Permissions map[string]string `yaml:"permissions,omitempty" json:"permissions,omitempty"`
+
+	// Tier is the retired word for this seat's access, which only the
+	// migration to Permissions reads.
 	Tier string `yaml:"tier,omitempty" json:"tier,omitempty"`
 
 	// Repos are the repositories this seat works in, as owner/name. Empty
@@ -428,8 +435,8 @@ type GitHubApp struct {
 	// operator chose when they installed the app.
 	Repos []string `yaml:"repos,omitempty" json:"repos,omitempty"`
 
-	// Workflows is the seat's opt-in to `workflows: write`, which only full
-	// access carries.
+	// Workflows is the retired opt-in to `workflows: write` beside Tier,
+	// which only the migration reads.
 	Workflows bool `yaml:"workflows,omitempty" json:"workflows,omitempty"`
 
 	// AppID and AppSlug are the app GitHub created. The SLUG is what the

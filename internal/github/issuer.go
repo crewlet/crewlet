@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // An agent acts on GitHub as its OWN app, with a token issued at use.
@@ -62,14 +62,13 @@ const (
 //
 // ONE NAMING, for the values the app's creation seals and for the token the
 // engine issues, so the three cannot drift into two grammars. It is
-// [setup.SecretNameFor]'s, which puts the vendor first: a handle beginning
+// [seataccess.SinkName]'s, the name the access sync seals under, which puts
+// the vendor first: a handle beginning
 // with a digit (`7th-engineer`, which the org model accepts) would
 // otherwise make a name no `${VAR}` can reference (see that function).
 // `senior-engineer`'s token is GITHUB_APP_TOKEN_SENIOR_ENGINEER.
 func SeatVar(handle, field string) string {
-	return setup.SecretNameFor(integration.KindGitHub, setup.Requirement{
-		Field: field, Seat: handle,
-	})
+	return seataccess.SinkName(integration.KindGitHub, field, handle)
 }
 
 // Token lifetimes a caller asks the [Issuer] for.
@@ -109,6 +108,10 @@ const (
 // step a person takes at GitHub or in the dashboard, which the seat-app
 // reconcile reports on the integration's card ([ReconcileSeatApps]).
 var ErrNotInstalled = errors.New("github: this agent's app is not created and installed yet")
+
+// ErrSeatOff reports a seat switched off on GitHub (D1): it is issued no
+// token until it is turned back on from the integration's Agents tab.
+var ErrSeatOff = errors.New("github: this agent is turned off on GitHub")
 
 // Issuer holds the installation tokens this process has minted, one per
 // installation and scope, and mints again when one runs short.
@@ -183,7 +186,7 @@ const refusalForgotten = time.Hour
 // set of repositories must never be handed to a caller asking for another.
 type issueKey struct {
 	app, installation int64
-	access            Access
+	perms             string
 	repos             string
 }
 
@@ -195,7 +198,7 @@ func keyOf(seat SeatApp) issueKey {
 	slices.Sort(repos)
 	return issueKey{
 		app: seat.AppID, installation: seat.InstallationID,
-		access: seat.Access(), repos: strings.Join(slices.Compact(repos), ","),
+		perms: seat.Permissions.key(), repos: strings.Join(slices.Compact(repos), ","),
 	}
 }
 
@@ -206,11 +209,11 @@ func (i *Issuer) now() time.Time {
 	return time.Now().UTC()
 }
 
-// Issuable reports whether seat's app can issue a token at all: created,
+// Issuable reports whether seat's app can issue a token at all: on, created,
 // installed, and holding a key. A seat for which this is false is waiting on
 // a person, never on GitHub.
 func Issuable(seat SeatApp) bool {
-	return seat.AppID != 0 && seat.InstallationID != 0 && strings.TrimSpace(seat.Key) != ""
+	return !seat.Off && seat.AppID != 0 && seat.InstallationID != 0 && strings.TrimSpace(seat.Key) != ""
 }
 
 // Token is a token for seat's app that stays good for at least life, from
@@ -230,6 +233,9 @@ func Issuable(seat SeatApp) bool {
 func (i *Issuer) Token(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp, life time.Duration,
 ) (InstallationToken, error) {
+	if seat.Off {
+		return InstallationToken{}, ErrSeatOff
+	}
 	if !Issuable(seat) {
 		return InstallationToken{}, ErrNotInstalled
 	}
