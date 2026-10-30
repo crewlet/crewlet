@@ -1,28 +1,38 @@
 /**
  * One third-party app's detail: its header with the engine's word for its
- * state and its counts, then Overview, Agents, Activity and Settings. Its
- * settings form opens in place of the tabs, so connecting, finishing setup and
- * replacing a key happen in the pane with the directory still beside it.
+ * state and four facts, then Agents, Activity and Settings, with "Check now"
+ * at the row's far end on every tab. Its settings form opens in place of the
+ * tabs, so connecting, finishing setup and replacing a key happen in the pane
+ * with the directory still beside it.
+ *
+ * AGENTS FIRST. What an integration is for is which agents work in it and with
+ * what access, so the Agents tab opens by default and carries what used to be
+ * an overview of its own: the issues that need a person and the notes the
+ * loop left.
  */
 
 import { useMemo, useState } from "react";
-import { Button, List, StatusDot, Tabs } from "@crewlethq/ui";
+import { Button, List, Tabs } from "@crewlethq/ui";
+import { RotateCwGlyph } from "@crewlethq/icons/glyphs";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
 import { VendorMark } from "@crewlethq/icons";
+import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { asSentence, plural } from "~/lib/format.ts";
+import { asSentence } from "~/lib/format.ts";
 import { SetupForm } from "../SetupForm.tsx";
-import { SetupPasses, SurfaceDeliveries, integrationFacts } from "./catalogue.tsx";
-import { workingLine, type Intent, type Model, type Tool } from "./model.ts";
+import { SeatStep, SetupPasses, SurfaceDeliveries, integrationFacts } from "./catalogue.tsx";
+import type { Intent, Model, Tool } from "./model.ts";
 import {
   actionName,
-  AgentList,
   BeforeYouStart,
   BucketTag,
   DocsLink,
   IssueRow,
   SettingsSummary,
 } from "./parts.tsx";
+import { useAccess } from "./access/api.ts";
+import { AgentsAccess } from "./access/AgentsAccess.tsx";
+import { needsAttention, statusOf } from "./access/logic.ts";
 
 /** The tool's one primary action, worded for what it opens. */
 function PrimaryAction({
@@ -70,27 +80,48 @@ export function AppPane({
   tool: Tool;
   model: Model;
   onDisconnect: () => void;
-  /** Open the settings form on arrival: the landing's Connect sends a reader here to connect. */
+  /** Open the settings form on arrival, or the Agents tab: the landing and the home send a reader here. */
   arrive?: Intent | undefined;
 }) {
   const now = useNow();
   // ONLY WHERE THE INTENT CAN BE TAKEN: an arrival asking to connect a tool
   // whose form cannot open lands on the page, which says why.
-  const [open, setOpen] = useState<Intent | null>(arrive && !tool.blocked ? arrive : null);
-  const [tab, setTab] = useState("overview");
+  const [open, setOpen] = useState<Intent | null>(
+    arrive && arrive !== "agents" && !tool.blocked ? arrive : null,
+  );
+  const [tab, setTab] = useState("agents");
+  const [checking, setChecking] = useState(false);
+  const access = useAccess(tool.configured ? tool.entry.key : null);
+  const data = access.data;
+
+  // WHAT THE AGENTS TAB SAYS, counted once for the header and the tab's marker.
+  const counts = useMemo(() => {
+    if (!data) return null;
+    let on = 0;
+    let waiting = 0;
+    for (const seat of data.seats) {
+      if (data.lanes.some((l) => seat.lanes[l.key]?.desired.enabled)) on++;
+      if (
+        data.lanes.some((l) => {
+          const saved = seat.lanes[l.key];
+          return saved !== undefined && needsAttention(statusOf(l, saved, false, data.syncing));
+        })
+      )
+        waiting++;
+    }
+    return { on, of: data.seats.length, waiting };
+  }, [data]);
+
   const facts = useMemo<Fact[] | undefined>(() => {
     if (!tool.configured) return undefined;
-    const ready = tool.seats.filter((s) => s.status === "ready").length;
     return [
-      ...(tool.seats.length > 0
-        ? [{ label: "Agents ready", value: `${ready} of ${tool.seats.length}` }]
-        : []),
+      ...(counts ? [{ label: "Agents on it", value: `${counts.on} of ${counts.of}` }] : []),
       ...integrationFacts(tool.entry, model.rows, now, {
         known: model.trafficKnown,
         since: model.trafficSince,
       }),
     ];
-  }, [tool, model, now]);
+  }, [tool, model, now, counts]);
 
   const header = (
     <ObjectHeader
@@ -109,17 +140,7 @@ export function AppPane({
             {tool.configured && (
               <Button
                 size="small"
-                variant="secondary"
-                disabledReason={tool.blocked}
-                onClick={() => !tool.blocked && setOpen("settings")}
-              >
-                Settings
-              </Button>
-            )}
-            {tool.configured && (
-              <Button
-                size="small"
-                variant="ghost"
+                variant="danger"
                 disabledReason={model.managed ?? undefined}
                 onClick={() => {
                   if (!model.managed) onDisconnect();
@@ -160,12 +181,15 @@ export function AppPane({
     );
   }
 
-  const waiting = tool.seats.filter((s) => s.status !== "ready").length;
   // WHICH SURFACES A PASS CAN EVEN RUN AGAINST: the setup listing's kinds,
   // which the runs route is keyed on. `forge` is a surface and not a kind.
   const kinds = tool.entry.surfaces
     .filter((s) => tool.sections.some((x) => x.tool.key === s.key))
     .map((s) => s.key);
+  const held = model.managed ?? (model.admin ? undefined : "Admins change an agent's access.");
+  const steps = new Map(
+    tool.seats.filter((r) => r.seat?.step && r.toolKey).map((r) => [r.handle, r]),
+  );
   return (
     <>
       {header}
@@ -176,27 +200,49 @@ export function AppPane({
         onValueChange={setTab}
         items={[
           {
-            value: "overview",
-            label: "Overview",
-            ...(tool.issues.length > 0
+            value: "agents",
+            label: "Agents",
+            count: counts?.of ?? tool.seats.length,
+            ...(tool.issues.length > 0 || (counts?.waiting ?? 0) > 0 || data?.notice
               ? { marker: { tone: "warning" as const, label: "Needs attention" } }
               : {}),
           },
-          { value: "agents", label: "Agents", count: tool.seats.length },
           { value: "activity", label: "Activity" },
           { value: "settings", label: "Settings" },
         ]}
+        actions={
+          // ONLY WHERE A PASS RUNS: a guarded reader has no loop to ask.
+          model.guarded ? undefined : (
+            <Button
+              size="small"
+              variant="ghost"
+              leadingIcon={<RotateCwGlyph size="sm" />}
+              loading={checking}
+              disabledReason={model.managed ?? (data?.syncing ? "A sync is running." : undefined)}
+              onClick={async () => {
+                if (model.managed) return;
+                setChecking(true);
+                try {
+                  await model.check(tool);
+                } finally {
+                  void access.reload({ quiet: true });
+                  setChecking(false);
+                }
+              }}
+            >
+              Check now
+            </Button>
+          )
+        }
       />
-      {tab === "overview" && (
+      {tab === "agents" && (
         <div className="int-tab">
-          {tool.issues.length > 0 ? (
+          {tool.issues.length > 0 && (
             <div className="int-issues">
               {tool.issues.map((issue) => (
                 <IssueRow key={issue.key} tool={tool} issue={issue} onFix={setOpen} />
               ))}
             </div>
-          ) : (
-            <StatusDot tone="success">{workingLine(tool)}</StatusDot>
           )}
           {/* ADVISORIES ARE SAID, never raised: the tool works, and what the
               loop noticed (an access wider than asked) is worth reading once. */}
@@ -212,18 +258,34 @@ export function AppPane({
               </List>
             </section>
           )}
-          {waiting > 0 && (
-            <Button size="small" variant="secondary" onClick={() => setTab("agents")}>
-              {waiting === 1
-                ? "One agent is not ready"
-                : `${plural(waiting, "agent")} are not ready`}
-            </Button>
-          )}
-        </div>
-      )}
-      {tab === "agents" && (
-        <div className="int-tab">
-          <AgentList tool={tool} model={model} />
+          <QueryState
+            error={access.code}
+            refusal={access.refusal}
+            loading={access.loading && !data}
+          >
+            {data && (
+              <AgentsAccess
+                kind={tool.entry.key}
+                name={tool.entry.name}
+                data={data}
+                reload={() => void access.reload({ quiet: true })}
+                held={held}
+                avatarOf={model.avatarOf}
+                onReplaceKey={() => setOpen("rotate")}
+                stepFor={(handle) => {
+                  const row = steps.get(handle);
+                  return row?.seat && row.toolKey && !model.guarded ? (
+                    <SeatStep
+                      app={tool.entry.name}
+                      toolKey={row.toolKey}
+                      seat={row.seat}
+                      managed={model.managed}
+                    />
+                  ) : null;
+                }}
+              />
+            )}
+          </QueryState>
         </div>
       )}
       {tab === "activity" && (
@@ -243,6 +305,14 @@ export function AppPane({
       {tab === "settings" && (
         <div className="int-tab">
           <SettingsSummary tool={tool} />
+          <Button
+            size="small"
+            variant="secondary"
+            disabledReason={tool.blocked}
+            onClick={() => !tool.blocked && setOpen("settings")}
+          >
+            Edit settings
+          </Button>
           <DocsLink tool={tool} />
         </div>
       )}
