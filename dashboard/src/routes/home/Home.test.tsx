@@ -786,16 +786,18 @@ describe("the decisions", () => {
     ]);
   });
 
-  // A PARKED RUN'S ROW QUOTES ITS QUESTION'S TITLE, never the whole of it: an
-  // older build's question ran to paragraphs, and the row's one line carried
-  // every word of it. Its Answer reads the rest, and a run that asked to
-  // choose is answered there with one of its options.
+  // A PARKED RUN'S ROW QUOTES ITS QUESTION, never its context, which its
+  // Answer reads. An older build's free-text question runs past the title's
+  // cap, and the row's one line cuts it rather than carrying every word of it
+  // or splitting it at a sentence. A run that asked to choose is answered
+  // there with one of its options, naming the question it answers.
   //
-  // Mutation: quote `run.question` whole in the row, or send the option as
-  // `answer`, and this fails.
-  test("a parked run's row quotes its question's title and is answered with an option", async () => {
+  // Mutation: quote the context in the row, draw a long question uncut, or
+  // send the option as `answer`, and this fails.
+  test("a parked run's row quotes its question and is answered with an option", async () => {
     const parked = {
       turn_id: "turn-7",
+      launch_id: "q7",
       agent_handle: "cto",
       status: "awaiting_clarification",
       question: "May I delete the fixtures directory?",
@@ -816,8 +818,11 @@ describe("the decisions", () => {
     const legacy = {
       ...parked,
       turn_id: "turn-8",
-      question: "Which retry ceiling? The API allows five.\n\nThe client used three.",
-      question_context: undefined,
+      launch_id: "q8",
+      question:
+        "Which retry ceiling? The API allows five. " +
+        "The client used three, and the gateway retries twice on its own before either. ".repeat(4),
+      question_context: "",
       decision: undefined,
     };
     mount({
@@ -839,9 +844,10 @@ describe("the decisions", () => {
       (el) => el.textContent ?? "",
     );
     expect(subs.some((s) => s.includes("“May I delete the fixtures directory?”"))).toBe(true);
-    expect(subs.some((s) => s.includes("“Which retry ceiling?”"))).toBe(true);
-    expect(subs.join(" ")).not.toContain("The API allows five");
     expect(subs.join(" ")).not.toContain("make fixtures");
+    // THE LONG ONE WHOLE, CUT TO ONE LINE, never split at its first sentence.
+    const cut = document.querySelector(".decision-sub .crewlet-text--truncate");
+    expect(cut?.textContent).toBe(legacy.question.trim());
     const row = screen
       .getByText("“May I delete the fixtures directory?”", { exact: false })
       .closest(".decision-row") as HTMLElement;
@@ -856,7 +862,9 @@ describe("the decisions", () => {
       fireEvent.click(within(dialog).getByRole("button", { name: /Delete it/ }));
     });
     await settle();
-    expect(posted).toEqual([{ tool: "answer_run", args: { turn_id: "turn-7", choice: "delete" } }]);
+    expect(posted).toEqual([
+      { tool: "answer_run", args: { turn_id: "turn-7", launch_id: "q7", choice: "delete" } },
+    ]);
   });
 
   // "REVIEW" LANDS ON WHAT IT COUNTED. It pointed at the Inbox filtered on a

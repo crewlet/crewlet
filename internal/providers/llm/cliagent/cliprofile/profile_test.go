@@ -217,6 +217,9 @@ func TestASentinelWithNoLettersIsRefused(t *testing.T) {
 		{"an empty auth marker",
 			func(p *Profile) { p.AuthMarkers = []AuthMarker{{Sentinel: ""}} },
 			"auth_markers[0].sentinel is empty"},
+		{"an auth marker meaning nothing the API words",
+			func(p *Profile) { p.AuthMarkers = []AuthMarker{{Sentinel: "Not logged in", Meaning: "expired"}} },
+			"auth_markers[0].meaning"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -755,6 +758,30 @@ func TestALoginKeyDecidesWhetherAFileHoldsALogin(t *testing.T) {
 		if _, err := Load("copilot", map[string]any{"login_keys": tc.keys}); err == nil ||
 			!strings.Contains(err.Error(), tc.says) {
 			t.Errorf("%s: err = %v, want one saying %q", name, err, tc.says)
+		}
+	}
+}
+
+// WHAT A REFUSED SIGN-IN MEANT is read off the CLI's own words, first marker
+// first: Claude Code says "Not logged in" of a token it never used (one with a
+// space inside), and ends a revoked token's report in the same "Please run
+// /login" clause, which must not read as unused.
+func TestAnAuthFailureSaysWhatItMeant(t *testing.T) {
+	t.Parallel()
+	p, err := Load("claude-code", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for said, want := range map[string]AuthMeaning{
+		"Not logged in · Please run /login":                                     AuthUnread,
+		"OAuth token has been revoked · Please run /login":                      AuthRefused,
+		"Failed to authenticate. API Error: 401 OAuth access token is invalid.": AuthRefused,
+		"Login expired · Please run /login":                                     AuthRefused,
+		"Invalid API key · Fix external API key":                                AuthRefused,
+		"a sentence no marker names":                                            AuthRefused,
+	} {
+		if got := p.AuthMeaning(said); got != want {
+			t.Errorf("AuthMeaning(%q) = %q, want %q", said, got, want)
 		}
 	}
 }

@@ -254,6 +254,38 @@ func (s *Service) References(ctx context.Context) ([]config.Reference, store.Rev
 	return company.VariablesRead(), revision, nil
 }
 
+// Reads is, for each name, the paths of the fleet's revision that read it
+// ([config.Company.VariablesRead]): what a secret write asks before it decides
+// whether the revision has to be re-activated for the value to reach anything
+// (ADR-0070). A name nothing reads is absent from the answer, and with nothing
+// active nothing reads anything, which is an empty answer rather than an
+// error: a value sealed before the first import is read by the revision that
+// import activates, which resolves it then.
+//
+// ONE OPENING OF THE REVISION for every name, because a batch of sixty-four
+// names asked one at a time would decrypt the company sixty-four times to
+// answer one question.
+func (s *Service) Reads(ctx context.Context, names []string) (map[string][]string, error) {
+	refs, _, err := s.References(ctx)
+	if errors.Is(err, ErrNoActiveRevision) {
+		return map[string][]string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	asked := make(map[string]bool, len(names))
+	for _, name := range names {
+		asked[name] = true
+	}
+	out := map[string][]string{}
+	for _, ref := range refs {
+		if asked[ref.Name] {
+			out[ref.Name] = append(out[ref.Name], ref.Path)
+		}
+	}
+	return out, nil
+}
+
 // ActiveRevision is the id of the fleet's revision ([Service.current]),
 // whichever one this node runs.
 //

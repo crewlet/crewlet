@@ -397,7 +397,7 @@ func TestARejectedBundleLeavesNothingBehind(t *testing.T) {
 	t.Parallel()
 	p := loginProvider(t)
 	// A good entry FIRST, then one the name check refuses.
-	blob, err := packBundle(p.agent, []bundleFile{
+	blob, err := packBundle(bundleManifest{Agent: p.agent}, []bundleFile{
 		{name: "creds.json", data: []byte(`{"token":"real"}`)},
 		{name: "../../.ssh/authorized_keys", data: []byte("pwned")},
 	})
@@ -772,7 +772,7 @@ func TestNoBuiltinProfileShipsACredentialLogin(t *testing.T) {
 // as the CLI it was exported from, through the export's own writer.
 func bundleOf(t *testing.T, agent, name, body string) string {
 	t.Helper()
-	blob, err := packBundle(agent, []bundleFile{{name: name, data: []byte(body)}})
+	blob, err := packBundle(bundleManifest{Agent: agent}, []bundleFile{{name: name, data: []byte(body)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -865,7 +865,9 @@ func TestNoProfileBrokersAnAuthCommandAsAPrompt(t *testing.T) {
 // `crewlet llm logout`, and the flagship profile has to answer both.
 //
 // It answered neither: with no status_args the command failed with "this CLI
-// has no status command" for a CLI that has one, and with no logout_args
+// has no status command" for a CLI that has one (now JSON for the engine's
+// reading, [Provider.LoginStatus], and --text for the person reading
+// `crewlet llm status`), and with no logout_args
 // `logout` deleted the local files while leaving the session live at the
 // vendor — an operator who believed they had revoked a login had not.
 func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
@@ -875,12 +877,14 @@ func TestTheClaudeProfileCanBrokerInspectAndRevokeItsLogin(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	for label, want := range map[string][]string{
-		"login_args":  {"auth", "login", "--claudeai"},
-		"status_args": {"auth", "status", "--text"},
-		"logout_args": {"auth", "logout"},
+		"login_args":       {"auth", "login", "--claudeai"},
+		"status_args":      {"auth", "status"},
+		"status_text_args": {"auth", "status", "--text"},
+		"logout_args":      {"auth", "logout"},
 	} {
 		got := map[string][]string{
-			"login_args": p.LoginArgs, "status_args": p.StatusArgs, "logout_args": p.LogoutArgs,
+			"login_args": p.LoginArgs, "status_args": p.StatusArgs,
+			"status_text_args": p.StatusTextArgs, "logout_args": p.LogoutArgs,
 		}[label]
 		if strings.Join(got, " ") != strings.Join(want, " ") {
 			t.Errorf("claude-code %s = %q, want %q", label, got, want)

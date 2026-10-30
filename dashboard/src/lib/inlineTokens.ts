@@ -98,6 +98,7 @@
 import { safeHref } from "@crewlethq/ui";
 import type { LinkHost, LinkHostKind } from "~/contract/integrations.ts";
 import { overlapsAny, writtenOutSpans } from "./writtenOut.ts";
+import { linkSegment } from "./segment.ts";
 
 /** One token of a run, as [at, end) and what it is. */
 export type InlineToken =
@@ -147,7 +148,13 @@ function hexOf(digits: string): string {
 }
 
 const HEX_ONLY = /^#([0-9a-f]{3}|[0-9a-f]{6})$/iu;
-const RGB_ONLY = /^rgb\(\s*(\d{1,3})\s*,?\s*(\d{1,3})\s*,?\s*(\d{1,3})\s*\)$/iu;
+/**
+ * `rgb(r, g, b)`, its commas optional. ONE WAY TO READ EACH RUN OF SPACES:
+ * written `\s*,?\s*`, a run with no comma could be split between the two
+ * `\s*` in every way, and a code span of `rgb(1`, 20,000 spaces and a letter
+ * took 640 ms to refuse. Spaces after a comma belong to the comma's group.
+ */
+const RGB_ONLY = /^rgb\(\s*(\d{1,3})\s*(?:,\s*)?(\d{1,3})\s*(?:,\s*)?(\d{1,3})\s*\)$/iu;
 
 /**
  * The colour a code span holds when it holds nothing else, as `#rrggbb`, or
@@ -530,6 +537,17 @@ function shortAddress(url: URL): string {
   return shown.length > ADDRESS_LABEL_MAX ? `${shown.slice(0, ADDRESS_LABEL_MAX - 1)}…` : shown;
 }
 
+/**
+ * `path` with its trailing slashes taken off, by one walk back. A pattern
+ * (`/\/+$/`) searched from every slash in a run of them, each to fail at the
+ * next character that is not one.
+ */
+function withoutTrailingSlashes(path: string): string {
+  let end = path.length;
+  while (end > 0 && path[end - 1] === "/") end--;
+  return path.slice(0, end);
+}
+
 /** The path under `base` when `url` is at it (host and path prefix), else null. */
 function under(url: URL, base: string): string[] | null {
   let root: URL;
@@ -539,7 +557,7 @@ function under(url: URL, base: string): string[] | null {
     return null;
   }
   if (url.host.toLowerCase() !== root.host.toLowerCase()) return null;
-  const prefix = root.pathname.replace(/\/+$/, "");
+  const prefix = withoutTrailingSlashes(root.pathname);
   if (prefix !== "" && url.pathname !== prefix && !url.pathname.startsWith(`${prefix}/`))
     return null;
   return segments(url.pathname.slice(prefix.length));
@@ -628,7 +646,18 @@ function underApp(
  */
 function rebuilt(base: string | null, parts: readonly string[]): string | null {
   if (base === null || !parts.every((p) => SEGMENT.test(p))) return null;
-  return safeHref(`${base}/${parts.map((p) => encodeURIComponent(p)).join("/")}`);
+  const path = segmentsOf(parts);
+  return path === null ? null : safeHref(`${base}/${path}`);
+}
+
+/**
+ * `parts` as the path of a link, each one segment ([linkSegment]), or null
+ * where one cannot be: a title or a name of dots alone is drawn as words,
+ * never as an address that goes to the page above.
+ */
+function segmentsOf(parts: readonly string[]): string | null {
+  const segments = parts.map(linkSegment);
+  return segments.every((s) => s !== null) ? segments.join("/") : null;
 }
 
 /** A host at a domain or under it, on a dot: `acme.slack.com` is Slack's, `slack.com.evil.test` is not. */
@@ -928,8 +957,8 @@ export function referenceTarget(
         : sep === "!"
           ? `-/merge_requests/${id}`
           : `-/issues/${id}`;
-  const encoded = segments.map((part) => encodeURIComponent(part)).join("/");
-  return { vendor, href: safeHref(`${base}/${encoded}/${tail}`) };
+  const encoded = segmentsOf(segments);
+  return { vendor, href: encoded === null ? null : safeHref(`${base}/${encoded}/${tail}`) };
 }
 
 /** The code host whose `owners` hold `owner` (any case), or null for none or two. */
@@ -953,7 +982,8 @@ export function repositoryTarget(
 ): ReferenceTarget | null {
   const host = ownerHost(owner, hosts);
   if (host === null) return null;
-  const href = safeHref(`${host.url}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`);
+  const path = segmentsOf([owner, repo]);
+  const href = path === null ? null : safeHref(`${host.url}/${path}`);
   return { vendor: host.kind as "github" | "gitlab", href };
 }
 

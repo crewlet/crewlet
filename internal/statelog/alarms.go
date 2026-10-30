@@ -193,6 +193,22 @@ const (
 	// do, and [Census.Background] is where they are counted. [Census]
 	// turns both into one log's figure.
 	LinearizableReadsPerSeatDay = 125
+
+	// CredentialNoticeDays and CredentialWarningDays are how far ahead a
+	// model credential's expiry is said: thirty days as a notice, seven as
+	// a warning. FIXED BY THE OWNER, with no setting and no route: a
+	// one-year token rotated by a person needs a month's notice to be
+	// rotated calmly and a week's to be rotated at all, and a knob here
+	// would be a second opinion about a date the vendor already fixed.
+	CredentialNoticeDays  = 30
+	CredentialWarningDays = 7
+
+	// LimitWaitingGrace is how long a seat may wait parked on a model's
+	// limit before the limit is a person's problem: FIFTEEN MINUTES, fixed
+	// by the owner, and equal to the provider park's longest re-probe step
+	// (cliagent's limitBackoff), so a park that has outlived the slowest
+	// re-probe is one the engine will not end on its own soon.
+	LimitWaitingGrace = 15 * time.Minute
 )
 
 // ReadModel is what one domain DECLARES about the linearizable reads its log
@@ -321,6 +337,13 @@ const (
 
 	KindObjectsBucketNearCeiling Kind = "objects_bucket_near_ceiling"
 	KindObjectiveBurn            Kind = "objective_burn"
+
+	// The model kinds, each about ONE model entry ([PerEntryKinds]).
+	KindLLMCredentialExpiring    Kind = "llm_credential_expiring"
+	KindLLMCredentialExpiresSoon Kind = "llm_credential_expires_soon"
+	KindLLMSignInRefused         Kind = "llm_sign_in_refused"
+	KindLLMLimit                 Kind = "llm_limit"
+	KindLLMLimitWaiting          Kind = "llm_limit_waiting"
 )
 
 // Reading is everything an alarm evaluation looks at, gathered once per tick.
@@ -599,6 +622,49 @@ type Reading struct {
 	// borrows the decision whole (ADR-0015) rather than restating a factor
 	// beside the one the objectives declare.
 	ObjectiveBurns []objectives.Burn
+
+	// Models is each configured model entry's condition across the fleet,
+	// and ModelsAt the instant it was gathered, which the expiry and the
+	// waiting thresholds are measured against. A zero ModelsAt is a node
+	// that gathered none, which evaluates no model alarm.
+	//
+	// FLEET-WIDE INPUTS where the fact is the fleet's: a limit met on one
+	// node and a refusal on another are both the entry's, so every data
+	// node reads the live leases' model rows and the secret store's write
+	// instants alike, as `backup_age` reads the fleet's one backup register.
+	// [ModelCondition.NoSignIn] is the gathering node's own reading.
+	Models   []ModelCondition
+	ModelsAt time.Time
+}
+
+// ModelCondition is one model entry's condition, gathered across the fleet.
+type ModelCondition struct {
+	// Key is the entry's key, and Variable the variable its credential is
+	// read from ("" where it reads none).
+	Key, Variable string
+
+	// ExpiresAt is when its credential expires, zero when that is unknown:
+	// a key, an environment value, a login, or a CLI that declares no
+	// lifetime.
+	ExpiresAt time.Time
+
+	// RefusedAt is the latest auth failure on any live node when it is
+	// newer than the latest answer on any node, zero otherwise; RefusedSaid
+	// is what the CLI said then.
+	RefusedAt   time.Time
+	RefusedSaid string
+
+	// NoSignIn is an entry nothing signs in on the gathering node while a
+	// seat or the assistant names it. An entry nobody runs is no alarm.
+	NoSignIn bool
+
+	// SittingOut is the latest window it sits out across live nodes, nil
+	// when it sits out none.
+	SittingOut *coord.ModelSitOut
+
+	// WaitingSince is the earliest instant a seat was parked on a chain
+	// naming it, across live nodes; zero when none waits.
+	WaitingSince time.Time
 }
 
 // Alarm is one condition currently true on this node.
@@ -662,6 +728,27 @@ type Alarm struct {
 	// things an operator has to be told started and ended, which a line per
 	// kind folded into one.
 	Domains []AlarmDomain `json:"domains,omitempty"`
+
+	// Entries is every model entry this alarm stands on, for a condition
+	// about one entry ([PerEntryKinds]), the analogue of Domains: one alarm
+	// per kind with its entries in it, leading with the longest-standing
+	// entry's detail, and one pair of log lines per entry. Empty for every
+	// other kind.
+	Entries []AlarmEntry `json:"entries,omitempty"`
+}
+
+// AlarmEntry is one model entry an alarm stands on.
+type AlarmEntry struct {
+	// Key is the entry's key in `providers.llm`.
+	Key string `json:"key"`
+
+	// Detail is this entry's own measurement.
+	Detail string `json:"detail"`
+
+	// Since is when the condition began for this entry: the report that
+	// opened a sit-out, the first park, the refusal, or the instant an
+	// expiry came within the alarm's threshold.
+	Since time.Time `json:"since,omitzero"`
 }
 
 // AlarmDomain is one measurement an alarm stands on, and the logs it was
@@ -716,6 +803,13 @@ type rule struct {
 	// directions — a flag nothing checked would be the second opinion the
 	// table exists to prevent.
 	perLog bool
+	// perEntry marks a condition about ONE MODEL ENTRY: entry is evaluated
+	// once per [Reading.Models] row at [Reading.ModelsAt], and the entries it
+	// holds for are listed under the kind's one alarm ([Alarm.Entries]),
+	// whose log lines the [Tracker] writes per entry. fires is unused on
+	// such a row.
+	perEntry bool
+	entry    func(m ModelCondition, now time.Time) (detail string, since time.Time, firing bool)
 }
 
 // table is every alarm this engine can raise, in the order they are reported.
@@ -1258,6 +1352,139 @@ var table = []rule{
 			"The alarm clears within minutes of the fault ending, once the short window " +
 			"is healthy again.",
 	},
+	{
+		kind:     KindLLMCredentialExpiring,
+		perEntry: true,
+		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+			left := m.ExpiresAt.Sub(now)
+			return expiryDetail(m, left), m.ExpiresAt.Add(-CredentialNoticeDays * day),
+				!m.ExpiresAt.IsZero() && left <= CredentialNoticeDays*day && left > CredentialWarningDays*day
+		},
+		remedy: modelRemedy("Rotate the credential before it expires: Settings › Models › the " +
+			"entry › Rotate tests the new value before it replaces the old one, and the " +
+			"models that read it switch to it at once."),
+	},
+	{
+		kind:     KindLLMCredentialExpiresSoon,
+		perEntry: true,
+		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+			left := m.ExpiresAt.Sub(now)
+			return expiryDetail(m, left), m.ExpiresAt.Add(-CredentialWarningDays * day),
+				!m.ExpiresAt.IsZero() && left <= CredentialWarningDays*day && left > 0
+		},
+		remedy: modelRemedy("Rotate the credential now: Settings › Models › the entry › " +
+			"Rotate. Once it expires every seat on the model is refused."),
+	},
+	{
+		kind:     KindLLMSignInRefused,
+		perEntry: true,
+		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+			switch {
+			case !m.RefusedAt.IsZero():
+				detail := fmt.Sprintf("%s's sign-in was refused at %s", m.Key,
+					m.RefusedAt.UTC().Format(time.RFC3339))
+				if m.RefusedSaid != "" {
+					detail += ": " + m.RefusedSaid
+				}
+				return detail, m.RefusedAt, true
+			case !m.ExpiresAt.IsZero() && !now.Before(m.ExpiresAt):
+				return fmt.Sprintf("%s's %s expired on %s", m.Key, credentialName(m),
+					m.ExpiresAt.UTC().Format("2 Jan 2006")), m.ExpiresAt, true
+			case m.NoSignIn:
+				return fmt.Sprintf("nothing signs %s in on this node, and a seat or "+
+					"the assistant runs on it", m.Key), time.Time{}, true
+			}
+			return "", time.Time{}, false
+		},
+		remedy: modelRemedy("Give the model a credential that signs in: Settings › Models › " +
+			"the entry › Rotate for a token or a key, or sign the CLI in on the node " +
+			"(`crewlet llm login <key>`) for a host login. Every call on it is refused " +
+			"until then, and its seats fall back to the next entry in their chain if " +
+			"they have one."),
+	},
+	{
+		kind:     KindLLMLimit,
+		perEntry: true,
+		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+			out := m.SittingOut
+			if out == nil || !now.Before(out.Until) {
+				return "", time.Time{}, false
+			}
+			waiting := !m.WaitingSince.IsZero() && now.Sub(m.WaitingSince) >= LimitWaitingGrace
+			return limitDetail(m.Key, out), out.Since, !waiting
+		},
+		remedy: modelRemedy("Nothing, if the plan's limit is expected: the engine tries the " +
+			"model again on its own and its seats fall back meanwhile. To end it now, " +
+			"Settings › Models › the entry › Retry asks the vendor once, and Clear " +
+			"stops every node sitting it out."),
+	},
+	{
+		kind:     KindLLMLimitWaiting,
+		perEntry: true,
+		entry: func(m ModelCondition, now time.Time) (string, time.Time, bool) {
+			if m.WaitingSince.IsZero() {
+				return "", time.Time{}, false
+			}
+			waited := now.Sub(m.WaitingSince)
+			detail := fmt.Sprintf("a seat has waited %s parked on %s's limit, with no "+
+				"entry in its chain to fall back to", spoken(waited), m.Key)
+			if m.SittingOut != nil {
+				detail += "; " + limitDetail(m.Key, m.SittingOut)
+			}
+			return detail, m.WaitingSince, waited >= LimitWaitingGrace
+		},
+		remedy: modelRemedy("Seats are not working. Add a fallback entry to their chain " +
+			"(a model on another sign-in), raise the plan, or wait for the reset the " +
+			"vendor named; Settings › Models › the entry › Retry asks the vendor once."),
+	},
+}
+
+// day is the unit the credential thresholds are written in.
+const day = 24 * time.Hour
+
+// modelRemedy is a model alarm's remedy, ending with the two places a person
+// reads the entry from: the page and the doctor.
+func modelRemedy(what string) string {
+	return what + " Settings › Models names the entry, and `crewlet llm doctor <key>` " +
+		"checks it end to end on a node."
+}
+
+// credentialName is how a model alarm names an entry's credential: its
+// variable, or "credential" where it reads none.
+func credentialName(m ModelCondition) string {
+	if m.Variable != "" {
+		return m.Variable
+	}
+	return "credential"
+}
+
+// expiryDetail says when an entry's credential expires and how far away that
+// is, in whole days rounded up, so seven days and an hour reads "8 days".
+func expiryDetail(m ModelCondition, left time.Duration) string {
+	days := int64((left + day - 1) / day)
+	unit := "days"
+	if days == 1 {
+		unit = "day"
+	}
+	return fmt.Sprintf("%s's %s expires on %s (%d %s)", m.Key, credentialName(m),
+		m.ExpiresAt.UTC().Format("2 Jan 2006"), days, unit)
+}
+
+// limitDetail says which limit an entry sits out and until when.
+func limitDetail(key string, out *coord.ModelSitOut) string {
+	window := out.Window
+	if window == "" || window == "unknown" {
+		window = "plan"
+	}
+	detail := fmt.Sprintf("%s sits out its %s limit until %s", key, window,
+		out.Until.UTC().Format(time.RFC3339))
+	if !out.ResetsAt.IsZero() {
+		detail += fmt.Sprintf(" (the vendor said it resets at %s)", out.ResetsAt.UTC().Format(time.RFC3339))
+	}
+	if out.Said != "" {
+		detail += ": " + out.Said
+	}
+	return detail
 }
 
 // Evaluate reports every alarm currently true, in the table's own order.
@@ -1269,11 +1496,43 @@ var table = []rule{
 func Evaluate(r Reading) []Alarm {
 	var out []Alarm
 	for _, rule := range table {
+		if rule.perEntry {
+			if a, firing := rule.evaluateEntries(r); firing {
+				out = append(out, a)
+			}
+			continue
+		}
 		if detail, firing := rule.fires(r); firing {
 			out = append(out, Alarm{Kind: rule.kind, Detail: detail, Remedy: rule.remedy})
 		}
 	}
 	return out
+}
+
+// evaluateEntries is a per-entry rule over every model row: one alarm listing
+// the entries it holds for, ordered by key, leading with the longest-standing
+// entry's detail (the earliest Since, ties to the lower key).
+func (rule rule) evaluateEntries(r Reading) (Alarm, bool) {
+	if r.ModelsAt.IsZero() {
+		return Alarm{}, false
+	}
+	var entries []AlarmEntry
+	for _, m := range r.Models {
+		if detail, since, firing := rule.entry(m, r.ModelsAt); firing {
+			entries = append(entries, AlarmEntry{Key: m.Key, Detail: detail, Since: since})
+		}
+	}
+	if len(entries) == 0 {
+		return Alarm{}, false
+	}
+	slices.SortFunc(entries, func(a, b AlarmEntry) int { return strings.Compare(a.Key, b.Key) })
+	lead := entries[0]
+	for _, e := range entries[1:] {
+		if e.Since.Before(lead.Since) {
+			lead = e
+		}
+	}
+	return Alarm{Kind: rule.kind, Detail: lead.Detail, Remedy: rule.remedy, Entries: entries}, true
 }
 
 // Frac is a measured fraction, for the two Reading fields whose zero value is
@@ -1294,6 +1553,17 @@ func PerLogKinds() []Kind {
 	var out []Kind
 	for _, rule := range table {
 		if rule.perLog {
+			out = append(out, rule.kind)
+		}
+	}
+	return out
+}
+
+// PerEntryKinds is the kinds evaluated once per model entry, in table order.
+func PerEntryKinds() []Kind {
+	var out []Kind
+	for _, rule := range table {
+		if rule.perEntry {
 			out = append(out, rule.kind)
 		}
 	}

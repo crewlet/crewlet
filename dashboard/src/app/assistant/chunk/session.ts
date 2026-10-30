@@ -46,7 +46,7 @@ import {
 } from "~/protocol/assistant.ts";
 import { assistantEventId, type AssistantNarrowFrame } from "~/protocol/assistantWire.ts";
 import { newActOpID } from "~/protocol/act.ts";
-import { RestError, isAbort } from "~/protocol/rest.ts";
+import { isAbort, pathSegment, RestError } from "~/protocol/rest.ts";
 import { rereadViewer } from "~/lib/viewer.ts";
 import { EVERY_QUESTION, session as floors, type SessionDomain } from "~/protocol/session.ts";
 import { writeFailed } from "~/protocol/writeOutcome.ts";
@@ -487,7 +487,7 @@ function rejoin(turnId?: string): void {
   if (!turn || turn.id === "" || view.id === null) return;
   if (turnId !== undefined && turn.id !== turnId) return;
   follow(
-    `/assistant/conversations/${encodeURIComponent(view.id)}/stream?turn=${encodeURIComponent(turn.id)}`,
+    `/assistant/conversations/${pathSegment(view.id)}/stream?${new URLSearchParams({ turn: turn.id })}`,
     turn.seq > 0 ? assistantEventId(turn.id, turn.seq) : undefined,
   );
 }

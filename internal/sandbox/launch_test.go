@@ -431,6 +431,46 @@ func TestAJobRecordsTheEntryItWasLaunchedOn(t *testing.T) {
 	}
 }
 
+// THE SIGN-IN A JOB WAS HANDED, AND WHY IT FOLLOWS THE JOB BEFORE IT, ARE THE
+// JOB'S: the collection compares the one against the entry's sign-in to tell a
+// refusal on a replaced credential from an ordinary one, and reads the other
+// so that a job already relaunched for that reason is not relaunched again. So
+// both survive the store's launch write, which rebuilds the record from
+// scratch, and a later launch replaces both with its own.
+//
+// Mutation: drop either from the store's rebuilt record, or let a launch keep
+// the previous job's reason, and this fails.
+func TestAJobRecordsTheSignInItWasHandedAndWhyItFollows(t *testing.T) {
+	t.Parallel()
+	rig := newWaiterRig(t)
+	req := launchReq("t1")
+	req.SignInID = "3f9a1c0e22b1d4"
+	if _, err := rig.launchVia(t.Context(), rig.manager, req); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := rig.get("t1").Launch; got.SignInID != "3f9a1c0e22b1d4" || got.FollowUp != "" {
+		t.Fatalf("the job's record = %+v, want the sign-in it was handed and no follow-up", got)
+	}
+
+	again := launchReq("t1")
+	again.SignInID = "77c0de11aa90"
+	again.Continue = &Continuation{Brief: "continue", Reason: FollowUpSignInReplaced}
+	if _, err := rig.launchVia(t.Context(), rig.manager, again); err != nil {
+		t.Fatalf("relaunch: %v", err)
+	}
+	if got := rig.get("t1").Launch; got.SignInID != "77c0de11aa90" || got.FollowUp != FollowUpSignInReplaced {
+		t.Fatalf("the relaunched job's record = %+v, want its own sign-in and its reason", got)
+	}
+
+	third := launchReq("t1")
+	if _, err := rig.launchVia(t.Context(), rig.manager, third); err != nil {
+		t.Fatalf("third launch: %v", err)
+	}
+	if got := rig.get("t1").Launch; got.SignInID != "" || got.FollowUp != "" {
+		t.Errorf("a plain launch after the follow-up kept %+v, want neither the sign-in nor the reason", got)
+	}
+}
+
 // A box that nothing names is billed for until its TTL and collected by
 // nobody. The launch kills its own box and the ending reclaims the box the row
 // names, which here are one box — killed by both, which a provider answers as

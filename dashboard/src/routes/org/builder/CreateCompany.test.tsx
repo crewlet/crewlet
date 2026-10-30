@@ -173,8 +173,8 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   expect(body._summary).toMatch(/^Created Nimbus in the organization builder \(write [0-9a-f]+\)$/);
 
   // What is left: the principles, on their own page in edit, and the two
-  // steps the builder cannot take, with the terminal steps for the one that has
-  // no screen at all: exactly the declaration the engine walks from a company
+  // steps the builder cannot take, with the terminal steps beside the model's
+  // own screen: exactly the declaration the engine walks from a company
   // only the store holds (`contract/providersteps.ts`), so a card drawn from
   // anything else is a card no gate has run.
   expect(await screen.findByText("The company is created")).toBeDefined();
@@ -184,6 +184,12 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   expect(screen.getByRole("link", { name: "Open Integrations" }).getAttribute("href")).toBe(
     "#/company/integrations",
   );
+  // The model is added on Settings › Models, signed in and tested there; the
+  // terminal steps stay folded beside it for a reader at the node's host.
+  expect(screen.getByRole("link", { name: "Add a model" }).getAttribute("href")).toBe(
+    "#/settings/models?flow=add",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Or from a terminal" }));
   expect(screen.getByText(/crewlet config export > company\.yaml/).textContent).toBe(
     PROVIDER_STEPS,
   );

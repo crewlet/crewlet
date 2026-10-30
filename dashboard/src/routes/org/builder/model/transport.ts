@@ -30,24 +30,23 @@
  * does not require it on a dry run); a save adds `_summary` to the body.
  */
 
+import type { ConfigAnswer } from "~/protocol/configAnswer.ts";
 import type { CompanyDocument } from "~/protocol/index.ts";
+import { pathSegment } from "~/lib/segment.ts";
 import { buildPatch, type IndexedDocument } from "./document.ts";
 
 /** Whether the builder edits the active company or creates the first one. */
 export type BuilderMode = "edit" | "create";
 
 /**
- * What the engine answered: its status, its parsed body and its entity tag.
- * Status 0 is a request that was never fully answered (unreachable, timed
- * out, or a body that broke part way through).
+ * What the engine answered: its status, its parsed body, its entity tag,
+ * whether it carried the engine's mark, and its `Retry-After` in whole
+ * seconds where it named a wait. Status 0 is a request that was never fully
+ * answered (unreachable, timed out, or a body that broke part way through).
+ * The ONE shape every /config reader shares (`ConfigAnswer`), so whose answer
+ * it is reaches the classifier by its type, not by chance.
  */
-export interface HttpAnswer {
-  readonly status: number;
-  readonly body: unknown;
-  readonly etag?: string | null;
-  /** Its `Retry-After` in whole seconds, null or absent where it named no wait. */
-  readonly retryAfter?: number | null;
-}
+export type HttpAnswer = ConfigAnswer;
 
 /** A configuration write or dry run, or a lead's read of their unit, ready for the transport. */
 export interface ConfigRequest {
@@ -63,7 +62,7 @@ export interface ConfigRequest {
 
 /** Where one unit is read and written: `/config/units/{key}`. */
 export function unitPath(key: string): string {
-  return `/config/units/${encodeURIComponent(key)}`;
+  return `/config/units/${pathSegment(key)}`;
 }
 
 /**

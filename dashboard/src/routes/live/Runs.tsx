@@ -72,7 +72,8 @@ import { WITHHELD_WHY, WITHHELD_WORDS, questionWithheld } from "~/lib/access.ts"
 import { useOrg, useSandboxes } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { indexOrg, nameOfIn, useSeatBadgeOf, type NameOf } from "~/lib/seats.ts";
-import { RUNS_POLL_MS, runAsk } from "~/lib/runs.ts";
+import { RUNS_POLL_MS } from "~/lib/runs.ts";
+import { RunQuestionLine } from "~/components/RunQuestion.tsx";
 import { deliveredLine, fromPhaseEvent, type PhaseRecord } from "~/lib/phases.ts";
 import { AnswerRunButton } from "~/components/writes.tsx";
 import { LiveOutput } from "./trace/Waterfall.tsx";
@@ -150,6 +151,8 @@ function fromLiveBox(box: SandboxEntry): SandboxRun {
     // run with no task.
     ...(box.task !== undefined ? { task_description: box.task } : {}),
     ...(box.question !== undefined ? { question: box.question } : {}),
+    question_context: box.question_context,
+    ...(box.decision ? { decision: box.decision } : {}),
     ...(box.body_withheld ? { body_withheld: true } : {}),
     audience: box.audience ?? "",
     // THE PROJECTION HOLDS NO RESOLUTION: who the question is put to is on
@@ -320,10 +323,14 @@ export function AwaitingBanner({
     <Callout variant="warning" icon={<CircleQuestionMarkGlyph size="md" />}>
       <span className="col gap-2 run-awaiting">
         <strong>
-          {runAsk(run).title ||
-            (questionWithheld(run)
-              ? "Waiting on a question you can’t see."
-              : "The run asked a question.")}
+          <RunQuestionLine
+            question={run.question}
+            empty={
+              questionWithheld(run)
+                ? "Waiting on a question you can’t see."
+                : "The run asked a question."
+            }
+          />
         </strong>
         <span className="t-caption">
           {/* WHO IT IS PUT TO, as the engine resolved it when the run parked

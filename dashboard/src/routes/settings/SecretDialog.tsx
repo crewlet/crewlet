@@ -26,7 +26,8 @@ import { useState } from "react";
 import { Button, Callout, InlineCode, Modal, ValueField } from "@crewlethq/ui";
 import { KeyGlyph } from "@crewlethq/icons/glyphs";
 import { isWholeReference } from "~/lib/references.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
+import { reloadFailure } from "./secretReload.ts";
 
 export function SecretDialog({
   /** The name being edited, or "" to store a new one. */
@@ -50,6 +51,9 @@ export function SecretDialog({
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // THE VALUE IS STORED AND NOT IN USE: the write answered 200, and its
+  // re-activation did not land. The dialog stays to say so.
+  const [unapplied, setUnapplied] = useState<string | null>(null);
   const readers = paths ?? [];
 
   async function submit() {
@@ -60,8 +64,13 @@ export function SecretDialog({
       // THE PATH SEGMENT IS ENCODED, and the value goes as the body. A name
       // is the operator's text until the engine has judged it, so it cannot
       // be pasted into a URL raw.
-      await rest.putText("/secrets/" + encodeURIComponent(name.trim()), value);
+      const answer = await rest.putText("/secrets/" + pathSegment(name.trim()), value);
       onDone(name.trim());
+      const failure = reloadFailure(answer);
+      if (failure) {
+        setUnapplied(failure);
+        return;
+      }
       onClose();
     } catch (err) {
       // `message` rather than `detail || code`: a refusal that carried
@@ -95,14 +104,20 @@ export function SecretDialog({
       stackBody
       onSubmit={() => void submit()}
       footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+        unapplied ? (
+          <Button variant="primary" onClick={onClose}>
+            Close
           </Button>
-          <Button type="submit" variant="primary" disabled={busy || !name.trim() || value === ""}>
-            {busy ? "Saving" : editing ? "Save" : "Store"}
-          </Button>
-        </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={busy || !name.trim() || value === ""}>
+              {busy ? "Saving" : editing ? "Save" : "Store"}
+            </Button>
+          </>
+        )
       }
     >
       {editing ? (
@@ -133,13 +148,25 @@ export function SecretDialog({
         help="Encrypted when saved. It can’t be viewed later."
       />
 
-      {editing && readers.length > 0 && (
+      {editing && readers.length > 0 && !unapplied && (
         <Callout variant="neutral">
           {/* WHEN it takes effect, because a rotation that appears to succeed
               and quietly does not is the failure the store exists to remove.
-              A provider holds the value it was built with. */}
-          {readers.length === 1 ? "One field uses it." : `${readers.length} fields use it.`} Running
-          seats pick it up after a re-activation or restart.
+              Saving re-activates the configuration that reads it (ADR-0070);
+              a run already going keeps the value it started with, and a
+              re-activation that fails is said below rather than here. */}
+          {readers.length === 1 ? "One field uses it." : `${readers.length} fields use it.`} Saving
+          switches them to the new value. Runs already going finish on the old one.
+        </Callout>
+      )}
+
+      {unapplied && (
+        <Callout variant="warning" role="alert">
+          <span className="col" style={{ gap: 4 }}>
+            <span>Saved, but the company is still using the old value.</span>
+            <span className="t-caption">{unapplied}</span>
+            <span className="t-caption">It switches at the next configuration change.</span>
+          </span>
         </Callout>
       )}
 

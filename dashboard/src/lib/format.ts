@@ -954,16 +954,6 @@ export function firstLine(body: string): string {
 }
 
 /**
- * The first sentence of a text, or its first line where no sentence ends in
- * it: what fits a heading of what a longer text says.
- */
-export function firstSentence(text: string): string {
-  const line = firstLine(text);
-  const end = /^(.+?[.?!])(?:\s|$)/.exec(line);
-  return end ? end[1]! : line;
-}
-
-/**
  * "Good morning, Jane", in the READER's clock, which is whose morning it is,
  * and with the first word of their name. A reader nobody named is greeted
  * without one rather than as "there" or as a token id.
@@ -981,4 +971,18 @@ export function greeting(now: number, name: string): string {
     hour < 5 ? "Hello" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const first = name.trim().split(/\s+/)[0] ?? "";
   return first ? `${salute}, ${first}` : salute;
+}
+
+/**
+ * Names or clauses in a sentence: "a", "a and b", "a, b, and c".
+ *
+ * THE OXFORD COMMA IS LOAD-BEARING: a clause can carry its own "and" ("the
+ * company's and every seat's token budget", "reviewing and evaluations"), so
+ * without it the last two run together and read as one item. Joined here
+ * rather than by `Intl.ListFormat`, which joins in the BROWSER's locale and
+ * would put "、" between words that are themselves English.
+ */
+export function listed(parts: readonly string[]): string {
+  if (parts.length < 3) return parts.join(" and ");
+  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1) ?? ""}`;
 }

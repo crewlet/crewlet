@@ -220,7 +220,7 @@ func wireAPI(
 	}
 	secretSurface, err := secretsapi.New(secretsapi.Options{
 		Fleet: backends.Fleet, Cipher: cipher, ActiveKeyID: boot.Secrets.ActiveKeyID,
-		Identity: keyring,
+		Identity: keyring, Config: configSurface,
 	})
 	if err != nil {
 		return fail("secret surface", err)
@@ -366,6 +366,13 @@ func wireAPI(
 	// AND THE NATIVE HALVES, per question, as cmd/crewlet hands them —
 	// through the one constructor, which sets every one or none.
 	api.NativeSources(e).Into(&opts.Sources)
+	// AND SETTINGS › MODELS, through the one constructor cmd/crewlet calls.
+	modelSurface, err := api.NewModelSurface(e, configSurface, cipher, backends.Queue)
+	if err != nil {
+		return fail("model surface", err)
+	}
+	opts.Models = modelSurface
+	api.ModelSources(&opts.Sources, e, cipher)
 	if amend != nil {
 		amend(&opts)
 	}

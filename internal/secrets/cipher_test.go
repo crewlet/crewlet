@@ -39,3 +39,38 @@ func TestKeyMaterialIsDecodedOneWay(t *testing.T) {
 		}
 	}
 }
+
+// A DERIVED KEY IS THE FLEET'S, ONE PER PURPOSE. Every node holding the keyring
+// derives the same key for one info string, so what it keys (a model's sign-in
+// identity) compares across nodes and restarts; another purpose, another active
+// key or another keyring derives another, and none of them is the key itself.
+//
+// Mutation: derive from the key id rather than its material, or ignore info,
+// and two purposes or two keyrings share one key.
+func TestADerivedKeyIsTheFleetsOnePerPurpose(t *testing.T) {
+	t.Parallel()
+	one, two := bytes.Repeat([]byte{1}, 32), bytes.Repeat([]byte{2}, 32)
+	ring := &Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": one, "k2": two}}
+	again := &Keyring{ActiveID: "k1", Keys: map[string][]byte{"k1": bytes.Clone(one)}}
+	rotated := &Keyring{ActiveID: "k2", Keys: map[string][]byte{"k1": one, "k2": two}}
+
+	key := ring.Derive("crewlet/llm-sign-in-id/v1")
+	if len(key) != 32 {
+		t.Fatalf("derived %d bytes, want 32", len(key))
+	}
+	if !bytes.Equal(key, again.Derive("crewlet/llm-sign-in-id/v1")) {
+		t.Error("two holders of one keyring derive different keys")
+	}
+	if bytes.Equal(key, ring.Derive("crewlet/another-purpose/v1")) {
+		t.Error("two purposes derive one key")
+	}
+	if bytes.Equal(key, rotated.Derive("crewlet/llm-sign-in-id/v1")) {
+		t.Error("a rotated keyring derives the key it derived before")
+	}
+	if bytes.Equal(key, one) {
+		t.Error("the derived key is the active key itself")
+	}
+	if got := (&Keyring{ActiveID: "missing"}).Derive("x"); got != nil {
+		t.Errorf("a keyring with no active key derived %x", got)
+	}
+}

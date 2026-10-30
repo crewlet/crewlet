@@ -1421,7 +1421,26 @@ func (w *Workspace) carryChanged(
 	// failed — IS the login of record, written, and still ends the logout
 	// below: answered as a carry with nothing left to do, the retry left the
 	// logout standing for good.
-	if write {
+	switch {
+	case write && gen.Mode == syncLogin:
+		// A LOGIN INSTALLED, so a new install record, committed with it
+		// ([LoginInstall]). Only on a write: nothing to write is a carry
+		// retried after its login landed, and that login landed with its
+		// record in the same step, so minting another would name one
+		// sign-in twice. A sign-in that left only a settings file holding
+		// no login installed none, and its write keeps no record either.
+		var install LoginInstall
+		if len(w.loginIn(login)) > 0 {
+			var err error
+			if install, err = newLoginInstall(time.Now()); err != nil {
+				return holds, nil, err
+			}
+		}
+		if err := w.installLoginLocked(ctx, who, login, install); err != nil {
+			return holds, nil, err
+		}
+	case write:
+		// A refresh, the same sign-in: its record stays.
 		if err := w.writeLoginLocked(ctx, who, login); err != nil {
 			return holds, nil, err
 		}
@@ -1596,11 +1615,12 @@ func homeHolds(gen generation, login, held map[string][]byte) bool {
 // the sign-in's seed is that login, refreshed. Every other writer moves the
 // epoch, in the same hold as its write and before it ([Workspace.bumpLoginEpoch])
 // — `-from-host`, an import, a logout (one whose epoch cannot move still
-// removes the login, which leaves no copy of any file to keep) — except two,
-// neither of which can reach a file the sign-in was seeded with: a restore of
-// a configured bundle, which lands only in a directory holding no file at all,
-// and another login command, which is refused while this one holds the login
-// home ([Workspace.lockLoginHome]).
+// removes the login, which leaves no copy of any file to keep), and so does a
+// restore of a configured bundle that REPLACES a login ([Provider.RestoreBundle]),
+// except two, neither of which can reach a file the sign-in was seeded with:
+// a restore into a directory holding no login, which a sign-in seeded with a
+// login never meets, and another login command, which is refused while this one
+// holds the login home ([Workspace.lockLoginHome]).
 //
 // A record without a seeded epoch vouches for nothing, so it answers false: the
 // shared copy is then dropped as another sign-in's, which loses a file rather
@@ -1790,9 +1810,11 @@ func (w *Workspace) loginEpoch() (uint64, error) {
 // caller holds, BEFORE the write it counts.
 //
 // The epoch counts the operator's writes of the login of record that are not a
-// login command's own — `-from-host`, an import, a logout — and nothing else: a
-// seat's refresh is not one, and a boot's restore of a bundle is not one. It
-// is read twice:
+// login command's own (`-from-host`, an import, a logout, and the automatic
+// restore of a bundle newer than the login it replaces, which writes over a
+// login exactly as `-from-host` does) and nothing else: a seat's refresh is not
+// one, and a restore into a directory holding no login is not one. It is read
+// twice:
 //
 //   - for the one write that is made LATE: a login whose export failed is kept
 //     in the login home and carried out by the next command, which may be days
@@ -2012,8 +2034,20 @@ func (w *Workspace) readLoginLocked() (map[string][]byte, error) {
 // land — the caller's steps after a write (the operator epoch, the logout's
 // record) follow it, and a reader that still cannot put it in place says so
 // itself.
+//
+// THE INSTALL RECORD IS LEFT AS IT IS ([LoginInstall]): this is the write of a
+// login that was not installed, a refresh carried back, which is the same
+// sign-in. A write that installs one, or removes one, is
+// [Workspace.installLoginLocked].
 func (w *Workspace) writeLoginLocked(ctx context.Context, who string, login map[string][]byte) error {
-	err := hostbox.WriteCredentials(w.CredentialsDir(), w.loginNames(), login)
+	return w.commitLoginLocked(ctx, who, w.loginNames(), login)
+}
+
+// commitLoginLocked is the one write of the shared directory: files over names,
+// as [hostbox.WriteCredentials] makes it, a write that committed and could not
+// be put in place at once logged and answered as written.
+func (w *Workspace) commitLoginLocked(ctx context.Context, who string, names []string, files map[string][]byte) error {
+	err := hostbox.WriteCredentials(w.CredentialsDir(), names, files)
 	if err != nil && hostbox.Committed(err) {
 		log.WarnContext(ctx, "cli_agent_login_unapplied", "provider", who, "agent", w.agent,
 			"path", w.CredentialsDir(), "error", err)

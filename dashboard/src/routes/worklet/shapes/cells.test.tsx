@@ -20,6 +20,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { WorkSummary } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -76,7 +77,7 @@ beforeEach(() => {
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );

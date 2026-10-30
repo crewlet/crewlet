@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -54,6 +55,15 @@ func TestAPermittedOriginIsAllowed(t *testing.T) {
 	if !reached {
 		t.Error("the request never reached the API")
 	}
+	// WHAT A CROSS-ORIGIN DASHBOARD READS, exposed: a browser hides every
+	// header outside a short safelist, and without the engine's mark every
+	// answer reads as something in front of the engine.
+	exposed := rec.Header().Get("Access-Control-Expose-Headers")
+	for _, want := range []string{httpjson.EngineHeader, "ETag", "Retry-After", "X-Request-Id"} {
+		if !strings.Contains(exposed, want) {
+			t.Errorf("Access-Control-Expose-Headers = %q, missing %s", exposed, want)
+		}
+	}
 }
 
 // AN ENTRY IS COMPARED AS A BROWSER SPELLS IT: written with its host in upper
@@ -93,6 +103,11 @@ func TestAnUnknownOriginIsUnpermittedRatherThanRefused(t *testing.T) {
 
 	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("an unlisted origin was permitted as %q", got)
+	}
+	// NOR IS ANYTHING EXPOSED TO IT: the headers a permitted origin reads
+	// stay hidden from a page the allow-list does not name.
+	if got := rec.Header().Get("Access-Control-Expose-Headers"); got != "" {
+		t.Errorf("an unlisted origin was exposed %q", got)
 	}
 	if !reached {
 		t.Error("a same-origin write was refused before it reached the API — " +
@@ -137,18 +152,31 @@ func TestAPreflightIsAnsweredWithoutACredential(t *testing.T) {
 			t.Errorf("%s = %q, want it to carry %q", header, got, want)
 		}
 	}
+	// THE WRITE PATH WHOLE: each header a write the API takes reads, or a
+	// cross-origin write that sends it is refused by the browser before it
+	// is sent.
+	allowed := strings.Split(rec.Header().Get("Access-Control-Allow-Headers"), ", ")
+	for _, want := range []string{
+		"Authorization", "Content-Type", "If-Match", "If-None-Match",
+		"Idempotency-Key", "X-Summary", "X-Request-Id",
+	} {
+		if !slices.Contains(allowed, want) {
+			t.Errorf("Access-Control-Allow-Headers = %q, missing %s", allowed, want)
+		}
+	}
 }
 
 // A PERMITTED ORIGIN MAY SEND WHAT THE ROUTES READ, AND NO HEADER BEYOND IT.
 //
 // A permitted origin may write, and the act route refuses a request with no
 // `Idempotency-Key`, a `/config` write needs its `X-Summary` and its
-// precondition, and a link's view takes its secret in a header: a preflight
-// that did not allow one made the browser refuse the whole request, so such an
-// origin could never make it at all. The reader header is the same-origin
-// dashboard's alone and is not offered. Which headers the routes read is held
-// by TestTheCORSListsAreTheHeadersTheRoutesReadAndSet; this holds the
-// preflight to answering that list rather than the browser's question.
+// precondition, a write that names its own request id is logged under it, and
+// a link's view takes its secret in a header: a preflight that did not allow
+// one made the browser refuse the whole request, so such an origin could never
+// make it at all. The reader header is the same-origin dashboard's alone and
+// is not offered. Which headers the routes read is held by
+// TestTheCORSListsAreTheHeadersTheRoutesReadAndSet; this holds the preflight
+// to answering that list rather than the browser's question.
 //
 // Mutation: drop opkey.Header or X-Summary from the set and the first row
 // fails; echo the browser's request back and the second does.
@@ -164,7 +192,7 @@ func TestAPermittedOriginMaySendWhatTheRoutesReadAndNothingBeyondIt(t *testing.T
 		return strings.Split(rec.Header().Get("Access-Control-Allow-Headers"), ", ")
 	}
 	want := []string{"Authorization", "Content-Type", opkey.Header,
-		"If-Match", "If-None-Match", "X-Summary",
+		"If-Match", "If-None-Match", "X-Summary", httpjson.RequestIDHeader,
 		"X-Crewlet-Invite-Secret", "X-Crewlet-Reset-Secret"}
 	if got := allowed("authorization, content-type, idempotency-key"); !slices.Equal(got, want) {
 		t.Errorf("a permitted origin may send %v, want %v", got, want)
@@ -182,9 +210,10 @@ func TestAPermittedOriginMaySendWhatTheRoutesReadAndNothingBeyondIt(t *testing.T
 // A browser hides from a cross-origin page every response header that is not
 // CORS-safelisted unless the answer exposes it, so a page on an allowed origin
 // could read a `/config` document and never its `ETag` — the tag its next
-// write's `If-Match` must carry — nor the `Retry-After` of a `503`. The
-// exposure rides the ANSWER, which is where the browser reads it; a preflight
-// and an origin the allow-list does not name carry none.
+// write's `If-Match` must carry — nor the `Retry-After` of a `503`, nor the
+// engine's mark that says the answer is the engine's at all. The exposure
+// rides the ANSWER, which is where the browser reads it; a preflight and an
+// origin the allow-list does not name carry none.
 //
 // Mutation: drop the exposure from the answer and the first check fails; set
 // it on the preflight and the second does.
@@ -204,7 +233,8 @@ func TestAPermittedOriginsScriptMayReadWhatAClientActsOn(t *testing.T) {
 		}
 		return strings.Split(got, ", ")
 	}
-	want := []string{"ETag", "Retry-After", "Accept-Patch", "Allow", "Content-Disposition"}
+	want := []string{httpjson.EngineHeader, "ETag", "Retry-After", "Accept-Patch", "Allow",
+		"Content-Disposition", httpjson.RequestIDHeader}
 	if got := exposed(http.MethodGet, "https://ops.example.com", false,
 		"https://ops.example.com"); !slices.Equal(got, want) {
 		t.Errorf("a permitted origin's answer exposes %v, want %v", got, want)

@@ -31,6 +31,7 @@ import { LiveSocket, QueryError, Store } from "~/protocol/index.ts";
 import type { ToolAnnotations, ToolRow } from "~/protocol/index.ts";
 import type { McpServersStatusAnswer } from "~/contract/mcp.ts";
 import { withDerived } from "~/test/org.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 // What the registry advertises for a tool whose server sent no hints: four
 // `unknown`s, which is what the engine writes rather than leaving the object
@@ -641,7 +642,7 @@ test("a server's page for a name the answer does not carry says so", async () =>
 const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 interface Call {
@@ -890,3 +891,76 @@ test("the servers' section is a card headed MCP servers, refused or empty", asyn
   const empty = screen.getByRole("heading", { name: "MCP servers" }).closest(".crewlet-card");
   expect(within(empty as HTMLElement).getByText("No MCP servers yet")).toBeDefined();
 });
+
+/**
+ * "DID NOT ANSWER" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED, read off
+ * real answers through the whole path (the transport, the read of who
+ * answered, the one classifier): a dropped connection and a gateway's page
+ * are not the engine's answer, and a 5xx the engine wrote is. "May have been
+ * added" only for the add itself: the check before it stores nothing.
+ */
+const FAILURES: readonly [string, () => Response, string][] = [
+  [
+    "a dropped connection",
+    () => {
+      throw new TypeError("Failed to fetch");
+    },
+    "The engine did not answer.",
+  ],
+  [
+    "a gateway's page",
+    () => new Response("<html>504 Gateway Time-out</html>", { status: 504 }),
+    "The engine did not answer.",
+  ],
+  ...([403, 413] as const).map((status): [string, () => Response, string] => [
+    `a proxy's ${status} in the engine's shape, without its mark`,
+    () =>
+      new Response(JSON.stringify({ error: "forbidden", detail: "blocked by policy" }), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
+    "The engine did not answer.",
+  ]),
+  [
+    "the engine's own 500",
+    () => json({ error: "internal", detail: "store: disk full" }, 500),
+    "The engine failed: store: disk full.",
+  ],
+];
+
+test.each(FAILURES)(
+  "a check met by %s says what happened, and that nothing was added",
+  async (_, fail, said) => {
+    const calls = stubConfig((call) => {
+      if (call.method === "GET") return json(company, 200, { ETag: '"r1"' });
+      if (call.method === "PATCH") return valid();
+      return fail();
+    });
+    const dialog = await openAdd();
+    type(dialog, "Name", "linear");
+    type(dialog, "Command", "linear-mcp");
+    await press(dialog, /Add server/);
+    expect(within(dialog).getByText(`${said} Nothing was added. Try again.`)).toBeDefined();
+    expect(calls.filter((c) => c.method === "PUT" && !c.url.includes("dry_run"))).toEqual([]);
+  },
+);
+
+test.each(FAILURES)(
+  "an add met by %s says what happened, and that it may have landed",
+  async (_, fail, said) => {
+    stubConfig((call) => {
+      if (call.method === "GET") return json(company, 200, { ETag: '"r1"' });
+      if (call.url.includes("dry_run=true")) return valid();
+      return fail();
+    });
+    const dialog = await openAdd();
+    type(dialog, "Name", "linear");
+    type(dialog, "Command", "linear-mcp");
+    await press(dialog, /Add server/);
+    expect(
+      within(dialog).getByText(
+        `${said} The server may or may not have been added. Look for it in the list before trying again.`,
+      ),
+    ).toBeDefined();
+  },
+);

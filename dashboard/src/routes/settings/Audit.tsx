@@ -59,7 +59,7 @@
  * the CALL: a tool call that was refused, one whose answer never came back, and
  * a verb that changes no tracker or wiki record at all — a backup — left
  * nothing anywhere. The runtime audit is that record (`operator_acted`,
- * `backup_requested`, and the Dashboard Assistant's `assistant_turn_completed`
+ * `backup_requested`, `model_acted`, and the Dashboard Assistant's `assistant_turn_completed`
  * and `assistant_conversation_read`, each with the envelope source
  * `operator`), and it is read
  * here as `Runtime`: every call, whatever became of it, under the author and
@@ -245,6 +245,15 @@ const RUNTIME_ROW: Record<
     subject: row.tags?.dir ?? "",
     path: ["settings", "backups"],
     noSubject: "No directory recorded",
+  }),
+  // A MODEL GESTURE NAMES ITS ENTRY AND WHAT WAS DONE TO IT (a check, a
+  // retry, a credential, a sign-in), and the secret NAMES a credential call
+  // touched are in its summary; a value never is.
+  model_acted: (row) => ({
+    kind: row.tags?.action ? `model ${row.tags.action.replaceAll("_", " ")}` : "model",
+    subject: row.tags?.provider_key ?? "",
+    path: ["settings", "models"],
+    noSubject: "No model recorded",
   }),
   // A COMPLIANCE READ NAMES THE CONVERSATION IT OPENED: the reader is the
   // row's actor and the reason is its summary, and what was read stays sealed.

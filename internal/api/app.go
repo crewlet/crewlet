@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -571,6 +573,13 @@ type Options struct {
 	// the engine's.
 	Objectives stream.Objectives
 
+	// Models serves the model routes under /llm/providers/ and
+	// /llm/device-sign-ins/, normally an llmapi.Service: a model's
+	// credential tested before it is stored, its checks, a retry of a
+	// sit-out, a host login's status and a device sign-in. The reads beside
+	// them are questions ([queries.Sources.Models]).
+	Models guardedMounter
+
 	// Secrets serves /secrets, normally a secretsapi.Service: the fleet's
 	// credential store.
 	Secrets guardedMounter
@@ -957,22 +966,34 @@ func New(opts Options) (*App, error) {
 	//
 	// These three, like the chart below, fail the boot on a route mounted
 	// with no policy — see [guardedMounter] for what they decided before.
+	//
+	// A REFUSED WRITE to the config, the secrets or a model logs one line
+	// ([refusalMux]), under the surface's own logger; setup is the
+	// first-run wizard's and logs its own outcomes.
 	for _, surface := range []struct {
 		name string
 		m    guardedMounter
+		log  *slog.Logger
 	}{
-		{"config", opts.Config},
+		{"config", opts.Config, logging.Get("api.config")},
 		// /secrets is how a rotation reaches a fleet at all — the
 		// coordination broker is inside the engine's process on the
 		// default topology, so no second process can write the store —
 		// and its listing alone says which credentials a company holds.
-		{"secrets", opts.Secrets},
+		{"secrets", opts.Secrets, logging.Get("api.secrets")},
 		// Connecting an integration without a shell, reads included —
 		// the list of which credentials a company has NOT configured is
 		// worth as much to an attacker as the ones it has.
-		{"setup", opts.Setup},
+		{"setup", opts.Setup, nil},
+		// A MODEL'S CREDENTIAL, CHECKS AND SIGN-INS, each route on its
+		// own verb (internal/api/llmapi).
+		{"models", opts.Models, logging.Get("api.llm")},
 	} {
-		if err := surface.m.Routes(mux); err != nil {
+		var mounted authz.Mux = mux
+		if surface.log != nil {
+			mounted = refusalMux{Mux: mux, log: surface.log}
+		}
+		if err := surface.m.Routes(mounted); err != nil {
 			return nil, fmt.Errorf("api: mount the %s surface: %w", surface.name, err)
 		}
 	}
@@ -1104,9 +1125,20 @@ func bindDispatcher(d *auth.Dispatcher, h http.Handler) error {
 //
 // ONE WRAPPING for the full surface and the boot surface api.port and
 // api.public serve before it ([Boot]), so a request a node refuses while it
-// starts carries the headers the same request carries once it serves.
+// starts carries the headers the same request carries once it serves. Among
+// them [httpjson.EngineHeader], set first, so every answer says it is the
+// engine's, a refusal no handler thought about included.
 func servedOn(bootstrap *config.Bootstrap, public bool, h http.Handler) http.Handler {
-	return pagepolicy.Apply(authz.CanonicalPath(h), servedOverHTTPS(bootstrap, public))
+	return pagepolicy.Apply(markedAsEngine(authz.CanonicalPath(h)), servedOverHTTPS(bootstrap, public))
+}
+
+// markedAsEngine sets [httpjson.EngineHeader] on the answer before anything
+// beneath it writes one: a header set after the status line is dropped.
+func markedAsEngine(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(httpjson.EngineHeader, httpjson.EngineHeaderValue)
+		next.ServeHTTP(w, r)
+	})
 }
 
 // partition serves the requests on one side of [auth.Public] and answers every
@@ -1188,6 +1220,7 @@ func (o Options) missing() error {
 		{"Config", o.Config == nil},
 		{"Secrets", o.Secrets == nil},
 		{"Setup", o.Setup == nil},
+		{"Models", o.Models == nil},
 		{"Retention", o.Retention == nil},
 		{"Capacity", o.Capacity == nil},
 		{"FleetBroker", o.FleetBroker == nil},
@@ -1579,6 +1612,10 @@ func (a *App) answer(ctx context.Context, what string, params map[string]any) (a
 		return nil, fmt.Errorf("%w: %s", stream.ErrNotFound, what)
 	case errors.Is(err, queries.ErrArtifactTrashed):
 		return nil, fmt.Errorf("%w: %s", stream.ErrArtifactTrashed, what)
+	case errors.Is(err, queries.ErrUnknownProvider):
+		// A REQUEST TO CHANGE, as a refused parameter is: the socket has
+		// one code for that, and the detail names the provider.
+		return nil, &stream.BadParamsError{What: what, Detail: err.Error()}
 	case errors.Is(err, queries.ErrBadParams):
 		// TRANSLATED RATHER THAN LEFT TO THE DEFAULT, which is what it
 		// was: an untranslated refusal reached the socket as an
@@ -1688,6 +1725,11 @@ func writeQueryError(w http.ResponseWriter, r *http.Request, what string, err er
 		// `message` cannot say which one.
 		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeBadParams,
 			httpjson.Detail{"detail": queries.RefusalDetail(err)})
+	case errors.Is(err, queries.ErrUnknownProvider):
+		// 422: the parameter is well formed and names nothing the
+		// catalogue holds, which the page answers with free text.
+		httpjson.FailWithFields(w, http.StatusUnprocessableEntity, httpjson.CodeUnknownProvider,
+			httpjson.Detail{"detail": err.Error()})
 	case errors.Is(err, queries.ErrNotFound):
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 	case errors.As(err, &revision):

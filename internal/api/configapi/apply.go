@@ -341,6 +341,10 @@ type draft struct {
 	// stated is an expect the request named in its If-Match header
 	// ([RacedError.Stated]).
 	stated bool
+	// warnings derives warnings the write itself carries beside the
+	// document's own ([Company.Warnings]): a removal's resolution moves.
+	// Nil for none.
+	warnings func(next, prior *config.Company) []config.Warning
 	// republishes is a write that re-publishes the active document's
 	// stored bytes unchanged ([Service.Reload]). It changes nothing about
 	// the company, so a managed document does not refuse it: see
@@ -392,6 +396,9 @@ type prepared struct {
 	// stated is the draft's: a race this write loses at the compare-and-set
 	// is a precondition its request stated ([RacedError.Stated]).
 	stated bool
+	// company is the proposed document, decoded: what [Service.CheckEntity]
+	// hands a caller testing a draft entry.
+	company *config.Company
 }
 
 // prepare builds and checks a write, storing nothing.
@@ -519,8 +526,13 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	if err := s.checkHeldSeats(ctx, b, company); err != nil {
 		return nil, err
 	}
+	warnings := company.Warnings()
+	if d.warnings != nil {
+		warnings = append(warnings, d.warnings(company, b.prior)...)
+	}
 	p := &prepared{
-		document: document, warnings: company.Warnings(), derived: derived, by: d.by,
+		company:  company,
+		document: document, warnings: warnings, derived: derived, by: d.by,
 		source: cmp.Or(d.source, revisionSource), pointed: cur.pointed,
 		held: heldWarnings(b.prior), stated: d.stated,
 	}

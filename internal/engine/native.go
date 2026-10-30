@@ -99,7 +99,7 @@ type native struct {
 	chatReader    *chatlet.Reader
 
 	// chatIndex is the chat corpus's own keyword index, separate from
-	// [native.indexer] for the reason ADR-0069 gives: chat is in neither
+	// [native.indexer] for the reason ADR-0071 gives: chat is in neither
 	// half of the knowledge corpus, so it has its own inverted list, its
 	// own forward-only walk and its own loop.
 	chatIndex *search.ChatIndexer

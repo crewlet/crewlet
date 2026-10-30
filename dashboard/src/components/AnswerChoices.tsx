@@ -47,6 +47,7 @@ export function AnswerChoices<T extends ActionTool>({
   options,
   recommended,
   pending,
+  blocked,
   onChoose,
   onSomethingElse,
 }: {
@@ -57,6 +58,8 @@ export function AnswerChoices<T extends ActionTool>({
   recommended?: string | undefined;
   /** The option being sent, while the write is in flight. */
   pending: string | null;
+  /** Why no option can be sent yet, where the caller knows of a reason. */
+  blocked?: string | undefined;
   /** An option was pressed, and the write can take it. */
   onChoose: (choice: string) => void;
   /** "Something else" was pressed: the caller opens its field. */
@@ -69,9 +72,9 @@ export function AnswerChoices<T extends ActionTool>({
         options={choiceOptions(options)}
         recommended={recommended}
         pending={pending}
-        disabledReason={write.access.can ? undefined : write.access.reason}
+        disabledReason={write.access.can ? blocked : write.access.reason}
         onChoose={(choice) => {
-          if (pressable(write)) onChoose(choice);
+          if (pressable(write, blocked)) onChoose(choice);
         }}
       />
       <WriteButton
@@ -98,10 +101,11 @@ export function AnswerChoices<T extends ActionTool>({
  * ONE COPY for every place an answered choice is read back: the Inbox's pane
  * for an answer just sent, and for one given before this visit.
  *
- * IN THE ORDER THEY WERE OFFERED, the recommended one first, but WITHOUT ITS
- * FILL: drawn chosen and recommended at once, the option carried the
- * accent's ink on the chosen fill, which does not clear contrast. The
- * answer's own line says when the choice was the recommended one.
+ * IN THE ORDER THEY WERE OFFERED, the recommended one first and still marked,
+ * so a reader sees what was recommended whether or not it was the one chosen.
+ * Chosen, the recommended option is drawn on the selected fill in the primary
+ * ink with its mark kept (uilet 0.75.3); before it, the accent's ink stayed on
+ * the chosen fill, under contrast, and the mark was left off here.
  */
 export function AnsweredChoices({
   options,
@@ -114,12 +118,11 @@ export function AnsweredChoices({
   /** The option chosen, by id, or null for an answer in words. */
   chosen: string | null;
 }) {
-  const first = options.find((o) => o.id === recommended);
-  const ordered = first ? [first, ...options.filter((o) => o !== first)] : options;
   return (
     <ChoiceButtons
       label="Answers"
-      options={choiceOptions(ordered)}
+      options={choiceOptions(options)}
+      recommended={recommended}
       chosen={chosen}
       disabledReason="This question is answered."
       onChoose={() => undefined}

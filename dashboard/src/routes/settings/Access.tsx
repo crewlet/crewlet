@@ -177,7 +177,7 @@ import { useQuery } from "~/lib/useQuery.ts";
 import { useFrameSession } from "~/lib/frameSession.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { rest } from "~/protocol/index.ts";
+import { pathSegment, rest } from "~/protocol/index.ts";
 import type { CompanyDocument, ConfigRole } from "~/protocol/index.ts";
 import {
   EditPersonDialog,
@@ -1828,11 +1828,11 @@ export function PersonPeek({ id }: { id: string }) {
   const viewer = useViewer();
   const toast = useToast();
   const { close } = usePeekControls();
-  const at = encodeURIComponent(id);
   const read = useRest(
-    id ? `/iam/people/${at}` : null,
+    id ? `/iam/people/${pathSegment(id)}` : null,
     // THE PATH A LITERAL AT ITS CALL, which is what the dev proxy's gate reads.
-    async (signal) => (await rest.get(`/iam/people/${at}`, signal)) as DirectoryRow | null,
+    async (signal) =>
+      (await rest.get(`/iam/people/${pathSegment(id)}`, signal)) as DirectoryRow | null,
     READ,
   );
   const row = read.data;
@@ -1963,17 +1963,22 @@ function Principal({
   onRemoved: () => void;
 }) {
   const now = useNow();
-  const id = encodeURIComponent(row.id);
   const credentials = useRest(
-    `/iam/credentials?person=${id}`,
+    `/iam/credentials?${new URLSearchParams({ person: row.id })}`,
     async (signal) =>
-      listOf<CredentialRow>(await rest.get(`/iam/credentials?person=${id}`, signal), "credentials"),
+      listOf<CredentialRow>(
+        await rest.get(`/iam/credentials?${new URLSearchParams({ person: row.id })}`, signal),
+        "credentials",
+      ),
     READ,
   );
   const sessions = useRest(
-    `/iam/people/${id}/sessions`,
+    `/iam/people/${pathSegment(row.id)}/sessions`,
     async (signal) =>
-      listOf<SessionRow>(await rest.get(`/iam/people/${id}/sessions`, signal), "sessions"),
+      listOf<SessionRow>(
+        await rest.get(`/iam/people/${pathSegment(row.id)}/sessions`, signal),
+        "sessions",
+      ),
     READ,
   );
   const [gesture, setGesture] = useState<PersonGesture | null>(null);
@@ -2086,7 +2091,7 @@ function Principal({
           danger
           request={{
             method: "DELETE",
-            path: `/iam/credentials/${encodeURIComponent(gesture.revoke.id)}`,
+            path: `/iam/credentials/${pathSegment(gesture.revoke.id)}`,
             query: { person: row.id },
           }}
           onClose={close}
@@ -2110,7 +2115,7 @@ function Principal({
           danger={gesture === "suspend"}
           request={{
             method: "PATCH",
-            path: `/iam/people/${id}`,
+            path: `/iam/people/${pathSegment(row.id)}`,
             body: { stage: gesture === "reactivate" ? "active" : "suspended" },
           }}
           onClose={close}
@@ -2136,7 +2141,7 @@ function Principal({
           }
           confirm="Reset two-step verification"
           danger
-          request={{ method: "POST", path: `/iam/people/${id}/mfa/reset` }}
+          request={{ method: "POST", path: `/iam/people/${pathSegment(row.id)}/mfa/reset` }}
           onClose={close}
           onDone={changed}
         >
@@ -2151,7 +2156,7 @@ function Principal({
           title={you ? "Sign out everywhere?" : `Sign ${who} out everywhere?`}
           confirm="Sign out everywhere"
           danger
-          request={{ method: "DELETE", path: `/iam/people/${id}/sessions` }}
+          request={{ method: "DELETE", path: `/iam/people/${pathSegment(row.id)}/sessions` }}
           onClose={close}
           onDone={changed}
         >
@@ -2167,7 +2172,7 @@ function Principal({
           confirm="Remove"
           danger
           typeToConfirm={row.login || row.id}
-          request={{ method: "DELETE", path: `/iam/people/${id}` }}
+          request={{ method: "DELETE", path: `/iam/people/${pathSegment(row.id)}` }}
           onClose={close}
           onDone={changed}
           onLanded={onRemoved}
@@ -2494,7 +2499,7 @@ function ResetLink({
         // attempt never showed, so a retry is a new link — which revokes the one
         // that may have landed.
         const answer = await write.run(
-          { method: "POST", path: `/iam/people/${encodeURIComponent(row.id)}/password-reset` },
+          { method: "POST", path: `/iam/people/${pathSegment(row.id)}/password-reset` },
           false,
         );
         if (answer) onDone();

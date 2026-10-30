@@ -97,6 +97,14 @@ var namedRoutes = []struct {
 	// which is the configuration's own collection — this is what the fleet
 	// did with it, from the heartbeats.
 	{method: "GET", pattern: "/mcp-servers", what: "mcp_servers_status"},
+	// WHAT EACH MODEL IS DOING, and what Settings › Models offers: the
+	// runners a model can be placed on, the models a step suggests, and one
+	// device sign-in while its record lingers. The writes beside them are
+	// llmapi's own routes under /llm/providers/.
+	{method: "GET", pattern: "/llm/entries", what: "llm_entries"},
+	{method: "GET", pattern: "/llm/runners", what: "llm_runners"},
+	{method: "GET", pattern: "/llm/models", what: "llm_models"},
+	{method: "GET", pattern: "/llm/device-sign-ins/{id}", what: "llm_device_sign_in", path: map[string]string{"id": "id"}},
 	// WHAT THE FLEET HAS BACKED UP, and every backup a person asked for.
 	// Plural beside `POST /backup`, which TAKES one: the read is a
 	// collection and the write is one act, and neither is the other's

@@ -136,7 +136,7 @@ func TestAnswerRunDeliversTheAnswerAsThePersonAndAnswersPending(t *testing.T) {
 	t.Parallel()
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusReseed)}}
 	result, err := answerRunTool(t, desk).Call(t.Context(),
-		map[string]any{"turn_id": " t1 ", "answer": "  use main  "})
+		map[string]any{"turn_id": " t1 ", "launch_id": "launch-t1", "answer": "  use main  "})
 	if err != nil || result.Failed {
 		t.Fatalf("answer_run = %+v, %v", result, err)
 	}
@@ -176,7 +176,7 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 			t.Parallel()
 			desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", status)}}
 			result, _ := answerRunTool(t, desk).Call(t.Context(),
-				map[string]any{"turn_id": "t1", "answer": "use main"})
+				map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use main"})
 			if !result.Failed || tools.RefusalOf(result) != tools.RefusalNotRunning {
 				t.Fatalf("answer_run on a %s run = %+v, want not_running", status, result)
 			}
@@ -187,7 +187,7 @@ func TestAnswerRunRefusesARunThatIsNotWaiting(t *testing.T) {
 	}
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{}}
 	result, _ := answerRunTool(t, desk).Call(t.Context(),
-		map[string]any{"turn_id": "gone", "answer": "use main"})
+		map[string]any{"turn_id": "gone", "launch_id": "launch-gone", "answer": "use main"})
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalNotRunning {
 		t.Fatalf("answer_run on a run with no record = %+v, want not_running", result)
 	}
@@ -202,7 +202,7 @@ func TestAnswerRunThatMayHaveLandedAnswersUnknown(t *testing.T) {
 		deliverErr: errors.New("publish ack timed out"),
 	}
 	result, _ := answerRunTool(t, desk).Call(t.Context(),
-		map[string]any{"turn_id": "t1", "answer": "use main"})
+		map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use main"})
 	if result.Failed || !strings.Contains(result.Output, `"outcome": "unknown"`) {
 		t.Fatalf("answer_run over an unconfirmed delivery = %+v, want outcome unknown", result)
 	}
@@ -220,7 +220,7 @@ func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
 	tool := answerRunTool(t, desk)
 	result, _ := tool.Call(t.Context(), map[string]any{
-		"turn_id": "t1", "answer": strings.Repeat("a", builtin.MaxRunAnswerBytes+1),
+		"turn_id": "t1", "launch_id": "launch-t1", "answer": strings.Repeat("a", builtin.MaxRunAnswerBytes+1),
 	})
 	if !result.Failed || tools.RefusalOf(result) != tools.RefusalInvalid {
 		t.Fatalf("answer_run with an answer a byte past a page = %+v, want invalid", result)
@@ -239,7 +239,7 @@ func TestAnAnswerIsHeldToThePageItsQuestionIs(t *testing.T) {
 	}
 
 	page := strings.Repeat("a", builtin.MaxRunAnswerBytes)
-	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "answer": page})
+	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": page})
 	if err != nil || result.Failed {
 		t.Fatalf("answer_run with an answer as long as a question may be = %+v, %v; "+
 			"want it delivered", result, err)
@@ -273,7 +273,7 @@ func TestARunIsAnsweredByItsRequesterOrItsSeatsLead(t *testing.T) {
 			desk := &deskFake{runs: map[string]sandbox.PendingRun{
 				"t1": parked(t, "t1", sandbox.StatusAwaiting)}}
 			result, err := newAnswerRunRig(t, desk, tc.caller, seatLeads).Call(
-				t.Context(), map[string]any{"turn_id": "t1", "answer": "use main"})
+				t.Context(), map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use main"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -310,7 +310,7 @@ func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 	unopened := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run},
 		seal: answerSeal(t, "another fleet's key material")}
 	result, err := answerRunTool(t, unopened).Call(t.Context(),
-		map[string]any{"turn_id": "t1", "answer": "use the release branch"})
+		map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use the release branch"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestAnAnsweredQuestionRefusesTheNextAnswerAndSaysWhose(t *testing.T) {
 
 	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}, seal: seal}
 	result, err = answerRunTool(t, desk).Call(t.Context(),
-		map[string]any{"turn_id": "t1", "answer": "use the release branch"})
+		map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use the release branch"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,7 +355,7 @@ func TestTheAnsweredRefusalSaysOnlyWhatTheRecordSays(t *testing.T) {
 		run := answeredBy(t, seal, parked(t, "t1", status), "miles", time.Time{})
 		desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}, seal: seal}
 		result, err := answerRunTool(t, desk).Call(t.Context(),
-			map[string]any{"turn_id": "t1", "answer": "use the release branch"})
+			map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "answer": "use the release branch"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -396,7 +396,7 @@ func TestAnswerRunDeliversAChoiceOfTheQuestionsOwnOptions(t *testing.T) {
 	}}
 	tool := answerRunTool(t, desk)
 
-	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "choice": "exact",
+	result, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "choice": "exact",
 		"answer": "and note it in the PR"})
 	if err != nil || result.Failed {
 		t.Fatalf("answer_run with a choice = %+v, %v", result, err)
@@ -415,9 +415,9 @@ func TestAnswerRunDeliversAChoiceOfTheQuestionsOwnOptions(t *testing.T) {
 		args map[string]any
 		want string
 	}{
-		{"an unoffered choice", map[string]any{"turn_id": "t1", "choice": "rewrite"}, `it offers "keep" or "exact"`},
-		{"a choice on an open question", map[string]any{"turn_id": "t2", "choice": "keep"}, "no options"},
-		{"neither a choice nor words", map[string]any{"turn_id": "t1"}, "`choice`"},
+		{"an unoffered choice", map[string]any{"turn_id": "t1", "launch_id": "launch-t1", "choice": "rewrite"}, `it offers "keep" or "exact"`},
+		{"a choice on an open question", map[string]any{"turn_id": "t2", "launch_id": "launch-t2", "choice": "keep"}, "no options"},
+		{"neither a choice nor words", map[string]any{"turn_id": "t1", "launch_id": "launch-t1"}, "`choice`"},
 	} {
 		got, err := tool.Call(t.Context(), tc.args)
 		if err != nil || !got.Failed || !strings.Contains(got.Output, tc.want) {
@@ -426,5 +426,37 @@ func TestAnswerRunDeliversAChoiceOfTheQuestionsOwnOptions(t *testing.T) {
 	}
 	if len(desk.delivered) != 1 {
 		t.Fatalf("%d answers delivered, want only the offered choice's", len(desk.delivered))
+	}
+}
+
+// AN ANSWER IS TO THE QUESTION THE PERSON READ. It names that question by the
+// job that asked it, and a run that has moved on to another question since
+// refuses it, in words that say to read the question again, rather than taking
+// it (a choice by id above all) as the answer to a question nobody showed them.
+// One naming no question is refused before anything is read.
+//
+// Mutation: deliver against the row's own launch whatever the call named, and
+// the answer to the old question resumes the run on the new one.
+func TestAnAnswerIsToTheQuestionItsPersonRead(t *testing.T) {
+	t.Parallel()
+	moved := decided(t, "t1")
+	moved.LaunchID = "launch-after"
+	desk := &deskFake{runs: map[string]sandbox.PendingRun{"t1": moved}}
+	tool := answerRunTool(t, desk)
+	got, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "launch_id": "launch-t1",
+		"choice": "keep"})
+	if err != nil || !got.Failed || tools.RefusalOf(got) != tools.RefusalStaleVersion ||
+		!strings.Contains(got.Output, "moved on to another question") {
+		t.Fatalf("an answer to a question the run moved past = %+v, %v; want a conflict in words", got, err)
+	}
+	if said := got.PersonRefusal.Person(); !strings.Contains(said, "Reload") {
+		t.Errorf("the person is told %q, want to reload", said)
+	}
+	unnamed, err := tool.Call(t.Context(), map[string]any{"turn_id": "t1", "choice": "keep"})
+	if err != nil || !unnamed.Failed || !strings.Contains(unnamed.Output, "`launch_id`") {
+		t.Errorf("an answer naming no question = %+v, %v; want it refused naming launch_id", unnamed, err)
+	}
+	if len(desk.delivered) != 0 {
+		t.Fatalf("delivered %+v, want nothing", desk.delivered)
 	}
 }

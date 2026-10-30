@@ -54,7 +54,7 @@ func TestABoxIsHandedItsEntrysWholeEnv(t *testing.T) {
 	// EXACTLY these: the profile's fixed env (CLAUDE_CODE_DISABLE_*), its
 	// isolation (HOME, CLAUDE_CONFIG_DIR, the CLAUDE.md switches) and the
 	// host allowlist (PATH) are this host's call's, never the box's.
-	if !maps.Equal(got, want) {
+	if !maps.Equal(got, withZone(want)) {
 		t.Errorf("the box's entry environment = %v, want exactly %v", got, want)
 	}
 }
@@ -80,7 +80,7 @@ func TestTheAuthModesRemovalsHoldInTheBox(t *testing.T) {
 	}, Auth{Mode: AuthSubscription, Token: "sk-ant-oat-plan"})
 	if want := (map[string]string{
 		"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat-plan", "ANTHROPIC_BASE_URL": gateway,
-	}); !maps.Equal(plan, want) {
+	}); !maps.Equal(plan, withZone(want)) {
 		t.Errorf("a subscription entry's box environment = %v, want exactly %v", plan, want)
 	}
 
@@ -89,7 +89,7 @@ func TestTheAuthModesRemovalsHoldInTheBox(t *testing.T) {
 	}, Auth{Mode: AuthAPIKey, APIKey: "sk-ant-entry"})
 	if want := (map[string]string{
 		"ANTHROPIC_API_KEY": "sk-ant-entry", "ANTHROPIC_BASE_URL": gateway,
-	}); !maps.Equal(key, want) {
+	}); !maps.Equal(key, withZone(want)) {
 		t.Errorf("an api-key entry's box environment = %v, want exactly %v", key, want)
 	}
 }
@@ -102,7 +102,7 @@ func TestAnInheritEnvEntrysBoxCarriesWhatTheModeForwards(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "")
 	t.Setenv("ANTHROPIC_BASE_URL", "https://not-the-entrys.example.com")
 	got := sandboxEnvOf(t, nil, Auth{Mode: AuthInheritEnv})
-	if want := (map[string]string{"ANTHROPIC_API_KEY": "sk-ant-from-the-engine"}); !maps.Equal(got, want) {
+	if want := (map[string]string{"ANTHROPIC_API_KEY": "sk-ant-from-the-engine"}); !maps.Equal(got, withZone(want)) {
 		t.Errorf("an inherit-env entry's box environment = %v, want exactly %v", got, want)
 	}
 }
@@ -130,7 +130,15 @@ func TestABoxIsNeverHandedTheIsolationOrABlankValue(t *testing.T) {
 	}, Auth{Mode: AuthAPIKey, APIKey: "sk-ant-entry"})
 	if want := (map[string]string{
 		"ANTHROPIC_API_KEY": "sk-ant-entry", "ANTHROPIC_MODEL": "claude-sonnet-5",
-	}); !maps.Equal(got, want) {
+	}); !maps.Equal(got, withZone(want)) {
 		t.Errorf("the box's entry environment = %v, want exactly %v", got, want)
 	}
+}
+
+// withZone is want with the zone every box is handed beside the entry's own
+// environment ([childZone]), which the engine reads the run's reset in.
+func withZone(want map[string]string) map[string]string {
+	out := maps.Clone(want)
+	out["TZ"], _ = childZone()
+	return out
 }

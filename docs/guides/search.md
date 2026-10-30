@@ -9,7 +9,7 @@ about it when the corpus outgrows one node's CPU.
 > index of its own, it has **no semantic half at all**, and no query fuses the
 > two. That is a decision with an arithmetic behind it rather than a gap — see
 > [Chatlet § Search](../concepts/chatlet.md#search) and
-> [ADR-0069](../../adr/0069-chat-is-a-keyword-corpus-and-takes-no-vectors.md).
+> [ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md).
 > Chat search is also the only search on this page with a **viewer**: a private
 > room's contents are not a fact about the company the way a page is, so every
 > chat search is answered for its asker — the node that ranks it resolves the

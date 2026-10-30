@@ -103,6 +103,11 @@ const (
 	// fleet's store directly, with the node's engine stopped.
 	SourceLLMLogin Source = "llm-login"
 
+	// SourceModels is a model's credential written by the engine for the
+	// Models page: the login a device sign-in made, exported as the entry's
+	// bundle once the person approved it.
+	SourceModels Source = "models"
+
 	// SourceIAM is the engine's own key material, minted by the engine
 	// ([Reserved] names, which no listing shows).
 	SourceIAM Source = "iam"
@@ -110,7 +115,7 @@ const (
 
 // Sources are every write path's word.
 var Sources = []Source{SourceAPI, SourceSetup, SourceProvision, SourceCLI,
-	SourceLLMLogin, SourceIAM}
+	SourceLLMLogin, SourceIAM, SourceModels}
 
 // Valid reports whether a source off the wire is one this build stamps.
 func (s Source) Valid() bool { return slices.Contains(Sources, s) }

@@ -520,6 +520,9 @@ func (r *retention) reading(ctx context.Context, now time.Time,
 	if r.objects != nil {
 		r.objects(now, &out)
 	}
+	if r.models != nil {
+		r.models(ctx, now, &out)
+	}
 	r.space(&out)
 	oldestWindow(now, windows, &out)
 	r.observed(&out)

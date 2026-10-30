@@ -687,3 +687,70 @@ describe("the credentials table", () => {
     });
   });
 });
+
+// A WRITE WHOSE RE-ACTIVATION FAILED IS STORED AND NOT IN USE. The engine
+// answers 200 with `reload.error`, and a dialog that closed on the 200 told
+// the operator the rotation took; it stays, and says what did not happen.
+test("a rotation the company did not switch to says so, and the dialog stays", async () => {
+  stubLoaded((path, init) =>
+    init?.method === "PUT"
+      ? ok({
+          name: "GITHUB_TOKEN",
+          reload: {
+            error: "revision_advanced",
+            detail: "Another write moved the configuration first.",
+          },
+        })
+      : null,
+  );
+  render(<Secrets />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Edit GITHUB_TOKEN" }));
+  fireEvent.change(screen.getByLabelText("New value"), { target: { value: "ghp-rotated" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  expect(
+    await screen.findByText("Saved, but the company is still using the old value."),
+  ).toBeDefined();
+  expect(screen.getByText("Another write moved the configuration first.")).toBeDefined();
+  expect(screen.getByRole("dialog", { name: "Edit GITHUB_TOKEN" })).toBeDefined();
+  // THE FOOTER'S, beside the modal's own close control, which reads the same.
+  const close = screen.getAllByRole("button", { name: "Close" });
+  fireEvent.click(close[close.length - 1]!);
+  expect(screen.queryByRole("dialog", { name: "Edit GITHUB_TOKEN" })).toBeNull();
+});
+
+test("a rotation that switched the company closes the dialog", async () => {
+  stubLoaded((path, init) =>
+    init?.method === "PUT"
+      ? ok({ name: "GITHUB_TOKEN", reload: { revision_id: "r-2", epoch: 42 } })
+      : null,
+  );
+  render(<Secrets />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Edit GITHUB_TOKEN" }));
+  fireEvent.change(screen.getByLabelText("New value"), { target: { value: "ghp-rotated" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await vi.waitFor(() => {
+    expect(screen.queryByRole("dialog", { name: "Edit GITHUB_TOKEN" })).toBeNull();
+  });
+});
+
+test("a removal the company did not stop reading says so, and the dialog stays", async () => {
+  stubLoaded((path, init) =>
+    init?.method === "DELETE"
+      ? ok({ name: "GITHUB_TOKEN", removed: true, reload: { error: "internal_error", detail: "" } })
+      : null,
+  );
+  render(<Secrets />);
+  await openRemove("GITHUB_TOKEN");
+  fireEvent.click(screen.getByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+
+  expect(
+    await screen.findByText("Removed, but the company is still using the old value."),
+  ).toBeDefined();
+  expect(screen.getByText("internal_error")).toBeDefined();
+  expect(screen.getByRole("dialog", { name: "Remove GITHUB_TOKEN" })).toBeDefined();
+});

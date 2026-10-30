@@ -10,7 +10,25 @@ import (
 	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/secrets"
 )
+
+// engineAnswered is the headers of an answer the engine wrote: its content
+// type and its mark ([httpjson.EngineHeader]).
+func engineAnswered(contentType string) http.Header {
+	h := http.Header{}
+	h.Set("Content-Type", contentType)
+	h.Set(httpjson.EngineHeader, httpjson.EngineHeaderValue)
+	return h
+}
+
+// proxyAnswered is the headers of an answer something in front of the node
+// wrote: a content type, and no mark.
+func proxyAnswered(contentType string) http.Header {
+	h := http.Header{}
+	h.Set("Content-Type", contentType)
+	return h
+}
 
 // EVERY CLIENT RENDERS THE HINT, because the hint is the half that says what
 // to do. A drain's refusal is `draining` plus a detail and a hint, and a
@@ -88,7 +106,7 @@ func TestARefusalSaysItsDetailOrElseItsCodesSentence(t *testing.T) {
 func TestEveryClientSaysTheCodesSentenceForARefusalNobodyWorded(t *testing.T) {
 	t.Parallel()
 	config := &configClient{base: "http://node"}
-	secrets := &secretsClient{base: "http://node"}
+	stored := &secretsClient{base: "http://node"}
 	decoded := func(raw []byte) map[string]any {
 		var answer map[string]any
 		_ = json.Unmarshal(raw, &answer)
@@ -97,13 +115,13 @@ func TestEveryClientSaysTheCodesSentenceForARefusalNobodyWorded(t *testing.T) {
 	clients := map[string]func(status int, raw []byte) error{
 		"node": func(status int, raw []byte) error { return nodeError(status, raw, true) },
 		"config": func(status int, raw []byte) error {
-			return config.refusal(status, "application/json", raw)
+			return config.refusal(status, engineAnswered("application/json"), raw)
 		},
 		"secrets": func(status int, raw []byte) error {
-			return secrets.refusal(status, "/secrets/X", "application/json", raw)
+			return stored.refusal(status, "/secrets/X", engineAnswered("application/json"), raw)
 		},
 		"iam": func(status int, raw []byte) error {
-			return iamRefusal(status, "application/json", decoded(raw), raw, true)
+			return iamRefusal(status, engineAnswered("application/json"), decoded(raw), raw, true)
 		},
 		"iam self": func(status int, raw []byte) error {
 			return selfRefusal(status, decoded(raw), raw)
@@ -194,17 +212,17 @@ func TestEveryClientNamesTheGrantANodeRefusedATokenFor(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := &configClient{base: "http://node"}
-	secrets := &secretsClient{base: "http://node"}
+	stored := &secretsClient{base: "http://node"}
 	clients := map[string]func(status int, raw []byte) error{
 		"node": func(status int, raw []byte) error { return nodeError(status, raw, true) },
 		"config": func(status int, raw []byte) error {
-			return config.refusal(status, "application/json", raw)
+			return config.refusal(status, engineAnswered("application/json"), raw)
 		},
 		"secrets": func(status int, raw []byte) error {
-			return secrets.refusal(status, "/secrets/X", "application/json", raw)
+			return stored.refusal(status, "/secrets/X", engineAnswered("application/json"), raw)
 		},
 		"iam": func(status int, raw []byte) error {
-			return iamRefusal(status, "application/json",
+			return iamRefusal(status, engineAnswered("application/json"),
 				map[string]any{"error": "unauthorized"}, raw, true)
 		},
 	}
@@ -347,11 +365,67 @@ func TestTheIamClientReadsAForeignPageForWhatItSaid(t *testing.T) {
 	t.Parallel()
 	page := "<html><head><title>502 Bad Gateway</title></head>" +
 		strings.Repeat("<div>a gateway error page</div>", 1_000) + "</html>"
-	err := iamRefusal(http.StatusBadGateway, "text/html", nil, []byte(page), true)
+	err := iamRefusal(http.StatusBadGateway, proxyAnswered("text/html"), nil, []byte(page), true)
 	if err == nil {
 		t.Fatal("a gateway page was not reported as an error")
 	}
 	if !strings.Contains(err.Error(), "502 Bad Gateway") || strings.Contains(err.Error(), "<div>") {
 		t.Errorf("the refusal %.300q does not say what the page said", err)
+	}
+}
+
+// A PROXY'S ANSWER IS NOT THE NODE'S, HOWEVER IT IS SPELLED. Every answer the
+// engine writes carries its mark ([httpjson.EngineHeader]), and something in
+// front of the node can answer JSON in the engine's own envelope. Read by its
+// body, a proxy's 401 was a token the node refused, its 403 a grant to ask
+// for, its 409 a lost race, its 404 a secret that does not exist and its 503
+// a write the node could not account for. Unmarked, each client reads none of
+// its fields and says what stood in front of the node answered. Mutation:
+// read the body whatever the headers say, and every case here goes red.
+func TestEveryClientReadsAnUnmarkedAnswerAsNotTheNodes(t *testing.T) {
+	t.Parallel()
+	forged := map[int][]byte{
+		http.StatusUnauthorized: []byte(`{"error":"invalid_token"}`),
+		http.StatusForbidden: []byte(`{"error":"unauthorized","reason":"no_grant",` +
+			`"grants":["admin"]}`),
+		http.StatusNotFound: []byte(`{"error":"not_found"}`),
+		http.StatusConflict: []byte(`{"error":"revision_advanced",` +
+			`"current_revision_id":"r9"}`),
+		http.StatusServiceUnavailable: []byte(`{"error":"unavailable",` +
+			`"outcome":"unknown","op_id":"op-1"}`),
+	}
+	config := &configClient{base: "http://node"}
+	stored := &secretsClient{base: "http://node"}
+	for status, raw := range forged {
+		proxy := proxyAnswered("application/json")
+		if code := engineCode(proxy, raw); code != "" {
+			t.Errorf("node: an unmarked %d read as the engine's %q", status, code)
+		}
+		if code := engineCode(engineAnswered("application/json"), raw); code == "" {
+			t.Errorf("node: the same %d, marked, read as nobody's", status)
+		}
+		for name, err := range map[string]error{
+			"config":  config.refusal(status, proxy, raw),
+			"secrets": stored.refusal(status, "/secrets/X", proxy, raw),
+			"iam":     iamRefusal(status, proxy, map[string]any{"error": "x"}, raw, true),
+		} {
+			if err == nil {
+				t.Errorf("%s: an unmarked %d was no error", name, status)
+				continue
+			}
+			said := err.Error()
+			for _, engines := range []string{
+				"didn't accept", "this token doesn't have", "couldn't confirm",
+				"could not establish", "another write activated first", "op op-1",
+			} {
+				if strings.Contains(said, engines) {
+					t.Errorf("%s: an unmarked %d was read as the engine's (%q):\n%s",
+						name, status, engines, said)
+				}
+			}
+			if errors.Is(err, secrets.ErrNotFound) {
+				t.Errorf("%s: an unmarked 404 was read as no such secret", name)
+			}
+		}
 	}
 }

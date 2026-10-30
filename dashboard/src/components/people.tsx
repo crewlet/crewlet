@@ -89,7 +89,7 @@ import { useServicesRun } from "~/lib/services.ts";
 import { useIamGesture, type IamAnswer, type IamGesture } from "~/lib/iamWrite.ts";
 import { useWaiting } from "~/lib/waiting.ts";
 import { useRest, type RestOptions, type RestResult } from "~/lib/useRest.ts";
-import { rest } from "~/protocol/index.ts";
+import { pathSegment, rest } from "~/protocol/index.ts";
 
 /**
  * The word for a credential the engine reports `revoked`: USED for a reset
@@ -1158,7 +1158,7 @@ export function CancelInvitation({
       onConfirm={async () => {
         const answer = await write.run({
           method: "DELETE",
-          path: `/iam/invitations/${encodeURIComponent(row.id)}`,
+          path: `/iam/invitations/${pathSegment(row.id)}`,
         });
         if (!answer) return;
         onChanged();

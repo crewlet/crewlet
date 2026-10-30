@@ -308,7 +308,7 @@ roles:
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	built, err := engine.BuildCLIAgent("subscription", c.Providers.LLM["subscription"], config.EnvOnly())
+	built, err := engine.BuildCLIAgent("subscription", c.Providers.LLM["subscription"], config.EnvOnly(), nil)
 	if err != nil {
 		t.Fatalf("BuildCLIAgent: %v", err)
 	}

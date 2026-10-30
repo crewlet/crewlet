@@ -1237,7 +1237,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/artifacts/new/doc` · `#/artifacts/new/slides` · `#/artifacts/new/sheet` · `#/artifacts/new/design` · `#/artifacts/new/dashboard` · `#/artifacts/new/html` | **New doc**, **New slide deck**, **New sheet**, **New design**, **New dashboard**, **New HTML page**: each kind's own create page, in one shared frame (the artifact page's slim bar, then a full-bleed body the kind draws), each a chunk of its own. A doc or a deck starts from the engine's starter and a sheet blank or from the Review sheet template, owned by the reader *(needs Artifacts access)*. A design starts as the canvas a person lays out: a starting layout (landing page, app screens, one screen at three sizes, a presentation or a blank canvas), then boards shaped on the canvas (Frame `F` places one; Text and Sticky place notes) with a panel that follows the selection (a board's name, frame preset or size, order and brief) and the hand-off panel beside it (the design's name, brief and references and who builds it); Create and ask publishes the boards as placeholder pages, shares the design with the chosen agent as an editor, files the agent a task carrying the brief and every board, links the design to it, and opens the design, whose boards fill in as the agent publishes. Every page offers **Ask an agent** in its bar, which opens the hand-off panel beside the page rather than replacing it ([Asking an agent from a create page is a panel, not a mode](#asking-an-agent-from-a-create-page-is-a-panel-not-a-mode)); a design and an HTML page arrive with it open where it fits beside the page. The gallery's Make row and its New menu open them. The bar's first control is **Save in**, the folder the new artifact is filed in (the folder page New was pressed on), which opens Move to… to choose another and writes nothing until the artifact is made; the way back leads to that folder, and a task asking an agent names it by its id alone (a task is read by people a private folder is not shown to, so it never carries the path) | `item=` (the task it is made for, which lists it on that task's Artifacts card) · `folder=` (the folder it is filed in, by id) · `panel=ask\|closed` (the hand-off panel; `closed` on a design or an HTML page, which open with it) |
 | `#/artifacts/new` | Not a page: an earlier link, rewritten in place to its kind's page when it carries `kind=`, and to the gallery when it does not | `kind=` (read once, then dropped) |
 | `#/artifacts/{id}` | **Artifact**: addressed by its id, drawn under ONE slim bar in the frame's place ([An open artifact is the screen](#an-open-artifact-is-the-screen)). A page runs in a sandboxed frame on the artifact origin, edge to edge, a doc is rendered here tab by tab by the dashboard's own Markdown renderer with its outline beside it, Edit (the text in place, in the rich editor, and the tabs: add, rename, reorder, remove; each save a version, a raced save merged onto the newer one) and Print, a deck is drawn from its canonical tree with Edit, Grid and Present in the bar, a sheet is drawn from its schema. The bar holds the way back (to the folder it is kept in, named, where the reader can see it), the title (renamed in place by an editor), the version chip, the kind's views, who is here, and the controls that open a panel at the side: Details (what the page header and its fact line used to say, and the Folder it is kept in, a link where the reader can see it, with Move…), History (versions, Compare, Restore, labels and the change record), Data where it keeps any (rows, the schema editor and every write, with Undo), People (who is here, with Follow) and, from More, Settings (details, what it can do, its owner, the trash); Share and More close the bar. A reader with no relation is told it is not there or not theirs, in one card | `panel=details\|history\|data\|people\|settings` (pushes; the old `tab=` and `rail=people` are read as the panel they became and rewritten) · `expand=1` (the panel takes the workspace) · `version=` · `against=` · `lens=` · `sheet=` (which collection a sheet draws) · `doctab=` (which tab of a doc is on show) · `data=rows\|schema\|history` · `mode=grid\|present\|presenter` · `slide=` · `follow=` |
-| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models & keys**, the column's landing and the Settings row's address for a reader who may open it (one who may not is taken to the first section they can, Token spend for a reader holding Worklet), every `providers.llm` entry (the coding CLI it drives, its model, what it runs as — a seat's executor, in its `run_in` cell, or text phases only — and how it signs in, by the variable each credential names) read off the company document (`config`), and the seats whose chain names it; one model's facts, its sign-in and its seats, and its **Edit** *(needs Admin access)*. `{id}` is the entry's config key, the name a seat's `llm:` writes | |
+| `#/settings/models` · `#/settings/models/{id}` | **Settings › Models**, the column's landing and the Settings row's address, open to every member: every model with its condition, how it signs in and what it is used for (`llm_entries`), the model alarms and, as the *By job* lens (`?view=jobs`), every seat's model for each category of work; one model's page with its sign-in, sit-out, usage and uses. Every change is an admin's: the wizard (`?flow=add`, or `?flow=edit&step=…` on a model; `&add=` lists the uses it opens with added, each `category:handle` or `assistant`), and the test, retry, device sign-in and removal flows (`?flow=`). `{id}` is the model's key, the name a seat's `llm:` writes | |
 | `#/settings/mcp-tools` · `#/settings/mcp-tools/{tool}` · `#/settings/mcp-tools/servers/{name}` | **MCP Tools**, the engine's runtime beside the models, every MCP server with what each node did with it, and every tool a seat can call, by origin *(needs Admin access, like every company setting: it is where MCP servers are added and their templates read; which tools a seat has is on that seat's page, from the overview's `tools` push)*. ONE tail segment is a tool and two are an origin filter, discriminated on LENGTH, because a tool name is a third party's string | `q=` · `origin=` · `add=server` (the add form) |
 | `#/settings/secrets` · `#/settings/secrets/{name}` | **Secrets** — names and provenance, never values *(needs Admin access)* | |
 | `#/settings/limits` | **Limits**, the caps the engine holds every turn to, as it enforces them: the turn's guardrails (review rounds, tool rounds on a first turn, delegation depth), delegation, notifications and a scheduled turn's timeout, one read-only settings table a group, each cap with its key in the company document, its value and whether it is the engine's default or changed from it *(needs Admin access)*. Read-only | |
@@ -3044,7 +3044,8 @@ controls were; a read or snoozed update shows its new state. 700 ms later
 moved on first.
 
 **What was answered before waits in a closed group.** The asks put to the
-reader and closed in the last week (`answered_decisions`) are an **Answered**
+reader and closed in the last week, and the coding runs' questions the reader
+answered themselves (`answered_decisions`), are an **Answered**
 group after Updates, closed and counted ("Answered 4"): its label is a
 disclosure button inside the heading, so a reader moving by heading lands on
 it and Enter opens it. Each row names who asked, the question, and who
@@ -4725,7 +4726,7 @@ a tool arrives in it with the control that sends it. The controls
 | An option · Something else and Send | A question in the Inbox's pane | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}`, then `mark_inbox{read}` for the notices that asked it |
 | Send | The reply box under the Inbox's conversation | `comment_on_work_item{item, body, reply_to}` |
 | Link a task · Attach a page | The Inbox's reply box | `update_work_item{item, linked}` / `{item, linked_pages}`; "Save as a page" first writes it with `write_page` |
-| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_run{turn_id, choice}` / `answer_run{turn_id, answer}` |
+| An option · Something else and Send answer | A parked coding run in the Inbox's pane, and its Answer dialog | `answer_run{turn_id, launch_id, choice}` / `answer_run{turn_id, launch_id, answer}` |
 | Accept · Change and Submit · Something else · Reply | A question in My work's Asked of me, and Home's "Needs your decision" | `comment_on_work_item{item, answers, choice}` / `{item, answers, body}` |
 | Drag a row · `Alt` + ↑/↓ | My work's Priorities reading (your own queue, or one in your line) | `set_priorities{handle, items, if_match}` — the whole stored list with the one row moved, conditional on the record's version |
 | Publish · Save as draft | The composer (`#/doclet/new`) | `write_page{title, body, container, parent?, labels?, status}`: a draft and a published page are one write with the status set |
@@ -5561,8 +5562,9 @@ be read at a glance:
 - **Waiting on a person** — every coding run parked on a question: whose, the
   question, who it asks (the chart's names for the seats the engine resolved),
   how long it has waited and how long its box is still held, and **Answer**,
-  which sends `answer_run{turn_id, choice}` for an option or
-  `answer_run{turn_id, answer}` for words, as the person reading.
+  which sends `answer_run{turn_id, launch_id, choice}` for an option or
+  `answer_run{turn_id, launch_id, answer}` for words, as the person reading,
+  naming the question it drew.
 - **In a box** — the rest of the detached runs in flight, eight before it
   says how many more. Empty, it says *Finished runs are on their turn’s
   trace*: a settled run's row is deleted, so the sentence it replaced,
@@ -7274,8 +7276,8 @@ it, so a link to one run landed on a board with the run below the fold.
   - A parked run's banner says what it asked, **who it is put to** (the
     audience the engine resolved when the run parked, by name, and the lead
     chain when the coding agent's label named nobody), how long its box is
-    held, and carries **Answer**: `answer_run{turn_id, choice}` for an option,
-    or `{turn_id, answer}` for words, which reaches
+    held, and carries **Answer**: `answer_run{turn_id, launch_id, choice}` for
+    an option, or `{turn_id, launch_id, answer}` for words, which reaches
     a run whatever launched it. `pending` is the ordinary outcome: the answer
     is on the seat's inbox and the node holding the seat resumes the run.
   - A running run's page polls its live output from the node that owns it
@@ -7447,7 +7449,7 @@ say where the company talks, as every service the company does not run is
 - **Search chat** (`#/chatlet/search`, `q=` and `in=`) ranks what was said in every
   room your seat may READ — wider than your rail — by keyword alone: chat is not
   in the vector corpus
-  ([ADR-0069](../../adr/0069-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
+  ([ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
   A phrase past the engine's bound is not sent, and the screen says why. It
   asks for the engine's own page — forty hits, `contract/chat.ts`'s
   `CHAT_SEARCH_PAGE`, the engine's `search.MaxChatSearchLimit` — and so does
@@ -8100,7 +8102,7 @@ saying the opposite.
 
 Settings is what the ENGINE runs, and nothing the company decides. It is the
 one workspace that draws its sections as a **column** beside the screen rather
-than as tabs in the page bar, in four groups: **Runtime** (Models & keys, MCP
+than as tabs in the page bar, in four groups: **Runtime** (Models, MCP
 Tools, Secrets and Limits: what a turn runs on and the caps it is held to),
 **Spend** (Token spend and Expensive tasks: the readings, never the
 ceilings; the row is not called Spend, since without Worklet it is the
@@ -8122,17 +8124,19 @@ section takes the screen's width. At 1024 the column beside it left a 489px
 section, whose tables drew their columns 46px wide. A section closed to the reader draws a lock naming what it
 lacks and **is never hidden**: a section that vanished for a reader without
 its access is one they cannot know exists. Closed is one rule, `sectionOpen`:
-Token spend's readings are open to everybody, Expensive tasks is
-Worklet's, and every other Settings section is admin's. It is the same rule
+Token spend's readings and Models are open to everybody (each model's
+condition is what tells a member why a seat waits; every action on it stays
+an admin's), Expensive tasks is Worklet's, and every other Settings section is
+admin's. It is the same rule
 the sidebar locks a row by (a row only when nothing in its workspace is open,
 so Settings never, since Spend always is) and the frame draws a section's
 refusal by. A section that reads a service the company does not run is not
 drawn at all, by the sidebar's rule: Expensive tasks, where the company does
-not run Worklet. The landing page, Models & keys (`#/settings/models`, where
+not run Worklet. The landing page, Models (`#/settings/models`, where
 the sidebar's Settings row goes), is one of the column's sections, so its
-trail reads **Settings › Models & keys** rather than "Settings" alone. **On a
+trail reads **Settings › Models** rather than "Settings" alone. **On a
 phone the column folds to one row naming the section** the reader is on,
-"Section · Models & keys", the word said and not only spoken, since a
+"Section · Models", the word said and not only spoken, since a
 section's name alone read as the page's title rather than as a control
 holding the others. It opens the list and folds again once a section is
 picked, the one the reader is already on included: stacked whole above the
@@ -8141,7 +8145,7 @@ fold. So a LINK to a section arrives folded, the section it named starting
 right under the picker. But the Settings row's own address names no section
 anybody chose, so **arriving there opens the list**, every group in it:
 folded, a phone reader saw one row naming the first section and never learned
-what else Settings holds. A pick that lands on that address (Models & keys)
+what else Settings holds. A pick that lands on that address (Models)
 folds it like any other. **Beside a
 section the column stays put**: it is the scroller's height rather than the
 section's, so it sticks while the section scrolls, its hairline runs the height
@@ -8646,7 +8650,12 @@ check carries **Test key** under its field: one read-only call to the app
 (`POST /setup/integrations/{kind}/verify`), whose verdict (*works*, *refused*,
 *unreachable*, or not checked, with the app's reason) shows under the field
 and goes when the value is typed over; a credential the app proves only by
-using it says how, in its help. A check the engine turned away (a `${NAME}`
+using it says how, in its help. Credentials the app checks together
+(`check_with`, Datadog's API key and application key) share one **Test keys**
+control after the last of them: it is disabled, with an accessible reason
+naming the empty fields, until all of them hold a value, shows one verdict
+that names the key that failed, and that verdict goes when any of them is
+typed over. A check the engine turned away (a `${NAME}`
 naming no secret) says why and claims no verdict.
 
 **Crewlet's own services** have pages laid out as an app's and filled only
@@ -8757,67 +8766,58 @@ asks the engine nothing. That list is derived from each seat's configuration
 an admin; an absent list on this admin's screen means a node older than the
 field, and the panel says so.
 
-**Models & keys** draws the company document's `providers.llm` entries, read
-through the same Admin-only `config` question the Configuration screen asks,
-in config order (the order a seat that names no model falls back through), each
-**as the engine will run it**: a field the entry leaves out is said as the
-default the engine applies — the CLI (`claude-code`), the
-sign-in (`subscription`), the 600-second timeout and four processes at once —
-from `contract/models.ts`, which
-`internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes` holds to the
-engine's own defaults, so a default that drifted cannot name a CLI or a
-sign-in the engine does not apply. There is **no per-key state** to draw and
-nothing is asked of a node: a model is one CLI, which holds one sign-in and
-rotates nothing, so what an operator needs is how it signs in and whether
-anything still runs on it. Three tiles count the models (and how many no seat
-names), the models that can run a seat's **executor** — a CLI with an in-box
-runner, whose own run in a box every agent seat's executor is — and the models
-**on an API key**, the ones billed to a metered account. Each row is the
-entry's key over its CLI and model (`claude-code · sonnet`), what the engine
-runs it for (*Executor* with the cell its `run_in` names, or *Text phases* for
-a CLI with no in-box runner, which a launch skips), how it **signs in** — *Subscription*, *API key* or *Engine
-environment* — over where that credential comes from: the variable the entry's
-`auth.token` or `auth.api_key` names, or, where it names none, what the CLI
-reads instead (*CLI login*, *from a bundle*; *the CLI's own key variable*; *the
-engine's own variables*) — and **Runs**, the seats whose resolved chain (the
-org projection's `llm`, the engine's own resolution) starts with the model and
-how many fall back to it. A credential is **never a value**: one written as a
-whole `${NAME}` is that name, and anything else is the document's mask, said to
-be *written inline* and never drawn. The list is read again on every company the
-engine publishes — the org projection the seats ride on moves with it — and
-never on a clock, since the document changes only with a revision.
+**Models** is every model the company runs and every task an operator does on
+one, read from the engine's own reading, `llm_entries`, which every member may
+ask: a member's names no credential, no account and no vendor sentence, and
+every action on the page is an admin's. It is kept current on a fifteen-second
+poll while the page is open, when the fleet applies a new configuration and
+when a seat's provider limit moves on the live state. Two lenses sit in the
+page bar. **Models** has stat tiles (the models, how many are ready, how many
+sit out or cannot sign in, and the week's tokens), then the model alarms
+the engine raised (`llm_credential_expiring`, `llm_credential_expires_soon`,
+`llm_sign_in_refused`, `llm_limit`, `llm_limit_waiting`), each naming its cause
+and what it stops, grouping the models one credential or one plan holds, its
+vendor's sentence behind **Details**, and offering the one gesture that fixes
+it. A limit that holds seats also offers **Use a different model for these
+seats**: a menu of the models that answer now (never one on the limited plan,
+and for coding only a CLI that runs it), or a line saying none can, and **Add a
+model**, each opening the wizard on *Use it for* with every seat's category on
+the limited models added (`?add=`), for Review to show before anything is
+written. The address only preselects: a seat the company no longer has, or
+coding on a CLI that runs none, is dropped. Then a row per model: its CLI's mark, key and model; its status (one word
+from the engine's reading, and when it changes); how it signs in and the secret
+it reads; what it is used for, by category; when it last answered; and its
+menu. **By job** is every agent seat as a row with the model it runs for each
+category of work (*Coding*, *Reviewing and delegations*, *Routines and
+evaluations*), the Assistant's model above the grid, a cell's model's condition
+in the cell, a split category said job by job, and a quiet note where a model
+under a fixed deadline is not a fast one; a pick opens that model's wizard on
+*Use it for* with the seat's category added.
 
-A row opens the **model's page** (`models/{id}`): its facts (model, CLI, what
-it runs as — *Executor* in its `run_in` cell, or *Text phases* — timeout,
-processes at once, seats — each default said as one), a **Signing
-in** card naming the mode, the credential that mode reads (the token under
-`subscription`, the API key under `api-key`, none under `inherit-env`) or, where
-the entry names none, the sentence saying what the engine reads instead (the
-CLI's own token variable or the login `crewlet llm login` wrote; the CLI's own
-key variable, from the secret store and then the environment), the login
-bundle's variable, where the login is kept (`state_dir`, or a directory derived
-from the key on each node) and each `env` variable with the name its value
-comes from; then **Seats on it** — each seat and which phases run on it or fall
-back to it. A seat's model chain on its Settings tab links here. Changing the
-CLI, where its runs happen (`run_in`) or the sign-in is Configuration's, where
-the whole entry is in view, and the card links to that entry there. **Edit** (the page's action, and
-a row's pencil) is drawn for every reader and disabled with the reason for one
-who cannot change the configuration: it reads the entry (`GET
-/config/llm-providers/{id}`) and edits its model, the ONE credential its
-sign-in reads (a secret field — `$` offers the sealed entries, and one the
-document holds inline is a locked row that can be kept or replaced, never shown
-— and none at all under `inherit-env`, since the engine refuses a credential
-under a mode that does not read it) and, under a **Limits** fold, its two caps,
-the wall clock on one stretch of a CLI's own work and how many of its CLIs live
-at once, empty meaning the default. It checks the whole company twice with `dry_run` — as stored and
-with the edit — so only a warning the edit introduces is said, places a problem
-the engine names at one of those fields beside it and any other above the form,
-then stores it with `PUT /config/llm-providers/{id}` and `If-Match`, sending
-back every field it did not show — the CLI, the mode, `run_in`, `state_dir`,
-`env`, `overrides` and the bundle — exactly as read. With no entry, or no
-company configured, the tiles read 0 and the card says to add one under
-`providers.llm`; an address naming no entry says so and links back to every
-model.
+A model's page (`models/{id}`) has its sign-in (the route, the secret, when and
+by whom it was stored, its expiry, and on a CLI login each node's state with the
+command that makes it there), its sit-out with **Retry now** and **Clear
+sit-out** for every model on its plan, its last answer and failure, its usage
+over seven days, its limits and every place that runs on it, grouped by
+category with backups apart and the Assistant named. **Test** runs the CLI's
+own checks on the answering node and says each in words. A Codex model signs
+in with a device code: the page shows the address and the code and follows the
+session until it ends. **Remove** names every place that runs on the model in
+words, asks where each moves, checks each choice with a dry run and removes the
+model and every repoint as one revision.
+
+**Adding and editing a model is one wizard**, a page of its own in place of the
+list: the name and the coding CLI (fixed once the model exists), how it signs
+in, the model (the CLI's aliases and the public catalogue's models, or any name
+as text), where its coding runs (for a CLI with a runner), what it is used for,
+its limits, a test call and a review of exactly what changes. A pasted
+credential is tested before anything is stored and sealed before the document
+that names it is written; the document is checked with a dry run against the
+revision it edits and stored with `If-Match`, so a colleague's save in between
+is a conflict to re-read. *Use it for* writes each category's fields as one
+model each, as
+[Managing models from the dashboard](../concepts/llm-backends.md#managing-models-from-the-dashboard)
+lists, and the review names every fallback a write drops.
 
 **Secrets** lists the names the fleet holds, their key ids and provenance, and
 can store, rotate and remove one over the same guarded routes the CLI uses.
@@ -9311,10 +9311,10 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 356 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. The Dashboard Assistant took it to 336.4 KiB: the kit's assistant pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 23 bytes past 355 KiB, so it moved to 356 KiB: 1.94 seconds on that link |
+| The initial load: the entry, its static imports and the linked stylesheet | 358 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. The Dashboard Assistant took it to 336.4 KiB: the kit's assistant pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load when it was 300 KiB, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
-| The whole of `static/dashboard`, which every binary and image carries | 4776 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. The Dashboard Assistant (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling the assistant what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Chatlet took it to 4775.6 KiB, so it moved to 4776 KiB, the first budget past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB |
+| The whole of `static/dashboard`, which every binary and image carries | 4913 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. The Dashboard Assistant (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling the assistant what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from

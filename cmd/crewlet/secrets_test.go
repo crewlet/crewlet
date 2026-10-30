@@ -98,13 +98,12 @@ func TestASecretRoundTripsThroughTheCLI(t *testing.T) {
 // resolving the value when.
 //
 // A removal is as invisible afterwards as a write: the engine resolves a
-// `${VAR}` through the snapshot its last apply took, so a removed value goes
-// on being used until the next one, and an unset that said only "removed"
-// read as one that failed. With the engine stopped the command reaches the
+// `${VAR}` through the snapshot its last apply took, so an unset that said
+// only "removed" left the reader to guess when the value stops being used. With the engine stopped the command reaches the
 // fleet's store itself, names it, and gives the stopped engine's note; a name
 // the store does not hold is reported against that store.
 //
-// Mutations, each red: the store line left out, and the running fleet's note
+// Mutations, each red: the store line left out, and a running node's note
 // given in place of the stopped engine's.
 func TestAnUnsetSaysWhichStoreItReached(t *testing.T) {
 	t.Parallel()
@@ -123,9 +122,9 @@ func TestAnUnsetSaysWhichStoreItReached(t *testing.T) {
 			t.Errorf("unset said %q, want it to carry %q", out, want)
 		}
 	}
-	if strings.Contains(out, secretsFleetRemovalNote) {
-		t.Errorf("an unset with the engine stopped was told the running fleet "+
-			"stops at its next apply: %q", out)
+	if strings.Contains(out, removalReloadNote(nil)) {
+		t.Errorf("an unset with the engine stopped was told what a running node's "+
+			"re-activation did: %q", out)
 	}
 
 	again, errs, err := secretsCmd(t, cfg, "unset", "TOKEN")

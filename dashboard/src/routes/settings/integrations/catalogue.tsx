@@ -66,7 +66,7 @@ import {
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, seatLookup } from "~/lib/seats.ts";
-import { rest, RestError } from "~/protocol/index.ts";
+import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import { ADMIN, needsWords } from "~/lib/access.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { useRest } from "~/lib/useRest.ts";
@@ -925,7 +925,7 @@ export function SeatStep({
     setBusy(true);
     setRefused("");
     try {
-      const answer = (await rest.post(`/setup/integrations/${toolKey}/app`, {
+      const answer = (await rest.post(`/setup/integrations/${pathSegment(toolKey)}/app`, {
         seat: seat.handle,
       })) as AppManifest;
       postManifest(answer);
@@ -1423,7 +1423,7 @@ function useSetupRuns(kinds: string[]): {
       const answers = (await Promise.all(
         key
           .split(",")
-          .map((one) => rest.get(`/setup/integrations/${encodeURIComponent(one)}/runs`, signal)),
+          .map((one) => rest.get(`/setup/integrations/${pathSegment(one)}/runs`, signal)),
       )) as RunListing[];
       return {
         runs: answers
@@ -1482,7 +1482,7 @@ function useSetupRun(
     kind === "" || id === "" ? null : `${kind}/${id}`,
     (signal) =>
       rest.get(
-        `/setup/integrations/${encodeURIComponent(kind)}/runs/${encodeURIComponent(id)}`,
+        `/setup/integrations/${pathSegment(kind)}/runs/${pathSegment(id)}`,
         signal,
       ) as Promise<SetupRun>,
     { pollMs: running ? PASS_POLL_MS : undefined },

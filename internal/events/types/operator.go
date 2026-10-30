@@ -49,6 +49,7 @@ const OperatorSource = "operator"
 var RuntimeAuditTypes = []string{
 	OperatorActed{}.EventType(),
 	BackupRequested{}.EventType(),
+	ModelActed{}.EventType(),
 	AssistantConversationRead{}.EventType(),
 	AssistantTurnCompleted{}.EventType(),
 }

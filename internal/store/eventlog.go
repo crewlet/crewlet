@@ -155,7 +155,7 @@ type EventRecord struct {
 	// and the data node that keeps its events holds rows it never
 	// published. So a reader asking where something happened asks the row,
 	// never the store that answered. Empty only on a row no node published
-	// (a test harness's queue). node/0053.
+	// (a test harness's queue). node/0054.
 	Node string `json:"node,omitempty"`
 
 	// Payload is the full serialized event. Nil on a listing — see above.
@@ -266,6 +266,14 @@ type ListQuery struct {
 	// [ListQuery.RelatedAgent], which also matches the events that merely
 	// name the seat as a party and pulls in their traces.
 	AgentID string
+
+	// AnsweredBy selects the answers ONE person gave, by the `answered_by`
+	// every record of an answer carries (sandbox_run_answered names who
+	// answered a coding run's question): the promoted column schema/0053
+	// ships, and its partial index. It is what a person's answered
+	// decisions ask ([types.SandboxRunAnswered]): the answers they gave,
+	// rather than every answer in the window read and kept in memory.
+	AnsweredBy string
 
 	// Suspended selects by whether a completion record PARKED its turn — the
 	// `suspended` flag a turn's segment carries when it launched a detached
@@ -492,9 +500,9 @@ INSERT INTO crewlet_events (
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, provider_key, work_item,
-	calls, spend_stage, node
+	calls, spend_stage, answered_by, node
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -653,9 +661,12 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		// name two different items. See schema/0033.
 		tags["work_item"],
 		spend.Calls, spend.Stage,
+		// WHO ANSWERED, off the `answered_by` tag, for the reason
+		// work_item is a copy of its own. See schema/0053.
+		tags["answered_by"],
 		// WHO PUBLISHED IT, off the record rather than off this node:
 		// a custody keeper writes rows another node published. See
-		// node/0053.
+		// node/0054.
 		rec.Node,
 	); err != nil {
 		return err
@@ -865,6 +876,7 @@ func (q ListQuery) predicate(at time.Time) (from string, where []string, args []
 	addIndexed("work_key", q.WorkKey)
 	addIndexed("work_item", q.WorkItem)
 	addIndexed("channel_id", q.ChannelID)
+	addIndexed("answered_by", q.AnsweredBy)
 	if q.Suspended != nil {
 		// [suspendedExpr]'s own rule, qualified for whichever FROM this is.
 		where = append(where, "COALESCE(json_extract("+col("payload")+", '$.suspended'), 0) = ?")

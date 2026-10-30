@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/coord"
 	coordkv "github.com/crewlet/crewlet/internal/coord/kv"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/period"
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
@@ -234,7 +235,10 @@ func refused(t *testing.T, srv *js.Server, member, stream, what string,
 // in whose copy a read asks.
 func clientBucket(ctx context.Context, t *testing.T, q *js.Queue, bucket string) jetstream.KeyValue {
 	t.Helper()
-	kv, err := q.JetStream().KeyValue(ctx, bucket)
+	// LOOKED UP AS THE PRODUCT LOOKS ONE UP ([jsprovision.LookupBucket]):
+	// only the stream's leader answers, so a request that lands while its
+	// group elects is asked again rather than failed.
+	kv, err := jsprovision.LookupBucket(ctx, q.JetStream(), bucket)
 	if err != nil {
 		t.Fatalf("bind %s: %v", bucket, err)
 	}

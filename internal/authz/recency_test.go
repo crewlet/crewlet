@@ -237,6 +237,10 @@ func TestEveryAdminRowAsksForAProofOrSaysWhyNot(t *testing.T) {
 			"Doclet surface the design leaves out of step-up",
 		authz.ActionArtifactUsage: "a read of what the company's artifacts " +
 			"hold against their quotas changes nothing",
+		authz.ActionModelsCheck: "a model's checks change no config and no " +
+			"credential: they spend a few tokens on a call the company already makes",
+		authz.ActionModelsRetry: "a retry changes no config and no credential: " +
+			"it clears a sit-out the vendor's next answer re-imposes if it still holds",
 	}
 	walked := 0
 	for _, a := range authz.Actions() {

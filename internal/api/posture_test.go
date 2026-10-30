@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/config"
@@ -508,6 +510,18 @@ func (posturePages) Revision(context.Context, string, int, statelog.Freshness) (
 	return doclet.Revision{}, false, nil
 }
 
+// postureReads is a company that reads no secret, so a write in the matrix
+// is decided on its route alone and re-activates nothing.
+type postureReads struct{}
+
+func (postureReads) Reads(context.Context, []string) (map[string][]string, error) {
+	return map[string][]string{}, nil
+}
+
+func (postureReads) Reload(context.Context, string, iam.Actor, string) (configapi.Applied, error) {
+	return configapi.Applied{}, errors.New("posture matrix: nothing reads a secret here")
+}
+
 // postureSecrets is the real /secrets surface over a memory fleet, so the
 // matrix composes the route the way a running node does rather than an inert
 // stand-in that would admit anybody.
@@ -520,6 +534,7 @@ func postureSecrets(t *testing.T) *secretsapi.Service {
 	}
 	svc, err := secretsapi.New(secretsapi.Options{
 		Fleet: coordmemory.NewFleet(), Cipher: cipher, ActiveKeyID: "k1",
+		Config: postureReads{},
 	})
 	if err != nil {
 		t.Fatalf("secretsapi.New: %v", err)

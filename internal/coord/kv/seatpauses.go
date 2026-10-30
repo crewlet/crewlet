@@ -148,7 +148,7 @@ func (f *FleetStore) DeleteSeatPause(ctx context.Context, seat uuid.UUID, versio
 // WatchSeatPauses streams every pause, the marker, then every change.
 //
 // A KV watcher over the class filter, so the broker sends this class and no
-// other of the eight sharing the register. Deletes are NOT ignored — a purge
+// other of the ten sharing the register. Deletes are NOT ignored — a purge
 // is exactly what a resume looks like on the wire. The answer and the changes
 // are [watchRecords]': the first answer certified, so a pause missing from it
 // is never a hold a node lifts and a seat it lets take work, and a change the

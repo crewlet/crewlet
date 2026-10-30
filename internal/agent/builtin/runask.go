@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/decision"
@@ -17,14 +18,20 @@ import (
 
 // AskAndWaitTool is the tool's wire name, declared in internal/toolname: no
 // authority row names the run's own ending, so the walk that holds every tool
-// name to one declaration reads it there ([toolname.AskAndWait]).
+// name to one declaration reads it there ([toolname.AskAndWait]). The run
+// record reads the same constant ([sandbox.AskAndWaitTool]): its call log's
+// bound keeps the call by that name, and the bridge's nudge reads it there
+// ([sandbox.EndsRun]).
 const AskAndWaitTool = toolname.AskAndWait
 
-// RunAskDesk records the question a coding run asks onto the job's row: the
-// run record's own write, [sandbox.PendingStore.RecordAsk], which the engine
-// hands over through the sandbox runtime it holds now.
+// RunAskDesk is the run record a coding run asks through: the write that
+// records its question onto the job's row ([sandbox.PendingStore.RecordAsk])
+// and the read of that row ([sandbox.PendingStore.Get]) a submission is held to
+// ([AskAndWait.Gate]), which the engine hands over through the sandbox runtime
+// it holds now.
 type RunAskDesk interface {
 	RecordAsk(ctx context.Context, turnID, launch string, ask sandbox.Ask) (sandbox.AskOutcome, error)
+	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
 }
 
 // RunAskDeps are ask_and_wait's dependencies.
@@ -71,20 +78,23 @@ type RunAskDeps struct {
 // the run learns one structure (ADR-0068). A run's ask carries no `inform`:
 // the answer resumes the run itself, and there is no answered turn of the
 // seat's to hold to a promise.
-func NewAskAndWait(deps RunAskDeps) tools.SeatCallable {
+func NewAskAndWait(deps RunAskDeps) *AskAndWait {
 	if deps.Desk == nil {
 		return nil
 	}
-	return &askAndWait{deps: deps}
+	return &AskAndWait{deps: deps}
 }
 
-type askAndWait struct{ deps RunAskDeps }
+// AskAndWait is the `ask_and_wait` tool ([NewAskAndWait]).
+type AskAndWait struct{ deps RunAskDeps }
 
-var _ tools.SeatCallable = (*askAndWait)(nil)
+var _ tools.SeatCallable = (*AskAndWait)(nil)
 
-func (t *askAndWait) Name() string { return AskAndWaitTool }
+// Name is the tool's wire name, [AskAndWaitTool].
+func (t *AskAndWait) Name() string { return AskAndWaitTool }
 
-func (t *askAndWait) Description() string {
+// Description is what the run is told the tool is for and when to use it.
+func (t *AskAndWait) Description() string {
 	return "Ask a person a question you cannot go on without, and park this run " +
 		"until they answer. Use it only when the work cannot proceed without a " +
 		"person's decision or information; a question that only shapes what comes " +
@@ -99,7 +109,8 @@ func (t *askAndWait) Description() string {
 		"with your question and their answer."
 }
 
-func (t *askAndWait) Parameters() map[string]any {
+// Parameters is the ask's schema: the question, its context and the choice.
+func (t *AskAndWait) Parameters() map[string]any {
 	properties := choiceProperties()
 	properties["question"] = map[string]any{
 		"type": "string",
@@ -149,11 +160,14 @@ type askArgs struct {
 	Role        decision.Role       `json:"role"`
 }
 
-func (t *askAndWait) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+// Call is [AskAndWait.CallForTurn] with no turn, which no run makes.
+func (t *AskAndWait) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
 	return t.CallForTurn(ctx, nil, args)
 }
 
-func (t *askAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+// CallForTurn records the ask a run's job makes over its bridge, or refuses
+// it with every fault at once.
+func (t *AskAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	args map[string]any) (tools.Result, error) {
 
 	runID, launch := "", turnctx.JobOf(ctx)
@@ -178,7 +192,10 @@ func (t *askAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return nodeFailure(ctx, AskAndWaitTool, err, AskAndWaitTool+" could not record "+
 			"your question", "Nothing was asked: call it again."), nil
 	case outcome == sandbox.AskAlreadyAsked:
-		return refused(tools.RefusalConflict, "You already asked a question in this run, "+
+		// NOT RUNNING rather than a conflict: a conflict clears on a retry,
+		// and this never does. The job is parked on the question it asked,
+		// so it is not waiting for another.
+		return refused(tools.RefusalNotRunning, "You already asked a question in this run, "+
 			"and it stands: one answer resumes the run, so it asks one question at a "+
 			"time. End your turn now; ask the next question once you have the answer."), nil
 	case outcome != sandbox.AskRecorded:
@@ -194,7 +211,7 @@ func (t *askAndWait) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 // readAsk reads and checks the arguments into the ask to record, or returns
 // the refusal: every fault at once (ADR-0059), the world's checks of the
 // evidence after the shape's.
-func (t *askAndWait) readAsk(ctx context.Context, args map[string]any) (sandbox.Ask, *tools.Result) {
+func (t *AskAndWait) readAsk(ctx context.Context, args map[string]any) (sandbox.Ask, *tools.Result) {
 	encoded, err := json.Marshal(args)
 	if err != nil {
 		return sandbox.Ask{}, refusalOf(failed(fmt.Sprintf("%s: the arguments are not "+
@@ -233,26 +250,107 @@ func (t *askAndWait) readAsk(ctx context.Context, args map[string]any) (sandbox.
 			}
 		}
 	}
-	if err = ask.Validate(); err != nil {
+	if err = ask.ValidateOwn(); err != nil {
 		found = append(found, err)
 	}
+	// THE DECISION'S SHAPE AND ITS EVIDENCE IN THE SAME PASS, named as the
+	// arguments carry them (at their top, with no `decision.`), so one
+	// refusal names every fault the run has to fix (ADR-0059, ADR-0068).
+	var said []string
 	if err = decision.Join(found); err != nil {
-		return sandbox.Ask{}, refusalOf(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf(
-			"%s was refused: %s. Nothing was asked.", AskAndWaitTool, err.Error())))
+		said = append(said, err.Error())
 	}
-	if ask.Decision == nil || len(ask.Decision.Evidence) == 0 {
-		return ask, nil
+	if ask.Decision != nil {
+		checked, err := worklet.ValidateDecisionAt(ctx, *ask.Decision, evidenceLookup{
+			work: t.deps.Work, pages: t.deps.Pages,
+		}, "")
+		switch {
+		case errors.Is(err, worklet.ErrInvalid):
+			said = append(said, worklet.Sentence(err))
+		case err != nil:
+			return sandbox.Ask{}, refusalOf(readFailure(ctx, AskAndWaitTool, err))
+		default:
+			ask.Decision = &checked
+		}
 	}
-	checked, err := worklet.ValidateDecision(ctx, *ask.Decision, evidenceLookup{
-		work: t.deps.Work, pages: t.deps.Pages,
-	})
-	switch {
-	case errors.Is(err, worklet.ErrInvalid):
-		return sandbox.Ask{}, refusalOf(refusedBy(tools.RefusalInvalid, err, fmt.Sprintf(
-			"%s was refused: %s. Nothing was asked.", AskAndWaitTool, worklet.Sentence(err))))
-	case err != nil:
-		return sandbox.Ask{}, refusalOf(readFailure(ctx, AskAndWaitTool, err))
+	if len(said) > 0 {
+		refusal := decision.Refuse("%s", strings.Join(said, "; "))
+		return sandbox.Ask{}, refusalOf(refusedBy(tools.RefusalInvalid, refusal, fmt.Sprintf(
+			"%s was refused: %s. Nothing was asked.", AskAndWaitTool, refusal.Error())))
 	}
-	ask.Decision = &checked
 	return ask, nil
+}
+
+// Gate is submit as an executor run's surface offers it beside this tool:
+// refused to a job whose question is on its row ([sandbox.PendingRun.AskedBy]).
+//
+// # Why the bridge refuses a submission once the job has asked
+//
+// A job that asked a person is parked on their answer: its collection carries
+// the run on with that answer rather than reporting it, and the work the run
+// goes on to do is what its round submits. A `submit_work` made after the
+// question is a run that did not stop when it was told to, and accepted, it
+// read as success to the CLI that made it, which then ended believing its work
+// was delivered while the turn waited on a person. Refused, the CLI is told
+// what is true: the run is parked, and its next prompt is the answer.
+//
+// The collection never replays such a call either (the replay keeps only the
+// calls made after the asking job, read off the row by the runner's resume): the gate is
+// what the run is told, the cut is what the round reports, and either holds
+// without the other.
+//
+// A READ OF THE ROW, before the submission is decoded, so a row that cannot be
+// read refuses the call as the node's condition, and the run calls again. A
+// call no run makes (no run id or job on its context) passes untouched: there
+// is no question it could have asked.
+func (t *AskAndWait) Gate(submit tools.Callable) tools.Callable {
+	return &submitGate{submit: submit, desk: t.deps.Desk}
+}
+
+// submitGate is [AskAndWait.Gate]'s submission: a FORWARDER, reached only
+// through [tools.Invoke] on the run's surface, which has checked the call
+// against the submission's own schema before the gate decides it (the
+// forwarders list in internal/tools holds it to that).
+type submitGate struct {
+	submit tools.Callable
+	desk   RunAskDesk
+}
+
+var (
+	_ tools.SeatCallable = (*submitGate)(nil)
+	_ tools.Wrapper      = (*submitGate)(nil)
+)
+
+func (g *submitGate) Name() string               { return g.submit.Name() }
+func (g *submitGate) Description() string        { return g.submit.Description() }
+func (g *submitGate) Parameters() map[string]any { return g.submit.Parameters() }
+func (g *submitGate) Unwrap() tools.Callable     { return g.submit }
+
+func (g *submitGate) Call(ctx context.Context, args map[string]any) (tools.Result, error) {
+	return g.CallForTurn(ctx, nil, args)
+}
+
+func (g *submitGate) CallForTurn(ctx context.Context, turn *turnctx.Turn,
+	args map[string]any) (tools.Result, error) {
+
+	if turn != nil && turn.RunID != "" {
+		if launch := turnctx.JobOf(ctx); launch != "" {
+			run, found, err := g.desk.Get(ctx, turn.RunID)
+			switch {
+			case err != nil:
+				return nodeFailure(ctx, g.submit.Name(), err, g.submit.Name()+" could not "+
+					"read whether this run is waiting on a person", "Nothing was submitted: "+
+					"call it again."), nil
+			case found && run.AskedBy(launch):
+				return refused(tools.RefusalNotRunning, "You asked a person a question in "+
+					"this run, so it is parked on their answer and takes no submission. "+
+					"END YOUR TURN NOW: their answer arrives as your next prompt, and you "+
+					"submit your work once you have finished it."), nil
+			}
+		}
+	}
+	if seat, ok := g.submit.(tools.SeatCallable); ok {
+		return seat.CallForTurn(ctx, turn, args)
+	}
+	return g.submit.Call(ctx, args)
 }

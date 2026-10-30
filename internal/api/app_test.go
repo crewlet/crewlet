@@ -243,6 +243,9 @@ func withRequired(opts api.Options) api.Options {
 	if opts.Setup == nil {
 		opts.Setup = noRoutes{}
 	}
+	if opts.Models == nil {
+		opts.Models = noRoutes{}
+	}
 	if opts.Retention == nil {
 		opts.Retention = fleet
 	}
@@ -305,7 +308,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"Runtime", "Sources.Company", "Sources.Events", "Sources.NodeID",
 		"Sources.Chart", "Sources.Holders", "Sources.WithheldContacts", "Sources.Coord",
 		"Inbound.Publisher", "Inbound.Claims", "Inbound.Secrets", "Inbound.AppFlow",
-		"Config", "Secrets", "Setup", "Retention", "Capacity", "FleetBroker", "Backup",
+		"Config", "Secrets", "Setup", "Models", "Retention", "Capacity", "FleetBroker", "Backup",
 		"AuthEvents", "Inbox", "Credentials", "ChatLive", "Nodes", "Audit",
 	} {
 		if !strings.Contains(err.Error(), "Options."+field) {

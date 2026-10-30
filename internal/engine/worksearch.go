@@ -127,7 +127,7 @@ func WorkSearcher(e *Engine) builtin.WorkSearcher {
 //
 // CHAT IS NEVER ONE OF THEM: a conversation has an index of its own
 // ([search.ChatIndexer]) with a forward-only walk and statistics it maintains
-// rather than counts (ADR-0069), so a room's chatter never moves the BM25
+// rather than counts (ADR-0071), so a room's chatter never moves the BM25
 // statistics a page or a work item is ranked by.
 func indexedCorpora(runTracker, wiki bool) []string {
 	var out []string

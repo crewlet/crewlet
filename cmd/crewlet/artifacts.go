@@ -1271,7 +1271,7 @@ func (c *nodeClient) sendRaw(ctx context.Context, method, target string, header 
 		return noAnswer{fmt.Errorf("reading the node's answer to %s: %w", target, err)}
 	}
 	if resp.StatusCode/100 != 2 {
-		if engineCode(answer) == "" {
+		if engineCode(resp.Header, answer) == "" {
 			return notTheNode(target, resp.StatusCode, resp.Header.Get("Content-Type"), answer)
 		}
 		return nodeError(resp.StatusCode, answer, c.token != "")

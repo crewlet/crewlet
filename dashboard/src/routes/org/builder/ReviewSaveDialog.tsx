@@ -259,7 +259,7 @@ export function ReviewSaveDialog({
           ))}
         </ul>
       )}
-      {status === "unreachable" && (
+      {status === "unchecked" && (
         <Callout variant="warning" icon={<PlugGlyph />}>
           Couldn’t check this draft. Saving still validates it.
         </Callout>

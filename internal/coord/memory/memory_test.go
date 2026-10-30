@@ -209,3 +209,10 @@ func TestFleetContract(t *testing.T) {
 		return func() coord.Fleet { return f }
 	})
 }
+
+// The memory twin, held mid-mint through its epoch counter.
+func TestMintingContract(t *testing.T) {
+	coordtest.RunMinting(t, func(t *testing.T, hold coordtest.MintHold) coord.Backend {
+		return &memory.Backend{Epochs: coordtest.NewMintCounter(hold)}
+	})
+}

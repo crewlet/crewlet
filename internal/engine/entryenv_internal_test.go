@@ -164,3 +164,35 @@ func TestAnOverriddenTokenVariableIsPartOfTheEntrysSignIn(t *testing.T) {
 		t.Errorf("the entry's token %q rode in beside the seat's own key", value)
 	}
 }
+
+// THE NAMES THAT SIGN A CLI IN ARE ITS PROFILE'S LIST, read wherever a box's
+// sign-in is judged: whether a seat already signs the CLI in, so the entry's
+// own sign-in stays out ([entryEnv]), and whether a remote run is signed in at
+// all ([entrySignsIn]). The list is the one `auth.mode: env` reads, so a
+// switch an override adds to it counts in both, and one it drops counts in
+// neither.
+//
+// Mutation: judge by a fixed list of Claude Code's names, and the added switch
+// neither keeps the entry's key out nor lets the remote run start, while the
+// dropped Bedrock toggle still keeps the key out.
+func TestTheNamesThatSignACLIInAreItsProfilesList(t *testing.T) {
+	t.Parallel()
+	overrides := map[string]any{"sign_in_env": []any{"CLAUDE_CODE_USE_MYCLOUD"}}
+	c, seat := creditedCompanyOverrides(t, "claude-code",
+		cliagent.Auth{Mode: cliagent.AuthAPIKey, APIKey: "sk-ant-entry"}, overrides)
+
+	env := runOn(t, c, seat, map[string]string{"CLAUDE_CODE_USE_MYCLOUD": "1"}).env
+	if value, present := env["ANTHROPIC_API_KEY"]; present {
+		t.Errorf("the entry's key %q rode in beside the seat's own sign-in", value)
+	}
+	env = runOn(t, c, seat, map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1"}).env
+	if env["ANTHROPIC_API_KEY"] != "sk-ant-entry" {
+		t.Errorf("a name the profile no longer lists kept the entry's key out: %v", env)
+	}
+
+	bare, bareSeat := creditedCompanyOverrides(t, "claude-code", cliagent.Auth{}, overrides)
+	if err := guardOn(t, bare, bareSeat, sandbox.E2B,
+		map[string]string{"CLAUDE_CODE_USE_MYCLOUD": "1"}); err != nil {
+		t.Errorf("a remote run signed in by a name the profile lists was refused: %v", err)
+	}
+}

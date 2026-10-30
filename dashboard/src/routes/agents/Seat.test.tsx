@@ -30,6 +30,7 @@ import type {
 } from "~/protocol/index.ts";
 import { emptyDay } from "~/test/myWork.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -254,7 +255,7 @@ beforeEach(() => {
         const path = new URL(String(url), "http://engine.test").pathname;
         return new Response(JSON.stringify(path === "/iam/seats" ? { seats: [] } : {}), {
           status: path === "/iam/seats" ? 200 : 404,
-          headers: { "Content-Type": "application/json" },
+          headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
         });
       }
       const tool = decodeURIComponent(String(url).split("/operator/act/")[1] ?? "");
@@ -262,7 +263,7 @@ beforeEach(() => {
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );
@@ -2485,13 +2486,13 @@ test("a company running no Worklet leaves no empty slot in the seat's bar", asyn
 });
 
 // A PARKED RUN IS ANSWERED FROM ITS SEAT WITH WHAT IT ASKED WHOLE. The live
-// projection the seat's page draws from carries the question's title alone,
-// so the answer dialog reads the run's durable row for its context and its
-// options: an option chosen without them would answer a question the reader
-// never saw.
+// entry the seat's page draws from carries no launch, which an answer names,
+// so the answer dialog reads the run's durable row for the question, its
+// context and its options, and answers the launch that row names.
 //
 // Mutation: draw the dialog off the live entry alone, and the context and the
-// options are missing; send the option as `answer`, and the write is wrong.
+// options are missing and nothing can be sent; send the option as `answer`,
+// or drop the launch, and the write is wrong.
 test("a parked run is answered from its seat with its context and options", async () => {
   const { store } = mount("#/company/org/seats/swe", {
     answers: {
@@ -2500,6 +2501,7 @@ test("a parked run is answered from its seat with its context and options", asyn
         runs: [
           {
             turn_id: "t-7",
+            launch_id: "q-7",
             agent_handle: "swe",
             status: "awaiting_clarification",
             question: "Which retry ceiling should the client use?",
@@ -2531,6 +2533,7 @@ test("a parked run is answered from its seat with its context and options", asyn
         status: "awaiting_clarification",
         started_at: "2026-09-21T09:45:50Z",
         question: "Which retry ceiling should the client use?",
+        question_context: "",
       },
     ]),
   );
@@ -2544,5 +2547,8 @@ test("a parked run is answered from its seat with its context and options", asyn
   expect(dialog.querySelector(".prose strong")?.textContent).toBe("five");
   fireEvent.click(within(dialog).getByRole("button", { name: /Three/ }));
   await waitFor(() => expect(posted).toHaveLength(1));
-  expect(posted[0]).toEqual({ tool: "answer_run", args: { turn_id: "t-7", choice: "three" } });
+  expect(posted[0]).toEqual({
+    tool: "answer_run",
+    args: { turn_id: "t-7", launch_id: "q-7", choice: "three" },
+  });
 });

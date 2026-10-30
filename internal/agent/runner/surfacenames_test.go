@@ -109,3 +109,7 @@ type noAsks struct{}
 func (noAsks) RecordAsk(context.Context, string, string, sandbox.Ask) (sandbox.AskOutcome, error) {
 	return sandbox.AskRecorded, nil
 }
+
+func (noAsks) Get(context.Context, string) (sandbox.PendingRun, bool, error) {
+	return sandbox.PendingRun{}, false, nil
+}

@@ -57,7 +57,7 @@
 // The company's CHAT is deliberately outside it, with a lexical index of its
 // own in this package ([ChatIndexer]) and no semantic half at all: a year at
 // the declared census is several times the entire supported vector corpus,
-// and the knowledge base's own embeddings are what would pay for it. ADR-0069
+// and the knowledge base's own embeddings are what would pay for it. ADR-0071
 // is the record of that decision and of what admitting chat to one half and
 // not the other cost the last time it happened.
 //

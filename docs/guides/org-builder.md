@@ -164,24 +164,26 @@ beside it.
 After a successful create, three steps remain. **Open Principles** opens
 Company › Principles in edit, to write the mission, the vision and the standing
 policies every agent reads. The builder cannot take the other two: connecting
-chat and trackers in Company › Integrations, and adding a model provider, which
-no dashboard screen adds. The engine applies the new company
-without one, but until the provider is added no agent seat takes a turn:
-whatever is sent to a seat waits on its inbox and runs once the provider
-exists. The panel gives the terminal steps for it, which
-[Giving the company a model](#giving-the-company-a-model) explains — unless
-another system [manages the company
-document](../concepts/configuration.md#managed-configuration), in which case it
-says the model is added there.
+chat and trackers in Company › Integrations, and adding a model provider. The
+engine applies the new company without one, but until the provider is added no
+agent seat takes a turn: whatever is sent to a seat waits on its inbox and runs
+once the provider exists. **Add a model** opens
+[Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard)
+on its wizard, which adds the model, signs it in and tests it; the panel also
+gives the terminal steps for it, folded, which
+[Giving the company a model](#giving-the-company-a-model) explains. On a company
+another system [manages](../concepts/configuration.md#managed-configuration),
+it says the model is added there instead.
 
 ### Giving the company a model
 
-Every model is a [coding CLI](../concepts/llm-backends.md) the engine drives,
-signed in on the node's host, so adding the first one is done in a terminal
-there — beside the node's `crewlet.yaml`. The company the builder created is
-in the store and in no file, so the steps start by writing it to one. The
-builder's panel after a create gives them, and so does its caution while the
-company has no model:
+Every model is a [coding CLI](../concepts/llm-backends.md) the engine drives.
+[Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard)
+adds one from the dashboard, signed in and tested. To add it at the node's host
+instead, in a terminal beside the node's `crewlet.yaml`: the company the builder
+created is in the store and in no file, so the steps start by writing it to
+one. The builder's panel after a create gives them, and so does its caution
+while the company has no model:
 
 ```bash
 # Stop crewlet run first (Ctrl+C), and run these beside its
@@ -476,10 +478,11 @@ engine applies such a company and places its seats, but no agent seat takes a
 turn until a provider exists: work sent to a seat waits on its inbox and runs
 once one is added
 ([A Company With No Model Provider](../concepts/configuration.md#a-company-with-no-model-provider)).
-The builder does not write providers, and the dashboard does not add one:
-Settings › Models & keys edits a model the configuration already declares.
-The caution folds away the steps that add one — the panel's own, starting from
-the company the store holds ([Giving the company a model](#giving-the-company-a-model)).
+The builder does not write providers: the caution sends the reader to
+[Settings › Models](../concepts/llm-backends.md#managing-models-from-the-dashboard),
+where a model is added, signed in and tested, and folds away the steps that add
+one from a terminal at the node's host, starting from the company the store
+holds ([Giving the company a model](#giving-the-company-a-model)).
 On a company another system [manages](../concepts/configuration.md#managed-configuration)
 it gives no steps and says the model is added there, by whoever reads it, a
 writer the document names included: the steps end in an offline

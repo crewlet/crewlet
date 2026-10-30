@@ -101,6 +101,7 @@ describe("what it surfaces", () => {
       placement: "direct",
       task_description: "",
       question: "Which branch should I target?",
+      question_context: "",
       audience: "",
       audience_handles: [],
       audience_fallback: false,

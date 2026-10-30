@@ -465,3 +465,44 @@ func TestAPreviewReadsTheSeatWithoutItsCalls(t *testing.T) {
 		}
 	}
 }
+
+// AN ANSWER TO A CODING RUN IS PREVIEWED AGAINST THE QUESTION IT ANSWERS. A
+// run that moved on to another question since the proposal was drafted is
+// refused before anybody approves an answer to a question it no longer asks,
+// and so is a choice its question does not offer; an offered choice is shown
+// as the option's label, which is what the person approves (ADR-0068).
+//
+// Mutation: drop the launch check, and the stale proposal is previewed.
+func TestARunsAnswerIsPreviewedAgainstItsQuestion(t *testing.T) {
+	t.Parallel()
+	read := reader(assistanttest.World())
+	var tool catalog.Tool
+	for _, one := range catalog.Tools() {
+		if one.Name == "answer_coding_run" {
+			tool = one
+		}
+	}
+	p, err := tool.Preview(t.Context(), read, wednesday, map[string]any{
+		"turn_id": assistanttest.RecordID, "launch_id": "launch-1", "choice": "main"})
+	if err != nil {
+		t.Fatalf("an answer to the question the run asks: %v", err)
+	}
+	shown := false
+	for _, c := range p.Changes {
+		raw, _ := json.Marshal(c)
+		shown = shown || strings.Contains(string(raw), "Target main")
+	}
+	if !shown {
+		t.Errorf("the preview %+v does not show the option chosen by its label", p.Changes)
+	}
+	for name, args := range map[string]map[string]any{
+		"a question the run moved past": {"turn_id": assistanttest.RecordID,
+			"launch_id": "launch-0", "choice": "main"},
+		"a choice not offered": {"turn_id": assistanttest.RecordID,
+			"launch_id": "launch-1", "choice": "rewrite"},
+	} {
+		if _, err := tool.Preview(t.Context(), read, wednesday, args); !errors.Is(err, catalog.ErrInvalidArguments) {
+			t.Errorf("%s previewed (%v), want it refused", name, err)
+		}
+	}
+}

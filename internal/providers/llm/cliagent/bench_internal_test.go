@@ -82,7 +82,7 @@ func TestASpentPlanSitsTheEntryOutUntilItsReset(t *testing.T) {
 			t.Errorf("the sit-out says %q, want it to name %q", err, want)
 		}
 	}
-	if left := p.sitOut.until.Sub(clock.read()); left < 36*time.Minute || left > 38*time.Minute {
+	if left := sitOutUntil(p).Sub(clock.read()); left < 36*time.Minute || left > 38*time.Minute {
 		t.Errorf("sits out %v, want the 37 minutes the CLI named", left)
 	}
 
@@ -130,7 +130,7 @@ func TestACallQueuedWhenTheEntryIsSatOutLaunchesNothing(t *testing.T) {
 	<-arrived
 
 	// The call holding the slot reports the spent plan, and lets it go.
-	p.bench(clock.read().Add(time.Minute), "Claude AI usage limit reached", clock.read())
+	p.bench(limitReport{reset: clock.read().Add(time.Minute), said: "Claude AI usage limit reached", at: clock.read()})
 	<-p.slots
 
 	err := <-done
@@ -162,7 +162,7 @@ func TestASitOutIsTheFirstBackoffStepWithoutAResetAndNeverPastAnHour(t *testing.
 			if _, err := ask(t, p, llm.Request{}); llm.KindOf(err) != llm.KindRateLimit {
 				t.Fatalf("the spent plan answered %v, want a rate limit", err)
 			}
-			left := p.sitOut.until.Sub(clock.read())
+			left := sitOutUntil(p).Sub(clock.read())
 			if left < tc.want-time.Minute || left > tc.want+time.Second {
 				t.Errorf("sits out %v, want %v", left, tc.want)
 			}
@@ -185,7 +185,7 @@ func TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered(t *testing.T) {
 	p := &Provider{now: clock.read}
 	window := func() time.Duration {
 		at := clock.read()
-		return p.bench(time.Time{}, "limited", at).Sub(at)
+		return p.bench(limitReport{said: "limited", at: at}).Sub(at)
 	}
 	if got := window(); got != time.Minute {
 		t.Fatalf("first window %v, want a minute", got)
@@ -195,12 +195,12 @@ func TestAnUnnamedResetBacksOffAndStartsAgainOnceAnswered(t *testing.T) {
 	}
 	want := []time.Duration{2 * time.Minute, 5 * time.Minute, 15 * time.Minute, 15 * time.Minute}
 	for i, step := range want {
-		clock.advance(p.sitOut.until.Sub(clock.read()))
+		clock.advance(sitOutUntil(p).Sub(clock.read()))
 		if got := window(); got != step {
 			t.Errorf("probe %d refused again sits out %v, want %v", i+1, got, step)
 		}
 	}
-	clock.advance(p.sitOut.until.Sub(clock.read()))
+	clock.advance(sitOutUntil(p).Sub(clock.read()))
 	p.answered(clock.read())
 	if got := window(); got != time.Minute {
 		t.Errorf("a limit after the entry answered sits out %v, want the first step again", got)
@@ -214,13 +214,13 @@ func TestALaterBenchNeverShortensAnEarlierOne(t *testing.T) {
 	t.Parallel()
 	clock := &testClock{now: time.Now()}
 	p := &Provider{now: clock.read}
-	p.bench(clock.read().Add(30*time.Minute), "first", clock.read())
-	p.bench(clock.read().Add(time.Minute), "second", clock.read())
-	if left := p.sitOut.until.Sub(clock.read()); left != 30*time.Minute {
+	p.bench(limitReport{reset: clock.read().Add(30 * time.Minute), said: "first", at: clock.read()})
+	p.bench(limitReport{reset: clock.read().Add(time.Minute), said: "second", at: clock.read()})
+	if left := sitOutUntil(p).Sub(clock.read()); left != 30*time.Minute {
 		t.Errorf("sits out %v after a shorter report, want the 30 minutes the first set", left)
 	}
-	if p.sitOut.said != "first" {
-		t.Errorf("says %q, want the report that set the window", p.sitOut.said)
+	if sitOutSaid(p) != "first" {
+		t.Errorf("says %q, want the report that set the window", sitOutSaid(p))
 	}
 }
 

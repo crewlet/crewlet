@@ -16,9 +16,11 @@
  *   module of `~/contract/` (the engine's own sets, which that directory's
  *   suite holds to data and shapes importing nothing but each other),
  *   `~/lib/avatar.ts` (the ONE reading of a seat's avatar, which imports
- *   nothing but the contract, held below) or
+ *   nothing but the contract, held below), `~/lib/segment.ts` (the ONE rule
+ *   of a URL path segment, which imports nothing, held below) or
  *   `~/protocol/configAnswer.ts` (the ONE reading of a `/config` refusal,
- *   which imports nothing but types — held below); the rest of `~/protocol`
+ *   which imports nothing but types and `engineAnswer.ts`, itself importing
+ *   nothing but the contract's mark of an engine answer, both held below); the rest of `~/protocol`
  *   is imported for TYPES only, because its runtime half is the socket and
  *   `fetch`;
  * - no module names a browser or time global.
@@ -33,6 +35,9 @@ const CONFIG_ANSWER = "~/protocol/configAnswer.ts";
 
 /** The one runtime import the model may make from `~/lib` beyond formatting and storage keys. */
 const AVATAR = "~/lib/avatar.ts";
+
+/** The one rule of a URL path segment, which a lead's unit path is built by: it imports nothing. */
+const SEGMENT = "~/lib/segment.ts";
 
 /** This directory, relative to `src/`. */
 const MODEL = "routes/org/builder/model/";
@@ -109,6 +114,7 @@ describe("the builder core", () => {
           spec.startsWith("~/contract/") ||
           spec === CONFIG_ANSWER ||
           spec === AVATAR ||
+          spec === SEGMENT ||
           (typeOnly && spec.startsWith("~/protocol/"));
         if (!allowed) offending.push(`${name}: ${typeOnly ? "import type" : "import"} "${spec}"`);
       }
@@ -120,15 +126,30 @@ describe("the builder core", () => {
     // THE ONE RUNTIME DOOR INTO ~/protocol, and it stays a door only while
     // what is behind it imports nothing at runtime: the day it reached for
     // `rest.ts` the model would be one import away from the network.
+    // One step further, and no more: the rule of whose answer an answer is,
+    // which `rest.ts` reads too, imports nothing but the contract (the
+    // engine's mark), whose modules import nothing at runtime.
     const answer = modules().find(({ path }) => path === "protocol/configAnswer.ts");
     expect(answer, "protocol/configAnswer.ts is gone").toBeDefined();
     const runtime = imports(answer!.text).filter(({ typeOnly }) => !typeOnly);
-    expect(runtime).toEqual([]);
-    const body = code(answer!.text);
-    const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
-      ([label]) => label,
-    );
-    expect(reached).toEqual([]);
+    expect(runtime.map(({ spec }) => spec)).toEqual(["./engineAnswer.ts"]);
+    const engine = modules().find(({ path }) => path === "protocol/engineAnswer.ts");
+    expect(engine, "protocol/engineAnswer.ts is gone").toBeDefined();
+    expect(
+      imports(engine!.text)
+        .filter(({ typeOnly }) => !typeOnly)
+        .map(({ spec }) => spec),
+    ).toEqual(["../contract/engine.ts"]);
+    const mark = modules().find(({ path }) => path === "contract/engine.ts");
+    expect(mark, "contract/engine.ts is gone").toBeDefined();
+    expect(imports(mark!.text)).toEqual([]);
+    for (const { text } of [answer!, engine!, mark!]) {
+      const body = code(text);
+      const reached = FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(
+        ([label]) => label,
+      );
+      expect(reached).toEqual([]);
+    }
   });
 
   test("reads a seat's avatar through a module that imports nothing but the contract", () => {
@@ -189,4 +210,14 @@ describe("the builder core", () => {
       { spec: "~/protocol/index.ts", typeOnly: true },
     ]);
   });
+});
+
+test("builds a path segment through a module that imports nothing", () => {
+  const segment = modules().find(({ path }) => path === "lib/segment.ts");
+  expect(segment, "lib/segment.ts is gone").toBeDefined();
+  expect(imports(segment!.text)).toEqual([]);
+  const body = code(segment!.text);
+  expect(
+    FORBIDDEN_GLOBALS.filter(([, pattern]) => pattern.test(body)).map(([label]) => label),
+  ).toEqual([]);
 });

@@ -484,7 +484,7 @@ func TestASpentSubscriptionIsRateLimitedWithItsOwnResetTime(t *testing.T) {
 	if !errors.As(err, &classified) {
 		t.Fatalf("error is not classified: %v", err)
 	}
-	if left := time.Until(p.sitOut.until); left < 30*time.Minute || left > 40*time.Minute {
+	if left := time.Until(sitOutUntil(p)); left < 30*time.Minute || left > 40*time.Minute {
 		t.Errorf("the entry sits out %v, want the vendor's own reset instant", left)
 	}
 }

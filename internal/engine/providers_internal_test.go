@@ -34,7 +34,7 @@ func TestBuildCLIAgentResolvesModel(t *testing.T) {
 	p, err := BuildCLIAgent("subscription", config.LLMProvider{
 		Model:    "${CLI_MODEL}",
 		StateDir: t.TempDir(),
-	}, r)
+	}, r, nil)
 	if err != nil {
 		t.Fatalf("BuildCLIAgent: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestAnEntrysConventionalCredentialIsReadThroughTheStore(t *testing.T) {
 				Model:    "sonnet",
 				StateDir: t.TempDir(),
 				Auth:     tc.auth,
-			}, r)
+			}, r, nil)
 			if err != nil {
 				t.Fatalf("BuildCLIAgent: %v", err)
 			}
@@ -152,7 +152,7 @@ func TestAnUnresolvedModelNamesTheVariable(t *testing.T) {
 				Agent:    config.CLIOpenCode,
 				Model:    tc.model,
 				StateDir: t.TempDir(),
-			}, tierB(tc.values))
+			}, tierB(tc.values), nil)
 			if err == nil {
 				t.Fatalf("an entry whose model %q resolved to nothing built", tc.model)
 			}
@@ -174,7 +174,7 @@ func TestAResolvedModelIsTrimmed(t *testing.T) {
 	p, err := BuildCLIAgent("default", config.LLMProvider{
 		Model:    "${LLM_MODEL}",
 		StateDir: t.TempDir(),
-	}, tierB(map[string]string{"LLM_MODEL": " sonnet\n"}))
+	}, tierB(map[string]string{"LLM_MODEL": " sonnet\n"}), nil)
 	if err != nil {
 		t.Fatalf("BuildCLIAgent: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestAMissingCredentialStillBuilds(t *testing.T) {
 			Mode:   config.AuthAPIKey,
 			APIKey: "${NOBODY_SET_THIS}",
 		},
-	}, tierB(nil)); err != nil {
+	}, tierB(nil), nil); err != nil {
 		t.Fatalf("a provider with no credential was refused: %v", err)
 	}
 }

@@ -221,7 +221,7 @@ type Config struct {
 	// on (`ask_and_wait`, ADR-0068), offered on that run's surface beside
 	// `submit_work`: the two ways the run ends. Nil offers none, which is a
 	// runner built outside an engine.
-	Ask tools.Callable
+	Ask RunAsk
 
 	// Steer is where the turn's notes from a person wait
 	// (internal/agent/steer): taken at the opening of every run of the
@@ -275,6 +275,19 @@ type SteerSource interface {
 	Waiting() bool
 }
 
+// RunAsk is the tool an executor's run asks a person through and parks on
+// (`ask_and_wait`, ADR-0068), as the runner offers it.
+//
+// Gate is the run's submission as its surface offers it beside the ask: a job
+// that asked is parked on the answer, and its CLI is told so if it submits
+// rather than ending. The collection holds the same line on its own
+// ([Resume.Answered]), so a submission the gate let through in a race with
+// the ask is still not the round's.
+type RunAsk interface {
+	tools.Callable
+	Gate(submit tools.Callable) tools.Callable
+}
+
 // Resume is the collection of the executor run a turn parked on.
 type Resume struct {
 	State execstate.State
@@ -295,6 +308,12 @@ type Resume struct {
 	// launched, so its surface is fresh and has executed nothing.
 	Bridged []BridgedCall
 
+	// Answered is the place ([BridgedCall.Seq]) of the last call the round
+	// made before a person's answer carried it on, and zero where no answer
+	// has: off the run's row (sandbox.PendingRun.AnsweredThrough). Only a
+	// submission made after it is the round's ([sinceAnswer]).
+	Answered int
+
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord
 
@@ -310,6 +329,12 @@ type Resume struct {
 	// Answer is then the job's own account of itself, marked cut off, and
 	// Bridged holds the round's calls so far.
 	Lost *Lost
+
+	// Rotated is set when the run's job ended refused by its vendor on a
+	// sign-in that was replaced while it ran: the turn carries the round on
+	// once, with the new sign-in, rather than collecting the refusal (see
+	// [Rotated]), unless the round's calls already hold its submission.
+	Rotated *Rotated
 
 	// Steered is every note the turn had read when the run was collected,
 	// and where, in the order read — off the run's record, which every read
@@ -1476,6 +1501,15 @@ type phaseResult struct {
 func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, submit tools.Callable, active []string, loaded ...string,
 ) (*tools.Surface, error) {
+	// THE EXECUTOR'S OTHER WAY TO END: parking on a person's answer. Here,
+	// in the funnel the launch and the collection both take, so the surface
+	// a collection rebuilds holds the tool its run called. And the run's
+	// submission is held to it: a job that asked is parked, and takes none
+	// ([RunAsk]).
+	asks := ph == phase.Execute && r.cfg.Ask != nil
+	if asks && submit != nil {
+		submit = r.cfg.Ask.Gate(submit)
+	}
 	if submit != nil {
 		var err error
 		snapshot, err = snapshot.With(tools.Entry{Tool: submit, Origin: tools.OriginBuiltin})
@@ -1484,10 +1518,7 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 		}
 		active = append([]string{submit.Name()}, active...)
 	}
-	// THE EXECUTOR'S OTHER WAY TO END: parking on a person's answer. Here,
-	// in the funnel the launch and the collection both take, so the surface
-	// a collection rebuilds holds the tool its run called.
-	if ph == phase.Execute && r.cfg.Ask != nil {
+	if asks {
 		var err error
 		snapshot, err = snapshot.With(tools.Entry{Tool: r.cfg.Ask, Origin: tools.OriginBuiltin})
 		if err != nil {

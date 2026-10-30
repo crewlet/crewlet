@@ -36,6 +36,7 @@ import { installWindow } from "~/testing.tsx";
 import { LiveSocket, Store, type AgentRow } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -285,7 +286,10 @@ test("every signed-in reader reads who holds a human seat, and only an admin act
 test("a directory that did not answer an administrator is said over the chart", async () => {
   seatsRefused = new Response(
     JSON.stringify({ error: "unavailable", message: "This node cannot answer yet." }),
-    { status: 503, headers: { "Content-Type": "application/json", "Retry-After": "2" } },
+    {
+      status: 503,
+      headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", "Retry-After": "2" },
+    },
   );
   await mount(OPERATOR);
   await act(async () => {});

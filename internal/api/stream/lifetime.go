@@ -211,6 +211,15 @@ type credential struct {
 
 	// decide is the guard, over the handshake request.
 	decide decideFunc
+
+	// applied is a TEST OBSERVATION POINT, with no production behaviour:
+	// nil wherever the engine serves a socket, and never read for a
+	// decision. When a test sets it, the lifetime loop calls it after each
+	// decision has been acted on (the principal set, or the socket closed),
+	// whether or not the socket stays open. A test waits on it because the
+	// guard answering a decision is not the socket applying it, and a
+	// question asked between the two is asked as the principal before.
+	applied func()
 }
 
 // deciderFor is the decision an open socket repeats: the guard's
@@ -396,7 +405,11 @@ func keepDecided(ctx context.Context, conn *websocket.Conn, l *listener,
 	seen := holds(seatOf, cred.who.current().Seat)
 	decide := func() bool {
 		r, refusal := cred.decide(ctx)
-		return decideOnce(ctx, conn, cred.who, r, refusal, rewatch)
+		open := decideOnce(ctx, conn, cred.who, r, refusal, rewatch)
+		if cred.applied != nil {
+			cred.applied()
+		}
+		return open
 	}
 	for {
 		select {

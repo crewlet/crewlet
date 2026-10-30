@@ -91,16 +91,36 @@ type Ask struct {
 }
 
 // Validate is the whole contract of an ask, every fault at once (ADR-0059),
-// each marked [decision.ErrInvalid] and naming its field. Nothing is trimmed,
-// defaulted or cut.
+// each marked [decision.ErrInvalid], each named once, and each named as the
+// run's arguments carry it (`question`, `options[0].label`, `recommended`):
+// the ask's own fields ([Ask.ValidateOwn]) and its decision's, which sit at
+// the top of those arguments. Nothing is trimmed, defaulted or cut.
 func (a Ask) Validate() error {
+	found := a.ownFaults()
+	if a.Decision != nil {
+		if err := a.Decision.ValidateAt(""); err != nil {
+			found = append(found, err)
+		}
+	}
+	return decision.Join(found)
+}
+
+// ValidateOwn is the ask's own contract, without its decision's shape: what a
+// caller that checks the decision itself (`ask_and_wait`, against the world as
+// well as its shape) joins its own refusal to. The question is the decision's
+// where the ask has one, and checked there once rather than twice.
+func (a Ask) ValidateOwn() error { return decision.Join(a.ownFaults()) }
+
+func (a Ask) ownFaults() []error {
 	var found []error
 	note := func(err error) {
 		if err != nil {
 			found = append(found, err)
 		}
 	}
-	note(decision.CheckText("question", a.Question, decision.MaxQuestion, true))
+	if a.Decision == nil || a.Decision.Question != a.Question {
+		note(decision.CheckText("question", a.Question, decision.MaxQuestion, true))
+	}
 	note(decision.CheckText("context", a.Context, MaxAskContextBytes, false))
 	note(decision.CheckText("to", a.To, MaxAskToBytes, true))
 	if a.Branch != "" && (len(a.Branch) > MaxBranchBytes || !ValidBranch(a.Branch)) {
@@ -113,17 +133,16 @@ func (a Ask) Validate() error {
 			// ONE QUESTION, never two that can disagree: the tool builds
 			// the decision from the ask's own question, so a mismatch is
 			// a caller assembling the value by hand.
-			note(fieldRefusal("decision.question", "differs from the ask's question; "+
-				"a run's decision is asked in the ask's own words"))
+			note(fieldRefusal("question", "differs from its decision's; a run's "+
+				"decision is asked in the ask's own words"))
 		}
 		if d.Inform != nil {
-			note(fieldRefusal("decision.inform", "is set, and a run's ask carries "+
+			note(fieldRefusal("inform", "is set, and a run's ask carries "+
 				"none: its answer resumes the run itself, which says what was decided "+
 				"where its work is"))
 		}
-		note(d.Validate())
 	}
-	return decision.Join(found)
+	return found
 }
 
 // fieldRefusal is a refusal of one field, marked [decision.ErrInvalid]: the
@@ -195,6 +214,16 @@ func (o AskOutcome) Valid() bool {
 // asked reports whether the job the row holds asked a question: the one fact
 // a collection parks on.
 func (r PendingRun) asked() bool { return r.Question != "" }
+
+// AskedBy reports whether job `launch` is the job the row holds and has asked
+// a person a question ([PendingStore.RecordAsk]): the job is then parking, and
+// its run's only remaining move is to end.
+//
+// A job the row no longer holds has asked nothing the row records, whatever it
+// called: its question, if any, went with it.
+func (r PendingRun) AskedBy(launch string) bool {
+	return launch != "" && r.LaunchID == launch && r.asked()
+}
 
 // withoutQuestion is the row as a collection that parks nothing reads it: the
 // job's question, its context, its decision, its audience and its branch

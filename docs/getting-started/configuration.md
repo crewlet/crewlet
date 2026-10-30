@@ -496,7 +496,7 @@ providers:
                                         #   An executor run's box gets it too, beneath the seat's
                                         #   role.sandbox.env
       auth:
-        mode: subscription              # subscription (default) | api-key | inherit-env.
+        mode: subscription              # subscription (default) | api-key | inherit-env | env.
                                         #   subscription: the CLI's own login, or a headless token.
                                         #   api-key: ONE key in the CLI's key variable
                                         #   (ANTHROPIC_API_KEY for claude-code, CODEX_API_KEY for
@@ -504,7 +504,10 @@ providers:
                                         #   opencode, kimi-code). qwen-code keeps no login, so it
                                         #   is api-key only, with api_key named (its OPENAI_API_KEY
                                         #   is shared with other vendors). inherit-env: forward
-                                        #   the engine's own value of either variable
+                                        #   the engine's own value of either variable. env: the
+                                        #   entry's env alone signs the CLI in (a cloud provider's
+                                        #   switch, or a gateway's ANTHROPIC_AUTH_TOKEN); neither
+                                        #   variable reaches the CLI and no login is seeded
         token: ""                       # optional — ${VAR} holding a headless subscription token;
                                         #   empty falls back to the profile's own variable
                                         #   (CLAUDE_CODE_OAUTH_TOKEN). subscription mode only, and

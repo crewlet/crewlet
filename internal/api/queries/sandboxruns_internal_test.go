@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/livestate"
+	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -28,7 +29,9 @@ import (
 // classify `task_description` or `provider_key` as status and it goes red too.
 func TestEverySandboxRunKeyIsClassified(t *testing.T) {
 	t.Parallel()
-	row := runRow(sandbox.PendingRun{}, "")
+	// A RUN THAT ASKED WITH A CHOICE, because `decision` is the one key the
+	// row leaves out rather than sends empty (absent, never null).
+	row := runRow(sandbox.PendingRun{Decision: &decision.Decision{}}, "")
 	for key := range row {
 		shown, ok := runKeys[key]
 		if !ok {
@@ -68,7 +71,7 @@ func TestEverySandboxRunKeyIsClassified(t *testing.T) {
 func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	t.Parallel()
 	run := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe",
-		AudienceHandles: []string{"ana"}}
+		AudienceHandles: []string{"ana"}, Decision: &decision.Decision{}}
 	status := serialiseRun(run, livestate.Reach{}, "")
 	for key := range status {
 		if runKeys[key] != runStatus {

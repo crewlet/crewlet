@@ -23,13 +23,16 @@
  * `clean` and `problems` for a validated draft; `conflict` when the engine
  * holds a newer revision than the draft's base (a 409, a 412, or a dry run
  * reporting a different base); `guarded` when it refused this browser on
- * authority (401 or 403, carrying the refusal's code); `unreachable` when the
- * request was never answered or the engine failed (status 0, or a 5xx). A
+ * authority (401 or 403, carrying the refusal's code); `unchecked` when no
+ * answer said whether the draft is valid: the engine's answer never arrived,
+ * or the engine failed (status 0, or a 5xx), each said apart by its `why`. A
  * draining node's `503 draining` is one of those, deliberately: the drain
  * ends, so the retry reaches a peer behind a load balancer, or this node once
  * it has restarted. So is a starting node's `503 starting`, for the same
  * reason the other way round: the node is about to serve, and the retry
- * reaches it once it does.
+ * reaches it once it does. And so is a `503 seat_holders_unavailable` that
+ * names a wait: the node could not read just now who holds the seats the
+ * draft removes, so it stored nothing, and the retry asks again once it can.
  *
  * TWO OF THEM HALT. `conflict` and `guarded` do not change by asking again
  * on their own: the answer to the next check is the same refusal. So a change
@@ -40,7 +43,7 @@
  * check is sent again, which is theirs to ask for, never a timer's — a
  * dialog that reopened at every keystroke would be one they could not leave.
  *
- * `unreachable` BACKS OFF. Asking again at every keystroke would hammer an
+ * `unchecked` BACKS OFF. Asking again at every keystroke would hammer an
  * engine that is restarting, or a network that is down, with requests that
  * each wait out the transport's deadline. After a failure the next check waits
  * [backoffDelay], doubling per consecutive failure up to a cap, and changes
@@ -48,7 +51,11 @@
  */
 
 import type { ConfigProblem, ConfigWarning, Derived, DryRunResult } from "~/protocol/index.ts";
-import { classifyConfigRefusal, type ConfigConflictReason } from "~/protocol/configAnswer.ts";
+import {
+  classifyConfigRefusal,
+  unsettledSentence,
+  type ConfigConflictReason,
+} from "~/protocol/configAnswer.ts";
 import type { IndexedDocument } from "./document.ts";
 import { isRecord } from "./json.ts";
 import type {
@@ -96,7 +103,16 @@ export function backoffDelay(failures: number): number {
 }
 
 export type CheckStatus =
-  "checking" | "clean" | "problems" | "conflict" | "guarded" | "managed" | "unreachable";
+  "checking" | "clean" | "problems" | "conflict" | "guarded" | "managed" | "unchecked";
+
+/**
+ * Why a check was left unchecked, which is what the toolbar says: the
+ * engine's answer never arrived, the engine failed, the node refused it
+ * while draining or starting, or it could not read, for now, something the
+ * check needs (`unavailable`: who holds the seats the draft removes). Every
+ * one backs off and lets a save through.
+ */
+export type UncheckedWhy = "unanswered" | "failed" | "draining" | "starting" | "unavailable";
 
 /**
  * Why the engine holds a revision the draft was not built on: every reason
@@ -131,7 +147,37 @@ export type CheckOutcome =
   | { readonly status: "guarded"; readonly code: string }
   /** Another system manages the document, and this credential is not it (ADR-0030). */
   | { readonly status: "managed"; readonly managedBy: readonly string[] }
-  | { readonly status: "unreachable"; readonly detail: string };
+  | {
+      readonly status: "unchecked";
+      readonly why: UncheckedWhy;
+      /** The status that came back; 0 where nothing did. */
+      readonly answerStatus: number;
+      readonly detail: string;
+    };
+
+/**
+ * What an unchecked answer was, in one sentence: [unsettledSentence] for the
+ * engine's own two, and for a condition waiting clears the engine's own
+ * sentence, which says what it could not read and that nothing was written.
+ */
+export function uncheckedSentence(outcome: Extract<CheckOutcome, { status: "unchecked" }>): string {
+  switch (outcome.why) {
+    case "draining":
+      return "This node is draining.";
+    case "starting":
+      return "This node is still starting.";
+    case "unavailable":
+      return outcome.detail;
+    case "unanswered":
+    case "failed":
+      return unsettledSentence({
+        kind: "unsettled",
+        answered: outcome.why === "failed",
+        status: outcome.answerStatus,
+        detail: outcome.detail,
+      });
+  }
+}
 
 /**
  * The code of a `guarded` refusal that is a step-up the person declined: the
@@ -198,9 +244,15 @@ export function classifyCheck(
   // A MANAGED DOCUMENT IS NEVER THE GRANT MISSING, whoever drafts: it is a
   // 403 too (ADR-0030), and read as a whole-company draft's missing grant it
   // sent somebody who holds every grant to an administrator who cannot help
-  // them.
+  // them. A 403 the ENGINE did not write (a proxy's) is no grant of anybody's,
+  // and stays the unsettled answer the classifier reads it as.
   const refusal = classifyConfigRefusal(answer);
-  if (answer.status === 403 && scope === null && refusal.kind !== "managed") {
+  if (
+    answer.status === 403 &&
+    scope === null &&
+    refusal.kind !== "managed" &&
+    refusal.kind !== "unsettled"
+  ) {
     return { status: "guarded", code: text(isRecord(answer.body) ? answer.body.error : "") };
   }
   switch (refusal.kind) {
@@ -217,8 +269,19 @@ export function classifyCheck(
     case "draining":
     case "starting":
     case "unavailable":
-    case "unreachable":
-      return { status: "unreachable", detail: refusal.detail };
+      return {
+        status: "unchecked",
+        why: refusal.kind,
+        answerStatus: answer.status,
+        detail: refusal.detail,
+      };
+    case "unsettled":
+      return {
+        status: "unchecked",
+        why: refusal.answered ? "failed" : "unanswered",
+        answerStatus: refusal.status,
+        detail: refusal.detail,
+      };
     case "problems":
       return {
         status: "problems",
@@ -366,14 +429,14 @@ export function transition(state: CheckState, event: CheckEvent): Transition {
         // already scheduled the check that counts.
         return { state: { ...state, inFlight: null }, effects };
       }
-      if (event.status === "unreachable") {
+      if (event.status === "unchecked") {
         const failures = state.failures + 1;
         const dueAt = event.now + backoffDelay(failures);
         effects.push({ type: "wake", at: dueAt });
         return {
           state: {
             ...state,
-            status: "unreachable",
+            status: "unchecked",
             inFlight: null,
             failures,
             dueAt,
@@ -424,7 +487,7 @@ export interface SaveRules {
 /**
  * What saving may do in a check status.
  *
- * `unreachable` ALLOWS SAVING: the write validates exactly as the check would
+ * `unchecked` ALLOWS SAVING: the write validates exactly as the check would
  * have, so a network that dropped a check is no reason to refuse the operator
  * a write that may well get through. `problems` opens the review so the
  * operator can read the changes, with Save disabled, in both modes: the
@@ -465,7 +528,7 @@ export function saveRules(status: CheckStatus, hasChanges: boolean): SaveRules {
     case "checking":
       return { review: true, save: false, waiting: true, reason: null };
     case "clean":
-    case "unreachable":
+    case "unchecked":
       return { review: true, save: true, waiting: false, reason: null };
   }
 }
@@ -606,12 +669,17 @@ export class CheckRunner {
     this.options.transport.send(prepared.request, controller.signal).then(
       (answer) =>
         settle(classifyCheck(answer, prepared.mode, prepared.baseRevision, prepared.scope)),
-      // An aborted check is superseded, not unreachable, and `settle` drops
+      // An aborted check is superseded, not unchecked, and `settle` drops
       // it. A transport that rejects for any other reason broke its contract,
       // and the check is reported as unanswered rather than left in flight for
       // ever, which would stop every later check.
       (err: unknown) =>
-        settle({ status: "unreachable", detail: err instanceof Error ? err.message : String(err) }),
+        settle({
+          status: "unchecked",
+          why: "unanswered",
+          answerStatus: 0,
+          detail: err instanceof Error ? err.message : String(err),
+        }),
     );
   }
 }

@@ -145,42 +145,59 @@ func joinInvalid(found []error) error {
 	return invalid("%s", strings.Join(sentences, "; "))
 }
 
-// ValidateDecision is [decision.Decision.Validate] plus the checks that need the
-// world, and returns the decision as it is to be stored.
+// ValidateDecision is [ValidateDecisionAt] for a work item's ask, whose
+// decision is its `decision` argument.
+func ValidateDecision(ctx context.Context, d decision.Decision, lookup EvidenceLookup,
+) (decision.Decision, error) {
+	return ValidateDecisionAt(ctx, d, lookup, decision.FieldPrefix)
+}
+
+// ValidateDecisionAt is [decision.Decision.ValidateAt] plus the checks that
+// need the world, in ONE PASS (ADR-0059): every fault of the shape and every
+// reference that resolves to nothing come back in one refusal, each named
+// under prefix as the caller's arguments carry the decision. It returns the
+// decision as it is to be stored.
 //
 // A TASK IS RESOLVED TO ITS ID, because a key is retired by a move and the
 // record is kept for ever, and its label loses a leading copy of its key,
-// which the link already says ([labelAfterKey]); a PAGE MUST EXIST, because a decision citing a page
-// that is not there sends the person deciding to a dead link at the moment
-// they are weighing it — and it is stored by ITS id too, for the task's
-// reason: a page's address is its title, and a rename retires the title. Turns, runs and URLs are not looked up: a turn or a
-// run is named by the asker's own tooling, and a URL is outside the company.
+// which the link already says ([labelAfterKey]); a PAGE MUST EXIST, because a
+// decision citing a page that is not there sends the person deciding to a dead
+// link at the moment they are weighing it, and it is stored by ITS id too, for
+// the task's reason: a page's address is its title, and a rename retires the
+// title. Turns, runs and URLs are not looked up: a turn or a run is named by
+// the asker's own tooling, and a URL is outside the company. A reference the
+// shape already refused (no kind, no ref) is not looked up, so it is named
+// once.
 //
-// A lookup that FAILS is returned unmarked — the node could not check, which
+// A lookup that FAILS is returned unmarked: the node could not check, which
 // is not something the caller can fix by changing the decision.
-func ValidateDecision(ctx context.Context, d decision.Decision, lookup EvidenceLookup,
-) (decision.Decision, error) {
-	if err := validDecision(d); err != nil {
-		return decision.Decision{}, err
-	}
-	if len(d.Evidence) == 0 {
-		return d, nil
+func ValidateDecisionAt(ctx context.Context, d decision.Decision, lookup EvidenceLookup,
+	prefix string) (decision.Decision, error) {
+
+	var found []error
+	if err := d.ValidateAt(prefix); err != nil {
+		found = append(found, invalid("%w", err))
 	}
 	out := d
 	out.Evidence = make([]decision.Evidence, len(d.Evidence))
 	copy(out.Evidence, d.Evidence)
-	// EVERY MISSING REFERENCE AT ONCE; a lookup that fails is the node's,
-	// and answered at once as itself.
-	var missing []error
 	for i, evidence := range out.Evidence {
-		field := fmt.Sprintf("decision.evidence[%d]", i)
+		field := fmt.Sprintf("%sevidence[%d]", prefix, i)
+		if strings.TrimSpace(evidence.Ref) == "" {
+			continue
+		}
 		switch evidence.Kind {
 		case decision.EvidenceTask:
 			task, err := lookup.Task(ctx, evidence.Ref)
 			switch {
 			case errors.Is(err, ErrNoTask):
-				missing = append(missing, invalid("%s.ref names the work "+
+				found = append(found, invalid("%s.ref names the work "+
 					"item %q, which does not exist", field, evidence.Ref))
+				continue
+			case errors.Is(err, ErrInvalid):
+				// NOTHING TO CHECK IT AGAINST (a company on another
+				// tracker), which the caller changes: a fault like any.
+				found = append(found, invalid("%s.ref: %s", field, lookupSentence(err)))
 				continue
 			case err != nil:
 				return decision.Decision{}, fmt.Errorf("worklet: resolve %s.ref %q: %w",
@@ -191,21 +208,34 @@ func ValidateDecision(ctx context.Context, d decision.Decision, lookup EvidenceL
 		case decision.EvidencePage:
 			id, exists, err := lookup.PageID(ctx, evidence.Ref)
 			switch {
+			case errors.Is(err, ErrInvalid):
+				found = append(found, invalid("%s.ref: %s", field, lookupSentence(err)))
+				continue
 			case err != nil:
 				return decision.Decision{}, fmt.Errorf("worklet: check %s.ref %q: %w",
 					field, evidence.Ref, err)
 			case !exists:
-				missing = append(missing, invalid("%s.ref names the page "+
+				found = append(found, invalid("%s.ref names the page "+
 					"%q, which does not exist", field, evidence.Ref))
 				continue
 			}
 			out.Evidence[i].Ref = id
 		}
 	}
-	if err := joinInvalid(missing); err != nil {
+	if err := joinInvalid(found); err != nil {
 		return decision.Decision{}, err
 	}
+	if len(d.Evidence) == 0 {
+		out.Evidence = d.Evidence
+	}
 	return out, nil
+}
+
+// lookupSentence is a lookup's refusal as the sentence a caller reads, without
+// the class's own words in front ("worklet: invalid: "), which say where the
+// error came from rather than what to change.
+func lookupSentence(err error) string {
+	return strings.TrimPrefix(Sentence(err), ErrInvalid.Error()+": ")
 }
 
 // checkCommentShape is what a comment's decision and choice must be on their

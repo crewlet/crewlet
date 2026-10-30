@@ -437,3 +437,37 @@ func (f fakeEvidence) PageID(_ context.Context, ref string) (string, bool, error
 	id, ok := f.pages[ref]
 	return id, ok, nil
 }
+
+// A DECISION'S SHAPE AND ITS EVIDENCE ARE CHECKED IN ONE PASS (ADR-0059). A
+// work item's ask whose decision is malformed and also cites a task that does
+// not exist is told both at once, each named under `decision.` as the ask
+// carries it, and a caller whose arguments carry the decision at their top (a
+// coding run's) is told the same faults under no prefix.
+//
+// Mutation: return on the shape's refusal before the evidence is looked up,
+// and the missing task is not named.
+func TestADecisionsShapeAndEvidenceAreCheckedInOnePass(t *testing.T) {
+	t.Parallel()
+	d := *decisionFixture()
+	d.Recommended = "neither"
+	d.Evidence = []decision.Evidence{{Kind: decision.EvidenceTask, Ref: "ENG-404"}}
+	lookup := fakeEvidence{tasks: map[string]worklet.CitedTask{}, pages: map[string]string{}}
+	for prefix, wants := range map[string][]string{
+		decision.FieldPrefix: {`decision.recommended is "neither"`,
+			`decision.evidence[0].ref names the work item "ENG-404"`},
+		"": {`recommended is "neither"`, `evidence[0].ref names the work item "ENG-404"`},
+	} {
+		_, err := worklet.ValidateDecisionAt(t.Context(), d, lookup, prefix)
+		if !errors.Is(err, worklet.ErrInvalid) {
+			t.Fatalf("prefix %q: ValidateDecisionAt = %v, want a refusal", prefix, err)
+		}
+		for _, want := range wants {
+			if !strings.Contains(worklet.Sentence(err), want) {
+				t.Errorf("prefix %q: the refusal does not say %q: %s", prefix, want, worklet.Sentence(err))
+			}
+		}
+		if prefix == "" && strings.Contains(worklet.Sentence(err), "decision.") {
+			t.Errorf("a top-level decision is named under decision.: %s", worklet.Sentence(err))
+		}
+	}
+}

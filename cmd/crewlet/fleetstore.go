@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -109,10 +111,41 @@ type fleetBackend struct{ *fleetsecrets.Store }
 
 // Set writes the row under the author and source offered, which — written
 // here rather than by a node's API — are what the row records.
+//
+// NOTHING IS RE-ACTIVATED: this node's engine is stopped, so it reads the
+// store when it starts, and a peer running on the same store is told to reload
+// by the note every write prints ([secretsStoppedNote]).
 func (f fleetBackend) Set(ctx context.Context, name, value string, by secrets.Author,
-	source secrets.Source, now time.Time) (secrets.Author, error) {
+	source secrets.Source, now time.Time) (storedSecret, error) {
 
-	return by, f.Store.Set(ctx, name, value, by, source, now)
+	return storedSecret{Author: by}, f.Store.Set(ctx, name, value, by, source, now)
+}
+
+// Unset removes the row. Nothing is re-activated, as for [fleetBackend.Set]:
+// the note an unset prints says when each engine stops resolving it
+// ([secretsStoppedRemovalNote]).
+func (f fleetBackend) Unset(ctx context.Context, name string) (removedSecret, error) {
+	gone, err := f.Store.Unset(ctx, name)
+	return removedSecret{Removed: gone}, err
+}
+
+// SetMany writes each row in turn, every one checked before the first is
+// written so a value no store keeps refuses the whole set.
+func (f fleetBackend) SetMany(ctx context.Context, values map[string]string, by secrets.Author,
+	source secrets.Source, now time.Time, _ bool) (storedSecret, error) {
+
+	names := slices.Sorted(maps.Keys(values))
+	for _, name := range names {
+		if err := errors.Join(secrets.CheckName(name), secrets.CheckValue(values[name])); err != nil {
+			return storedSecret{}, fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	for _, name := range names {
+		if err := f.Store.Set(ctx, name, values[name], by, source, now); err != nil {
+			return storedSecret{}, fmt.Errorf("writing %s: %w", name, err)
+		}
+	}
+	return storedSecret{Author: by}, nil
 }
 
 // Rekey re-seals every row of the store, the engine's own keys among them.

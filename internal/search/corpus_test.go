@@ -7,7 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 )
 
-// TestTheVectorCorpusIsPagesAndTasksOnly is the gate behind ADR-0069, and the
+// TestTheVectorCorpusIsPagesAndTasksOnly is the gate behind ADR-0071, and the
 // decision it holds is a COST rather than a taste.
 //
 // Every member of [search.Sources] is a corpus the fleet-singleton embedding
@@ -38,7 +38,7 @@ func TestTheVectorCorpusIsPagesAndTasksOnly(t *testing.T) {
 			"record per document on the log and a provider bill, against a duty "+
 			"budget of about a thousand sources a minute shared by every corpus "+
 			"the company has. If a corpus genuinely belongs in the semantic half, "+
-			"change ADR-0069 and this case together; if it belongs in search at "+
+			"change ADR-0071 and this case together; if it belongs in search at "+
 			"all, the lexical half is what it is affordable in",
 			want, search.Sources)
 	}
@@ -54,7 +54,7 @@ func TestTheVectorCorpusIsPagesAndTasksOnly(t *testing.T) {
 			t.Fatalf("%q is in the vector corpus. Chat is a keyword corpus "+
 				"here: a year at the declared census is several times the whole "+
 				"supported vector corpus, and embedding it starves the knowledge "+
-				"base's own vectors to do it. See ADR-0069", s)
+				"base's own vectors to do it. See ADR-0071", s)
 		}
 	}
 }

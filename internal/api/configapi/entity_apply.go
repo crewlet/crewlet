@@ -66,6 +66,45 @@ func (s *Service) ApplyEntity(ctx context.Context, req ApplyEntityRequest) (Appl
 	return s.commit(ctx, prepared, req.Summary)
 }
 
+// CheckEntity is a dry run of one entity write from inside this process: the
+// entity spliced into a copy of the fleet's revision (replacing the one under
+// id, or with create added beside the rest) and the whole document held to
+// the rules a write is, exactly as `PUT /config/{kind}/{id}?dry_run=true`
+// does. Nothing is stored. It answers the proposed company, which is what the
+// model routes test a draft entry from (internal/api/llmapi): a model a person
+// is creating or changing the sign-in of is tested as the document would run
+// it before the document is written.
+//
+// The refusals are the write's: a [*ManagedError] for a credential a managed
+// document refuses, an [*EntityError] for an entity the collection cannot
+// take, and a [*ValidationError] for a company the entity leaves invalid.
+func (s *Service) CheckEntity(ctx context.Context, kind, id string, body []byte,
+	create bool, by iam.Actor) (*config.Company, error) {
+
+	d, err := entityDraft(kind, id, asText(body), "", create)
+	if err != nil {
+		return nil, err
+	}
+	d.by = by
+	prepared, err := s.prepare(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	return prepared.company, nil
+}
+
+// ActiveCompany is the fleet's company, UNREDACTED, and the revision it is.
+// For an in-process caller that has to resolve what an entry reads (the model
+// routes, which test and seal its credential); never answered to a caller as
+// it stands. [ErrNoActiveRevision] when the fleet runs none.
+func (s *Service) ActiveCompany(ctx context.Context) (*config.Company, string, error) {
+	company, revision, err := s.activeCompany(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	return company, revision.ID, nil
+}
+
 // EntityError reports an entity write the document refused: no such entity,
 // an identity mismatch, or a body this kind cannot read.
 type EntityError struct{ Err error }

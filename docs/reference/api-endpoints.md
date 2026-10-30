@@ -328,11 +328,26 @@ another method. Both carry a `detail` naming the method and the path, where the
 router's own answer was a line of plain text no client could branch on.
 
 The CLI and the dashboard rely on it. A non-2xx answer with no code was written
-by something **in front of** the node — most often a reverse proxy's read
-timeout — and says nothing about what the node did, so a write that meets one
+by something **in front of** the node (most often a reverse proxy's read
+timeout) and says nothing about what the node did, so a write that meets one
 is reported as *unknown*, with the operation id to finish it under, rather than
-as refused. An answer with a code is the node's own, and a refusal from the
-node means nothing was done.
+as refused. A refusal from the node means nothing was done.
+
+**Every answer the node's API writes carries `X-Crewlet-Engine: 1`**: a route's
+answer, every refusal, the router's own `404` and `405`, the canonical-path
+refusal and the `503 starting` of a node still starting. A body alone cannot
+say whose answer it is, since a proxy can answer JSON with an `error` field of
+its own; this header is set by nothing in front of the node. The dashboard and
+the CLI read an answer as the node's only when it carries both the header and a
+code, so a proxy's `401`, `403` or `413` is an answer that says nothing about
+what the node did, never a refused token, a grant to ask for or a smaller
+document. A proxy in front of the node must pass the header through unchanged;
+one that strips it makes every answer read as one the node never gave, so a
+write's outcome is reported unknown and never as refused. A dashboard served
+from another origin (`api.auth.allowed_origins`) reads it because the node
+exposes it to permitted origins (`Access-Control-Expose-Headers`, beside the
+`ETag`, `Retry-After` and `X-Request-Id` it reads too); a proxy that rewrites
+that header must keep `X-Crewlet-Engine` in it.
 
 ---
 
@@ -2269,8 +2284,9 @@ Four collections, `GET` and `PUT`:
 | `PUT` | `/config/units/{id}` | Replace one org unit, by its key |
 | `PUT` | `/config/llm-providers/{key}` | Replace one named LLM provider; with `If-None-Match: *`, add one under that key |
 | `PUT` | `/config/mcp-servers/{name}` | Replace one MCP server entry; with `If-None-Match: *`, add one after every server already declared |
+| `DELETE` | `/config/llm-providers/{key}` | Remove one model and repoint everything that names it, in one revision. See [below](#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it) |
 
-Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no `DELETE` — removal is a full-document edit, for the reasons below.
+Any other method is `405` with an `Allow` header naming `GET, PUT`. There is no other `DELETE`: removing a seat, a unit or a server is a full-document edit, for the reasons below.
 
 Why these exist beside the whole-document write: `PUT /config` makes every edit
 a company-wide one. A founder changing one seat's goal sends back a document
@@ -2344,6 +2360,75 @@ Four rules follow from that:
   configured the write answers `409 no_active_revision` — there is nothing to splice
   into, and building a company out of one seat is not what this route is for.
 
+#### `DELETE /config/llm-providers/{id}`: remove a model and repoint what names it
+
+A model is named by every seat field and assistant field that runs on it, so
+removing it alone leaves a document validation refuses. This route takes the
+removal **and the repoint of every dependant** as one write, addressed by
+identity (a seat's handle and the job the field points at a model, or the
+assistant's chat or deep work), never by a list index. `config.write` (admin,
+a recent proof); `?dry_run=true` checks it and stores nothing, `If-Match` takes
+the entry's own `ETag` from its `GET` (optional, as on the entity `PUT`), and
+a summary is required unless it is a dry run: the `X-Summary` header or a
+`_summary` key in the body, the header winning when both are sent, as on every
+config write.
+
+```json
+{
+  "repoint": [
+    {"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
+    {"at": {"seat": "backend-engineer", "job": "executor"}, "to": null},
+    {"at": {"assistant": "chat"}, "to": "aux"},
+    {"at": {"assistant": "deep_work"}, "to": null}
+  ],
+  "assistant_off": false
+}
+```
+
+- `job` is `executor`, `review`, `subagent`, `auxiliary` or `judge`. A seat
+  that writes one job twice (`llm_review` and `llm.review`) has both fields
+  answered by its one `repoint`. Each `at` is answered once: a body naming one
+  twice is `400 invalid_body`, naming both rows.
+- **`to: <key>`** replaces the entry in that field's chain where it stood,
+  each key once; `to` naming the entry being removed is refused at the field
+  (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field,
+  so the job resolves as an unset one does. `{"assistant": "deep_work"}` with
+  `null` removes the `assistant.deep_work` block.
+- The entry leaves `providers.llm` and `providers.llm_order`.
+- The assistant's chat left with no model while the assistant is on is refused
+  at `assistant.llm` unless the body sends `"assistant_off": true`, which writes
+  `assistant.enabled: false` in the same revision.
+- The **whole document** is validated with the admission rules, so an executor
+  job moved to a CLI that cannot run one, or an assistant target that allows web
+  tools, is refused at its field.
+
+**Every reference has to be answered.** One left out, or a `repoint` that
+answers nothing, is `422 validation_error` with one problem per reference
+(`kind: "conflict"`, its `segments` the written field, its `seat`, and a message
+such as "qa's reviewing work still names codex-review: repoint it or leave it
+unset in the same write") and `references`, every written reference as
+`{at, segments, chain}`. A `repoint` that answers nothing is located at its own
+row, `segments: ["repoint", i, "at"]` (`kind: "unknown_value"`). A dry run with an empty body is how a page draws the
+list.
+
+**A move nobody wrote is a warning.** A seat's job that names no model runs on
+the company's fallback, the entry keyed `default` or else the first in
+`llm_order`, so removing that entry moves the job although no field named it.
+Each such move is a warning of kind `resolution_moved` with the seat (`seat`),
+the job (`ref`), the model it ran on (`from`), the one it will (`to`) and a
+sentence ("pm's memory and summaries will run on aux"), in the dry run and in the
+write's answer. Resolution is the engine's own, so the warning says exactly
+where the work lands. A job the seat names no model for but whose executor
+names one runs on that executor's chain, and moves with the executor's
+`repoint`, so it is not warned about. Removing the company's last model leaves
+`to` empty, and the sentence says the job will have no model to run on.
+
+Answers: a dry run `200 {valid, base_revision_id, warnings, derived}`, a write
+`201 {revision_id, epoch, warnings, derived}`. Refusals: `404 no_such_entity`,
+`409 revision_advanced`, `403 config_managed` (a managed document),
+`412 version_moved` (the entry changed since its `ETag`), `422 validation_error`
+and `400 summary_required`.
+
 ### `/secrets/*` — the company's credentials (auth-gated)
 
 Every `/secrets/*` and `/setup/*` route takes `admin`, reads included: the
@@ -2355,7 +2440,7 @@ changed. Every node serving the API serves them, because every node opens the fl
 |---|---|
 | `GET /secrets`, `GET /secrets/{name}` | `admin` |
 | `GET /secrets/{name}?reveal=true`, `POST /secrets/reveal` | `admin`, a **person present** — a request that presented a machine token is refused `403 token_refused` — and a proof of identity inside `step_up`, decided before the store is read, so a caller refused is refused alike for a name that exists and one that does not |
-| `PUT /secrets/{name}`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `admin`, and a proof inside `step_up` |
+| `PUT /secrets/{name}`, `PUT /secrets`, `DELETE /secrets/{name}`, `POST /secrets/rekey` | `admin`, and a proof inside `step_up`. A write of a name the active revision reads also asks `config.write`, before anything is sealed, for the re-activation that follows (below) |
 | `GET /setup/integrations`, `GET /setup/integrations/{kind}`, the two `runs` reads | `admin` |
 | `POST /setup/integrations/{kind}/inputs`, `POST /setup/integrations/{kind}/verify`, `DELETE /setup/integrations/{kind}`, `POST /setup/integrations/{kind}/check` | `admin` |
 | `POST /setup/integrations/{kind}/provision`, `POST /setup/integrations/github/app` | `admin`: a writing pass is handed a sink that mints and seals, and an app's private key is sealed on its way back |
@@ -2382,9 +2467,34 @@ Every `/setup` and `/secrets` write asks for a proof of identity inside
 | `GET` | `/secrets/{name}` | The same fields for one name. `404 not_found` when it is unset |
 | `GET` | `/secrets/{name}?reveal=true` | **Break-glass.** The decrypted value, `Cache-Control: no-store`, logged by name against the authenticated operator. The longest answer is some 384 KiB — the largest value a write admits, in the characters JSON spells longest — which is what a client reading it must be prepared to take |
 | `POST` | `/secrets/reveal` | **Break-glass, for several names at once.** The body is `{"names": ["GITLAB_TOKEN_SWE", …]}` — at most 64 names, each an environment-variable name — and the answer is `{"values": {"<name>": "<value>"}, "missing": ["<name>"]}`: every name asked that is held, with its decrypted value (an empty one included), and every name nothing holds. Nothing beside the names asked is opened. `Cache-Control: no-store`, logged by every name asked against the authenticated operator, and decided on the reveal's own row before the body is read. It is what a [CLI run resolving a company document through a running node](cli.md#where-a-command-reads-the-companys-values) reads: having listed the names with `GET /secrets`, it asks for the variables its command reads that the node lists — and, with a `-secret-store` sink, the planned seats' tokens it reads back — in requests of at most 64, never one reveal per name. `400 invalid_body` for no names, more than 64, a field it does not read or a body that is not JSON; `400 invalid_name` for a name no `${VAR}` reference can hold; `400 invalid_query` for any query parameter; `403 reserved_name` for the engine's own key. The longest answer is about 24 MiB — 64 values of the largest size a write admits, each in the characters JSON spells longest — which is what a client reading it must be prepared to take |
-| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB — the size every store holds a value to, a direct write with the engine stopped included, which is what every reveal is sized from — and it is the only thing the request supplies; a longer body is `413 body_too_large`. The author is the caller the guard resolved and the `source` is this route's own, `api`, whoever calls it — never anything the request names; the answer carries `updated_by`, `updated_by_kind`, `operator_id` and `source` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name; `400 invalid_query` when the request carries any query parameter (`?source=` included), with a `detail` naming each and a `hint` saying where the provenance comes from instead — checked after the name and before the body is read |
-| `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false}` |
+| `PUT` | `/secrets/{name}` | Store or rotate one value. **The request body is the value**, raw bytes, up to 64 KiB — the size every store holds a value to, a direct write with the engine stopped included, which is what every reveal is sized from — and it is the only thing the request supplies; a longer body is `413 body_too_large`. The author is the caller the guard resolved and the `source` is this route's own, `api`, whoever calls it — never anything the request names; the answer carries `updated_by`, `updated_by_kind`, `operator_id` and `source` as the row records them, which is the only confirmation a client that could not choose them gets. `400 invalid_name` when the name is not an environment-variable name; `400 invalid_query` when the request carries any query parameter but one `defer_reload=true|false` (`?source=` included), with a `detail` naming each and a `hint` saying where the provenance comes from instead — checked after the name and before the body is read. `?defer_reload=true` seals the value and re-activates nothing, as the batch's `defer_reload` does (`reload` is `{"deferred": true}`, and it asks `secrets.write` alone): it is for a value the JSON batch cannot carry, one that is not UTF-8, sealed first so that the batch after it re-activates once for both. The answer also carries `read_by`, the paths of the active revision that read the name (an empty list when none does), and `reload`, what the [re-activation](#a-secret-write-re-activates-the-revision-that-reads-it) did |
+| `PUT` | `/secrets` | Store or rotate **several** values as one write. The body is `{"values": {"NAME": "value", …}}`, at most 64 names, each held to the name grammar and the 64 KiB value bound; any fault refuses the whole body, `400 invalid_body` with `invalid` mapping each bad name to its reason, and nothing is stored. `403 reserved_name` for the engine's own key, `400 invalid_query` for any query parameter. Every value is sealed and the active revision is re-activated **once** when it reads any of them. With `"defer_reload": true` the values are sealed and nothing is re-activated: `reload` is `{"deferred": true}`, saying the values are **not active yet**, and `read_by` says what a later re-activation will reach. A deferred batch asks `secrets.write` alone, never `config.write`, since it changes nothing the company runs: `config.write` is asked of the re-activation that follows (`POST /config/reload`). It is for a writer that seals values one at a time, each durable the moment it exists, and re-activates once with its last write, as a provisioning run through a node does. Nothing that runs reads a deferred value until a re-activation: a writer that dies before its re-activation leaves its values sealed and inactive until the company is next re-activated, by anyone (`POST /config/reload`, or any apply). `200 {"names": [...], "bytes": {"NAME": n}, "read_by": {"NAME": [paths]}, "reload": {...}\|null}`. A seal that fails part way answers `500 internal_error` with `sealed` (the names stored before it) and the `reload` those were given |
+| `DELETE` | `/secrets/{name}` | Remove one value. `200` either way, with `{"removed": true\|false, "read_by": [paths], "reload": {...}\|null}`: a removal of a name the active revision reads re-activates it, so whatever read it falls back or signs out now |
 | `POST` | `/secrets/rekey` | Re-seal every record not already under this node's `secrets.active_key_id` — the engine's own keys included — and every person's sealed values in the identity estate, one record per person, answering the names of yours it moved, `engine_keys_moved`, a count of the engine's, and `identity` — `{"people": n, "values": n}`, or `null` on a node that runs no identity estate. An outstanding invitation's address is not moved (only a re-issue could carry it again) and is counted by the listing instead. A person whose record nobody could confirm, or whose value would not open, is `500 rekey_incomplete` carrying what did move — run it again, which moves only what is still under an old key. `?key_id=` is refused with `409` when it names a different key |
+
+#### A secret write re-activates the revision that reads it
+
+A `${VAR}` is resolved when a provider or a transport is built, so a value
+sealed and left there changes nothing that is running. `PUT /secrets/{name}`,
+`PUT /secrets` and `DELETE /secrets/{name}` therefore re-activate the active
+revision, once per request and synchronously, when it reads a name they wrote
+([ADR-0070](../../adr/0070-a-secret-write-re-activates-the-revision-that-reads-it.md);
+what reads a name is what [`GET /config/references`](#config--live-config-management-auth-gated)
+answers). The answer's `reload` is one of:
+
+| `reload` | Means |
+|---|---|
+| `null` | Nothing the active revision reads names it; nothing was re-activated |
+| `{"deferred": true}` | A batch sent with `defer_reload`: sealed and **not active yet**, until the caller's own re-activation or any later one |
+| `{"revision_id": "…", "epoch": 42}` | The revision that re-published the company, and the epoch every node converges on |
+| `{"error": "revision_advanced", "detail": "…", "stored_revision_id": "…", "node": "…"}` | Another configuration write activated first. The value is sealed; `POST /config/reload` re-activates the company that runs now |
+| `{"error": "validation_error", "detail": "…"}` | The active company does not pass this build's validation, so it was not re-published |
+| `{"error": "unavailable", "detail": "…", "stored_revision_id": "…", "node": "…"}` | The re-activation was stored and the coordination store did not answer it: whether the fleet runs it is unknown |
+| `{"error": "no_active_revision" \| "internal_error", "detail": "…"}` | Nothing to re-activate, or a failure this node's log names |
+
+**The status is `200` whatever `reload` says**, because the value is sealed
+before the re-activation is asked for: a client that reads only the status, as
+crewlet-operator does, is told the truth about the write.
 
 **The engine's own keys are not addressable here.** The identity directory's
 blind-index key shares the bucket under a path-shaped name
@@ -2432,8 +2542,9 @@ without one.
 `message` a screen shows, and the route's own detail beside them:
 `reserved_name`, `invalid_name`, `invalid_query` (on a write or a reveal of
 several names carrying any query parameter, with a `detail` naming each and a
-`hint`), `invalid_body` (a reveal of several names that names none, too many,
-or a field it does not read), `not_found`, and on a rekey
+`hint`), `invalid_body` (a reveal or a write of several names that names none,
+too many, or a field it does not read, and a write of several whose names or
+values the store refuses, with `invalid`), `not_found`, and on a rekey
 `key_id_mismatch` (with `key_id` and `your_key_id`) and `rekey_incomplete`
 (with the `moved` names and the `engine_keys_moved` count).
 
@@ -2445,6 +2556,278 @@ With that node's engine stopped it reaches the fleet's store itself, through no
 route here: no node logs a `secret_revealed` line for what it reads, and a
 write records the shell's user as its author, with no credential, under the
 command's own `source`.
+
+### `/llm/*`: models (Settings › Models)
+
+What each model is doing is a question, answered on the query channel and by
+the named routes below; what changes something is a route of its own, one verb
+each. Every answer that depends on the node names it (`node`).
+
+| Method | Path | Needs | Description |
+|--------|------|-------|-------------|
+| `GET` | `/llm/entries` | anybody | Every model's condition across the fleet (query `llm_entries`): an administrator's reading, or a member's with nothing that names a credential |
+| `GET` | `/llm/runners` | `admin` | Whether each executor cell (`direct`, `container`, `e2b`) can start a box on each node (query `llm_runners`) |
+| `GET` | `/llm/models?agent=claude-code\|codex\|opencode[&provider=…]` | `admin` | The models a model step suggests (query `llm_models`) |
+| `GET` | `/llm/device-sign-ins/{id}` | `admin` | One device sign-in while its record lingers (query `llm_device_sign_in`) |
+| `PUT` | `/llm/providers/{key}/credential` | `secrets.write`, and `config.write` with a draft `entity` or when it re-activates | Test candidate credential values with the model's own CLI, and store them only if they sign it in; `?dry_run=true` tests and stores nothing |
+| `POST` | `/llm/providers/{key}/check` | `models.check`; with a draft `entity`, also `config.write` and `secrets.write` | The doctor over the API, on this node |
+| `POST` | `/llm/providers/{key}/retry` | `models.retry` | Probe a sitting-out model once, or clear its sit-out on every node |
+| `POST` | `/llm/providers/{key}/host-login/check` | `models.check` | Read a CLI login's status on this node now |
+| `POST` | `/llm/providers/{key}/device-sign-in` | `secrets.write` | Start a Codex device-code sign-in |
+| `DELETE` | `/llm/device-sign-ins/{id}` | `secrets.write` | Cancel one |
+
+`models.check` and `models.retry` are an administrator's at any recency, and
+the Dashboard Assistant's only on the person's approval: they change runtime
+state, never config or a credential. `secrets.write` asks a recent proof and is
+never the assistant's, since a credential's value travels in the body.
+
+**A draft is decided as the writes it stands for.** A draft entry chooses its
+CLI, its overrides and its env, and resolves its `${VAR}`s through the secret
+store as an apply would, so a check or a credential test of one asks
+`config.write` and `secrets.write` too: an administrator's, with a recent
+proof, and never the assistant's. A credential test's `dry_run=true` is asked at
+the write's own proof, not a check's: it runs the CLI and spends tokens.
+
+**Every call is audited**, refused ones included (by the route, or by the
+guard before it: a member's `403 unauthorized`, a stale proof's
+`step_up_required`), as one `model_acted` in the runtime audit (`actor`,
+`actor_kind`, `operator_id`, `action`, `provider_key`, the secret `names` a
+credential call touched and never a value, `dry_run`, `outcome` and `refusal`,
+and the `revision_id` a credential's re-activation activated). The node is the
+envelope's. `action` is `check`, `retry`, `clear`, `credential`,
+`host_login_check`, `device_sign_in` (a start) or `device_sign_in_cancel`. How
+a device sign-in **ended** is a row of its own, `device_sign_in_ended`, with
+`status` (`approved`, `failed`, `expired` or `cancelled`), published by the node
+that ran the session, or by the sweep that fails one whose node is gone, and
+attributed to whoever started it; an approved session whose login could not be
+stored or carried to the fleet is `outcome: "failed"`.
+
+#### `GET /llm/entries`
+
+Built from every live node's heartbeat, which carries each model's sign-in
+route, sit-out, last answer and last failure, parked seats and host login, plus
+what this node resolved for each entry. An unreadable lease table is
+`503 unavailable`: the table is the answer, so a blip is never drawn as "no
+node knows".
+
+```json
+{
+  "reading": "admin",
+  "node": "node-1",
+  "nodes": [{"id": "node-1", "reported": true}, {"id": "node-2", "reported": false}],
+  "entries": [{
+    "key": "default", "agent": "claude-code", "model": "claude-opus-5-5",
+    "health": "expiring", "plan": "3f9a1c0e22b1",
+    "sign_in": {"route": "token", "mode": "subscription", "variable": "CLAUDE_CODE_OAUTH_TOKEN",
+      "source": "store", "resolves": true, "hint": "sk-ant-oat01-…Qm4x",
+      "stored_at": "2025-11-04T18:37:00Z", "stored_by": "miles",
+      "expires_at": "2026-11-04T18:37:00Z", "expiry_basis": "stored_at+365d", "host_logins": []},
+    "sitting_out": null, "last_success": "2026-10-28T21:56:00Z", "last_failure": null,
+    "waiting": null,
+    "usage": {"days": 7, "calls": 412, "total_tokens": 38400000},
+    "used_by": [{"seat": "pm", "job": "executor", "position": 0, "written": false, "source": "default-entry"}],
+    "device_sign_in": null
+  }],
+  "alarms": [{"kind": "llm_credential_expiring", "detail": "…", "remedy": "…", "entries": [...]}]
+}
+```
+
+- `health` is the first of `sitting_out` (a live node sits it out and the window
+  has not ended), `no_sign_in` (no route on the answering node, or a credential
+  that does not resolve), `rejected` (an auth failure newer than its last answer,
+  or an expiry past), `expiring` (within seven days), `untested` (no answer, no
+  failure and no call in the window) and `ready`.
+- `sign_in.route` is `token`, `credentials`, `api-key`, `env`, `inherit-env`,
+  `environment`, `device` or `none`, as the answering node resolves it;
+  `source` is `store`, `environment` or `none`. A stored token's `expires_at` is
+  its row's `stored_at` plus the lifetime its vendor documents, and
+  `expiry_basis` says so: the token itself is opaque.
+- `sitting_out` is the latest window across live nodes (`until`, `resets_at`,
+  `window`, `said`, `since`) and the `nodes` sitting it out; `last_success` and
+  `last_failure` (`kind`, `at`, `said`, `node`) are the latest across live nodes;
+  `waiting` is the seats parked on a chain naming it, by handle, and since when.
+- `usage` is the trailing seven days of the [spend rollup](#get-tokensbreakdown)'s per-entry
+  row, in calls and tokens and never money: the dashboard renders tokens, never a
+  price, and the rollup itself carries `cost_usd` for a reader that wants one.
+- `used_by` is the engine's own resolution of every agent seat's jobs
+  (`position` 0 runs the job, more is a fallback; `written` is whether the seat
+  wrote the field; `source` the level that decided it: `seat`, `executor`,
+  `default-entry`, `first-entry`), and `{"assistant": "chat" | "deep_work",
+  "position": n}` for the assistant.
+- `alarms` is this node's latest evaluation of the five model alarms.
+
+**A member's reading** (`"reading": "member"`) keeps each entry's `key`,
+`agent`, `model`, `health`, `sign_in.route` and `sign_in.resolves`,
+`sitting_out` without `said` and `nodes`, `last_success`, `waiting` and
+`used_by`, and answers `alarms: null`: nothing in it names a credential, an
+account, a vendor's sentence or a cost.
+
+#### `GET /llm/runners`
+
+```json
+{
+  "default_run_in": "container",
+  "cells": {"direct": {"declared": true, "ready_on": ["node-1"], "not_ready_on": []}, …},
+  "nodes": [{"id": "node-1", "reported": true,
+    "direct": {"state": "ready", "detail": "Landlock confinement; box root writable", "fix": null, "checked_at": "…"}, …}]
+}
+```
+
+A cell `providers.sandbox` does not declare reads `unconfigured`; a refusal
+carries its `fix`.
+
+#### `GET /llm/models`
+
+```json
+{"source": "models.dev", "fetched_at": "…", "provider": "anthropic",
+ "aliases": [{"id": "sonnet", "name": "Sonnet", "detail": "The CLI's latest Sonnet"}],
+ "models": [{"id": "claude-opus-5-5", "name": "Claude Opus 5.5", "family": "claude-opus",
+   "released": "2026-…", "tool_call": true}],
+ "docs_url": "https://code.claude.com/docs/en/model-config"}
+```
+
+Read from the public [models.dev](https://models.dev) catalogue, which needs no
+key: no credential leaves the engine to name models, and whether a plan reaches
+one is what the test call says. Claude Code reads provider `anthropic` and Codex
+`openai`; OpenCode names its `provider` and is offered `<provider>/<id>`. A copy
+is kept for a day and revalidated; a catalogue that cannot be read keeps the
+last copy and says how old it is in `reason`, and with no copy the answer is
+`"source": "none"` with `models: []` and the `reason`. `400 bad_params` for an
+unknown `agent` or OpenCode without `provider`; `422 unknown_provider` for a
+provider the catalogue does not list.
+
+#### `PUT /llm/providers/{key}/credential`
+
+```json
+{"values": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-…"},
+ "entity": {"agent": "claude-code", "model": "sonnet",
+   "auth": {"mode": "api-key", "api_key": "${ANTHROPIC_API_KEY_SONNET}"}}}
+```
+
+**Tested before it is stored.** In this order:
+
+1. The target is the active entry, or the draft `entity`: a create, or an edit
+   that changes how it signs in, validated by splicing it into a copy of the
+   active document as the entity route's dry run does (`422 validation_error`
+   with problems under `providers.llm.<key>`). `404 not_found` for an absent key
+   with no `entity`; `403 config_managed` for a draft on a managed document.
+2. Every name must be a variable the entry reads (`422 validation_error` at
+   `["values", NAME]`), and a value of the wrong kind by its vendor's prefix (an
+   API key in a token's slot, or the reverse) is refused there too, before any
+   call. The whitespace around each value is trimmed, and a value holding a
+   space, a line break, a tab or an invisible formatting character inside is
+   refused at the value with how many and where ("This token contains 2 spaces
+   (characters 66 and 67)."): a terminal that wraps a long token turns the
+   break into spaces when it is copied, and Claude Code ignores such a token
+   outright.
+3. `If-None-Match: *` refuses a name already stored: `412 already_exists` with
+   `names`, so a create never overwrites a secret another model reads. It is
+   decided again at the seal, in one step of the store's: a name another write
+   stored while this one was tested is the same `412`, with `sealed` naming
+   what this write stored before it, and nothing is re-activated.
+   **A create is keyed** by its operation key: the `Idempotency-Key` header,
+   or one minted for it, scoped by the caller as on every keyed route. Each
+   row it seals carries the key. A create that stopped part way (a `500` with
+   `sealed`, or a `412` on a later name) answers `op_id`. The same request sent
+   again under that key re-seals the names its key sealed, within a day of
+   their seal by the engine's own clock (never the time the key carries, which
+   its caller writes), with the values it sends now, and creates the rest. Any other create naming them
+   is `412`, whatever value it sends: the store is never read for a value, so
+   no answer says whether a guess equals what is stored. The key is in no
+   other answer, listing, log or audit row.
+4. When the write will re-activate the company, `config.write` is asked before
+   anything is tested or sealed.
+5. The candidate values are handed to the model's own CLI, in an isolated home,
+   for one one-turn call, within the entry's `timeout_seconds` capped at 120 s.
+   A refusal is `422 credential_rejected` at the value, and nothing is stored.
+   Its `detail` says what the failure meant rather than quoting the CLI: the
+   vendor refused the credential (wrong, expired or revoked, with the command
+   that makes a new token where the CLI has one), or the CLI never used it, so
+   the vendor never saw it (the profile's `auth_markers` `meaning: unread`).
+   The CLI's own words stay on the check's lines, and a failing line carries
+   `meaning` (`refused` or `unread`) beside its `kind`; a vendor that did not answer is
+   `502 credential_untested`; a CLI that cannot run (no binary) is
+   `422 validation_error` at `providers.llm.<key>.agent` with the doctor's
+   remedy. A `429` passes: it proves the credential authenticated, and the
+   answer's `limited` says so, `{"until", "resets_at", "window", "said"}`, with
+   `until` null, since a test sits nothing out, and `resets_at` the vendor's
+   reset when it named one.
+6. With `dry_run=true` the answer is `200 {"ok": true, "verified", "hints",
+   "check", "limited"}` and nothing is stored.
+7. Each value is sealed (source `models`), and the revision that reads any of
+   them is [re-activated](#a-secret-write-re-activates-the-revision-that-reads-it)
+   once, held to `If-Match` when the caller sent one. From here the write
+   finishes even when the caller disconnects. A seal that fails part way is
+   `500 internal_error` with `sealed`, the names stored before it, and
+   re-activates nothing; send the values again.
+
+```json
+{"verified": "Answered a one-turn Claude Code run in 3.4 s with only this value.",
+ "check": {"at": "…", "node": "node-1", "ok": true, "lines": [{"check": "binary", "ok": true, "detail": "…"}]},
+ "names": ["ANTHROPIC_API_KEY_SONNET"], "hints": {"ANTHROPIC_API_KEY_SONNET": "sk-ant-api03-…7d2K"},
+ "entries": ["sonnet"], "reload": {"revision_id": "…", "epoch": 42},
+ "cleared": ["sonnet"], "running_runs": 1, "limited": null}
+```
+
+`entries` is every model that reads one of the names, which all sign in with it
+now; `cleared` the ones this node had sitting out on the sign-in it replaced, which
+start clean; `running_runs` the executor runs still running on them, which keep
+the old credential until their segment ends (`null` when it could not be
+counted). A re-activation that raced another write answers `200` with
+`reload.error: "revision_advanced"`: the values are sealed and stay.
+
+#### `POST /llm/providers/{key}/check`
+
+`{"smoke": true}` checks the active entry, `{"smoke": true, "entity": {...}}`
+a draft, which resolves its `${VAR}`s through the store as an apply would. The
+body carries **no credential value**: a typed credential is tested by the
+credential route's dry run. The answer is `{"at", "node", "ok", "failure",
+"lines": [{"check", "ok", "detail", "kind", "remedy"}]}`, one line per check
+(`binary`, `version`, `sign-in`, `usage`, `smoke`, `shell`, `web`, `executor`),
+within 180 s. A check of an existing entry is a real call on its sign-in, so its
+outcome is remembered as any call's is. `404`, `422 validation_error` for a
+draft.
+
+#### `POST /llm/providers/{key}/retry`
+
+`{"mode": "probe"}` makes one call within 60 s on the answering node and, if
+it answers, clears the sit-out on every node; a limit met again is
+`{"cleared": false, "still": {"until", "resets_at", "window", "said"}}`, and
+nothing is cleared; a probe that failed for any other reason (a refused sign-in,
+a vendor that did not answer) clears nothing either and says why in `failed`,
+present only then, so the person tests the model rather than retrying again. `{"mode": "clear"}` clears it at once, and every chain
+parked on the model probes again. `200 {"cleared", "mode", "node", "still",
+"failed"}`;
+`404`; `409 not_sitting_out` for a probe of a model no live node sits out.
+
+#### `POST /llm/providers/{key}/host-login/check`
+
+Runs the CLI's own status command on the answering node:
+`{"node", "state": "signed_in" | "signed_out" | "unknown", "method", "account",
+"checked_at", "command": "crewlet llm login <key>", "shares_login_with": [...]}`.
+`shares_login_with` is every model on the same CLI and login directory, which
+one login signs in. It never signs anything in: `command` is what to run on that
+node. `404`; `422 no_host_login` for a model that signs in with a token, a key
+or its env.
+
+#### Device sign-in
+
+`POST /llm/providers/{key}/device-sign-in` (body `{}`) starts the CLI's
+device-code sign-in on this node and answers `201` as soon as the CLI printed
+its code: `{"id", "entry", "node", "url", "code", "status": "pending",
+"started_at", "expires_at"}`. The person approves at the vendor's page; nothing
+is pasted back. On approval the node seals the login as the model's credential
+bundle and re-activates, so every node restores it, and the record's `reload`
+names the revision. `GET /llm/device-sign-ins/{id}` reads it (`status`
+`starting`, `pending`, `approved`, `failed`, `expired` or `cancelled`, a
+`detail` on failure) until ten minutes after its code expires, then `404`.
+`DELETE /llm/device-sign-ins/{id}` cancels it: `200 {"id", "status":
+"cancelled"}`, forwarded to the node running it.
+
+Refusals: `404`; `409 sign_in_in_progress` with the `running` session;
+`422 no_device_sign_in` for a CLI with none or a model whose sign-in reads no
+login (an API key or its env); `502 device_sign_in_unavailable` with the CLI's
+first line when it printed no code in time.
 
 ### Concurrent writes
 
@@ -2600,12 +2983,16 @@ the epoch and makes every node apply again. Whichever node it is sent to, it
 re-publishes the fleet's revision — on a node that refused that revision too,
 never the one the node still runs.
 
-That is the gesture a rotated credential needs, and no other route performs
-it. A secret lives in the company config as a `${VAR}` pointer, resolved when
-a provider or a transport is constructed, from a snapshot taken at apply time.
-Writing a new value with `PUT /secrets/{name}` therefore changes nothing in a
-running process: the pointer is already correct, so there is no patch to make,
-and with no activation there is no apply and no refreshed snapshot.
+That is the gesture a rotated credential needs. A secret lives in the company
+config as a `${VAR}` pointer, resolved when a provider or a transport is
+constructed, from a snapshot taken at apply time: the pointer is already
+correct, so there is no patch to make, and with no activation there is no apply
+and no refreshed snapshot. A write through `/secrets` of a name the active
+revision reads performs this same reload itself
+([above](#a-secret-write-re-activates-the-revision-that-reads-it)); the route is
+for a value written any other way (with the node's engine stopped, on a store
+an external broker holds) and for a write whose own re-activation answered an
+error.
 Re-activating an unchanged revision is exactly why the activation pointer is
 append-only rather than keyed on a revision id.
 
@@ -2953,6 +3340,15 @@ carries `check_note` instead: the sentence saying when the vendor proves it. A
 webhook signing secret is the usual case, since the vendor never presents it
 and only signs its deliveries with it.
 
+`check_with`, on a `checkable` field only, names the other fields of the same
+list that one check of it is made with, for a vendor that accepts or refuses
+several values together. A form offers a single Test control after that
+field, enabled once it and every field named holds a value, and sends them in
+one request. A credential named there is not `checkable` on its own, and its
+`check_note` says where it is tested. Datadog is the one surface that uses it
+today: `app_key` carries `"check_with": ["site", "api_key"]`. Absent, a field
+is checked on its own.
+
 ### Supplying them
 
 ```bash
@@ -3065,8 +3461,8 @@ because it spends a credential at a vendor on a person's hand.
 ```bash
 curl -X POST https://engine.example.com/setup/integrations/datadog/verify \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"field": "api_key", "value": "<the typed key>",
-       "values": {"site": "datadoghq.eu", "app_key": "${DATADOG_APP_KEY}"}}'
+  -d '{"field": "app_key", "value": "<the typed key>",
+       "values": {"site": "datadoghq.eu", "api_key": "${DATADOG_API_KEY}"}}'
 ```
 
 | Field | Meaning |
@@ -3089,7 +3485,7 @@ never repeats the value that was checked.
 
 | `outcome` | Meaning |
 |---|---|
-| `works` | The vendor accepted it, and `detail` says who or what it authenticates as where the vendor says: "Works. Datadog accepted it for the FairSplit organization in datadoghq.eu." |
+| `works` | The vendor accepted it, and `detail` says who or what it authenticates as where the vendor says: "Works. Both keys are valid for the FairSplit organization in datadoghq.eu, and can read users, roles and webhooks." |
 | `refused` | The vendor answered and refused it: a 401 or 403, Slack's `invalid_auth`, or a credential that authenticates without what the integration needs (a Mattermost account that is not a system administrator, a GitLab token without its scope, an Atlassian key created with scopes, a Slack user token where a bot token belongs). The vendor's own reason is repeated where it is short |
 | `unreachable` | The vendor gave no answer about the credential: no connection, ten seconds without an answer, a `429` or `5xx`, or an answer that is not the vendor's API (often a wrong address). The detail says nothing was stored |
 | `unchecked` | The field cannot be checked ahead without acting on it, and `detail` is its `check_note` |
@@ -3100,7 +3496,7 @@ What each surface checks, and with what:
 |---|---|---|---|
 | `atlassian` | `api_key`, against `org_id` | one page of the organization's service accounts, which a scoped key is refused | |
 | `confluence` | `token`, with `email` on Cloud | `GET /rest/api/user/current` | `webhook_token` (Cloud), `webhook_secret` (Data Center) |
-| `datadog` | `api_key` and `app_key`, checked together in `site` | `GET /api/v1/org` | `webhook_token` |
+| `datadog` | `app_key`, checked with `api_key` in `site` (`check_with`); `api_key` alone answers its `check_note` | in stages, stopping at the first refusal so the detail names the key or permission that failed: `GET /api/v1/validate` (the API key alone), `GET /api/v1/org` (both keys), then one row of `/api/v2/users` and `/api/v2/roles` and a read of the configured webhook (absent is fine). See [Testing the keys](../integrations/datadog.md#testing-the-keys-before-you-save-them) | `webhook_token` |
 | `github` | `token`, at `url` for Enterprise Server | `GET /user` | `webhook_secret` |
 | `gitlab` | `admin_token` (needs `api`) and `token` (needs `read_api`), at `url` | `GET /user`, then the token's own scopes and expiry where the instance describes them | `signing_secret` |
 | `jira` | `token`, with `email` on Cloud | `GET /myself` | `webhook_secret` |
@@ -4820,7 +5216,7 @@ REST route calls, so the two surfaces cannot diverge:
 | `work_item_turns` | `{id, cursor?, limit?, read_level, …}` | `GET /worklet/turns`. One page of the agent TURNS charged to an item, newest first: `{item, key, turns, next_cursor?}` plus the coverage half. Each turn is `{turn_id, ordinal, seat, trigger?, segments, tokens, cache_read, rounds, wall_ms, workers?, sent_back?, outcome, phases, failed_in?, summary?, review?, tools?, at}`: a turn's SEGMENTS folded into one (a turn that parked on a coding run is charged once per segment): tokens, rounds and wall time summed, `phases` in the order each first ran, and `outcome`, `summary` (what it did, in the agent's words) and `review` (what the newest review that sent the work back asked for) off its newest segment; `tools` is each tool its executor called with its `calls`. `failed_in` names the phase that failed when `outcome` is `failed` because one did (`phases` lists every phase that ran, the failed one included), and is absent for a failure outside every phase and on a turn that did not fail. `ordinal` is "Turn n": the position of the turn's counted segment among every counted segment on the item, so the newest turn's `ordinal` is the item's `spend.turns`; a turn with no counted segment on this item (more of a turn charged to another) has `0`. `at` is when the newest segment landed. Read from Worklet's own turn rows (the account `spend` sums), so it answers on any node and outlives the thirty days a node keeps its event history, where `turns?work_item=` reads the event history. `next_cursor` is the position of the oldest turn's first segment; the next page is the turns whose first segment is below it, so a turn that gains a segment while you page never moves between pages. `limit` defaults to 20 and is held to 50; a cursor this endpoint did not hand out is `bad_params` |
 | `work_comments` | `{item, cursor?, limit?, thread?, with_root?, read_level, …}` | `GET /worklet/comments`. One page of an item's THREAD, newest page first and each page in the order it was written: `{item, key, title, comments, next_cursor?, key_collision?}` plus the coverage half. `next_cursor` reads the page before and is absent when this page reaches the first comment; it continues from `work_item`'s own `comments_cursor` exactly, since both are the same read. `limit` defaults to the detail's 20 and is held to 50. `thread` names a comment and narrows every page to its conversation: the comments replying to it and the answers to it when it is an ask, with the comment itself only when `with_root` is true. Narrowed in the read rather than by the caller, so `next_cursor` is present only when that conversation goes back further: a page of the whole thread kept to one question's replies carried the task's cursor, and a question nobody had replied to offered earlier replies. Each comment's `author` is who wrote it (a person as their seat, beside `author_kind`), so a pane draws a name with no second lookup. `key_collision` says the item's key opens another task, as on `work_item`. Its own question beside `work_item` because nothing followed that cursor, so every comment older than the twentieth was unreachable, and because a pane that draws a conversation wants the thread without the history, links and fields a detail assembles |
 | `decisions` | `{handle?, read_level, …}` | `GET /worklet/decisions`. What waits on ONE PERSON's decision: the open asks put to them (to their own record, a person's seat) and the coding runs parked on a question put to them (`awaiting_clarification` or `reseed`), newest first, at most 50. `{handle, items: [{kind: "ask"\|"run", at, ask?, run?}], total, capped, oldest_at?}`: `total` counts every one, not the page; `capped` says the ask count stopped at the engine's ceiling, so `total` is a floor; `oldest_at` is when the longest-waiting began. An ask is `work_my_work`'s `asked_of_me` row and a run is `sandbox_runs`' row. The same scope rule as `work_my_work`: absent is the caller's own record, and a named one is resolved first (a login to the record its holder's work is kept under) and then takes whoever leads them, or `admin`. Your own asks need no app at all, so a person without `worklet` still sees what they were asked. On a company that does not run Worklet (Jira, or none), the asks are left out and the parked runs are still answered, with no `read_level` or `complete` beside them, since no tracker was read |
-| `answered_decisions` | `{handle?, read_level, …}` | `GET /worklet/decisions/answered`. What ONE PERSON decided lately: the asks put to them and closed in the last seven days (`worklet.AnsweredWindow`), by them or by somebody else, or resolved without an answer, newest closing first, at most 50. `{handle, items: [{at, ask, answer, followed_up?}], since, truncated, read_level, complete}`: `ask` is the row `decisions` listed while it was open, with `open: false` and no `answer_with`; `answer` is `{by, by_kind?, at, comment?, choice?, body, resolved?}`, where `by` is whoever closed it (not always the person asked), `choice` the option chosen by id and `body` the answer's words; `followed_up` is the asker's first record on the task after the commit that closed the ask (`{at, kind, excerpt?, fields?, comment_id?}`, `work_activity`'s fields), absent while there is none, and left out for a reader the tracker shows no task to, since it is the task's record rather than the question's. A coding run's question the person answered (ADR-0068) is listed beside them as `{at, run, answer}`, with no `ask` and no `followed_up`: `run` is `{turn_id, launch_id, agent_handle, question, question_context?, decision?, asked_at, work_item?}` and `answer` is the same shape, read from the `sandbox_run_answered` record the fleet's event log keeps (answers the run took, given by that person, shown to whoever reads the run's seat trail and to the person who answered). `since` is the start of the window and `truncated` says it held more than the page. The same scope rule as `decisions`, and the same answer without the app: your own are listed whether or not you hold `worklet`. A company that does not run Worklet is answered its run questions alone, with no `read_level`. Served from the index replicated migration 0052 adds, one person's closed asks |
+| `answered_decisions` | `{handle?, read_level, …}` | `GET /worklet/decisions/answered`. What ONE PERSON decided lately: the asks put to them and closed in the last seven days (`worklet.AnsweredWindow`), by them or by somebody else, or resolved without an answer, newest closing first, at most 50. `{handle, items: [{at, ask, answer, followed_up?}], since, truncated, read_level, complete}`: `ask` is the row `decisions` listed while it was open, with `open: false` and no `answer_with`; `answer` is `{by, by_kind?, at, comment?, choice?, body, resolved?}`, where `by` is whoever closed it (not always the person asked), `choice` the option chosen by id and `body` the answer's words; `followed_up` is the asker's first record on the task after the commit that closed the ask (`{at, kind, excerpt?, fields?, comment_id?}`, `work_activity`'s fields), absent while there is none, and left out for a reader the tracker shows no task to, since it is the task's record rather than the question's. A coding run's question is listed only for the person who answered it (ADR-0068), never for the rest of the people it was put to: it is listed beside them as `{at, run, answer}`, with no `ask` and no `followed_up`: `run` is `{turn_id, launch_id, agent_handle, question, question_context?, decision?, asked_at, work_item?}` and `answer` is the same shape, read from the `sandbox_run_answered` record the fleet's event log keeps, found by who answered it (answers the run took, given by that person, shown to whoever reads the run's seat trail and to the person who answered). `since` is the start of the window and `truncated` says it held more than the page. The same scope rule as `decisions`, and the same answer without the app: your own are listed whether or not you hold `worklet`. A company that does not run Worklet is answered its run questions alone, with no `read_level`. Served from the index replicated migration 0052 adds, one person's closed asks |
 | `company_feed` | `{kinds, actor, limit, cursor, read_level, …}` | `GET /feed`. What the company DID, newest first: `completed`, `created` and `handoff` from Worklet, `page` (created or saved) from Doclet, and `schedule` fires from the usage domain, never a chat message, which is conversation rather than something the company did and is readable only where its room is. `kinds` is a comma list, empty for every kind this node keeps; asking for one it keeps no source for is `bad_params`. A kind is kept only where the company runs its half: a company on Jira keeps no Worklet kinds and a company on Confluence no `page` kind, and the feed answers the kinds it does keep (the `schedule` runs on every company), never refusing whole for the half it leaves out. Which halves a company runs is the org answer's [`services`](#get-org). `limit` is 1–50 (default 20). `{rows: [{kind, at, work?, page?, schedule?}], next_cursor?, complete, read_level}`. A Worklet row carries its task's key and title, and, by kind, the task's running `spend` (`{tokens, turns}`, tokens only) and `first_pass` (no reviewer sent it back), the create's `origin` (`{surface, conversation}`: the chat surface the filing turn was woken on), or the hand-off's `from`, `to`, `reassignments` and `reassignment_budget`. A `schedule` row is a RUN, a fire the scheduler dispatched and never a tick it skipped (those stay in `schedule_runs`), and consecutive runs of one schedule for one runner that no other row falls between are ONE row: `schedule.runs` counts them (at least 1) and `schedule.since` is the oldest one's instant (set when `runs` is above 1). A page that folds many runs reads its source again from where it stopped, at most four reads per source; past that the page is answered short, never out of order. MERGED BY INSTANT, CURSORED PER SOURCE: `next_cursor` resumes each source exactly where this page stopped consuming it, so a scroll never repeats or skips a row however the three interleave, and is absent once every source is read to its end. A `read_level=session` floor names Worklet's log (this is a Worklet session question); the Doclet half is read at the dashboard's own level |
 | `work_activity` | `{task, container, kinds, actor, actor_kinds, assignee, q, notified, since, from, to, limit, cursor}` | `GET /worklet/activity`. Every commit writes a history row, so this is an account of what HAPPENED rather than of what was announced: `notified` is how a reader tells the two apart, and `kinds` is what the change WAS whether or not anybody heard about it. The two used to be one: a record's kind was read off its notification, so the same change filed under one word with an audience and another without, and a quiet removal reached the feed as `tombstone` while the filter spells it `removed`. `kinds` accepts the twenty-seven change kinds and nothing else: one this build does not have is refused `bad_params` naming the set, by this route and by a seat's `task_activity` alike, because a filter matching nothing answers an empty feed that reads exactly like a quiet company. Each record carries BOTH instants: `at` is the authored one a card renders, and `effective_at` is the fleet-agreed one every duration is measured on. `task` answers that task's WHOLE history, the changes it had before it moved projects included, and a `container` named beside it is a check rather than a filter: it must be the project the task is filed in, and any other is refused `bad_params` naming the one it is — a tracker holder reads the whole tracker, so a container would keep out nothing the reader is not owed, and as a filter it hid every change written while the task sat elsewhere. `actor` is who made the change; `assignee` is whose work it is, and the two are routinely different people. `actor_kinds` is a CSV of `agent`, `human`, `operator` and `system` and narrows to WHO WAS WRITING rather than to which handle, which is not the same question and cannot be asked as a set of handles, since an `operator` commit carries a token's own label where an `agent` one carries a seat handle, and the set of people is the roster, which changes. It is REFUSED when it names a kind this build does not have, as `kinds` is: a filter silently ignored answers a wider question than the caller asked, and on an audit feed that reads as a company where everybody is an operator. Each kind named is read as its own newest-first range and the ranges are merged into one page, so an audit of several kinds costs a page of each rather than every commit those kinds ever wrote, at any age of the company. The `q` gate is on what the query would SCAN, never on which keys were named: `container=workspace&q=` and a five-year `since` both name a key and narrow nothing. `fields` is what MOVED, in the same `{from, to}` shape for every kind, the full list of names a task's own row draws on is there too, and `keys` names the tasks those deltas point at; `ask` is the question a commit asked or answered, in `work_inbox`'s shape and read the same way; see [`GET /worklet/activity`](#routes). `subject_key_collision` says the record's `subject_key` opens ANOTHER task (one that claimed the key first), so a link to the subject goes by `subject_id`. A `cursor` or a position `since` must be on Worklet's own log, and one from another domain's log (or a `cursor` that is not a position) is refused `bad_params` rather than picking a page by a number from elsewhere |
 | `work_my_work` | `{handle}` | `GET /worklet/my-work`. Seven lists, each bounded at 20 so no block crowds out another: the whole answer is read as one page. `priorities` is NOT re-sorted: the order is what somebody decided. A finished or removed task is filtered out of it rather than rewritten out, because a read must not write to somebody's own object. `totals` counts each list IN FULL (`{priorities, assigned, asked_of_me, checklist_items, collaborating, watching_recent, unblocked_recent}`, each `{total, capped}`), by the predicate that drew its page and in the same read, so a count is drawn from there and never from a list's length; `capped` means the count stopped at 10,000. Every row's `overdue` mark is cut on the company's own midnight (the [`timezone`](../getting-started/configuration.md#the-companys-clock) a board's due bands are cut on), so a task due today is not overdue here while a board says today. `handle` DEFAULTS to the caller's own record, and naming anybody else's takes the owner-or-lead rule: whoever leads them, or `admin`, with `worklet`; see below. Every task row carries `key_collision` and every checklist item `task_key_collision`, and an ask's `answer_with` names the task by its key or, where that key opens another task, by its id |
@@ -5706,6 +6102,7 @@ answers any parked run by naming it:
 | Argument | |
 |---|---|
 | `turn_id` | The parked run's `turn_id`, as [`GET /sandbox-runs`](#get-sandbox-runs) lists it. |
+| `launch_id` | The question you are answering: the run's `launch_id` as [`GET /sandbox-runs`](#get-sandbox-runs) listed it beside the question you read. Required. A run asks each question under a new job, so a run that has moved on to another question since is refused `stale_version` and nothing is answered: read its question again and answer that one. |
 | `choice` | The id of the option chosen, where the run's question offers options (its `decision` in [`GET /sandbox-runs`](#get-sandbox-runs)). It must be one of them, and is refused `invalid`, naming the options, otherwise and on an open question. The run reads it as the option's label and id: `Chosen option: <label> (`<id>`).`, followed by `answer` when both are given. |
 | `answer` | What the coding agent should be told: the whole answer to an open question, or what to add to a `choice`. One of `choice` and `answer` is required. It carries the run on: the coding CLI is launched again in the box the run kept, continuing its own session with the answer as its next message, where the relaunch reuses that box (the box was kept, the member picked runs the same CLI in the same cell, and the box is the resuming node's to drive); otherwise afresh in a new box from the run's pushed branch, told the question and the answer. Either way the answer is part of the run's prompt from then on, which its coding CLI sends again with every request it makes, so it is held to the page its question is: at most 16 KiB. Put anything longer on a page the run can read and answer with where it is; a longer answer is refused `invalid`. |
 
@@ -5737,7 +6134,7 @@ never saw. What it became is read off the run's own row in
 every attempt to resume the run with it failed and it was let go of (the run
 waits on its question again, and you answer it again), or a new `launch_id` if
 the run moved past the question first. It is also announced on the event stream
-as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or `declined`),
+as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone`, `declined` or `unoffered`),
 naming who answered: their name, its kind and the credential. A node that stops
 on the way to the resume leaves the recorded answer for the seat's next holder
 rather than losing it. An `unknown` outcome is a delivery the broker never
@@ -5746,7 +6143,7 @@ finds that question no longer waiting.
 
 **Who may answer**: whoever asked for the run — the seat its requester holds — or whoever leads the run's seat, or `admin`. Everybody else is refused `forbidden`, as the authority table refuses a lead's verb, because everybody signed in holds a credential and an answer steers somebody else's work.
 
-It refuses `already_answered` for a question another answer was recorded against first (the first recorded answer wins), naming who gave it and when; the run's row in `GET /sandbox-runs` carries both as values (`answered_by`, `answered_at`). It refuses `not_running` for a run that is not waiting for an answer, or has no
+It refuses `stale_version` for a `launch_id` that is not the job the run waits on now, the question you read having been answered and followed by another. It refuses `already_answered` for a question another answer was recorded against first (the first recorded answer wins), naming who gave it and when; the run's row in `GET /sandbox-runs` carries both as values (`answered_by`, `answered_at`). It refuses `not_running` for a run that is not waiting for an answer, or has no
 record at all (a run that ended has none). It is
 served on every company, whether it runs Worklet, Doclet and Chatlet or not: the run record is the
 fleet's, and a company on Jira runs coding agents too.

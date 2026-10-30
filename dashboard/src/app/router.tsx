@@ -64,6 +64,7 @@ import {
 } from "react";
 
 import { screenScroller } from "~/lib/scroller.ts";
+import { fragmentSegment } from "~/lib/segment.ts";
 
 export interface Route {
   /** Path segments, already decoded. `#/seats/pm` → `["seats", "pm"]`. */
@@ -141,7 +142,7 @@ export function buildHash(
   path: readonly string[],
   query?: URLSearchParams | Record<string, string>,
 ): string {
-  const p = path.map((s) => encodeURIComponent(s)).join("/");
+  const p = path.map(fragmentSegment).join("/");
   const q =
     query instanceof URLSearchParams
       ? query

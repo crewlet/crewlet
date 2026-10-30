@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -441,6 +442,21 @@ const (
 	// own environment has — an escape hatch for an unusual CLI, and the
 	// only mode that lets a host credential reach the child.
 	AuthInheritEnv CLIAgentAuthMode = "inherit-env"
+	// AuthEnv signs the CLI in with the entry's own env: a cloud
+	// provider's switch and credentials (Claude Code's
+	// CLAUDE_CODE_USE_BEDROCK with the AWS pair), or a gateway's address
+	// and token (ANTHROPIC_BASE_URL with ANTHROPIC_AUTH_TOKEN). The CLI is
+	// handed neither the profile's token variable nor its key variable,
+	// and runs in a home no login is seeded into.
+	//
+	// A MODE OF ITS OWN rather than an env the default mode reads beside
+	// its token: under subscription the convention resolves the plan
+	// token for every entry, and it reached a Bedrock entry's CLI and its
+	// box, where the cloud switch outranks it and it was never used. Such
+	// an entry also read as signed in to nothing, since only an
+	// env_sign_in profile counted its env. Admitted only where the env
+	// does sign the CLI in ([LLMProvider.validateCredentials]).
+	AuthEnv CLIAgentAuthMode = "env"
 )
 
 // CLIAgentAuthModes is the closed set.
@@ -448,12 +464,12 @@ const (
 // The default is deliberately NOT inherit-env: a subscription entry that
 // silently picked up a stray ANTHROPIC_API_KEY would bill the metered
 // account while the operator believed they were on a flat-rate plan.
-var CLIAgentAuthModes = []CLIAgentAuthMode{AuthSubscription, AuthAPIKey, AuthInheritEnv}
+var CLIAgentAuthModes = []CLIAgentAuthMode{AuthSubscription, AuthAPIKey, AuthInheritEnv, AuthEnv}
 
 // CLIAgentAuth is how a providers.llm entry's CLI authenticates. The login
 // itself is performed by `crewlet llm login`, never by the engine.
 type CLIAgentAuth struct {
-	Mode CLIAgentAuthMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=subscription|api-key|inherit-env" desc:"subscription (default), api-key, or inherit-env."`
+	Mode CLIAgentAuthMode `yaml:"mode,omitempty" json:"mode,omitempty" js:"enum=subscription|api-key|inherit-env|env" desc:"subscription (default), api-key, inherit-env, or env (the entry's env signs the CLI in: a cloud provider or a gateway)."`
 
 	// Token is a ${VAR} reference to a long-lived subscription token.
 	// Empty falls back to the profile's own token variable. This is the
@@ -479,11 +495,14 @@ type CLIAgentAuth struct {
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
 	// `crewlet llm export` — the CLI's login (its credential files, or the
-	// document its export printed) as one blob, restored into an empty
-	// credential directory whenever the engine builds a company to run (boot
-	// and every apply it publishes), so a fresh container comes up already
-	// logged in — and withheld after `crewlet llm logout` until a login is
-	// written into the credential directory again (`crewlet llm login`,
+	// document its export printed) as one blob, restored whenever the engine
+	// builds a company to run (boot and every apply it publishes) into a
+	// credential directory holding no login, or over one installed before the
+	// bundle's login (the newest login wins, by the install record the bundle
+	// carries), so a fresh container comes up already logged in and a
+	// re-login exported to the store reaches every node. It is withheld
+	// after `crewlet llm logout` until a login is written into the
+	// credential directory again (`crewlet llm login`,
 	// `-from-host` or `crewlet llm import`; a headless token does not end it).
 	// It holds ONE CLI's files and names that CLI, though it is keyed by the
 	// entry: after the entry's agent changes, the new CLI refuses it — by the
@@ -619,9 +638,10 @@ type CredentialSources struct {
 //
 // PER AUTH MODE, as the CLI is handed them: a token only under subscription,
 // an API key only under api-key, and the bundle under every mode, since it is
-// restored into an empty credential directory whatever signs the calls in.
+// restored into the credential directory whatever signs the calls in.
 // inherit-env reads nothing through here: it forwards the engine's own
-// environment, which the secret store is not part of.
+// environment, which the secret store is not part of. Nor does env: the
+// entry's own env is its sign-in, and the CLI is handed no token and no key.
 func (l *LLMProvider) CredentialSources(key string) CredentialSources {
 	profile, err := cliprofile.Load(l.AgentName(), l.Overrides)
 	if err != nil {
@@ -737,6 +757,88 @@ func (l *LLMProvider) validateProfile(path Path) error {
 			l.AgentName(), l.Model)
 	}
 	return p.err()
+}
+
+// ProviderKeyPattern is the grammar of a providers.llm key: a lowercase
+// letter or digit, then up to 62 more of those, `.`, `_` and `-`, which is a
+// DNS label with the two separators a model's name already uses.
+//
+// A GRAMMAR, because a key is not only the name seats select an entry by. It
+// names a directory: the default state_dir joins it under the CLI home
+// ([LLMProvider.ResolvedStateDir]), so a key with a `/` nested one entry's
+// login inside another's, and `..` left the home altogether. And it names a
+// variable: the entry's credential bundle is read from
+// [cliprofile.BundleVarName], which upper-cases the key and maps every other
+// character to `_`. Lowercase only, so the one key a person reads in the
+// document, a URL path and a Kubernetes resource name (crewlet-operator's,
+// which are DNS labels already) is the same string.
+var ProviderKeyPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
+
+// validateLLMKeys holds every providers.llm key to [ProviderKeyPattern], and
+// no two keys to one credential bundle variable.
+//
+// ONE BUNDLE PER ENTRY. [cliprofile.BundleVarName] maps `.`, `_` and `-` to
+// one character, so `gpt-5`, `gpt_5` and `gpt.5` all read
+// CREWLET_LLM_CLI_GPT_5_CREDENTIALS: the second entry was restored the first
+// one's login, silently, and `crewlet llm export -secret-store` from either
+// overwrote the other's. Each key after the first, in sorted order, is
+// reported naming the one it collides with.
+//
+// ADMISSION rather than runnable: an entry under such a key still builds and
+// runs, and a refusal at apply would take a node off the fleet's epoch over a
+// revision written before the rule. A write that keeps one is refused. (An
+// empty key is the runnable rule [Providers.validate] holds: no seat can
+// select it.)
+func (c *Company) validateLLMKeys() error {
+	var p problems
+	bundles := make(map[string]string, len(c.Providers.LLM))
+	for _, key := range sortedKeys(c.Providers.LLM) {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		path := entryPath(key)
+		if !ProviderKeyPattern.MatchString(key) {
+			p.add(path, ErrShape,
+				"%q is not a provider key: a key is lowercase letters, digits, '.', '_' and "+
+					"'-', starting with a letter or a digit, at most 63 characters (%s). It "+
+					"names the entry's state directory and its credential bundle variable, "+
+					"so rename it, and every seat's llm that names it, e.g. %q",
+				key, ProviderKeyPattern, suggestProviderKey(key))
+			continue
+		}
+		bundle := cliprofile.BundleVarName(key)
+		if first, ok := bundles[bundle]; ok {
+			p.add(path, ErrConflict,
+				"%q and %q read one credential bundle, %s, since the variable maps '.', '_' and "+
+					"'-' alike: the two entries would restore and export one login. Rename one "+
+					"so the two differ in a letter or a digit", key, first, bundle)
+			continue
+		}
+		bundles[bundle] = key
+	}
+	return p.err()
+}
+
+// suggestProviderKey is key in [ProviderKeyPattern]'s grammar, for the
+// refusal's example: lowercased, every other character a `-`, cut to length.
+func suggestProviderKey(key string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(key) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.TrimLeft(b.String(), "._-")
+	if len(out) > 63 {
+		out = out[:63]
+	}
+	if out == "" {
+		return "default"
+	}
+	return out
 }
 
 // entryPath is where provider key sits in the document.
@@ -995,6 +1097,8 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 			agent, remedy)
 	}
 
+	p.wrap(l.validateEnvSignIn(path, profile, mode))
+
 	// The two variables auth owns. It is layered over env, and whether it
 	// then replaces, removes or leaves a value written here turns on the
 	// mode and on whether the secret store or the engine's own environment
@@ -1011,6 +1115,16 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					"here reaches the CLI depends on auth.mode and on whether the secret "+
 					"store or the engine's environment holds a token of its own. Give "+
 					"the token as auth.token", name)
+		case cliprofile.ZoneVariable:
+			// The engine pins the zone of every CLI it starts, and reads a
+			// reset the CLI names with no zone in it; a value here would be
+			// replaced without a word, or, honoured, would have the engine
+			// read the CLI's reset in the wrong zone.
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s is the zone the engine hands every CLI it starts (its own TZ, else "+
+					"UTC), and reads the CLI's limit resets in; it is not set per entry. "+
+					"Drop it, and set TZ in the engine's own environment to move every "+
+					"CLI's zone", name)
 		case profile.APIKeyEnv:
 			p.add(entry(at(path, "env"), name), ErrConflict,
 				"%s is this CLI's key variable, which auth owns: whether a value "+
@@ -1045,6 +1159,79 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 					isolationRemedy(name, layer, profile))
 			}
 		}
+	}
+	return p.err()
+}
+
+// validateEnvSignIn holds an entry to the rule that its env is its sign-in
+// exactly when auth.mode says so ([AuthEnv]).
+//
+// UNDER env, THE ENV MUST SIGN THE CLI IN. The mode hands the CLI no token
+// and no key and seeds no login, so an env that sets none of the names the
+// profile signs in by ([cliprofile.Profile.SignInEnv]), or on a CLI that reads
+// its model provider's key from its environment ([cliprofile.Profile.EnvSignIn])
+// no credential-named variable, is an entry signed in to nothing. A profile
+// that declares neither has no env that signs it in, and cannot take the mode.
+//
+// UNDER ANY OTHER MODE, A NAME THAT SIGNS THE CLI IN IS REFUSED in env. The
+// mode hands the CLI its own credential beside it: subscription the plan
+// token the convention resolves for every entry, api-key the metered key. The
+// CLI then ranks the two by rules of its own (Claude Code routes a cloud
+// switch away from the vendor's API whatever token it holds), so one of them
+// is a credential handed to a process that never uses it, and which one is
+// the CLI's choice rather than the document's.
+//
+// ADMISSION, like the rest of [LLMProvider.validateCredentials]: the CLI
+// starts and signs in from whatever it reads.
+func (l *LLMProvider) validateEnvSignIn(path Path, profile cliprofile.Profile, mode CLIAgentAuthMode) error {
+	var p problems
+	agent := l.AgentName()
+	if mode != AuthEnv {
+		for _, name := range profile.SignsInWithEnv(l.Env) {
+			p.add(entry(at(path, "env"), name), ErrConflict,
+				"%s signs the %q CLI in from its env, and auth.mode %s hands it a credential of "+
+					"its own beside it, which the CLI then ranks by rules of its own: set "+
+					"auth.mode: env, so the entry's env is its one sign-in", name, agent, mode)
+		}
+		return p.err()
+	}
+	if l.Auth.CredentialBundle != "" {
+		// A bundle is a login, and an env entry seeds none, on this host or in
+		// a box: one named here would be stored, restored and never read.
+		p.add(at(path, "auth.credential_bundle"), ErrConflict,
+			"auth.mode env signs the %q CLI in with the entry's env alone and seeds no "+
+				"login, so a credential bundle reaches nothing. Drop auth.credential_bundle, "+
+				"or set auth.mode: subscription to sign in with that login", agent)
+	}
+	switch {
+	case len(profile.SignInEnv) > 0:
+		if len(profile.SignsInWithEnv(l.Env)) == 0 {
+			p.add(at(path, "env"), ErrMissing,
+				"auth.mode env signs the CLI in with the entry's env, and env sets none of the "+
+					"names the %q CLI signs in by (%s), so the entry would sign in to nothing: set "+
+					"the one your cloud provider or gateway uses, its credentials as ${VAR}s, "+
+					"e.g. CLAUDE_CODE_USE_BEDROCK: \"1\" with AWS_REGION, or "+
+					"ANTHROPIC_AUTH_TOKEN: \"${GATEWAY_TOKEN}\" with ANTHROPIC_BASE_URL",
+				agent, strings.Join(profile.SignInEnv, ", "))
+		}
+	case profile.EnvSignIn:
+		signed := slices.ContainsFunc(slices.Collect(maps.Keys(l.Env)), func(name string) bool {
+			return cliprofile.IsCredentialName(name) && strings.TrimSpace(l.Env[name]) != ""
+		})
+		if !signed {
+			p.add(at(path, "env"), ErrMissing,
+				"auth.mode env signs the CLI in with the entry's env, and env holds no "+
+					"credential: the %q CLI reads the key of the provider its model names from "+
+					"that provider's own variable, so set it there as a ${VAR}, e.g. "+
+					`OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"`, agent)
+		}
+	default:
+		p.add(at(path, "auth.mode"), ErrConflict,
+			"env signs the CLI in with the entry's env, and the %q profile names no variable "+
+				"that does (sign_in_env) and does not read its provider's key from its "+
+				"environment (env_sign_in), so the entry would sign in to nothing: use "+
+				"subscription or api-key, or name the variables your build of the CLI signs in "+
+				"by with overrides.sign_in_env", agent)
 	}
 	return p.err()
 }

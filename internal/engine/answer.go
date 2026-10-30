@@ -103,7 +103,7 @@ func (b answerBudget) Refusing(ctx context.Context) (builtin.BudgetRefusal, bool
 // position, which is what retires every answer cached at the old one.
 //
 // AND NOT CHAT'S, deliberately: a conversation is outside the knowledge corpus
-// (ADR-0069) — an answer is drawn from the knowledge seam, which searches no
+// (ADR-0071) — an answer is drawn from the knowledge seam, which searches no
 // room — so a message changes nothing an answer would say. Keyed on chat's log
 // as well, every cached answer would be retired each time anybody spoke, which
 // on a busy company is every answer, all the time.

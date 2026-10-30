@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api"
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/engine"
 	"github.com/crewlet/crewlet/internal/httpx"
@@ -143,7 +144,7 @@ func newFakeRetentionNode(t *testing.T) *fakeRetentionNode {
 				_ = json.NewEncoder(w).Encode(api.RenderGate(verb == "evict", result))
 			})
 	}
-	n.server = httptest.NewServer(mux)
+	n.server = httptest.NewServer(asEngine(mux))
 	t.Cleanup(n.server.Close)
 	return n
 }
@@ -1284,20 +1285,29 @@ func TestOnlyAnAnswerWithAnEngineCodeIsTheNodesRefusal(t *testing.T) {
 	for name, tc := range map[string]struct {
 		status int
 		body   string
+		// marked is whether the answer carries the engine's mark, as every
+		// answer the engine writes does and nothing in front of it sets.
+		marked bool
 		node   bool
 	}{
-		"an engine refusal":           {http.StatusConflict, `{"error":"eviction_refused","detail":"live"}`, true},
-		"a drain":                     {http.StatusServiceUnavailable, `{"error":"draining"}`, true},
-		"a route the node lacks":      {http.StatusNotFound, `{"error":"no_route","detail":"this node serves nothing at POST /x"}`, true},
-		"a method the route refuses":  {http.StatusMethodNotAllowed, `{"error":"method_not_allowed"}`, true},
-		"a gateway page":              {http.StatusGatewayTimeout, "<html>504</html>", false},
-		"a 503 carrying no code":      {http.StatusServiceUnavailable, `{}`, false},
-		"an empty 502":                {http.StatusBadGateway, "", false},
-		"a 200 whose JSON is cut off": {http.StatusOK, `{"node":`, false},
+		"an engine refusal":           {http.StatusConflict, `{"error":"eviction_refused","detail":"live"}`, true, true},
+		"a drain":                     {http.StatusServiceUnavailable, `{"error":"draining"}`, true, true},
+		"a route the node lacks":      {http.StatusNotFound, `{"error":"no_route","detail":"this node serves nothing at POST /x"}`, true, true},
+		"a method the route refuses":  {http.StatusMethodNotAllowed, `{"error":"method_not_allowed"}`, true, true},
+		"a gateway page":              {http.StatusGatewayTimeout, "<html>504</html>", false, false},
+		"a 503 carrying no code":      {http.StatusServiceUnavailable, `{}`, true, false},
+		"an empty 502":                {http.StatusBadGateway, "", false, false},
+		"a 200 whose JSON is cut off": {http.StatusOK, `{"node":`, true, false},
+		// FORGED: the engine's envelope, from something that is not the engine.
+		"a proxy's 403 in the engine's shape": {http.StatusForbidden, `{"error":"unauthorized"}`, false, false},
+		"a proxy's 503 in the engine's shape": {http.StatusServiceUnavailable, `{"error":"draining"}`, false, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if tc.marked {
+					w.Header().Set(httpjson.EngineHeader, httpjson.EngineHeaderValue)
+				}
 				w.WriteHeader(tc.status)
 				_, _ = w.Write([]byte(tc.body))
 			}))

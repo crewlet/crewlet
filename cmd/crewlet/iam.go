@@ -890,12 +890,12 @@ func (c *iamClient) call(ctx context.Context, method, path string,
 	var answer map[string]any
 	_ = decodeAnswer(raw, &answer)
 	if resp.StatusCode >= 400 {
-		refusal := iamRefusal(resp.StatusCode, resp.Header.Get("Content-Type"),
-			answer, raw, c.keyed)
-		if engineCode(raw) == "" {
-			// NOT THE NODE'S OWN ANSWER — no engine code, so something in
-			// front of it answered, most often a proxy's read timeout — and
-			// the node may still have done what was asked ([notTheNode]).
+		refusal := iamRefusal(resp.StatusCode, resp.Header, answer, raw, c.keyed)
+		if engineCode(resp.Header, raw) == "" {
+			// NOT THE NODE'S OWN ANSWER — no engine code under the engine's
+			// mark, so something in front of it answered, most often a
+			// proxy's read timeout — and the node may still have done what
+			// was asked ([notTheNode]).
 			return answer, c.unanswered(method, refusal)
 		}
 		return answer, refusal
@@ -997,13 +997,17 @@ const iamMaxAnswer = 8 << 20
 // mint — is retried as a new write, which the node's own sentence says, so
 // the op id is named for the trail and no -op-id is prescribed.
 //
-// contentType is the answer's, for a body that carries no engine code: what
-// stood in front of the node is read through [foreignAnswer], as the other
-// three clients read it, rather than printed whole.
-func iamRefusal(status int, contentType string, answer map[string]any, raw []byte,
+// header is the answer's. One without the engine's mark ([ownBody]) is read
+// for none of its fields, whatever its body says, and what stood in front of
+// the node is read through [foreignAnswer], as the other three clients read
+// it, rather than printed whole.
+func iamRefusal(status int, header http.Header, answer map[string]any, raw []byte,
 	keyed bool) error {
 
-	if msg, ok := credentialRefusal(status, raw, true); ok {
+	contentType := header.Get("Content-Type")
+	if ownBody(header, raw) == nil {
+		answer = nil
+	} else if msg, ok := credentialRefusal(status, raw, true); ok {
 		return errors.New(msg)
 	}
 	code, _ := answer["error"].(string)

@@ -75,7 +75,7 @@ import {
   configGuardedReason,
   useManagedConfig,
 } from "~/lib/useWriteAccess.ts";
-import { PRINCIPLES_PATH } from "~/app/routes.ts";
+import { MODELS_PATH, PRINCIPLES_PATH } from "~/app/routes.ts";
 import { PROVIDER_STEPS } from "~/contract/providersteps.ts";
 import { principlesEditQuery } from "~/routes/settings/principles/edit/address.ts";
 import { useMayWriteCharter } from "~/routes/settings/principles/edit/access.ts";
@@ -111,6 +111,7 @@ import {
   STEP_UP_REQUIRED,
   type CheckOutcome,
   type CheckStatus,
+  type UncheckedWhy,
 } from "./model/scheduler.ts";
 import { readyToUpdate } from "./model/writes.ts";
 import { scopedTransport } from "./model/scope.ts";
@@ -377,6 +378,7 @@ function statusLook(
   problems: number,
   signedIn: boolean,
   code: string,
+  unchecked: UncheckedWhy,
 ): StatusLook {
   switch (status) {
     case "checking":
@@ -385,8 +387,8 @@ function statusLook(
       return { label: "No problems", tone: "success", icon: CheckGlyph };
     case "problems":
       return { label: plural(problems, "problem"), tone: "danger", icon: CircleAlertGlyph };
-    case "unreachable":
-      return { label: "Could not reach the engine to check", tone: "warning", icon: PlugGlyph };
+    case "unchecked":
+      return { label: UNCHECKED_LABELS[unchecked], tone: "warning", icon: PlugGlyph };
     case "conflict":
       return { label: "The configuration changed", tone: "warning", icon: TriangleAlertGlyph };
     case "guarded":
@@ -403,6 +405,25 @@ function guardedLabel(code: string, signedIn: boolean): string {
   return configGuardedReason(code) === CONFIG_WRITE_REASONS.no_grant
     ? "Needs Admin access"
     : "Refused";
+}
+
+/**
+ * What the toolbar says of a check left unchecked, by why: "could not reach"
+ * only where the engine's answer never arrived. A drain, a start and an
+ * engine that failed each answered, and said so.
+ */
+const UNCHECKED_LABELS: Readonly<Record<UncheckedWhy, string>> = {
+  unanswered: "Could not reach the engine to check",
+  failed: "The engine failed to check",
+  draining: "Not checked: this node is draining",
+  starting: "Not checked: this node is starting",
+  unavailable: "Not checked: who holds the seats could not be read",
+};
+
+/** Why the check stands unchecked, read like [guardedCodeOf] from the last answer. */
+function uncheckedWhyOf(state: BuilderState): UncheckedWhy {
+  const outcome = state.check.outcome;
+  return outcome?.status === "unchecked" ? outcome.why : "unanswered";
 }
 
 /**
@@ -1567,7 +1588,7 @@ function BuilderScreen({
   }
 
   const problemCount = problemsCurrent ? state.check.problems.problemCount : 0;
-  const look = statusLook(status, problemCount, signedIn, guardedCode);
+  const look = statusLook(status, problemCount, signedIn, guardedCode, uncheckedWhyOf(state));
   const canUndo = !readOnly && state.log.ops.length > 0;
   const canRedo = !readOnly && state.log.undone.length > 0;
   // THE CREATE FORM HAS NO TOOLBAR: there is no draft to undo, check or save
@@ -2002,8 +2023,11 @@ function BuilderScreen({
           <Callout variant="warning" icon={<CpuGlyph />}>
             {documentManagedBy === null ? (
               <>
-                No model provider is set, so agents can’t work. One is added from a terminal on the
-                node’s host, starting from the company the store holds:
+                No model provider is set, so agents can’t work. Add one under{" "}
+                <a className="prose-link" href={href(MODELS_PATH, { flow: "add" })}>
+                  Settings, Models
+                </a>
+                , or from a terminal on the node’s host, starting from the company the store holds:
                 <Disclosure title="The steps" size="compact" headingLevel="none">
                   <CodeBlock plain wrap code={PROVIDER_STEPS} />
                 </Disclosure>

@@ -479,7 +479,7 @@ counted from zero, which would call every room unread.
 
 Chatlet has its own keyword index, separate from Doclet's, and **no
 semantic search at all**
-([ADR-0069](../../adr/0069-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
+([ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md)).
 
 Both halves of that are deliberate. A message is a remark about work rather
 than a statement of it — the same argument that keeps a work item's comment

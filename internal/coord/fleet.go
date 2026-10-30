@@ -55,7 +55,8 @@ import (
 // The rest never lived on a node's own database and are here because the
 // question they answer is a company's from the start: the company's sealed
 // [Secrets], the [Follows] a chat thread is routed by, the [Mailboxes] a seat
-// may still have, the [SeatPauses] a person set, the windowed token [Budgets]
+// may still have, the [SeatPauses] a person set, the [ModelRetries] a person
+// asked for and the [DeviceSignIns] in progress, the windowed token [Budgets]
 // every node charges (budget.go), the [PositionRegister] and its neighbours
 // the state log trims against, the [Rebases] a retried unit of work inherits
 // its instant from, the [ObjectStores] backend the fleet's files are in, the
@@ -1314,6 +1315,13 @@ type SecretRecord struct {
 	OperatorID    string
 	Source        string
 
+	// OpID is the operation key of the create-only write that sealed the
+	// row (internal/api/opkey, scoped by its principal), so the same
+	// request retried can finish what it sealed without the store being
+	// read for a value. Empty for every other write, which clears it.
+	// NEVER ANSWERED: no route, listing, log or audit carries it.
+	OpID string
+
 	// Version is the store's own revision of the row, set on every read
 	// and ignored on every write: what [Secrets.UpdateSecret] is
 	// conditioned on. Store-wide rather than
@@ -1644,6 +1652,8 @@ type Fleet interface {
 	ObjectStores
 	TrashReaps
 	SeatPauses
+	ModelRetries
+	DeviceSignIns
 	PositionRegister
 	HoldRegister
 	FloorRegister

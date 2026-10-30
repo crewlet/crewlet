@@ -15,7 +15,7 @@
 import { expect, test } from "vitest";
 
 import { lineOf, modules, parse, stringValue, walk, type Node } from "../test/source.ts";
-import { RUNS_POLL_MS, runAsk } from "./runs.ts";
+import { RUNS_POLL_MS, runAskTexts } from "./runs.ts";
 
 test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
   const off: string[] = [];
@@ -51,34 +51,31 @@ test("every reader of sandbox_runs polls on RUNS_POLL_MS", () => {
   expect(RUNS_POLL_MS).toBe(20_000);
 });
 
-// A RUN'S QUESTION IS A TITLE AND ITS CONTEXT. A structured one carries both;
-// an older build's free text is split at its first sentence, so neither the
-// title nor the context repeats the other.
+// A RUN'S QUESTION IS ITS TITLE, WHOLE, AND ITS CONTEXT IS ITS OWN: one
+// message of the question, the context and the decision's texts, with nothing
+// split out of the question. It was split at its first sentence where a row
+// carried no context, and a question with a full stop of its own lost the
+// rest of itself to the context.
 //
-// Mutation: split a question that came with its context, or keep the first
-// sentence in a free-text question's context, and this fails.
-test("a run's question is its title and its context, split once for an older build", () => {
+// Mutation: split the question at its first sentence again, or leave the
+// context out, and this fails.
+test("a run's question is one message of its title and its context, never split", () => {
   expect(
-    runAsk({
-      question: "Keep the cache? It is warm.",
-      question_context: "**Cold** start costs 4s.",
+    runAskTexts({
+      question: "Should I drop the legacy flag (e.g. --old)? Nothing reads it.",
+      question_context: "",
     }),
-  ).toEqual({
-    title: "Keep the cache? It is warm.",
-    context: "**Cold** start costs 4s.",
-    decision: undefined,
-  });
-  expect(runAsk({ question: "\n  Keep the cache? It is warm.\n\nCold start costs 4s.\n" })).toEqual(
-    {
-      title: "Keep the cache?",
-      context: "It is warm.\n\nCold start costs 4s.",
-      decision: undefined,
-    },
-  );
-  expect(runAsk({ question: "Keep the cache?" })).toEqual({
-    title: "Keep the cache?",
-    context: "",
-    decision: undefined,
-  });
-  expect(runAsk({})).toEqual({ title: "", context: "", decision: undefined });
+  ).toEqual(["Should I drop the legacy flag (e.g. --old)? Nothing reads it."]);
+  expect(
+    runAskTexts({
+      question: "Keep the cache?",
+      question_context: "**Cold** start costs 4s.",
+      decision: {
+        question: "Keep the cache?",
+        options: [{ id: "keep", label: "Keep it" }],
+        role: "approver",
+      },
+    }),
+  ).toEqual(["Keep the cache?", "**Cold** start costs 4s.", "Keep it"]);
+  expect(runAskTexts({ question_context: "" })).toEqual([]);
 });

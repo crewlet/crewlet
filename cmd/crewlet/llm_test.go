@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent/cliprofile"
@@ -177,7 +178,7 @@ roles:
 				t.Errorf("the write carried %q, want the invocation's own token",
 					node.last.auth)
 			}
-			for _, want := range append([]string{node.server.URL, secretsFleetNote},
+			for _, want := range append([]string{node.server.URL, reloadNote(nil)},
 				tc.says...) {
 				if !strings.Contains(out.String(), want) {
 					t.Errorf("the output does not say %q:\n%s", want, out.String())
@@ -1118,7 +1119,7 @@ func TestAnLLMWriteSaysWhenARunningEngineReadsIt(t *testing.T) {
 			node := newRevealNode(t, nil)
 			return llmStoreAt(t, tokenEnviron(cliFixtureToken), sub, "-api", node.server.URL),
 				func(name string) bool { _, ok := node.holds(name); return ok }
-		}, secretsFleetNote},
+		}, reloadNote(&configapi.Reloaded{RevisionID: "r-2", Epoch: 7})},
 		{"the fleet's store, with the engine stopped", func(t *testing.T, sub string) (*companyStore, func(string) bool) {
 			cfg := bootstrapWithKeyring(t, "k1")
 			store := llmStoreAt(t, noEnviron, sub, "-config", cfg)

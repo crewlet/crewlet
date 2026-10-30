@@ -22,6 +22,7 @@
  */
 
 import type { BrokerKind, FleetBrokerAnswer } from "./broker.ts";
+import type { ModelDevice, ModelEntriesAnswer, ModelsAnswer, RunnersAnswer } from "./models.ts";
 import type { LogPosition } from "./session.ts";
 // THE SHAPES AN ENGINE GATE HOLDS ARE NOT DECLARED HERE. They live in
 // `../contract/`, the one home of every declaration a Go test reads, and this
@@ -756,6 +757,12 @@ export interface SandboxEntry {
    * trail AND to the people it is put to, who answer it.
    */
   question?: string;
+  /** What the question says beside its title, as Markdown. Always sent, ""
+   *  where there is none. */
+  question_context: string;
+  /** The options the question offers, where it asks to choose. Absent,
+   *  never null, on an open question. */
+  decision?: WorkDecision;
   audience?: string;
   /** The item the launching turn is charged to, when it is on one. */
   work_item?: WorkItemRef | null;
@@ -786,8 +793,9 @@ export interface SandboxRun {
    *  record's own key. See `adr/0017`. */
   turn_id: string;
   /** The job the row holds NOW — a turn can launch more than one — and what
-   *  `sandbox_tail` is asked by. Empty on a run the live projection knows of
-   *  before its durable row is read. */
+   *  `sandbox_tail` is asked by. On a parked run it names the question the
+   *  run waits on, which `answer_run` answers by. Empty on a run the live
+   *  projection knows of before its durable row is read. */
   launch_id?: string;
   /** The unit of work behind that run. Absent on a turn with no ledgerable
    *  trigger, and on a live entry whose durable row has not been read yet. */
@@ -811,15 +819,17 @@ export interface SandboxRun {
    * who are told so by [body_withheld].
    */
   task_description?: string;
-  /** The question, as one sentence: the title of what the run asks. A row from
-   *  an older build may carry the whole free-text question here instead. */
+  /** The question: the title of what the run asks (body). A row from an older
+   *  build may carry a free-text question past the title's cap, which a reader
+   *  draws clamped rather than split. */
   question?: string;
-  /** What the question says beside its title, as Markdown (body). Absent when
-   *  the run gave none. */
-  question_context?: string;
+  /** What the question says beside its title, as Markdown (body). Always
+   *  sent, "" where there is none, on the durable row and the live entry
+   *  alike. */
+  question_context: string;
   /** The options the run asks a person to choose between, in a work item's
-   *  ask's shape, never with an `inform` (body). Absent on an open question,
-   *  which is answered in words. */
+   *  ask's shape, never with an `inform` (body). Absent, never null, on an
+   *  open question, which is answered in words. */
   decision?: WorkDecision;
   /** What reached the waiting party, where something did — body. */
   reply?: string;
@@ -4660,6 +4670,15 @@ export interface SetupRequirement {
    * test it would have to fake.
    */
   check_note?: string;
+  /**
+   * The other fields of this list a check of this credential is made with,
+   * for an app that proves several values in one check (Datadog's API key
+   * and application key, against their region). The form offers one Test
+   * control after this field, enabled once this field and every one named
+   * here holds a value, and a result about all of them. Absent, the field
+   * is checked on its own.
+   */
+  check_with?: string[];
   mintable?: boolean;
   /**
    * Written without being asked for.
@@ -5913,13 +5932,13 @@ export interface AnsweredRunAsk {
   launch_id: string;
   /** The seat whose coding run asked. */
   agent_handle: string;
-  /** The question, as one sentence. */
+  /** The question: the title of what the run asked. */
   question: string;
-  /** What the question says beside its title, as Markdown. Absent when the
-   *  run gave none. */
-  question_context?: string;
-  /** The options the run asked a person to choose between. Absent on an open
-   *  question, which was answered in words. */
+  /** What the question says beside its title, as Markdown. Always sent, ""
+   *  where the run gave none. */
+  question_context: string;
+  /** The options the run asked a person to choose between. Absent, never
+   *  null, on an open question, which was answered in words. */
   decision?: WorkDecision;
   asked_at: string;
   /** The task the run was on, where it was on one. */
@@ -7480,6 +7499,14 @@ export interface QueryMap {
   artifact_data_state: DataStateAnswer;
   artifact_data_usage: DataUsageAnswer;
   brand: BrandAnswer;
+  /** Every model, in an admin's reading or a member's (Settings › Models). */
+  llm_entries: ModelEntriesAnswer;
+  /** Where a model's coding runs can happen, on each node. Admin. */
+  llm_runners: RunnersAnswer;
+  /** The models a CLI can run (`agent`, and `provider` for OpenCode). Admin. */
+  llm_models: ModelsAnswer;
+  /** One device sign-in (`id`). Admin. */
+  llm_device_sign_in: ModelDevice;
 }
 
 export type QueryName = keyof QueryMap;

@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { classifyConfigRefusal, introducedWarnings } from "./configAnswer.ts";
+import { classifyConfigRefusal, introducedWarnings, unsettledSentence } from "./configAnswer.ts";
 import {
   configTransport,
   createEntity,
@@ -20,6 +20,7 @@ import {
   savePatch,
 } from "./configWrite.ts";
 import type { ConfigWarning } from "./types.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -40,7 +41,7 @@ function stub(respond: (url: string, init: RequestInit) => Promise<Response>) {
 const json = (payload: unknown, status: number, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(payload), {
     status,
-    headers: { "Content-Type": "application/json", ...headers },
+    headers: { ...ENGINE_HEADERS, "Content-Type": "application/json", ...headers },
   });
 
 // A REFUSAL IS AN ANSWER. The scheduler and the save classify the status and
@@ -89,7 +90,7 @@ test("an aborted request rejects rather than resolving as unreachable", async ()
 test("a success carries the entity tag that names the revision", async () => {
   stub(async () => json({ name: "Acme" }, 200, { ETag: '"r1"' }));
   const answer = await configTransport.current(new AbortController().signal);
-  expect(answer).toEqual({ status: 200, body: { name: "Acme" }, etag: '"r1"' });
+  expect(answer).toEqual({ status: 200, body: { name: "Acme" }, etag: '"r1"', fromEngine: true });
 });
 
 test("a revision is read by its id, encoded into the path", async () => {
@@ -220,7 +221,8 @@ describe("the warnings a change introduces", () => {
 describe("one reading of a /config refusal", () => {
   test.each([
     [401, { error: "invalid_token" }, { kind: "guarded", code: "invalid_token" }],
-    [403, {}, { kind: "guarded", code: "" }],
+    // NO CODE, SO NOT THE ENGINE'S: something in front of it answered.
+    [403, {}, { kind: "unsettled", answered: false, status: 403, detail: "" }],
     [403, { error: "step_up_required" }, { kind: "guarded", code: "step_up_required" }],
     // A MANAGED DOCUMENT ACCEPTED THE CREDENTIAL, so it is not `guarded`:
     // the remedy is where the company is written, not a grant to ask for.
@@ -255,10 +257,31 @@ describe("one reading of a /config refusal", () => {
       { kind: "draining", detail: "shutting down" },
     ],
     [503, { error: "starting", detail: "recovering" }, { kind: "starting", detail: "recovering" }],
-    [502, {}, { kind: "unreachable", detail: "" }],
-    [0, { error: "unreachable", detail: "offline" }, { kind: "unreachable", detail: "offline" }],
+    // NOT THE ENGINE'S ANSWER: no engine code, or a body that was not its JSON.
+    [502, {}, { kind: "unsettled", answered: false, status: 502, detail: "" }],
+    [
+      504,
+      { error: "unreadable_body", detail: "a 504 came back without the engine's JSON" },
+      {
+        kind: "unsettled",
+        answered: false,
+        status: 504,
+        detail: "a 504 came back without the engine's JSON",
+      },
+    ],
+    [
+      0,
+      { error: "unreachable", detail: "offline" },
+      { kind: "unsettled", answered: false, status: 0, detail: "offline" },
+    ],
+    // THE ENGINE'S OWN 5xx: it answered, and failed.
+    [
+      500,
+      { error: "internal", detail: "the store could not commit" },
+      { kind: "unsettled", answered: true, status: 500, detail: "the store could not commit" },
+    ],
   ])("status %i %j reads as %j", (status, body, want) => {
-    expect(classifyConfigRefusal({ status, body })).toEqual(want);
+    expect(classifyConfigRefusal({ status, body, fromEngine: true })).toEqual(want);
   });
 
   // A DRAIN AND A START ARE THE TWO 5xx THAT ARE CERTAIN: each refused before
@@ -266,15 +289,81 @@ describe("one reading of a /config refusal", () => {
   // raised after the revision was stored, and reading it as a refusal is how
   // a save that landed gets replayed on top of itself.
   test("only the drain gate's and a starting node's 503 are refusals that stored nothing", () => {
-    expect(classifyConfigRefusal({ status: 503, body: { error: "draining" } }).kind).toBe(
-      "draining",
-    );
-    expect(classifyConfigRefusal({ status: 503, body: { error: "starting" } }).kind).toBe(
-      "starting",
-    );
-    expect(classifyConfigRefusal({ status: 503, body: { error: "unavailable" } }).kind).toBe(
-      "unreachable",
-    );
+    expect(
+      classifyConfigRefusal({ status: 503, body: { error: "draining" }, fromEngine: true }).kind,
+    ).toBe("draining");
+    expect(
+      classifyConfigRefusal({ status: 503, body: { error: "starting" }, fromEngine: true }).kind,
+    ).toBe("starting");
+    expect(
+      classifyConfigRefusal({ status: 503, body: { error: "unavailable" }, fromEngine: true }).kind,
+    ).toBe("unsettled");
+  });
+
+  // A PROXY'S REFUSAL IS NO REFUSAL OF THE ENGINE'S, however it is spelled: a
+  // 403 or a 413 in the engine's own envelope, without the engine's mark, is an
+  // answer that says nothing about what the engine did. Read as the engine's,
+  // its 403 asked a person for a grant and its 413 for a smaller document.
+  test.each([403, 413])("a proxy's %i in the engine's shape, unmarked, is unsettled", (status) => {
+    const body = { error: "unauthorized", detail: "blocked by policy" };
+    expect(classifyConfigRefusal({ status, body, fromEngine: false })).toEqual({
+      kind: "unsettled",
+      answered: false,
+      status,
+      detail: "blocked by policy",
+    });
+    // The same answer, marked, is the engine's own refusal.
+    expect(classifyConfigRefusal({ status, body, fromEngine: true }).kind).not.toBe("unsettled");
+  });
+
+  // "DID NOT ANSWER" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED. The owner
+  // removing a model saw "the engine did not answer" while the engine's log
+  // showed it answering; every screen opens with this one sentence.
+  test.each([
+    [
+      { status: 0, body: { error: "unreachable", detail: "Failed to fetch" }, fromEngine: false },
+      "The engine did not answer.",
+    ],
+    [
+      {
+        status: 0,
+        body: { error: "unreachable", detail: "the engine did not answer within 30 seconds" },
+        fromEngine: false,
+      },
+      "The engine did not answer.",
+    ],
+    [
+      {
+        status: 504,
+        body: { error: "unreadable_body", detail: "a 504 came back without the engine's JSON" },
+        fromEngine: true,
+      },
+      "The engine did not answer.",
+    ],
+    [
+      {
+        status: 500,
+        body: { error: "internal", detail: "the store could not commit" },
+        fromEngine: true,
+      },
+      "The engine failed: the store could not commit.",
+    ],
+    [
+      {
+        status: 503,
+        body: { error: "unavailable", detail: "The fleet pointer is unreadable." },
+        fromEngine: true,
+      },
+      "The engine failed: The fleet pointer is unreadable.",
+    ],
+    [
+      { status: 500, body: { error: "internal" }, fromEngine: true },
+      "The engine failed: internal.",
+    ],
+  ])("%j is said as %j", (answer, sentence) => {
+    const refusal = classifyConfigRefusal(answer);
+    if (refusal.kind !== "unsettled") throw new Error(`classified as ${refusal.kind}`);
+    expect(unsettledSentence(refusal)).toBe(sentence);
   });
 
   // A 409 THAT NO NEWER REVISION CLEARS. A write taking a human seat out of
@@ -298,6 +387,7 @@ describe("one reading of a /config refusal", () => {
         },
         hint: "free each seat first",
       },
+      fromEngine: true,
     });
     expect(refusal).toMatchObject({ kind: "problems", code: "seat_held", derived: null });
     if (refusal.kind !== "problems") throw new Error(refusal.kind);
@@ -333,6 +423,7 @@ describe("one reading of a /config refusal", () => {
     const bare = classifyConfigRefusal({
       status: 409,
       body: { error: "seat_held", detail: "held" },
+      fromEngine: true,
     });
     expect(bare).toMatchObject({
       kind: "problems",
@@ -352,6 +443,7 @@ describe("one reading of a /config refusal", () => {
     const refusal = classifyConfigRefusal({
       status: 503,
       body: { error: "seat_holders_unavailable", detail: said, seats: ["sre", "qa"] },
+      fromEngine: true,
     });
     expect(refusal).toMatchObject({
       kind: "problems",
@@ -367,6 +459,7 @@ describe("one reading of a /config refusal", () => {
     const bare = classifyConfigRefusal({
       status: 503,
       body: { error: "seat_holders_unavailable", detail: said },
+      fromEngine: true,
     });
     expect(bare).toMatchObject({ kind: "problems", problems: [{ message: said }] });
   });
@@ -383,6 +476,7 @@ describe("one reading of a /config refusal", () => {
         status: 503,
         body: { error: "seat_holders_unavailable", detail: said, seats: ["sre"] },
         retryAfter: 2,
+        fromEngine: true,
       }),
     ).toEqual({ kind: "unavailable", detail: said });
   });
@@ -422,6 +516,7 @@ describe("one reading of a /config refusal", () => {
           { kind: "seat", id: "qa", side: "after", why: "manages", value: "ceo" },
         ],
       },
+      fromEngine: true,
     });
     expect(refusal).toMatchObject({ kind: "problems", code: "unauthorized", derived: null });
     if (refusal.kind !== "problems") throw new Error(refusal.kind);
@@ -472,7 +567,11 @@ describe("one reading of a /config refusal", () => {
     ]);
     // A 403 naming no part is a refusal of the person, as before.
     expect(
-      classifyConfigRefusal({ status: 403, body: { error: "unauthorized", refused: [] } }),
+      classifyConfigRefusal({
+        status: 403,
+        body: { error: "unauthorized", refused: [] },
+        fromEngine: true,
+      }),
     ).toEqual({ kind: "guarded", code: "unauthorized" });
   });
 
@@ -480,6 +579,7 @@ describe("one reading of a /config refusal", () => {
     const refusal = classifyConfigRefusal({
       status: 400,
       body: { error: "invalid_patch", detail: "not a merge patch", hint: "send an object" },
+      fromEngine: true,
     });
     expect(refusal).toMatchObject({
       kind: "problems",
@@ -490,12 +590,16 @@ describe("one reading of a /config refusal", () => {
   });
 
   test("a write's success and refusal are read by the same function", () => {
-    expect(outcomeOf({ status: 201, body: { revision_id: "r2", epoch: 3 } })).toMatchObject({
+    expect(
+      outcomeOf({ status: 201, body: { revision_id: "r2", epoch: 3 }, fromEngine: true }),
+    ).toMatchObject({
       kind: "saved",
       revisionId: "r2",
       epoch: 3,
     });
-    expect(outcomeOf({ status: 409, body: { error: "revision_advanced" } }).kind).toBe("conflict");
+    expect(
+      outcomeOf({ status: 409, body: { error: "revision_advanced" }, fromEngine: true }).kind,
+    ).toBe("conflict");
   });
 });
 

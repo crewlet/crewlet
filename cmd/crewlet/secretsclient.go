@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/secretsapi"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/config"
@@ -126,22 +127,62 @@ func (c *secretsClient) List(ctx context.Context) ([]secrets.Record, error) {
 // too, with a 413 that names a body rather than a value, after the whole of it
 // had crossed the network.
 func (c *secretsClient) Set(ctx context.Context, name, value string, _ secrets.Author,
-	_ secrets.Source, _ time.Time) (secrets.Author, error) {
+	_ secrets.Source, _ time.Time) (storedSecret, error) {
 
 	if err := secrets.CheckValue(value); err != nil {
-		return secrets.Author{}, err
+		return storedSecret{}, err
 	}
 	var body struct {
-		UpdatedBy     string `json:"updated_by"`
-		UpdatedByKind string `json:"updated_by_kind"`
-		OperatorID    string `json:"operator_id"`
+		UpdatedBy     string              `json:"updated_by"`
+		UpdatedByKind string              `json:"updated_by_kind"`
+		OperatorID    string              `json:"operator_id"`
+		ReadBy        []string            `json:"read_by"`
+		Reload        *configapi.Reloaded `json:"reload"`
 	}
 	if err := c.call(ctx, http.MethodPut, "/secrets/"+url.PathEscape(name),
 		[]byte(value), &body); err != nil {
-		return secrets.Author{}, err
+		return storedSecret{}, err
 	}
-	return secrets.Author{Name: body.UpdatedBy, Kind: body.UpdatedByKind,
-		OperatorID: body.OperatorID}, nil
+	return storedSecret{
+		Author: secrets.Author{Name: body.UpdatedBy, Kind: body.UpdatedByKind,
+			OperatorID: body.OperatorID},
+		ReadBy: map[string][]string{name: body.ReadBy}, Reload: body.Reload,
+	}, nil
+}
+
+// SetMany stores several values through `PUT /secrets`, which seals them all
+// and re-activates the revision that reads any of them once (ADR-0070). The
+// node stamps the author, as on [secretsClient.Set], and its answer for a
+// batch names none, since it is the caller's own credential.
+func (c *secretsClient) SetMany(ctx context.Context, values map[string]string, _ secrets.Author,
+	_ secrets.Source, _ time.Time, deferReload bool) (storedSecret, error) {
+
+	if len(values) > secretsapi.MaxRevealNames {
+		return storedSecret{}, fmt.Errorf("%d values, and one write stores at most %d",
+			len(values), secretsapi.MaxRevealNames)
+	}
+	for name, value := range values {
+		if err := secrets.CheckValue(value); err != nil {
+			return storedSecret{}, fmt.Errorf("%s: %w", name, err)
+		}
+	}
+	body := map[string]any{"values": values}
+	if deferReload {
+		body["defer_reload"] = true
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return storedSecret{}, err
+	}
+	var answer struct {
+		ReadBy map[string][]string `json:"read_by"`
+		Reload *configapi.Reloaded `json:"reload"`
+	}
+	if err := c.callWithin(ctx, http.MethodPut, "/secrets", "application/json", raw, &answer,
+		maxRowAnswerBytes, "no answer about one write is this long"); err != nil {
+		return storedSecret{}, err
+	}
+	return storedSecret{ReadBy: answer.ReadBy, Reload: answer.Reload}, nil
 }
 
 // Get reads one value back. Break-glass, and the node logs it by name.
@@ -208,16 +249,18 @@ func (c *secretsClient) Values(ctx context.Context, names []string) (map[string]
 	return out, nil
 }
 
-// Unset removes one value, reporting whether it was there.
-func (c *secretsClient) Unset(ctx context.Context, name string) (bool, error) {
+// Unset removes one value, reporting whether it was there and what the
+// node's re-activation of the revision that read it did (ADR-0070).
+func (c *secretsClient) Unset(ctx context.Context, name string) (removedSecret, error) {
 	var body struct {
-		Removed bool `json:"removed"`
+		Removed bool                `json:"removed"`
+		Reload  *configapi.Reloaded `json:"reload"`
 	}
 	err := c.call(ctx, http.MethodDelete, "/secrets/"+url.PathEscape(name), nil, &body)
 	if err != nil {
-		return false, err
+		return removedSecret{}, err
 	}
-	return body.Removed, nil
+	return removedSecret{Removed: body.Removed, Reload: body.Reload}, nil
 }
 
 // Rekey re-seals every stale row on the node.
@@ -293,6 +336,12 @@ func (c *secretsClient) listing(ctx context.Context, out any) error {
 // one to read, and decodes it, or explains the refusal.
 func (c *secretsClient) callWithin(ctx context.Context, method, path, contentType string,
 	body []byte, out any, limit int, tooLong string) error {
+	return c.callWith(ctx, method, path, contentType, nil, body, out, limit, tooLong)
+}
+
+// callWith is [secretsClient.callWithin] with headers of the caller's own.
+func (c *secretsClient) callWith(ctx context.Context, method, path, contentType string,
+	header http.Header, body []byte, out any, limit int, tooLong string) error {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -300,6 +349,9 @@ func (c *secretsClient) callWithin(ctx context.Context, method, path, contentTyp
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, reader)
 	if err != nil {
 		return err
+	}
+	for name, values := range header {
+		req.Header[name] = values
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -333,7 +385,7 @@ func (c *secretsClient) callWithin(ctx context.Context, method, path, contentTyp
 			"read: %s", path, limit, tooLong)
 	}
 	if resp.StatusCode/100 != 2 {
-		return c.refusal(resp.StatusCode, path, resp.Header.Get("Content-Type"), raw)
+		return c.refusal(resp.StatusCode, path, resp.Header, raw)
 	}
 	if out == nil {
 		return nil
@@ -371,12 +423,13 @@ const maxRowAnswerBytes = 64 << 10
 const maxListingBytes = 64 << 20
 
 // refusal turns a status code into something an operator can act on.
-func (c *secretsClient) refusal(status int, path, contentType string, raw []byte) error {
+func (c *secretsClient) refusal(status int, path string, header http.Header, raw []byte) error {
+	own := ownBody(header, raw)
 	var body struct {
 		refusalWords
 		Error string `json:"error"`
 	}
-	_ = json.Unmarshal(raw, &body)
+	_ = json.Unmarshal(own, &body)
 	switch {
 	case status == http.StatusNotFound && body.Error == "not_found":
 		// THE SENTINEL, so a caller can tell "no such secret" from
@@ -395,12 +448,14 @@ func (c *secretsClient) refusal(status int, path, contentType string, raw []byte
 			withRefusalDetail(strings.TrimPrefix(
 				strings.SplitN(path, "?", 2)[0], "/secrets/"), refusalWords{Hint: body.Hint}))
 	}
-	if msg, ok := credentialRefusal(status, raw, true); ok {
-		return &nodeRefusal{Status: status, Code: body.Error, msg: c.base + ": " + msg}
+	if own != nil {
+		if msg, ok := credentialRefusal(status, own, true); ok {
+			return &nodeRefusal{Status: status, Code: body.Error, msg: c.base + ": " + msg}
+		}
 	}
 	msg := body.Error
 	if msg == "" {
-		msg = foreignAnswer(contentType, raw)
+		msg = foreignAnswer(header.Get("Content-Type"), raw)
 	}
 	// A [nodeRefusal], so a caller can tell a refused credential from a
 	// node that is failing ([refusedTheToken]): the remedy for the first is
@@ -418,4 +473,21 @@ func refusedTheToken(err error) bool {
 	var refusal *nodeRefusal
 	return errors.As(err, &refusal) &&
 		(refusal.Status == http.StatusUnauthorized || refusal.Status == http.StatusForbidden)
+}
+
+// Reload re-activates the company the node runs, unchanged (`POST
+// /config/reload`): what a provisioning run that sealed its values with the
+// re-activation deferred sends once at its end, so the running company reads
+// them. It seals nothing, so a value rotated meanwhile is never overwritten.
+func (c *secretsClient) Reload(ctx context.Context, summary string) (*configapi.Reloaded, error) {
+	var answer struct {
+		RevisionID string `json:"revision_id"`
+		Epoch      int64  `json:"epoch"`
+	}
+	if err := c.callWith(ctx, http.MethodPost, "/config/reload", "",
+		http.Header{"X-Summary": {summary}}, nil, &answer, maxRowAnswerBytes,
+		"no answer about one re-activation is this long"); err != nil {
+		return nil, err
+	}
+	return &configapi.Reloaded{RevisionID: answer.RevisionID, Epoch: answer.Epoch}, nil
 }

@@ -162,6 +162,9 @@ export const ORG_EDIT_PATH: readonly string[] = ["company", "org", "edit"];
  */
 export const PRINCIPLES_PATH: readonly string[] = ["company", "principles"];
 
+/** Settings › Models, where a model is added, signed in and tested: the page a screen sends a reader to give the company a model. */
+export const MODELS_PATH: readonly string[] = ["settings", "models"];
+
 /**
  * Where a new artifact of a kind is made: each kind has its own page
  * (`routes/artifacts/new/`), because writing a doc, laying out a deck and
@@ -615,13 +618,13 @@ function artifactsRoute(rest: string[], screen: Make, under: Under): Route {
 
 /**
  * Settings' sections. The bare `#/settings` names none of them: the Settings
- * row lands on its first section, Models & keys, and an address is one page.
+ * row lands on its first section, Models, and an address is one page.
  */
 function settings(rest: string[], screen: Make, under: Under): Route {
   const [first, ...tail] = rest;
   const none = () => missing("settings", under("Settings"));
   if (first === undefined) {
-    return missing("settings", "Settings itself", "Settings opens on Models & keys");
+    return missing("settings", "Settings itself", "Settings opens on Models");
   }
   // THE SECTIONS THAT TAKE NO TAIL: every row they list has a page of its
   // own somewhere else, or none.

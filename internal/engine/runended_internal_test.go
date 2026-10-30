@@ -1,11 +1,15 @@
 package engine
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
+	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/configplane"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/providers/llm/chain"
 	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
@@ -91,25 +95,43 @@ func TestARecollectedEndingBenchesItsEntryNoMore(t *testing.T) {
 	}
 }
 
-// AN APPLY KEEPS A SPENT PLAN SPENT. Every apply rebuilds every entry, so an
-// edit to anything else handed the node's seats the spent entry back, and each
-// relearned the window with a call or a launch. An entry whose spec is
-// unchanged keeps its predecessor's sit-out; one whose spec moved starts clean.
+// AN APPLY KEEPS A SPENT PLAN SPENT, AND A NEW CREDENTIAL STARTS CLEAN. Every
+// apply rebuilds every entry, and the window is the account's: an entry built
+// on the node's registry of sign-ins finds its predecessor's window whatever
+// else about its spec changed, and one whose credential was rotated under the
+// same ${VAR} is a new sign-in with nothing to sit out. The old carry keyed on
+// the spec and got both backwards: an edit to the timeout dropped a window the
+// vendor still held, and a rotated token stayed benched.
+//
+// Mutation: build each revision without the engine's registry, and the edited
+// entry walks back into the spent plan.
 func TestAnApplyKeepsASpentPlanSpent(t *testing.T) {
 	t.Parallel()
-	before, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
-	if !planOf(t, before).RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
+	plans := cliagent.NewPlans([]byte("a fleet key"))
+	dir := t.TempDir()
+	build := func(timeout float64, key string) *cliagent.Provider {
+		t.Helper()
+		cfg := &config.Company{Providers: config.Providers{LLM: map[string]config.LLMProvider{
+			"plan": {Agent: "claude-code", Model: "opus", StateDir: dir, TimeoutSeconds: timeout,
+				Auth:      config.CLIAgentAuth{Mode: config.AuthAPIKey, APIKey: "${PLAN_KEY}"},
+				Overrides: map[string]any{"binary": filepath.Join(dir, "no-cli-here")}},
+		}}}
+		models, err := buildProviders(cfg, config.NewResolver(config.MapSource{"PLAN_KEY": key}), plans)
+		if err != nil {
+			t.Fatalf("buildProviders: %v", err)
+		}
+		p, _ := models.Provider("plan")
+		return p.(*cliagent.Provider)
+	}
+	before := build(600, "sk-ant-api03-spent")
+	if !before.RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
 		t.Fatal("the premise: the old entry sits out")
 	}
-	same, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
-	carrySitOuts(before, same)
-	if planOf(t, same).SittingOut() == nil {
-		t.Error("the rebuilt entry with an unchanged spec was handed back the spent plan")
+	if build(900, "sk-ant-api03-spent").SittingOut() == nil {
+		t.Error("an entry whose timeout was edited was handed back the spent plan")
 	}
-	moved, _ := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "haiku"})
-	carrySitOuts(before, moved)
-	if err := planOf(t, moved).SittingOut(); err != nil {
-		t.Errorf("an entry whose spec moved inherited the old one's sit-out: %v", err)
+	if err := build(600, "sk-ant-api03-rotated").SittingOut(); err != nil {
+		t.Errorf("an entry whose key was rotated under the same name still sits out: %v", err)
 	}
 }
 
@@ -178,5 +200,66 @@ func TestAResumeWaitsOnTheChainItsFirstCallTakes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// THE NODE'S APPLY BUILDS EVERY REVISION ON ITS ONE REGISTRY OF SIGN-INS. The
+// unit case above hands buildProviders a registry itself; this one goes through
+// Engine.Apply, the path a running node takes, so an apply that built its
+// revision on no registry, or a fresh one, fails here: an edit to the entry's
+// timeout must find the window its sign-in is sitting out, and a key rotated
+// under the same ${VAR} must not.
+//
+// NOT PARALLEL: the key is read from the process environment.
+//
+// Mutation: pass nil (or cliagent.NewPlans(nil)) to buildRevision in Apply, and
+// the edited entry answers through the spent plan.
+func TestARunningNodesApplyKeepsTheSignInsSitOut(t *testing.T) {
+	dir := t.TempDir()
+	revision := func(timeout int) *config.Company {
+		return parseBundled(t, fmt.Sprintf(`
+name: Acme
+providers:
+  sandbox: {fake: true}
+  llm:
+    k:
+      agent: claude-code
+      model: sonnet
+      state_dir: %q
+      timeout_seconds: %d
+      auth: {mode: api-key, api_key: "${PLAN_KEY_UNDER_TEST}"}
+roles:
+  - name: CEO
+    handle: ceo
+    llm: k
+`, dir, timeout))
+	}
+	entry := func(e *Engine) *cliagent.Provider {
+		t.Helper()
+		p, ok := e.Company().Models.Provider("k")
+		if !ok {
+			t.Fatal("the running epoch has no entry k")
+		}
+		return p.(*cliagent.Provider)
+	}
+	apply := func(e *Engine, c *config.Company) {
+		t.Helper()
+		if status, stages, err := e.Apply(t.Context(), c, time.Now()); err != nil || status != configplane.StatusOK {
+			t.Fatalf("Apply = (%s, %v, %v), want ok", status, stages, err)
+		}
+	}
+	t.Setenv("PLAN_KEY_UNDER_TEST", "sk-ant-api03-spent")
+	e := bundleNode(t, revision(600))
+	if !entry(e).RunEnded(t.Context(), cliagent.RunEnd{Answer: "Usage limit reached · resets 5pm"}) {
+		t.Fatal("the premise: the running entry sits out")
+	}
+	apply(e, revision(900))
+	if entry(e).SittingOut() == nil {
+		t.Error("an apply that edited the entry's timeout handed back the spent plan")
+	}
+	t.Setenv("PLAN_KEY_UNDER_TEST", "sk-ant-api03-rotated")
+	apply(e, revision(900))
+	if err := entry(e).SittingOut(); err != nil {
+		t.Errorf("an apply after the key was rotated under the same name still sits out: %v", err)
 	}
 }

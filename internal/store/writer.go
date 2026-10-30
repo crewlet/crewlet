@@ -165,6 +165,12 @@ var tagKeys = map[string]string{
 	"operator_id": "operator_id",
 	"tool":        "tool",
 	"dir":         "dir",
+	// And a model gesture's (types.ModelActed): which gesture, and on which
+	// providers.llm entry. `provider_key` means that entry wherever a
+	// payload carries it (a phase's record, a fallback, a sandbox run), so
+	// "what ran on, and what was done to, this model" is one filter.
+	"action":       "action",
+	"provider_key": "provider_key",
 	// The Dashboard Assistant's CONVERSATION a runtime audit row belongs to
 	// (types.AssistantTurnCompleted, and an approved write the act route
 	// records under the assistant transport), so the Audit log lists every

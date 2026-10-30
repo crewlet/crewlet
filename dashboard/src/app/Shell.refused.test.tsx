@@ -225,9 +225,9 @@ test("a session holding no app finds Settings unlocked, and Spend open in it", a
   );
   expect(settings.getAttribute("title")).toBe("Settings");
   expect(settings.getAttribute("aria-current")).toBe("page");
-  // AND IT OPENS WHERE THE READER MAY READ: Models & keys is Admin's, so the
-  // row leads to Token spend rather than to a refusal ([landingPath]).
-  await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/spend"));
+  // AND IT OPENS ON ITS LANDING, Models, which every member reads: each
+  // model's condition is what tells a member why a seat waits.
+  await waitFor(() => expect(settings.getAttribute("href")).toBe("#/settings/models"));
   const column = await screen.findByRole("navigation", { name: "Settings sections" });
   const spend = within(column)
     .getAllByRole("link")

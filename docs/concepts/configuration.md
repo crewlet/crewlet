@@ -1354,23 +1354,25 @@ Preflights are answered **before** the auth guard, and deliberately: a browser
 sends the `OPTIONS` itself with no `Authorization` header, so answering it
 behind the guard would be a `401` on every cross-origin write and the real
 request would never be sent. The request headers a permitted origin may send
-are a closed set — exactly the ones the routes read: `Authorization`,
-`Content-Type`, `Idempotency-Key`, `If-Match`, `If-None-Match`, `X-Summary` and
-the two link secrets — never an echo of what the browser asked for, and an
-answer to a permitted origin exposes exactly the headers a client acts on:
-`ETag`, `Retry-After`, `Accept-Patch`, `Allow` and `Content-Disposition`.
-Leaving one out does not strip it; the browser refuses the whole request, or
-hides the header from the page, so a route reading a header a permitted origin
-cannot send is a route that origin can never use. The Dashboard Assistant's
-`Last-Event-ID` is not offered, since the one route that reads it, the
-assistant's stream, answers nothing but a person's own browser session, and
-no answer here allows another origin credentials. The dashboard's
+are a closed set, exactly the ones the routes read, never an echo of what the
+browser asked for: `Authorization`, `Content-Type`, `Idempotency-Key`,
+`If-Match`, `If-None-Match`, `X-Summary`, `X-Request-Id` and the two link
+secrets. An answer to a permitted origin exposes exactly the headers a client
+acts on (`Access-Control-Expose-Headers`): `X-Crewlet-Engine`, `ETag`,
+`Retry-After`, `Accept-Patch`, `Allow`, `Content-Disposition` and
+`X-Request-Id`; an origin the list does not name is answered with none of
+these. Leaving one out does not strip it; the browser refuses the whole
+request, or hides the header from the page, so a route reading a header a
+permitted origin cannot send is a route that origin can never use. The
+Dashboard Assistant's `Last-Event-ID` is not offered, since the one route that
+reads it, the assistant's stream, answers nothing but a person's own browser
+session, and no answer here allows another origin credentials. The dashboard's
 `X-Crewlet-Reader` is not offered, since only the dashboard sends it and it is
-same-origin. The methods are likewise exactly the ones the routes serve —
+same-origin. The methods are likewise exactly the ones the routes serve,
 `OPTIONS` among them, for `OPTIONS /config`. The
 [API reference](../reference/api-endpoints.md#routes) says which route reads
-each one. A preflight is cacheable for ten minutes —
-short enough that removing an origin takes effect within one.
+each one. A preflight is cacheable for ten minutes, short enough that removing
+an origin takes effect within one.
 
 The auth middleware compares tokens in constant time (`crypto/subtle`).
 A credential presented and refused logs `api_auth_failed` at WARNING (never
@@ -1380,6 +1382,23 @@ be attributed to), `operator_id` (the credential it came through) and `route`.
 Every write this surface logs — `config_revision_written`, `secret_written`,
 `backup_taken`, `retention_gate` and the rest — carries the same pair as `by`
 and `operator`.
+
+A write to the config, the secrets or a model (a model's check, retry and
+sign-in on its host included, which are writes without being config) that is
+refused with a `4xx` (a stale `If-Match`, a validation problem, a missing
+step-up, a grant the caller does not hold) logs one `write_refused` at INFO,
+on the `api.config`, `api.secrets` or `api.llm` logger: `route` (the pattern
+the request was served on, such as `PUT /secrets/{name}` or
+`DELETE /config/llm-providers/{id}`, never the path, which would name it),
+`method`, `status`, `code` (the problem's code from the answer's `error`),
+`by`, `kind`, `operator`, `base_revision` (the `If-Match` written against,
+where it is one revision tag of at most 128 bytes, and `<invalid>` otherwise),
+`dry_run` and `request_id`. It never carries a value, a secret's name or the
+problem's detail. INFO rather than WARNING because a refusal is the engine
+working as meant: a stale tab or an expired step-up refuses routinely. Each
+write answers an `X-Request-Id` header: the caller's own where it sent one
+(one token of at most 128 bytes of letters, digits and `._~:+/=-`), a minted
+UUID where not, so a refusal a user reports can be found in the log by it.
 
 See the [API endpoints reference](../reference/api-endpoints.md#config--live-config-management-auth-gated) for the per-route auth + status semantics.
 

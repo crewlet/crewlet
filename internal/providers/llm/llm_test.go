@@ -119,3 +119,23 @@ func TestReconcileAlwaysLandsOnTheAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A LIMIT'S WINDOW IS ONE OF A CLOSED SET. A reader that draws one (the Models
+// screen) is held to LimitWindows, so what Valid admits and what the set lists
+// are one list: a window added to one and not the other fails here.
+func TestALimitWindowIsOneOfTheClosedSet(t *testing.T) {
+	t.Parallel()
+	for _, w := range llm.LimitWindows {
+		if !w.Valid() {
+			t.Errorf("%q is in LimitWindows and not Valid", w)
+		}
+	}
+	for _, w := range []llm.LimitWindow{"", "five_hour", "seven_day", "monthly"} {
+		if w.Valid() {
+			t.Errorf("%q is Valid and not in LimitWindows", w)
+		}
+	}
+	if len(llm.LimitWindows) != 4 {
+		t.Errorf("LimitWindows has %d windows, want session, weekly, model and unknown", len(llm.LimitWindows))
+	}
+}

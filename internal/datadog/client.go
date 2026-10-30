@@ -182,8 +182,15 @@ func (c *Client) do(
 	if err != nil {
 		return fmt.Errorf("datadog: build %s %s: %w", method, path, err)
 	}
-	req.Header.Set("DD-API-KEY", creds.APIKey)
-	req.Header.Set("DD-APPLICATION-KEY", creds.AppKey)
+	// ONLY THE KEYS THE CALL CARRIES, and only ever as headers: the API
+	// key's own validation route takes the API key alone, and an empty
+	// application key header is a second credential Datadog may judge.
+	if creds.APIKey != "" {
+		req.Header.Set("DD-API-KEY", creds.APIKey)
+	}
+	if creds.AppKey != "" {
+		req.Header.Set("DD-APPLICATION-KEY", creds.AppKey)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -291,6 +298,39 @@ func (c *Client) VerifyCredentials(ctx context.Context, creds Credentials) (Org,
 	}
 	first := body.Orgs[0]
 	return Org{Name: first.Name, Public: first.PublicID}, nil
+}
+
+// ValidateAPIKey asks Datadog whether an API key is one it issued, with the
+// API key alone.
+//
+// THE FIRST HALF OF TELLING THE TWO KEYS APART. `/api/v1/org` takes the pair
+// and refuses both a bad API key and a bad application key the same way, so
+// a refusal there cannot say which one to replace. `/api/v1/validate` reads
+// no application key, so a refusal here is the API key's and an acceptance
+// here makes a later refusal of the pair the application key's.
+func (c *Client) ValidateAPIKey(ctx context.Context, apiKey string) error {
+	return c.do(ctx, http.MethodGet, "/api/v1/validate", Credentials{APIKey: apiKey}, nil, nil)
+}
+
+// CanReadUsers reads one row of the organization's users and keeps nothing,
+// to learn whether the keys may read them at all.
+func (c *Client) CanReadUsers(ctx context.Context, creds Credentials) error {
+	return c.do(ctx, http.MethodGet, "/api/v2/users?page[size]=1", creds, nil, nil)
+}
+
+// CanReadRoles reads one row of the organization's roles and keeps nothing.
+func (c *Client) CanReadRoles(ctx context.Context, creds Credentials) error {
+	return c.do(ctx, http.MethodGet, "/api/v2/roles?page[size]=1", creds, nil, nil)
+}
+
+// CanReadWebhook reads the named webhook definition and keeps nothing.
+//
+// AN ABSENT WEBHOOK IS A READ THAT WORKED: the first reconcile pass creates
+// it, so a 404 says the keys may look and there is nothing yet to see. Only
+// a refusal is an answer about the keys. It creates nothing either way.
+func (c *Client) CanReadWebhook(ctx context.Context, creds Credentials, name string) error {
+	_, _, err := c.Webhook(ctx, creds, name)
+	return err
 }
 
 // User is a Datadog user or service account.

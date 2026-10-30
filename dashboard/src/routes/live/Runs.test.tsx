@@ -25,12 +25,14 @@ import { Router } from "~/app/router.tsx";
 import { FrameReadings } from "~/app/Shell.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
+import { ACT_ERRORS } from "~/contract/errors.ts";
 import { SANDBOX_TAIL_POLL_MS } from "~/contract/sandbox.ts";
 import { overflowing } from "~/testing.tsx";
 import { BridgeLog, RunScreen } from "./Runs.tsx";
 import type { SandboxRun } from "~/protocol/index.ts";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 afterEach(() => {
   cleanup();
@@ -53,6 +55,7 @@ function run(extra: Partial<SandboxRun> = {}): SandboxRun {
     placement: "direct",
     task_description: "Ship it",
     question: "",
+    question_context: "",
     audience: "",
     audience_handles: [],
     audience_fallback: false,
@@ -280,7 +283,7 @@ function mountPage(answers: Record<string, unknown>, outcome = "pending") {
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify({ tool, outcome, position: "", receipt: {} }), {
         status: 200,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );
@@ -344,6 +347,7 @@ test("a parked run's page answers it by its turn", async () => {
       runs: [
         run({
           status: "awaiting_clarification",
+          launch_id: "q1",
           question: "Which retry ceiling?",
           audience: "requester",
           audience_handles: ["jane"],
@@ -363,48 +367,138 @@ test("a parked run's page answers it by its turn", async () => {
   fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
   await settle();
   expect(posted).toEqual([
-    { tool: "answer_run", args: { turn_id: "turn-1", answer: "Thirty seconds." } },
+    { tool: "answer_run", args: { turn_id: "turn-1", launch_id: "q1", answer: "Thirty seconds." } },
   ]);
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
-// AN OLDER BUILD'S QUESTION IS READ, NOT QUOTED. Its free-text question ran
-// to paragraphs, and the banner and the answer dialog drew every word of it
-// in one block. The banner carries its first sentence; the dialog adds the
-// rest as Markdown, never as a quote.
+// A RUN'S QUESTION IS ITS TITLE AND ITS CONTEXT IS ITS OWN. The banner names
+// the question; the answer dialog reads the context under it as Markdown, by
+// the Inbox's `checked` rule: a link only where the dashboard built it, on a
+// host the company configured, and any other address drawn inert, as written.
 //
-// Mutation: draw `run.question` whole in the banner, or quote it in the
-// dialog, and this fails.
-test("a parked run's long question heads the banner and reads as Markdown in its dialog", async () => {
+// Mutation: draw the context in the banner, quote it in the dialog, or render
+// it with live links, and this fails.
+test("a parked run's question heads the banner and its dialog reads the context checked", async () => {
   const { posted } = mountPage({
     sandbox_runs: {
       runs: [
         run({
           status: "awaiting_clarification",
-          question: "Which retry ceiling? The API allows **five**.\n\nThe client used three.",
+          launch_id: "q1",
+          question: "Which retry ceiling?",
+          question_context:
+            "The API allows **five**. See https://evil.example.net/c?q=secret and " +
+            "https://github.com/gophrase/backend/pull/11.",
           audience_handles: ["jane"],
         }),
       ],
     },
+    link_hosts: { hosts: [{ kind: "github", url: "https://github.com", owners: ["gophrase"] }] },
     turn: { turn_id: "turn-1", events: [] },
   });
   await settle();
   const banner = document.querySelector(".run-awaiting") as HTMLElement;
   expect(banner.querySelector("strong")?.textContent).toBe("Which retry ceiling?");
-  expect(banner.textContent).not.toContain("The client used three.");
+  expect(banner.textContent).not.toContain("The API allows");
   fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
   const dialog = await screen.findByRole("dialog");
   await settle();
   expect(dialog.querySelector("blockquote")).toBeNull();
   expect(dialog.textContent?.split("Which retry ceiling?")).toHaveLength(2);
-  expect(dialog.querySelector(".prose strong")?.textContent).toBe("five");
-  expect(dialog.querySelector(".prose")?.textContent).toContain("The client used three.");
+  const prose = dialog.querySelector(".prose") as HTMLElement;
+  expect(prose.querySelector("strong")?.textContent).toBe("five");
+  expect([...prose.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([
+    "https://github.com/gophrase/backend/pull/11",
+  ]);
+  expect(prose.textContent).toContain("https://evil.example.net/c?q=secret");
   fireEvent.change(within(dialog).getByLabelText("Your answer"), {
     target: { value: "Three." },
   });
   fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
   await settle();
-  expect(posted).toEqual([{ tool: "answer_run", args: { turn_id: "turn-1", answer: "Three." } }]);
+  expect(posted).toEqual([
+    { tool: "answer_run", args: { turn_id: "turn-1", launch_id: "q1", answer: "Three." } },
+  ]);
+});
+
+// AN OLDER BUILD'S FREE-TEXT QUESTION runs past the title's cap: the banner
+// cuts it to one line, and the dialog draws it whole and clamped, with every
+// word a press away, rather than split into a title and a context.
+//
+// Mutation: split it on its first sentence, or draw it unclamped, and this
+// fails.
+test("a parked run's question past the title's cap is clamped, never split", async () => {
+  const question =
+    "Which retry ceiling? The API allows five. " +
+    "The client used three, and the gateway retries twice on its own before either. ".repeat(4);
+  mountPage({
+    sandbox_runs: {
+      runs: [run({ status: "awaiting_clarification", launch_id: "q1", question })],
+    },
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  await settle();
+  const banner = document.querySelector(".run-awaiting") as HTMLElement;
+  const line = banner.querySelector("strong .crewlet-text--truncate");
+  expect(line?.textContent).toBe(question.trim());
+  fireEvent.click(within(banner).getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  await settle();
+  expect(dialog.querySelector(".prose")).toBeNull();
+  const clamped = dialog.querySelector(".crewlet-text--clamp-3");
+  expect(clamped?.textContent).toBe(question.trim());
+  fireEvent.click(within(dialog).getByRole("button", { name: "Show all" }));
+  expect(dialog.querySelector(".crewlet-text--clamp-3")).toBeNull();
+  expect(within(dialog).getByRole("button", { name: "Show less" })).toBeTruthy();
+});
+
+// AN ANSWER NAMES THE QUESTION THE DIALOG DREW. A run that moved on to
+// another question refuses it `stale_version`; the dialog says it changed
+// and, asked again by the refusal, draws the question it asks now.
+//
+// Mutation: send no `launch_id`, or keep the old question drawn, and this
+// fails.
+test("an answer to a question the run moved on from says so and draws the new one", async () => {
+  let refused = false;
+  const parked = (launch: string, question: string) =>
+    run({ status: "awaiting_clarification", launch_id: launch, question });
+  mountPage({
+    sandbox_runs: () => ({
+      runs: [
+        refused
+          ? parked("q2", "May I move the fixtures under testdata?")
+          : parked("q1", "Which retry ceiling?"),
+      ],
+    }),
+    turn: { turn_id: "turn-1", events: [] },
+  });
+  const sent: Record<string, unknown>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init: RequestInit) => {
+      sent.push((JSON.parse(init.body as string) as { args: Record<string, unknown> }).args);
+      refused = true;
+      return new Response(JSON.stringify({ error: "stale_version", tool: "answer_run" }), {
+        status: 409,
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
+      });
+    }),
+  );
+  await settle();
+  fireEvent.click(screen.getByRole("button", { name: "Answer" }));
+  const dialog = await screen.findByRole("dialog");
+  await settle();
+  fireEvent.change(within(dialog).getByLabelText("Your answer"), {
+    target: { value: "Three." },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Send answer" }));
+  await settle();
+  await settle();
+  expect(sent).toEqual([{ turn_id: "turn-1", launch_id: "q1", answer: "Three." }]);
+  expect(within(dialog).getByText(ACT_ERRORS.stale_version)).toBeTruthy();
+  expect(dialog.textContent).toContain("May I move the fixtures under testdata?");
+  expect(dialog.textContent).not.toContain("Which retry ceiling?");
 });
 
 // A PARKED RUN'S QUESTION OPENS ONLY WHAT THE DASHBOARD BUILT. Its context and

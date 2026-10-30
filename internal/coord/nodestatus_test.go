@@ -240,3 +240,162 @@ func TestAnMCPFailureNamesItsSeatByIDOrNotAtAll(t *testing.T) {
 		})
 	}
 }
+
+// modelBeat is a node's models and runners as a busy node reports them: one
+// entry sitting out with parked seats, one refused and signed in on the host,
+// and every runner cell in a different state.
+func modelBeat() coord.NodeStatus {
+	at := time.Date(2026, 10, 28, 21, 56, 0, 123456789, time.UTC)
+	return coord.NodeStatus{
+		Models: []coord.ModelStatus{{
+			Key: "default", Plan: "3f9a1c0e22b1", SignIn: "token", Resolves: true,
+			SittingOut: &coord.ModelSitOut{
+				Until: at.Add(time.Hour), ResetsAt: at.Add(3 * time.Hour), Since: at,
+				Window: "session", Said: "You've hit your session limit · resets 4:30pm (America/Vancouver)",
+			},
+			LastAnswer: at.Add(-time.Minute),
+			Parked: []coord.ParkedSeat{
+				{Seat: uuid.MustParse("6f1c2a3b-4d5e-5f60-8172-839405a6b7c8"), Since: at.Add(time.Second)},
+			},
+			ParkedCount: 1, ParkedSince: at.Add(time.Second),
+		}, {
+			Key: "codex-review", SignIn: "credentials",
+			LastFailure: &coord.ModelFailure{Kind: "auth", At: at, Said: "Not logged in. Run codex login."},
+			HostLogin: &coord.HostLogin{State: coord.HostSignedIn, Method: "chatgpt",
+				Account: "someone@example.com", CheckedAt: at},
+		}},
+		Runners: &coord.RunnerStatus{
+			Direct:    coord.RunnerCell{State: coord.RunnerReady, Detail: "Landlock confinement; box root writable", CheckedAt: at},
+			Container: coord.RunnerCell{State: coord.RunnerNotReady, Detail: "docker: not found", Fix: "Install Docker on node-2 and restart the engine", CheckedAt: at},
+			E2B:       coord.RunnerCell{State: coord.RunnerUnconfigured, CheckedAt: at},
+		},
+	}
+}
+
+// WHAT A NODE KNOWS ABOUT ITS MODELS TRAVELS WHOLE, both on the local map and
+// through the JSON round trip the lease store does: the Models page joins
+// every node's rows, so a field lost on the wire is a sit-out, a refusal or a
+// parked seat the page cannot show, and an instant cut to the second is two
+// nodes' last answer and last failure ordered wrongly.
+func TestAModelBeatRoundTrips(t *testing.T) {
+	t.Parallel()
+	want := modelBeat()
+	local, ok := coord.StatusFromMeta(map[string]any{coord.StatusKey: want.Meta()})
+	if !ok || !reflect.DeepEqual(local, want) {
+		t.Errorf("local read = %+v (ok %v), want %+v", local, ok, want)
+	}
+	raw, err := json.Marshal(map[string]any{coord.StatusKey: want.Meta()})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	stored, ok := coord.StatusFromMeta(meta)
+	if !ok || !reflect.DeepEqual(stored, want) {
+		t.Errorf("after the store's round trip = %+v (ok %v), want %+v", stored, ok, want)
+	}
+}
+
+// THE BEAT IS RE-SENT EVERY FIFTEEN SECONDS, so every piece of text a model row
+// or a runner cell carries is bounded: a vendor's sentence, a CLI's detail and
+// an account are any length, and the plan is a prefix and never the whole
+// sign-in identity.
+func TestModelTextIsBoundedOnTheWire(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("x", 4*coord.MaxModelSaidBytes)
+	at := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	status := coord.NodeStatus{
+		Models: []coord.ModelStatus{{
+			Key: "default", Plan: strings.Repeat("ab", 32), SignIn: "token",
+			SittingOut:  &coord.ModelSitOut{Until: at, Since: at, Window: "weekly", Said: long},
+			LastFailure: &coord.ModelFailure{Kind: "auth", At: at, Said: long},
+			HostLogin: &coord.HostLogin{State: coord.HostLoginUnknown, Method: long,
+				Account: long, Detail: long, CheckedAt: at},
+		}},
+		Runners: &coord.RunnerStatus{Container: coord.RunnerCell{
+			State: coord.RunnerNotReady, Detail: long, Fix: long, CheckedAt: at}},
+	}
+	got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
+	if len(got.Models) != 1 || got.Runners == nil {
+		t.Fatalf("decoded %+v, want one model row and the runners", got)
+	}
+	m := got.Models[0]
+	if len(m.Plan) != coord.ModelPlanChars {
+		t.Errorf("the plan travelled as %d characters, want the %d-character prefix", len(m.Plan), coord.ModelPlanChars)
+	}
+	for name, text := range map[string]string{
+		"a sit-out's sentence": m.SittingOut.Said, "a failure's sentence": m.LastFailure.Said,
+		"a login's method": m.HostLogin.Method, "a login's detail": m.HostLogin.Detail,
+		"a runner's detail": got.Runners.Container.Detail, "a runner's fix": got.Runners.Container.Fix,
+	} {
+		if len(text) > coord.MaxModelSaidBytes || !strings.HasSuffix(text, "…") {
+			t.Errorf("%s travelled as %d bytes (%q...), want at most %d and marked where it was cut",
+				name, len(text), text[:min(len(text), 12)], coord.MaxModelSaidBytes)
+		}
+	}
+	if n := len(m.HostLogin.Account); n > coord.MaxModelAccountBytes {
+		t.Errorf("an account travelled as %d bytes, over the %d-byte bound", n, coord.MaxModelAccountBytes)
+	}
+}
+
+// A ROW A READER CANNOT ATTRIBUTE IS DROPPED, never drawn: a model row naming
+// no entry, and a parked seat naming no seat in canonical form. A node that
+// sends no runners is not a node whose every cell is unconfigured.
+func TestAModelRowNamingNothingIsDropped(t *testing.T) {
+	t.Parallel()
+	meta := map[string]any{coord.StatusKey: map[string]any{
+		"in_flight": 0,
+		"models": []any{
+			map[string]any{"sign_in": "token"},
+			map[string]any{"key": "default", "parked": []any{
+				map[string]any{"seat": "not-a-seat", "since": "2026-10-28T00:00:00Z"},
+				map[string]any{"seat": "6F1C2A3B-4D5E-5F60-8172-839405A6B7C8"},
+			}},
+		},
+	}}
+	got, ok := coord.StatusFromMeta(meta)
+	if !ok {
+		t.Fatal("the status read as absent")
+	}
+	if len(got.Models) != 1 || got.Models[0].Key != "default" {
+		t.Fatalf("models = %+v, want the one row that names an entry", got.Models)
+	}
+	if len(got.Models[0].Parked) != 0 {
+		t.Errorf("parked = %+v, want no seat from rows naming none canonically", got.Models[0].Parked)
+	}
+	if got.Runners != nil {
+		t.Errorf("runners = %+v from a node that sent none, want nil", got.Runners)
+	}
+}
+
+// A MODEL ROW'S PARKED SEATS ARE BOUNDED ON THE WIRE, and the count and the
+// first wait travel whole: a hundred seats parked on one plan put eight ids on
+// the beat, the longest-waiting, beside how many there are and when the first
+// of them parked, which is what the waiting alarm is judged from.
+//
+// Mutation: publish every seat, or name the eight lowest ids rather than the
+// longest-waiting, or drop the count, and this fails.
+func TestAModelRowsParkedSeatsAreBounded(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	var parked []coord.ParkedSeat
+	for i := range 100 {
+		parked = append(parked, coord.ParkedSeat{
+			Seat:  uuid.NewSHA1(uuid.NameSpaceURL, []byte{byte(i)}),
+			Since: at.Add(-time.Duration(i) * time.Minute),
+		})
+	}
+	status := coord.NodeStatus{Models: []coord.ModelStatus{{Key: "default", SignIn: "token", Parked: parked}}}
+	got, _ := coord.StatusFromMeta(map[string]any{coord.StatusKey: status.Meta()})
+	row := got.Models[0]
+	if len(row.Parked) != coord.MaxModelParkedSeats || row.ParkedCount != 100 {
+		t.Fatalf("the row named %d seat(s) of %d, want %d of 100", len(row.Parked), row.ParkedCount,
+			coord.MaxModelParkedSeats)
+	}
+	if want := at.Add(-99 * time.Minute); !row.ParkedSince.Equal(want) || !row.Parked[0].Since.Equal(want) {
+		t.Errorf("the wait reads from %v (first named %v), want the longest-waiting seat's %v",
+			row.ParkedSince, row.Parked[0].Since, want)
+	}
+}

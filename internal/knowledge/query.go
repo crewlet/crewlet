@@ -19,7 +19,7 @@ import (
 // whichever surface asked. Declared here because this package is already the
 // first two searches' shared vocabulary ([Mode], [Outcome]), and a bound
 // spelled once per surface is a bound that drifts until one of them cuts. Chat
-// shares only the bound: it is a keyword corpus of its own (ADR-0069), but a
+// shares only the bound: it is a keyword corpus of its own (ADR-0071), but a
 // pasted passage ranks on every incidental word in it there exactly as it
 // does here.
 //

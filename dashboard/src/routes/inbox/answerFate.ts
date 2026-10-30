@@ -44,6 +44,12 @@ export interface GivenAnswer {
  *
  * A record that was never read (`undefined` with `loaded` false) is `sent`:
  * nothing is known yet, and nothing is claimed.
+ *
+ * NO `unoffered` FATE. The engine announces an answer by turn whose choice
+ * the question does not offer as `unoffered`, but `answer_run` checks the
+ * choice against the very question it names (`launch_id`) before it sends
+ * anything, and refuses it there: a press this pane made is refused at once,
+ * and never becomes an answer that fate could be read for.
  */
 export type AnswerFate =
   "sent" | "recorded" | "taken" | "ended" | "superseded" | "declined" | "overtaken";

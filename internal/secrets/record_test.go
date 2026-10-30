@@ -21,7 +21,7 @@ import (
 func TestASourceIsAWritePathsWordAndNothingElse(t *testing.T) {
 	t.Parallel()
 	for _, s := range []Source{SourceAPI, SourceSetup, SourceProvision,
-		SourceCLI, SourceLLMLogin, SourceIAM} {
+		SourceCLI, SourceLLMLogin, SourceIAM, SourceModels} {
 		if !s.Valid() {
 			t.Errorf("%q is a write path's word and is not Valid", s)
 		}

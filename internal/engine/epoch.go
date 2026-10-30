@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"reflect"
 	"sync/atomic"
 	"time"
 
@@ -140,6 +139,12 @@ func (e *Engine) installEpoch(ctx context.Context, c *Company) {
 		e.backends.Store.LearnEmbeddingDim(embeddingWidth(c))
 	}
 	e.auditSkills()
+	// A REVISION CAN DECLARE OR DROP A CELL, or point the e2b key at another
+	// variable: probe again rather than publish the last revision's answer.
+	e.kickRunnerProbe()
+	// AND EACH LOGIN, for the same reason: an entry may have started or
+	// stopped signing in with one.
+	e.kickHostLogins()
 }
 
 // stampActivation records on c the instant the fleet activated the revision it
@@ -269,7 +274,7 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 	// THE BUILD, which changes nothing: the company and the sandbox catalogue
 	// it configures. See [buildRevision], which is also what a write that
 	// must not land a revision this node cannot build asks ([Buildable]).
-	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.sandboxOtel, e.fakePlay)
+	next, sandboxManager, built, err := buildRevision(cfg, e.resolver(), e.plans, e.sandboxOtel, e.fakePlay)
 	applied = append(applied, built...)
 	if err != nil {
 		log.WarnContext(ctx, "config_apply_failed", "error", err,
@@ -278,10 +283,12 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 		return configplane.StatusError, applied, fmt.Errorf("engine: apply: %w", err)
 	}
 	stampActivation(next, activatedAt)
-	// THE SPENT PLANS STAY SPENT: every entry the revision left as it was
-	// keeps the sit-out the entry it replaces was serving — see
-	// [carrySitOuts].
-	carrySitOuts(e.Company(), next)
+	// THE SPENT PLANS STAY SPENT, with nothing carried: every entry is built
+	// on the node's registry of sign-ins, so one that calls as the same
+	// account finds the window its predecessor was sitting out, and one on a
+	// new credential starts clean ([cliagent.Plans]). What the sweep drops is
+	// a sign-in neither epoch names and that sits nothing out.
+	e.plans.Sweep(append(signIns(e.Company()), signIns(next)...), time.Now())
 	// THE NATIVE HALVES, on a node whose FIRST company this is — before the
 	// tools, which are registered only where they exist, and before the
 	// inbound edge, whose parsers include their own. The state log and the
@@ -519,10 +526,10 @@ func (e *Engine) Apply(ctx context.Context, cfg *config.Company,
 // (the cli-agent backend's workspace registry), so a later revision driving
 // another CLI from the same directory is refused until a restart — as it is
 // after an apply that built and was refused.
-func buildRevision(cfg *config.Company, env *config.Resolver,
+func buildRevision(cfg *config.Company, env *config.Resolver, plans *cliagent.Plans,
 	otel *sandbox.OtelReceiver, play fakePlayer) (*Company, *sandbox.Manager, []string, error) {
 
-	next, err := NewCompanyWith(cfg, env)
+	next, err := newCompany(cfg, env, plans)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -536,38 +543,21 @@ func buildRevision(cfg *config.Company, env *config.Resolver,
 	return next, manager, built, nil
 }
 
-// carrySitOuts hands every coding-CLI entry of next whose spec is unchanged
-// from previous the sit-out its predecessor is serving
-// ([cliagent.Provider.CarrySitOut]).
-//
-// AN APPLY REBUILDS EVERY ENTRY, and a rebuilt provider sits nothing out — so
-// the first apply after an entry's plan was spent, an edit to an unrelated
-// seat, handed every seat on the node the spent entry back, and each of their
-// next calls and launches started a process to learn the window again. Only an
-// UNCHANGED spec is the same login and the same plan: an entry whose spec moved
-// — another login, another model, another CLI — is a new question and starts
-// clean, as one that is new to the revision does.
-func carrySitOuts(previous, next *Company) {
-	if previous == nil || next == nil || previous.Models == nil || next.Models == nil ||
-		previous.Config == nil || next.Config == nil {
-		return
+// signIns is the sign-in of every coding-CLI entry of an epoch, for
+// [cliagent.Plans.Sweep]: the sign-ins whose records an apply must keep.
+func signIns(c *Company) []cliagent.SignInID {
+	if c == nil || c.Models == nil {
+		return nil
 	}
-	for key, spec := range next.Config.Providers.LLM {
-		was, ok := previous.Config.Providers.LLM[key]
-		if !ok || !reflect.DeepEqual(was, spec) {
-			continue
-		}
-		now, okNow := next.Models.Provider(key)
-		then, okThen := previous.Models.Provider(key)
-		if !okNow || !okThen {
-			continue
-		}
-		rebuilt, isCLI := now.(*cliagent.Provider)
-		served, wasCLI := then.(*cliagent.Provider)
-		if isCLI && wasCLI {
-			rebuilt.CarrySitOut(served)
+	var ids []cliagent.SignInID
+	for _, provider := range c.Models.All() {
+		if cli, ok := provider.(*cliagent.Provider); ok {
+			if id := cli.SignInID(); id != "" {
+				ids = append(ids, id)
+			}
 		}
 	}
+	return ids
 }
 
 // Buildable reports whether cfg builds on this node — the half of an apply
@@ -586,7 +576,7 @@ func carrySitOuts(previous, next *Company) {
 // which an apply moments later re-reads: a value rotated in between is the
 // only difference, and it is the rotation gesture rather than a revision.
 func (e *Engine) Buildable(cfg *config.Company) error {
-	_, _, _, err := buildRevision(cfg, e.resolver(), nil, e.fakePlay)
+	_, _, _, err := buildRevision(cfg, e.resolver(), nil, nil, e.fakePlay)
 	return err
 }
 

@@ -1862,7 +1862,7 @@ function ModelSection({
                 ? `Tried in this order: ${chain.join(", then ")}.`
                 : unpinned
                   ? `Empty runs on ${unpinned}, the default.`
-                  : "No model provider yet. Add one in the configuration."
+                  : "No model provider yet. Add one under Settings, Models."
             }
             error={withProblems(chainError)}
           >

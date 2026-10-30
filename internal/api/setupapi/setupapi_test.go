@@ -2714,6 +2714,51 @@ func TestACredentialFindingIsClearedByACredentialField(t *testing.T) {
 	}
 }
 
+// ONE TEST FOR DATADOG'S TWO KEYS, AND NO OTHER FORM MOVES.
+//
+// Datadog's application key carries the check for both keys
+// (setup.Requirement.CheckWith), and its API key lost its own Test control.
+// That is the only change: every other integration's checkable credentials
+// are the ones they were, each tested on its own, so their forms render as
+// before. A field gaining or losing a Test control anywhere else shows here.
+func TestOnlyDatadogChecksItsKeysTogether(t *testing.T) {
+	t.Parallel()
+	resolve := func(string) (string, bool) { return "", false }
+	for _, tc := range []struct {
+		kind      string
+		reqs      []setup.Requirement
+		checkable string
+		with      map[string]string
+	}{
+		{"atlassian", atlassian.Requirements(nil, resolve), "api_key", nil},
+		{"confluence", confluence.Requirements(nil, true, resolve), "token", nil},
+		{"confluence data center", confluence.Requirements(nil, false, resolve), "token", nil},
+		{"datadog", datadog.Requirements(nil, resolve), "app_key",
+			map[string]string{"app_key": "site,api_key"}},
+		{"github", github.Requirements(nil, resolve), "token", nil},
+		{"gitlab", gitlab.Requirements(nil, resolve), "token,admin_token", nil},
+		{"jira", jira.Requirements(nil, true, resolve), "token", nil},
+		{"jira data center", jira.Requirements(nil, false, resolve), "token", nil},
+		{"mattermost", mattermost.Requirements(nil, resolve), "admin_token", nil},
+		{"slack", slack.Requirements("ceo", nil, resolve), "bot_token", nil},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			var checkable []string
+			for _, req := range tc.reqs {
+				if req.Checkable {
+					checkable = append(checkable, req.Field)
+				}
+				if got, want := strings.Join(req.CheckWith, ","), tc.with[req.Field]; got != want {
+					t.Errorf("%s.%s is checked with %q, want %q", tc.kind, req.Field, got, want)
+				}
+			}
+			if got := strings.Join(checkable, ","); got != tc.checkable {
+				t.Errorf("%s's checkable fields are %q, want %q", tc.kind, got, tc.checkable)
+			}
+		})
+	}
+}
+
 // EVERY DROPDOWN OPENS ON AN ANSWER, which is what makes "Choose one"
 // unreachable rather than merely unwanted.
 //

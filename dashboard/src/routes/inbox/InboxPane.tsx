@@ -68,7 +68,9 @@ import { TechnicalDetails } from "~/components/common.tsx";
 import { Composer } from "~/components/Composer.tsx";
 import { useAct } from "~/lib/useAct.ts";
 import { useQuery } from "~/lib/useQuery.ts";
-import { RUNS_POLL_MS, runAsk, runAskTexts } from "~/lib/runs.ts";
+import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
+import { useFocusLanding } from "~/lib/focusLanding.ts";
+import { RunQuestion } from "~/components/RunQuestion.tsx";
 import { answerFate, type GivenAnswer } from "./answerFate.ts";
 import { fmtDateTime } from "~/lib/format.ts";
 import { addressMark, InertAddress, TokenScope } from "~/components/InlineToken.tsx";
@@ -313,6 +315,8 @@ function AskPane({
   const [open, setOpen] = useState(false);
   const [answer, setAnswer] = useState<AskAnswer | null>(null);
   const mark = useAct("mark_inbox");
+  // THE OUTCOME TAKES THE FOCUS from the option that sent it, which it replaces.
+  const landing = useFocusLanding(answer !== null);
   const recommended = options.find((o) => o.id === decision?.recommended);
   const context = askContext(ask);
   // THE ASK'S OWN TASK IS NOT EVIDENCE of anything: the byline names it.
@@ -373,7 +377,7 @@ function AskPane({
           chips
         )}
         {answer ? (
-          <ReadingPaneOutcome>{answeredWith(answer)}</ReadingPaneOutcome>
+          <ReadingPaneOutcome {...landing}>{answeredWith(answer)}</ReadingPaneOutcome>
         ) : (
           <AnswerAsk
             layout="buttons"
@@ -455,7 +459,7 @@ function AnsweredPane({
   const asked = (decision && WAS_ASKED[decision.role]) || "asked you";
   const said =
     words.kind === "resolved" ? null : words.kind === "choice" ? words.said : `“${words.said}”`;
-  const context = run ? runAsk(run).context : "";
+  const context = run ? run.question_context.trim() : "";
   return (
     <TokenScope texts={answeredTexts(answered)}>
       <ReadingPane>
@@ -466,9 +470,13 @@ function AnsweredPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
-        <ReadingPaneTitle>
-          {renderTokens(answeredQuestion(answered), "question", "text", true)}
-        </ReadingPaneTitle>
+        {run ? (
+          <RunQuestion question={answeredQuestion(answered)} />
+        ) : (
+          <ReadingPaneTitle>
+            {renderTokens(answeredQuestion(answered), "question", "text", true)}
+          </ReadingPaneTitle>
+        )}
         {context && (
           <ReadingPaneLead>
             {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
@@ -490,6 +498,12 @@ function AnsweredPane({
             </>
           )}
           {words.recommended && " (Recommended)"}
+          {words.note && (
+            <>
+              {" and wrote "}
+              <strong>{`“${words.note}”`}</strong>
+            </>
+          )}
         </ReadingPaneOutcome>
         {words.who !== "You" && words.kind !== "resolved" && (
           <Text as="p" variant="caption">
@@ -784,12 +798,13 @@ function Conversation({
 
 /**
  * A coding run parked on a question, read as an ask is: its question as the
- * title, its context as Markdown, the run's recommendation with the evidence
- * it cites, then the answer. A run that asked to choose is answered with one
- * press of an option (`answer_run{turn_id, choice}`), the recommended one
- * first and filled, through the same buttons an ask's options are
- * (`AnswerChoices`); "Something else", and an open question from the start,
- * answers in words (`answer_run{turn_id, answer}`).
+ * title (`RunQuestion`), its context as Markdown, the run's recommendation
+ * with the evidence it cites, then the answer. A run that asked to choose is
+ * answered with one press of an option (`answer_run{turn_id, launch_id,
+ * choice}`), the recommended one first and filled, through the same buttons
+ * an ask's options are (`AnswerChoices`); "Something else", and an open
+ * question from the start, answers in words (`answer_run{turn_id, launch_id,
+ * answer}`). Every answer names the question this pane drew by its launch.
  */
 function RunPane({
   run,
@@ -830,8 +845,12 @@ function RunPane({
   const seenTaken = useRef(false);
   const fate = given ? answerFate(given, record, runs.data !== undefined, seenTaken.current) : null;
   if (fate === "recorded" || fate === "taken") seenTaken.current = true;
-  const ask = runAsk(run);
-  const decision = ask.decision;
+  // THE OUTCOME TAKES THE FOCUS from the control that sent the answer, which
+  // it replaces.
+  const landing = useFocusLanding(given !== null);
+  const question = (run.question ?? "").trim();
+  const context = run.question_context.trim();
+  const decision = run.decision;
   const options = decision?.options ?? [];
   const recommended = options.find((o) => o.id === decision?.recommended);
   // A QUESTION THIS READER CAN'T SEE IS NOT ASKED OF THEM: the answer form
@@ -853,7 +872,8 @@ function RunPane({
       : null;
   const inWords = options.length === 0 || open;
   const hold = holdLine(run, now);
-  const blocked = text.trim() ? undefined : "Write the answer first.";
+  const notYet = unanswerable(run);
+  const blocked = notYet ?? (text.trim() ? undefined : "Write the answer first.");
   // ONCE PER ANSWER: telling the screen redraws it, and the screen's
   // callback is a new one on every draw, so the fate is said once.
   const told = useRef<string | null>(null);
@@ -905,14 +925,18 @@ function RunPane({
   // ONE SEND for a choice and for words: the press differs only in what it
   // carries, and the answer's fate is read the same way after it.
   const send = async (args: { choice: string } | { answer: string }, said: AskAnswer) => {
+    // THE QUESTION THIS PANE DREW rides the answer, so a run that moved on to
+    // another one refuses it rather than taking it as that one's answer.
     const result = await write.run(
-      { turn_id: run.turn_id, ...args },
+      { turn_id: run.turn_id, launch_id: run.launch_id, ...args },
       { done: `Sent your answer to ${frame.name}’s coding run` },
     );
-    // THE RECORD IS ASKED AGAIN by the refusal itself: already_answered is a
-    // code that looks again at what the press would have moved
-    // (protocol/writeOutcome.ts), sandbox_runs among it, so who answered and
-    // when arrive without a read of this pane's own.
+    // THE RECORD IS ASKED AGAIN by the refusal itself: already_answered and
+    // conflict (the run asks another question now) are codes that look again
+    // at what the press would have moved (protocol/writeOutcome.ts),
+    // sandbox_runs and decisions among it. Who answered and when arrive
+    // without a read of this pane's own, and so does the question the run
+    // asks now, which this pane then draws under the engine's sentence.
     setRefusedAnswered(
       result?.kind === "refused" && result.code === "already_answered"
         ? { worded: result.detail !== "" }
@@ -957,7 +981,7 @@ function RunPane({
   // nothing else on the pane names them, and the line does.
   const answererNamed = refusedAnswered?.worded === true && write.refusal !== null;
   return (
-    <TokenScope texts={runAskTexts(ask)}>
+    <TokenScope texts={runAskTexts(run)}>
       <ReadingPane>
         {frame.byline(
           <>
@@ -967,16 +991,18 @@ function RunPane({
             {frame.task && <> on {frame.task}</>}
           </>,
         )}
-        <ReadingPaneTitle>
-          {ask.title
-            ? renderTokens(ask.title, "question", "text", true)
-            : hidden
+        {question ? (
+          <RunQuestion question={question} />
+        ) : (
+          <ReadingPaneTitle>
+            {hidden
               ? "This run is waiting on a question you can’t see."
               : "The run paused on a question"}
-        </ReadingPaneTitle>
-        {ask.context && (
+          </ReadingPaneTitle>
+        )}
+        {context && (
           <ReadingPaneLead>
-            {renderMarkdown(ask.context, { ...CHECKED_WORDS, scoped: true })}
+            {renderMarkdown(context, { ...CHECKED_WORDS, scoped: true })}
           </ReadingPaneLead>
         )}
         {reasoning ? (
@@ -1006,7 +1032,7 @@ function RunPane({
         {given !== null ? (
           // PENDING UNTIL THE RUN TOOK IT: sent, recorded or ended is never the
           // success check a used answer gets.
-          <ReadingPaneOutcome tone={fate === "taken" ? "done" : "pending"}>
+          <ReadingPaneOutcome {...landing} tone={fate === "taken" ? "done" : "pending"}>
             {fate === "taken" ? (
               answeredWith(given.answer)
             ) : fate === "recorded" ? (
@@ -1089,6 +1115,7 @@ function RunPane({
                 options={options}
                 recommended={decision?.recommended}
                 pending={write.busy ? chosen : null}
+                blocked={notYet}
                 onChoose={choose}
                 onSomethingElse={() => setOpen(true)}
               />

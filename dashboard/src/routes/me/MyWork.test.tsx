@@ -40,6 +40,7 @@ import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ACT_ERRORS } from "~/contract/errors.ts";
 import { withDerived } from "~/test/org.ts";
 import { applyPageAction, resetPageContextForTest } from "~/app/assistant/context.ts";
+import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
 
 // THE FRAME'S ONE COVERAGE SLOT, stood in for so a case can say WHAT was
 // published rather than only that something was drawn: the state bar renders
@@ -87,7 +88,7 @@ beforeEach(() => {
       posted.push({ tool, args: body.args });
       return new Response(JSON.stringify(reply.body), {
         status: reply.status,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );
@@ -1427,7 +1428,7 @@ test("a reorder in flight keeps every row's grip and the list's place track", as
       await new Promise<void>((resolve) => (release = resolve));
       return new Response(JSON.stringify(reply.body), {
         status: 200,
-        headers: { "Content-Type": "application/json" },
+        headers: { ...ENGINE_HEADERS, "Content-Type": "application/json" },
       });
     }),
   );

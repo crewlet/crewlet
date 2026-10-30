@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/inbox"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/agent/runner"
+	"github.com/crewlet/crewlet/internal/agent/steer"
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turn"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -881,6 +882,11 @@ type resumeInput struct {
 	// Lost is the loss a lost job's round is carried on from — see
 	// [sandbox.ResumeRequest.Lost].
 	Lost *sandbox.LostRun
+
+	// Rotated is set by the resume itself, never by the collection: the
+	// run ended refused on a sign-in replaced while it ran, so the turn
+	// carries its round on once with the new one ([Engine.signInReplaced]).
+	Rotated *runner.Rotated
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -990,6 +996,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// vendor's spent plan sits its entry out here, on the node whose launch
 	// the turn's next run is — see [Engine.noteRunEnded].
 	e.noteRunEnded(ctx, company, in.Run, in.Ended)
+	in.Rotated = e.signInReplaced(ctx, company, in)
 	// A COMPLETION'S MODELS ARE ASKED HERE, its job collected and charged and
 	// its box asleep, and before anything of its turn runs: a limit its
 	// review's chain already knows refuses it, which the coordinator holds on
@@ -1031,39 +1038,7 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// NO onboarding on a resume. The pass is a seat's FIRST turn, and this
 	// turn already ran its first phase — running it here would spend the
 	// resumed turn's opening on orientation for a seat that is mid-task.
-	input.Resume = &runner.Resume{
-		State: in.State, Answer: in.Answer,
-		// WHICH BOX DID THE WORK. Off the run's own row, because this
-		// process may not be the one that launched it — and it is the only
-		// thing that can say a phase ran in a sandbox rather than in this
-		// process's own tool loop.
-		Run: runner.RunRecord{
-			CodingAgent: in.Run.CodingAgent,
-			SandboxID:   in.Run.SandboxID,
-			// AND WHICH ENTRY RAN IT, as the launch recorded the member it
-			// picked: the executor's record and its spend are charged to
-			// that entry and model, which a fallback makes other than the
-			// chain's head — and which the chain resolved now could name
-			// differently again.
-			ProviderKey:   in.Run.Launch.ProviderKey,
-			Model:         in.Run.Launch.Model,
-			LaunchID:      in.Run.LaunchID,
-			DeliveredRefs: in.DeliveredRefs,
-			RefsElided:    in.RefsElided,
-		},
-		// THE RUN'S OWN TOOL CALLS, off its durable row. The executor called
-		// them over the bridge, possibly in another process, so this list is
-		// the only record of what the phase did — its submission included.
-		Bridged: bridgedCalls(in.Run.BridgeCalls),
-		// AND A PERSON'S ANSWER, which carries the run on rather than
-		// reporting it — see [runner.Asked] — or the loss of its job with its
-		// host, which carries its round on ([runner.Lost]).
-		Asked: runnerAsked(in.Asked),
-		Lost:  runnerLost(in.Lost),
-		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
-		// written on — the briefs', the run's own and earlier reviews'.
-		Steered: e.runSteers.carried(in.Run),
-	}
+	input.Resume = runnerResume(in, e.runSteers.carried(in.Run))
 	r, err := company.RunnerFor(in.Turn.Handle(), e.seatRegistry(company, in.Turn.Handle()), input)
 	if err != nil {
 		return err
@@ -1370,6 +1345,53 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 	return &sandbox.HeldError{Refusal: refusal, Err: err}
 }
 
+// runnerResume is the collection a resumed segment's runner takes, read off the
+// run's row and the resume's own input: what the run did, where, under which
+// entry, and what carries it on. steered is every note the turn has read
+// ([runSteers.carried]).
+func runnerResume(in resumeInput, steered []steer.Read) *runner.Resume {
+	return &runner.Resume{
+		State: in.State, Answer: in.Answer,
+		// WHICH BOX DID THE WORK. Off the run's own row, because this
+		// process may not be the one that launched it, and it is the only
+		// thing that can say a phase ran in a sandbox rather than in this
+		// process's own tool loop.
+		Run: runner.RunRecord{
+			CodingAgent: in.Run.CodingAgent,
+			SandboxID:   in.Run.SandboxID,
+			// AND WHICH ENTRY RAN IT, as the launch recorded the member it
+			// picked: the executor's record and its spend are charged to
+			// that entry and model, which a fallback makes other than the
+			// chain's head, and which the chain resolved now could name
+			// differently again.
+			ProviderKey:   in.Run.Launch.ProviderKey,
+			Model:         in.Run.Launch.Model,
+			LaunchID:      in.Run.LaunchID,
+			DeliveredRefs: in.DeliveredRefs,
+			RefsElided:    in.RefsElided,
+		},
+		// THE RUN'S OWN TOOL CALLS, off its durable row. The executor called
+		// them over the bridge, possibly in another process, so this list is
+		// the only record of what the phase did, its submission included.
+		Bridged: bridgedCalls(in.Run.BridgeCalls),
+		// AND WHERE A PERSON'S ANSWER CUT THE ROUND, as the row recorded it
+		// when the job carried on by that answer opened: no submission
+		// made before it is the round's.
+		Answered: in.Run.AnsweredThrough,
+		// AND A PERSON'S ANSWER, which carries the run on rather than
+		// reporting it (see [runner.Asked]), or the loss of its job with its
+		// host, which carries its round on ([runner.Lost]).
+		Asked: runnerAsked(in.Asked),
+		Lost:  runnerLost(in.Lost),
+		// A REFUSAL ON A REPLACED SIGN-IN CARRIES THE ROUND ON, once. See
+		// [Engine.signInReplaced].
+		Rotated: in.Rotated,
+		// AND EVERY NOTE THE TURN HAS READ, off the record every read is
+		// written on: the briefs', the run's own and earlier reviews'.
+		Steered: steered,
+	}
+}
+
 // runnerAsked is the coordinator's account of an answered question in the
 // runner's terms, nil for a resume no answer drove.
 func runnerAsked(asked *sandbox.AskedRun) *runner.Asked {
@@ -1407,6 +1429,17 @@ func runnerLost(lost *sandbox.LostRun) *runner.Lost {
 // renamed or removed since the launch — and one that is not a coding CLI's
 // bench nothing; a run that succeeded starts the entry's backoff over, as a
 // call that was answered does.
+//
+// THE ENDING IS THE SIGN-IN'S THE RUN LAUNCHED WITH, never the entry's current
+// one. A run launched before its entry's credential was replaced ran on the
+// old credential to its end, so what it met (a refusal, a spent plan, an
+// answer) says nothing about the new one. Recorded on the entry, a refusal on
+// a revoked token became the NEW sign-in's last failure and readiness verdict
+// (a false `llm_sign_in_refused`, and the assistant refusing the entry for the
+// verdict's ten minutes), and a limit on the old plan benched a new account
+// with quota left. Such an ending records nothing: the old sign-in is no
+// entry's now, and the run itself is carried on with the new one where it was
+// refused ([Engine.signInReplaced]).
 func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) {
 	if c == nil || c.Models == nil || run.Launch.ProviderKey == "" ||
 		(ended.Text == "" && ended.Error == "" && ended.Event == "") {
@@ -1418,6 +1451,14 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 	}
 	agent, isCLI := provider.(*cliagent.Provider)
 	if !isCLI {
+		return
+	}
+	if launched := run.Launch.SignInID; launched != "" && launched != string(agent.SignInID()) {
+		log.InfoContext(ctx, "executor_run_ended_on_a_replaced_sign_in",
+			"turn_id", run.TurnID, "seat", run.AgentHandle,
+			"provider_key", run.Launch.ProviderKey,
+			"detail", "the run ran on a sign-in its entry no longer uses; how it ended is "+
+				"recorded on none the entry signs in with now")
 		return
 	}
 	if agent.RunEnded(ctx, cliagent.RunEnd{Answer: ended.Text, Error: ended.Error,
@@ -3325,15 +3366,23 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // model provider, and the provider the run's model names reads the one
 // variable it reads.
 //
-// ONE UNIT FOR CLAUDE CODE'S SIGN-IN: when the seat's own environment already
-// signs Claude Code in ([codingagent.ClaudeCodeCredentialEnv]), the entry adds
-// none of its own ([entrySignInName]). Claude Code has several sign-ins under
-// different names and ranks them — a cloud toggle routes away from the
-// Anthropic API altogether, and ANTHROPIC_API_KEY outranks a plan's
-// CLAUDE_CODE_OAUTH_TOKEN — so underlaying by name cannot see that a seat is
-// already signed in. An api-key entry's key underlaid beside a seat's own plan
-// token silently moved that seat onto the company's metered key, and beside a
-// Bedrock toggle it rode into a box that never reads it.
+// ONE UNIT FOR THE SIGN-IN OF A CLI THAT HAS SEVERAL: when the entry's profile
+// lists names that sign its CLI in beyond its token and its key
+// ([cliprofile.Profile.SignInEnv]) and the seat's own environment already signs
+// the CLI in ([cliagent.Provider.CredentialEnvNames], which reads that list),
+// the entry adds none of its own sign-in
+// ([entrySignInName]). Such a CLI ranks its sign-ins by name (Claude Code's
+// cloud toggle routes away from the Anthropic API altogether, and
+// ANTHROPIC_API_KEY outranks a plan's CLAUDE_CODE_OAUTH_TOKEN), so underlaying
+// by name cannot see that a seat is already signed in. An api-key entry's key
+// underlaid beside a seat's own plan token silently moved that seat onto the
+// company's metered key, and beside a Bedrock toggle it rode into a box that
+// never reads it.
+//
+// THE PROFILE'S LIST, NOT A LIST OF THE RUNNER'S: the names that sign a CLI in
+// are a fact about that CLI, which its profile records once and an override
+// can extend, so a cloud switch a build of the CLI adds is one profile edit,
+// and an entry's `auth.mode: env` and this rule read the same names.
 //
 // THE REST OF THE ENTRY'S ENV STILL LIES BENEATH IT. A base URL, a region or
 // a proxy says where the run's requests go, not whom they are made as, so a
@@ -3344,7 +3393,7 @@ func newCodingRun(agent *cliagent.Provider, seatEnv map[string]string) codingRun
 // other phase of its entry goes through.
 func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]string {
 	env := agent.SandboxEnv()
-	if agent.Agent() != codingagent.ClaudeCodeName || !signsIn(seatEnv, codingagent.ClaudeCodeCredentialEnv) {
+	if len(agent.Profile().SignInEnv) == 0 || !signsIn(seatEnv, agent.CredentialEnvNames()) {
 		return env
 	}
 	for name := range env {
@@ -3355,21 +3404,19 @@ func entryEnv(agent *cliagent.Provider, seatEnv map[string]string) map[string]st
 	return env
 }
 
-// entrySignInName reports whether name is part of a Claude Code entry's
-// sign-in, which a seat signing Claude Code in itself replaces as one unit
-// ([entryEnv]): a name Claude Code signs in by, its cloud toggles included
-// ([codingagent.ClaudeCodeCredentialEnv]); the profile's own token or key
-// variable, which an override may have renamed
-// ([cliagent.Provider.CredentialEnvNames]); and any credential-named variable
-// ([cliprofile.IsCredentialName]) — a cloud sign-in's own key, such as
-// Bedrock's AWS_BEARER_TOKEN_BEDROCK or the AWS key pair, which with the
-// entry's toggle gone no request of the run reads, and which would sit in a
-// box whose agent runs with every permission as a company credential the
-// seat's run never uses.
+// entrySignInName reports whether name is part of an entry's sign-in, which a
+// seat signing the CLI in itself replaces as one unit ([entryEnv]): a name the
+// CLI signs in by, its profile's token and key variables (which an override may
+// have renamed) and its sign_in_env, such as Claude Code's gateway bearer token
+// and its cloud toggles ([cliagent.Provider.CredentialEnvNames]); and any
+// credential-named variable
+// ([cliprofile.IsCredentialName]), such as a cloud sign-in's own key (Bedrock's
+// AWS_BEARER_TOKEN_BEDROCK or the AWS key pair), which with the entry's toggle
+// gone no request of the run reads, and which would sit in a box whose agent
+// runs with every permission as a company credential the seat's run never
+// uses.
 func entrySignInName(agent *cliagent.Provider, name string) bool {
-	return slices.Contains(codingagent.ClaudeCodeCredentialEnv, name) ||
-		slices.Contains(agent.CredentialEnvNames(), name) ||
-		cliprofile.IsCredentialName(name)
+	return slices.Contains(agent.CredentialEnvNames(), name) || cliprofile.IsCredentialName(name)
 }
 
 // signsIn reports whether env carries a non-blank value under any of names.
@@ -3439,17 +3486,15 @@ func sandboxCredentials(agent *cliagent.Provider, key, seat string, placement sa
 // the engine host: the rule a seat's remote run and the assistant's deep work
 // are both held to before a box is started.
 func entrySignsIn(agent *cliagent.Provider, env map[string]string) bool {
+	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([cliprofile.Profile.SignInEnv],
+	// which [cliagent.Provider.CredentialEnvNames] reads): for Claude Code a
+	// bearer token, or a Bedrock, Vertex AI or Foundry toggle, whether the seat
+	// brought one, which is then handed none of the entry's sign-in
+	// ([entryEnv]), or the entry's own env carries it into the box: a gateway's
+	// bearer token, a cloud of the company's. Judged by the profile's token and
+	// key variables alone, such a remote run was refused as signed in to nothing
+	// when it was signed in to its gateway or its cloud.
 	if signsIn(env, agent.CredentialEnvNames()) {
-		return true
-	}
-	// CLAUDE CODE'S OTHER SIGN-INS COUNT TOO — a bearer token, a Bedrock,
-	// Vertex AI or Foundry toggle — whether the seat brought one, which is then
-	// handed none of the entry's sign-in ([entryEnv]), or the entry's own env
-	// carries it into the box: a gateway's bearer token, a cloud of the
-	// company's. Judged by the profile's two names alone, such a remote run was
-	// refused as signed in to nothing when it was signed in to its gateway or
-	// its cloud.
-	if agent.Agent() == codingagent.ClaudeCodeName && signsIn(env, codingagent.ClaudeCodeCredentialEnv) {
 		return true
 	}
 	// A CLI THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
@@ -3532,6 +3577,15 @@ func credentialRefusal(agent *cliagent.Provider, key, seat string, placement san
 		lead := fmt.Sprintf("seat %q's executor runs on %q in %q, and nothing in this run's "+
 			"environment authenticates it: %s", seat, key, placement, sign.Missing())
 		switch {
+		case sign.Mode == cliagent.AuthEnv && len(sign.Variables) == 0:
+			// The entry's env is its whole sign-in and seeds no login, so
+			// no cell helps: the remedy is the env, which the lead names.
+			return &SandboxCredentialError{msg: lead}
+		case sign.Mode == cliagent.AuthEnv:
+			// No login either way, so a local cell is no remedy here: the
+			// env is, the entry's or the seat's.
+			return &SandboxCredentialError{msg: fmt.Sprintf(
+				"%s; or set %s in this seat's role.sandbox.env", lead, strings.Join(sign.Variables, " or "))}
 		case len(sign.Variables) == 0 && len(sign.Misnamed) == 0:
 			// The mode hands the CLI nothing, so the remedy is the mode
 			// — and the login it names reaches a box only in a local cell.
@@ -3635,4 +3689,52 @@ func underlay(env, defaults map[string]string) map[string]string {
 		}
 	}
 	return env
+}
+
+// signInReplaced decides whether a collected run is carried on because a
+// credential was replaced while it ran (M8 of the Models design), answering the
+// carried round or nil.
+//
+// A process's environment cannot change, and the coding CLIs re-read no file
+// for a token, so a job running when its entry's credential was rotated keeps
+// the old one until it ends; where the vendor revoked the old one, the job
+// ends refused while the entry already signs in with the new one. Every LAUNCH
+// builds its env from the current epoch's entry, so the next segment carries
+// the new credential: the round is relaunched once, in the job's box,
+// continuing its session, rather than failed for a reason it no longer has.
+//
+// ALL OF IT MUST HOLD: a completion (a person's answer and a lost job carry
+// their rounds on already); a job that is not itself such a relaunch (once per
+// round, so a credential that keeps failing fails the turn); a sign-in
+// recorded at its launch; an ending its entry's CLI classifies as an auth
+// failure; and an entry whose sign-in now differs from the one recorded. A
+// refusal on the very sign-in the entry still uses is an ordinary refusal.
+func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput) *runner.Rotated {
+	run := in.Run
+	if in.Asked != nil || in.Lost != nil || run.Launch.FollowUp == sandbox.FollowUpSignInReplaced ||
+		run.Launch.SignInID == "" || c == nil || c.Models == nil {
+		return nil
+	}
+	provider, ok := c.Models.Provider(run.Launch.ProviderKey)
+	if !ok {
+		return nil
+	}
+	agent, isCLI := provider.(*cliagent.Provider)
+	if !isCLI {
+		return nil
+	}
+	kind, classified := agent.EndedKind(cliagent.RunEnd{Answer: in.Ended.Text, Error: in.Ended.Error,
+		Failed: !in.Ended.Success, Event: in.Ended.Event, At: in.Ended.At})
+	if !classified || kind != llm.KindAuth {
+		return nil
+	}
+	current := agent.SignInID()
+	if current == "" || string(current) == run.Launch.SignInID {
+		return nil
+	}
+	log.InfoContext(ctx, "run_relaunched_signed_in", "turn_id", run.TurnID, "seat", run.AgentHandle,
+		"provider_key", run.Launch.ProviderKey, "launch_id", run.LaunchID,
+		"detail", "the run was refused on a sign-in that was replaced while it ran; its round "+
+			"is carried on once, in its box, on the entry's new sign-in")
+	return &runner.Rotated{SessionID: run.SessionID, BoxKept: run.SandboxID != ""}
 }

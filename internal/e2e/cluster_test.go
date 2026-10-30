@@ -24,6 +24,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/doclet"
 	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/jsprovision"
 	"github.com/crewlet/crewlet/internal/queue/jetstream"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/brokertest"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/jetstreamtest"
@@ -1556,11 +1557,10 @@ func (c *cluster) logEnds(t *testing.T) []statelog.Position {
 	var out []statelog.Position
 	for _, domain := range engine.Domains() {
 		name := domain.Stream().Name
-		stream, err := js.Stream(t.Context(), name)
-		if err != nil {
-			t.Fatalf("look up %s: %v", name, err)
-		}
-		info, err := stream.Info(t.Context())
+		// THE LEADER'S END, looked up as the product looks a stream up
+		// ([jsprovision.LookupStream]): re-asked while nobody answers, and
+		// never a member's own copy, which can be short of the quorum's.
+		info, err := jsprovision.LookupStream(t.Context(), js, name)
 		if err != nil {
 			t.Fatalf("read %s's end: %v", name, err)
 		}

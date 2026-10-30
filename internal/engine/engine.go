@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/compact"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/providers/llm/cliagent"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/seat/placement"
@@ -79,7 +80,7 @@ type Company struct {
 	// ([runner.Config.Ask]) rather than filed in Tools, because no other
 	// phase has a run to park. Built with the builtins ([Engine.equip]);
 	// nil on an epoch built without an engine, whose runs offer none.
-	AskTool tools.Callable
+	AskTool runner.RunAsk
 
 	// ActivatedAt is the instant the revision this epoch was applied from
 	// was activated — the activation pointer's own ([coord.Activation.At]),
@@ -143,10 +144,12 @@ func NewCompanyWith(c *config.Company, env *config.Resolver) (*Company, error) {
 	if env == nil {
 		env = config.EnvOnly()
 	}
-	return newCompany(c, env)
+	return newCompany(c, env, nil)
 }
 
-func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
+// newCompany builds an epoch whose coding-CLI entries keep their sit-outs on
+// plans, the node's registry ([cliagent.Plans]); nil for an epoch nothing runs.
+func newCompany(c *config.Company, env *config.Resolver, plans *cliagent.Plans) (*Company, error) {
 	if c == nil {
 		return nil, fmt.Errorf("engine: no company config")
 	}
@@ -171,7 +174,7 @@ func newCompany(c *config.Company, env *config.Resolver) (*Company, error) {
 	if err != nil {
 		return nil, fmt.Errorf("engine: organization: %w", err)
 	}
-	models, err := buildProviders(c, env)
+	models, err := buildProviders(c, env, plans)
 	if err != nil {
 		return nil, err
 	}

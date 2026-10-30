@@ -27,6 +27,7 @@ import {
   WORKSPACES,
   grantsMissing,
   isSidebarRow,
+  landingPath,
   ownedBy,
   personalPath,
   sectionOf,
@@ -54,9 +55,10 @@ import { segmentsOf } from "~/test/routes.ts";
 import { principlesEditHref } from "~/routes/settings/principles/edit/address.ts";
 
 /** Every Settings section's own address but Spend's readings, which `nav gates by app` sets apart. */
+/** Settings' Admin pages: every section but Spend's readings and Models, which every member reads. */
 function settingsPaths(): string[][] {
   return workspaceRow("settings")!
-    .sections.filter((s) => s.group !== "Spend")
+    .sections.filter((s) => s.group !== "Spend" && s.key !== "models")
     .map((s) => s.path);
 }
 
@@ -361,7 +363,7 @@ describe("the navigation grammar", () => {
   //
   // (The tracker's screens: Inbox, My work, Work and Settings › Expensive
   // tasks. Admin's: the company-wide transcripts, Company › Integrations, and
-  // every Settings page but Spend's readings.)
+  // every Settings page but Spend's readings and Models.)
   test("nav gates by app", () => {
     const at = (...path: string[]) => sectionOf(path) ?? workspaceRow(workspaceOf(path))!;
     const opens = (path: string[], held: string[]) => {
@@ -427,6 +429,9 @@ describe("the navigation grammar", () => {
       ["live"],
       ["live", "runs"],
       ["settings", "spend"],
+      // EACH MODEL'S CONDITION is every member's: it is why a seat waits. Its
+      // actions and its credentials stay an Admin's, on the page itself.
+      ["settings", "models"],
       ["account"],
     ];
     for (const path of OVERVIEW) {
@@ -861,10 +866,30 @@ describe("the breadcrumb", () => {
 
   // EXCEPT SETTINGS', whose landing is one of the column's sections: "Settings"
   // alone over the models said nothing the column's selected row did not.
-  test("Settings' landing is named Models & keys in the trail", () => {
+  // A LANDING CLOSED TO THE READER OPENS THE FIRST SECTION THEY MAY OPEN, never
+  // a refusal. Settings' own landing is every member's, so the rule is held on
+  // a copy of it whose landing takes a grant. Mutation: return the row's own
+  // path and the Worklet reader lands on the lock.
+  test("a workspace whose landing is closed opens on the first section the reader may open", () => {
+    const settings = workspaceRow("settings")!;
+    const gated: WorkspaceRow = {
+      ...settings,
+      sections: settings.sections.map((s) =>
+        samePath(s.path, settings.path) ? { ...s, grants: ["admin"] } : s,
+      ),
+    };
+    const runs = { tracker: true, knowledge: true, chat: true };
+    expect(landingPath(gated, ["worklet"], runs)).toEqual(["settings", "spend"]);
+    expect(landingPath(gated, ["admin"], runs)).toEqual(gated.path);
+    // A reader not read yet: the workspace's own path, as the frame draws a lock only once it knows.
+    expect(landingPath(gated, null, runs)).toEqual(gated.path);
+    expect(landingPath(settings, ["worklet"], runs)).toEqual(settings.path);
+  });
+
+  test("Settings' landing is named Models in the trail", () => {
     const crumbs = crumbsFor(["settings", "models"]);
-    expect(crumbs.map((c) => c.label)).toEqual(["Settings", "Models & keys"]);
-    expect(titleOf(crumbs)).toBe("Models & keys");
+    expect(crumbs.map((c) => c.label)).toEqual(["Settings", "Models"]);
+    expect(titleOf(crumbs)).toBe("Models");
   });
 
   test("a path the table does not have is named Not Found, under its workspace if any", () => {
@@ -1009,8 +1034,8 @@ describe("the breadcrumb", () => {
 // section that fell through to an object branch read as "Worklet / Item /
 // search", a trail naming a page that does not exist.
 //
-// A COLUMN'S LANDING NAMES ITS SECTION: Settings draws Models & keys as a row of
-// its column like any other, so its page is "Settings › Models & keys" while
+// A COLUMN'S LANDING NAMES ITS SECTION: Settings draws Models as a row of
+// its column like any other, so its page is "Settings › Models" while
 // the palette's destination is still the workspace.
 test("every fixed destination names itself rather than reading as a key", () => {
   for (const dest of DESTINATIONS) {
@@ -1241,4 +1266,14 @@ describe("Worklet's scope", () => {
     expect(row.does).toBe("Switch project");
     expect(sequenceWords("project")).toBe("G then P");
   });
+});
+
+// `#/..` IS A NAME, NOT A STEP: a fragment is never resolved as a path, so the
+// route for an item named `..` is that item's, and reads back as it was built.
+test("a route segment of dots alone reads back as the same route, never the one above", () => {
+  for (const name of ["..", ".", "..."]) {
+    const hash = buildHash(["worklet", name]);
+    expect(parseHash(hash).path).toEqual(["worklet", name]);
+    expect(new URL(`https://dash.example/${hash}`).hash).toBe(hash);
+  }
 });

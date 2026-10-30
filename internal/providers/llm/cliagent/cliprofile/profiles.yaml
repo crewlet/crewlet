@@ -12,7 +12,7 @@
 
 claude-code:
   binary: claude
-  written_for: "Claude Code CLI 2.1.x, measured on 2.1.303 and 2.1.310 (`claude --version`)"
+  written_for: "Claude Code CLI 2.1.x, measured on 2.1.303, 2.1.310 and 2.1.312 (`claude --version`); on 2.1.312 a `-p` stream-json run writes a `rate_limit_event` on every run (its `rate_limit_info` carrying `status`, `resetsAt` in epoch seconds and `rateLimitType` `five_hour` or `seven_day`), a refused key or token a result event with `api_error_status: 401`, a refused token `system` `api_retry` events with `error: authentication_failed` first, and `auth status` JSON with `loggedIn`, `authMethod`, `email` and `orgName`, exiting 0 signed in and 1 signed out; token_lifetime_days is the documented one-year `claude setup-token` token (code.claude.com/docs/en/authentication)"
   version_args: ["--version"]
   # EVERY FLAG BELOW KEEPS THE CLI TO ITS CALL. Measured on 2.1.310 through
   # the engine's own code path, with the state directory inside a git
@@ -376,6 +376,35 @@ claude-code:
   host_credential_paths: [".claude/.credentials.json"]
   token_env: "CLAUDE_CODE_OAUTH_TOKEN"
   api_key_env: "ANTHROPIC_API_KEY"
+  # How each credential begins: the hint a stored one shows, and what tells
+  # an API key pasted where the token belongs from the token.
+  token_prefix: "sk-ant-oat01-"
+  api_key_prefix: "sk-ant-api03-"
+  # `claude setup-token` mints a one-year token. Opaque, so its expiry is
+  # computed from when it was stored.
+  token_lifetime_days: 365
+  # What signs Claude Code in from an entry's env under auth.mode env: a
+  # gateway's token, or the switch that sends it to a cloud provider, whose
+  # own credentials (AWS_*, GOOGLE_*, the Foundry key) ride the same env.
+  sign_in_env:
+    - "ANTHROPIC_AUTH_TOKEN"
+    - "CLAUDE_CODE_USE_BEDROCK"
+    - "CLAUDE_CODE_USE_VERTEX"
+    - "CLAUDE_CODE_USE_FOUNDRY"
+  # Which account or endpoint those reach, none of it a credential: a Bedrock
+  # region and AWS profile, a Vertex project and region, a Foundry resource,
+  # and each one's or a gateway's address. Two entries that differ here are
+  # two sign-ins, and a limit one meets does not sit the other out.
+  identity_env:
+    - "AWS_REGION"
+    - "AWS_PROFILE"
+    - "ANTHROPIC_BEDROCK_BASE_URL"
+    - "ANTHROPIC_VERTEX_PROJECT_ID"
+    - "CLOUD_ML_REGION"
+    - "ANTHROPIC_VERTEX_BASE_URL"
+    - "ANTHROPIC_FOUNDRY_RESOURCE"
+    - "ANTHROPIC_FOUNDRY_BASE_URL"
+    - "ANTHROPIC_BASE_URL"
   # `auth login`, NOT `/login`. `claude` takes a bare argument as the PROMPT
   # ("Usage: claude [options] [command] [prompt]"), so `claude /login` never ran
   # a login command at all: it opened an INTERACTIVE SESSION carrying `/login`
@@ -392,9 +421,14 @@ claude-code:
   # the plan sat unused — the silent switch applyAuth deletes ANTHROPIC_API_KEY
   # to prevent.
   login_args: ["auth", "login", "--claudeai"]
-  # --text because a person ran `crewlet llm status` and is reading this; the
-  # CLI's own default is --json.
-  status_args: ["auth", "status", "--text"]
+  # JSON, the CLI's own default, for the engine's reading of the login
+  # (status_fields); --text for a person reading `crewlet llm doctor` or
+  # `crewlet llm status`.
+  status_args: ["auth", "status"]
+  status_text_args: ["auth", "status", "--text"]
+  status_fields:
+    method: [["authMethod"]]
+    account: [["email"], ["orgName"]]
   logout_args: ["auth", "logout"]
   capture_token_args: ["setup-token"]
   # A SPENT PLAN IS RECOGNISED BY ITS STATUS FIRST, and by the vendor's words
@@ -418,6 +452,43 @@ claude-code:
       said_path: ["result"]
       reset_separator: "resets "
       reset_unit: clock
+  # WHEN AND WHICH, IN FIELDS. Every run writes a rate_limit_event, an allowed
+  # one too (`status: allowed` or `allowed_warning`), so only a rejected one
+  # dates the limit a run reported: its `resetsAt` is the reset in epoch
+  # seconds and its `rateLimitType` the window. The sentence above is read
+  # only where no such event came.
+  limit_reset_events:
+    - match:
+        - {path: ["type"], equals: "rate_limit_event"}
+        - {path: ["rate_limit_info", "status"], equals: "rejected"}
+      resets_at: {path: ["rate_limit_info", "resetsAt"], unit: epoch}
+      window:
+        path: ["rate_limit_info", "rateLimitType"]
+        map:
+          five_hour: session
+          seven_day: weekly
+          seven_day_opus: model
+          seven_day_sonnet: model
+  limit_windows:
+    - {contains: "session limit", window: session}
+    - {contains: "5-hour limit", window: session}
+    - {contains: "weekly limit", window: weekly}
+    - {contains: "Opus limit", window: model}
+    - {contains: "Sonnet limit", window: model}
+  # A REFUSED SIGN-IN IS RECOGNISED BY ITS STATUS FIRST, as a spent plan is:
+  # a refused key or token ends in a result event with `api_error_status:
+  # 401`, and a refused token is first retried with a `system` `api_retry`
+  # event naming `authentication_failed` (both measured on 2.1.312).
+  auth_events:
+    - match:
+        - {path: ["type"], equals: "result"}
+        - {path: ["is_error"], equals: true}
+        - {path: ["api_error_status"], equals: 401}
+      said_path: ["result"]
+    - match:
+        - {path: ["type"], equals: "system"}
+        - {path: ["subtype"], equals: "api_retry"}
+        - {path: ["error"], equals: "authentication_failed"}
   # MEASURED AGAINST THE INSTALLED CLI, NOT REMEMBERED. The sentinel this
   # profile first shipped ("Claude AI usage limit reached", with the reset
   # instant after a pipe) was 1.x's wording; "Usage limit reached" was 2.1.263's,
@@ -448,14 +519,31 @@ claude-code:
   # "OAuth token has been revoked", and every other auth failure this CLI
   # reports — "Not logged in", "Login expired", "OAuth token revoked" — ends
   # in the same clause, so "Please run /login" covers all three at once.
+  #
+  # "Failed to authenticate" opens what `-p` prints for a refused token
+  # ("Failed to authenticate. API Error: 401 OAuth access token is
+  # invalid.", measured on 2.1.312).
+  #
+  # "Not logged in" is listed before "Please run /login" for its meaning
+  # only: with CLAUDE_CODE_OAUTH_TOKEN set, 2.1.312 says it when it did not
+  # use the token at all (one with a space inside, as a terminal wraps
+  # `claude setup-token` output, measured), so the vendor never saw it.
   auth_markers:
     - sentinel: "Invalid API key"
     - sentinel: "OAuth token has been revoked"
+    - sentinel: "Not logged in"
+      meaning: unread
     - sentinel: "Please run /login"
+    - sentinel: "Failed to authenticate"
+  model_aliases:
+    - {id: "opus", name: "Opus", detail: "The CLI's latest Opus"}
+    - {id: "sonnet", name: "Sonnet", detail: "The CLI's latest Sonnet"}
+    - {id: "haiku", name: "Haiku", detail: "The CLI's latest Haiku"}
+  models_docs: "https://code.claude.com/docs/en/model-config"
 
 codex:
   binary: codex
-  written_for: "Codex CLI 0.164.x (`codex --version`)"
+  written_for: "Codex CLI 0.164.x (`codex --version`); measured on 0.150.1: `exec --json` writes no rate-limit event (`rate_limits` is in the session rollout only, which a plain call's --ephemeral never writes) and its 401 error event names no status field, so a limit's reset is read from its sentence, which 0.150.1 writes as `try again at` and a time of day (`%-I:%M %p`) or a date (`%b %-d<st|nd|rd|th>, %Y %-I:%M %p`) in the CLI's local zone; `login --device-auth` prints the address, a code such as `ABCD-EFGH1` and `(expires in 15 minutes)`"
   version_args: ["--version"]
   # MEASURED on 0.153.4 and 0.164.0 through this backend's own code path — the
   # built-in profile, cliagent.New and Complete — with the CLI pointed at a
@@ -901,18 +989,40 @@ codex:
   # first, and sends no Authorization header at all with only the second set
   # (measured on both releases).
   api_key_env: "CODEX_API_KEY"
+  api_key_prefix: "sk-"
   login_args: ["login"]
   status_args: ["login", "status"]
   logout_args: ["logout"]
+  # The device-code sign-in, pinned to the file store so a host whose config
+  # selects the keyring cannot leave auth.json empty. The code's lifetime is
+  # read from its own line, and 15 minutes is OpenAI's documented one.
+  device_login_args: ["login", "--device-auth", "-c", "cli_auth_credentials_store=file"]
+  device_code_patterns:
+    url: '(https://\S+/device\S*)'
+    code: '\b([A-Z0-9]{4}-[A-Z0-9]{4,6})\b'
+    lifetime: 'expires in (\d+) minutes'
+  models_docs: "https://developers.openai.com/codex/models"
   # A spent plan or a rate limit exits 1, its report in the error events on
   # stdout. 0.153.4 writes the plan's sentence with an ASCII apostrophe and
   # 0.164.0 with a typographic one, so both are listed. An API rate limit is
   # retried by codex itself and reported as "exceeded retry limit, last
   # status: 429 Too Many Requests", without the API's own message.
+  #
+  # The plan's sentence ends "or try again at 4:31 PM." or, on another day,
+  # "Try again at Nov 3rd, 2026 4:31 PM." in the CLI's local zone, which the
+  # engine pins with TZ on every child, so the time needs no zone of its own
+  # to be read.
   limit_markers:
     - sentinel: "You've hit your usage limit"
+      reset_separator: "try again at "
+      reset_unit: clock
     - sentinel: "You’ve hit your usage limit"
+      reset_separator: "try again at "
+      reset_unit: clock
     - sentinel: "429 Too Many Requests"
+  # "You've hit your usage limit for <model>" is a limit of one model.
+  limit_windows:
+    - {contains: "usage limit for ", window: model}
   # A refused key reports "unexpected status 401 Unauthorized"; a ChatGPT
   # login that cannot be refreshed asks to "log out and sign in again".
   auth_markers:

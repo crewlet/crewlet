@@ -79,6 +79,22 @@ const PART_OF: Readonly<Record<string, { screen: readonly string[]; why: string 
     screen: ["routes/artifacts/DocEditor.tsx", "routes/artifacts/SlidesView.tsx"],
     why: "its editing status is drawn from the open kind's editor, which declares the draft",
   },
+  "routes/settings/models/wizard/steps/CliStep.tsx": {
+    screen: ["routes/settings/models/wizard/ModelWizard.tsx"],
+    why: "one step of the model wizard, whose draft the wizard declares",
+  },
+  "routes/settings/models/wizard/steps/LimitsStep.tsx": {
+    screen: ["routes/settings/models/wizard/ModelWizard.tsx"],
+    why: "one step of the model wizard, whose draft the wizard declares",
+  },
+  "routes/settings/models/wizard/steps/ModelStep.tsx": {
+    screen: ["routes/settings/models/wizard/ModelWizard.tsx"],
+    why: "one step of the model wizard, whose draft the wizard declares",
+  },
+  "routes/settings/models/wizard/steps/SignInStep.tsx": {
+    screen: ["routes/settings/models/wizard/ModelWizard.tsx"],
+    why: "one step of the model wizard, whose draft the wizard declares",
+  },
   "routes/doclet/page/LinkPicker.tsx": {
     screen: ["routes/doclet/page/Editor.tsx"],
     why: "the editor's link popover; what it inserts lands in the body the editor declares",

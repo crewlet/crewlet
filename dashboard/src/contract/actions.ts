@@ -189,7 +189,12 @@ export const ACTIONS = {
     //
     // A RUN THAT ASKED A PERSON TO CHOOSE is answered with one of its options
     // (`choice`), words (`answer`), or both: a choice with a note.
-    args: ["turn_id", "choice", "answer"],
+    //
+    // THE QUESTION THE READER SAW (`launch_id`, the run's own on the row the
+    // screen drew) rides every answer: a run that moved on to another
+    // question refuses it `conflict` rather than taking an answer to a
+    // question nobody showed.
+    args: ["turn_id", "launch_id", "choice", "answer"],
     domain: null,
     apps: [],
     refreshes: ["sandbox_runs", "decisions"],

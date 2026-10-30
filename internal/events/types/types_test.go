@@ -75,7 +75,7 @@ func catalogue() []events.Payload {
 		IAMPasswordResetIssued{}, IAMPasswordReset{},
 		IAMSessionGenerationBumped{}, RecordUnverifiable{}, RecordTampered{},
 		// operator.go
-		OperatorActed{}, BackupRequested{},
+		OperatorActed{}, BackupRequested{}, ModelActed{},
 		// assistant_read.go
 		AssistantConversationRead{},
 		// assistant.go
@@ -107,6 +107,7 @@ var wireTypes = []string{
 	"assistant_turn_completed",
 	"auxiliary_spend",
 	"backup_requested",
+	"model_acted",
 	"budget_exhausted",
 	"budget_meters",
 	"compaction_completed",
@@ -325,13 +326,15 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 //
 // Sorted per type, because the comparison is against sorted marshalled keys.
 var wireTags = map[string][]string{
-	"org_started":                     {"org_name"},
-	"org_stopped":                     {"org_name"},
-	"agent_spawned":                   {"agent_handle", "agent_id", "role"},
-	"agent_terminated":                {"agent_handle", "agent_id", "reason", "role"},
-	"config_revision_activated":       {"created_by", "created_by_kind", "operator_id", "revision_id", "revision_source", "revision_summary"},
-	"operator_acted":                  {"actor", "actor_kind", "assistant", "conversation_id", "failed", "operator_id", "outcome", "position", "refusal", "request_id", "tool", "transport"},
-	"backup_requested":                {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
+	"org_started":               {"org_name"},
+	"org_stopped":               {"org_name"},
+	"agent_spawned":             {"agent_handle", "agent_id", "role"},
+	"agent_terminated":          {"agent_handle", "agent_id", "reason", "role"},
+	"config_revision_activated": {"created_by", "created_by_kind", "operator_id", "revision_id", "revision_source", "revision_summary"},
+	"operator_acted":            {"actor", "actor_kind", "assistant", "conversation_id", "failed", "operator_id", "outcome", "position", "refusal", "request_id", "tool", "transport"},
+	"backup_requested":          {"actor", "actor_kind", "dir", "failed", "operator_id", "outcome", "streams"},
+	"model_acted": {"action", "actor", "actor_kind", "dry_run", "failed", "names",
+		"operator_id", "outcome", "provider_key", "refusal", "revision_id", "status"},
 	"config_revision_applied":         {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                   {"agent_id", "description", "role", "schedule", "task_id", "timeout_seconds"},
 	"scheduled_task_fired":            {"schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},

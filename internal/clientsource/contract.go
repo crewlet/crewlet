@@ -166,6 +166,19 @@ var contract = []Entry{
 	{"DEFAULT_CLI_TIMEOUT_SECONDS", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"DEFAULT_CLI_MAX_CONCURRENT", ReadScalar, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
 	{"CLI_PRODUCTS", ReadLiteral, "internal/config.TestEveryBuiltInCLIHasAProductName"},
+	{"ModelJob", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"RunnerCellName", ReadUnion, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"SEAT_JOB_FIELDS", ReadLiteral, "internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes"},
+	{"ModelHealth", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms"},
+	{"ModelAlarmKind", ReadUnion, "internal/api/queries.TestTheModelsScreenReadsTheEnginesHealthAndAlarms"},
+	{"ModelDeviceStatus", ReadUnion, "internal/coord.TestTheModelsScreenNamesEveryDeviceSignInStatus"},
+	{"DEVICE_SIGN_IN_ENDED", ReadLiteral, "internal/coord.TestTheModelsScreenNamesEveryDeviceSignInStatus"},
+	{"ModelSignInRoute", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
+	{"ModelLimitWindow", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
+	{"ModelCheckName", ReadUnion, "internal/providers/llm/cliagent.TestTheModelsScreenNamesTheEnginesSignIns"},
+	{"MODEL_CHECK_BUDGET_SECONDS", ReadScalar, "internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks"},
+	{"MODEL_CREDENTIAL_BUDGET_SECONDS", ReadScalar, "internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks"},
+	{"MODEL_RETRY_BUDGET_SECONDS", ReadScalar, "internal/api/llmapi.TestTheModelsScreenWaitsAsLongAsTheEngineWorks"},
 
 	// config.ts
 	{"ENTITY_KINDS", ReadLiteral, "internal/api/configapi.TestEntityKindsMatchTheClient"},
@@ -196,6 +209,10 @@ var contract = []Entry{
 		"internal/api.TestTheDashboardKeepsTheGesturesOwnIDWhereTheEngineDoes"},
 	{"GATE_REQUEST_TIMEOUT_MS", ReadScalar,
 		"internal/api.TestTheDashboardWaitsAsLongAsTheEngineSaysAClientShould"},
+
+	// engine.ts
+	{"ENGINE_HEADER", ReadScalar, "internal/api.TestTheDashboardKnowsTheEnginesOwnAnswers"},
+	{"ENGINE_HEADER_VALUE", ReadScalar, "internal/api.TestTheDashboardKnowsTheEnginesOwnAnswers"},
 
 	// retry.ts
 	{"UNAVAILABLE_RETRY_MS", ReadScalar, "internal/api.TestTheDashboardRetriesOnTheEnginesOwnHints"},

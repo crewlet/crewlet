@@ -150,6 +150,13 @@ func TestTheRemedyFollowsTheEntrysAuthMode(t *testing.T) {
 			notWant: []string{"capture-token", "subscription login", "crewlet secrets set"},
 		},
 		{
+			// The env is the whole sign-in and seeds no login, so a local
+			// cell is no remedy and a token is never asked for.
+			mode:    cliagent.AuthEnv,
+			want:    []string{"env", "CLAUDE_CODE_USE_BEDROCK", "providers.llm.sub.env", "role.sandbox.env"},
+			notWant: []string{"capture-token", "local cell", "seeded with its login", "crewlet secrets set"},
+		},
+		{
 			mode:    cliagent.AuthSubscription,
 			want:    []string{"subscription login", "crewlet llm login sub -capture-token", string(sandbox.Direct)},
 			notWant: []string{"auth.api_key", "inherit-env"},
@@ -361,7 +368,7 @@ func TestASeatThatBroughtItsOwnKeyIsNotRefused(t *testing.T) {
 // would only ride along unread — and a guard that knew only the profile's own
 // two variables then refused its remote run as signed in to nothing.
 //
-// Mutation: drop Claude Code's own list from the guard, and every case here
+// Mutation: drop the profile's sign_in_env from the guard, and every case here
 // is refused.
 func TestASeatsOwnClaudeCodeSignInPassesTheRemoteGuard(t *testing.T) {
 	t.Parallel()

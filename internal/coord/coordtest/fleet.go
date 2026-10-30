@@ -68,6 +68,8 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"trash reaps", trashReapCases},
 		{"upload reservations", uploadReservationCases},
 		{"seat_pauses", seatPauseCases},
+		{"model_retries", modelRetryCases},
+		{"device_sign_ins", deviceSignInCases},
 		{"maintenance", maintenanceCases},
 		{"backups", backupCases},
 		{"listings", listingCases},
@@ -2209,6 +2211,30 @@ var secretCases = []fleetCase{{
 		if err != nil || !created {
 			h.t.Fatalf("a create after the row was deleted = (%v, %v), want "+
 				"it written", created, err)
+		}
+	},
+}, {
+	// A CREATE'S OPERATION KEY IS KEPT, AND A PLAIN WRITE CLEARS IT. The key
+	// is how the same create retried finishes what it sealed (fleetsecrets
+	// Store.Reclaim); a store that dropped it would refuse every retry, and
+	// one that kept it across a plain write would let a stale retry re-seal
+	// over a value somebody else wrote.
+	name: "a create's operation key round-trips and a plain write clears it",
+	fn: func(h *fleetHarness) {
+		created, err := h.f.CreateSecret(h.ctx, coord.SecretRecord{
+			Name: "GATEWAY_KEY", Value: "v1:first", KeyID: "key-1",
+			UpdatedAt: h.now(), OpID: "op-1",
+		})
+		if err != nil || !created {
+			h.t.Fatalf("the keyed create = (%v, %v)", created, err)
+		}
+		rec, _ := h.secret("GATEWAY_KEY")
+		if rec.OpID != "op-1" {
+			h.t.Fatalf("the create's operation key reads back as %q", rec.OpID)
+		}
+		h.putSecret("GATEWAY_KEY", "v1:rotated", "key-1")
+		if rec, _ = h.secret("GATEWAY_KEY"); rec.OpID != "" {
+			h.t.Fatalf("a plain write left the operation key %q", rec.OpID)
 		}
 	},
 }, {

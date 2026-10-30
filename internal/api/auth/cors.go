@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/config"
 )
@@ -55,7 +56,10 @@ const CORSMaxAge = 10 * time.Minute
 // `If-None-Match`: `/config` and its entities, a work item, a project file and
 // `/setup`'s disconnect are written against the version they were read at,
 // and `GET /config` revalidates on its tag. `X-Summary`, the revision summary
-// a `/config` write must carry. And THE TWO LINK SECRETS
+// a `/config` write must carry. THE REQUEST ID ([httpjson.RequestIDHeader]),
+// which a write to the configuration, the secrets or a model is answered with
+// and a refused one is logged under: a caller that sends its own finds the
+// refusal in the log by it. And THE TWO LINK SECRETS
 // (`X-Crewlet-Invite-Secret`, `X-Crewlet-Reset-Secret`, declared in
 // internal/api/authapi, which imports this package): a link's view takes its
 // secret in a header so that it is never in a URL, and a page on a permitted
@@ -70,13 +74,16 @@ const CORSMaxAge = 10 * time.Minute
 // that page the one header whose whole job is to say which person a tab of
 // the dashboard was opened for.
 //
-// THE EXPOSED HEADERS are the ones a client reads to form its next request:
-// the `ETag` it writes back as `If-Match`, the `Retry-After` that says when to
-// ask again, the `Accept-Patch` a refused patch names the format it takes in,
-// the `Allow` an `OPTIONS` or a `405` lists the methods in, and the
-// `Content-Disposition` that names a downloaded project file. A
-// CORS-safelisted header (`Content-Type`, `Content-Length`, `Cache-Control`)
-// is readable without being listed.
+// THE EXPOSED HEADERS are the ones a client reads to tell whose answer it
+// holds and to form its next request: the engine's mark
+// ([httpjson.EngineHeader]), without which every answer reads as something in
+// front of the engine and a write's outcome as unknown, the `ETag` it writes
+// back as `If-Match`, the `Retry-After` that says when to ask again, the
+// `Accept-Patch` a refused patch names the format it takes in, the `Allow` an
+// `OPTIONS` or a `405` lists the methods in, the `Content-Disposition` that
+// names a downloaded project file, and the request id a refused write is found
+// in the log by. A CORS-safelisted header (`Content-Type`, `Content-Length`,
+// `Cache-Control`) is readable without being listed.
 //
 // THE METHODS ARE EXACTLY THE ONES THE ROUTES SERVE, held so by
 // TestTheCORSMethodsAreTheMethodsTheRoutesServe over every route pattern the
@@ -92,11 +99,12 @@ var (
 	}
 	corsHeaders = []string{
 		"Authorization", "Content-Type", opkey.Header,
-		"If-Match", "If-None-Match", "X-Summary",
+		"If-Match", "If-None-Match", "X-Summary", httpjson.RequestIDHeader,
 		"X-Crewlet-Invite-Secret", "X-Crewlet-Reset-Secret",
 	}
 	corsExposed = []string{
-		"ETag", "Retry-After", "Accept-Patch", "Allow", "Content-Disposition",
+		httpjson.EngineHeader, "ETag", "Retry-After", "Accept-Patch", "Allow",
+		"Content-Disposition", httpjson.RequestIDHeader,
 	}
 )
 

@@ -595,3 +595,80 @@ func TestAValuePastTheSizeEveryStoreKeepsIsRefusedOnTheFleet(t *testing.T) {
 		t.Errorf("the value at the limit read back as %d bytes, %v", len(got), err)
 	}
 }
+
+// A CREATE-ONLY WRITE OF AN OPERATOR'S SECRET NEVER SEALS OVER ONE STORED.
+//
+// A credential sent with `If-None-Match: *` is tested for up to two minutes
+// before it is sealed; a value another writer stored meanwhile is kept, and
+// the create says it lost.
+func TestACreateNeverSealsOverAStoredSecret(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store, _ := fleetStore(t, ring(t, "k1"))
+	mustSet(t, store, "ANTHROPIC_API_KEY", "theirs")
+	if created, err := store.Create(ctx, "ANTHROPIC_API_KEY", "mine", nodeA, secrets.SourceModels,
+		clock, ""); err != nil || created {
+		t.Fatalf("a create over a stored value = (%v, %v), want it refused", created, err)
+	}
+	if got, _ := store.Get(ctx, "ANTHROPIC_API_KEY"); got != "theirs" {
+		t.Errorf("a refused create replaced the value: %q", got)
+	}
+	if created, err := store.Create(ctx, "OPENAI_API_KEY", "mine", nodeA, secrets.SourceModels,
+		clock, ""); err != nil || !created {
+		t.Fatalf("a create of a new name = (%v, %v)", created, err)
+	}
+	if _, err := store.Create(ctx, "iam/blind-index-key", "x", nodeA, secrets.SourceModels,
+		clock, ""); err == nil {
+		t.Error("a create of the engine's own name was not refused")
+	}
+}
+
+// A CREATE'S RETRY RE-SEALS ONLY THE ROWS ITS OWN KEY SEALED, AND READS NONE.
+//
+// Reclaim writes the value it is handed over a row the keyed create sealed,
+// whatever that row holds, and refuses a row any other write left: another
+// key's, a plain write's (which clears the key), or none. OpOf answers the key
+// and never the value.
+func TestACreatesRetryReclaimsOnlyItsOwnRows(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	store, _ := fleetStore(t, ring(t, "k1"))
+	if created, err := store.Create(ctx, "GATEWAY_KEY", "first", nodeA, secrets.SourceModels,
+		clock, "op-1"); err != nil || !created {
+		t.Fatalf("the keyed create = (%v, %v)", created, err)
+	}
+	if op, sealed, found, err := store.OpOf(ctx, "GATEWAY_KEY"); err != nil || !found || op != "op-1" ||
+		!sealed.Equal(clock) {
+		t.Fatalf("OpOf = (%q, %v, %v, %v), want op-1 sealed at %v", op, sealed, found, err, clock)
+	}
+	// SEALED BEFORE notBefore, by the store's own record: refused whatever
+	// the key.
+	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "late", nodeA, secrets.SourceModels,
+		clock, "op-1", clock.Add(time.Second)); err != nil || wrote {
+		t.Errorf("a reclaim of a row sealed before notBefore = (%v, %v), want it refused", wrote, err)
+	}
+	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "corrected", nodeA, secrets.SourceModels,
+		clock, "op-2", clock.Add(-time.Hour)); err != nil || wrote {
+		t.Errorf("another key's reclaim = (%v, %v), want it refused", wrote, err)
+	}
+	if wrote, err := store.Reclaim(ctx, "GATEWAY_KEY", "corrected", nodeA, secrets.SourceModels,
+		clock, "op-1", clock.Add(-time.Hour)); err != nil || !wrote {
+		t.Fatalf("its own key's reclaim = (%v, %v)", wrote, err)
+	}
+	if got, _ := store.Get(ctx, "GATEWAY_KEY"); got != "corrected" {
+		t.Errorf("after the reclaim the value is %q, want the retry's", got)
+	}
+	// A PLAIN WRITE CLEARS THE KEY: the row is that write's now.
+	mustSet(t, store, "GATEWAY_KEY", "rotated")
+	if op, _, _, _ := store.OpOf(ctx, "GATEWAY_KEY"); op != "" {
+		t.Errorf("a plain write left the key %q on the row", op)
+	}
+	if wrote, _ := store.Reclaim(ctx, "GATEWAY_KEY", "late", nodeA, secrets.SourceModels,
+		clock, "op-1", clock.Add(-time.Hour)); wrote {
+		t.Error("a retry re-sealed over a plain write that followed its create")
+	}
+	if wrote, _ := store.Reclaim(ctx, "ABSENT", "x", nodeA, secrets.SourceModels, clock, "op-1",
+		clock.Add(-time.Hour)); wrote {
+		t.Error("a reclaim wrote a row nothing created")
+	}
+}

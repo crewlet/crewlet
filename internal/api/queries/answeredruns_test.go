@@ -1,11 +1,13 @@
 package queries_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
+	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -79,5 +81,89 @@ func TestARunsAnsweredQuestionIsAnAnsweredDecision(t *testing.T) {
 		item.Answer.Body != "The unit suite" || item.Answer.By != "ana" {
 		t.Errorf("the answered run ask is %+v, want the question, its options, the choice "+
 			"and its label as the answer, by ana", item)
+	}
+}
+
+// leadsBoth is a chart whose one lead leads two seats: a person, and the
+// coding seat whose run asked them.
+type leadsBoth struct {
+	leadsChart
+	also string
+}
+
+func (c leadsBoth) Leads(ctx context.Context, actor, subject string) (bool, error) {
+	if actor == c.lead && subject == c.also {
+		return true, nil
+	}
+	return c.leadsChart.Leads(ctx, actor, subject)
+}
+
+// A RUN'S ANSWERED QUESTION IS READ BY WHOEVER MAY READ BOTH THE PERSON AND
+// THE RUN. Somebody else's answered decisions are their lead's or an admin's
+// ([authz.ActionPersonRead]), and a run's question is the body of the seat
+// whose run asked it, withheld wherever that body is (ADR-0068): the person
+// who answered reads it as theirs, an admin and a lead of the run's seat read
+// it in the person's list, and a lead of the person alone reads their
+// decisions without that question in them, never a refusal of the whole list.
+//
+// Mutation: list the run's ask for any reader of the person, and bo's lead who
+// does not lead swe reads swe's question; check only the seat's body, and bo
+// does not read his own answer.
+func TestARunsAnsweredQuestionReachesWhoMayReadTheRunAndThePerson(t *testing.T) {
+	t.Parallel()
+	db := openStore(t)
+	asked := &decision.Decision{Question: "Which suite?", Role: decision.RoleApprover,
+		Recommended: "unit", Options: []decision.Option{
+			{ID: "unit", Label: "The unit suite"}, {ID: "all", Label: "Every suite"}}}
+	e := types.SandboxRunAnswered{AgentHandle: "swe", TurnID: "t-1", LaunchID: "l-1",
+		Question: asked.Question, Decision: asked, Outcome: types.AnswerResumed,
+		AudienceHandles: []string{"bo"}, AnsweredBy: "bo", AnsweredByKind: "human",
+		Choice: "unit", AskedAt: time.Now().UTC().Add(-2 * time.Hour)}
+	raw, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storetest.WriteEvents(t, db.Events(), []store.EventRecord{{ID: "answered",
+		Type: e.EventType(), Source: "engine", Time: time.Now().UTC().Add(-time.Hour),
+		Category: "task", Actor: "SWE", Summary: "answered", Payload: raw,
+		Tags: store.ExtractTags(raw)}})
+	sources := func(chart authz.Chart) queries.Sources {
+		s := viewerSources(t, &stubWork{})
+		s.Events = fleetOf(db.Events())
+		if chart != nil {
+			s.Chart = chart
+		}
+		return s
+	}
+	lead := leadsChart{lead: "ana", report: "bo"}
+	for _, tc := range []struct {
+		name   string
+		s      queries.Sources
+		reader string
+		grants []iam.Grant
+		listed bool
+	}{
+		{"the person who answered", sources(nil), "bo", nil, true},
+		{"a lead of the person and the run's seat", sources(leadsBoth{lead, "swe"}), "ana",
+			[]iam.Grant{iam.GrantWorklet}, true},
+		{"a lead of the person alone", sources(lead), "ana", []iam.Grant{iam.GrantWorklet}, false},
+		{"an admin", sources(nil), "ana", []iam.Grant{iam.GrantAdmin}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := askHolding(t, tc.s, tc.reader, "answered_decisions",
+				map[string]any{"handle": "bo"}, tc.grants...)
+			if err != nil {
+				t.Fatalf("answered_decisions of bo: %v", err)
+			}
+			items := got.(map[string]any)["items"].([]any)
+			if listed := len(items) == 1; listed != tc.listed {
+				t.Fatalf("%s read %d answered decisions of bo, want the run's question listed: %v",
+					tc.reader, len(items), tc.listed)
+			}
+			if tc.listed && items[0].(queries.AnsweredRunAsk).Run.Question != asked.Question {
+				t.Errorf("the listed ask is %+v, want swe's question", items[0])
+			}
+		})
 	}
 }

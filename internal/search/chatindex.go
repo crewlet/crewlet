@@ -20,7 +20,7 @@ import (
 //
 // # A different corpus, deliberately
 //
-// Chat is in NEITHER half of the knowledge corpus (ADR-0069). The argument is
+// Chat is in NEITHER half of the knowledge corpus (ADR-0071). The argument is
 // already in this package: [TaskSource] does not index a work item's comment
 // thread, because a thread is a conversation ABOUT the item rather than a
 // statement of it and indexing it would make one busy item outrank every

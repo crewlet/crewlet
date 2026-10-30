@@ -400,6 +400,12 @@ func (s *Service) Routes(mux authz.Mux) error {
 		entity("PUT /config/"+kind+"/{id}", entityPolicy(kind, authz.ActionConfigWrite),
 			s.putEntity(kind))
 	}
+	// A MODEL IS REMOVED WITH ITS DEPENDANTS REPOINTED, in one revision
+	// (removal.go): the one collection whose members everything else names
+	// by key, so a removal by itself would leave the company invalid.
+	entity("DELETE /config/"+EntityLLMProviders+"/{id}",
+		authz.Policy{Action: authz.ActionConfigWrite}.Checked().Summarised(),
+		s.deleteEntity(EntityLLMProviders))
 	// AND THOSE TWO ARE JSON, like every other answer here: see
 	// [httpjson.Mux].
 	surface := noStore(httpjson.Mux(routes))

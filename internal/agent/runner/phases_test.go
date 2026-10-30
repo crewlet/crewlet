@@ -333,7 +333,7 @@ type buildOpts struct {
 	// ask is the tool the executor's run asks a person through, which the
 	// engine hands the runner from outside the seat's registry
 	// ([runner.Config.Ask]). Nil offers none.
-	ask tools.Callable
+	ask runner.RunAsk
 
 	// calls, when set, is the run's call log, on a turn context the
 	// surfaces are bound to — for the cases about what a run has called.

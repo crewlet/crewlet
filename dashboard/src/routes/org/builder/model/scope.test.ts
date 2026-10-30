@@ -161,14 +161,15 @@ describe("the engine's answer, in the draft's coordinates", () => {
   test("the transport reads the unit as the draft's document and answers in its coordinates", async () => {
     const sent: ConfigRequest[] = [];
     const answers: HttpAnswer[] = [
-      { status: 200, body: ENGINEERING, etag: '"r1"' },
-      { status: 200, body: { valid: true, base_revision_id: "r1", derived } },
+      { status: 200, body: ENGINEERING, etag: '"r1"', fromEngine: true },
+      { status: 200, body: { valid: true, base_revision_id: "r1", derived }, fromEngine: true },
       {
         status: 400,
         body: {
           derived,
           problems: [{ path: "units[1].name", segments: ["units", 1, "name"], message: "a" }],
         },
+        fromEngine: true,
       },
     ];
     const inner: ConfigTransport = {
@@ -185,6 +186,7 @@ describe("the engine's answer, in the draft's coordinates", () => {
       status: 200,
       body: DRAFT_DOC,
       etag: '"r1"',
+      fromEngine: true,
     });
     expect(sent[0]).toMatchObject({ method: "GET", path: "/config/units/eng" });
     const check = checkRequest({

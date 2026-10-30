@@ -1148,8 +1148,11 @@ const (
 	// the renderer (`lib/markdownText.ts`), and a coding run's question asked
 	// as a decision added 0.2 KiB. With Chatlet the load measured 355.0 KiB
 	// (363,549 bytes), 29 bytes past 355 KiB, so it moved to 356 KiB, which is
-	// 1.94 seconds on that link.
-	initialBudget = 356 << 10
+	// 1.94 seconds on that link. Merged beside Settings › Models, whose frame
+	// measured 351.0 KiB (359,385 bytes), the load measured 357.0 KiB (365,596
+	// bytes), 28 bytes past 357 KiB, so it moved to 358 KiB, which is 1.96
+	// seconds on that link.
+	initialBudget = 358 << 10
 	// lazyChunkBudget holds each chunk the page fetches later — a workspace,
 	// the org builder, a stylesheet a preload list names. A chunk is what a
 	// reader waits for on the first click into a workspace the idle prefetch
@@ -1352,14 +1355,44 @@ const (
 	// as a decision (the run's ask drawn with the decision components, its
 	// options read back with the chosen one marked, and its answered history
 	// in the Inbox's Answered group), all in lazy chunks, took it to
-	// 4637.3 KiB. 4638 KiB, which still refuses a doubled baseline.
-	// Chatlet (its workspace, its rail and its screens) took it from 4637.3
-	// KiB to 4775.6 KiB, so it moved to 4776 KiB, the first budget past a
-	// doubled baseline: the 2.3 MiB the tree measured when this budget was
-	// first set, doubled, is about 4710 KiB. From here the budget holds the
-	// tree to what each change says it costs rather than refusing a bundle
-	// that doubled.
-	treeBudget = 4<<20 + 680<<10
+	// 4637.3 KiB. 4638 KiB, which still refuses a doubled baseline. Its
+	// review's fixes (a run's question drawn whole and clamped with Show all
+	// rather than split, an answer naming the question it answers, a choice
+	// read back with the words beside it, and the focus kept on the outcome)
+	// took it to 4638.7 KiB. 4639 KiB, which still refuses a doubled
+	// baseline. A model's cloud or gateway sign-in (auth.mode env) named on the
+	// Models screen, its words in the shared models module every chunk that
+	// imports it carries, took it to 4639.1 KiB. The Audit log's row for a
+	// model gesture (`model_acted`, its action and its entry linked to the
+	// models) took it to 4639.4 KiB.
+	// 4640 KiB, which still refuses a doubled baseline. Settings › Models built
+	// on the engine's model answers (the list with its alarms, By job, a page
+	// per model, the one wizard that adds and edits a model, and the test,
+	// retry, device sign-in and removal flows), with uilet 0.76.0's choice
+	// cards and setup wizard, took it to 4758.3 KiB: the Settings chunk the
+	// first load does not fetch grew from 192 KiB to 303 KiB, and the first
+	// load is 350.1 KiB. 4759 KiB, which still refuses a doubled baseline.
+	// The device sign-in statuses held to the engine's set, with uilet
+	// 0.76.1, kept it within 4759 KiB. The secret dialogs reading whether the
+	// company switched to a write (`reload`), and saying so when it did not
+	// rather than closing on the 200 (#457), took it to 4760.1 KiB. 4761 KiB,
+	// which still refuses a doubled baseline. The models round (the Datadog
+	// keys tested together, each failure named at its own key; one reading of
+	// a /config failure by whether the engine answered, its sentence shared
+	// by every screen that writes the company; and the Models fixes from the
+	// owner's review: a removal on its entry's own tag, Review's list of who
+	// changes model, an edit keeping its seats; an answer read as the
+	// engine's only where it carries the engine's mark; every path segment
+	// through one rule; rgb channels and trailing slashes read in linear
+	// time; and uilet 0.77.0, its compact cards and CheckGrid in place of the
+	// seat grid) took it to 4773.5 KiB. 4774 KiB, which still refuses a
+	// doubled baseline.
+	// Chatlet (its workspace, its rail and its screens) took it from 4773.6
+	// KiB to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline:
+	// the 2.3 MiB the tree measured when this budget was first set, doubled,
+	// is about 4710 KiB. From here the budget holds the tree to what each
+	// change says it costs rather than refusing a bundle that doubled.
+	treeBudget = 4<<20 + 817<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

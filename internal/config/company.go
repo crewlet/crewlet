@@ -270,6 +270,8 @@ func (c *Company) ValidateRunnable() error {
 // NAME is held unique), a unit with no id, duplicate sandbox setup step names
 // within one list, a GitHub App on a human seat, an avatar the dashboard
 // cannot draw or one on a human seat ([Company.validateAvatars]), a
+// providers.llm key outside its grammar or sharing another's credential bundle
+// variable ([Company.validateLLMKeys]), a
 // providers.llm entry's credential configured where its CLI never reads it or
 // handed over under a variable name no store can hold
 // ([LLMProvider.validateCredentials]), a model with no provider segment on a
@@ -294,7 +296,7 @@ func (c *Company) ValidateAdmission() error {
 func (c *Company) validateAdmission(o *org.Organization) error {
 	return errors.Join(o.ValidateAdmission(), c.validateUnitIDs(),
 		c.validateSetupStepNames(), c.validateHumanSeatApps(), c.validateAvatars(),
-		c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
+		c.validateLLMKeys(), c.validateLLMCredentials(), c.validateLLMModels(), c.validateSetupFileHomes(),
 		c.validateRunOptionalKeys(), c.validateUnitRooms(), c.validateFileRules(), c.validateAssistant())
 }
 
@@ -1024,11 +1026,19 @@ func (c *Company) VectorsEnabled() bool {
 // NOTHING still runs, and from inside resolution a name that misses and a name
 // that was never written are the same absence.
 //
-// Applied to EVERY seat in the document, at any depth. Nearly all of a real
-// company's roles live inside units, which nest arbitrarily — so a rule that
-// walked the root `roles:` list alone left the typo invisible exactly where
-// it is most likely to be written. The walk is [Company.EachRole] rather than
-// a loop here, so the next whole-document rule about seats inherits it.
+// Applied to EVERY seat in the document, at any depth, and to every field each
+// writes: the fields are [Company.ProviderReferences]'s, so the rule, a
+// removal and the account of who uses an entry read one list. Each typo is
+// reported at the field the operator typed it in. Validating the RESOLVED
+// chain instead would hide half of them: the flat field wins over the
+// mapping, so a typo inside `llm.review` under a role that also sets
+// `llm_review` never appears in the resolved value at all, and it is still a
+// typo, still in the file, and still what the operator will edit next.
+//
+// NOT THE ASSISTANT'S FIELDS: its chain is held by [Company.validateAssistant]
+// at admission and again wherever it is handed out ([Company.AssistantChain]),
+// because nothing about running a seat depends on it, and this is a runnable
+// rule.
 //
 // Skipped entirely when providers.llm is empty. A company with no models is a
 // documented authoring state (an org chart written before the credentials
@@ -1043,38 +1053,18 @@ func (c *Company) validateProviderKeys() error {
 		return nil
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
-
-	for role, path := range c.EachRole() {
-		// Both written surfaces are checked, and each is reported at the
-		// path the operator typed. Validating the RESOLVED chain instead
-		// would hide half of them: the flat field wins over the mapping,
-		// so a typo inside `llm.review` under a role that also sets
-		// `llm_review` never appears in the resolved value at all — and it
-		// is still a typo, still in the file, and still what the operator
-		// will edit next.
-		for _, field := range []struct {
-			path Path
-			keys ProviderKeys
-		}{
-			{at(path, "llm"), role.LLM.Default},
-			{at(at(path, "llm"), "review"), role.LLM.Review},
-			{at(at(path, "llm"), "subagent"), role.LLM.Subagent},
-			{at(at(path, "llm"), "auxiliary"), role.LLM.Auxiliary},
-			{at(at(path, "llm"), "judge"), role.LLM.Judge},
-			{at(path, "llm_review"), role.LLMReview},
-			{at(path, "llm_subagent"), role.LLMSubagent},
-			{at(path, "llm_auxiliary"), role.LLMAuxiliary},
-			{at(path, "llm_judge"), role.LLMJudge},
-		} {
-			for _, key := range field.keys {
-				if _, ok := c.Providers.LLM[key]; !ok {
-					p.add(field.path, ErrUnknownValue,
-						"%q is not a configured provider. Use one of providers.llm's: %s. "+
-							"A key that misses is not an error at run time: the seat "+
-							"falls back to another model and bills against it, so this "+
-							"is the only place the typo can be seen",
-						key, words.Or(known))
-				}
+	for _, ref := range c.providerReferences() {
+		if ref.Job == JobAssistant || ref.Job == JobDeepWork {
+			continue
+		}
+		for _, key := range ref.Chain {
+			if _, ok := c.Providers.LLM[key]; !ok {
+				p.add(ref.Segments, ErrUnknownValue,
+					"%q is not a configured provider. Use one of providers.llm's: %s. "+
+						"A key that misses is not an error at run time: the seat "+
+						"falls back to another model and bills against it, so this "+
+						"is the only place the typo can be seen",
+					key, words.Or(known))
 			}
 		}
 	}

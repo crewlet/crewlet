@@ -168,6 +168,11 @@ type Continuation struct {
 	// because the session already holds every note it read before it asked.
 	SessionID string
 	Brief     string
+
+	// SignInReplaced is a launch carrying on a round whose job was refused
+	// on a sign-in replaced while it ran ([Rotated]): the launch records it
+	// on the new job, so that job is not carried on again for it.
+	SignInReplaced bool
 }
 
 // executeAsAgentRun launches the executor as a detached agentic run.
@@ -369,6 +374,7 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 		Notes: fresh,
 		Continue: &Continuation{
 			SessionID: carry.session(), Brief: continued,
+			SignInReplaced: isRotated(carry),
 		},
 		Surface:    surface,
 		Spend:      bridged,
@@ -556,15 +562,6 @@ func (r *Runner) observeLoads(surface *tools.Surface, called []ledger.Call) {
 	}
 }
 
-// askName is the name of the tool the executor's run asks a person through,
-// empty where the runner offers none ([Config.Ask]).
-func (r *Runner) askName() string {
-	if r.cfg.Ask == nil {
-		return ""
-	}
-	return r.cfg.Ask.Name()
-}
-
 // frozen is the turn-start context a runner builds every launch's prompt from,
 // as a park carries it: the blocks' rendered text and the prior-turns block —
 // what [Runner.executorPrompt] reads of them, and nothing else.
@@ -639,7 +636,7 @@ func (r *Runner) resumeAgentRun(ctx context.Context, history []ledger.Iteration,
 	}
 	surface = built
 
-	replaySubmission(ctx, submit, logged, r.askName())
+	replaySubmission(ctx, submit, bridgedLedger(sinceAnswer(bridged, r.cfg.Resume.Answered)))
 
 	run := r.cfg.Resume.Run
 	res := agentRunResult(answer, bridged, run, state.LaunchedAt, began)
@@ -772,6 +769,33 @@ func runReads(reads []steer.Read, iteration int) []types.PhaseSteer {
 // under the call that spawned them.
 const runRound = 1
 
+// sinceAnswer is the calls of a round made after a person's answer last
+// carried it on: those placed after `answered` ([Resume.Answered]), or every
+// call where no answer has.
+//
+// ONLY WHAT THE RUN DID KNOWING THE ANSWER. A run carried on by a person's
+// answer keeps the calls it made before the question (ADR-0068), and a
+// `submit_work` among them was made without the answer: replayed, it would
+// report the carried-on run as the work submitted before it, whether or not
+// the run went on to submit again. The cut is the place the row recorded when
+// the continuing job opened, never a search for the round's last ask: the log
+// is bounded and drops from the middle (sandbox.MaxBridgeCalls), so the ask
+// may be gone from it, and the asking job may have called `submit_work` after
+// its question as well as before it. A call with no place (zero) is not after
+// any answer.
+func sinceAnswer(bridged []BridgedCall, answered int) []BridgedCall {
+	if answered <= 0 {
+		return bridged
+	}
+	out := make([]BridgedCall, 0, len(bridged))
+	for _, call := range bridged {
+		if call.Seq > answered {
+			out = append(out, call)
+		}
+	}
+	return out
+}
+
 // inAdmissionOrder is a run's bridged calls in the order the bridge admitted
 // them — the order the CLI made them in — where the row holds them in the
 // order they FINISHED: each is appended once it returns, and a CLI that makes
@@ -794,24 +818,9 @@ func inAdmissionOrder(bridged []BridgedCall) []BridgedCall {
 // the run happened, its other calls happened, and a malformed submission is
 // exactly the "said nothing" case the rescue path exists for.
 //
-// ONLY WHAT THE RUN SUBMITTED AFTER IT LAST ASKED. A run that asked a person
-// and was carried on by the answer keeps the calls it made before the
-// question, and a submission among them was made before the run knew the
-// answer: replayed, it would report the carried-on run as the work it
-// submitted before it asked, whether or not the run went on to submit again.
-// asked is the ask tool's name (`ask_and_wait`), empty where the run was
-// offered none.
-func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []ledger.Call,
-	asked string,
-) {
-	if asked != "" {
-		for i := len(bridged) - 1; i >= 0; i-- {
-			if bridged[i].Name == asked && !bridged[i].Failed {
-				bridged = bridged[i+1:]
-				break
-			}
-		}
-	}
+// The caller hands it the calls a submission may come from: the round's since
+// a person's answer last carried it on ([sinceAnswer]).
+func replaySubmission(ctx context.Context, submit *structured.Tool[workPayload], bridged []ledger.Call) {
 	for _, call := range bridged {
 		if call.Name != SubmitWorkTool || call.Failed {
 			continue

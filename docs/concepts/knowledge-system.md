@@ -859,7 +859,7 @@ passing. The second is arithmetic — chat has no semantic half at all, because
 a year of it at the declared census needs several times the whole supported
 vector corpus, and what would pay for it is the embeddings on this page. See
 [Chatlet § Search](chatlet.md#search) and
-[ADR-0069](../../adr/0069-chat-is-a-keyword-corpus-and-takes-no-vectors.md).
+[ADR-0071](../../adr/0071-chat-is-a-keyword-corpus-and-takes-no-vectors.md).
 
 Static org configuration (mission, vision, policies, role profile, team roster, unit context, integration hints) is a third source, but it is not "knowledge" in the read-path sense: it renders straight into the executor's system prompt via the section builders in `internal/agent/prompts`. There is no startup seed step and no reconcile pass, because the prompt **is** the configuration. Documents that change frequently (procedures, ADRs, runbooks) live in the knowledge base, where humans and agents already author them.
 

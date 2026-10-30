@@ -231,7 +231,7 @@ func (e *Engine) corpora(estate store.ReplicatedReader) []search.Corpus {
 	// an operator would act on.
 	//
 	// AND NOT CHAT, deliberately: a conversation is a keyword corpus and
-	// takes no vectors (ADR-0069). A year of a company's messages is
+	// takes no vectors (ADR-0071). A year of a company's messages is
 	// several times the whole vector budget the knowledge base is sized
 	// for, so a chat corpus here would be the knowledge base's own
 	// embeddings paying for it.

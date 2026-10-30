@@ -52,17 +52,19 @@ class Engine implements ConfigTransport {
   ) {}
   async current(): Promise<HttpAnswer> {
     this.calls.push("current");
-    return this.script.current ?? { status: 0, body: null };
+    return this.script.current ?? { status: 0, body: null, fromEngine: false };
   }
   async revision(id: string): Promise<HttpAnswer> {
     this.calls.push(`revision ${id}`);
-    return this.script.revisions?.[id] ?? { status: 404, body: { error: "not_found" } };
+    return (
+      this.script.revisions?.[id] ?? { status: 404, body: { error: "not_found" }, fromEngine: true }
+    );
   }
   async send(request: ConfigRequest): Promise<HttpAnswer> {
     this.calls.push(
       `${request.method} ${JSON.stringify(request.query)} ${JSON.stringify(request.headers)}`,
     );
-    return this.script.send ?? { status: 0, body: null };
+    return this.script.send ?? { status: 0, body: null, fromEngine: false };
   }
 }
 
@@ -78,6 +80,7 @@ const revision = (parent: string | undefined, summary: string): HttpAnswer => ({
     ...(parent ? { parent_revision_id: parent } : {}),
     payload: {},
   },
+  fromEngine: true,
 });
 
 describe("signing a save", () => {
@@ -109,7 +112,11 @@ describe("classifySave", () => {
     const derived = fixtureDerived(fixtureCompany());
     expect(
       classifySave(
-        { status: 201, body: { revision_id: "r2", epoch: 7, warnings: null, derived } },
+        {
+          status: 201,
+          body: { revision_id: "r2", epoch: 7, warnings: null, derived },
+          fromEngine: true,
+        },
         EDIT,
         false,
       ),
@@ -123,14 +130,18 @@ describe("classifySave", () => {
   });
 
   test("no answer is unknown, and so is a 409 or 412 right after no answer", () => {
-    expect(classifySave({ status: 0, body: null }, EDIT, false)).toEqual({
+    expect(classifySave({ status: 0, body: null, fromEngine: false }, EDIT, false)).toEqual({
       kind: "unknown",
       currentRevisionId: null,
       detail: "",
     });
     expect(
       classifySave(
-        { status: 409, body: { error: "revision_advanced", current_revision_id: "r2" } },
+        {
+          status: 409,
+          body: { error: "revision_advanced", current_revision_id: "r2" },
+          fromEngine: true,
+        },
         EDIT,
         true,
       ),
@@ -141,7 +152,11 @@ describe("classifySave", () => {
     });
     expect(
       classifySave(
-        { status: 412, body: { error: "already_configured", current_revision_id: "r1" } },
+        {
+          status: 412,
+          body: { error: "already_configured", current_revision_id: "r1" },
+          fromEngine: true,
+        },
         CREATE,
         true,
       ),
@@ -156,9 +171,13 @@ describe("classifySave", () => {
     // A failure after the revision was stored, and a gateway that gave up
     // waiting, both leave a write that may be active.
     for (const answer of [
-      { status: 500, body: { error: "internal_error", detail: "activate the config: timeout" } },
-      { status: 502, body: null },
-      { status: 504, body: "Gateway Timeout" },
+      {
+        status: 500,
+        body: { error: "internal_error", detail: "activate the config: timeout" },
+        fromEngine: true,
+      },
+      { status: 502, body: null, fromEngine: true },
+      { status: 504, body: "Gateway Timeout", fromEngine: true },
     ]) {
       expect(classifySave(answer, EDIT, false), String(answer.status)).toMatchObject({
         kind: "unknown",
@@ -166,12 +185,20 @@ describe("classifySave", () => {
       });
     }
     expect(
-      classifySave({ status: 500, body: { error: "internal_error", detail: "boom" } }, EDIT, false),
+      classifySave(
+        { status: 500, body: { error: "internal_error", detail: "boom" }, fromEngine: true },
+        EDIT,
+        false,
+      ),
     ).toMatchObject({ detail: "boom" });
     // So the next 409 is settled rather than taken for a colleague's save.
     expect(
       classifySave(
-        { status: 409, body: { error: "revision_advanced", current_revision_id: "mine" } },
+        {
+          status: 409,
+          body: { error: "revision_advanced", current_revision_id: "mine" },
+          fromEngine: true,
+        },
         EDIT,
         true,
       ),
@@ -182,26 +209,42 @@ describe("classifySave", () => {
     // into "the outcome of the last save is not known" and sent it reading
     // the revision chain back for a write that never happened.
     expect(
-      classifySave({ status: 503, body: { error: "draining", detail: "restarting" } }, EDIT, false),
+      classifySave(
+        { status: 503, body: { error: "draining", detail: "restarting" }, fromEngine: true },
+        EDIT,
+        false,
+      ),
     ).toMatchObject({ kind: "refused" });
     // AND SO IS A STARTING NODE'S: its listener refuses every route before
     // the node serves, so the save was never read. Settling it read the
     // revision chain of a node that had not started for a write that never
     // happened.
     expect(
-      classifySave({ status: 503, body: { error: "starting", detail: "recovering" } }, EDIT, false),
+      classifySave(
+        { status: 503, body: { error: "starting", detail: "recovering" }, fromEngine: true },
+        EDIT,
+        false,
+      ),
     ).toMatchObject({ kind: "refused" });
     // Every other 5xx stays unknown: the engine stores the revision before it
     // activates it, so a failure after that point may have landed.
     expect(
-      classifySave({ status: 500, body: { error: "internal_error" } }, EDIT, false),
+      classifySave(
+        { status: 500, body: { error: "internal_error" }, fromEngine: true },
+        EDIT,
+        false,
+      ),
     ).toMatchObject({ kind: "unknown" });
   });
 
   test("a 409 on a first attempt is a conflict, and a refused document its problems", () => {
     expect(
       classifySave(
-        { status: 409, body: { error: "revision_advanced", current_revision_id: "r2" } },
+        {
+          status: 409,
+          body: { error: "revision_advanced", current_revision_id: "r2" },
+          fromEngine: true,
+        },
         EDIT,
         false,
       ),
@@ -210,7 +253,11 @@ describe("classifySave", () => {
       outcome: { status: "conflict", reason: "revision_advanced", currentRevisionId: "r2" },
     });
     expect(
-      classifySave({ status: 400, body: { error: "validation_error", detail: "bad" } }, EDIT, true),
+      classifySave(
+        { status: 400, body: { error: "validation_error", detail: "bad" }, fromEngine: true },
+        EDIT,
+        true,
+      ),
     ).toMatchObject({
       kind: "refused",
       outcome: { status: "problems" },
@@ -294,7 +341,7 @@ describe("settleUnknownWrite", () => {
 
   test("without a named revision, reads the active one first", async () => {
     const landed = new Engine({
-      current: { status: 200, body: {}, etag: '"r3"' },
+      current: { status: 200, body: {}, etag: '"r3"', fromEngine: true },
       revisions: { r3: revision("base", signedSummary("Edit", EDIT.writeId)) },
     });
     expect(await settleUnknownWrite(landed, EDIT, null, signal)).toEqual({
@@ -304,7 +351,9 @@ describe("settleUnknownWrite", () => {
     });
     expect(landed.calls).toEqual(["current", "revision r3"]);
 
-    const still = new Engine({ current: { status: 200, body: {}, etag: '"base"' } });
+    const still = new Engine({
+      current: { status: 200, body: {}, etag: '"base"', fromEngine: true },
+    });
     expect(await settleUnknownWrite(still, EDIT, null, signal)).toEqual({
       kind: "not_landed",
       currentRevisionId: "base",
@@ -313,7 +362,9 @@ describe("settleUnknownWrite", () => {
   });
 
   test("a create that did not land finds no company", async () => {
-    const engine = new Engine({ current: { status: 404, body: { error: "no_active_revision" } } });
+    const engine = new Engine({
+      current: { status: 404, body: { error: "no_active_revision" }, fromEngine: true },
+    });
     expect(await settleUnknownWrite(engine, CREATE, null, signal)).toEqual({
       kind: "not_landed",
       currentRevisionId: null,
@@ -337,17 +388,23 @@ describe("readyToUpdate", () => {
   const dryRun: HttpAnswer = {
     status: 200,
     body: { valid: true, base_revision_id: "", warnings: null, derived },
+    fromEngine: true,
   };
 
   test("behind while the node still serves the draft's base", async () => {
-    const engine = new Engine({ current: { status: 200, body: doc, etag: '"base"' } });
+    const engine = new Engine({
+      current: { status: 200, body: doc, etag: '"base"', fromEngine: true },
+    });
     expect(
       await readyToUpdate(engine, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
     ).toEqual({ kind: "behind" });
   });
 
   test("ready on the conflict's revision, with the engine's derivation of it from a dry run conditional on it", async () => {
-    const engine = new Engine({ current: { status: 200, body: doc, etag: '"r2"' }, send: dryRun });
+    const engine = new Engine({
+      current: { status: 200, body: doc, etag: '"r2"', fromEngine: true },
+      send: dryRun,
+    });
     expect(
       await readyToUpdate(engine, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
     ).toEqual({
@@ -361,7 +418,7 @@ describe("readyToUpdate", () => {
 
   test("ready on a descendant of the conflict's revision, behind on a revision that does not descend from it", async () => {
     const descendant = new Engine({
-      current: { status: 200, body: doc, etag: '"r4"' },
+      current: { status: 200, body: doc, etag: '"r4"', fromEngine: true },
       revisions: { r4: revision("r3", "later"), r3: revision("r2", "later") },
       send: dryRun,
     });
@@ -373,7 +430,7 @@ describe("readyToUpdate", () => {
     });
 
     const sibling = new Engine({
-      current: { status: 200, body: doc, etag: '"s1"' },
+      current: { status: 200, body: doc, etag: '"s1"', fromEngine: true },
       revisions: { s1: revision("base", "raced") },
       send: dryRun,
     });
@@ -387,7 +444,7 @@ describe("readyToUpdate", () => {
     for (let i = 0; i < UPDATE_ANCESTRY_LIMIT + 5; i++)
       revisions[`n${i}`] = revision(`n${i + 1}`, "later");
     const engine = new Engine({
-      current: { status: 200, body: doc, etag: '"n0"' },
+      current: { status: 200, body: doc, etag: '"n0"', fromEngine: true },
       revisions,
       send: dryRun,
     });
@@ -410,8 +467,12 @@ describe("readyToUpdate", () => {
       kind: "unknown",
     });
     const moved = new Engine({
-      current: { status: 200, body: doc, etag: '"r2"' },
-      send: { status: 409, body: { error: "revision_advanced", current_revision_id: "r3" } },
+      current: { status: 200, body: doc, etag: '"r2"', fromEngine: true },
+      send: {
+        status: 409,
+        body: { error: "revision_advanced", current_revision_id: "r3" },
+        fromEngine: true,
+      },
     });
     expect(
       await readyToUpdate(moved, { baseRevision: "base", conflictRevisionId: "r2" }, signal),
@@ -436,6 +497,7 @@ describe("a lead's draft", () => {
     status: 200,
     body: { name: "Acme", units: [unit(goal)] },
     etag: `"${etag}"`,
+    fromEngine: true,
   });
 
   test("a save is settled by reading its unit back, and never by the revision history", async () => {
@@ -471,7 +533,11 @@ describe("a lead's draft", () => {
     const derived = fixtureDerived({ name: "Acme", units: [unit("Grow")] });
     const engine = new Engine({
       current: read("r3", "Grow"),
-      send: { status: 200, body: { valid: true, base_revision_id: "r3", derived } },
+      send: {
+        status: 200,
+        body: { valid: true, base_revision_id: "r3", derived },
+        fromEngine: true,
+      },
     });
     expect(
       await readyToUpdate(

@@ -1153,6 +1153,40 @@ const (
 	// CodeActionAlreadyClaimed is a page action another tab already
 	// claimed. 409.
 	CodeActionAlreadyClaimed Code = "action_already_claimed"
+
+	// --- the model routes (internal/api/llmapi) --- //
+
+	// CodeCredentialRejected is a candidate credential that did not sign
+	// the model in when it was tested (the vendor refused it, or the CLI did
+	// not use it): nothing was stored, and the model keeps its current
+	// credential. 422, its problem at the value. Not
+	// `credential_refused`, which is an artifact's content carrying a
+	// credential's shape and says so to the person.
+	CodeCredentialRejected Code = "credential_rejected"
+	// CodeCredentialUntested is a candidate credential the vendor did not
+	// answer the test of (a timeout, a server error): nothing was stored.
+	// 502.
+	CodeCredentialUntested Code = "credential_untested"
+	// CodeAlreadyExists is a create-only credential write (`If-None-Match:
+	// *`) naming a secret that is already stored, its `names` listed. 412.
+	CodeAlreadyExists Code = "already_exists"
+	// CodeNotSittingOut is a probe of a model no live node sits out. 409.
+	CodeNotSittingOut Code = "not_sitting_out"
+	// CodeSignInInProgress is a device sign-in started while another for the
+	// same model is running, which the answer carries. 409.
+	CodeSignInInProgress Code = "sign_in_in_progress"
+	// CodeNoDeviceSignIn is a device sign-in for a model whose CLI has
+	// none, or whose sign-in reads no login. 422.
+	CodeNoDeviceSignIn Code = "no_device_sign_in"
+	// CodeDeviceSignInUnavailable is a device sign-in whose CLI printed no
+	// code in time, its first line beside it. 502.
+	CodeDeviceSignInUnavailable Code = "device_sign_in_unavailable"
+	// CodeNoHostLogin is a host login check of a model that signs in with
+	// no CLI login. 422.
+	CodeNoHostLogin Code = "no_host_login"
+	// CodeUnknownProvider is a model catalogue question about a provider
+	// the catalogue lists nothing under. 422.
+	CodeUnknownProvider Code = "unknown_provider"
 )
 
 // codes is THE TABLE: every code this engine answers with, each with the one
@@ -1559,6 +1593,20 @@ var codes = map[Code]string{
 	CodeProposalStale: "What this change would edit has moved since it was proposed, so " +
 		"nothing was sent. Ask the assistant to propose it again.",
 	CodeActionAlreadyClaimed: "Another tab is already applying this change.",
+	CodeCredentialRejected: "This credential did not sign the model in, so nothing was " +
+		"stored. The model still uses its current credential.",
+	CodeCredentialUntested: "The vendor did not answer the test, so nothing was stored. " +
+		"Try again.",
+	CodeAlreadyExists: "A secret with that name is already stored, so nothing was " +
+		"written. Choose another name, or rotate that one.",
+	CodeNotSittingOut: "This model isn't sitting out on any node. Nothing to retry; " +
+		"test it instead.",
+	CodeSignInInProgress: "A sign-in for this model is already in progress. Finish or " +
+		"cancel that one first.",
+	CodeNoDeviceSignIn:          "This model can't sign in with a device code.",
+	CodeDeviceSignInUnavailable: "The CLI didn't print a sign-in code in time. Try again.",
+	CodeNoHostLogin:             "This model signs in without a CLI login, so there is none to check.",
+	CodeUnknownProvider:         "The model catalogue lists no provider by that name.",
 }
 
 // Codes is every code in the vocabulary, sorted.
@@ -1831,6 +1879,37 @@ func Refuse(w http.ResponseWriter, err error) {
 	}
 	Fail(w, http.StatusBadRequest, CodeUnreadableBody)
 }
+
+// EngineHeader is the header every answer the engine's API writes carries,
+// with the value [EngineHeaderValue], set once around everything a socket
+// serves (`api.servedOn`): a route's answer, a refusal, the mux's own 404
+// and 405, the canonical-path refusal and the boot surface's `503 starting`
+// alike.
+//
+// IT SAYS WHOSE ANSWER AN ANSWER IS. A client reads an answer the engine wrote
+// as what the engine did, and one it did not write as saying nothing about
+// it: a proxy's 504 page, a gateway's 403, a cache's 413. The error envelope
+// alone could not tell them apart, since anything in front of the engine can
+// answer JSON with an `error` field; a header no proxy sets can. The
+// dashboard requires it (dashboard/src/contract/engine.ts, held to these two
+// values by `TestTheDashboardKnowsTheEnginesOwnAnswers`).
+const EngineHeader = "X-Crewlet-Engine"
+
+// EngineHeaderValue is [EngineHeader]'s one value.
+const EngineHeaderValue = "1"
+
+// RequestIDHeader is the header a write's request id travels in, both ways:
+// the API reads a caller's (or a proxy's) and answers one back on every
+// write, the caller's where it is one token and a minted UUID where not, so a
+// refusal a caller reports can be found in the engine's log by it. Here, with
+// [EngineHeader], so the API that answers it and the CORS policy that lets a
+// browser read it name one header.
+const RequestIDHeader = "X-Request-Id"
+
+// Marked reports whether an answer's headers carry the engine's mark
+// ([EngineHeader]): the one test a client applies before it reads an answer
+// as the engine's, whatever its body says.
+func Marked(h http.Header) bool { return h.Get(EngineHeader) == EngineHeaderValue }
 
 // NoActiveRevisionRetry is the Retry-After a `503 no_active_revision` carries:
 // the control plane's reconcile poll, because a node that has not been handed

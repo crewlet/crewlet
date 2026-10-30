@@ -111,8 +111,8 @@ type runParties struct {
 // what says what became of it: `answered` on that question once it is
 // recorded, the id among the question's `declined_answers` if the run let it
 // go, or a new question if the run moved past this one first. Each is also
-// announced as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone` or
-// `declined`). What it refuses up front is what this node can know: a run that
+// announced as `sandbox_run_answered` (`resumed`, `not_awaiting`, `gone`,
+// `declined` or `unoffered`). What it refuses up front is what this node can know: a run that
 // is not waiting for an answer (`not_running`).
 //
 // # It answers the question it was given against
@@ -155,6 +155,13 @@ func (t *answerRun) Parameters() map[string]any {
 				"type":        "string",
 				"description": "The turn id of the parked run — its `turn_id` on the sandbox-runs board.",
 			},
+			"launch_id": map[string]any{
+				"type": "string",
+				"description": "The question you are answering: the run's `launch_id` on the " +
+					"sandbox-runs board, read with the question. A run that has moved on to " +
+					"another question since refuses the answer, so it never answers one you did " +
+					"not see.",
+			},
 			"choice": map[string]any{
 				"type": "string",
 				"description": "The id of the option chosen, where the run's question " +
@@ -168,7 +175,7 @@ func (t *answerRun) Parameters() map[string]any {
 					"a page the run can read, and say where it is.", MaxRunAnswerBytes>>10),
 			},
 		},
-		"required": []any{"turn_id"},
+		"required": []any{"turn_id", "launch_id"},
 	}
 }
 
@@ -192,6 +199,11 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	turnID := strings.TrimSpace(argString(args, "turn_id"))
 	if turnID == "" {
 		return failed(AnswerRunTool + " needs a `turn_id` — the parked run's turn id."), nil
+	}
+	launchID := strings.TrimSpace(argString(args, "launch_id"))
+	if launchID == "" {
+		return failed("answer_run needs a `launch_id`: the question you are answering, " +
+			"the run's `launch_id` read with it on the sandbox-runs board."), nil
 	}
 	answer := strings.TrimSpace(argString(args, "answer"))
 	choice := strings.TrimSpace(argString(args, "choice"))
@@ -233,6 +245,16 @@ func (t *answerRun) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return refused(tools.RefusalNotRunning, fmt.Sprintf("Run %s is %s, not "+
 			"waiting for an answer, so there is no question for this to answer.",
 			clip(turnID), run.Status)), nil
+	}
+	// THE QUESTION THE PERSON READ, never the one the run asks now if
+	// those differ: a run that moved on to another question since would
+	// otherwise take an answer, or a choice by id, given to one it no
+	// longer asks.
+	if launchID != run.LaunchID {
+		return toPerson(refused(tools.RefusalStaleVersion, fmt.Sprintf("Run %s has moved on to "+
+			"another question since the one you answered (launch %s): read its question "+
+			"again on the sandbox-runs board and answer that one. Nothing was answered.",
+			clip(turnID), clip(launchID))), caveat.QuestionChanged()), nil
 	}
 	// THE CHOICE NAMES AN OPTION OF THIS QUESTION, checked against the
 	// row just read as waiting, whose job the answer is pinned to: a run

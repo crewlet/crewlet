@@ -539,9 +539,8 @@ describe("what an org push re-checks", () => {
   });
 });
 
-// NO PROVIDER, NO TURN. The dashboard writes none, so the builder says where one
-// comes from rather than leaving agents whose work waits with nothing to say
-// why.
+// NO PROVIDER, NO TURN. The builder writes none, so it says where one comes
+// from rather than leaving agents whose work waits with nothing to say why.
 test("a company with no model provider is told so, and one with a provider is not", async () => {
   const without = company();
   delete without.providers;
@@ -552,8 +551,12 @@ test("a company with no model provider is told so, and one with a provider is no
   const caution = (
     await screen.findByText(/No model provider is set, so agents can’t work\./)
   ).closest(".crewlet-callout") as HTMLElement;
-  // And it gives the steps that add one, the card's own: the declaration the
-  // engine walks from a company only the store holds.
+  // It sends the reader to Settings › Models to add one, signed in and tested.
+  expect(within(caution).getByRole("link", { name: "Settings, Models" }).getAttribute("href")).toBe(
+    "#/settings/models?flow=add",
+  );
+  // And it gives the steps that add one from a terminal, the card's own: the
+  // declaration the engine walks from a company only the store holds.
   fireEvent.click(within(caution).getByRole("button", { name: "The steps" }));
   expect(within(caution).getByText(/crewlet config export > company\.yaml/).textContent).toBe(
     PROVIDER_STEPS,
@@ -700,6 +703,48 @@ describe("the selection in the URL", () => {
     );
   });
 
+  // "COULD NOT REACH" ONLY WHERE THE ENGINE'S ANSWER NEVER ARRIVED. Every one
+  // of these leaves the draft unchecked and saving allowed; the toolbar says
+  // which happened, and a drain or an engine that failed is not a network.
+  test.each([
+    [
+      "a gateway's page",
+      () => new Response("<html>502</html>", { status: 502 }),
+      "Could not reach the engine to check",
+    ],
+    ...([403, 413] as const).map((status): [string, () => Response, string] => [
+      `a proxy's ${status} in the engine's shape, without its mark`,
+      () =>
+        new Response(JSON.stringify({ error: "forbidden" }), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+      "Could not reach the engine to check",
+    ]),
+    [
+      "the engine's own 500",
+      () => json({ error: "internal", detail: "store: disk full" }, 500),
+      "The engine failed to check",
+    ],
+    [
+      "a draining node",
+      () => json({ error: "draining", detail: "shutting down" }, 503),
+      "Not checked: this node is draining",
+    ],
+    [
+      "a starting node",
+      () => json({ error: "starting", detail: "recovering" }, 503),
+      "Not checked: this node is starting",
+    ],
+  ])("a check met by %s is labelled as what happened", async (_, fail, label) => {
+    const engine = new Engine(company());
+    mountBuilder({ engine });
+    await screen.findByText("No problems");
+    engine.script = (r) => (r.query.get("dry_run") === "true" ? fail() : null);
+    fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
+    await screen.findByText(label);
+  });
+
   // A SEAT ADDED IN THIS DRAFT HAS NO SCREEN YET. A check derives its handle
   // at once, and a link built from that handle opened a seat the engine does
   // not have; its reports, like any seat's, can still be edited.
@@ -710,7 +755,7 @@ describe("the selection in the URL", () => {
     // First with no answer about the new seat, so no handle is known for it.
     engine.script = (r) => (r.query.get("dry_run") === "true" ? json({ error: "bad" }, 502) : null);
     fireEvent.click(screen.getByRole("button", { name: "Add an analyst" }));
-    await screen.findByText("Could not reach the engine to check");
+    await screen.findByText("The engine failed to check");
     fireEvent.click(screen.getByRole("button", { name: "Select Analyst" }));
     const actionsFor = async () => {
       fireEvent.click(await screen.findByRole("button", { name: "Actions for Analyst, selected" }));
@@ -842,7 +887,7 @@ describe("somebody else signing in mid-edit", () => {
     fireEvent.click(screen.getByRole("button", { name: "Edit CEO" }));
     await waitFor(() => expect(engine.checks()).toHaveLength(2));
 
-    engine.script = () => (who === EDITOR ? null : json({}, 401));
+    engine.script = () => (who === EDITOR ? null : json({ error: "unauthorized" }, 401));
     who = NOBODY;
     reconnect(store);
     expect(
