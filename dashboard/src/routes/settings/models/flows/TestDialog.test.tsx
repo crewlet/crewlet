@@ -8,7 +8,7 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import type { CheckAnswer } from "~/protocol/models.ts";
 import { apiKeyEntry, modelsData } from "~/routes/settings/models/fixtures.ts";
-import { TestDialog } from "./TestDialog.tsx";
+import { TestDialog, failureWords } from "./TestDialog.tsx";
 
 const checkModel = vi.hoisted(() => vi.fn());
 vi.mock("../api.ts", () => ({ checkModel }));
@@ -77,4 +77,19 @@ test("a refused test says the engine's sentence and changes nothing behind it", 
   const onDone = open("api-key");
   expect(await screen.findByText("There is no model called sonnet.")).toBeDefined();
   expect(onDone).not.toHaveBeenCalled();
+});
+
+// A token the CLI never used was not refused by the vendor, and saying so sent
+// the reader to a login that changed nothing.
+test("an auth failure of a credential the CLI never used says so", () => {
+  const token = { route: "token" as const, expiresAt: null };
+  expect(failureWords("auth", token, "unread")).toBe("The CLI did not use the subscription token");
+  expect(failureWords("auth", { route: "api-key", expiresAt: null }, "unread")).toBe(
+    "The CLI did not use the API key",
+  );
+  expect(failureWords("auth", { route: "credentials", expiresAt: null }, "unread")).toBe(
+    "The CLI's login on the host was refused",
+  );
+  expect(failureWords("auth", token, "refused")).toBe("The subscription token was refused");
+  expect(failureWords("auth", token)).toBe("The subscription token was refused");
 });
