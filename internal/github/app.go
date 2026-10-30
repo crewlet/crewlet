@@ -558,6 +558,18 @@ func (i Installation) Suspended() bool { return strings.TrimSpace(i.SuspendedAt)
 // organization owner on the installation's page), as opposed to one an app
 // placed through the API. A person's suspension is a decision made at GitHub,
 // so it is lifted there by a person, never by this engine on its own.
+//
+// AN ASSUMPTION, and guarded. GitHub documents `suspended_by` as null or a
+// Simple User, whose `type` is "User" or "Bot"
+// (https://docs.github.com/en/rest/apps/apps#get-an-installation-for-the-authenticated-app),
+// and documents the suspend and unsuspend endpoints as answering 204 or 404
+// (https://docs.github.com/en/rest/apps/apps#unsuspend-an-app-installation).
+// It does not say which account an app's own API suspension records; this
+// reads a User as a person and a Bot (the app's own account) as the app. If
+// GitHub records an app's suspension as a User, this engine only stops lifting
+// a suspension it could have lifted, and where it records a person's as a
+// Bot, the unsuspend GitHub refuses becomes the same person's step
+// ([liftRefused]).
 func (i Installation) SuspendedByPerson() bool {
 	return i.Suspended() && i.SuspendedBy != nil && strings.EqualFold(i.SuspendedBy.Type, "User")
 }
