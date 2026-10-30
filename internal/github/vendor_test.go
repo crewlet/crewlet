@@ -669,3 +669,63 @@ func TestAdoptSeatAppsKeepsTheRecordInStep(t *testing.T) {
 		t.Errorf("a dry run called GitHub or failed: %v", err)
 	}
 }
+
+// AN UNSUSPEND GITHUB REFUSES IS A PERSON'S STEP, NEVER A RETRIED FAULT. The
+// suspension was not this app's to lift, whatever its suspended_by said, so
+// back on waits with the installation's link; the next pass reads that wait
+// from the ledger, draws the person's step, and asks GitHub nothing.
+func TestARefusedUnsuspendWaitsOnAPersonAndIsNotAskedAgain(t *testing.T) {
+	t.Parallel()
+	const lift = "DELETE /app/installations/7/suspended"
+	const page = "https://github.com/organizations/acme/settings/installations/7"
+	for _, status := range []int{403, 422} {
+		w := suspendedSRE(t, `"suspended_by":{"login":"acme-sre[bot]","type":"Bot"},`)
+		w.gh.on(lift, status, `{"message":"This installation cannot be unsuspended by the app"}`)
+		rec := seataccess.Record{Kind: integration.KindGitHub, Handle: "sre",
+			Account: &seataccess.Account{ID: "41", State: seataccess.AccountDisabled}}
+		res, err := apply(t, w.open(t), seataccess.OpEnable, 0, seataccess.Desired{Enabled: true}, &rec)
+		if err != nil || res.Waiting == nil || res.Waiting.ActionURL != page {
+			t.Fatalf("%d: back on answered %+v, %v", status, res.Waiting, err)
+		}
+
+		// THE NEXT PASS, with the wait the sync recorded.
+		rec.Lanes = map[seataccess.Lane]seataccess.LaneRecord{seataccess.LaneGitHub: {
+			Sync: &seataccess.SyncResult{Outcome: seataccess.OutcomeWaiting,
+				Error: &seataccess.Failure{Step: seataccess.VerbEnable, Actor: seataccess.ByYou}},
+		}}
+		s := w.open(t)
+		obs, err := s.Observe(t.Context(), seataccess.ObserveInput{
+			Seats: []seataccess.SeatRef{sre}, Records: map[string]seataccess.Record{"sre": rec},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		have := obs["sre"][seataccess.LaneGitHub]
+		if have.DisabledBy != seataccess.DisabledByHand {
+			t.Errorf("%d: a suspension GitHub would not let this app lift is attributed to %q",
+				status, have.DisabledBy)
+		}
+		vendor, _ := seataccess.Lookup(integration.KindGitHub)
+		steps := vendor.Steps(sre, seataccess.LaneGitHub, seataccess.OpEnable,
+			seataccess.Desired{Enabled: true}, have)
+		if len(steps) == 0 || steps[0].By != seataccess.ByYou {
+			t.Fatalf("%d: the next pass drew %+v", status, steps)
+		}
+		res, err = s.Apply(t.Context(), seataccess.ApplyInput{
+			Seat: sre, Lane: seataccess.LaneGitHub, Step: steps[0],
+			Want: seataccess.Desired{Enabled: true}, Record: &rec,
+		})
+		if err != nil || res.Waiting == nil || res.Waiting.ActionURL != page {
+			t.Errorf("%d: the next pass answered %+v, %v", status, res.Waiting, err)
+		}
+		lifts := 0
+		for _, call := range w.gh.called() {
+			if call == lift {
+				lifts++
+			}
+		}
+		if lifts != 1 {
+			t.Errorf("%d: GitHub was asked to lift the suspension %d times", status, lifts)
+		}
+	}
+}
