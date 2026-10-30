@@ -71,11 +71,17 @@ func TestSlackStepsPerOp(t *testing.T) {
 		"a sealed token mints nothing": {op: seataccess.OpMint,
 			have: seataccess.Observed{Credential: &seataccess.Credential{Variable: "SLACK_BOT_TOKEN_SWE"}}},
 		"the credential is cleared once off": {op: seataccess.OpRevoke, out: []drawn{{seataccess.VerbRevoke, crewlet}}},
+		// A BOT TOKEN KEEPS THE SCOPES IT WAS INSTALLED WITH, both ways: the
+		// token holding the changed scopes is retired and a reinstall issues
+		// one at the manifest's.
 		"a scope removed at Slack needs a reinstall": {op: seataccess.OpLevel,
 			have: seataccess.Observed{Level: missing},
-			out:  []drawn{{seataccess.VerbRestore, crewlet}, {seataccess.VerbApprove, you}}},
-		"a scope added at Slack is only restored": {op: seataccess.OpLevel,
-			have: seataccess.Observed{Level: extra}, out: []drawn{{seataccess.VerbRestore, crewlet}}},
+			out: []drawn{{seataccess.VerbRestore, crewlet}, {seataccess.VerbRevoke, crewlet},
+				{seataccess.VerbApprove, you}}},
+		"a scope added at Slack needs a reinstall too": {op: seataccess.OpLevel,
+			have: seataccess.Observed{Level: extra},
+			out: []drawn{{seataccess.VerbRestore, crewlet}, {seataccess.VerbRevoke, crewlet},
+				{seataccess.VerbApprove, you}}},
 		"off revokes":            {op: seataccess.OpDisable, out: []drawn{{seataccess.VerbRevoke, crewlet}}},
 		"rotate is a reinstall":  {op: seataccess.OpRotate, out: []drawn{{seataccess.VerbRevoke, crewlet}, {seataccess.VerbApprove, you}}},
 		"remove deletes the app": {op: seataccess.OpRemove, out: []drawn{{seataccess.VerbRemove, crewlet}}},
@@ -117,7 +123,7 @@ func newSlackWorld(t *testing.T) *slackWorld {
 	return &slackWorld{
 		ws: newWorkspace(t),
 		cfg: &config.Company{
-			Integrations: config.Integrations{Slack: &config.Slack{}},
+			Integrations: config.Integrations{Slack: &config.Slack{AppConfigToken: "${" + slack.ConfigTokenVar + "}"}},
 			Roles: []config.Role{{Name: "Engineer", Handle: "swe",
 				Integrations: config.RoleIntegrations{Slack: &config.RoleSlack{Enabled: &on}}}},
 		},

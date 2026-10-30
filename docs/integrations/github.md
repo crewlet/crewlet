@@ -357,7 +357,7 @@ Agents tab offers, under GitHub's names:
 
 - **A permission left out is No access.** `metadata: read` is added to every
   app and every token, because GitHub requires it to resolve a repository.
-- **The app is registered at exactly these (D5).** The manifest a person
+- **The app is registered at exactly these.** The manifest a person
   submits asks for the seat's permissions and nothing wider, so a leaked app key
   reaches only what the seat may do.
 - **Narrowing applies on the next token.** Every token is minted with the seat's
@@ -370,8 +370,7 @@ Agents tab offers, under GitHub's names:
   Until the installation holds a permission the seat asks for, GitHub refuses
   every token the seat requests.
 - **Read and write on Contents or Workflows is an administration grant.**
-  Raising a seat to either needs a fresh step-up from the person saving it
-  (D10).
+  Raising a seat to either needs a fresh step-up from the person saving it.
 - **Workflows needs Contents (Read and write).** A workflow change is a push,
   and GitHub refuses a push from a token that cannot write contents, so the
   document refuses the pair half set. The same grant lets the agent's branch
@@ -387,18 +386,18 @@ Agents tab offers, under GitHub's names:
 ### On, off and remove
 
 `enabled` is stored on the seat's block, and a seat is off until it is turned
-on (D9).
+on.
 
 | Action | What happens at GitHub |
 |---|---|
 | Turn on, first time | A person creates the app from the prepared manifest and installs it. The engine seals the app's key and webhook secret when GitHub returns them. |
 | Turn off | The engine suspends the seat's installation as the app. The app, its key and the installation are kept, and every token is refused from that moment. |
-| Turn back on | The engine lifts the suspension, at the seat's current permissions and repositories: anything the installation must still grant or cover waits for a person, as a raise does. |
+| Turn back on | The engine lifts the suspension it placed, at the seat's current permissions and repositories: anything the installation must still grant or cover waits for a person, as a raise does. A suspension an organization owner placed at GitHub is lifted there: the Agents tab links to the installation's settings page and checks again once it is lifted. |
 | Remove (only when off) | The engine uninstalls the app. A person deletes the app registration from its settings (GitHub has no API for it), and once GitHub reports it deleted the engine clears the sealed key and webhook secret. |
 | Rotate | Not offered: tokens last an hour and are never stored. |
 
 An installation suspended or uninstalled by somebody at GitHub is never turned
-back on automatically, in case it was incident response (D3): the Agents tab
+back on automatically, in case it was incident response: the Agents tab
 offers **Turn back on** or **Keep off**. Each pass reads the app's registration
 and installation back, so a permission an owner removed at GitHub shows as a
 waiting step rather than silently failing tokens.

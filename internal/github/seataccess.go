@@ -43,6 +43,12 @@ type SeatObservation struct {
 	// is read only where it can matter: the seat narrows to repositories
 	// and the installation covers selected ones. Nil otherwise.
 	Repositories []string
+
+	// RepositoriesUnread reports an installation whose repositories could
+	// matter and were not read because it is suspended: listing them takes
+	// an installation token, and a suspended installation is issued none.
+	// What it covers is then unknown, never missing.
+	RepositoriesUnread bool
 }
 
 // ObserveSeat reads one seat's app, registration and installation back from
@@ -78,6 +84,14 @@ func ObserveSeat(ctx context.Context, opts SeatAppOptions, seat SeatApp) (SeatOb
 		len(repoNames(seat.Repos)) == 0 {
 		return out, nil
 	}
+	if installation.Suspended() {
+		// NOT ASKED WHILE SUSPENDED: the listing mints a token GitHub
+		// refuses for a suspended installation, and that refusal is not
+		// a fact about this seat's repositories. The seat's turn back on
+		// reads them again.
+		out.RepositoriesUnread = true
+		return out, nil
+	}
 	repos, err := client.InstallationRepositories(ctx, installation.ID)
 	if err != nil {
 		return out, err
@@ -91,7 +105,8 @@ func ObserveSeat(ctx context.Context, opts SeatAppOptions, seat SeatApp) (SeatOb
 // mints nothing until a person adds them to the installation or the seat
 // stops naming them.
 func (o SeatObservation) UncoveredRepositories(seat SeatApp) []string {
-	if o.Installation == nil || o.Installation.RepositorySelection == RepositorySelectionAll {
+	if o.Installation == nil || o.Installation.RepositorySelection == RepositorySelectionAll ||
+		o.RepositoriesUnread {
 		return nil
 	}
 	covered := make([]string, 0, len(o.Repositories))

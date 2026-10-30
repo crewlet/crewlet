@@ -35,6 +35,13 @@ func TestRecognisedServersReadTheirOwnKeys(t *testing.T) {
 			[]config.BoundSeatKey{bound("datadog", "APP_KEY", "DD_APPLICATION_KEY", "")}},
 		"Datadog's government site": {remote("dd", "https://mcp.ddog-gov.com/v1/mcp"),
 			[]config.BoundSeatKey{bound("datadog", "APP_KEY", "DD_APPLICATION_KEY", "")}},
+		"Datadog's EU site": {remote("dd", "https://mcp.datadoghq.eu/v1/mcp"),
+			[]config.BoundSeatKey{bound("datadog", "APP_KEY", "DD_APPLICATION_KEY", "")}},
+		// A SEAT'S KEY GOES ONLY TO A DATADOG SITE: a host that merely
+		// contains a site's name is somebody else's server.
+		"a host that ends in a site's name":  {remote("dd", "https://mcp.datadoghq.com.example.net/v1/mcp"), nil},
+		"a host that contains a site's name": {remote("dd", "https://evil-datadoghq.com/v1/mcp"), nil},
+		"a site's name as a subdomain":       {remote("dd", "https://datadoghq.evil.example/v1/mcp"), nil},
 		"GitHub's remote server": {remote("gh", "https://api.githubcopilot.com/mcp/"),
 			[]config.BoundSeatKey{bound("github", "APP_TOKEN", "Authorization", "Bearer ")}},
 		"GitHub's local server": {stdio("gh", "docker", "run", "-i", "ghcr.io/github/github-mcp-server"),

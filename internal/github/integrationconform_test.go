@@ -41,9 +41,9 @@ import (
 //
 // # What is restated, and what that costs
 //
-// A GitHub pass is TWO halves — [github.Reconcile] over the organization's
-// credential and webhooks, and [github.ReconcileSeatApps] over each agent's
-// own app — and engine.githubPass.Run is what composes them. This file
+// A GitHub pass is TWO halves, [github.Reconcile] over the organization's
+// credential and webhooks and [github.AdoptSeatApps] keeping each agent's app
+// record in step, and engine.githubPass.Run is what composes them. This file
 // composes them the same way, which means the composition itself is the one
 // thing here that is a copy rather than the original: a change to the order
 // or to which findings are appended would pass here and be wrong there. The
@@ -597,13 +597,12 @@ func (s *sealingSink) Value(_ context.Context, name string) (string, bool, error
 //   - one seat NAMES an `mcp_env.github` token GitHub refuses →
 //     identity_failed. Its colleague names none, and is silent, because on
 //     this host identity is each agent's own app;
-//   - one seat's APP IS INSTALLED WITH LESS than its tier asks for →
-//     grant_short;
-//   - one seat has NO APP AT ALL, and one names an app SOMEBODY DELETED at
-//     GitHub → approval_required for both, which is the same state arrived at
-//     from two directions. The deleted one is also the only thing anywhere
-//     that drives the pass's second engine-side write, the record being
-//     cleared.
+//   - one seat's app is INSTALLED and its installation not yet recorded, so
+//     the pass records it; one seat has NO APP AT ALL; and one names an app
+//     SOMEBODY DELETED at GitHub, so the pass clears the record. What each
+//     of those agents still owes is the access sync's to report, not this
+//     pass's; the deleted app is the only thing anywhere that drives the
+//     pass's second engine-side write, the record being cleared.
 //
 // A pass here is ALLOWED to write, and does: it creates the repository hook,
 // records the installation it discovered and clears the app record GitHub no
@@ -812,15 +811,12 @@ func (r *githubReconciler) Reconcile(ctx context.Context) ([]integration.Finding
 	if err != nil {
 		return nil, fmt.Errorf("github pass: %w", err)
 	}
-	findings := res.Findings()
-	if len(r.seats.Seats) == 0 {
-		return findings, nil
+	if len(r.seats.Seats) > 0 {
+		if err := github.AdoptSeatApps(ctx, r.seats); err != nil {
+			return nil, fmt.Errorf("github pass: %w", err)
+		}
 	}
-	apps, appsErr := github.ReconcileSeatApps(ctx, r.seats)
-	if appsErr != nil {
-		return nil, fmt.Errorf("github pass: %w", appsErr)
-	}
-	return append(findings, apps.Findings...), nil
+	return res.Findings(), nil
 }
 
 // THE CONTRACT, AGAINST THE REAL RECONCILER, over a company that holds an
@@ -1067,9 +1063,8 @@ func TestTheConvergedWorldIsActuallyRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile over a converged world: %v", err)
 	}
-	apps, err := github.ReconcileSeatApps(t.Context(), seats)
-	if err != nil {
-		t.Fatalf("ReconcileSeatApps over a converged world: %v", err)
+	if err := github.AdoptSeatApps(t.Context(), seats); err != nil {
+		t.Fatalf("AdoptSeatApps over a converged world: %v", err)
 	}
 
 	got := world.readLog()
@@ -1107,23 +1102,14 @@ func TestTheConvergedWorldIsActuallyRead(t *testing.T) {
 		}
 	}
 
-	// AND IT CONCLUDED THE THING A CONVERGED WORLD MEANS. Zero findings is
-	// half of it and the weaker half: a pass that read nothing reports zero
-	// too. Both seats READY is the half only a pass that read the
-	// installations back can reach.
-	if findings := append(res.Findings(), apps.Findings...); len(findings) != 0 {
+	// AND IT CONCLUDED THE THING A CONVERGED WORLD MEANS: no findings, and
+	// neither engine-side write, since both installations are recorded and
+	// both apps exist.
+	if findings := res.Findings(); len(findings) != 0 {
 		t.Fatalf("a converged world produced %+v", findings)
 	}
-	if len(apps.Ready) != 2 {
-		t.Errorf("Ready = %v, want both seats: a converged installation on the "+
-			"tier its seat is set to is the only state an agent can act from",
-			apps.Ready)
-	}
-	// AND NOTHING WAS ADOPTED OR FORGOTTEN, which are the two engine-side
-	// writes. Counted above as well; asserted here because the count says
-	// only that the total did not move.
-	if len(apps.Adopted) != 0 || len(apps.Forgotten) != 0 {
-		t.Errorf("a converged pass adopted %v and forgot %v", apps.Adopted, apps.Forgotten)
+	if writes := world.writeLog(); len(writes) != 0 {
+		t.Errorf("a converged pass wrote %v", writes)
 	}
 }
 
@@ -1150,10 +1136,11 @@ func TestTheOutstandingWorldIsReadAndWrittenTo(t *testing.T) {
 	}
 
 	// EVERY STATE THIS WORLD IS IN, and nothing else. The suite's clause
-	// is satisfied by ONE person-owed finding, so three of these four
-	// could stop being produced and every conformance run would stay
-	// green — which is the same vacuity the outstanding world exists to
-	// remove, one level down.
+	// is satisfied by ONE person-owed finding, so one of these two could
+	// stop being produced and every conformance run would stay green,
+	// which is the same vacuity the outstanding world exists to remove, one
+	// level down. The agents' own states are the access sync's findings,
+	// never this pass's.
 	//
 	// The absentee is as load-bearing as the four: `ops-lead` names no
 	// `mcp_env.github` credential and gets NO identity finding, because on
@@ -1167,17 +1154,9 @@ func TestTheOutstandingWorldIsReadAndWrittenTo(t *testing.T) {
 	want := []string{
 		"ingress_blocked on " + blockedRepo,
 		"identity_failed on eng-lead",
-		"grant_short on eng-lead",
-		"approval_required on qa-lead",
-		// EVERY AGENT WITH NO APP, gathered into the one finding that says
-		// the act once (github.SeatsWithNoApp), naming them as its subjects.
-		"approval_required on agents without an app",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("the outstanding world reported\n %v\nwant\n %v", got, want)
-	}
-	if last := findings[len(findings)-1]; !slices.Equal(last.Subjects, []string{"ops-lead"}) {
-		t.Errorf("the agents with no app = %v, want ops-lead", last.Subjects)
 	}
 
 	reads := world.readLog()
@@ -1330,14 +1309,12 @@ func TestAPassCancelledAfterItsCredentialProbeRaisesRatherThanReportingWhatItSaw
 	}
 }
 
-// THE THIRD: the seat-app half, which could not report a fault at all.
+// THE THIRD: the seat-app half.
 //
-// Its "a failed read is not a finding" rule is right for a timeout and wrong
-// for a cancellation — one means GitHub was asked and could not say, the
-// other that it was never asked — and both landed on the arm that leaves the
-// seat exactly as it was. [github.ReconcileSeatApps] then returned nil
-// unconditionally, so no cancellation anywhere beneath it could reach a
-// caller: a draining node reported every seat as ready on its way out.
+// Its "a failed read changes nothing" rule is right for a timeout and wrong
+// for a cancellation: one means GitHub was asked and could not say, the other
+// that it was never asked. A pass torn down raises, so the loop retries rather
+// than believing the records were kept in step.
 func TestACancelledSeatPassRaisesRatherThanLeavingEverySeatAlone(t *testing.T) {
 	t.Parallel()
 	_, pem := testKey(t)
@@ -1345,32 +1322,23 @@ func TestACancelledSeatPassRaisesRatherThanLeavingEverySeatAlone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	res, err := github.ReconcileSeatApps(ctx, seats)
+	err := github.AdoptSeatApps(ctx, seats)
 	if err == nil {
-		t.Fatalf("a cancelled seat pass returned no error; with Findings %+v "+
-			"and Ready %v that is the exact shape the loop reads as ready",
-			res.Findings, res.Ready)
+		t.Fatal("a cancelled seat pass returned no error, which the loop reads " +
+			"as every record kept in step")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("the refusal does not carry the cancellation: %v", err)
-	}
-	// AND IT CLAIMED NOTHING ON THE WAY OUT. A seat marked Ready out of a
-	// roster that was never read is the same false "converged" one seat
-	// wide, and Ready is what the engine mints tokens against.
-	if len(res.Ready) != 0 {
-		t.Errorf("a cancelled pass reported %v as ready", res.Ready)
 	}
 }
 
 // AND A CANCELLATION BETWEEN SEATS STOPS THE WALK, not just one that
 // interrupts a request.
 //
-// The two arms above a seat's first call — no app, and no key — conclude from
-// the DOCUMENT alone and make no request at all, so a check placed only where
-// a read failed would let a torn-down pass keep walking the roster and report
-// on seats it had already stopped being able to look at. The finding it would
-// produce is even true; what is false is the pass presenting a roster it did
-// not finish as one it did.
+// A seat with no app or no key is passed over from the DOCUMENT alone, with no
+// request at all, so a check placed only where a read failed would let a
+// torn-down pass keep walking the roster and present one it did not finish as
+// one it did.
 //
 // THE CANCELLATION HAS TO LAND BETWEEN THE SEATS, and getting that wrong is
 // how this test came to pin nothing: cancelled from inside the first seat's
@@ -1398,7 +1366,7 @@ func TestACancellationBetweenSeatsStopsTheWalk(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	var forgotten atomic.Bool
-	res, err := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
+	err := github.AdoptSeatApps(ctx, github.SeatAppOptions{
 		APIBase: server.URL, WebBase: server.URL, Org: convergedOrgName,
 		Seats: []github.SeatApp{
 			{Handle: "a-gone", AppID: 11, Slug: "acme-a", InstallationID: 101,
@@ -1407,6 +1375,7 @@ func TestACancellationBetweenSeatsStopsTheWalk(t *testing.T) {
 			// what the loop-top check exists for.
 			{Handle: "z-no-app"},
 		},
+		Record: func(context.Context, string, int64) error { return nil },
 		Forget: func(context.Context, string) error {
 			// THE DRAIN, between the seats: the first seat is finished
 			// with and the second has not started.
@@ -1421,89 +1390,11 @@ func TestACancellationBetweenSeatsStopsTheWalk(t *testing.T) {
 			"test is pinning something else")
 	}
 	if err == nil {
-		t.Fatalf("a pass cancelled between seats answered %+v with no error, so "+
-			"a roster it did not finish is presented as one it did", res.Findings)
+		t.Fatal("a pass cancelled between seats answered no error, so a roster " +
+			"it did not finish is presented as one it did")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("the refusal does not carry the cancellation: %v", err)
-	}
-	// AND THE SEAT THE WALK NEVER REACHED IS NOT REPORTED ON. Its finding
-	// would even be true — it has no app — and it is still a statement
-	// about a roster this pass stopped reading.
-	for _, f := range res.Findings {
-		if f.Subject == "z-no-app" {
-			t.Errorf("a pass that stopped at the first seat still reported %+v "+
-				"about the seat after it", f)
-		}
-	}
-}
-
-// AND A SEAT CANCELLED AFTER ITS OWN READ SUCCEEDED IS NOT REPORTED READY.
-//
-// The other half of the same clause, and the one the loop-top guard cannot
-// reach: the context is alive when the seat's turn begins and dies while its
-// installation is being read. THE READ SUCCEEDS — that is what makes this
-// arm necessary rather than redundant — so every other arm of the switch
-// falls through to "this seat is fine", and the pass returns a roster it
-// abandoned with the last seat it looked at marked Ready. Ready is what the
-// engine mints tokens against.
-//
-// Cancelled from [SeatAppOptions.Record], which is the callback the discovery
-// walk invokes with the installation already in hand: the read is complete and
-// the answer is good, which is exactly the state a lease expiring mid-pass
-// leaves behind.
-//
-// It is also what pins the predicate. The guard tests the CONTEXT, never the
-// error a call came back with, and here there is no error at all — so a guard
-// rewritten as `errors.Is(err, context.Canceled)` sees nothing and reports the
-// seat ready.
-func TestASeatCancelledAfterItsInstallationWasReadIsNotReportedReady(t *testing.T) {
-	t.Parallel()
-	_, pem := testKey(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	perms, err := json.Marshal(github.TierReadOnly.Permissions())
-	if err != nil {
-		t.Fatal(err)
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `[{"id":901,"account":{"login":%q,"type":"Organization"},`+
-			`"repository_selection":"all","suspended_at":null,"permissions":%s}]`,
-			convergedOrgName, perms)
-	}))
-	t.Cleanup(server.Close)
-
-	var recorded atomic.Bool
-	res, err := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
-		APIBase: server.URL, WebBase: server.URL, Org: convergedOrgName,
-		Seats: []github.SeatApp{{
-			Handle: "eng-lead", AppID: 11, Slug: "acme-eng-lead",
-			Key: pem, Permissions: tierPerms("read_only", false),
-		}},
-		Record: func(context.Context, string, int64) error {
-			// THE LEASE EXPIRING with the answer already in hand.
-			recorded.Store(true)
-			cancel()
-			return nil
-		},
-	})
-	if !recorded.Load() {
-		t.Fatal("the discovery walk never reached the callback this test " +
-			"cancels from, so the cancellation did not land after a successful " +
-			"read and this test is pinning something else")
-	}
-	if err == nil {
-		t.Fatalf("a seat pass cancelled after a successful read answered %+v "+
-			"with no error", res.Findings)
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("the refusal does not carry the cancellation: %v", err)
-	}
-	if len(res.Ready) != 0 {
-		t.Errorf("a pass abandoned mid-roster reported %v as ready, which is "+
-			"what the engine mints tokens against", res.Ready)
 	}
 }
 
@@ -1524,24 +1415,23 @@ func TestAReadGitHubRefusedIsStillNotAFinding(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	res, err := github.ReconcileSeatApps(context.Background(), github.SeatAppOptions{
+	err := github.AdoptSeatApps(context.Background(), github.SeatAppOptions{
 		APIBase: server.URL, WebBase: server.URL, Org: convergedOrgName,
 		Seats: []github.SeatApp{{
 			Handle: "sre-lead", AppID: 12, Slug: "acme-sre-lead",
 			InstallationID: 102, Key: pem, Permissions: tierPerms("review", false),
 		}},
+		Record: func(_ context.Context, handle string, id int64) error {
+			t.Errorf("a read GitHub refused recorded installation %d for %s", id, handle)
+			return nil
+		},
+		Forget: func(_ context.Context, handle string) error {
+			t.Errorf("a read GitHub refused forgot %s's app", handle)
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("a read GitHub refused failed the whole pass: %v", err)
-	}
-	if len(res.Findings) != 0 {
-		t.Errorf("a seat whose installation could not be READ was reported as "+
-			"%+v, which tells an operator to redo a click nobody reversed",
-			res.Findings)
-	}
-	if len(res.Ready) != 0 {
-		t.Errorf("a seat whose installation could not be read was reported ready: %v",
-			res.Ready)
 	}
 }
 
