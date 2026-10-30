@@ -531,8 +531,9 @@ type Installation struct {
 	SuspendedAt         string `json:"suspended_at"`
 
 	// SuspendedBy is who suspended it, as GitHub records it, or nil. Read
-	// for the sentence an operator sees; whether THIS ENGINE suspended it
-	// is the account ledger's to say, never inferred from a login.
+	// for who can lift it ([Installation.SuspendedByPerson]); whether THIS
+	// ENGINE suspended it is the account ledger's to say, never inferred
+	// from a login.
 	SuspendedBy *struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
@@ -552,6 +553,14 @@ const RepositorySelectionAll = "all"
 // are refused, and the fix is a person's, so it is worth telling apart from
 // an installation that is simply gone.
 func (i Installation) Suspended() bool { return strings.TrimSpace(i.SuspendedAt) != "" }
+
+// SuspendedByPerson reports a suspension a person placed at GitHub (an
+// organization owner on the installation's page), as opposed to one an app
+// placed through the API. A person's suspension is a decision made at GitHub,
+// so it is lifted there by a person, never by this engine on its own.
+func (i Installation) SuspendedByPerson() bool {
+	return i.Suspended() && i.SuspendedBy != nil && strings.EqualFold(i.SuspendedBy.Type, "User")
+}
 
 // InstallationToken is a credential for one installation, and it expires.
 type InstallationToken struct {

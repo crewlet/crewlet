@@ -112,7 +112,7 @@ type Options struct {
 // somebody can fix: every call its tools make is refused, and an operator has
 // a variable to set or a token to reissue. A seat that names NONE has not
 // asked for one — identity on this host is each agent's OWN GitHub App, which
-// [ReconcileSeatApps] is the authority on and which this run cannot see from
+// the access sync is the authority on and which this run cannot see from
 // the org chart it was handed.
 //
 // Reported as one state, they were both "Login is empty, Reason says why",
@@ -557,7 +557,7 @@ func resolveSeats(ctx context.Context, opts Options) []SeatIdentity {
 		}
 		// NAMED NOTHING IS NOT A FAULT — see [IdentityOutcome]. This
 		// seat's identity is its own GitHub App, which this run cannot
-		// see and [ReconcileSeatApps] reports on.
+		// see and the access sync reports on.
 		out[i].Outcome = IdentityUnclaimed
 		out[i].Reason = "no credential under mcp_env." + SeatEnv +
 			", so this seat acts through its own GitHub App rather than a " +

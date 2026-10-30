@@ -127,6 +127,7 @@ func TestTheDashboardKnowsExactlyTheAccessValues(t *testing.T) {
 			string(seataccess.VerbEnable), string(seataccess.VerbRerole), string(seataccess.VerbScope),
 			string(seataccess.VerbDisable), string(seataccess.VerbRevoke), string(seataccess.VerbRemove),
 			string(seataccess.VerbRotate), string(seataccess.VerbRestore), string(seataccess.VerbApprove),
+			string(seataccess.VerbObserve),
 		), func(v string) bool { return seataccess.StepVerb(v).Valid() }},
 	} {
 		client, err := clientsource.Union(tree, c.client)

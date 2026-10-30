@@ -79,6 +79,9 @@ func TestStepsPerOp(t *testing.T) {
 		"create is two clicks": {op: seataccess.OpCreate, out: []drawn{
 			{seataccess.VerbCreate, you}, {seataccess.VerbApprove, you}}},
 		"enable unsuspends": {op: seataccess.OpEnable, out: []drawn{{seataccess.VerbEnable, crewlet}}},
+		"a person's suspension is lifted at GitHub": {op: seataccess.OpEnable,
+			have: seataccess.Observed{Exists: true, DisabledBy: seataccess.DisabledByHand},
+			out:  []drawn{{seataccess.VerbEnable, you}}},
 		"a narrowing needs nothing at GitHub": {op: seataccess.OpLevel,
 			want: seataccess.Desired{Permissions: perms("contents", "read")},
 			have: seataccess.Observed{Permissions: perms("contents", "write"), Ceiling: perms("contents", "write")},
@@ -491,7 +494,9 @@ func TestMintAdoptsASealedKeyAndWaitsOnALostOne(t *testing.T) {
 	}
 }
 
-// A COMPANY THAT DOES NOT CONNECT GITHUB IS NOT A FAULT.
+// A COMPANY THAT DOES NOT CONNECT GITHUB IS NOT A FAULT, and neither is one
+// whose agents' apps are handed in from outside Crewlet (D4b): the access sync
+// opens no session for either.
 func TestOpenWithoutGitHubIsNotConfigured(t *testing.T) {
 	t.Parallel()
 	vendor, _ := seataccess.Lookup(integration.KindGitHub)
@@ -499,20 +504,125 @@ func TestOpenWithoutGitHubIsNotConfigured(t *testing.T) {
 	if !errors.Is(err, integration.ErrNotConfigured) {
 		t.Errorf("open answered %v", err)
 	}
+	external := installedSRE(t)
+	external.cfg.Integrations.GitHub.Provisioning = nil
+	if _, err := vendor.Open(t.Context(), seataccess.OpenInput{Config: external.cfg, Env: external.env}); !errors.Is(err, integration.ErrNotConfigured) {
+		t.Errorf("a company whose apps are external opened a session: %v", err)
+	}
 }
 
-// AN OFF SEAT IS THE ACCESS SYNC'S: the seat-app reconcile reports nothing
-// about the suspension this engine made, and the issuer hands it no token.
-func TestAnOffSeatIsLeftToTheAccessSync(t *testing.T) {
+// suspendedSRE is installedSRE with its installation suspended, by who.
+func suspendedSRE(t *testing.T, by string) *ghSeat {
+	t.Helper()
+	w := installedSRE(t)
+	w.gh.on("GET /app/installations/7", 200, `{"id":7,"account":{"login":"acme"},
+		"repository_selection":"selected","suspended_at":"2026-10-29T10:00:00Z",`+by+`
+		"html_url":"https://github.com/organizations/acme/settings/installations/7",
+		"permissions":{"contents":"read","issues":"read","metadata":"read"}}`)
+	return w
+}
+
+// A SUSPENDED INSTALLATION IS READ WITHOUT A TOKEN. Listing its repositories
+// mints one, which GitHub refuses while it is suspended, and that refusal
+// failed the whole kind, so the seat could never be turned back on. What it
+// covers is unknown, never missing; back on unsuspends and reads again.
+func TestASuspendedInstallationIsReadWithoutAToken(t *testing.T) {
+	t.Parallel()
+	w := suspendedSRE(t, `"suspended_by":{"login":"acme-sre[bot]","type":"Bot"},`)
+	w.gh.on("POST /app/installations/7/access_tokens", 403, `{"message":"This installation has been suspended"}`)
+	w.gh.on("DELETE /app/installations/7/suspended", 204, ``)
+	s := w.open(t)
+	disabled := map[string]seataccess.Record{"sre": {Kind: integration.KindGitHub, Handle: "sre",
+		Account: &seataccess.Account{ID: "41", State: seataccess.AccountDisabled}}}
+	obs, err := s.Observe(t.Context(), seataccess.ObserveInput{Seats: []seataccess.SeatRef{sre}, Records: disabled})
+	if err != nil {
+		t.Fatalf("a suspended installation failed the read: %v", err)
+	}
+	got := obs["sre"][seataccess.LaneGitHub]
+	if got.Enabled || got.DisabledBy != seataccess.DisabledByCrewlet || !slices.Equal(got.Scope, []string{"acme/backend"}) {
+		t.Errorf("observed %+v", got)
+	}
+	if slices.Contains(w.gh.called(), "POST /app/installations/7/access_tokens") {
+		t.Error("a suspended installation was asked for a token")
+	}
+
+	rec := disabled["sre"]
+	if _, err := apply(t, s, seataccess.OpEnable, 0, seataccess.Desired{Enabled: true}, &rec); err != nil {
+		t.Fatalf("back on: %v", err)
+	}
+	calls := w.gh.called()
+	lifted := slices.Index(calls, "DELETE /app/installations/7/suspended")
+	if lifted < 0 || !slices.Contains(calls[lifted:], "GET /app/installations/7") {
+		t.Errorf("back on did not read the installation again after lifting it: %v", calls)
+	}
+}
+
+// A PERSON'S SUSPENSION IS THEIRS TO LIFT: an owner suspended the installation
+// at GitHub, so back on waits for a person at the installation's page rather
+// than lifting a decision made there.
+func TestAnOwnersSuspensionWaitsOnAPerson(t *testing.T) {
+	t.Parallel()
+	w := suspendedSRE(t, `"suspended_by":{"login":"octo-owner","type":"User"},`)
+	s := w.open(t)
+	disabled := map[string]seataccess.Record{"sre": {Kind: integration.KindGitHub, Handle: "sre",
+		Account: &seataccess.Account{ID: "41", State: seataccess.AccountDisabled}}}
+	obs, err := s.Observe(t.Context(), seataccess.ObserveInput{Seats: []seataccess.SeatRef{sre}, Records: disabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := obs["sre"][seataccess.LaneGitHub]; got.DisabledBy != seataccess.DisabledByHand {
+		t.Errorf("an owner's suspension is attributed to %q", got.DisabledBy)
+	}
+	rec := disabled["sre"]
+	for _, by := range []seataccess.StepActor{seataccess.ByCrewlet, seataccess.ByYou} {
+		res, err := s.Apply(t.Context(), seataccess.ApplyInput{
+			Seat: sre, Lane: seataccess.LaneGitHub, Record: &rec, Want: seataccess.Desired{Enabled: true},
+			Step: seataccess.Step{Op: seataccess.OpEnable, Verb: seataccess.VerbEnable, By: by},
+		})
+		if err != nil || res.Waiting == nil || !strings.Contains(res.Waiting.Detail, "octo-owner") ||
+			res.Waiting.ActionURL != "https://github.com/organizations/acme/settings/installations/7" {
+			t.Errorf("%s: %+v, %v", by, res.Waiting, err)
+		}
+	}
+	if slices.Contains(w.gh.called(), "DELETE /app/installations/7/suspended") {
+		t.Error("this engine lifted a suspension a person placed")
+	}
+}
+
+// ONE AGENT'S APP, ONE AGENT'S FAULT: a read GitHub refused for one seat is
+// that seat's, and the others are observed.
+func TestOneUnreadableAppIsThatSeatsFault(t *testing.T) {
+	t.Parallel()
+	w := installedSRE(t)
+	pem, _ := w.env.LookupOK("GITHUB_APP_KEY_SRE")
+	on := true
+	w.cfg.Roles = append(w.cfg.Roles, config.Role{Name: "Ops", Handle: "ops",
+		Integrations: config.RoleIntegrations{GitHub: &config.RoleGitHub{
+			Enabled: &on, AppID: 42, AppSlug: "acme-ops", InstallationID: 8,
+			PrivateKey: "${GITHUB_APP_KEY_OPS}",
+		}}})
+	w.env = config.NewResolver(config.MapSource{"GITHUB_APP_KEY_SRE": pem, "GITHUB_APP_KEY_OPS": pem})
+	w.gh.on("GET /app/installations/8", 502, `{"message":"Bad Gateway"}`)
+	obs, err := w.open(t).Observe(t.Context(), seataccess.ObserveInput{
+		Seats: []seataccess.SeatRef{sre, {Handle: "ops", Name: "Ops"}},
+	})
+	faults, ok := errors.AsType[seataccess.SeatFaults](err)
+	if !ok || len(faults) != 1 || faults["ops"] == nil {
+		t.Fatalf("observe answered %v", err)
+	}
+	if got := obs["sre"][seataccess.LaneGitHub]; !got.Exists || !got.Enabled {
+		t.Errorf("the readable seat observed %+v", got)
+	}
+}
+
+// AN OFF SEAT IS ISSUED NO TOKEN: the suspension is the access sync's, and the
+// issuer refuses before asking GitHub.
+func TestAnOffSeatIsIssuedNoToken(t *testing.T) {
 	t.Parallel()
 	_, pem := testKey(t)
 	seat := github.SeatApp{
 		Handle: "sre", AppID: 41, Slug: "acme-sre", InstallationID: 7, Key: pem, Off: true,
 		Permissions: tierPerms("read_only", false),
-	}
-	res, err := github.ReconcileSeatApps(t.Context(), github.SeatAppOptions{Seats: []github.SeatApp{seat}})
-	if err != nil || len(res.Findings) != 0 || len(res.Ready) != 0 {
-		t.Errorf("an off seat: findings %v, ready %v, %v", kinds(res.Findings), res.Ready, err)
 	}
 	if _, err := (&github.Issuer{}).Token(t.Context(), github.SeatAppOptions{}, seat, github.ToolTokenLife); !errors.Is(err, github.ErrSeatOff) {
 		t.Errorf("an off seat was issued %v", err)
