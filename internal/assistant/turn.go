@@ -688,7 +688,7 @@ func (t *turn) outcome(ctx context.Context, res *toolloop.Result, err error) (wi
 		}
 		if errors.As(err, &budget) {
 			if budget.Scope == PersonBudgetScope {
-				failure.Message = "Your own Ask Crewlet token budget for this window is spent."
+				failure.Message = "Your own Ask Crewlet budget for this window is spent."
 			}
 			// BOTH WAYS BACK, in a person's words: the window turning over,
 			// and the ceiling raised, which the remedy beside it opens

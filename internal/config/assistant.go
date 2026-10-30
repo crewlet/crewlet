@@ -328,7 +328,7 @@ func (c *Company) deepWorkProblems(path Path) error {
 
 // ErrAssistantOff is what [Company.AssistantChain] answers for a company that
 // has not turned the assistant on.
-var ErrAssistantOff = errors.New("this company has not enabled Ask Crewlet: set assistant.enabled to true")
+var ErrAssistantOff = errors.New("assistant.enabled is not true, so Ask Crewlet is off for this company: set it to true")
 
 // AssistantChain is the provider chain the assistant runs on, or why there is
 // none: [ErrAssistantOff] for a company that has not turned it on, and

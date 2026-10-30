@@ -7945,7 +7945,8 @@ seat at once; **Agent seats** follow as one table with a column per window, so
 the one seat near its ceiling is found down a column. The company's row stands
 on the table's own columns (one track list handed to both), so each window
 sits over its column, and its first track says once what the windows are:
-every seat together, on the company clock, and when each turns over. **Ask Crewlet, per person** follows the company, on the same tracks: the ceiling every
+every seat together, on the company clock, and when each turns over.
+**Ask Crewlet, per person** follows the company, on the same tracks: the ceiling every
 person's Ask Crewlet questions are held to (`assistant.token_budget`),
 each person on their own. Its figures are the reader's own spend against it,
 drawn only where the engine counts one (`counted`: a person, under a company

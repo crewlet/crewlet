@@ -229,7 +229,8 @@ Ask Crewlet's rounds are charged to the company's token budget windows like
 any other spend, recorded under the operator stage and the asking person's
 seat, so the [spend views](budgets-and-spend.md) show who used how much.
 `assistant.token_budget` adds a per-person ceiling per day, week or month on
-top of the company's own, edited on Company › Budgets under **Ask Crewlet, per person**; a raised ceiling holds from the next question once the node has
+top of the company's own, edited on Company › Budgets under **Ask Crewlet, per
+person**; a raised ceiling holds from the next question once the node has
 applied the revision, with no restart. A question whose budget is spent is
 refused before its first round, and a turn whose budget runs out stops before
 its next one. Either way the drawer says whose ceiling it is (the person's own,

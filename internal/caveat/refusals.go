@@ -151,7 +151,7 @@ func TokenBudgetSpent(where Remedy) Refusal {
 	case SettingSeatTokenBudget:
 		whose = "@" + where.Seat + "'s token budget"
 	case SettingAssistantTokenBudget:
-		whose = "Your own Ask Crewlet token budget"
+		whose = "Your own Ask Crewlet budget"
 	default:
 		whose = "The company's token budget"
 	}
