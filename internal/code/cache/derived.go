@@ -539,12 +539,20 @@ type Write struct {
 	Deadline func(Covers) time.Duration
 	// BytesPerObject is the write's own memory an object of what it covers
 	// (Covers.Objects: the repository's for own mode's writes, the tail's for
-	// the node's tip): it is admitted at chargeOver(those objects,
-	// BytesPerObject, the repository's), which adds room for one transfer of
-	// the whole repository (memory.go). Zero for an in-process write, which no
-	// admission charges: its Charge says what it holds.
+	// the node's tip): it is admitted at its charge (Write.charge), which adds
+	// room for one transfer of the whole repository (memory.go). Zero for an
+	// in-process write, which no admission charges: its Charge says what it
+	// holds.
 	BytesPerObject int64
-	Writer         Writer
+	// BaseBytes is the write's own memory WHATEVER it covers, charged beside
+	// BytesPerObject's: zero for a write over the whole repository, whose
+	// per-object figure folds any fixed part into the repository's many
+	// objects, and set where a write covers few objects and holds a part that
+	// does not follow them — the node's tip, whose changed-path filters are
+	// bounded by MaxNewFilters rather than by its tail (TipGraphBaseBytes).
+	// Zero for an in-process write.
+	BaseBytes int64
+	Writer    Writer
 	// Args is the argument list its writer hands git: one of the writer
 	// file's own literals, so the writers gate reads it where git runs. Nil
 	// for an in-process write.
@@ -973,12 +981,14 @@ func DerivedFiles() []Derived {
 			// THE NODE'S TIP over the tail (maintain.go), git's: its Covers are
 			// the tail's — its packs, their objects and their bytes — since a
 			// split write walks only the commits no layer beneath it holds, so
-			// its time and its own memory follow the tail, never the history.
+			// its time and its own memory follow the tail, never the history,
+			// beside a fixed part its filters' bound sets (TipGraphBaseBytes).
 			{Step: StepTipGraph, Trigger: TriggerMaintainer, Lane: gitproc.ClassMaintenance,
 				Deadline: func(c Covers) time.Duration {
 					return gitproc.PackWorkDeadline(c.DiskBytes) + gitproc.HistoryWalk(c.Objects)
 				},
-				BytesPerObject: TipGraphBytesPerObject, Writer: Writer{maintainFile, procGraph}, Args: tipGraphArgs,
+				BytesPerObject: TipGraphBytesPerObject, BaseBytes: TipGraphBaseBytes,
+				Writer: Writer{maintainFile, procGraph}, Args: tipGraphArgs,
 				Holds: []FilePattern{{graphLayersDir, graphChainLock()}, {graphLayersDir, tmpGraph()}}},
 		},
 		Owns: []Owned{
@@ -1191,6 +1201,9 @@ func (w Write) validateGit(field string, bad func(field, format string, args ...
 		return bad(field+".Deadline", "is nil: say how long its process may run")
 	case w.BytesPerObject <= 0:
 		return bad(field+".BytesPerObject", "is %d: say what an object costs it in memory", w.BytesPerObject)
+	case w.BaseBytes < 0:
+		return bad(field+".BaseBytes", "is %d: a fixed part of a process's memory is never less than none",
+			w.BaseBytes)
 	case len(w.Args) == 0:
 		return bad(field+".Args", "is empty")
 	case w.Args[0] != w.Writer.Subcommand:
@@ -1214,6 +1227,9 @@ func (w Write) validateInProcess(field string, bad func(field, format string, ar
 	case w.BytesPerObject != 0:
 		return bad(field+".BytesPerObject", "is %d, and no admission charges an in-process write: its Charge "+
 			"says what it holds", w.BytesPerObject)
+	case w.BaseBytes != 0:
+		return bad(field+".BaseBytes", "is %d, and no admission charges an in-process write: its Charge "+
+			"says what it holds", w.BaseBytes)
 	case len(w.Args) != 0:
 		return bad(field+".Args", "is %q, and an in-process write hands git nothing", w.Args)
 	case strings.TrimSpace(w.Charge) == "":

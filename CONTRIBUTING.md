@@ -737,7 +737,7 @@ each, on one idle machine, and read the two outputs with
 | `BENCH_PATTERN` | `.` | `-bench`, e.g. `Backend/via=member` |
 | `BENCH_TIME` | `3s` | `-benchtime` |
 | `BENCH_COUNT` | `1` | `-count` |
-| `BENCH_TIMEOUT` | `8h` | `-timeout`, a hang detector, each package's: at six counts of every arm, the large ones included, `internal/code/cache` takes about six and a half hours on four vCPUs and `internal/code/host` about two and a half |
+| `BENCH_TIMEOUT` | `8h`, and `24h` with `CREWLET_BENCH_LARGE=1` | `-timeout`, a hang detector, each package's: at six counts of every arm a default run measures, `internal/code/cache` takes about three and a quarter hours on four vCPUs, and with the large arms about thirteen — estimates for its published layers' arms, from one count of each; `internal/code/host` about two and a half hours with the large arms |
 
 The packages run one at a time (`-p 1`) and without the race detector, and the
 output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
@@ -747,11 +747,17 @@ output is verbose (`-v`), because a skipped benchmark prints nothing otherwise
 (`internal/objstore/s3obj`'s doc lists the variables that do), and the arms
 whose fixture takes minutes and gigabytes — in `internal/code/cache` cold
 syncs of 2 048 and of 10 000 pushes, repositories of 10 000 packs, a 5 GB
-index, a gigabyte split into hundreds of packs; in `internal/code/host` a
-gigabyte history, a hundred thousand refs and a 100 000-file tree; in
-`internal/code/query` a gigabyte history under a 100 000-file tree read by
-object id; in `internal/jsapi` streams of a million and of three million
-subjects — skip unless `CREWLET_BENCH_LARGE=1`.
+index and its published layers, a gigabyte split into hundreds of packs, an
+installer catching up 10 000 repositories, and `BenchmarkBigNode`'s 5 GB
+monorepo; in `internal/code/host` a gigabyte history, a hundred thousand refs
+and a 100 000-file tree; in `internal/code/query` a gigabyte history under a
+100 000-file tree read by object id, and a gigabyte history blamed and logged
+by path; in `internal/jsapi` streams of a million and of three million
+subjects — skip unless `CREWLET_BENCH_LARGE=1`. `BenchmarkBigNode`'s 12 GB
+monorepo, whose fixture builds for hours and whose bitmap holds tens of
+gigabytes beside the in-memory store, skips unless `CREWLET_BENCH_BIGNODE=1`
+is set beside it, on a machine of at least 64 GB of memory; run it alone,
+under the day's `BENCH_TIMEOUT` that `CREWLET_BENCH_LARGE=1` gives a run.
 
 A code host figure is the pool's git's as much as the engine's, so `make bench`
 runs the node pin — the git the engine image builds — first on `PATH`, as every
@@ -1243,7 +1249,32 @@ credential, which the workflow does not take. It holds `contents: read` and
 2. `make git` — it builds the new git from the tarball the digest names, and a
    digest that is not the tarball's refuses the build — then `make check`, the
    suite on the new git.
-3. Title the pull request as the report does: `build(deps): bump git from <a>
+3. Measure what the published layers' rules rest on, on the new git and one
+   idle machine:
+   `make bench BENCH_PKGS=./internal/code/cache BENCH_PATTERN='Midx/size=/^step='`
+   (the `git=floor` arms run the node floor's own build). Each arm states the
+   rule it holds, and the same pull request re-decides a rule its arm no
+   longer holds:
+   - **No node writes a multi-pack-index layer of its own**
+     (`internal/code/cache`'s package doc): re-decided once `step=tip`'s
+     `peak-MiB` stops growing with the history — a node's bitmapped layer
+     costing the objects it adds rather than the history. On git 2.56.0 the
+     same 64 pushes' layer held 88 MiB over 100 MB and 254 MiB over the
+     gigabyte, and took longer there than `step=whole/write=bitmap`'s whole
+     rewrite.
+   - **A layer is written over exactly its base, never merged with
+     `multi-pack-index compact`** (`internal/code/compact`'s): re-decided once
+     `merge=stacked` no longer reports `pathological`, or `merge=root-compact`
+     beats `merge=root-write` by more than the tail's layer write a compaction
+     from the root cannot skip (`step=publish/layer=tail`'s `midx-s/op`).
+   - **A published layer covers every live pack its base does not**:
+     re-decided once `step=closure` fails, git having written a bitmap over
+     packs that are not closed.
+
+   The constants the same arms measure — `internal/code/cache`'s bytes an
+   object, `internal/code/compact`'s publication cadence — say at their
+   definitions what moves each.
+4. Title the pull request as the report does: `build(deps): bump git from <a>
    to <b>` for the node pin, `build(deps): bump git's node floor from <a> to
    <b>` or `… client floor …` for a floor.
 

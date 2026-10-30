@@ -187,19 +187,22 @@ func TestAGraphTheNodesMemoryCannotHoldIsGaugedAsABitmapIs(t *testing.T) {
 
 // A TIP THE NODE'S MEMORY CANNOT HOLD IS GAUGED, AND RAISES NOTHING. A copy
 // serving from an installed chain writes one thing of its own, its tip over
-// the tail, charged TipGraphBytesPerObject an object of the tail with room
-// for a clone of the whole repository beside it (chargeOver). Past the budget
-// it never runs: its refusal is logged and counted once for the incarnation
-// and kept on the refused gauge under its own step while it stands — and the
-// alarm, which says a repository is served without a bitmap, does not stand
-// for it, since the copy is served through its chain's bitmap and graph
-// layers and only the tail's commits walk by date. At a budget of the tip's
-// own charge it is written at once, and the gauge falls back.
+// the tail, charged TipGraphBytesPerObject an object of the tail and
+// TipGraphBaseBytes whatever its length, with room for a clone of the whole
+// repository beside it (Write.charge). Past the budget it never runs: its
+// refusal is logged and counted once for the incarnation and kept on the
+// refused gauge under its own step while it stands — and the alarm, which
+// says a repository is served without a bitmap, does not stand for it, since
+// the copy is served through its chain's bitmap and graph layers and only the
+// tail's commits walk by date. At a budget of the tip's own charge it is
+// written at once, and the gauge falls back.
 //
 // Mutations: count no refused tip in refusalWalk.note, and the tip's gauge
 // stays at zero; count it with the bitmaps, and the alarm reading names the
 // repository; charge the tip by the repository's objects (plan's tip case
-// dropped), and the budget of its charge holds no run.
+// dropped), and the budget of its charge holds no run; charge it without its
+// fixed part (Write.charge's BaseBytes dropped), and the budget a byte short
+// of its charge runs it.
 func TestATipTheNodesMemoryCannotHoldIsGaugedAndRaisesNoAlarm(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -210,12 +213,17 @@ func TestATipTheNodesMemoryCannotHoldIsGaugedAndRaisesNoAlarm(t *testing.T) {
 	c := w.open(t, clk.on)
 	defer w.sync(t, c, repo).Release()
 	tip := cache.TipCharge(c, repo)
-	objects := cache.ObjectsOf(c, repo)
-	if repoWide := objects * (cache.TipGraphBytesPerObject + gitproc.TransferBytesPerObject); tip >= repoWide ||
-		tip <= objects*gitproc.TransferBytesPerObject {
+	objects, tail := cache.ObjectsOf(c, repo), cache.TailObjects(c, repo)
+	if tail <= 0 || tail >= objects {
+		t.Fatalf("the premise: a tail of %d objects in a repository of %d, want some and fewer than all", tail,
+			objects)
+	}
+	room := objects * gitproc.TransferBytesPerObject
+	if repoWide := objects*cache.TipGraphBytesPerObject + cache.TipGraphBaseBytes + room; tip >= repoWide ||
+		tip <= cache.TipGraphBaseBytes+room {
 		t.Fatalf("the tip's charge is %d over a repository of %d objects: want its figure over the tail alone, "+
-			"under %d, and the clone's room over the whole repository, %d", tip, objects, repoWide,
-			objects*gitproc.TransferBytesPerObject)
+			"under %d, beside its fixed part and the clone's room over the whole repository, %d", tip, objects,
+			repoWide, cache.TipGraphBaseBytes+room)
 	}
 	cache.SetMaintenanceBudget(c, tip-1)
 	for range 2 {
@@ -276,6 +284,13 @@ func TestATipTheNodesMemoryCannotHoldIsGaugedAndRaisesNoAlarm(t *testing.T) {
 // bitmap is written again at the cadence any index is — MidxPacks gathered
 // beside it — and covers every pack pushed since.
 //
+// The budget is held a byte short of the bitmap's charge AS THE COPY STANDS
+// after each push, so the bitmap is refused for good whatever the repository
+// grows to, while the index and the graph — a fraction of the bitmap's bytes
+// an object, beside the same room — always fit: a budget fixed at the
+// repository's first size would refuse the index too once the repository
+// outgrew it by the ratio of the bitmap's charge to the index's.
+//
 // Mutation: drop the index without a bitmap from plan, and no pack is ever
 // indexed.
 func TestARefusedRepositoryKeepsItsPushesIndexed(t *testing.T) {
@@ -295,6 +310,7 @@ func TestARefusedRepositoryKeepsItsPushesIndexed(t *testing.T) {
 	for push := range 4 {
 		w.push(t, repo, "refs/heads/main", nil)
 		w.sync(t, c, repo).Release()
+		cache.SetMaintenanceBudget(c, cache.BitmapCharge(c, repo)-1)
 		clk.Add(cache.MidxMinInterval)
 		cache.MaintainerPass(c)
 		packs, withBitmap, _ := cache.Indexed(c, repo)
@@ -320,7 +336,9 @@ func TestARefusedRepositoryKeepsItsPushesIndexed(t *testing.T) {
 // the bitmap stands while the packs outside it are fewer than MidxRoundPacks —
 // the most this cache serves outside an index anywhere — and past them, the
 // index without a bitmap over every pack replaces it, so a refused
-// repository's pushes never pile up outside an index without bound.
+// repository's pushes never pile up outside an index without bound. The
+// budget is held a byte short of the bitmap's charge as the copy stands after
+// each batch of pushes (TestARefusedRepositoryKeepsItsPushesIndexed says why).
 //
 // Mutation: replace a stale bitmap at MidxPacks rather than MidxRoundPacks,
 // and the second pass deletes it.
@@ -342,12 +360,12 @@ func TestAStaleBitmapIsKeptUntilMidxRoundPacksGatherOutsideIt(t *testing.T) {
 		t.Fatalf("the first run left an index over %d packs (bitmap %v), want the bitmap over both", packs,
 			withBitmap)
 	}
-	cache.SetMaintenanceBudget(c, cache.BitmapCharge(c, repo)-1)
 	pushes := func(n int) {
 		for range n {
 			w.push(t, repo, "refs/heads/main", nil)
 		}
 		w.sync(t, c, repo).Release()
+		cache.SetMaintenanceBudget(c, cache.BitmapCharge(c, repo)-1)
 		clk.Add(cache.MidxMinInterval)
 	}
 
@@ -965,9 +983,9 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 // delta search a multiple of max_blob_bytes.
 //
 // Mutation: change IndexBytesPerObject, GraphBytesPerObject,
-// TipGraphBytesPerObject, CompactBytesPerObject, CompactWindowBytes'
-// multiple, PublishBytesPerObject or MidxDebounce, and the catalogue no
-// longer says what the cache does.
+// TipGraphBytesPerObject, TipGraphBaseBytes, CompactBytesPerObject,
+// CompactWindowBytes' multiple, PublishBytesPerObject or MidxDebounce, and the
+// catalogue no longer says what the cache does.
 func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	bitmap := fmt.Sprintf("%d bytes an object", cache.BitmapBytesPerObject)
@@ -994,6 +1012,7 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 			fmt.Sprintf("`index` (%d)", cache.IndexBytesPerObject),
 			fmt.Sprintf("`graph` (%d)", cache.GraphBytesPerObject),
 			fmt.Sprintf("`tip-graph` (%d an object of the tail", cache.TipGraphBytesPerObject),
+			fmt.Sprintf("and %s whatever its length", amount(t, cache.TipGraphBaseBytes)),
 			fmt.Sprintf("`compact` (%d bytes an object of the packs merged, beside a transfer's room of them — %d "+
 				"bytes an object merged, never of the whole repository, whose size alone would refuse every merge "+
 				"of a large one — and %s times max_blob_bytes for the build's delta search)",
@@ -1031,9 +1050,9 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 //
 // Mutation: change any constant the page names — BitmapBytesPerObject,
 // FsckBytesPerObject, gitproc.TransferMemory, MaintenanceMemoryPerCore,
-// MidxPacks, TipGraphBytesPerObject, MaxNewFilters, CompactBytesPerObject,
-// CompactWindowBytes' multiple — and the page no longer says what the cache
-// does.
+// MidxPacks, TipGraphBytesPerObject, TipGraphBaseBytes, MaxNewFilters,
+// CompactBytesPerObject, CompactWindowBytes' multiple — and the page no
+// longer says what the cache does.
 func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(sourcetree.Root(t), "docs", "concepts", "code-host.md")
@@ -1088,8 +1107,8 @@ func TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures(t *testing.T) {
 			"time", cache.MidxPacks, spell(t, cache.MidxMinInterval), fraction(t, cache.MidxDutyCycle)),
 		fmt.Sprintf("until %d packs have gathered outside it", cache.MidxRoundPacks),
 		fmt.Sprintf("holding %d packs or more gets an index", cache.MidxRoundPacks),
-		fmt.Sprintf("charged by the tail rather than the repository: %s bytes an object of the tail",
-			spaced(cache.TipGraphBytesPerObject)),
+		fmt.Sprintf("charged by the tail rather than the repository: %s bytes an object of the tail and %s "+
+			"whatever its length", spaced(cache.TipGraphBytesPerObject), amount(t, cache.TipGraphBaseBytes)),
 		fmt.Sprintf("it is charged the largest of theirs: %s bytes an object of the whole repository for its bitmap",
 			spaced(cache.PublishBytesPerObject)),
 		fmt.Sprintf("%s an object of the layer for its commit-graph layer", spaced(cache.GraphLayerBytesPerObject)),

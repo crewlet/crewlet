@@ -46,6 +46,16 @@ const (
 	// 20 GiB — the large reference model's 12 GB monorepo with two thirds
 	// of headroom. Every git node serving a repository caches it whole, so
 	// this is also what one repository may take of each such node's disk.
+	// And of ONE node's memory: a repository's bitmap is written once for
+	// the fleet, by the first git node whose background budget holds its
+	// publication — internal/code/cache's PublishBytesPerObject an object
+	// with a clone's room beside it, 840 bytes measured on the node pin —
+	// some 50 GB at this size's 60 million objects, which the large git node
+	// docs/guides/deployment.md names (96 GiB and 16 cores, about 68 GiB of
+	// background budget) holds. So the size is KEPT when weighed against
+	// memory as well: one such node gives the whole fleet the bitmap, and a
+	// fleet without one still serves the repository, without a bitmap, and
+	// refuses it nothing.
 	DefaultCodeRepoMaxBytes int64 = 20 << 30
 
 	// DefaultCodeDeletedRetentionDays is an unset

@@ -260,10 +260,11 @@ push — in about 70 to 130 seconds.
 
 **A git node is sized by its memory before its disk.** Every git process a
 node runs over a whole repository holds memory in proportion to the
-repository's objects, measured on git 2.43 over a source repository's history:
-writing the bitmap of its background index takes about 1 000 bytes an object,
-and a clone beside it about 240 more — about 1 240 an object. At about three
-million objects a gigabyte of a source repository's packs, that is nearly 4 GB
+repository's objects, measured over a source repository's history — the
+bitmap on the node pin, git 2.56.0, and a clone on git 2.43:
+writing the bitmap of its background index takes about 600 bytes an object,
+and a clone beside it about 240 more — about 840 an object. At about three
+million objects a gigabyte of a source repository's packs, that is about 2.5 GB
 of memory for each gigabyte of packs on disk; memory follows the objects rather
 than the bytes, so a repository of large binaries, far fewer objects to the
 gigabyte, needs far less. [The cache's Memory paragraph](code-host.md#the-cache-on-a-git-node)
@@ -279,13 +280,29 @@ its order whose advertised background budget holds the work, its home on a
 fleet of alike nodes — MERGES its packs ([Compaction](code-host.md#compaction))
 and PUBLISHES its bitmapped index as layers every other git node installs
 ([When a repository is published](code-host.md#when-a-repository-is-published)).
-A publication is charged the largest of its steps: its bitmap at 900 bytes an
-object of the whole repository and a clone's 240 beside it, 1 140 bytes an
-object — so a repository near the default `repo_max_bytes` needs ONE git node
-with the memory for its bitmap, for the whole fleet, and every other git node
-installs the layers in a few MiB of memory and serves through them
-([Sizing git nodes](../guides/deployment.md#sizing-git-nodes)). A merge is
-held to the same budget — about 500 bytes an object it merges, 240 more an
+A publication is charged the largest of its steps: its bitmap at 600 bytes an
+object of the whole repository and a clone's 240 beside it, 840 bytes an
+object — so a repository of N objects needs ONE git node whose background
+budget holds 840 × N bytes for it to be served with a bitmap anywhere, for the
+whole fleet, and every other git node installs the layers in a few MiB of
+memory and serves through them
+([Sizing git nodes](../guides/deployment.md#sizing-git-nodes)).
+Measured on the node pin over a source repository's history of a gigabyte,
+three million objects, from the in-memory store (one run of each, on two
+cores): a git node writing the whole bitmap of its own took 13.5 seconds and
+812 MiB; the maintainer's root publication of it held the same 812 MiB for
+its layer and bitmap (13.8 seconds) and 262 MiB for its commit-graph layer
+(13.5 seconds), once for the fleet; and a git node installing what it
+published synced the repository cold — its 64 packs and the layer's one
+part — in 1.4 seconds, its own code allocating 7.4 MiB beside the bytes it
+fetched, and counted every object through the bitmap 6 ms after its answer.
+The large reference model's 12 GB monorepo, some 36 million objects, is
+charged about 30 GB for its publication; what git holds writing it is an
+EXTRAPOLATION, never measured — the line through the bitmaps of 100 MB and
+the gigabyte puts it near 9 GB — because the 12 GB arm needs a machine of
+64 GB and the 5 GB arm, which would anchor the line nearer, more memory than
+these figures ran with. A merge is
+held to the same budget — about 550 bytes an object it merges, 240 more an
 object merged for a transfer's room beside them and six times
 `code.limits.max_blob_bytes` for its delta search, as measured: by what it
 merges, never by the repository's size, which would refuse a large
@@ -303,7 +320,7 @@ reservation](object-store.md#its-byte-reservation)).
 **Between publications, the tail is walked.** The packs pushed since a
 repository's last publication sit outside its layers, and every clone walks
 their objects without a bitmap. A publication is due once that tail holds
-64 packs, a sixteenth of the repository's objects, or 90 909 objects — a
+64 packs, a sixty-fourth of the repository's objects, or 90 909 objects — a
 second of walk at the slowest a walk is held to, and about 21 MiB of a clone's
 memory — whichever comes first, and the maintainer publishes a repository at
 most every 10 minutes or every ten times its last publication's build,

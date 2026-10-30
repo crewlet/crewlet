@@ -162,14 +162,14 @@ var alarmMeaning = map[Kind]string{
 		"both hold only while every node and that member keep within that hour of the " +
 		"fleet's clock.",
 	KindCodeMaintenanceRefused: "This node's git cache cannot write the bitmap " +
-		"of some repositories, because a bitmap over each (about 1000 bytes " +
+		"of some repositories, because a bitmap over each (about 600 bytes " +
 		"an object, with room for a clone of the repository beside it) needs " +
 		"more memory than the node can give its background work: its memory, " +
 		"or its cgroup's limit, less what it keeps for its git lanes, the " +
 		"store, the broker and the engine. Those repositories are indexed " +
 		"without a bitmap and served more slowly: a clone walks their history. " +
 		"A repository this node maintains whose next published layer it cannot " +
-		"write counts too — its layer's bitmap is 900 bytes an object of the " +
+		"write counts too — its layer's bitmap is 600 bytes an object of the " +
 		"repository — since no git node then publishes it, and every git node " +
 		"serves the packs pushed since its last publication outside every bitmap.",
 	KindCodeCompactionBehind: "Repositories this node maintains — the git node " +

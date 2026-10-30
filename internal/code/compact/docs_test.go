@@ -18,12 +18,12 @@ import (
 // docs/concepts/scaling.md tell an operator when a repository is published —
 // the tail's packs, its share of the objects and its objects, the debounce,
 // the ceiling, the pace and the duty cycle, the chain's split and repack
-// rules — in the constants' own figures, held here, so the re-derivation
-// BenchmarkMidx's arms make of the provisional ones (M3-decisions M3-O39)
-// cannot leave a page saying what the code no longer does.
+// rules — in the constants' own figures, held here, so a re-derivation by
+// BenchmarkMidx's arms (internal/code/cache), on this pin or the next, cannot
+// leave a page saying what the code no longer does.
 //
-// Mutation: change PublishPacks or PublishTailObjects, and neither page says
-// any longer when a repository is published.
+// Mutation: change PublishPacks, PublishShare or PublishTailObjects, and
+// neither page says any longer when a repository is published.
 func TestThePagesStateThePublicationsCadence(t *testing.T) {
 	t.Parallel()
 	tail := fmt.Sprintf("%d packs, or a %s of its objects, or %s objects", compact.PublishPacks,
@@ -98,7 +98,8 @@ func numberWord(t *testing.T, n int) string {
 // fractionWord is 1/n as the pages spell a share in words.
 func fractionWord(t *testing.T, n int) string {
 	t.Helper()
-	words := map[int]string{2: "half", 4: "quarter", 8: "eighth", 16: "sixteenth", 32: "thirty-second"}
+	words := map[int]string{2: "half", 4: "quarter", 8: "eighth", 16: "sixteenth", 32: "thirty-second",
+		64: "sixty-fourth"}
 	w, ok := words[n]
 	if !ok {
 		t.Fatalf("the pages spell a 1/%d share in words: add it here as they write it", n)

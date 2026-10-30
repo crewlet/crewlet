@@ -46,9 +46,9 @@ func TestAPublicationIsDueByItsRow(t *testing.T) {
 	settled := dueAt.Add(-time.Hour)
 	long := dueAt.Add(-24 * time.Hour)
 	never := time.Time{}
-	// A repository of a million objects in 100 packs: a sixteenth of it is
-	// 62 500 objects, under compact.PublishTailObjects, so the share is the
-	// objects' bound here.
+	// A repository of a million objects in 100 packs: its share is 15 625
+	// objects (a sixty-fourth), under compact.PublishTailObjects, so the share
+	// is the objects' bound here.
 	const live, objects = int64(100), int64(1_000_000)
 	share := objects / compact.PublishShare
 	for _, c := range []struct {
@@ -114,9 +114,9 @@ func TestAPublicationIsDueByItsRow(t *testing.T) {
 // each one outside the chain — so the largest repository the defaults admit,
 // some 60 million objects, is due once its tail holds
 // compact.PublishTailObjects objects (a second of walk at
-// gitproc.WalkPerObject) in a few packs, where its sixteenth would wait for
-// 3.75 million (24–41 s of walk added to every clone); while a small one, whose
-// sixteenth is fewer, is due at that sixteenth first.
+// gitproc.WalkPerObject) in a few packs, where its share, a sixty-fourth,
+// would wait for 937 500 (some ten seconds of walk added to every clone);
+// while a small one, whose share is fewer, is due at that share first.
 //
 // Mutation: hold the tail's objects to the share alone, and the 60 million
 // arm is not due.
@@ -139,15 +139,15 @@ func TestALargeRepositorysTailIsBoundedInObjects(t *testing.T) {
 			compact.PublishTailObjects, largest)
 	}
 	const small = int64(200_000)
-	sixteenth := small / compact.PublishShare
-	if sixteenth >= compact.PublishTailObjects {
+	share := small / compact.PublishShare
+	if share >= compact.PublishTailObjects {
 		t.Fatalf("the case needs a repository whose share is under the bound: %d objects' share is %d",
-			small, sixteenth)
+			small, share)
 	}
-	if !compact.Due(candidate(30, 10, small, small-sixteenth, long, long, 0), long, dueAt) {
-		t.Errorf("a tail of a sixteenth, %d objects, of a %d-object repository is not due", sixteenth, small)
+	if !compact.Due(candidate(30, 10, small, small-share, long, long, 0), long, dueAt) {
+		t.Errorf("a tail of its share, %d objects, of a %d-object repository is not due", share, small)
 	}
-	if compact.Due(candidate(30, 10, small, small-sixteenth+1, long, long, 0), long, dueAt) {
-		t.Errorf("a tail one object short of a sixteenth of a %d-object repository is due", small)
+	if compact.Due(candidate(30, 10, small, small-share+1, long, long, 0), long, dueAt) {
+		t.Errorf("a tail one object short of its share of a %d-object repository is due", small)
 	}
 }

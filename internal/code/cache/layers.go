@@ -37,8 +37,11 @@ import (
 // byte for byte as the maintainer's git wrote it, both chain files written by
 // this cache from the rows' order. No node writes a multi-pack-index layer of
 // its own: on the node pin a bitmapped layer costs the walk of the WHOLE
-// history however few objects it adds (1.52–1.89 s and 127–132 MiB over a
-// 220 000-object history against 1.43 s and 168 MiB for the whole index), and
+// history however few objects it adds (BenchmarkMidx's step=tip, a layer over
+// 64 pushes of a few objects on a published root: 0.65 s and 88 MiB over
+// 100 MB and 15.1 s and 254 MiB over a gigabyte, against 0.94 s and 158 MiB
+// and 11.5 s and 812 MiB for the whole index and its bitmap — its memory
+// following the history, never the few hundred objects it adds), and
 // a layer without its bitmap turns off every bitmap beneath it — so a chain of
 // node-local tips would be the whole rewrite paid more often. So the packs
 // that arrived since the last publication stay OUTSIDE the chain, the TAIL,

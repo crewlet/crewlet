@@ -795,12 +795,12 @@ const (
 	//     once on the data node and held about as large by the cache;
 	//   - not served, the cache treats every pack file no row names as one no
 	//     row accounts for and drops the repository's commit-graph with it —
-	//     rewritten from the whole history at 56 bytes an object of memory
+	//     rewritten from the whole history at 67 bytes an object of memory
 	//     (the cache's GraphBytesPerObject), and until then a walk that would
 	//     stop on its generation numbers walks by date (a push dated before
 	//     its parent: 6.9 s over a gigabyte, against 0.37 s with the graph,
-	//     docs/concepts/code-host.md) — and a graph of some 43 000 objects, a
-	//     repository of about fifteen megabytes, already holds the page's
+	//     docs/concepts/code-host.md) — and a graph of some 36 000 objects, a
+	//     repository of about twelve megabytes, already holds the page's
 	//     memory;
 	//   - a page is some 9 400 pushes to ONE repository since a cache last
 	//     synced it (at most 16/15 retirements a push, a compaction below
@@ -1055,6 +1055,11 @@ const (
 	// would make this the largest count their rate downloads in 27 s; a round
 	// past the spool wait with its downloads inside them is a finding against
 	// the round's index (internal/code/cache's MidxRoundPacks), never this.
+	// KEPT with a published chain: its layer's part rides the same download
+	// queue as the packs, so a round that installs one adds one GET and the
+	// layer's check and placement — the same arm under one published layer
+	// (layers=chain/fetch=16, 2026-10-29) ended at 28.1 s against 26.2 s
+	// without it, seven per cent, inside the spool wait.
 	MaxPacksPerRepo = 2_048
 
 	// CompactFactor is the geometric progression a home keeps a repository's
@@ -1195,12 +1200,17 @@ const (
 	// deeper chain is a slower answer on every git node; past the bound a
 	// publisher merges the top layers whatever their sizes.
 	//
-	// PROVISIONAL (M3-decisions M3-O39): nothing yet measures what a chain's
-	// depth costs a lookup — no arm of BenchmarkPackLookup serves through a
-	// chain. The layers={1,8,32,64} arm the layer measurements add to it
-	// confirms the bound or moves it: thirty-two stays unless a lookup
-	// through thirty-two layers costs more than twice one through a single
-	// layer, and otherwise becomes the longest chain that does not.
+	// CONFIRMED by what a chain's depth costs (internal/code/cache's
+	// BenchmarkPackLookup layers={1,8,32,64}: the 100 MB source history's 64
+	// pushes under a chain of that many bitmapped layers, each over an equal
+	// share of the packs; git 2.56.0, one bounded run of each arm —
+	// -benchtime 1x, one count — on two E-cores of an Intel Core Ultra 7
+	// 265U, 2026-10-29): a lookup of 10 000 ids drawn from every object took
+	// 4.5 µs an id through one layer, 4.8 through eight, 6.4 through
+	// thirty-two and 7.8 through sixty-four, and a count of main's objects
+	// through the bitmaps 3.9, 3.8, 6.2 and 7.3 ms. Thirty-two layers cost a
+	// lookup 1.4 times one layer's, under the twice past which the bound
+	// would come down to the longest chain that does not, so it stays.
 	MaxPublishedLayers = 32
 
 	// LayerPartBytes is the most bytes one stored object of a layer holds:

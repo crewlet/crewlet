@@ -1857,11 +1857,15 @@ func TestTheMaintainersStepsAreTheDeclaredWrites(t *testing.T) {
 			t.Fatalf("%s holds an index over %d packs (bitmap %t) and graph %t; the case needs both packs "+
 				"indexed without a bitmap, and the graph", plain, packs, bitmap, graph)
 		}
-		// And the node's tip over an installed chain.
+		// And the node's tip over an installed chain, on a budget of its own
+		// charge: the fixed part its filters hold (TipGraphBaseBytes) is past
+		// the budget that refused plain's bitmap, and plain, indexed a moment
+		// ago, is not due again whatever the budget.
 		chained := w.repo(t, 3)
 		p := w.pushN(t, chained, 3)
 		w.log.publish(chained, w.buildChain(t, p[:2]), nil)
 		w.sync(t, c, chained).Release()
+		cache.SetMaintenanceBudget(c, cache.TipCharge(c, chained))
 		if ran := cache.MaintainerPass(c); len(ran) != 1 || ran[0] != chained {
 			t.Fatalf("the third pass ran %v, want %s's tip", ran, chained)
 		}

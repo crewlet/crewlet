@@ -1356,11 +1356,11 @@ func derivedIdentities(t *testing.T, dir string) map[string][4]int64 {
 // that index; a pack fetched again whose .pack alone failed is the same pack
 // byte for byte — its name is its checksum, its bundle held to its row — so
 // every offset and every commit they record holds over the new files, and they
-// stay: no index repair, no rewrite of the bitmap over the whole history (16
-// to 21 s a gigabyte), and no clone without a bitmap meanwhile — or for good,
-// where the node's memory no longer holds the bitmap's charge. A pack whose
-// .idx failed is another matter: what was built from that index may be wrong,
-// so they go and are written again at once.
+// stay: no index repair, no rewrite of the bitmap over the whole history (12
+// to 14 s a gigabyte up to a gigabyte, more past it), and no clone without a
+// bitmap meanwhile — or for good, where the node's memory no longer holds the
+// bitmap's charge. A pack whose .idx failed is another matter: what was built
+// from that index may be wrong, so they go and are written again at once.
 //
 // Mutation: drop the derived files before any placement over a present pack
 // (the .pack arm's bitmap is replaced and an index repair made due).

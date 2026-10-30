@@ -746,15 +746,19 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # unless CREWLET_BENCH_S3_BUCKET names a bucket (internal/objstore/s3obj's
 # package doc), and the arms whose fixture takes minutes and gigabytes —
 # internal/code/cache's cold syncs of 2 048 and of 10 000 pushes, its
-# 10 000-pack repositories, its 5 GB index and its gigabyte split into
-# hundreds of packs,
+# 10 000-pack repositories, its 5 GB index and its published layers, its
+# gigabyte split into hundreds of packs, its installer catching up 10 000
+# repositories and BenchmarkBigNode's 5 GB monorepo,
 # internal/code/host's gigabyte history, hundred thousand refs,
 # 100 000-file tree and a box's million-file one, internal/code/query's
-# gigabyte history under a 100 000-file tree read by object id, and
-# internal/jsapi's streams of a
+# gigabyte history under a 100 000-file tree read by object id and its
+# gigabyte history blamed and logged by path, and internal/jsapi's streams of a
 # million and of three million subjects (about five minutes a count on four
 # cores) — unless CREWLET_BENCH_LARGE=1; an arm that silently did not run
-# reads as one that measured nothing worth showing. Not through
+# reads as one that measured nothing worth showing. BenchmarkBigNode's 12 GB
+# monorepo also needs CREWLET_BENCH_BIGNODE=1 and a machine of at least 64 GB:
+# its fixture builds for hours, so it runs alone, under the day's timeout
+# CREWLET_BENCH_LARGE=1 gives a run (BENCH_TIMEOUT below). Not through
 # skipgate, for the same reason: an allowance there would make that skip
 # silent again. The code host's pools and every client run the node pin, which
 # GIT_ENV puts first on PATH as it does for every test target, so a figure is
@@ -784,9 +788,19 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # which). A fixture is built once a run whatever BENCH_COUNT says,
 # since go test repeats only a leaf benchmark a count: the gigabyte's is ten
 # minutes and its arms four a count, the tree's eleven and its clones eight.
+# internal/code/cache's published layers' arms came after those runs, and add
+# — an ESTIMATE from each arm's one bounded count on two cores, never a run of
+# six — about an hour and a half at six counts (12 minutes a count, a quarter
+# of an hour of fixtures once), and with CREWLET_BENCH_LARGE=1 about five and
+# a half more: their 5 GB arms (some 25 minutes a count, a whole-history walk
+# growing sevenfold from a gigabyte to 5 GB as git 2.43's did),
+# BenchmarkBigNode's 5 GB monorepo and the installer's 10 000-repository
+# catch-up (a quarter of an hour a count, most of it the 20 000 syncs that
+# set each count up) — about thirteen hours for the package at six counts.
 # The timeout is each package's, as -p 1 runs them in turn. Eight hours holds
-# six counts of everything with room for a slower machine; a real bucket's
-# arm is bounded by its link.
+# six counts of everything a default run measures with room for a slower
+# machine, and a day six counts of the large arms too; a real bucket's arm is
+# bounded by its link.
 BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
                  ./internal/objstore/natsobj ./internal/objstore/natsobj/replicated \
                  ./internal/objstore/s3obj ./internal/statelog ./internal/store \
@@ -797,7 +811,7 @@ BENCH_PKGS    ?= ./internal/objstore ./internal/objstore/memobj \
 BENCH_PATTERN ?= .
 BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
-BENCH_TIMEOUT ?= 8h
+BENCH_TIMEOUT ?= $(if $(filter 1,$(CREWLET_BENCH_LARGE)),24h,8h)
 
 bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes and clones, a coding box's git, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))

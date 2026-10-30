@@ -32,38 +32,61 @@ import (
 const PublishPoll = time.Minute
 
 // The publication's cadence — when a repository's tail is worth a layer
-// ([Due]). Each states its reason, and the ones marked PROVISIONAL are
-// re-derived by BenchmarkMidx's arms in internal/code/cache (M3-decisions
-// M3-O39): the old value and the new one in the commit that measures them.
+// ([Due]). Each states its reason; the ones MEASURED are BenchmarkMidx's arms
+// in internal/code/cache — git 2.56.0, one bounded run of each arm
+// (-benchtime 1x, one count) on two E-cores of an Intel Core Ultra 7 265U,
+// 2026-10-29, over gittest.History's composition at 100 MB and a gigabyte.
 const (
 	// PublishPacks is a tail worth a publication by its PACKS: a pack outside
-	// the chain costs every request that reaches it a lookup of its own
-	// index, 0.06–0.09 ms a pack measured at 100 MB–1 GB — the own-mode
-	// index's reason for cache.MidxPacks, moved to the layer that replaces
-	// it. PROVISIONAL: BenchmarkMidx's stale arms on the pin.
+	// the chain costs every request that reaches it a walk of its own
+	// commits and trees — the own-mode index's reason for cache.MidxPacks,
+	// moved to the layer that replaces it. SIXTY-FOUR, MEASURED
+	// (stale=k/mode=chain, pushes of 4 KiB beside a published root; and
+	// step=publish/layer=tail, the publication over sixty-four of them):
+	// counting a clone's objects through the chain costs about 0.14 ms a
+	// pack outside it at 100 MB and 0.07 ms at the gigabyte, against a
+	// publication of 0.66 s and 9.9 s — so a repository published every M
+	// pushes, each of its sixteen requests a push paying M/2 packs' walk, is
+	// cheapest at M = √(2T/qδ): 25 at 100 MB and 129 at the gigabyte. A
+	// JUDGMENT CALL between the two: sixty-four, near their geometric middle
+	// (57), costs each about a quarter to a half past its own least, where
+	// either least would cost the other end nearly three times its own; past
+	// a minute's build the duty cycle binds before it anyway.
 	PublishPacks = 64
 	// PublishShare is a tail worth a publication by its SHARE of the
-	// repository's objects: the tail's objects are walked unbitmapped by every
-	// clone and fetch that reaches them — 0.09 s at a sixteenth of a 219 679
-	// object history outside the chain, against 0.004 s inside it and 1.1 s
-	// with no index (git 2.56.0) — so a SMALL repository is published once
-	// its tail holds a sixteenth of its objects. A share alone does not bound
-	// a large one's tail: PublishTailObjects does. PROVISIONAL: BenchmarkMidx's
-	// share= arm.
-	PublishShare = 16
+	// repository's objects: the tail's objects are walked, never read off the
+	// bitmap, and packed by every clone that reaches them — so a SMALL
+	// repository is published once its tail holds a sixty-fourth of its
+	// objects. SIXTY-FOURTH, MEASURED (share=…: a clone of main with the
+	// history's last 1, 4 and 16 of its 64 pushes outside a published root):
+	// a sixty-fourth added nothing a run shows to a clone at 100 MB (0.64 s
+	// either way) and at the gigabyte (6.53 s against 6.60), a sixteenth a
+	// quarter (0.79 against 0.64 s; 8.40 against 6.60 s), and a quarter more
+	// than doubled it (1.42 s; 14.7 s) — so the largest share whose tail adds
+	// at most a tenth to a clone at both sizes is the sixty-fourth. 16, the
+	// provisional share this replaced, priced a tail by a count of its
+	// objects (0.09 s at a sixteenth of 219 679 objects), not by the clone
+	// that also packs them. A share alone does not bound a large repository's
+	// tail: PublishTailObjects does.
+	PublishShare = 64
 	// PublishTailObjects is a tail worth a publication by its OBJECTS, the
 	// ABSOLUTE bound: a tail's cost is its objects, never its share — every
 	// clone, the installer's canary and the node's tip commit-graph walk every
-	// object outside the chain, at about 6.5 µs an object on git 2.56.0 and at
-	// most gitproc.WalkPerObject, plus gitproc.TransferBytesPerObject of a
-	// clone's memory each — so this many objects cost a clone at most a
-	// second of walk and some 21 MiB. A sixteenth of the largest repository
-	// the defaults admit, some 60 million objects, is 3.75 million: 24–41 s of
-	// walk added to every clone of it, while compaction keeps such a tail to a
-	// few dozen packs and PublishPacks never fires there. A repository is due
-	// at whichever of the share and this bound its tail reaches first.
-	// PROVISIONAL: BenchmarkMidx's tail= arm re-derives it where the walk is
-	// not under gitproc.WalkPerObject.
+	// object outside the chain, at most gitproc.WalkPerObject an object, plus
+	// gitproc.TransferBytesPerObject of a clone's memory each — so this many
+	// objects cost a clone at most a second of walk and some 21 MiB. A
+	// sixty-fourth of the largest repository the defaults admit, some 60
+	// million objects, is 940 000: 10 s of walk added to every clone of it,
+	// while compaction keeps such a tail to a few dozen packs and PublishPacks
+	// never fires there. A repository is due at whichever of the share and
+	// this bound its tail reaches first. MEASURED (tail=…, at the gigabyte:
+	// a quarter of it, it, and four times it outside a published root): the
+	// canary walks a tail object in 2.7–3.3 µs and the tip's write in
+	// 1.1–2.8, and a clone pays 11.0 µs for each, packing included (the line
+	// through the three clones: 7.28, 7.83 and 11.0 s), which is
+	// gitproc.WalkPerObject's own figure, so the bound stays a second over it
+	// — the clone at the bound ran 1.23 s past the chained clone with no tail
+	// (6.60 s) in its one run.
 	PublishTailObjects = int64(time.Second / gitproc.WalkPerObject)
 	// PublishDebounce is how long a burst of pushes stands still before its
 	// tail is published once, rather than a layer for each of its pushes —
@@ -77,8 +100,16 @@ const (
 	PublishMaxWait = 10 * time.Minute
 	// PublishMinInterval is the least time between two publications of one
 	// repository, and between two REPAIRS — cache.MidxMinInterval's reason: a
-	// layer's build walks the whole history. PROVISIONAL: max(10 minutes, 10
-	// × BenchmarkMidx's step=publish at 5 GB).
+	// layer's build walks the whole history. TEN MINUTES, the larger of ten
+	// minutes and ten times a publication at 5 GB, as cache.MidxMinInterval
+	// is set beside its run: a later publication (step=publish/layer=tail)
+	// took 0.66 s at 100 MB and 9.9 s at the gigabyte, its walk of the
+	// history growing faster than the bytes, which at the gigabyte's growth
+	// is about a minute at 5 GB — ten minutes within that extrapolation's
+	// error, since the 5 GB arm (under CREWLET_BENCH_LARGE) has not run on
+	// the machine these did. A JUDGMENT CALL on that figure, and a safe one:
+	// past a minute's build PublishDutyCycle holds the repository to a tenth
+	// of the maintainer's time whatever this says.
 	PublishMinInterval = 10 * time.Minute
 	// PublishDutyCycle holds a repository's publications to at most a tenth
 	// of the time of the node that runs them: the next waits this many times

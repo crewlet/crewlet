@@ -490,6 +490,9 @@ const (
 	drawsNext
 	drawsFiles
 	drawsReuse
+	// drawsTail is BenchmarkMidx's published fixture's tail of pushes and
+	// the ids its chain lookups draw.
+	drawsTail
 )
 
 // pushStream is a fast-import stream of n commits on main, the i'th adding
@@ -731,20 +734,22 @@ func coldWorld(b *testing.B, bucket string, firstByte time.Duration) *syncWorld 
 	return nil
 }
 
-// coldRepo is a repository of shape's pushes in w's log and store, and the
-// bytes its bundles hold.
-func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64) {
+// coldRepo is a repository of shape's pushes in w's log and store, the bytes
+// its bundles hold, its pack rows, one a push, oldest first, and each push's
+// commit.
+func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64, []code.PackRow, []string) {
 	b.Helper()
 	src := gittest.Empty(b)
 	gittest.FastImport(b, w.client, src, pushStream(shape.packs, shape.size))
-	pushes := eachPush(commitsOf(b, w.client, src, "main"))
+	commits := commitsOf(b, w.client, src, "main")
+	pushes := eachPush(commits)
 	rows, total := w.storePushes(b, src, pushes)
 	if err := os.RemoveAll(src); err != nil {
 		b.Fatal(err)
 	}
 	repo := w.logRepo(1)
 	w.writePushes(repo, pushes, rows)
-	return repo, total
+	return repo, total, rows, commits
 }
 
 // BenchmarkColdSync is a git node's FIRST sync of a repository it has never
@@ -791,6 +796,19 @@ func (w *syncWorld) coldRepo(b *testing.B, shape coldShape) (string, int64) {
 // to the spool wait itself; cpu-ms/pack is the process's CPU a bundle, user
 // and system — the S3 fake's server's among it, since it runs in the process
 // and on the same cores, which a real bucket's does not.
+//
+// A PUBLISHED repository's (coldLayered, at S3's 100 and 200 ms and fetch=16):
+// layers=chain is the compacted shape and the bound's under one root layer
+// the maintainer published, and layers=chain21 the compacted shape under the
+// twenty-one layers the default repo_max_bytes' chain reaches — the round
+// installing the chain before it answers, its parts in the same download
+// queue as its packs: packs/op and parts/op its GETs, ns/op its answer, and
+// count-s and clone-s the first count of every object through the bitmap
+// and the first clone after it — beside the same shape's arm above, which
+// publishes nothing. install=catchup is the node's INSTALLER placing one
+// one-part layer on each of 1 000 repositories (10 000 under
+// CREWLET_BENCH_LARGE=1) whose copies it already holds — a restore's
+// catch-up (catchUp).
 func BenchmarkColdSync(b *testing.B) {
 	quiet(b)
 	type arm struct {
@@ -832,7 +850,7 @@ func BenchmarkColdSync(b *testing.B) {
 					gittest.Large(b, fmt.Sprintf("%d pushes packed and stored", shape.packs))
 				}
 				w := coldWorld(b, a.bucket, a.firstByte)
-				repo, total := w.coldRepo(b, shape)
+				repo, total, rows, tips := w.coldRepo(b, shape)
 				for _, fetch := range fetches {
 					b.Run(fmt.Sprintf("fetch=%d", fetch), func(b *testing.B) {
 						root := b.TempDir()
@@ -867,7 +885,32 @@ func BenchmarkColdSync(b *testing.B) {
 						b.ReportMetric(float64(cpu)/float64(shape.packs*b.N)/1e6, "cpu-ms/pack")
 					})
 				}
+				// THE PUBLISHED ARMS LAST: each publishes a chain on the
+				// repository, which every cold sync after it installs.
+				if a.bucket != "fake" || !slices.Contains(s3FirstBytes, a.firstByte) ||
+					(shape != compacted && shape != bound) {
+					return
+				}
+				b.Run(fmt.Sprintf("layers=chain/fetch=%d", cache.FetchConcurrency), func(b *testing.B) {
+					coldLayered(b, w, repo, rows, tips, a.firstByte, 1, cache.FetchConcurrency)
+				})
+				if shape == compacted {
+					b.Run(fmt.Sprintf("layers=chain21/fetch=%d", cache.FetchConcurrency), func(b *testing.B) {
+						coldLayered(b, w, repo, rows, tips, a.firstByte, 21, cache.FetchConcurrency)
+					})
+				}
 			})
+		}
+	}
+	for _, firstByte := range s3FirstBytes {
+		for _, repos := range []int{1_000, 10_000} {
+			b.Run(fmt.Sprintf("install=catchup/firstbyte=%dms/repos=%d", firstByte.Milliseconds(), repos),
+				func(b *testing.B) {
+					if repos > 1_000 {
+						gittest.Large(b, "10 000 repositories synced, each then handed a published layer")
+					}
+					catchUp(b, firstByte, repos)
+				})
 		}
 	}
 }
@@ -1424,7 +1467,9 @@ func packOutFiltered(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir, filt
 }
 
 // BenchmarkMidx is what indexing a repository's packs costs, and what the
-// maintainer's index stops saving as pushes land outside it.
+// maintainer's index stops saving as pushes land outside it — in OWN mode,
+// the node's own index, and in CHAIN mode, the layers a repository's
+// maintainer publishes for every git node (layers_bench_test.go).
 //
 //   - index=round is the multi-pack-index a full round writes before it
 //     answers once it leaves MidxRoundPacks packs or more: no bitmap, a
@@ -1434,9 +1479,10 @@ func packOutFiltered(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir, filt
 //     then the commit-graph, in the maintenance lane at one thread — the
 //     run MidxMinInterval and MidxDutyCycle pace, and
 //     gitproc.PackWorkDeadline bounds.
-//   - memory/step=… (100MB and 1GB) is the memory each git process the cache
-//     runs over the whole repository holds — the figures its memory budget
-//     charges by (memoryArms says which).
+//   - memory/step=… (100MB and 1GB) is the memory a clone and a check hold
+//     over the whole repository — the figures its memory budget charges a
+//     transfer and a check by (memoryArms says which); step=whole/write=…
+//     is its writes'.
 //   - lookup=on|off (1GB, and 5GB under CREWLET_BENCH_LARGE) is the
 //     maintainer's bitmap written with its lookup table (ServeConfig's
 //     pack.writeBitmapLookupTable) and without it, the maintainer run again
@@ -1445,11 +1491,15 @@ func packOutFiltered(b *testing.B, pool *gitproc.Pool, c *cache.Cache, dir, filt
 //     included), op=fetch the pack a fetch of main's newest commit is
 //     (main~1..main) — two requests that open the bitmap to answer a few
 //     objects.
-//   - stale=k (100MB and 1GB) is once k pushes of stalePushBytes have
-//     landed outside the maintainer's index: op=count counts main's objects
-//     from the bitmap, the walk a bitmap that many pushes behind leaves a
-//     clone to do, and op=clone is the pack a clone of main is served — the
-//     price MidxPacks weighs against a run.
+//   - step=…, stale=k/mode=chain, share=… and tail=… are the published
+//     layers' arms (layerArms.run): every step a maintainer, a publisher and
+//     a node serving a chain runs, each over a scratch of the history's
+//     packs.
+//   - stale=k/mode=own (100MB and 1GB) is once k pushes of stalePushBytes
+//     have landed outside the maintainer's index: op=count counts main's
+//     objects from the bitmap, the walk a bitmap that many pushes behind
+//     leaves a clone to do, and op=clone is the pack a clone of main is
+//     served — the price MidxPacks weighs against a run.
 //
 // Each over a repository of 64 packs of the history above, the previous
 // index and graph removed with the timer stopped. size is the packs' bytes,
@@ -1468,11 +1518,6 @@ func BenchmarkMidx(b *testing.B) {
 			w.processes = runtime.NumCPU()
 			repo, src, commits, rows, total, objects := w.midxRepo(b, arm.bytes)
 			stale := arm.bytes <= 1_000_000_000
-			if !stale {
-				if err := os.RemoveAll(src); err != nil {
-					b.Fatal(err)
-				}
-			}
 			clk := newClock()
 			c := w.open(b, clk.on, func(o *cache.Options) { o.MaxBytes, o.Logger = 1<<40, nil })
 			s := w.sync(b, c, repo)
@@ -1508,6 +1553,10 @@ func BenchmarkMidx(b *testing.B) {
 			if arm.bytes >= 1_000_000_000 {
 				w.lookupArms(b, c, s, repo)
 			}
+			// THE PUBLISHED LAYERS' ARMS, before the own-mode stale arms below
+			// replace the synced copy's incarnation: their scratches link its
+			// packs.
+			newLayerArms(b, w, c, s, src, commits, rows, arm.bytes).run(b)
 			if !stale {
 				// No memory arms over 5 GB: its bitmap holds some 10 GB
 				// beside the history the in-memory store already holds,
@@ -1528,7 +1577,7 @@ func BenchmarkMidx(b *testing.B) {
 				}
 				s.Release()
 				s = w.sync(b, c, repo)
-				b.Run(fmt.Sprintf("stale=%d/op=count", k), func(b *testing.B) {
+				b.Run(fmt.Sprintf("stale=%d/mode=own/op=count", k), func(b *testing.B) {
 					for b.Loop() {
 						_, err := w.pool.Run(b.Context(), gitproc.Cmd{
 							Dir:    s.Dir,
@@ -1540,7 +1589,7 @@ func BenchmarkMidx(b *testing.B) {
 						}
 					}
 				})
-				b.Run(fmt.Sprintf("stale=%d/op=clone", k), func(b *testing.B) {
+				b.Run(fmt.Sprintf("stale=%d/mode=own/op=clone", k), func(b *testing.B) {
 					for b.Loop() {
 						packOut(b, w.pool, c, s.Dir, "refs/heads/main")
 					}
@@ -1587,7 +1636,7 @@ func BenchmarkVerify(b *testing.B) {
 				total, objects int64
 			)
 			if arm.bytes == 0 {
-				repo, total = w.coldRepo(b, coldShape{packs: 5})
+				repo, total, _, _ = w.coldRepo(b, coldShape{packs: 5})
 			} else {
 				var src string
 				repo, src, _, _, total, objects = w.midxRepo(b, arm.bytes)
@@ -1744,42 +1793,37 @@ func (w *syncWorld) lazyBlob(b *testing.B, c *cache.Cache, s cache.Synced) strin
 
 // memorySteps are what BenchmarkMidx's memory arms price, in the order they
 // run: each git process a cache runs over a whole repository, with what it
-// finds in the incarnation when it starts.
+// finds in the incarnation when it starts. Its WRITES — the index, its bitmap
+// and the commit-graph — are step=whole's (layers_bench_test.go), over every
+// pack after a tail of pushes, as a maintainer writes them.
 var memorySteps = []struct {
 	name string
 	// args is the process; none is a clone (packOut), run in the read lane as
 	// a request's transfer runs; the rest run in the maintenance lane.
 	args []string
 	// index is the multi-pack-index the incarnation holds when it starts:
-	// "" none, "plain" one without a bitmap, "bitmap" the maintainer's.
+	// "plain" one without a bitmap, "bitmap" the maintainer's.
 	index string
 	// graph: the commit-graph is there when it starts.
 	graph bool
 }{
-	{name: "index", args: []string{"multi-pack-index", "write", "--no-progress"}},
 	{name: "clone-walk", index: "plain"},
-	{name: "bitmap", args: []string{"multi-pack-index", "write", "--bitmap", "--no-progress"}},
-	{name: "graph", args: []string{"commit-graph", "write", "--reachable", "--no-progress"}, index: "bitmap"},
 	{name: "clone", index: "bitmap", graph: true},
 	{name: "fsck", args: []string{"fsck", "--connectivity-only", "--no-dangling", "--no-progress"}, index: "bitmap",
 		graph: true},
 }
 
 // memoryArms are BenchmarkMidx's memory/step=… arms over repo, synced in s:
-// the memory each git process a cache runs over the whole repository holds —
-// the figures the node's memory budget charges by (BitmapBytesPerObject,
-// IndexBytesPerObject, GraphBytesPerObject, FsckBytesPerObject,
-// gitproc.TransferBytesPerObject). Each is the peak ANONYMOUS memory of the one
-// git process, sampled every millisecond from /proc (gittest.PeakAnon; Linux only —
-// elsewhere only the times are reported), divided by the objects the packs
-// hold: the packs' own pages it maps in are not counted, since the kernel
-// takes those back under pressure rather than killing anybody.
+// the memory a clone and a check of the whole repository hold — the figures
+// the node's memory budget charges a transfer and a check by
+// (gitproc.TransferBytesPerObject, FsckBytesPerObject). Each is the peak
+// ANONYMOUS memory of the one git process, sampled every millisecond from
+// /proc (gittest.PeakAnon; Linux only — elsewhere only the times are
+// reported), divided by the objects the packs hold: the packs' own pages it
+// maps in are not counted, since the kernel takes those back under pressure
+// rather than killing anybody. The state each starts from is written by the
+// maintainer's declared writes (cache.DerivedFiles).
 //
-//   - step=index is a multi-pack-index without a bitmap — a full round's own,
-//     and the maintainer's where the node cannot hold the bitmap.
-//   - step=bitmap is the maintainer's index with its bitmap: a walk of the
-//     whole history.
-//   - step=graph is the commit-graph a run writes after its index.
 //   - step=clone-walk and step=clone are the pack a clone of main is served
 //     (packOut) with only the index without a bitmap and with the
 //     maintainer's bitmap — what one transfer of the repository holds beside
@@ -1803,12 +1847,12 @@ func (w *syncWorld) memoryArms(b *testing.B, c *cache.Cache, s cache.Synced, rep
 		}
 		switch index {
 		case "plain":
-			run(b, memorySteps[0].args)
+			run(b, declaredArgs(b, cache.StepIndex, cache.TriggerMaintainer))
 		case "bitmap":
-			run(b, memorySteps[2].args)
+			run(b, declaredArgs(b, cache.StepBitmap, cache.TriggerMaintainer))
 		}
 		if graph {
-			run(b, memorySteps[3].args)
+			run(b, declaredArgs(b, cache.StepGraph, cache.TriggerMaintainer))
 		}
 	}
 	for _, step := range memorySteps {
@@ -1882,6 +1926,10 @@ const lookupFetch = 4
 //   - op=clone is the pack a clone of main is served — pack-objects over the
 //     whole history: the request a cold cache was synced for, and the first
 //     a coding run's fresh sandbox makes.
+//
+// layers=… (100MB) is the same history's 64 pushes under a PUBLISHED chain of
+// that many layers (layerLookupArms): what a lookup pays per layer of a chain
+// a node installs, which code.MaxPublishedLayers bounds.
 func BenchmarkPackLookup(b *testing.B) {
 	quiet(b)
 	for _, size := range lookupSizes {
@@ -1904,6 +1952,9 @@ func BenchmarkPackLookup(b *testing.B) {
 					}
 					lookupArm(b, w, root, src, commits, packs, oids, have)
 				})
+			}
+			if size.bytes <= 100_000_000 {
+				w.layerLookupArms(b, src, commits)
 			}
 		})
 	}

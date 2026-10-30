@@ -147,11 +147,14 @@ import (
 // chain git writes over and its file is expired by git's own write, rather
 // than a new tip stacked on the old one — a stack would grow without bound
 // while the tail waits for its publication — and a whole rewrite costs only
-// the tail's commits (0.29 s over 5 000 with every filter, 0.04 s at 100, on
-// git 2.56.0), charged at TipGraphBytesPerObject an object of the tail with
-// room for a clone of the whole repository beside it (chargeOver). A tip's
-// failure costs speed and never an answer: the tail's commits are read from
-// their packs, as they are before the tip is written.
+// the tail's commits (on git 2.56.0, 0.01–0.03 s over a tail of 64 pushes and
+// 0.12 s over one of 90 909 objects outside a gigabyte's published layer,
+// BenchmarkMidx's step=tip-graph and tail= arms), charged at
+// TipGraphBytesPerObject an object of the tail, TipGraphBaseBytes for its
+// filters whatever its length, and room for a clone of the whole repository
+// beside it (Write.charge). A tip's failure costs speed and never an answer:
+// the tail's commits are read from their packs, as they are before the tip
+// is written.
 //
 // WHAT A DUE RUN WRITES is the PLAN the node's memory allows (plan): the
 // bitmap where the budget holds it; where it does not, the index WITHOUT a
@@ -274,7 +277,7 @@ func (c *Cache) indexRound(ctx context.Context, e *entry, inc *incarnation, snap
 		covers.IndexBytes += p.indexBytes
 		covers.Objects += p.objects
 	}
-	mem := chargeOver(covers.Objects, w.BytesPerObject, covers.Objects)
+	mem := w.charge(covers.Objects, covers.Objects)
 	switch c.maint.admitOther(mem) {
 	case pastBudget:
 		// Refused as the maintainer's own index without a bitmap would be:
@@ -941,7 +944,7 @@ func (c *Cache) plan(inc *incarnation, budget int64, due bool) (p runPlan, refus
 			// The tip covers the tail; the clone beside it, the repository.
 			over = inc.tail.objects
 		}
-		charges[s] = chargeOver(over, w.BytesPerObject, inc.objects)
+		charges[s] = w.charge(over, inc.objects)
 	}
 	p = runPlan{covers: Covers{Packs: inc.packs, Objects: inc.objects, DiskBytes: inc.diskBytes}, startedAt: c.now(),
 		graphCharge: charges[mw.graph]}
@@ -1271,10 +1274,10 @@ var (
 	roundIndexArgs = []string{"multi-pack-index", "write", "--stdin-packs", "--no-progress"}
 	bitmapArgs     = []string{"multi-pack-index", "write", "--bitmap", "--no-progress"}
 	plainArgs      = []string{"multi-pack-index", "write", "--no-progress"}
-	graphArgs      = []string{"commit-graph", "write", "--reachable", "--changed-paths", "--max-new-filters=1024",
+	graphArgs      = []string{"commit-graph", "write", "--reachable", "--changed-paths", "--max-new-filters=100",
 		"--no-progress"}
 	tipGraphArgs = []string{"commit-graph", "write", "--reachable", "--split=no-merge", "--changed-paths",
-		"--max-new-filters=1024", "--no-progress"}
+		"--max-new-filters=100", "--no-progress"}
 )
 
 // maintWrites is the maintainer's declared writes — every Write of the

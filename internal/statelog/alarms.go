@@ -1483,13 +1483,13 @@ var table = []rule{
 			"writes its multi-pack-index without the bitmap, so lookups stay " +
 			"fast, but a clone counts objects by walking the history rather " +
 			"than reading the bitmap: slower, never wrong. A bitmap is charged " +
-			"at 1000 bytes an object of the repository, and 240 more for room " +
+			"at 600 bytes an object of the repository, and 240 more for room " +
 			"beside it for a clone of the repository; each " +
 			"`code_cache_maintenance_refused` line names a repository, the step " +
 			"refused and its charge (a step `index` or `graph` refused as well " +
 			"is a repository served from its packs' own indexes; a step " +
 			"`publish` is a repository this node maintains whose next published " +
-			"layer it cannot write, at 900 bytes an object of the repository, " +
+			"layer it cannot write, at 600 bytes an object of the repository, " +
 			"which falls to this node because no git node advertises a budget " +
 			"that holds it — give one git node that memory, and it becomes the " +
 			"repository's maintainer: docs/guides/deployment.md, Sizing git " +

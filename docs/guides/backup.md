@@ -608,7 +608,10 @@ layer with a part it lacks as `missing`, serving from the layers below it — or
 from its own index, slower and never wrong — until the repository's
 [maintainer](../concepts/code-host.md#who-maintains-a-repository) publishes
 again: one walk of the repository's history, once, for a chain the store lost
-whole. `crewlet.code.cache.layers{outcome=missing}` counts each layer a node
+whole — about half a minute for a gigabyte of a source repository's packs,
+measured, and about a quarter of an hour, extrapolated, for the largest
+repository the default `repo_max_bytes` admits.
+`crewlet.code.cache.layers{outcome=missing}` counts each layer a node
 refused, and `crewlet.code.cache.chained` climbs back to the repositories held
 as their maintainers publish; nothing alarms meanwhile.
 The stream half is restored into a broker with `nats stream restore` per

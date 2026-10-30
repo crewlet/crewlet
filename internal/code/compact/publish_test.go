@@ -1514,8 +1514,8 @@ func TestAStoredPublicationReleasesItsOwnHold(t *testing.T) {
 	}
 	x.awaitInstalled(1)
 
-	// THE NEXT PUBLICATION: a tail of four small pushes — past a sixteenth of
-	// the repository's objects, so it is due — whose layer, over the first,
+	// THE NEXT PUBLICATION: a tail of four small pushes — past the share of
+	// the repository's objects that makes one due — whose layer, over the first,
 	// weighs far less. The duty cycle's interval passed since the first.
 	x.pushN(4, 1<<10)
 	var tail int64

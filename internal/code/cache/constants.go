@@ -216,26 +216,31 @@ const MaxFullRounds = store.MinReaderConns
 // MidxPacks is how many packs gathered beside the maintainer's index make the
 // repository due for another run.
 //
-// SIXTY-FOUR, MEASURED (BenchmarkMidx's stale arms: pushes of 4 KiB landed
-// beside the maintainer's index over the 100 MB and 1 GB histories; git
-// 2.43, four vCPUs, six counts). A pack outside the index is outside its
-// bitmap: a request that reaches it — a clone, a fetch of anything pushed
-// since — opens it and walks its commits and trees rather than reading them
-// off the bitmap, and that walk is what each such pack costs a request.
-// Counting a clone's objects took 4.5 ms with no pack beside the index and
-// 12.0 ms with 128 over the 100 MB, 6.9 and 17.9 ms over the gigabyte —
-// about 0.06 and 0.09 ms a pack — while a clone's whole pack-objects (1.1 s
-// and 10.7 s) moved by less than its own noise up to 128. A run rewrites the
-// whole index and bitmap: 1.6 s over the 100 MB, 21 s over the gigabyte. So
-// a repository run every M pushes pays a run's T every M pushes and each of
-// its q requests a push an average of M/2 packs' δ — least at M = √(2T/qδ):
-// for sixteen requests a push (a pipeline's fetches, the clones of the
-// coding runs a push starts), 58 at 100 MB and 173 at a gigabyte. Sixty-four
-// is the least at 100 MB, and runs a gigabyte's index more often than its
-// least to spare each request a few milliseconds, a third of a core-second
-// a push; where pushes come faster, MidxMinInterval and MidxDutyCycle bind
-// first. A judgment call on q: at four requests a push the least doubles,
-// and a count past it costs a request a twentieth of a millisecond a pack.
+// SIXTY-FOUR, MEASURED (BenchmarkMidx's stale=k/mode=own arms: pushes of
+// 4 KiB landed beside the maintainer's index over the 100 MB and 1 GB
+// histories; git 2.56.0, one bounded run of each arm — -benchtime 1x, one
+// count — on two E-cores of an Intel Core Ultra 7 265U, 2026-10-29). A pack
+// outside the index is outside its bitmap: a request that reaches it — a
+// clone, a fetch of anything pushed since — opens it and walks its commits
+// and trees rather than reading them off the bitmap, and that walk is what
+// each such pack costs a request. Counting a clone's objects took 3.8 ms
+// with no pack beside the index and 11.8 ms with 128 over the 100 MB, 5.5
+// and 15.4 ms over the gigabyte — about 0.06 and 0.08 ms a pack — while a
+// clone's whole pack-objects (0.64 s and 6.5 s) moved by little more than
+// its own noise up to 128. A run rewrites the whole index and bitmap and
+// writes the commit-graph: 1.16 s over the 100 MB, 14.2 s over the gigabyte
+// (step=whole). So a repository run every M pushes pays a run's T every M
+// pushes and each of its q requests a push an average of M/2 packs' δ —
+// least at M = √(2T/qδ): for sixteen requests a push (a pipeline's fetches,
+// the clones of the coding runs a push starts), 48 at 100 MB and 152 at a
+// gigabyte. Sixty-four costs the 100 MB a twenty-fifth past its least, and
+// runs a gigabyte's index more often than its least to spare each request a
+// few milliseconds; where pushes come faster, MidxMinInterval and
+// MidxDutyCycle bind first. A judgment call on q: at four requests a push
+// the least doubles, and a count past it costs a request a twentieth of a
+// millisecond a pack. On git 2.43 the same arms gave 0.06 and 0.09 ms a pack
+// and runs of 1.6 and 21 s — a least of 58 and 173 — so the pin moved
+// neither the figure nor the reason.
 // Counted in packs rather than objects, because a push here is a seat's
 // commit or a few: the one push that carries a whole history, an import, is
 // a repository's first pack, which no index covers, so it is due at once.
@@ -249,7 +254,13 @@ const MidxPacks = 64
 // 256, MEASURED (BenchmarkPackLookup: a source repository's history split
 // into ever more packs, as one push a pack with nothing compacting them
 // leaves a repository — 100 MB, 296 000 objects and 42 000 commits, and a
-// gigabyte, 3.0 million and 424 000; git 2.43, four vCPUs). The index is a
+// gigabyte, 3.0 million and 424 000; git 2.43, four vCPUs) and CONFIRMED on
+// the node pin (git 2.56.0, the 100 MB at 128, 256 and 512 packs, one
+// bounded run of each arm — -benchtime 1x, one count — on two E-cores of an
+// Intel Core Ultra 7 265U, 2026-10-29): the round's index, written in 0.11,
+// 0.08 and 0.09 s, saves a clone 0.11, 0.62 and 3.1 s (6.31 against 6.20,
+// 8.42 against 7.80, 12.8 against 9.7) — nothing past its own write at 128
+// and the cold clone alone paying it back from 256, as below. The index is a
 // merge of the packs' own indexes, so what it costs follows the objects far
 // more than the packs — 0.13 s over the 100 MB at 128 packs and at 256, 1.3 s
 // over the gigabyte at 128, 256 and 512 — while what it saves a request
@@ -281,9 +292,10 @@ const MidxPacks = 64
 // That window is not "a debounce later": the maintainer indexes a repository
 // once its packs have stood still for MidxDebounce and the runs ahead of it
 // have ended — on four cores ONE run at a time (maintenanceRuns), most packs
-// uncovered first, each at 16 to 30 s a gigabyte (MidxDutyCycle) — so on a
-// node that just joined, every repository it syncs due at once, the last
-// waits for all of them: a quarter of an hour or more for 50 GB. What a clone
+// uncovered first, each at 12 to 30 s a gigabyte, more the larger the
+// repository (MidxDutyCycle) — so on a node that just joined, every
+// repository it syncs due at once, the last waits for all of them: ten
+// minutes or more for 50 GB. What a clone
 // misses in that window is the maintainer's BITMAP far more than this index —
 // 1.4 s with it against 9.6 at 128 packs over the 100 MB, 14 s against 111
 // over the gigabyte — which no round writes, since its walk is no request's
@@ -371,88 +383,125 @@ const MidxMinInterval = 10 * time.Minute
 // cycle is what bounds how often. BenchmarkMidx confirms both bounds over a
 // source repository's composition, its commits a seventh of its objects —
 // what both writes follow, the commit-graph reading every commit and the
-// bitmap selecting and walking them: a run takes 16 s a gigabyte of packs at
-// 100 MB (1.6 s; 296 000 objects, 42 000 commits), 21 s at 1 GB (3.0 million,
-// 424 000) and 30 s at 5 GB (152 s; 14.8 million, 2.1 million), growing
-// faster than the bytes. So a run passes a minute — where the duty cycle
-// starts to bind — past about 3 GB, and the largest repository the defaults
-// admit (code.DefaultRepoMaxBytes, 20 GiB), at the 5 GB arm's rate and its
-// growth, runs about a quarter of an hour and is rebuilt at most every two
-// and a half; under 3 GB a repository is rebuilt at most every
+// bitmap selecting and walking them. On the node pin (git 2.56.0, step=whole:
+// the index with its bitmap, then the graph with its filters; one bounded run
+// of each arm on two E-cores of an Intel Core Ultra 7 265U, 2026-10-29) a run
+// takes 11.6 s a gigabyte of packs at 100 MB (1.16 s; 296 000 objects, 42 000
+// commits) and 14.2 s at 1 GB (14.2 s; 3.0 million, 424 000), growing faster
+// than the bytes as it did on git 2.43 — 16 s, 21 s and 30 s a gigabyte at
+// 100 MB, 1 GB and 5 GB (152 s; 14.8 million, 2.1 million) on four vCPUs, the
+// one run of the 5 GB arm there is. So a run passes a minute — where the duty
+// cycle starts to bind — past about 3 to 4 GB, and the largest repository the
+// defaults admit (code.DefaultRepoMaxBytes, 20 GiB), at the 5 GB arm's rate
+// and its growth, runs about a quarter of an hour and is rebuilt at most
+// every two and a half; under 3 GB a repository is rebuilt at most every
 // MidxMinInterval.
 const MidxDutyCycle = 10
 
 // THE MEMORY OF EACH WHOLE-REPOSITORY PROCESS, an object of its repository —
 // what the node's memory budget charges each by (memory.go), beside room for
 // one transfer of the same repository (gitproc.TransferBytesPerObject). Each
-// MEASURED by BenchmarkMidx's memory arms: git 2.43, the peak ANONYMOUS memory
-// of the one git process, sampled every millisecond from /proc, over
-// BenchmarkMidx's histories — a source repository's composition, commits a
-// seventh of the objects, in 64 packs — of 100 MB (296 000 objects) and a
-// gigabyte (2.97 million). The packs' own pages a process maps in are not
-// counted: the kernel takes those back under pressure rather than killing
-// anybody. The objects are the packs' rows' own counts, so a charge is a
-// multiplication, never a read of the disk.
+// is the peak ANONYMOUS memory of the one git process, sampled every
+// millisecond from /proc, over BenchmarkMidx's histories — a source
+// repository's composition, commits a seventh of the objects, in 64 packs —
+// of 100 MB (296 000 objects) and a gigabyte (2.97 million): the maintainer's
+// writes on the node pin (step=whole: git 2.56.0, the writes the declarations
+// run, over every pack after a tail of sixty-four pushes; one bounded run of
+// each arm — -benchtime 1x, one count — on two E-cores of an Intel Core Ultra
+// 7 265U, 2026-10-29), the check and a clone on git 2.43 (the memory arms).
+// The packs' own pages a process maps in are not counted: the kernel takes
+// those back under pressure rather than killing anybody. The objects are the
+// packs' rows' own counts, so a charge is a multiplication, never a read of
+// the disk.
 
 // BitmapBytesPerObject is the memory the maintainer's multi-pack-index WITH
 // ITS BITMAP holds for every object of its repository.
 //
-// 1 000 BYTES: it held 1 985 MiB over the gigabyte — 702 bytes an object — and
-// 136 MiB over 100 MB (484), the bitmap's walk keeping more of the history at
-// once the more of it there is: about 220 bytes an object more for every
-// tenfold. At that growth the largest repository the defaults admit
-// (code.DefaultRepoMaxBytes, 20 GiB, some 60 million objects) holds about
-// 990 an object — some 60 GB for one bitmap, which few nodes have to give,
-// and why a refused bitmap leaves the index without one rather than nothing
-// (IndexBytesPerObject). 320, the figure this replaced, was 255 bytes an
-// object over the gigabyte sampled more coarsely, and fell short of the
-// bitmap's peak by a factor of almost three: on a node held to it, a run the
-// budget admitted could take three times what the budget kept for it.
-const BitmapBytesPerObject = 1000
+// 600 BYTES: it held 158 MiB over 100 MB (560 bytes an object) and 812 MiB
+// over the gigabyte (287), the larger rounded up to the next 50. Unlike git
+// 2.43's, whose walk kept more of the history at once the more of it there
+// was — 136 MiB and 1 985 MiB, 484 and 702 bytes an object, about 220 more for
+// every tenfold, which set the 1 000 this replaced — the pin's bitmap grows
+// about 257 bytes an object past a fixed part of some 86 MiB (the two sizes'
+// line), so its share an object FALLS with the repository's size: the largest
+// repository the defaults admit (code.DefaultRepoMaxBytes, 20 GiB, some 60
+// million objects) would hold about 15.5 GB on that line, which this charges
+// at 36 GB — room for a growth past the gigabyte no arm here has measured
+// (the 5 GB arm, under CREWLET_BENCH_LARGE, is the one that would). A
+// refused bitmap still leaves the index without one rather than nothing
+// (IndexBytesPerObject). 320, the figure before the 1 000, was 255 bytes an
+// object over the gigabyte sampled more coarsely, and fell short of git
+// 2.43's peak by a factor of almost three.
+const BitmapBytesPerObject = 600
 
 // IndexBytesPerObject is the memory the multi-pack-index WITHOUT A BITMAP —
 // a full round's own, and the maintainer's where the bitmap cannot be had —
 // holds for every object of its repository.
 //
-// 80 BYTES, a fifth past the larger measurement: 182 MiB over the gigabyte
-// (64 bytes an object) and 18.5 MiB over 100 MB (66). It is a merge of the
-// packs' indexes, an entry an object, so it follows the objects and nothing
-// else — a ninth of the bitmap's at the gigabyte and less beyond it, which is
-// what lets a node index a repository whose bitmap it cannot hold.
+// 80 BYTES, a fifth past the larger measurement: 18.6 MiB over 100 MB (66
+// bytes an object) and 182 MiB over the gigabyte (64) on the pin, as on git
+// 2.43 (66 and 64). It is a merge of the packs' indexes, an entry an object,
+// so it follows the objects and nothing else — a quarter of the bitmap's at
+// the gigabyte and less beyond it, which is what lets a node index a
+// repository whose bitmap it cannot hold.
 const IndexBytesPerObject = 80
 
 // GraphBytesPerObject is the memory the commit-graph holds for every object of
 // its repository.
 //
-// 56 BYTES, a fifth past the larger measurement: 112 MiB over the gigabyte
-// (39.5 bytes an object) and 12.7 MiB over 100 MB (45). It reads every commit,
-// a seventh of a source repository's objects, so it is charged by the objects
-// the rows count, as the rest are. Measured before the graph carried
-// changed-path filters (MaxNewFilters), which add a bounded amount a write
-// rather than an amount an object: a write computes at most MaxNewFilters new
-// filters, and reads every filter an earlier write left from the graph it
-// replaces, which git maps rather than holds. BenchmarkMidx's step=whole
-// measures the graph with its filters on the node pin, and that figure
-// replaces this one.
-const GraphBytesPerObject = 56
+// 67 BYTES, a fifth past the larger measurement of the maintainer's own write
+// — its version-2 changed-path filters, 1 024 of them new a write, more than
+// the MaxNewFilters it computes since: 15.6 MiB over 100 MB (55 bytes an
+// object) and 126 MiB over the gigabyte (45). It reads every commit, a
+// seventh of a source repository's objects, so it is charged by the objects
+// the rows count, as the rest are.
+// The filters add a bounded amount a write rather than an amount an object:
+// a write computes at most MaxNewFilters new ones, and reads every filter an
+// earlier write left from the graph it replaces, which git maps rather than
+// holds. 56, the figure this replaced, was git 2.43's graph without filters
+// (12.7 and 112 MiB, 45 and 39.5 bytes an object).
+const GraphBytesPerObject = 67
 
 // TipGraphBytesPerObject is the memory the node's TIP commit-graph layer
 // (maintain.go) holds for every object of the TAIL it is written over — the
-// packs no installed published layer names — beside the room for one clone of
-// the whole repository every whole-repository step is charged (memory.go's
-// chargeOver): a split write walks only the commits no layer beneath it holds,
-// so its own memory follows the tail, and the clone it shares the node with
-// is of the repository.
+// packs no installed published layer names — beside its fixed part
+// (TipGraphBaseBytes) and the room for one clone of the whole repository
+// every whole-repository step is charged (memory.go's chargeOver): a split
+// write walks only the commits no layer beneath it holds, so its own memory
+// follows the tail, and the clone it shares the node with is of the
+// repository.
 //
-// 1 700 BYTES, PROVISIONAL (M3-decisions M3-O39): git 2.56.0 held 40 MiB
-// writing a tip over 5 000 commits, about 25 000 objects of a source
-// repository's composition, with every changed-path filter (0.29 s; 0.04 s at
-// 100 filters) — a figure dominated by what any commit-graph write loads
-// whatever it writes, so an object's share of it over-charges a large tail
-// rather than under-charging a small one. BenchmarkMidx's step=tip-graph
-// re-derives it, and adds a fixed term beside it only where the fit's
-// intercept passes a tenth of the charge at the publication's tail bound.
-const TipGraphBytesPerObject = 1700
+// 50 BYTES, MEASURED (BenchmarkMidx's tail= arms, op=tip-graph — the
+// declaration's own write, MaxNewFilters new filters at most — over tails of
+// 22 722, 90 909 and 363 636 objects outside a gigabyte's published root:
+// git 2.56.0, one bounded run of each arm — -benchtime 1x, one count — on
+// two E-cores of an Intel Core Ultra 7 265U, 2026-10-30): it held 2.4, 5.0
+// and 16.7 MiB, 40 to 45 bytes an object of the tail past the shortest (37
+// to 47 when the write computed 1 024 filters), the larger rounded up to the
+// next ten. 1 700, the provisional figure this replaced, was 40 MiB over
+// 5 000 commits with every filter computed, divided by the tail's objects:
+// what it held was the filters, which a write bounds whatever its tail
+// (TipGraphBaseBytes).
+const TipGraphBytesPerObject = 50
+
+// TipGraphBaseBytes is the memory the node's tip holds WHATEVER its tail's
+// length, charged beside TipGraphBytesPerObject's (its declaration's
+// Write.BaseBytes): the write's own fixed part and its changed-path filters,
+// at most MaxNewFilters of them held until it ends.
+//
+// TWO MEBIBYTES, MEASURED (the same arms, and step=tip-graph's tail of 64
+// pushes, 64 commits under each filter bound): the line through the three
+// long tails meets a tail of no objects at 1.1–1.6 MiB, by which pair of
+// them it is drawn through, and a tail of 64 commits held 0.4 MiB over
+// 100 MB and 0.9 over the gigabyte — the part a write holds whatever its
+// tail — rounded up to the next whole MiB past a fifth more. It is the
+// filters' part: computing 1 024 a write, the same three tails held 5.8, 8.2
+// and 20.4 MiB, a line meeting no tail at 4.2–4.6 MiB, about 4 KiB a filter.
+// Added because it is past a tenth of what TipGraphBytesPerObject charges a
+// tail of compact.PublishTailObjects (4.5 MB), the rule its arms set:
+// charged by its tail alone, a short tail's tip would be admitted at a
+// fraction of what it holds. It follows MaxNewFilters, and moves with it.
+const TipGraphBaseBytes = 2 << 20
 
 // PublishBytesPerObject is the memory a publication's multi-pack-index layer
 // and its bitmap hold for every object of the WHOLE repository
@@ -462,15 +511,25 @@ const TipGraphBytesPerObject = 1700
 // (Cache.PublishCharge, the git node its maintenance falls to): a bitmap is
 // O(history), so the layer's own few objects say nothing of what it holds.
 //
-// 900 BYTES, PROVISIONAL (M3-decisions M3-O39): on git 2.56.0 a bitmapped tip
-// layer over an eighth of a 219 679-object history held 131.6 MiB (628 bytes
-// an object of the history), a sixty-fourth 127.5 MiB, and the whole index
-// with its bitmap 167.8 MiB (801), because the bitmap's writer walks every
-// commit and reuses no bitmap of the base; rounded up for the growth with the
-// history's size the per-object figures above saw, some 220 bytes a tenfold.
-// BenchmarkMidx's step=publish re-derives it from the largest figure measured
-// at 100 MB, 1 GB and 5 GB.
-const PublishBytesPerObject = 900
+// 600 BYTES, MEASURED (BenchmarkMidx's step=publish and merge=root-write: git
+// 2.56.0, one bounded run of each arm — -benchtime 1x, one count — on two
+// E-cores of an Intel Core Ultra 7 265U, 2026-10-29, the in-memory store): a
+// repository's FIRST publication, a root layer and its bitmap over every pack,
+// held 158 MiB over 100 MB (560 bytes an object of the repository) and 812 MiB
+// over the gigabyte (287) — what own mode's whole index with its bitmap holds,
+// the writer walking every commit and reusing no bitmap of a base — and each
+// later one, over the tail of compact.PublishPacks pushes on that root, 88 and
+// 254 MiB (312 and 90); the node floor's own build, git 2.55.0, the same. The
+// largest, rounded up to the next 50 as BitmapBytesPerObject is: a
+// publication's charge follows its repository's history whatever its layer
+// adds, so a repository is placed by its root's. 900, the provisional figure
+// this replaced, was a tip over a 219 679-object history (628 and 801 bytes an
+// object at that size) rounded up for git 2.43's growth with the history,
+// which the pin does not show (BitmapBytesPerObject). BenchmarkBigNode's
+// node=publish measures the root at 5 and 12 GB where a machine holds them;
+// until one has, docs/concepts/scaling.md states the 12 GB figure as the
+// extrapolation it is.
+const PublishBytesPerObject = 600
 
 // GraphLayerBytesPerObject is the memory a publication's commit-graph layer —
 // `commit-graph write --stdin-packs --split=no-merge --changed-paths`, every
@@ -479,11 +538,16 @@ const PublishBytesPerObject = 900
 // room for one clone of the repository: a split layer reads only the commits
 // of its own packs.
 //
-// 700 BYTES, PROVISIONAL (M3-decisions M3-O39): 117 MiB on git 2.56.0 over
-// 35 000 commits, some 190 000 objects of a source repository's composition
-// (620 bytes an object), rounded up. BenchmarkMidx's step=publish re-derives
-// it from its graph step.
-const GraphLayerBytesPerObject = 700
+// 350 BYTES, MEASURED (BenchmarkMidx's step=publish/layer=root, as
+// PublishBytesPerObject is): the root publication's graph layer over every
+// commit of the history held 89 MiB over 100 MB (317 bytes an object of the
+// layer) and 261 MiB over the gigabyte (92), the node floor's build the same —
+// a part of it fixed, which a small layer's few objects carry alone (0.4 MiB
+// over a tail of sixty-four pushes, whose charge the clone's room beside it
+// covers many times) — the larger rounded up to the next 50. 700, the
+// provisional figure this replaced, was 117 MiB over 35 000 commits (620
+// bytes an object) rounded up.
+const GraphLayerBytesPerObject = 350
 
 // MaxNewFilters is the most changed-path filters one commit-graph write
 // computes — the node's tip and own mode's whole graph alike, git's
@@ -497,16 +561,21 @@ const GraphLayerBytesPerObject = 700
 // filters afresh at every write, and a tail of more commits than this leaves
 // the rest without one until a publication covers them.
 //
-// 1 024, PROVISIONAL (M3-decisions M3-O39): a filter is a diff of a commit
-// against its first parent — about 0.05 ms a commit over the synthetic
-// history of the tip's measurement above (0.29 s for 5 000 commits with every
-// filter, 0.04 s with 100), so 1 024 are some 60 ms there and more where a
-// commit changes more paths — a bound on what one write spends on filters
-// whatever the history it walks. BenchmarkLogPath and BenchmarkBlame
-// re-derive it: the smallest of 100, 1 024 and every filter that keeps a
-// path's log and a file's blame under half of gitproc.ReadDeadline with a tail
-// of the publication's bound outside the chain.
-const MaxNewFilters = 1024
+// 100, MEASURED, the smallest of 100, 1 024 and every filter that keeps a
+// path's log and a file's blame under half of gitproc.ReadDeadline with a
+// tail of the publication's bound outside the chain (internal/code/query's
+// BenchmarkBlame and BenchmarkLogPath: the gigabyte's 455 680 commits under a
+// published graph layer, compact.PublishTailObjects objects outside it under
+// the node's tip; git 2.56.0, one bounded run of each arm — -benchtime 1x,
+// one count — on two E-cores of an Intel Core Ultra 7 265U, 2026-10-29): a
+// blame took 40 ms with 100 new filters, 44 ms with 1 024 and 18 ms with
+// every one, a page of a path's log 70, 68 and 47 ms, and with no filter at
+// all 51 and 96 ms — every one under a hundredth of the deadline. What the
+// bound buys is the write's: a filter is a diff of a commit against its
+// first parent, about 0.05 ms and 4 KiB held until the write ends
+// (TipGraphBaseBytes), so 100 are some 5 ms and 0.4 MiB where 1 024, the
+// provisional bound this replaced, were 50 ms and 4 MiB.
+const MaxNewFilters = 100
 
 // FsckBytesPerObject is the memory Verify's connectivity check (fsck
 // --connectivity-only) holds for every object of its repository.
@@ -525,19 +594,24 @@ const FsckBytesPerObject = 192
 // (memory.go's chargeOver, over the inputs alone) and the build's delta window
 // (CompactWindowBytes).
 //
-// 500 BYTES, MEASURED (internal/code/compact's BenchmarkCompact, its
-// history=source/inputs={4,8,16,64} arms: git 2.56.0 over the in-memory
-// store, Go 1.27.2, the build's peak ANONYMOUS memory sampled every
-// millisecond, the method of the figures above; one bounded run, -benchtime
-// 1x and one count, on two E-cores of an Intel Core Ultra 7 265U, which has
-// SHA instructions, 2026-10-27): one build merging the 100 MB history's
-// 295 680 objects held 139 MiB whether they came in 4, 8, 16 or 64 packs —
-// 493.4 to 493.8 bytes an object, the input count adding nothing — and the
-// 64-input figure is rounded up to the next 50 bytes. The 300 this replaced was reasoned from git's struct object_entry
-// and a merge reusing every delta its inputs carry, and fell short of the
-// measurement by two fifths: a build admitted at it could hold two thirds
-// more than its budget kept for the build itself. The history is one size,
-// so the figure folds whatever part of the 139 MiB does not grow with the
+// 550 BYTES, MEASURED (internal/code/compact's BenchmarkCompact, its
+// history=source/inputs={4,8,16,64} arms, and BenchmarkMidx's
+// step=publish/layer=root, a publication's repack of the same composition:
+// git 2.56.0 over the in-memory store, Go 1.27.2, the build's peak ANONYMOUS
+// memory sampled every millisecond, the method of the figures above; one
+// bounded run, -benchtime 1x and one count, on two E-cores of an Intel Core
+// Ultra 7 265U, which has SHA instructions, 2026-10-27 and 29): one build
+// merging the 100 MB history's 295 680 objects held 139 MiB whether they came
+// in 4, 8, 16 or 64 pushes through a host — 493.4 to 493.8 bytes an object,
+// the input count adding nothing — and 147.5 MiB merging the same history's
+// 64 packs as BenchmarkMidx stores them (523 bytes an object; 289 over the
+// gigabyte's 2.97 million), on the node pin and on the node floor's build
+// alike: the larger figure rounded up to the next 50 bytes. 500, the figure
+// this replaced, was the first arm's alone, and the publication's re-check
+// held a build a twentieth past it. The 300 before it was reasoned from git's
+// struct object_entry and a merge reusing every delta its inputs carry, and
+// fell short of the measurement by two fifths. The history is one size, so
+// the figure folds whatever part of the build's memory does not grow with the
 // objects into the objects: a merge of more objects is charged more than it
 // holds, never less, and a merge of a few is charged CompactWindowBytes
 // beside them, far more than any fixed part. Charged by the inputs' objects
@@ -545,7 +619,7 @@ const FsckBytesPerObject = 192
 // compaction merges the small packs, so its charge follows what it merges,
 // and a charge that grew with the repository would refuse a large
 // repository's every merge, and with them its pushes (Cache.AdmitCompaction).
-const CompactBytesPerObject = 500
+const CompactBytesPerObject = 550
 
 // CompactWindowBytes is the delta search a compaction's build is charged
 // beside its objects: what its pack-objects holds around the window it runs
@@ -625,8 +699,8 @@ const CheckPieceBytes = 64 << 20
 // 1.1 GiB a core for the store, the broker, the engine and the read lane's
 // processes; a quarter of a GiB of that is the maintainer's, and the rest is
 // ServingMemoryPerCore. On a four-core node it is 1 GiB — the bitmaps of
-// some 860 000 objects beside the largest, or every slot of repositories of
-// typical size (under 100 000 objects: 118 MiB each with the room for a
+// some 1.2 million objects beside the largest, or every slot of repositories
+// of typical size (under 100 000 objects: 80 MiB each with the room for a
 // transfer beside them) at once — and it binds only when several
 // repositories of hundreds of thousands of objects are due together. A
 // JUDGMENT CALL: larger lets a joining node's backlog clear sooner at the
@@ -647,7 +721,7 @@ const MaintenanceMemoryPerCore int64 = 256 << 20
 // maintenance MaintenanceMemoryPerCore for each core its memory backs — the
 // share every figure here was sized with — and a node with more memory than
 // CoreMemory a core everything past what its other work is sized to hold:
-// 16 GiB on four cores gives 9 GiB, a bitmap of up to some 7.7 million
+// 16 GiB on four cores gives 9 GiB, a bitmap of up to some 11 million
 // objects with room for a clone of the repository beside it, an index without
 // one of up to some 30 million (docs/concepts/code-host.md works these
 // through, and TestTheConceptPageSizesAGitNodeByTheCachesOwnFigures computes

@@ -157,8 +157,12 @@ type GitListing struct {
 // whole of its budget is (internal/code/query).
 //
 // BenchmarkCodeRead (internal/code/query) confirms the TERMS — every warm
-// kind's p99 far inside gitproc.ReadDeadline with its sync — and never sets
-// the sum: a term it misses is re-derived and the sum follows.
+// kind's p99 far inside gitproc.ReadDeadline with its sync — and
+// BenchmarkBlame and BenchmarkLogPath the history reads' own git: a blame
+// and a page of a path's log over a gigabyte's 455 680 commits, a
+// publication's tail outside the published graph layer, at most 0.1 s with
+// no filter at all (git 2.56.0, 2026-10-29) — and neither sets the sum: a
+// term one misses is re-derived and the sum follows.
 // TestProductionsGitReadAttemptHoldsAGitReadsWaits holds it.
 const GitReadAttempt = code.GitShareWait + 2*statelog.ReadBudget + gitproc.ReadDeadline + code.ReplyMargin
 

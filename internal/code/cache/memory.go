@@ -20,7 +20,8 @@ import (
 // Verify's connectivity check (FsckBytesPerObject). A fifth, the node's TIP
 // commit-graph over an installed chain (TipGraphBytesPerObject), holds memory
 // in proportion to the TAIL it covers — the commits no installed layer holds
-// — and is charged so (chargeOver), with the room for a clone of the whole
+// — beside a fixed part its filters' bound sets (TipGraphBaseBytes), and is
+// charged so (Write.charge), with the room for a clone of the whole
 // repository beside it that every step keeps; a compaction's build, which
 // the cache admits to a slot of the maintenance lane (background.go), in
 // proportion to the packs it merges (CompactBytesPerObject), charged so with
@@ -30,15 +31,16 @@ import (
 // its layer's bitmap over the whole repository (PublishBytesPerObject), its
 // commit-graph layer over the layer's packs (GraphLayerBytesPerObject) and
 // its repack, a compaction's build over the packs it repacks — each with the
-// room for a clone of the whole repository beside it. Each write's figure is
-// its declaration's own (derived.go, Write.BytesPerObject), which the plan and
-// a refusal's line read from the declaration, never beside it; the check, the
-// build and the publication are no writes and keep their own. The largest
-// repository the defaults admit is some 60 million objects, which no node
-// holds a bitmap of; and on a node with less memory than a run needs, every
-// duty cycle's run was killed by the kernel, which may as well have chosen
-// the engine. So each is held to a BUDGET of the node's memory: what it has,
-// less what it keeps for its other work.
+// room for a clone of the whole repository beside it. Each write's figures
+// are its declaration's own (derived.go, Write.BytesPerObject and
+// Write.BaseBytes), which the plan and a refusal's line read from the
+// declaration, never beside it; the check, the build and the publication are
+// no writes and keep their own. The largest repository the defaults admit is
+// some 60 million objects, whose bitmap only a node of the large class
+// docs/guides/deployment.md sizes holds; and on a node with less memory than
+// a run needs, every duty cycle's run was killed by the kernel, which may as
+// well have chosen the engine. So each is held to a BUDGET of the node's
+// memory: what it has, less what it keeps for its other work.
 //
 // WHAT THE NODE HAS is what its git pool read at boot — the least of its
 // physical memory and every cgroup limit set on the process or above it
@@ -129,6 +131,15 @@ import (
 // repository, it would cost the repository its pushes, never just speed.
 func chargeOver(stepObjects, perObject, roomObjects int64) int64 {
 	return stepObjects*perObject + roomObjects*gitproc.TransferBytesPerObject
+}
+
+// charge is what a declared git write is admitted at over objects with room
+// kept for a transfer of roomObjects: chargeOver at its own figure an object,
+// and its fixed part beside it (Write.BaseBytes) — the one rule every
+// maintainer step's charge is read by, so a declaration's figures are never
+// read beside it.
+func (w Write) charge(objects, roomObjects int64) int64 {
+	return chargeOver(objects, w.BytesPerObject, roomObjects) + w.BaseBytes
 }
 
 // perBackedCore is share for each core of cores that memory backs at

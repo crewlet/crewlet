@@ -1029,7 +1029,7 @@ func Catalogue() []Instrument {
 			Name: CodePublishRefusals, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"reason"},
 			Shows: "Publications refused before or at their decide, by `reason`. " +
-				"This node's own: `memory`, the build's charge — 900 bytes an " +
+				"This node's own: `memory`, the build's charge — 600 bytes an " +
 				"object of the repository for the bitmap, with room beside it for a " +
 				"clone — past what the node can give its background work " +
 				"(`code_cache_maintenance_refused` names it with step `publish`, " +
@@ -1425,15 +1425,16 @@ func Catalogue() []Instrument {
 				"can give its background work, which " +
 				"is its memory (its cgroup's limit where one is set) less what " +
 				"it keeps for its git lanes, the store, the broker and the " +
-				"engine. `bitmap` (1000 bytes an object of the repository): " +
+				"engine. `bitmap` (600 bytes an object of the repository): " +
 				"the repository is indexed without one, and a clone walks its " +
 				"history; `index` (80): it is served from its packs' own " +
-				"indexes, a round's index included; `graph` (56): its walks go " +
+				"indexes, a round's index included; `graph` (67): its walks go " +
 				"by date, and a push of a commit dated before its parent walks " +
-				"every commit; `tip-graph` (1700 an object of the tail, the " +
-				"packs pushed since the repository's last publication): a copy " +
+				"every commit; `tip-graph` (50 an object of the tail, the " +
+				"packs pushed since the repository's last publication, and " +
+				"2 MiB whatever its length): a copy " +
 				"serving from a published chain walks those packs' commits by " +
-				"date. Slower, never wrong. `compact` (500 bytes an object of " +
+				"date. Slower, never wrong. `compact` (550 bytes an object of " +
 				"the packs merged, beside a transfer's room of them — 240 " +
 				"bytes an object merged, never of the whole repository, whose " +
 				"size alone would refuse every merge of a large one — and six " +
@@ -1442,7 +1443,7 @@ func Catalogue() []Instrument {
 				"so its pack count grows with its pushes until a git node with " +
 				"more memory maintains it or this one is given more — and at " +
 				"the pack bound its pushes are refused, which " +
-				"code_compaction_behind raises. `publish` (900 bytes an object " +
+				"code_compaction_behind raises. `publish` (600 bytes an object " +
 				"of the repository for the layer's bitmap, beside the clone's " +
 				"room): the repository's maintainer cannot publish its next " +
 				"layer, so every pack pushed since its last publication is served " +

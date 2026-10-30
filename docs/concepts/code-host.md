@@ -869,7 +869,7 @@ merge of a few small pushes into a large repository cost time and memory in
 proportion to that history. It runs in the node's maintenance lane: at the
 background indexing's own limit, never the slot kept for
 `crewlet code verify`, with its memory charged against the node's background
-budget beside the indexing's (500 bytes an object merged, 240 more an object
+budget beside the indexing's (550 bytes an object merged, 240 more an object
 merged for a transfer's room beside them, and six times
 `code.limits.max_blob_bytes` for its delta search, as a build was measured to
 hold). It follows the merge and never the repository, where every other step
@@ -951,8 +951,10 @@ repository that takes pushes faster than one node merges them shows as
 `crewlet.code.compact.duration` against the pushes' rate
 ([metrics reference](../reference/metrics.md)).
 
-**What it costs.** The build holds about 500 bytes of memory an object it
-merges — 139 MiB for a 100 MB source history's 295 680 objects, measured —
+**What it costs.** The build holds about 550 bytes of memory an object it
+merges — 139 MiB for a 100 MB source history's 295 680 objects pushed through
+a host, and 147.5 MiB for the same history's 64 pushes as a publication
+repacks them, measured on git 2.56.0 —
 and more where its delta search meets large files (eight revisions of a
 50 MiB file held 270 MiB), and takes 28 to 48 seconds for every gibibyte of
 packs it merges, in the node's maintenance lane. Every other git node holding
@@ -988,7 +990,7 @@ A repository's background work — merging its packs and
 node, its **maintainer**: the first git node of the repository's rendezvous
 order (the order its reads walk, [The home git node](#the-home-git-node))
 whose **advertised background budget** holds the repository's publication — a
-bitmap over its whole history, 900 bytes an object of the repository with
+bitmap over its whole history, 600 bytes an object of the repository with
 room beside it for a clone — and its home where no git node's does. Every git
 node advertises its budget on its presence heartbeat, so every node reads the
 placement from memory. On a fleet of alike git nodes every repository's
@@ -2170,7 +2172,7 @@ as no request holds it. Every git node that serves a repository caches it
 **whole**, so size the volume for the repositories it serves, not the company's
 total. A dedicated disk is worth it, because a cold sync writes everything it
 downloads at the speed the object store delivers it. Size the node's memory
-for its largest repository too: the background index below needs about 1 000
+for its largest repository too: the background index below needs about 600
 bytes of memory for every object of a repository to write its bitmap, and a
 repository past what the node can give it is indexed without one.
 
@@ -2187,8 +2189,9 @@ the table and 6.2 without, and the one that answers a fetch of one new commit
 request costs beside its exchange, its sync and its checks. The node writes
 them again once 64 more packs have gathered beside them, at most every ten
 minutes and at most a tenth of a core's time for any one repository. A
-run, on one core, takes 16 to 30 seconds a gigabyte of packs, more a gigabyte
-the larger the repository. Runs take at most half the node's cores, one each,
+run, on one core, takes about 12 seconds a gigabyte of packs at 100 MB and 14
+at a gigabyte on git 2.56.0, more a gigabyte the larger the repository. Runs
+take at most half the node's cores, one each,
 in a slot that is free or not at all, so they never make a push or a fetch
 wait; and only as many run at once as a quarter of a gibibyte a core holds
 beside the largest, so a node that has just joined does not index all its
@@ -2217,9 +2220,14 @@ changed-path filters, one a commit: a `git log -- <path>` or a blame skips
 each commit whose filter says the path did not change rather than diffing it
 against its parent — 0.044 seconds with them against 0.399 with no
 commit-graph, for one path over a synthetic history of 40 000 commits on git
-2.56.0. One write computes at most 1 024 new filters, so what it spends on
-them is bounded whatever the history; a commit without one is diffed as
-before. A copy's own graph keeps every filter the graph it replaces holds,
+2.56.0. One write computes at most 100 new filters, so what it spends on
+them is bounded whatever the history — about 5 ms and 0.4 MiB; a commit
+without one is diffed as before. Over a gigabyte's 455 680 commits, a page
+of a path's log answered in 70 ms and a file's blame in 40 ms with a tail of
+90 909 objects outside the published layer and 100 new filters a tip — 68 and
+44 ms with 1 024, 47 and 18 ms with every one, 96 and 51 ms with none — all
+under a hundredth of the 10 seconds a read is given, so the bound is the
+smallest of the three. A copy's own graph keeps every filter the graph it replaces holds,
 so its background indexing's next write computes more; a node's tip over a
 published chain ([Published layers](#published-layers)) computes its own
 afresh at each write, so the commits of a tail longer than that go without
@@ -2371,24 +2379,30 @@ written again at once.
 | `graph-layers`, the installed published commit-graph layers, one a layer, the node's tip over them, and their chain file | `objects/info/commit-graphs/commit-graph-chain`, `objects/info/commit-graphs/graph-<checksum>.graph` | the install of the maintainer's published layers: `layer`; the background indexing: `tip-graph` | cut first, below the layer that names it | kept, but for the node's tip, dropped first | cut first, below the layer that names it |
 
 **Memory.** Every git process a node runs over a whole repository holds memory
-in proportion to the repository's objects, measured on git 2.43 over a source
-repository's history: about 1 000 bytes an object for the bitmap (702 over
-three million objects, more the larger the repository), 80 for the index
-without one, 56 for the commit-graph, 192 for `crewlet code verify`'s
+in proportion to the repository's objects, measured over a source repository's
+history — the background index's writes on the node pin, git 2.56.0, and the
+check and a clone on git 2.43: about 600 bytes an object for the bitmap (560
+over 296 000 objects and 287 over three million: some 86 MiB, and about 257
+bytes an object past it), 80 for the index
+without one, 67 for the commit-graph, 192 for `crewlet code verify`'s
 connectivity check, and a clone about 240 more than the 224 MiB its git
 transfer slot keeps for it — the clone of a repository with no bitmap walks
-its whole history. The node's tip over a published chain is the one step
+its whole history. The commit-graph's figure includes its changed-path
+filters. The node's tip over a published chain is the one step
 that walks less than the whole history, the commits the chain lacks, so it is
-charged by the tail rather than the repository: 1 700 bytes an object of the
-tail, from 40 MiB over 5 000 new commits on git 2.56.0. A
+charged by the tail rather than the repository: 50 bytes an object of the
+tail and 2 MiB whatever its length, for its changed-path filters — measured on
+git 2.56.0 over tails of 23 000 to 364 000 objects outside a gigabyte's
+published layer, 2.4 to 16.7 MiB at 100 new filters a write (5.8 to 20.4 MiB
+at 1 024), and 0.4 to 0.9 MiB over a tail of 64 commits. A
 [compaction](#compaction)'s build walks no history, only the packs it merges,
-and is charged by them: 500 bytes an object merged, 240 more an object merged
+and is charged by them: 550 bytes an object merged, 240 more an object merged
 for a transfer's room beside them, and six times
 `code.limits.max_blob_bytes` for its delta search. A
 [publication](#when-a-repository-is-published)'s steps run one after another,
-and it is charged the largest of theirs: 900 bytes an object of the whole
+and it is charged the largest of theirs: 600 bytes an object of the whole
 repository for its bitmap — whose writer walks every commit however few
-objects the layer adds — 700 an object of the layer for its commit-graph
+objects the layer adds — 350 an object of the layer for its commit-graph
 layer, and a compaction's for its repack. A git node reads its
 memory — the least of the machine's and any cgroup limit set on its
 container — and keeps 224 MiB of it for every
@@ -2433,14 +2447,14 @@ repository in the queue is given the room it needs: nothing smaller starts
 in its place.
 
 So **a git node's ceiling on a repository it keeps a bitmap of is bounded by
-memory — about 1 240 bytes an object, with the clone beside it — before it is
+memory — about 840 bytes an object, with the clone beside it — before it is
 bounded by disk**: at about three million objects a gigabyte of a source
-repository's packs, nearly 4 GB of memory for each gigabyte of packs, and some
-75 GB for the 20 GiB a repository may hold by default, which few nodes have.
+repository's packs, about 2.5 GB of memory for each gigabyte of packs, and some
+50 GB for the 20 GiB a repository may hold by default, which few nodes have.
 A node of 2 GiB a core leaves a quarter of a gibibyte a core (1 GiB on four
-cores: bitmaps of repositories of up to about 860 000 objects, indexes of up to
+cores: bitmaps of repositories of up to about 1.2 million objects, indexes of up to
 about 3.3 million); 16 GiB on four cores leaves 9 GiB: bitmaps of up to about
-7.7 million objects, indexes of up to about 30 million. Give the node the
+11 million objects, indexes of up to about 30 million. Give the node the
 memory: it reads it again every ten seconds, so a container resized in place
 is held to its new limit at once (`code_cache_memory_changed`), while the git
 lanes keep the sizes they took at boot until a restart. An operator's
@@ -2767,7 +2781,7 @@ and `corrupt` at all a disk damaging what the cache holds
 
 A repository's multi-pack index, its bitmap and its commit-graph are the
 dearest files a git node derives — writing the bitmap walks the whole history
-and holds about 1 000 bytes of memory an object of it ([Memory](#the-cache-on-a-git-node))
+and holds about 600 bytes of memory an object of it ([Memory](#the-cache-on-a-git-node))
 — and every git node that serves the repository wants them. So they can be
 written **once**, by one git node, the repository's
 [maintainer](#who-maintains-a-repository), and installed by every other
@@ -2807,11 +2821,15 @@ mode.
 costs the walk of the whole history however few objects it adds. Over a
 synthetic history of 220 000 objects in 64 packs, a layer of an eighth of the
 objects took 1.52 seconds and 132 MiB and a layer of a sixty-fourth 1.89
-seconds and 128 MiB, against 1.43 seconds and 168 MiB for the whole index —
-and a layer without a bitmap switches off the bitmap of every layer beneath
-it. So the packs pushed since the last publication, the **tail**, stay
-outside the chain, and git reads them beside it through each pack's own
-index. A bitmapped walk of every object took 0.004 seconds with no pack
+seconds and 128 MiB, against 1.43 seconds and 168 MiB for the whole index;
+over a source repository's history, a layer of 64 small pushes on a published
+root took 0.65 seconds and 88 MiB at 100 MB and 15.1 seconds and 254 MiB at a
+gigabyte, against 0.94 seconds and 158 MiB and 11.5 seconds and 812 MiB for
+the whole index — its time and memory following the history, never the few
+hundred objects it adds. And a layer without a bitmap switches off the bitmap
+of every layer beneath it. So the packs pushed since the last publication, the
+**tail**, stay outside the chain, and git reads them beside it through each
+pack's own index. A bitmapped walk of every object took 0.004 seconds with no pack
 outside the chain, 0.03 with one, 0.09 with four and 0.35 with sixteen, and a
 clone's pack ran in the same 2.7 to 3.0 seconds with four packs outside it as
 with none (4.6 with no index at all).
@@ -2822,8 +2840,9 @@ commit-graph layer, unlike a multi-pack-index layer, costs only the commits it
 adds and switches off nothing beneath it, so each node's background indexing
 writes one over the chain, the copy's **tip**: git's own split write of just
 the commits the installed graph layers lack, over exactly those layers, with
-changed-path filters — 0.29 seconds over 5 000 new commits with every filter,
-0.04 with 100, on git 2.56.0. A copy holding no tip gets one at once, as a copy
+changed-path filters — on git 2.56.0, 0.01 to 0.03 seconds over a tail of 64
+pushes, and 0.12 over one of 90 909 objects outside a gigabyte's published
+layer. A copy holding no tip gets one at once, as a copy
 with no graph does ([The commit-graph first](#the-cache-on-a-git-node)); once
 the tail's packs change, the tip is written again by the background indexing's
 usual pace, **whole** — over the installed layers alone and every commit of the
@@ -2854,6 +2873,16 @@ bitmap are about 37 bytes an object it covers, about a tenth of a source
 repository's packs. A layer is installed only over every pack it names, and
 only in the rows' order: one whose packs the copy does not hold, or a git
 newer than the node's wrote, is not installed, and nothing above it is either.
+Measured on git 2.56.0 from an S3 fake answering each request 100 or 200 ms
+late, sixteen downloads at once, one run each: the fifty packs of a compacted
+repository came up under one published layer in 0.47 and 0.87 seconds,
+against 0.43 and 0.83 with none, and under the twenty-one layers the default
+`repo_max_bytes` reaches in 0.59 and 1.09 — about one first byte more, never
+twenty-one; the 2 048 a repository may hold came up under one layer in 14.0
+and 28.1 seconds, against 20.0 and 26.2 with none — the first pair a single
+run each on a loaded machine, the second the layer's part adding seven per
+cent; and each copy's first count of every object went through the bitmap,
+in 5 to 66 milliseconds.
 
 **A delta never downloads a layer.** A sync after a push that brings a new
 publication hands the new layers to the node's **installer** and answers at
@@ -2863,7 +2892,10 @@ installer runs behind the serving, on at most half the node's downloads —
 sixteen parts at once, of the thirty-two the node runs at once — and one core
 of the node's read lane for checking what it fetched, as the scrub takes, and
 one for reading each placement through its bitmap, so the requests the lane
-serves keep the rest of it through a mass install. It fetches each layer in
+serves keep the rest of it through a mass install — a node handed one small
+layer for each of 1 000 repositories, as after a restore, placed them all in
+11.2 seconds at a 100 ms first byte and 17.5 at 200 ms: each repository's
+first byte and about 80 ms of its own, sixteen at once. It fetches each layer in
 chain order, and places them once all are held. Meanwhile the copy serves from
 its chain as it was, the new packs in its tail. A copy that moves while its
 layers download — a compaction's swap, a sync that reads the chain anew —
@@ -2941,10 +2973,14 @@ pack no layer covers, least recently published first, and publishes each it
 maintains whose tail is due:
 
 - **Worth a layer**: the repository was never published, or its tail holds 64
-  packs, or a sixteenth of its objects, or 90 909 objects — a second of walk
+  packs, or a sixty-fourth of its objects, or 90 909 objects — a second of walk
   for every clone at the slowest a walk is held to — whichever comes first.
-  The bound in objects keeps the largest repository's tail small: a sixteenth
-  of it would be millions of objects every clone walks.
+  A tail of a sixty-fourth of a repository's objects added nothing measurable
+  to a clone of it, where a sixteenth added a quarter, since a clone walks the
+  tail rather than reading it off the bitmap. The bound in
+  objects keeps the largest repository's tail small: a sixty-fourth of it
+  would be nearly a million objects, some ten seconds of walk every clone
+  pays.
 - **Settled**: the tail has stood still 10 seconds, so a burst of pushes is
   published once; or it has waited 10 minutes since the maintainer first
   listed it, or since its last publication where that is later, so a

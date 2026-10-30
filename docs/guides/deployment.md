@@ -1926,14 +1926,20 @@ bitmapped index is written once, by its
 installed by every other git node in a few MiB of memory: the maintainer is the
 first git node of the repository's order whose background budget — what the
 node can give its background work, which every git node advertises on its
-presence heartbeat — holds the repository's publication, about 1 140 bytes of
-memory an object of the repository (900 for the bitmap, 240 for a clone beside
+presence heartbeat — holds the repository's publication, about 840 bytes of
+memory an object of the repository (600 for the bitmap, 240 for a clone beside
 it; [Memory](../concepts/code-host.md#the-cache-on-a-git-node)). On a fleet of
 alike git nodes that is each repository's home, and a fleet whose repositories
 every node can publish needs nothing more. Where one repository's publication
 is past every node of ordinary size, give one git node the memory for it: every
 repository only that node can hold is published there, whatever its home, and
-the rest stay with their homes. A repository NO git node can hold is still
+the rest stay with their homes. A repository at the default `repo_max_bytes`,
+20 GiB or some 60 million objects of a source repository's history, needs
+about 50 GB: the LARGE git node — 96 GiB of memory and 16 cores, whose
+background budget at the default lanes is about 68 GiB once it keeps 224 MiB
+for each of its 64 transfers and 896 MiB for each core — publishes it with
+room to spare, and one such node is all the fleet needs for a bitmap of it
+everywhere. A repository NO git node can hold is still
 served, without a bitmap for what was pushed since its last publication, and
 its home raises [`code_maintenance_refused`](../reference/alarms.md), its
 `code_cache_maintenance_refused` line naming the repository and the charge.

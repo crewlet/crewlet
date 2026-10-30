@@ -185,14 +185,14 @@
 // code.LayerPartBytes is refused before it is built. Each build holds a slot
 // of the node's MAINTENANCE lane and its charge of the node's background
 // memory (internal/code/cache's AdmitCompaction and AdmitPublication: a
-// compaction's 500 bytes an object of its inputs and room beside them for a
+// compaction's 550 bytes an object of its inputs and room beside them for a
 // transfer of as many — never for a clone of the whole repository, whose size
 // would refuse every merge of a large one and so its pushes — and six times
 // max_blob_bytes for its delta search, the first and the last what
-// BenchmarkCompact's memory arms measured a build to hold (# Measured); a
-// publication's the largest of its bitmap's 900 an object of the WHOLE
-// repository, its graph layer's and its repack's, provisional until
-// BenchmarkMidx's memory arms measure them, each beside room for a clone of
+// BenchmarkCompact's and BenchmarkMidx's memory arms measured a build to hold
+// (# Measured); a publication's the largest of its bitmap's 600 an object of
+// the WHOLE repository, its graph layer's and its repack's, as BenchmarkMidx's
+// step=publish arms measured them, each beside room for a clone of
 // the repository, since a publication refused is slower, never a push
 // refused) — at the maintainer's limit, never the slot it keeps for a
 // person's verify — and gives both back once its last git process has ended,
@@ -325,9 +325,10 @@
 // CompactWindowBytes are BenchmarkCompact's (bench_test.go), whose arms and
 // what each decides are listed there; the publication's cadence ([Due]'s
 // constants) and the cache's PublishBytesPerObject and GraphLayerBytesPerObject
-// are BenchmarkMidx's (internal/code/cache), each provisional until its arm
-// runs on the pin. Every figure below is of git 2.56.0 over the in-memory
-// store, so what an S3
+// are BenchmarkMidx's (internal/code/cache's layers_bench_test.go), measured
+// on the pin and stated where each is defined, which re-checks
+// CompactBytesPerObject by a publication's repack too. Every figure below is
+// of git 2.56.0 over the in-memory store, so what an S3
 // bucket would bill is stated as requests and bytes, never as a bucket's
 // time; each arm ran once (-benchtime 1x, one count) with Go 1.27.2 on two
 // E-cores of an Intel Core Ultra 7 265U, which has SHA instructions, on
@@ -336,9 +337,13 @@
 // THE BUILD (history=source/inputs={4,8,16,64}): one compaction of the
 // 100 MB source history — 295 680 objects, 99 MB of bundles pushed as 4, 8,
 // 16 or 64 packs — held 139 MiB of anonymous memory at its peak whichever,
-// 493.4 to 493.8 bytes an object, the input count adding nothing, which the
-// cache's CompactBytesPerObject is rounded up from (500, where 300 had been
-// reasoned); its build took 28 to 48 s a gibibyte of the pack bytes it
+// 493.4 to 493.8 bytes an object, the input count adding nothing; a
+// publication's repack of the same history's 64 packs (BenchmarkMidx's
+// step=publish/layer=root, 2026-10-29) held 147.5 MiB, 523 bytes an object,
+// on the pin and on the node floor's own build alike; the cache's
+// CompactBytesPerObject is the larger rounded up to the next 50 bytes (550;
+// it was 500 from the first arm alone, where 300 had been reasoned); its
+// build took 28 to 48 s a gibibyte of the pack bytes it
 // merged, more the more packs it read, under a twentieth of the second a
 // mebibyte gitproc.PackWorkDeadline gives it; and its outputs held 94.8 MB.
 // Eight revisions of one 50 MiB blob, each a delta of the one before

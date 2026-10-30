@@ -869,14 +869,15 @@
 //
 // And never a step the node's memory cannot hold. Every git process the cache
 // runs over a whole repository holds memory in proportion to its objects —
-// a bitmap about [BitmapBytesPerObject] an object, some 60 GB for the largest
+// a bitmap about [BitmapBytesPerObject] an object, some 36 GB for the largest
 // repository the defaults admit; the index without one [IndexBytesPerObject];
 // the commit-graph [GraphBytesPerObject]; Verify's check
 // [FsckBytesPerObject] — so each is charged its own figure an object of what
 // it walks — the repository's, but for the node's tip, which walks only the
 // commits an installed chain lacks and is charged by the tail's objects
-// ([TipGraphBytesPerObject]) — and room beside it for one transfer of the
-// whole repository (gitproc.TransferBytesPerObject; chargeOver), against the
+// ([TipGraphBytesPerObject]) beside the fixed part its filters' bound sets
+// ([TipGraphBaseBytes]) — and room beside it for one transfer of the whole
+// repository (gitproc.TransferBytesPerObject; Write.charge), against the
 // node's BUDGET: its memory as the git pool read it (the least of
 // the machine's and every cgroup limit above the process, v2's and v1's),
 // read again at every maintainer pass so a container resized in place is held
@@ -1150,8 +1151,9 @@
 // no audit asks after one); every git node INSTALLS the chain the rows name
 // (layers.go): each layer fetched, held to its row (code.CheckLayer) and
 // placed byte for byte, both chain files written by the cache from the rows'
-// order, since a layer's files never name its base. Nothing in this build
-// publishes one; the cache installs whatever the rows name. No node writes a
+// order, since a layer's files never name its base. The maintainer's
+// publisher writes them (internal/code/compact); the cache installs whatever
+// the rows name, whoever wrote them. No node writes a
 // layer of its own: on the node pin a bitmapped layer costs the walk of the
 // whole history however few objects it adds, and a layer without one turns
 // off every bitmap beneath it, so the packs since the last publication stay
@@ -1369,24 +1371,31 @@
 //
 // The MULTI-PACK-INDEX, over a source repository's composition — every commit
 // four files of one directory, so commits are a seventh of the objects
-// (BenchmarkMidx says how the history is built). The maintainer's index with
-// its bitmap and the commit-graph over 64 packs take 1.6 s at 100 MB (296 000
-// objects, 42 000 commits), 21 s at 1 GB (3.0 million, 424 000) and 152 s at
-// 5 GB (14.8 million, 2.1 million) — 16, 21 and 30 s a gigabyte — so
-// MidxMinInterval rather than MidxDutyCycle paces every repository under about
-// 3 GB of packs, and gitproc.PackWorkDeadline gives the gigabyte sixteen
-// minutes, about 48 times its run; the index a full round writes, with no
-// bitmap, 0.12 s, 1.1 s and 6.1 s. The bitmap's lookup table pays every
-// request that opens it: over the gigabyte (three runs, medians) the pack a
-// blobless clone's lazy fetch of one blob is served takes 5.0 ms with it and
-// 6.2 ms without, and the pack a fetch of one new commit 8.2 and 9.0 ms —
-// the difference what each spent reading the entry of every commit with a
-// bitmap before it answered. Pushes of 4 KiB landed beside the
+// (BenchmarkMidx says how the history is built). On the node pin (git 2.56.0;
+// one bounded run of each arm, -benchtime 1x and one count, on two E-cores of
+// an Intel Core Ultra 7 265U, 2026-10-29; step=whole, the maintainer's
+// declared writes over every pack after a tail of 64 pushes) the
+// maintainer's index with its bitmap and the commit-graph with its
+// changed-path filters take 1.16 s at 100 MB (296 000 objects, 42 000
+// commits) and 14.2 s at 1 GB (3.0 million, 424 000) — 11.6 and 14.2 s a
+// gigabyte, growing faster than the bytes as on git 2.43, whose 1.6 s, 21 s
+// and 152 s at 5 GB (14.8 million, 2.1 million; 16, 21 and 30 s a gigabyte)
+// are the one 5 GB figure there is — so MidxMinInterval rather than
+// MidxDutyCycle paces every repository under about 3 to 4 GB of packs, and
+// gitproc.PackWorkDeadline gives the gigabyte sixteen minutes, about 68
+// times its run; the index without a bitmap 0.08 s and 0.65 s (on git 2.43
+// the round's, 0.12 s, 1.1 s and 6.1 s). The bitmap's lookup table pays every
+// request that opens it: over the gigabyte (git 2.43, three runs, medians)
+// the pack a blobless clone's lazy fetch of one blob is served takes 5.0 ms
+// with it and 6.2 ms without, and the pack a fetch of one new commit 8.2 and
+// 9.0 ms — the difference what each spent reading the entry of every commit
+// with a bitmap before it answered. Pushes of 4 KiB landed beside the
 // maintainer's index cost counting a clone's objects about 0.06 ms each at
-// 100 MB and 0.09 ms at 1 GB (4.5 ms with none and 12.0 with 128; 6.9 and
-// 17.9 ms), and a clone's whole pack-objects nothing it shows up to 128 (1.06
-// and 1.11 s; 10.7 s either way): the figures MidxPacks is set from. Over the
-// 100 MB split into packs (BenchmarkPackLookup), a clone's pack-objects takes
+// 100 MB and 0.08 ms at 1 GB on the pin (3.8 ms with none and 11.8 with 128;
+// 5.5 and 15.4 ms), and a clone's whole pack-objects nothing a run shows up
+// to 128 (0.64 and 0.72 s; 6.50 and 6.79 s): the figures MidxPacks is set
+// from, which git 2.43 put at 0.06 and 0.09 ms. Over the
+// 100 MB split into packs (BenchmarkPackLookup, git 2.43), a clone's pack-objects takes
 // 3.8, 5.1, 9.7, 12.3, 17.0 and 26 s across 8, 32, 128, 256, 512 and a
 // thousand packs with no multi-pack-index, 4.0, 5.2, 9.6, 11.4, 14.0 and 18 s
 // with the round's, and 0.83, 0.95, 1.44, 2.24, 3.72 and 6.3 s with the
@@ -1406,7 +1415,11 @@
 // 104–116), which the three runs' 3 s was inside — and at 256 it saves 0.55 s
 // and 11 s (12.9 against 12.4, 12.6–13.5 and 11.9–12.9; 151 against 140,
 // 145–160 and 133–143), for writes of 0.13 s and 1.3 s: the figures
-// MidxRoundPacks is set from. Across 10 000 packs of the 100 MB the round's
+// MidxRoundPacks is set from, and the pin confirms them (git 2.56.0, the
+// 100 MB at 128, 256 and 512 packs, one run each, 2026-10-29: the round's
+// index, written in 0.11, 0.08 and 0.09 s, saves a clone 0.11, 0.62 and
+// 3.1 s — 6.31 against 6.20, 8.42 against 7.80, 12.8 against 9.7 — where
+// the maintainer's bitmap clones in 0.81, 1.31 and 2.14 s). Across 10 000 packs of the 100 MB the round's
 // index costs 0.53 s and saves a clone 122 s (146 against 24), Missing over
 // 1 000 commits 520 ms and a fetch 94 ms, while the maintainer's bitmap,
 // which opens every pack it covers, clones in 32 s and fetches in 300 ms:
@@ -1416,14 +1429,18 @@
 // write: the peel is no reason for the round's index below thousands of
 // tagged packs.
 //
-// The MEMORY each whole-repository git process holds (BenchmarkMidx's memory
-// arms: the one process's peak anonymous memory, sampled every millisecond),
-// over the 100 MB and the gigabyte: the index without a bitmap 18.5 and
-// 182 MiB (66 and 64 bytes an object), with its bitmap 136 MiB and 1 985 MiB
-// (484 and 702), the commit-graph 12.7 and 112 MiB (45 and 39.5), the
-// connectivity check 110 and 452 MiB (390 and 160), and a clone of main
-// 132 MiB and 670 MiB walking the history with no bitmap, 36 and 330 MiB
-// counting from the maintainer's — the figures BitmapBytesPerObject,
+// The MEMORY each whole-repository git process holds (the one process's peak
+// anonymous memory, sampled every millisecond), over the 100 MB and the
+// gigabyte. The maintainer's writes on the node pin (step=whole, the run
+// above): the index without a bitmap 18.6 and 182 MiB (66 and 64 bytes an
+// object), with its bitmap 158 MiB and 812 MiB (560 and 287 — some 86 MiB
+// and about 257 bytes an object past it, where git 2.43 held 136 and
+// 1 985 MiB, 484 and 702, more an object the larger the history), the
+// commit-graph with its changed-path filters 15.6 and 126 MiB (55 and 45;
+// 12.7 and 112 MiB without them on git 2.43). The rest on git 2.43
+// (BenchmarkMidx's memory arms): the connectivity check 110 and 452 MiB (390
+// and 160), and a clone of main 132 MiB and 670 MiB walking the history with
+// no bitmap, 36 and 330 MiB counting from the maintainer's — the figures BitmapBytesPerObject,
 // IndexBytesPerObject, GraphBytesPerObject, FsckBytesPerObject and
 // gitproc.TransferBytesPerObject are set from. Each process's peak resident
 // size, the packs' pages it maps included, was about one and a half to two
