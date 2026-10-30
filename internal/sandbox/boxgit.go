@@ -78,12 +78,22 @@ type BoxGit struct {
 //     GIT_COMMITTER_* or `-c user.*` as it likes, and the push's row, never
 //     a commit header, is the provenance;
 //  5. protocol.version 2, which the code host serves partial clones and
-//     fetches by id under, held against a box's own configuration.
+//     fetches by id under, held against a box's own configuration;
+//  6. index.version 4 and 7. core.untrackedCache true — the two index
+//     settings of feature.manyFiles, without its index.skipHash, which writes
+//     an index older libgit2 builds refuse — MEASURED IN, by the rule a
+//     box-side setting is adopted by (BenchmarkBoxWorktree,
+//     internal/code/host; docs/concepts/code-sandbox.md "What a clone
+//     costs"): at 100 000 files a box's warm `git status` took 99 ms with
+//     them against 142 ms without, a 30 % cut past the arms' spread, and its
+//     checkout 15.6 s against 15.4 s, under the 10 % it may cost. Through the
+//     environment, so every repository the box's git touches has them, one
+//     its agent clones from another host included.
 //
 // The URL key carries a trailing '/', so git's URL match (a path matched as a
 // prefix ending at a '/') scopes the helper to the code host's paths and
 // never to a sibling path of the same host. The engine's come LAST, so for
-// the three single-valued keys its value wins: a seat's identity is
+// its five single-valued keys its value wins: a seat's identity is
 // role.email's to change, never an environment variable's.
 //
 // An operator's GIT_CONFIG_COUNT that is not a non-negative integer, or that
@@ -113,6 +123,8 @@ func (g BoxGit) Env(run map[string]string) (map[string]string, error) {
 		{"user.name", g.Name},
 		{"user.email", g.Email},
 		{"protocol.version", "2"},
+		{"index.version", "4"},
+		{"core.untrackedCache", "true"},
 	}
 	out := map[string]string{GitTokenVar: g.Token, GitURLVar: g.Base,
 		gitConfigCount: strconv.Itoa(n + len(entries))}

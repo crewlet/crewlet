@@ -124,6 +124,11 @@ func fill(paths []string) {
 func TestTheCloneRecipesAreTheirShapes(t *testing.T) {
 	t.Parallel()
 	hook := sandbox.ShellQuote(sandbox.TrailerHook)
+	monitor := `  { git version | awk -v want=2.55.0 ` + sandbox.ShellQuote(`function n(s,  a) { split(s, a, "."); return a[1] * 1000000 + a[2] * 1000 + a[3] }
+/^git version / { seen = 1; v = $3; sub(/[^0-9.].*$/, "", v); ok = n(v) >= n(want); exit }
+END { exit !(seen && ok) }`) + ` &&
+    [ "$(find 'web' -type d | wc -l)" -le "$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)" ] &&
+    git -C 'web' config core.fsmonitor true || :; }`
 	coding := `if [ ! -e 'web'/.git ]; then
   git clone --quiet --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
   git -C 'web' sparse-checkout set --cone --skip-checks -- 'src' 'docs' &&
@@ -131,14 +136,16 @@ func TestTheCloneRecipesAreTheirShapes(t *testing.T) {
   git -C 'web' checkout --quiet -B 'seats/swe/ENG-7' '` + cloneBase + `' &&
   { [ -e 'web'/.git/hooks/prepare-commit-msg ] || [ -L 'web'/.git/hooks/prepare-commit-msg ] ||
     { mkdir -p 'web'/.git/hooks && printf '%s' ` + hook + ` > 'web'/.git/hooks/prepare-commit-msg &&
-      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; }
+      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; } &&
+` + monitor + `
 fi`
 	empty := `if [ ! -e 'web'/.git ]; then
   git clone --quiet --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
   git -C 'web' symbolic-ref HEAD 'refs/heads/seats/swe/ENG-7' &&
   { [ -e 'web'/.git/hooks/prepare-commit-msg ] || [ -L 'web'/.git/hooks/prepare-commit-msg ] ||
     { mkdir -p 'web'/.git/hooks && printf '%s' ` + hook + ` > 'web'/.git/hooks/prepare-commit-msg &&
-      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; }
+      chmod 755 'web'/.git/hooks/prepare-commit-msg; }; } &&
+` + monitor + `
 fi`
 	single := `if [ ! -e 'web'/.git ]; then
   git init --quiet 'web' && git -C 'web' remote add origin "$CREWLET_GIT_URL"/'web.git' &&
@@ -211,6 +218,7 @@ clone|init)
   esac ;;
 esac
 exit 0`)
+	watches(t, filepath.Dir(stub))
 	r := cloned()
 	r.Branch = `seats/swe/a$(touch${IFS}x)'b`
 	r.Paths = []string{"src", "dir with 'quote'", "[odd]", "!bang"}
@@ -222,7 +230,8 @@ exit 0`)
 		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", step.Commands[0])
 		cmd.Dir = box
 		cmd.Env = []string{"PATH=" + filepath.Dir(stub) + string(os.PathListSeparator) + os.Getenv("PATH"),
-			"CREWLET_GIT_URL=" + url, "STUB_CALLS=" + calls, "STUB_HOOK=" + hook, "HOME=" + t.TempDir()}
+			"CREWLET_GIT_URL=" + url, "STUB_CALLS=" + calls, "STUB_HOOK=" + hook, "HOME=" + t.TempDir(),
+			"STUB_WATCHES=1000000"}
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("%s: %v\n%s", step.Name, err, out)
 		}
@@ -253,6 +262,7 @@ exit 0`)
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
 			{"-C", "web", "fetch", "--quiet", "--no-tags", "--filter=blob:none", "origin", cloneBase},
 			{"-C", "web", "checkout", "--quiet", "-B", r.Branch, cloneBase},
+			{"-C", "web", "config", "core.fsmonitor", "true"},
 		}
 		sameCalls(t, calls, want)
 		if _, err := os.Stat(filepath.Join(box, "x")); !errors.Is(err, os.ErrNotExist) {
@@ -283,6 +293,7 @@ exit 0`)
 			{"clone", "--quiet", "--filter=blob:none", "--no-checkout", "--", url + "/web.git", "web"},
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
 			{"-C", "web", "symbolic-ref", "HEAD", "refs/heads/" + r.Branch},
+			{"-C", "web", "config", "core.fsmonitor", "true"},
 		})
 		if body, err := os.ReadFile(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); err != nil ||
 			string(body) != sandbox.TrailerHook {
@@ -334,6 +345,78 @@ func sameCalls(t *testing.T, got, want [][]string) {
 	t.Helper()
 	if !slices.EqualFunc(got, want, slices.Equal[[]string]) {
 		t.Errorf("git was called\n%q\nwant\n%q", got, want)
+	}
+}
+
+// watches puts a stand-in cat in dir, a directory a case puts first on PATH:
+// asked for how many directories the box's user may watch, it answers
+// $STUB_WATCHES, so a case decides what the kernel says whatever kernel runs
+// it; anything else it reads as cat does.
+func watches(t *testing.T, dir string) {
+	t.Helper()
+	script := "#!/bin/sh\nif [ \"$1\" = /proc/sys/fs/inotify/max_user_watches ]; then\n" +
+		"  printf '%s\\n' \"$STUB_WATCHES\"; exit 0\nfi\nexec /bin/cat \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "cat"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A CODING CLONE TURNS GIT'S MONITOR ON WHERE THE BOX CAN KEEP IT, and only
+// there: in the checkout's own configuration where the box's git is 2.55.0
+// or newer and the box's user may watch every directory the checkout holds;
+// never with an older git or too few watches, and never a failure of the
+// step either way — the monitor is speed, the checkout is the step. Run under
+// a shell against stand-ins: a git of each version, and a cat answering the
+// kernel's watch limit.
+//
+// Mutations: drop the version check — 2.54.0 turns it on, red; compare with
+// `>` — 2.55.0 leaves it off, red; drop the watch check — two watches turn it
+// on, red; drop the `|| :` — the step fails where it stays off, red.
+func TestACodingCloneTurnsTheMonitorOnWhereTheBoxCanKeepIt(t *testing.T) {
+	t.Parallel()
+	r := cloned()
+	r.Paths = nil
+	step, err := sandbox.CloneRecipe(r, sandbox.CloneCoding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, version, watches string
+		on                     bool
+	}{
+		{"the node pin's git with watches to spare", "git version 2.56.0", "1000000", true},
+		{"the floor's own release", "git version 2.55.0", "1000000", true},
+		{"a vendor's build of the floor", "git version 2.55.0 (Apple Git-160)", "1000000", true},
+		{"a git below the floor", "git version 2.54.0", "1000000", false},
+		{"fewer watches than the checkout's directories", "git version 2.56.0", "2", false},
+		{"no watch limit to read", "git version 2.56.0", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stub := gittest.Fake(t, tc.version, `{ for arg in "$@"; do printf '%s\037' "$arg"; done; printf '\n'; } >> "$STUB_CALLS"
+case "$1" in
+clone) for dir in "$@"; do :; done; mkdir -p "$dir/.git/hooks" "$dir/src/lib" ;;
+esac
+exit 0`)
+			watches(t, filepath.Dir(stub))
+			calls := filepath.Join(t.TempDir(), "calls")
+			cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", step.Commands[0])
+			cmd.Dir = t.TempDir()
+			cmd.Env = []string{"PATH=" + filepath.Dir(stub) + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"CREWLET_GIT_URL=https://git.example.com/box/git", "STUB_CALLS=" + calls, "HOME=" + t.TempDir(),
+				"STUB_WATCHES=" + tc.watches}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("the coding clone failed: %v\n%s", err, out)
+			}
+			body, err := os.ReadFile(calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			on := strings.Contains(string(body), "config\x1fcore.fsmonitor\x1ftrue\x1f")
+			if on != tc.on {
+				t.Errorf("the monitor turned on = %v, want %v; git saw\n%q", on, tc.on, body)
+			}
+		})
 	}
 }
 

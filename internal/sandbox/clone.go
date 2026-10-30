@@ -74,7 +74,7 @@ const ClientGitFloor = "2.40.0"
 // makes of the same line, in the box's own awk. awk's "/dev/stderr" is
 // understood by gawk, mawk and busybox's awk alike.
 func GitVersionStep() SetupStep {
-	program := `function n(s,  a) { split(s, a, "."); return a[1] * 1000000 + a[2] * 1000 + a[3] }
+	program := versionNumber + `
 /^git version / { seen = 1; v = $3; sub(/[^0-9.].*$/, "", v)
   if (n(v) < n(want)) {
     print "git " $3 " in this box is below " want ", the oldest git a coding box may reach the code host with; use a template or image with a newer git" > "/dev/stderr"
@@ -92,6 +92,50 @@ END { if (!seen) { print "the git in this box did not say its version, so it can
 	}
 }
 
+// versionNumber is the awk function both readings of a box's git version
+// compare releases by: a release's three numbers as one, so 2.40.10 is above
+// 2.40.9.
+const versionNumber = `function n(s,  a) { split(s, a, "."); return a[1] * 1000000 + a[2] * 1000 + a[3] }`
+
+// monitorGitFloor is the oldest git whose file-system monitor a coding clone
+// turns on ([CloneRecipe]): 2.55.0, the oldest git the code host runs on its
+// own nodes (internal/code/gitproc's NodeMinVersion), whose monitor watches a
+// Linux checkout through inotify as the node pin's does — the git the
+// engine's measurements read it on (2.56.0, internal/code/host's
+// BenchmarkBoxWorktree). A box's git below it keeps git's default.
+const monitorGitFloor = "2.55.0"
+
+// inotifyWatches is where Linux says how many directories one user may watch,
+// which a monitor needs one of for every directory of a checkout.
+const inotifyWatches = "/proc/sys/fs/inotify/max_user_watches"
+
+// monitor is the command that turns git's FILE-SYSTEM MONITOR on in the
+// checkout at dir's own configuration — where the box's git is
+// [monitorGitFloor] or newer, and the box's user may watch at least as many
+// directories as the checkout holds (.git's own counted, every one a watch
+// the monitor may take) — and leaves it off otherwise: a box whose git or
+// kernel cannot keep it is no worse off than git's default. Never a failure
+// of the step: the monitor is speed, never a part of the checkout.
+//
+// ADOPTED ON ITS MEASUREMENT, by the rule a box-side setting is
+// (docs/concepts/code-sandbox.md, "What a clone costs"): at 100 000 files a
+// warm `git status` took 62 ms with it against 142 ms without (17 ms beside
+// the engine's index settings, 99 without it), and a one-file commit 88 ms
+// against 172, while the checkout is not touched — the monitor's daemon is
+// started by the first command that asks it, whose status took 417 ms.
+// THE CHECKOUT'S OWN CONFIGURATION, never the box's environment: a monitor
+// is a daemon a repository runs, and the environment would start one for
+// every repository the box's git touches, every clone its agent makes of
+// another host's included.
+func (w cloneWords) monitor() string {
+	program := versionNumber + `
+/^git version / { seen = 1; v = $3; sub(/[^0-9.].*$/, "", v); ok = n(v) >= n(want); exit }
+END { exit !(seen && ok) }`
+	return "  { git version | awk -v want=" + monitorGitFloor + " " + ShellQuote(program) + " &&\n" +
+		"    [ \"$(find " + w.dir + " -type d | wc -l)\" -le \"$(cat " + inotifyWatches + " 2>/dev/null || echo 0)\" ] &&\n" +
+		"    git -C " + w.dir + " config core.fsmonitor true || :; }"
+}
+
 // CloneRecipe is the ONE way a box is given a repository: the setup step that
 // checks r out for purpose, into `./<r.Repo>`, from
 // "$CREWLET_GIT_URL/<r.Repo>.git". Every value it interpolates is quoted
@@ -107,7 +151,10 @@ END { if (!seen) { print "the git in this box did not say its version, so it can
 // the history — millions at the rate agents push — and fetches each tree a
 // walk touches one request at a time. NEVER A BUNDLE URI: a client downloads a
 // whole bundle even for a filtered clone. No `--reference --dissociate`: a box
-// holds no cache to borrow from, and a remote one never can.
+// holds no cache to borrow from, and a remote one never can — and a copy
+// borrowed and dissociated costs the box a repack of the whole history, 47.8
+// s against the recipe's 13.0 at a gigabyte (internal/code/host's
+// BenchmarkBoxDissociate).
 func CloneRecipe(r RunRepo, purpose ClonePurpose) (SetupStep, error) {
 	if err := r.Validate(); err != nil {
 		return SetupStep{}, err
@@ -205,8 +252,10 @@ func wordsOf(r RunRepo) cloneWords {
 // codingClone is [CloneCoding]'s command: a blobless clone with no checkout,
 // the cone, the base fetched by id ([cloneWords.fetchBase]), the branch made
 // at the base and checked out — only the cone's files, fetched as the
-// checkout needs them — and the commit-trailer hook written. An EMPTY
-// repository (no base) has its branch named as the unborn HEAD instead.
+// checkout needs them — the commit-trailer hook written, and git's
+// file-system monitor turned on where the box can keep it
+// ([cloneWords.monitor]). An EMPTY repository (no base) has its branch named
+// as the unborn HEAD instead.
 //
 // The hook is written only where no entry of its name exists — a box's git
 // whose template directory put a prepare-commit-msg there keeps its own —
@@ -232,7 +281,8 @@ func codingClone(r RunRepo) string {
 	lines = append(lines,
 		"  { [ -e "+hook+" ] || [ -L "+hook+" ] ||",
 		"    { mkdir -p "+w.dir+"/.git/hooks && printf '%s' "+ShellQuote(TrailerHook)+" > "+hook+" &&",
-		"      chmod 755 "+hook+"; }; }",
+		"      chmod 755 "+hook+"; }; } &&",
+		w.monitor(),
 		"fi")
 	return strings.Join(lines, "\n")
 }

@@ -711,7 +711,8 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # charged by many nodes at once, each a leaf of its own, and a gated lease
 # claim (internal/coord/kv), a git process through the pool end to end,
 # receive-pack's index-pack at one thread, and a person's clone on a transfer
-# lane one CI token has filled, with the fair share and without it, and one
+# lane one CI token has filled, with the fair share and without it, and beside
+# coding boxes with their cap and without it, and one
 # grant of a lane ten thousand waiters deep (internal/code/gitproc), the git
 # cache's cold and delta syncs and a bundle's own file work, its index
 # maintenance and what a request pays across many packs, a node's boot of its
@@ -720,8 +721,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # history costs every data node's disk (internal/code), the code host's
 # commit chain on one and three members (internal/code/codecluster), a push,
 # a warm fetch, cold and warm clones and a blobless clone's lazy blame end to
-# end (internal/code/host), a seat's reads of a repository by object id on a
-# git node, warm and cold (internal/code/query), the
+# end, and a coding box's two clone recipes, its own git in a wide work tree
+# and a copy borrowed from the node (internal/code/host), a seat's reads of a
+# repository by object id on a git node, warm and cold (internal/code/query), the
 # pace a client's connection is held to, on a real connection
 # (internal/api/paced), and what every push pays to start its proc-receive
 # hook (cmd/crewlet). Each package's doc records what it measured, and on what
@@ -746,9 +748,10 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # internal/code/cache's cold syncs of 2 048 and of 10 000 pushes, its
 # 10 000-pack repositories, its 5 GB index and its gigabyte split into
 # hundreds of packs,
-# internal/code/host's gigabyte history, hundred thousand refs and
-# 100 000-file tree, internal/code/query's gigabyte history under a
-# 100 000-file tree read by object id, and internal/jsapi's streams of a
+# internal/code/host's gigabyte history, hundred thousand refs,
+# 100 000-file tree and a box's million-file one, internal/code/query's
+# gigabyte history under a 100 000-file tree read by object id, and
+# internal/jsapi's streams of a
 # million and of three million subjects (about five minutes a count on four
 # cores) — unless CREWLET_BENCH_LARGE=1; an arm that silently did not run
 # reads as one that measured nothing worth showing. Not through
@@ -774,7 +777,11 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # internal/code/host: fifty minutes at six counts, and with
 # CREWLET_BENCH_LARGE=1 about two and a half hours — half an hour of it
 # BenchmarkPushSmall's gigabyte history and an hour BenchmarkCloneCold's
-# 2 000-push tree. A fixture is built once a run whatever BENCH_COUNT says,
+# 2 000-push tree; its coding boxes' (BenchmarkBoxClone, BenchmarkBoxWorktree,
+# BenchmarkBoxDissociate) took twelve minutes more at one count of ten
+# operations on two E-cores, and their gigabyte arms twenty at one, the
+# million-file tree's unmeasured (BENCH_TIME=10x, or 1x, each figure says
+# which). A fixture is built once a run whatever BENCH_COUNT says,
 # since go test repeats only a leaf benchmark a count: the gigabyte's is ten
 # minutes and its arms four a count, the tree's eleven and its clones eight.
 # The timeout is each package's, as -p 1 runs them in turn. Eight hours holds
@@ -792,7 +799,7 @@ BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= 8h
 
-bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes and clones, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
+bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes and clones, a coding box's git, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

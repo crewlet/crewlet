@@ -504,16 +504,17 @@ func (r *reposRig) startedEnv(t *testing.T, n int) map[string]string {
 // A BOX IS CONFIGURED BY ENVIRONMENT: a launch with one repository hands the
 // box its run's credential — a token the code host verifies for exactly this
 // launch — the code host's base, and git's configuration through the
-// environment: exactly the engine's five entries, in order, the helper reset
+// environment: exactly the engine's seven entries, in order, the helper reset
 // first, the seat's identity as an engine-built commit names it (a role with
-// no email on the identity domain), protocol v2; and the commit hook's three
-// values for THIS launch — a second launch in the turn carries the second
-// launch's id. The variables beyond git's own are exactly the ones config
-// reserves.
+// no email on the identity domain), protocol v2, and the index settings a wide
+// checkout's status was measured faster with (index version 4, the untracked
+// cache); and the commit hook's three values for THIS launch — a second
+// launch in the turn carries the second launch's id. The variables beyond
+// git's own are exactly the ones config reserves.
 //
 // Mutations: drop entry 1 (the helper reset) → the exact-entries assertion,
-// red; take the launch id from the row's first launch → the relaunch row,
-// red.
+// red; drop entry 7 (the untracked cache) → the same, red; take the launch id
+// from the row's first launch → the relaunch row, red.
 func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 	t.Parallel()
 	const base = "https://git.example.com/box/git"
@@ -548,6 +549,8 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 				{"user.name", tc.name},
 				{"user.email", tc.email},
 				{"protocol.version", "2"},
+				{"index.version", "4"},
+				{"core.untrackedCache", "true"},
 			}
 			if env["GIT_CONFIG_COUNT"] != strconv.Itoa(len(want)) {
 				t.Errorf("GIT_CONFIG_COUNT=%q, want %d", env["GIT_CONFIG_COUNT"], len(want))
@@ -606,8 +609,8 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 }
 
 // THE OPERATOR'S GIT CONFIGURATION IS KEPT: a seat whose sandbox env hands git
-// a proxy through GIT_CONFIG_COUNT keeps it at entry 0, the engine's five
-// appended after it and the count six; a count naming an entry the env does
+// a proxy through GIT_CONFIG_COUNT keeps it at entry 0, the engine's seven
+// appended after it and the count eight; a count naming an entry the env does
 // not set is refused, naming it, since git refuses a configuration with a hole
 // in it and every clone would fail.
 //
@@ -629,10 +632,11 @@ func TestTheOperatorsGitConfigIsKept(t *testing.T) {
 		t.Fatalf("Launch: %v", err)
 	}
 	env := rig.startedEnv(t, 0)
-	if env["GIT_CONFIG_COUNT"] != "6" || env["GIT_CONFIG_KEY_0"] != "http.proxy" ||
+	if env["GIT_CONFIG_COUNT"] != "8" || env["GIT_CONFIG_KEY_0"] != "http.proxy" ||
 		env["GIT_CONFIG_VALUE_0"] != "http://proxy.example.com:3128" ||
-		env["GIT_CONFIG_KEY_1"] != "credential."+base+"/.helper" || env["GIT_CONFIG_KEY_5"] != "protocol.version" {
-		t.Errorf("the box's git configuration is %v, want the proxy at 0 and the engine's five at 1..5",
+		env["GIT_CONFIG_KEY_1"] != "credential."+base+"/.helper" || env["GIT_CONFIG_KEY_5"] != "protocol.version" ||
+		env["GIT_CONFIG_KEY_7"] != "core.untrackedCache" {
+		t.Errorf("the box's git configuration is %v, want the proxy at 0 and the engine's seven at 1..7",
 			gitConfigOf(env))
 	}
 

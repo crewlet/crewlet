@@ -640,4 +640,39 @@
 // 412.5 KiB and costing the node 1.1 s of CPU, about 5.5 ms a fetch, in 7.2 s
 // of the client's wall clock. Every one is charged to the token's share,
 // which is the whole bound on what such a storm costs anybody else.
+//
+// A CODING BOX'S CLONE (BenchmarkBoxClone, boxbench_test.go) — a box launched
+// as the engine launches one, its steps run through its shell under the
+// engine's box git environment, against a node holding the repository warm,
+// git 2.56.0 at both ends unless named, on two E-cores of an Intel Core Ultra
+// 7 265U, from memobj, the mean of ten clones (one at a gigabyte): the coding
+// recipe of a 100 MiB history (44 800 commits) took 1.25 s (0.94 s on the
+// client floor's 2.40.4) and was sent 16.7 MB — every commit and tree, 134 538
+// objects — for 345 ms of the node's CPU, in two fetches, the clone's and the
+// checkout's one lazy fetch of the tip's files (0.57 MB); with a cone of one
+// directory 1.03 s and 16.3 MB; the check's recipe 0.13 s, 0.57 MB and 143
+// objects. At a gigabyte (455 680 commits) the coding recipe took 14.6 s for
+// 179 MB, 1.37 million objects and 4.3 s of the node's CPU, with a cone 13.3
+// s, and the check's 0.99 s and 5.9 MB: a coding clone is its history's
+// commits and trees, and a cone narrows only the files its checkout writes.
+//
+// A BOX'S OWN GIT IN A WIDE TREE (BenchmarkBoxWorktree), medians of ten: at
+// 100 000 files of 4 KiB in directories of 48 a warm `git status` took 142 ms
+// on git's own index settings, 99 ms on the engine's — index version 4 and the
+// untracked cache, entries 6 and 7 of sandbox.BoxGit, which that cut adopted
+// with the checkout 15.6 s against 15.4 — and 62 and 17 ms with git's
+// monitor on, which the coding recipe therefore turns on where the box can
+// keep it (its daemon's start, the first status, 417 ms); a one-file commit
+// 172, 161 and 88 ms. At 10 000 files the status took 18, 15, 8.4 and 4.0 ms.
+// A session of an agent's commands in a blobless clone — 200 rounds, its
+// lazy fetches leaving 602 packs — never ran git's automatic gc, so gc.auto
+// is left as git has it.
+//
+// BORROWING THE NODE'S COPY (BenchmarkBoxDissociate): a box's checkout and a
+// build reading every file, by the coding recipe, took 1.14 s of a 100 MiB
+// history and 13.0 s of a gigabyte (the box's git 1.03 and 12.2 s of CPU, the
+// node's 0.36 and 3.7 s); by `clone --reference <the node's copy>
+// --dissociate`, 2.59 and 47.8 s (the box's 3.4 and 58 s, the repack
+// --dissociate makes being the whole history, and the node's 3 ms) — so a
+// borrowed copy costs a box several times the clone it saves the node.
 package host

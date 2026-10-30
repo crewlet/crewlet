@@ -63,6 +63,28 @@ const ShareForget = shareForget
 // BenchmarkTransferShare's control runs. Call before any Run.
 func SetArrivalOrder(p *Pool) { p.transfer = newLane(ClassTransfer, p.transfer.size) }
 
+// SetRunUncapped lifts p's transfer lane's cap on the coding boxes' class
+// (ShareClass.Cap): its book reckons each class's cap of a lane twice as wide,
+// and a box's half of that is the whole lane — the share without the cap,
+// work-conserving for every class, which BenchmarkTransferShare's
+// runs-uncapped control runs. Call before any Run.
+func SetRunUncapped(p *Pool) { p.transfer.book.slots = 2 * int(p.transfer.size) }
+
+// SetWeights has p's transfer lane weigh the classes by weights in place of
+// ShareClass.Weight: the search BenchmarkTransferShare's runs arms make for
+// the weights a contended lane holds its pass rule at. Every class needs a
+// weight above zero. Call before any Run.
+func SetWeights(p *Pool, weights map[ShareClass]int) {
+	p.transfer.book.weight = func(c ShareClass) int { return weights[c] }
+}
+
+// TransferHeld is how many of p's transfer slots class c's runs hold now.
+func TransferHeld(p *Pool, c ShareClass) int {
+	p.transfer.mu.Lock()
+	defer p.transfer.mu.Unlock()
+	return p.transfer.book.classes[c].running
+}
+
 // SetShareClock sets the clock p's transfer lane reads its book by — what a
 // benchmark moves minutes on without waiting them. Call before any Run.
 func SetShareClock(p *Pool, now func() time.Time) {

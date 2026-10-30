@@ -123,7 +123,15 @@ func (c ShareClass) Valid() bool { return c.Weight() > 0 }
 // beside sixty-four of one CI token's clones — a person's clone is granted
 // the first slot released rather than the sixty-fifth: BenchmarkTransferShare
 // measures its wait for a slot at 60 ms at the p99 there, one release's turn,
-// against 1.46 s in arrival order (one count of twenty clones). A RATIO, never
+// against 1.46 s in arrival order (one count of twenty clones). Beside coding
+// boxes too — the CI token's sixty-four and sixty-four boxes, half of them
+// reading at the slowest pace a transfer is waited on (its runs arms, on a
+// lane of two slots, one count of five hundred clones) — the person's clone
+// took 83 ms at the p99 against 42 ms alone, with none of theirs refused and
+// the boxes holding one slot of the two: within the twice its idle figure the
+// search for the run's weight is held to, at 4:2:1, the first it tries (8:4:1
+// and 16:8:1, which keep persons at twice the machines too, measured 86 and
+// 97 ms), so the box's 1 stands. A RATIO, never
 // a cap, for persons and machines: the share is work-conserving for them, so a
 // machine alone takes the whole lane (its machine-alone arm runs as many
 // clones a second as arrival order's) — a flat per-credential cap would
@@ -320,7 +328,12 @@ type run struct {
 // written under the lane's mutex. Nil on the other lanes, which grant in
 // arrival order.
 type shareBook struct {
-	now       func() time.Time
+	now func() time.Time
+	// weight is each class's share of a contended lane: ShareClass.Weight,
+	// which a benchmark's search replaces (BenchmarkTransferShare's runs
+	// arms) and nothing else does, since two nodes weighing the classes
+	// differently would let a balancer decide who waits.
+	weight    func(ShareClass) int
 	occupancy float64 // what a held slot is charged a second (occupancyRate)
 	slots     int     // the lane's width, which each class's cap is of (ShareClass.Cap)
 	byKey     map[Share]*account
@@ -335,7 +348,7 @@ type shareBook struct {
 // lane's shape) and reporting each class's standing into rec (nil: nowhere).
 func newShareBook(now func() time.Time, slots int, occupancy float64, rec *metrics.Recorder) *shareBook {
 	b := &shareBook{
-		now: now, occupancy: occupancy, slots: slots,
+		now: now, weight: ShareClass.Weight, occupancy: occupancy, slots: slots,
 		byKey: map[Share]*account{}, classes: map[ShareClass]*classBook{}, metrics: rec,
 	}
 	for _, c := range ShareClasses() {
@@ -459,7 +472,7 @@ func (b *shareBook) next(t time.Time) *waiter {
 		if len(c.waiting) == 0 || !b.mayStart(cls) {
 			continue
 		}
-		s := c.value(t, b.occupancy) / float64(cls.Weight())
+		s := c.value(t, b.occupancy) / float64(b.weight(cls))
 		switch {
 		case pick == nil || s < score:
 			pick, score, pickHead = c, s, 0

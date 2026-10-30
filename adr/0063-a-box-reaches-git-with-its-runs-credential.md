@@ -3,7 +3,7 @@
 - **Status:** accepted
 - **Authority:** `internal/code/host`
 - **Enforced-by:** `internal/code/host.TestARunTokenOfAnEndedRunIsRefused`, `internal/code/host.TestABoxIsGivenOnlyItsGrants`, `internal/code/host.TestABoxIsShownNothingItsFloorDoesNotHold`, `internal/api.TestEveryMountedRouteIsOnTheListenerItsPathNames`, `internal/api.TestABoxRouteIsAdmittedByItsRunNotTheGuard`, `internal/engine.TestABoxIsGivenOnlyItsGrantsAtLaunch`, `internal/engine.TestABoxIsConfiguredByEnvironment`, `internal/config.TestTheEnginesGitVariablesAreReserved`, `internal/agent/builtin.TestARunsRepositoriesAreReadForWhoeverWokeItsTurn`, `internal/code/host.TestTheGitFloorsPassTheSuite` (its box half), `internal/code/host.TestNeitherTransportTakesTheOthersCredential`, `internal/code/host.TestAStoppedSeatsBoxPushesNothing`, `internal/code/gitproc.TestBoxesHoldAtMostHalfTheTransferLane`, `internal/sandbox.TestNothingButTheHookSpellsATrailerKey`, `internal/e2e.TestACodingRunClonesPushesAndIsToldWhatItPushed`
-- **Measured:** to come with the box measurements — `BenchmarkBoxClone` (the two recipes' cost), `BenchmarkBoxWorktree` (which box-side tuning is set), `BenchmarkBoxDissociate` — each figure written here with the machine, the git and the store it was taken on
+- **Measured:** `BenchmarkBoxClone`, `BenchmarkBoxWorktree` and `BenchmarkBoxDissociate` (internal/code/host's boxbench_test.go) on two E-cores of an Intel Core Ultra 7 265U, Go 1.27.2, git 2.56.0 in the node and the box (the client floor's 2.40.4 in an arm of its own), over codetest's in-memory object store, one count each (ten operations; one at a gigabyte, five for the borrowing): a coding box's clone of a 100 MiB history took 1.25 s for 16.7 MB (0.94 s on 2.40.4) and of a gigabyte 14.6 s for 179 MB, a cone narrowing only the checkout's files (13.3 s); the check's one commit 0.13 and 0.99 s; at 100 000 files a warm status took 142 ms on git's own index settings, 99 ms on the engine's (index version 4 and the untracked cache, adopted: the checkout 1.5 % longer) and 17 ms with the file-system monitor the coding clone turns on (62 ms beside git's own); 200 rounds of an agent's commands never ran git's automatic gc, so gc.auto is git's; a copy borrowed from the node and dissociated took 2.59 and 47.8 s against the recipe's 1.14 and 13.0 s — every figure in docs/concepts/code-sandbox.md, "What a clone costs"
 - **Cost-when-tried:** not tried here. The alternatives on paper: a box holding the API token (it reads the whole company, and the box runs generated code); a per-seat personal access token (a credential that outlives the run and that somebody must rotate); persons' `/git/` on the public listener (operator credentials on the internet-facing socket — the partition `auth.Public` exists to keep)
 - **Tag-status:** unreleased
 
@@ -25,11 +25,13 @@ already holds. `/box/git/` is published on `api.public` beside `/mcp/` and `/otl
 
 The engine gives the box its git configuration as the LAUNCH's environment, minted once the store has named the job
 (`GIT_CONFIG_COUNT`, appended after the operator's own entries): a reset of the helper list and a credential helper
-scoped to `CREWLET_BOX_GIT_URL` that answers the run's token, the seat's commit identity, protocol v2 — which amends
-the sandbox's "the engine contributes only tool-agnostic facts" rule for the engine's own surface, as the tool bridge
-already did; configuration reserves the names it sets. A box is given its repositories by one recipe
-(`sandbox.CloneRecipe`): blobless with an optional cone for a coding run, depth-1 blobless at one commit for a
-check. The coding recipe also writes a `prepare-commit-msg` hook that adds `Crewlet-Seat`, `Crewlet-Run` and
+scoped to `CREWLET_BOX_GIT_URL` that answers the run's token, the seat's commit identity, protocol v2, and index
+version 4 with the untracked cache, which the box measurements adopted — which amends the sandbox's "the engine
+contributes only tool-agnostic facts" rule for the engine's own surface, as the tool bridge already did;
+configuration reserves the names it sets. A box is given its repositories by one recipe (`sandbox.CloneRecipe`):
+blobless with an optional cone for a coding run, depth-1 blobless at one commit for a check; a coding clone turns
+git's file-system monitor on in its own configuration where the box's git and kernel can keep one, as the same
+measurements adopted. The coding recipe also writes a `prepare-commit-msg` hook that adds `Crewlet-Seat`, `Crewlet-Run` and
 `Crewlet-Work-Item` trailers from the launch's environment; nothing in the engine reads them, and the push row is
 the provenance.
 

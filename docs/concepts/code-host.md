@@ -5165,6 +5165,26 @@ percentile behind the token's sixty-four, and three minutes old 67 ms, about
 as someone who had spent nothing does — on that lane, as wide as its cores,
 each second a slot is held is charged a whole core.
 
+**With coding boxes beside them** (the same benchmark's `runs` arms, on two
+E-cores of the same machine, so a lane of two slots, one count of five hundred
+of a person's clones an arm): the CI token's sixty-four clones held the lane
+for a minute, then sixty-four boxes arrived — each a run of its own, each
+cloning as the coding recipe does, a blobless fetch and then its checkout's
+files, again and again, half of them reading at the slowest pace a transfer is
+waited on, thirty seconds a mebibyte — and once the boxes held what the lane
+let them, the person cloned, pushing once a second beside. A person's clone
+alone took 42 ms at the 99th percentile; with every class contending it took
+83 ms, none of 500 clones or 36 pushes was refused, and the boxes never held
+more than one slot of the two, three tenths of what the lane spent. On a lane
+of two the boxes' half is one slot and a person shares the other with the CI
+token, so their clone waits behind at most one CI clone as long as their own:
+twice the idle figure is that lane's floor, which the weights — 4 : 2 : 1, and
+8 : 4 : 1 and 16 : 8 : 1 tried beside them, each keeping people at twice the
+machines (85.8 and 97.4 ms) — only move inside. With the boxes' half lifted, the
+slow boxes came to hold both slots, and three of five clones and two of three
+pushes were refused after their ten seconds: the half is what keeps people
+served.
+
 ---
 
 ## What git prints, and what it means
