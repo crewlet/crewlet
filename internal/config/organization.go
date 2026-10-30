@@ -51,6 +51,7 @@ func (c *Company) organization() (*org.Organization, *identityIndex) {
 		o.Units = append(o.Units, unit)
 	}
 	o.Normalize()
+	c.bindSeatTools(o)
 	return o, index
 }
 
