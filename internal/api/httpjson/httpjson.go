@@ -1064,9 +1064,10 @@ const (
 
 	// --- the model routes (internal/api/llmapi) --- //
 
-	// CodeCredentialRejected is a candidate credential the vendor refused
-	// when it was tested: nothing was stored, and the current credential
-	// still signs the model in. 422, its problem at the value. Not
+	// CodeCredentialRejected is a candidate credential that did not sign
+	// the model in when it was tested (the vendor refused it, or the CLI did
+	// not use it): nothing was stored, and the model keeps its current
+	// credential. 422, its problem at the value. Not
 	// `credential_refused`, which is an artifact's content carrying a
 	// credential's shape and says so to the person.
 	CodeCredentialRejected Code = "credential_rejected"
@@ -1483,8 +1484,8 @@ var codes = map[Code]string{
 	CodeProposalStale: "What this change would edit has moved since it was proposed, so " +
 		"nothing was sent. Ask the assistant to propose it again.",
 	CodeActionAlreadyClaimed: "Another tab is already applying this change.",
-	CodeCredentialRejected: "The vendor refused this credential, so nothing was stored. " +
-		"The current credential still signs the model in.",
+	CodeCredentialRejected: "This credential did not sign the model in, so nothing was " +
+		"stored. The model still uses its current credential.",
 	CodeCredentialUntested: "The vendor did not answer the test, so nothing was stored. " +
 		"Try again.",
 	CodeAlreadyExists: "A secret with that name is already stored, so nothing was " +

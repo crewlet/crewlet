@@ -185,7 +185,7 @@ function checkVerdict(lines: readonly CheckLine[], signIn: SignInFacts) {
   if (failed)
     return {
       ok: false,
-      message: `${failureWords(failed.kind, signIn)}.${failed.remedy ? ` ${failed.remedy}` : ""}`,
+      message: `${failureWords(failed.kind, signIn, failed.meaning)}.${failed.remedy ? ` ${failed.remedy}` : ""}`,
     };
   const smoke = lines.find((l) => l.check === "smoke");
   return { ok: true, message: smoke?.detail ?? "It answers." };
