@@ -97,13 +97,20 @@ const (
 	VerbRotate  StepVerb = "rotate"
 	VerbRestore StepVerb = "restore"
 	VerbApprove StepVerb = "approve"
+
+	// VerbObserve is no step a plan draws: it names a failure to read a
+	// seat's account back ([SeatFaults]), which the sync records on the
+	// seat's lanes.
+	VerbObserve StepVerb = "observe"
 )
 
-// Valid reports whether v is a verb this build draws.
+// Valid reports whether v is a verb this build draws or reports a failure
+// at.
 func (v StepVerb) Valid() bool {
 	return slices.Contains([]StepVerb{
 		VerbCreate, VerbGrant, VerbMint, VerbEnable, VerbRerole, VerbScope,
 		VerbDisable, VerbRevoke, VerbRemove, VerbRotate, VerbRestore, VerbApprove,
+		VerbObserve,
 	}, v)
 }
 

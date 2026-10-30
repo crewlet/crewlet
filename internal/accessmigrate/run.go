@@ -3,7 +3,6 @@ package accessmigrate
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -101,11 +100,6 @@ type Result struct {
 	Pending  map[integration.Kind]error
 }
 
-// ErrPlanMoved reports a document that changed between the plan and the
-// write in a way that moves different credentials: the run stops before
-// writing, and the next one plans again.
-var ErrPlanMoved = errors.New("accessmigrate: the document changed while it was being migrated")
-
 // Run migrates the fleet's company, every integration it can, in the one order
 // that is safe: read the vendors for the integrations left to migrate, plan
 // from the stored document, seal every credential the plan moves under its
@@ -150,8 +144,32 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 	if plan.Empty() {
 		return result, nil
 	}
+	held, err := ownCredentials(ctx, d.Records.Ledger(), plan.Moves)
+	if err != nil {
+		return result, err
+	}
 	author := secrets.Author{Name: Actor().Name, Kind: string(Actor().Kind)}
+	// landed are the credentials the seats hold under the engine's name once
+	// the moves are done, which the ledger records as theirs.
+	var landed []Move
+	for _, m := range plan.Kept {
+		if value, ok := d.Secrets.Value(m.To); ok && strings.TrimSpace(value) != "" {
+			landed = append(landed, m)
+		}
+	}
 	for _, m := range plan.Moves {
+		// CREATE-ONLY: a seat whose ledger already records a credential of
+		// its own (a migration reverted after its syncs minted one), or a
+		// name that already holds a value (a run that stopped after its
+		// seals), keeps what it holds. Sealing the old value over it would
+		// put back the credential the seat replaced.
+		if held[m.Kind][m.Handle] {
+			continue
+		}
+		if value, ok := d.Secrets.Value(m.To); ok && strings.TrimSpace(value) != "" {
+			landed = append(landed, m)
+			continue
+		}
 		value, ok := d.Secrets.Value(m.From)
 		if !ok || strings.TrimSpace(value) == "" {
 			// NOTHING TO MOVE: the seat named a variable that holds no
@@ -164,9 +182,10 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 		if sealErr := d.Secrets.Seal(ctx, m.To, value, author, now()); sealErr != nil {
 			return result, fmt.Errorf("accessmigrate: seal %s for %s: %w", m.To, m.Handle, sealErr)
 		}
+		landed = append(landed, m)
 		result.Moved++
 	}
-	if result.Seeded, err = seed(ctx, d.Records.Ledger(), plan.Seeds, plan.Moves,
+	if result.Seeded, err = seed(ctx, d.Records.Ledger(), plan.Seeds, landed,
 		now()); err != nil {
 		return result, err
 	}
@@ -174,18 +193,12 @@ func Run(ctx context.Context, d Deps) (Result, error) {
 		return result, err
 	}
 	result.Notices = len(plan.Notices)
+	// HELD TO THE REVISION PLANNED ON: the rewrite is refused as raced
+	// where another write activated first, so the plan is applied to the
+	// very document it was made from, and the next run plans a moved one
+	// again.
 	written, changed, err := d.Document.Rewrite(ctx, revision, migrationSummary(plan),
-		Actor(), func(root map[string]any) (bool, error) {
-			again, planErr := Plan(root, facts)
-			if planErr != nil {
-				return false, planErr
-			}
-			if !sameMoves(again.Moves, plan.Moves) ||
-				!slices.Equal(again.Migrated, plan.Migrated) {
-				return false, ErrPlanMoved
-			}
-			return Apply(root, again)
-		})
+		Actor(), func(root map[string]any) (bool, error) { return Apply(root, plan) })
 	if err != nil {
 		return result, err
 	}
@@ -264,10 +277,33 @@ func Read(ctx context.Context, root map[string]any,
 	return facts, nil
 }
 
+// ownCredentials are the seats whose ledger record already holds a credential
+// of their own, by kind and handle, for each kind moves touch.
+func ownCredentials(ctx context.Context, ledger seataccess.Ledger,
+	moves []Move) (map[integration.Kind]map[string]bool, error) {
+
+	out := map[integration.Kind]map[string]bool{}
+	for _, m := range moves {
+		if _, read := out[m.Kind]; read {
+			continue
+		}
+		records, err := ledger.Records(ctx, m.Kind)
+		if err != nil {
+			return nil, fmt.Errorf("accessmigrate: read the %s ledger: %w", m.Kind, err)
+		}
+		out[m.Kind] = map[string]bool{}
+		for handle, rec := range records {
+			out[m.Kind][handle] = rec.Credential != nil
+		}
+	}
+	return out, nil
+}
+
 // seed records each account the engine made before the ledger, where the
 // ledger holds no record for its seat yet, with what the vendor showed for its
-// lanes and the credential the migration sealed for it.
-func seed(ctx context.Context, ledger seataccess.Ledger, seeds []Seed, moves []Move,
+// lanes and the credential the seat holds under the engine's name: one the
+// migration sealed, or one already there (landed).
+func seed(ctx context.Context, ledger seataccess.Ledger, seeds []Seed, landed []Move,
 	now time.Time) (int, error) {
 
 	n := 0
@@ -297,7 +333,7 @@ func seed(ctx context.Context, ledger seataccess.Ledger, seeds []Seed, moves []M
 				rec.Lanes[lane] = seataccess.LaneRecord{Observed: seen}
 			}
 		}
-		for _, m := range moves {
+		for _, m := range landed {
 			if m.Kind == s.Kind && m.Handle == s.Handle && rec.Credential == nil {
 				rec.Credential = &seataccess.Credential{Variable: m.To, MintedAt: now,
 					By: Actor().Name, Source: seataccess.CredentialMinted}
@@ -395,12 +431,14 @@ func SharedFindings(ctx context.Context, kind integration.Kind,
 		out = append(out, integration.Finding{
 			Kind: integration.FindingCredentialShared, Subject: variable,
 			Subjects: seats[variable],
-			Detail: fmt.Sprintf("%s kept its own %s credential in %s, which a company "+
-				"setting also uses, so %s may hold that agent's value", strings.Join(
-				seats[variable], ", "), vendor, variable, variable),
-			Remedy: fmt.Sprintf("Replace %s with the company's own credential at %s. "+
-				"Crewlet gives the agent a new credential of its own on its next sync",
-				variable, vendor),
+			Detail: fmt.Sprintf("%s used %s for %s %s credential, and %s is also "+
+				"named elsewhere in the company (a company setting, a unit's shared "+
+				"credentials or another agent), so its value may be in more than one "+
+				"hand", strings.Join(seats[variable], ", "), variable,
+				possessive(len(seats[variable])), vendor, variable),
+			Remedy: fmt.Sprintf("Replace the value of %s at %s, so no agent's old "+
+				"credential stays in it. Crewlet gives each agent a new credential of its "+
+				"own on its next sync", variable, vendor),
 		})
 	}
 	return out, nil
@@ -412,10 +450,18 @@ func SharedFindings(ctx context.Context, kind integration.Kind,
 func NoticeOf(kind integration.Kind, f integration.Finding) seataccess.Notice {
 	return seataccess.Notice{
 		Tone:       "danger",
-		Title:      "Replace the company's " + vendorName(kind) + " credential",
+		Title:      "Replace a shared " + vendorName(kind) + " credential",
 		Body:       f.Detail + ". " + f.Remedy + ".",
 		ReplaceKey: true,
 	}
+}
+
+// possessive is "its" for one agent and "their" for several.
+func possessive(n int) string {
+	if n == 1 {
+		return "its"
+	}
+	return "their"
 }
 
 // migrationSummary is the history line the revision records.
@@ -430,19 +476,6 @@ func migrationSummary(m Migration) string {
 		line += " for " + strings.Join(seats, ", ")
 	}
 	return line
-}
-
-// sameMoves reports two plans moving the same credentials.
-func sameMoves(a, b []Move) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for _, m := range a {
-		if !slices.Contains(b, m) {
-			return false
-		}
-	}
-	return true
 }
 
 // vendorName is a kind as its vendor names itself ([seataccess.KindName]).

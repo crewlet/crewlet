@@ -49,6 +49,21 @@ type SeatApp struct {
 	ClientSecret  string
 }
 
+// set is one sealed field's value, by the field it is sealed under
+// ([SeatVar]). A field the app does not keep is ignored.
+func (a *SeatApp) set(field, value string) {
+	switch field {
+	case FieldClientID:
+		a.ClientID = value
+	case FieldClientSecret:
+		a.ClientSecret = value
+	case FieldSigningSecret:
+		a.SigningSecret = value
+	case FieldBotToken:
+		a.BotToken = value
+	}
+}
+
 // ErrNoBaseURL refuses a step that would build an app pointing nowhere.
 var ErrNoBaseURL = errors.New("slack: no public base URL: every app's request URL " +
 	"and redirect URL are built from it, so an app made without one delivers " +
@@ -106,7 +121,8 @@ func InstallLink(seat SeatApp, base, state string) string {
 // A token for another app is revoked and nothing is sealed.
 //
 // A SEAL THAT FAILS REVOKES THE TOKEN, so no bot token is live that nothing
-// holds.
+// holds, and the revoke outlives the request: a person closing the tab must
+// not leave a token live that nothing holds.
 func CompleteSeatInstall(
 	ctx context.Context, admin *Admin, sink provision.TokenSink, httpClient *http.Client,
 	seat SeatApp, code, base string,
@@ -139,13 +155,13 @@ func CompleteSeatInstall(
 		return Install{}, errors.Join(fmt.Errorf(
 			"%w: the install answered app %q, not %s's app %s; nothing was recorded",
 			errOtherApp, got, seat.Handle, seat.AppID),
-			revokeToken(ctx, httpClient, installed.BotToken))
+			revokeToken(context.WithoutCancel(ctx), httpClient, installed.BotToken))
 	}
 	tokenVar := SeatVar(seat.Handle, FieldBotToken)
 	if err := sink.Record(ctx, tokenVar, installed.BotToken); err != nil {
 		return Install{}, errors.Join(
 			fmt.Errorf("slack: seal %s: %w", tokenVar, err),
-			revokeToken(ctx, httpClient, installed.BotToken))
+			revokeToken(context.WithoutCancel(ctx), httpClient, installed.BotToken))
 	}
 	return installed, nil
 }

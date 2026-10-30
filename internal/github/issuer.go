@@ -105,8 +105,8 @@ const (
 
 // ErrNotInstalled reports a seat whose app cannot issue a token yet: it has
 // not been created, or not installed, or its key does not resolve. Each is a
-// step a person takes at GitHub or in the dashboard, which the seat-app
-// reconcile reports on the integration's card ([ReconcileSeatApps]).
+// step a person takes at GitHub or in the dashboard, which the access sync
+// reports on the integration's Agents tab.
 var ErrNotInstalled = errors.New("github: this agent's app is not created and installed yet")
 
 // ErrSeatOff reports a seat switched off on GitHub (D1): it is issued no

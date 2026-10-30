@@ -815,6 +815,14 @@ func (c *Client) MarkDisconnected(ctx context.Context, creds Credentials, userID
 	return c.updateUser(ctx, creds, userID, map[string]any{"title": DisconnectedTitle})
 }
 
+// ClearDisconnected takes the marker off an account, which is what a live
+// account still carrying it needs: the marker says this engine turned the
+// account off, and on a live one it is stale, so a later disable by somebody
+// else would read as this engine's and be undone.
+func (c *Client) ClearDisconnected(ctx context.Context, creds Credentials, userID string) error {
+	return c.updateUser(ctx, creds, userID, map[string]any{"title": ""})
+}
+
 // EnableUser undoes a disable and clears the marker in one request.
 //
 // ONE REQUEST, because two would have a window in which the account is live

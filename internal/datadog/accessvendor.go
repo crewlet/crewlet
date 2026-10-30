@@ -68,6 +68,10 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 		Op: op, Verb: seataccess.VerbMint, By: seataccess.ByCrewlet,
 		Text: "Mint its application key and seal it as " + sink,
 	}
+	retire := seataccess.Step{
+		Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
+		Text: "Delete the application keys the new one replaces",
+	}
 	switch op {
 	case seataccess.OpCreate:
 		return []seataccess.Step{{
@@ -84,7 +88,7 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 			Text: "Turn its Datadog service account back on, holding the role this seat names",
 		}}
 		if have.Credential == nil || have.CredentialGone {
-			out = append(out, mint)
+			out = append(out, mint, retire)
 		}
 		return out
 	case seataccess.OpLevel:
@@ -93,7 +97,10 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 			Text: "Give it the role this seat names and take it out of any other role",
 		}}
 	case seataccess.OpMint:
-		return []seataccess.Step{mint}
+		// THE NEW KEY FIRST, sealed before anything is deleted: a key
+		// this engine minted earlier may be what something else still
+		// authenticates with, so it goes only once the seat holds its own.
+		return []seataccess.Step{mint, retire}
 	case seataccess.OpDisable:
 		return []seataccess.Step{{
 			Op: op, Verb: seataccess.VerbDisable, By: seataccess.ByCrewlet,
@@ -115,10 +122,7 @@ func datadogSteps(seat seataccess.SeatRef, op seataccess.Op, have seataccess.Obs
 		}}
 	case seataccess.OpRotate:
 		mint.Text = "Mint a new application key and seal it as " + sink
-		return []seataccess.Step{mint, {
-			Op: op, Verb: seataccess.VerbRevoke, By: seataccess.ByCrewlet,
-			Text: "Delete the application key it replaces",
-		}}
+		return []seataccess.Step{mint, retire}
 	default:
 		// OpScope: Datadog grants by role alone, so there is no scope to
 		// move, and an op this build does not know takes no step.
@@ -305,13 +309,7 @@ func observedOf(account Account, rec seataccess.Record, recorded bool) seatacces
 		Level: strings.Join(account.RoleIDs, " "),
 	}
 	if account.Disabled {
-		// THIS ENGINE'S OFF, by either record of it: the ledger, or the
-		// marker on the account, which survives a lost ledger (D3).
-		out.DisabledBy = seataccess.DisabledByHand
-		if account.Marked || (recorded && rec.Account != nil &&
-			rec.Account.State == seataccess.AccountDisabled) {
-			out.DisabledBy = seataccess.DisabledByCrewlet
-		}
+		out.DisabledBy = seataccess.DisabledByOf(account.Marked, rec, recorded)
 	}
 	if recorded && rec.Account != nil {
 		out.CreatedAt = rec.Account.CreatedAt
@@ -331,8 +329,11 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		if in.Step.Verb == seataccess.VerbCreate {
 			return s.create(ctx, in)
 		}
-		return s.mint(ctx, in, false)
+		return s.mint(ctx, in)
 	case seataccess.OpEnable:
+		if in.Step.Verb == seataccess.VerbRevoke {
+			return s.retire(ctx, in)
+		}
 		if in.Step.Verb == seataccess.VerbEnable {
 			return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
 				if err := s.roleExists(ctx, in); err != nil {
@@ -345,9 +346,12 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 				return seataccess.StepResult{}, s.refused(in, err)
 			})
 		}
-		return s.mint(ctx, in, true)
+		return s.mint(ctx, in)
 	case seataccess.OpMint:
-		return s.mint(ctx, in, true)
+		if in.Step.Verb == seataccess.VerbRevoke {
+			return s.retire(ctx, in)
+		}
+		return s.mint(ctx, in)
 	case seataccess.OpLevel:
 		return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
 			if err := s.roleExists(ctx, in); err != nil {
@@ -386,14 +390,9 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 		})
 	case seataccess.OpRotate:
 		if in.Step.Verb == seataccess.VerbMint {
-			return s.mint(ctx, in, false)
+			return s.mint(ctx, in)
 		}
-		return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
-			// THE KEY THE FIRST STEP MINTED is kept, and every other key
-			// this engine minted is deleted; with none minted, nothing is.
-			_, err := s.client.RetireKeys(ctx, s.creds, account, in.PriorCredentialID(AppKeyField))
-			return seataccess.StepResult{}, s.refused(in, err)
-		})
+		return s.retire(ctx, in)
 	default:
 		return seataccess.StepResult{}, fmt.Errorf("datadog: no step for %q", in.Step.Op)
 	}
@@ -440,23 +439,25 @@ func (s *accessSession) roleExists(ctx context.Context, in seataccess.ApplyInput
 	return nil
 }
 
+// retire deletes the keys this engine minted on the account other than the
+// one this op's earlier step minted ([seataccess.ApplyInput.PriorCredentialID]):
+// a mint's, an enable's and a rotation's second half. With nothing minted
+// before it, it refuses and deletes nothing ([Client.RetireKeys]).
+func (s *accessSession) retire(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
+	return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
+		_, err := s.client.RetireKeys(ctx, s.creds, account, in.PriorCredentialID(AppKeyField))
+		return seataccess.StepResult{}, s.refused(in, err)
+	})
+}
+
 // mint creates one application key and hands it to the sync to seal.
 //
 // A KEY THE SYNC CANNOT SEAL IS DELETED through its Revoke, which the sync
-// calls with a context that outlives its own cancellation (design 5.2).
-// replaceUnheld first deletes this engine's earlier keys, which a seat being
-// given a credential because nothing is sealed for it holds values nobody has.
-func (s *accessSession) mint(
-	ctx context.Context, in seataccess.ApplyInput, replaceUnheld bool,
-) (seataccess.StepResult, error) {
+// calls with a context that outlives its own cancellation (design 5.2). It
+// deletes nothing else: the keys a new one replaces go in the op's next step,
+// once the new one is sealed.
+func (s *accessSession) mint(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	return s.withAccount(ctx, in, func(account Account) (seataccess.StepResult, error) {
-		if replaceUnheld {
-			for _, key := range account.EngineKeys() {
-				if err := s.client.DeleteAppKey(ctx, s.creds, account.ID, key.ID); err != nil {
-					return seataccess.StepResult{}, s.refused(in, err)
-				}
-			}
-		}
 		key, err := s.client.CreateAppKey(ctx, s.creds, account.ID, appKeyName)
 		if err != nil {
 			return seataccess.StepResult{}, s.refused(in, err)
@@ -511,7 +512,17 @@ func (s *accessSession) withAccount(
 	if err != nil {
 		return seataccess.StepResult{}, s.refused(in, err)
 	}
-	return fn(accountOf(user, keys))
+	account := accountOf(user, keys)
+	if !account.Disabled && account.Marked && in.Step.Op.LeavesOn() {
+		// A STALE MARKER, left by an off that failed part way or by an
+		// older engine: on a live account it would make a later disable by
+		// somebody else read as this engine's, and be undone (D3).
+		if err := s.client.ClearDisconnected(ctx, s.creds, account.ID); err != nil {
+			return seataccess.StepResult{}, s.refused(in, err)
+		}
+		account.Marked = false
+	}
+	return fn(account)
 }
 
 // refused turns a Datadog refusal into the shared [seataccess.Refusal], with

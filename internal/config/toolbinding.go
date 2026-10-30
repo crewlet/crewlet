@@ -112,7 +112,7 @@ type SeatToolBinding struct {
 // per integration first.
 func SeatToolBindings() []SeatToolBinding {
 	return []SeatToolBinding{
-		{Vendor: "datadog", Server: "datadog", match: hostHas("datadoghq.", "ddog-gov."), Keys: []SeatToolKey{
+		{Vendor: "datadog", Server: "datadog", match: hostUnder(DatadogSites...), Keys: []SeatToolKey{
 			// Datadog's remote server. The organization's API key is the
 			// server's own header, the same for every seat.
 			{Field: "APP_KEY", Env: "DD_APPLICATION_KEY", Header: "DD_APPLICATION_KEY"},
@@ -179,14 +179,21 @@ func hostIs(host string) func(*MCPServer) bool {
 	return func(m *MCPServer) bool { return m.Kind() == TransportHTTP && hostOf(m.URL) == host }
 }
 
-// hostHas recognises an http server whose host contains one of the parts.
-func hostHas(parts ...string) func(*MCPServer) bool {
+// hostUnder recognises an http server at one of the domains or a host beneath
+// one (`mcp.us5.datadoghq.com` under `us5.datadoghq.com`).
+//
+// WHOLE LABELS, NEVER A SUBSTRING: a seat's credential is handed to whatever
+// server this recognises, so `datadoghq.com.example.net` and
+// `evil-datadoghq.com` must not be.
+func hostUnder(domains ...string) func(*MCPServer) bool {
 	return func(m *MCPServer) bool {
 		if m.Kind() != TransportHTTP {
 			return false
 		}
 		host := hostOf(m.URL)
-		return slices.ContainsFunc(parts, func(p string) bool { return strings.Contains(host, p) })
+		return slices.ContainsFunc(domains, func(d string) bool {
+			return host == d || strings.HasSuffix(host, "."+d)
+		})
 	}
 }
 

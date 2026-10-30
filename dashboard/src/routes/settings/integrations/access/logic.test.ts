@@ -179,12 +179,29 @@ test("an operator-written document holds only a reader who is not an admin; any 
 });
 
 describe("a lane of sets (Confluence by operation)", () => {
-  test("stores the chosen ids sorted, and any choice brings View with it", () => {
-    expect(joinLevels(CONFLUENCE_LANE, ["create:page"])).toBe("create:page read:space");
-    expect(joinLevels(CONFLUENCE_LANE, ["read:space", "administer:space"])).toBe(
-      "administer:space read:space",
+  test("stores the chosen ids sorted, once each, and the empty level as nothing", () => {
+    expect(joinLevels(CONFLUENCE_LANE, ["read:space", "create:page", "read:space"])).toBe(
+      "create:page read:space",
     );
+    expect(joinLevels(CONFLUENCE_LANE, [""])).toBe("");
     expect(joinLevels(CONFLUENCE_LANE, [])).toBe("");
+  });
+
+  test("any choice brings the level the engine requires, and none brings nothing", () => {
+    expect(joinLevels(CONFLUENCE_LANE, ["create:page"])).toBe("create:page read:space");
+    // A LANE THE ENGINE REQUIRES NOTHING OF stores what was chosen.
+    expect(joinLevels({ ...CONFLUENCE_LANE, required_level: undefined }, ["create:page"])).toBe(
+      "create:page",
+    );
+  });
+
+  test("a set without the required level is held, in the engine's words", () => {
+    expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "create:page" })).toBe(
+      "Confluence grants nothing else without View. Add it to the set.",
+    );
+    expect(
+      refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "create:page read:space" }),
+    ).toBeNull();
   });
 
   test("names the set in the vendor's order, and the empty set as product access only", () => {
@@ -209,7 +226,6 @@ describe("a lane of sets (Confluence by operation)", () => {
     );
     expect(refusedLevel(CONFLUENCE_LANE, { enabled: false })).toBeNull();
     expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "read:space" })).toBeNull();
-    expect(refusedLevel(DATADOG_LANE, { enabled: true })).toBeNull();
   });
 });
 
@@ -224,4 +240,25 @@ test("Jira's empty level is product access only, which has no scope", () => {
   expect(scopeApplies(JIRA_LANE, { enabled: true, level: "10003" })).toBe(true);
   // A LIST HELD WITH IT is offered, so it can be cleared.
   expect(scopeApplies(JIRA_LANE, { enabled: true, level: "", scope: ["ENG"] })).toBe(true);
+});
+
+test("a lane with roles and no empty level refuses an agent that is on with none", () => {
+  expect(refusedLevel(DATADOG_LANE, { enabled: true })).toBe(
+    "Choose a Datadog role for every agent that is on.",
+  );
+  expect(refusedLevel(DATADOG_LANE, { enabled: true, level: "r-ro" })).toBeNull();
+  expect(refusedLevel(DATADOG_LANE, { enabled: false })).toBeNull();
+  // GitHub has permissions rather than levels, and Jira an empty level of its own.
+  expect(refusedLevel(GITHUB_LANE, { enabled: true })).toBeNull();
+  expect(refusedLevel(JIRA_LANE, { enabled: true, level: "" })).toBeNull();
+});
+
+test("an agent that left the company reads as such when its details open, not as off", () => {
+  const kept = { ...offLane(), observed: { exists: true, enabled: false } };
+  expect(offSentence(DATADOG_LANE, kept, true)).toBe(
+    "This agent left the company. Its account is kept, disabled, until you remove it.",
+  );
+  expect(offSentence(DATADOG_LANE, offLane(), true)).toBe(
+    "This agent left the company and has no account here.",
+  );
 });

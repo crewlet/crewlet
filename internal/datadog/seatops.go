@@ -110,17 +110,28 @@ func (c *Client) Disable(ctx context.Context, creds Credentials, account Account
 		return nil
 	}
 	if err := c.DisableUser(ctx, creds, account.ID); err != nil {
-		return fmt.Errorf("disable the account: %w", err)
+		// THE MARKER COMES OFF AGAIN, or the account is left live and
+		// marked as this engine's off: a disable by somebody else later
+		// would then read as this engine's and be undone (D3). Detached,
+		// because the failure is often the cancellation itself.
+		disableErr := fmt.Errorf("disable the account: %w", err)
+		if clearErr := c.ClearDisconnected(context.WithoutCancel(ctx), creds, account.ID); clearErr != nil {
+			return errors.Join(disableErr, fmt.Errorf("take the marker off again: %w", clearErr))
+		}
+		return disableErr
 	}
 	return nil
 }
 
-// TurnOff revokes every key on an account, then marks and disables it.
+// TurnOff revokes every key on an account, then marks and disables it: a
+// remove, which leaves the account unmanaged and so can leave no key behind.
 //
 // THE KEYS FIRST: a revoked key on a live account is an agent that can do
 // nothing, and a live key on a disabled account is a credential that works
 // again the moment anybody re-enables it. The first is the safer thing to be
-// interrupted at. One rule for a seat turned off and for a disconnect.
+// interrupted at. A seat turned off takes the other order, as two steps
+// ([seataccess.OpDisable], then [seataccess.OpRevoke]): the account stays
+// managed, so a key delete that fails is planned again on the next pass.
 func (c *Client) TurnOff(ctx context.Context, creds Credentials, account Account) error {
 	if err := c.RevokeKeys(ctx, creds, account); err != nil {
 		return err
@@ -129,8 +140,9 @@ func (c *Client) TurnOff(ctx context.Context, creds Credentials, account Account
 }
 
 // RetireKeys deletes the keys this engine minted on an account other than
-// keep, which is a rotation's second half: keep was minted and sealed by the
-// step before, so the keys it replaces hold values nothing reads.
+// keep, which is the second half of a mint, an enable that mints and a
+// rotation: keep was minted and sealed by the step before, so the keys it
+// replaces hold values nothing reads.
 //
 // IT REFUSES RATHER THAN GUESSES. A keep the account does not hold means the
 // key just minted is gone, and deleting the others would leave the seat with
@@ -140,8 +152,8 @@ func (c *Client) RetireKeys(
 ) (int, error) {
 	engine := account.EngineKeys()
 	if keep == "" || !slices.ContainsFunc(engine, func(key AppKey) bool { return key.ID == keep }) {
-		return 0, errors.New("datadog: the key this rotation minted is not on the account, " +
-			"so no older key was deleted; rotate again")
+		return 0, errors.New("datadog: the key the step before minted is not on the account, " +
+			"so no older key was deleted; rotate the agent's key")
 	}
 	retired := 0
 	for _, key := range engine {

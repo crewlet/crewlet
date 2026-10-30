@@ -2,6 +2,8 @@ package seataccess
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -81,6 +83,13 @@ type Session interface {
 	// seat with no account answers Exists false. A seat in Records that the
 	// document no longer has is observed too: it is what lets a pass reach a
 	// seat that left the document.
+	//
+	// ONE SEAT'S READ IS ONE SEAT'S FAULT. A vendor that could read some
+	// seats and not others (one agent's own credential refused, one account
+	// timing out) answers the rest with a [SeatFaults] error naming the
+	// others, and the sync records each as that seat's fault and syncs the
+	// rest. Any other error is the kind's, and a pass whose context is done
+	// answers that.
 	Observe(ctx context.Context, in ObserveInput) (Observation, error)
 
 	// Apply takes one step. A vendor refusal is a [*Refusal]; any other
@@ -102,6 +111,19 @@ type ObserveInput struct {
 
 // Observation is what the vendor holds, by handle then lane.
 type Observation map[string]map[Lane]Observed
+
+// SeatFaults is an [Session.Observe] error naming the seats the vendor could
+// not read, each with why, beside an [Observation] of every other seat.
+type SeatFaults map[string]error
+
+// Error implements error, naming each seat in order.
+func (f SeatFaults) Error() string {
+	parts := make([]string, 0, len(f))
+	for _, h := range slices.Sorted(maps.Keys(f)) {
+		parts = append(parts, h+": "+f[h].Error())
+	}
+	return "seataccess: could not read " + strings.Join(parts, "; ")
+}
 
 // ApplyInput is one step for one seat's lane.
 type ApplyInput struct {
@@ -278,6 +300,13 @@ type Options struct {
 	// Live is whether Levels were read from the vendor just now.
 	Live bool `json:"live"`
 
+	// Unread is a lane that grants by level whose offer the vendor did not
+	// answer for just now, so its levels are unknown: which of them
+	// administers cannot be told, and a turn-on or a change of level is
+	// asked a step-up as a raise would be ([AsksStepUp]). In process only:
+	// a reader of the answer sees a lane with no levels.
+	Unread bool `json:"-"`
+
 	// Permissions is GitHub's permission set.
 	Permissions []PermissionSpec `json:"permissions,omitempty"`
 
@@ -303,6 +332,14 @@ type Options struct {
 	// roles. Its Desired.Level is the chosen ids, sorted and space-separated,
 	// and the picker offers a multi-select.
 	Multiple bool `json:"multiple,omitempty"`
+
+	// RequiredLevel is, on a [Options.Multiple] lane, the level every other
+	// level in a set needs, so a set naming any level holds this one too:
+	// Confluence's View (`read:space`), without which Confluence grants no
+	// other space permission. The picker keeps it checked while anything
+	// else is, and the sync and the access routes refuse a set without it
+	// ([Options.MissingRequired]). Empty where no level is required.
+	RequiredLevel string `json:"required_level,omitempty"`
 }
 
 // ManagedExternal is [Options.Managed] for a lane the engine does not

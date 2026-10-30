@@ -405,9 +405,9 @@ func (s *session) docScope(handle string, lane seataccess.Lane) []string {
 	d := s.doc(handle)
 	switch {
 	case lane == seataccess.LaneJira && d.jira != nil:
-		return normalKeys(d.jira.Projects)
+		return normalKeys(lane, d.jira.Projects)
 	case lane == seataccess.LaneConfluence && d.confluence != nil:
-		return normalKeys(d.confluence.Spaces)
+		return normalKeys(lane, d.confluence.Spaces)
 	}
 	return nil
 }

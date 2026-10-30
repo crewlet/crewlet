@@ -243,3 +243,33 @@ units:
 		}
 	}
 }
+
+// A KEY IS WITHIN REACH IN ANY CASE ITS VENDOR IGNORES: a seat's lower-case
+// Jira project or Confluence space key is the upper-case one a unit names.
+func TestAKeyIsWithinReachInAnyCaseItsVendorIgnores(t *testing.T) {
+	t.Parallel()
+	const company = `
+name: Acme
+integrations:
+  atlassian: {org_id: org-1, api_key: "${ATLASSIAN_KEY}"}
+  jira: {url: "https://acme.atlassian.net", email: admin@acme.example, token: "${JIRA_TOKEN}", webhook_secret: "${JIRA_HOOK}"}
+  confluence: {url: "https://acme.atlassian.net/wiki", email: admin@acme.example, token: "${CONF_TOKEN}"}
+units:
+  - name: Ops
+    id: ops
+    project: OPS
+    space: ENG
+    roles:
+`
+	if _, err := ParseCompany([]byte(company + "      - {name: SRE, handle: sre, integrations: " +
+		"{jira: {enabled: true, project_role: \"10101\", projects: [ops]}, " +
+		"confluence: {enabled: true, space_role: r-1, spaces: [eng]}}}\n")); err != nil {
+		t.Fatalf("keys in another case were refused: %v", err)
+	}
+	err := rejects(t, company+"      - {name: SRE, handle: sre, integrations: "+
+		"{jira: {enabled: true, project_role: \"10101\", projects: [web]}}}\n",
+		"units[0].roles[0].integrations.jira.projects[0]")
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("a project outside reach: want ErrConflict, got %v", err)
+	}
+}

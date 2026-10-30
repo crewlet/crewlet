@@ -5,9 +5,8 @@
  * with the frame, since neither tab is on the first screen.
  */
 
-/* One table of agents by what they hold at the vendor. A row's details open
- * as a full-width row of the same table at the same size (option A), the row
- * and its details sharing one tinted band, never a box of their own. */
+/* The kit's DataTable draws the table, its expanded details and the line
+ * under a row; this places only what fills them. */
 .agent-access,
 .agent-access-page {
   display: flex;
@@ -23,48 +22,6 @@
   display: inline-flex;
   align-items: center;
   gap: var(--spacing-2);
-}
-.agent-access-table {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  border-top: 1px solid var(--color-border-default);
-}
-.agent-access-row {
-  display: grid;
-  grid-template-columns:
-    minmax(8rem, 13rem) 3rem minmax(8rem, 15rem) minmax(8rem, 1fr)
-    minmax(6rem, 9.5rem) 2rem;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-2) 0;
-  min-width: 0;
-}
-.agent-access-table:has(.agent-access-product) .agent-access-row {
-  grid-template-columns:
-    minmax(8rem, 13rem) 6rem 3rem minmax(8rem, 15rem) minmax(8rem, 1fr)
-    minmax(6rem, 9.5rem) 2rem;
-  gap: var(--spacing-3);
-}
-.agent-access-table--unscoped .agent-access-row {
-  grid-template-columns: minmax(8rem, 13rem) 3rem minmax(10rem, 20rem) minmax(6rem, 1fr) 2rem;
-  gap: var(--spacing-3);
-}
-.agent-access-row--head {
-  color: var(--color-text-secondary);
-  border-bottom: 1px solid var(--color-border-default);
-}
-.agent-access-seat + .agent-access-seat {
-  border-top: 1px solid var(--color-border-default);
-}
-.agent-access-seat {
-  padding: var(--spacing-1) 0;
-}
-.agent-access-lane.is-open {
-  background: var(--color-surface-subtle);
-  box-shadow:
-    calc(-1 * var(--spacing-3)) 0 0 var(--color-surface-subtle),
-    var(--spacing-3) 0 0 var(--color-surface-subtle);
 }
 .agent-access-who {
   display: flex;
@@ -82,22 +39,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.agent-access-level,
-.agent-access-scope {
-  min-width: 0;
-}
 .agent-access-quiet {
   color: var(--color-text-secondary);
 }
 .agent-access-menu {
   min-width: 22rem;
 }
-.agent-access-message {
-  margin: 0 0 var(--spacing-3) calc(13rem + var(--spacing-3));
-}
-/* A seat that is on with nothing to work in, said quietly under its row. */
-.agent-access-hint {
-  margin: 0 0 var(--spacing-3) calc(13rem + var(--spacing-3));
+/* What a row is waiting on, and a quiet hint, in the row's accessory strip. */
+.agent-access-under {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  min-width: 0;
 }
 .agent-access-actions {
   display: flex;
@@ -105,47 +58,28 @@
   gap: var(--spacing-2);
 }
 /* The details: one list and, on its first row, the actions; one size. */
-.agent-access-details-cell {
+.agent-access-details {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: var(--spacing-3);
-  padding: var(--spacing-1) 0 var(--spacing-3) calc(13rem + var(--spacing-3));
   font-size: var(--font-size-compact);
 }
 .agent-access-facts,
 .agent-access-off {
-  flex: 1 1 auto;
+  flex: 1 1 20rem;
   min-width: 0;
 }
 .agent-access-off {
   color: var(--color-text-secondary);
 }
-.agent-access-details-cell .mono {
+.agent-access-details .mono {
   font-size: inherit;
 }
 .agent-access-detail-actions {
   display: flex;
   flex: none;
   gap: var(--spacing-1);
-}
-.agent-access-bar {
-  position: sticky;
-  bottom: var(--spacing-3);
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--spacing-3);
-  padding: var(--spacing-3) var(--spacing-4);
-  border: 1px solid var(--color-border-default);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-elevated);
-  box-shadow: var(--shadow-md);
-}
-.agent-access-bar-actions {
-  display: flex;
-  gap: var(--spacing-2);
-  margin-left: auto;
 }
 .agent-access-review {
   display: flex;
@@ -179,26 +113,4 @@
 .agent-access-plan-note {
   display: block;
   color: var(--color-text-secondary);
-}
-@media (width < 1024px) {
-  .agent-access-row,
-  .agent-access-table:has(.agent-access-product) .agent-access-row,
-  .agent-access-table--unscoped .agent-access-row {
-    grid-template-columns: minmax(0, 1fr) auto auto;
-  }
-  .agent-access-row > .agent-access-level,
-  .agent-access-row > .agent-access-scope {
-    grid-column: 1 / -1;
-  }
-  .agent-access-row--head {
-    display: none;
-  }
-  .agent-access-message,
-  .agent-access-hint {
-    margin-left: 0;
-  }
-  .agent-access-details-cell {
-    flex-direction: column;
-    padding-left: 0;
-  }
 }

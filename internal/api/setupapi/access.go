@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
@@ -222,6 +223,11 @@ func (s *Service) writeAccess(w http.ResponseWriter, r *http.Request, q AccessQu
 		s.accessFault(w, r, q.Kind, "setup_access_unread", err)
 		return
 	}
+	s.writeAnswer(w, answer)
+}
+
+// writeAnswer writes an access answer with its revision as the entity tag.
+func (s *Service) writeAnswer(w http.ResponseWriter, answer seataccess.Answer) {
 	if s.config.Managed() {
 		answer.ManagedBy = seataccess.ManagedByOperator
 	}
@@ -289,7 +295,7 @@ func (s *Service) accessPlan(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !checkDraft(w, kind, current, draft) {
+	if !checkDraft(w, kind, q.Company, current, draft) {
 		return
 	}
 	plan, err := s.access.Plan(r.Context(), q, seataccess.Draft{Seats: draft.Seats})
@@ -319,8 +325,9 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 	}
 	check := authz.IsCheck(r, accessSavePolicy())
 	// A MANAGED DOCUMENT IS REFUSED BEFORE ANYTHING ELSE, as every write
-	// here is: see the package documentation.
-	if !check && !s.mayWriteAccess(w, r) {
+	// here is, and so is its check: a check that answered a plan for a save
+	// that would be refused is the one thing a check must never do.
+	if !s.mayWriteAccess(w, r) {
 		return
 	}
 	q, ok := s.accessQuery(w, r, kind)
@@ -335,7 +342,7 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !checkDraft(w, kind, current, draft) {
+	if !checkDraft(w, kind, q.Company, current, draft) {
 		return
 	}
 	edits, changed := draftEdits(current, draft)
@@ -393,11 +400,46 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	s.startSync(r, AccessSync{Kind: kind, Revision: applied.RevisionID, By: attributionOf(r),
 		Handles: changedHandles(changed), AfterSave: true})
-	after, ok := s.accessQuery(w, r, kind)
-	if !ok {
-		return
+	s.writeSaved(w, r, current, changed, applied.RevisionID)
+}
+
+// writeSaved answers a save that landed: the tab read again at the revision it
+// wrote, or, where that read fails, the tab as it was read before the save with
+// the saved settings in place, marked as syncing. NEVER A FAILURE: the revision
+// is the company's now, and an error here would have the person save again.
+func (s *Service) writeSaved(w http.ResponseWriter, r *http.Request,
+	before seataccess.Answer, changed []accessChange, revision string) {
+
+	fc, err := s.readCompany(r.Context())
+	if err == nil {
+		q := AccessQuery{Kind: before.Kind, Company: fc.company, Roster: fc.roster,
+			Revision: fc.revision}
+		answer, answerErr := s.access.Answer(r.Context(), q)
+		if answerErr == nil {
+			s.writeAnswer(w, answer)
+			return
+		}
+		err = answerErr
 	}
-	s.writeAccess(w, r, after)
+	log.WarnContext(r.Context(), "setup_access_reread_failed", "kind", before.Kind,
+		"revision", revision, "error", err.Error(),
+		"detail", "the save landed; the answer is the tab as read before it, with the saved settings")
+	saved := before
+	saved.Revision, saved.Syncing = revision, true
+	saved.Seats = slices.Clone(before.Seats)
+	for i, seat := range saved.Seats {
+		lanes := maps.Clone(seat.Lanes)
+		for _, c := range changed {
+			if c.handle != seat.Handle {
+				continue
+			}
+			la := lanes[c.lane]
+			la.Desired, la.Plan = c.after, []seataccess.Step{}
+			lanes[c.lane] = la
+		}
+		saved.Seats[i].Lanes = lanes
+	}
+	s.writeAnswer(w, saved)
 }
 
 // accessInstall serves
@@ -536,7 +578,7 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 	}
 	held := seat.Lanes[lane]
 	if action == seataccess.ActionKeep {
-		s.keepVendorSetting(w, r, q, seat, lane, held)
+		s.keepVendorSetting(w, r, q, current, seat, lane, held)
 		return
 	}
 	var ask seataccess.Ask
@@ -556,6 +598,9 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 		}
 		ask.Rotate = true
 	case seataccess.ActionRemove:
+		if refusedOutside(w, current, kind, lane, seat.Handle) {
+			return
+		}
 		// OFF FIRST (D1): remove is a separate, confirmed action, allowed
 		// only once the seat is off here. A seat that left the document is
 		// off by definition.
@@ -568,6 +613,9 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 		}
 		ask.Remove = true
 	case seataccess.ActionRestore:
+		if refusedOutside(w, current, kind, lane, seat.Handle) {
+			return
+		}
 		ask.Reenable = true
 	}
 	// A RETRY AND A RE-READ ASK NOTHING: they run the sync for the one seat.
@@ -609,9 +657,15 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 // after drift, D2; "Keep off" after an account was disabled at the vendor, D3),
 // so the next sync finds nothing to restore.
 func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q AccessQuery,
-	seat seataccess.SeatAnswer, lane seataccess.Lane, held seataccess.LaneAnswer) {
+	current seataccess.Answer, seat seataccess.SeatAnswer, lane seataccess.Lane,
+	held seataccess.LaneAnswer) {
 
-	if !s.mayWriteAccess(w, r) {
+	// THE SAVE'S OWN VERBS: keep writes the document as a save does, so it
+	// is asked setup.access.write, and the raise on top where what the
+	// vendor shows is an administration grant the document did not hold
+	// (D10). The route's own verb is the one-off asks', which write nothing.
+	if !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessWrite}) ||
+		!s.mayWriteAccess(w, r) {
 		return
 	}
 	if seat.Departed || !held.Observed.Exists {
@@ -621,7 +675,17 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 		})
 		return
 	}
-	kept := held.Observed.Access()
+	kept, err := seataccess.KeptAccess(lane, held.Desired, held.Observed)
+	if err != nil {
+		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeInvalidInput, map[string]string{
+			"detail": seat.Handle + ": " + err.Error(),
+		})
+		return
+	}
+	if seataccess.AsksStepUp(offerOf(current, lane), held.Desired, kept) &&
+		!authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessRaise}) {
+		return
+	}
 	expect := strings.TrimSpace(r.Header.Get("If-Match"))
 	if expect == "" {
 		expect = q.Revision
@@ -643,11 +707,18 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 	log.InfoContext(r.Context(), "setup_access_kept",
 		"kind", q.Kind, "seat", seat.Handle, "lane", lane, "revision", applied.RevisionID,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
-	after, ok := s.accessQuery(w, r, q.Kind)
-	if !ok {
-		return
+	s.writeSaved(w, r, current, []accessChange{change}, applied.RevisionID)
+}
+
+// offerOf is what lane offers on an access answer: an offer nobody read where
+// the answer holds none, so a judgement on it fails closed.
+func offerOf(answer seataccess.Answer, lane seataccess.Lane) seataccess.Options {
+	for _, o := range answer.Options {
+		if o.Lane == lane {
+			return o
+		}
 	}
-	s.writeAccess(w, r, after)
+	return seataccess.UnreadOffers(answer.Kind, false)[lane]
 }
 
 // startSync asks the engine to sync after a save, and logs rather than refuses
@@ -722,8 +793,8 @@ func readAccessDraft(w http.ResponseWriter, r *http.Request) (accessDraft, bool)
 // from. Where a lane's levels could not be read live, the static list is all
 // there is, and a live-listed id it does not hold is left to the document's
 // rules and the sync's finding rather than refused on a guess.
-func checkDraft(w http.ResponseWriter, kind integration.Kind, current seataccess.Answer,
-	draft accessDraft) bool {
+func checkDraft(w http.ResponseWriter, kind integration.Kind, company *config.Company,
+	current seataccess.Answer, draft accessDraft) bool {
 
 	if len(draft.Seats) == 0 {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
@@ -753,7 +824,7 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, current seataccess
 					})
 				return false
 			}
-			if refusal := notOffered(kind, lane, offers[lane],
+			if refusal := notOffered(kind, lane, offers[lane], within(company, lane),
 				draft.Seats[handle][lane]); refusal != nil {
 				refusal["seat"] = handle
 				refusal["lane"] = string(lane)
@@ -767,14 +838,16 @@ func checkDraft(w http.ResponseWriter, kind integration.Kind, current seataccess
 }
 
 // notOffered is why want is not something o offers on lane, as a refusal's
-// detail, or nil where it is.
+// detail, or nil where it is. under is the path every scope entry must sit
+// under where the connection does not list its reach, empty where any entry
+// the vendor accepts is within it ([within]).
 //
 // A LEVEL IS JUDGED ON WHAT IS LISTED: a fixed set always, and a live-listed
 // one only when it was read live just now. A live-listed lane the vendor did
 // not answer for holds no list to judge by, and an id it does not hold is the
 // document rules' and the sync's finding rather than a refusal on a guess.
 func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Options,
-	want seataccess.Desired) httpjson.Detail {
+	under string, want seataccess.Desired) httpjson.Detail {
 
 	if want.Level != "" && len(o.Levels) > 0 && (o.Live || !liveLevels(kind, lane)) {
 		// A SET OF LEVELS where the lane takes one (Confluence's space
@@ -787,6 +860,11 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 			return httpjson.Detail{"detail": fmt.Sprintf("level %q is not one the vendor "+
 				"lists", want.Level), "offered": offered}
 		}
+	}
+	if required, missing := o.MissingRequired(want.Level); missing {
+		return httpjson.Detail{"detail": fmt.Sprintf("%s grants nothing else without %s "+
+			"(%s); add it to the set", seataccess.LaneName(lane), required.Name, required.ID),
+			"required": required.ID}
 	}
 	for key, grant := range want.Permissions {
 		i := slices.IndexFunc(o.Permissions, func(p seataccess.PermissionSpec) bool {
@@ -808,15 +886,34 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 				"or not at all", o.Permissions[i].Name)}
 		}
 	}
-	if !o.ScopeOpen && len(want.Scope) > 0 {
+	for _, entry := range want.Scope {
+		if !o.Reaches(entry) {
+			return httpjson.Detail{"detail": fmt.Sprintf("%q is outside what the "+
+				"company's connection reaches", entry), "offered": o.Scope}
+		}
+	}
+	if o.ScopeOpen && under != "" {
+		prefix := strings.ToLower(strings.Trim(under, "/")) + "/"
 		for _, entry := range want.Scope {
-			if !slices.Contains(o.Scope, strings.TrimSpace(entry)) {
-				return httpjson.Detail{"detail": fmt.Sprintf("%q is outside what the "+
-					"company's connection reaches", entry), "offered": o.Scope}
+			if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry)), prefix) {
+				return httpjson.Detail{"detail": fmt.Sprintf("%q is outside %s, the group "+
+					"the company's connection reaches", entry, under)}
 			}
 		}
 	}
 	return nil
+}
+
+// within is the path a lane's scope entries must sit under where its
+// connection does not list its reach: a GitLab project inside the group the
+// company's connection joins agents to, since the engine grants a seat its
+// projects as a member of that group. Empty for every other lane.
+func within(company *config.Company, lane seataccess.Lane) string {
+	if lane != seataccess.LaneGitLab || company == nil || company.Integrations.GitLab == nil ||
+		company.Integrations.GitLab.Provisioning == nil {
+		return ""
+	}
+	return strings.TrimSpace(company.Integrations.GitLab.Provisioning.Group)
 }
 
 // liveLevels reports a lane whose levels the vendor lists live rather than
@@ -830,14 +927,40 @@ func liveLevels(kind integration.Kind, lane seataccess.Lane) bool {
 	return ok && spec.LiveLevels
 }
 
-// external reports a lane whose credential was handed in from outside Crewlet:
-// one the engine does not provision for the company, or a credential the
-// ledger records as provided rather than minted.
-func external(current seataccess.Answer, lane seataccess.Lane, held seataccess.LaneAnswer) bool {
+// refusedOutside refuses a remove or a turn back on of an account managed
+// outside Crewlet, and reports whether it did. The outside removes it or turns
+// it back on: the engine opens no session there and records nothing, so an ask
+// would change nothing while the card said it had.
+func refusedOutside(w http.ResponseWriter, current seataccess.Answer, kind integration.Kind,
+	lane seataccess.Lane, handle string) bool {
+
+	if !managedOutside(current, lane) {
+		return false
+	}
+	httpjson.FailWith(w, http.StatusConflict, httpjson.CodeAccessExternal, map[string]string{
+		"detail": handle + "'s " + string(lane) + " account is managed outside Crewlet",
+		"hint":   "remove it or turn it back on at " + seataccess.KindName(kind) + " itself",
+	})
+	return true
+}
+
+// managedOutside reports a lane the engine does not provision for the company
+// ([seataccess.ManagedExternal]).
+func managedOutside(current seataccess.Answer, lane seataccess.Lane) bool {
 	for _, o := range current.Options {
 		if o.Lane == lane && o.Managed == seataccess.ManagedExternal {
 			return true
 		}
+	}
+	return false
+}
+
+// external reports a lane whose credential was handed in from outside Crewlet:
+// one the engine does not provision for the company, or a credential the
+// ledger records as provided rather than minted.
+func external(current seataccess.Answer, lane seataccess.Lane, held seataccess.LaneAnswer) bool {
+	if managedOutside(current, lane) {
+		return true
 	}
 	c := held.Observed.Credential
 	return c != nil && c.Source == seataccess.CredentialExternal

@@ -153,7 +153,8 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 		}
 	}
 	obs, err := sess.Observe(ctx, ObserveInput{Seats: observeSeats, Records: records})
-	if err != nil {
+	unread, partial := errors.AsType[SeatFaults](err)
+	if err != nil && !partial {
 		return SyncReport{}, fmt.Errorf("seataccess: read %s back: %w", kind, err)
 	}
 	s := &syncer{
@@ -166,6 +167,12 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 			return s.report, err
 		}
 		seat, inDoc := seats[h]
+		if fault, ok := unread[h]; ok {
+			if err := s.unread(ctx, h, seat, inDoc, records[h], fault); err != nil {
+				return s.report, err
+			}
+			continue
+		}
 		if err := s.seat(ctx, h, seat, inDoc, records[h], obs[h]); err != nil {
 			return s.report, err
 		}
@@ -375,6 +382,32 @@ func (s *syncer) seat(
 	return s.put(ctx, rec)
 }
 
+// unread records a seat the vendor could not read: a fault on each of its
+// lanes, which the next pass retries, with its account and its last
+// observation left as the ledger holds them. Nothing is planned or taken for
+// it, because a plan drawn from no answer would act on a guess.
+func (s *syncer) unread(ctx context.Context, h string, seat Seat, inDoc bool, rec Record, err error) error {
+	if rec.Handle == "" {
+		rec = Record{Kind: s.kind, Handle: h}
+	}
+	if inDoc {
+		rec.Name = seat.Name
+	}
+	if rec.Lanes == nil {
+		rec.Lanes = map[Lane]LaneRecord{}
+	}
+	f := failureOf(Step{Verb: VerbObserve}, "", err)
+	if s.in.Sink == nil {
+		// A DRY RUN keeps the last sync's result, and still says the seat
+		// could not be read.
+		s.finding(integration.FindingIdentityFailed, h, "", f)
+		s.report.Records[h] = rec
+		return nil
+	}
+	s.failAll(&rec, LanesOf(s.kind), f)
+	return s.put(ctx, rec)
+}
+
 // adopt records, rather than duplicates, what the vendor already holds for a
 // seat the ledger has no account for: an account under the engine's naming
 // (one made before the ledger existed), where the seat is on; and a
@@ -467,10 +500,18 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 				Remedy: "Choose a role for that list on the integration's Agents tab, or clear the list",
 			}, nil
 		}
+		if required, missing := opts.MissingRequired(d.Level); missing {
+			return &Failure{
+				Step: VerbGrant, Actor: ByYou,
+				Said: fmt.Sprintf("%s grants nothing else without %s, and this agent's "+
+					"access leaves it out", LaneName(lane), required.Name),
+				Remedy: fmt.Sprintf("Add %s to its access on the integration's Agents tab", required.Name),
+			}, nil
+		}
 	}
-	if spec.Scoped && !opts.ScopeOpen {
+	if spec.Scoped {
 		for _, entry := range d.Scope {
-			if !slices.Contains(opts.Scope, entry) {
+			if !opts.Reaches(entry) {
 				return &Failure{
 					Step: VerbScope, Actor: ByYou,
 					Said:   fmt.Sprintf("%s is outside what the company's %s connection reaches", entry, LaneName(lane)),
@@ -813,7 +854,7 @@ func observedFor(lanes []Lane, got map[Lane]Observed, rec Record, now time.Time)
 				o.DisabledBy = DisabledByHand
 			}
 		}
-		if o.Enabled && applied != nil && applied.Enabled && !applied.SameAccess(o.Access()) {
+		if o.Enabled && applied != nil && applied.Enabled && !applied.NormalizedFor(lane).SameAccess(o.Access()) {
 			o.ChangedByHandAt = prior.Observed.ChangedByHandAt
 			if o.ChangedByHandAt.IsZero() {
 				o.ChangedByHandAt = now
