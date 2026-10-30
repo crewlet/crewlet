@@ -82,8 +82,10 @@ type SyncReport struct {
 // An error is a fault the whole kind shares (the vendor could not be opened
 // or read, the ledger could not be read or written); a failure confined to one
 // seat is that seat's finding and its lane's sync result, and the next seat is
-// synced regardless. An error wrapping [integration.ErrNotConfigured] is a
-// company that does not provision this vendor.
+// synced regardless. A vendor refusing the company itself at Open (a
+// [*Refusal]) is one finding on the integration, not an error. An error
+// wrapping [integration.ErrNotConfigured] is a company that does not provision
+// this vendor.
 func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 	if in.Vendor == nil || in.Ledger == nil {
 		return SyncReport{}, errors.New("seataccess: a sync needs its vendor and the ledger")
@@ -113,6 +115,18 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 		return SyncReport{}, fmt.Errorf("seataccess: %s: %w", kind, err)
 	}
 	sess, err := in.Vendor.Open(ctx, in.Open)
+	if r, ok := errors.AsType[*Refusal](err); ok {
+		// THE VENDOR REFUSES THE COMPANY AS CONFIGURED (a Mattermost team
+		// that does not exist, say), which stops every seat alike and only
+		// a person can fix: one finding on the integration with the
+		// vendor's reason and remedy, no seat observed and nothing changed.
+		// Reported, not raised, because the pass ran and found exactly
+		// that; a fault (the vendor not answering) still fails the pass.
+		return SyncReport{Findings: []integration.Finding{{
+			Kind: integration.FindingIdentityFailed, Detail: r.Said, Remedy: r.Remedy,
+			ActionURL: r.ActionURL,
+		}}}, nil
+	}
 	if err != nil {
 		return SyncReport{}, fmt.Errorf("seataccess: open %s: %w", kind, err)
 	}
