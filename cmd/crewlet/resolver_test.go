@@ -121,8 +121,8 @@ func TestAStoredSecretWinsOverAStaleExport(t *testing.T) {
 // Not parallel: it exports the credential on the process, to show a run
 // handed an environment without it does not read it there.
 //
-// Mutation: read the store, or the process's environment, and the run finds an
-// administrator token.
+// Mutation: read the store, or the process's environment, and the run finds a
+// provisioning token.
 func TestAnOperatorCredentialIsNotReadFromTheStore(t *testing.T) {
 	cfg := bootstrapWithKeyring(t, "k1")
 	if _, errs, err := secretsCmd(t, cfg, "set", "GITLAB_ADMIN_TOKEN",
@@ -133,8 +133,8 @@ func TestAnOperatorCredentialIsNotReadFromTheStore(t *testing.T) {
 	company := companyAt(t, readerCompanyDoc, untouchedVendor(t))
 	_, _, err := cliIn(t, noEnviron, "gitlab", "provision", company, "-print",
 		"-config", cfg, "-public-url", "https://crewlet.example.com")
-	if err == nil || !strings.Contains(err.Error(), "no administrator token") {
-		t.Fatalf("err = %v, want the run to find no administrator token: one was read "+
+	if err == nil || !strings.Contains(err.Error(), "no provisioning token") {
+		t.Fatalf("err = %v, want the run to find no provisioning token: one was read "+
 			"out of the secret store or the process's environment", err)
 	}
 	exported := config.MapSource{"GITLAB_ADMIN_TOKEN": "  exported-admin-pat  "}
