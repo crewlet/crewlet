@@ -159,11 +159,40 @@ The bot token drives the transport (the seat's own identity at start, and the wo
 The engine creates every agent's app once an app configuration token is on the
 company block, and a person approves each install from the Agents tab: see
 [Per-agent access from the Agents tab](#per-agent-access-from-the-agents-tab).
-An app the retired `crewlet slack provision` made is adopted by its working
-bot token rather than created again; to let one be installed again, copy its
-`client_id` and `client_secret` from that command's `slack-apps.json` with
-`crewlet secrets set SLACK_CLIENT_ID_<HANDLE>` and
-`crewlet secrets set SLACK_CLIENT_SECRET_<HANDLE>`.
+
+### Upgrading from `crewlet slack provision`
+
+The retired `crewlet slack provision` command made each agent's app from your
+machine and kept what Slack returned in a local ledger, `slack-apps.json`.
+Nothing on the engine reads that file, so moving a company onto the engine's
+own setup takes three steps.
+
+1. **Enter an app configuration token on Slack's connect form.** Generate a
+   fresh one from [api.slack.com/apps](https://api.slack.com/apps) (Your App
+   Configuration Tokens) rather than reusing the pair in `slack-apps.json`,
+   which Slack may have rotated or expired since the command last ran. On its
+   next sync the engine adopts each app the command made by the seat's working
+   bot token, so no app is created twice.
+2. **Store each app's OAuth client.** Slack serves an app's client id and
+   secret only once, at creation, so the command's ledger holds the only
+   copy, and an adopted app cannot be installed again (after it is turned off,
+   or for a rotate) until both are in the secret store. Pipe each value
+   straight from the ledger so it is never shown on screen or written to shell
+   history, once per agent handle:
+
+   ```sh
+   jq -r '.apps["senior-engineer"].client_id' slack-apps.json \
+     | crewlet secrets set SLACK_CLIENT_ID_SENIOR_ENGINEER
+   jq -r '.apps["senior-engineer"].client_secret' slack-apps.json \
+     | crewlet secrets set SLACK_CLIENT_SECRET_SENIOR_ENGINEER
+   ```
+
+   The variable is the handle in upper case with each character other than a
+   letter or digit written as `_`. Never pass these values with `-value`,
+   which exposes them in the process list and shell history.
+3. **Delete `slack-apps.json`** once every client is stored. It holds each
+   app's client secret and signing secret in plain text, and the engine never
+   reads it.
 
 ### Ordering and URL verification
 
