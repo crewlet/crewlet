@@ -2476,6 +2476,90 @@
         "null"
       ]
     },
+    "RoleConfluence": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has Confluence access. Off removes the product access and keeps the account.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "operations": {
+          "description": "Confluence space permissions as operation:target, where the site has no space roles.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "space_role": {
+          "description": "Confluence space role id, where the site has role-based access.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "spaces": {
+          "description": "Confluence space keys this agent holds the role in.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleDatadog": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has a Datadog service account. Off disables the account and keeps it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "Datadog role id (GET /api/v2/roles), managed or custom.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleGitHub": {
       "additionalProperties": false,
       "properties": {
@@ -2495,10 +2579,34 @@
             "null"
           ]
         },
+        "enabled": {
+          "description": "Whether this agent has its own GitHub App. Off suspends the installation and keeps the app.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
         "installation_id": {
           "description": "Installation of this seat's app on the organization. Written by the engine.",
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "permissions": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "description": "GitHub App permissions (contents, issues, pull_requests, checks, actions, workflows), each read or write; absent is No access.",
+          "type": [
+            "object",
             "null"
           ]
         },
@@ -2561,20 +2669,125 @@
         "null"
       ]
     },
+    "RoleGitLab": {
+      "additionalProperties": false,
+      "properties": {
+        "access_level": {
+          "description": "GitLab role: 10 Guest, 15 Planner, 20 Reporter, 30 Developer, 40 Maintainer, 50 Owner.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent has a GitLab service account. Off blocks the account and keeps it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "member_role_id": {
+          "description": "GitLab custom role id (Ultimate), instead of access_level.",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "projects": {
+          "description": "Projects this agent is a member of; empty means the whole group.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "RoleIntegrations": {
       "additionalProperties": false,
       "properties": {
+        "confluence": {
+          "$ref": "#/$defs/RoleConfluence",
+          "description": "This seat's Confluence access: whether it is on, its space role and its spaces."
+        },
+        "datadog": {
+          "$ref": "#/$defs/RoleDatadog",
+          "description": "This seat's Datadog service account: whether it is on and its role."
+        },
         "github": {
           "$ref": "#/$defs/RoleGitHub",
-          "description": "This seat's own GitHub App: how much it may do, and where."
+          "description": "This seat's own GitHub App: whether it is on, its permissions, and where."
+        },
+        "gitlab": {
+          "$ref": "#/$defs/RoleGitLab",
+          "description": "This seat's GitLab service account: whether it is on, its role and its projects."
+        },
+        "jira": {
+          "$ref": "#/$defs/RoleJira",
+          "description": "This seat's Jira access: whether it is on, its project role and its projects."
         },
         "mattermost": {
           "$ref": "#/$defs/RoleMattermost",
-          "description": "This seat's Mattermost bot: one token covers everything."
+          "description": "This seat's Mattermost bot: whether it is on, its roles and its channels."
         },
         "slack": {
           "$ref": "#/$defs/RoleSlack",
-          "description": "This seat's own Slack app: bot token and signing secret."
+          "description": "This seat's own Slack app: whether it is on."
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "RoleJira": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "Whether this agent has Jira access. Off removes the product access and keeps the account.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "project_role": {
+          "description": "Jira project role id (GET /rest/api/3/role).",
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "projects": {
+          "description": "Jira project keys this agent holds the role in.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": [
@@ -2601,6 +2814,45 @@
             "string",
             "number",
             "boolean",
+            "null"
+          ]
+        },
+        "channels": {
+          "description": "Channels this agent's bot is a member of.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "enabled": {
+          "description": "Whether this agent has a Mattermost bot. Off revokes its tokens and deactivates it.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
+        },
+        "roles": {
+          "description": "Mattermost roles: system_user, plus system_post_all_public or system_post_all, or system_admin.",
+          "items": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
             "null"
           ]
         },
@@ -2776,6 +3028,15 @@
             "null"
           ],
           "x-crewlet-secret": true
+        },
+        "enabled": {
+          "description": "Whether this agent has its own Slack app. Off revokes the bot token and keeps the app.",
+          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+          "type": [
+            "boolean",
+            "string",
+            "null"
+          ]
         },
         "signing_secret": {
           "description": "Verifies inbound webhooks for this seat's app.",
