@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/accessmigrate"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -248,5 +249,51 @@ roles:
 	if _, err := written.syncSeatAccess(t.Context(), integration.KindGitHub, seatSync{}); err == nil ||
 		errors.Is(err, integration.ErrNotConfigured) {
 		t.Fatalf("an engine-written deployment's GitHub sync = %v, want it to reach the ledger", err)
+	}
+}
+
+// ONLY A CONNECTED INTEGRATION WAITS ON THE MIGRATION, AND IT SAYS WHY.
+//
+// The company connects Jira (so Atlassian) and not Datadog. Datadog's pass
+// reports nothing about a migration: it is not configured, and there is
+// nothing for it to wait on. Atlassian's pass names Atlassian, says its access
+// migration has not finished, and gives the reason the migration's last attempt
+// here left; once an attempt moves it, the reason is forgotten. Mutation: gate
+// on the marker alone, or drop the reason, and a case here fails.
+func TestOnlyAConnectedIntegrationReportsTheUnfinishedMigration(t *testing.T) {
+	t.Parallel()
+	e, c := sealingEngine(t, "https://jira.example.com")
+	e.epoch.current.Store(c)
+	waiting := func(r seataccess.SyncReport) []string {
+		var said []string
+		for _, f := range r.Findings {
+			if strings.Contains(f.Detail, "access migration has not finished") {
+				said = append(said, f.Detail)
+			}
+		}
+		return said
+	}
+
+	report, err := e.syncSeatAccess(t.Context(), integration.KindDatadog, seatSync{})
+	if err != nil && !errors.Is(err, integration.ErrNotConfigured) {
+		t.Fatalf("an unconnected integration's sync = %v", err)
+	}
+	if said := waiting(report); len(said) != 0 {
+		t.Errorf("Datadog, which the company does not connect, reports %q", said)
+	}
+
+	why := "Atlassian did not answer when its agents' accounts were read: 503 Service Unavailable"
+	e.rememberSeatAccessPending(accessmigrate.Result{
+		Pending: map[integration.Kind]error{integration.KindAtlassian: errors.New(why)}})
+	report, err = e.syncSeatAccess(t.Context(), integration.KindAtlassian, seatSync{})
+	if said := waiting(report); err != nil || len(said) != 1 ||
+		!strings.HasPrefix(said[0], "Atlassian's access migration") || !strings.Contains(said[0], why) {
+		t.Fatalf("Atlassian's pass said %q, %v; want its unfinished migration with the reason", said, err)
+	}
+
+	e.rememberSeatAccessPending(accessmigrate.Result{
+		Migrated: []integration.Kind{integration.KindAtlassian}})
+	if got := e.seatAccessPendingReason(integration.KindAtlassian); got != "" {
+		t.Errorf("a moved integration still waits on %q", got)
 	}
 }

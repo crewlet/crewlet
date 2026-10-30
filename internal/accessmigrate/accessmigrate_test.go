@@ -289,6 +289,11 @@ func TestAnUnansweredVendorLeavesOnlyItsIntegrationGated(t *testing.T) {
 				m.Pending)
 			continue
 		}
+		// THE REASON IS A PERSON'S TO READ: the access pass reports it.
+		if why := m.Pending[integration.KindDatadog].Error(); !strings.Contains(why, "Datadog") ||
+			strings.Contains(why, "accessmigrate") {
+			t.Errorf("%s: the reason reads %q", name, why)
+		}
 		if _, err := accessmigrate.Apply(root, m); err != nil {
 			t.Fatal(err)
 		}
