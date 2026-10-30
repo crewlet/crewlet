@@ -192,8 +192,7 @@ export function availableActions(
   if (held || syncing) return [];
   const out: SeatAction[] = [];
   const o = saved.observed;
-  if (laneWords(lane.key).rotatable && o.credential && !providedExternally(lane, o))
-    out.push("rotate");
+  if (lane.rotatable && o.credential && !providedExternally(lane, o)) out.push("rotate");
   if (!saved.desired.enabled && o.exists) out.push("remove");
   return out;
 }

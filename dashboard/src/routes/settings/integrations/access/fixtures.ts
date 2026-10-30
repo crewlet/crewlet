@@ -19,6 +19,7 @@ export const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 const DATADOG_OPTIONS: AccessOptions = {
   lane: "datadog",
   live: true,
+  rotatable: true,
   levels: [
     { id: "r-ro", name: "Datadog Read Only Role" },
     { id: "r-std", name: "Datadog Standard Role" },

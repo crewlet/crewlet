@@ -59,6 +59,8 @@ export interface AccessOptions {
   scope?: string[];
   /** Whether a scope entry outside `scope` may be typed. */
   scope_open?: boolean;
+  /** Whether a person can ask Crewlet to rotate a seat's credential on this lane. */
+  rotatable?: boolean;
   /**
    * "external" where the engine does not provision this lane for the company:
    * a seat's switch still binds its tool to the credential, and its access is
