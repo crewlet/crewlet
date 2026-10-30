@@ -116,6 +116,10 @@ type Facts struct {
 	// Unavailable is each integration whose vendor could not be read, with
 	// why.
 	Unavailable map[integration.Kind]error
+
+	// Managed is a deployment whose company document only named systems
+	// write ([config.Company.SeatCredentialMode]).
+	Managed bool
 }
 
 // ResolveLevel turns a level the old document named into the vendor's
@@ -223,7 +227,8 @@ func Plan(root map[string]any, facts Facts) (Migration, error) {
 			m.Pending[kind] = err
 			continue
 		}
-		provisioned := company.SeatCredentialMode(string(kind)) == config.SeatCredentialEngine
+		provisioned := company.SeatCredentialMode(string(kind), facts.Managed) ==
+			config.SeatCredentialEngine
 		lanes := map[string]map[seataccess.Lane]seataccess.Desired{}
 		var laneErr error
 		for _, row := range seats {

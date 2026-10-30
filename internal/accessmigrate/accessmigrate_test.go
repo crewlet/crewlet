@@ -110,7 +110,7 @@ func (session) Apply(context.Context, seataccess.ApplyInput) (seataccess.StepRes
 // plan is a migration's plan of root, read from vs.
 func plan(t *testing.T, root map[string]any, vs *vendors) accessmigrate.Migration {
 	t.Helper()
-	facts, err := accessmigrate.Read(t.Context(), root, vs.open, config.NewResolver())
+	facts, err := accessmigrate.Read(t.Context(), root, vs.open, config.NewResolver(), false)
 	if err != nil {
 		t.Fatal(err)
 	}
