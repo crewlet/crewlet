@@ -151,7 +151,27 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 			return s.report, err
 		}
 	}
+	s.report.Findings = append(s.report.Findings, unboundTools(in.Open.Config, kind)...)
 	return s.report, nil
+}
+
+// unboundTools is the finding for each per-seat server named after kind that
+// reads no seat's credential: it declares no `seat_credentials` and is not a
+// server this build recognises, so every agent's instance of it starts and
+// acts as nobody (D15).
+func unboundTools(c *config.Company, kind integration.Kind) []integration.Finding {
+	var out []integration.Finding
+	for _, name := range c.UnboundSeatServers(string(kind)) {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingCredentialMissing,
+			Subject: "mcp_servers." + name,
+			Detail: "tool declared but no credential binding: the per-seat server " + name +
+				" reads no agent's credential, so every agent's instance acts as nobody",
+			Remedy: "Declare the variable or header it reads under seat_credentials on " +
+				"the mcp_servers entry, or run a server this engine recognises",
+		})
+	}
+	return out
 }
 
 // syncHandles is every seat a sync visits: the document's agents and every
