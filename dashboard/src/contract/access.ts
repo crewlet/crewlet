@@ -71,6 +71,12 @@ export interface AccessOptions {
    */
   multiple?: boolean;
   /**
+   * On a `multiple` lane, the level every other level in a set needs, so a set
+   * naming any level holds this one too: Confluence's View (`read:space`).
+   * The engine refuses a set without it. Absent where no level is required.
+   */
+  required_level?: string;
+  /**
    * "external" where the engine does not provision this lane for the company:
    * a seat's switch still binds its tool to the credential, and its access is
    * managed outside Crewlet.
