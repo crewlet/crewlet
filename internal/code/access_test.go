@@ -395,6 +395,92 @@ func TestAReadForAnotherSeatIsHeldToBothGrants(t *testing.T) {
 	}
 }
 
+// A GRANT UNDER A COLLEAGUE'S CEILING IS HELD TO BOTH (M3-decisions U40 (a),
+// a coding box working for the seat whose ask woke its turn): every command
+// of RefRule's table passes exactly where the seat's own grant passes it AND —
+// outside the seat's own namespace, which is its own work — the colleague's
+// grant passes the very same command; a read passes where both read; and
+// whether any push could pass is the seat's own answer, since its namespace
+// is never the ceiling's to refuse. Exhaustively, at every tier and relation
+// of both seats, for a seat of a short handle and of a handle four refs long:
+// every refusal the ceiling adds says the same for both and fits what a
+// receiver carries into a proposal. A seat that reads a repository for a
+// colleague who reads nothing of it is told about the colleague.
+//
+// Mutations: Under ignored by RefRule → the rows the colleague refuses pass,
+// red; the namespace not exempted → the seat's own rows under a read-only
+// colleague refused, red; MayRead ignoring the ceiling → the colleague who
+// reads nothing lets the seat read, red; the colleague's handle in the
+// sentence → the long handle's sentences differ and pass the bound, red.
+func TestAGrantUnderAColleaguesCeilingIsHeldToBoth(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", 4*code.MaxRefNameBytes)
+	tiers := append(code.Tiers(), "")
+	for _, tier := range tiers {
+		for _, relation := range code.Accesses() {
+			for _, ceilingTier := range tiers {
+				for _, ceilingRelation := range code.Accesses() {
+					own := grantAs("ana", tier, relation)
+					ceiling := grantAs("bo", ceilingTier, ceilingRelation)
+					under := own.Under(ceiling)
+					longUnder := grantAs(long, tier, relation).Under(grantAs(long+"b", ceilingTier,
+						ceilingRelation))
+					what := fmt.Sprintf("ana at %s/%s for bo at %s/%s", tier, relation, ceilingTier,
+						ceilingRelation)
+					for name, c := range commands {
+						ownReason, _ := own.RefRule(c)
+						ceilingReason, _ := ceiling.RefRule(c)
+						mine := strings.HasPrefix(c.Ref, "refs/heads/seats/ana/")
+						want := ownReason == "" && (mine || ceilingReason == "")
+						reason, words := under.RefRule(c)
+						if (reason == "") != want {
+							t.Errorf("%s, %s: passes %v, want %v (own %q, colleague's %q)", what, name,
+								reason == "", want, ownReason, ceilingReason)
+						}
+						if reason != "" && reason != code.RefusalNotPermitted {
+							t.Errorf("%s, %s: refused %q, want not_permitted", what, name, reason)
+						}
+						if len(words) > code.MaxDetailBytes {
+							t.Errorf("%s, %s: %d bytes, past the %d a receiver carries: %q", what, name,
+								len(words), code.MaxDetailBytes, words)
+						}
+						// THE LONG HANDLES' OWN ROWS, spelled for them.
+						longCommand := c
+						longCommand.Ref = strings.ReplaceAll(strings.ReplaceAll(c.Ref, "seats/ana/",
+							"seats/"+long+"/"), "seats/bo/", "seats/"+long+"b/")
+						if _, longWords := longUnder.RefRule(longCommand); longWords != words {
+							t.Errorf("%s, %s: a seat of a long handle is told\n%q\nand ana\n%q", what, name,
+								longWords, words)
+						}
+					}
+					if got, want := under.MayRead(), own.MayRead() && ceiling.MayRead(); got != want {
+						t.Errorf("%s: MayRead %v, want %v", what, got, want)
+					}
+					if under.MayPush() != own.MayPush() || under.PushRefusal() != own.PushRefusal() {
+						t.Errorf("%s: MayPush %v %q, want the seat's own %v %q", what, under.MayPush(),
+							under.PushRefusal(), own.MayPush(), own.PushRefusal())
+					}
+				}
+			}
+		}
+	}
+
+	r := testChart()
+	private := unitOnly(ownedBy("platform", code.OwnerUnit, "Platform"))
+	shut := code.GrantOf(agent("dev"), private, r).Under(code.GrantOf(agent("vp-sales"), private, r))
+	if shut.MayRead() || !strings.Contains(shut.ReadRefusal(), `seat "dev" reads repository "platform-private"`) ||
+		!strings.Contains(shut.ReadRefusal(), `seat "vp-sales" holds no access`) {
+		t.Errorf("dev reading platform-private for vp-sales: MayRead %v, told %q", shut.MayRead(),
+			shut.ReadRefusal())
+	}
+	// A CEILING NEVER WIDENS: a read-only seat working for a colleague who
+	// writes still creates no branch.
+	if reason, _ := code.GrantOf(agent("reader"), private, r).Under(code.GrantOf(agent("dev"), private,
+		r)).RefRule(commands["create a branch"]); reason == "" {
+		t.Error("a read-only seat working for a colleague who writes created a branch")
+	}
+}
+
 type askedRoster struct{ n int }
 
 func (a *askedRoster) Seat(string) (code.RosterSeat, bool) { a.n++; return code.RosterSeat{}, false }

@@ -1542,7 +1542,10 @@ func (l *launcher) Launch(ctx context.Context, t *turnctx.Turn, req builtin.Sand
 		Opened:     holds.opened,
 		Clone:      repos.clone,
 		CodeFloor:  codeFloor,
-		RunEnv:     runEnv,
+		// WHOM THE BOX WORKS FOR, which the code host holds every request
+		// of the box to beside the seat's own grant (code.Grant.Under).
+		CodeCeiling: repos.ceiling,
+		RunEnv:      runEnv,
 	})
 	holds.settle(err)
 	return res, err

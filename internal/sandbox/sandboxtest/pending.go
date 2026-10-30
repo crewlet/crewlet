@@ -3883,26 +3883,31 @@ const (
 const futureGrant = "code_scope"
 
 // A RUN'S ROW CARRIES ITS GRANTS AND ITS CODE FLOOR, the launch's own: a create
-// writes the repositories and the floor it is handed, and the launch floor from
-// that same floor whatever the caller put there; a relaunch REPLACES all three
-// — the previous job's repositories are not this job's — where the turn's
-// holds are unioned. And every write a build makes to the row hands back a key
-// of a newer build's beside them, so a fleet mid-upgrade loses neither.
+// writes the repositories, the floor and the colleague's ceiling it is handed,
+// and the launch floor from that same floor whatever the caller put there; a
+// relaunch REPLACES all four — the previous job's repositories, and whom its
+// turn worked for, are not this job's — where the turn's holds are unioned.
+// And every write a build makes to the row hands back a key of a newer build's
+// beside them, so a fleet mid-upgrade loses neither.
 //
 // Mutation: keep the previous job's repositories on a reset — the relaunch
 // reads the first job's grant, red; take the launch floor from the caller —
-// the create reads the caller's, red.
+// the create reads the caller's, red; keep the previous job's ceiling on a
+// reset — the relaunch reads the first job's colleague, red.
 func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
 	ctx := t.Context()
 	first := run("t1")
 	first.Repos = []sandbox.RunRepo{runRepo("web", webID)}
 	first.CodeFloor = "code@1:40"
 	first.CodeLaunch = "code@1:1"
+	first.CodeCeiling = "designer"
 	mustBeginLaunch(t, s, first)
 	got := mustGet(t, s, "t1")
-	if !reflect.DeepEqual(got.Repos, first.Repos) || got.CodeFloor != "code@1:40" || got.CodeLaunch != "code@1:40" {
-		t.Fatalf("a create carries repos %+v, floor %q and launch floor %q; want the run's repositories, "+
-			"code@1:40 and the launch floor equal to it", got.Repos, got.CodeFloor, got.CodeLaunch)
+	if !reflect.DeepEqual(got.Repos, first.Repos) || got.CodeFloor != "code@1:40" ||
+		got.CodeLaunch != "code@1:40" || got.CodeCeiling != "designer" {
+		t.Fatalf("a create carries repos %+v, floor %q, launch floor %q and ceiling %q; want the run's "+
+			"repositories, code@1:40, the launch floor equal to it and designer", got.Repos, got.CodeFloor,
+			got.CodeLaunch, got.CodeCeiling)
 	}
 
 	// A KEY A NEWER BUILD WROTE beside the grants, put on the stored row as
@@ -3958,18 +3963,21 @@ func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingSt
 	}
 	kept("the relaunch")
 	got = mustGet(t, s, "t1")
-	if !reflect.DeepEqual(got.Repos, second.Repos) || got.CodeFloor != "code@1:90" || got.CodeLaunch != "code@1:90" {
-		t.Fatalf("a relaunch carries repos %+v, floor %q and launch floor %q; want the second job's "+
-			"repositories alone and code@1:90 for both floors", got.Repos, got.CodeFloor, got.CodeLaunch)
+	if !reflect.DeepEqual(got.Repos, second.Repos) || got.CodeFloor != "code@1:90" ||
+		got.CodeLaunch != "code@1:90" || got.CodeCeiling != "" {
+		t.Fatalf("a relaunch carries repos %+v, floor %q, launch floor %q and ceiling %q; want the second "+
+			"job's repositories alone, code@1:90 for both floors and no ceiling", got.Repos, got.CodeFloor,
+			got.CodeLaunch, got.CodeCeiling)
 	}
 
 	// A RELAUNCH GIVEN NO REPOSITORIES has none: a job's grants are its own.
 	if _, err := s.BeginLaunch(ctx, run("t1"), sandbox.Fence{}); err != nil {
 		t.Fatalf("relaunch with no repositories: %v", err)
 	}
-	if got := mustGet(t, s, "t1"); len(got.Repos) != 0 || got.CodeFloor != "" || got.CodeLaunch != "" {
-		t.Fatalf("a relaunch given no repositories carries %+v, floor %q, launch floor %q; want none",
-			got.Repos, got.CodeFloor, got.CodeLaunch)
+	if got := mustGet(t, s, "t1"); len(got.Repos) != 0 || got.CodeFloor != "" || got.CodeLaunch != "" ||
+		got.CodeCeiling != "" {
+		t.Fatalf("a relaunch given no repositories carries %+v, floor %q, launch floor %q, ceiling %q; "+
+			"want none", got.Repos, got.CodeFloor, got.CodeLaunch, got.CodeCeiling)
 	}
 	kept("the relaunch with no repositories")
 }

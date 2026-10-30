@@ -875,6 +875,23 @@ type PendingRun struct {
 	// CodeFloor, on a create and on every relaunch, from the same value.
 	CodeLaunch string `json:"code_launch,omitempty"`
 
+	// CodeCeiling is the handle of the colleague SEAT whose ask woke the turn
+	// that launched this job — the requester ceiling its launch resolved the
+	// repositories under — whose own grant on each repository bounds what
+	// the job's box may do there, as it bounds the turn's own code tools: a
+	// read the colleague could not make, or a push outside the seat's own
+	// namespace the colleague could not make, is refused the box (the code
+	// host's box admission, code.Grant.Under). Empty for a job no colleague
+	// seat bounds: a turn nobody woke, one the seat itself woke, and one a
+	// person woke, since a person maintains every repository.
+	//
+	// CARRIED, NEVER READ HERE, as CodeFloor is; by the seat's handle,
+	// which is immutable, so the row names the same colleague for as long as
+	// the job runs. LAUNCH-SCOPED, like Repos: written by
+	// [PendingStore.BeginLaunch] with them and replaced by every relaunch,
+	// set only where they are.
+	CodeCeiling string `json:"code_ceiling,omitempty"`
+
 	// Charged is whether this launch's collected tokens are on the fleet's
 	// token counter.
 	//
@@ -1076,10 +1093,12 @@ type PendingStore interface {
 	// drops a hold an earlier job's turn depends on.
 	//
 	// THE JOB'S GRANTS ARE ITS OWN, so a create and a reset alike write the
-	// run's [PendingRun.Repos] and [PendingRun.CodeFloor] as handed, and
-	// [PendingRun.CodeLaunch] from that same floor whatever the caller put
-	// there: a relaunch's repositories replace the previous job's, and its
-	// launch floor is the one its own resolution read.
+	// run's [PendingRun.Repos], [PendingRun.CodeFloor] and
+	// [PendingRun.CodeCeiling] as handed, and [PendingRun.CodeLaunch] from
+	// that same floor whatever the caller put there: a relaunch's
+	// repositories replace the previous job's, its launch floor is the one
+	// its own resolution read, and the colleague it works for is the one
+	// that resolution read for.
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)

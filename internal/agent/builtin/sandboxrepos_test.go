@@ -3,6 +3,7 @@ package builtin_test
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/agent/builtin"
@@ -83,6 +84,85 @@ func TestARunsRepositoriesAreReadForWhoeverWokeItsTurn(t *testing.T) {
 	}
 	if ids := woken.Holds.IDs(); len(ids) != 0 {
 		t.Errorf("a turn a stranger woke holds %v", ids)
+	}
+}
+
+// launchRoster is the chart a launch's precheck judges in these cases:
+// agent-cto, full_access in eng — site's owning unit — writes site; agent-ceo,
+// full_access in another unit, reads it (visibility company) and owns its own
+// namespace there; neither leads anything.
+type launchRoster struct{}
+
+func (launchRoster) Seat(handle string) (code.RosterSeat, bool) {
+	switch handle {
+	case "agent-cto":
+		return code.RosterSeat{Handle: handle, Tier: code.TierFullAccess, Unit: "eng"}, true
+	case "agent-ceo":
+		return code.RosterSeat{Handle: handle, Tier: code.TierFullAccess, Unit: "exec"}, true
+	}
+	return code.RosterSeat{}, false
+}
+func (launchRoster) Lead(string) string                { return "" }
+func (launchRoster) Leads(string) []string             { return nil }
+func (launchRoster) Within(unit, ancestor string) bool { return unit == ancestor }
+
+// charted is a launch's precheck grant from launchRoster.
+func charted(asker code.Principal, repo code.RepoRef) code.Grant {
+	return code.GrantOf(asker, repo, launchRoster{})
+}
+
+// A RUN'S PUSHES ARE DECIDED FOR WHOEVER WOKE ITS TURN TOO (M3-decisions U40
+// a, its write half for a coding run): in a turn a colleague seat woke, the
+// run's grants name that seat for the code host's box admission to hold the
+// box to, and the launch prechecks the same rule — `access: write` on a branch
+// the colleague could not push is refused naming why, an access left out
+// there is read, and the seat's own branch stays write, its own work. A turn
+// a person woke, or nobody, names no ceiling and pushes what the seat may.
+//
+// Mutations: the precheck judged on the seat's grant alone (no Under) → the
+// colleague's write of main is given write, red; RunRepos.Ceiling left empty →
+// the colleague's turn names nobody, red.
+func TestARunsPushesAreDecidedForWhoeverWokeItsTurn(t *testing.T) {
+	t.Parallel()
+	resolve := func(t *testing.T, requester string, req builtin.RepoRequest) (builtin.RunRepos, error) {
+		t.Helper()
+		turn := launchTurn(t)
+		turn.Requester = requester
+		return codeDeps(newCodeHost()).ResolveRunRepos(t.Context(), turn, []builtin.RepoRequest{req}, charted)
+	}
+
+	_, err := resolve(t, "agent-ceo", builtin.RepoRequest{Repo: "site", Branch: "main", Access: "write"})
+	var refused *builtin.RefusedLaunch
+	if !errors.As(err, &refused) || tools.RefusalOf(refused.Result) != tools.RefusalForbidden ||
+		!strings.Contains(refused.Result.Output, "this work is for the seat whose ask started its turn") {
+		t.Fatalf("a colleague who reads site asked for a write of main: %v, want a forbidden refusal naming "+
+			"whom the run works for", err)
+	}
+	for _, c := range []struct {
+		name, requester string
+		req             builtin.RepoRequest
+		access          sandbox.RepoAccess
+		ceiling         string
+	}{
+		{"main left to the default, for a colleague who reads it", "agent-ceo",
+			builtin.RepoRequest{Repo: "site", Branch: "main"}, sandbox.RepoRead, "agent-ceo"},
+		{"the seat's own branch, for that colleague", "agent-ceo",
+			builtin.RepoRequest{Repo: "site", Access: "write"}, sandbox.RepoWrite, "agent-ceo"},
+		{"main, for a person", "founder",
+			builtin.RepoRequest{Repo: "site", Branch: "main", Access: "write"}, sandbox.RepoWrite, ""},
+		{"main, for nobody", "",
+			builtin.RepoRequest{Repo: "site", Branch: "main", Access: "write"}, sandbox.RepoWrite, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolve(t, c.requester, c.req)
+			if err != nil {
+				t.Fatalf("ResolveRunRepos: %v", err)
+			}
+			if len(got.Repos) != 1 || got.Repos[0].Access != c.access || got.Ceiling != c.ceiling {
+				t.Errorf("the run is given %+v under ceiling %q, want %s under %q", got.Repos, got.Ceiling,
+					c.access, c.ceiling)
+			}
+		})
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/queue/memory"
 	"github.com/crewlet/crewlet/internal/runtoken"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -220,6 +221,8 @@ type reposRig struct {
 	jobs     map[string]*sandbox.FakeRunner
 	tokens   *host.BoxTokens
 	pending  sandbox.PendingStore
+	// requesters composes whoever woke a turn; nil composes nobody.
+	requesters builtin.Requesters
 }
 
 // newReposRig is a rig over doc, its code host at base (CREWLET_BOX_GIT_URL
@@ -260,10 +263,15 @@ func newReposRig(t *testing.T, doc, base string) *reposRig {
 }
 
 // launcher is the rig's run_sandbox launcher, its code tools' seams over the
-// rig's code host — as the epoch's equip hands them.
+// rig's code host — as the epoch's equip hands them — composing whoever woke a
+// turn by the rig's requesters (nobody, unless a case says).
 func (r *reposRig) launcher() *launcher {
+	requesters := r.requesters
+	if requesters == nil {
+		requesters = noRequester{}
+	}
 	return &launcher{engine: r.e, code: builtin.CodeDeps{Code: r.host, Holder: r.host,
-		Requesters: noRequester{}, Chart: authz.NoChart{}}}
+		Requesters: requesters, Chart: authz.NoChart{}}}
 }
 
 // turn is a fresh turn of the seat handle, charged to item (nil for none).
@@ -442,6 +450,75 @@ func TestABoxIsGivenOnlyItsGrantsAtLaunch(t *testing.T) {
 				t.Error("a refused launch left a run row")
 			}
 		})
+	}
+}
+
+// colleagues composes whoever woke a rig's turn: the founder's seat as the
+// person holding it, and any other handle as that agent seat itself.
+type colleagues struct{}
+
+func (colleagues) Requester(_ context.Context, handle string) (iam.Principal, error) {
+	if handle == "founder" {
+		return iam.Principal{Kind: iam.KindPerson, Login: "founder@example.com", Seat: handle,
+			Stage: iam.StageActive, Grants: iam.Apps}, nil
+	}
+	return iam.Principal{Kind: iam.KindSeat, Seat: handle, Stage: iam.StageActive, Grants: iam.Apps}, nil
+}
+
+// A RUN WORKS FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a), the write half
+// for a coding run): a launch in a turn a colleague seat woke names that seat
+// on the run's row, which the code host's box admission reads back
+// (boxRuns.Run) to hold the box to the colleague's grant beside the seat's;
+// `access: write` on a branch the colleague could not push is refused at
+// launch, leaving no row, while the seat's own branch is written; a turn a
+// person woke names nobody, and pushes what the seat may.
+//
+// Mutations: the launch request's ceiling dropped — the row names nobody, red;
+// boxRuns.Run not copying the row's ceiling — the admission reads none, red.
+func TestARunWorksForWhoeverWokeItsTurn(t *testing.T) {
+	t.Parallel()
+	rig := newReposRig(t, launchReposDoc, "https://git.example.com/box/git")
+	rig.requesters = colleagues{}
+	rig.host.add(project("web", "Engineering", code.VisibilityCompany),
+		map[string]string{"refs/heads/main": mainHead})
+
+	// designer, full_access in Design, reads web and pushes only its own
+	// namespace there.
+	turn := rig.turn(t, "swe", nil)
+	turn.Requester = "designer"
+	_, err := rig.launch(t, turn, builtin.RepoRequest{Repo: "web", Branch: "main", Access: "write"})
+	var refused *builtin.RefusedLaunch
+	if !errors.As(err, &refused) || tools.RefusalOf(refused.Result) != tools.RefusalForbidden ||
+		!strings.Contains(refused.Result.Output, "this work is for the seat whose ask started its turn") {
+		t.Fatalf("a write of main for designer answered %v, want a forbidden refusal naming whom the run "+
+			"works for", err)
+	}
+	if _, found, _ := rig.pending.Get(t.Context(), turn.RunID); found {
+		t.Error("a refused launch left a run row")
+	}
+	row, err := rig.launch(t, turn, builtin.RepoRequest{Repo: "web"})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if row.CodeCeiling != "designer" || len(row.Repos) != 1 || row.Repos[0].Access != sandbox.RepoWrite {
+		t.Errorf("the run is given %+v under ceiling %q, want web to write under designer", row.Repos,
+			row.CodeCeiling)
+	}
+	run, found, err := boxRuns{pending: rig.pending}.Run(t.Context(), turn.RunID)
+	if err != nil || !found || run.Ceiling != "designer" {
+		t.Errorf("the box admission reads the run as %+v (found %v, %v), want it working for designer", run,
+			found, err)
+	}
+
+	person := rig.turn(t, "swe", nil)
+	person.Requester = "founder"
+	row, err = rig.launch(t, person, builtin.RepoRequest{Repo: "web", Branch: "main", Access: "write"})
+	if err != nil {
+		t.Fatalf("Launch for the founder: %v", err)
+	}
+	if row.CodeCeiling != "" || row.Repos[0].Access != sandbox.RepoWrite {
+		t.Errorf("a run the founder asked for is given %+v under ceiling %q, want main to write under none",
+			row.Repos, row.CodeCeiling)
 	}
 }
 

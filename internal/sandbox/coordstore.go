@@ -206,6 +206,7 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// depend on whichever job named them.
 		existing.Repos = run.Repos
 		existing.CodeFloor, existing.CodeLaunch = run.CodeFloor, run.CodeLaunch
+		existing.CodeCeiling = run.CodeCeiling
 		if fence.Fenced() {
 			existing.Owner, existing.OwnerEpoch = fence.Owner, fence.Epoch
 		}

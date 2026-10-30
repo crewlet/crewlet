@@ -443,6 +443,70 @@ func TestABoxIsGivenOnlyItsGrants(t *testing.T) {
 	})
 }
 
+// A BOX WORKS FOR WHOEVER WOKE ITS TURN (M3-decisions U40 (a)): a run whose
+// turn a colleague seat woke (host.BoxRun.Ceiling) has its box held to that
+// colleague's grant as well as its seat's (code.Grant.Under) — a branch eve,
+// who only reads the repository, could not create is refused per ref,
+// not_permitted, in the ceiling's words, while the seat's own branch lands, its
+// own work; and a repository eve reads nothing of is not fetched for her. A
+// run no colleague bounds creates what its seat may.
+//
+// Mutation: the admission ignoring the run's ceiling — the branch eve could
+// not create lands, and the repository she reads nothing of is fetched — red.
+func TestABoxWorksForWhoeverWokeItsTurn(t *testing.T) {
+	t.Parallel()
+	c := newCase(t, codetest.SoloOptions{
+		Roster: func() code.Roster { return eveRoster{codetest.FixtureRoster()} }}, codetest.Settings())
+	unit := codetest.Settings()
+	unit.Visibility = code.VisibilityUnit
+	c.Fleet.Declare(t, code.Declared{Name: "secret", Settings: unit})
+	p := codetest.NewPerson(t, c.Fleet, "ceo")
+	work := p.Init()
+	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
+	c.MustPush(p, work, "main")
+	runs := c.Fleet.Runs()
+
+	ref, box := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
+	runs.WorkFor(ref, "eve")
+	clone := box.Clone(c.BoxURL(0))
+	box.Commit(clone, map[string]string{"a.txt": "a\n"}, "a")
+	res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:refs/heads/topic")
+	if why, refused := res.Rejected("refs/heads/topic"); !refused || !strings.Contains(why, "not_permitted") ||
+		!strings.Contains(why, "this work is for the seat whose ask started its turn") {
+		t.Errorf("a box working for eve created a branch eve could not: %s", res)
+	}
+	own := code.SeatNamespace(codetest.FixtureAlice) + "work"
+	if res := box.Push(c.Ctx, clone, c.BoxURL(0), "HEAD:"+own); res.Err != nil {
+		t.Errorf("a box working for eve could not push its seat's own branch: %s", res)
+	}
+	refs := c.Rows().Refs
+	if _, created := refs["refs/heads/topic"]; created {
+		t.Error("topic exists after a box working for eve, who could not create it, pushed it")
+	}
+	if _, pushed := refs[own]; !pushed {
+		t.Errorf("the seat's own branch %s was not pushed", own)
+	}
+
+	_, free := c.LaunchBox(codetest.FixtureAlice, code.AccessWrite)
+	freeClone := free.Clone(c.BoxURL(0))
+	free.Commit(freeClone, map[string]string{"b.txt": "b\n"}, "b")
+	if res := free.Push(c.Ctx, freeClone, c.BoxURL(0), "HEAD:refs/heads/topic"); res.Err != nil {
+		t.Errorf("a box no colleague bounds could not create a branch its seat may: %s", res)
+	}
+
+	secret, err := c.Fleet.Rows(c.Ctx, "secret", codetest.Linearizable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden := runs.Launch(codetest.FixtureAlice, secret.Position, host.BoxGrant{RepoID: secret.Repo.ID,
+		Name: "secret", Access: code.AccessWrite})
+	runs.WorkFor(hidden, "eve")
+	resp, answer := boxDo(t, c, 0, "secret", boxFetchAdvert, host.BoxUser, runs.Token(hidden), "", "")
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(answer, `seat "eve" holds no access`) {
+		t.Errorf("alice's box fetched a unit repository of ENG for eve: %d %q", resp.StatusCode, answer)
+	}
+}
+
 // AN UNGRANTED NAME COSTS THE LOG NOTHING: the run's grant is matched by the
 // NAME it was given before the code log is read, so a box probing names it
 // was never given — `git ls-remote` over guesses — appends no barrier and

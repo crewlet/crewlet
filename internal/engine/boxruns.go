@@ -61,11 +61,12 @@ func (b boxRuns) Run(ctx context.Context, turnID string) (host.BoxRun, bool, err
 		return host.BoxRun{}, false, err
 	}
 	out := host.BoxRun{
-		Ref:    host.BoxRunRef{TurnID: run.TurnID, LaunchID: run.LaunchID},
-		Live:   boxLive(run),
-		Status: run.Status,
-		Seat:   run.AgentHandle,
-		Floor:  b.floorOf(run),
+		Ref:     host.BoxRunRef{TurnID: run.TurnID, LaunchID: run.LaunchID},
+		Live:    boxLive(run),
+		Status:  run.Status,
+		Seat:    run.AgentHandle,
+		Ceiling: run.CodeCeiling,
+		Floor:   b.floorOf(run),
 		Provenance: code.RunProvenance{TurnID: run.TurnID, RunID: run.LaunchID, Model: run.Launch.Model,
 			CodingAgent: run.CodingAgent},
 		Holds: make(map[string]bool, len(run.CodeHolds)),

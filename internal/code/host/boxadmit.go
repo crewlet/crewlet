@@ -86,14 +86,21 @@ import (
 //     another repository is refused as not given.
 //  7. THE SEAT'S GRANT — from the serving node's CURRENT chart (Options.Roster),
 //     held to the run's (code.Grant.Within): a box does at most what both its
-//     row and its seat's own grant allow. A node with no chart, or one
-//     confirmed behind the company's configuration (Options.Current), judges
-//     no box's grant and answers 503: the configuration it failed to apply may
-//     be the one that revoked the seat, and the box's retry reaches another
-//     node, since /ready already drains this one at the balancer. A fetch the
-//     seat may not read — a `visibility: unit` repository outside its unit —
-//     is 403. A push's commands are judged per ref on the same grant, at its
-//     advertisement and its receive, as a person's are.
+//     row and its seat's own grant allow. And in a run whose turn a colleague
+//     seat woke (BoxRun.Ceiling), held to that colleague's own grant from the
+//     same chart (code.Grant.Under) — what a seat does for a colleague is
+//     decided for the colleague too, as its code tools' reads and writes are
+//     (M3-decisions U40 (a)): a fetch the colleague could not make, and a
+//     command outside the seat's own namespace the colleague could not make,
+//     are refused, and the seat's own branches stay its own work. A node with
+//     no chart, or one confirmed behind the company's configuration
+//     (Options.Current), judges no box's grant and answers 503: the
+//     configuration it failed to apply may be the one that revoked the seat,
+//     and the box's retry reaches another node, since /ready already drains
+//     this one at the balancer. A fetch the seat — or the colleague — may not
+//     read, a `visibility: unit` repository outside its unit, is 403. A push's
+//     commands are judged per ref on the same grant, at its advertisement and
+//     its receive, as a person's are.
 //  8. FRESHNESS — every read of the request's refs is at the run's SESSION:
 //     its floor, which every ref answer the box is shown and every push it
 //     lands raises (raiseFloor). A ZERO floor reads LINEARIZABLE, a re-sync
@@ -294,6 +301,10 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 		return admission{}, false
 	}
 	adm.grant = code.GrantOf(adm.principal(), repo, roster).Within(g.Access)
+	if run.Ceiling != "" {
+		adm.grant = adm.grant.Under(code.GrantOf(code.Principal{Kind: code.PrincipalAgent, Seat: run.Ceiling},
+			repo, roster))
+	}
 	if op == auth.GitFetch && !adm.grant.MayRead() {
 		b.refuse("not_permitted", adm.grant.ReadRefusal())
 		return admission{}, false

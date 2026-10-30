@@ -34,6 +34,19 @@ import (
 // of them as the caller the code tools read as — decided again for whoever
 // woke the turn ([CodeDeps.callerOn] on the code host's read verb), so a box
 // is never given a repository its requester could not read.
+//
+// AND WHAT THE BOX MAY PUSH IS DECIDED FOR THAT REQUESTER TOO (M3-decisions
+// U40 (a), its write half for a coding run): in a turn a colleague seat woke,
+// the run's row names that seat ([RunRepos.Ceiling], the row's CodeCeiling),
+// and the code host's box admission holds the box to the colleague's own
+// grant on every request it makes ([code.Grant.Under]) — a read the colleague
+// could not make, and a push outside the seat's own namespace the colleague
+// could not make, are refused, while the seat's own branches stay its own
+// work, which anybody who can message it steers. The launch prechecks the
+// same rule ([runAccess]), so `access: write` on a branch the colleague could
+// not push is refused before a box costs anything, and an access left out is
+// write only where the box could push. A person bounds nothing, holding
+// maintain on every repository, and a stranger's turn reads nothing at all.
 
 // RunRepos is what the repositories one run_sandbox call names resolve to.
 type RunRepos struct {
@@ -44,6 +57,12 @@ type RunRepos struct {
 	// repository — a code_commit_files just before the launch must be in
 	// the clone.
 	Floor statelog.Position
+	// Ceiling is the handle of the colleague seat whose ask woke the turn,
+	// whose own grant bounds the run's box on every repository it was given
+	// ([code.Grant.Under]) — the seat the resolution's reads carried as their
+	// ceiling ([code.ReadQuery.CeilingSeat]) — and "" where no colleague seat
+	// bounds the run.
+	Ceiling string
 }
 
 // GrantFunc is a seat's grant on a repository as this node's chart reads it
@@ -70,9 +89,11 @@ type GrantFunc func(asker code.Principal, repo code.RepoRef) code.Grant
 //     base is named — the default branch, the turn's hold taken on every
 //     seat's branch among them ([HoldRef]) and on the run's own branch where
 //     it does not exist yet, before anything durable of the launch exists;
-//  4. the access: `write` asked must pass the seat's grant's ref rule for
-//     the branch (and the repository must not be archived), `read` is read,
-//     and none asked is write where `write` would pass, else read;
+//  4. the access: `write` asked must pass, for the branch, the ref rule the
+//     box will be judged by — the seat's grant held to a run given write and,
+//     in a turn a colleague woke, to that colleague's grant outside the
+//     seat's own namespace — and the repository must not be archived; `read`
+//     is read, and none asked is write where `write` would pass, else read;
 //  5. the base: an id — whole or abbreviated — expanded and checked by a
 //     read by object id; a ref, as the query answered it; none, the branch's
 //     head where it exists, else the default branch's, and an EMPTY
@@ -96,7 +117,7 @@ func (d CodeDeps) ResolveRunRepos(ctx context.Context, turn *turnctx.Turn, reqs 
 		return RunRepos{}, &RefusedLaunch{Result: refused(tools.RefusalForbidden,
 			"run_sandbox gives repositories to a seat's coding run, and this call is no seat's.")}
 	}
-	var out RunRepos
+	out := RunRepos{Ceiling: c.ceiling}
 	byID := map[string]string{}
 	for _, req := range reqs {
 		r, floor, refusal := d.runRepo(ctx, turn, c, req, grant)
@@ -192,7 +213,15 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 		}
 	}
 
-	access, refusal := runAccess(req, branch, head, current, grant(c.asker, current))
+	// THE GRANT THE BOX WILL BE JUDGED BY, from this node's chart: the
+	// seat's, held to a run given write — what `write` puts on the row — and,
+	// in a turn a colleague woke, to that colleague's own grant outside the
+	// seat's namespace, as the code host's box admission holds it.
+	boxGrant := grant(c.asker, current).Within(code.AccessWrite)
+	if c.ceiling != "" {
+		boxGrant = boxGrant.Under(grant(code.Principal{Kind: code.PrincipalAgent, Seat: c.ceiling}, current))
+	}
+	access, refusal := runAccess(req, branch, head, current, boxGrant)
 	if refusal != nil {
 		return sandbox.RunRepo{}, statelog.Position{}, refusal
 	}
@@ -251,15 +280,19 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 }
 
 // runAccess is what a run may do with a repository — the request's access,
-// held to the seat's grant on the run's branch — or the refusal: `write` asked
-// on an archived repository, or on a branch the grant's ref rule refuses, is
-// refused with the code host's sentence; none asked is write exactly where
-// write would pass, so a read-only seat naming a repository to look at is not
-// refused, and a run that forgot the field can deliver where its seat may.
+// held to g, the grant its box will be judged by on the run's branch — or the
+// refusal: `write` asked on an archived repository, or on a branch g's ref
+// rule refuses (the seat's, or the colleague's its turn works for), is refused
+// with the code host's sentence; none asked is write exactly where write
+// would pass, so a read-only seat naming a repository to look at is not
+// refused, and a run that forgot the field can deliver where its box may.
 //
 // A PRECHECK, from this node's chart: a box's every push is decided again at
 // the code host's admission and at its decide, so this decides only whether a
-// run that could never deliver is refused before a box costs anything.
+// run that could never deliver is refused before a box costs anything — which
+// is why g is the box's grant, held to a run given write, and not the seat's:
+// a branch the seat may push and its box may not (another seat's namespace,
+// which needs maintain) is a run that could never deliver.
 func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.RepoRef,
 	g code.Grant) (sandbox.RepoAccess, *tools.Result) {
 
@@ -289,8 +322,8 @@ func runAccess(req RepoRequest, branch string, head code.ResolvedRef, repo code.
 		return sandbox.RepoRead, nil
 	}
 	r := refusedBy(tools.RefusalForbidden, code.ErrNotPermitted, fmt.Sprintf("%s: a run given repository %q "+
-		"to write may not push %s: %s. Ask for `access: read`, or name a `branch` your grant lets you push.",
-		tool, repo.Name, branch, why))
+		"to write may not push %s: %s. Ask for `access: read`, or name a `branch` this run may push — "+
+		"leave `branch` out for your own.", tool, repo.Name, branch, why))
 	return "", &r
 }
 

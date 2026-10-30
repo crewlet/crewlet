@@ -209,6 +209,12 @@ type Grant struct {
 	// grant no run holds is unlimited, the zero value.
 	limit   Access
 	limited bool
+
+	// ceiling is the grant of the colleague seat the principal's turn works
+	// for ([Grant.Under]) — the seat whose ask woke it — which every read and
+	// every command outside the principal's own namespace is held to as
+	// well; nil for a grant no such seat bounds, the zero value.
+	ceiling *Grant
 }
 
 // Within is g held to a coding run's grant — what the run's run_sandbox call
@@ -227,6 +233,41 @@ func (g Grant) Within(run Access) Grant {
 		return g
 	}
 	g.limit, g.limited = run, true
+	return g
+}
+
+// Under is g held to ceiling, the grant of the colleague SEAT whose ask woke
+// the turn g's holder works in — that seat's own grant on the same repository
+// ([GrantOf] of an agent principal), judged as the seat itself would be
+// judged asking: what the holder does for a colleague is decided again for
+// that colleague (the requester ceiling, M3-decisions U40 (a), as
+// [JudgeRead] decides a read made for one). So:
+//
+//   - a READ needs both: the holder's grant, and the colleague's reading the
+//     repository ([Grant.MayRead], [Grant.ReadRefusal]);
+//   - a COMMAND needs both — the holder's [Grant.RefRule], and the
+//     colleague's RefRule for the very same command — EXCEPT under the
+//     holder's own namespace, which is the holder's own work: anybody who can
+//     message a seat steers its own work, as authz.DecideWithin lets a
+//     steerable verb on what an agent owns skip the requester, so a colleague
+//     who only reads a repository may still ask a seat to change it on the
+//     seat's own branch, and never on one the colleague could not push.
+//
+// A grant UNDER A CEILING IS NEVER WIDER than g: the ceiling only refuses.
+// A PERSON bounds nothing — a person maintains every repository (ADR-0055) —
+// so a caller holds a grant under a seat's ceiling alone, never a person's,
+// and a ceiling that stands nowhere (no seat of the chart, a human seat
+// asked as an agent) refuses every read and every command outside the
+// namespace, the narrow direction.
+//
+// Like [Grant.Within], it is coordination state a coding box's admission
+// judges — the run's row names the colleague (internal/sandbox's
+// PendingRun.CodeCeiling) — and the decide never reads it; the launch's
+// precheck reads it too, so a run that could never deliver is refused before a
+// box costs anything.
+func (g Grant) Under(ceiling Grant) Grant {
+	ceiling.ceiling = nil
+	g.ceiling = &ceiling
 	return g
 }
 
@@ -371,8 +412,11 @@ func relation(s RosterSeat, repo RepoRef, r Roster) Access {
 	return AccessNone
 }
 
-// MayRead reports whether the principal reads the repository at all.
-func (g Grant) MayRead() bool { return g.effective() >= AccessRead }
+// MayRead reports whether the principal reads the repository at all — and,
+// under a colleague's ceiling ([Grant.Under]), whether that colleague does.
+func (g Grant) MayRead() bool {
+	return g.effective() >= AccessRead && (g.ceiling == nil || g.ceiling.MayRead())
+}
 
 // MayPush reports whether any command at all could pass [Grant.RefRule]: a
 // principal at write or above, or a full_access seat that reads the repository
@@ -430,7 +474,15 @@ func (g Grant) outside() bool { return g.Principal.Kind == PrincipalAgent && g.R
 // or ask on its behalf. It names the owner as the repository's row records
 // it: a read refusal answers whoever asked and is never carried into a
 // proposal, so nothing bounds its length the way RefRule's sentences are.
+//
+// A principal that reads the repository and is refused only by the colleague
+// its turn works for ([Grant.Under]) is told THAT: the colleague's own
+// refusal, as [JudgeRead]'s [ErrAboveCeiling] carries it to a code tool.
 func (g Grant) ReadRefusal() string {
+	if g.effective() >= AccessRead && g.ceiling != nil && !g.ceiling.MayRead() {
+		return fmt.Sprintf("%s reads repository %q, and this work is for the seat whose ask started its "+
+			"turn, which could not read it itself: %s", g.who(), g.RepoName, g.ceiling.ReadRefusal())
+	}
 	why := g.none
 	switch {
 	case why != "":
@@ -539,7 +591,9 @@ const UnboundDetail = "this token is not bound to a person: a person pushes with
 // rules are judged after it, by their own code. A coding box's grant
 // ([Grant.Within]) is held to its run's: every row refused where the run was
 // given the repository to read, and every row outside the seat's own
-// namespace held to what the run was given.
+// namespace held to what the run was given. A grant under a colleague's
+// ceiling ([Grant.Under]) passes a command outside its own namespace only
+// where the colleague's own grant passes the same command.
 //
 // THE ENGINE'S OWN ACCOUNT ([PrincipalSystem]) is granted nothing ([GrantOf])
 // but the one thing its expiry does: deleting a branch in a seat's namespace,
@@ -550,6 +604,27 @@ const UnboundDetail = "this token is not bound to a person: a person pushes with
 // THE SENTENCE NAMES NO REF: git prints the ref beside the reason, and a
 // receiver carries the sentence into a proposal, whose every Detail is bounded.
 func (g Grant) RefRule(c Command) (Refusal, string) {
+	refusal, sentence := g.ownRefRule(c)
+	if refusal != "" || g.ceiling == nil {
+		return refusal, sentence
+	}
+	if owner, ok := seatNamespaceRef(c.Ref); ok && g.Principal.Kind == PrincipalAgent &&
+		owner == g.Principal.Seat {
+		// THE SEAT'S OWN WORK, which whoever messages it steers.
+		return "", ""
+	}
+	if refusal, _ := g.ceiling.RefRule(c); refusal != "" {
+		action, need := commandNeeds(c)
+		return RefusalNotPermitted, fmt.Sprintf("this work is for the seat whose ask started its turn, which "+
+			"holds %s on this repository; %s needs %s, which that seat does not hold — push under this "+
+			"seat's own namespace (%s<its handle>/) instead", g.ceiling.Access, action, need, SeatNamespaceRoot)
+	}
+	return "", ""
+}
+
+// ownRefRule is [Grant.RefRule] for the principal's own grant, held to its
+// run's: RefRule's table with no colleague's ceiling.
+func (g Grant) ownRefRule(c Command) (Refusal, string) {
 	if reservedRef(c.Ref) {
 		return RefusalNotPermitted, "no principal pushes a ref the engine reserves: " +
 			RefusalReservedRef.Sentence()

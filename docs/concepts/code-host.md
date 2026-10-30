@@ -3499,6 +3499,19 @@ needs maintain — whatever its seat holds. The seat's grant is judged again by
 the push's decide (rule 2b); the run's only here, since the decide reads no
 run row.
 
+**A box working for a colleague does only what that colleague could.** A run
+launched in a turn a colleague seat woke — its ask, its message — names that
+seat on its row, and the box is held to the colleague's own grant from the
+same chart as well as its seat's, as the seat's own code tools are in that
+turn ([Reads made for somebody else](#reads-made-for-somebody-else)): it
+fetches no repository the colleague could not read, and pushes nothing outside
+its seat's own namespace that the colleague could not push — a colleague who
+only reads a repository can ask a seat to change it on the seat's own branch,
+`seats/<handle>/…`, never on `main` or a `release/*` branch the seat itself
+could move. The seat's own branches stay its own work, which anybody who can
+message it steers. A run a person asked for, or nobody, is bounded by its seat
+alone: a person maintains every repository.
+
 **The admission**, in this order, each refusal in the one line git prints:
 
 | Step | Refused | Answer |
@@ -3513,9 +3526,10 @@ run row.
 | The repository | not found, deleted or purging, or archived for a push, as a person's request is — decided through the code log's barrier, never on the box's own read, while the run's [re-syncs](#a-boxs-re-syncs-and-requests-in-flight) last; past them, on its run's floor, a not-found saying so. A name a rename left redirecting is not refused: the box is served the repository under its new name, a push included, since the box's remote is the name its launch gave it | as a person's |
 | | a name renamed away from the repository the run was given and since taken by another | `403 not_granted` — call `run_sandbox` again |
 | The seat's grant | this node holds no chart yet, or is confirmed behind the company's configuration | `503` (`no_chart`, `behind_config`): the configuration it failed to apply may be the one that revoked the seat; the box retries, and `/ready` already drains this node |
-| | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit | `403 not_permitted` |
+| | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit — or, for a run working for a colleague, one that colleague reads nothing of | `403 not_permitted`, naming whose grant reads nothing |
 | The run's hold, for a push (below) | the run store could not be written | `503 holds_unwritten` with `Retry-After` — the push is never received unheld |
 | | the run already holds the most repositories and branches one run may (1 024) | `403 holds_full` |
+| A push's commands, each | a command the seat's grant refuses, or — for a run working for a colleague — one outside the seat's own namespace the colleague's grant refuses | `not_permitted` on that ref, saying what the seat or the colleague holds and what the command needs |
 
 **A box's push holds the seat branches it pushes.** A seat's branch — a ref
 under `refs/heads/seats/<handle>/` — that a coding run's box pushes is what the
@@ -3939,6 +3953,14 @@ tools read them, so in a colleague's turn the hot list leaves out what the
 colleague may not read as well, and a stranger's turn is answered nothing. Who
 woke the turn is asked only what a code read asks of them — the deployment's
 view beside the repositories is the seat's own grant.
+
+And for a [coding run](#coding-boxes) the seat launches in such a turn: its
+repositories are resolved for whoever woke it, so a stranger's turn is given
+none and a colleague's is given none that colleague could not read; the run's
+row names the colleague, and its box is held to the colleague's grant on every
+request it makes — every fetch, and every push outside the seat's own
+namespace, which stays the seat's own work. A launch asking to `write` a
+branch the colleague could not push is refused before any box exists.
 
 The colleague's grant is judged where the seat's own is: by the node that
 answers each read, from its own chart and the repository's row, and never

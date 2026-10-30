@@ -21,6 +21,10 @@ type launchRepos struct {
 	repos []sandbox.RunRepo
 	floor statelog.Position
 	clone []sandbox.SetupStep
+	// ceiling is the colleague seat whose ask woke the turn, whose own grant
+	// bounds the box's on every repository (builtin.RunRepos.Ceiling); "" for
+	// none.
+	ceiling string
 }
 
 // resolveRunRepos resolves the repositories a run_sandbox call names into
@@ -36,6 +40,10 @@ type launchRepos struct {
 //   - a repository the code tools' resolution refuses
 //     ([builtin.CodeDeps.ResolveRunRepos]: the seat's grant, the requester it
 //     works for, a deletion, an archive under `write`, a base it does not hold).
+//
+// A turn a colleague seat woke names that seat on the run's row
+// (sandbox.LaunchRequest.CodeCeiling), and the code host's box admission
+// holds the box to its grant as well as to the seat's.
 //
 // CALLED AFTER THE LAUNCH'S OWN REFUSALS and before its run row is opened —
 // the resolution reads at the seat's level and takes the turn's holds, which
@@ -82,7 +90,7 @@ func (l *launcher) resolveRunRepos(ctx context.Context, t *turnctx.Turn,
 		return launchRepos{}, fmt.Errorf("engine: the code host answered this launch's reads at %s, no position "+
 			"of the code log", resolved.Floor)
 	}
-	out := launchRepos{repos: resolved.Repos, floor: resolved.Floor,
+	out := launchRepos{repos: resolved.Repos, floor: resolved.Floor, ceiling: resolved.Ceiling,
 		clone: []sandbox.SetupStep{sandbox.GitVersionStep()}}
 	for _, r := range resolved.Repos {
 		step, err := sandbox.CloneRecipe(r, sandbox.CloneCoding)

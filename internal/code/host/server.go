@@ -90,6 +90,13 @@ type BoxRun struct {
 	Status string
 	// Seat is the handle of the seat whose run it is.
 	Seat string
+	// Ceiling is the handle of the colleague seat whose ask woke the turn
+	// that launched the run — the requester ceiling its launch resolved the
+	// repositories under — whose own grant bounds the box's beside the
+	// seat's: a read it could not make, and a push outside the seat's own
+	// namespace it could not make, are refused (code.Grant.Under). "" for a
+	// run no colleague seat bounds.
+	Ceiling string
 	// Repos are the repositories the run was given.
 	Repos []BoxGrant
 	// Floor is the run's SESSION on the code log: a position at or past

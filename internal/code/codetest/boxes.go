@@ -144,6 +144,13 @@ func (r *FixtureRuns) Remove(ref host.BoxRunRef) {
 	delete(r.runs, ref.TurnID)
 }
 
+// WorkFor has ref's run work for seat: its turn was woken by that colleague
+// seat's ask, whose own grant the box is held to beside its seat's
+// (host.BoxRun.Ceiling) — "" for a run no colleague seat bounds.
+func (r *FixtureRuns) WorkFor(ref host.BoxRunRef, seat string) {
+	r.edit(ref, func(run *host.BoxRun) { run.Ceiling = seat })
+}
+
 // SetProvenance replaces ref's run's provenance — a work item with a key a
 // vendor wrote, say — keeping its two ids.
 func (r *FixtureRuns) SetProvenance(ref host.BoxRunRef, p code.RunProvenance) {

@@ -312,8 +312,11 @@
 // given before the code log is read, so a box guessing names costs the log no
 // barrier; refuses a push of a seat a person stopped (Runs.Stopped: a detached
 // run is not fenced by a pause); and holds the seat's own grant, judged by
-// this node's current chart, to the run's (code.Grant.Within), judging none on
-// a node with no chart or one behind the configuration. Its reads of refs are
+// this node's current chart, to the run's (code.Grant.Within) and — for a run
+// whose turn a colleague seat woke (BoxRun.Ceiling) — to that colleague's own
+// grant from the same chart (code.Grant.Under), so a box does for a colleague
+// only what the colleague could, its seat's own namespace aside; judging none
+// on a node with no chart or one behind the configuration. Its reads of refs are
 // at the run's SESSION (admission.refs): every answer naming refs raises the
 // run's floor to its copy before its first byte, and an applied push raises it
 // to its row before `ok` (raiseFloor), because git builds a push's thin pack

@@ -213,6 +213,11 @@ type LaunchRequest struct {
 	// Spec.Repos is.
 	CodeFloor string
 
+	// CodeCeiling is the colleague seat whose ask woke the launching turn,
+	// whose own grant bounds the box's on every repository of Spec.Repos
+	// ([PendingRun.CodeCeiling]); "" for none. Set only where Spec.Repos is.
+	CodeCeiling string
+
 	// RunEnv is the engine's environment for THIS LAUNCH: what a box needs
 	// that is minted for the job itself, such as its access to the engine's
 	// own code host (ADR-0063). Asked ONCE, AFTER the store has minted the
@@ -340,7 +345,7 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// exists for the same reason: a box's first request to the code
 		// host is admitted against the row, and it can come before this
 		// launch returns.
-		Repos: req.Spec.Repos, CodeFloor: req.CodeFloor,
+		Repos: req.Spec.Repos, CodeFloor: req.CodeFloor, CodeCeiling: req.CodeCeiling,
 		CreatedAt: now(),
 	}, fence)
 	if err != nil {
@@ -531,7 +536,8 @@ func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runne
 // ([RunRepo.ValidateFor] [CloneCoding]), one named twice — by its name or by
 // its id, since either would give one repository two grants and one checkout
 // directory two clones — or a floor that does not go with them, set exactly
-// when repositories are.
+// when repositories are; or a colleague's ceiling on a run given none, which
+// would bound nothing.
 func checkRepos(req LaunchRequest) error {
 	repos := req.Spec.Repos
 	if len(repos) > MaxRunRepos {
@@ -554,6 +560,8 @@ func checkRepos(req LaunchRequest) error {
 		return fmt.Errorf("sandbox: a run given repositories needs the code floor they were resolved at")
 	case len(repos) == 0 && req.CodeFloor != "":
 		return fmt.Errorf("sandbox: a run given no repositories has no code floor")
+	case len(repos) == 0 && req.CodeCeiling != "":
+		return fmt.Errorf("sandbox: a run given no repositories has no colleague's ceiling on them")
 	}
 	return nil
 }

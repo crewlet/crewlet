@@ -110,8 +110,9 @@ func (w *grantWitness) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 // A LAUNCH WHOSE GRANTS ITS ROW COULD NOT CARRY IS REFUSED BEFORE ANYTHING IS
 // WRITTEN: more repositories than a run is given, one that is not a RunRepo,
 // one named twice — by its name or by its id, either giving one repository two
-// grants and one checkout two clones — and a floor that does not go with its
-// repositories. Nothing is on the store and no box was made.
+// grants and one checkout two clones — a floor that does not go with its
+// repositories, and a colleague's ceiling on a run given none, which would
+// bound nothing. Nothing is on the store and no box was made.
 //
 // Mutation: drop checkRepos from Launch — the duplicate and floor rows open a
 // row, red.
@@ -146,6 +147,11 @@ func TestALaunchRefusesGrantsItsRowCouldNotCarry(t *testing.T) {
 		{"a floor with no repositories", func(t *testing.T) LaunchRequest {
 			return launchReq("t1").withFloor("code@1:40")
 		}, "has no code floor"},
+		{"a colleague's ceiling with no repositories", func(t *testing.T) LaunchRequest {
+			r := launchReq("t1")
+			r.CodeCeiling = "designer"
+			return r
+		}, "no colleague's ceiling on them"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
