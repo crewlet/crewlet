@@ -486,6 +486,11 @@ administrator has to change. A setting is reported only when the server
 says it is off: the config endpoint's key set varies by server version, so
 an absent key means "this server did not say".
 
+A `team` the instance does not have is reported once on the integration,
+naming the team, and no agent's bot is created, changed or turned off until
+it is fixed: channels are team-scoped, so every seat would fail the same
+way.
+
 `crewlet mattermost provision` is retired: each agent's bot, roles, channels
 and token are managed from the Agents tab and applied by the reconcile loop.
 The command answers with that and changes nothing.
