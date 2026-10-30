@@ -192,11 +192,7 @@ func accessKind(w http.ResponseWriter, r *http.Request) (integration.Kind, bool)
 	if slices.Contains(seataccess.Kinds(), kind) {
 		return kind, true
 	}
-	names := make([]string, 0, len(seataccess.Kinds()))
-	for _, k := range seataccess.Kinds() {
-		names = append(names, string(k))
-	}
-	detail := map[string]string{"hint": "one of " + strings.Join(names, ", ")}
+	detail := map[string]string{"hint": accessElsewhere}
 	if kind == integration.KindJira || kind == integration.KindConfluence {
 		detail["detail"] = "Jira and Confluence are set per agent on atlassian, " +
 			"whose one account per agent both products grant"
@@ -473,9 +469,22 @@ func (s *Service) accessInstall(w http.ResponseWriter, r *http.Request) {
 
 // accessSavePolicy is the save route's policy, declared once so the mount and
 // the handler's own check read one value.
+//
+// IT NEVER CREATES WHAT ITS ADDRESS NAMES: the address is an integration, and
+// an integration is connected through its own setup, never by saving its
+// agents. A kind that manages no account per agent is refused with
+// [accessElsewhere], the sentence a preview that finds nothing there is told.
 func accessSavePolicy() authz.Policy {
-	return authz.Policy{Action: authz.ActionSetupAccessWrite}.Checked()
+	return authz.Policy{Action: authz.ActionSetupAccessWrite}.Checked().
+		WhenAbsent(authz.AddedElsewhere(accessElsewhere))
 }
+
+// accessElsewhere is where an integration's agents are reached from when the
+// address names no integration that manages an account per agent: what the
+// route refuses such a kind with, and what it declares ([authz.Absent]).
+const accessElsewhere = "an agent's access is set on an integration that manages one " +
+	"account per agent (slack, mattermost, atlassian for Jira and Confluence, github, " +
+	"gitlab, datadog); connect one with POST /setup/integrations/{kind}/inputs first"
 
 // accessAct serves POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}.
 //
