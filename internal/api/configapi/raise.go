@@ -50,7 +50,7 @@ func failClosedRaises(managed func() bool) Raises {
 	return func(_ context.Context, prior *config.Company, _ string,
 		next *config.Company) []seataccess.Raise {
 
-		return seataccess.RaisesBetween(prior, next, func(kind integration.Kind) map[seataccess.Lane]seataccess.Options {
+		return seataccess.RaisesBetween(prior, next, managed(), func(kind integration.Kind) map[seataccess.Lane]seataccess.Options {
 			return seataccess.UnreadOffers(kind,
 				next.SeatCredentialMode(string(kind), managed()) != config.SeatCredentialEngine)
 		})

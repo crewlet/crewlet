@@ -439,7 +439,7 @@ func (e *Engine) SeatAccessRaises(ctx context.Context, prior *config.Company,
 	if prior != nil && reflect.DeepEqual(prior.Integrations, next.Integrations) {
 		company, revision = prior, priorRevision
 	}
-	return seataccess.RaisesBetween(prior, next, func(kind integration.Kind) map[seataccess.Lane]seataccess.Options {
+	return seataccess.RaisesBetween(prior, next, e.companyManaged, func(kind integration.Kind) map[seataccess.Lane]seataccess.Options {
 		roster, err := company.Organization()
 		if err != nil {
 			return seataccess.UnreadOffers(kind,

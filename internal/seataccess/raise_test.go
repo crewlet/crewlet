@@ -84,19 +84,19 @@ func TestAWriteRaisesOnlyWhereASeatMovesUp(t *testing.T) {
 		return map[seataccess.Lane]seataccess.Options{seataccess.LaneDatadog: datadogOffer}
 	}
 	std, admin := datadogSeats("role-std", true), datadogSeats("role-admin", true)
-	if got := seataccess.RaisesBetween(std, admin, offers); len(got) != 1 ||
+	if got := seataccess.RaisesBetween(std, admin, false, offers); len(got) != 1 ||
 		got[0] != (seataccess.Raise{Kind: integration.KindDatadog, Handle: "sre",
 			Lane: seataccess.LaneDatadog}) {
 		t.Errorf("std to admin = %+v, want the SRE's Datadog", got)
 	}
-	if got := seataccess.RaisesBetween(nil, admin, offers); len(got) != 1 {
+	if got := seataccess.RaisesBetween(nil, admin, false, offers); len(got) != 1 {
 		t.Errorf("a first document with the SRE at admin = %+v, want one raise", got)
 	}
-	if got := seataccess.RaisesBetween(admin, std, offers); len(got) != 0 {
+	if got := seataccess.RaisesBetween(admin, std, false, offers); len(got) != 0 {
 		t.Errorf("a lowering = %+v, want none", got)
 	}
 	reads = 0
-	if got := seataccess.RaisesBetween(admin, datadogSeats("role-admin", true), offers); len(got) != 0 ||
+	if got := seataccess.RaisesBetween(admin, datadogSeats("role-admin", true), false, offers); len(got) != 0 ||
 		reads != 0 {
 		t.Errorf("an unchanged seat = %+v after %d vendor reads, want none and none", got, reads)
 	}
@@ -131,5 +131,37 @@ func TestKeepingTheVendorsSettingWritesItsOwnTerms(t *testing.T) {
 		seataccess.Observed{Exists: true, Enabled: true, Level: "bot", Scope: []string{"x"}})
 	if err != nil || !got.Enabled || got.Level != "" || len(got.Scope) != 0 {
 		t.Errorf("Slack kept = %+v, %v; want on and nothing else", got, err)
+	}
+}
+
+// A KIND THE ENGINE STARTS GRANTING IS A TURN-ON, in two writes as in one.
+//
+// The SRE is set to Datadog's Admin Role while Datadog is handed in from
+// outside Crewlet, which grants nothing and asks nobody. A later write adds the
+// provisioning block and moves no seat setting at all, yet from it on the
+// engine creates the account at that role, so that write is the raise.
+// Mutation: compare the seat with its prior setting whatever the kind's mode,
+// and the second write passes with no person asked.
+func TestAKindTheEngineStartsGrantingIsATurnOn(t *testing.T) {
+	t.Parallel()
+	offers := func(kind integration.Kind) map[seataccess.Lane]seataccess.Options {
+		if kind != integration.KindDatadog {
+			return nil
+		}
+		return map[seataccess.Lane]seataccess.Options{seataccess.LaneDatadog: datadogOffer}
+	}
+	external := datadogSeats("role-admin", true)
+	external.Integrations = config.Integrations{}
+	provisioned := datadogSeats("role-admin", true)
+	got := seataccess.RaisesBetween(external, provisioned, false, offers)
+	if len(got) != 1 || got[0] != (seataccess.Raise{Kind: integration.KindDatadog,
+		Handle: "sre", Lane: seataccess.LaneDatadog}) {
+		t.Errorf("provisioning a kind under a seat already at admin = %+v, want the SRE's Datadog", got)
+	}
+	if got := seataccess.RaisesBetween(provisioned, datadogSeats("role-admin", true), false, offers); len(got) != 0 {
+		t.Errorf("a provisioned kind left as it was = %+v, want none", got)
+	}
+	if got := seataccess.RaisesBetween(external, datadogSeats("role-std", true), false, offers); len(got) != 0 {
+		t.Errorf("provisioning a kind under a seat at an ordinary role = %+v, want none", got)
 	}
 }

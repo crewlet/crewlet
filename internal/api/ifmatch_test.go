@@ -59,7 +59,7 @@ func TestEveryIfMatchReaderIsAReviewedPrecondition(t *testing.T) {
 			"body's or the read's revision loses as 409; TestASaveIsOneRevisionThenASync",
 		"setupapi/access.go:keepVendorSetting": "the header is the base, stated as on a " +
 			"save: a lost race is 412, the read's revision loses as 409; " +
-			"TestASaveIsOneRevisionThenASync holds the shared path",
+			"TestAKeepUnderAStaleIfMatchIsAFailedPrecondition",
 		"setupapi/setupapi.go:disconnect": "the header is the base, a stated revision " +
 			"([configapi.ApplyRequest.Stated]) whose lost race is 412, where a " +
 			"connect's body base loses as 409; " +
