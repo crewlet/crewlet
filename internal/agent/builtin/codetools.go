@@ -270,23 +270,32 @@ func codeCandidates(deps CodeDeps) []candidate {
 // operator's own `code_repo_readers` among them.
 //
 // EVERY WRITE IS A WRITE TO A SHARED SURFACE — a branch, a repository, a
-// protection every colleague of the company reads — so `ReadOnly: No` with
-// `OpenWorld: Yes`, which [mcp.WritesToSharedSurface] reads as true: a worker
-// acting under its parent's name is given none of them (a second, unbudgeted
-// writer with the parent's grant), the delivery check counts a call to one as
-// a delivery, and the operator catalogue audits every call. IDEMPOTENT, every
-// one, because each is held to what its caller read: a commit, a revert, a
+// protection, a change every colleague of the company reads — so `ReadOnly:
+// No` with `OpenWorld: Yes`, which [mcp.WritesToSharedSurface] reads as true:
+// a worker acting under its parent's name is given none of them (a second,
+// unbudgeted writer with the parent's grant), the delivery check counts a call
+// to one as a delivery, and the operator catalogue audits every call.
+// IDEMPOTENT where each is held to what its caller read: a commit, a revert, a
 // pick and a deletion to the branch's head (`expected_head`), a branch's
-// creation to its absence, a repository's to its free name, and a setting or
-// a protection set again is the same setting — so a call made twice leaves
-// what one call left, which is what makes a retry after a lost answer safe.
-// DESTRUCTIVE only where a call can take away what somebody else made with
-// nothing kept to undo it by the same tool: a branch deleted (its commits stay
-// in the repository, its name and head only in the push history) and a
-// repository deleted (restorable until its purge, then gone). A commit moves a
-// branch forward over its history, which keeps every earlier version; a
-// setting or a protection is set back by the same tool, the record of each
-// change keeping what it replaced; and an archive is undone by an unarchive.
+// creation to its absence, a repository's to its free name, a change's open
+// to the one live change its branch may head and every other write of its
+// lifecycle to the version its caller read, an ask of a reviewer already
+// asked and an answer a finding already holds to nothing, and a setting or a
+// protection set again is the same setting — so a call made twice leaves what
+// one call left, which is what makes a retry after a lost answer safe. NOT a
+// review and not a comment, which are additive: the engine makes the same
+// call's re-run the same write, but the annotation describes the tool a model
+// is offered, and two reviews or two comments saying the same are two (the
+// tracker's comment_on_work_item, for the same reason). DESTRUCTIVE only where
+// a call can take away what somebody else made with nothing kept to undo it by
+// the same tool: a branch deleted (its commits stay in the repository, its
+// name and head only in the push history), a repository deleted (restorable
+// until its purge, then gone), and a finding dismissed — a reviewer's
+// blocker cleared, which nothing moves back. A commit moves a branch forward
+// over its history, which keeps every earlier version; a setting, a
+// protection or what a change says is set back by the same tool, the record
+// of each change keeping what it replaced; and an archive, a close and a
+// draft are each undone by their opposite.
 func codeAnnotations(name string) (tools.Annotations, bool) {
 	for _, tool := range append(CodeToolNames(), CodeRepoReadersTool) {
 		if tool == name {
@@ -294,11 +303,14 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 		}
 	}
 	if slices.Contains(CodeWrites(), name) {
-		destructive := mcp.No
-		if name == CodeDeleteBranchTool || name == CodeDeleteRepoTool {
+		destructive, idempotent := mcp.No, mcp.Yes
+		switch name {
+		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeResolveFindingTool:
 			destructive = mcp.Yes
+		case CodeReviewChangeTool, CodeCommentOnChangeTool:
+			idempotent = mcp.No
 		}
-		return tools.Annotations{ReadOnly: mcp.No, Destructive: destructive, Idempotent: mcp.Yes,
+		return tools.Annotations{ReadOnly: mcp.No, Destructive: destructive, Idempotent: idempotent,
 			OpenWorld: mcp.Yes}, true
 	}
 	return tools.Annotations{}, false

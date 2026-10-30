@@ -1703,13 +1703,13 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
-// codeCatalogueBudget is the most bytes the twenty-four code tools'
+// codeCatalogueBudget is the most bytes the twenty-eight code tools'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
 // a seat at full_access carries, the one tier offered the writes
 // (CodeWritesWithheld); every other seat carries the reads alone
 // ([codeReadsCatalogueBudget]).
 //
-// 34 800: measured at 32 899 (~8 225 tokens), so ~6% headroom — a sentence can
+// 42 000: measured at 39 603 (~9 901 tokens), so ~6% headroom — a sentence can
 // be added and a tool cannot, the executor prompt's rule (a code tool a later
 // part adds raises this deliberately, with its measured cost). 10 654 → 9 570
 // when the revision grammar, written into each of the six revision arguments,
@@ -1745,8 +1745,14 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // code_open_change, code_update_change and code_close_change, each argument
 // its name and type but where they do not say it — a change named by number
 // or reference, the version a write is held to, the forms a work item takes —
-// and update's one-thing-a-call rule said once, in its description.
-const codeCatalogueBudget = 34_800
+// and update's one-thing-a-call rule said once, in its description. And
+// 34 800 → 42 000 when a change's four conversation writes joined the list,
+// deliberately, with their measured cost: 32 899 → 39 603, 6 704 bytes (~1 676
+// tokens) for code_request_review, code_review_change (2 906 of them: its
+// findings' nine fields, each a name, a type and an enum where it has one),
+// code_comment_on_change and code_resolve_finding, the rules of who may answer
+// what said once in each description.
+const codeCatalogueBudget = 42_000
 
 // codeReadsCatalogueBudget is the most bytes the eleven code reads'
 // definitions may add to a tool catalogue as a CLI's prompt renders it: what
@@ -1759,18 +1765,18 @@ const codeCatalogueBudget = 34_800
 // states — a code read a later part adds raises this deliberately, with its
 // measured cost, as it raises that. The ten writes were the 12 053 bytes
 // (~3 013 tokens) between the two budgets' figures then, and a change's three
-// lifecycle writes beside them make the thirteen 15 324 (~3 831 tokens),
-// carried by a full_access seat alone.
+// lifecycle and four conversation writes beside them make the seventeen
+// 22 028 (~5 507 tokens), carried by a full_access seat alone.
 const codeReadsCatalogueBudget = 18_600
 
 // THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
 // code carries the eleven reads' definitions on every round of every turn, and
-// a seat at full_access the thirteen writes' beside them: a CLI's catalogue
+// a seat at full_access the seventeen writes' beside them: a CLI's catalogue
 // rides in the user text (cliagent.RenderPrompt), so nothing caches them, and
 // each byte is paid again every round. Measured as that catalogue renders them
 // — indented, HTML-escaped, added to a catalogue already holding a tool, so
 // each one's separator and indentation count — the reads alone and all
-// twenty-four, each held to a budget, so a later description edit is a
+// twenty-eight, each held to a budget, so a later description edit is a
 // decision rather than drift, as the executor prompt's budgets make a sentence
 // one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
@@ -1798,7 +1804,7 @@ func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 		got, budget int
 	}{
 		{"the eleven code reads (every seat's)", added(codeDeps(newCodeHost())), codeReadsCatalogueBudget},
-		{"all twenty-four code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
+		{"all twenty-eight code tools (a full_access seat's)", added(writeDeps(newCodeHost(), &codeWrites{})),
 			codeCatalogueBudget},
 	} {
 		tokens := cliagent.EstimateTokens(strings.Repeat(" ", c.got))

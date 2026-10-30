@@ -86,13 +86,16 @@ const (
 // catalogue lists them: the last of [CodeWrites], and with [ChangeToolNames]
 // every change tool [changeToolNeeds] names an access for.
 func ChangeWrites() []string {
-	return []string{CodeOpenChangeTool, CodeUpdateChangeTool, CodeCloseChangeTool}
+	return []string{CodeOpenChangeTool, CodeUpdateChangeTool, CodeCloseChangeTool, CodeRequestReviewTool,
+		CodeReviewChangeTool, CodeCommentOnChangeTool, CodeResolveFindingTool}
 }
 
-// changeWriteTools are the change writes over deps, in [ChangeWrites]' order.
+// changeWriteTools are the change writes over deps, in [ChangeWrites]' order:
+// a change's lifecycle, then its conversation (codechangeconverse.go).
 func changeWriteTools(deps CodeDeps) []tools.Callable {
 	return []tools.Callable{&codeOpenChange{deps: deps}, &codeUpdateChange{deps: deps},
-		&codeCloseChange{deps: deps}}
+		&codeCloseChange{deps: deps}, &codeRequestReview{deps: deps}, &codeReviewChange{deps: deps},
+		&codeCommentOnChange{deps: deps}, &codeResolveFinding{deps: deps}}
 }
 
 // changeVerb is the verb a change write's operation is named by (m3-w1's op
@@ -444,7 +447,11 @@ func (d CodeDeps) askOpened(ctx context.Context, turn *turnctx.Turn, c codeCalle
 	case err != nil:
 		out.ReviewersNotAsked = notAsked(named, writeErrWords(err), sameCall(c.actor, CodeOpenChangeTool))
 	case res.Refusal != "":
-		out.ReviewersNotAsked = notAsked(named, fmt.Sprintf("%s (%s)", res.Detail, res.Refusal), "")
+		// A REFUSAL IS REFUSED AGAIN by the same call, which opens nothing
+		// twice and asks the same reviewers: asking others is a call of its
+		// own, of the change the open made.
+		out.ReviewersNotAsked = notAsked(named, fmt.Sprintf("%s (%s)", res.Detail, res.Refusal), "") +
+			fmt.Sprintf(" Ask others with %s.", CodeRequestReviewTool)
 	case res.Outcome == statelog.OutcomeApplied || res.Outcome == statelog.OutcomePending:
 		out.Reviewers = reviewers
 	default:

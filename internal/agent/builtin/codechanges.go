@@ -113,13 +113,20 @@ func ChangeToolNames() []string { return []string{CodeListChangesTool, CodeGetCh
 // push of the branch it proposes — a full_access seat's own namespace on a
 // repository it reads, so read — and a change's lifecycle is steered by its
 // owner, whatever their access, by a principal that maintains the repository
-// or by a person — so read too.
+// or by a person — so read too. A comment and an ask for review need read (an
+// author asks whatever their access); a review needs review, the one write
+// whose access alone admits it; and an answer to findings is an author's, or a
+// dismissal by the raiser, a maintainer or a person — read.
 var changeToolNeeds = map[string]code.Access{
-	CodeListChangesTool:  code.AccessRead,
-	CodeGetChangeTool:    code.AccessRead,
-	CodeOpenChangeTool:   code.AccessRead,
-	CodeUpdateChangeTool: code.AccessRead,
-	CodeCloseChangeTool:  code.AccessRead,
+	CodeListChangesTool:     code.AccessRead,
+	CodeGetChangeTool:       code.AccessRead,
+	CodeOpenChangeTool:      code.AccessRead,
+	CodeUpdateChangeTool:    code.AccessRead,
+	CodeCloseChangeTool:     code.AccessRead,
+	CodeRequestReviewTool:   code.AccessRead,
+	CodeReviewChangeTool:    code.AccessReview,
+	CodeCommentOnChangeTool: code.AccessRead,
+	CodeResolveFindingTool:  code.AccessRead,
 }
 
 // The listing's page. A listed change is its row and its readiness in a line,

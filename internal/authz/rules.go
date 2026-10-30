@@ -163,6 +163,14 @@ const (
 	ActionCodeOpenChange   Action = "code_open_change"
 	ActionCodeUpdateChange Action = "code_update_change"
 	ActionCodeCloseChange  Action = "code_close_change"
+	// And its conversation: reviewers asked, a review with its findings, a
+	// comment and a thread's state, findings answered — each one write the
+	// change's writer decides from its own chart (D21: who may ask, review,
+	// answer or dismiss).
+	ActionCodeRequestReview   Action = "code_request_review"
+	ActionCodeReviewChange    Action = "code_review_change"
+	ActionCodeCommentOnChange Action = "code_comment_on_change"
+	ActionCodeResolveFinding  Action = "code_resolve_finding"
 
 	// --- somebody's own record -------------------------------------- //
 	ActionPersonRead    Action = "get_person"
@@ -790,6 +798,14 @@ var rules = map[Action]rule{
 	ActionCodeOpenChange:   {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeUpdateChange: {class: ClassEverybody, recency: iam.RecencyAny},
 	ActionCodeCloseChange:  {class: ClassEverybody, recency: iam.RecencyAny},
+	// AND ITS CONVERSATION, decided by the change's writer from its own chart
+	// — who may review the repository, who wrote the change, who raised a
+	// finding — on the same footing: a seat reviews, so neither human-only nor
+	// asking a proof.
+	ActionCodeRequestReview:   {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeReviewChange:    {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeCommentOnChange: {class: ClassEverybody, recency: iam.RecencyAny},
+	ActionCodeResolveFinding:  {class: ClassEverybody, recency: iam.RecencyAny},
 	// BUT WHO READ A REPOSITORY IS ADMIN'S, as the company-wide trail is
 	// ([ActionAuditRead]): the answer names every person, credential and
 	// seat that read a unit's code and how much, which is an audit of the

@@ -1372,6 +1372,18 @@ behind their batches and contend with every push to the repository.
   once its own copy holds it, or refuses as a node that is behind, which the
   next node answers: a reply to a comment the asker was shown is never refused
   because the writer has not seen the comment yet.
+- **A seat and a person's assistant write it through tools** —
+  `code_request_review`, `code_review_change`, `code_comment_on_change` and
+  `code_resolve_finding` ([The company's
+  code](../guides/tools-and-mcp.md#the-companys-code)) — each one write, named
+  by one operation and decided at or past the tool's own read of the change. A
+  review is ONE record — its verdict, its summary, every finding it raises and
+  every finding of the reviewer's own it carries — and the tool anchors each
+  finding where its lines were read: in the revision's head on the new side,
+  its recorded base on the old, the blob from one read of the revision's diff,
+  on a file the revision changes. A reply that also marks its thread resolved
+  is the reply, then the thread's state as a second write of the same
+  operation.
 - **A table is written by one subject's records.** The repository's records
   keep the change's row, its body, its authors and its revisions; the change's
   keep its conversation's tables:

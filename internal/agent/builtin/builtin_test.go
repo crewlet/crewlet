@@ -348,6 +348,13 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeOpenChangeTool:   true,
 		builtin.CodeUpdateChangeTool: true,
 		builtin.CodeCloseChangeTool:  true,
+		// AND ITS CONVERSATION, which wakes the change's people: a worker
+		// reviewing or dismissing a finding would judge under its parent's
+		// name.
+		builtin.CodeRequestReviewTool:   true,
+		builtin.CodeReviewChangeTool:    true,
+		builtin.CodeCommentOnChangeTool: true,
+		builtin.CodeResolveFindingTool:  true,
 
 		// THE DEPLOYMENT'S HEALTH: two reads of what the fleet already
 		// publishes, which a worker of a granted seat may be handed.

@@ -213,9 +213,14 @@ func TestEveryCodeWriteDeliversToTheCodeSurface(t *testing.T) {
 		if entry.Surface != code.Source {
 			t.Errorf("%s delivers to %q, want the code host's surface %q", name, entry.Surface, code.Source)
 		}
+		// ADDITIVE WRITES ARE NOT IDEMPOTENT: two reviews or two comments
+		// saying the same are two; every other write is held to what its
+		// caller read.
+		additive := name == builtin.CodeReviewChangeTool || name == builtin.CodeCommentOnChangeTool
 		if mcp.ReadOnlyProven(entry.Annotations) || !mcp.WritesToSharedSurface(entry.Annotations) ||
-			entry.Annotations.Idempotent != mcp.Yes {
-			t.Errorf("%s is annotated %+v, want an idempotent write to a shared surface", name, entry.Annotations)
+			(entry.Annotations.Idempotent == mcp.Yes) == additive {
+			t.Errorf("%s is annotated %+v, want a write to a shared surface, idempotent unless additive", name,
+				entry.Annotations)
 		}
 	}
 	for _, name := range builtin.CodeToolNames() {
@@ -278,7 +283,7 @@ func (r tierRoster) Leads(unit string) []string {
 func (tierRoster) Within(unit, ancestor string) bool { return unit == ancestor && unit != "" }
 
 // THE CODE WRITES ARE WITHHELD EXACTLY WHERE NO GRANT ADMITS ONE: a seat is
-// left the thirteen at every tier that caps it below write and offered them at
+// left the seventeen at every tier that caps it below write and offered them at
 // full_access — held to code.GrantOf both ways at the highest relation the
 // chart can give a seat, on a project its unit owns and leads and on its own
 // scratch repository. A tier they are withheld at pushes to neither and
@@ -305,7 +310,7 @@ func TestTheCodeWritesAreWithheldExactlyWhereNoGrantAdmitsOne(t *testing.T) {
 	for _, tier := range append(code.Tiers(), "", "admin") {
 		withheld := builtin.CodeWritesWithheld(tier)
 		if len(withheld) != 0 && !slices.Equal(withheld, builtin.CodeWrites()) {
-			t.Errorf("tier %q withholds %v, want all thirteen writes or none", tier, withheld)
+			t.Errorf("tier %q withholds %v, want all seventeen writes or none", tier, withheld)
 		}
 		for _, repo := range repos {
 			g := code.GrantOf(agent, repo, tierRoster{tier: tier})
@@ -988,8 +993,13 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeProtectBranchTool: {"repo": repo, "pattern": "refs/heads/main"},
 		builtin.CodeOpenChangeTool: {"repo": repo, "branch": "fix", "title": "Fix the lab",
 			"reviewers": []any{"agent-ceo"}},
-		builtin.CodeUpdateChangeTool: {"repo": repo, "change": 7, "expected_version": 1, "title": "Fix the lab"},
-		builtin.CodeCloseChangeTool:  {"repo": repo, "change": 7, "expected_version": 1},
+		builtin.CodeUpdateChangeTool:    {"repo": repo, "change": 7, "expected_version": 1, "title": "Fix the lab"},
+		builtin.CodeCloseChangeTool:     {"repo": repo, "change": 7, "expected_version": 1},
+		builtin.CodeRequestReviewTool:   {"repo": repo, "change": 7, "reviewers": []any{"agent-ceo"}},
+		builtin.CodeReviewChangeTool:    {"repo": repo, "change": 7, "verdict": "approve"},
+		builtin.CodeCommentOnChangeTool: {"repo": repo, "change": 7, "body": "Looks right."},
+		builtin.CodeResolveFindingTool: {"repo": repo, "change": 7, "findings": []any{standingFinding},
+			"resolution": "dismissed"},
 	}
 	args, ok := rows[name]
 	return args, ok

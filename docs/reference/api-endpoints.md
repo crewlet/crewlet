@@ -5037,8 +5037,10 @@ read as you, so every repository, and none recorded as `operator_acted` — and,
 where the code host's writes are served, the code writes: `code_commit_files`,
 `code_revert`, `code_cherry_pick`, `code_create_branch`, `code_delete_branch`,
 `code_create_repo`, `code_update_repo`, `code_delete_repo`,
-`code_restore_repo`, `code_protect_branch`, and a change's `code_open_change`,
-`code_update_change` and `code_close_change`, each made as the human seat you
+`code_restore_repo`, `code_protect_branch`, a change's `code_open_change`,
+`code_update_change` and `code_close_change`, and its conversation's
+`code_request_review`, `code_review_change`, `code_comment_on_change` and
+`code_resolve_finding`, each made as the human seat you
 hold through the credential you came with (a token bound to nobody writes
 nothing), each answering its `op_id` here and taking it back by the tracker's
 own rule, and each one `operator_acted`. And

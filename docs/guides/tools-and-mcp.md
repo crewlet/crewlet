@@ -318,8 +318,8 @@ is (copy the directory into your assistant's skills folder).
 
 ### The company's code
 
-Twenty-four more — eleven that read, two of them a repository's changes, and
-thirteen that change a branch, a repository or a change — registered wherever
+Twenty-eight more — eleven that read, two of them a repository's changes, and
+seventeen that change a branch, a repository or a change — registered wherever
 the company hosts its git repositories in the engine (`code.native`; see [Code
 Host](../concepts/code-host.md)) — on every
 node, whatever its roles, since a node holding no copy of the code log and no
@@ -328,22 +328,22 @@ terms the node's `/code/` reads are: a node whose runtime was already running
 when `code.native` was turned on offers them once it restarts into it, and one
 that turned it off keeps them until that restart ([Turn it
 on](code.md#turn-it-on)). A company that hosts no code is given none of them,
-and the operator catalogue serves the same twenty-four, so an operator's own
+and the operator catalogue serves the same twenty-eight, so an operator's own
 assistant reads and changes the company's code exactly as a seat does — the
 person as the human seat they hold. The eleven reads are reads: none counts as
 a delivery, a [worker](../concepts/turn-engine.md#workers) may be handed any of
-them, and the operator catalogue records no call to one. The thirteen writes
+them, and the operator catalogue records no call to one. The seventeen writes
 each deliver to the code host, so a turn woken about work on a repository that
-answered by moving a branch or opening a change delivered; no worker is ever
-handed one, since it
+answered by moving a branch, opening a change or reviewing one delivered; no
+worker is ever handed one, since it
 would write with its parent's grant; and every call to one on the operator
-catalogue is recorded as any write is. A seat is offered the thirteen only where
+catalogue is recorded as any write is. A seat is offered the seventeen only where
 its `role.code.access` is `full_access`: below it, no repository's grant lets
 the seat change anything ([Who may read and
 push](../concepts/code-host.md#who-may-read-and-push)), so a `read_only` or
 `review` seat — `read_only` is what a seat that sets none runs at — is offered
 the eleven reads alone, and its prompt says nothing about changing code,
-rather than carrying thirteen tools it would be refused on every repository on
+rather than carrying seventeen tools it would be refused on every repository on
 every round.
 
 | Tool | Description |
@@ -372,6 +372,10 @@ every round.
 | `code_open_change` | A [change](../concepts/code-host.md#changes) opened: a `branch` proposed into a `target` (the repository's default branch when left out), with a `title`, a `body`, as a `draft` or not, carrying a work item — the turn's own unless `work_item` names another, by a native item's key (`ENG-42`), any tracker's identity (`<backend>:<id>`) or `none` — and, once it is open, asking the `reviewers` it names in a second write; an ask that did not finish leaves the change open and says why (`reviewers_not_asked`). It answers the change's reference (`web!42`) and its `version` |
 | `code_update_change` | One thing about a change a call, held to the `version` the caller read (`expected_version`): what it says — any of `title`, `body` and `work_item` together — or `draft` (a draft, or ready for review), or its `target` |
 | `code_close_change` | A change closed without merging it (`reason`), or with `reopen` a closed one opened again at its branch's head — held to `expected_version` as an update is |
+| `code_request_review` | Reviewers asked of a change (`reviewers`, at most 32), or an ask withdrawn (`withdraw`), with a `note`. A seat asked must review the repository and not have written the change; a person may always be asked ([Asking for review](../concepts/code-host.md#asking-for-review)) |
+| `code_review_change` | A review of a change's revision — its latest unless `revision` names one — as ONE record: a `verdict` (`approve`, `request_changes` or `comment`), a `summary`, up to 64 `findings` (each a `path`, a `side` — `new`, its head, by default, or `old`, its base — its lines, a `severity`, a `category`, a `title`, a `body` and a `suggestion`, the lines to put in place of its own) on files the revision changes, and `carries`, the reviewer's own standing findings that still stand: a review of a later revision supersedes every other one of theirs ([Reviews](../concepts/code-host.md#reviews)). It answers the review's id and its findings' ids in the order raised |
+| `code_comment_on_change` | A comment: a thread of its own — on a line, with an `anchor` (`path`, `line`, `side`, `revision`) — or a reply to a `thread` or a `finding`; with `thread`, `resolve` marks the thread resolved (`true`) or open again (`false`), after the reply where there is one |
+| `code_resolve_finding` | Findings answered (`findings`, at most 64): `resolved`, `wont_fix` or `disputed` — an author's, which leave a blocker standing for its raiser to judge — or `dismissed` — its raiser's, a maintainer's or a person's, which clears it — with a `note` and, for `resolved`, the `commit` that answers them ([Findings](../concepts/code-host.md#findings)) |
 
 **Every revision is a commit id or a ref.** A whole or abbreviated commit id
 (7 or more hex digits) costs nothing; anything else — a branch, a tag, a
@@ -466,6 +470,32 @@ answered in the class every write surface renders: a rule of the repository
 `forbidden`, a change to make another way `invalid` — a conflict among them,
 its marked text fenced as `repo_file` — a head that moved `stale_version`, and
 what waiting clears `unavailable`.
+
+**A change's writes are each one write, decided where the change is.** A
+change's lifecycle — an open, an edit, a draft's state, a retarget, a close, a
+reopen — is decided by the repository's committer, and its conversation — an
+ask for review, a review, a comment, an answer to findings — by the data node
+that commits the repository, each from its own chart: whoever may push a
+branch opens a change from it; its owner, a maintainer or any person steers
+it; a seat that reviews the repository and did not write the change reviews
+it; an author answers a finding, and its raiser, a maintainer or a person
+dismisses one ([Changes](../concepts/code-host.md#changes), [Reviews and
+findings](../concepts/code-host.md#reviews-and-findings)). Each call reads the
+change once, at linearizable, for the id its write names it by, and the write
+is decided at or past that read; an edit, a draft's state, a retarget, a close
+and a reopen are also held to the `version` the caller read
+(`expected_version`), and refused `stale_version` where the change moved since.
+A call that makes a second write — an open asking its reviewers, a reply
+marking its thread — makes it as a step of its own operation once the first
+landed, and says on its answer if the second did not finish (`reviewers_not_asked`,
+`thread_not_set`), the first standing all the same. A finding, and a comment
+on a line, is anchored where its lines were read — the revision's head on the
+`new` side, its recorded base on the `old` — so a later revision carries it to
+where those lines went, its blob read in one read of the revision's diff, on
+a file the revision changes. A refusal is answered in the class every write
+surface renders: a rule of the change `forbidden`, a change that moved
+`stale_version`, a branch already heading a live change `exists`, a write only
+a live change takes `conflict`, and what is gone `not_found`.
 
 **A scratch repository a turn names stays while the turn does.** Every call
 that names a scratch repository — a read or a write — first holds it from the
