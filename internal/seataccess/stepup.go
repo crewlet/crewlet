@@ -1,5 +1,7 @@
 package seataccess
 
+import "slices"
+
 // NeedsStepUp reports whether moving one seat's lane from before to after is a
 // raise to an administration grant, which needs a fresh step-up from the
 // person saving it (D10): Datadog Admin Role, GitLab Maintainer or Owner, Jira
@@ -19,9 +21,14 @@ func NeedsStepUp(opts Options, before, after Desired) bool {
 	if !after.Enabled {
 		return false
 	}
-	if after.Level != "" {
-		if level, _, ok := opts.Level(after.Level); ok && level.Administers {
-			if !before.Enabled || before.Level != after.Level {
+	if after.Level != "" && (!before.Enabled || before.Level != after.Level) {
+		levels, _ := opts.LevelsOf(after.Level)
+		held, _ := opts.LevelsOf(before.Level)
+		for _, level := range levels {
+			// A SET RAISES where it adds an administering level the seat did
+			// not hold; a single level where it is one.
+			if level.Administers && (!before.Enabled || !slices.ContainsFunc(held,
+				func(h Level) bool { return h.ID == level.ID })) {
 				return true
 			}
 		}

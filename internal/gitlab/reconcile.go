@@ -16,127 +16,62 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 )
 
-// Reconcile brings a GitLab instance in line with the company config.
+// Reconcile brings a GitLab instance in line with the company config, for
+// what the company holds as a whole: the group it provisions into, the token
+// the provisioning runs on, and the webhook that delivers to this deployment.
+//
+// # Seats are not this pass's
+//
+// Each agent's account, memberships and token are per-seat access
+// ([Vendor], internal/seataccess): a seat's own setting in the document,
+// read back from GitLab every pass and applied by the shared sync. This pass
+// never creates, re-roles, rotates or removes an account.
 //
 // # It is a reconcile, not a setup
 //
-// Running it twice must be safe and must be quiet: an account that exists is
-// found rather than re-created, a membership that holds is left alone. What
-// it does do every time is MINT A TOKEN, because a personal access token's
-// value is returned once and GitLab will not show it again — so there is no
-// "already correct" state to detect, and the honest thing is to rotate and
-// say so.
-//
-// # A run that cannot record what it minted revokes it
-//
-// Between the third-party app creating a token and the sink recording it there is a
-// window where the only copy of a live credential is in this process's
-// memory. If recording fails, the token exists, nothing can use it, and
-// nobody knows to remove it — so the run revokes what it minted and discards
-// what it recorded, and reports both.
+// Running it twice must be safe and must be quiet: a hook that already
+// carries what this pass would write is left exactly as it is.
 
 // Result is what one reconcile did, for the report.
 type Result struct {
-	// Created names the seats whose accounts this run created.
-	Created []string
-	// Rotated names the seats whose tokens this run minted.
-	Rotated []string
-	// Kept names the seats whose existing token was left alone — the
-	// SUCCESSFUL outcome of a re-run, said out loud because a silent
-	// report reads as a run that did nothing.
-	Kept []string
-	// Decommissioned names the accounts this run deleted.
-	Decommissioned []string
-
-	// Blocked is the seats whose GitLab account exists and cannot sign in.
-	//
-	// Its own list rather than a line in [Result.Unusable], because the two
-	// are different facts with different remedies: unusable is an account
-	// that authenticated and was refused, and this is one GitLab will not
-	// let authenticate at all — most often because a previous disconnect
-	// blocked it, since GitLab's service-account delete blocks rather than
-	// erases.
-	Blocked []BlockedAccount
-
-	// AccountsURL is where a person goes to act on one, and is empty when
-	// this run could not work out an address. It is the page that lists the
-	// accounts this engine provisions — the group's service accounts, or
-	// the instance's user administration — rather than any one account's
-	// profile, because the profile has no control on it.
-	AccountsURL string
 	// Hooked is the webhook target this run registered or re-pointed, or
 	// empty when webhooks were not part of it.
 	Hooked string
 	// HookedOn names WHERE it was registered: the single element "group",
 	// or one entry per project. Reported because the two are not
-	// interchangeable — a group hook covers projects added later and a set
-	// of project hooks does not, and an operator reading "webhook
-	// registered" cannot tell which they got.
+	// interchangeable: a group hook covers projects added later and a set
+	// of project hooks does not.
 	HookedOn []string
 
 	// NoIngress says why this run left the instance with no delivery path
 	// at all, and is empty when it registered one.
 	//
-	// A SEPARATE FIELD rather than an empty [Result.Hooked], for the same
-	// reason [jira.Result.NoIngress] is one: an empty Hooked is also what a
-	// perfectly healthy run looks like from the outside, and
-	// [integration.Classify] over no findings is READY. So a company that
-	// never set its webhook address — Tier A's `api.public.external_url`
-	// behind a public listener, `api.external_url` otherwise, which the
-	// reconcile loop feeds into every pass — had GitLab reported ready
-	// while the instance had nowhere to deliver to and not one merge
-	// request, pipeline or comment ever reached a seat. The note below said so to whoever ran
-	// the CLI; the dashboard, which is where a running company is watched,
-	// was told nothing.
-	//
-	// The zero value is "nothing to report", deliberately: a Result built
-	// anywhere but [Reconcile] must not invent an ingress problem.
+	// A SEPARATE FIELD rather than an empty [Result.Hooked], because an
+	// empty Hooked is also what a healthy run looks like from the outside,
+	// and [integration.Classify] over no findings is READY: a company that
+	// never set its webhook address would read as ready while not one merge
+	// request, pipeline or comment reached a seat.
 	NoIngress string
 
 	// NoIngressKey is the Tier A key this deployment's webhook address is
-	// read from, which NoIngress names as the setting an operator fills in
-	// to give the instance an address — as [Options] handed it over. Empty
-	// is [setup.BaseKey]'s.
+	// read from, which NoIngress names as the setting to fill in. Empty is
+	// [setup.BaseKey]'s.
 	NoIngressKey string
 
-	// CredentialExpires is when the credential this run authenticated with
-	// stops working, set ONLY when that is inside
+	// CredentialExpires is when the provisioning token this run
+	// authenticated with stops working, set ONLY when that is inside
 	// [integration.ExpiryWarning] of the run's clock; zero otherwise, and
 	// zero where GitLab published no expiry or the run could not read it.
-	//
-	// THE ONE CREDENTIAL HERE NOTHING ROTATES. Every seat's token is minted
-	// by this pass with a lifetime and replaced by it; the group Owner token
-	// the pass itself runs on was pasted in by a person, and the day it
-	// lapses every pass is refused, no seat is provisioned again, and the
-	// card goes from Connected to Failed with no warning at all. GitLab
-	// publishes the date, so the warning is a read away.
+	// It is the one credential here nothing rotates: a person pasted it in,
+	// and the day it lapses every pass is refused.
 	CredentialExpires time.Time
 
-	// Unusable names the seats whose ACCOUNT GitLab will not let
-	// authenticate — a token minted seconds earlier was refused.
-	//
-	// SEPARATE FROM A FAILED RUN, because nothing is wrong with the pass and
-	// a retry changes nothing: the account needs a person at GitLab. Reported
-	// as [integration.FindingIdentityFailed], which is that exact sentence in
-	// the neutral vocabulary — "a seat's account could not be created or its
-	// credential was refused".
-	//
-	// It is also the one state in which this pass deliberately leaves a seat
-	// with NO credential at all. The alternative is the loop it replaced.
-	Unusable []string
-
-	// Notes carries the plan's notes plus anything the run itself found.
+	// Notes carries anything the run found worth saying.
 	Notes []string
 
-	// Recorded counts the values this run wrote to the sink — seat tokens
-	// plus a minted or rotated signing secret.
-	//
-	// A COUNT rather than the names, because the names are the variables
-	// holding live credentials and this number's only job is deciding
-	// whether the report tells the operator what still has to happen for
-	// those values to reach a running engine. Zero means a re-run that
-	// changed nothing, and instructing that operator to restart anything
-	// would be noise.
+	// Recorded counts the values this run wrote to the sink: a minted or
+	// rotated signing secret. A count rather than names, because the names
+	// hold live credentials; zero means a re-run that changed nothing.
 	Recorded int
 }
 
@@ -188,21 +123,17 @@ func Modes() []string { return []string{string(ModeGroup), string(ModeInstance)}
 
 // Options are one reconcile's inputs.
 type Options struct {
-	// Client talks to the instance as an administrator.
+	// Client talks to the instance with the provisioning token.
 	Client *Client
 
 	// Config is the company's gitlab block.
 	Config *config.GitLab
 
-	// Plan is what to do, from [PlanFor].
-	Plan *provision.Plan
-
-	// Sink records what is minted.
+	// Sink records a minted or rotated signing secret.
 	Sink provision.TokenSink
 
 	// WebhookBase is where the instance reaches this deployment
-	// ([config.API.WebhookBase]: the public listener's address where
-	// `api.public` is set), or empty to skip webhook registration.
+	// ([config.API.WebhookBase]), or empty to skip webhook registration.
 	//
 	// SKIPPED RATHER THAN GUESSED. A hook pointing at the wrong host is
 	// worse than no hook: the instance reports a healthy integration, and
@@ -217,69 +148,39 @@ type Options struct {
 	// SigningSecret is the value the hook is registered with, resolved.
 	//
 	// Empty means the config's ${VAR} answered nothing, and the run MINTS
-	// one — see [signingSecret]. GitLab's signing token is
-	// caller-supplied and write-only: it is never returned, so a hook
-	// registered with an empty one verifies nothing and there is no way
-	// to read back what it should have been.
+	// one: see [signingSecret]. GitLab's signing token is caller-supplied
+	// and write-only, so a hook registered with an empty one verifies
+	// nothing and there is no way to read back what it should have been.
 	SigningSecret string
 
-	// SigningSecretVar is the variable the minted secret is recorded
-	// under, empty when the config's signing_secret is not a whole ${VAR}
-	// reference. Mirrors the seat tokens' mint-into-${VAR} contract: the
-	// config's reference is what says where the value belongs.
+	// SigningSecretVar is the variable a minted secret is recorded under,
+	// empty when the config's signing_secret is not a whole ${VAR}.
 	SigningSecretVar string
 
-	// Mode is where service accounts are owned — see [Mode]. The zero
-	// value is [ModeGroup], which is the only shape GitLab.com has.
-	Mode Mode
-
-	// Decommission deletes managed service accounts whose seats have left
-	// the config. Off by default: it is the one destructive direction,
-	// and a company mid-edit looks exactly like a company that removed a
-	// seat.
-	Decommission bool
-
-	// Rotate forces a fresh token for every seat, including seats whose
-	// current one still works — and, where the run registers the hook, a
-	// fresh signing secret into the variable signing_secret names
-	// ([PlanSigningSecret]).
+	// Rotate replaces the signing secret in the variable signing_secret
+	// names ([PlanSigningSecret]).
 	//
-	// # Why it is a flag rather than what a run does
-	//
-	// GitLab returns a personal access token's value once, so a
-	// provisioner cannot check that what it recorded last time still
-	// matches. The tempting answer is to mint every run — and that is an
-	// outage: the engine is running with the OLD value, and rotating
-	// revokes the credential every agent is currently authenticating
-	// with. An operator adding a tenth seat would take the other nine
-	// down, from a command whose whole promise is that it is safe to
-	// re-run.
+	// A FLAG RATHER THAN WHAT A RUN DOES: a new key re-points the hook at a
+	// value the RUNNING engine does not hold yet, and every delivery is
+	// refused until it does.
 	Rotate bool
 
-	// ExpiryDays is the lifetime minted onto each token, or nil for the
-	// instance default. A POINTER because zero is meaningful — it means
-	// "send no expiry" — and an int's zero value would silently override
-	// every caller that did not set it.
-	ExpiryDays *int
-
-	// Now is the clock expiry is computed from. Nil takes the wall clock.
+	// Now is the clock the token-expiry warning is judged by. Nil takes the
+	// wall clock.
 	Now func() time.Time
+
+	// Plan and Mode are IGNORED. They are kept only so the engine's current
+	// call sites compile until they are retired: seats are per-seat access
+	// ([Vendor]), which reads the mode from the document itself.
+	Plan *provision.Plan
+	Mode Mode
 }
 
 // Reconcile runs one pass.
 func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// A CANCELLED PASS HAS OBSERVED NOTHING, so it must RAISE rather than
-	// answer with a Result.
-	//
-	// Checked here, at the top, because every early return below hands back
-	// a Result — and the loop reads a Result with no findings as "this
-	// integration is ready" and trusts it for a full settled interval. The
-	// reachable shape was an empty plan: [PlanFor] skips every seat whose
-	// mcp_env.gitlab token is a literal rather than a ${VAR}, so a company
-	// that manages its GitLab credentials by hand plans nothing, and the
-	// empty-plan return below never touched ctx at all. A node shutting
-	// down would then record GitLab as converged on its way out, having
-	// made not one request.
+	// answer with a Result: the loop reads a Result with no findings as
+	// "this integration is ready" and trusts it for a full settled interval.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -287,51 +188,36 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		return nil, errors.New("gitlab: no client")
 	}
 	if opts.Sink == nil {
-		// THE COMMAND LINE'S CASE, and it stays a refusal: a run with
-		// nowhere to put what it mints would create live credentials and
-		// print none of them, which is the worst outcome available.
+		// A run with nowhere to put a minted signing secret would register
+		// a hook signed with a key nothing holds.
 		return nil, provision.ErrNoSink
 	}
-	if opts.Plan == nil || opts.Plan.Empty() {
-		return &Result{Notes: notesOf(opts.Plan)}, nil
-	}
-	if !opts.Mode.Valid() {
-		return nil, fmt.Errorf("gitlab: unknown mode %q — it is one of %s",
-			opts.Mode, strings.Join(Modes(), ", "))
+	if opts.Config == nil || opts.Config.Provisioning == nil {
+		return nil, errors.New("gitlab: integrations.gitlab.provisioning is unset, " +
+			"so there is no group to reconcile; name one")
 	}
 	p := opts.Config.Provisioning
-	// THE GROUP IS RESOLVED IN BOTH MODES. An instance service account is
-	// not OWNED by the group, but it is still made a member of it — that
-	// is what gives a seat access to the company's repositories — so a
-	// group that does not exist is fatal either way, before anything is
-	// created.
 	group, found, err := opts.Client.GroupByPath(ctx, p.Group)
 	if err != nil {
 		// GitLab has no separate auth probe, so this first call is where
-		// a bad token shows up. Distinguishing a refusal from an
-		// unreachable instance here is what stops a revoked token
-		// reporting as "the engine is working on it" forever.
+		// a bad token shows up, and a refusal is told from an unreachable
+		// instance here.
 		return nil, fmt.Errorf("gitlab: resolve group %q: %w", p.Group,
 			integration.Reject(err, Status(err)))
 	}
 	if !found {
 		return nil, fmt.Errorf(
-			"gitlab: no group %q on this instance — every seat is made a "+
-				"member of it, so it has to exist before seats can be "+
-				"provisioned", p.Group)
+			"gitlab: no group %q on this instance: every seat's access is "+
+				"granted within it, so it has to exist", p.Group)
 	}
 
-	res := &Result{
-		Notes:       notesOf(opts.Plan),
-		AccountsURL: accountsURL(opts),
-	}
+	res := &Result{}
 
-	// THE CREDENTIAL JUST PROVED IT WORKS, so this is the moment to ask
-	// how long it will go on working. A NOTE, never a failure, when GitLab
+	// THE CREDENTIAL JUST PROVED IT WORKS, so this is the moment to ask how
+	// long it will go on working. A NOTE, never a failure, when GitLab
 	// cannot say: `/personal_access_tokens/self` answers only for a
 	// personal (or group or project) access token and only on GitLab 15.5
-	// and later, and a pass that stopped over a forecast would lose every
-	// observation it exists to make.
+	// and later.
 	if self, serr := opts.Client.SelfToken(ctx); serr != nil {
 		res.Notes = append(res.Notes, fmt.Sprintf(
 			"could not read when this pass's own token expires, so no expiry "+
@@ -340,230 +226,22 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		res.CredentialExpires = self.ExpiresAt.UTC()
 	}
 
-	// PROJECTS ARE RESOLVED BEFORE ANYTHING IS MUTATED, and a missing one
-	// is dropped rather than fatal — see [resolveProjects].
+	// PROJECTS ARE RESOLVED BEFORE ANYTHING IS WRITTEN, and a missing one
+	// is dropped rather than fatal: see [resolveProjects].
 	projects, notes, err := resolveProjects(ctx, opts.Client, p.Projects)
 	if err != nil {
 		return nil, err
 	}
 	res.Notes = append(res.Notes, notes...)
 
-	// AND THE MEMBERSHIPS ARE READ BEFORE ANY OF THEM IS WRITTEN — see
-	// [readMemberships]. One listing for the group and one per surviving
-	// project, whatever the seat count, replacing a POST per seat and a
-	// POST per seat per project on every pass for ever.
-	have, err := readMemberships(ctx, opts.Client, group.ID, projects)
-	if err != nil {
-		return nil, err
-	}
-
-	// MINTED IDS ARE TRACKED so a failure can revoke them. Held here
-	// rather than looked up on the way out, because the account whose
-	// token needs revoking may be one this run just created.
-	minted := map[string]mintedToken{}
-
-	for _, seat := range opts.Plan.Seats {
-		user, created, err := ensureAccount(ctx, opts, group.ID, seat)
-		if err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("gitlab: %s: %w", seat.Handle, err))
-		}
-		if created {
-			res.Created = append(res.Created, seat.Handle)
-		}
-		// A BLOCKED ACCOUNT IS REPORTED BEFORE ANYTHING IS WRITTEN ON IT.
-		//
-		// GitLab's service-account delete BLOCKS rather than erases, so the
-		// ordinary disconnect-then-reconnect cycle finds the account it
-		// decommissioned sitting where it left it — and this pass used to
-		// walk straight past the state: it added the memberships, minted a
-		// token, watched its own post-mint probe refuse the token, swept
-		// the token and reported the SEAT unusable, naming an
-		// authentication failure and suggesting an unconfirmed address.
-		// Every one of those writes was spent on an account that cannot
-		// sign in, and the sentence sent the operator looking for the
-		// wrong thing.
-		//
-		// NOT UNBLOCKED HERE, which is the difference from datadog and is
-		// the vendor's rather than a choice: unblocking is
-		// POST /users/:id/unblock, an INSTANCE ADMIN route, and the
-		// ordinary deployment holds a group Owner token. Attempting it
-		// would be a 403 on every tick. So the state is named, with the
-		// page that can change it, and no provenance marker is written
-		// either — a marker is only worth having where the engine could
-		// act on it.
-		if !created && user.Blocked() {
-			res.Blocked = append(res.Blocked, BlockedAccount{
-				Handle: seat.Handle, Username: user.Username, State: user.State,
-			})
-			continue
-		}
-		level := accessLevel(p, seat)
-		if err = have.ensureGroup(ctx, opts.Client, group.ID, user.ID, level); err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("gitlab: %s: group membership: %w", seat.Handle, err))
-		}
-		for _, project := range projects {
-			if err = have.ensureProject(ctx, opts.Client, project, user.ID, level); err != nil {
-				return nil, rollback(ctx, opts, minted,
-					fmt.Errorf("gitlab: %s: membership of %s: %w",
-						seat.Handle, project, err))
-			}
-		}
-
-		verdict, held := provision.VerdictRejected, true
-		if !created && !opts.Rotate {
-			verdict, held, err = credentialFor(ctx, opts, user.ID, seat)
-			if err != nil {
-				return nil, rollback(ctx, opts, minted,
-					fmt.Errorf("gitlab: %s: %w", seat.Handle, err))
-			}
-		}
-		switch verdict {
-		case provision.VerdictSelf:
-			res.Kept = append(res.Kept, seat.Handle)
-			continue
-		case provision.VerdictOther:
-			// A COPY-PASTED VARIABLE. Minting over it hands this seat a
-			// second identity while the other keeps authenticating as
-			// one account from two places, and nothing reports it.
-			return nil, rollback(ctx, opts, minted, fmt.Errorf(
-				"gitlab: %s: %s holds a token that authenticates as a "+
-					"different account — give this seat its own variable",
-				seat.Handle, seat.TokenVar))
-		case provision.VerdictUnknown:
-			// LEFT EXACTLY AS IT WAS. Re-minting on "cannot tell"
-			// destroys a token that works; the recovery for one that
-			// does not is a -rotate away.
-			res.Kept = append(res.Kept, seat.Handle)
-			res.Notes = append(res.Notes, fmt.Sprintf(
-				"%s: could not check whether the token in %s still works, so "+
-					"it was left alone — re-run with -rotate if this seat is "+
-					"failing to authenticate", seat.Handle, seat.TokenVar))
-			continue
-		}
-
-		// THROUGH THE GROUP THAT OWNS THE ACCOUNT, which is what a group
-		// Owner may do: the instance route is admin only and 403s on
-		// gitlab.com for every seat. Zero on the instance path, where the
-		// credential is an admin token and no group owns the account.
-		token, err := opts.Client.CreateToken(ctx, mintGroup(opts, group.ID), user.ID,
-			TokenName(seat.Handle), tokenScopes(p), expiry(opts))
-		if err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("gitlab: %s: mint token: %w", seat.Handle, err))
-		}
-		minted[seat.Handle] = mintedToken{
-			// THE GROUP IT WAS MINTED THROUGH, carried rather than
-			// recomputed: a rollback that reached for the other route
-			// would fail to revoke exactly the credential it just
-			// created, which is the one moment a live token is loose.
-			groupID: mintGroup(opts, group.ID),
-			userID:  user.ID, tokenID: token.ID, createdAccount: created,
-		}
-
-		// A TOKEN THIS PASS JUST MINTED IS CHECKED BEFORE IT IS KEPT, and
-		// a refusal here means something a rotation can never fix.
-		//
-		// The mint above is reached because the PREVIOUS credential was
-		// refused, and the whole design reads that as "the token is
-		// stale" — which is right, except when the account itself cannot
-		// authenticate at all. Then the new token is refused for the same
-		// reason the old one was, the next pass reads that as stale
-		// again, and the run mints for ever: 144 live `api`-scoped tokens
-		// over one connect, none of which ever worked. The account's
-		// address was unconfirmable (see provision.go), but the loop is
-		// not specific to that cause and neither is this guard — any
-		// account GitLab will not let authenticate produces it.
-		//
-		// So the fresh token is the probe. It is a credential that is
-		// AS NEW AS ONE CAN BE: if GitLab refuses it, the seat's problem
-		// is its account, nothing this pass can do will change that, and
-		// minting another is the loop rather than the recovery.
-		if verdict := opts.Client.verify(ctx, token.Value, user.ID); verdict == provision.VerdictRejected {
-			// SWEPT, NOT LEFT. keep is 0, which no token id ever is, so
-			// this retires the one just minted along with every earlier
-			// token this tool minted on the account, such as one a pass
-			// that stopped between minting and retiring left behind. An
-			// administrator's own tokens are named differently and are
-			// never touched.
-			swept, rerr := retirePrevious(ctx, opts,
-				mintGroup(opts, group.ID), user.ID, seat, 0)
-			delete(minted, seat.Handle)
-			if rerr != nil {
-				// A LIVE CREDENTIAL IS LOOSE and the operator has to be
-				// told in the strongest terms this pass has.
-				return nil, rollback(ctx, opts, minted, fmt.Errorf(
-					"gitlab: %s: this account cannot authenticate, and the "+
-						"token just minted for it could not be revoked — "+
-						"revoke tokens named %q on user %d at GitLab: %w",
-					seat.Handle, TokenName(seat.Handle), user.ID, rerr))
-			}
-			res.Unusable = append(res.Unusable, seat.Handle)
-			res.Notes = append(res.Notes, fmt.Sprintf(
-				"%s: GitLab refused a token minted seconds earlier, so the "+
-					"account itself cannot authenticate — %d token(s) this "+
-					"tool had minted for it were revoked and none was kept",
-				seat.Handle, swept))
-			continue
-		}
-
-		// RECORDED IMMEDIATELY. The value above is the only copy there
-		// will ever be.
-		if err = opts.Sink.Record(ctx, seat.TokenVar, token.Value); err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("gitlab: %s: record %s: %w", seat.Handle, seat.TokenVar, err))
-		}
-		res.Rotated = append(res.Rotated, seat.Handle)
-		res.Recorded++
-		if created {
-			continue
-		}
-		// RETIRED AFTER THE RECORD, and only this tool's own: an
-		// administrator may have minted a token on this account by hand,
-		// and revoking it would break whatever is using it — silently,
-		// since nothing here knows what that is.
-		retired, err := retirePrevious(ctx, opts, mintGroup(opts, group.ID), user.ID, seat, token.ID)
-		if err != nil {
-			return nil, rollback(ctx, opts, minted,
-				fmt.Errorf("gitlab: %s: %w", seat.Handle, err))
-		}
-		if !held && retired > 0 {
-			// THE SURPRISING CASE, and the only one that earns a note:
-			// the operator asked for nothing, but the variable was empty
-			// on this machine while a live token existed on the account
-			// — so a rotation happened anyway, and whatever is running
-			// with the old value is now failing to authenticate.
-			res.Notes = append(res.Notes, fmt.Sprintf(
-				"%s: the account held a working token but %s did not, so a "+
-					"fresh one was minted and the old one retired — a running "+
-					"engine holding the old value is refused until it reads the "+
-					"new one, at the step this run's Next: line names",
-				seat.Handle, seat.TokenVar))
-		}
-	}
-
-	if opts.Decommission {
-		removed, notes, err := decommission(ctx, opts, group.ID, have.group)
-		if err != nil {
-			return nil, rollback(ctx, opts, minted, err)
-		}
-		res.Decommissioned = removed
-		res.Notes = append(res.Notes, notes...)
-	}
-
+	// THE WEBHOOK IS REGISTERED WHATEVER THE SEATS, which an earlier shape
+	// of this pass did not do: it returned before this point when no seat
+	// asked for an account, so a company whose seats were all off had no
+	// hook at all, and nothing said so.
 	if target := webhookTarget(opts.WebhookBase); target != "" {
-		// freshSecret is this run's own record of whether it minted or
-		// rotated the key, and all it drives now is the Recorded count.
-		// It used to force the hook re-write as well, because GitLab
-		// never returns a signing token and nothing else could tell a
-		// hook carrying the current key from one carrying the value this
-		// run had just replaced. [HookDigest] answers that from the
-		// instance's own listing, for every key change rather than only
-		// the ones this process made, so the flag stops here.
 		secret, note, freshSecret, err := signingSecret(ctx, opts)
 		if err != nil {
-			return nil, rollback(ctx, opts, minted, err)
+			return nil, rollback(ctx, opts, err)
 		}
 		if note != "" {
 			res.Notes = append(res.Notes, note)
@@ -574,16 +252,13 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		opts.SigningSecret = secret
 		hooked, notes, err := ensureHooks(ctx, opts, group, projects, target)
 		if err != nil {
-			return nil, rollback(ctx, opts, minted, err)
+			return nil, rollback(ctx, opts, err)
 		}
 		res.Hooked, res.HookedOn = target, hooked
 		res.Notes = append(res.Notes, notes...)
 	} else {
-		// REPORTED, not just noted. The note is what the CLI prints and it
-		// already said the right words — "the integration looks idle rather
-		// than unconfigured" — about a pass whose own answer then made it
-		// look exactly that way: no findings, so [integration.Classify]
-		// reported READY on a company whose GitLab delivers nothing. See
+		// REPORTED, not just noted: a pass with no findings classifies
+		// READY, on a company whose GitLab delivers nothing. See
 		// [Result.NoIngress].
 		res.NoIngress = "no webhook is registered on this GitLab, so merge " +
 			"requests, pipelines, issues and comments reach no seat: set " +
@@ -595,144 +270,9 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	if err := opts.Sink.Flush(ctx); err != nil {
-		return nil, rollback(ctx, opts, minted, err)
+		return nil, rollback(ctx, opts, err)
 	}
 	return res, nil
-}
-
-// memberships is what the instance already has, read once per pass.
-//
-// # Why the pass reads before it writes
-//
-// It did not. Every seat got a POST to the group's members and a POST to
-// every project's, on every pass, and GitLab answers a second one with a 409
-// that [Client.AddGroupMember] treats as success. The loop runs every few
-// minutes for the life of the deployment, so a converged company of ten seats
-// and four projects sent fifty writes to somebody's GitLab for ever — and the
-// contract this pass is certified against ([integration.Reconciler]) says a
-// converged pass writes nothing, because that is what makes the loop safe to
-// leave switched on.
-//
-// It was also the whole of the access-level bug. Adding was the only thing
-// the pass could do and 409 was read as done, so editing
-// provisioning.access_level or an access_levels override changed nothing for
-// a seat that already had a membership: the company document said maintainer,
-// the instance kept developer, and every pass reported converged. Reading
-// first is what makes the difference visible, and [Client.SetGroupMember] is
-// what acts on it — which is why this is the root-cause fix rather than the
-// cheap way to make a write counter read zero.
-type memberships struct {
-	// group is the company's top-level group's roster, IN THE INSTANCE'S
-	// OWN ORDER, because a decommission sweep reports in that order and a
-	// map's iteration would make one pass's report differ from the next's
-	// over an unchanged group.
-	group []Member
-	// groupLevel indexes that roster by user id, which is the question the
-	// seat loop asks: at what level, if at all, is this account a member.
-	groupLevel map[int]int
-	// projectLevel is the same index per `provisioning.projects` entry.
-	// No roster beside it: nothing decommissions a project membership.
-	projectLevel map[string]map[int]int
-}
-
-// readMemberships lists the group's members and each project's, once.
-//
-// A FAILURE IS FATAL, unlike a missing project. [resolveProjects] drops a
-// project the instance does not have because a config naming a repository
-// that was renamed is an ordinary state; a listing that is REFUSED is the
-// pass being unable to see what it is about to change, and guessing from
-// there is what produced the fifty-writes-a-pass behaviour this replaces.
-func readMemberships(ctx context.Context, c *Client, groupID int, projects []string) (*memberships, error) {
-	members, err := c.GroupMembers(ctx, groupID)
-	if err != nil {
-		return nil, fmt.Errorf("gitlab: list group members: %w", err)
-	}
-	have := &memberships{
-		group:        members,
-		groupLevel:   make(map[int]int, len(members)),
-		projectLevel: make(map[string]map[int]int, len(projects)),
-	}
-	for _, member := range members {
-		have.groupLevel[member.ID] = member.AccessLevel
-	}
-	for _, project := range projects {
-		members, err := c.ProjectMembers(ctx, project)
-		if err != nil {
-			return nil, fmt.Errorf("gitlab: list %s's members: %w", project, err)
-		}
-		levels := make(map[int]int, len(members))
-		for _, member := range members {
-			levels[member.ID] = member.AccessLevel
-		}
-		have.projectLevel[project] = levels
-	}
-	return have, nil
-}
-
-// ensureGroup brings one seat's group membership to the configured level.
-//
-// THREE OUTCOMES, and only two of them write: absent is added, present at
-// another level is moved, present at the right level is left entirely alone.
-// The third is the steady state and it is the one the loop spends its life
-// in.
-func (m *memberships) ensureGroup(ctx context.Context, c *Client, groupID, userID, level int) error {
-	switch current, member := m.groupLevel[userID]; {
-	case !member:
-		if err := c.AddGroupMember(ctx, groupID, userID, level); err != nil {
-			return err
-		}
-	case current != level:
-		if err := c.SetGroupMember(ctx, groupID, userID, level); err != nil {
-			return err
-		}
-	default:
-		return nil
-	}
-	// RECORDED SO THE PICTURE STAYS IN STEP with the instance for the rest
-	// of the pass. Nothing here reads it twice today; a second reader that
-	// appeared and did not see this run's own writes would repeat them.
-	m.groupLevel[userID] = level
-	return nil
-}
-
-// ensureProject is the same decision for one project.
-func (m *memberships) ensureProject(ctx context.Context, c *Client, project string, userID, level int) error {
-	levels := m.projectLevel[project]
-	switch current, member := levels[userID]; {
-	case !member:
-		if err := c.AddProjectMember(ctx, project, userID, level); err != nil {
-			return err
-		}
-	case current != level:
-		if err := c.SetProjectMember(ctx, project, userID, level); err != nil {
-			return err
-		}
-	default:
-		return nil
-	}
-	if levels == nil {
-		levels = map[int]int{}
-		m.projectLevel[project] = levels
-	}
-	levels[userID] = level
-	return nil
-}
-
-// mintedToken is one credential this run created, as its rollback needs it.
-type mintedToken struct {
-	// groupID is the group the token was minted THROUGH, or zero for the
-	// instance route. Carried rather than recomputed: a rollback reaching
-	// for the other route would fail to revoke exactly the credential it
-	// just created, which is the one moment a live token is loose.
-	groupID int
-	userID  int
-	tokenID int
-	// createdAccount says the account is this run's, which decides HOW
-	// the rollback undoes it: everything on an account nothing else ever
-	// minted on, versus exactly the one token on an account that already
-	// existed. Sweeping the second would take an administrator's own
-	// token with no way to tell that it had.
-	createdAccount bool
 }
 
 // TokenName is the name this tool mints under.
@@ -743,31 +283,6 @@ type mintedToken struct {
 // string repeated at three call sites, where the three would eventually
 // differ and rotation would quietly stop retiring anything.
 func TokenName(handle string) string { return "crewlet-" + handle }
-
-// credentialFor decides whether this seat already has a working token.
-//
-// # It PROVES it, rather than inferring it
-//
-// The weaker test — "the variable has a value and the account has some
-// token" — reads as provisioned in exactly the case that matters: an
-// operator who restored an older env file has a stale value sitting beside
-// a live token that is not it, and the seat then authenticates with
-// nothing, on every run, forever. So the run takes the value the variable
-// actually holds and asks the instance who it is.
-func credentialFor(ctx context.Context, opts Options, userID int, seat provision.Seat) (provision.Verdict, bool, error) {
-	value, held, err := opts.Sink.Value(ctx, seat.TokenVar)
-	if err != nil {
-		// UNREADABLE IS NOT ABSENT. Treating it as absent would rotate
-		// every live credential in the company because a store blinked.
-		return provision.VerdictUnknown, false, fmt.Errorf(
-			"cannot read %s, and guessing would either rotate a live token or "+
-				"leave a seat with none: %w", seat.TokenVar, err)
-	}
-	if !held {
-		return provision.VerdictRejected, false, nil
-	}
-	return opts.Client.verify(ctx, value, userID), true, nil
-}
 
 // verify asks the instance who a token authenticates as.
 func (c *Client) verify(ctx context.Context, value string, wantID int) provision.Verdict {
@@ -800,274 +315,11 @@ func status(err error) int {
 	return 0
 }
 
-// retirePrevious revokes this tool's earlier tokens on an existing account.
-func retirePrevious(
-	ctx context.Context, opts Options, groupID, userID int, seat provision.Seat, keep int,
-) (int, error) {
-	tokens, err := opts.Client.Tokens(ctx, groupID, userID)
-	if err != nil {
-		return 0, fmt.Errorf("list tokens: %w", err)
-	}
-	retired := 0
-	for _, token := range tokens {
-		// ALREADY-REVOKED ROWS ARE SKIPPED: revoking one again changes
-		// nothing and every rotation leaves another behind, so a run
-		// without this issues one more pointless request than the run
-		// before it, for ever.
-		if token.ID == keep || token.Revoked || token.Name != TokenName(seat.Handle) {
-			continue
-		}
-		if err := opts.Client.RevokeToken(ctx, groupID, userID, token.ID); err != nil {
-			return retired, fmt.Errorf("revoke the previous token: %w", err)
-		}
-		retired++
-	}
-	return retired, nil
-}
-
-// expiry is the date a minted token dies, or the zero time for the
-// instance default.
-//
-// NO EXPIRY BY DEFAULT, deliberately: nothing in Crewlet renews a
-// credential on a schedule, so a lifetime nobody renews is an outage with a
-// date on it. GitLab.com caps personal access tokens at a year regardless,
-// which is the instance enforcing its own policy rather than this tool
-// choosing one — and a company whose policy needs a shorter window sets
-// -token-expiry-days and owns the re-run.
-func expiry(opts Options) time.Time {
-	if opts.ExpiryDays == nil || *opts.ExpiryDays <= 0 {
-		return time.Time{}
-	}
-	return clock(opts).AddDate(0, 0, *opts.ExpiryDays)
-}
-
 func clock(opts Options) time.Time {
 	if opts.Now != nil {
 		return opts.Now()
 	}
 	return time.Now()
-}
-
-// ensureAccount finds or creates a seat's service account.
-//
-// THE LOOKUP IS MODE-INDEPENDENT: /users?username= sees every account on the
-// instance whatever owns it, which is what makes switching modes safe — an
-// operator who moves a company from group to instance finds the accounts it
-// already has rather than colliding with their usernames.
-// accountsURL is the page a person acts on this engine's service accounts
-// from, or "" when this run cannot name one.
-//
-// THE LISTING, NOT A PROFILE. An account's own page carries no control that
-// changes its state; the group's service-accounts settings and the instance's
-// user administration both do, and which one applies is exactly what
-// [Options.Mode] already decides.
-func accountsURL(opts Options) string {
-	base := strings.TrimRight(strings.TrimSpace(opts.Config.URL), "/")
-	if base == "" {
-		return ""
-	}
-	// ONLY THE INSTANCE'S, and the group half is deliberately absent.
-	//
-	// /admin/users has been GitLab's user administration for many years and
-	// `filter=blocked` is one of its own filters, so an instance-mode
-	// deployment — whose credential is an instance administrator by
-	// definition — gets a link that works. Where a group Owner manages
-	// service accounts has MOVED between GitLab versions, and a link that
-	// 404s costs an operator the trip to find that out: the finding names
-	// the account and the state in words instead, which is worse than a
-	// working link and better than a broken one.
-	if opts.Mode.Or() == ModeInstance {
-		return base + "/admin/users?filter=blocked"
-	}
-	return ""
-}
-
-// BlockedAccount is one seat whose GitLab account cannot sign in.
-type BlockedAccount struct {
-	// Handle is the seat, Username the account, and State GitLab's own
-	// word for why it cannot — blocked, deactivated, ldap_blocked, banned.
-	// The state is quoted back because the remedy differs between them and
-	// only GitLab knows which applies.
-	Handle, Username, State string
-}
-
-func ensureAccount(ctx context.Context, opts Options, groupID int,
-	seat provision.Seat,
-) (User, bool, error) {
-	p := opts.Config.Provisioning
-	username := Username(p, seat.Handle)
-	user, found, err := opts.Client.UserByUsername(ctx, username)
-	if err != nil {
-		return User{}, false, err
-	}
-	if found {
-		return user, false, nil
-	}
-	if opts.Mode.Or() == ModeInstance {
-		user, err = opts.Client.CreateInstanceServiceAccount(ctx, seat.Role, username)
-	} else {
-		user, err = opts.Client.CreateServiceAccount(ctx, groupID, seat.Role, username)
-	}
-	if err != nil {
-		return User{}, false, modeError(opts.Mode, err)
-	}
-	return user, true, nil
-}
-
-// mintGroup is the group a token is minted through, or zero for the instance
-// path.
-//
-// THE SAME SPLIT [ensureAccount] MAKES, and it has to be: an account created
-// through the group route is owned by that group and its tokens are minted
-// there, while an instance service account belongs to nobody and takes the
-// admin route. Reading the mode once in each place is what keeps a run from
-// creating an account one way and reaching for its tokens the other.
-func mintGroup(opts Options, groupID int) int {
-	if opts.Mode.Or() == ModeInstance {
-		return 0
-	}
-	return groupID
-}
-
-// ErrNameReserved reports a username or email GitLab is still releasing from
-// an account it is deleting.
-//
-// A STATE THAT CLEARS ITSELF, and the whole reason it is named: the pass has
-// nothing to fix and nobody to tell, it simply has to be run again once
-// GitLab's own deletion finishes. The caller reports it as work in progress
-// rather than as a failure to read the integration.
-var ErrNameReserved = errors.New(
-	"gitlab is still releasing the name of an account it is deleting")
-
-// modeError turns a refusal into the sentence that names the credential the
-// chosen mode actually needs.
-//
-// A 403 IS UNREADABLE ON ITS OWN here: group creation is satisfied by a group
-// Owner and instance creation is not, so the same status means two different
-// remedies and an operator reading "403 Forbidden" has no way to tell which
-// they hit. A 404 on the instance route means the same thing a third way —
-// GitLab.com does not serve it at all.
-func modeError(mode Mode, err error) error {
-	var api *APIError
-	if !errors.As(err, &api) {
-		return err
-	}
-	// A NAME GITLAB HAS NOT RELEASED YET, which is a deletion still running
-	// rather than anything wrong with this run.
-	//
-	// GitLab removes a user asynchronously: the account is gone from every
-	// listing the moment the delete is accepted, and its username and email
-	// stay reserved until a background job finishes. So a disconnect
-	// followed by a reconnect inside that window looks up the account,
-	// honestly does not find it, creates one, and is refused with "has
-	// already been taken".
-	//
-	// Reported as an error, that reads as "the last pass could not read this
-	// integration", which sends an operator looking for an outage over a
-	// state that clears itself on the next tick. See [ErrNameReserved].
-	if api.Status == http.StatusBadRequest && strings.Contains(api.Detail, "already been taken") {
-		return fmt.Errorf("%w: %w", ErrNameReserved, err)
-	}
-	if mode.Or() != ModeInstance {
-		if api.Forbidden() {
-			return fmt.Errorf(
-				"%w — creating a group service account needs a token whose "+
-					"owner is an Owner of provisioning.group (or an instance "+
-					"administrator)", err)
-		}
-		return err
-	}
-	// THE FIELD FIRST, THE FLAG AFTER IT. Both of these are reached by the
-	// engine's reconcile loop as well as by the provisioning command, and an
-	// operator reading one off a card has no command line: the document is
-	// what they can change. The flag is named too, because it is that same
-	// field's form on the CLI and dropping it would leave somebody who did
-	// pass it with no sentence about what they passed.
-	switch {
-	case api.Forbidden():
-		return fmt.Errorf(
-			"%w — instance mode creates service accounts the instance owns, "+
-				"which only an INSTANCE ADMINISTRATOR may do. Use an admin "+
-				"PAT, or set integrations.gitlab.provisioning.mode: group "+
-				"(drop -mode instance on the command line) to create them "+
-				"under provisioning.group instead", err)
-	case api.Status == http.StatusNotFound:
-		return fmt.Errorf(
-			"%w — this deployment does not serve the instance service-account "+
-				"route, which is how GitLab.com answers: instance service "+
-				"accounts are self-managed only. Set "+
-				"integrations.gitlab.provisioning.mode: group, or drop "+
-				"-mode instance", err)
-	}
-	return err
-}
-
-// decommission deletes the managed accounts whose seats have left.
-//
-// # The prefix and the group are both the safety property
-//
-// "Managed" means an account whose username starts with the configured
-// prefix AND which is a member of the group this company provisions into.
-// Either alone is too broad: a prefix matches whatever an operator chose to
-// call things elsewhere on the instance, and a group holds people. The
-// prefix can never be empty — [Username] defaults one — and that default is
-// what stops an unscoped sweep.
-//
-// A group member the instance refuses to delete because it is not a service
-// account is left alone and reported: that refusal is GitLab catching what
-// this scan should not have proposed, so it is a signal about the prefix
-// rather than an error to abort on.
-//
-// # The GROUP scan is used in both modes, and that is deliberate
-//
-// An instance service account is not owned by the group, so the obvious
-// enumeration for -mode instance is the instance's own service-account
-// listing. It is the wrong one: every seat this run provisions is made a
-// member of provisioning.group whatever mode created it, so a managed
-// account of THIS company is always in that group — while the instance
-// listing also holds the accounts of every other company on the box, which a
-// shared username prefix would then sweep. The only account the group scan
-// misses is one somebody removed from the group by hand, and leaving that
-// alone is the right answer. Only the DELETE route differs by mode.
-//
-// # It scans the roster the pass already read
-//
-// members comes from [readMemberships], taken BEFORE the seat loop, so the
-// whole pass acts on ONE picture of the group's membership rather than two
-// that can disagree — and a decommission costs no second walk of a group that
-// may run to thousands of rows. It cannot miss a candidate: nothing between
-// the two points removes a member, and the only additions are this run's own
-// seats, every one of which is in the plan and therefore in `keep`.
-func decommission(ctx context.Context, opts Options, groupID int, members []Member) ([]string, []string, error) {
-	p := opts.Config.Provisioning
-	prefix := strings.ToLower(Username(p, ""))
-	keep := make(map[string]bool, len(opts.Plan.Seats))
-	for _, seat := range opts.Plan.Seats {
-		keep[strings.ToLower(Username(p, seat.Handle))] = true
-	}
-	var removed, notes []string
-	for _, member := range members {
-		username := strings.ToLower(member.Username)
-		if !strings.HasPrefix(username, prefix) || keep[username] {
-			continue
-		}
-		if err := deleteAccount(ctx, opts, groupID, member.ID); err != nil {
-			var api *APIError
-			if errors.As(err, &api) && api.Status == http.StatusBadRequest {
-				notes = append(notes, fmt.Sprintf(
-					"%s matches the managed prefix but the instance refuses "+
-						"to delete it, which is what it does for an account "+
-						"that is not a service account — check that "+
-						"provisioning.username_prefix is not catching people",
-					member.Username))
-				continue
-			}
-			return removed, notes, fmt.Errorf("gitlab: decommission %s: %w",
-				member.Username, err)
-		}
-		removed = append(removed, member.Username)
-	}
-	return removed, notes, nil
 }
 
 // signingSecret is what the hook is registered with, minting one when the
@@ -1783,62 +1035,23 @@ func gatedByTier(err error) bool {
 	return false
 }
 
-// rollback revokes what this run minted and clears what it recorded.
+// rollback discards what this run recorded and returns the ORIGINAL failure,
+// with the discard's own problem appended, never in place of it: the reason
+// the run stopped is what an operator has to fix.
 //
-// It returns the ORIGINAL failure with the cleanup's own problems appended,
-// never in place of it: the reason the run stopped is what an operator has
-// to fix, and a cleanup error that replaced it would hide the cause behind
-// its consequence.
-func rollback(ctx context.Context, opts Options, minted map[string]mintedToken, cause error) error {
-	// DETACHED, because the failure may BE a cancelled context — and a
-	// rollback that inherits it does nothing at all, leaving every minted
-	// credential live.
-	ctx = context.WithoutCancel(ctx)
-	var problems []string
-	for handle, m := range minted {
-		var err error
-		if m.createdAccount {
-			// Nothing else has ever minted on an account this run made,
-			// so taking everything takes exactly what this run caused.
-			err = opts.Client.RevokeTokens(ctx, m.groupID, m.userID)
-		} else {
-			err = opts.Client.RevokeToken(ctx, m.groupID, m.userID, m.tokenID)
-		}
-		if err != nil {
-			problems = append(problems, fmt.Sprintf("%s: %v", handle, err))
-		}
+// THE SIGNING SECRET IS WHY IT EXISTS. [signingSecret] seals a fresh secret
+// before [ensureHooks] writes the hook, so a run that then failed to write the
+// hook would leave a new key sealed while GitLab went on signing with the old
+// one, and the next pass, resolving the sealed value, would never mint again
+// or re-point the hook. Discard on a run that recorded nothing is a no-op by
+// contract ([provision.TokenSink]).
+func rollback(ctx context.Context, opts Options, cause error) error {
+	// DETACHED, because the failure may BE a cancelled context, and a
+	// rollback that inherits it does nothing at all.
+	if err := opts.Sink.Discard(context.WithoutCancel(ctx)); err != nil {
+		return fmt.Errorf("%w (and discarding what this run recorded failed: %w)", cause, err)
 	}
-	// DISCARDED WHETHER OR NOT A SEAT TOKEN WAS MINTED, which is the whole
-	// of what this used to get wrong: it returned early on an empty `minted`
-	// map, and the seat tokens are not the only thing a pass records.
-	//
-	// [signingSecret] MINTS A WEBHOOK SIGNING SECRET and Records it before
-	// [ensureHooks] runs. So a pass over a company whose seats all Kept
-	// their tokens — the steady state, every few minutes, for ever — that
-	// then failed to write the hook left a FRESH secret sealed in the
-	// fleet's store while GitLab went on signing with the old one. Nothing
-	// ever recovered: the next pass resolves that sealed value, sees a
-	// non-empty secret and takes [SigningReuse], so it never mints again
-	// and never re-points the hook. Every delivery after the next config
-	// apply fails verification, from a pass that reported an error once and
-	// then looked healthy.
-	//
-	// Discard on a run that recorded nothing is a no-op by contract
-	// ([provision.TokenSink]), so this costs a run that failed before its
-	// first Record exactly nothing.
-	if err := opts.Sink.Discard(ctx); err != nil {
-		problems = append(problems, err.Error())
-	}
-	if len(problems) == 0 {
-		if len(minted) == 0 {
-			return cause
-		}
-		return fmt.Errorf("%w (the %d token(s) this run minted were revoked)",
-			cause, len(minted))
-	}
-	return fmt.Errorf("%w\n\nAND THE CLEANUP DID NOT FINISH — these credentials "+
-		"may still be live and must be revoked by hand:\n  %s",
-		cause, strings.Join(problems, "\n  "))
+	return cause
 }
 
 // webhookTarget is the endpoint GitLab delivers to.
@@ -1847,60 +1060,4 @@ func webhookTarget(base string) string {
 		return ""
 	}
 	return base + "/webhooks/gitlab"
-}
-
-// accessLevel is a seat's membership level, as GitLab's numbers: the override
-// its plan entry carries, or the company's default.
-//
-// RESOLVED BY [PlanFor], which holds the company's settings, so the plan
-// carries the answer and this reads no configuration of its own.
-func accessLevel(p *config.GitLabProvisioning, seat provision.Seat) int {
-	level := p.AccessLevel
-	if seat.AccessLevel != "" {
-		level = config.GitLabAccessLevel(seat.AccessLevel)
-	}
-	if level == config.GitLabMaintainer {
-		return gitlabMaintainer
-	}
-	return gitlabDeveloper
-}
-
-// GitLab's access levels, which the API takes as integers.
-const (
-	gitlabDeveloper  = 30
-	gitlabMaintainer = 40
-)
-
-// tokenScopes are the scopes minted on a seat's token.
-func tokenScopes(p *config.GitLabProvisioning) []string {
-	if len(p.TokenScopes) > 0 {
-		return p.TokenScopes
-	}
-	// `api` is what an agent needs to comment, review and push through the
-	// MCP surface. It is broad, which is why it is a config field: a
-	// company that runs read-only agents narrows it there, and one that
-	// says nothing gets the scope its agents will actually use rather than
-	// a run that succeeds and produces tokens nothing can act with.
-	return []string{"api"}
-}
-
-func notesOf(p *provision.Plan) []string {
-	if p == nil {
-		return nil
-	}
-	return p.Notes
-}
-
-// deleteAccount removes a service account by whichever route owns it.
-//
-// The routes are not interchangeable: the group route 404s on an account the
-// instance owns, and the instance route needs an administrator. Sending a
-// delete down the wrong one reports "already gone" for an account that is
-// still live — a decommission that silently kept every credential it was
-// asked to destroy.
-func deleteAccount(ctx context.Context, opts Options, groupID, userID int) error {
-	if opts.Mode.Or() == ModeInstance {
-		return opts.Client.DeleteInstanceServiceAccount(ctx, userID)
-	}
-	return opts.Client.DeleteServiceAccount(ctx, groupID, userID)
 }
