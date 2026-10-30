@@ -30,13 +30,16 @@ const (
 // document only named systems write (`api.auth.company_writers`, an operator
 // rendering it from its custom resources).
 //
-//   - datadog: a `provisioning` block, whose keys create service accounts.
+//   - datadog: an enabled block with `provisioning`, whose keys create
+//     service accounts.
 //   - gitlab: an enabled block with `provisioning`, whose owner token creates
 //     them.
 //   - atlassian (Jira and Confluence): the organization block, on a Cloud
 //     site; a Data Center site has no organization to create an account in.
-//   - mattermost: a `provisioning` block, whose admin token creates bots.
-//   - github: a `provisioning` block on a document the engine writes. An
+//   - mattermost: an enabled block with `provisioning`, whose admin token
+//     creates bots.
+//   - github: an enabled block with `provisioning` on a document the engine
+//     writes. An
 //     agent's app is made from a manifest whose result the engine records in
 //     the document, so where only the operator writes it the apps are made
 //     outside Crewlet and handed in, however the block reads.
@@ -46,7 +49,9 @@ const (
 //     it for apps made by hand.
 //
 // Any other kind, and a company that does not connect kind, is external: the
-// engine provisions nothing it was not given the authority for.
+// engine provisions nothing it was not given the authority for. So is a block
+// switched off (`enabled: false`), whose pass does not run: the engine holds
+// the authority there and has been told not to use it.
 func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMode {
 	if c == nil {
 		return SeatCredentialExternal
@@ -55,15 +60,15 @@ func (c *Company) SeatCredentialMode(kind string, managed bool) SeatCredentialMo
 	engine := false
 	switch kind {
 	case "datadog":
-		engine = in.Datadog != nil && in.Datadog.Provisioning != nil
+		engine = in.Datadog != nil && in.Datadog.Enabled && in.Datadog.Provisioning != nil
 	case "gitlab":
 		engine = in.GitLab != nil && in.GitLab.Enabled && in.GitLab.Provisioning != nil
 	case "atlassian":
 		engine = in.Atlassian != nil && in.Atlassian.IsCloud()
 	case "mattermost":
-		engine = in.Mattermost != nil && in.Mattermost.Provisioning != nil
+		engine = in.Mattermost != nil && in.Mattermost.Enabled && in.Mattermost.Provisioning != nil
 	case "github":
-		engine = in.GitHub != nil && in.GitHub.Provisioning != nil && !managed
+		engine = in.GitHub != nil && in.GitHub.Enabled && in.GitHub.Provisioning != nil && !managed
 	case "slack":
 		engine = in.Slack != nil && strings.TrimSpace(in.Slack.AppConfigToken) != ""
 	}

@@ -370,7 +370,7 @@ func TestAMattermostBotsChannelsAreWrittenOut(t *testing.T) {
 			provisioning["channels"] = tc.company
 		}
 		root["integrations"].(map[string]any)["mattermost"] = map[string]any{
-			"url": "https://chat.example.invalid", "provisioning": provisioning}
+			"enabled": true, "url": "https://chat.example.invalid", "provisioning": provisioning}
 		block := map[string]any{"bot_token": "${MATTERMOST_BOT_TOKEN_QA}"}
 		if tc.own != "" {
 			block["channel"] = tc.own

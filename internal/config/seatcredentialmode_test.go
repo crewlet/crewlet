@@ -22,7 +22,7 @@ func TestSeatCredentialModeIsReadPerIntegration(t *testing.T) {
 	engine, external := config.SeatCredentialEngine, config.SeatCredentialExternal
 	cloud, dc := config.AtlassianCloud, config.AtlassianDataCenter
 	slackToken := &config.Slack{AppConfigToken: "${SLACK_APP_CONFIG_TOKEN}"}
-	githubProvisioned := &config.GitHub{Provisioning: &config.GitHubProvisioning{}}
+	githubProvisioned := &config.GitHub{Enabled: true, Provisioning: &config.GitHubProvisioning{}}
 	for name, tc := range map[string]struct {
 		in      config.Integrations
 		kind    string
@@ -30,9 +30,13 @@ func TestSeatCredentialModeIsReadPerIntegration(t *testing.T) {
 		want    config.SeatCredentialMode
 	}{
 		"datadog provisioned": {in: config.Integrations{Datadog: &config.Datadog{
-			Provisioning: &config.DatadogProvisioning{}}}, kind: "datadog", want: engine},
+			Enabled: true, Provisioning: &config.DatadogProvisioning{}}}, kind: "datadog", want: engine},
 		"datadog alerts only": {in: config.Integrations{Datadog: &config.Datadog{}},
 			kind: "datadog", want: external},
+		// SWITCHED OFF, its pass does not run: the authority is held and
+		// not used.
+		"datadog switched off": {in: config.Integrations{Datadog: &config.Datadog{
+			Provisioning: &config.DatadogProvisioning{}}}, kind: "datadog", want: external},
 		"gitlab provisioned": {in: config.Integrations{GitLab: &config.GitLab{Enabled: true,
 			Provisioning: &config.GitLabProvisioning{}}}, kind: "gitlab", want: engine},
 		"gitlab off": {in: config.Integrations{GitLab: &config.GitLab{
@@ -46,7 +50,7 @@ func TestSeatCredentialModeIsReadPerIntegration(t *testing.T) {
 		"jira without the organization": {in: config.Integrations{Jira: &config.Jira{}},
 			kind: "atlassian", want: external},
 		"mattermost provisioned": {in: config.Integrations{Mattermost: &config.Mattermost{
-			Provisioning: &config.MattermostProvisioning{}}}, kind: "mattermost", want: engine},
+			Enabled: true, Provisioning: &config.MattermostProvisioning{}}}, kind: "mattermost", want: engine},
 		"mattermost by hand": {in: config.Integrations{Mattermost: &config.Mattermost{}},
 			kind: "mattermost", want: external},
 		"github provisioned": {in: config.Integrations{GitHub: githubProvisioned},
@@ -73,7 +77,7 @@ func TestSeatCredentialModeIsReadPerIntegration(t *testing.T) {
 		"operator slack with its token": {in: config.Integrations{Slack: slackToken},
 			kind: "slack", managed: true, want: engine},
 		"operator datadog": {in: config.Integrations{Datadog: &config.Datadog{
-			Provisioning: &config.DatadogProvisioning{}}}, kind: "datadog", managed: true,
+			Enabled: true, Provisioning: &config.DatadogProvisioning{}}}, kind: "datadog", managed: true,
 			want: engine},
 	} {
 		c := &config.Company{Integrations: tc.in}

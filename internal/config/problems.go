@@ -410,7 +410,7 @@ func (x *identityIndex) entityOf(path Path) (seat, unit string) {
 // # What Kind says
 //
 // "dangling_reference" is a name that resolves to nothing, with Ref naming
-// what carries it (lead, unit, manages, or gitlab_access_level). "admission"
+// what carries it (lead, unit or manages). "admission"
 // is a rule an applied revision breaks that a new write would be refused for.
 // "advisory" is a setting that is valid and carries a consequence, and it is
 // the one kind either tier can raise. Ref is empty on the last two, because

@@ -1166,8 +1166,8 @@ Each warning is `{"kind", "ref", "path", "segments", "seat", "unit", "from",
 here:
 
 - **`dangling_reference`** — a reference that resolves to nothing: a unit
-  `lead`, a root seat's `unit`, a `manages` entry, a GitLab access level.
-  `ref` names which (`lead`, `unit`, `manages` or `gitlab_access_level`), and
+  `lead`, a root seat's `unit`, a `manages` entry.
+  `ref` names which (`lead`, `unit` or `manages`), and
   `from` and `to` are what holds it and what it names.
 - **`advisory`** — a setting that is valid and carries a consequence: a
   declined fsync, a backup nobody owns, a human seat nobody can message, a

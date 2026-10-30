@@ -590,7 +590,6 @@ The engine reports them rather than letting them pass silently. **Each node logs
 | `lead` | A unit's own `lead` is no seat's handle | The unit | The handle as written |
 | `unit` | A root seat's `unit` is no unit's key | The seat | The key as written |
 | `manages` | A `manages` entry is neither a seat's handle nor a unit's key | The seat | The entry as written |
-| `gitlab_access_level` | A key of `integrations.gitlab.provisioning.access_levels` names no seat — no seat's handle is the key | `integrations.gitlab.provisioning.access_levels` | The handle |
 
 Each line also carries `epoch`, `revision` and a `detail` sentence saying what the engine does meanwhile and how to resolve it.
 

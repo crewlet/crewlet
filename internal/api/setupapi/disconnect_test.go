@@ -166,7 +166,7 @@ func TestASeatWhoseCredentialWentWithItsAccountIsNotSatisfied(t *testing.T) {
 	// A provisioned seat: the pass sealed both slots.
 	for name, value := range map[string]string{
 		"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
-		"ATLASSIAN_EMAIL_SRE_LEAD":     "crewlet-sre-lead@acme.invalid",
+		"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
@@ -221,7 +221,7 @@ func TestASeatIsNotSatisfiedOnASurfaceTheCompanyDoesNotDeclare(t *testing.T) {
 	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
-		"ATLASSIAN_EMAIL_SRE_LEAD":     "crewlet-sre-lead@acme.invalid",
+		"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
@@ -268,7 +268,7 @@ func TestASeatTheLoopFoundBrokenIsNotSatisfied(t *testing.T) {
 	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
-		"ATLASSIAN_EMAIL_SRE_LEAD":     "crewlet-sre-lead@acme.invalid",
+		"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
@@ -309,7 +309,7 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
 		"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
-		"ATLASSIAN_EMAIL_SRE_LEAD":     "crewlet-sre-lead@acme.invalid",
+		"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)

@@ -8,6 +8,10 @@ import (
 
 // slackServer is a per-seat Slack tool server, so a seat's mcp_env.slack names
 // a server the document declares.
+// slackEngine is a Slack block holding the app-configuration token the engine
+// creates agents' apps with, which is what makes Slack the engine's.
+const slackEngine = "integrations:\n  slack: {app_config_token: \"${SLACK_APP_CONFIG_TOKEN}\"}\n"
+
 const slackServer = `
 mcp_servers:
   - {name: slack, command: slack-mcp-server, shared: false}
@@ -36,16 +40,20 @@ func TestAnMCPEnvCredentialFollowsTheIntegrationsMode(t *testing.T) {
 roles:
   - {name: SRE, handle: sre, mcp_env: {slack: {SLACK_MCP_XOXB_TOKEN: "${SRE_SLACK}"}}}
 `
-	err := rejects(t, "name: Acme\nintegrations:\n  slack: {}\n"+slackServer+seat,
+	err := rejects(t, "name: Acme\n"+slackEngine+slackServer+seat,
 		"roles[0].mcp_env.slack.SLACK_MCP_XOXB_TOKEN")
 	if !strings.Contains(err.Error(), "provisions slack") {
 		t.Fatalf("the refusal must say the engine provisions slack: %v", err)
 	}
-	if _, err := ParseCompany([]byte("name: Acme\n" + slackServer + seat)); err != nil {
-		t.Fatalf("an external Slack credential in mcp_env was refused: %v", err)
+	for _, external := range []string{"", "integrations:\n  slack: {}\n"} {
+		// NO BLOCK, OR A BLOCK WITHOUT THE AUTHORITY: an operator renders one
+		// for apps made by hand.
+		if _, err := ParseCompany([]byte("name: Acme\n" + external + slackServer + seat)); err != nil {
+			t.Fatalf("an external Slack credential in mcp_env was refused: %v", err)
+		}
 	}
 	// A UNIT'S BLOCK IS EVERY MEMBER'S, so in engine mode it names none.
-	rejects(t, "name: Acme\nintegrations:\n  slack: {}\n"+slackServer+`
+	rejects(t, "name: Acme\n"+slackEngine+slackServer+`
 units:
   - name: Ops
     id: ops
@@ -59,7 +67,7 @@ units:
 // does not.
 func TestARoleCredentialPositionFollowsTheIntegrationsMode(t *testing.T) {
 	t.Parallel()
-	engine := "name: Acme\nintegrations:\n  slack: {}\nroles:\n  - name: SRE\n    handle: sre\n" +
+	engine := "name: Acme\n" + slackEngine + "roles:\n  - name: SRE\n    handle: sre\n" +
 		"    integrations: {slack: {enabled: true, bot_token: %q}}\n"
 	rejects(t, strings.Replace(engine, "%q", `"${SOME_TOKEN}"`, 1), "roles[0].integrations.slack.bot_token")
 	if _, err := ParseCompany([]byte(strings.Replace(engine, "%q", `"${SLACK_BOT_TOKEN_SRE}"`, 1))); err != nil {
@@ -131,7 +139,7 @@ func TestTheOrgModelBindsASeatsIdentityByMode(t *testing.T) {
 name: Acme
 seat_access_migrated: [slack]
 integrations:
-  slack: {}
+  slack: {app_config_token: "${SLACK_APP_CONFIG_TOKEN}"}
 roles:
   - {name: SRE, handle: sre, integrations: {slack: {enabled: true}}}
   - {name: CTO, handle: cto, integrations: {slack: {enabled: false}}}
