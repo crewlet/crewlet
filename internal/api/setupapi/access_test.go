@@ -3,6 +3,7 @@ package setupapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"sync"
@@ -34,14 +35,27 @@ type fakeAccess struct {
 	outcomes map[string]seataccess.Outcome
 	// syncErr is what Sync answers.
 	syncErr error
-	syncs   []setupapi.AccessSync
-	plans   []seataccess.Draft
+	// ghost is a seat the answer lists that the document does not hold, as
+	// one removed between the tab's read and its save.
+	ghost string
+	// unreadAfterSync fails every answer once a sync was asked, as a store
+	// that stops answering after a save landed.
+	unreadAfterSync bool
+	syncs           []setupapi.AccessSync
+	plans           []seataccess.Draft
 }
 
 func (f *fakeAccess) Answer(_ context.Context, q setupapi.AccessQuery) (seataccess.Answer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.unreadAfterSync && len(f.syncs) > 0 {
+		return seataccess.Answer{}, errors.New("the ledger did not answer")
+	}
 	answer := seataccess.Answer{Kind: q.Kind, Revision: q.Revision, Options: f.options}
+	if f.ghost != "" {
+		answer.Seats = append(answer.Seats, seataccess.SeatAnswer{Handle: f.ghost,
+			Name: f.ghost, Lanes: map[seataccess.Lane]seataccess.LaneAnswer{}})
+	}
 	for r := range q.Company.EachRole() {
 		if r.Seat().IsHuman() {
 			continue

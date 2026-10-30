@@ -223,8 +223,9 @@ func seatAccessPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		}
 	}
 	if plan.StepUp {
-		c.fact("raise", "Administration", "This makes "+seat.Name+" an administrator at "+
-			title+", so approving it asks you to confirm it is you, at a keyboard.")
+		c.fact("raise", "Administration", "This may give "+seat.Name+" an administration "+
+			"role at "+title+", or "+title+" could not confirm it does not, so approving it "+
+			"asks you to confirm it is you, at a keyboard.")
 	}
 	for i, warning := range checkWarnings(body) {
 		c.fact("check.warning."+strconv.Itoa(i+1), "Warning", warning)
@@ -240,22 +241,42 @@ func seatAccessPreview(ctx context.Context, read proposal.Read, _ time.Time,
 		SourceRevision: rep.revision}, nil
 }
 
-// accessSeat is the seat a call names on an access answer, by handle or name,
-// or the refusal naming the agents the integration lists.
+// accessSeat is the seat a call names on an access answer, or the refusal
+// naming the agents the integration lists.
+//
+// A HANDLE NAMES ONE SEAT, and wins; a name may be shared, so it names a seat
+// only where exactly one carries it, and two agents of the same name are
+// refused, naming both handles, rather than one of them changed on a guess.
 func accessSeat(answer seataccess.Answer, named, title string) (seataccess.SeatAnswer, error) {
 	named = strings.TrimSpace(named)
 	var listed []string
+	var byName []seataccess.SeatAnswer
 	for _, seat := range answer.Seats {
 		if seat.Departed {
 			continue
 		}
-		if seat.Handle == named || strings.EqualFold(seat.Name, named) {
+		if seat.Handle == named {
 			return seat, nil
 		}
-		listed = append(listed, seat.Name)
+		if strings.EqualFold(seat.Name, named) {
+			byName = append(byName, seat)
+		}
+		listed = append(listed, seat.Name+" ("+seat.Handle+")")
 	}
-	return seataccess.SeatAnswer{}, fmt.Errorf("%w: %s lists no agent %q; it lists %s",
-		ErrInvalidArguments, title, named, strings.Join(listed, ", "))
+	switch len(byName) {
+	case 1:
+		return byName[0], nil
+	case 0:
+		return seataccess.SeatAnswer{}, fmt.Errorf("%w: %s lists no agent %q; it lists %s",
+			ErrInvalidArguments, title, named, strings.Join(listed, ", "))
+	}
+	handles := make([]string, 0, len(byName))
+	for _, seat := range byName {
+		handles = append(handles, seat.Handle)
+	}
+	return seataccess.SeatAnswer{}, fmt.Errorf("%w: %d agents on %s are called %q; name "+
+		"one by its handle: %s", ErrInvalidArguments, len(byName), title, named,
+		strings.Join(handles, ", "))
 }
 
 // accessAfter is the seat's lane with the call's change over it: only what the
@@ -269,23 +290,11 @@ func accessAfter(a map[string]any, before seataccess.Desired, offer seataccess.O
 		after.Enabled = args.Bool("enabled")
 	}
 	if named := strings.TrimSpace(args.String("access")); named != "" {
-		if len(offer.Levels) == 0 {
-			return seataccess.Desired{}, fmt.Errorf("%w: %s has no roles to choose from; "+
-				"GitHub takes permissions, and Slack's scopes are set in each app",
-				ErrInvalidArguments, title)
+		level, err := accessLevel(offer, named, title)
+		if err != nil {
+			return seataccess.Desired{}, err
 		}
-		i := slices.IndexFunc(offer.Levels, func(l seataccess.Level) bool {
-			return l.ID == named || strings.EqualFold(l.Name, named)
-		})
-		if i < 0 {
-			offered := make([]string, 0, len(offer.Levels))
-			for _, l := range offer.Levels {
-				offered = append(offered, l.Name)
-			}
-			return seataccess.Desired{}, fmt.Errorf("%w: %s offers no role %q; it offers %s",
-				ErrInvalidArguments, title, named, strings.Join(offered, ", "))
-		}
-		after.Level = offer.Levels[i].ID
+		after.Level = level
 	}
 	if given, ok := a["permissions"].(map[string]any); ok {
 		if len(offer.Permissions) == 0 {
@@ -310,6 +319,41 @@ func accessAfter(a map[string]any, before seataccess.Desired, offer seataccess.O
 		after.Scope = args.Strings("scope")
 	}
 	return after.Normalized(), nil
+}
+
+// accessLevel is the level a call names on offer: by the vendor's id, which
+// names one level and wins, or by its exact name where exactly one level
+// carries it (a custom GitLab role may share a built-in one's name).
+func accessLevel(offer seataccess.Options, named, title string) (string, error) {
+	switch {
+	case offer.Lane == seataccess.LaneGitHub || offer.Lane == seataccess.LaneSlack:
+		return "", fmt.Errorf("%w: %s has no roles to choose from; GitHub takes "+
+			"permissions, and Slack's scopes are set in each app", ErrInvalidArguments, title)
+	case len(offer.Levels) == 0:
+		return "", fmt.Errorf("%w: %s did not answer when its roles were read, so none "+
+			"can be chosen now; try again shortly", ErrInvalidArguments, title)
+	}
+	if i := slices.IndexFunc(offer.Levels, func(l seataccess.Level) bool {
+		return l.ID == named
+	}); i >= 0 {
+		return offer.Levels[i].ID, nil
+	}
+	var ids, offered []string
+	for _, l := range offer.Levels {
+		offered = append(offered, l.Name)
+		if strings.EqualFold(l.Name, named) {
+			ids = append(ids, l.ID)
+		}
+	}
+	switch len(ids) {
+	case 1:
+		return ids[0], nil
+	case 0:
+		return "", fmt.Errorf("%w: %s offers no role %q; it offers %s",
+			ErrInvalidArguments, title, named, strings.Join(offered, ", "))
+	}
+	return "", fmt.Errorf("%w: %s offers %d roles called %q; name one by its id: %s",
+		ErrInvalidArguments, title, len(ids), named, strings.Join(ids, ", "))
 }
 
 // redecode reads a decoded answer into a typed one.
