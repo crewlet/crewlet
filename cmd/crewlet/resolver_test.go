@@ -240,9 +240,6 @@ type revealNode struct {
 	// its body the engine's own refusal of a machine token.
 	refuse int
 
-	// refuseListing, when set, is the status the listing is answered with.
-	refuseListing int
-
 	// gone is the names the listing still names and a reveal no longer
 	// finds: removed between the two.
 	gone map[string]bool
@@ -255,7 +252,6 @@ type revealNode struct {
 
 	tokens       []string
 	contentTypes []string
-	listings     int
 	stored       map[string]string
 }
 
@@ -307,13 +303,6 @@ func newRevealNode(t *testing.T, held map[string]string) *revealNode {
 		}
 		if r.URL.Path == "/secrets" {
 			n.mu.Lock()
-			n.listings++
-			if n.refuseListing != 0 {
-				n.mu.Unlock()
-				w.WriteHeader(n.refuseListing)
-				_, _ = fmt.Fprint(w, `{"error":"forbidden","detail":"this token may not list secrets"}`)
-				return
-			}
 			var rows []map[string]string
 			for name := range n.held {
 				rows = append(rows, map[string]string{"name": name, "key_id": "k1"})
@@ -397,13 +386,6 @@ func (n *revealNode) revealMany(w http.ResponseWriter, r *http.Request) {
 	}
 	n.mu.Unlock()
 	_ = json.NewEncoder(w).Encode(map[string]any{"values": values, "missing": missing})
-}
-
-// listed is how many times the node has been asked for its listing.
-func (n *revealNode) listed() int {
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	return n.listings
 }
 
 // requests is how many requests of any kind have reached the node.

@@ -979,4 +979,3 @@ func TestARunTheStoreDoesNotOutrankGoesOnToTheVendor(t *testing.T) {
 		})
 	}
 }
-
