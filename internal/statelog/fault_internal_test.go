@@ -46,7 +46,7 @@ func TestAFaultPastTheBudgetIsReportedOncePerRun(t *testing.T) {
 		t.Helper()
 		start := now
 		for now.Sub(start) <= d {
-			if stopped := runner.faulted(t.Context(), full); stopped != nil {
+			if stopped := runner.faulted(t.Context(), sideApply, full); stopped != nil {
 				t.Fatalf("a transient failure ended the loop: %v", stopped)
 			}
 			now = now.Add(ApplyRetryCeiling)
@@ -126,6 +126,164 @@ func TestAFaultPastTheBudgetIsReportedOncePerRun(t *testing.T) {
 	if got := counts()["statelog_apply_faulted"]; got != 4 {
 		t.Fatalf("%d statelog_apply_faulted lines in total, want 4 — a run that "+
 			"began after the loop was restarted was never reported", got)
+	}
+}
+
+// A RUN ENDS ONLY ONCE EVERY PART THAT FAILED IN IT HAS SUCCEEDED AGAIN.
+//
+// A commit of the checkpoint transaction beside the loop is the retry of that
+// transaction's failure and of nothing else's. Here a fetch fails and that
+// transaction then commits what the loop handed it before: the run stands — no
+// `statelog_apply_recovered`, its clock running on, Fault reporting it past the
+// budget, a second failed fetch the same run rather than a second one — until a
+// fetch is answered. Before, any success ended any run, so a commit beside the
+// loop logged a recovery from a fetch nobody had retried and restarted the
+// fault's clock and its back-off.
+func TestARunEndsOnlyOnceEveryPartThatFailedHasSucceeded(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	runner, err := NewRunner(RunnerDeps{
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Verifier: loggerProbeVerifier(t),
+		Applier: struct{ Applier }{},
+		Fetch:   struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
+		Node: nodeProbe{}, DB: struct{ Estate }{},
+		Logger: slog.New(slog.NewJSONHandler(&buf, nil)),
+		Now:    func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	counts := func() map[string]int {
+		t.Helper()
+		out := map[string]int{}
+		for _, record := range jsonRecords(t, &buf) {
+			msg, _ := record["msg"].(string)
+			out[msg]++
+		}
+		return out
+	}
+	unanswered := errors.New("the broker did not answer")
+	fail := func(side faultSide, err error) {
+		t.Helper()
+		if stopped := runner.faulted(t.Context(), side, err); stopped != nil {
+			t.Fatalf("a transient failure ended the loop: %v", stopped)
+		}
+	}
+
+	fail(sideFetch, unanswered)
+	now = now.Add(ApplyRetryBudget)
+	if runner.recoveredOn(t.Context(), sideBeside) {
+		t.Fatal("a commit beside the loop ended a run of failed fetches, so the " +
+			"back-off went back to the beat")
+	}
+	if got := counts()["statelog_apply_recovered"]; got != 0 {
+		t.Fatalf("%d statelog_apply_recovered line(s) after a commit beside the loop, "+
+			"want none — no fetch had been answered", got)
+	}
+	if _, faulted := runner.Fault(now); !faulted {
+		t.Fatal("a fetch failing for the whole budget is not reported by Fault — its " +
+			"clock was restarted by a commit beside the loop")
+	}
+	fail(sideFetch, unanswered)
+	if got := counts()["statelog_apply_retrying"]; got != 1 {
+		t.Fatalf("%d statelog_apply_retrying lines, want one — the second failed fetch "+
+			"belongs to the run the first began", got)
+	}
+	if !runner.recoveredOn(t.Context(), sideFetch) {
+		t.Fatal("a fetch answered did not end a run of nothing but failed fetches")
+	}
+	if got := counts()["statelog_apply_recovered"]; got != 1 {
+		t.Fatalf("%d statelog_apply_recovered lines once a fetch was answered, want one", got)
+	}
+
+	// THE TRANSACTION'S OWN FAILURE is ended by its commit.
+	fail(sideBeside, errors.New("the commit failed"))
+	if !runner.recoveredOn(t.Context(), sideBeside) {
+		t.Fatal("a commit beside the loop did not end the run its own failure began")
+	}
+
+	// A RUN BOTH FAILED IN needs both to succeed again — or a transaction of
+	// the loop's own, which carries whatever either failed on.
+	fail(sideFetch, unanswered)
+	fail(sideBeside, errors.New("the commit failed"))
+	if runner.recoveredOn(t.Context(), sideFetch) {
+		t.Fatal("an answered fetch ended a run in which the commit beside the loop " +
+			"is still failing")
+	}
+	if !runner.recoveredOn(t.Context(), sideBeside) {
+		t.Fatal("the commit beside the loop, the last part failing, did not end the run")
+	}
+	fail(sideVerify, errors.New("the log's ends could not be read"))
+	fail(sideBeside, errors.New("the commit failed"))
+	runner.recovered(t.Context())
+	if _, faulted := runner.Fault(now.Add(time.Hour)); faulted {
+		t.Fatal("a transaction of the loop's own did not end the run")
+	}
+	if got, want := counts()["statelog_apply_recovered"], 4; got != want {
+		t.Fatalf("%d statelog_apply_recovered lines in all, want %d — one a run", got, want)
+	}
+}
+
+// ONLY A VERIFICATION THAT SETTLED ENDS A VERIFICATION'S FAILURE.
+//
+// The look at the checkpoint's record failed — the log's ends could not be
+// read — and the loop then let through a run of nothing past the checkpoint,
+// which needs no look: the verification is still owed, and its failure stands,
+// with no `statelog_apply_recovered`, until a look settles it. Before, any run
+// the verification let through ended the run of failures.
+func TestOnlyAVerificationThatSettledEndsItsFailure(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	runner, err := NewRunner(RunnerDeps{
+		Domain: loggerProbe{}, Spec: loggerProbeSpec(), Verifier: loggerProbeVerifier(t),
+		Applier: struct{ Applier }{},
+		Fetch:   struct{ Fetcher }{}, Log: struct{ CheckpointLog }{},
+		Node: nodeProbe{}, DB: struct{ Estate }{},
+		Logger: slog.New(slog.NewJSONHandler(&buf, nil)),
+		Now:    func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	recoveries := func() int {
+		t.Helper()
+		n := 0
+		for _, record := range jsonRecords(t, &buf) {
+			if record["msg"] == "statelog_apply_recovered" {
+				n++
+			}
+		}
+		return n
+	}
+
+	runner.mu.Lock()
+	runner.verify = true
+	runner.mu.Unlock()
+	if stopped := runner.faulted(t.Context(), sideVerify,
+		errors.New("the log's ends could not be read")); stopped != nil {
+		t.Fatalf("a transient failure ended the loop: %v", stopped)
+	}
+	if runner.verifiedOn(t.Context()) {
+		t.Fatal("a run that needed no look ended a failed look's run of failures")
+	}
+	if got := recoveries(); got != 0 {
+		t.Fatalf("%d statelog_apply_recovered line(s) while the verification is still "+
+			"owed, want none", got)
+	}
+	if _, faulted := runner.Fault(now.Add(ApplyRetryBudget)); !faulted {
+		t.Fatal("a look failing for the whole budget is not reported by Fault")
+	}
+
+	runner.mu.Lock()
+	runner.verify = false
+	runner.mu.Unlock()
+	if !runner.verifiedOn(t.Context()) {
+		t.Fatal("a verification that settled did not end its failure")
+	}
+	if got := recoveries(); got != 1 {
+		t.Fatalf("%d statelog_apply_recovered lines once the look settled, want one", got)
 	}
 }
 

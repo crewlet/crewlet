@@ -440,6 +440,10 @@ type Runner struct {
 	// written as `statelog_apply_faulted`, which happens once per run —
 	// see [Runner.faulted] for why. Cleared with fault.
 	faultReported bool
+	// faultSides is every part of the loop that has failed in the current
+	// run and not succeeded since ([faultSide]): the run ends when the last
+	// of them does ([Runner.recoveredOn]). Cleared with fault.
+	faultSides faultSide
 
 	// drained records that this loop has reached the end of its log at
 	// least once since it started, which is what [Health.Drained] carries.
@@ -1784,8 +1788,8 @@ func (r *Runner) Rejoined(at Position, keyed, live time.Time) error {
 // the honest reading is that this node's rows have stopped moving. Reported,
 // it takes the same path a stop does: reads refuse `stalled` naming it, and
 // the node takes its copy of this domain out of service, so this domain's
-// operations go to the other data nodes. It clears the moment a retry
-// succeeds.
+// operations go to the other data nodes. It clears the moment every part of
+// the loop that failed has succeeded again ([Runner.recoveredOn]).
 func (r *Runner) Fault(now time.Time) (string, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -2030,7 +2034,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		if w == nil {
 			pinned, err := r.startup(ctx)
 			if err != nil {
-				if stopped := r.faulted(ctx, err); stopped != nil {
+				if stopped := r.faulted(ctx, sideApply, err); stopped != nil {
 					return stopped
 				}
 				pause = r.backOff(ctx, pause)
@@ -2045,18 +2049,20 @@ func (r *Runner) Run(ctx context.Context) error {
 		// transaction of its own does: its records come back into the
 		// loop's hands — the goroutine that failed has exited — to be
 		// applied again after the pause, here or beside the loop. A COMMIT
-		// is a retry that succeeded, which is what clears a fault: on a log
-		// of nothing but barriers no transaction of the loop's own ever
-		// runs to clear one.
+		// is the retry of THAT TRANSACTION'S failure, which on a log of
+		// nothing but barriers no transaction of the loop's own ever runs
+		// to clear — and of nothing else's: what it committed may have
+		// been handed over before a fetch failed, and is no retry of the
+		// fetch, so a run of the loop's own failures stands, its back-off
+		// with it, until a success of the loop's own ends it.
 		if failed, taken, committed := beside.outcome(); failed != nil {
 			tail = append(taken, tail...)
-			if stopped := r.faulted(ctx, failed); stopped != nil {
+			if stopped := r.faulted(ctx, sideBeside, failed); stopped != nil {
 				return stopped
 			}
 			pause = r.backOff(ctx, pause)
 			continue
-		} else if committed {
-			r.recovered(ctx)
+		} else if committed && r.recoveredOn(ctx, sideBeside) {
 			pause = 0
 		}
 		// A DOUBT SINCE THIS LOOP LAST TRUSTED WHAT IT HOLDS — a fetch that
@@ -2077,7 +2083,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			failed := r.unwind(ctx, beside, tail, &buffer)
 			tail, trusted = nil, doubts
 			if failed != nil {
-				if stopped := r.faulted(ctx, failed); stopped != nil {
+				if stopped := r.faulted(ctx, sideBeside, failed); stopped != nil {
 					return stopped
 				}
 				pause = r.backOff(ctx, pause)
@@ -2096,11 +2102,19 @@ func (r *Runner) Run(ctx context.Context) error {
 			r.doubtLocked()
 			r.mu.Unlock()
 			tail = run
-			if stopped := r.faulted(ctx, err); stopped != nil {
+			if stopped := r.faulted(ctx, sideFetch, err); stopped != nil {
 				return stopped
 			}
 			pause = r.backOff(ctx, pause)
 			continue
+		}
+		// THE BROKER ANSWERED A FETCH — the run starts empty after a failed
+		// one, which the unwind gave back — and that is the retry a failed
+		// fetch was waiting for, whatever the run then holds: one of nothing
+		// but barriers goes beside the loop, and no transaction of the
+		// loop's own would ever end it.
+		if r.recoveredOn(ctx, sideFetch) {
+			pause = 0
 		}
 		if r.doubted() != trusted {
 			// A DOUBT WHILE THE RUN WAS FETCHED: it is given back with the
@@ -2134,13 +2148,16 @@ func (r *Runner) Run(ctx context.Context) error {
 			if errors.Is(verifyErr, ErrStopped) {
 				verifyErr = r.stop(ctx, verifyErr)
 			}
-			if stopped := r.faulted(ctx, verifyErr); stopped != nil {
+			if stopped := r.faulted(ctx, sideVerify, verifyErr); stopped != nil {
 				return stopped
 			}
 			// THE SAME RUN, for the reason a failed commit keeps it.
 			tail = run
 			pause = r.backOff(ctx, pause)
 			continue
+		}
+		if r.verifiedOn(ctx) {
+			pause = 0
 		}
 		if r.doubted() != trusted {
 			// A DOUBT WHILE THE CHECKPOINT WAS VERIFIED, which settled
@@ -2178,7 +2195,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		taken, failed := beside.settle()
 		run = append(taken, run...)
 		if failed != nil {
-			if stopped := r.faulted(ctx, failed); stopped != nil {
+			if stopped := r.faulted(ctx, sideBeside, failed); stopped != nil {
 				return stopped
 			}
 			tail = run
@@ -2194,7 +2211,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		consumed, err := r.applyRun(ctx, w, run)
 		if err != nil {
-			if stopped := r.faulted(ctx, err); stopped != nil {
+			if stopped := r.faulted(ctx, sideApply, err); stopped != nil {
 				return stopped
 			}
 			// THE SAME RUN, AGAIN. Its records are delivered and
@@ -2319,8 +2336,40 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 	return w, nil
 }
 
-// faulted classifies a failure: a STOP is returned to end the loop, anything
-// else is recorded as the fault being retried and swallowed.
+// faultSide is one part of the apply loop that can fail, as a bit of the run
+// of failures it joins ([Runner.faultSides]).
+//
+// # Why a run remembers WHICH parts failed
+//
+// Because what ends a failure is a success of the part that failed, and the
+// parts succeed apart: a transaction beside the loop commits barriers the loop
+// handed it before a fetch failed, and a fetch is answered while that
+// transaction is still held at its commit. A run that any success ended had a
+// commit beside the loop clear a fetch nobody had retried — logged as
+// `statelog_apply_recovered` naming the fetch's error, the fault's clock and
+// its back-off reset, so [Runner.Fault] and the refusals and the copy's leaving
+// service it drives past [ApplyRetryBudget] began late, and the broker was asked
+// again at the beat rather than the doubled pause.
+type faultSide uint8
+
+const (
+	// sideApply is the loop's startup or a transaction of its own; a
+	// transaction of its own that commits ends the whole run, since it
+	// carries whatever the others failed on.
+	sideApply faultSide = 1 << iota
+	// sideFetch is a fetch the broker did not answer, ended by the next one
+	// it does.
+	sideFetch
+	// sideVerify is the verification of the checkpoint's record, ended by
+	// the next that settles ([Runner.verifiedOn]).
+	sideVerify
+	// sideBeside is the checkpoint transaction beside the loop, ended by its
+	// next commit ([checkpoints]).
+	sideBeside
+)
+
+// faulted classifies a failure of side: a STOP is returned to end the loop,
+// anything else is recorded as the fault being retried and swallowed.
 //
 // # Why a run of failures is written as three lines and never as a level
 //
@@ -2348,7 +2397,7 @@ func (r *Runner) startup(ctx context.Context) (*store.Writer, error) {
 // the ERROR lands on the same retry that makes [Runner.Fault] start
 // answering, so the line and the refusals and the copy's leaving service it
 // describes begin together.
-func (r *Runner) faulted(ctx context.Context, err error) error {
+func (r *Runner) faulted(ctx context.Context, side faultSide, err error) error {
 	if errors.Is(err, ErrStopped) || ctx.Err() != nil {
 		return err
 	}
@@ -2359,6 +2408,7 @@ func (r *Runner) faulted(ctx context.Context, err error) error {
 		r.faultSince = now
 	}
 	r.fault = err
+	r.faultSides |= side
 	since := r.faultSince
 	report := !r.faultReported && now.Sub(since) >= ApplyRetryBudget
 	if report {
@@ -2386,16 +2436,54 @@ func (r *Runner) faulted(ctx context.Context, err error) error {
 
 // recovered clears the fault a retry just outlived, and closes its run: the
 // next failure starts a new one, written again from `statelog_apply_retrying`.
+// It is the success that ends a run whatever failed in it — the loop's startup,
+// a transaction of its own, a fetch answered with nothing while the loop holds
+// nothing — and [Runner.recoveredOn] the one that ends only its own part.
 func (r *Runner) recovered(ctx context.Context) {
 	r.mu.Lock()
 	had, since := r.fault, r.faultSince
-	r.fault, r.faultSince, r.faultReported = nil, time.Time{}, false
+	r.fault, r.faultSince, r.faultReported, r.faultSides = nil, time.Time{}, false, 0
 	r.mu.Unlock()
 	if had != nil {
 		r.logger.InfoContext(ctx, "statelog_apply_recovered",
 			"domain", r.domain.Name(), "stream", r.spec.Name,
 			"after", r.now().Sub(since).Round(time.Millisecond), "error", had.Error())
 	}
+}
+
+// recoveredOn is a success of side alone: it ends side's part of the current
+// run, and the run once no part of it is left failing ([faultSide]). It answers
+// whether no run is left standing, which is when the loop's back-off starts
+// again from the beat.
+func (r *Runner) recoveredOn(ctx context.Context, side faultSide) bool {
+	r.mu.Lock()
+	if r.fault == nil {
+		r.mu.Unlock()
+		return true
+	}
+	r.faultSides &^= side
+	open := r.faultSides != 0
+	r.mu.Unlock()
+	if open {
+		return false
+	}
+	r.recovered(ctx)
+	return true
+}
+
+// verifiedOn is the success that ends a verification's failure ([sideVerify]):
+// a verification that SETTLED, and only one. A run of nothing past the
+// checkpoint is let through with none ([Runner.verifyBeforeApplying]) and
+// leaves the verification owed, and its failure with it, which no look at the
+// log has yet ended — taken for a success, it wrote a recovery naming the
+// failed look and restarted the fault's clock, and the next run past the
+// checkpoint failed the same look as a run of its own. It answers what
+// [Runner.recoveredOn] does, and false while the verification is owed.
+func (r *Runner) verifiedOn(ctx context.Context) bool {
+	r.mu.Lock()
+	owed := r.verify
+	r.mu.Unlock()
+	return !owed && r.recoveredOn(ctx, sideVerify)
 }
 
 // backOff waits before the next attempt and returns the pause the attempt
