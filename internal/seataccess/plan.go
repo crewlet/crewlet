@@ -154,7 +154,7 @@ func walk(
 		}
 	}
 	for i, lane := range lanes {
-		want := in.Want[lane].Normalized()
+		want := in.Want[lane].NormalizedFor(lane)
 		have := in.Have[lane]
 		switch {
 		case removed:
@@ -172,8 +172,12 @@ func walk(
 		}
 		var applied *Desired
 		if in.Record != nil {
-			if rec, ok := in.Record.Lanes[lane]; ok {
-				applied = rec.Applied
+			if rec, ok := in.Record.Lanes[lane]; ok && rec.Applied != nil {
+				// A RECORD WRITTEN BEFORE KEYS WERE SPELLED AS THE VENDOR
+				// MATCHES THEM compares under the same spelling as the
+				// document, so a case alone is never read as drift.
+				a := rec.Applied.NormalizedFor(lane)
+				applied = &a
 			}
 		}
 		var ops []planned

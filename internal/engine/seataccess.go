@@ -48,6 +48,27 @@ func (e *Engine) SeatAccessLedger() (seataccess.Ledger, error) {
 	return seataccess.NewCoordLedger(e.backends.Fleet)
 }
 
+// seatAccessAccounts is each seat's account the ledger records as held for
+// kind, by the seat's handle: the agents' accounts the access sync manages,
+// which a company-level pass leaves to it or touches only as its own.
+func (e *Engine) seatAccessAccounts(ctx context.Context, kind integration.Kind) (map[string]string, error) {
+	ledger, err := e.SeatAccessLedger()
+	if err != nil {
+		return nil, err
+	}
+	records, err := ledger.Records(ctx, kind)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(records))
+	for handle, rec := range records {
+		if rec.Held() {
+			out[handle] = rec.Account.ID
+		}
+	}
+	return out, nil
+}
+
 // SyncSeatAccess runs one integration's seat access sync for a person's
 // action on the access routes (save, rotate, remove, restore, retry, done),
 // under the integration's provisioning lease, sealing as by.

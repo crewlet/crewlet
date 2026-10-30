@@ -325,6 +325,14 @@ type Options struct {
 	// roles. Its Desired.Level is the chosen ids, sorted and space-separated,
 	// and the picker offers a multi-select.
 	Multiple bool `json:"multiple,omitempty"`
+
+	// RequiredLevel is, on a [Options.Multiple] lane, the level every other
+	// level in a set needs, so a set naming any level holds this one too:
+	// Confluence's View (`read:space`), without which Confluence grants no
+	// other space permission. The picker keeps it checked while anything
+	// else is, and the sync and the access routes refuse a set without it
+	// ([Options.MissingRequired]). Empty where no level is required.
+	RequiredLevel string `json:"required_level,omitempty"`
 }
 
 // ManagedExternal is [Options.Managed] for a lane the engine does not

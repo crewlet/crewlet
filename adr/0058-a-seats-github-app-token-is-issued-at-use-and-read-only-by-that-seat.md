@@ -14,7 +14,7 @@ a value naming it is read, and never sealed.** Configuration names it as
 credentials are read: its tool servers' `mcp_env`, its coding box's
 environment and setup files, and the servers rendered into that box. The
 process-wide `github.Issuer` mints it from the app's sealed key, narrowed to
-the seat's permissions and repositories, and holds it in memory for as long as it has
+the seat's tier and repositories, and holds it in memory for as long as it has
 life left for the reader asking. A mint GitHub refuses is held too, for the
 wait of the restart schedule the seat's tool servers retry it on, and every
 reader of that installation meets the held answer until the wait ends: a

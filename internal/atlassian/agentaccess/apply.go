@@ -83,13 +83,13 @@ func (s *session) grant(ctx context.Context, in seataccess.ApplyInput, p product
 // target is the projects or spaces a lane's role is held in: the seat's
 // scope, or the company's own list where the scope is empty.
 func (s *session) target(lane seataccess.Lane, scope []string) []string {
-	if keys := normalKeys(scope); len(keys) > 0 {
+	if keys := normalKeys(lane, scope); len(keys) > 0 {
 		return keys
 	}
 	if lane == seataccess.LaneJira {
-		return normalKeys(s.jiraIn)
+		return normalKeys(lane, s.jiraIn)
 	}
-	return normalKeys(s.confIn)
+	return normalKeys(lane, s.confIn)
 }
 
 // converge brings the lane's roles to the document: the role in each
