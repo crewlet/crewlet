@@ -442,8 +442,8 @@ func (s *session) applyRemove(ctx context.Context, seat SeatApp) (seataccess.Ste
 				"this engine asks with an app-configuration token",
 		}}
 	}
-	if err := s.needs(false); err != nil {
-		return byHand("No app-configuration token is sealed, so this engine cannot"), nil
+	if s.admin == nil || s.configToken == "" {
+		return byHand("No usable app-configuration token is held, so this engine cannot"), nil
 	}
 	err := s.admin.DeleteApp(ctx, s.configToken, seat.AppID)
 	var api *APIError
