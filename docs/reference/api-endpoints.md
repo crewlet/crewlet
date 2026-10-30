@@ -3650,9 +3650,13 @@ answers the name and when it was minted, never the value.
 the same value quoted. Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration
-for the company: Datadog, GitLab or Mattermost without a `provisioning` block,
-Jira and Confluence on Data Center or without the Atlassian organization key,
-GitHub without `provisioning`. On such a lane a seat's switch still binds its
+for the company, which is wherever it does not hold the authority that creates
+an agent's account: Datadog, GitLab or Mattermost without a `provisioning`
+block, Jira and Confluence on Data Center or without the Atlassian organization
+key, GitHub without `provisioning` or on a document only the operator writes
+(the engine records each agent's app in the document), and Slack without
+`integrations.slack.app_config_token`, the token the engine creates agents'
+apps with. On such a lane a seat's switch still binds its
 tool to the credential handed in from outside Crewlet, its access is managed
 where that credential was issued, and its `observed.credential` names the
 variable the seat holds with `"source": "external"`. A credential Crewlet
