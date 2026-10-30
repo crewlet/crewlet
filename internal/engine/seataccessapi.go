@@ -544,26 +544,49 @@ func (a *SeatAccessAPI) Sync(ctx context.Context, req setupapi.AccessSync) error
 		}
 	}
 	if !req.AfterSave {
-		return a.syncNow(context.WithoutCancel(ctx), req.Kind, req.By, asks, handles)
+		return a.syncNow(context.WithoutCancel(ctx), req.Kind, req.By, asks, handles, req.Then)
 	}
 	// MARKED BEFORE THE ANSWER IS READ, so the tab the save answers with
-	// already says a sync is under way.
+	// already says a sync is under way; and held through the follow-up, so
+	// it reads as syncing until the integration has been looked at again.
 	a.mark(req.Kind, true)
 	go func() {
 		defer a.mark(req.Kind, false)
-		a.syncAfterApply(context.WithoutCancel(ctx), req)
+		detached := context.WithoutCancel(ctx)
+		if a.syncAfterApply(detached, req) && req.Then != nil {
+			req.Then(detached)
+		}
 	}()
 	return nil
 }
 
-// syncNow runs one sync under the kind's lease, bounded as a pass is.
+// syncNow runs one sync under the kind's lease, bounded as a pass is, and then
+// its follow-up ([setupapi.AccessSync.Then]) wherever the sync ran.
+//
+// THE FOLLOW-UP IS DETACHED and holds the kind's syncing mark, so the person's
+// action is answered as soon as the seat's own sync is done, and the tab keeps
+// reading again until the integration has been looked at too.
 func (a *SeatAccessAPI) syncNow(ctx context.Context, kind integration.Kind, by iam.Actor,
-	asks map[string]seataccess.Ask, handles []string) error {
+	asks map[string]seataccess.Ask, handles []string, then func(context.Context)) error {
 
+	detached := context.WithoutCancel(ctx)
 	ctx, cancel := context.WithTimeout(ctx, setup.PassDeadline)
 	defer cancel()
 	a.mark(kind, true)
 	defer a.mark(kind, false)
+	// DEFERRED AFTER THE MARK, so it runs before the mark is dropped and the
+	// integration never reads as idle between the sync and its follow-up.
+	ran := false
+	defer func() {
+		if !ran || then == nil {
+			return
+		}
+		a.mark(kind, true)
+		go func() {
+			defer a.mark(kind, false)
+			then(detached)
+		}()
+	}()
 	report, err := a.engine.SyncSeatAccess(ctx, kind, by, asks, handles)
 	switch {
 	case errors.Is(err, ErrSeatAccessBusy):
@@ -580,20 +603,24 @@ func (a *SeatAccessAPI) syncNow(ctx context.Context, kind integration.Kind, by i
 		// with it rather than refused.
 		log.WarnContext(ctx, "seat_access_sync_failed", "kind", kind, "error", err.Error(),
 			"by", by.Name)
+		ran = true
 		return nil
 	}
 	log.InfoContext(ctx, "seat_access_synced", "kind", kind, "findings",
 		len(report.Findings), "by", by.Name)
+	ran = true
 	return nil
 }
 
 // syncAfterApply waits for this node to run the revision a save wrote, then
-// syncs; a sync another holds is waited out once.
-func (a *SeatAccessAPI) syncAfterApply(ctx context.Context, req setupapi.AccessSync) {
+// syncs; a sync another holds is waited out once. It reports whether the sync
+// ran, which is when its follow-up is owed: a sync left to the reconcile loop
+// is followed by the loop's own pass.
+func (a *SeatAccessAPI) syncAfterApply(ctx context.Context, req setupapi.AccessSync) bool {
 	if err := a.waitApplied(ctx, req.Kind); err != nil {
 		log.InfoContext(ctx, "seat_access_sync_deferred", "kind", req.Kind,
 			"revision", req.Revision, "detail", err.Error())
-		return
+		return false
 	}
 	for attempt := 0; attempt < 2; attempt++ {
 		passCtx, cancel := context.WithTimeout(ctx, setup.PassDeadline)
@@ -603,22 +630,25 @@ func (a *SeatAccessAPI) syncAfterApply(ctx context.Context, req setupapi.AccessS
 		case errors.Is(err, ErrSeatAccessBusy):
 			select {
 			case <-ctx.Done():
-				return
+				return false
 			case <-time.After(setup.RecordDeadline):
 			}
 			continue
-		case err != nil && !errors.Is(err, integration.ErrNotConfigured):
+		case errors.Is(err, integration.ErrNotConfigured):
+			return false
+		case err != nil:
 			log.WarnContext(ctx, "seat_access_sync_failed", "kind", req.Kind,
 				"revision", req.Revision, "error", err.Error(), "by", req.By.Name)
-			return
+			return true
 		}
 		log.InfoContext(ctx, "seat_access_synced", "kind", req.Kind,
 			"revision", req.Revision, "findings", len(report.Findings), "by", req.By.Name)
-		return
+		return true
 	}
 	log.InfoContext(ctx, "seat_access_sync_deferred", "kind", req.Kind,
 		"revision", req.Revision, "detail", "another sync held the integration; the "+
 			"reconcile loop takes the saved revision on its next pass")
+	return false
 }
 
 // waitApplied waits until this node runs the fleet's setting for every seat of

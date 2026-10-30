@@ -4040,7 +4040,11 @@ connection lists no projects, a project outside that group is
 `400 access_not_offered` too.
 
 **`PUT /setup/integrations/{kind}/access`** saves the same body as one revision
-of the company document and starts the sync for that integration. Send the
+of the company document and starts the sync for that integration. Every access
+sync ends in the same read-only pass `POST /setup/integrations/{kind}/check`
+runs, recorded on the integration's status through the loop's fold, and the tab
+reads `syncing` until that pass is recorded, so the integration's issues and
+notes say what the change left as soon as the sync is over. Send the
 tab's `revision` back as `If-Match` (or as `revision` in the body); a save on
 a revision the fleet has left is `409 revision_advanced` and writes nothing.
 The revision records the caller as its author and a history line naming what
@@ -4092,7 +4096,9 @@ acts on one agent's account, and answers the tab:
 | `done` | Reads the vendor again after a person took a step there (a GitHub App's creation or permission request, a Slack install) |
 
 Every action but `keep` is carried by a sync, and one asked while a sync of the
-same integration runs is `409 pass_in_flight`.
+same integration runs is `409 pass_in_flight`. `keep` writes its revision and
+then starts a sync, as a save does, which finds the vendor already matching.
+Each of these syncs ends in the check's own pass, as a save's does.
 
 **`POST /setup/integrations/slack/access/seats/{handle}/{lane}/install`**
 answers `{"url": "https://slack.com/oauth/v2/authorize?..."}`: a link signed for

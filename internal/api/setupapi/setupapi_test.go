@@ -1681,7 +1681,7 @@ func (s *surface) withPassSink(
 	s.mux = http.NewServeMux()
 	s.status = status
 	s.setup = newService(t, setupapi.Options{
-		Config: s.config, Secrets: s.vault,
+		Config: s.config, Secrets: s.vault, Access: s.access,
 		Resolve:        s.vault.get,
 		Passes:         runner,
 		Sink:           sink,
