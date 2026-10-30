@@ -1012,7 +1012,7 @@ func (g gateJudge) mergeAuthority() Precondition {
 	grant := GrantOf(m, g.rows.Repo, g.roster)
 	if !g.rules.Protected() {
 		if refusal, why := grant.RefRule(fastForward(target)); refusal != "" {
-			p.State, p.WaitsOn = PreconditionUnmet, partiesOf(maintainersOf(g.rows.Repo, g.roster))
+			p.State, p.WaitsOn = PreconditionUnmet, seatParties(maintainersOf(g.rows.Repo, g.roster))
 			p.Detail = fmt.Sprintf("%s may not merge into %s, which no rule protects, as it may not push it: %s",
 				who, target, why)
 			return p
@@ -1040,15 +1040,15 @@ func (g gateJudge) mergeAuthority() Precondition {
 			g.rows.Repo.Name, target, need, g.rules.MergeBy)
 		return p
 	}
-	p.State, p.WaitsOn = PreconditionUnmet, partiesOf(maintainersOf(g.rows.Repo, g.roster))
+	p.State, p.WaitsOn = PreconditionUnmet, seatParties(maintainersOf(g.rows.Repo, g.roster))
 	p.Detail = fmt.Sprintf("%s holds %s on %s, and a merge into %s takes %s (merge_by %s, the stricter of its "+
 		"rules' and code.merge_by_floor): %s or a person merges it", who, grant.Access, g.rows.Repo.Name,
 		target, need, g.rules.MergeBy, maintainedBy(g.rows.Repo, g.roster))
 	return p
 }
 
-// partiesOf is seats as the parties a readiness names.
-func partiesOf(seats []string) []Party {
+// seatParties is seats as the parties a readiness names.
+func seatParties(seats []string) []Party {
 	var out []Party
 	for _, s := range seats {
 		out = append(out, Party{Handle: s, Kind: PartyAgent})
@@ -1060,7 +1060,7 @@ func partiesOf(seats []string) []Party {
 // seat, or the lead of its owner where no seat may.
 func maintainedBy(repo RepoRef, r Roster) string {
 	if seats := maintainersOf(repo, r); len(seats) > 0 {
-		return namedAll(partiesOf(seats))
+		return namedAll(seatParties(seats))
 	}
 	return "a principal that maintains the repository"
 }
