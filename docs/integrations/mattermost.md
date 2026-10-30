@@ -426,7 +426,7 @@ channel and can only be messaged directly.
 |---|---|
 | Turn a seat on | Creates the bot, adds it to the team with its roles and to its channels, then mints its access token and seals it. |
 | Change its roles | Sets the bot's roles (`PUT /api/v4/users/{id}/roles`) to the seat's whole set. |
-| Change its channels | Adds it to the channels the seat gained and removes it from the company's channels the seat no longer names. A channel outside the company's list (one a person invited the bot into) and a direct message are never touched. |
+| Change its channels | Adds it to the channels the seat gained and removes it from the company's channels the seat no longer names. Where the company lists channels, one outside that list (a room a person invited the bot into) is never touched; where it lists none, the seat's channels are the whole of what the bot is in. A direct message is never touched. |
 | Turn it off | Revokes the tokens this engine minted, clears the sealed token, records in the bot's description that this engine turned it off, and deactivates it. Mattermost keeps the bot and everything it posted. |
 | Turn it back on | Reactivates the bot, clears the marker, and mints and seals a new token. No person is needed. |
 | Remove it (only while off) | Nothing at Mattermost: deleting a bot deletes everything it posted, so it stays deactivated and Crewlet stops managing it. Remove is a separate, confirmed action and never follows from editing the document. |
