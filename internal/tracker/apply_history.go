@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/store"
@@ -335,19 +334,6 @@ func (a *Applier) stampStatusEntered(ctx context.Context, tx *sql.Tx, taskID str
 	return 1, nil
 }
 
-// InboxRetentionDefaultDays is how long a person's inbox rows are kept on a
-// node that has not been handed a company, whose epoch states no horizon: a
-// published company's always does ([inbox.RetentionKey]), with the company's
-// own default applied, so this is the horizon of a replay that runs before
-// any company has.
-//
-// THE ONE HORIZON THAT DELETES A ROW DERIVED FROM A RECORD, and it is a
-// MAILBOX rather than a record: the history those rows were derived from is
-// untouched and answers for ever. A year, against the vendor's three months
-// uncleared, because an inbox row costs almost nothing and a founder scrolling
-// back a year is a thing that happens.
-const InboxRetentionDefaultDays = 365
-
 // subjectKeys is what the applier already read off the object row, named so
 // the two are not passed as two bare strings a call site can swap.
 //
@@ -418,7 +404,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		// the property lives.
 		return 0, nil
 	}
-	if horizon := inboxHorizon(c.epoch); horizon > 0 && !c.brokerAt.IsZero() {
+	if horizon := inbox.Horizon(c.epoch); horizon > 0 && !c.brokerAt.IsZero() {
 		// A RECORD OLDER THAN THE HORIZON WRITES NO INBOX ROWS AT ALL,
 		// which is what makes a whole-log replay rebuild no expired
 		// inbox — the alternative, sweeping afterwards, means every
@@ -481,32 +467,6 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 		written += n
 	}
 	return written, nil
-}
-
-// inboxHorizon reads the retention days out of the epoch the framework passed
-// in: the company's `inbox.retention_days`, under the one key every domain
-// that keeps an inbox reads ([inbox.RetentionKey]).
-//
-// FROM THE EPOCH RATHER THAN FROM CONFIG, because the applier reads no
-// configuration at all: two nodes briefly on different epochs may write
-// different inbox rows, which is precisely why that table is classed as
-// diverging rather than compared by the identity claim.
-func inboxHorizon(epoch map[string]any) time.Duration {
-	days := InboxRetentionDefaultDays
-	if raw, held := epoch[inbox.RetentionKey]; held {
-		switch v := raw.(type) {
-		case int:
-			days = v
-		case int64:
-			days = int(v)
-		case float64:
-			days = int(v)
-		}
-	}
-	if days <= 0 {
-		return 0
-	}
-	return time.Duration(days) * 24 * time.Hour
 }
 
 // historyID is the history row's key: the record's own operation id when it
