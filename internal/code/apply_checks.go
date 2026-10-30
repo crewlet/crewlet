@@ -110,6 +110,20 @@ type checkQueue struct {
 	queuedAt, position                                                         int64
 }
 
+// overdueAt is the instant, in the store's microseconds, the queue's attempt
+// falls overdue — waits for a runner longer than its own definition's
+// timeout, which the code_checks_backlog alarm counts — or 0 for an attempt
+// with no timeout: one a person's CI reports, which no runner of the engine
+// claims, and so is never overdue. code_checks_overdue_idx holds the queued
+// attempts by it, so the backlog's walk reads them in the order they fell
+// overdue (replicated 0080).
+func (q checkQueue) overdueAt() int64 {
+	if q.timeoutSeconds <= 0 {
+		return 0
+	}
+	return q.queuedAt + q.timeoutSeconds*int64(time.Second/time.Microsecond)
+}
+
 // checkRun is a row's RUN, as the claim with the lower (startedAt, runner)
 // set it, its holder's later record naming the box.
 type checkRun struct {
@@ -328,7 +342,8 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 		string(row.state()), q.purpose, q.changeID, q.revision, q.candidateID, q.entryID, q.target, q.base,
 		q.defsOID, q.required, q.runIn, q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, r.borrowed,
 		e.reporter, q.queuedAt, r.startedAt, e.finishedAt, e.durationMs, e.exitCode, e.failuresOmitted,
-		q.position, e.position, row.rowBytes(), e.url, e.summary, q.def, e.failures, e.tail); err != nil {
+		q.position, e.position, row.rowBytes(), q.overdueAt(), e.url, e.summary, q.def, e.failures,
+		e.tail); err != nil {
 		return 0, fmt.Errorf("code: write check %s of %s at %s: %w", key.Name, key.OID, at.position, err)
 	}
 	if !ended {
@@ -485,14 +500,15 @@ const (
 		FROM code_checks INDEXED BY ` + checksKey + `
 		WHERE repo_id = ? AND commit_oid = ? AND name = ? AND attempt = ?`
 	// writeCheckSQL writes a row whole, the join's: every column the join
-	// computed, over whatever the row held.
+	// computed, over whatever the row held — overdue_at derived from its
+	// queue (checkQueue.overdueAt).
 	writeCheckSQL = `INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose,
 			change_id, revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in,
 			timeout_seconds, reason, runner_node, placement, box_handle, borrowed, reporter, queued_at,
 			started_at, finished_at, duration_ms, exit_code, failures_omitted, queued_position,
-			finished_position, row_bytes, url, summary, def, failures, tail)
+			finished_position, row_bytes, overdue_at, url, summary, def, failures, tail)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-			?, ?, ?, ?, ?)
+			?, ?, ?, ?, ?, ?)
 		ON CONFLICT (repo_id, commit_oid, name, attempt) DO UPDATE SET
 			state = excluded.state, purpose = excluded.purpose, change_id = excluded.change_id,
 			revision = excluded.revision, candidate_id = excluded.candidate_id, entry_id = excluded.entry_id,
@@ -504,7 +520,8 @@ const (
 			finished_at = excluded.finished_at, duration_ms = excluded.duration_ms,
 			exit_code = excluded.exit_code, failures_omitted = excluded.failures_omitted,
 			queued_position = excluded.queued_position, finished_position = excluded.finished_position,
-			row_bytes = excluded.row_bytes, url = excluded.url, summary = excluded.summary,
+			row_bytes = excluded.row_bytes, overdue_at = excluded.overdue_at, url = excluded.url,
+			summary = excluded.summary,
 			def = excluded.def, failures = excluded.failures, tail = excluded.tail`
 	dropCheckLogSQL = `DELETE FROM code_check_logs
 		WHERE repo_id = ? AND commit_oid = ? AND name = ? AND attempt = ?`

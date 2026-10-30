@@ -602,6 +602,7 @@ func (e *Engine) codeReading(ctx context.Context, now time.Time, out *statelog.R
 				"detail", "this evaluation raises no code_checks_backlog; the next reads the rows again")
 		}
 		out.CodeChecksBacklog = backlog.Behind
+		out.CodeChecksBacklogMore = backlog.More
 		out.CodeChecksBacklogOldest = backlog.Oldest
 		out.CodeChecksBacklogCheck = backlog.Check
 	}

@@ -196,8 +196,9 @@ var alarmMeaning = map[Kind]string{
 		"the definition it was queued under, the time its author gave the check " +
 		"to run — so a change whose head they check waits on them past anything " +
 		"its checks file planned for. Measured from the code log's rows by every " +
-		"data node, the oldest queued first, so it stands even where no git node " +
-		"runs checks at all.",
+		"data node, in the order the attempts fell overdue, so it stands even " +
+		"where no git node runs checks at all; past a thousand it says there " +
+		"are more rather than how many.",
 }
 
 const alarmHeader = `# Alarms

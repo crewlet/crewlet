@@ -739,10 +739,11 @@ type Reading struct {
 	// CodeChecksBacklog is how many queued attempts of checks have waited for
 	// a runner longer than their OWN timeout — each held to the
 	// timeout_seconds of the definition it was queued under, the time its
-	// author gave the check to run — among the oldest queued attempts this
-	// node's rows hold (internal/code's Reader.ChecksBacklog, at most
-	// code.BacklogScan of them, oldest queued first);
-	// CodeChecksBacklogOldest is the longest wait among them and
+	// author gave the check to run — as this node's rows hold them
+	// (internal/code's Reader.ChecksBacklog, read in the order they fell
+	// overdue), exact up to code.BacklogScan; CodeChecksBacklogMore reports
+	// more than that many, the count then the bound;
+	// CodeChecksBacklogOldest is the longest wait among those counted and
 	// CodeChecksBacklogCheck that attempt, by its repository's name, its
 	// commit, its check and its attempt.
 	//
@@ -754,6 +755,7 @@ type Reading struct {
 	// data role — and on one whose queued attempts are all within their
 	// time.
 	CodeChecksBacklog       int
+	CodeChecksBacklogMore   bool
 	CodeChecksBacklogOldest time.Duration
 	CodeChecksBacklogCheck  string
 }
@@ -1625,9 +1627,15 @@ var table = []rule{
 		// runs no check, and still raises it.
 		kind: KindCodeChecksBacklog,
 		fires: func(r Reading) (string, bool) {
-			return fmt.Sprintf("%d queued check attempt(s) have waited for a runner longer than their "+
-					"own timeout — the longest, %s, for %s",
-					r.CodeChecksBacklog, r.CodeChecksBacklogCheck, spoken(r.CodeChecksBacklogOldest)),
+			count := fmt.Sprintf("%d", r.CodeChecksBacklog)
+			if r.CodeChecksBacklogMore {
+				// PAST THE READING'S BOUND the count is the bound, and the
+				// sentence says there are more rather than how many.
+				count = "more than " + count
+			}
+			return fmt.Sprintf("%s queued check attempt(s) have waited for a runner longer than their "+
+					"own timeout — the longest of those counted, %s, for %s",
+					count, r.CodeChecksBacklogCheck, spoken(r.CodeChecksBacklogOldest)),
 				r.CodeChecksBacklog > 0
 		},
 		remedy: "A queued attempt waits for a git node that runs checks to " +
