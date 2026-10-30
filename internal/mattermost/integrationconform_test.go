@@ -101,7 +101,7 @@ func convergedChatOn(t *testing.T, tb integrationtest.TB, tune func(*chatServer)
 			client: chatClient(t, srv),
 			cfg:    cfg,
 			org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-				chatSeat("CEO", "", "leadership"),
+				chatSeat("CEO", ""),
 			}},
 		},
 		srv: srv,
