@@ -585,8 +585,12 @@ var allowedReplicatedWriter = []allowance{
 			"and findings — on the change's own subject, the compaction that " +
 			"retires a repository's packs for the outputs that replace them " +
 			"and the publication that replaces the top of its published layer " +
-			"chain, the sweep of its retired packs past their grace, and the " +
-			"notices a change record writes per recipient and a purge removes.",
+			"chain, the sweep of its retired packs past their grace, the " +
+			"notices a change record writes per recipient and a purge removes, " +
+			"its merge queues on its own subject, and its checks on their own " +
+			"subject — each attempt's queue, claim and ending joined into one " +
+			"row with its log and its horizon, and the home's dispatch of a " +
+			"change head under its target's checks file (apply_dispatch.go).",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,

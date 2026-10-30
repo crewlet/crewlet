@@ -1768,6 +1768,32 @@ outcome (`crewlet.code.checks.claims`) — `claimed` is git nodes racing for one
 attempt, each losing a box it never made, and `lost` above zero is two nodes
 writing one repository's checks at once ([metrics](../reference/metrics.md)).
 
+### How a head's checks are dispatched
+
+A change's head is checked by its **target's** checks file, read at the
+target's tip — never the head's own, so no change narrows the checks that
+judge it. The repository's home reads `.crewlet/checks.yaml` there, queues
+every check it defines at the head for that target (or records it skipped),
+and then records that it did: a `check_dispatched` record naming the target,
+the tip it read, the file it found there — or none — and the heads it
+dispatched under it. Two tables keep what those records say: each target's
+checks file as the home last read it, and the file each head was dispatched
+under.
+
+The home's work list is read from those rows alone. A live change's head is
+due a dispatch while no dispatch of it for its target names the file the
+target's reading holds — a head never dispatched, a change retargeted, a
+target whose checks file changed since — and a head whose target defines no
+checks at all leaves the list after one record, as one whose target defines
+many does: the list never asks whether an attempt exists, which a repository
+that has not adopted checks never has. A target is due a reading again once
+its branch has moved past the tip it was read at and that reading is older
+than the home's refresh, so a target pushed to on every landing is read at
+the home's pace, and only a file that changed makes its waiting heads due —
+which is how a check added to a target's file reaches the changes waiting on
+it. Two homes recording one target's reading at once, across a failover,
+leave one row: each row keeps the reading of the later tip.
+
 ### Reading a repository's checks
 
 A repository's checks are read through `code.read`, held to the reader's
@@ -1782,8 +1808,11 @@ grant on the repository as every other read of it is:
 - **`check`**: one attempt whole — its row, the definition it ran under, the
   last of its output, the failures its ending named and its kept log;
 - **`checks_due`**: the engine's own, which no person or seat may make — the
-  live changes whose head commit no attempt of any check has been queued at,
-  which the repository's home polls for the heads whose checks it dispatches;
+  work the repository's home polls for: the live changes whose head has no
+  **dispatch** for its target naming the checks file the target's reading
+  holds, and the targets whose branch moved past the tip their checks file
+  was read at, once that reading is older than the home's refresh
+  ([How a head's checks are dispatched](#how-a-heads-checks-are-dispatched));
 - **`check_box`**: the engine's own too — the one attempt a check's box's
   token names, by its key, as its row stands, which the box's admission reads
   on every request ([Check boxes](#check-boxes)). A person's or a seat's read

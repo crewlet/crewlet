@@ -280,13 +280,19 @@
 // object reference (CheckLogReferences) — written by records on the
 // repository's CHECKS subject ([KindChecks], checks.<repo>, scope
 // [ChecksPath]) and by no record on its repository's (checks.go): queued,
-// started, finished and swept ([CheckOps]). The subject is ADDITIVE — no
+// started, finished, swept and dispatched ([CheckOps]) — the last the
+// home's record of a target's checks file read at its tip and the change
+// heads it dispatched under it, which code_check_targets and
+// code_check_dispatches keep, so the home's due listing converges on what it
+// decided (checksdispatch.go). The subject is ADDITIVE — no
 // expectation, so no runner's claim waits behind another's — and every
 // apply a JOIN (apply_checks.go, [joinCheck]), so its records commute as
 // PatternAdditive requires: the state is derived and only rises, a claim
 // tie keeps the lower (StartedAt, Runner) and its box is set once, an
 // ending tie keeps a measurement over infrastructure's, the log follows
-// the ending kept. Its rows are kept [CheckHistory]: every ending removes
+// the ending kept, and a dispatch's rows keep the reading of the later tip.
+// Its attempts' rows are kept [CheckHistory] — a dispatch's until the
+// repository's purge, one a head and a target — and every ending removes
 // its own repository's oldest past its broker instant, bounded by
 // [CheckHorizonRows] and [CheckHorizonBytes], and the retention duty's
 // checks_sweep ([Store.ChecksSweep], [Retention.Pass]'s checks step) does

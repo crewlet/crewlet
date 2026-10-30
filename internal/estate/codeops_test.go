@@ -1184,9 +1184,10 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		{Asker: code.Principal{Kind: code.PrincipalAgent, Seat: "dev"}, Kind: code.ReadCheck, Repo: "app",
 			Checks: &code.CheckQuery{OID: "6666666666666666666666666666666666666666", Name: "unit", Attempt: 2},
 			Fresh:  statelog.Freshness{Level: statelog.ReadLinearizable}},
-		{Kind: code.ReadChecksDue, Cursor: ref.ID, Fresh: statelog.Freshness{Level: statelog.ReadStale}},
-		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RepoID: ref.ID}, Cursor: "refs/heads/fix",
-			Fresh: statelog.FloorAt(statelog.ReadSession, at)},
+		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RefreshBefore: created}, Cursor: ref.ID,
+			Fresh: statelog.Freshness{Level: statelog.ReadStale}},
+		{Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RepoID: ref.ID, RefreshBefore: created},
+			Cursor: "refs/heads/fix", Fresh: statelog.FloorAt(statelog.ReadSession, at)},
 		// ONE BRANCH'S MERGE QUEUE, and ONE REPOSITORY'S QUEUE WORK ITS HOME
 		// OWES: the target or the due query dropped on the wire would answer
 		// every branch's queue, or the repositories holding one.

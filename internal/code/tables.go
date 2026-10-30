@@ -54,8 +54,12 @@ var ReproducibleTables = []string{
 	// the log a failed run kept — written by the records on the repository's
 	// CHECKS subject alone, each apply a join, and removed past CheckHistory
 	// by those records and by the code-retention duty's checks_sweep, and
-	// with the repository by its purge.
-	"code_checks", "code_check_logs",
+	// with the repository by its purge. Beside them what the repository's
+	// home dispatched: each target's checks file as the home last read it,
+	// and the file each change head was dispatched under — written by the
+	// check_dispatched records on the same subject, each apply a join, and
+	// removed with the repository by its purge.
+	"code_checks", "code_check_logs", "code_check_targets", "code_check_dispatches",
 
 	// A repository's merge queues — each entry a change's enqueue made, the
 	// candidates a pre_land queue builds, the landings on its protected

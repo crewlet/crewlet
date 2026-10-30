@@ -326,6 +326,13 @@ func (r CheckRow) encodedBytes() int {
 	return n
 }
 
+// encodedBytes is the length of the due target's JSON encoding.
+func (d CheckTargetDue) encodedBytes() int {
+	return 2 + field("target_ref", stringBytes(d.TargetRef), true) +
+		field("tip", stringBytes(d.Tip), false) +
+		field("tip_position", positionBytes(d.TipPosition), false)
+}
+
 // encodedBytes is the length of the due change's JSON encoding.
 func (c ChangeDue) encodedBytes() int {
 	n := 2 + field("id", stringBytes(c.ID), true) +

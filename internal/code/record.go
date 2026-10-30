@@ -401,6 +401,17 @@ const (
 	// string(OpChecksSweep)}, with the same companions. It is no gate.
 	OpChecksSweep OpKind = "checks_sweep"
 
+	// OpCheckDispatched records a repository's home's reading of a target's
+	// checks file at its tip and the change heads it dispatched under it
+	// ([CheckDispatched]), on the repository's checks subject: what the
+	// home's due listing converges on (checksdispatch.go).
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpCheckQueued] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op
+	// check_dispatched", Since: 2, Path: []string{"op"}, Equals:
+	// string(OpCheckDispatched)}, with the same companions. It is no gate.
+	OpCheckDispatched OpKind = "check_dispatched"
+
 	// OpEnqueue puts a change in its target's merge queue ([Enqueue]), on the
 	// repository's own subject, decided by its committer alone through the
 	// change's merge gate ([Committer.ProposeQueue]).
@@ -422,20 +433,20 @@ const (
 	OpDequeue OpKind = "dequeue"
 )
 
-// OpKinds are the forty, in the order they are documented.
+// OpKinds are the forty-one, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
-	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpEnqueue, OpDequeue,
+	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpEnqueue, OpDequeue,
 }
 
 // CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every
 // record on its checks subject ([KindChecks]).
 func CheckOps() []OpKind {
-	return []OpKind{OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep}
+	return []OpKind{OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched}
 }
 
 // ChangeOps are the seven ops of a change's LIFECYCLE, in [OpKinds]' order:

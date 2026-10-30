@@ -980,8 +980,9 @@ func registeredStatements() map[string]statement {
 		// it after a (name, attempt), on code_checks_change_idx; a
 		// repository's newest ended first, from the top or after a place, on
 		// code_checks_finished_idx; the window's above its moment, on
-		// code_checks_recent_idx; and the home's due heads — the due
-		// listing's two statements with a head's attempts tested on the key.
+		// code_checks_recent_idx; and the home's due work — the due
+		// listing's statements, a head tested by its dispatch's key and its
+		// target's, and a target's reading by its key.
 		"check listed":          {checkRowSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
 		"check whole":           {checkWholeSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
 		"check log":             {checkLogSQL, []any{"repo-1", oid("c"), "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND name=? AND attempt=?)"}},
@@ -993,13 +994,29 @@ func registeredStatements() map[string]statement {
 		"checks of a repo next": {checksOfRepoAfterSQL, []any{"repo-1", 1000, oid("c"), "unit", 1, 50}, []string{checksEndedKey + " (repo_id=? AND finished_at<=?)"}},
 		"checks window":         {checksWindowSQL, []any{1, 50}, []string{"code_checks_recent_idx (finished_at>=?)"}},
 		"checks window next":    {checksWindowAfterSQL, []any{1, 1000, "repo-1", oid("c"), "unit", 1, 50}, []string{"code_checks_recent_idx (finished_at<=? AND finished_at>=?)"}},
-		"due check repositories": {dueCheckReposSQL, []any{"", MaxSnapshotItems},
-			[]string{"code_changes_open_idx (repo_id>?)", "COVERING INDEX " + checksKey + " (repo_id=? AND commit_oid=?)",
-				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
+		"due check repositories": {dueCheckReposSQL, []any{"", MaxSnapshotItems, 1000},
+			[]string{"code_changes_open_idx (repo_id>?)", refsKey + " (repo_id=? AND ref=?)",
+				checkDispatchesKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
+				checkTargetsKey + " (repo_id=? AND target_ref=?)", repoKey + " (id=?)"}},
 		"checks backlog": {checksBacklogSQL, []any{1000, BacklogScan + 1}, []string{"code_checks_overdue_idx (overdue_at>? AND overdue_at<?)", repoKey + " (id=?)"}},
 		"due check heads": {dueCheckChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
-				"COVERING INDEX " + checksKey + " (repo_id=? AND commit_oid=?)"}},
+				checkDispatchesKey + " (repo_id=? AND commit_oid=? AND target_ref=?)",
+				checkTargetsKey + " (repo_id=? AND target_ref=?)"}},
+		"due check targets": {dueCheckTargetsSQL, []any{"repo-1", 1000, MaxSnapshotItems},
+			[]string{checkTargetsKey + " (repo_id=?)", refsKey + " (repo_id=? AND ref=?)",
+				"code_changes_target_idx (repo_id=? AND target_ref=?)"}},
+		// THE HOME'S DISPATCHES (checksdispatch.go): a target's reading and
+		// a head's dispatch, each by its whole key — the join's read and the
+		// decide's — and a purge's, by the repository's prefix of each key.
+		"check target":            {readCheckTargetSQL, []any{"repo-1", "refs/heads/main"}, []string{checkTargetsKey + " (repo_id=? AND target_ref=?)"}},
+		"check target defs":       {checkTargetDefsSQL, []any{"repo-1", "refs/heads/main"}, []string{checkTargetsKey + " (repo_id=? AND target_ref=?)"}},
+		"check dispatch":          {readCheckDispatchSQL, []any{"repo-1", oid("c"), "refs/heads/main"}, []string{checkDispatchesKey + " (repo_id=? AND commit_oid=? AND target_ref=?)"}},
+		"check dispatch defs":     {checkDispatchDefsSQL, []any{"repo-1", oid("c"), "refs/heads/main"}, []string{checkDispatchesKey + " (repo_id=? AND commit_oid=? AND target_ref=?)"}},
+		"purge some dispatches":   {purgeSomeDispatchesSQL, []any{"repo-1", PurgePartRows}, []string{checkDispatchesKey + " (repo_id=?)"}},
+		"purge some targets":      {purgeSomeCheckTargetsSQL, []any{"repo-1", PurgePartRows}, []string{checkTargetsKey + " (repo_id=?)"}},
+		"purge all dispatches":    {purgeAllDispatchesSQL, []any{"repo-1"}, []string{checkDispatchesKey + " (repo_id=?)"}},
+		"purge all check targets": {purgeAllCheckTargetsSQL, []any{"repo-1"}, []string{checkTargetsKey + " (repo_id=?)"}},
 		// AN EXPUNGE'S TIPS: a repository's ref drops from an instant, the
 		// key's own covering seek in its order, first and keyset.
 		"expunge tips": {expungeTipsSQL, []any{"repo-1", 100, MaxSnapshotItems},

@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/store"
+	"github.com/google/uuid"
 )
 
 // A REPOSITORY'S CHECKS THROUGH THEIR WRITER: every write handed to the checks
@@ -447,43 +448,162 @@ func TestChecksDueRefusesAnAsker(t *testing.T) {
 	n := newNode(t)
 	repo, change := discussed(t, n, "web")
 	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	due := &code.ChecksDueQuery{RefreshBefore: harnessAt}
 	for name, q := range map[string]code.ReadQuery{
-		"a person's": {Kind: code.ReadChecksDue, Asker: ada, Fresh: fresh},
-		"a seat's":   {Kind: code.ReadChecksDue, Asker: dev, Fresh: fresh},
+		"a person's": {Kind: code.ReadChecksDue, Asker: ada, ChecksDue: due, Fresh: fresh},
+		"a seat's":   {Kind: code.ReadChecksDue, Asker: dev, ChecksDue: due, Fresh: fresh},
 		"one made for a seat": {Kind: code.ReadChecksDue, CeilingSeat: "cto",
-			ChecksDue: &code.ChecksDueQuery{RepoID: repo}, Fresh: fresh},
+			ChecksDue: &code.ChecksDueQuery{RepoID: repo, RefreshBefore: harnessAt}, Fresh: fresh},
+		"one naming no refresh": {Kind: code.ReadChecksDue, ChecksDue: &code.ChecksDueQuery{RepoID: repo},
+			Fresh: fresh},
+		"one asking nothing": {Kind: code.ReadChecksDue, Fresh: fresh},
 	} {
 		if _, err := n.reader.Read(t.Context(), q); !errors.Is(err, code.ErrInvalid) {
 			t.Errorf("%s read of the due check work answered %v, want code.ErrInvalid", name, err)
 		}
 	}
-	listed := func() ([]string, []code.ChangeDue) {
-		t.Helper()
-		repos, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChecksDue, Fresh: fresh})
-		if err != nil {
-			t.Fatalf("the due repositories: %v", err)
-		}
-		heads, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChecksDue,
-			ChecksDue: &code.ChecksDueQuery{RepoID: repo}, Fresh: fresh})
-		if err != nil {
-			t.Fatalf("the due heads: %v", err)
-		}
-		return repos.DueRepos, heads.DueChanges
-	}
-	repos, heads := listed()
+	repos, heads, _ := checksDue(t, n, repo, harnessAt)
 	if !slices.Equal(repos, []string{repo}) || len(heads) != 1 || heads[0].ID != change ||
 		heads[0].Head != oidOf("B") || heads[0].Tip != oidOf("A") {
 		t.Fatalf("the due check work is %v and %+v, want web and its change's head B against main's A", repos,
 			heads)
 	}
+}
+
+// checksDue is the home's due check work n's rows hold: the repositories
+// holding some, and repo's due heads and targets, a target's reading due again
+// once it was recorded at or before refresh.
+func checksDue(t *testing.T, n *node, repo string, refresh time.Time) ([]string, []code.ChangeDue,
+	[]code.CheckTargetDue) {
+
+	t.Helper()
+	fresh := statelog.Freshness{Level: statelog.ReadStale}
+	repos, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChecksDue,
+		ChecksDue: &code.ChecksDueQuery{RefreshBefore: refresh}, Fresh: fresh})
+	if err != nil {
+		t.Fatalf("the due repositories: %v", err)
+	}
+	work, err := n.reader.Read(t.Context(), code.ReadQuery{Kind: code.ReadChecksDue,
+		ChecksDue: &code.ChecksDueQuery{RepoID: repo, RefreshBefore: refresh}, Fresh: fresh})
+	if err != nil {
+		t.Fatalf("the due work of %s: %v", repo, err)
+	}
+	return repos.DueRepos, work.DueChanges, work.DueTargets
+}
+
+// dispatching is the home's record of target main's checks file defs, read at
+// the tip at position tip, with heads dispatched under it, under an operation
+// id of its own.
+func dispatching(repo, tipOID string, tip statelog.Position, defs string,
+	heads ...code.DispatchedHead) code.ChecksRequest {
+
+	return code.ChecksRequest{OpID: statelog.NewOpID(time.Now(), "code_check_dispatch"),
+		Dispatched: &code.CheckDispatched{RepoID: repo, Target: mainRef, Tip: tipOID, TipPosition: tip,
+			DefsOID: defs, Heads: heads, DispatchedAt: harnessAt}}
+}
+
+// A HEAD LEAVES THE DUE LISTING ONCE ITS DISPATCH IS RECORDED, whatever its
+// target's checks file defines: web's change into main, whose tip holds no
+// checks file, is due until its home records the dispatch naming none — and
+// then not, though no attempt of any check was ever queued at its head: the
+// listing converges on what the home decided, never on attempts, which a
+// target with no checks file — every repository that has not adopted checks —
+// never has. The same dispatch asked again is answered unchanged. A checks
+// file the target's reading comes to name makes the head due again, and its
+// dispatch under that file takes it off again.
+//
+// Mutation: list a head while its commit holds no attempt of any check, as
+// the listing once did — web's head, whose target defines nothing, is listed
+// for ever — red.
+func TestAHeadLeavesTheDueListingOnceItsDispatchIsRecorded(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
+	w, counter, _, _ := checksWriterOn(t, n)
+	_, heads, _ := checksDue(t, n, repo, harnessAt)
+	if len(heads) != 1 {
+		t.Fatalf("web's due heads are %+v, want its change's", heads)
+	}
+	tip, head := heads[0].TipPosition, code.DispatchedHead{OID: oidOf("B"), ChangeID: change, Revision: 1}
+	applied := func(what string, res code.ChecksResult, err error) {
+		t.Helper()
+		if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.IsZero() || res.Unchanged {
+			t.Fatalf("%s answered (%+v, %v), want applied at a position", what, res, err)
+		}
+	}
+	none := func(when string) {
+		t.Helper()
+		if repos, heads, targets := checksDue(t, n, repo, harnessAt); len(repos)+len(heads)+len(targets) != 0 {
+			t.Fatalf("%s the due check work is %v, %+v and %+v, want none", when, repos, heads, targets)
+		}
+	}
+
+	res, err := w.Publish(t.Context(), dispatching(repo, oidOf("A"), tip, "", head))
+	applied("the head's dispatch under no checks file", res, err)
+	none("once its dispatch under no checks file is recorded,")
+	appended := counter.appended.Load()
+	res, err = w.Publish(t.Context(), dispatching(repo, oidOf("A"), tip, "", head))
+	if err != nil || !res.Unchanged || counter.appended.Load() != appended {
+		t.Fatalf("the dispatch asked again answered (%+v, %v), want unchanged with no record", res, err)
+	}
+
+	defs := oidOf("checks-file")
+	res, err = w.Publish(t.Context(), dispatching(repo, oidOf("A"), tip, defs))
+	applied("the target's reading naming a checks file", res, err)
+	if _, heads, _ := checksDue(t, n, repo, harnessAt); len(heads) != 1 || heads[0].ID != change {
+		t.Fatalf("with its target naming a checks file its dispatch did not, the due heads are %+v, want "+
+			"web's change's again", heads)
+	}
+	res, err = w.Publish(t.Context(), dispatching(repo, oidOf("A"), tip, defs, head))
+	applied("the head's dispatch under the checks file", res, err)
+	none("once its dispatch under the target's checks file is recorded,")
+}
+
+// A TARGET THAT MOVES IS READ AGAIN AT THE HOME'S PACE: once web's head is
+// dispatched at main's tip A, a push moving main to C makes no head due — the
+// head's dispatch names the file the target's reading holds — and makes main
+// due a reading only once that reading is older than the home's refresh: a
+// target pushed to on every landing is read at the home's pace, never at its
+// own. Read again at C, it is due nothing.
+//
+// Mutation: list a target due a reading as soon as its branch moves, whatever
+// its reading's age — main is due at once — red.
+func TestAMovedTargetIsDueAReadingAtTheHomesPace(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	repo, change := discussed(t, n, "web")
 	w, _, _, _ := checksWriterOn(t, n)
-	head := code.CheckKey{RepoID: repo, OID: oidOf("B"), Name: "unit", Attempt: 1}
-	req := queueing(head, code.QueueDispatch)
-	req.Queued.Purpose, req.Queued.ChangeID, req.Queued.Revision = code.PurposeHead, change, 1
-	res, err := w.Publish(t.Context(), req)
-	requireChecked(t, "the head's dispatch", res, err)
-	if repos, heads := listed(); len(repos) != 0 || len(heads) != 0 {
-		t.Fatalf("a head with a queued attempt is still due: %v, %+v", repos, heads)
+	_, heads, _ := checksDue(t, n, repo, harnessAt)
+	if len(heads) != 1 {
+		t.Fatalf("web's due heads are %+v, want its change's", heads)
+	}
+	res, err := w.Publish(t.Context(), dispatching(repo, oidOf("A"), heads[0].TipPosition, "",
+		code.DispatchedHead{OID: oidOf("B"), ChangeID: change, Revision: 1}))
+	if err != nil || res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("the head's dispatch answered (%+v, %v), want applied", res, err)
+	}
+	n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, oidOf("A"), oidOf("C"))))
+
+	// THE READING WAS RECORDED A MOMENT AGO, after an hour ago.
+	if repos, heads, targets := checksDue(t, n, repo, time.Now().Add(-time.Hour)); len(repos)+len(heads)+
+		len(targets) != 0 {
+		t.Fatalf("with main's reading recorded inside the home's refresh, the due check work is %v, %+v and "+
+			"%+v, want none", repos, heads, targets)
+	}
+	repos, heads, targets := checksDue(t, n, repo, time.Now().Add(time.Hour))
+	if !slices.Equal(repos, []string{repo}) || len(heads) != 0 || len(targets) != 1 ||
+		targets[0].TargetRef != mainRef || targets[0].Tip != oidOf("C") {
+		t.Fatalf("with main's reading past the home's refresh, the due check work is %v, %+v and %+v, want "+
+			"web for main's reading at C alone", repos, heads, targets)
+	}
+	res, err = w.Publish(t.Context(), dispatching(repo, oidOf("C"), targets[0].TipPosition, ""))
+	if err != nil || res.Outcome != statelog.OutcomeApplied {
+		t.Fatalf("main's reading at C answered (%+v, %v), want applied", res, err)
+	}
+	if repos, heads, targets := checksDue(t, n, repo, time.Now().Add(time.Hour)); len(repos)+len(heads)+
+		len(targets) != 0 {
+		t.Fatalf("with main read again at C, the due check work is %v, %+v and %+v, want none", repos, heads,
+			targets)
 	}
 }
 

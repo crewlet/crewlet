@@ -802,11 +802,12 @@ func (a *Applier) sweepTombstones(ctx context.Context, tx *sql.Tx, at applyConte
 // fixed order — its pushes, then its refs, then its packs, then the packs a
 // record retired, then its ref drops, then its changes, each whole: its
 // revisions, its authors, its conversation, its body and then its row
-// ([purgeChanges]) — then its checks, each with its log ([purgeChecks]) — then
+// ([purgeChanges]) — then its checks, each with its log ([purgeChecks]), then
+// its home's dispatches and its targets' readings ([purgeDispatches]) — then
 // its merge queues' entries, candidates, landings and green rows
-// ([purgeQueues]) — so every node deletes the same rows. THE PART IS THE GUARD: only the row's
-// purge_parts + 1 deletes anything, so a redelivered or stale part deletes
-// nothing more.
+// ([purgeQueues]) — so every node deletes the same rows. THE PART IS THE
+// GUARD: only the row's purge_parts + 1 deletes anything, so a redelivered or
+// stale part deletes nothing more.
 //
 // BOUNDED BY ROWS AND BY BYTES: at most PurgePartRows rows, and its wide rows
 // only until what they weigh reaches PurgePartBytes — the push rows by their
@@ -985,6 +986,14 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		budget -= n
 	}
 	if budget > 0 {
+		n, err := purgeDispatches(ctx, tx, p.RepoID, budget)
+		if err != nil {
+			return 0, err
+		}
+		deleted += n
+		budget -= n
+	}
+	if budget > 0 {
 		n, err := purgeQueues(ctx, tx, p.RepoID, budget)
 		if err != nil {
 			return 0, err
@@ -1047,8 +1056,8 @@ func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p
 		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
 		purgeAllFindingsSQL, purgeAllCommentsSQL, purgeAllFindingTextsSQL, purgeAllReviewsSQL,
 		purgeAllFactsSQL, purgeAllBodiesSQL, purgeAllMergeabilitySQL, purgeAllConversationsSQL,
-		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL, purgeAllQueueSQL, purgeAllCandidatesSQL,
-		purgeAllLandingsSQL, purgeAllGreenSQL,
+		purgeAllChangesSQL, purgeAllCheckLogsSQL, purgeAllChecksSQL, purgeAllDispatchesSQL, purgeAllCheckTargetsSQL,
+		purgeAllQueueSQL, purgeAllCandidatesSQL, purgeAllLandingsSQL, purgeAllGreenSQL,
 		purgeAllLayerPartsSQL, purgeAllLayersSQL, clearProtectionsSQL, clearPathOwnersSQL,
 	} {
 		res, err := tx.ExecContext(ctx, stmt, p.RepoID)

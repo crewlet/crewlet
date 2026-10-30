@@ -71,6 +71,11 @@ import (
 //   - An ENDING the join would not keep — one after a measurement, or a later
 //     infrastructure ending beside an earlier one — is answered from the row,
 //     unchanged, and appends nothing.
+//   - A DISPATCH — the home's reading of a target's checks file and the heads
+//     it dispatched under it (checksdispatch.go) — is answered from the rows,
+//     unchanged, where the target's reading and every head's dispatch already
+//     say it, at its tip or a later one and naming its file, and refused on an
+//     archived repository as an attempt queued there is.
 //
 // A rerun and a report — a principal's request, a seat's or a person's — are
 // judged by the asker's grant, which this writer holds no chart to judge: it
@@ -242,14 +247,14 @@ func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 // attempts it read, and it is refused attempts_exhausted, from the rows.
 func (r ChecksRequest) Validate() error {
 	set := 0
-	for _, isSet := range []bool{r.Queued != nil, r.Started != nil, r.Finished != nil} {
+	for _, isSet := range []bool{r.Queued != nil, r.Started != nil, r.Finished != nil, r.Dispatched != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set != 1 {
-		return fmt.Errorf("%w: a write of a repository's checks is exactly one of an attempt queued, a claim "+
-			"and an ending, and this one sets %d", ErrInvalidProposal, set)
+		return fmt.Errorf("%w: a write of a repository's checks is exactly one of an attempt queued, a claim, "+
+			"an ending and a dispatch, and this one sets %d", ErrInvalidProposal, set)
 	}
 	if err := statelog.CheckCallerOpID(r.OpID); err != nil {
 		return badField("op_id", "%v", err)
@@ -310,11 +315,14 @@ func (r ChecksRequest) record() (OpKind, any) {
 		return OpCheckStarted, *r.Started
 	case r.Finished != nil:
 		return OpCheckFinished, *r.Finished
+	case r.Dispatched != nil:
+		return OpCheckDispatched, *r.Dispatched
 	}
 	return "", nil
 }
 
-// Key is the attempt r is about.
+// Key is the attempt r is about — none for a dispatch, which is about a
+// target and its heads.
 func (r ChecksRequest) Key() CheckKey {
 	switch {
 	case r.Queued != nil:
@@ -330,7 +338,12 @@ func (r ChecksRequest) Key() CheckKey {
 // RepoID is the repository r is about — "" for a request that carries no
 // record, which the estate's router refuses as it refuses a push naming no
 // repository. It is the ONE answer the router keys r by.
-func (r ChecksRequest) RepoID() string { return r.Key().RepoID }
+func (r ChecksRequest) RepoID() string {
+	if r.Dispatched != nil {
+		return r.Dispatched.RepoID
+	}
+	return r.Key().RepoID
+}
 
 // Publish decides one write of a repository's checks and answers what became
 // of it: a write whose asker's DEADLINE leaves too little for a publish and its
@@ -524,6 +537,9 @@ func (w *ChecksWriter) write(r ChecksRequest) (ChecksResult, error, checksLanded
 	}
 	switch res.Outcome {
 	case statelog.OutcomeApplied:
+		if !res.Position.IsZero() && r.Dispatched != nil {
+			return w.dispatchApplied(ctx, r, res)
+		}
 		if !res.Position.IsZero() {
 			// AN ENDING THE ROW ALREADY KEPT, which this one's decide chose
 			// to replace — a measurement over an infrastructure ending — is
@@ -564,22 +580,24 @@ func (w *ChecksWriter) write(r ChecksRequest) (ChecksResult, error, checksLanded
 func decideChecks(ctx context.Context, tx *sql.Tx, r ChecksRequest, retention time.Duration) (checksDecision,
 	error) {
 
-	key := r.Key()
-	repo, found, err := pushRepoIn(ctx, tx, key.RepoID)
+	key, repoID := r.Key(), r.RepoID()
+	repo, found, err := pushRepoIn(ctx, tx, repoID)
 	if err != nil {
 		return checksDecision{}, err
 	}
 	var d checksDecision
 	switch {
 	case !found || repo.status == RepoStatusDeleted || repo.status == RepoStatusPurging:
-		detail, err := goneDetail(ctx, tx, key.RepoID, repo, found, retention)
+		detail, err := goneDetail(ctx, tx, repoID, repo, found, retention)
 		if err != nil {
 			return checksDecision{}, err
 		}
 		return d.refuse(CheckRefusalRepoDeleted, detail), nil
-	case r.Queued != nil && repo.status == RepoStatusArchived:
+	case (r.Queued != nil || r.Dispatched != nil) && repo.status == RepoStatusArchived:
 		return d.refuse(CheckRefusalRepoArchived, fmt.Sprintf("repository %s is archived and read-only "+
 			"(code.repos archived: true): nothing moves in it to be checked", repo.name)), nil
+	case r.Dispatched != nil:
+		return decideDispatched(ctx, tx, *r.Dispatched, d)
 	}
 	named := func(k CheckKey) string {
 		return fmt.Sprintf("attempt %d of check %s of %s on %s", k.Attempt, k.Name, k.OID, repo.name)
@@ -825,6 +843,43 @@ func (w *ChecksWriter) applied(ctx context.Context, r ChecksRequest, res statelo
 			Target: row.Target, Required: row.Required, DurationMs: row.DurationMs, Replaces: string(replacing)}
 	}
 	return out, nil, own
+}
+
+// dispatchApplied answers a dispatch whose record applied at res.Position,
+// FROM THE ROWS: its target's reading, which the record — or one that read a
+// later tip — wrote. A target the rows hold no reading of is a record that
+// applied and wrote nothing this node holds — the repository purged under it
+// — logged at ERROR and answered unknown, never applied.
+func (w *ChecksWriter) dispatchApplied(ctx context.Context, r ChecksRequest, res statelog.Result) (ChecksResult,
+	error, checksLanded) {
+
+	d := r.Dispatched
+	var held bool
+	if err := w.db.Read(ctx, func(tx *sql.Tx) error {
+		var tip int64
+		var defs string
+		switch err := tx.QueryRowContext(ctx, checkTargetDefsSQL, d.RepoID, d.Target).Scan(&tip, &defs); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
+			return err
+		}
+		held = true
+		return nil
+	}); err != nil {
+		err = fmt.Errorf("code: the dispatch of operation %s applied at %s and its target's reading could not "+
+			"be read: %w", r.OpID, res.Position, err)
+		w.log.WarnContext(ctx, "code_checks_failed", "repo", d.RepoID, "op_id", r.OpID, "error", err)
+		return ChecksResult{}, err, checksLanded{}
+	}
+	if !held {
+		w.log.ErrorContext(ctx, "code_checks_unanswerable", "repo", d.RepoID, "op_id", r.OpID,
+			"position", res.Position.String())
+		return ChecksResult{Outcome: statelog.OutcomeUnknown, Detail: fmt.Sprintf("the dispatch's record applied "+
+			"at %s and this node holds no reading of target %s", res.Position, d.Target)}, nil, checksLanded{}
+	}
+	return ChecksResult{Outcome: statelog.OutcomeApplied, Position: res.Position}, nil,
+		checksLanded{fresh: !res.Collapsed}
 }
 
 // announce publishes an applied ending's event on this node's event stream,

@@ -839,7 +839,7 @@ func TestADutyListingNamesNoAsker(t *testing.T) {
 			ChangesDue: &code.ChangesDueQuery{RecheckBefore: harnessAt}, ExpungeTips: tips, Fresh: stale},
 			"expunge_tips"},
 		"a check work listing naming tips": {code.ReadQuery{Kind: code.ReadChecksDue, ExpungeTips: tips,
-			Fresh: stale}, "expunge_tips"},
+			ChecksDue: &code.ChecksDueQuery{RefreshBefore: harnessAt}, Fresh: stale}, "expunge_tips"},
 		"a principal's listing naming no asker": {code.ReadQuery{Kind: code.ReadRepos, Fresh: stale}, "asker"},
 		"a principal's listing naming a floor": {code.ReadQuery{Kind: code.ReadRepos, Asker: asker, MinPacks: 1,
 			Fresh: stale}, "min_packs"},

@@ -46,6 +46,8 @@ func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) 
 		repoID = p.RepoID
 	case ChecksSweep:
 		repoID = p.RepoID
+	case CheckDispatched:
+		repoID = p.RepoID
 	default:
 		return 0, fmt.Errorf("code: %s is not an op this build applies to a repository's checks (the record "+
 			"at %s)", at.record.Op, at.position)
@@ -64,6 +66,8 @@ func (a *Applier) applyChecks(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return applyCheckFinished(ctx, tx, at, p)
 	case ChecksSweep:
 		return applyChecksSweep(ctx, tx, at, p)
+	case CheckDispatched:
+		return applyCheckDispatched(ctx, tx, at, p)
 	}
 	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
 }

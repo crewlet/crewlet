@@ -87,11 +87,11 @@ import (
 // []string{"subject", "k"}, Equals: string(KindChecks)} in versionedFields
 // and each op its own row ({Name: "MutationRecord.Op <op>", Since: 2, Path:
 // []string{"op"}, Equals: "<op>"} — check_queued, check_started,
-// check_finished, checks_sweep), with RecordVersion at 2, their lines under
-// "What each version added", a Carrying record in the statelogtest candidate
-// and the kind excepted from the stamp test's base-format loop — an older
-// build would otherwise FAIL on such a record at Apply's unknown-kind arm
-// rather than retain it. None is a gate.
+// check_finished, checks_sweep, check_dispatched), with RecordVersion at 2,
+// their lines under "What each version added", a Carrying record in the
+// statelogtest candidate and the kind excepted from the stamp test's
+// base-format loop — an older build would otherwise FAIL on such a record at
+// Apply's unknown-kind arm rather than retain it. None is a gate.
 
 // CheckHistory is how long a check's rows are kept once it has ended: thirty
 // days. Past it a check is one nobody reads — a change merged weeks ago, a tip

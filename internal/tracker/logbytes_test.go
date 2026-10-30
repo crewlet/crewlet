@@ -325,6 +325,14 @@ var codeLogUnwritten = map[code.OpKind]struct {
 		"queued — or recorded skipped — by its repository's home git node, one record a check its target's " +
 		"checks file defines, and an attempt its infrastructure ended queued again, through the estate's " +
 		"code.checks"},
+	// A HEAD'S DISPATCH is recorded by the same home, after the attempts it
+	// queued: one record a target's due heads, a few dozen bytes a head, and
+	// one a target's reading refreshed at the home's pace — what the day must
+	// price beside the attempts once that writer lands.
+	code.OpCheckDispatched: {payload: reflect.TypeFor[code.CheckDispatched](), how: "a change head's " +
+		"dispatch — its target's checks file read at the tip, and the heads whose checks were queued under " +
+		"it — is recorded by its repository's home git node, one record a target's due heads and one a " +
+		"target's reading refreshed at the home's pace, through the estate's code.checks"},
 }
 
 // codeLogRiders is every op of the code domain a node of this build appends
@@ -577,9 +585,9 @@ var codeLogKinds = map[code.ObjectKind]string{
 	code.KindChange: "a change's conversation — its asks for review, its comments, its threads' " +
 		"resolutions, its reviews and the answers to their findings — on the change (codeLogUnwritten), " +
 		"and its revisions' facts and its mergeability, which ride the change's making (codeLogRiders)",
-	code.KindChecks: "a repository's checks: an attempt queued (codeLogUnwritten), and its claim, its " +
-		"ending and the sweep of an idle repository's past the history, which ride its queueing " +
-		"(codeLogRiders)",
+	code.KindChecks: "a repository's checks: an attempt queued and a head's dispatch (codeLogUnwritten), " +
+		"and an attempt's claim, its ending and the sweep of an idle repository's past the history, which " +
+		"ride its queueing (codeLogRiders)",
 }
 
 // The reference company's chart, as a seat's tools hold it. Its work is filed

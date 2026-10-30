@@ -820,11 +820,14 @@ const (
 	ReadCheck ReadKind = "check"
 	// ReadChecksDue is the check work a repository's HOME git node owes
 	// ([ChecksDueQuery]): with no repository, the active repositories holding
-	// a LIVE change whose head commit no attempt of any check has been queued
-	// at, by id; with one, those changes of that repository, by source
-	// branch, each with its target's tip as the rows hold it ([ChangeDue]) —
-	// the tip whose checks file defines what the home dispatches. The
-	// engine's own read, as `changes_due` is.
+	// a LIVE change whose head no dispatch for its target names the checks
+	// file its target's row holds, or a target due a reading of its checks
+	// file again, by id; with one, those changes of that repository, by
+	// source branch, each with its target's tip as the rows hold it
+	// ([ChangeDue]) — the tip whose checks file defines what the home
+	// dispatches — and on its first page the targets due a reading
+	// ([CheckTargetDue]). The engine's own read, as `changes_due` is
+	// (checksdispatch.go).
 	ReadChecksDue ReadKind = "checks_due"
 	// ReadCheckBox is the ONE attempt a check's box's token names, by its key
 	// ([ReadQuery.CheckBox]): its row as the rows hold it, in the answer's
@@ -1071,8 +1074,8 @@ type ReadQuery struct {
 	// Checks narrows a `checks` read to a change's attempts or a commit's,
 	// or bounds its window; and names the one attempt a `check` read is of,
 	// REQUIRED there. Refused on every other kind. ChecksDue is a
-	// `checks_due` read's repository, as ChangesDue is a `changes_due`
-	// read's, and refused on every other kind. Estate request fields and no
+	// `checks_due` read's question, REQUIRED there as ChangesDue is a
+	// `changes_due` read's, and refused on every other kind. Estate request fields and no
 	// record's, so they take no versionedFields row: a node of a build that
 	// predates the kinds refuses the read as a kind it does not know.
 	Checks    *CheckQuery     `json:"checks,omitempty"`
@@ -1151,12 +1154,15 @@ type ReadAnswer struct {
 	// the same snapshot — what its home matches the touched paths against —
 	// and, on its first page, Rechecks: the changes whose merge is due again,
 	// the oldest recorded first ([ChangesDueQuery.Rechecks]). A `checks_due`
-	// read answers in the same two fields: its repositories in DueRepos, one
-	// repository's changes in DueChanges, with no owners and no rechecks.
-	DueRepos   []string    `json:"due_repos,omitempty"`
-	DueChanges []ChangeDue `json:"due_changes,omitempty"`
-	Rechecks   []ChangeDue `json:"rechecks,omitempty"`
-	PathOwners []PathOwner `json:"path_owners,omitempty"`
+	// read answers in the same two fields — its repositories in DueRepos, one
+	// repository's heads due a dispatch in DueChanges, with no owners and no
+	// rechecks — and, on a repository's first page, DueTargets: its target
+	// branches due a reading of their checks file again.
+	DueRepos   []string         `json:"due_repos,omitempty"`
+	DueChanges []ChangeDue      `json:"due_changes,omitempty"`
+	DueTargets []CheckTargetDue `json:"due_targets,omitempty"`
+	Rechecks   []ChangeDue      `json:"rechecks,omitempty"`
+	PathOwners []PathOwner      `json:"path_owners,omitempty"`
 	// Checks is a page of a `checks` read — and a `check_box` read's one
 	// attempt as its row stands, or none where the rows hold no such attempt
 	// — and Check a `check` read's one attempt whole.
@@ -1532,6 +1538,11 @@ type ChecksRequest struct {
 	Queued   *CheckQueued   `json:"queued,omitempty"`
 	Started  *CheckStarted  `json:"started,omitempty"`
 	Finished *CheckFinished `json:"finished,omitempty"`
+	// Dispatched is the home's record of a target's checks file read at its
+	// tip and the heads it dispatched under it (checksdispatch.go). An
+	// estate request's field, no record's: the record it asks for takes its
+	// op's versionedFields row, under the subject's stated condition.
+	Dispatched *CheckDispatched `json:"dispatched,omitempty"`
 }
 
 // ChecksResult is what became of one write of a repository's checks.
@@ -1655,10 +1666,27 @@ type CheckQuery struct {
 	Since time.Time `json:"since,omitzero"`
 }
 
-// ChecksDueQuery is a `checks_due` read of ONE repository's due check work:
-// the repository by its id, which its home was nudged about or found listed.
+// ChecksDueQuery is a `checks_due` read's question, REQUIRED as a
+// `changes_due` read's is: the instant a target's reading of its checks file
+// is due again by, and — for ONE repository's due check work — the repository
+// by its id, which its home was nudged about or found listed.
 type ChecksDueQuery struct {
-	RepoID string `json:"repo_id"`
+	RepoID string `json:"repo_id,omitempty"`
+	// RefreshBefore is the home's clock less its refresh: a target whose
+	// branch moved past the tip its checks file was read at is due a reading
+	// again once that reading was recorded at or before it — so a target
+	// pushed to on every landing is read at the home's pace, never at its
+	// own.
+	RefreshBefore time.Time `json:"refresh_before"`
+}
+
+// CheckTargetDue is a target branch whose checks file its home owes a reading
+// at the branch's tip ([ReadAnswer.DueTargets]): the branch, its tip and the
+// position of the record that moved it there.
+type CheckTargetDue struct {
+	TargetRef   string            `json:"target_ref"`
+	Tip         string            `json:"tip"`
+	TipPosition statelog.Position `json:"tip_position"`
 }
 
 // RepoSummary is a repository as a listing renders it.
