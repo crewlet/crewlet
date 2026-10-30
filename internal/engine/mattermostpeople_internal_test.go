@@ -82,6 +82,12 @@ func ghostServer(t *testing.T) *httptest.Server {
 	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/users/me") &&
+			r.Header.Get("Authorization") == "Bearer admin-token":
+			// THE PROVISIONING TOKEN IS A SYSTEM ADMIN, so the pass's
+			// preflight, which runs whether or not it has a seat to
+			// provision, has nothing to report about it.
+			w.Write([]byte(`{"id":"admin","username":"admin","roles":"system_admin system_user"}`))
 		case strings.HasSuffix(r.URL.Path, "/users/me"):
 			w.Write([]byte(`{"id":"bot-ceo","username":"ceo","is_bot":true}`))
 		case strings.HasSuffix(r.URL.Path, "/users/usernames"):
@@ -110,7 +116,9 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 	t.Parallel()
 	chat := ghostServer(t)
 	company := ghostCompany(t, chat.URL)
-	e := &Engine{}
+	// A FLEET STORE, which every engine [New] builds has: the pass reads the
+	// seat access ledger once the Mattermost vendor has opened.
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
 	e.epoch.current.Store(company)
 
 	tr, err := mattermost.NewTransport(mattermost.TransportOptions{
@@ -302,6 +310,12 @@ func TestOnlyAnApplyAnswersAMovedName(t *testing.T) {
 	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/users/me") &&
+			r.Header.Get("Authorization") == "Bearer admin-token":
+			// THE PROVISIONING TOKEN IS A SYSTEM ADMIN, so the pass's
+			// preflight, which runs whether or not it has a seat to
+			// provision, has nothing to report about it.
+			w.Write([]byte(`{"id":"admin","username":"admin","roles":"system_admin system_user"}`))
 		case strings.HasSuffix(r.URL.Path, "/users/me"):
 			w.Write([]byte(`{"id":"bot-ceo","username":"ceo","is_bot":true}`))
 		case strings.HasSuffix(r.URL.Path, "/users/usernames"):

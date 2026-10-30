@@ -14,14 +14,23 @@ import (
 // FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
 const SeatEnv = org.MCPEnvDatadog
 
-// CredentialKeys are the spellings a seat's application key arrives under.
+// CredentialKeys are the spellings a seat's application key arrives under in
+// a seat's `mcp_env.datadog` block.
 //
 // A LIST rather than one name, for the reason GitLab's is: a company writes
 // its own mcp_env, and refusing to find a credential because it was spelled
 // the other obvious way is a silent no-op an operator cannot debug.
 //
+// DD_APPLICATION_KEY IS ONE OF THEM, and it was missing: it is the header
+// Datadog's MCP server reads ([config.SeatToolBindings]), so a seat that named
+// only it gave its tool a key while this package found none and silently
+// dropped the seat. With the engine now binding the seat's own key under that
+// header itself (D15), every spelling here is a credential position the
+// document rules refuse for a managed integration (D4) and the migration
+// recognises.
+//
 //nolint:gochecknoglobals // an immutable list, not state
-var CredentialKeys = []string{"DD_APP_KEY", "DATADOG_APP_KEY", "app_key"}
+var CredentialKeys = []string{"DD_APP_KEY", "DATADOG_APP_KEY", "app_key", "DD_APPLICATION_KEY"}
 
 // DefaultEmailDomain is what a service account's address is built under when
 // the company names none.
@@ -114,10 +123,7 @@ func firstCredential(block map[string]string) (string, string) {
 // FROM THE HANDLE, which is immutable (ADR-0013), so the address is stable for
 // the life of the seat: Datadog will not change an account's address at all.
 func AccountEmail(p *config.DatadogProvisioning, handle string) string {
-	domain := DefaultEmailDomain
-	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
-		domain = strings.TrimSpace(p.EmailDomain)
-	}
+	domain := emailDomain(p)
 	// `crewlet-`, the same prefix GitLab's service accounts carry, so a
 	// person reading a user list at either app can see at a glance which
 	// accounts this engine made. NOT `agent-`: that string is a queue
@@ -146,4 +152,15 @@ func RoleName(p *config.DatadogProvisioning) string {
 		return strings.TrimSpace(p.Role)
 	}
 	return DefaultRole
+}
+
+// emailDomain is the domain every agent account's address is built under:
+// the company's, or [DefaultEmailDomain]. One function, so the address a
+// pass creates an account under, the listing that finds it again and the
+// orphan check that judges it cannot disagree about a stray space.
+func emailDomain(p *config.DatadogProvisioning) string {
+	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
+		return strings.TrimSpace(p.EmailDomain)
+	}
+	return DefaultEmailDomain
 }

@@ -338,6 +338,15 @@ type Observed struct {
 	// nothing is sealed for the seat.
 	Credential *Credential `json:"credential,omitempty"`
 
+	// CredentialGone is the vendor's proof that the account holds no
+	// credential this engine minted: a key or token deleted at the vendor,
+	// so whatever is sealed for the seat authenticates as nothing. It
+	// overrides the ledger's record of a sealed credential, so a seat that
+	// is on is given a fresh one. False where the vendor shows one, and
+	// where it could not tell (a vendor that cannot read the account fails
+	// its Observe instead).
+	CredentialGone bool `json:"credential_gone,omitempty"`
+
 	// CreatedAt is when this engine created the account.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 

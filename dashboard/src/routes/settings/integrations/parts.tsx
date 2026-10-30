@@ -1,6 +1,6 @@
 /**
  * The parts a detail pane on Company › Integrations is composed from: the
- * issues with their fixes, an agent's line, the settings an app holds, what to
+ * issues with their fixes, the settings an app holds, what to
  * have ready before connecting, and the engine's address at the foot of the
  * directory.
  */
@@ -18,21 +18,18 @@ import {
 } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
 import { ProductMark } from "@crewlethq/icons/product-mark";
-import { CheckGlyph, RotateCwGlyph } from "@crewlethq/icons/glyphs";
-import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
+import { CheckGlyph } from "@crewlethq/icons/glyphs";
 import { relTime } from "~/lib/format.ts";
 import { DisconnectDialog } from "../DisconnectDialog.tsx";
-import { FindingSubjects, SeatStep, docHref } from "./catalogue.tsx";
+import { FindingSubjects, docHref } from "./catalogue.tsx";
 import {
   BUCKET_WORDS,
   OWNER_WORDS,
-  SEAT_WORDS,
   type BuiltInService,
   type DropPlan,
   type Intent,
   type Issue,
   type Model,
-  type SeatRow,
   type Tool,
 } from "./model.ts";
 
@@ -152,104 +149,6 @@ export function IssueRow({
           </ButtonLink>
         ) : null}
       </span>
-    </div>
-  );
-}
-
-/** One agent on one tool: its mark, its standing, and its own step at the app. */
-export function SeatLine({ row, tool, model }: { row: SeatRow; tool: Tool; model: Model }) {
-  const words = SEAT_WORDS[row.status];
-  return (
-    <div className="int-seat">
-      <SeatAvatar name={row.name} kind="agent" avatar={row.avatar} size="sm" decorative />
-      <div className="int-seat-id">
-        <span className="int-seat-name">
-          {row.name}
-          {row.tier && (
-            // THE ENGINE'S OWN WORDS, weighted by trust only on a scale it
-            // names: a role an organization made carries no tier id, and
-            // drawing it in the accent would claim what it grants.
-            <span
-              className={
-                row.tier.id ? `int-seat-tier int-seat-tier--${row.tier.id}` : "int-seat-tier"
-              }
-              title={row.tier.hint}
-            >
-              {row.tier.label}
-            </span>
-          )}
-        </span>
-        <span className="t-caption">{row.detail}</span>
-      </div>
-      <Tag
-        size="sm"
-        variant={words.tone}
-        appearance={row.status === "missing" ? "outline" : "soft"}
-      >
-        {words.label}
-      </Tag>
-      {row.seat && row.toolKey && !model.guarded ? (
-        <span className="int-seat-act">
-          <SeatStep
-            app={tool.entry.name}
-            toolKey={row.toolKey}
-            seat={row.seat}
-            managed={model.managed}
-          />
-        </span>
-      ) : null}
-    </div>
-  );
-}
-
-/** Every agent on one tool, and the control that asks the loop to look again. */
-export function AgentList({ tool, model }: { tool: Tool; model: Model }) {
-  const [checking, setChecking] = useState(false);
-  const [said, setSaid] = useState("");
-  const provisioned = tool.sections.some((s) => s.tool.can_provision);
-  const waiting = tool.seats.filter((s) => s.status === "pending").length;
-  return (
-    <div className="int-agents">
-      <p className="t-caption">
-        {tool.story.identity}
-        {provisioned ? " Crewlet makes each account on its next pass." : ""}
-      </p>
-      {tool.seats.length > 0 ? (
-        <div className="int-seats">
-          {tool.seats.map((row) => (
-            <SeatLine key={row.handle} row={row} tool={tool} model={model} />
-          ))}
-        </div>
-      ) : (
-        <p className="t-caption">No agent is on this app yet.</p>
-      )}
-      {/* ONLY WHERE A PASS RUNS: a tool whose accounts are made by hand has
-          no loop to ask, so the control would only ever be refused. */}
-      {!model.guarded && tool.configured && provisioned && (
-        <div className="int-row-start">
-          <Button
-            size="small"
-            variant="secondary"
-            leadingIcon={<RotateCwGlyph size="sm" />}
-            disabled={checking}
-            disabledReason={model.managed ?? undefined}
-            onClick={async () => {
-              if (model.managed) return;
-              setChecking(true);
-              setSaid((await model.check(tool)) || "Crewlet is looking now.");
-              setChecking(false);
-            }}
-          >
-            {checking ? "Checking" : "Check now"}
-          </Button>
-          <span className="t-caption">
-            {said ||
-              (waiting > 0
-                ? `${waiting === 1 ? "One account is" : `${waiting} accounts are`} being made.`
-                : "Made an app or account just now? Check picks it up.")}
-          </span>
-        </div>
-      )}
     </div>
   );
 }

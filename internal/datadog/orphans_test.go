@@ -472,7 +472,7 @@ func TestASeatRefusalNamesWhereToActOnIt(t *testing.T) {
 // seat, indefinitely, with nothing retrying and nothing broken but this.
 //
 // The engine's own teardown already settles the question the refusal was
-// asking: revokeAppKeys takes EVERY key on an agent's account, because "the
+// asking: Client.TurnOff takes EVERY key on an agent's account, because "the
 // account exists solely because this engine created it". Both cannot be right.
 func TestAnUnreadableKeyIsReplacedRatherThanReported(t *testing.T) {
 	t.Parallel()
@@ -676,5 +676,35 @@ func TestTheVendorLinkIsThePageItself(t *testing.T) {
 				"query nothing has established the vendor honours can hide "+
 				"the account somebody followed the link to find", f.ActionURL)
 		}
+	}
+}
+
+// AN ACCOUNT THE ACCESS SYNC MANAGES IS NEVER AN ORPHAN, whatever the plan
+// this pass is handed. Each agent's account moved to the per-seat access
+// sync, so the loop hands this pass no seats at all, and an advisory judged
+// against the plan alone called every agent's live account an orphan.
+func TestAccountsTheAccessSyncManagesAreNotOrphans(t *testing.T) {
+	t.Parallel()
+	reg := newRegion(t)
+	orgOK(reg)
+	reg.handle["/api/v2/users"] = func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"data":[
+			{"id":"u1","attributes":{"email":"crewlet-sre@agents.test.invalid","service_account":true}},
+			{"id":"u2","attributes":{"email":"crewlet-dba@agents.test.invalid","service_account":true}},
+			{"id":"u3","attributes":{"email":"crewlet-gone@agents.test.invalid","service_account":true}}
+		]}`)
+	}
+	res, err := datadog.Reconcile(context.Background(), datadog.Options{
+		Client: reg.client(t), Config: cfgWith(), Plan: &provision.Plan{},
+		Creds: pair, Sink: newSink(),
+		// One by the ledger's id, one by a document seat's address.
+		Managed: []string{"u1", "Crewlet-DBA@agents.test.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	f, found := orphansFinding(t, res)
+	if !found || !slices.Equal(f.Subjects, []string{"crewlet-gone@agents.test.invalid"}) {
+		t.Errorf("orphans = %+v, want only the account nothing manages", f.Subjects)
 	}
 }

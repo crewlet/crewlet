@@ -788,8 +788,21 @@ var vendorCommands = map[string][]vendorCommand{
 		{"resync", "<company.yaml>", runConfluenceResync},
 	},
 	"mattermost": {
-		{"provision", "<company.yaml>", runMattermostProvision},
 		{"doctor", "<company.yaml>", runMattermostDoctor},
+	},
+}
+
+// retiredCommands are the subcommands a release removed, each with what an
+// operator does instead. Answered in place of the generic unknown-command
+// error, so a command line copied from an older guide says where its work
+// went rather than that it never existed.
+//
+//nolint:gochecknoglobals // a fixed table, not state
+var retiredCommands = map[string]map[string]string{
+	"mattermost": {
+		"provision": "each agent's Mattermost bot, its roles, its channels and its token " +
+			"are now managed from the Mattermost integration's Agents tab and applied " +
+			"by the reconcile loop; `crewlet mattermost doctor` checks an install",
 	},
 }
 
@@ -816,6 +829,9 @@ func runIntegration(inv invocation, vendor string, args []string, stdout, stderr
 			return command.run(inv, rest, stdout, stderr)
 		}
 	}
+	if instead, retired := retiredCommands[vendor][sub]; retired {
+		return fmt.Errorf("`crewlet %s %s` is retired: %s", vendor, sub, instead)
+	}
 	if sub != "" && sub != "help" {
 		return fmt.Errorf("%w: %s %q", errUnknownSub, vendor, sub)
 	}
@@ -832,6 +848,10 @@ func printVendorUsage(w io.Writer, vendor string, commands []vendorCommand) {
 		}
 		fmt.Fprintf(w, "%s crewlet %s %s %s\n", lead, vendor, command.sub, command.args)
 	}
+	retired := retiredCommands[vendor]
+	for _, sub := range slices.Sorted(maps.Keys(retired)) {
+		fmt.Fprintf(w, "retired: crewlet %s %s: %s\n", vendor, sub, retired[sub])
+	}
 }
 
 // soleVarOf is the variable a whole ${VAR} reference names, or empty.
@@ -841,175 +861,6 @@ func soleVarOf(value string) string {
 		return ""
 	}
 	return name
-}
-
-// mattermostProvisionReads is every variable `crewlet mattermost provision`
-// reads of the company: the instance's address alone — the name a running
-// node is asked to reveal ([companyStore.resolver]). The bots' tokens are what
-// it mints, and it works with the operator's admin token.
-func mattermostProvisionReads(cfg *config.Mattermost) []string {
-	if cfg == nil {
-		return nil
-	}
-	return fieldReads(cfg.URL)
-}
-
-// runMattermostProvision is `crewlet mattermost provision`.
-func runMattermostProvision(inv invocation, args []string, stdout, stderr io.Writer) error {
-	companyPath, args := splitSubject(args)
-
-	fs := flag.NewFlagSet("mattermost provision", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	sinks := addSinkFlags(fs)
-	adminToken := fs.String("admin-token", "",
-		"a Mattermost token for a system administrator; empty reads MATTERMOST_ADMIN_TOKEN")
-	rotate := fs.Bool("rotate", false,
-		"mint a fresh token for every bot, including bots whose current "+
-			"one still works (the run then says what the engine needs to "+
-			"read them)")
-	only := fs.String("handles", "",
-		"provision only these seat handles, comma-separated; empty does all")
-	decommission := fs.Bool("decommission", false,
-		"disable managed bot accounts whose seats have left the config")
-	dryRun := fs.Bool("dry-run", false,
-		"print what the run would do and touch nothing")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	companyPath, given := onePositional(fs, companyPath)
-	if given != 1 {
-		fmt.Fprintln(stderr,
-			"usage: crewlet mattermost provision <company.yaml> "+
-				"[-secret-store|-env-file PATH|-print] [-handles a,b] "+
-				"[-rotate] [-decommission] [-dry-run] [-config PATH] [-api URL]")
-		return errors.New("name exactly one company document")
-	}
-
-	company, err := config.LoadCompanyToRun(companyPath, nil)
-	if err != nil {
-		return err
-	}
-	organization, err := company.Organization()
-	if err != nil {
-		return err
-	}
-	cfg := company.Integrations.Mattermost
-	plan, err := mattermost.PlanFor(organization, cfg)
-	if err != nil {
-		return err
-	}
-
-	// A DRY RUN AND AN EMPTY PLAN READ NO STORED VALUE, so they decide no
-	// route and run on any node. A real run decides its route before it
-	// prints anything, so a run the store refuses prints only the refusal.
-	what := "a Mattermost bot token (its role's mattermost.bot_token)"
-	if *dryRun || plan.Empty() {
-		printPlan(stdout, plan, what)
-		if *dryRun {
-			fmt.Fprintln(stdout, "\n-dry-run: nothing was created, joined or minted.")
-		}
-		return nil
-	}
-
-	if err = sinks.check(); err != nil {
-		return err
-	}
-	ctx := context.Background()
-	companySecrets, err := openCompanyStore(inv.environ, sinks.store,
-		"crewlet mattermost provision")
-	if err != nil {
-		return err
-	}
-	defer companySecrets.Close()
-	reads := mattermostProvisionReads(cfg)
-	if sinks.recordsInStore() && !*rotate {
-		// AND EACH BOT'S TOKEN, IN THE SAME BATCH: a bot that exists is
-		// kept or re-minted on what the sink reads back for it.
-		reads = unionReads(reads, seatTokenVars(plan, splitHandles(*only)))
-	}
-	env, err := companySecrets.resolver(ctx, reads, stdout)
-	if err != nil {
-		return err
-	}
-	// EVERY PLANNED BOT'S TOKEN is a name the run can mint into: a bot is
-	// kept or re-minted on what the server says of the token its sink holds.
-	if err = sinks.refuseOutranked(ctx, companySecrets, "Mattermost",
-		seatTokenVars(plan, splitHandles(*only)), stdout); err != nil {
-		return err
-	}
-	printPlan(stdout, plan, what)
-	sink, err := sinks.open(ctx, companySecrets, stdout)
-	if err != nil {
-		return err
-	}
-
-	token := strings.TrimSpace(*adminToken)
-	if token == "" {
-		token = operatorCredential(inv.environ, "MATTERMOST_ADMIN_TOKEN")
-	}
-	if token == "" {
-		return errors.New(
-			"no administrator token: pass -admin-token or export " +
-				"MATTERMOST_ADMIN_TOKEN. The bots' own tokens are what this " +
-				"run MINTS, so it cannot bootstrap itself from them")
-	}
-	client, err := mattermost.NewClient(mattermost.ClientOptions{
-		URL: env.Value(cfg.URL), Token: token,
-	})
-	if err != nil {
-		return err
-	}
-
-	res, err := mattermost.Reconcile(ctx, mattermost.Options{
-		Client: client, Config: cfg, Org: organization, Plan: plan, Sink: sink,
-		Rotate: *rotate, Decommission: *decommission, Only: splitHandles(*only),
-	})
-	if err != nil {
-		return err
-	}
-	printChatResult(stdout, res, sink)
-	return nil
-}
-
-// printChatResult renders what a Mattermost run did.
-//
-// WITH THE NEXT STEP, as GitLab's report has it ([printNextStep]): a token
-// minted into the secret store reaches a running engine at its next apply and
-// not before, and a report that stopped at "Recorded in the encrypted secret
-// store" read as finished while every new bot stayed offline.
-func printChatResult(w io.Writer, res *mattermost.Result, sink provision.TokenSink) {
-	fmt.Fprintf(w, "\nRecorded in %s.\n", sink.Describe())
-	printNextStep(w, res.Recorded, sink)
-	if len(res.Created) > 0 {
-		fmt.Fprintf(w, "Created %d bot(s): %s\n",
-			len(res.Created), strings.Join(res.Created, ", "))
-	}
-	if len(res.Renamed) > 0 {
-		fmt.Fprintf(w, "Renamed %d bot(s) to match the company document: %s\n",
-			len(res.Renamed), strings.Join(res.Renamed, ", "))
-	}
-	if len(res.Rotated) > 0 {
-		fmt.Fprintf(w, "Minted a token for %d bot(s): %s\n",
-			len(res.Rotated), strings.Join(res.Rotated, ", "))
-	}
-	if len(res.Decommissioned) > 0 {
-		fmt.Fprintf(w, "Disabled %d departed bot(s): %s\n",
-			len(res.Decommissioned), strings.Join(res.Decommissioned, ", "))
-	}
-	printKept(w, res.Kept, "-rotate")
-	// THE CHANNELS ARE THE PART TO CHECK. A bot receives only what its
-	// channels deliver, so this line is the difference between an agent
-	// that wakes and one that never does.
-	for _, seat := range sortedKeys(res.Joined) {
-		fmt.Fprintf(w, "  %-16s channels: %s\n", seat,
-			strings.Join(res.Joined[seat], ", "))
-	}
-	printNotes(w, res.Notes)
-}
-
-func sortedKeys(m map[string][]string) []string {
-	out := slices.Sorted(maps.Keys(m))
-	return out
 }
 
 // mattermostDoctorReads is every variable `crewlet mattermost doctor` reads

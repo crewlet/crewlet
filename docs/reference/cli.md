@@ -64,7 +64,6 @@ subcommand below is served by it.
 | `crewlet jira provision <company.yaml>` | Report a [Jira](../integrations/jira.md) instance against the config: which account each seat's own credential authenticates as, whether every project the org chart names exists and agrees about its lead, and — on Data Center — register the inbound webhook with a minted secret. Jira issues no credentials on a provisioner's behalf, so this run reports far more than it changes |
 | `crewlet gitlab provision <company.yaml>` | Reconcile the company-level half of GitLab: the group check, the provisioning token's expiry warning, and the webhook with its signing secret. Each agent's account, role and token are per-agent access, applied by the engine. `-dry-run` reports without touching anything. |
 | `crewlet github provision <company.yaml>` | Report a [GitHub](../integrations/github.md) deployment against the config — which account each seat's own credential authenticates as — and register the inbound webhooks with a minted secret: one on the organization where the credential may, otherwise one per named repository. GitHub issues no credentials on a provisioner's behalf, so this run reports more than it changes |
-| `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). Keeps each bot's display name in step with the company document. A re-run leaves a working token alone; `-rotate` mints fresh ones, `-handles a,b` narrows the run, `-decommission` disables departed seats' bots. Runs a preflight first: system-admin role, `EnableBotAccountCreation`, `EnableUserAccessTokens`. |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits (against the address people browse, given `-browser-url`), a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
 | `crewlet mcp-relay <socket>` | Not for people: the MCP server a seat's coding CLI starts. It relays the CLI's stdio to the engine's tool socket and back — see [`crewlet mcp-relay`](#crewlet-mcp-relay) |
 | `crewlet version` | Show the installed version (`--version` and `-v` too) |
@@ -125,8 +124,8 @@ store. Its first line says which it is.
 
 A command that reads no stored value decides no route and runs anywhere, a
 cluster member whose engine is stopped included, and starts no broker for a
-store it never reads: `mattermost provision`, `slack provision` and
-`confluence import` with `-dry-run` or nothing to do. Slack's run resolves no
+store it never reads: `slack provision` and `confluence import` with
+`-dry-run` or nothing to do. Slack's run resolves no
 `${VAR}` of the company's — its address is Tier A's — but a real one with seats
 to provision (a seat in scope whose `bot_token` and `signing_secret` are each a
 whole `${VAR}`; one with a literal credential is the operator's to manage, and
@@ -164,9 +163,7 @@ command reads held there` (`the external broker at <host:port>` on
   with `-secret-store` each planned seat's token variable, which the sink reads
   back to decide whether to keep the token the seat holds (`-rotate` and
   `-dry-run` read none back).
-- **`mattermost provision`** `integrations.mattermost.url`, and with
-  `-secret-store` each planned bot's token variable (`-handles` narrows them,
-  `-rotate` reads none back); **`mattermost doctor`** the URL, `.team` and each
+- **`mattermost doctor`** `integrations.mattermost.url`, `.team` and each
   agent seat's `mattermost.bot_token` that is one whole `${VAR}`.
 - **`github provision`** `integrations.github.url`, `.token` and
   `.webhook_secret`, and the token spellings its identity scan tries in each
@@ -235,7 +232,6 @@ nothing.
 | Command | The names it can mint into |
 |---|---|
 | `gitlab provision` | Every planned seat's token variable, and `integrations.gitlab.signing_secret`'s `${VAR}` where the run mints the secret or, with `-rotate`, rotates it |
-| `mattermost provision` | Every planned bot's token variable (`-handles` narrows them) |
 | `slack provision` | The `signing_secret` variable of each seat it provisions — one whose `bot_token` and `signing_secret` are each a whole `${VAR}` — and, where an install runs (not with `-no-install`), its `bot_token` variable (`-handles` narrows them): the run records each app's signing secret, which an app created on the run brings new, and an install mints the token |
 | `github provision`, `jira provision` | `webhook_secret`'s `${VAR}`, where the run registers a hook — it has a webhook address to register one at, and for GitHub an `integrations.github.provisioning` block naming where — and the secret resolves to nothing, or `-recreate-webhooks` (GitHub) or `-recreate-webhook` (Jira) asks for a fresh one |
 | `confluence provision` | `webhook_secret`'s and `webhook_token`'s `${VAR}`s, on the same terms with `-recreate-webhooks` — which of the two the instance's hooks use is the instance's answer, which the run has not asked for yet |
@@ -2834,37 +2830,14 @@ and the record a tool call always has. See [LLM Backends](../concepts/llm-backen
 - It cannot reach a socket? It prints one line on stderr naming the path, and
   exits 1 — which the CLI reports as an MCP server that failed to start.
 
-## `crewlet mattermost provision`
+## `crewlet mattermost provision` (retired)
 
-```
-crewlet mattermost provision <company.yaml> [-admin-token TOKEN]
-                                           [-secret-store | -env-file PATH | -print]
-                                           [-handles a,b] [-rotate] [-decommission]
-                                           [-dry-run] [-config PATH] [-api URL]
-```
-
-Creates (or updates) **one Mattermost bot account per Mattermost-enabled agent seat** — a role whose `mattermost.bot_token` is a whole-value `${VAR}` reference — adds it to the configured team and channels, and mints its personal access token into the exact `${VAR}` the YAML references.
-
-Unlike the Slack provisioner there is **no app manifest, no local ledger and no OAuth click**: Mattermost is its own directory, so a seat is found by looking up a deterministic username and the reconcile is stateless. The one manual prerequisite is a **system-admin personal access token** (`-admin-token`, or `$MATTERMOST_ADMIN_TOKEN`) — creating bot accounts and minting their tokens both require system-admin rights, and an admin must first enable personal access tokens in System Console → Integrations.
-
-**A bot hears only what it has joined**, so the channel list is not a convenience: a bot that exists, authenticates and is in no channel is an agent that never wakes, and the failure is silent on both sides. A channel that does not exist is a note rather than an abort — half a fleet joined and the run stopped is a worse state than every bot joined to the channels that do exist and a line saying which did not.
-
-**A plain re-run does not rotate a working token.** Mattermost returns an access token's value once, so minting every run would revoke the credential every bot's websocket is currently authenticated with — an operator adding a tenth seat would take the other nine down. A bot is left alone when the variable holding its token still has a value **and** the account still has a token under this tool's description (`crewlet-<handle>`). `-rotate` mints for every bot regardless, retiring the previous one after recording the new.
-
-**A run that recorded something says what is left to do**, on a `Next:` line after where it recorded, as [`crewlet gitlab provision`](#crewlet-gitlab-provision)'s does: the sink's own step, which with `-secret-store` is re-activating the current revision on a running node (`POST /config/reload`), since a token in the store reaches a running engine at its next apply and not before. A re-run that kept every bot's token prints none.
-
-| Flag | Description |
-|------|-------------|
-| `-admin-token` | System-admin personal access token. Falls back to `$MATTERMOST_ADMIN_TOKEN`. The bots' own tokens are what this run mints, so it cannot bootstrap itself from them. |
-| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default. See [the secret store](../concepts/secret-store.md). `-print` writes `export VAR=…` lines and, when a run rolls back, `unset VAR` for each — the stream is meant to be sourced, and a comment is a no-op to a shell, so an operator who piped it into `source` would otherwise keep a revoked token exported. With `-env-file` or `-print` a real run is refused before it reaches the server where the company's store holds a planned bot's token variable, which the engine reads over anything the run records there ([A sink the store outranks](#a-sink-the-store-outranks)). |
-| `-rotate` | Mint a fresh token for every bot, including bots whose current one still works. Then do what the run's `Next:` line says. It reads the company's values as every real run does, by the run's one route. |
-| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. It reads no stored value, so it decides no route and runs on any node, a cluster member whose engine is stopped included — and so does a run with nothing to do. |
-| `-config PATH` | Tier A config naming this node's store and keyring (default `./crewlet.yaml`): where the run reads the company's values, and where `-secret-store` records ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
-| `-api URL` | The node to read the company's values through and record into — a node that holds data, named from a `seats` node, a member of a cluster whose engine is stopped, or a machine that is not a node. Default: this node's engine when it runs, and the fleet's store itself when it is stopped ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
-
-A bot this run created is rolled back by revoking every token on it — nothing else has ever minted there. On a bot that already existed, only the token this run minted is revoked. See [Mattermost integration](../integrations/mattermost.md#automated-setup-crewlet-mattermost-provision).
-
----
+Each agent's Mattermost bot, its roles, its channels and its token are managed
+from the Mattermost integration's **Agents** tab and applied by the reconcile
+loop, which seals each bot's token under the name the engine derives for the
+seat. The command answers with that and changes nothing. To check an install,
+use [`crewlet mattermost doctor`](#crewlet-mattermost-doctor); see
+[Each agent's access](../integrations/mattermost.md#each-agents-access-roles-and-channels).
 
 ## `crewlet mattermost doctor`
 
