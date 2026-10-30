@@ -374,13 +374,7 @@ func RoutingsOf(payload any) []*ChangeRouting {
 	var r *ChangeRouting
 	switch p := payload.(type) {
 	case PushBatch:
-		var out []*ChangeRouting
-		for i := range p.Pushes {
-			for j := range p.Pushes[i].Routing {
-				out = append(out, &p.Pushes[i].Routing[j])
-			}
-		}
-		return out
+		return pushRoutings(p)
 	case ChangeOpen:
 		r = p.Routing
 	case ChangeEdit:
@@ -414,6 +408,23 @@ func RoutingsOf(payload any) []*ChangeRouting {
 		return nil
 	}
 	return []*ChangeRouting{r}
+}
+
+// pushRoutings is the routings a push record carries, one for each change its
+// entries merge or open, each pointing into the record's own entries. A
+// function of its own so the batch is a typed parameter where its routings
+// are handed to append: inline, a type switch's variable is a value
+// internal/sourcetree/decltype cannot type, and the code cache's writers gate
+// (TestNothingButSyncWritesACache) refuses one handed to a call it cannot type
+// either, append among them, since it cannot tell it from a gitproc.Cmd.
+func pushRoutings(b PushBatch) []*ChangeRouting {
+	var out []*ChangeRouting
+	for i := range b.Pushes {
+		for j := range b.Pushes[i].Routing {
+			out = append(out, &b.Pushes[i].Routing[j])
+		}
+	}
+	return out
 }
 
 // withRouting is payload with r stamped on it — every payload of a change's
