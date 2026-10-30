@@ -464,18 +464,6 @@ func (s sinkStore) Unset(ctx context.Context, name string) (bool, error) {
 	return gone, nil
 }
 
-// seatTokenVars is the variable each planned seat's token is recorded under,
-// for the seats a run provisions — every one, or those only names.
-func seatTokenVars(plan *provision.Plan, only []string) []string {
-	var names []string
-	for _, seat := range plan.Seats {
-		if len(only) == 0 || slices.Contains(only, seat.Handle) {
-			names = append(names, seat.TokenVar)
-		}
-	}
-	return unionReads(names)
-}
-
 // fieldReads is every variable these fields reference, each once, sorted:
 // what a command reads behind the fields of the document it resolves.
 func fieldReads(fields ...string) []string {
@@ -650,22 +638,6 @@ func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer)
 	}
 	printResult(stdout, res, sink)
 	return nil
-}
-
-// printPlan renders what a run intends to do.
-// The `what` names the credential a seat would have to reference, because
-// an empty plan is almost always a config that names none — and "nothing to
-// do" without saying what was looked for sends an operator to the third-party app.
-func printPlan(w io.Writer, plan *provision.Plan, what string) {
-	if plan.Empty() {
-		fmt.Fprintf(w, "No seat references %s, so there is nothing to provision.\n", what)
-	} else {
-		fmt.Fprintf(w, "%d seat(s) to provision:\n", len(plan.Seats))
-		for _, seat := range plan.Seats {
-			fmt.Fprintf(w, "  %-16s %s → %s\n", seat.Handle, seat.Role, seat.TokenVar)
-		}
-	}
-	printNotes(w, plan.Notes)
 }
 
 // printResult renders what a run did.
