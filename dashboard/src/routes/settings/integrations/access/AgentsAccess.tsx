@@ -56,15 +56,20 @@ import {
   accessWords,
   availableActions,
   emptyScopeHint,
+  joinLevels,
   lanesOf,
+  levelIds,
   levelName,
   managedOutside,
   MANAGED_OUTSIDE,
   levelsHeading,
+  levelSummary,
+  noPermissionsHint,
   offSentence,
   permissionCount,
   permissionWords,
   providedExternally,
+  refusedLevel,
   sameDesired,
   scopeWords,
   statusOf,
@@ -137,11 +142,16 @@ export function AgentsAccess({
     draft[seat.handle]?.[lane] ?? seat.lanes[lane]!.desired;
 
   let changes = 0;
+  // A DRAFT THE ENGINE WOULD REFUSE is held at the review, with its reason.
+  let refused: string | undefined;
   for (const seat of data.seats)
     for (const lane of lanes) {
       const d = draft[seat.handle]?.[lane.key];
       const saved = seat.lanes[lane.key];
-      if (d && saved && !sameDesired(lane, d, saved.desired)) changes++;
+      if (d && saved && !sameDesired(lane, d, saved.desired)) {
+        changes++;
+        refused ??= refusedLevel(lane, d) ?? undefined;
+      }
     }
 
   const change = (seat: AccessSeat, lane: Lane, next: Partial<AccessDesired>) => {
@@ -264,7 +274,7 @@ export function AgentsAccess({
               const want = desiredOf(seat, lane.key);
               const drafted = !sameDesired(lane, want, saved.desired);
               const status = statusOf(lane, saved, drafted, data.syncing, seat.departed);
-              const hint = emptyScopeHint(lane, want);
+              const hint = emptyScopeHint(lane, want) ?? noPermissionsHint(lane, want);
               const key = `${seat.handle}:${lane.key}`;
               const expanded = open[key] ?? false;
               const off = !want.enabled;
@@ -323,6 +333,26 @@ export function AgentsAccess({
                             ? permissionCount(lane, want.permissions)
                             : (laneWords(lane.key).fixed ?? levelName(lane, want.level))}
                         </span>
+                      ) : lane.multiple && lane.levels.length > 0 ? (
+                        <Select
+                          size="sm"
+                          width="full"
+                          menuClassName="agent-access-menu"
+                          multiple
+                          ariaLabel={`${seat.name}'s ${lane.name} permissions`}
+                          value={levelIds(want.level)}
+                          options={levelOptions(lane)}
+                          disabled={off || locked || seat.departed}
+                          placeholder="No permissions"
+                          onChange={(v) =>
+                            change(seat, lane, {
+                              level: joinLevels(lane, (Array.isArray(v) ? v : [v]).map(String)),
+                            })
+                          }
+                          renderMultiLabel={(sel) =>
+                            levelSummary(lane, sel.map((x) => String(x.value)).join(" "))
+                          }
+                        />
                       ) : lane.levels.length > 0 ? (
                         <Select
                           size="sm"
@@ -466,7 +496,14 @@ export function AgentsAccess({
             <Button size="small" variant="ghost" onClick={() => setDraft({})}>
               Discard
             </Button>
-            <Button size="small" variant="primary" onClick={() => setReview(true)}>
+            <Button
+              size="small"
+              variant="primary"
+              disabledReason={refused}
+              onClick={() => {
+                if (!refused) setReview(true);
+              }}
+            >
               Review changes
             </Button>
           </span>

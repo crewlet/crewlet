@@ -31,6 +31,11 @@ export interface LaneWords {
    * none.
    */
   scope?: { noun: string; singular: string; empty: string; emptyOn?: string };
+  /**
+   * Where a seat's access is a set of permissions: the hint under a seat that
+   * is on with none, and why a draft like that cannot be saved.
+   */
+  noPermissions?: { hint: string; refused: string };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
   /** The `mcp_servers` entry a seat's tool is started from, as the warning names it. */
@@ -77,7 +82,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     access: "Role at GitLab",
     turnOn:
       "Turning it on creates a GitLab service account with the chosen role and its own token.",
-    off: "With an instance administrator token, Crewlet blocks the service account. With a group Owner token, it revokes the account's tokens and removes its project memberships instead. Its commits and comments stay.",
+    off: "Crewlet revokes the service account's tokens. With an instance administrator token it also blocks the account; otherwise it removes the account's memberships. Its commits and comments stay.",
     remove: "Crewlet deletes the account. GitLab keeps its contributions under Ghost User.",
     scope: { noun: "Projects", singular: "project", empty: "The whole group" },
     tool: "GitLab MCP server, one per agent",
@@ -88,7 +93,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     access: "Project role",
     turnOn:
       "Turning it on creates an Atlassian service account and adds it to the chosen project role.",
-    off: "Crewlet removes the account from its Jira project roles and mints its API token again without Jira's scopes. With Confluence also off, it revokes the token. The account keeps its Jira product access at Atlassian, which has no API to remove it, so an organization admin removes it there if needed.",
+    off: "Crewlet removes the account from its Jira project roles and narrows its API token to Confluence, or revokes the token when Confluence is also off. Atlassian product access is one grant for every agent and stays, since Atlassian has no documented way to remove it.",
     remove:
       "With both products off, Crewlet deletes the service account. Its issues and comments keep its name.",
     scope: { noun: "Projects", singular: "project", empty: "No project" },
@@ -100,12 +105,16 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     access: "Space role",
     turnOn:
       "Turning it on creates an Atlassian service account and gives it the chosen space role.",
-    off: "Crewlet removes the account's Confluence space access and mints its API token again without Confluence's scopes. With Jira also off, it revokes the token. The account keeps its Confluence product access at Atlassian, which has no API to remove it, so an organization admin removes it there if needed.",
+    off: "Crewlet removes the account's Confluence space access and narrows its API token to Jira, or revokes the token when Jira is also off. Atlassian product access is one grant for every agent and stays, since Atlassian has no documented way to remove it.",
     remove:
       "With both products off, Crewlet deletes the service account. Its pages keep their author.",
     scope: { noun: "Spaces", singular: "space", empty: "No space" },
     tool: "Crewlet's own Confluence tools",
     server: "confluence",
+    noPermissions: {
+      hint: "No permissions yet, so it cannot see any space. Choose at least View.",
+      refused: "Confluence needs at least View for every agent that is on.",
+    },
   },
   slack: {
     name: "Slack",
