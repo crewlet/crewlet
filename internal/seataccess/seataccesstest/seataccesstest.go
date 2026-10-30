@@ -156,6 +156,10 @@ type Account struct {
 	Scope   map[seataccess.Lane][]string
 	Perms   map[seataccess.Lane]seataccess.Permissions
 	Keys    []string
+
+	// Sealed is a credential sealed for the account outside the sync (a
+	// manifest route, an install landing), which Observe reports.
+	Sealed *seataccess.Credential
 }
 
 // Vendor is a scriptable fake vendor for one kind. Its accounts live in
@@ -184,6 +188,22 @@ type Vendor struct {
 
 	// NotConfigured makes Open answer integration.ErrNotConfigured.
 	NotConfigured bool
+
+	// Opened counts the sessions opened.
+	Opened int
+
+	// StepsPerOp draws this many steps for an op instead of one.
+	StepsPerOp map[seataccess.Op]int
+
+	// Did is the sentence Apply reports doing for an op's steps.
+	Did map[seataccess.Op]string
+
+	// Priors is, for every step taken, how many of its op's earlier steps'
+	// results it was handed.
+	Priors []int
+
+	// MintOnly, when set, limits what a mint makes to these fields.
+	MintOnly []string
 }
 
 var _ seataccess.Vendor = (*Vendor)(nil)
@@ -219,7 +239,7 @@ func (v *Vendor) Catalog() seataccess.Catalog {
 	cat := seataccess.Catalog{Kind: v.KindValue, Credentials: v.Creds}
 	for _, lane := range seataccess.LanesOf(v.KindValue) {
 		cat.Lanes = append(cat.Lanes, seataccess.LaneSpec{
-			Lane: lane, Levels: true, Scoped: true,
+			Lane: lane, Levels: len(v.Levels[lane]) > 0, Scoped: true,
 			CreatedBy: seataccess.ByCrewlet, EnabledBy: seataccess.ByCrewlet, Rotatable: true,
 		})
 	}
@@ -237,14 +257,22 @@ func (v *Vendor) Steps(seat seataccess.SeatRef, lane seataccess.Lane, op seatacc
 		seataccess.OpRevoke: seataccess.VerbRevoke, seataccess.OpRemove: seataccess.VerbRemove,
 		seataccess.OpRotate: seataccess.VerbRotate,
 	}[op]
-	return []seataccess.Step{{
-		Verb: verb, By: seataccess.ByCrewlet,
-		Text: fmt.Sprintf("%s %s on %s", op, seat.Handle, lane),
-	}}
+	n := max(v.StepsPerOp[op], 1)
+	out := make([]seataccess.Step, 0, n)
+	for i := range n {
+		out = append(out, seataccess.Step{
+			Verb: verb, By: seataccess.ByCrewlet,
+			Text: fmt.Sprintf("%s %s on %s (%d)", op, seat.Handle, lane, i+1),
+		})
+	}
+	return out
 }
 
 // Open implements [seataccess.Vendor].
 func (v *Vendor) Open(context.Context, seataccess.OpenInput) (seataccess.Session, error) {
+	v.mu.Lock()
+	v.Opened++
+	v.mu.Unlock()
 	if v.NotConfigured {
 		return nil, integration.ErrNotConfigured
 	}
@@ -271,8 +299,9 @@ func (v *Vendor) Observe(_ context.Context, in seataccess.ObserveInput) (seatacc
 			}
 			lanes[lane] = seataccess.Observed{
 				Exists: true, Enabled: acct.Enabled[lane], AccountID: acct.ID,
-				Level: acct.Level[lane], Scope: slices.Clone(acct.Scope[lane]),
-				Permissions: acct.Perms[lane],
+				Account: seat.Handle + "@vendor.invalid",
+				Level:   acct.Level[lane], Scope: slices.Clone(acct.Scope[lane]),
+				Permissions: acct.Perms[lane], Credential: acct.Sealed,
 			}
 		}
 		out[seat.Handle] = lanes
@@ -287,6 +316,7 @@ func (v *Vendor) Apply(_ context.Context, in seataccess.ApplyInput) (seataccess.
 	v.Applied = append(v.Applied, strings.Join([]string{
 		in.Seat.Handle, string(in.Lane), string(in.Step.Op), string(in.Step.Verb),
 	}, "/"))
+	v.Priors = append(v.Priors, len(in.Prior))
 	if r := v.Refuse[in.Step.Op]; r != nil {
 		return seataccess.StepResult{}, r
 	}
@@ -294,7 +324,11 @@ func (v *Vendor) Apply(_ context.Context, in seataccess.ApplyInput) (seataccess.
 		return seataccess.StepResult{Waiting: w}, nil
 	}
 	acct := v.accounts[in.Seat.Handle]
-	var res seataccess.StepResult
+	res := seataccess.StepResult{Did: v.Did[in.Step.Op]}
+	if in.Step.Index > 0 {
+		// AN OP'S LATER STEPS have done their part in its first.
+		return res, nil
+	}
 	switch in.Step.Op {
 	case seataccess.OpCreate:
 		if acct == nil {
@@ -348,6 +382,9 @@ func (v *Vendor) grant(acct *Account, in seataccess.ApplyInput) {
 func (v *Vendor) mint(handle string, acct *Account) []seataccess.Minted {
 	var out []seataccess.Minted
 	for _, field := range v.Creds {
+		if v.MintOnly != nil && !slices.Contains(v.MintOnly, field) {
+			continue
+		}
 		v.next++
 		value := fmt.Sprintf("fake-%s-%s-%d", strings.ToLower(field), handle, v.next)
 		acct.Keys = append(acct.Keys, value)

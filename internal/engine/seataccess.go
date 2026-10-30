@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -69,17 +70,25 @@ func (e *Engine) SyncSeatAccess(
 	if err != nil {
 		return seataccess.SyncReport{}, fmt.Errorf("engine: %s access sync: %w", kind, err)
 	}
-	return e.syncSeatAccess(held, kind, seatSync{sink: sink, by: by, asks: asks, handles: handles})
+	return e.syncSeatAccess(held, kind, seatSync{
+		sink: sink, by: by, asks: asks, handles: handles, webhookBase: e.webhookBase,
+	})
 }
+
+// SecretResolver is the resolver a vendor session reads the document's
+// `${VAR}` references through, the sealed store included: what the access
+// routes hand [seataccess.Vendor.Open] for a preview.
+func (e *Engine) SecretResolver() *config.Resolver { return e.resolver() }
 
 // seatSync is one sync's inputs beyond the integration.
 type seatSync struct {
-	sink       provision.TokenSink
-	by         iam.Actor
-	operator   string
-	asks       map[string]seataccess.Ask
-	handles    []string
-	disconnect bool
+	sink        provision.TokenSink
+	by          iam.Actor
+	operator    string
+	webhookBase string
+	asks        map[string]seataccess.Ask
+	handles     []string
+	disconnect  bool
 }
 
 // syncSeatAccess runs the sync for kind and flushes its sink, so what it
@@ -105,6 +114,9 @@ func (e *Engine) syncSeatAccess(
 		Vendor: vendor,
 		Open: seataccess.OpenInput{
 			Config: company.Config, Org: company.Org, Env: e.resolver(), Operator: in.operator,
+			// A DRY RUN HANDS NEITHER, so a session rotates and registers
+			// nothing (vendor.go).
+			Sink: in.sink, WebhookBase: in.webhookBase,
 		},
 		Ledger:     ledger,
 		Sink:       in.sink,
@@ -142,7 +154,9 @@ func (e *Engine) withSeatAccess(
 	if err != nil {
 		return nil, err
 	}
-	report, err := e.syncSeatAccess(ctx, kind, seatSync{sink: in.Sink, by: in.By, operator: in.Operator})
+	report, err := e.syncSeatAccess(ctx, kind, seatSync{
+		sink: in.Sink, by: in.By, operator: in.Operator, webhookBase: in.WebhookBase,
+	})
 	switch {
 	case errors.Is(err, integration.ErrNotConfigured):
 		return findings, nil
@@ -183,7 +197,9 @@ func (e *Engine) tearDownSeatAccess(
 			asks[handle] = seataccess.Ask{Remove: true}
 		}
 	}
-	_, err = e.syncSeatAccess(ctx, kind, seatSync{sink: sink, by: by, asks: asks, disconnect: true})
+	_, err = e.syncSeatAccess(ctx, kind, seatSync{
+		sink: sink, by: by, asks: asks, disconnect: true, webhookBase: e.webhookBase,
+	})
 	if err != nil && !errors.Is(err, integration.ErrNotConfigured) {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}

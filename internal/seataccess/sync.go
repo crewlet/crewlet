@@ -43,6 +43,12 @@ type SyncInput struct {
 	// and its credential revoked, and removed where Asks says so.
 	Disconnect bool
 
+	// Unmigrated is an integration whose seats the migration onto per-seat
+	// access has not written yet. Its document reads every seat as off, and
+	// acting on that would disable the very accounts the migration is about
+	// to record, so the sync makes no vendor call at all and reports it.
+	Unmigrated bool
+
 	// Now is the clock; nil is the wall clock in UTC.
 	Now func() time.Time
 
@@ -87,6 +93,17 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 	}
 	cat := in.Vendor.Catalog()
 	kind := cat.Kind
+	if in.Unmigrated {
+		// NOT EVEN OPENED: a session may write a company value of its own
+		// on the way in (Slack's configuration token).
+		return SyncReport{Findings: []integration.Finding{{
+			Kind: integration.FindingIdentityMissing,
+			Detail: "the migration onto per-seat access has not finished for this " +
+				"integration, so its agents' accounts are left exactly as they are",
+			Remedy: "It is retried every minute; the log's seat_access_migration_pending " +
+				"line says what it is waiting on, usually the vendor not answering",
+		}}}, nil
+	}
 	now := in.Now
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
@@ -188,6 +205,7 @@ func (s *syncer) seat(
 		}
 	}
 	have := observedFor(lanes, got, rec, s.now)
+	s.adopt(&rec, want, have)
 
 	// THE VENDOR SHOWS THE ACCOUNT GONE: the record is closed, its sealed
 	// credential is dead and is cleared, and a seat that is on is created
@@ -278,6 +296,41 @@ func (s *syncer) seat(
 	return s.put(ctx, rec)
 }
 
+// adopt records, rather than duplicates, what the vendor already holds for a
+// seat the ledger has no account for: an account under the engine's naming
+// (one made before the ledger existed), where the seat is on; and a
+// credential sealed outside the sync (a GitHub App's key from the manifest
+// route, a Slack bot token from the install landing), wherever it is found.
+func (s *syncer) adopt(rec *Record, want map[Lane]Desired, have map[Lane]Observed) {
+	on := false
+	for _, d := range want {
+		on = on || d.Enabled
+	}
+	for _, lane := range LanesOf(s.kind) {
+		o := have[lane]
+		if !o.Exists {
+			continue
+		}
+		if on && !rec.Held() && o.AccountID != "" {
+			created := o.CreatedAt
+			if created.IsZero() {
+				created = s.now
+			}
+			rec.Account = &Account{
+				ID: o.AccountID, Name: o.Account, CreatedAt: created,
+				CreatedByPass: s.in.Pass, State: AccountActive, Adopted: true,
+			}
+		}
+		if rec.Credential == nil && o.Credential != nil {
+			cred := *o.Credential
+			if cred.Variable == "" {
+				cred.Variable = SinkName(s.kind, s.cat.Credentials[0], rec.Handle)
+			}
+			rec.Credential = &cred
+		}
+	}
+}
+
 // put records the seat's record and reports it.
 func (s *syncer) put(ctx context.Context, rec Record) error {
 	if err := s.in.Ledger.Put(ctx, rec); err != nil {
@@ -353,9 +406,14 @@ func (s *syncer) take(
 		return eff
 	}
 	sinks := SinkNames(s.cat, ref.Handle)
-	for _, step := range steps {
+	var prior []StepResult
+	for i, step := range steps {
+		if i == 0 || steps[i-1].Op != step.Op {
+			prior = nil
+		}
 		res, err := s.sess.Apply(ctx, ApplyInput{
 			Seat: ref, Lane: lane, Step: step, Want: want, Have: have, Record: rec, Sinks: sinks,
+			Prior: slices.Clone(prior),
 		})
 		if err == nil && res.Waiting != nil {
 			result.Steps = append(result.Steps, StepOutcome{Step: step})
@@ -376,7 +434,12 @@ func (s *syncer) take(
 			result.Error = failureOf(step, lane, err)
 			break
 		}
-		result.Steps = append(result.Steps, StepOutcome{Step: step, Done: true})
+		prior = append(prior, res)
+		done := StepOutcome{Step: step, Done: true}
+		if res.Did != "" {
+			done.Text = res.Did
+		}
+		result.Steps = append(result.Steps, done)
 	}
 	s.finish(rec, lane, want, have, result)
 	switch result.Outcome {
@@ -408,8 +471,10 @@ func (s *syncer) absorb(ctx context.Context, rec *Record, step Step, res StepRes
 		if err != nil {
 			return err
 		}
-		rec.Credential = cred
-		eff.credential = cred
+		if cred != nil {
+			rec.Credential = cred
+			eff.credential = cred
+		}
 	}
 	if len(res.Revoked) > 0 {
 		if err := s.forget(ctx, rec, res.Revoked); err != nil {
@@ -471,6 +536,12 @@ func (s *syncer) seal(ctx context.Context, handle string, minted []Minted) (*Cre
 			}
 		}
 		return nil, errors.Join(append([]error{err}, undo...)...)
+	}
+	// THE CREDENTIAL ITSELF, OR NOTHING TO RECORD: a step that minted only
+	// the account's other values (Slack's app secrets before a person
+	// installs it) has sealed no credential the seat can use yet.
+	if !slices.ContainsFunc(minted, func(m Minted) bool { return m.Field == s.cat.Credentials[0] }) {
+		return nil, nil
 	}
 	sinks := SinkNames(s.cat, handle)
 	cred := &Credential{Variable: sinks[s.cat.Credentials[0]], MintedAt: s.now, By: s.in.By}
