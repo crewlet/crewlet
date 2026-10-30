@@ -159,6 +159,7 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 			return seataccess.Options{}, err
 		}
 		out := seataccess.Options{Lane: lane, Live: true, Scope: slices.Clone(s.jiraIn)}
+		out.Levels = append(out.Levels, productOnly(productJira))
 		for _, role := range roles {
 			out.Levels = append(out.Levels, seataccess.Level{
 				ID: strconv.FormatInt(role.ID, 10), Name: role.Name,
@@ -180,6 +181,7 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 			// set of these ([confluence.OperationsLevel]), chosen with a
 			// multi-select.
 			out.Live, out.Multiple = false, true
+			out.Levels = append(out.Levels, productOnly(productConfluence))
 			for _, op := range confluence.Operations {
 				out.Levels = append(out.Levels, seataccess.Level{
 					ID: op.ID(), Name: op.Name,
@@ -192,6 +194,7 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 		if err != nil {
 			return seataccess.Options{}, err
 		}
+		out.Levels = append(out.Levels, productOnly(productConfluence))
 		for _, role := range roles {
 			out.Levels = append(out.Levels, seataccess.Level{
 				ID: role.ID, Name: role.Name, Custom: role.Type == "CUSTOM",

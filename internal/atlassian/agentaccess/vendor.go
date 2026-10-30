@@ -93,6 +93,22 @@ var (
 	}
 )
 
+// productOnlyName is the level that holds the product and no role in any
+// project or space: the empty level, least access first.
+const productOnlyName = "Product access only"
+
+// productOnly is the product-access-only level as a lane offers it, with the
+// sentence that says what it means.
+func productOnly(p product) seataccess.Level {
+	note := "The account has Jira and no project role: each project's permission " +
+		"scheme decides what it sees."
+	if p.lane == seataccess.LaneConfluence {
+		note = "The account has Confluence and no space role or permission of its " +
+			"own: the site's and each space's permissions decide what it sees."
+	}
+	return seataccess.Level{ID: "", Name: productOnlyName, Note: note}
+}
+
 // roleWord is what the product calls the access a seat holds in it.
 func (p product) roleWord() string {
 	if p.lane == seataccess.LaneConfluence {
@@ -119,7 +135,7 @@ func productOf(lane seataccess.Lane) (product, bool) {
 func (p product) access(level string, opts seataccess.Options) string {
 	level = strings.TrimSpace(level)
 	if level == "" {
-		return "no " + p.name + " access"
+		return strings.ToLower(productOnlyName[:1]) + productOnlyName[1:]
 	}
 	if strings.Contains(level, ":") {
 		// IN CONFLUENCE'S OWN ORDER, View first, as its screen lists them.
@@ -178,6 +194,13 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have se
 		text:  "Give it " + access + " in " + where,
 		apply: (*session).converge,
 	}
+	// PRODUCT ACCESS ONLY ASSIGNS NOTHING: the same step removes whatever
+	// role it holds, so the account keeps the product and no more.
+	productOnlyWant := strings.TrimSpace(want.Level) == ""
+	if productOnlyWant {
+		roles.text = "Give it " + p.name + " " + access + ": no " + p.roleWord() + " in any " +
+			strings.TrimSuffix(p.where, "s") + ", and any it holds removed"
+	}
 	mint := action{
 		verb:  seataccess.VerbMint,
 		text:  "Mint its API token with the scopes of the products it is on, where its token lacks " + p.name + "'s",
@@ -201,10 +224,18 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have se
 	case seataccess.OpLevel:
 		roles.verb = seataccess.VerbRerole
 		roles.text = "Change it from " + p.access(have.Level, opts) + " to " + access + " in " + where
+		if productOnlyWant {
+			roles.text = "Change it from " + p.access(have.Level, opts) + " to " + p.name + " " +
+				access + ", removing its " + p.roleWord()
+		}
 		return []action{roles}
 	case seataccess.OpScope:
 		roles.verb = seataccess.VerbScope
 		roles.text = "Give it " + access + " in " + where + " and nowhere else"
+		if productOnlyWant {
+			roles.text = "Remove its " + p.roleWord() + " in every " + strings.TrimSuffix(p.where, "s") +
+				": " + p.name + " " + access
+		}
 		return []action{roles}
 	case seataccess.OpMint:
 		mint.apply = (*session).mintAlways
