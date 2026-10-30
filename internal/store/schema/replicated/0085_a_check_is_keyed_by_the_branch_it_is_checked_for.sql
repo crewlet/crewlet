@@ -27,16 +27,16 @@
 -- an index nothing reads is a write cost on every check record of every node.
 -- It is dropped by name first — dropping the table would take it anyway — so
 -- the file says where it went. Every other index carries target_ref in the
--- key's order. overdue_at (replicated 0080) is declared before the wide
+-- key's order. overdue_at (replicated 0083) is declared before the wide
 -- columns, as row_bytes is, and with NO DEFAULT: the applier writes every
--- column of a row whole, so no row reads as never overdue by omission — 0080's
+-- column of a row whole, so no row reads as never overdue by omission — 0083's
 -- default was only SQLite's price for adding a NOT NULL column.
 --
 -- THE TABLES ARE CREATED AGAIN, EMPTY, RATHER THAN ALTERED: a primary key is
 -- no column ALTER TABLE adds. No release carries the code domain (the
 -- domain's stated condition, code.RecordVersion), so no store anywhere holds a
 -- row of 0075 outside a development branch, and no build of this one reads a
--- row keyed by the commit alone. 0075 and 0080 ARE NOT EDITED:
+-- row keyed by the commit alone. 0075 and 0083 ARE NOT EDITED:
 -- `schema_migrations` keys on the filename, so a store that applied them
 -- would never see the change.
 --

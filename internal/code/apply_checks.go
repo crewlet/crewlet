@@ -120,7 +120,7 @@ type checkQueue struct {
 // with no timeout: one a person's CI reports, which no runner of the engine
 // claims, and so is never overdue. code_checks_overdue_idx holds the queued
 // attempts by it, so the backlog's walk reads them in the order they fell
-// overdue (replicated 0080).
+// overdue (replicated 0083).
 func (q checkQueue) overdueAt() int64 {
 	if q.timeoutSeconds <= 0 {
 		return 0
