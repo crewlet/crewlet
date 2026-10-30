@@ -75,7 +75,7 @@ when your *people* already live there.
 - **[GitHub](integrations/github.md)** — github.com or Enterprise Server: one GitHub App per agent (create it, then install it) with three access tiers, webhook routing by review request / assignment / review verdict / mention, derived seat logins, participant fan-out, organization or per-repository hooks, and `crewlet github provision`
 - **[Datadog](integrations/datadog.md)** — Monitor alerts as inbound events through the Webhooks integration: routing by monitor tag with a required fallback seat, a trigger and its recovery as one conversation, and shared-token verification because Datadog cannot sign a body
 - **[Slack](integrations/slack.md)** — One app per agent: `crewlet slack provision` builds and installs them from a manifest, per-seat webhook routing with thread follows, a text-carrying working indicator, and the Slack MCP tool server
-- **[Mattermost](integrations/mattermost.md)** — Self-hosted open-source chat: one bot account per agent, `crewlet mattermost provision`, a websocket event fleet instead of webhooks (no public URL needed), and thread routing
+- **[Mattermost](integrations/mattermost.md)** — Self-hosted open-source chat: one bot account per agent with its own roles and channels, set on the Agents tab, a websocket event fleet instead of webhooks (no public URL needed), and thread routing
 
 ## Guides
 

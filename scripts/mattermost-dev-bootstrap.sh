@@ -8,25 +8,24 @@
 # fresh install is auto-promoted to system admin — that is the account the
 # provisioner authenticates as), mints a personal access token for it and
 # writes it straight to the env file, reconciles the server's own Site URL
-# with the address browsers use, creates the team and its channels, proves
-# a websocket can be opened, and — with COMPANY= set — provisions the agent
-# bot accounts.
+# with the address browsers use, creates the team and its channels, and
+# proves a websocket can be opened. The agents' bots are the engine's: it
+# creates each one when the agent is turned on in the Mattermost
+# integration's Agents tab.
 #
 # Credentials are persisted the moment they exist, before any check that
 # can abort: Mattermost returns a personal access token's value exactly
 # once, so a gate that fails between minting and writing strands a live
 # admin credential nobody can read.
 #
-# The company config references this instance as ${MATTERMOST_URL} — no
-# copy or sed needed: this script writes MATTERMOST_URL and
-# MATTERMOST_ADMIN_TOKEN into the env file, and every consumer (provision,
-# the engine) resolves the ref from the sourced environment.
+# The company config references this instance as ${MATTERMOST_URL}, and
+# its administrator token as ${MATTERMOST_ADMIN_TOKEN}: this script writes
+# both into the env file, and the engine resolves the refs from the sourced
+# environment.
 #
 # Usage (from the repo root):
 #   docker compose --profile mattermost up -d --wait
 #   scripts/mattermost-dev-bootstrap.sh
-#   # or, provision the agent bots in the same run:
-#   COMPANY=my_company.yaml scripts/mattermost-dev-bootstrap.sh
 #
 # THE PUBLIC URL. Mattermost hands its own `ServiceSettings.SiteURL` to
 # every browser that loads the web app, and the web app and its plugins
@@ -53,13 +52,7 @@
 # Mattermost has no usable inbound webhook, so the engine dials OUT over a
 # websocket per agent seat. This stack works behind NAT with no tunnel.
 #
-# Re-runnable: every step is idempotent. Its COMPANY= provision reads the
-# company's stored values through ./crewlet.yaml when one is present, and
-# from the environment alone when none is. With that node's engine stopped it
-# reaches the fleet's secret store itself, through the node's own broker; with
-# the engine up it goes through it, so set CREWLET_API_TOKEN to one of
-# crewlet.yaml's api.auth tokens whose grants include admin. On a member of a
-# cluster whose engine is stopped the provision is refused, naming -api.
+# Re-runnable: every step is idempotent.
 set -euo pipefail
 
 PORT="${MATTERMOST_LISTEN_PORT:-8065}"
@@ -651,17 +644,6 @@ else
   exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# 8. Optional: provision the agent bots
-# ---------------------------------------------------------------------------
-if [ -n "${COMPANY:-}" ]; then
-  say "Provisioning agent bots from ${COMPANY}"
-  MATTERMOST_ADMIN_TOKEN="$ADMIN_TOKEN" MATTERMOST_URL="$URL" \
-    crewlet mattermost provision "$COMPANY" -env-file "$ENV_FILE"
-else
-  say "Skipping bot provisioning (set COMPANY=<company.yaml> to include it)"
-fi
-
 # THE PATH `.` IS HANDED: a bare name is looked up on PATH rather than in the
 # working directory, so a relative file is spelt with its ./ prefix.
 case "$ENV_FILE" in
@@ -686,23 +668,16 @@ Next:
            enabled: true
            url: "\${MATTERMOST_URL}"
            team: ${TEAM}
+           provisioning:
+             admin_token: "\${MATTERMOST_ADMIN_TOKEN}"
 
-  2. Load the env file into this shell, and provision the bots into it if
-     you did not pass COMPANY= above (one of -env-file, -secret-store and
-     -print is required), loading it again for the tokens just minted:
+  2. Load the env file into this shell:
 
        set -a; . ${ENV_SOURCE}; set +a
-       crewlet mattermost provision <company.yaml> -env-file ${ENV_FILE}
-       set -a; . ${ENV_SOURCE}; set +a
 
-     It reads the company's stored values through ./crewlet.yaml when one
-     is here, and from this shell alone when none is. With that node's
-     engine stopped it reaches the fleet's store itself, through the node's
-     own broker; with the engine up, run this step and the next with
-     CREWLET_API_TOKEN set to one of crewlet.yaml's api.auth tokens whose
-     grants include admin, or pass -api URL naming a running node. On a
-     member of a cluster whose engine is stopped it is refused before it
-     changes anything, naming -api.
+     Once the engine is up, turn each agent on in the Mattermost
+     integration's Agents tab, with its roles and channels: the engine
+     creates its bot and seals its token itself.
 
   3. Check the whole path before you boot or restart:
 
@@ -718,7 +693,8 @@ Next:
      already runs one keeps it and logs that the file was ignored: once it
      is up, hand it step 1's block with crewlet config import
      <company.yaml> (CREWLET_API_TOKEN as in step 2), which replaces its
-     whole company with the file.
+     whole company with the file, with CREWLET_API_TOKEN set to one of
+     crewlet.yaml's api.auth tokens whose grants include admin.
 
 Nothing needs to reach the engine from Mattermost, so no tunnel is needed.
 See docs/integrations/mattermost.md for the full walkthrough.
