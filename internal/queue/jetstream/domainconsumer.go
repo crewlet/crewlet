@@ -88,7 +88,10 @@ type DomainConsumer struct {
 // the count itself as well — see [DomainConsumer.Fetch] — so what this adds is
 // the bound across pulls: records delivered and not yet acknowledged, because
 // their transaction has not committed, hold back the next pull rather than
-// piling up behind it.
+// piling up behind it. And so it is also how many barriers the applier can
+// reach while their checkpoint's commit is stalled — they are acknowledged
+// only once it returns — before the reads resting on the next one wait for
+// that commit again; [statelog.FetchMessages] says what that covers.
 //
 // It used to be the ONLY count bound, because the client library could not
 // send one pull with both a count and a byte bound and the applier pulled by

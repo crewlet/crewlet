@@ -85,12 +85,32 @@ const (
 	// asked, or to the next one. A record the broker handed over and the
 	// loop never took is a hole for an ack window, on every pull.
 	//
-	// FOUR THOUSAND, which is [ApplyTxRowBudget]: the loop estimates a row
-	// per record when it decides whether another pull could fit, so a
-	// consumer that can hand over one transaction's worth of records in
-	// flight is one whose every pull the loop can commit whole. Larger
-	// buys nothing, because the run closes at the budget; smaller commits
-	// more often than the budget asks.
+	// FOUR THOUSAND, and the number has two jobs, because the same count is
+	// the broker-side consumer's MaxAckPending: how many delivered records
+	// may wait unacknowledged.
+	//
+	//   - BATCHING: it is [ApplyTxRowBudget]. The loop estimates a row per
+	//     record when it decides whether another pull could fit, so a
+	//     consumer that can hand over one transaction's worth of records in
+	//     flight is one whose every pull the loop can commit whole; smaller
+	//     commits more often than the budget asks.
+	//   - HOW FAR THE REACHED POSITION RUNS AHEAD OF A STALLED COMMIT
+	//     ([Runner.Reached]). Barriers are reached the moment they are
+	//     decoded and acknowledged only once the checkpoint transaction
+	//     beside the loop commits them, so while a disk's fsync stalls every
+	//     barrier delivered meanwhile is in flight; at this many the broker
+	//     withholds the next, and the reads resting on it wait for the
+	//     stalled commit — refused `behind` at [ReadBudget] if it outlasts
+	//     that, never answered from rows that are not current. Sized
+	//     against the l1 reproduction (wf_abebd46b-b70): reads follow one
+	//     another a median 13.4 ms apart, about 75 barriers a second from a
+	//     loaded node, and every node applies every node's barriers, so four
+	//     thousand ride out about 53 s of one node's barriers or 18 s of
+	//     three nodes' — against fsync stalls measured at 2.1–9.3 s. A
+	//     larger ceiling would ride out longer stalls and add nothing to a
+	//     transaction, which closes at the budget whatever the pull holds;
+	//     it is not raised, because what it would cover is a stall nobody
+	//     has measured, and past it reads only wait as they always did.
 	//
 	// 28 MiB OF BYTES, and the floor under it is not a preference: a pull
 	// whose byte bound is smaller than the next record is REFUSED by the
