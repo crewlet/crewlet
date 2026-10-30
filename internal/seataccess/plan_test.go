@@ -157,12 +157,44 @@ func TestPlanTreatsAtlassianAsOneAccountOverTwoLanes(t *testing.T) {
 		Have: map[seataccess.Lane]seataccess.Observed{
 			seataccess.LaneJira: held("a"), seataccess.LaneConfluence: held("a"),
 		},
-		Record: &seataccess.Record{Credential: &seataccess.Credential{Variable: "ATLASSIAN_TOKEN_SRE"}},
+		Record: &seataccess.Record{
+			Account:    &seataccess.Account{ID: "acct-1", State: seataccess.AccountActive},
+			Credential: &seataccess.Credential{Variable: "ATLASSIAN_TOKEN_SRE"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
 	if got := ops(oneOff[seataccess.LaneJira]); !slices.Equal(got, []seataccess.Op{seataccess.OpDisable}) {
 		t.Errorf("one product off: jira ops = %v, want a disable and no revoke", got)
+	}
+}
+
+// THE PLAN TAKES NOTHING AWAY FROM AN ACCOUNT WITH NO LEDGER ROW, and adopts
+// one for a seat that is on rather than creating another.
+func TestPlanTakesNothingAwayWithoutALedgerRow(t *testing.T) {
+	t.Parallel()
+	v := seataccesstest.NewVendor(integration.KindDatadog, "APP_KEY")
+	for _, tc := range []struct {
+		name string
+		want seataccess.Desired
+		ask  seataccess.Ask
+		ops  []seataccess.Op
+	}{
+		{name: "off", want: seataccess.Desired{}},
+		{name: "remove", want: seataccess.Desired{}, ask: seataccess.Ask{Remove: true}},
+		{name: "rotate", want: on("a"), ask: seataccess.Ask{Rotate: true}},
+		{name: "on at another level", want: on("b"), ops: []seataccess.Op{seataccess.OpLevel}},
+	} {
+		plan, err := seataccess.Plan(v, seataccess.SeatInput{
+			Seat: sre, Want: map[seataccess.Lane]seataccess.Desired{dd: tc.want},
+			Have: map[seataccess.Lane]seataccess.Observed{dd: held("a")}, Ask: tc.ask,
+		})
+		if err != nil {
+			t.Fatalf("%s: Plan: %v", tc.name, err)
+		}
+		if got := ops(plan[dd]); !slices.Equal(got, tc.ops) {
+			t.Errorf("%s: ops = %v, want %v", tc.name, got, tc.ops)
+		}
 	}
 }
