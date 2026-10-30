@@ -42,22 +42,38 @@ type Offers func(kind integration.Kind) map[Lane]Options
 // RaisesBetween is every agent seat's lane that moving the company document
 // from prior to next raises ([AsksStepUp]): a seat new to next is compared with
 // a seat that held nothing, and a lane whose setting does not move is never
-// one. prior is nil for a company's first document.
+// one. prior is nil for a company's first document. managed is whether the
+// deployment's document is written by its operator, which decides GitHub's
+// mode ([config.Company.SeatCredentialMode]).
+//
+// A KIND THE ENGINE STARTS GRANTING IS A TURN-ON FOR EVERY SEAT ON IT. Where
+// prior handed the kind's credentials in from outside Crewlet and next has the
+// engine provision it, each seat's setting was a binding, not a grant: nothing
+// at the vendor held it. Judged as the setting it was, a level written while
+// the kind was external and a provisioning block added in a later write would
+// each move nothing, and the next sync would create the account at that level
+// with no person asked. So the seat is compared with one that held nothing.
 //
 // THE OFFER IS READ LAZILY, only for an integration whose seats the write
 // changes, since reading one asks the vendor.
-func RaisesBetween(prior, next *config.Company, offers Offers) []Raise {
+func RaisesBetween(prior, next *config.Company, managed bool, offers Offers) []Raise {
 	held := map[string]*config.Role{}
 	for _, seat := range SeatsOf(prior) {
 		held[seat.Handle] = seat.Role
 	}
 	var out []Raise
 	for _, kind := range Kinds() {
+		startsGranting := prior != nil &&
+			prior.SeatCredentialMode(string(kind), managed) != config.SeatCredentialEngine &&
+			next.SeatCredentialMode(string(kind), managed) == config.SeatCredentialEngine
 		var offer map[Lane]Options
 		for _, seat := range SeatsOf(next) {
 			for _, lane := range LanesOf(kind) {
 				after, _ := DesiredOf(seat.Role, lane)
 				before, _ := DesiredOf(held[seat.Handle], lane)
+				if startsGranting {
+					before = Desired{}
+				}
 				before, after = before.Normalized(), after.Normalized()
 				if before.Enabled == after.Enabled && before.SameAccess(after) {
 					continue

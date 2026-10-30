@@ -121,7 +121,7 @@ func (s *Service) prepareSeats(ctx context.Context, req ApplySeatsRequest) (*pre
 	}
 	access := entityKinds[EntityRoles]
 	d := draft{
-		expect: req.Expect, stated: seatsStated(req), requireActive: true, by: req.By,
+		expect: req.Expect, stated: statedPrecondition(req.Stated, req.Expect), requireActive: true, by: req.By,
 		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			// A SECOND COPY, as a one-entity write makes: the edits land on
@@ -270,10 +270,3 @@ func (s *Service) StoredDocument(ctx context.Context) (map[string]any, string, e
 // custom resources, typically. Every surface that writes the document answers
 // such a deployment read-only, and says where a change is made instead.
 func (s *Service) Managed() bool { return len(s.writers.CompanyWriters) > 0 }
-
-// seatsStated is whether a seats write's expect is a precondition its request
-// stated: a header naming a revision, never `*` or nothing.
-func seatsStated(req ApplySeatsRequest) bool {
-	expect := strings.TrimSpace(req.Expect)
-	return req.Stated && expect != "" && expect != "*"
-}
