@@ -31,7 +31,15 @@ import (
 // repo_archived, since an archived repository's changes are read and written
 // nothing — then its change, on this repository (change_not_found), then its
 // asker: a principal bound to no seat writes nothing (not_permitted), since
-// every row of a conversation names who wrote it by the seat they act as.
+// every row of a conversation names who wrote it by the seat they act as; and
+// a seat the deciding chart does not let READ the repository writes nothing
+// either (not_permitted, in the grant's own sentence, [Grant.ReadRefusal]) —
+// BEFORE any rule below that admits a writer by its relation to the change.
+// Being an author, a finding's raiser or a thread's starter is a fact about
+// the change that outlives the seat's standing on its repository: a seat that
+// left the chart, or whose unit a `visibility: unit` repository no longer
+// reaches, reads none of the change it would answer, resolve or ask for, so
+// it answers, resolves and asks nothing. A person maintains every repository.
 //
 // AN ASK FOR REVIEW (rule D21) takes a LIVE change (change_closed,
 // change_merged), and an asker who is an author of the change or reviews the
@@ -680,12 +688,23 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 			"discussed by a person, through a credential bound to their human seat, or by a seat; a credential "+
 			"bound to nobody reads only")
 	}
+	// THE GRANT BEFORE EVERY RELATION: an author's answer to a finding, a
+	// raiser's dismissal, a thread's starter's resolution and an author's ask
+	// for review are relations to the CHANGE, which outlive a seat's standing
+	// on its repository — and a seat the deciding chart no longer lets read
+	// the repository (it left the chart, or the repository's visibility no
+	// longer reaches its unit) reads nothing of the change it would write, so
+	// it writes nothing of it either, in the grant's own sentence. A person
+	// maintains every repository and always passes.
 	grant := GrantOf(w.Asker, repo.grantRef(repoID), seats.Roster)
+	if !grant.MayRead() {
+		return d.refuse(ConversationRefusalNotPermitted, grant.ReadRefusal())
+	}
 	switch {
 	case w.Reviewers != nil:
 		d, err = decideReviewers(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, grant, d)
 	case w.Comment != nil:
-		d, err = decideComment(ctx, tx, w, row, named, grant, d)
+		d, err = decideComment(ctx, tx, w, row, named, d)
 	case w.Review != nil:
 		d, err = decideReview(ctx, tx, w, asker, kind, row, named, grant, d)
 	case w.FindingResolve != nil:
@@ -1047,11 +1066,8 @@ func reviewRemedy(g Grant) string {
 
 // decideComment is a comment's rules over row — see this file's head.
 func decideComment(ctx context.Context, tx *sql.Tx, w ConversationWrite, row changeRow, named string,
-	grant Grant, d conversationDecision) (conversationDecision, error) {
+	d conversationDecision) (conversationDecision, error) {
 
-	if !grant.MayRead() {
-		return d.refuse(ConversationRefusalNotPermitted, grant.ReadRefusal())
-	}
 	c := *w.Comment
 	c.CommentID, c.By = CommentID(w.OpID), w.Asker
 	c.ThreadID = c.CommentID

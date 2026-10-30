@@ -5,7 +5,9 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -371,6 +373,110 @@ func TestAnAuthorCannotReview(t *testing.T) {
 		AND reviewer_kind = 'agent' AND revision = 3) OR (change_id = ? AND reviewer = 'founder'
 		AND reviewer_kind = 'person' AND operator_id = 'pat:ada')`, change, other.ChangeID); got != 2 {
 		t.Fatalf("%d of the two reviews are kept with their reviewer, want 2", got)
+	}
+}
+
+// A SEAT THAT LOST THE REPOSITORY WRITES NOTHING OF ITS CONVERSATION: an
+// author's answer to a finding, a raiser's dismissal of its own, a thread's
+// starter's resolution and an author's ask for review — or its withdrawal —
+// admit a writer by what it did on the change, and a seat the deciding chart
+// no longer lets read the repository holds none of them: one that left the
+// chart, and one whose unit a `visibility: unit` repository no longer reaches
+// once the chart moved it. Each such write is refused not_permitted in the
+// grant's own sentence and appends nothing, while a person — who maintains
+// every repository — and a seat the chart still lets maintain it write on.
+//
+// Mutation: drop the grant check that precedes the relation rules, and the
+// author's answer, the raiser's dismissal, the starter's resolution and the
+// author's withdrawal each land.
+func TestASeatThatLostTheRepositoryWritesNothingOfItsConversation(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		visibility code.Visibility
+		// revoke is the chart the writer judges by once the seats lost the
+		// repository; why is the end of the read refusal that says so.
+		revoke func(chart) chart
+		why    string
+	}{
+		{"the seats left the chart", code.VisibilityCompany, func(c chart) chart {
+			delete(c.seats, "dev")
+			delete(c.seats, "plat-lead")
+			return c
+		}, "this seat is no seat of the chart"},
+		{"a unit repository no longer reaches the seats", code.VisibilityUnit, func(c chart) chart {
+			c.seats["dev"] = code.RosterSeat{Handle: "dev", Tier: code.TierFullAccess, Unit: "sales"}
+			c.seats["plat-lead"] = code.RosterSeat{Handle: "plat-lead", Tier: code.TierReview, Unit: "sales"}
+			return c
+		}, `it is visibility: unit, read by the seats of unit "Engineering" and the leads above it`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			n := newNode(t)
+			s := suiteSettings()
+			s.Owner, s.Visibility = code.Owner{Kind: code.OwnerUnit, Ref: "Engineering"}, tc.visibility
+			repo := n.ensure("web", s, t1).RepoID
+			n.push(repo, entry(uuid.Must(uuid.NewV7()).String(), set(mainRef, code.ZeroOID, oidOf("A")),
+				set(featureRef, code.ZeroOID, oidOf("B"))))
+			c, _ := committerOn(t, n, n.pub)
+			opened, err := c.ProposeChange(t.Context(), opening(repo, featureRef, mainRef, dev))
+			requireChanged(t, opened, err)
+			change := opened.ChangeID
+
+			var judged atomic.Pointer[chart]
+			whole := testChart()
+			judged.Store(&whole)
+			w, _ := writerOn(t, n, n.pub, func(o *code.ChangeWriterOptions) {
+				o.SeatRules = func() (code.SeatRules, bool) {
+					return code.SeatRules{Roster: *judged.Load(), Zone: time.UTC}, true
+				}
+			})
+			ctx := t.Context()
+
+			// WHILE THEY READ IT: plat-lead raises two findings, dev starts a
+			// thread and asks cto to review.
+			res, err := w.Converse(ctx, reviewing(repo, change, platLead, 1, code.VerdictRequestChanges, nil,
+				raising(code.SeverityBlocker, 1, "No backoff"), raising(code.SeverityBlocker, 2, "No jitter")))
+			ids := requireReviewed(t, res, err)
+			thread, err := w.Converse(ctx, saying(repo, change, dev, "", "Why the retry loop?"))
+			requireConversed(t, thread, err)
+			res, err = w.Converse(ctx, asking(repo, change, dev, "cto"))
+			requireConversed(t, res, err)
+
+			// THE CHART TAKES THE REPOSITORY FROM THEM.
+			revoked := tc.revoke(testChart())
+			judged.Store(&revoked)
+			for _, write := range []struct {
+				name string
+				as   string
+				w    code.ConversationWrite
+			}{
+				{"the author's answer to a finding", "dev",
+					answering(repo, change, dev, code.FindingResolved, ids[0])},
+				{"the raiser's dismissal of its own finding", "plat-lead",
+					answering(repo, change, platLead, code.FindingDismissed, ids[1])},
+				{"the starter's resolution of its thread", "dev",
+					resolving(repo, change, dev, thread.ID, true)},
+				{"the author's withdrawal of an ask", "dev", withdrawing(repo, change, dev, "cto")},
+				{"the author's ask for review", "dev", asking(repo, change, dev, "vp-sales")},
+			} {
+				before := n.end()
+				res, err := w.Converse(ctx, write.w)
+				requireConversationRefused(t, n, before, res, err, code.ConversationRefusalNotPermitted,
+					`seat "`+write.as+`" holds no access to repository "web": `+tc.why)
+			}
+
+			// A PERSON, AND A SEAT THE CHART STILL LETS MAINTAIN IT, WRITE ON.
+			res, err = w.Converse(ctx, answering(repo, change, ada, code.FindingDismissed, ids[1]))
+			requireConversed(t, res, err)
+			res, err = w.Converse(ctx, resolving(repo, change, cto, thread.ID, true))
+			requireConversed(t, res, err)
+			requireStates(t, n, change, map[string]code.FindingState{ids[0]: code.FindingOpen,
+				ids[1]: code.FindingDismissed})
+			if got, _ := n.reviewer(change, "cto"); got.state != string(code.ReviewerRequested) {
+				t.Fatalf("cto's ask is %q after the refused withdrawal, want it still requested", got.state)
+			}
+		})
 	}
 }
 

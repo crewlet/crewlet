@@ -1462,6 +1462,16 @@ behind their batches and contend with every push to the repository.
   on a file the revision changes. A reply that also marks its thread resolved
   is the reply, then the thread's state as a second write of the same
   operation.
+- **A seat writes only on a repository it reads.** Every write of a
+  conversation by a seat is held first to its grant on the repository, as the
+  deciding node's chart gives it ([Who may read and
+  push](#who-may-read-and-push)): a seat that left the chart, or whose unit a
+  `visibility: unit` repository no longer reaches, is refused `not_permitted`
+  in the read refusal's own words — its answer to a finding as an author, its
+  dismissal of a finding it raised, its resolution of a thread it started and
+  its ask for review as an author among them. Those rules admit a writer by
+  what it did on the change, which outlives its standing on the repository; a
+  person maintains every repository and is never refused so.
 - **A table is written by one subject's records.** The repository's records
   keep the change's row, its body, its authors and its revisions; the change's
   keep its conversation's tables:
@@ -1641,7 +1651,7 @@ sentence:
 |---|---|
 | `repo_deleted`, `repo_archived` | The repository is deleted, being purged or gone, or archived and read-only |
 | `change_not_found` | The repository holds no such change |
-| `not_permitted` | The asker may not make the write, a reviewer asked may not review the change, or an author asked to review their own — the sentence says which, and what would admit it |
+| `not_permitted` | The asker may not make the write — a seat that reads nothing of the repository makes none — a reviewer asked may not review the change, or an author asked to review their own: the sentence says which, and what would admit it |
 | `no_reviewer` | A reviewer asked is no seat of the chart |
 | `too_many_reviewers` | The change would ask more than 32 reviewers at once |
 | `unknown_revision` | A comment points at, or a review judges, a revision the change has not reached |

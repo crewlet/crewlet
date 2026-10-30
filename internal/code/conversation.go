@@ -73,13 +73,14 @@ const (
 	// ConversationRefusalChangeNotFound is a write naming a change the
 	// repository does not hold.
 	ConversationRefusalChangeNotFound ConversationRefusal = "change_not_found"
-	// ConversationRefusalNotPermitted is a write its asker may not make: a
-	// comment by one who reads nothing of the repository, an ask for review
-	// by one who neither wrote the change nor reviews the repository, a
-	// thread resolved by one who neither started it nor wrote the change nor
-	// maintains the repository, nor is a person — and an ask of a reviewer
-	// who may not review it: a seat below review on the repository, or an
-	// author of the change, whose review counts for nothing.
+	// ConversationRefusalNotPermitted is a write its asker may not make: any
+	// write by a seat that reads nothing of the repository — whatever it
+	// wrote, raised or started on the change while it did — an ask for
+	// review by one who neither wrote the change nor reviews the repository,
+	// a thread resolved by one who neither started it nor wrote the change
+	// nor maintains the repository, nor is a person — and an ask of a
+	// reviewer who may not review it: a seat below review on the repository,
+	// or an author of the change, whose review counts for nothing.
 	ConversationRefusalNotPermitted ConversationRefusal = "not_permitted"
 	// ConversationRefusalNoReviewer is an ask of a reviewer the chart does
 	// not hold: no seat by that handle.
