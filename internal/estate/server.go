@@ -37,8 +37,10 @@ type ServerOptions struct {
 	// Git is this node's git half, resolved per request ([LocalGit]), on a
 	// node with the `git` role — every one of which holds data in this
 	// release — and nil on every other. Where it is set the node registers
-	// the git lane too ([gitLanes]), from boot: until its code host is built
-	// the lane answers `no_backend`.
+	// the two git lanes too, the reads' and the engine writes' ([gitLanes]:
+	// [laneGitReads], [laneGitWrites]), both from boot: until its code host
+	// is built each answers `no_backend`, a git read and an engine write
+	// alike.
 	Git LocalGit
 
 	// Seams are this node's own: supplied to every operation it answers.

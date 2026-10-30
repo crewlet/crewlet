@@ -226,15 +226,17 @@ func gitNodeOf(lease coord.Lease) (string, bool) {
 }
 
 // serveEstate makes this data node answer the fleet from its copy of the
-// estate — and, where it has the git role, from its git half on the git lane.
+// estate — and, where it has the git role, from its git half on the two git
+// lanes, the reads' and the engine writes' (estate's gitLanes).
 //
 // EVERY DATA NODE SERVES, whether or not another node asks yet — one joins
 // without anybody reconfiguring the others — and from BEFORE its native runtime
 // is up: the backend is resolved per request, so a request arriving first is
 // answered "not here" rather than refused. So is the git half ([engineGit]),
 // and every git node holds data in this release (git needs ingress, and
-// ingress needs data), so every git node serves here: its git lane answers
-// `no_backend` until its code host is built.
+// ingress needs data), so every git node serves here: each of its git lanes
+// answers `no_backend` until its code host is built, a git read and an engine
+// write alike.
 func (e *Engine) serveEstate(ctx context.Context) error {
 	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
