@@ -179,6 +179,11 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		config.SeatCredentialEngine
 	answer.Options = a.engine.seatOffers(ctx, q.Kind, q.Company, q.Roster, q.Revision,
 		a.managed())
+	// A PLAN IS DRAWN ONLY WHERE THE SYNC TAKES ITS STEPS: a kind the engine
+	// provisions, through a registered vendor, once its migration has
+	// finished. Anywhere else the sync takes none, so a plan would promise
+	// steps that never run and hold the tab at "Next sync" for ever.
+	planned := registered && provisioned && !q.Company.SeatAccessPending(string(q.Kind))
 	offers := map[seataccess.Lane]seataccess.Options{}
 	for _, o := range answer.Options {
 		offers[o.Lane] = o
@@ -197,8 +202,7 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		for _, lane := range lanes {
 			want[lane], _ = seataccess.DesiredOf(seat.Role, lane)
 		}
-		sa, err := a.seatAnswer(q, vendor, registered && provisioned, seat.SeatRef, want,
-			rec, held, offers)
+		sa, err := a.seatAnswer(q, vendor, planned, seat.SeatRef, want, rec, held, offers)
 		if err != nil {
 			return answer, plan, err
 		}
@@ -220,13 +224,16 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 		for lane, d := range edits {
 			next[lane] = d.Normalized()
 		}
-		// A LANE MANAGED OUTSIDE CREWLET HAS NO PLAN: the engine takes no
-		// step on it, so a preview that listed some would promise them.
+		// A LANE MANAGED OUTSIDE CREWLET HAS NO PLAN and asks no step-up:
+		// the engine grants nothing on it.
 		if !provisioned {
 			continue
 		}
+		// ONE WAITING ON ITS MIGRATION HAS NO STEPS YET, and still asks the
+		// step-up a raise does: the saved setting is the one the sync
+		// applies once the migration finishes, with nobody asked again.
 		steps := map[seataccess.Lane][]seataccess.Step{}
-		if registered {
+		if planned {
 			if steps, err = seataccess.Plan(vendor, seatInput(seat.SeatRef, next, rec, held,
 				offers)); err != nil {
 				return answer, plan, err
@@ -249,7 +256,7 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 			continue
 		}
 		rec := records[handle]
-		sa, err := a.seatAnswer(q, vendor, registered && provisioned,
+		sa, err := a.seatAnswer(q, vendor, planned,
 			seataccess.SeatRef{Handle: handle, Name: rec.Name},
 			map[seataccess.Lane]seataccess.Desired{}, rec, true, offers)
 		if err != nil {
@@ -269,8 +276,9 @@ func (a *SeatAccessAPI) compose(ctx context.Context, q setupapi.AccessQuery,
 	return answer, plan, nil
 }
 
-// seatAnswer is one seat on the tab. planned is a lane the engine provisions
-// through a registered vendor, the only kind a plan is drawn for.
+// seatAnswer is one seat on the tab. planned is a kind whose sync takes steps
+// (provisioned by the engine through a registered vendor, and migrated), the
+// only kind a plan is drawn for.
 func (a *SeatAccessAPI) seatAnswer(q setupapi.AccessQuery, vendor seataccess.Vendor,
 	planned bool, ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desired,
 	rec seataccess.Record, held bool,

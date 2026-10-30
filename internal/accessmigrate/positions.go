@@ -99,26 +99,42 @@ type position struct {
 	server string
 	lane   seataccess.Lane
 	key    string
+
+	// inUnit is an `mcp_env` position the seat inherits from its unit's
+	// shared block rather than names itself ([config.Unit.MCPEnv]).
+	inUnit bool
 }
 
 // seatPositions are every place one seat named a credential for a kind
 // connected reports, each a whole `${VAR}`: a literal is a credential somebody
 // manages by hand, which no pass ever wrote and this does not move.
-func seatPositions(seat map[string]any, handle string,
+//
+// THE `mcp_env` THE PASSES READ WAS THE SEAT'S OWN LAID OVER ITS UNIT'S, key
+// by key ([org.MCPEnv.WithDefaults]): unit is the seat's own unit, nil for a
+// seat at the root, and a key the seat inherits from it is a position too,
+// marked as the unit's.
+func seatPositions(seat, unit map[string]any, handle string,
 	connected func(integration.Kind) bool) []position {
 
 	var out []position
-	env := object(seat["mcp_env"])
+	env, shared := object(seat["mcp_env"]), object(unit["mcp_env"])
 	for _, server := range managedServers {
 		spec := envPositions[server]
 		if !connected(spec.kind) {
 			continue
 		}
-		block := object(env[server])
-		for _, key := range credentialKeysIn(block, server) {
-			name, _ := envref.Whole(stripBearer(text(block[key])))
-			out = append(out, position{handle: handle, kind: spec.kind,
-				field: fieldOf(server, key), from: name, server: server, key: key})
+		own, inherited := object(env[server]), object(shared[server])
+		for _, k := range spec.keys {
+			value, inUnit := own[k.key], false
+			if !has(own, k.key) {
+				value, inUnit = inherited[k.key], true
+			}
+			name, whole := envref.Whole(stripBearer(text(value)))
+			if !whole {
+				continue
+			}
+			out = append(out, position{handle: handle, kind: spec.kind, field: k.field,
+				from: name, server: server, key: k.key, inUnit: inUnit})
 		}
 	}
 	for _, lane := range []seataccess.Lane{seataccess.LaneSlack, seataccess.LaneMattermost,
@@ -135,27 +151,6 @@ func seatPositions(seat map[string]any, handle string,
 		}
 	}
 	return out
-}
-
-// credentialKeysIn are the keys of one server's block that held a seat's
-// credential as a whole `${VAR}`, in the pass's order.
-func credentialKeysIn(block map[string]any, server string) []string {
-	var out []string
-	for _, spec := range envPositions[server].keys {
-		if _, whole := envref.Whole(stripBearer(text(block[spec.key]))); whole {
-			out = append(out, spec.key)
-		}
-	}
-	return out
-}
-
-func fieldOf(server, key string) string {
-	for _, spec := range envPositions[server].keys {
-		if spec.key == key {
-			return spec.field
-		}
-	}
-	return ""
 }
 
 // stripBearer drops the scheme an Authorization header carries, as the passes
@@ -178,7 +173,7 @@ func HandedIn(role *config.Role, kind integration.Kind) string {
 		return ""
 	}
 	handle := role.Seat().Handle()
-	for _, p := range seatPositions(seat, handle, func(k integration.Kind) bool {
+	for _, p := range seatPositions(seat, nil, handle, func(k integration.Kind) bool {
 		return k == kind
 	}) {
 		if p.field == primaryField[kind] || primaryField[kind] == "" {
@@ -188,16 +183,51 @@ func HandedIn(role *config.Role, kind integration.Kind) string {
 	return ""
 }
 
-// apply rewrites one position in its seat and reports whether it changed it.
+// apply rewrites one position in its seat, or its unit, and reports whether
+// it changed it.
 //
 // AN `mcp_env` KEY IS DROPPED where the engine now binds the seat's own
 // credential to that server itself (D15), and pointed at the engine's name for
 // it where it does not, so the tool keeps reading the seat's own credential
 // either way. A SEAT BLOCK FIELD is pointed at the engine's name. Neither ever
 // keeps naming a variable a company block shares.
-func (p position) apply(seat map[string]any) bool {
+//
+// A KEY THE SEAT INHERITS FROM ITS UNIT is dropped from the unit's block where
+// the engine binds the server, since it binds each member's own credential;
+// where it does not, the seat names its own credential over it, which wins key
+// by key, and the unit's block is left to its other members.
+func (p position) apply(seat, unit map[string]any) bool {
 	to := seataccess.SinkName(p.kind, p.field, p.handle)
 	pointer := "${" + to + "}"
+	if p.inUnit {
+		shared := object(unit["mcp_env"])
+		block := object(shared[p.server])
+		if bound(p.kind, p.server) {
+			if !has(block, p.key) {
+				return false
+			}
+			dropEnvKey(unit, p.server, p.key)
+			return true
+		}
+		if strings.HasPrefix(strings.TrimSpace(text(block[p.key])), "Bearer ") {
+			pointer = "Bearer " + pointer
+		}
+		env := object(seat["mcp_env"])
+		if env == nil {
+			env = map[string]any{}
+			seat["mcp_env"] = env
+		}
+		own := object(env[p.server])
+		if own == nil {
+			own = map[string]any{}
+			env[p.server] = own
+		}
+		if text(own[p.key]) == pointer {
+			return false
+		}
+		own[p.key] = pointer
+		return true
+	}
 	if p.server != "" {
 		env := object(seat["mcp_env"])
 		block := object(env[p.server])
@@ -205,13 +235,7 @@ func (p position) apply(seat map[string]any) bool {
 			return false
 		}
 		if bound(p.kind, p.server) {
-			delete(block, p.key)
-			if len(block) == 0 {
-				delete(env, p.server)
-			}
-			if len(env) == 0 {
-				delete(seat, "mcp_env")
-			}
+			dropEnvKey(seat, p.server, p.key)
 			return true
 		}
 		if strings.HasPrefix(strings.TrimSpace(text(block[p.key])), "Bearer ") {
@@ -229,6 +253,20 @@ func (p position) apply(seat map[string]any) bool {
 	}
 	block[p.key] = pointer
 	return true
+}
+
+// dropEnvKey removes one key of one server's `mcp_env` block from holder (a
+// seat or a unit), and the block and the env once they are empty.
+func dropEnvKey(holder map[string]any, server, key string) {
+	env := object(holder["mcp_env"])
+	block := object(env[server])
+	delete(block, key)
+	if len(block) == 0 {
+		delete(env, server)
+	}
+	if len(env) == 0 {
+		delete(holder, "mcp_env")
+	}
 }
 
 // bound reports whether the engine binds kind's credential to server itself

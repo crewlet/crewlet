@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/accessmigrate"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/setupapi"
 	"github.com/crewlet/crewlet/internal/engine"
@@ -76,7 +75,7 @@ func migrateSeatAccessStep(ctx context.Context, e *engine.Engine, cfg *configapi
 	case errors.Is(err, configapi.ErrNoActiveRevision):
 		// NOTHING TO MIGRATE YET: a company imported later is migrated by
 		// the next attempt.
-	case errors.As(err, &raced), errors.Is(err, accessmigrate.ErrPlanMoved):
+	case errors.As(err, &raced):
 		log.InfoContext(ctx, "seat_access_migration_raced", "detail",
 			"the document moved while it was being migrated; the next attempt reads it again")
 	default:

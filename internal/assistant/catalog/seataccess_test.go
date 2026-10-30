@@ -24,6 +24,9 @@ type accessRoutes struct {
 	t    *testing.T
 	mu   sync.Mutex
 	sent []exec.Request
+	// twins adds a second agent called QA Engineer and a second role called
+	// Datadog Standard Role; unread answers Datadog's roles as not read.
+	twins, unread bool
 }
 
 func (a *accessRoutes) read(_ context.Context, r exec.Request) (exec.Response, error) {
@@ -32,7 +35,7 @@ func (a *accessRoutes) read(_ context.Context, r exec.Request) (exec.Response, e
 	a.mu.Unlock()
 	switch {
 	case r.Method == http.MethodGet && r.Path == "/setup/integrations/datadog/access":
-		raw, _ := json.Marshal(seataccess.Answer{Kind: "datadog", Revision: "rev-4",
+		answer := seataccess.Answer{Kind: "datadog", Revision: "rev-4",
 			Options: []seataccess.Options{{Lane: seataccess.LaneDatadog, Live: true,
 				Levels: []seataccess.Level{{ID: "role-ro", Name: "Datadog Read Only Role"},
 					{ID: "role-std", Name: "Datadog Standard Role"},
@@ -43,7 +46,18 @@ func (a *accessRoutes) read(_ context.Context, r exec.Request) (exec.Response, e
 						Level: "role-std"}}}},
 				{Handle: "qa", Name: "QA Engineer", Lanes: map[seataccess.Lane]seataccess.LaneAnswer{
 					seataccess.LaneDatadog: {}}},
-			}})
+			}}
+		if a.twins {
+			answer.Seats = append(answer.Seats, seataccess.SeatAnswer{Handle: "qa-2",
+				Name: "QA Engineer", Lanes: map[seataccess.Lane]seataccess.LaneAnswer{
+					seataccess.LaneDatadog: {}}})
+			answer.Options[0].Levels = append(answer.Options[0].Levels,
+				seataccess.Level{ID: "role-std-2", Name: "Datadog Standard Role"})
+		}
+		if a.unread {
+			answer.Options[0] = seataccess.Options{Lane: seataccess.LaneDatadog}
+		}
+		raw, _ := json.Marshal(answer)
 		return exec.Response{Status: http.StatusOK, Header: http.Header{"Etag": {`"rev-4"`}},
 			Body: raw}, nil
 	case r.Method == http.MethodGet:
@@ -142,5 +156,45 @@ func TestASeatAccessCallNamesOnlyWhatTheTabOffers(t *testing.T) {
 		if !errors.Is(err, catalog.ErrInvalidArguments) {
 			t.Errorf("%s: err = %v, want the arguments refused", name, err)
 		}
+	}
+}
+
+// A NAME TWO AGENTS OR TWO ROLES SHARE IS NEVER GUESSED AT.
+//
+// Two agents are called QA Engineer and two roles Datadog Standard Role: a
+// call naming either by that name is refused, naming the handles or the ids
+// to choose by, and one naming the handle or the id goes ahead. A role list
+// Datadog did not answer for is refused as not read, not as a vendor with no
+// roles. Mutation: take the first match, and a case here changes the wrong
+// agent or role.
+func TestASharedNameIsNeverGuessedAt(t *testing.T) {
+	t.Parallel()
+	preview := func(routes *accessRoutes, args map[string]any) error {
+		_, err := mustTool(t, "set_seat_access").Preview(t.Context(), routes.read, wednesday,
+			args)
+		return err
+	}
+	for name, tc := range map[string]struct {
+		args map[string]any
+		says string
+	}{
+		"two agents": {map[string]any{"handle": "QA Engineer", "integration": "datadog",
+			"enabled": true}, "qa, qa-2"},
+		"two roles": {map[string]any{"handle": "qa", "integration": "datadog",
+			"access": "Datadog Standard Role"}, "role-std, role-std-2"},
+	} {
+		err := preview(&accessRoutes{t: t, twins: true}, tc.args)
+		if !errors.Is(err, catalog.ErrInvalidArguments) || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s: err = %v, want it refused naming %s", name, err, tc.says)
+		}
+	}
+	if err := preview(&accessRoutes{t: t, twins: true}, map[string]any{"handle": "qa-2",
+		"integration": "datadog", "access": "role-std-2"}); err != nil {
+		t.Errorf("by handle and id: %v", err)
+	}
+	err := preview(&accessRoutes{t: t, unread: true}, map[string]any{"handle": "qa",
+		"integration": "datadog", "access": "Datadog Standard Role"})
+	if !errors.Is(err, catalog.ErrInvalidArguments) || !strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("an unread role list: err = %v, want it refused as not read", err)
 	}
 }
