@@ -409,7 +409,7 @@ func TestTheGitLabVendorIsRegisteredWithOneTokenAndOneLane(t *testing.T) {
 func TestAStoredLevelRoundTripsAndRefusesWhatGitLabIsNotOffered(t *testing.T) {
 	t.Parallel()
 	for _, a := range []gitlab.Access{{Level: 30}, {Level: 20, MemberRoleID: 7}} {
-		level, role, err := gitlab.ParseLevel(gitlab.LevelID(a))
+		level, role, err := gitlab.ParseLevel(a.LevelID())
 		if err != nil || (role == 0 && level != a.Level) || role != a.MemberRoleID {
 			t.Errorf("%+v round trip = %d, %d, %v", a, level, role, err)
 		}
@@ -596,6 +596,10 @@ func TestASeatsWholeLifeAtGitLab(t *testing.T) {
 
 	off := runOp(t, s, seataccess.OpDisable, seataccess.Desired{}, have, rec)
 	off = append(off, runOp(t, s, seataccess.OpRevoke, seataccess.Desired{}, have, rec)...)
+	// THE SENTENCE SAYS WHAT APPLIED: an administrator's token blocks.
+	if off[0].Did != "Blocked crewlet-sre at GitLab" || !strings.Contains(off[1].Did, "Revoked 1 access token") {
+		t.Fatalf("off said %q / %q", off[0].Did, off[1].Did)
+	}
 	if !off[0].Disabled || !slices.Equal(off[1].Revoked, []string{gitlab.FieldToken}) ||
 		g.userNamed("crewlet-sre").State != "blocked" || len(g.liveTokens(user.ID)) != 0 {
 		t.Fatalf("off = %+v, user %+v", off, g.userNamed("crewlet-sre"))
@@ -683,7 +687,12 @@ func TestOffWithAGroupOwnerTokenStripsMembershipsAndReadsBackAsOffByCrewlet(t *t
 	want := seataccess.Desired{Enabled: true, Level: "30", Scope: []string{"acme/api"}}
 	results := runOp(t, s, seataccess.OpCreate, want, seataccess.Observed{}, nil)
 	rec := &seataccess.Record{Account: &seataccess.Account{ID: results[0].AccountID, State: seataccess.AccountActive}}
-	runOp(t, s, seataccess.OpDisable, seataccess.Desired{}, seataccess.Observed{Scope: want.Scope}, rec)
+	off := runOp(t, s, seataccess.OpDisable, seataccess.Desired{}, seataccess.Observed{Scope: want.Scope}, rec)
+	// AND A GROUP OWNER'S TOKEN SAYS IT COULD NOT BLOCK, and what it did instead.
+	if got := off[0].Did; got != "Removed crewlet-sre's memberships in acme/api (this GitLab token "+
+		"cannot block accounts, so the account stays active with no access)" {
+		t.Fatalf("off said %q", got)
+	}
 	runOp(t, s, seataccess.OpRevoke, seataccess.Desired{}, seataccess.Observed{Scope: want.Scope}, rec)
 	id := atoi(results[0].AccountID)
 	if g.userNamed("crewlet-sre").State != "active" || g.projectSize("acme/api") != 0 || len(g.liveTokens(id)) != 0 {
@@ -887,7 +896,11 @@ func TestThePlanTurnsASeatOffThenRevokesItsToken(t *testing.T) {
 			Exists: true, Enabled: true, Level: "30",
 			Credential: &seataccess.Credential{Variable: "GITLAB_TOKEN_SRE"},
 		}},
-		Record: &seataccess.Record{Credential: &seataccess.Credential{Variable: "GITLAB_TOKEN_SRE"}},
+		// AN ACCOUNT THE LEDGER RECORDS: nothing is turned off without one.
+		Record: &seataccess.Record{
+			Account:    &seataccess.Account{ID: "500", State: seataccess.AccountActive},
+			Credential: &seataccess.Credential{Variable: "GITLAB_TOKEN_SRE"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

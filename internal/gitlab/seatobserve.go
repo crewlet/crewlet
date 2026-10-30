@@ -265,9 +265,9 @@ func observedLevel(held []Access, applied string) string {
 	if len(held) == 0 {
 		return ""
 	}
-	first := LevelID(held[0])
+	first := held[0].LevelID()
 	for _, access := range held {
-		if id := LevelID(access); id != applied {
+		if id := access.LevelID(); id != applied {
 			return id
 		}
 	}

@@ -54,18 +54,11 @@ func (Vendor) Catalog() seataccess.Catalog {
 	}
 }
 
-// memberRolePrefix marks a custom role in a stored level, as
-// [seataccess.GitLabLevel] reads it: a default role is its `access_level` as
-// a decimal ("30"), a custom role on Ultimate "member_role:<id>".
-const memberRolePrefix = "member_role:"
-
-// LevelID is the stored form of what a membership holds, the inverse of
-// [seataccess.GitLabLevel] (a test holds the two to each other).
-func LevelID(a Access) string {
-	if a.MemberRoleID != 0 {
-		return memberRolePrefix + strconv.Itoa(a.MemberRoleID)
-	}
-	return strconv.Itoa(a.Level)
+// LevelID is the stored form of what a membership holds, through the one
+// formatter the document mapping uses ([seataccess.GitLabLevelID]): a default
+// role's access level ("30"), or a custom role's "member_role:<id>".
+func (a Access) LevelID() string {
+	return seataccess.GitLabLevelID(a.Level, int64(a.MemberRoleID))
 }
 
 // ParseLevel reads a stored level through the one parser the document
@@ -446,7 +439,7 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 	out.Live = available
 	for _, role := range custom {
 		out.Levels = append(out.Levels, seataccess.Level{
-			ID:   LevelID(Access{Level: role.BaseAccessLevel, MemberRoleID: role.ID}),
+			ID:   Access{Level: role.BaseAccessLevel, MemberRoleID: role.ID}.LevelID(),
 			Name: role.Name, Custom: true,
 			Administers: Administration(role.BaseAccessLevel),
 		})
@@ -585,12 +578,14 @@ func (s *session) enable(ctx context.Context, in seataccess.ApplyInput) (seatacc
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
-	if user.Blocked() {
-		if err := s.client.UnblockUser(ctx, user.ID); err != nil {
-			return seataccess.StepResult{}, refuse(s, err)
-		}
+	if !user.Blocked() {
+		return seataccess.StepResult{Did: user.Username + " was not blocked at GitLab; " +
+			"its memberships are restored by the next step"}, nil
 	}
-	return seataccess.StepResult{}, nil
+	if err := s.client.UnblockUser(ctx, user.ID); err != nil {
+		return seataccess.StepResult{}, refuse(s, err)
+	}
+	return seataccess.StepResult{Did: "Unblocked " + user.Username + " at GitLab"}, nil
 }
 
 // converge brings the seat's memberships to the document's role and scope:
@@ -659,7 +654,8 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 			return seataccess.StepResult{}, refuse(s, listErr)
 		}
 		if newest, ok := newestOwn(tokens, in.Seat.Handle); ok && SameScopes(newest.Scopes, scopes) {
-			return seataccess.StepResult{}, nil
+			return seataccess.StepResult{Did: "Kept its access token: it already carries " +
+				strings.Join(scopes, " and ") + ", the scopes its new role allows"}, nil
 		}
 	}
 	group := s.mintGroup()
@@ -690,6 +686,7 @@ func (s *session) mint(ctx context.Context, in seataccess.ApplyInput) (seatacces
 	}
 	return seataccess.StepResult{Minted: []seataccess.Minted{{
 		Field: FieldToken, Value: token.Value, Revoke: revoke,
+		CredentialID: strconv.Itoa(token.ID),
 	}}}, nil
 }
 
@@ -731,7 +728,14 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput) (seatacc
 	if err != nil {
 		return seataccess.StepResult{}, refuse(s, err)
 	}
+	// THE ONE THIS OP JUST SEALED is kept, by the id its mint reported;
+	// failing that, the newest, which is the same token on an instance whose
+	// ids only grow.
 	keep, _ := newestOwn(tokens, in.Seat.Handle)
+	if id, err := strconv.Atoi(priorMinted(in.Prior, FieldToken)); err == nil {
+		keep.ID = id
+	}
+	revoked := 0
 	for _, t := range tokens {
 		if t.ID == keep.ID || !ownLive(t, in.Seat.Handle) {
 			continue
@@ -739,8 +743,23 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput) (seatacc
 		if err := s.client.RevokeToken(ctx, s.mintGroup(), user.ID, t.ID); err != nil {
 			return seataccess.StepResult{}, refuse(s, err)
 		}
+		revoked++
 	}
-	return seataccess.StepResult{}, nil
+	return seataccess.StepResult{Did: fmt.Sprintf("Revoked %d earlier token(s) Crewlet minted on %s",
+		revoked, user.Username)}, nil
+}
+
+// priorMinted is the credential id an earlier step of this op minted for
+// field, or "" where none did.
+func priorMinted(prior []seataccess.StepResult, field string) string {
+	for i := len(prior) - 1; i >= 0; i-- {
+		for _, m := range prior[i].Minted {
+			if m.Field == field && m.CredentialID != "" {
+				return m.CredentialID
+			}
+		}
+	}
+	return ""
 }
 
 // disable turns the account off and keeps it (D1): blocked where this token
@@ -752,26 +771,39 @@ func (s *session) disable(ctx context.Context, in seataccess.ApplyInput) (seatac
 		return seataccess.StepResult{}, err
 	}
 	if s.admin {
-		if !user.Blocked() {
-			if blockErr := s.client.BlockUser(ctx, user.ID); blockErr != nil {
-				return seataccess.StepResult{}, refuse(s, blockErr)
-			}
+		if user.Blocked() {
+			return seataccess.StepResult{Disabled: true,
+				Did: user.Username + " was already blocked at GitLab"}, nil
 		}
-		return seataccess.StepResult{Disabled: true}, nil
+		if blockErr := s.client.BlockUser(ctx, user.ID); blockErr != nil {
+			return seataccess.StepResult{}, refuse(s, blockErr)
+		}
+		return seataccess.StepResult{Disabled: true, Did: "Blocked " + user.Username + " at GitLab"}, nil
 	}
 	r, err := s.readRoster(ctx, in.Want.Scope, in.Have.Scope)
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
-	for _, project := range r.projectsOf(user.ID) {
+	dropped := r.projectsOf(user.ID)
+	for _, project := range dropped {
 		if err := r.dropProject(ctx, s.client, project, user.ID); err != nil {
 			return seataccess.StepResult{}, refuse(s, err)
 		}
 	}
-	if err := r.dropGroup(ctx, s.client, s.group.ID, user.ID); err != nil {
-		return seataccess.StepResult{}, refuse(s, err)
+	if _, member := r.group[user.ID]; member {
+		if err := r.dropGroup(ctx, s.client, s.group.ID, user.ID); err != nil {
+			return seataccess.StepResult{}, refuse(s, err)
+		}
+		dropped = append([]string{s.group.FullPath}, dropped...)
 	}
-	return seataccess.StepResult{Disabled: true}, nil
+	// SAID AS IT HAPPENED: this token cannot block, so the account stays
+	// active with no membership, which is what off means here.
+	did := user.Username + " held no membership to remove"
+	if len(dropped) > 0 {
+		did = "Removed " + user.Username + "'s memberships in " + strings.Join(dropped, ", ")
+	}
+	return seataccess.StepResult{Disabled: true, Did: did + " (this GitLab token cannot block " +
+		"accounts, so the account stays active with no access)"}, nil
 }
 
 // revokeAll revokes every token this engine minted for the seat, and tells
@@ -781,6 +813,7 @@ func (s *session) revokeAll(ctx context.Context, in seataccess.ApplyInput) (seat
 	if err != nil {
 		return seataccess.StepResult{}, refuse(s, err)
 	}
+	revoked := 0
 	if found {
 		tokens, err := s.client.Tokens(ctx, s.mintGroup(), user.ID)
 		if err != nil {
@@ -793,9 +826,11 @@ func (s *session) revokeAll(ctx context.Context, in seataccess.ApplyInput) (seat
 			if err := s.client.RevokeToken(ctx, s.mintGroup(), user.ID, t.ID); err != nil {
 				return seataccess.StepResult{}, refuse(s, err)
 			}
+			revoked++
 		}
 	}
-	return seataccess.StepResult{Revoked: []string{FieldToken}}, nil
+	return seataccess.StepResult{Revoked: []string{FieldToken},
+		Did: fmt.Sprintf("Revoked %d access token(s) Crewlet minted", revoked)}, nil
 }
 
 // remove deletes the service account. GitLab keeps what it authored under

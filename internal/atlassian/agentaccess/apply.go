@@ -296,7 +296,8 @@ func (s *session) mintIfShort(ctx context.Context, in seataccess.ApplyInput, p p
 		return seataccess.StepResult{}, refuseOrg(s, err)
 	}
 	if own := ownTokens(tokens, in.Seat.Handle, s.now()); len(own) > 0 && own[0].lanes == want {
-		return seataccess.StepResult{}, nil
+		return seataccess.StepResult{Did: "Kept its API token: it already carries the scopes of " +
+			lanesName(want)}, nil
 	}
 	return s.mintFor(ctx, in, account, want)
 }
@@ -330,7 +331,7 @@ func (s *session) mintFor(ctx context.Context, in seataccess.ApplyInput, account
 	}
 	id := token.ID
 	minted := []seataccess.Minted{{
-		Field: FieldToken, Value: token.Token,
+		Field: FieldToken, Value: token.Token, CredentialID: id,
 		Revoke: func(ctx context.Context) error {
 			return s.org.RevokeToken(ctx, s.key, account.ID, id)
 		},
@@ -338,7 +339,34 @@ func (s *session) mintFor(ctx context.Context, in seataccess.ApplyInput, account
 	if email := strings.TrimSpace(account.Email); email != "" {
 		minted = append(minted, seataccess.Minted{Field: FieldEmail, Value: email})
 	}
-	return seataccess.StepResult{Minted: minted}, nil
+	return seataccess.StepResult{Minted: minted,
+		Did: "Minted an API token with the scopes of " + lanesName(on)}, nil
+}
+
+// lanesName says which products a set of lanes is, for a step's sentence.
+func lanesName(l lanes) string {
+	switch {
+	case l.jira && l.confluence:
+		return "Jira and Confluence"
+	case l.jira:
+		return "Jira only"
+	case l.confluence:
+		return "Confluence only"
+	}
+	return "no product"
+}
+
+// priorMinted is the credential id an earlier step of this op minted for
+// field, or "" where none did.
+func priorMinted(prior []seataccess.StepResult, field string) string {
+	for i := len(prior) - 1; i >= 0; i-- {
+		for _, m := range prior[i].Minted {
+			if m.Field == field && m.CredentialID != "" {
+				return m.CredentialID
+			}
+		}
+	}
+	return ""
 }
 
 // retire revokes every token this engine minted for the seat except the
@@ -352,13 +380,25 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput, _ produc
 	if err != nil {
 		return seataccess.StepResult{}, refuseOrg(s, err)
 	}
+	// THE ONE THIS OP JUST SEALED is kept, by the id its mint reported;
+	// failing that, the newest by the time its label carries.
 	own := ownTokens(tokens, in.Seat.Handle, s.now())
-	for _, t := range own[min(1, len(own)):] {
+	keep := priorMinted(in.Prior, FieldToken)
+	if keep == "" && len(own) > 0 {
+		keep = own[0].ID
+	}
+	revoked := 0
+	for _, t := range own {
+		if t.ID == keep {
+			continue
+		}
 		if err := s.org.RevokeToken(ctx, s.key, account.ID, t.ID); err != nil {
 			return seataccess.StepResult{}, refuseOrg(s, err)
 		}
+		revoked++
 	}
-	return seataccess.StepResult{}, nil
+	return seataccess.StepResult{Did: fmt.Sprintf("Revoked %d earlier API token(s) Crewlet minted on it",
+		revoked)}, nil
 }
 
 // disable takes the lane's roles away everywhere this pass reads. The
@@ -381,7 +421,10 @@ func (s *session) disable(ctx context.Context, in seataccess.ApplyInput, p produ
 		}
 	}
 	remaining := s.doc(in.Seat.Handle).lanes().without(p.lane)
-	return seataccess.StepResult{Disabled: !remaining.any()}, nil
+	return seataccess.StepResult{Disabled: !remaining.any(),
+		Did: "Removed its " + p.name + " " + p.roleWord() + " in every " + strings.TrimSuffix(p.where, "s") +
+			" the company or this agent names; the account keeps its " + p.name + " product access, " +
+			"which Atlassian offers no route to remove per product"}, nil
 }
 
 // narrow replaces the seat's token with one that leaves out the lane being
@@ -391,7 +434,8 @@ func (s *session) disable(ctx context.Context, in seataccess.ApplyInput, p produ
 func (s *session) narrow(ctx context.Context, in seataccess.ApplyInput, p product) (seataccess.StepResult, error) {
 	remaining := s.doc(in.Seat.Handle).lanes().without(p.lane)
 	if !remaining.any() {
-		return seataccess.StepResult{}, nil
+		return seataccess.StepResult{Did: "Left its API token for the revoke that follows: " +
+			"it is on neither Jira nor Confluence"}, nil
 	}
 	account, err := s.mustAccount(ctx, in)
 	if err != nil {
@@ -422,7 +466,8 @@ func (s *session) revokeAll(ctx context.Context, in seataccess.ApplyInput, _ pro
 			return seataccess.StepResult{}, refuseOrg(s, revokeErr)
 		}
 	}
-	return seataccess.StepResult{Revoked: []string{FieldToken}}, nil
+	return seataccess.StepResult{Revoked: []string{FieldToken},
+		Did: "Revoked its API token; the account and its address are kept"}, nil
 }
 
 // remove deletes the service account, which is allowed only when the seat is
