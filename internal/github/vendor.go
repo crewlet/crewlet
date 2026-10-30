@@ -365,8 +365,8 @@ func (s *session) observed(
 		// has suspended it at GitHub since: that suspension is theirs, and
 		// it stays until a person chooses Turn back on (D3).
 		out.DisabledBy = seataccess.DisabledByHand
-		if !installation.SuspendedByPerson() && record != nil && record.Account != nil &&
-			record.Account.State == seataccess.AccountDisabled {
+		if !installation.SuspendedByPerson() && !liftWaiting(record) && record != nil &&
+			record.Account != nil && record.Account.State == seataccess.AccountDisabled {
 			out.DisabledBy = seataccess.DisabledByCrewlet
 		}
 	}
@@ -453,6 +453,13 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 		}
 		seat.InstallationID = obs.Installation.ID
 		if err := UnsuspendSeat(ctx, s.opts, seat); err != nil {
+			if liftRefused(err) {
+				// NOT OURS TO LIFT AFTER ALL: a person's step, never a
+				// fault retried every pass. The next pass reads this wait
+				// from the ledger and asks GitHub nothing ([liftWaiting]).
+				res.Waiting = s.personSuspended(seat, obs)
+				return res, nil
+			}
 			return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbEnable)
 		}
 		// READ AGAIN, NOW THAT IT IS ON: a suspended installation's
@@ -626,6 +633,25 @@ func (s *session) installWait(seat SeatApp) *seataccess.Waiting {
 		Detail: seat.Handle + "'s app exists and nothing has installed it: install it on " +
 			orgLabel(s.opts.Org),
 	}
+}
+
+// liftRefused reports GitHub refusing this engine's unsuspend: a 403 or a 422,
+// which is GitHub saying the suspension is not this app's to lift.
+func liftRefused(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && (apiErr.Status == 403 || apiErr.Status == 422)
+}
+
+// liftWaiting reports a seat whose last sync stopped at turning it back on,
+// waiting for a person to unsuspend it at GitHub. Its suspension is then a
+// person's to lift whoever placed it, so no pass asks GitHub to lift it again.
+func liftWaiting(record *seataccess.Record) bool {
+	if record == nil {
+		return false
+	}
+	sync := record.Lanes[seataccess.LaneGitHub].Sync
+	return sync != nil && sync.Outcome == seataccess.OutcomeWaiting &&
+		sync.Error != nil && sync.Error.Step == seataccess.VerbEnable
 }
 
 // personSuspended is the unsuspend a person still owes at GitHub.

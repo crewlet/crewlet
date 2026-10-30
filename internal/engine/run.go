@@ -169,6 +169,10 @@ type Engine struct {
 	// for the access pass's finding ([Engine.MigrateSeatAccess]).
 	seatAccessPending sync.Map
 
+	// offers is each integration's per-seat offer, read live from its vendor
+	// and reused per revision ([Engine.seatOffers]).
+	offers offerCache
+
 	// setupRunner is the provisioning runner this node serves, built once.
 	//
 	// ONE INSTANCE, and that is the whole reason it is held here rather

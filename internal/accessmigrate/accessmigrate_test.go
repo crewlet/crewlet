@@ -263,9 +263,10 @@ func TestTheMigratedDocumentCarriesNothingRetired(t *testing.T) {
 // Its role cannot be looked up or its accounts read, so nothing is guessed:
 // the SRE keeps its old seat exactly as it was, the company role is not
 // removed, and Datadog is not marked, so its access pass waits. GitHub and
-// GitLab move on. A Datadog that answers but lists no such role is the same.
-// Mutation: fall back to a default role, or migrate every integration or
-// none, and a case here fails.
+// GitLab move on. A Datadog that answers but lists no such role is the same,
+// for an SRE whose account the engine has not made yet (one that exists keeps
+// the role it holds, which needs no lookup). Mutation: fall back to a default
+// role, or migrate every integration or none, and a case here fails.
 func TestAnUnansweredVendorLeavesOnlyItsIntegrationGated(t *testing.T) {
 	t.Parallel()
 	for name, vs := range map[string]*vendors{
@@ -277,6 +278,7 @@ func TestAnUnansweredVendorLeavesOnlyItsIntegrationGated(t *testing.T) {
 		"no such role": func() *vendors {
 			v := gophraseVendors()
 			v.roles = v.roles[:2]
+			delete(v.accounts, integration.KindDatadog)
 			return v
 		}(),
 	} {

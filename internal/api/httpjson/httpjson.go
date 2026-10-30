@@ -349,6 +349,10 @@ const (
 	// CodeCredentialExternal is a rotation asked of a credential handed in
 	// from outside Crewlet, which the engine binds and never writes.
 	CodeCredentialExternal Code = "credential_external"
+	// CodeAccessExternal is a remove or a turn back on asked of an agent's
+	// account that is managed outside Crewlet, which the engine does not
+	// change.
+	CodeAccessExternal Code = "access_external"
 )
 
 // The configuration set: `/config`'s refusals, and the ones `/setup` shares
@@ -1339,6 +1343,8 @@ var codes = map[Code]string{
 		"its account. Nothing was removed.",
 	CodeCredentialExternal: "This credential was provided from outside Crewlet, so " +
 		"Crewlet does not rotate it. Rotate it where it was issued.",
+	CodeAccessExternal: "This agent's account is managed outside Crewlet, so Crewlet " +
+		"does not remove it or turn it back on. Change it at the vendor.",
 
 	CodeNoActiveRevision: "No company is active on this node yet. Import one " +
 		"first. The detail says how.",

@@ -137,6 +137,8 @@ type Service struct {
 	// lost race name as the one node holding the revision they stored.
 	node string
 	now  func() time.Time
+	// raises is which agent seats a write raises ([Options.Raises]).
+	raises Raises
 }
 
 // Options wire the service.
@@ -196,6 +198,12 @@ type Options struct {
 
 	// Now is injectable so a test can pin the revision timestamps.
 	Now func() time.Time
+
+	// Raises is which agent seats a write raises to an administration
+	// grant at a vendor (raise.go): the engine's, which reads each vendor's
+	// offer. Nil judges with no vendor asked, failing closed: every turn-on
+	// or change of level on a lane the engine provisions is a raise.
+	Raises Raises
 }
 
 // New builds the service.
@@ -236,12 +244,16 @@ func New(opts Options) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{
+	s := &Service{
 		configs: opts.Store.Configs(), plane: opts.Plane,
 		cipher: opts.Cipher, holders: opts.Holders, queue: opts.Queue, now: now,
 		writers: config.APIAuth{CompanyWriters: slices.Clone(opts.CompanyWriters)},
-		node:    opts.Node,
-	}, nil
+		node:    opts.Node, raises: opts.Raises,
+	}
+	if s.raises == nil {
+		s.raises = failClosedRaises(s.Managed)
+	}
+	return s, nil
 }
 
 // Routes registers the surface on the API's mux, every route through
@@ -952,6 +964,7 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 	var unanswered *ActivationUnknownError
 	var refused *AdmissionError
 	var managed *ManagedError
+	var raise *RaiseError
 	switch {
 	// THE CREDENTIAL'S REFUSAL FIRST, as [Service.prepare] decides it: a
 	// managed document refuses whoever is asking before anything they sent
@@ -960,6 +973,8 @@ func (s *Service) refuseApply(w http.ResponseWriter, err error) {
 		RefuseManaged(w, managed)
 	case errors.As(err, &refused):
 		refuseAdmission(w, refused)
+	case errors.As(err, &raise):
+		refuseRaise(w, raise)
 	case errors.Is(err, ErrNoActiveRevision):
 		httpjson.FailWith(w, http.StatusConflict, httpjson.CodeNoActiveRevision,
 			map[string]string{
