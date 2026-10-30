@@ -15,12 +15,11 @@ type TeardownOptions struct {
 	Client *Client
 	Config *config.GitLab
 
-	// Plan, RemoveSeats and Mode are IGNORED. They are kept only so the
-	// engine's current call sites compile until they are retired: removing
-	// an agent's account is per-seat access, through the ledger.
-	Plan        *provision.Plan
-	RemoveSeats bool
-	Mode        Mode
+	// Plan and Mode are IGNORED. They are kept only so the engine's current
+	// call site compiles until it stops setting them: removing an agent's
+	// account is per-seat access, through the ledger.
+	Plan *provision.Plan
+	Mode Mode
 }
 
 // Teardown removes the webhooks this engine registered in a GitLab group.

@@ -38,30 +38,6 @@ type Result struct {
 // [Reconcile] returns. A seat's findings come from per-seat access.
 func (r *Result) Findings() []integration.Finding { return nil }
 
-// TeardownOptions is what removing the organization's integration needs.
-type TeardownOptions struct {
-	Client *Client
-	OrgID  string
-	Key    string
-
-	// Plan is IGNORED, kept only so the engine's current call site compiles
-	// until it is retired: removing an agent's account is per-seat access,
-	// through the ledger.
-	Plan *provision.Plan
-}
-
-// Teardown has nothing of the organization's to undo. Atlassian keeps no
-// webhook this engine registered (Cloud events arrive through the Forge
-// relay), and every agent's account is per-seat access, removed through the
-// ledger rather than from the document's current seats. It answers an empty
-// [provision.Removed].
-func Teardown(_ context.Context, opts TeardownOptions) (provision.Removed, error) {
-	if opts.Client == nil {
-		return provision.Removed{}, errors.New("atlassian: no client")
-	}
-	return provision.Removed{}, nil
-}
-
 // Reconcile is the organization's company-level pass: it proves the
 // organization key and discovers the site the agents work in.
 //
