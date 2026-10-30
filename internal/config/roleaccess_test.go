@@ -90,11 +90,15 @@ roles:
 }
 
 // THE ENGINE BINDS A SEAT'S OWN CREDENTIAL TO ITS PER-SEAT SERVER (D15), under
-// the key the server reads, and only for a seat that is on.
+// the key the server reads, and only for a seat that is on. Both integrations
+// are ones the engine provisions, so the credential is the one it seals (D4b).
 func TestTheOrgModelBindsASeatsCredentialToItsTool(t *testing.T) {
 	t.Parallel()
 	c := parsedDoc(t, `
 name: Acme
+integrations:
+  datadog: {provisioning: {site: datadoghq.com}}
+  gitlab: {enabled: true, provisioning: {group: acme}}
 mcp_servers:
   - {name: datadog, transport: http, url: "https://mcp.datadoghq.com/v1/mcp", shared: false}
   - {name: gitlab, command: gitlab-mcp, shared: false}
