@@ -73,3 +73,44 @@ func TestTheBacklogFindsAnOverdueCheckBehindLongerOnes(t *testing.T) {
 		t.Fatalf("a minute on, with every attempt inside its own timeout, the backlog is %+v, want none", got)
 	}
 }
+
+// A DELETED REPOSITORY'S QUEUE IS NOBODY'S BACKLOG: an attempt past its own
+// timeout counts while its repository is active, and while it is archived —
+// a runner still claims and ends an archived repository's attempts — and not
+// once the repository is deleted: every write of a deleted repository's
+// checks is refused repo_deleted, the home's cancel and a runner's claim
+// alike, so the attempt stays queued until the purge removes it, and counted
+// it raised the alarm on every data node for the retention's days, sending an
+// operator to git nodes that were healthy. Restored, it counts again.
+//
+// Mutation: drop the walk's test of the repository's state, and the deleted
+// repository's attempt is counted — red.
+func TestTheBacklogLeavesADeletedRepositorysChecksOut(t *testing.T) {
+	t.Parallel()
+	e := openChecksEstate(t)
+	lint := CheckKey{RepoID: checkRepo, OID: oid("short"), Name: "lint", Attempt: 1}
+	e.apply(queuedWithTimeout(t, lint, 60, applyClock))
+	later := applyClock.Add(2 * time.Hour)
+	archived := settingsFor("")
+	archived.Archived = true
+	restored := settingsFor("")
+	for _, step := range []struct {
+		what    string
+		records []built
+		behind  int
+	}{
+		{"active", nil, 1},
+		{"archived", []built{rec(t, RepoSubject(checkRepo), OpSettings, Scope{RepoPath(checkRepo)},
+			SettingsRecord{RepoID: checkRepo, Settings: archived})}, 1},
+		{"deleted", []built{rec(t, RepoSubject(checkRepo), OpDelete, Scope{RepoPath(checkRepo)},
+			LifecycleRecord{RepoID: checkRepo, ConfigEpoch: 1})}, 0},
+		{"restored", []built{rec(t, RepoSubject(checkRepo), OpRestore, Scope{RepoPath(checkRepo)},
+			LifecycleRecord{RepoID: checkRepo, ConfigEpoch: 1, Settings: &restored})}, 1},
+	} {
+		e.apply(step.records...)
+		if got := e.backlog(later); got.Behind != step.behind {
+			t.Fatalf("with its repository %s, an attempt two hours past its one-minute timeout reads as %+v, "+
+				"want %d behind", step.what, got, step.behind)
+		}
+	}
+}

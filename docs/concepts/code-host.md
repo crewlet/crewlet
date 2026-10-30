@@ -1751,7 +1751,10 @@ reading the queued attempts in the order they fell **overdue** — each
 attempt's queued instant plus its own timeout, which its row carries — so a
 lint stuck behind a thousand attempts of a long check is found as soon as it
 is overdue, and every attempt the reading counts is one past its time. It
-counts up to 1 024 and says there are more past that.
+counts up to 1 024 and says there are more past that. A **deleted**
+repository's queued attempts are not counted: every write of its checks is
+refused — a runner's claim and the home's cancel alike — so they wait for its
+purge to remove them, and no runner was ever going to claim them.
 
 The writer counts what it decided on three instruments: the attempts it
 queued (`crewlet.code.checks.queued`, by purpose), the endings the rows kept

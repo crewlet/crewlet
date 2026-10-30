@@ -603,7 +603,9 @@ func (r *Reader) dueCheckWork(ctx context.Context, tx *sql.Tx, q ReadQuery, out 
 // their own timeouts is a fleet with no runner at all, which the alarm names
 // either way. So a reading every AlarmInterval on every data node is one
 // range of one partial index, a thousand entries at most, each read with its
-// row for the instant it was queued.
+// row for the instant it was queued and its repository's key for whether a
+// runner may still claim it — and the entries of a deleted repository's
+// attempts, until its purge removes them, are read and skipped the same way.
 const BacklogScan = 1024
 
 // ChecksBacklog is what a node's alarm reads of the queued checks
@@ -624,8 +626,19 @@ type ChecksBacklog struct {
 // and at most [BacklogScan] of them: the threshold of the code_checks_backlog
 // alarm is every check's own (ADR-0015), never one of the alarm's. An attempt
 // queued with no definition — one a person's CI reports, which no runner of
-// the engine claims — is never overdue. A STALE read of this node's rows, as
-// every alarm's reading is: the alarm says what this node holds.
+// the engine claims — is never overdue.
+//
+// AN ATTEMPT NO RUNNER CAN CLAIM IS NOBODY'S BACKLOG: one of a repository that
+// is deleted, being purged or gone is not counted. Every write of such a
+// repository's checks is refused repo_deleted — a runner's claim and the
+// home's cancel alike — so its queued attempts stay queued until the purge
+// removes them, up to code.deleted_retention_days later; counted, they raised
+// the alarm on every data node for that long, its remedy sending an operator
+// to git nodes that were healthy. Each is tested by its repository's key as
+// the walk reads it, so it takes no place in the count.
+//
+// A STALE read of this node's rows, as every alarm's reading is: the alarm
+// says what this node holds.
 func (r *Reader) ChecksBacklog(ctx context.Context, now time.Time) (ChecksBacklog, error) {
 	query := statelog.Freshness{Level: statelog.ReadStale}.Query(
 		statelog.ScopeSet{Paths: []string{DomainPath()}}, true)
@@ -814,11 +827,15 @@ const (
 		ORDER BY finished_at DESC, repo_id DESC, commit_oid DESC, name DESC, attempt DESC LIMIT ?7`
 	// THE BACKLOG'S WALK: the queued attempts overdue by ?1, in the order
 	// they fell overdue, on code_checks_overdue_idx — its partial predicate
-	// repeated verbatim, and its range what the seek reads.
-	checksBacklogSQL = `SELECT repo_id, commit_oid, name, attempt, queued_at
-		FROM code_checks INDEXED BY code_checks_overdue_idx
-		WHERE state = 'queued' AND overdue_at > 0 AND overdue_at < ?1
-		ORDER BY overdue_at, repo_id, commit_oid, name, attempt LIMIT ?2`
+	// repeated verbatim, and its range what the seek reads; each kept only
+	// where its repository is one a runner may still claim it in (active or
+	// archived), tested by the repository's key.
+	checksBacklogSQL = `SELECT k.repo_id, k.commit_oid, k.name, k.attempt, k.queued_at
+		FROM code_checks AS k INDEXED BY code_checks_overdue_idx
+		WHERE k.state = 'queued' AND k.overdue_at > 0 AND k.overdue_at < ?1
+			AND EXISTS (SELECT 1 FROM code_repos AS r WHERE r.id = k.repo_id
+				AND r.status IN ('active', 'archived'))
+		ORDER BY k.overdue_at, k.repo_id, k.commit_oid, k.name, k.attempt LIMIT ?2`
 	// THE HOME'S LISTING, changes_due's two statements with the facts' test
 	// replaced by the checks': a head with no attempt at its commit, one seek
 	// of code_checks' key.

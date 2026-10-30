@@ -996,7 +996,7 @@ func registeredStatements() map[string]statement {
 		"due check repositories": {dueCheckReposSQL, []any{"", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id>?)", "COVERING INDEX " + checksKey + " (repo_id=? AND commit_oid=?)",
 				refsKey + " (repo_id=? AND ref=?)", repoKey + " (id=?)"}},
-		"checks backlog": {checksBacklogSQL, []any{1000, BacklogScan + 1}, []string{"code_checks_overdue_idx (overdue_at>? AND overdue_at<?)"}},
+		"checks backlog": {checksBacklogSQL, []any{1000, BacklogScan + 1}, []string{"code_checks_overdue_idx (overdue_at>? AND overdue_at<?)", repoKey + " (id=?)"}},
 		"due check heads": {dueCheckChangesSQL, []any{"repo-1", "refs/heads/f000001", MaxSnapshotItems},
 			[]string{"code_changes_open_idx (repo_id=? AND source_ref>?)", refsKey + " (repo_id=? AND ref=?)",
 				"COVERING INDEX " + checksKey + " (repo_id=? AND commit_oid=?)"}},

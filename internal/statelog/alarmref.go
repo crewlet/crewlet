@@ -198,7 +198,8 @@ var alarmMeaning = map[Kind]string{
 		"its checks file planned for. Measured from the code log's rows by every " +
 		"data node, in the order the attempts fell overdue, so it stands even " +
 		"where no git node runs checks at all; past a thousand it says there " +
-		"are more rather than how many.",
+		"are more rather than how many. A deleted repository's queued attempts " +
+		"are not counted: no runner may claim them, and its purge removes them.",
 }
 
 const alarmHeader = `# Alarms
