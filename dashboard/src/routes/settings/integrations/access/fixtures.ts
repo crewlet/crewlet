@@ -37,6 +37,7 @@ const GITHUB_OPTIONS: AccessOptions = {
     { key: "pull_requests", name: "Pull requests" },
     { key: "checks", name: "Checks" },
     { key: "actions", name: "Actions" },
+    { key: "deployments", name: "Deployments" },
     { key: "workflows", name: "Workflows", write_only: true, administers_on_write: true },
   ],
   scope: ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
@@ -55,7 +56,46 @@ const MATTERMOST_OPTIONS: AccessOptions = {
 const laneOf = (options: AccessOptions): Lane =>
   lanesOf({ kind: options.lane, revision: "", syncing: false, options: [options], seats: [] })[0]!;
 
+/** Confluence on a site without space roles: space permissions by operation, a set per seat. */
+const CONFLUENCE_OPTIONS: AccessOptions = {
+  lane: "confluence",
+  live: false,
+  multiple: true,
+  levels: [
+    {
+      id: "",
+      name: "Product access only",
+      note: "The account has Confluence and no space role or permission of its own: the site's and each space's permissions decide what it sees.",
+    },
+    { id: "read:space", name: "View" },
+    { id: "create:page", name: "Add pages" },
+    { id: "create:blogpost", name: "Add blog posts" },
+    { id: "create:comment", name: "Add comments" },
+    { id: "administer:space", name: "Admin", administers: true },
+  ],
+  scope: ["ENG", "OPS"],
+};
+
+/** Jira's project roles, read live; a seat may also hold Jira with no role. */
+const JIRA_OPTIONS: AccessOptions = {
+  lane: "jira",
+  live: true,
+  levels: [
+    {
+      id: "",
+      name: "Product access only",
+      note: "The account has Jira and no project role: each project's permission scheme decides what it sees.",
+    },
+    { id: "10002", name: "Viewer" },
+    { id: "10003", name: "Member" },
+    { id: "10004", name: "Administrator", administers: true },
+  ],
+  scope: ["ENG", "OPS"],
+};
+
 export const DATADOG_LANE = laneOf(DATADOG_OPTIONS);
+export const JIRA_LANE = laneOf(JIRA_OPTIONS);
+export const CONFLUENCE_LANE = laneOf(CONFLUENCE_OPTIONS);
 export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 
@@ -127,6 +167,7 @@ const REVIEW = {
   pull_requests: "write",
   checks: "read",
   actions: "read",
+  deployments: "read",
 } as const;
 
 export function githubAnswer(): AccessAnswer {
@@ -167,6 +208,54 @@ export function mattermostAnswer(): AccessAnswer {
         mattermost: onLane({
           variable: "MATTERMOST_TOKEN_PM",
           desired: { enabled: true, level: "system_user", scope: [] },
+        }),
+      }),
+    ],
+  };
+}
+
+/** Atlassian's Confluence lane of sets: PM on with View and Add pages, QA off with product access only. */
+export function confluenceAnswer(): AccessAnswer {
+  const held = "create:page read:space";
+  return {
+    kind: "atlassian",
+    revision: "rev-7",
+    syncing: false,
+    options: [CONFLUENCE_OPTIONS],
+    seats: [
+      seat("pm", "PM", {
+        confluence: onLane({
+          variable: "ATLASSIAN_TOKEN_PM",
+          desired: { enabled: true, level: held, scope: ["ENG"] },
+          observed: {
+            exists: true,
+            enabled: true,
+            level: held,
+            scope: ["ENG"],
+            credential: { variable: "ATLASSIAN_TOKEN_PM", minted_at: ago(DAY) },
+          },
+        }),
+      }),
+      seat("qa", "QA", { confluence: offLane() }),
+    ],
+  };
+}
+
+/** Atlassian's Jira lane: PM on with product access only, QA a Member on ENG. */
+export function jiraAnswer(): AccessAnswer {
+  return {
+    kind: "atlassian",
+    revision: "rev-7",
+    syncing: false,
+    options: [JIRA_OPTIONS],
+    seats: [
+      seat("pm", "PM", {
+        jira: onLane({ variable: "ATLASSIAN_TOKEN_PM", desired: { enabled: true, level: "" } }),
+      }),
+      seat("qa", "QA", {
+        jira: onLane({
+          variable: "ATLASSIAN_TOKEN_QA",
+          desired: { enabled: true, level: "10003", scope: ["ENG"] },
         }),
       }),
     ],

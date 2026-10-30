@@ -468,7 +468,7 @@ func TestOptionsAreTheSitesOwnRolesAndPermissions(t *testing.T) {
 	}
 	admins, _, _ := jiraOpts.Level("10002")
 	devs, _, _ := jiraOpts.Level("10101")
-	if !jiraOpts.Live || len(jiraOpts.Levels) != 3 || !admins.Administers || devs.Administers ||
+	if !jiraOpts.Live || len(jiraOpts.Levels) != 4 || !admins.Administers || devs.Administers ||
 		!slices.Equal(jiraOpts.Scope, []string{"GOP"}) {
 		t.Fatalf("Jira options = %+v", jiraOpts)
 	}
@@ -490,7 +490,7 @@ func TestOptionsAreTheSitesOwnRolesAndPermissions(t *testing.T) {
 	}
 	adminRole, _, _ := roles.Level("r-admin")
 	collab, _, _ := roles.Level("r-collab")
-	if len(roles.Levels) != 3 || !adminRole.Administers || collab.Administers || collab.Name != "Collaborator" {
+	if len(roles.Levels) != 4 || !adminRole.Administers || collab.Administers || collab.Name != "Collaborator" {
 		t.Fatalf("Confluence role options = %+v", roles)
 	}
 }
@@ -818,5 +818,164 @@ func TestStepsNameTheAccessAsTheProductDoes(t *testing.T) {
 		Want: seataccess.Desired{Enabled: true, Level: "create:page read:space", Scope: []string{"ENG"}}}
 	if got := v.StepsFor(perms)[0].Text; got != "Give it the space permissions View, Add pages in ENG and nowhere else" {
 		t.Fatalf("permissions = %q", got)
+	}
+}
+
+// PRODUCT ACCESS ONLY IS OFFERED FIRST, least access, with the sentence that
+// says what it means, on Jira and on both kinds of Confluence site.
+func TestProductAccessOnlyIsOfferedFirstWithWhatItMeans(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	f := newAtlSite(t)
+	s := testSession(t, f, seatDoc{}, []string{"GOP"}, []string{"ENG"})
+	check := func(lane seataccess.Lane, mention string) {
+		t.Helper()
+		opts, err := s.Options(ctx, lane)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := opts.Levels[0]
+		if first.ID != "" || first.Name != "Product access only" || !strings.Contains(first.Note, mention) ||
+			first.Administers {
+			t.Fatalf("%s first level = %+v", lane, first)
+		}
+		if _, ok := opts.LevelsOf(""); !ok {
+			t.Fatalf("%s does not offer the empty level", lane)
+		}
+	}
+	check(seataccess.LaneJira, "permission scheme")
+	check(seataccess.LaneConfluence, "permissions decide")
+	f.locked(func() { f.rolesMode = "ROLES" })
+	s = testSession(t, f, seatDoc{}, []string{"GOP"}, []string{"ENG"})
+	check(seataccess.LaneConfluence, "permissions decide")
+}
+
+// A SEAT CREATED WITH PRODUCT ACCESS ONLY gets the account, the product and a
+// token, and no project role anywhere; read back, it is converged.
+func TestASeatCreatedWithProductAccessOnlyHoldsNoRole(t *testing.T) {
+	t.Parallel()
+	f := newAtlSite(t)
+	s := testSession(t, f, seatDoc{jira: onJira("")}, []string{"GOP", "OPS"}, nil)
+	want := seataccess.Desired{Enabled: true}
+	steps := (Vendor{}).Steps(sre, seataccess.LaneJira, seataccess.OpCreate, want, seataccess.Observed{})
+	if !strings.Contains(steps[2].Text, "product access only: no project roles in any project") {
+		t.Fatalf("role step = %q", steps[2].Text)
+	}
+	results := run(t, s, seataccess.LaneJira, seataccess.OpCreate, want, seataccess.Observed{}, nil)
+	account := results[0].AccountID
+	f.locked(func() {
+		if !slices.Equal(f.grants[account], []string{"jira-software"}) || len(f.tokens[account]) != 1 {
+			t.Fatalf("grants %v, tokens %d", f.grants[account], len(f.tokens[account]))
+		}
+		for key, members := range f.actors {
+			if members[account] {
+				t.Fatalf("product access only holds the role %s", key)
+			}
+		}
+	})
+	rec := &seataccess.Record{
+		Account:    &seataccess.Account{ID: account, State: seataccess.AccountActive},
+		Credential: &seataccess.Credential{Variable: "ATLASSIAN_TOKEN_SRE"},
+		Lanes:      map[seataccess.Lane]seataccess.LaneRecord{seataccess.LaneJira: {Applied: &want}},
+	}
+	have := observe(t, s, rec)[seataccess.LaneJira]
+	plan, err := seataccess.Plan(Vendor{}, seataccess.SeatInput{
+		Seat: sre, Record: rec,
+		Want: map[seataccess.Lane]seataccess.Desired{seataccess.LaneJira: want},
+		Have: map[seataccess.Lane]seataccess.Observed{seataccess.LaneJira: have},
+	})
+	if err != nil || len(plan[seataccess.LaneJira]) != 0 {
+		t.Fatalf("a converged product-access-only seat plans %+v, %v", plan[seataccess.LaneJira], err)
+	}
+}
+
+// FROM A ROLE TO PRODUCT ACCESS ONLY removes the roles and keeps the product;
+// AND BACK gives the role again in the listed project.
+func TestMovingBetweenARoleAndProductAccessOnly(t *testing.T) {
+	t.Parallel()
+	f := newAtlSite(t)
+	doc := seatDoc{jira: onJira("10101", "GOP")}
+	s := testSession(t, f, doc, []string{"GOP", "OPS"}, nil)
+	role := seataccess.Desired{Enabled: true, Level: "10101", Scope: []string{"GOP"}}
+	account := run(t, s, seataccess.LaneJira, seataccess.OpCreate, role, seataccess.Observed{}, nil)[0].AccountID
+	rec := &seataccess.Record{
+		Account: &seataccess.Account{ID: account, State: seataccess.AccountActive},
+		Lanes:   map[seataccess.Lane]seataccess.LaneRecord{seataccess.LaneJira: {Applied: &role}},
+	}
+	have := observe(t, s, rec)[seataccess.LaneJira]
+
+	only := seataccess.Desired{Enabled: true}
+	doc.jira = onJira("")
+	s.seats["sre"] = doc
+	plan, err := seataccess.Plan(Vendor{}, seataccess.SeatInput{
+		Seat: sre, Record: rec,
+		Want: map[seataccess.Lane]seataccess.Desired{seataccess.LaneJira: only},
+		Have: map[seataccess.Lane]seataccess.Observed{seataccess.LaneJira: have},
+		Options: map[seataccess.Lane]seataccess.Options{seataccess.LaneJira: {Levels: []seataccess.Level{
+			{ID: "", Name: "Product access only"}, {ID: "10101", Name: "Developers"},
+		}}},
+	})
+	if err != nil || len(plan[seataccess.LaneJira]) == 0 {
+		t.Fatalf("plan = %+v, %v", plan, err)
+	}
+	if got := plan[seataccess.LaneJira][0].Text; got != "Change it from the Developers project role to Jira "+
+		"product access only, removing its project roles" {
+		t.Fatalf("step = %q", got)
+	}
+	for _, step := range plan[seataccess.LaneJira] {
+		if _, err := s.Apply(context.Background(), seataccess.ApplyInput{
+			Seat: sre, Lane: seataccess.LaneJira, Step: step, Want: only, Have: have, Record: rec,
+		}); err != nil {
+			t.Fatalf("%s: %v", step.Text, err)
+		}
+	}
+	f.locked(func() {
+		if f.actors["GOP/10101"][account] || !slices.Contains(f.grants[account], "jira-software") {
+			t.Fatalf("after product access only: actors %v, grants %v", f.actors, f.grants[account])
+		}
+	})
+	if back := observe(t, s, rec)[seataccess.LaneJira]; back.Level != "" || len(back.Scope) != 0 || !back.Enabled {
+		t.Fatalf("observed product access only = %+v", back)
+	}
+
+	doc.jira = onJira("10101", "GOP")
+	s.seats["sre"] = doc
+	run(t, s, seataccess.LaneJira, seataccess.OpLevel, role, seataccess.Observed{Exists: true, Enabled: true}, rec)
+	f.locked(func() {
+		if !f.actors["GOP/10101"][account] {
+			t.Fatalf("back to the role: actors %v", f.actors)
+		}
+	})
+}
+
+// CONFLUENCE TOO, on both kinds of site: a space role, or a set of space
+// permissions, gives way to product access only.
+func TestConfluenceGivesWayToProductAccessOnly(t *testing.T) {
+	t.Parallel()
+	for _, rolesMode := range []string{"ROLES", ""} {
+		t.Run("mode "+rolesMode, func(t *testing.T) {
+			t.Parallel()
+			f := newAtlSite(t)
+			f.rolesMode = rolesMode
+			level := "r-collab"
+			if rolesMode == "" {
+				level = "create:page read:space"
+			}
+			doc := seatDoc{confluence: onConfluence(level, "ENG")}
+			s := testSession(t, f, doc, nil, []string{"ENG"})
+			held := seataccess.Desired{Enabled: true, Level: level, Scope: []string{"ENG"}}
+			account := run(t, s, seataccess.LaneConfluence, seataccess.OpCreate, held, seataccess.Observed{}, nil)[0].AccountID
+			doc.confluence = onConfluence("")
+			s.seats["sre"] = doc
+			s.cache = newCache()
+			run(t, s, seataccess.LaneConfluence, seataccess.OpLevel, seataccess.Desired{Enabled: true},
+				seataccess.Observed{Exists: true, Enabled: true, Level: level, Scope: []string{"ENG"}}, nil)
+			f.locked(func() {
+				if f.spaceRoles["1001"][account] != "" || len(f.spacePerms["1001"][account]) != 0 {
+					t.Fatalf("after product access only: role %q, permissions %+v",
+						f.spaceRoles["1001"][account], f.spacePerms["1001"][account])
+				}
+			})
+		})
 	}
 }

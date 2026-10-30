@@ -980,7 +980,7 @@ func (s *Service) state(company *config.Company, roster *org.Organization,
 		// a seat, because every agent has its own Slack app.
 		block := company.Integrations.Slack
 		summary = slack.Summary()
-		reqs = slack.CompanyRequirements(block)
+		reqs = slack.CompanyRequirements(block, s.resolve)
 		seats = slackSeats(roster, s.resolve, s.apps(), s.webhookBase, s.webhookBaseKey)
 		managePath = slack.ManagePath()
 		// CONFIGURED WHEN ANY SEAT IS, not when the company block exists:
