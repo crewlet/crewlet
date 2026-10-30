@@ -980,7 +980,11 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 // alarm reference or the metrics reference stale. A compaction's build is
 // one of those steps, charged its own bytes an object of the packs it merges,
 // a transfer's room by those packs — never by the whole repository — and its
-// delta search a multiple of max_blob_bytes.
+// delta search a multiple of max_blob_bytes. An expunge's build is another,
+// charged the compaction's figure an object of the packs it sorts
+// (Cache.AdmitExpunge) with room for a clone of the WHOLE repository beside
+// it, whose history its build walks — so its words are held to that constant
+// too, since a retune of it once left them stating the old figure.
 //
 // Mutation: change IndexBytesPerObject, GraphBytesPerObject,
 // TipGraphBytesPerObject, TipGraphBaseBytes, CompactBytesPerObject,
@@ -1018,6 +1022,8 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 				"of a large one — and %s times max_blob_bytes for the build's delta search)",
 				cache.CompactBytesPerObject, gitproc.TransferBytesPerObject, window),
 			fmt.Sprintf("`publish` (%d bytes an object of the repository", cache.PublishBytesPerObject),
+			fmt.Sprintf("`expunge` (%d bytes an object of the packs an expunge sorts, beside the room for a clone "+
+				"of the whole repository, whose history its build walks", cache.CompactBytesPerObject),
 		},
 		metrics.CodeCacheMaintenanceRefused: {reread},
 		// A publication refused for memory is the cache's refusal, counted

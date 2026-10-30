@@ -1447,7 +1447,7 @@ func Catalogue() []Instrument {
 				"of the repository for the layer's bitmap, beside the clone's " +
 				"room): the repository's maintainer cannot publish its next " +
 				"layer, so every pack pushed since its last publication is served " +
-				"outside every bitmap, and every one pushed after. `expunge` (500 " +
+				"outside every bitmap, and every one pushed after. `expunge` (550 " +
 				"bytes an object of the packs an expunge sorts, beside the room " +
 				"for a clone of the whole repository, whose history its build " +
 				"walks, and its delta search): a person's purge of the " +
