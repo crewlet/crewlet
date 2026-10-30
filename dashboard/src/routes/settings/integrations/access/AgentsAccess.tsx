@@ -71,6 +71,7 @@ import {
   providedExternally,
   refusedLevel,
   sameDesired,
+  scopeApplies,
   scopeWords,
   statusOf,
   syncValue,
@@ -104,11 +105,16 @@ export interface AgentsAccessProps {
 function levelOptions(lane: Lane): SelectOption[] {
   // WHERE THE LIST COMES FROM is the menu's own heading.
   const group = levelsHeading(lane);
-  return lane.levels.map((l) => ({
-    value: l.id,
-    label: l.custom ? `${l.name} (custom)` : l.name,
-    group,
-  }));
+  const only = lane.multiple ? undefined : laneWords(lane.key).productOnly;
+  return [
+    // THE EMPTY LEVEL IS A CHOICE where the product can be held with no role.
+    ...(only ? [{ value: "", label: only.name, description: only.note, group }] : []),
+    ...lane.levels.map((l) => ({
+      value: l.id,
+      label: l.custom ? `${l.name} (custom)` : l.name,
+      group,
+    })),
+  ];
 }
 
 export function AgentsAccess({
@@ -359,7 +365,7 @@ export function AgentsAccess({
                           width="full"
                           menuClassName="agent-access-menu"
                           ariaLabel={`${seat.name}'s ${lane.name} access`}
-                          value={want.level}
+                          value={want.level ?? ""}
                           options={levelOptions(lane)}
                           disabled={off || locked || seat.departed}
                           onChange={(v) => change(seat, lane, { level: String(v) })}
@@ -380,11 +386,9 @@ export function AgentsAccess({
                     </span>
                     {scoped && (
                       <span role="cell" className="agent-access-scope">
-                        {managedOutside(lane) ? null : lane.scope !== undefined &&
-                          words.scope &&
-                          readOnly ? (
+                        {!scopeApplies(lane, want) || !words.scope ? null : readOnly ? (
                           <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
-                        ) : lane.scope !== undefined && words.scope ? (
+                        ) : lane.scope ? (
                           <Select
                             size="sm"
                             width="full"

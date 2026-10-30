@@ -71,7 +71,20 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
   scope: ["ENG", "OPS"],
 };
 
+/** Jira's project roles, read live; a seat may also hold Jira with no role. */
+const JIRA_OPTIONS: AccessOptions = {
+  lane: "jira",
+  live: true,
+  levels: [
+    { id: "10002", name: "Viewer" },
+    { id: "10003", name: "Member" },
+    { id: "10004", name: "Administrator", administers: true },
+  ],
+  scope: ["ENG", "OPS"],
+};
+
 export const DATADOG_LANE = laneOf(DATADOG_OPTIONS);
+export const JIRA_LANE = laneOf(JIRA_OPTIONS);
 export const CONFLUENCE_LANE = laneOf(CONFLUENCE_OPTIONS);
 export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
@@ -214,6 +227,27 @@ export function confluenceAnswer(): AccessAnswer {
         }),
       }),
       seat("qa", "QA", { confluence: offLane() }),
+    ],
+  };
+}
+
+/** Atlassian's Jira lane: PM on with product access only, QA a Member on ENG. */
+export function jiraAnswer(): AccessAnswer {
+  return {
+    kind: "atlassian",
+    revision: "rev-7",
+    syncing: false,
+    options: [JIRA_OPTIONS],
+    seats: [
+      seat("pm", "PM", {
+        jira: onLane({ variable: "ATLASSIAN_TOKEN_PM", desired: { enabled: true, level: "" } }),
+      }),
+      seat("qa", "QA", {
+        jira: onLane({
+          variable: "ATLASSIAN_TOKEN_QA",
+          desired: { enabled: true, level: "10003", scope: ["ENG"] },
+        }),
+      }),
     ],
   };
 }
