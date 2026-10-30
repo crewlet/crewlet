@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -174,13 +175,17 @@ func (s *CoordStore) BeginLaunch(ctx context.Context, run PendingRun, fence Fenc
 // box the row did not record — killed under it by the ending, or billed and
 // named by nothing.
 func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, bool, int64, error) {
-	var held int64
+	var (
+		held     int64
+		replaced string
+	)
 	full := false
 	opened, reset, err := s.mutateLive(ctx, run.TurnID, func(existing *PendingRun) bool {
 		if outranked(*existing, fence) {
 			held = existing.OwnerEpoch
 			return false
 		}
+		replaced = existing.LaunchID
 		// THE TURN'S CODE HOLDS ARE UNIONED, never reset with the rest: a
 		// relaunch's turn may still depend on what an earlier job, or an
 		// earlier half of the turn, named — and once it parks, this row is
@@ -204,12 +209,14 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		if fence.Fenced() {
 			existing.Owner, existing.OwnerEpoch = fence.Owner, fence.Epoch
 		}
-		// The previous job's suspension is not this job's. Left in place
-		// it is worse than absent: a completion claimed before the new
-		// suspension lands would resume the conversation the LAST call
-		// suspended, splicing this run's findings into a loop that has
-		// already moved on.
-		existing.ExecuteState = nil
+		// The previous job's suspension is not this job's: a completion
+		// claimed before the new suspension lands would otherwise resume the
+		// conversation the LAST call suspended, splicing this run's findings
+		// into a loop that has already moved on. It is kept beside the row
+		// under the job it belongs to, so the new launch's id names none
+		// until its own is written, and the old one is removed once this
+		// reset has landed (below).
+		//
 		// And its question is answered, or was never asked — either way a
 		// reply arriving now belongs to the new job, not the old one.
 		existing.Question, existing.Audience = "", ""
@@ -232,8 +239,10 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 		// FIRST round's submit_work: a round that in fact submitted
 		// nothing would report the previous round's outcome instead of
 		// being rescued, and its deliveries would satisfy this round's
-		// delivery check.
-		existing.BridgeCalls, existing.BridgeCallsElided = nil, 0
+		// delivery check. The log is the job's, beside the row, so the new
+		// launch names none, and the job's record, replaced whole above,
+		// counts none ([LaunchRecord.BridgedCalls]).
+		//
 		// AND THE PREVIOUS JOB'S CHARGE IS NOT THIS JOB'S. Carried over,
 		// it would tell this job's completion that its spend is already
 		// counted, and the company would never be billed for it.
@@ -246,6 +255,13 @@ func (s *CoordStore) resetLaunch(ctx context.Context, run PendingRun, fence Fenc
 	case full:
 		return PendingRun{}, false, 0, fmt.Errorf("sandbox: relaunch run %s: %w", run.TurnID,
 			ErrCodeHoldsFull)
+	}
+	if reset && replaced != "" && replaced != run.LaunchID {
+		// THE REPLACED JOB'S VALUES ARE NOBODY'S NOW: nothing reads a
+		// job's conversation or log but through a row that names it, and
+		// the row names this launch. Removed AFTER the reset, so no row
+		// ever names a job whose values are gone.
+		s.dropJob(ctx, run.TurnID, replaced, "relaunch")
 	}
 	return opened, reset, held, nil
 }
@@ -828,15 +844,17 @@ func (s *CoordStore) ReleaseBox(ctx context.Context, turnID string) error {
 	return err
 }
 
-// AppendBridgeCall records one tool call a bridged run made.
+// AppendBridgeCall records one tool call a bridged run made: on the job's log
+// beside the row, then its count and the session's spend on the row. See the
+// contract on [PendingStore].
 //
 // NO FENCE, and that is deliberate. Every other mutation here is an ownership
 // decision — a claim, a status flip, a pause — and a node whose lease has
 // moved must not make one. This is a LOG APPEND: the call already ran and its
 // effect already happened, and refusing to record it because the seat moved
-// mid-run would lose evidence of something that is true either way. The row's
-// own version still guards the write, so two concurrent appends serialise
-// rather than clobbering each other.
+// mid-run would lose evidence of something that is true either way. Each
+// value's own version still guards its write, so two concurrent appends
+// serialise rather than clobbering each other.
 //
 // A run whose row is gone is not an error: the run ended while a late call was
 // in flight, which is the ordinary shape of a box shutting down. Nor is a job
@@ -851,53 +869,301 @@ func (s *CoordStore) AppendBridgeCall(ctx context.Context, turnID string, a Brid
 	if call.At.IsZero() {
 		call.At = s.clock()
 	}
+	// THE ROW FIRST, READ: a call of a job the row no longer holds, or of a
+	// run whose row is gone, writes nothing at all rather than a log the
+	// steps below would only have to remove.
+	run, _, found, err := s.read(ctx, turnID)
+	switch {
+	case err != nil:
+		return false, err
+	case !found || run.LaunchID != a.Launch:
+		return false, nil
+	}
+	recorded, err := s.appendToLog(ctx, turnID, a.Launch, call)
+	if err != nil {
+		return false, err
+	}
 	_, won, err := s.mutateAny(ctx, turnID, func(run *PendingRun) bool {
 		if a.Launch != run.LaunchID {
 			return false
 		}
-		run.BridgeCalls, run.BridgeCallsElided = appendBounded(
-			run.BridgeCalls, run.BridgeCallsElided, call)
 		// Onto THIS job's record: the append names the job the row holds,
-		// or it was dropped above.
+		// or it was dropped above. The LOG'S OWN COUNT, never one more than
+		// the row's, so a count a failed write left short is whole again
+		// at the next call that lands, and two calls racing count both.
+		run.Launch.BridgedCalls = max(run.Launch.BridgedCalls, recorded)
 		run.Launch.Bridged = run.Launch.Bridged.Newest(a.Spent)
 		return true
 	})
+	if err == nil && !won {
+		// THE JOB WAS REPLACED, OR ITS RUN ENDED, between the read above
+		// and the count: its log names a job no row holds, and the relaunch
+		// or the end that removed it may have done so before this call
+		// wrote it back.
+		s.dropPart(ctx, turnID, bridgePart(a.Launch), "a bridged call outlived its job")
+	}
 	return won, err
+}
+
+// appendToLog adds call to the log the job launch keeps beside turnID's run —
+// read, appended and written back at the version read, and again on a lost
+// race, as the row is written ([CoordStore.write]) — and answers how many
+// calls the log has recorded, the one just added and those its middle dropped
+// included.
+func (s *CoordStore) appendToLog(ctx context.Context, turnID, launch string, call BridgeCall) (int, error) {
+	part := bridgePart(launch)
+	for range casRetries {
+		record, found, err := s.runs.SandboxRunPart(ctx, turnID, part)
+		if err != nil {
+			return 0, fmt.Errorf("sandbox: read the bridge log of run %s: %w", turnID, err)
+		}
+		var (
+			kept     = bridgeLog{}
+			calls    []BridgeCall
+			recorded int
+		)
+		if found {
+			if kept, calls, recorded, err = decodeBridgeLog(turnID, record.Value); err != nil {
+				return 0, err
+			}
+		}
+		value, err := kept.encode(appendBounded(calls, call), recorded+1)
+		if err != nil {
+			return 0, fmt.Errorf("sandbox: encode the bridge log of run %s: %w", turnID, err)
+		}
+		wrote, err := s.runs.PutSandboxRunPart(ctx, turnID, part, value, record.Version)
+		if err != nil {
+			return 0, fmt.Errorf("sandbox: write the bridge log of run %s: %w", turnID, err)
+		}
+		if wrote {
+			return recorded + 1, nil
+		}
+	}
+	return 0, fmt.Errorf("sandbox: write the bridge log of run %s: the log kept changing under the append", turnID)
 }
 
 // appendBounded adds one call and drops from the MIDDLE past the cap.
 //
 // The start and the end are what explain a run — how it set about the work and
 // how it finished — so a log truncated to its last N loses the half a reader
-// most often needs. The count of what was dropped rides along, because a log
-// that silently skips is a log that lies about what the run did.
-func appendBounded(calls []BridgeCall, elided int, next BridgeCall) ([]BridgeCall, int) {
+// most often needs. How many were dropped is the row's count less the cap
+// ([LaunchRecord.BridgedCallsElided]), because a log that silently skips is a
+// log that lies about what the run did.
+func appendBounded(calls []BridgeCall, next BridgeCall) []BridgeCall {
 	calls = append(calls, next)
 	if len(calls) <= MaxBridgeCalls {
-		return calls, elided
+		return calls
 	}
 	head := MaxBridgeCalls / 2
 	tail := MaxBridgeCalls - head
-	dropped := len(calls) - MaxBridgeCalls
 	kept := make([]BridgeCall, 0, MaxBridgeCalls)
 	kept = append(kept, calls[:head]...)
 	kept = append(kept, calls[len(calls)-tail:]...)
-	return kept, elided + dropped
+	return kept
 }
 
-// MarkSuspended writes the suspended Execute loop and opens the run to the
-// completion poll. See the contract on [PendingStore].
+// MarkSuspended writes the suspended Execute loop beside the row and opens the
+// run to the completion poll. See the contract on [PendingStore].
 func (s *CoordStore) MarkSuspended(ctx context.Context, turnID string, suspension Suspension) (bool, error) {
+	run, _, found, err := s.read(ctx, turnID)
+	switch {
+	case err != nil:
+		return false, err
+	case !found || run.Ending != nil || run.Status != StatusLaunching:
+		return false, nil
+	}
+	launch := run.LaunchID
+	part := conversationPart(launch)
+	// THE CONVERSATION FIRST, under the job the row holds: the flip below is
+	// what makes the run claimable, and a claim resumes into this.
+	if err := s.putPart(ctx, turnID, part, suspension.State); err != nil {
+		return false, fmt.Errorf("sandbox: write the suspended conversation of run %s: %w", turnID, err)
+	}
 	_, won, err := s.mutate(ctx, turnID, func(run *PendingRun) bool {
-		if run.Status != StatusLaunching {
+		if run.Status != StatusLaunching || run.LaunchID != launch {
 			return false
 		}
-		run.ExecuteState = bytes.Clone(suspension.State)
 		run.Status = StatusRunning
 		run.Launch.Iteration = suspension.Iteration
 		return true
 	})
+	if err == nil && !won {
+		// NO ROW IS RUNNING THIS JOB, definitively: the run moved on, ended
+		// or went while its turn unwound, so the conversation names nothing.
+		// An ERROR keeps it, since the flip may have landed all the same.
+		s.dropPart(ctx, turnID, part, "a suspension whose run was no longer launching it")
+	}
 	return won, err
+}
+
+// Conversation is the suspended conversation of the job launch named on
+// turnID's run. See the contract on [PendingStore].
+func (s *CoordStore) Conversation(ctx context.Context, turnID, launch string) (json.RawMessage, bool, error) {
+	if launch == "" {
+		// A row with no launch names no job, and so no conversation.
+		return nil, false, nil
+	}
+	record, found, err := s.runs.SandboxRunPart(ctx, turnID, conversationPart(launch))
+	if err != nil {
+		return nil, false, fmt.Errorf("sandbox: read the suspended conversation of run %s: %w", turnID, err)
+	}
+	// A NULL STATE IS NO STATE, as an empty one is: a `len(...) == 0` asking
+	// "is a conversation parked here?" must not read four bytes of null as
+	// one.
+	if state := bytes.TrimSpace(record.Value); !found || len(state) == 0 || bytes.Equal(state, []byte("null")) {
+		return nil, false, nil
+	}
+	return record.Value, true, nil
+}
+
+// BridgeLog is the calls the job launch named on turnID's run recorded through
+// its bridge. See the contract on [PendingStore].
+func (s *CoordStore) BridgeLog(ctx context.Context, turnID, launch string) ([]BridgeCall, error) {
+	if launch == "" {
+		return nil, nil
+	}
+	record, found, err := s.runs.SandboxRunPart(ctx, turnID, bridgePart(launch))
+	if err != nil {
+		return nil, fmt.Errorf("sandbox: read the bridge log of run %s: %w", turnID, err)
+	}
+	if !found {
+		return nil, nil
+	}
+	_, calls, _, err := decodeBridgeLog(turnID, record.Value)
+	return calls, err
+}
+
+// The values a run keeps BESIDE its row, each its job's and named for the
+// launch it belongs to ([PendingRun]'s note says why they are not on it): a
+// relaunch's values never meet those of the job it replaced, and a write for a
+// job the row no longer holds lands under a name nothing reads.
+const (
+	conversationKind = "conversation"
+	bridgeLogKind    = "bridge"
+)
+
+// conversationPart is the name the suspended conversation of launch is kept
+// under beside its run.
+func conversationPart(launch string) string { return conversationKind + "-" + launch }
+
+// bridgePart is the name the bridged tool log of launch is kept under beside
+// its run.
+func bridgePart(launch string) string { return bridgeLogKind + "-" + launch }
+
+// putPart writes value as the part named part beside turnID's run, whatever
+// that part holds: a create, and on a lost race an update at the version
+// standing. Only the job the part is named for writes it, so the race is a
+// retry of its own write.
+func (s *CoordStore) putPart(ctx context.Context, turnID, part string, value []byte) error {
+	var version uint64
+	for range casRetries {
+		wrote, err := s.runs.PutSandboxRunPart(ctx, turnID, part, value, version)
+		if err != nil || wrote {
+			return err
+		}
+		record, found, err := s.runs.SandboxRunPart(ctx, turnID, part)
+		if err != nil {
+			return err
+		}
+		version = 0
+		if found {
+			version = record.Version
+		}
+	}
+	return errors.New("the value kept changing under the write")
+}
+
+// dropJob removes both values the job launch kept beside turnID's run, once
+// nothing names that job: a relaunch replaced it, or its run ended.
+func (s *CoordStore) dropJob(ctx context.Context, turnID, launch, why string) {
+	for _, part := range []string{conversationPart(launch), bridgePart(launch)} {
+		s.dropPart(ctx, turnID, part, why)
+	}
+}
+
+// dropPart removes a value beside turnID's run that nothing names any more.
+//
+// UNDER context.WithoutCancel, as a teardown is: the step that made it nobody's
+// has landed, and a caller that hangs up then has still made it so.
+//
+// BEST EFFORT, logged when it fails rather than failing what made it nobody's
+// — a launch that opened, a run that ended — since a value no row names is
+// storage and never an answer: the next relaunch or the run's end removes it
+// by the same name, and once the run's record is gone the coordination store's
+// sweep of parts whose record is gone does ([coord.SandboxRuns]).
+func (s *CoordStore) dropPart(ctx context.Context, turnID, part, why string) {
+	ctx = context.WithoutCancel(ctx)
+	if err := s.runs.DeleteSandboxRunPart(ctx, turnID, part); err != nil {
+		log.WarnContext(ctx, "sandbox_run_part_kept", "turn_id", turnID, "part", part, "why", why,
+			"error", err.Error(),
+			"detail", "a value kept beside the run's record that nothing names any more was "+
+				"not removed; the coordination store's sweep removes it once the run's "+
+				"record is gone")
+	}
+}
+
+// bridgeLog is a job's bridged tool log as it is kept beside its run: its
+// calls under [bridgeLogCalls], how many it has recorded under
+// [bridgeLogRecorded], and every key this build does not know carried as it
+// came, for the row's reason ([PendingRun.Extra]) — the log is read, appended
+// and written back whole, and a node of an older build appending must not drop
+// what a newer one keeps beside the calls.
+type bridgeLog map[string]json.RawMessage
+
+const (
+	// bridgeLogCalls is the key a log's calls are kept under: at most
+	// [MaxBridgeCalls], the middle dropped past that.
+	bridgeLogCalls = "calls"
+	// bridgeLogRecorded is the key of how many calls the log has recorded,
+	// the dropped ones included: what the row's count is set from
+	// ([LaunchRecord.BridgedCalls]).
+	bridgeLogRecorded = "recorded"
+)
+
+// decodeBridgeLog reads a log's value: the log, with what it keeps beside its
+// calls, the calls and how many it has recorded.
+func decodeBridgeLog(turnID string, value []byte) (bridgeLog, []BridgeCall, int, error) {
+	var kept bridgeLog
+	if err := json.Unmarshal(value, &kept); err != nil {
+		return nil, nil, 0, fmt.Errorf("sandbox: decode the bridge log of run %s: %w", turnID, err)
+	}
+	var (
+		calls    []BridgeCall
+		recorded int
+	)
+	if raw, ok := kept[bridgeLogCalls]; ok {
+		if err := json.Unmarshal(raw, &calls); err != nil {
+			return nil, nil, 0, fmt.Errorf("sandbox: decode the bridge log of run %s: %w", turnID, err)
+		}
+	}
+	if raw, ok := kept[bridgeLogRecorded]; ok {
+		if err := json.Unmarshal(raw, &recorded); err != nil {
+			return nil, nil, 0, fmt.Errorf("sandbox: decode the bridge log of run %s: %w", turnID, err)
+		}
+	}
+	if kept == nil {
+		kept = bridgeLog{}
+	}
+	// NEVER FEWER THAN IT HOLDS, whatever the count says.
+	return kept, calls, max(recorded, len(calls)), nil
+}
+
+// encode is l with its calls replaced by calls and its count by recorded.
+func (l bridgeLog) encode(calls []BridgeCall, recorded int) ([]byte, error) {
+	rawCalls, err := json.Marshal(calls)
+	if err != nil {
+		return nil, err
+	}
+	rawRecorded, err := json.Marshal(recorded)
+	if err != nil {
+		return nil, err
+	}
+	out := maps.Clone(l)
+	if out == nil {
+		out = bridgeLog{}
+	}
+	out[bridgeLogCalls], out[bridgeLogRecorded] = rawCalls, rawRecorded
+	return json.Marshal(out)
 }
 
 // ListRuns returns every run the store holds, whatever its status. See the
@@ -962,6 +1228,9 @@ func (s *CoordStore) Finish(ctx context.Context, turnID, ending string) (Pending
 			return PendingRun{}, false, fmt.Errorf("sandbox: finish run %s: %w", turnID, err)
 		}
 		if gone {
+			// THE JOB'S VALUES AFTER THE RECORD that named them — see the
+			// contract on [PendingStore.Finish].
+			s.dropJob(ctx, turnID, run.LaunchID, "the run ended")
 			return run, true, nil
 		}
 	}
@@ -1166,12 +1435,6 @@ func decodeRun(record coord.Record) (PendingRun, error) {
 			run.Extra = map[string]json.RawMessage{}
 		}
 		run.Extra[key] = value
-	}
-	// A null state is NO state. The struct writes one for a run that has
-	// none, and a raw field reads the null back as four bytes — which every `len(...) == 0` asking "is a
-	// conversation parked here?" would answer wrongly.
-	if bytes.Equal(bytes.TrimSpace(run.ExecuteState), []byte("null")) {
-		run.ExecuteState = nil
 	}
 	// The KEY is the identity, not the field: a record whose body somehow
 	// disagrees with the key it is stored under would hand a caller a run

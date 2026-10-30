@@ -1822,7 +1822,178 @@ var runCases = []fleetCase{{
 			h.t.Error("CreateSandboxRun created a run with no turn id")
 		}
 	},
+}, {
+	// THE REASON A PART EXISTS: a value beside the record that a read or a
+	// listing of records never moves. A run's suspended conversation was a
+	// field of its record, so every listing of runs and every git request of
+	// its box moved it whole; beside the record, the listing returns the
+	// record alone, byte for byte as written.
+	name: "a part is kept beside its run and never listed with the records",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-1", `{"status":"running"}`)
+		if !h.putPart("turn-1", "conversation-a", "the whole conversation", 0) {
+			h.t.Fatal("the first write of a part lost")
+		}
+		part, found := h.part("turn-1", "conversation-a")
+		switch {
+		case !found:
+			h.t.Fatal("a part written a moment ago reads as absent")
+		case string(part.Value) != "the whole conversation" || part.Key != "conversation-a":
+			h.t.Errorf("part = %q under %q, want the value written under its name", part.Value, part.Key)
+		case part.Version == 0:
+			h.t.Error("a part's version is 0 — a write cannot be conditioned on it")
+		}
+		records, err := h.f.SandboxRuns(h.ctx)
+		if err != nil {
+			h.t.Fatalf("SandboxRuns: %v", err)
+		}
+		if len(records) != 1 || records[0].Key != "turn-1" || string(records[0].Value) != `{"status":"running"}` {
+			h.t.Errorf("SandboxRuns = %+v, want the one record alone and none of its parts", records)
+		}
+		record, _ := h.run("turn-1")
+		if string(record.Value) != `{"status":"running"}` {
+			h.t.Errorf("the record reads %q beside a part, want it as written", record.Value)
+		}
+	},
+}, {
+	// A part is written as a record is: a create at no version, an update at
+	// the version just read, and a writer that read a version another write
+	// replaced loses — so two appends to one log cannot drop either.
+	name: "a part is written at a version, as a record is",
+	fn: func(h *fleetHarness) {
+		if h.putPart("turn-1", "bridge-a", "one", 7) {
+			h.t.Error("an update created a part nobody wrote")
+		}
+		h.putPart("turn-1", "bridge-a", "one", 0)
+		if h.putPart("turn-1", "bridge-a", "again", 0) {
+			h.t.Error("a second create of one part reported itself as new")
+		}
+		first, _ := h.part("turn-1", "bridge-a")
+		if !h.putPart("turn-1", "bridge-a", "one, two", first.Version) {
+			h.t.Fatal("an update at the version just read was refused")
+		}
+		if h.putPart("turn-1", "bridge-a", "one, three", first.Version) {
+			h.t.Error("two writers both won one part's version — one append was lost")
+		}
+		second, _ := h.part("turn-1", "bridge-a")
+		if string(second.Value) != "one, two" || second.Version == first.Version {
+			h.t.Errorf("part = %q at %d, want the first writer's at a new version", second.Value, second.Version)
+		}
+	},
+}, {
+	// A part belongs to its writer, which removes it by name: a record's
+	// delete leaves it, a removal is unconditional, and one repeated — after
+	// a crash, or of a part never written — is no error.
+	name: "a part is removed by its writer, not by its record's delete",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-1", `{"status":"done"}`)
+		h.putPart("turn-1", "conversation-a", "the conversation", 0)
+		record, _ := h.run("turn-1")
+		if ok, err := h.f.DeleteSandboxRun(h.ctx, "turn-1", record.Version); err != nil || !ok {
+			h.t.Fatalf("DeleteSandboxRun = (%v, %v)", ok, err)
+		}
+		if _, found := h.part("turn-1", "conversation-a"); !found {
+			h.t.Fatal("a record's delete took a part its writer had not removed")
+		}
+		for range 2 {
+			if err := h.f.DeleteSandboxRunPart(h.ctx, "turn-1", "conversation-a"); err != nil {
+				h.t.Fatalf("DeleteSandboxRunPart: %v", err)
+			}
+		}
+		if err := h.f.DeleteSandboxRunPart(h.ctx, "turn-1", "bridge-a"); err != nil {
+			h.t.Errorf("removing a part never written = %v, want nothing", err)
+		}
+		if _, found := h.part("turn-1", "conversation-a"); found {
+			h.t.Error("a removed part reads as present")
+		}
+		if !h.putPart("turn-1", "conversation-a", "written again", 0) {
+			h.t.Error("a removed part could not be written again")
+		}
+	},
+}, {
+	name: "a part with no turn or no name is an error, not an answer",
+	fn: func(h *fleetHarness) {
+		if _, _, err := h.f.SandboxRunPart(h.ctx, "", "conversation-a"); err == nil {
+			h.t.Error("a part of no turn was read")
+		}
+		if ok, err := h.f.PutSandboxRunPart(h.ctx, "turn-1", "", []byte("x"), 0); err == nil || ok {
+			h.t.Errorf("a part with no name was written: (%v, %v)", ok, err)
+		}
+		if err := h.f.DeleteSandboxRunPart(h.ctx, "", "conversation-a"); err == nil {
+			h.t.Error("a part of no turn was removed")
+		}
+	},
+}, {
+	// THE SWEEP'S WHOLE RULE: a part outlives its record only where a write
+	// raced the run's end, so a part written before the cutoff whose run has
+	// NO RECORD goes, and every other stays — a young one, one beside a live
+	// record, and one beside a record written again under its turn after the
+	// part (the turn's next job, after its last one ended), which that job's
+	// own end removes.
+	name: "the sweep removes the parts of a run with no record, and only those",
+	fn: func(h *fleetHarness) {
+		h.createRun("turn-live", `{"status":"running"}`)
+		h.putPart("turn-live", "conversation-a", "live", 0)
+		h.putPart("turn-gone", "conversation-a", "gone", 0)
+		h.putPart("turn-gone", "bridge-a", "gone", 0)
+		h.putPart("turn-again", "conversation-a", "an earlier job's", 0)
+		h.createRun("turn-again", `{"status":"launching"}`)
+
+		if n := h.sweepParts(time.Now().Add(-time.Hour)); n != 0 {
+			h.t.Errorf("a sweep before every part was written removed %d, want 0", n)
+		}
+		if n := h.sweepParts(time.Now().Add(time.Hour)); n != 2 {
+			h.t.Errorf("the sweep removed %d parts, want the two of the run with no record", n)
+		}
+		for _, p := range []struct{ turn, part string }{
+			{"turn-gone", "conversation-a"}, {"turn-gone", "bridge-a"},
+		} {
+			if _, found := h.part(p.turn, p.part); found {
+				h.t.Errorf("%s/%s outlived the sweep with no record beside it", p.turn, p.part)
+			}
+		}
+		for _, p := range []struct{ turn, part string }{
+			{"turn-live", "conversation-a"}, {"turn-again", "conversation-a"},
+		} {
+			if _, found := h.part(p.turn, p.part); !found {
+				h.t.Errorf("the sweep removed %s/%s, beside a record", p.turn, p.part)
+			}
+		}
+		if n := h.sweepParts(time.Now().Add(time.Hour)); n != 0 {
+			h.t.Errorf("a second sweep removed %d parts, want 0", n)
+		}
+		if records, err := h.f.SandboxRuns(h.ctx); err != nil || len(records) != 2 {
+			h.t.Errorf("SandboxRuns after the sweep = (%d records, %v), want both records", len(records), err)
+		}
+	},
 }}
+
+func (h *fleetHarness) putPart(turnID, part, value string, version uint64) bool {
+	h.t.Helper()
+	ok, err := h.f.PutSandboxRunPart(h.ctx, turnID, part, []byte(value), version)
+	if err != nil {
+		h.t.Fatalf("PutSandboxRunPart(%s, %s): %v", turnID, part, err)
+	}
+	return ok
+}
+
+func (h *fleetHarness) part(turnID, part string) (coord.Record, bool) {
+	h.t.Helper()
+	record, found, err := h.f.SandboxRunPart(h.ctx, turnID, part)
+	if err != nil {
+		h.t.Fatalf("SandboxRunPart(%s, %s): %v", turnID, part, err)
+	}
+	return record, found
+}
+
+func (h *fleetHarness) sweepParts(cutoff time.Time) int64 {
+	h.t.Helper()
+	n, err := h.f.SweepSandboxRunParts(h.ctx, cutoff)
+	if err != nil {
+		h.t.Fatalf("SweepSandboxRunParts: %v", err)
+	}
+	return n
+}
 
 // ---- the revision payload ---------------------------------------------- //
 

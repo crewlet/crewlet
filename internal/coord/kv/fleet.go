@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"time"
@@ -2644,14 +2645,37 @@ func (f *FleetStore) SandboxRun(ctx context.Context, turnID string) (coord.Recor
 	return coord.Record{Key: turnID, Value: entry.Value(), Version: entry.Revision()}, true, nil
 }
 
-// SandboxRuns returns every record, by turn id.
+// The bucket's two kinds of key: a run's RECORD is its turn id, one segment
+// ([encodeKey]), and a PART beside it is the turn id and the part's name, two
+// ([partKey]). A subject token path, so the broker tells them apart and a
+// listing of records never reads a part.
+const (
+	runRecordKeys = "*"
+	runPartKeys   = "*.*"
+)
+
+// partKey is the key of the part named part beside turnID's run.
+func partKey(turnID, part string) (string, error) {
+	if turnID == "" || part == "" {
+		return "", fmt.Errorf("coord/kv: a sandbox run's part needs its turn id and a name (got %q, %q)",
+			turnID, part)
+	}
+	return coord.DocumentKey(turnID, part), nil
+}
+
+// SandboxRuns returns every record, by turn id — the records alone.
 func (f *FleetStore) SandboxRuns(ctx context.Context) ([]coord.Record, error) {
 	// A listing that quietly dropped a run would tell the seat's new owner
 	// there is nothing to recover, which abandons a billed box — the exact
 	// failure this bucket exists to end. eachEntry raises on a short answer
 	// rather than returning one, which is what makes that true.
+	//
+	// RECORDS ONLY, filtered by the broker: a run's parts — its suspended
+	// conversation above all — are kept beside it so that this listing,
+	// which the busy check, the recovery pass, the pause reaper and the
+	// live panel's reconcile all take, never moves them.
 	var out []coord.Record
-	err := f.each(ctx, f.runs, func(kve jetstream.KeyValueEntry) error {
+	err := f.eachUnder(ctx, f.runs, runRecordKeys, "the sandbox runs", func(kve jetstream.KeyValueEntry) error {
 		turnID, ok := decodeKey(kve.Key())
 		if !ok {
 			return nil
@@ -2729,6 +2753,155 @@ func (f *FleetStore) DeleteSandboxRun(ctx context.Context, turnID string, versio
 	default:
 		return false, unavailable("delete the sandbox run", err)
 	}
+}
+
+// SandboxRunPart reads one part beside a run, as the stream LEADER holds it
+// ([FleetStore.get]): a replica behind the quorum answers "not found" for a
+// conversation written a moment ago, which a resume would take for a run that
+// never suspended.
+func (f *FleetStore) SandboxRunPart(ctx context.Context, turnID, part string) (coord.Record, bool, error) {
+	key, err := partKey(turnID, part)
+	if err != nil {
+		return coord.Record{}, false, err
+	}
+	entry, err := f.get(ctx, f.runs, key)
+	if errors.Is(err, jetstream.ErrKeyNotFound) {
+		return coord.Record{}, false, nil
+	}
+	if err != nil {
+		return coord.Record{}, false, unavailable("read the sandbox run's part", err)
+	}
+	return coord.Record{Key: part, Value: entry.Value(), Version: entry.Revision()}, true, nil
+}
+
+// PutSandboxRunPart writes a part at a version, 0 creating it only where none
+// is stored.
+func (f *FleetStore) PutSandboxRunPart(ctx context.Context, turnID, part string, value []byte,
+	version uint64) (bool, error) {
+
+	key, err := partKey(turnID, part)
+	if err != nil {
+		return false, err
+	}
+	if version == 0 {
+		// THE ONE CREATE ([createKey]), which writes over a removal's
+		// marker and asks the leader whether the key holds a value.
+		_, err = f.create(ctx, f.runs, key, value)
+		switch {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, jetstream.ErrKeyExists):
+			return false, nil
+		default:
+			return false, unavailable("create the sandbox run's part", err)
+		}
+	}
+	_, err = f.runs.Update(ctx, key, value, version)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, jetstream.ErrKeyRevisionMismatch), errors.Is(err, jetstream.ErrKeyNotFound):
+		// A LOST RACE, as an update of a record's is.
+		return false, nil
+	default:
+		return false, unavailable("update the sandbox run's part", err)
+	}
+}
+
+// DeleteSandboxRunPart removes a part whatever it holds.
+//
+// ASKED FIRST, of the leader: a part is removed by its writer once nothing
+// names it, whether or not it was ever written — a run whose job bridged
+// nothing has no tool log — and a purge of a key holding nothing would leave a
+// marker behind for every such removal, which the marker sweep and every walk
+// of the bucket would then read. PURGED, the standing rule for a bucket no
+// clock ages (markers.go).
+func (f *FleetStore) DeleteSandboxRunPart(ctx context.Context, turnID, part string) error {
+	key, err := partKey(turnID, part)
+	if err != nil {
+		return err
+	}
+	if _, err := f.get(ctx, f.runs, key); err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil
+		}
+		return unavailable("read the sandbox run's part", err)
+	}
+	if err := f.runs.Purge(ctx, key); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+		return unavailable("delete the sandbox run's part", err)
+	}
+	return nil
+}
+
+// SweepSandboxRunParts removes every part written before cutoff whose run has
+// no record — see [coord.SandboxRuns].
+//
+// THE PARTS FIRST, OFF THE KEY INDEX, THEN EACH ONE'S RUN, so a record written
+// under the turn again after its parts were found keeps them all, and one
+// written before is read. Each run's record and each candidate part are read
+// from the LEADER, so a replica behind the quorum can neither hide a record nor
+// show a part removed; and each part is purged THROUGH THE REVISION THE SWEEP
+// READ ([leaderPurge]), so a part written again since is untouched — with no
+// marker left behind, since nothing reads the absence of a part.
+func (f *FleetStore) SweepSandboxRunParts(ctx context.Context, cutoff time.Time) (int64, error) {
+	keys, err := keysUnder(ctx, f.js, f.runs, runPartKeys)
+	if err != nil {
+		return 0, unavailable("list the sandbox runs' parts", err)
+	}
+	byTurn := map[string][]string{}
+	for _, key := range keys {
+		segments, ok := coord.DocumentSegments(key)
+		if !ok || len(segments) != 2 {
+			// A key this backend did not write: left alone, as every
+			// listing here leaves one.
+			continue
+		}
+		byTurn[segments[0]] = append(byTurn[segments[0]], key)
+	}
+	read, err := newLeaderReader(f.js, f.runs)
+	if err != nil {
+		return 0, fmt.Errorf("coord/kv: sweep the sandbox runs' parts: %w", err)
+	}
+	purge, err := newLeaderPurge(f.js, f.runs)
+	if err != nil {
+		return 0, fmt.Errorf("coord/kv: sweep the sandbox runs' parts: %w", err)
+	}
+	var swept int64
+	// TURN ORDER, so two sweeps walk the bucket alike and a failure part-way
+	// names the same run on every retry.
+	for _, turnID := range slices.Sorted(maps.Keys(byTurn)) {
+		_, err := read.live(ctx, encodeKey(turnID))
+		switch {
+		case err == nil:
+			continue // the run has a record: its parts are its writer's
+		case !errors.Is(err, jetstream.ErrKeyNotFound):
+			return swept, unavailable("sweep the sandbox runs' parts",
+				fmt.Errorf("read the record of run %q: %w", turnID, err))
+		}
+		parts := byTurn[turnID]
+		slices.Sort(parts)
+		for _, key := range parts {
+			kve, err := read.live(ctx, key)
+			switch {
+			case errors.Is(err, jetstream.ErrKeyNotFound):
+				continue
+			case err != nil:
+				return swept, unavailable("sweep the sandbox runs' parts",
+					fmt.Errorf("read %q: %w", key, err))
+			case !kve.Created().Before(cutoff):
+				continue
+			}
+			n, err := purge.through(ctx, key, kve.Revision())
+			if err != nil {
+				return swept, unavailable("sweep the sandbox runs' parts",
+					fmt.Errorf("remove %q: %w", key, err))
+			}
+			if n > 0 {
+				swept++
+			}
+		}
+	}
+	return swept, nil
 }
 
 // ---- the integration reconcile status ---------------------------------- //

@@ -787,6 +787,52 @@ func TestTheMarkerSweepRunsUnderTheDutyAtItsOwnHorizon(t *testing.T) {
 	}
 }
 
+// fakeRunParts is the coordination store's sweep of a run's orphaned parts,
+// recording each cutoff it was asked to sweep before.
+type fakeRunParts struct {
+	cutoffs []time.Time
+	swept   int64
+}
+
+func (p *fakeRunParts) SweepSandboxRunParts(_ context.Context, cutoff time.Time) (int64, error) {
+	p.cutoffs = append(p.cutoffs, cutoff)
+	return p.swept, nil
+}
+
+// A RUN'S PARTS WHOSE RECORD IS GONE ARE SWEPT ONCE PER FLEET, AT THE MARKERS'
+// HORIZON.
+//
+// Fleet-scoped for the markers' reason: the bucket is one copy the company
+// shares. And the horizon is coord.MarkerRetention, the markers' own: a part
+// that old whose run's record is gone is being written by nothing that read
+// the record before its removal, since nothing that did outlives its claim.
+func TestTheRunPartSweepRunsUnderTheDutyAtTheMarkersHorizon(t *testing.T) {
+	t.Parallel()
+	if jobs := maintenance.SandboxRunPartJobs(nil); len(jobs) != 0 {
+		t.Fatalf("a nil part sweep produced %d jobs", len(jobs))
+	}
+	p := &fakeRunParts{swept: 2}
+	jobs := maintenance.SandboxRunPartJobs(p)
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %d, want the one part sweep", len(jobs))
+	}
+	job := jobs[0]
+	if job.Name != "sandbox_run_parts" || job.Scope != maintenance.Fleet {
+		t.Fatalf("job = %q scope %v, want sandbox_run_parts under the duty", job.Name, job.Scope)
+	}
+	if got := job.Horizon(); got != coord.MarkerRetention {
+		t.Errorf("horizon = %v, want coord.MarkerRetention", got)
+	}
+	w := newWorker(t, maintenance.Options{Jobs: jobs, Now: func() time.Time { return base }})
+	swept, err := w.Tick(context.Background())
+	if err != nil || swept["sandbox_run_parts"] != 2 {
+		t.Fatalf("a tick = (%v, %v), want the store's count", swept, err)
+	}
+	if want := base.Add(-coord.MarkerRetention); len(p.cutoffs) != 1 || !p.cutoffs[0].Equal(want) {
+		t.Errorf("the sweep saw cutoffs %v, want %v", p.cutoffs, want)
+	}
+}
+
 // opsLedger is one log's operation ledger, counting what it was asked to purge.
 type opsLedger struct {
 	rows  int64

@@ -3505,6 +3505,24 @@ fetch whose wants the node's copy lacks, and one past its repository's
 request bound, each read through the barrier once — rare, as a person's do,
 and paid from the run's re-syncs (below).
 
+**What a box's request costs its run's record.** Every request a box makes —
+each lazy fetch of a blob into a blobless clone among them — reads its run's
+record once, from the stream leader of the bucket the fleet keeps runs in,
+and each raise of its floor is one compare-and-set of that record. So the
+record holds the run's facts alone: the job's suspended conversation and its
+tool log are kept beside it, never on it
+([Code Sandbox](code-sandbox.md#the-runs-record-and-what-is-kept-beside-it)).
+Measured on three members with every bucket at three replicas, from a member
+not leading the runs' bucket, for a job keeping half a mebibyte of
+conversation and a full bridge log of 200 calls: the record is 2 983 bytes,
+its 2 KiB brief among them, and a read takes 0.15 ms and a raise 0.42 ms at
+the median (0.21 and 0.88 at the 99th percentile). With the conversation and
+the log on the record, as they were, it was 1 046 412 bytes, a read took
+8.4 ms and a raise 16.4 (11.4 and 22.1) — and every listing of runs and every
+flip of one moved the same mebibyte (`BenchmarkABoxRequestOnItsRun`,
+`internal/coord/kv`, thirty operations each on two E-cores of an Intel Core
+Ultra 7 265U).
+
 **Its transfers are its run's.** Every box's git is charged to the `run` class
 of the [fair share](#fair-share), keyed by its launch, and boxes together hold
 at most **half** the transfer lane, so a burst of coding runs cloning — or a

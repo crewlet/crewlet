@@ -44,6 +44,12 @@ func (e *Engine) codeBoxRuns(log *slog.Logger) boxRuns {
 // Run is the row of the run whose turn is turnID, as the host judges a box by
 // it: an error is the store unreachable, never "no run".
 //
+// ONE READ OF THE RUN'S FACTS, made by every request a box sends — a lazy
+// fetch of a blobless clone's blob included — so it moves the row and never
+// the job's conversation or tool log, which the store keeps beside the row
+// (sandbox.PendingRun's note): a few kilobytes from the bucket's stream
+// leader, whatever the turn's size.
+//
 // LIVE is a row whose job is in its box: LAUNCHING — the clone steps run
 // during the launch, before the job is marked suspended — or RUNNING, with no
 // ending decided. A row parked on a question (awaiting, reseed, answered) or

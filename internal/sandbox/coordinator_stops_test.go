@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -687,6 +688,20 @@ func (s *refusingStore) Get(ctx context.Context, turnID string) (PendingRun, boo
 		return PendingRun{}, false, errRefusedCall
 	}
 	return s.inner.Get(ctx, turnID)
+}
+
+func (s *refusingStore) Conversation(ctx context.Context, turnID, launch string) (json.RawMessage, bool, error) {
+	if s.called("Conversation") {
+		return nil, false, errRefusedCall
+	}
+	return s.inner.Conversation(ctx, turnID, launch)
+}
+
+func (s *refusingStore) BridgeLog(ctx context.Context, turnID, launch string) ([]BridgeCall, error) {
+	if s.called("BridgeLog") {
+		return nil, errRefusedCall
+	}
+	return s.inner.BridgeLog(ctx, turnID, launch)
 }
 
 func (s *refusingStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,

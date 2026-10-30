@@ -135,6 +135,11 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 		// every listing that meets one pays a leader read for it. See
 		// [maintenance.MarkerJobs].
 		jobs = append(jobs, maintenance.MarkerJobs(fleet)...)
+		// AND THE PARTS A DETACHED RUN KEEPS BESIDE ITS RECORD, once the
+		// record is gone — a write that raced the run's end. Ageless for
+		// the runs' own reason, so a decision removes them; see
+		// [maintenance.SandboxRunPartJobs].
+		jobs = append(jobs, maintenance.SandboxRunPartJobs(fleet)...)
 		// The NATIVE backends' own records, on the same edge and for a
 		// related reason: their family holds several classes under one
 		// grammar, and only some of them age out — so no bucket age can

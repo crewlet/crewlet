@@ -452,7 +452,11 @@ func TestAParkCarriesWhatTheTurnWrote(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("the parked row: found=%v err=%v", found, err)
 	}
-	state, ok, err := execstate.Decode(row.ExecuteState)
+	conversation, found, err := store.Conversation(t.Context(), "run-code", row.LaunchID)
+	if err != nil || !found {
+		t.Fatalf("the parked job's conversation: found=%v err=%v", found, err)
+	}
+	state, ok, err := execstate.Decode(conversation)
 	if err != nil || !ok {
 		t.Fatalf("decode the suspension: ok=%v err=%v", ok, err)
 	}

@@ -19,8 +19,9 @@ and it deliberately follows the same doctrine one scope wider.
 ## What it is not
 
 **Not a transcript replay.** The engine can already round-trip a whole LLM
-conversation — the detached run's `execute_state` persists the full message
-list and splices it back into a running loop, which re-enters it as it was.
+conversation — a detached run's suspended conversation persists the full
+message list beside the run's record and splices it back into a running loop,
+which re-enters it as it was.
 That is right for a turn *parked* on a question whose dangling tool call
 is waiting for one answer. It is wrong here: a conversation's next turn
 arrives against a thread that has **moved**, and replaying raw prior context

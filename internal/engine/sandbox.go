@@ -646,7 +646,7 @@ func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 // resume is [resumer.Resume]'s body, separated so the recovery around it is
 // one deferred call.
 func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
-	state, ok, err := execstate.Decode(req.Run.ExecuteState)
+	state, ok, err := execstate.Decode(req.State)
 	if err != nil {
 		// A state this build cannot read is a ROUTING failure, not a run
 		// failure: a peer on the version that wrote it can resume this, so
@@ -692,6 +692,7 @@ func (r *resumer) resume(ctx context.Context, req sandbox.ResumeRequest) error {
 		OutputTokens: req.OutputTokens,
 		Begin:        req.Begin,
 		Engine:       req.Engine,
+		Bridged:      req.Bridged,
 	})
 }
 
@@ -841,6 +842,10 @@ type resumeInput struct {
 	// bridged calls and the condensation of its collection — which this
 	// segment's charge includes too: see [sandbox.ResumeRequest.Engine].
 	Engine sandbox.EngineSpend
+
+	// Bridged is the job's bridged tool log as the coordinator read it for
+	// this resume — see [sandbox.ResumeRequest.Bridged].
+	Bridged []sandbox.BridgeCall
 }
 
 // resumeTurn re-enters a suspended turn.
@@ -1027,11 +1032,11 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 				// WHICH BOX DID THE WORK, and what it delivered — see
 				// [runRecordOf].
 				Run: runRecordOf(in.Run, in.Account),
-				// THE RUN'S OWN TOOL CALLS, off its durable row. An
-				// agent-mode executor called them over the bridge, possibly
-				// in another process, so this list is the only record of
-				// what the phase did — its submission included.
-				Bridged: bridgedCalls(in.Run.BridgeCalls),
+				// THE RUN'S OWN TOOL CALLS, off its job's durable bridge
+				// log. An agent-mode executor called them over the bridge,
+				// possibly in another process, so this list is the only
+				// record of what the phase did — its submission included.
+				Bridged: bridgedCalls(in.Bridged),
 			},
 		})
 	if err != nil {

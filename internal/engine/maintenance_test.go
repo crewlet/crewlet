@@ -155,6 +155,13 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// the history is a Replicated table an applier owns, so a
 		// delete here on one node's own authority is exactly what the
 		// identity claim forbids.
+		// THE PARTS A DETACHED RUN KEEPS BESIDE ITS RECORD — a launch's
+		// suspended conversation and bridged tool log — whose record is
+		// gone: a write that raced the run's end, or a process that
+		// stopped between the end's two removals. Their bucket is
+		// ageless, so without this entry such a part stayed for the life
+		// of the deployment, a conversation's megabytes among them.
+		"sandbox_run_parts",
 		"scheduled_runs",
 		// The one job that deletes BROKER state rather than rows: a
 		// removed seat's mailbox, retired after its grace period. Named

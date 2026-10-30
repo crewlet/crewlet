@@ -140,6 +140,16 @@ func (b bridgedRun) row(t *testing.T, turnID string) sandbox.PendingRun {
 	return row
 }
 
+// log is the bridged calls the job row names has on record.
+func (b bridgedRun) log(t *testing.T, row sandbox.PendingRun) []sandbox.BridgeCall {
+	t.Helper()
+	calls, err := b.pending.BridgeLog(t.Context(), row.TurnID, row.LaunchID)
+	if err != nil {
+		t.Fatalf("the job's bridge log: %v", err)
+	}
+	return calls
+}
+
 // A LAUNCH BINDS ITS BRIDGE SESSION TO ITS JOB, so the box's calls are filed
 // under it. Driven through the real launcher and the real bridge, because the
 // binding is one line of wiring in LaunchExecutor and nothing else can show it
@@ -155,9 +165,9 @@ func TestALaunchedRunsBridgedCallIsFiledUnderItsJob(t *testing.T) {
 
 	run.call(t, "read_page")
 	row := run.row(t, "t-bound")
-	if row.LaunchID != job || len(row.BridgeCalls) != 1 || row.BridgeCalls[0].Name != "read_page" {
+	if calls := run.log(t, row); row.LaunchID != job || len(calls) != 1 || calls[0].Name != "read_page" {
 		t.Fatalf("the job's log after one bridged call: job %q (was %q), calls %+v",
-			row.LaunchID, job, row.BridgeCalls)
+			row.LaunchID, job, calls)
 	}
 }
 
@@ -200,8 +210,9 @@ func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) 
 	if row.LaunchID != next.LaunchID {
 		t.Fatalf("the row holds job %q, want the relaunch's %q", row.LaunchID, next.LaunchID)
 	}
-	if len(row.BridgeCalls) != 0 || row.Launch.Bridged != (sandbox.EngineSpend{}) {
-		t.Fatalf("the next job took the last one's late call: calls %+v, spend %+v",
-			row.BridgeCalls, row.Launch.Bridged)
+	if calls := run.log(t, row); len(calls) != 0 || row.Launch.BridgedCalls != 0 ||
+		row.Launch.Bridged != (sandbox.EngineSpend{}) {
+		t.Fatalf("the next job took the last one's late call: calls %+v (%d counted), spend %+v",
+			calls, row.Launch.BridgedCalls, row.Launch.Bridged)
 	}
 }

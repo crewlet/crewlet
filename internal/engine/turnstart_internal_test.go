@@ -338,8 +338,8 @@ func TestAResumeBeginsItsTurnBeforeAnyOfItRuns(t *testing.T) {
 		Run: sandbox.PendingRun{
 			TurnID: "run-4", AgentHandle: "swe", Reply: "tool",
 			TaskDescription: "fix the failing test", DelegationDepth: 3,
-			ExecuteState: state,
 		},
+		State:  state,
 		Answer: "use main",
 		Begin:  b.begin,
 	})

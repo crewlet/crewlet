@@ -1037,11 +1037,29 @@ type Record struct {
 // RAISES rather than answering empty, on every read: "there is no run" starts
 // the work again and abandons a box, and a store that could not be read must
 // never be able to say that.
+//
+// # A record has PARTS beside it
+//
+// A part is a value kept beside one run's record under a name its writer
+// chose — internal/sandbox keeps a launch's suspended conversation and its
+// bridged tool log there — so that a read or a write of the RECORD never
+// moves it. Every flip of a run is a compare-and-swap of its record whole,
+// every listing below reads every record whole, and every git request of a
+// coding box reads its run's record and every ref answer past its floor
+// writes it: with the conversation on the record, each of those moved the
+// whole conversation, megabytes for a long turn, through the bucket's stream
+// leader. A part is versioned as a record is and written the same way, and is
+// never read by a listing of records.
+//
+// A part belongs to its record's TURN, and nothing removes it when the record
+// goes: its writer does, by name, and [SandboxRuns.SweepSandboxRunParts]
+// removes whatever a write that raced the record's end left behind.
 type SandboxRuns interface {
 	// SandboxRun reads one run's record.
 	SandboxRun(ctx context.Context, turnID string) (Record, bool, error)
 
-	// SandboxRuns returns every record, by turn id.
+	// SandboxRuns returns every record, by turn id — the records ALONE,
+	// never a part beside one.
 	//
 	// Every listing this serves — the seat's busy check, the boot recovery
 	// pass, the pause reaper, the clarification match — filters on fields
@@ -1062,8 +1080,34 @@ type SandboxRuns interface {
 	UpdateSandboxRun(ctx context.Context, turnID string, value []byte, version uint64) (bool, error)
 
 	// DeleteSandboxRun removes a record at a version, reporting whether
-	// that version still held.
+	// that version still held. Its parts stay: see the type's doc.
 	DeleteSandboxRun(ctx context.Context, turnID string, version uint64) (bool, error)
+
+	// SandboxRunPart reads the part named part beside turnID's run, whether
+	// or not the run has a record. Record.Key is the part's name.
+	SandboxRunPart(ctx context.Context, turnID, part string) (Record, bool, error)
+
+	// PutSandboxRunPart writes a part at a version, reporting whether that
+	// version still held: version 0 writes only where no part of that name
+	// is stored, any other only where that version is the part's. False is
+	// a LOST RACE, as an update of a record's is. Writing one asks nothing of
+	// the run's record: a writer that needs the record to name what it
+	// writes reads the record itself.
+	PutSandboxRunPart(ctx context.Context, turnID, part string, value []byte, version uint64) (bool, error)
+
+	// DeleteSandboxRunPart removes a part whatever version it holds. A part
+	// that is not stored is no error: its writer removes a part once nothing
+	// names it, and a removal repeated after a crash finds it gone.
+	DeleteSandboxRunPart(ctx context.Context, turnID, part string) error
+
+	// SweepSandboxRunParts removes every part written before cutoff whose
+	// run has NO RECORD, reporting how many went. Whether a run has a
+	// record is read AFTER its parts are found, so a record written under
+	// the turn again — its next job, after its last one ended — keeps
+	// every part beside it; and each part is removed only as it was when
+	// found, so a part written again since is untouched. A failure part-way
+	// reports the parts already removed beside the error.
+	SweepSandboxRunParts(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
 // SecretRecord is one stored credential, as coordination holds it.

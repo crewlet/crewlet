@@ -79,6 +79,12 @@ var markerCases = []fleetCase{{
 			}
 		}
 		h.createRun("turn-again", `{"status":"running"}`)
+		// A run's parts: one removed and one kept.
+		h.putPart("turn-live", "conversation-gone", "removed", 0)
+		h.putPart("turn-live", "conversation-kept", "kept", 0)
+		if err := h.f.DeleteSandboxRunPart(h.ctx, "turn-live", "conversation-gone"); err != nil {
+			h.t.Fatalf("DeleteSandboxRunPart: %v", err)
+		}
 		// Mailboxes, secrets, integration statuses and trim holds: one
 		// removed and one kept in each.
 		for _, handle := range []string{"cto", "ceo"} {
@@ -130,6 +136,15 @@ var markerCases = []fleetCase{{
 		}
 		if !h.createRun("turn-gone", `{"status":"running"}`) {
 			h.t.Error("a run whose marker was swept could not be created again: the store reported a removed key as held")
+		}
+		if part, found := h.part("turn-live", "conversation-kept"); !found || string(part.Value) != "kept" {
+			h.t.Errorf("a part kept through the sweep reads (%q, %v), want it as written", part.Value, found)
+		}
+		if _, found := h.part("turn-live", "conversation-gone"); found {
+			h.t.Error("a part removed before the sweep reads as present after it")
+		}
+		if !h.putPart("turn-live", "conversation-gone", "written again", 0) {
+			h.t.Error("a part whose marker was swept could not be written again")
 		}
 		if _, found := h.mailbox("cto"); found {
 			h.t.Error("a mailbox record removed before the sweep reads as present after it")

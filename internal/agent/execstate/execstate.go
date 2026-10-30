@@ -4,8 +4,10 @@
 // the run_sandbox call UNANSWERED, and is re-entered later — after a restart,
 // possibly on another node, possibly days later once a person answers a
 // question. The conversation cannot be a parked goroutine: the run outlives
-// the process. So it is serialized into the pending-run row and re-entered
-// from there.
+// the process. So it is serialized and kept beside the run's pending-run row,
+// under the job's launch (internal/sandbox's PendingStore.Conversation — beside
+// rather than on the row, which every flip and every listing of runs reads
+// whole), and re-entered from there.
 //
 // THIS IS A WIRE FORMAT, not an implementation detail, because it crosses two
 // boundaries:
@@ -359,18 +361,18 @@ func (s State) dangling() []string {
 	return open
 }
 
-// Encode serializes the state for the pending-run row, validating first.
+// Encode serializes the state for the run's store, validating first.
 //
-// A refusal here is better than a row that cannot be resumed: the suspending
+// A refusal here is better than a run that cannot be resumed: the suspending
 // turn still holds the box and can fail loudly, where a resume finding a
-// corrupt row has already lost the conversation.
+// corrupt conversation has already lost it.
 //
-// The result is the row's bytes and nothing else. It used to be decoded back
-// into a map[string]any for the row to hold, and that decode read every number
-// in the conversation as a float64 — so a nineteen-digit id a model passed as
-// a tool argument came back from a suspension rounded to the nearest
-// representable double, and the resumed loop replayed (and could act on) an
-// argument the model never wrote. Bytes have no such step to get wrong.
+// The result is the bytes the store keeps and nothing else. It used to be
+// decoded back into a map[string]any for the row to hold, and that decode read
+// every number in the conversation as a float64 — so a nineteen-digit id a
+// model passed as a tool argument came back from a suspension rounded to the
+// nearest representable double, and the resumed loop replayed (and could act
+// on) an argument the model never wrote. Bytes have no such step to get wrong.
 func Encode(s State) (json.RawMessage, error) {
 	s.Version = Version
 	if err := s.Validate(); err != nil {
@@ -383,7 +385,7 @@ func Encode(s State) (json.RawMessage, error) {
 	return blob, nil
 }
 
-// Decode reads a state back out of a pending-run row.
+// Decode reads a state back as the run's store kept it.
 //
 // An empty blob — no bytes, a JSON null or an object with no keys — is
 // (State{}, false, nil): a run with no suspended conversation is an ordinary

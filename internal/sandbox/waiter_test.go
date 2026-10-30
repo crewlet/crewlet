@@ -227,8 +227,8 @@ var rigItem = types.WorkItem{Backend: types.WorkNative, ID: "task-1", Key: "ENG-
 // carried one in place of the other shows.
 const rigWorkKey = "0123456789abcdef0123456789abcdef"
 
-// suspend writes the execute_state a real suspending turn would have written,
-// which is what opens the run to the completion poll.
+// suspend writes the suspended conversation a real suspending turn would have
+// written, which is what opens the run to the completion poll.
 func (r *waiterRig) suspend(turnID string) {
 	r.t.Helper()
 	r.suspendIn(r.t.Context(), turnID)

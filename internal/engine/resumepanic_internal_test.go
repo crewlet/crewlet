@@ -85,9 +85,10 @@ func TestAResumeOnANodeWithNoCompanyIsUnavailableHere(t *testing.T) {
 		t.Fatalf("Encode: %v", err)
 	}
 	r := &resumer{engine: &Engine{backends: &Backends{Queue: &pub{}}}}
-	err = r.Resume(context.Background(), sandbox.ResumeRequest{Run: sandbox.PendingRun{
-		TurnID: "t-2", AgentHandle: "ceo", ExecuteState: state,
-	}})
+	err = r.Resume(context.Background(), sandbox.ResumeRequest{
+		Run:   sandbox.PendingRun{TurnID: "t-2", AgentHandle: "ceo"},
+		State: state,
+	})
 	if !errors.Is(err, sandbox.ErrResumeUnavailable) {
 		t.Fatalf("err = %v, want ErrResumeUnavailable so the completion goes back", err)
 	}

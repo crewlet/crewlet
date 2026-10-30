@@ -38,6 +38,20 @@ func (f fixedRuns) Get(_ context.Context, turnID string) (sandbox.PendingRun, bo
 	return sandbox.PendingRun{}, false, nil
 }
 
+// BridgeLog is one call — fixedCall — for the job of a listed run whose row
+// counts a bridged call, and none for any other.
+func (f fixedRuns) BridgeLog(_ context.Context, turnID, launch string) ([]sandbox.BridgeCall, error) {
+	for _, run := range f {
+		if run.TurnID == turnID && run.LaunchID == launch && run.Launch.BridgedCalls > 0 {
+			return []sandbox.BridgeCall{fixedCall}, nil
+		}
+	}
+	return nil, nil
+}
+
+// fixedCall is the bridged call [fixedRuns] logs for a job that made one.
+var fixedCall = sandbox.BridgeCall{Name: "get_work_item", Args: `{"id":"ENG-1"}`}
+
 // WHAT WAITS ON A PERSON IS THEIR OPEN ASKS AND THE RUNS PARKED ON A QUESTION
 // TO THEM — their own record when they name nobody, and only runs that are
 // actually waiting.

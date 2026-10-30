@@ -51,6 +51,11 @@ type Fleet struct {
 	integrations map[string][]byte
 	mailboxes    map[uuid.UUID]coord.MailboxRecord
 
+	// runParts are the parts beside each run's record, by turn and then by
+	// name — kept apart from runs, as the KV keeps them under keys a listing
+	// of records never reads.
+	runParts map[string]map[string]runPart
+
 	// objectBackend is the fleet's recorded object backend, empty until a
 	// node records one, and objectCollection the collector's last report.
 	objectBackend    string
@@ -125,6 +130,7 @@ func NewFleet() *Fleet {
 		custody:      map[string]string{},
 		rebases:      map[string]rebaseEntry{},
 		runs:         map[string]coord.Record{},
+		runParts:     map[string]map[string]runPart{},
 		secrets:      map[string]coord.SecretRecord{},
 		integrations: map[string][]byte{},
 		mailboxes:    map[uuid.UUID]coord.MailboxRecord{},
@@ -796,6 +802,102 @@ func (f *Fleet) DeleteSandboxRun(_ context.Context, turnID string, version uint6
 	}
 	delete(f.runs, turnID)
 	return true, nil
+}
+
+// runPart is one part beside a run's record, with the instant it was written,
+// which the sweep compares its cutoff with as the KV compares a message's.
+type runPart struct {
+	record coord.Record
+	at     time.Time
+}
+
+// SandboxRunPart reads the part named part beside turnID's run.
+func (f *Fleet) SandboxRunPart(_ context.Context, turnID, part string) (coord.Record, bool, error) {
+	if err := partNamed(turnID, part); err != nil {
+		return coord.Record{}, false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.runParts[turnID][part]
+	if !ok {
+		return coord.Record{}, false, nil
+	}
+	return copyRecord(p.record), true, nil
+}
+
+// PutSandboxRunPart writes a part at a version: 0 only where none is stored.
+func (f *Fleet) PutSandboxRunPart(_ context.Context, turnID, part string, value []byte, version uint64) (bool, error) {
+	if err := partNamed(turnID, part); err != nil {
+		return false, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	existing, ok := f.runParts[turnID][part]
+	switch {
+	case version == 0 && ok:
+		return false, nil
+	case version != 0 && (!ok || existing.record.Version != version):
+		return false, nil
+	}
+	if f.runParts[turnID] == nil {
+		f.runParts[turnID] = map[string]runPart{}
+	}
+	// FROM THE STORE-WIDE COUNTER, for the records' reason: a part removed
+	// and written again never hands back a version an older one used.
+	f.version++
+	f.runParts[turnID][part] = runPart{
+		record: coord.Record{Key: part, Value: slices.Clone(value), Version: f.version},
+		at:     time.Now(),
+	}
+	return true, nil
+}
+
+// DeleteSandboxRunPart removes a part whatever version it holds.
+func (f *Fleet) DeleteSandboxRunPart(_ context.Context, turnID, part string) error {
+	if err := partNamed(turnID, part); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.runParts[turnID], part)
+	if len(f.runParts[turnID]) == 0 {
+		delete(f.runParts, turnID)
+	}
+	return nil
+}
+
+// SweepSandboxRunParts removes every part written before cutoff whose run has
+// no record. Under one lock, so the KV's ordering — the parts found, then each
+// run's record read — holds here by construction.
+func (f *Fleet) SweepSandboxRunParts(_ context.Context, cutoff time.Time) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var swept int64
+	for turnID, parts := range f.runParts {
+		if _, live := f.runs[turnID]; live {
+			continue
+		}
+		for name, p := range parts {
+			if p.at.Before(cutoff) {
+				delete(parts, name)
+				swept++
+			}
+		}
+		if len(parts) == 0 {
+			delete(f.runParts, turnID)
+		}
+	}
+	return swept, nil
+}
+
+// partNamed refuses a part with no turn or no name: neither names anything,
+// and the KV could not even spell its key.
+func partNamed(turnID, part string) error {
+	if turnID == "" || part == "" {
+		return fmt.Errorf("coord/memory: a sandbox run's part needs its turn id and a name (got %q, %q)",
+			turnID, part)
+	}
+	return nil
 }
 
 // copyRecord hands back a value whose bytes the caller cannot write through.

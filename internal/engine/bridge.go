@@ -46,15 +46,16 @@ func bridgedCalls(logged []sandbox.BridgeCall) []ledger.Call {
 // decodeBridgeArgs reads the JSON text a bridged call was recorded with.
 //
 // [tools.ReadArgs] rather than a bare unmarshal, because this is the SECOND
-// decode of the id the row went out of its way to keep exact: a bridged call
+// decode of the id the job's log went out of its way to keep exact: a bridged call
 // naming a 19-digit issue id would otherwise reach the resumed turn's ledger
 // as a rounded one.
 func decodeBridgeArgs(raw string) map[string]any {
 	return tools.ReadArgs(raw)
 }
 
-// bridgeLedger appends a bridged run's calls to its pending-run row, and with
-// each one what the run's bridged calls have cost the engine so far.
+// bridgeLedger appends a bridged run's calls to its job's log beside the
+// pending-run row, and with each one what the run's bridged calls have cost the
+// engine so far, onto the row.
 //
 // ONE PER SESSION, so one per job, and BOUND TO THAT JOB BEFORE ITS BOX EXISTS
 // ([bridgeLedger.bind], handed to [sandbox.LaunchRequest.Opened]): every append
@@ -167,7 +168,7 @@ func engineSpendOf(b runner.Bridged) sandbox.EngineSpend {
 		WorkerInput: b.WorkerInput, WorkerOutput: b.WorkerOutput}
 }
 
-// encodeArgs renders a call's arguments as the JSON text the row holds.
+// encodeArgs renders a call's arguments as the JSON text the job's log holds.
 //
 // An UNENCODABLE argument is not an error worth failing a log append over: the
 // call already ran. It records as empty, with the name and outcome intact,

@@ -101,7 +101,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"AStaleFenceCannotWrite", testAStaleFenceCannotWrite},
 		{"ALaunchStampsTheLeaseThatLaunchedIt", testALaunchStampsTheLeaseThatLaunchedIt},
 		{"ReleasingABoxClearsBothHalves", testReleasingABoxClearsBothHalves},
-		{"ExecuteStateRoundTrips", testExecuteStateRoundTrips},
+		{"TheConversationRoundTrips", testTheConversationRoundTrips},
 		{"ActiveIncludesResumed", testActiveIncludesResumed},
 		{"AnAnswerFindsTheRunThatAsked", testAnAnswerFindsTheRunThatAsked},
 		{"ARunParkedOnATopLevelDMIsAnsweredInItsThread", testARunParkedOnATopLevelDMIsAnsweredInItsThread},
@@ -164,6 +164,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			testAudienceFieldsSurviveAStatusFlipByABuildThatDoesNotKnowThem},
 		{"ListRunsListsEveryStatus", testListRunsListsEveryStatus},
 		{"ARunRowCarriesItsRepositoriesAndFloor", testARunRowCarriesItsRepositoriesAndFloor},
+		{"TheRowIsTheSizeOfItsFactsWhateverItsJobKeeps", testTheRowIsTheSizeOfItsFactsWhateverItsJobKeeps},
 	}
 	for _, tc := range raw {
 		t.Run(tc.name, func(t *testing.T) {
@@ -351,17 +352,44 @@ func testASecondLaunchDropsTheFirstSuspension(t *testing.T, s sandbox.PendingSto
 	// completion claimed before the new suspension lands would splice this
 	// run's findings into the loop the LAST call suspended, which has
 	// already moved on. The status is what says so — back to launching, so
-	// the poll leaves it alone until the new conversation is written.
-	mustLaunched(t, s, run("t1"))
-	mustBeginLaunch(t, s, run("t1"))
+	// the poll leaves it alone until the new conversation is written — and
+	// the conversation kept beside the row is the job's: the new launch
+	// names none, and the replaced one's is removed.
+	//
+	// Mutation: drop the replaced job's values after a reset, and the first
+	// call's conversation is still kept.
+	first := mustLaunched(t, s, run("t1"))
+	second := mustBeginLaunch(t, s, run("t1"))
 
 	got := mustGet(t, s, "t1")
 	if got.Status != sandbox.StatusLaunching {
 		t.Errorf("status = %q, want %q", got.Status, sandbox.StatusLaunching)
 	}
-	if len(got.ExecuteState) != 0 {
-		t.Errorf("the first call's suspension survived the relaunch: %+v", got.ExecuteState)
+	for _, launch := range []string{second, first} {
+		if state, kept := mustConversation(t, s, "t1", launch); kept {
+			t.Errorf("the relaunch left launch %s a suspension: %s", launch, state)
+		}
 	}
+}
+
+// mustConversation is the conversation launch's job keeps beside turnID's run.
+func mustConversation(t *testing.T, s sandbox.PendingStore, turnID, launch string) (string, bool) {
+	t.Helper()
+	state, kept, err := s.Conversation(t.Context(), turnID, launch)
+	if err != nil {
+		t.Fatalf("Conversation(%s, %s): %v", turnID, launch, err)
+	}
+	return string(state), kept
+}
+
+// mustBridgeLog is the bridged tool log launch's job keeps beside turnID's run.
+func mustBridgeLog(t *testing.T, s sandbox.PendingStore, turnID, launch string) []sandbox.BridgeCall {
+	t.Helper()
+	calls, err := s.BridgeLog(t.Context(), turnID, launch)
+	if err != nil {
+		t.Fatalf("BridgeLog(%s, %s): %v", turnID, launch, err)
+	}
+	return calls
 }
 
 // A SECOND LAUNCH UNDER ONE TURN ID IS A SECOND ROUND, and its tool log starts
@@ -383,18 +411,20 @@ func testASecondLaunchDropsTheFirstRunsBridgedCalls(t *testing.T, s sandbox.Pend
 	}); err != nil {
 		t.Fatalf("AppendBridgeCall: %v", err)
 	}
-	if got := mustGet(t, s, first.TurnID); len(got.BridgeCalls) != 1 {
-		t.Fatalf("the first round recorded %d calls, want 1", len(got.BridgeCalls))
+	if calls := mustBridgeLog(t, s, first.TurnID, launch); len(calls) != 1 {
+		t.Fatalf("the first round recorded %d calls, want 1", len(calls))
 	}
 
-	mustBeginLaunch(t, s, run("t-relaunch-bridge"))
+	next := mustBeginLaunch(t, s, run("t-relaunch-bridge"))
 	got := mustGet(t, s, first.TurnID)
-	if len(got.BridgeCalls) != 0 {
-		t.Errorf("the second round inherited %d calls from the first: %+v",
-			len(got.BridgeCalls), got.BridgeCalls)
+	if calls := mustBridgeLog(t, s, first.TurnID, next); len(calls) != 0 {
+		t.Errorf("the second round inherited %d calls from the first: %+v", len(calls), calls)
 	}
-	if got.BridgeCallsElided != 0 {
-		t.Errorf("the elision count survived the relaunch: %d", got.BridgeCallsElided)
+	if got.Launch.BridgedCalls != 0 {
+		t.Errorf("the call count survived the relaunch: %d", got.Launch.BridgedCalls)
+	}
+	if calls := mustBridgeLog(t, s, first.TurnID, launch); len(calls) != 0 {
+		t.Errorf("the first round's log outlived the relaunch beside the row: %+v", calls)
 	}
 }
 
@@ -478,10 +508,11 @@ func testALaunchingRunIsNotClaimable(t *testing.T, s sandbox.PendingStore) {
 }
 
 func testSuspendingOpensTheRunToTheTail(t *testing.T, s sandbox.PendingStore) {
-	// One write, both facts: the conversation lands and the run becomes
-	// pollable at the same instant. Two writes would leave a running row
-	// with nothing to resume into, which is the state the poll fires on.
-	mustBeginLaunch(t, s, run("t1"))
+	// The conversation, then the flip: the run becomes pollable only once
+	// there is something to resume into. The other order would leave a
+	// running row with nothing to resume into, which is the state the poll
+	// fires on.
+	launch := mustBeginLaunch(t, s, run("t1"))
 	suspended, err := s.MarkSuspended(t.Context(), "t1", suspension())
 	if err != nil || !suspended {
 		t.Fatalf("mark suspended: suspended=%v err=%v", suspended, err)
@@ -491,8 +522,8 @@ func testSuspendingOpensTheRunToTheTail(t *testing.T, s sandbox.PendingStore) {
 	if got.Status != sandbox.StatusRunning {
 		t.Errorf("status = %q, want %q", got.Status, sandbox.StatusRunning)
 	}
-	if len(got.ExecuteState) == 0 {
-		t.Error("the run opened to the poll with no conversation on it")
+	if _, kept := mustConversation(t, s, "t1", launch); !kept {
+		t.Error("the run opened to the poll with no conversation kept for its job")
 	}
 	if _, won, err := s.ClaimForResume(t.Context(), "t1", completionOf(t, s, "t1"), sandbox.Fence{}); err != nil || !won {
 		t.Errorf("a suspended run was not claimable: won=%v err=%v", won, err)
@@ -624,7 +655,12 @@ func testAReseedIsStillClaimable(t *testing.T, s sandbox.PendingStore) {
 // answer matching a question it once asked.
 func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
-	mustLaunched(t, s, run("t1"))
+	launch := mustLaunched(t, s, run("t1"))
+	if recorded, err := s.AppendBridgeCall(ctx, "t1", sandbox.BridgeAppend{
+		Launch: launch, Call: sandbox.BridgeCall{Name: "read_page"},
+	}); err != nil || !recorded {
+		t.Fatalf("AppendBridgeCall = %v, %v", recorded, err)
+	}
 	park(t, s, "t1")
 	// Read before the record goes: a claim names the launch it is for, and
 	// after the delete there is nothing left to read one from.
@@ -656,6 +692,19 @@ func testAFinishedRunIsGoneForEveryReader(t *testing.T, s sandbox.PendingStore) 
 	}
 	if _, won, err := s.ClaimForResume(ctx, "t1", tail, sandbox.Fence{}); err != nil || won {
 		t.Errorf("a finished run was claimed: won=%v err=%v", won, err)
+	}
+	// AND WHAT ITS JOB KEPT BESIDE THE RECORD: nothing reads a job's
+	// conversation or tool log but through a record that names the job, so
+	// once the record is gone they are nobody's, and a bucket no clock ages
+	// would keep them for ever.
+	//
+	// Mutation: keep the job's values when Finish deletes the record, and
+	// both are still there.
+	if state, kept := mustConversation(t, s, "t1", launch); kept {
+		t.Errorf("the finished run's conversation outlived its record: %s", state)
+	}
+	if calls := mustBridgeLog(t, s, "t1", launch); len(calls) != 0 {
+		t.Errorf("the finished run's tool log outlived its record: %+v", calls)
 	}
 	// Two parties reaching the end of one run is ordinary, not an error.
 	if _, again, err := end(ctx, s, "t1", everyJob(sandbox.Fence{}, sandbox.Active)); err != nil || again {
@@ -1695,18 +1744,21 @@ func testASeatsRunsAreFoundByItsID(t *testing.T, s sandbox.PendingStore) {
 	}
 }
 
-func testExecuteStateRoundTrips(t *testing.T, s sandbox.PendingStore) {
+func testTheConversationRoundTrips(t *testing.T, s sandbox.PendingStore) {
 	// THE SUSPENDED CONVERSATION. Everything the tool loop needs to re-enter
 	// where it stopped; a lossy round trip here resumes into a conversation
 	// that is not the one that was suspended.
 	//
-	// BYTE FOR BYTE: the store carries the conversation and never reads it,
+	// BYTE FOR BYTE: the store keeps the conversation and never reads it,
 	// so anything it gives back other than what it was given — a number
 	// re-read as a float64, a key re-sorted — is the store editing a turn.
-	mustLaunched(t, s, run("t1"))
-	got := mustGet(t, s, "t1")
-	if string(got.ExecuteState) != suspendedState {
-		t.Errorf("execute state = %s\nwant exactly %s", got.ExecuteState, suspendedState)
+	launch := mustLaunched(t, s, run("t1"))
+	if got, kept := mustConversation(t, s, "t1", launch); !kept || got != suspendedState {
+		t.Errorf("conversation = (%s, %v)\nwant exactly %s", got, kept, suspendedState)
+	}
+	// AND ONLY THE JOB'S: a launch the run never held names none.
+	if got, kept := mustConversation(t, s, "t1", "another-launch"); kept {
+		t.Errorf("a launch the run never held has a conversation: %s", got)
 	}
 }
 
@@ -2152,24 +2204,29 @@ func testBridgeCallsAreAppendedInOrder(t *testing.T, s sandbox.PendingStore) {
 		}
 	}
 
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 3 {
-		t.Fatalf("%d calls recorded: %+v", len(got.BridgeCalls), got.BridgeCalls)
+	calls := mustBridgeLog(t, s, r.TurnID, launch)
+	if len(calls) != 3 {
+		t.Fatalf("%d calls recorded: %+v", len(calls), calls)
 	}
 	want := []string{"read_page", "post_message", "read_page"}
 	for i, name := range want {
-		if got.BridgeCalls[i].Name != name {
-			t.Errorf("call %d = %q, want %q", i, got.BridgeCalls[i].Name, name)
+		if calls[i].Name != name {
+			t.Errorf("call %d = %q, want %q", i, calls[i].Name, name)
 		}
 	}
 	// The ARGUMENTS and the OUTCOME ride along, because a log of bare
 	// names does not tell a reviewer whether the turn delivered anything.
-	if got.BridgeCalls[0].Args != `{"id":1}` || got.BridgeCalls[0].Output != "read_page ok" {
-		t.Errorf("the call does not carry what it did: %+v", got.BridgeCalls[0])
+	if calls[0].Args != `{"id":1}` || calls[0].Output != "read_page ok" {
+		t.Errorf("the call does not carry what it did: %+v", calls[0])
 	}
 	// STAMPED, so a reader can see the shape of a run that stalled.
-	if got.BridgeCalls[0].At.IsZero() {
+	if calls[0].At.IsZero() {
 		t.Error("the call has no timestamp")
+	}
+	// AND COUNTED ON THE ROW, which is how a reader of the row knows the
+	// job has a log to read at all.
+	if got := mustGet(t, s, r.TurnID).Launch.BridgedCalls; got != 3 {
+		t.Errorf("the row counts %d bridged calls, want 3", got)
 	}
 }
 
@@ -2191,8 +2248,8 @@ func testBridgeCallsSurviveWithoutAFence(t *testing.T, s sandbox.PendingStore) {
 	if err != nil || !recorded {
 		t.Fatalf("a log append was refused by ownership: %v, %v", recorded, err)
 	}
-	if got := mustGet(t, s, r.TurnID); len(got.BridgeCalls) != 1 {
-		t.Errorf("%d calls recorded", len(got.BridgeCalls))
+	if calls := mustBridgeLog(t, s, r.TurnID, launch); len(calls) != 1 {
+		t.Errorf("%d calls recorded", len(calls))
 	}
 }
 
@@ -2226,21 +2283,22 @@ func testBridgeCallsDropTheMiddleNotTheStart(t *testing.T, s sandbox.PendingStor
 		}
 	}
 
-	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != sandbox.MaxBridgeCalls {
-		t.Fatalf("%d calls kept, want %d", len(got.BridgeCalls), sandbox.MaxBridgeCalls)
+	calls := mustBridgeLog(t, s, r.TurnID, launch)
+	if len(calls) != sandbox.MaxBridgeCalls {
+		t.Fatalf("%d calls kept, want %d", len(calls), sandbox.MaxBridgeCalls)
 	}
-	if first := got.BridgeCalls[0].Name; first != "call-000" {
+	if first := calls[0].Name; first != "call-000" {
 		t.Errorf("the first call was dropped: %q — a log cut to its tail loses how the run began", first)
 	}
-	last := got.BridgeCalls[len(got.BridgeCalls)-1].Name
+	last := calls[len(calls)-1].Name
 	if want := fmt.Sprintf("call-%03d", total-1); last != want {
 		t.Errorf("the last call = %q, want %q", last, want)
 	}
-	// AND THE GAP IS REPORTED: a log that silently skips is a log that
-	// lies about what the run did.
-	if got.BridgeCallsElided != 10 {
-		t.Errorf("elided = %d, want 10", got.BridgeCallsElided)
+	// AND THE GAP IS REPORTED, off the row: a log that silently skips is a
+	// log that lies about what the run did.
+	if got := mustGet(t, s, r.TurnID).Launch; got.BridgedCalls != total || got.BridgedCallsElided() != 10 {
+		t.Errorf("the row counts %d calls, %d elided; want %d, 10", got.BridgedCalls,
+			got.BridgedCallsElided(), total)
 	}
 }
 
@@ -2325,9 +2383,15 @@ func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.Pen
 				t.Error("a call from a job that is over was recorded on the next one")
 			}
 			got := mustGet(t, s, r.TurnID)
-			if len(got.BridgeCalls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
-				t.Fatalf("the next job took a call from the last one: calls %+v, spend %+v",
-					got.BridgeCalls, got.Launch.Bridged)
+			if calls := mustBridgeLog(t, s, r.TurnID, second); len(calls) != 0 ||
+				got.Launch.BridgedCalls != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
+				t.Fatalf("the next job took a call from the last one: calls %+v (%d counted), spend %+v",
+					calls, got.Launch.BridgedCalls, got.Launch.Bridged)
+			}
+			// AND THE LATE CALL LEAVES NOTHING BESIDE THE ROW: the job it
+			// names is over, so a log of it would name nothing.
+			if calls := mustBridgeLog(t, s, r.TurnID, first); len(calls) != 0 {
+				t.Errorf("the finished job kept a log beside the row: %+v", calls)
 			}
 		})
 	}
@@ -2339,16 +2403,17 @@ func testABridgedCallOutlivingItsJobIsNotTheNextJobs(t *testing.T, s sandbox.Pen
 // a caller's mistake and lands nowhere rather than somewhere.
 func testABridgedCallNamingNoJobIsNotRecorded(t *testing.T, s sandbox.PendingStore) {
 	r := run("t-bridge-unnamed")
-	mustLaunched(t, s, r)
+	launch := mustLaunched(t, s, r)
 	recorded, err := s.AppendBridgeCall(t.Context(), r.TurnID, sandbox.BridgeAppend{
 		Call: sandbox.BridgeCall{Name: "read_page"}, Spent: bridged(1)})
 	if err != nil {
 		t.Fatalf("an unnamed append was an error: %v", err)
 	}
 	got := mustGet(t, s, r.TurnID)
-	if recorded || len(got.BridgeCalls) != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
+	calls := mustBridgeLog(t, s, r.TurnID, launch)
+	if recorded || len(calls) != 0 || got.Launch.BridgedCalls != 0 || got.Launch.Bridged != (sandbox.EngineSpend{}) {
 		t.Fatalf("an append naming no job was recorded (%v): calls %+v, spend %+v",
-			recorded, got.BridgeCalls, got.Launch.Bridged)
+			recorded, calls, got.Launch.Bridged)
 	}
 }
 
@@ -2379,9 +2444,10 @@ func testABridgedCallAfterItsJobsClaimStaysOnItsJob(t *testing.T, s sandbox.Pend
 		t.Errorf("the claim read %+v, want what the job held when it was claimed: %+v", got, bridged(1))
 	}
 	got := mustGet(t, s, r.TurnID)
-	if len(got.BridgeCalls) != 2 || got.Launch.Bridged != bridged(2) {
-		t.Fatalf("the job's record after the late call: calls %d, spend %+v; want 2 and %+v",
-			len(got.BridgeCalls), got.Launch.Bridged, bridged(2))
+	calls := mustBridgeLog(t, s, r.TurnID, launch)
+	if len(calls) != 2 || got.Launch.BridgedCalls != 2 || got.Launch.Bridged != bridged(2) {
+		t.Fatalf("the job's record after the late call: calls %d (%d counted), spend %+v; want 2 and %+v",
+			len(calls), got.Launch.BridgedCalls, got.Launch.Bridged, bridged(2))
 	}
 }
 
@@ -3906,6 +3972,62 @@ func testARunRowCarriesItsRepositoriesAndFloor(t *testing.T, s sandbox.PendingSt
 			got.Repos, got.CodeFloor, got.CodeLaunch)
 	}
 	kept("the relaunch with no repositories")
+}
+
+// THE ROW IS THE SIZE OF ITS FACTS, WHATEVER ITS JOB KEEPS.
+//
+// Every flip of a run is a compare-and-set of its row whole, every listing of
+// runs reads every row whole, and every git request a coding box makes reads
+// its run's row before anything else, every ref answer past the box's floor
+// writing it back. With the job's suspended conversation and its bridged tool
+// log on the row, each of those moved the whole conversation — every message
+// and tool answer of the turn — for want of a status or a floor. So a job's
+// two large values are kept beside the row: here a conversation of a quarter
+// of a mebibyte and calls of 8 KiB of output each leave the row a few
+// kilobytes, while the store still answers both whole for the job.
+//
+// Mutation: write the conversation onto the row again, or the calls, and the
+// row carries their bytes.
+func testTheRowIsTheSizeOfItsFactsWhateverItsJobKeeps(t *testing.T, s sandbox.PendingStore, runs coord.SandboxRuns) {
+	ctx := t.Context()
+	const marker = "kept-beside-the-row"
+	conversation := `{"messages":[{"role":"tool","content":"` + marker +
+		strings.Repeat("x", 256<<10) + `"}]}`
+	launch := mustBeginLaunch(t, s, run("t-row-size"))
+	if suspended, err := s.MarkSuspended(ctx, "t-row-size", sandbox.Suspension{
+		State: json.RawMessage(conversation), Iteration: 1,
+	}); err != nil || !suspended {
+		t.Fatalf("MarkSuspended = %v, %v", suspended, err)
+	}
+	output := marker + strings.Repeat("y", 8<<10)
+	for range 3 {
+		if recorded, err := s.AppendBridgeCall(ctx, "t-row-size", sandbox.BridgeAppend{
+			Launch: launch, Call: sandbox.BridgeCall{Name: "read_page", Output: output},
+		}); err != nil || !recorded {
+			t.Fatalf("AppendBridgeCall = %v, %v", recorded, err)
+		}
+	}
+	record, found, err := runs.SandboxRun(ctx, "t-row-size")
+	if err != nil || !found {
+		t.Fatalf("read the raw row: found=%v err=%v", found, err)
+	}
+	// A FEW KILOBYTES: the fixture's brief, conversation values and ids,
+	// against the 280 KiB its job keeps beside it.
+	const rowBound = 4 << 10
+	if len(record.Value) > rowBound || strings.Contains(string(record.Value), marker) {
+		t.Fatalf("the row is %d bytes and carries its job's values: %.200s…", len(record.Value), record.Value)
+	}
+	if got, kept := mustConversation(t, s, "t-row-size", launch); !kept || got != conversation {
+		t.Errorf("the job's conversation came back as %d bytes (kept %v), want the %d written",
+			len(got), kept, len(conversation))
+	}
+	if calls := mustBridgeLog(t, s, "t-row-size", launch); len(calls) != 3 || calls[2].Output != output {
+		t.Errorf("the job's log holds %d calls, want the 3 recorded whole", len(calls))
+	}
+	if got := mustGet(t, s, "t-row-size"); got.Status != sandbox.StatusRunning || got.Launch.BridgedCalls != 3 {
+		t.Errorf("the row reads %q with %d bridged calls counted, want running and 3",
+			got.Status, got.Launch.BridgedCalls)
+	}
 }
 
 // higherFloor is a raise to want, judged as the code host's caller judges one:

@@ -708,8 +708,9 @@ require-node: ## fail unless node is on PATH (the e2e client replay needs it)
 # and the applier's drain (internal/statelog), the store's own drain
 # (internal/store), what a stream's leader takes to list the subjects it
 # holds, a page at a time (internal/jsapi), the company's token counter
-# charged by many nodes at once, each a leaf of its own, and a gated lease
-# claim (internal/coord/kv), a git process through the pool end to end,
+# charged by many nodes at once, each a leaf of its own, a gated lease claim
+# and what a coding box's request costs its run's record on three members
+# (internal/coord/kv), a git process through the pool end to end,
 # receive-pack's index-pack at one thread, and a person's clone on a transfer
 # lane one CI token has filled, with the fair share and without it, and beside
 # coding boxes with their cap and without it, and one
@@ -819,7 +820,7 @@ BENCH_TIME    ?= 3s
 BENCH_COUNT   ?= 1
 BENCH_TIMEOUT ?= $(if $(filter 1,$(CREWLET_BENCH_LARGE)),24h,8h)
 
-bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes, clones and engine writes, a coding box's git, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
+bench: git ## measure the object store, the state log's write path, a stream leader's subject listing, the fleet's token counter, git, its cache, a home's compaction of a repository's packs, the code host's pushes, clones and engine writes, a coding box's git and its run's record, a seat's reads by object id, a node's day of usage and who read a repository, a client's pace and the push hook's start (not a gate)
 	$(call PREBUILD,,$(BENCH_PKGS))
 	$(GIT_ENV) $(GO) test -run '^$$' -bench '$(BENCH_PATTERN)' -benchmem \
 	  -benchtime $(BENCH_TIME) -count $(BENCH_COUNT) -timeout $(BENCH_TIMEOUT) \

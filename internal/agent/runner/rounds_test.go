@@ -356,7 +356,7 @@ func TestAParkedRoundsStopReasonSurvivesTheResume(t *testing.T) {
 			{Round: 1, Model: "earlier", StopReason: string(llm.StopToolUse)},
 			{Round: 2, Model: "earlier", StopReason: string(llm.StopToolUse)},
 		}
-		// Through JSON, as the pending-run row hands it back.
+		// Through JSON, as the run's store hands it back.
 		blob, err := execstate.Encode(state)
 		if err != nil {
 			t.Fatalf("Encode: %v", err)

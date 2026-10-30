@@ -465,7 +465,7 @@ takes, and whether the turn survives its own process.
 flowchart TB
     WHO["<b>Who is waiting?</b><br/>derived from the trigger's own type,<br/>before any model runs"]
     EXEC["<b>Executor</b><br/>one agentic loop: decide, discover,<br/>act, then account for it"]
-    SUSP["<b>Suspended</b><br/>a detached coding run: the loop is serialized<br/>into the pending-run record and left"]
+    SUSP["<b>Suspended</b><br/>a detached coding run: the loop is serialized<br/>beside the pending-run record and left"]
     CHECK["<b>Engine check</b><br/>does the record support<br/>what it says it did?"]
     SKIP["<b>skipped</b><br/>nobody was asking<br/>this seat to do anything"]
     REV["<b>Reviewer</b><br/>is the work any good?"]
@@ -528,8 +528,8 @@ thing: a function it can ask the engine to call.
 
 **A suspended turn is the reason there is no parked goroutine anywhere.** A
 detached coding run stops the executor's loop mid-round with its `run_sandbox`
-call *unanswered*, and the conversation is serialized into the pending-run
-record rather than held in memory. The run outlives the process: it may be
+call *unanswered*, and the conversation is serialized beside the pending-run
+record, under the job's launch, rather than held in memory. The run outlives the process: it may be
 resumed after a restart, on a different node, days later once a person answers
 the agent's question. The record carries an explicit version, a permanent
 reader for the previous one, and a build that understands neither refuses

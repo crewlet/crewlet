@@ -345,7 +345,7 @@ func TestAResumeWithNoRecordedClockMeasuresTheReentry(t *testing.T) {
 
 // THE FOLD SURVIVES THE WIRE, and is omitted when there is nothing to fold.
 //
-// The offset travels through JSON in a pending-run row, so a field serialized
+// The offset travels through JSON beside a pending-run row, so a field serialized
 // under a name the reader does not know would silently reinstate the bug above
 // with every test here still green.
 func TestTheSuspendedClockSurvivesTheWire(t *testing.T) {

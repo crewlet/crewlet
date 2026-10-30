@@ -317,7 +317,7 @@ func priorRounds(state execstate.State) toolloop.Result {
 // intField reads a number that has been through JSON, where the state's
 // reader keeps every one of them as the json.Number it was written as — and
 // out of a Go map that never was, where it is still an int. Both shapes reach
-// here: a state serialized to the pending-run row and back, and one handed
+// here: a state serialized to the run's store and back, and one handed
 // straight over in the process that wrote it. A float64 is accepted too,
 // because that is what any other plain JSON decode of the same row produces.
 func intField(v any) (int, bool) {
@@ -340,7 +340,7 @@ func intField(v any) (int, bool) {
 //
 // Built HERE rather than by the engine because this is the only frame that
 // holds the loop's messages and the phase's live surface. The engine reads it
-// back through [Runner.Suspended] and writes it to the pending-run row.
+// back through [Runner.Suspended] and writes it beside the pending-run row.
 //
 // A state that fails its invariants is NOT recorded, and the absence is what
 // the engine reports: a run whose conversation could not be serialized is one

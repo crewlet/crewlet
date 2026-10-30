@@ -37,6 +37,10 @@ func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, err
 	return sandbox.PendingRun{}, false, nil
 }
 
+func (memorySandbox) BridgeLog(context.Context, string, string) ([]sandbox.BridgeCall, error) {
+	return nil, nil
+}
+
 // roomQueries is every query kind a room asks for, mapped to the files that
 // ask — found in the rooms' own source, never a list kept here: a
 // hand-maintained one is exactly what drifts, and it would drift towards

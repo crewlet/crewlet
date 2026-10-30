@@ -8080,7 +8080,7 @@ events or a `sandbox_run_failed` event naming the reason.
 
 A `launching` run is one whose coding job has started while the turn that
 started it is still unwinding, so the suspended conversation a resume
-re-enters is not on the row yet; it is listed but never polled, because a
+re-enters is not written yet; it is listed but never polled, because a
 row nobody lists is a box nobody reclaims.
 
 This query reads the durable row directly. The live projection's panel is
@@ -8155,16 +8155,20 @@ already names every run's audience. A run whose question resolved to nobody —
 the label named no one the chart has and the seat has no lead chain, or the
 node held no company when it parked — matches no one.
 
-`execute_state` — the serialised Execute-loop conversation — is
-deliberately not returned: it is the largest column in the row and every
-prompt in it is already reachable through the event store.
+The suspended conversation — the serialised Execute loop, which a run keeps
+beside its record rather than on it — is deliberately not returned: it is the
+largest thing a run keeps, and every prompt in it is already reachable
+through the event store. `bridge_calls` is kept beside the record too, and is
+read only for a run whose record counts a bridged call, and only for a reader
+shown the run's body.
 
 The run record lives in the fleet's coordination store, which every node
 opens, so every node answers with the fleet's runs. A company with no sandbox
 configured does not register the question at all, so the route answers `404`
-with `unknown_query` rather than an empty board; a record that could not be
-read answers `503` with a `Retry-After`, because "no run is parked" is a
-claim and a store blip is not evidence for it.
+with `unknown_query` rather than an empty board; a record, or a run's
+`bridge_calls`, that could not be read answers `503` with a `Retry-After`,
+because "no run is parked" is a claim — and a run drawn with no calls one
+that it did nothing — and a store blip is not evidence for either.
 
 ### `GET /budgets`
 

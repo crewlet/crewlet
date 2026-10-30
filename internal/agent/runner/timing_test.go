@@ -219,7 +219,7 @@ func TestAResumedPhaseStatesItsOwnSegmentStart(t *testing.T) {
 	state.ToolExecutions[1]["duration_ms"] = 3100
 	state.ToolExecutions[1]["origin"] = tools.OriginBuiltin
 
-	// Through JSON, the way the pending-run row hands it back: every number
+	// Through JSON, the way the run's store hands it back: every number
 	// in a loose map is a float64 on the other side.
 	blob, err := execstate.Encode(state)
 	if err != nil {

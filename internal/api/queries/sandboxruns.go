@@ -29,11 +29,15 @@ import (
 // seat and a per-node read drew a board that disagreed with itself depending on
 // which node answered.
 //
-// What it deliberately does NOT return is the execute state, the serialised
-// Execute conversation. It is by far the largest column in the row, and every
-// prompt in it is already reachable through the event store — shipping it to a
-// board that renders one line per run would be a page-weight problem in
-// exchange for nothing.
+// What it deliberately does NOT return is the suspended conversation, the
+// serialised Execute loop a launch keeps beside the row. It is by far the
+// largest thing a run keeps, and every prompt in it is already reachable through
+// the event store — shipping it to a board that renders one line per run would
+// be a page-weight problem in exchange for nothing. The bridged tool log, kept
+// beside the row too, IS returned, to a reader shown the run's body, and read
+// only for a job whose row says its bridge made a call
+// ([sandbox.LaunchRecord.BridgedCalls]): a board of runs that bridged nothing
+// reads no log at all.
 
 // PendingRuns is the durable record a sandbox-runs answer reads.
 //
@@ -52,9 +56,14 @@ import (
 // AND ONE RUN BY ITS TURN, which `sandbox_tail` reads to learn whose seat a
 // run is before it shows anybody that seat's transcript — the record is the
 // only thing that names it.
+//
+// AND A JOB'S BRIDGED TOOL LOG, which the store keeps beside the row rather
+// than on it, so the row every listing and every box's request reads stays the
+// size of its facts ([sandbox.PendingStore.BridgeLog]).
 type PendingRuns interface {
 	ListActive(ctx context.Context) ([]sandbox.PendingRun, error)
 	Get(ctx context.Context, turnID string) (sandbox.PendingRun, bool, error)
+	BridgeLog(ctx context.Context, turnID, launch string) ([]sandbox.BridgeCall, error)
 }
 
 // SandboxTails answers a running coding run's live output from the node that
@@ -236,9 +245,35 @@ func (s Sources) sandboxRuns(ctx context.Context, p Params) (any, error) {
 		if filtered && !putTo(run, who) {
 			continue
 		}
-		out = append(out, serialiseRun(run, reach(run)))
+		r := reach(run)
+		calls, err := s.bridgeLogFor(ctx, run, r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, serialiseRun(run, calls, r))
 	}
 	return map[string]any{"runs": out}, nil
+}
+
+// bridgeLogFor is the bridged tool log of run's job as reader r is shown it:
+// nil for a reader not shown the run's body, and for a job whose bridge made no
+// call — the row counts them ([sandbox.LaunchRecord.BridgedCalls]), so no log
+// is read for a run that has none.
+//
+// A LOG THAT COULD NOT BE READ FAILS THE ANSWER, as a listing that could not be
+// read does: a run drawn with no calls reads as a run that did nothing, which a
+// read that failed must not say.
+func (s Sources) bridgeLogFor(ctx context.Context, run sandbox.PendingRun, r livestate.Reach,
+) ([]sandbox.BridgeCall, error) {
+	if !r.Body || run.Launch.BridgedCalls == 0 {
+		return nil, nil
+	}
+	calls, err := s.Sandbox.BridgeLog(ctx, run.TurnID, run.LaunchID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the bridged tool log of run %s could not be read: %w",
+			ErrUnavailable, run.TurnID, err)
+	}
+	return calls, nil
 }
 
 // runReach is what the asking principal may read of each coding run: its
@@ -378,12 +413,13 @@ var runKeys = map[string]runShown{
 // serialiseRun is one coding run's row as reader r receives it: [runRow],
 // with every key [runKeys] does not show them left out — absent rather than
 // empty, because an empty task is a value a board would draw — and
-// `body_withheld` saying whether the body was.
+// `body_withheld` saying whether the body was. calls is the job's bridged tool
+// log as [Sources.bridgeLogFor] read it for r.
 //
 // A KEY THE TABLE DOES NOT NAME IS WITHHELD, which the walk keeps unreachable:
 // left out is the direction a mistake here has to fail in.
-func serialiseRun(run sandbox.PendingRun, r livestate.Reach) map[string]any {
-	row := runRow(run)
+func serialiseRun(run sandbox.PendingRun, calls []sandbox.BridgeCall, r livestate.Reach) map[string]any {
+	row := runRow(run, calls)
 	asked := r.Record != "" && slices.Contains(run.AudienceHandles, r.Record)
 	for key := range row {
 		switch runKeys[key] {
@@ -408,9 +444,10 @@ func serialiseRun(run sandbox.PendingRun, r livestate.Reach) map[string]any {
 	return row
 }
 
-// runRow is every fact a coding run's row carries, whoever reads it — see
-// [serialiseRun] for what each reader is shown of it.
-func runRow(run sandbox.PendingRun) map[string]any {
+// runRow is every fact a coding run's row carries, whoever reads it, with its
+// job's bridged tool log beside them — see [serialiseRun] for what each reader
+// is shown of it.
+func runRow(run sandbox.PendingRun, calls []sandbox.BridgeCall) map[string]any {
 	// HELD, NOT STAMPED. A box parked on a question is being paid for
 	// whether or not the pause instant reached the row, and drawing the raw
 	// stamp showed exactly that box as a live one — the one reading that
@@ -475,12 +512,13 @@ func runRow(run sandbox.PendingRun) map[string]any {
 		// THE BRIDGE'S OWN TOOL LOG. A native loop keeps its calls in
 		// memory and the turn writes them at the end; a bridged run's are
 		// made by a process outside the engine, minutes or hours apart
-		// and possibly across a restart, so this row is the only copy
-		// there is. `bridge_calls_elided` says how many were cut from the
-		// middle, because a log that silently skips is a log that lies
-		// about what the run did.
-		"bridge_calls":        run.BridgeCalls,
-		"bridge_calls_elided": run.BridgeCallsElided,
+		// and possibly across a restart, so the log its job keeps beside
+		// the row is the only copy there is. `bridge_calls_elided` says
+		// how many were cut from the middle, off the row's own count,
+		// because a log that silently skips is a log that lies about what
+		// the run did.
+		"bridge_calls":        calls,
+		"bridge_calls_elided": run.Launch.BridgedCallsElided(),
 		// THE THREE IDENTIFIERS a person needs to find this run in
 		// somebody else's system: the coding CLI's own session, the
 		// command the engine launched, and the chain of asks that led

@@ -445,6 +445,39 @@ func MarkerJobs(m Markers) []Job {
 	return []Job{Purge("coordination_markers", Fleet, Fixed(coord.MarkerRetention), m.SweepMarkers)}
 }
 
+// SandboxRunParts is the coordination store's sweep of the parts a detached
+// run keeps beside its record. Declared here, by the consumer, like
+// [Markers]; coord.Fleet is the implementation.
+type SandboxRunParts interface {
+	// SweepSandboxRunParts removes every part written before cutoff whose
+	// run has no record, reporting how many went.
+	SweepSandboxRunParts(ctx context.Context, cutoff time.Time) (int64, error)
+}
+
+// SandboxRunPartJobs is the sweep for the PARTS a detached coding run keeps
+// beside its record — the suspended conversation and the bridged tool log of
+// each of its launches (internal/sandbox's CoordStore) — once that record is
+// gone.
+//
+// A part outlives its record only where a write raced the run's end: the end
+// removes the record and then its launch's parts, a writer that read the
+// record before that removal can land its part after it, and a process can
+// stop between the two removals. Nothing else ever removes such a part, and
+// its bucket is ageless — a parked run waits on a person for days — so the
+// sweep is a decision this duty takes, for the markers' reason ([MarkerJobs]).
+//
+// [Fleet], for the markers' reason: the bucket is the company's, one copy
+// agreed by every node. Its horizon is [coord.MarkerRetention], the markers'
+// own and for their reason: nothing still acting on what it read before a
+// run's record was removed outlives the claim it runs under, so a part that
+// old whose record is gone is being written by nobody.
+func SandboxRunPartJobs(p SandboxRunParts) []Job {
+	if p == nil {
+		return nil
+	}
+	return []Job{Purge("sandbox_run_parts", Fleet, Fixed(coord.MarkerRetention), p.SweepSandboxRunParts)}
+}
+
 // ScheduleJobs is the sweep for the scheduled-run ledger.
 //
 // [NodeLocal]. The fleet half of scheduling — "may I start this fire" — moved

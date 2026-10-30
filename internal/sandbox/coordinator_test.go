@@ -733,6 +733,68 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 	}
 }
 
+// A JOB WHOSE CONVERSATION COULD NOT BE READ IS A RETRY, NEVER A RUN WITH
+// NOTHING TO RESUME — and the resume is handed what the job suspended.
+//
+// The conversation a claim resumes into is kept beside the run's row, so the
+// claim reads it in a read of its own, and a store that failed that read says
+// nothing about whether the job suspended: read as "no conversation", it failed
+// the run as no_execute_state and ended a turn the next completion would have
+// resumed. It is handed back instead, as a resume that failed is, and the retry
+// resumes with the conversation the job wrote.
+//
+// Mutation: answer the read's error as no conversation, and the run is failed;
+// hand the resumer the row alone, and its request carries no conversation.
+func TestAJobWhoseConversationCouldNotBeReadIsResumedOnItsRetry(t *testing.T) {
+	t.Parallel()
+	rig := newCoordRig(t)
+	rig.launch("t1")
+	rig.coordinator.countRun("swe", StatusRunning)
+	rig.runner.Finish(Result{Success: true, Text: "done"})
+	unread := &unreadableJob{PendingStore: rig.pending}
+	unread.failing.Store(true)
+	rig.coordinator.pending = unread
+
+	payload, ev := rig.completion("t1")
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err == nil {
+		t.Fatal("a resume whose job could not be read was reported done — the completion would be acked")
+	}
+	if got := rig.get("t1"); got.Status != StatusRunning {
+		t.Fatalf("status = %q, want the claim handed back to %q for the retry", got.Status, StatusRunning)
+	}
+	if failed := rig.failures(); len(failed) != 0 {
+		t.Fatalf("announced %+v: a read that failed ended the turn", failed)
+	}
+
+	unread.failing.Store(false)
+	if err := rig.coordinator.OnCompleted(t.Context(), payload, ev); err != nil {
+		t.Fatalf("the retry failed: %v", err)
+	}
+	calls := rig.resumer.calls()
+	if len(calls) != 1 {
+		t.Fatalf("resumed %d times, want the retry to resume exactly once", len(calls))
+	}
+	const suspended = `{"version":1,"pending_tool_call_id":"call-1","pending_tool_name":"run_sandbox"}`
+	if got := string(calls[0].State); got != suspended {
+		t.Errorf("the resume re-enters %q, want the conversation the job suspended, %s", got, suspended)
+	}
+}
+
+// unreadableJob is a store whose read of a job's conversation fails while
+// failing is set — the coordination store unreachable for that one read.
+type unreadableJob struct {
+	PendingStore
+	failing atomic.Bool
+}
+
+func (u *unreadableJob) Conversation(ctx context.Context, turnID, launch string) (json.RawMessage, bool, error) {
+	if u.failing.Load() {
+		return nil, false, fmt.Errorf("sandbox: read the suspended conversation of run %s: %w",
+			turnID, coord.ErrUnavailable)
+	}
+	return u.PendingStore.Conversation(ctx, turnID, launch)
+}
+
 // AND A REVERT THAT CANNOT BE WRITTEN IS NOT A RETRY AT ALL.
 //
 // The un-claim above is the whole reason a failed resume is harmless, so the
@@ -3178,17 +3240,13 @@ func TestAnAnswerForATerminallyGoneRunGoesBackThroughItsRow(t *testing.T) {
 	}
 }
 
-// statelessStore hands back a claimed run with no suspended conversation on
-// it, which is what a row this build's launch path did not write looks like:
-// the resume has nothing to re-enter, and the run is failed as
-// no_execute_state.
+// statelessStore keeps no suspended conversation for any job, which is what a
+// run this build's launch path did not write looks like: the resume has
+// nothing to re-enter, and the run is failed as no_execute_state.
 type statelessStore struct{ PendingStore }
 
-func (s statelessStore) ClaimForResume(ctx context.Context, turnID string, tail Tail, fence Fence,
-) (PendingRun, bool, error) {
-	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
-	run.ExecuteState = nil
-	return run, won, err
+func (statelessStore) Conversation(context.Context, string, string) (json.RawMessage, bool, error) {
+	return nil, false, nil
 }
 
 // THE HAND-BACK IS BOUNDED, and then the message is let go.

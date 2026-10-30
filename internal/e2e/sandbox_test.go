@@ -861,25 +861,47 @@ func (n *codingNode) diagnose() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "phases seen = %v; boxes on disk = %v; %d run record(s)",
 		n.model.seen(), n.liveBoxesQuietly(), len(records))
+	store := sandbox.NewCoordStore(n.engine.Backends().Fleet)
 	for _, record := range records {
 		var run struct {
-			Status       string         `json:"status"`
-			SandboxID    string         `json:"sandbox_id"`
-			CommandID    string         `json:"command_id"`
-			Question     string         `json:"question"`
-			PausedAt     time.Time      `json:"paused_at"`
-			ExecuteState map[string]any `json:"execute_state"`
+			Status    string    `json:"status"`
+			LaunchID  string    `json:"launch_id"`
+			SandboxID string    `json:"sandbox_id"`
+			CommandID string    `json:"command_id"`
+			Question  string    `json:"question"`
+			PausedAt  time.Time `json:"paused_at"`
 		}
 		if err := json.Unmarshal(record.Value, &run); err != nil {
 			fmt.Fprintf(&b, "\n  turn=%s <undecodable: %v>", record.Key, err)
 			continue
 		}
-		fmt.Fprintf(&b, "\n  turn=%s status=%s sandbox=%q command=%q "+
-			"execute_state_keys=%d question=%q paused_at=%s",
-			record.Key, run.Status, run.SandboxID, run.CommandID,
-			len(run.ExecuteState), run.Question, run.PausedAt)
+		// THE CONVERSATION IS KEPT BESIDE THE RECORD, under its launch, so
+		// whether one was written is asked of the store.
+		conversation := "none"
+		switch state, found, err := store.Conversation(context.Background(), record.Key, run.LaunchID); {
+		case err != nil:
+			conversation = "<unreadable: " + err.Error() + ">"
+		case found:
+			conversation = fmt.Sprintf("%d bytes", len(state))
+		}
+		fmt.Fprintf(&b, "\n  turn=%s status=%s launch=%s sandbox=%q command=%q "+
+			"conversation=%s question=%q paused_at=%s",
+			record.Key, run.Status, run.LaunchID, run.SandboxID, run.CommandID,
+			conversation, run.Question, run.PausedAt)
 	}
 	return b.String()
+}
+
+// hasConversation reports whether run's launch has its suspended conversation
+// kept beside its record — the fact a restart depends on.
+func (n *codingNode) hasConversation(t *testing.T, run sandbox.PendingRun) bool {
+	t.Helper()
+	_, found, err := sandbox.NewCoordStore(n.engine.Backends().Fleet).Conversation(t.Context(),
+		run.TurnID, run.LaunchID)
+	if err != nil {
+		t.Fatalf("Conversation(%s): %v", run.TurnID, err)
+	}
+	return found
 }
 
 // liveBoxesQuietly is [codingNode.liveBoxes] for a diagnostic, which must
@@ -957,8 +979,9 @@ func TestAParkedRunReachesTheBoardAnOperatorReads(t *testing.T) {
 	if parked["box_exists"] != true || parked["paused_at"] == "" {
 		t.Fatalf("the held snapshot is invisible, so nobody can see what is being paid for: %v", parked)
 	}
-	// The suspended conversation is by far the largest column in the row,
-	// and every prompt in it is already reachable through the event store.
+	// The suspended conversation is by far the largest thing a run keeps
+	// (beside its row), and every prompt in it is already reachable through
+	// the event store.
 	for _, key := range []string{"execute_state", "messages"} {
 		if _, leaked := parked[key]; leaked {
 			t.Fatalf("%q reached a board that renders one line per run", key)
@@ -1027,7 +1050,7 @@ func TestAnEngineRestartMidRunStillFinishesTheSameTurn(t *testing.T) {
 	// the restart depends on.
 	waitFor(t, "the run to be recorded with its conversation", func() bool {
 		for _, run := range firstNode.activeRuns(t) {
-			if run.Status == sandbox.StatusRunning && len(run.ExecuteState) > 0 {
+			if run.Status == sandbox.StatusRunning && firstNode.hasConversation(t, run) {
 				return true
 			}
 		}

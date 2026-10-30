@@ -694,9 +694,14 @@ func (s Sources) decisions(ctx context.Context, p Params) (any, error) {
 			if !putTo(run, handle) {
 				continue
 			}
+			r := reach(run)
+			calls, err := s.bridgeLogFor(ctx, run, r)
+			if err != nil {
+				return nil, err
+			}
 			at := waitingSince(run)
 			items = append(items, DecisionItem{Kind: "run", At: at,
-				Run: serialiseRun(run, reach(run))})
+				Run: serialiseRun(run, calls, r)})
 			total++
 			older(at)
 		}

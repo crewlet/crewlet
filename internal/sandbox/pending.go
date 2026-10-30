@@ -40,23 +40,24 @@ const (
 	//
 	// This state is the launch's two halves made visible, and it exists
 	// because they are not one write. [Launch] starts a detached process
-	// and returns; the suspended Execute conversation is serialized onto
-	// the row only once the turn's frame unwinds, which is milliseconds
-	// later on an idle host and hundreds of milliseconds on a loaded one.
-	// A completion fired inside that window was claimed against a row with
-	// no ExecuteState, and the coordinator — finding nothing to resume —
-	// FAILED the run: a coding job that finished too fast destroyed the
-	// agent's whole turn, permanently, with no retry. The window is not
-	// theoretical, it is measured: a job that completes in ~100 ms against
-	// an unwind that takes longer is the ordinary case for a trivial run.
+	// and returns; the suspended Execute conversation is serialized only
+	// once the turn's frame unwinds, which is milliseconds later on an idle
+	// host and hundreds of milliseconds on a loaded one. A completion fired
+	// inside that window was claimed against a run with no conversation,
+	// and the coordinator — finding nothing to resume — FAILED the run: a
+	// coding job that finished too fast destroyed the agent's whole turn,
+	// permanently, with no retry. The window is not theoretical, it is
+	// measured: a job that completes in ~100 ms against an unwind that
+	// takes longer is the ordinary case for a trivial run.
 	//
-	// So the row says "launching" until the conversation is on it, and it
-	// is [PendingStore.MarkSuspended] — one write, both facts — that makes
-	// the run pollable and claimable at the same instant.
+	// So the row says "launching" until the conversation is written, and
+	// it is [PendingStore.MarkSuspended] — the conversation beside the row,
+	// THEN the flip — that makes the run pollable and claimable once there
+	// is something to resume into.
 	StatusLaunching = "launching"
 
 	// StatusRunning — the job is executing, the suspended conversation is
-	// on the row, and the seat is BUSY.
+	// kept beside the row, and the seat is BUSY.
 	StatusRunning = "running"
 
 	// StatusAwaiting — the agent asked a person and stopped. The seat is
@@ -460,15 +461,17 @@ type BridgeAppend struct {
 
 // MaxBridgeCalls bounds the durable log of a bridged run.
 //
-// The row is ONE VALUE in the coordination store, read and written whole on
-// every mutation, and a coding run can make hundreds of calls — so an
-// unbounded list turns a busy run's every status change into a growing write.
-// Two hundred is well past what a reviewer reads (the ledger elides a long log
-// anyway) and small enough that the row stays a row.
+// The log is ONE VALUE in the coordination store, kept beside the run's row
+// ([PendingStore.BridgeLog]) and read and written whole by every call it
+// records, and a coding run can make hundreds of calls — so an unbounded list
+// turns a busy run's every call into a growing write. Two hundred is well past
+// what a reviewer reads (the ledger elides a long log anyway) and small enough
+// that each append stays one write.
 //
 // The MIDDLE is what gets dropped, never the start: how a run began and how it
 // ended are what explain it, and a log truncated to its last N loses the
-// former entirely.
+// former entirely. How many were dropped is the row's own count less the
+// bound ([LaunchRecord.BridgedCallsElided]).
 const MaxBridgeCalls = 200
 
 // MaxCodeHolds bounds [PendingRun.CodeHolds]: internal/agent/turnctx's
@@ -477,8 +480,9 @@ const MaxBridgeCalls = 200
 // that does, and the engine's TestATurnHoldsWhatItsRowMay holds the two
 // equal. A key is a scratch repository's id (39 bytes on the row, quoted and
 // with its comma) or a seat branch's key (72 — the code host's fixed-width
-// RefHoldKey), so the field is at most about 72 KiB on a row that already
-// carries the whole suspended conversation.
+// RefHoldKey), so the field is at most about 72 KiB: the largest field the row
+// keeps once its conversation and tool log are beside it, and only for a turn
+// that held a thousand repositories and branches.
 const MaxCodeHolds = 1024
 
 // ErrCodeHoldsFull refuses a write that would take a row's
@@ -808,47 +812,17 @@ type PendingRun struct {
 	DelegationDepth int      `json:"delegation_depth"`
 	DelegationChain []string `json:"delegation_chain"`
 
-	// ExecuteState is the SUSPENDED Execute conversation: the serialized
-	// messages, including the assistant turn with the dangling tool call,
-	// plus the surface bookkeeping needed to re-enter the loop where it
-	// stopped.
-	//
-	// Empty for exactly as long as the run is [StatusLaunching], which is
-	// the state that says so: the launch starts the job, and the turn
-	// writes this when its frame unwinds. Nothing polls or claims a run in
-	// that window, so a claimed run always has one — and a claimed run
-	// WITHOUT one is a row the launch path did not write, which the
-	// coordinator fails rather than resuming into nothing.
-	//
-	// RAW BYTES, because this package carries the conversation and never
-	// reads it. Held as a decoded map it was decoded twice on every
-	// suspension — once for the row and once more off the coordination
-	// record — and each decode read every number as a float64, so an id
-	// longer than 2^53 a model had passed as a tool argument came back from
-	// the row as a different id. Bytes are carried, not decoded, and a JSON
-	// null (what a launching run writes) is read back as none at all — see
-	// decodeRun.
-	ExecuteState json.RawMessage `json:"execute_state"`
-
-	// BridgeCalls is what a run made through the MCP bridge, in order.
-	//
-	// DURABLE, because this is the one tool log that has nowhere else to
-	// live. A native tool loop keeps its calls on a surface in memory and
-	// the turn writes them when it ends; a bridged run's calls are made by
-	// a process outside the engine, minutes or hours apart, and possibly
-	// across a restart. Without this the reviewer of a resumed run judges a
-	// turn whose entire tool log is gone — and "it called nothing" is
-	// exactly the shape the delivery check reads as a turn that did not act.
-	//
-	// Bounded: see [MaxBridgeCalls]. Empty on every run that is not
-	// bridged, which is every ordinary coding run.
-	BridgeCalls []BridgeCall `json:"bridge_calls,omitempty"`
-
-	// BridgeCallsElided counts the calls dropped from the middle of that
-	// list, so a reader can tell a short run from a long one whose middle
-	// was cut. Reported rather than hidden, because a log that silently
-	// skips is a log that lies about what the run did.
-	BridgeCallsElided int `json:"bridge_calls_elided,omitempty"`
+	// NOT ON THE ROW: the job's suspended conversation and its bridged tool
+	// log. Each is kept BESIDE the row, under the launch it belongs to —
+	// [PendingStore.Conversation] and [PendingStore.BridgeLog] — because the
+	// row is read and written WHOLE by every flip, every listing and every
+	// git request of the job's box (the code host's admission reads its run,
+	// and a ref answer past the box's floor writes it), and a conversation is
+	// the turn's every message and tool answer: on the row, each of those
+	// moved megabytes for a long turn, through the bucket's stream leader,
+	// for want of a status or a floor. The row keeps what a reader DECIDES
+	// on, the bridge's count and cost of its calls among it
+	// ([LaunchRecord.BridgedCalls], [LaunchRecord.Bridged]).
 
 	// CodeHolds are the hold KEYS of what this run's turn holds
 	// (internal/agent/turnctx's Holds): the seat's scratch repositories it
@@ -884,9 +858,10 @@ type PendingRun struct {
 	// at it never shows the box a branch older than one it already saw — as
 	// statelog.Position's token (`<stream>@<generation>:<sequence>`).
 	//
-	// CARRIED, NEVER READ HERE, for ExecuteState's reason: this package
-	// holds no log and imports nothing that reads one, and the floor is the
-	// same kind of value as the conversation it carries without decoding.
+	// CARRIED, NEVER READ HERE, for the suspended conversation's reason:
+	// this package holds no log and imports nothing that reads one, and the
+	// floor is the same kind of value as the conversation it keeps without
+	// decoding.
 	// Written by the launch — the furthest position its resolution of the
 	// repositories read — and raised only through
 	// [PendingStore.RaiseCodeFloor]; empty for a run given no repositories.
@@ -1057,9 +1032,10 @@ func (r PendingRun) HeldSince() (time.Time, bool) {
 type PendingStore interface {
 	// BeginLaunch opens a launch on this turn's row: it creates the row
 	// when there is none, and RESETS an existing one to launching —
-	// clearing the previous job's suspended conversation, the question
-	// it was parked on and the record of its charge, while keeping the
-	// row's identity and its box. Either way the launch gets a new
+	// clearing the question the previous job was parked on and the record
+	// of its charge, and then removing the suspended conversation and the
+	// tool log kept beside the row for that job, while keeping the row's
+	// identity and its box. Either way the launch gets a new
 	// [PendingRun.LaunchID].
 	//
 	// CREATE-OR-RESET rather than create-if-absent, because the SECOND
@@ -1107,6 +1083,24 @@ type PendingStore interface {
 	BeginLaunch(ctx context.Context, run PendingRun, fence Fence) (PendingRun, error)
 
 	Get(ctx context.Context, turnID string) (PendingRun, bool, error)
+
+	// Conversation is the suspended conversation of the job launch named on
+	// turnID's run, as [PendingStore.MarkSuspended] wrote it beside the row
+	// — read from the coordination store's leader, so a conversation written
+	// a moment ago is never read as none. False for none: a job that has not
+	// suspended, or one the run has since replaced or ended.
+	//
+	// READ ONCE PER RESUME, by the claim that drives it, and by nothing
+	// else: the row every other reader reads names the job, never carries
+	// its conversation.
+	Conversation(ctx context.Context, turnID, launch string) (json.RawMessage, bool, error)
+
+	// BridgeLog is the calls launch's bridged session recorded beside
+	// turnID's run, oldest first, its middle dropped past [MaxBridgeCalls]
+	// ([PendingStore.AppendBridgeCall]) — nil for a job that bridged
+	// nothing, and for one the run has since replaced or ended. The row's
+	// [LaunchRecord.BridgedCalls] says whether there is one to read.
+	BridgeLog(ctx context.Context, turnID, launch string) ([]BridgeCall, error)
 
 	// ClaimForResume atomically flips a run to resumed, when it holds the
 	// tail's launch in one of the tail's statuses.
@@ -1214,6 +1208,14 @@ type PendingStore interface {
 	// only thing still carrying it. The caller lets it go
 	// ([PendingStore.OweHandBack]), hands it back and finishes again. A reply
 	// a turn took has been used, and goes with the run.
+	//
+	// THE JOB'S CONVERSATION AND TOOL LOG GO AFTER THE RECORD, from beside
+	// it: nothing reads a job's values but through the record that names it,
+	// so once the record is deleted they are nobody's. After rather than
+	// before, so a crash between the two never leaves a record naming a
+	// conversation that is gone; what a crash there leaves, or a write
+	// racing the delete, the coordination store's sweep of parts whose
+	// record is gone removes.
 	Finish(ctx context.Context, turnID, ending string) (PendingRun, bool, error)
 
 	// ExpirePause flips a run parked on a clarification to reseed AND
@@ -1256,14 +1258,21 @@ type PendingStore interface {
 	MarkBoxPaused(ctx context.Context, turnID string, at time.Time) error
 	ReleaseBox(ctx context.Context, turnID string) error
 
-	// MarkSuspended writes the suspended conversation AND flips launching to
-	// running, in one compare-and-swap.
+	// MarkSuspended writes the suspended conversation beside the row, under
+	// the job the row holds, and THEN flips the row from launching to
+	// running, on that job only.
 	//
-	// ONE WRITE, because it is one fact: the run becomes resumable and
-	// becomes pollable at the same instant. Two writes leave a state a
-	// reader can see — a `running` row with no conversation — and the
-	// reader is the completion poll, which fires on it. See
-	// [StatusLaunching] for what that cost.
+	// IN THAT ORDER, because the flip is the one fact a reader acts on: the
+	// run becomes pollable and claimable at the flip, and the conversation a
+	// claim resumes into is already there. The other order leaves a state a
+	// reader can see — a `running` row with no conversation — and the reader
+	// is the completion poll, which fires on it. See [StatusLaunching] for
+	// what that cost. A conversation written for a flip that did not happen
+	// names a job no row is running, and is removed.
+	//
+	// BESIDE THE ROW rather than on it, because the row is read and written
+	// whole by every flip, listing and box request of the run, and the
+	// conversation is the largest thing the run has ([PendingRun]'s note).
 	//
 	// Reports whether the flip happened. FALSE IS NOT AN ERROR and is not a
 	// lost race either — it is a run that is no longer launching, which is
@@ -1283,10 +1292,18 @@ type PendingStore interface {
 	// already ran because the seat's lease moved would lose evidence of
 	// something that is true either way.
 	//
-	// THE SESSION'S SPEND RIDES THE SAME WRITE: what its bridged calls have
-	// cost the engine so far ([BridgeAppend.Spent]), merged onto the job's
-	// record by [EngineSpend.Newest], so the segment that resumes from the
-	// job can pay it ([LaunchRecord.Bridged]).
+	// THE CALL TO THE LOG, THEN ITS COUNT AND THE SESSION'S SPEND TO THE ROW.
+	// The log is kept beside the row ([PendingStore.BridgeLog]), so a row
+	// every flip, listing and box request reads whole is not its length; the
+	// row counts the job's calls ([LaunchRecord.BridgedCalls]) and carries
+	// what they have cost the engine so far ([BridgeAppend.Spent]), merged
+	// onto the job's record by [EngineSpend.Newest], so the segment that
+	// resumes from the job can pay it ([LaunchRecord.Bridged]). In that
+	// order, so no claim reads a cost or a count whose call the log does not
+	// hold: a failure between the two leaves a call logged and its cost
+	// unwritten, which the next call's cumulative total carries, never a
+	// cost with no call. A call logged for a job whose row then turns out not
+	// to hold it names nothing, and its log is removed.
 	//
 	// PINNED TO ONE JOB. Every append names the job its session serves
 	// ([BridgeAppend.Launch]), and is recorded only while the row holds that
@@ -1839,7 +1856,15 @@ func (f Fence) Fenced() bool { return f.Epoch > 0 }
 // field reached into it would be a second reader of a format this package
 // does not own. The run's phase record is keyed on it (see [LaunchRecord]).
 type Suspension struct {
-	// State is the serialized loop, [PendingRun.ExecuteState].
+	// State is the serialized loop: the messages, including the assistant
+	// turn with the dangling tool call, and the surface bookkeeping needed to
+	// re-enter the loop where it stopped — what [PendingStore.Conversation]
+	// answers for the job.
+	//
+	// RAW BYTES, because this package keeps the conversation and never reads
+	// it. Held as a decoded map it was decoded twice on every suspension, and
+	// each decode read every number as a float64, so an id longer than 2^53 a
+	// model had passed as a tool argument came back as a different id.
 	State json.RawMessage
 
 	// Iteration is the turn iteration the executor suspended in, which is
@@ -1912,12 +1937,30 @@ type LaunchRecord struct {
 	// one job's spend to the next.
 	Bridged EngineSpend `json:"bridged_spend,omitzero"`
 
+	// BridgedCalls is how many calls this job's bridged session recorded in
+	// its log ([PendingStore.BridgeLog]) — the ones the log has since dropped
+	// from its middle included — taken from the log's own count in the write
+	// that carries their cost, AFTER each call reached the log
+	// ([PendingStore.AppendBridgeCall]): never ahead of the log, and whole
+	// again at the next call that lands after a write that failed.
+	//
+	// ON THE ROW because the log is not: a reader of the row learns from it
+	// whether the job has a log worth reading — every run that is not bridged
+	// has none, and a board of runs reads no log for any of them — and how
+	// much of it was cut ([LaunchRecord.BridgedCallsElided]), without reading
+	// the log at all.
+	BridgedCalls int `json:"bridged_calls,omitempty"`
+
 	// Condensed is what condensing the collection that PARKED this job on
 	// a question cost the seat's auxiliary model ([Result.Condensed]),
 	// written with the question ([PendingStore.MarkAwaiting]) and paid by
 	// the resume the answer drives, as [PendingRun.ParkedInputTokens] is.
 	Condensed AuxTokens `json:"parked_condensed,omitzero"`
 }
+
+// BridgedCallsElided is how many of the job's bridged calls its log dropped
+// from its middle: past [MaxBridgeCalls], every call recorded drops one.
+func (r LaunchRecord) BridgedCallsElided() int { return max(r.BridgedCalls-MaxBridgeCalls, 0) }
 
 // AuxTokens is what calls to a seat's AUXILIARY model cost, split the way
 // every token figure in the engine is: the whole input, the share of it the

@@ -118,6 +118,19 @@ type Resumer interface {
 type ResumeRequest struct {
 	Run PendingRun
 
+	// State is the suspended conversation of the claimed job, as the
+	// coordinator read it from beside the run's row for this resume
+	// ([PendingStore.Conversation]) — never empty: a claimed job with none
+	// is failed before any resume is asked.
+	State json.RawMessage
+
+	// Bridged is the claimed job's bridged tool log, as read beside the row
+	// for this resume ([PendingStore.BridgeLog]): an agent-mode executor
+	// called these over the bridge, possibly in another process, so it is the
+	// only record of what the job's phase did — its submission included.
+	// Empty for a job that bridged nothing.
+	Bridged []BridgeCall
+
 	// Answer is what the pending run_sandbox call is answered with: the
 	// coding agent's findings, or a person's reply to its question. Already
 	// redacted — it becomes a tool message published as a phase record.
@@ -1933,6 +1946,35 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 	}
 }
 
+// resumeFailed hands back a claim whose resume did not happen — its resumer
+// answered err, or the job it would re-enter could not be read — so a retry
+// can win the flip again, and answers what that leaves the delivery that drove
+// it. The run must already be uncounted from [StatusResumed], as it is
+// immediately before a resume.
+//
+// UN-CLAIMED, because without it the NAK'd completion redelivers, the claim
+// refuses, and the suspended conversation is permanently lost with the row
+// stranded in resumed.
+func (c *Coordinator) resumeFailed(ctx context.Context, run PendingRun, err error) (AnswerDisposition, error) {
+	log.ErrorContext(ctx, "sandbox_resume_failed",
+		"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
+	if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
+		//nolint:nilerr // Deliberate, and the same answer the
+		// acted-and-broke branch of resumeAndSettle gives for the same
+		// reason: the run has been settled, so the completion is not sent
+		// back for a retry that would find nothing to claim.
+		//
+		// And nothing is owed the delivery either, for that same reason:
+		// the run it would come back to has been ended and announced, and a
+		// recorded reply went back through its row.
+		return AnswerNotMine, nil
+	}
+	// THE RUN IS BACK WHERE THE CLAIM FOUND IT, which on the answer route is
+	// awaiting this very reply. The delivery is still owed to it, so it has
+	// to come back rather than be worked as an ordinary message.
+	return AnswerDeferred, err
+}
+
 // resumeAndSettle re-enters the suspended loop, then settles the box.
 //
 // After the resumed Execute returns: if the executor called run_sandbox AGAIN
@@ -1973,7 +2015,28 @@ func (c *Coordinator) announceAnswered(ctx context.Context, run PendingRun,
 func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	answer string, success bool, trigger *events.Event, outcome runOutcome,
 ) (AnswerDisposition, error) {
-	if len(run.ExecuteState) == 0 {
+	// THE JOB'S CONVERSATION AND ITS BRIDGED TOOL LOG, read from beside the
+	// row the claim answered: the row names the job and carries neither
+	// ([PendingStore.Conversation], [PendingStore.BridgeLog]). The log is
+	// read whatever the row counts, unlike a board's read of it: a call
+	// reaches the log before its count reaches the row, so a count a failed
+	// write left short must not hide the call — a job's submission among
+	// them — from the phase this resume rebuilds.
+	state, suspended, err := c.pending.Conversation(ctx, run.TurnID, run.LaunchID)
+	var bridged []BridgeCall
+	if err == nil && suspended {
+		bridged, err = c.pending.BridgeLog(ctx, run.TurnID, run.LaunchID)
+	}
+	if err != nil {
+		// UNKNOWN, NEVER "NOTHING TO RESUME": a store that could not be read
+		// says nothing about whether the job suspended, and failing the run
+		// on that would end a turn its retry resumes. So the claim goes
+		// back, as a resume that failed hands it back.
+		c.uncountRun(run.AgentHandle, StatusResumed)
+		return c.resumeFailed(ctx, run, fmt.Errorf("sandbox: read the suspended job of run %s: %w",
+			run.TurnID, err))
+	}
+	if !suspended {
 		// No suspended conversation to resume, and the turn cannot
 		// continue without one.
 		//
@@ -1981,15 +2044,15 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 		// [StatusLaunching] until its conversation is written, and a
 		// launching run is not claimable — which is exactly why it stays:
 		// it is the assertion that the launching state is doing its job.
-		// A claimed run without one is a row this build's launch path did
+		// A claimed run without one is a run this build's launch path did
 		// not write, and it is failed as no_execute_state rather than
 		// resumed into nothing.
 		log.WarnContext(ctx, "sandbox_resume_no_execute_state",
-			"turn_id", run.TurnID, "claimed_from", run.ClaimedFrom,
-			"detail", "the row carried no suspended conversation; the turn "+
+			"turn_id", run.TurnID, "launch_id", run.LaunchID, "claimed_from", run.ClaimedFrom,
+			"detail", "no suspended conversation is kept for the run's job; the turn "+
 				"cannot be resumed and the run is failed")
 		if !c.settleFailed(ctx, run, types.SandboxFailureNoConversation,
-			"the run record carried no suspended conversation, so the turn that "+
+			"no suspended conversation is kept for the run's job, so the turn that "+
 				"started it cannot be continued") {
 			return AnswerNotMine, errRunMovedOn
 		}
@@ -2043,7 +2106,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 	// answer, wrapping [ErrResumeUnavailable], and it takes the failure
 	// path below like every other failed resume.
 	if err := c.resume.Resume(ctx, ResumeRequest{
-		Run: run, Answer: answer, Success: success, Trigger: trigger,
+		Run: run, State: state, Bridged: bridged, Answer: answer, Success: success, Trigger: trigger,
 		DeliveredRefs: outcome.DeliveredRefs, DeliveredRefsElided: outcome.DeliveredRefsElided,
 		Pushed: outcome.Pushed, PushedElided: outcome.PushedElided, PushedUnread: outcome.PushedUnread,
 		InputTokens: outcome.InputTokens, OutputTokens: outcome.OutputTokens,
@@ -2111,27 +2174,7 @@ func (c *Coordinator) resumeAndSettle(ctx context.Context, run PendingRun,
 			// has already acted on.
 			return AnswerConsumed, nil
 		}
-		// UN-CLAIM so a retry can win the flip again. Without this the NAK'd
-		// completion redelivers, the claim refuses, and the suspended
-		// conversation is permanently lost with the row stranded in resumed.
-		log.ErrorContext(ctx, "sandbox_resume_failed",
-			"turn_id", run.TurnID, "revert_to", claimedFrom(run), "error", err.Error())
-		if unclaimErr := c.unclaim(ctx, run, false, resumeUnrevertedDetail); unclaimErr != nil {
-			//nolint:nilerr // Deliberate, and the same answer the
-			// acted-and-broke branch above gives for the same reason:
-			// the run has been settled, so the completion is not sent
-			// back for a retry that would find nothing to claim.
-			//
-			// And nothing is owed the delivery either, for that same
-			// reason: the run it would come back to has been ended and
-			// announced, and a recorded reply went back through its row.
-			return AnswerNotMine, nil
-		}
-		// THE RUN IS BACK WHERE THE CLAIM FOUND IT, which on the answer
-		// route is awaiting this very reply. The delivery is still owed to
-		// it, so it has to come back rather than be worked as an ordinary
-		// message.
-		return AnswerDeferred, err
+		return c.resumeFailed(ctx, run, err)
 	}
 
 	latest, err := c.current(ctx, run)

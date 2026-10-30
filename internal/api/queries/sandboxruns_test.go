@@ -274,6 +274,10 @@ func (unreachableRuns) Get(context.Context, string) (sandbox.PendingRun, bool, e
 	return sandbox.PendingRun{}, false, fmt.Errorf("sandbox: read run: %w", coord.ErrUnavailable)
 }
 
+func (unreachableRuns) BridgeLog(context.Context, string, string) ([]sandbox.BridgeCall, error) {
+	return nil, fmt.Errorf("sandbox: read the bridge log: %w", coord.ErrUnavailable)
+}
+
 // The run board reads the fleet's coordination store, so a blip there is "ask
 // again in a moment" like any other, not a failure. It reached the client as
 // `query_failed` and a 500, where the reference promised a 503.
@@ -336,20 +340,37 @@ func TestTheBoardNamesTheJobEachRunHolds(t *testing.T) {
 // trigger; `bridge_calls` is the ONLY copy of a bridged run's tool log, since
 // those calls are made by a process outside the engine minutes apart and
 // possibly across a restart. Without them the run page's Calls tab had nothing
-// to render and "is anybody waiting on this" had no answer.
+// to render and "is anybody waiting on this" had no answer. The log is kept
+// beside the row, so the board reads it for the job the row holds, and how many
+// calls its middle lost is the row's own count.
+//
+// Mutation: answer the board's log as none ([Sources.bridgeLogFor] returning
+// nil) and the calls go missing; count the elided calls off the log rather than
+// the row and the count reads zero.
 func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 	t.Parallel()
-	called := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	store := seedRuns(t, sandbox.PendingRun{
 		TurnID: "t-1", Role: "Dev", Status: sandbox.StatusAwaiting,
 		Reply:     "chat:C1",
 		SessionID: "sess-9", CommandID: "cmd-3",
 		DelegationChain: []string{"agent-pm", "agent-swe"},
-		BridgeCalls: []sandbox.BridgeCall{
-			{Name: "get_work_item", Args: `{"id":"ENG-1"}`, At: called},
-		},
-		BridgeCallsElided: 4,
 	})
+	parked, _, err := store.Get(context.Background(), "t-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	// FOUR PAST THE LOG'S BOUND, so its middle loses four.
+	for i := range sandbox.MaxBridgeCalls + 4 {
+		name := fmt.Sprintf("call-%03d", i)
+		if i == 0 {
+			name = "get_work_item"
+		}
+		if ok, err := store.AppendBridgeCall(context.Background(), "t-1", sandbox.BridgeAppend{
+			Launch: parked.LaunchID, Call: sandbox.BridgeCall{Name: name, Args: `{"id":"ENG-1"}`},
+		}); err != nil || !ok {
+			t.Fatalf("AppendBridgeCall %d = (%v, %v)", i, ok, err)
+		}
+	}
 	row := askRuns(t, store)[0]
 	switch {
 	case row["reply"] != "chat:C1":
@@ -363,8 +384,9 @@ func TestAParkedRunSaysWhoIsWaitingAndWhatItCalled(t *testing.T) {
 			"log that lies about what the run did", row["bridge_calls_elided"])
 	}
 	calls, ok := row["bridge_calls"].([]sandbox.BridgeCall)
-	if !ok || len(calls) != 1 || calls[0].Name != "get_work_item" {
-		t.Fatalf("bridge_calls = %#v, want the run's own tool log", row["bridge_calls"])
+	if !ok || len(calls) != sandbox.MaxBridgeCalls || calls[0].Name != "get_work_item" {
+		t.Fatalf("bridge_calls = %d calls %#v, want the run's own tool log, its start kept",
+			len(calls), row["bridge_calls"])
 	}
 	chain, ok := row["delegation_chain"].([]string)
 	if !ok || !slices.Equal(chain, []string{"agent-pm", "agent-swe"}) {
@@ -498,11 +520,12 @@ func TestARunNamesTheItemItIsOn(t *testing.T) {
 // to ana, carrying every body field and a work item.
 func parkedRun() sandbox.PendingRun {
 	return sandbox.PendingRun{
-		TurnID: "t-1", AgentHandle: "swe", Role: "SWE", Status: sandbox.StatusAwaiting,
+		TurnID: "t-1", LaunchID: "launch-1", AgentHandle: "swe", Role: "SWE",
+		Status:          sandbox.StatusAwaiting,
 		TaskDescription: "port the importer", Question: "which branch?",
 		Reply:           "chat:C1",
 		AudienceHandles: []string{"ana"},
-		BridgeCalls:     []sandbox.BridgeCall{{Name: "get_work_item", Args: `{"id":"ENG-1"}`}},
+		Launch:          sandbox.LaunchRecord{BridgedCalls: 1},
 		WorkItem:        &types.WorkItem{Backend: "native", ID: "task-1", Key: "ENG-1"},
 		CreatedAt:       runBase,
 	}

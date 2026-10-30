@@ -24,7 +24,7 @@ import (
 // classify `task_description` as status and it goes red too.
 func TestEverySandboxRunKeyIsClassified(t *testing.T) {
 	t.Parallel()
-	row := runRow(sandbox.PendingRun{})
+	row := runRow(sandbox.PendingRun{}, nil)
 	for key := range row {
 		shown, ok := runKeys[key]
 		if !ok {
@@ -64,7 +64,7 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	t.Parallel()
 	run := sandbox.PendingRun{TurnID: "t1", AgentHandle: "swe",
 		AudienceHandles: []string{"ana"}}
-	status := serialiseRun(run, livestate.Reach{})
+	status := serialiseRun(run, nil, livestate.Reach{})
 	for key := range status {
 		if runKeys[key] != runStatus {
 			t.Errorf("a reader with no reach was shown %q, which is not status", key)
@@ -73,7 +73,7 @@ func TestAMaskedRunCarriesOnlyItsStatus(t *testing.T) {
 	if status["body_withheld"] != true {
 		t.Errorf("body_withheld = %v for a reader shown no body", status["body_withheld"])
 	}
-	whole := serialiseRun(run, livestate.Reach{Body: true, Tracker: true})
+	whole := serialiseRun(run, nil, livestate.Reach{Body: true, Tracker: true})
 	if got, want := slices.Sorted(maps.Keys(whole)), slices.Sorted(maps.Keys(runKeys)); !slices.Equal(got, want) {
 		t.Errorf("a reader with every reach was shown %v, want every key %v", got, want)
 	}
