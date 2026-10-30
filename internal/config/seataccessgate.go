@@ -19,20 +19,23 @@ func (c *Company) SeatAccessMigratedFor(kind string) bool {
 }
 
 // RefuseEngineWritten is the refusal of a write, by anybody but the engine,
-// that changes a seat field only the engine writes ([EngineWrittenChanges]): a
+// that changes a field only the engine writes ([EngineWrittenChanges]): a
 // GitHub App's id, slug or installation, which the engine records after GitHub
-// answers. Nil where the write changes none.
+// answers, and the migration's `seat_access_migrated` marker. Nil where the
+// write changes none.
 //
-// A person or a model writing one would point an agent at an app that is not
-// its own, so the field is the engine's alone (design section 2), and the
-// refusal names every path the write changed.
+// A person or a model writing an app's record would point an agent at an app
+// that is not its own, and one writing the marker would open the access pass
+// on seats the migration has not written, which read as off would have every
+// account turned off. So both are the engine's alone (design section 2), and
+// the refusal names every path the write changed.
 func RefuseEngineWritten(prior, next *Company) error {
 	paths := EngineWrittenChanges(prior, next)
 	if len(paths) == 0 {
 		return nil
 	}
-	return fault(nil, ErrConflict, "%s %s written by the engine once GitHub answers, and "+
-		"no other writer may change them; leave them as they are",
+	return fault(nil, ErrConflict, "%s %s written only by the engine, and no other writer "+
+		"may change them; leave them as they are",
 		strings.Join(paths, ", "), pluralAre(len(paths)))
 }
 

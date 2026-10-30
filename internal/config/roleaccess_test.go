@@ -160,23 +160,45 @@ roles:
 	}
 }
 
-// THE ENGINE-WRITTEN GITHUB FIELDS are reported when a write changes them.
+// THE ENGINE-WRITTEN FIELDS are reported when a write changes them: a GitHub
+// App's record on a seat, matched by its derived handle wherever it moved; one
+// on a seat new to the document; and the migration's marker. An unchanged
+// record, and the marker in another order, are not changes.
 func TestEngineWrittenChanges(t *testing.T) {
 	t.Parallel()
 	prior := parsedDoc(t, `
 name: Acme
+seat_access_migrated: [github, slack]
 roles:
   - {name: SRE, handle: sre, integrations: {github: {enabled: true, app_id: 7, app_slug: acme-sre, installation_id: 9}}}
+  - {name: Planner, integrations: {github: {enabled: true, app_id: 5, app_slug: acme-planner}}}
 `)
+	same := parsedDoc(t, `
+name: Acme
+seat_access_migrated: [slack, github]
+units:
+  - name: Ops
+    roles:
+      - {name: SRE, handle: sre, integrations: {github: {enabled: false, app_id: 7, app_slug: acme-sre, installation_id: 9}}}
+roles:
+  - {name: Planner, integrations: {github: {enabled: true, app_id: 5, app_slug: acme-planner}}}
+`)
+	if got := EngineWrittenChanges(prior, same); len(got) != 0 {
+		t.Fatalf("a write that moved and switched seats but kept their records changed %v", got)
+	}
 	next := parsedDoc(t, `
 name: Acme
+seat_access_migrated: [github]
 roles:
   - {name: SRE, handle: sre, integrations: {github: {enabled: true, app_id: 8, app_slug: acme-sre, installation_id: 9}}}
+  - {name: Planner, integrations: {github: {enabled: true, app_id: 5, app_slug: acme-planner}}}
   - {name: CTO, handle: cto, integrations: {github: {enabled: true, app_id: 3}}}
 `)
 	got := EngineWrittenChanges(prior, next)
-	if !slices.Equal(got, []string{"roles[0].integrations.github.app_id"}) {
-		t.Fatalf("changes = %v", got)
+	want := []string{"seat_access_migrated", "roles[0].integrations.github.app_id",
+		"roles[2].integrations.github.app_id"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("changes = %v, want %v", got, want)
 	}
 }
 

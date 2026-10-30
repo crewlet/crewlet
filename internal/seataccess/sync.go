@@ -53,6 +53,11 @@ type SyncInput struct {
 	// said ([UnmigratedFinding]); empty where it did not.
 	UnmigratedReason string
 
+	// Written is when the sealed store last wrote a variable, which tells a
+	// seat's shared company credential (D12) replaced ([SharedCredential]).
+	// Nil holds every seat that shared one, as if it were never replaced.
+	Written Written
+
 	// Now is the clock; nil is the wall clock in UTC.
 	Now func() time.Time
 
@@ -238,33 +243,52 @@ func (s *syncer) seat(
 			want[lane], _ = DesiredOf(seat.Role, lane)
 		}
 	}
+	// AN ACCOUNT THE VENDOR SHOWS ON IS ACTIVE, whoever turned it on: a
+	// disabled state the ledger kept from an earlier off would otherwise
+	// credit this engine with a later off made by hand, and turn it back on
+	// against D3.
+	if rec.Account != nil && rec.Account.State == AccountDisabled && anyEnabled(got) {
+		rec.Account.State = AccountActive
+	}
 	have := observedFor(lanes, got, rec, s.now)
 	s.adopt(&rec, want, have)
 
-	// THE VENDOR SHOWS THE ACCOUNT GONE: the record is closed, its sealed
-	// credential is dead and is cleared, and a seat that is on is created
-	// afresh by the plan below.
+	// THE VENDOR SHOWS THE ACCOUNT GONE: its sealed credential is dead and is
+	// cleared, then the record is closed, and a seat that is on is created
+	// afresh by the plan below. CLOSED ONLY ONCE CLEARED: a closed record is
+	// not visited for its credential again, so one closed first would leave
+	// a dead value sealed for good after a failed clear.
 	if rec.Held() && !anyExists(have) {
-		rec.Account.State = AccountClosed
 		if err := s.forget(ctx, &rec, s.cat.Credentials); err != nil {
 			s.faultAll(&rec, lanes, VerbRevoke, err)
 			return s.put(ctx, rec)
 		}
+		rec.Account.State = AccountClosed
 	}
 
-	// DEFENCE IN DEPTH: never seal into a name something else reads.
-	if shared := SharedSinks(s.cat, h, s.refs); len(shared) > 0 {
-		f := &Failure{
-			Step: VerbMint,
-			Said: fmt.Sprintf("%s is named elsewhere in the company document, so a "+
-				"credential sealed there would be read by something other than this agent",
-				strings.Join(shared, ", ")),
-			Remedy: "Remove every reference to " + strings.Join(shared, ", ") +
-				" from the company document; the engine binds the agent's own credential itself",
-			Actor: ByYou,
-		}
-		s.failAll(&rec, lanes, f)
-		return s.put(ctx, rec)
+	// DEFENCE IN DEPTH: never seal into a name something else reads. Only
+	// the steps that seal are refused: turning the agent off, which takes
+	// access away and clears nothing another reader holds ([Forgettable]),
+	// goes ahead.
+	shared := SharedSinks(s.cat, h, s.refs)
+	sharedFailure := &Failure{
+		Step: VerbMint,
+		Said: fmt.Sprintf("%s is named elsewhere in the company document, so a "+
+			"credential sealed there would be read by something other than this agent",
+			strings.Join(shared, ", ")),
+		Remedy: "Remove every reference to " + strings.Join(shared, ", ") +
+			" from the company document; the engine binds the agent's own credential itself",
+		Actor: ByYou,
+	}
+
+	// AND WHILE A COMPANY CREDENTIAL MAY STILL HOLD THIS AGENT'S VALUE (D12),
+	// nothing that would stop that value working is taken: the company
+	// setting would stop with it. Held as a person's step until the
+	// credential is replaced, which the integration's shared-credential
+	// finding asks for.
+	holding, err := s.sharedOpen(ctx, rec)
+	if err != nil {
+		return err
 	}
 
 	// A LEVEL OR SCOPE THE VENDOR DOES NOT OFFER is a finding, never a
@@ -286,7 +310,7 @@ func (s *syncer) seat(
 	}
 
 	var removed bool
-	err := walk(s.in.Vendor, SeatInput{
+	err = walk(s.in.Vendor, SeatInput{
 		Seat: ref, Want: want, Have: have, Record: &rec, Ask: s.in.Asks[h],
 		Options: s.options,
 	}, func(lane Lane, w Desired, hv Observed, steps []Step) laneEffect {
@@ -295,12 +319,32 @@ func (s *syncer) seat(
 			s.finding(integration.FindingUnknownTier, h, lane, f)
 			return laneEffect{}
 		}
+		if len(shared) > 0 && slices.ContainsFunc(steps, func(st Step) bool { return st.Op.Seals() }) {
+			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeFailed,
+				Steps: []StepOutcome{}, Error: sharedFailure})
+			s.finding(integration.FindingIdentityFailed, h, lane, sharedFailure)
+			return laneEffect{}
+		}
 		if s.in.Sink == nil {
 			// A DRY RUN refreshes what the vendor shows and keeps the last
 			// sync's result.
 			lr := rec.Lanes[lane]
 			lr.Observed = hv
 			rec.Lanes[lane] = lr
+			return laneEffect{}
+		}
+		if i := slices.IndexFunc(steps, func(st Step) bool { return st.Op.Retires() }); holding && i >= 0 {
+			// NO FINDING OF ITS OWN: the shared credential's finding on the
+			// integration is the one thing to do, and says so.
+			variable, vendor := rec.SharedCredential.Variable, KindName(s.kind)
+			s.finish(&rec, lane, w, hv, SyncResult{At: s.now, Outcome: OutcomeWaiting,
+				Steps: []StepOutcome{}, Error: &Failure{
+					Step: steps[i].Verb, Actor: ByYou,
+					Said: fmt.Sprintf("%s may still hold this agent's %s credential, so "+
+						"changing it now would stop that company setting too", variable, vendor),
+					Remedy: fmt.Sprintf("Replace %s with the company's own credential at %s; "+
+						"the next sync takes this change", variable, vendor),
+				}})
 			return laneEffect{}
 		}
 		eff := s.take(ctx, &rec, ref, lane, w, hv, steps)
@@ -538,6 +582,10 @@ func (s *syncer) absorb(ctx context.Context, rec *Record, step Step, res StepRes
 	if rec.Account != nil {
 		switch {
 		case res.Gone:
+			// CLOSED ONLY ONCE CLEARED, as the seat's own check above.
+			if err := s.forget(ctx, rec, s.cat.Credentials); err != nil {
+				return err
+			}
 			rec.Account.State = AccountClosed
 		case res.Disabled:
 			rec.Account.State = AccountDisabled
@@ -774,6 +822,34 @@ func observedFor(lanes []Lane, got map[Lane]Observed, rec Record, now time.Time)
 		out[lane] = o
 	}
 	return out
+}
+
+// anyEnabled reports whether the vendor shows the account on at any lane.
+func anyEnabled(got map[Lane]Observed) bool {
+	for _, o := range got {
+		if o.Exists && o.Enabled {
+			return true
+		}
+	}
+	return false
+}
+
+// sharedOpen reports whether rec's seat once kept its credential in a company
+// credential (D12) that has not been replaced since: the company setting may
+// still hold the seat's value.
+func (s *syncer) sharedOpen(ctx context.Context, rec Record) (bool, error) {
+	shared := rec.SharedCredential
+	if shared == nil {
+		return false, nil
+	}
+	if s.in.Written == nil {
+		return true, nil
+	}
+	at, held, err := s.in.Written(ctx, shared.Variable)
+	if err != nil {
+		return false, fmt.Errorf("seataccess: when %s was last written: %w", shared.Variable, err)
+	}
+	return !shared.Replaced(at, held), nil
 }
 
 func anyExists(have map[Lane]Observed) bool {

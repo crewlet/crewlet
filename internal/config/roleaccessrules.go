@@ -324,36 +324,37 @@ func normalRoleSet(roles []string) []string {
 	return slices.Compact(out)
 }
 
-// EngineWrittenChanges is every engine-written seat field next changes from
-// prior, as a document path: a GitHub App's `app_id`, `app_slug` and
-// `installation_id`, which only the engine writes, after GitHub has answered.
+// EngineWrittenChanges is every engine-written field next changes from prior,
+// as a document path: a GitHub App's `app_id`, `app_slug` and
+// `installation_id`, which only the engine writes after GitHub has answered,
+// and `seat_access_migrated`, which only the engine's migration writes.
 //
 // A WRITE RULE, NOT A DOCUMENT RULE: the document cannot say who wrote it, so
 // the write path refuses a change here from any writer but the engine's own.
-// A seat added or removed whole is not a change to these fields; a seat whose
-// app the engine recorded, edited by a person, keeps them as they were.
+// Seats are matched by the derived handle the org model keys them by, and a
+// seat new to the document is held to an empty record: a writer adding a seat
+// with an app id would point a new agent at an app that is not its own. A
+// seat removed whole is not a change to these fields.
 func EngineWrittenChanges(prior, next *Company) []string {
 	if prior == nil || next == nil {
 		return nil
 	}
+	var out []string
+	if !sameSet(prior.SeatAccessMigrated, next.SeatAccessMigrated) {
+		out = append(out, field("seat_access_migrated").String())
+	}
 	before := map[string]*RoleGitHub{}
 	for role := range prior.EachRole() {
-		if role.Handle != "" {
-			before[role.Handle] = role.Integrations.GitHub
+		if handle := role.IdentityKey(); handle != "" {
+			before[handle] = role.Integrations.GitHub
 		}
 	}
-	var out []string
 	for role, path := range next.EachRole() {
-		was, existed := before[role.Handle]
-		if !existed {
-			continue
-		}
-		now := role.Integrations.GitHub
 		var a, b RoleGitHub
-		if was != nil {
+		if was := before[role.IdentityKey()]; was != nil {
 			a = *was
 		}
-		if now != nil {
+		if now := role.Integrations.GitHub; now != nil {
 			b = *now
 		}
 		here := at(at(path, "integrations"), "github")
@@ -368,4 +369,12 @@ func EngineWrittenChanges(prior, next *Company) []string {
 		}
 	}
 	return out
+}
+
+// sameSet reports whether a and b hold the same entries, in any order.
+func sameSet(a, b []string) bool {
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(slices.Compact(a), slices.Compact(b))
 }

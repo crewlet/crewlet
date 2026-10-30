@@ -65,6 +65,20 @@ func (o Op) Valid() bool {
 	}, o)
 }
 
+// Seals reports whether a step of o may seal a credential under the seat's
+// own name: a create, an enable that mints where none is sealed, a mint and a
+// rotate.
+func (o Op) Seals() bool {
+	return o == OpCreate || o == OpEnable || o == OpMint || o == OpRotate
+}
+
+// Retires reports whether a step of o may stop the seat's current credential
+// from working at the vendor: a mint (a vendor may retire the keys it holds
+// for the account), a rotate, a disable, a revoke and a remove.
+func (o Op) Retires() bool {
+	return o == OpMint || o == OpRotate || o == OpDisable || o == OpRevoke || o == OpRemove
+}
+
 // StepVerb is the word a step is drawn with on the dashboard. The values are
 // the wire's (`verb` on a plan step).
 type StepVerb string
