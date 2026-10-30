@@ -327,15 +327,19 @@ const (
 	postPublic = "system_user system_post_all_public"
 )
 
-// THE CATALOG SEALS THE BOT'S TOKEN and binds no tool server: the engine's own
-// chat transport reads it.
+// THE CATALOG SEALS THE BOT'S TOKEN, which the engine's own chat transport
+// reads, and which the Mattermost MCP server this build recognises is handed
+// under MATTERMOST_TOKEN where a company runs one.
 func TestTheMattermostCatalog(t *testing.T) {
 	t.Parallel()
 	vendor, _ := seataccess.Lookup(integration.KindMattermost)
 	cat := vendor.Catalog()
-	if !slices.Equal(cat.Credentials, []string{mattermost.BotTokenField}) ||
-		seataccess.ToolFor(seataccess.LaneMattermost) != nil {
-		t.Errorf("catalog = %+v, want one token and no tool binding", cat)
+	if !slices.Equal(cat.Credentials, []string{mattermost.BotTokenField}) {
+		t.Errorf("catalog = %+v, want one token", cat)
+	}
+	if tool := seataccess.ToolFor(seataccess.LaneMattermost); tool == nil || tool.Keys[0].Field != mattermost.BotTokenField ||
+		tool.Keys[0].Env != "MATTERMOST_TOKEN" {
+		t.Errorf("tool = %+v, want the bot token under MATTERMOST_TOKEN", tool)
 	}
 	lane, ok := cat.Lane(seataccess.LaneMattermost)
 	if !ok || !lane.Levels || lane.LiveLevels || !lane.Scoped || !lane.Rotatable {
