@@ -35,6 +35,13 @@ import "sync"
 // calls the turn makes: an entry is added only by a call that looked something
 // up.
 //
+// Beside what a name named, a consumer may keep a FACT its lookups established
+// that a later call builds on — the code tools keep how far the refs a turn
+// resolved on a repository had moved, which the turn's writes to it are
+// floored at — taken with [Lookups.LoadOrStore], so callers racing to be first
+// share one value, which the consumer then changes in place under a lock of
+// its own.
+//
 // A consumer that finds an entry no longer true — the name now names another
 // object, or the object it named is gone — FORGETS it, whichever of its reads
 // finds that out, so the next call looks up again; it never replaces it with
@@ -75,6 +82,29 @@ func (l *Lookups) Store(key, value any) {
 		l.held = map[any]any{}
 	}
 	l.held[key] = value
+}
+
+// LoadOrStore is what key was looked up as in this turn, storing value first
+// where it held nothing, and whether it held something already — under the
+// set's one lock, so two callers racing to be first (a turn's tools and its
+// workers run at once) both answer the ONE value kept, never each its own: an
+// entry a consumer goes on to change in place under a lock of its own (a
+// position it only raises) loses no caller's change to the other's store. A nil
+// set stores nothing, and answers value.
+func (l *Lookups) LoadOrStore(key, value any) (any, bool) {
+	if l == nil {
+		return value, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if held, ok := l.held[key]; ok {
+		return held, true
+	}
+	if l.held == nil {
+		l.held = map[any]any{}
+	}
+	l.held[key] = value
+	return value, false
 }
 
 // Forget drops key, so the turn's next call looks it up again.

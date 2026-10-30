@@ -76,6 +76,49 @@ func TestAForgottenLookupAndANilSetHoldNothing(t *testing.T) {
 	}
 }
 
+// THE FIRST TO STORE IS THE ONE EVERY CALLER GETS: callers racing to be first
+// for one key each answer the same value — the one stored — and a later one
+// finds it held, so a value changed in place under its own lock loses no
+// caller's change to another's store; a nil set stores nothing and answers the
+// value it was handed. Run under -race.
+//
+// Mutation: store over whatever the set held → the later caller is answered
+// its own value, red.
+func TestTheFirstStoreIsTheOneEveryCallerGets(t *testing.T) {
+	t.Parallel()
+	l := turnctx.NewLookups()
+	const callers = 8
+	got := make([]any, callers)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			got[i], _ = l.LoadOrStore(repoName("site"), new(int))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	kept, held := l.Load(repoName("site"))
+	if !held {
+		t.Fatal("nothing was stored")
+	}
+	for i, v := range got {
+		if v != kept {
+			t.Errorf("caller %d answers %p, want the one value kept, %p", i, v, kept)
+		}
+	}
+	if v, loaded := l.LoadOrStore(repoName("site"), new(int)); !loaded || v != kept {
+		t.Errorf("a later caller answers %p (held %v), want the value kept, %p", v, loaded, kept)
+	}
+	var none *turnctx.Lookups
+	if v, loaded := none.LoadOrStore(repoName("site"), "repo-1"); loaded || v != "repo-1" {
+		t.Errorf("a nil set answers %v (held %v), want the value handed it", v, loaded)
+	}
+}
+
 // ONE SET, MANY CALLERS AT ONCE: the executor's tools and its workers' run
 // concurrently against the turn's one set. Run under -race.
 func TestALookupSetTakesConcurrentCallers(t *testing.T) {

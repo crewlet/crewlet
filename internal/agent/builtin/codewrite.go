@@ -204,14 +204,24 @@ func writer(ctx context.Context, turn *turnctx.Turn, c codeCaller) code.Principa
 }
 
 // writeFresh is the floor an engine write of repo is built at: a seat's
-// session — this node's own writes to the repository and the turn's own read
-// of it (the resolution's position), whichever is later, so the git node's copy
-// holds at least what the turn has seen — and a person's the log's head.
-func (d CodeDeps) writeFresh(c codeCaller, repo code.RepoRef) statelog.Freshness {
+// session at the furthest of this node's own writes to the repository, the
+// turn's own read of it (the resolution's position), and where every ref the
+// turn has resolved on it last moved ([refsRead]) — this call's own revisions
+// among them, resolved before the floor is read, as [CodeDeps.gitFresh] floors
+// a read at them — so the git node's copy holds what the turn has seen: the
+// head it writes onto, read by code_resolve after the head moved, and every
+// commit it names by a ref. Floored short of them, the git node answers a
+// session sync from a copy that lacks them, finds the head stale or the commit
+// absent, and pays the write's re-judgement at the log's head — a barrier and
+// a second sync, and before it, for a stale head, a data node's read of the
+// write's own outcome — where one sync would have done. A person's is the
+// log's head.
+func (d CodeDeps) writeFresh(turn *turnctx.Turn, c codeCaller, repo code.RepoRef) statelog.Freshness {
 	if c.asker.Kind != code.PrincipalAgent {
 		return statelog.Freshness{Level: statelog.ReadLinearizable}
 	}
-	return statelog.FloorAt(statelog.ReadSession, furthestOnLog(d.Code.FloorOf(repo.ID), repo.Position))
+	floor := furthestOnLog(furthestOnLog(d.Code.FloorOf(repo.ID), repo.Position), refsReadOn(turn, repo.ID))
+	return statelog.FloorAt(statelog.ReadSession, floor)
 }
 
 // bindOperation settles which operation this call is, by the rule every family
@@ -371,7 +381,7 @@ func (t *codeBranchWrite) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if refusal := t.resolve(ctx, turn, c, repo, &w, revs); refusal != nil {
 		return *refusal, nil
 	}
-	w.RepoID, w.Principal, w.Fresh = repo.ID, writer(ctx, turn, c), t.deps.writeFresh(c, repo)
+	w.RepoID, w.Principal, w.Fresh = repo.ID, writer(ctx, turn, c), t.deps.writeFresh(turn, c, repo)
 	w.OpID = opIDFor(actor, tool, codeWriteVerb, repo.ID, args)
 	if err := w.Validate(); err != nil {
 		return codeWriteFailure(ctx, tool, actor, repo.Name, err), nil
@@ -462,7 +472,9 @@ func fileOpsArg(tool string, args map[string]any) ([]code.FileOp, *tools.Result)
 // resolve fills the write's commits from its revision arguments: a whole id
 // as given; a branch, a tag, a ref or HEAD through the call's one ref read
 // ([CodeDeps.resolveRevs]); and an abbreviated id refused by the rule every
-// party holds a write to, which names whole ids only.
+// party holds a write to, which names whole ids only. A ref it resolves is
+// one the turn has read, and the write is floored where it moved
+// ([CodeDeps.writeFresh]).
 func (t *codeBranchWrite) resolve(ctx context.Context, turn *turnctx.Turn, c codeCaller, repo code.RepoRef,
 	w *code.EngineWrite, revs revArgs) *tools.Result {
 

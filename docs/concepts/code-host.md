@@ -4947,8 +4947,11 @@ history its caller never saw, and one that creates a branch needs it absent.
 ### How a write is built
 
 1. **Judged before anything is built.** The node's copy of the repository is
-   brought to the caller's floor — a seat's own writes, a person's
-   linearizable — and the write is judged on it: the repository's status, the
+   brought to the caller's floor — a person's linearizable; a seat's its own
+   writes, its turn's read of the repository and where every ref the turn
+   read on it last moved, so a write onto a head the seat read with
+   `code_resolve`, or naming a commit by a branch, finds them in the copy
+   after one sync — and the write is judged on it: the repository's status, the
    writer's [grant](#who-may-read-and-push), the [protections](#protection-rules)
    — a seat's write to a ref `direct_push: persons` protects is refused
    `protected_direct`, as its push would be ([A seat's push](#a-seats-push)) —

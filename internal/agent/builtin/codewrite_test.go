@@ -373,6 +373,64 @@ func TestACodeWriteNamesItsTurn(t *testing.T) {
 	}
 }
 
+// A SEAT'S WRITE IS FLOORED AT EVERY REF ITS TURN READ: a write naming a
+// commit by a ref is floored at where that ref last moved, as a read by object
+// id is; and a write onto a head the turn read with code_resolve — a branch
+// that moved after the turn first read the repository — at where the head
+// moved. So the git node judges it on a copy that holds the commit and the
+// head, in one sync, rather than on one synced only to the turn's first read,
+// which lacks both and is judged again at the log's head: a barrier and a
+// second sync, and for the head a data node's read of the write's own outcome
+// before them.
+//
+// Mutations: writeFresh leaving out the refs the turn resolved → both writes
+// are floored at the repository's read, 7, red; refsOf noting nothing → the
+// same, red.
+func TestASeatsWriteIsFlooredAtTheRefsItsTurnRead(t *testing.T) {
+	t.Parallel()
+	floorOf := func(w code.EngineWrite) statelog.Position { return w.Fresh.Floor(codeAt(1).Stream) }
+
+	// A REVERT OF A COMMIT NAMED BY ITS BRANCH: feature last moved at 11,
+	// past the turn's read of the repository at 7 and this node's own writes
+	// at 3.
+	host, writer := newCodeHost(), &codeWrites{}
+	reg := codeRegistry(t, writeDeps(host, writer))
+	if got := callWrite(t, everyGrant(), reg, writerTurn(t), builtin.CodeRevertTool, map[string]any{
+		"repo": "site", "branch": "seats/agent-cto/fix", "expected_head": mainOID, "commit": "feature",
+	}); got.Failed {
+		t.Fatalf("the revert answered %q", got.Output)
+	}
+	writes, _ := writer.asked()
+	if len(writes) != 1 || writes[0].Fresh.Level != statelog.ReadSession || floorOf(writes[0]) != codeAt(11) {
+		t.Fatalf("the revert of feature's head is built at %+v, want its session floored where feature last "+
+			"moved, %s", writes, codeAt(11))
+	}
+
+	// A COMMIT ONTO A HEAD THE TURN READ: the seat's branch moved at 9, after
+	// the turn's read of the repository at 7, and the turn reads its head
+	// before it writes onto it.
+	host, writer = newCodeHost(), &codeWrites{}
+	host.refs["refs/heads/seats/agent-cto/fix"] = featureOID
+	host.moved["refs/heads/seats/agent-cto/fix"] = codeAt(9)
+	reg = codeRegistry(t, writeDeps(host, writer))
+	turn := writerTurn(t)
+	if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeResolveTool,
+		map[string]any{"repo": "site", "ref": "seats/agent-cto/fix"}); got.Failed {
+		t.Fatalf("the resolve answered %q", got.Output)
+	}
+	if got := callWrite(t, everyGrant(), reg, turn, builtin.CodeCommitFilesTool, map[string]any{"repo": "site",
+		"branch": "seats/agent-cto/fix", "expected_head": featureOID, "message": "Fix the readme",
+		"files": []any{map[string]any{"op": "put", "path": "README.md", "content": "hello"}},
+	}); got.Failed {
+		t.Fatalf("the commit answered %q", got.Output)
+	}
+	writes, _ = writer.asked()
+	if len(writes) != 1 || floorOf(writes[0]) != codeAt(9) {
+		t.Errorf("the commit onto the head the turn read is built at %+v, want its session floored where "+
+			"that head moved, %s", writes, codeAt(9))
+	}
+}
+
 // A RERUN OF A CODE WRITE IS THE SAME PUSH: the same call made again in a turn
 // — a re-run, an executor asking twice — derives the same operation and so
 // the same push id; the same call after a different one is a new operation,

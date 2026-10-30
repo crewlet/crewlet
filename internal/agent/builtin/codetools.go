@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
@@ -672,7 +673,64 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 			repo.Name, faultSaid))
 		return code.RefAnswer{}, &r
 	}
+	noteRefsRead(turn, repo.ID, answer.Refs)
 	return answer, nil
+}
+
+// refsReadKey keys, in a turn's lookups, how far the refs the turn resolved on
+// one repository had moved ([refsRead]).
+type refsReadKey struct{ repoID string }
+
+// refsRead is the furthest position on the code log at which a ref this turn
+// resolved on one repository last MOVED — code_resolve's ref, and every ref a
+// call named — which a seat's engine write of the repository is floored at
+// ([CodeDeps.writeFresh]): a turn writes onto a head it read and names commits
+// it read, and a copy synced no further than the turn's first read of the
+// repository may hold neither, so its write is judged on a copy that lacks
+// them and judged again at the log's head — a barrier and a second sync, and
+// for a head the copy has not seen move, a data node's read of the write's
+// own outcome first. Kept by the turn ([turnctx.Lookups], taken with
+// LoadOrStore) and only ever raised, under its own lock, since the turn's
+// workers resolve refs while it runs; a FACT about what the turn read, never a
+// resolution: it decides nothing, and outlives a name the turn forgets
+// ([forget]), since what was read stays read.
+type refsRead struct {
+	mu sync.Mutex
+	at statelog.Position
+}
+
+// noteRefsRead raises turn's [refsRead] on repoID to where each of refs last
+// moved; a ref no live ref holds, which moved nowhere, raises nothing.
+func noteRefsRead(turn *turnctx.Turn, repoID string, refs []code.ResolvedRef) {
+	if turn == nil || turn.LookedUp() == nil {
+		return
+	}
+	held, _ := turn.LookedUp().LoadOrStore(refsReadKey{repoID: repoID}, &refsRead{})
+	read, ok := held.(*refsRead)
+	if !ok {
+		return
+	}
+	read.mu.Lock()
+	defer read.mu.Unlock()
+	for _, ref := range refs {
+		read.at = furthestOnLog(read.at, ref.Moved)
+	}
+}
+
+// refsReadOn is turn's [refsRead] on repoID: the zero position where the turn
+// has resolved no ref of it, or there is no turn.
+func refsReadOn(turn *turnctx.Turn, repoID string) statelog.Position {
+	held, ok := turn.LookedUp().Load(refsReadKey{repoID: repoID})
+	if !ok {
+		return statelog.Position{}
+	}
+	read, ok := held.(*refsRead)
+	if !ok {
+		return statelog.Position{}
+	}
+	read.mu.Lock()
+	defer read.mu.Unlock()
+	return read.at
 }
 
 // headRev is the revision a call names its repository's default branch by.
