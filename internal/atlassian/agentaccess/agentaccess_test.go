@@ -558,6 +558,10 @@ func TestASeatsWholeLifeAcrossJiraAndConfluence(t *testing.T) {
 	if off[0].Disabled {
 		t.Fatal("the account was marked disabled while Confluence is still on")
 	}
+	if !strings.Contains(off[0].Did, "keeps its Jira product access") ||
+		off[1].Did != "Minted an API token with the scopes of Confluence only" {
+		t.Fatalf("Jira off said %q / %q", off[0].Did, off[1].Did)
+	}
 	f.locked(func() {
 		live := f.tokens[account]
 		if f.actors["GOP/10101"][account] || len(live) != 1 || !slices.Equal(live[0].scopes, atlassian.ConfluenceScopes) {

@@ -93,6 +93,14 @@ var (
 	}
 )
 
+// roleWord is what the product calls the access a seat holds in it.
+func (p product) roleWord() string {
+	if p.lane == seataccess.LaneConfluence {
+		return "space roles and permissions"
+	}
+	return "project roles"
+}
+
 // productOf is the product a lane grants, and false for a lane this vendor
 // does not have.
 func productOf(lane seataccess.Lane) (product, bool) {
