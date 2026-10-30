@@ -65,7 +65,7 @@ func migrateSeatAccessStep(ctx context.Context, e *engine.Engine, cfg *configapi
 	store *fleetsecrets.Store, log *slog.Logger) {
 
 	result, err := e.MigrateSeatAccess(ctx, migrationDocument{svc: cfg},
-		migrationSecrets{engine: e, store: store})
+		migrationSecrets{engine: e, store: store}, cfg.Managed())
 	var raced *configapi.RacedError
 	switch {
 	case err == nil:

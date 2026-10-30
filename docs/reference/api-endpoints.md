@@ -3650,9 +3650,13 @@ answers the name and when it was minted, never the value.
 the same value quoted. Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration
-for the company: Datadog, GitLab or Mattermost without a `provisioning` block,
-Jira and Confluence on Data Center or without the Atlassian organization key,
-GitHub without `provisioning`. On such a lane a seat's switch still binds its
+for the company, which is wherever it does not hold the authority that creates
+an agent's account: Datadog, GitLab or Mattermost without a `provisioning`
+block, Jira and Confluence on Data Center or without the Atlassian organization
+key, GitHub without `provisioning` or on a document only the operator writes
+(the engine records each agent's app in the document), and Slack without
+`integrations.slack.app_config_token`, the token the engine creates agents'
+apps with. On such a lane a seat's switch still binds its
 tool to the credential handed in from outside Crewlet, its access is managed
 where that credential was issued, and its `observed.credential` names the
 variable the seat holds with `"source": "external"`. A credential Crewlet
@@ -3754,8 +3758,9 @@ said what it could do once for the whole company (`provisioning.role`,
 document, one integration at a time, in one revision attributed to
 `seat access migration`: each agent seat states `enabled` per integration, the
 company's role is copied into each seat in the vendor's own terms (a Datadog
-role is looked up at Datadog by name), a Mattermost bot's channels are written
-out, each credential the engine minted is re-sealed under the agent's own name,
+role is looked up at Datadog by name), a Jira or Confluence agent keeps
+product access only (no project or space role, which is all the earlier engine
+granted), a Mattermost bot's channels are written out, each credential the engine minted is re-sealed under the agent's own name,
 every account the engine made is recorded, and the retired fields are removed.
 A credential that named a variable a company setting also uses is never moved:
 the agent gets a new one from its next sync, and the Agents tab warns that the
