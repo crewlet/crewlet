@@ -124,14 +124,14 @@ MCP server (`CONFLUENCE_USERNAME` / `CONFLUENCE_API_TOKEN`), the
 
 ## Mattermost
 
-Conventions used by the [Mattermost integration](../integrations/mattermost.md) and its provisioning/bootstrap tooling. Apart from `MATTERMOST_ADMIN_TOKEN` (read directly by the CLI) and `MATTERMOST_PUBLIC_URL` (read by `docker-compose.yml`, the bootstrap script and `crewlet mattermost doctor`), these are `${VAR}` references in the company YAML — [`crewlet mattermost provision`](cli.md#crewlet-mattermost-provision) **mints** the token values into `.env` for you.
+Conventions used by the [Mattermost integration](../integrations/mattermost.md) and its provisioning/bootstrap tooling. Apart from `MATTERMOST_PUBLIC_URL` (read by `docker-compose.yml`, the bootstrap script and `crewlet mattermost doctor`), these are `${VAR}` references in the company YAML or names the engine seals values under.
 
 | Variable | Description | Where to get it |
 |----------|-------------|-----------------|
 | `MATTERMOST_URL` | Mattermost instance base URL (`integrations.mattermost.url`, and the `MATTERMOST_URL` each role's MCP server reads): the address the engine reaches the server at, which may be another route than `MATTERMOST_PUBLIC_URL` — an in-cluster name, say — under the same path, answered without a redirect (see [The address the engine dials](../integrations/mattermost.md#the-address-the-engine-dials)) | Written to `.env` by `scripts/mattermost-dev-bootstrap.sh` locally; your deployment's URL otherwise |
 | `MATTERMOST_PUBLIC_URL` | **The address browsers use.** Read by the bundled `docker-compose.yml` (it becomes `MM_SERVICESETTINGS_SITEURL`), by the bootstrap script, and by [`crewlet mattermost doctor`](cli.md#crewlet-mattermost-doctor) as `-browser-url`'s default, which holds the server's Site URL to it. Getting it wrong costs every human live updates while the engine keeps working — see [The Site URL](../integrations/mattermost.md#the-site-url). Defaults to `http://localhost:8065`; the bootstrap defaults it to the address you reached the host on over SSH. | You — it is the address in your browser's address bar |
-| `MATTERMOST_ADMIN_TOKEN` | Read directly by `crewlet mattermost provision` as the operator credential (a system-admin personal access token; `--admin-token` overrides) | Mattermost profile > Security > Personal Access Tokens (system-admin account) |
-| `MATTERMOST_TOKEN_<SEAT>` | Per-agent bot personal access token (each role's `integrations.mattermost.bot_token` **and** `mcp_env.mattermost.MATTERMOST_TOKEN`, e.g. `MATTERMOST_TOKEN_PM`) | Minted by `crewlet mattermost provision` |
+| `MATTERMOST_ADMIN_TOKEN` | The system-admin personal access token the engine provisions each agent's bot with (`integrations.mattermost.provisioning.admin_token`); `crewlet mattermost doctor` also reads it (`-admin-token` overrides) | Mattermost profile > Security > Personal Access Tokens (system-admin account) |
+| `MATTERMOST_BOT_TOKEN_<HANDLE>` | Per-agent bot personal access token, sealed by the engine under this name when the agent is turned on in the Agents tab (e.g. `MATTERMOST_BOT_TOKEN_PM`); never written in the company document | Minted by the engine |
 
 ---
 

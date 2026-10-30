@@ -117,57 +117,25 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 			removed.Add(removalFor(seat, seat.Email))
 			continue
 		}
-		// THE KEY FIRST, THEN THE ACCOUNT, which is the order mattermost's
-		// teardown argues for: a revoked key on a live account is an agent
-		// that can do nothing, and a live key on a disabled account is a
-		// credential that works again the moment anybody re-enables it.
-		// The first is the safer thing to be interrupted at.
-		if err := revokeAppKeys(ctx, opts, account.ID); err != nil {
+		// ONE RULE FOR OFF AND FOR A DISCONNECT, in [Client.TurnOff]: every
+		// key first, then the marker, then the disable, and marked whatever
+		// state the account is already in. Every key rather than the ones
+		// this engine can name: a key's value is served once, the account
+		// exists solely because this engine created it, and a key left on
+		// it is exactly the live credential a decommission exists to
+		// remove. A step that fails leaves the account as an operator can
+		// see it, still listed with a credential nobody could withdraw.
+		keys, err := opts.Client.ListAppKeys(ctx, opts.Creds, account.ID)
+		if err != nil {
 			failures = append(failures, fmt.Errorf(
-				"datadog: revoke %s's application keys before disabling it: %w",
-				seat.Handle, integration.Reject(err, Status(err))))
-			// AND THE ACCOUNT STAYS AS IT IS, so the state is the one an
-			// operator can see: an account still listed with a credential
-			// nobody could withdraw, rather than a disabled one quietly
-			// holding a working key.
-			continue
-		}
-		// MARKED WHATEVER STATE THE ACCOUNT IS IN, and marked BEFORE it is
-		// disabled.
-		//
-		// Re-enabling is a decision this engine may only make about an
-		// account IT turned off, and the surface's own status row — the
-		// obvious place to record that — is forgotten the moment this
-		// disconnect succeeds. The marker lives on the account instead,
-		// and writing it first means an interrupted run leaves a marked,
-		// live account rather than a disabled one with no provenance.
-		//
-		// THE ALREADY-DISABLED CASE IS WHY THIS IS NOT GUARDED. Both calls
-		// used to sit behind `if !account.Disabled`, and the seat was
-		// reported removed either way — so a teardown that met an account
-		// already off wrote no marker and swore the work was done. That
-		// state is reached by an ordinary disconnect twice, by a
-		// disconnect after somebody disabled the account by hand, and by
-		// a teardown retried after a partial failure, and from it there is
-		// NO WAY BACK: every later connect takes the unmarked-disabled arm
-		// and refuses for ever, because the marker can now never appear.
-		// Measured: crewlet-sre-lead@agents.crewlet.invalid, disabled,
-		// title empty, the card at degraded/admin after six attempts.
-		//
-		// The write is idempotent and costs one request, which is the
-		// whole price of making the state recoverable.
-		if err := opts.Client.MarkDisconnected(ctx, opts.Creds, account.ID); err != nil {
-			failures = append(failures, fmt.Errorf(
-				"datadog: record that this engine is disabling %s: %w",
+				"datadog: read %s's application keys before disabling it: %w",
 				seat.Handle, integration.Reject(err, Status(err))))
 			continue
 		}
-		if !account.Disabled {
-			if err := opts.Client.DisableUser(ctx, opts.Creds, account.ID); err != nil {
-				failures = append(failures, fmt.Errorf("datadog: disable %s: %w",
-					seat.Handle, integration.Reject(err, Status(err))))
-				continue
-			}
+		if err := opts.Client.TurnOff(ctx, opts.Creds, accountOf(account, keys)); err != nil {
+			failures = append(failures, fmt.Errorf("datadog: turn %s off: %w",
+				seat.Handle, integration.Reject(err, Status(err))))
+			continue
 		}
 		// REPORTED REMOVED ONLY ONCE IT IS BOTH MARKED AND OFF, which is
 		// what the two `continue`s above are for: a seat named here has
@@ -177,27 +145,6 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 		removed.Add(removalFor(seat, account.Email))
 	}
 	return removed, errors.Join(failures...)
-}
-
-// revokeAppKeys deletes every application key on one account.
-//
-// ALL OF THEM, not only the one this run can name: a key's VALUE is returned
-// once and never again, so there is nothing to match a stored value against,
-// and the account exists solely because this engine created it. An
-// administrator has no reason to have put a key of their own on an agent's
-// service account, and leaving one would leave exactly the live credential
-// this deletion exists to remove.
-func revokeAppKeys(ctx context.Context, opts TeardownOptions, accountID string) error {
-	keys, err := opts.Client.ListAppKeys(ctx, opts.Creds, accountID)
-	if err != nil {
-		return err
-	}
-	for _, key := range keys {
-		if err := opts.Client.DeleteAppKey(ctx, opts.Creds, accountID, key.ID); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // removalFor is one seat's removal, naming the variable its key lives in.

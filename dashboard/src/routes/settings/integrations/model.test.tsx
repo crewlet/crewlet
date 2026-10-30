@@ -19,7 +19,7 @@ import type {
 } from "~/contract/integrations.ts";
 import type { SetupSeatState, SetupToolState } from "~/protocol/types.ts";
 import { CATALOG, FindingSubjects } from "./catalogue.tsx";
-import { deriveTool, workingLine, type Tool, type ToolInputs } from "./model.ts";
+import { deriveTool, type ToolInputs } from "./model.ts";
 import { IssueRow } from "./parts.tsx";
 
 afterEach(cleanup);
@@ -356,21 +356,4 @@ test("one subject is shown, not hidden behind a count", () => {
   render(<FindingSubjects subjects={["sre-lead"]} />);
   expect(screen.getByText("sre-lead")).toBeTruthy();
   expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
-});
-
-// A WORKING TOOL'S LINE IS WHOLE SENTENCES: no trailing space when it counts
-// nothing, and no separator glyph between what it does count.
-test.each<[string, Tool["seats"], number | null, string]>([
-  ["counts nothing", [], null, "Working."],
-  ["one agent", [{ status: "ready" }] as Tool["seats"], null, "Working. 1 of 1 agent ready."],
-  [
-    "agents and deliveries",
-    [{ status: "ready" }, { status: "pending" }] as Tool["seats"],
-    14,
-    "Working. 1 of 2 agents ready, 14 deliveries.",
-  ],
-  ["one delivery", [], 1, "Working. 1 delivery."],
-  ["nothing delivered", [], 0, "Working. Nothing delivered yet."],
-])("a working tool's line: %s", (_, seats, delivered, want) => {
-  expect(workingLine({ seats, delivered })).toBe(want);
 });

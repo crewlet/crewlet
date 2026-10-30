@@ -326,15 +326,14 @@ identities it needs.
 1. **Run the Mattermost server yourself** (official Docker image; it needs
    its own PostgreSQL) and **create the team** agents will live in. Crewlet
    never creates top-level tenancy.
-2. **Declare each agent's identity in the company YAML** — one per-agent bot
-   token as a `${VAR}` placeholder under `role.integrations.mattermost`, and
-   the Mattermost MCP tool server in `mcp_servers`.
-3. **Provision the bots** with
-   [`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision),
-   which creates one bot account per agent, adds it to the team and its
-   channels, and mints its access token into the `${VAR}` the YAML
-   references. The only thing you do by hand is generate one system-admin
-   token, once.
+2. **Give the integration a system-admin token**, once, under
+   `integrations.mattermost.provisioning.admin_token`, and declare the
+   Mattermost MCP tool server in `mcp_servers`.
+3. **Turn each agent on** in the Mattermost integration's
+   [Agents tab](../integrations/mattermost.md#each-agents-access-roles-and-channels),
+   with its roles and channels. The engine creates one bot account per agent,
+   adds it to the team and its channels, and seals its access token under the
+   name it derives for the seat.
 
 Nothing needs to reach the engine from outside: it opens outbound websockets
 per seat rather than receiving webhooks, so no tunnel and no public URL.
