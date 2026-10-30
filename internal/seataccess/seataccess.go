@@ -289,7 +289,19 @@ type Credential struct {
 
 	// By is who the pass that sealed it ran for, as [iam.Actor] names them.
 	By string `json:"by,omitempty"`
+
+	// Source is [CredentialMinted] for a credential Crewlet minted at the
+	// vendor, and [CredentialExternal] for one handed in from outside
+	// Crewlet (an operator's Secret, an app created elsewhere), which the
+	// engine binds and never writes or rotates.
+	Source string `json:"source,omitempty"`
 }
+
+// The two sources of a seat's credential ([Credential.Source]).
+const (
+	CredentialMinted   = "minted"
+	CredentialExternal = "external"
+)
 
 // Observed is what the vendor showed on the last sync for one seat on one
 // lane, read back every pass. The wire shape is the dashboard's (`observed`).

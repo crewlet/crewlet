@@ -288,12 +288,26 @@ type Options struct {
 	Scope     []string `json:"scope,omitempty"`
 	ScopeOpen bool     `json:"scope_open,omitempty"`
 
+	// Rotatable is whether a person can ask for a seat's credential on this
+	// lane to be rotated ([LaneSpec.Rotatable]).
+	Rotatable bool `json:"rotatable,omitempty"`
+
+	// Managed is [ManagedExternal] where the engine does not provision this
+	// lane for the company (D4b): a seat's switch still binds its tool to
+	// the credential handed in, and its access is managed outside Crewlet.
+	// Empty where the engine provisions it.
+	Managed string `json:"managed,omitempty"`
+
 	// Multiple is a lane whose access is a SET of Levels rather than one:
 	// Confluence's space permissions by operation, on a site without space
 	// roles. Its Desired.Level is the chosen ids, sorted and space-separated,
 	// and the picker offers a multi-select.
 	Multiple bool `json:"multiple,omitempty"`
 }
+
+// ManagedExternal is [Options.Managed] for a lane the engine does not
+// provision for the company.
+const ManagedExternal = "external"
 
 // Level returns the level with id, or false.
 func (o Options) Level(id string) (Level, int, bool) {

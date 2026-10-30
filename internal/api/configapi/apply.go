@@ -205,6 +205,10 @@ type ApplyRequest struct {
 	// for the party — or the engine's own name for a write a timer made.
 	By iam.Actor
 
+	// Engine marks the engine's own write ([draft].engine), which may change
+	// a field only the engine writes.
+	Engine bool
+
 	// Expect is the revision the caller built this edit on. Empty states no
 	// precondition, which is what a script that owns the config outright
 	// wants: the edit is built on the fleet's revision as this call reads
@@ -292,6 +296,13 @@ type draft struct {
 	// document's own ([Company.Warnings]): a removal's resolution moves.
 	// Nil for none.
 	warnings func(next, prior *config.Company) []config.Warning
+	// authored is a write a caller composed (a patch, a whole document, an
+	// entity, a removal), held to every rule an author is, and engine the
+	// engine's own write of one: an installation it discovered, an app it
+	// recorded, a block a disconnect removed. Only an authored write that is
+	// not the engine's is refused a change to a field the engine alone
+	// writes ([config.RefuseEngineWritten]).
+	authored, engine bool
 	// republishes is a write that re-publishes the active document's
 	// stored bytes unchanged ([Service.Reload]). It changes nothing about
 	// the company, so a managed document does not refuse it: see
@@ -411,6 +422,15 @@ func (s *Service) prepare(ctx context.Context, d draft) (*prepared, error) {
 	derived := config.Derive(company)
 	if invalid := d.rules(company, b.prior); invalid != nil {
 		return nil, &ValidationError{Err: invalid, Derived: derived}
+	}
+	// A FIELD ONLY THE ENGINE WRITES, changed by anybody else, is refused:
+	// a GitHub App id written by a person or a model points an agent at an
+	// app that is not its own. A document the operator writes is exempt:
+	// it renders what the engine reported back to it.
+	if d.authored && !d.engine && !s.Managed() {
+		if refused := config.RefuseEngineWritten(b.prior, company); refused != nil {
+			return nil, &ValidationError{Err: refused, Derived: derived}
+		}
 	}
 	// AFTER THE RULES, because a document that is refused anyway takes no
 	// seat away, and it is the one step here that reads outside this node.
@@ -576,8 +596,8 @@ func importRules(next, _ *config.Company) error {
 // has.
 func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 	return draft{
-		expect: req.Expect, requireActive: true, by: req.By,
-		rules: authoredRules,
+		expect: req.Expect, requireActive: true, by: req.By, engine: req.Engine,
+		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			if len(req.Patch) == 0 {
 				return nil, nil, &PatchError{Err: errEmptyPatch}
@@ -629,7 +649,7 @@ func patchDraft(req ApplyRequest, sent *yaml.Node) draft {
 func replaceDraft(incoming *config.Company, built string, by iam.Actor) draft {
 	return draft{
 		expect: built, expectAbsent: built == "", by: by,
-		rules: authoredRules,
+		rules: authoredRules, authored: true,
 		build: func(b base) (*config.Company, []byte, error) {
 			if b.found {
 				// The masks the caller was shown come back as the values

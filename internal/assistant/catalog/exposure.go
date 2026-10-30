@@ -102,6 +102,8 @@ var routeExposures = []Exposure{
 	// the company's as a merge patch of the document.
 	routeProposed(seatWriteRoute, "set_token_budget"),
 	routeProposed(companyWriteRoute, "set_token_budget"),
+	// AN AGENT'S ACCESS AT A VENDOR IS SAVED AS ITS AGENTS TAB SAVES IT.
+	routeProposed(accessWriteRoute, "set_seat_access"),
 }
 
 // Exposures are every exposure row, questions first, then tools, then routes.

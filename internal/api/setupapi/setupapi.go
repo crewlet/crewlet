@@ -250,6 +250,12 @@ type Options struct {
 	// is open on every node.
 	StateClaims StateClaims
 
+	// Access is the engine's per-seat access: each agent seat's setting,
+	// account and last sync on every integration that manages one account
+	// per agent, the plan a draft would take, and the sync a save starts.
+	// What the Agents tab's routes answer from ([Access]).
+	Access Access
+
 	// Now is injectable so a test can pin a secret row's timestamp.
 	Now func() time.Time
 }
@@ -267,11 +273,13 @@ type Service struct {
 	slackApps func() map[string]string
 	secrets   setup.Secrets
 	passes    *setup.Runner
-	probes    map[integration.Kind]setup.Probe
-	sink      sinkFactory
-	status    Status
-	clock     func() time.Time
-	appFlow   *AppFlow
+	// access is the engine's per-seat access. See [Options.Access].
+	access  Access
+	probes  map[integration.Kind]setup.Probe
+	sink    sinkFactory
+	status  Status
+	clock   func() time.Time
+	appFlow *AppFlow
 
 	// guard decides every route, and the credential write a route asks
 	// for on top of its own. No chart: not one verb here asks a relation.
@@ -296,6 +304,7 @@ func New(opts Options) (*Service, error) {
 		{"SlackApps", opts.SlackApps == nil},
 		{"StateCipher", opts.StateCipher == nil},
 		{"StateClaims", opts.StateClaims == nil},
+		{"Access", opts.Access == nil},
 		{"WebhookBaseKey", opts.WebhookBaseKey == ""},
 	} {
 		if field.absent {
@@ -328,6 +337,7 @@ func New(opts Options) (*Service, error) {
 		webhookBaseKey: opts.WebhookBaseKey,
 		secrets:        opts.Secrets,
 		passes:         opts.Passes,
+		access:         opts.Access,
 		probes:         maps.Clone(opts.Probes),
 		sink:           opts.Sink,
 		status:         opts.Status,
@@ -380,6 +390,25 @@ func (s *Service) Routes(mux authz.Mux) error {
 	// nothing could name a run id, so one pass was readable only by the
 	// caller that had just started it.
 	mount("GET /setup/integrations/{kind}/runs", authz.ActionSetupRead, s.runs)
+	// WHAT EACH AGENT MAY DO ON ONE INTEGRATION: see access.go. The read and
+	// the plan are the read verb, the plan being a read sent as a POST
+	// because a draft is a body. The save is its own verb, which carries no
+	// credential and so is one a person's assistant may prepare, and it
+	// answers `dry_run=true` as its check (ADR-0055). The seat actions are
+	// the connect verb: a rotate seals a credential, and a remove takes an
+	// account away at the vendor.
+	mount("GET /setup/integrations/{kind}/access", authz.ActionSetupRead, s.accessRead)
+	mount("POST /setup/integrations/{kind}/access/plan", authz.ActionSetupRead, s.accessPlan)
+	if err := router.Handle("PUT /setup/integrations/{kind}/access", accessSavePolicy(),
+		http.HandlerFunc(s.accessSave)); err != nil {
+		failures = append(failures, err)
+	}
+	mount("POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}",
+		authz.ActionSetupConnect, s.accessAct)
+	// A SLACK APP'S INSTALL LINK, minted on request and never stored: the one
+	// seat action that answers something other than the tab.
+	mount("POST /setup/integrations/slack/access/seats/{handle}/{lane}/install",
+		authz.ActionSetupConnect, s.accessInstall)
 	return errors.Join(failures...)
 }
 
@@ -421,6 +450,9 @@ func (c configWriter) Apply(
 ) (string, int64, error) {
 	applied, err := c.svc.Apply(ctx, configapi.ApplyRequest{
 		Patch: patch, Summary: summary, By: by, Expect: expect,
+		// THE SETUP SURFACE'S OWN WRITE: what it records (an app GitHub
+		// created, a site Atlassian named) is the engine's to write.
+		Engine: true,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
@@ -464,7 +496,7 @@ func (c configWriter) SetSeat(
 ) (string, int64, error) {
 	applied, err := c.svc.ApplyEntity(ctx, configapi.ApplyEntityRequest{
 		Kind: "roles", ID: handle, Body: body, Summary: summary, By: by,
-		Expect: expect,
+		Expect: expect, Engine: true,
 	})
 	return applied.RevisionID, applied.Epoch, err
 }
@@ -1522,12 +1554,18 @@ func seatSecretNames(at seatCredentialAt, role *org.Role, stored string) []strin
 // function here passes values through rather than expanding them.
 func atlassianAt(product atlassian.Product) seatCredentialAt {
 	return seatCredentialAt{
+		// THE SEAT'S CREDENTIAL AS THE PRODUCTS READ IT ([atlassian.CredentialOf]):
+		// the engine's own sealed names first, then a credential handed in
+		// through `mcp_env`, whose address is the one this names.
 		Find: func(role *org.Role) (stored, where string) {
-			cred, at := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
-			if at == "" {
+			cred := atlassian.CredentialOf(product, role, verbatim)
+			if cred.Token == "" {
 				return "", ""
 			}
-			return cred.Token, "mcp_env." + at
+			if _, at := atlassian.CredentialAt(product, role.MCPEnv, verbatim); at != "" {
+				return cred.Token, "mcp_env." + at
+			}
+			return cred.Token, "the engine's sealed credential"
 		},
 		// THE SHARED BLOCK is what a form tells an operator to write: a
 		// provisioned seat's credential lands there, and the two
@@ -1537,7 +1575,7 @@ func atlassianAt(product atlassian.Product) seatCredentialAt {
 		// creation and its products authenticate base64(address:token), so
 		// the pass seals both and a disconnect orphans both.
 		Vars: func(role *org.Role) []string {
-			cred, _ := atlassian.CredentialAt(product, role.MCPEnv, verbatim)
+			cred := atlassian.CredentialOf(product, role, verbatim)
 			return []string{cred.Token, atlassian.SeatEmail(role.MCPEnv)}
 		},
 	}
