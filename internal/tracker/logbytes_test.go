@@ -516,6 +516,17 @@ var codeLogFields = map[code.OpKind]struct {
 				"term of the day, its opening as its other records (codeLogUnwritten), and neither are the " +
 				"records its repository's home appends about it once it is live, its revisions' facts and " +
 				"its landing, which ride its making (codeLogRiders)",
+			"pushes.routing": "whom a push concerns (code.PushEntry.Routing): an entry carries a routing " +
+				"only for a change its commands MERGE, by setting the change's target to its head, and for " +
+				"the one it OPENS from its options — each the change's id, name, repository, title, work " +
+				"item and owner, the pusher as its actor, and the handles its reason reaches, the change's " +
+				"authors for a merge (at most code.MaxRoutedParticipants, 64) and the open's mentions (at " +
+				"most code.MaxMentions, 32), with which of them are persons — and none where it merges and " +
+				"opens nothing, since a head move concerns nobody; the measured push, a coding box's moving " +
+				"its branch on, does neither. A change is opened once and merged once, so a push carries " +
+				"its routing once a change, beside the opening and the landing it announces, which the day " +
+				"leaves out (codeLogUnwritten, codeLogRiders), held with the record's bytes by the push's " +
+				"decide (internal/code's routingRoom)",
 		},
 	},
 	code.OpCompact: {
