@@ -509,7 +509,32 @@ const (
 	// handles at seventy bytes, the work item and the title — so the text a
 	// write carries never takes the room its record needs for the wakes it
 	// causes.
+	//
+	// What one routing holds is bounded list by list — its mentions by
+	// MaxMentions, its reviewers by MaxReviewersPerChange, every other role
+	// by MaxRoutedParticipants — and a record fills only the roles its op
+	// routes by (concerns.go), so the widest, a comment's — its mentions,
+	// its thread's participants, the finding it answers and which of them
+	// are persons — is some 15 KiB at handles of iam.MaxLogin bytes: the
+	// room is four times what any record's routing reaches, kept so a role
+	// a later op routes by fits beside the rest.
 	MaxRoutingBytes = 64 << 10
+
+	// MaxMentions is the most handles one write of a change mentions that
+	// its record routes: the tracker's own bound on the people one item
+	// mentions (its MaxMentions), the same people a change's text names.
+	// Past it the write is refused, naming the bound, rather than a mention
+	// silently going unheard.
+	MaxMentions = 32
+
+	// MaxRoutedParticipants is the most handles one role of a change's
+	// routing names — its authors, its watchers, a thread's participants,
+	// the raisers an answer to findings replies to: SIXTY-FOUR, as many as a
+	// revise asks to look again (MaxReReviewers). A change with more of
+	// any of them has an audience no wake is the way to, and the rest read
+	// it in their listings; each role is read in its key's order, so every
+	// writer names the same sixty-four.
+	MaxRoutedParticipants = 64
 
 	// MaxConversationBytes is the most one write of a change's conversation
 	// may encode to: a record's bytes ([MaxRecordBytes]) less the routing's

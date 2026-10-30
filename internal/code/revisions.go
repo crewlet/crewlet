@@ -159,8 +159,10 @@ type bookWrites struct {
 	// the authors they added, each pair of a change and an author once.
 	revisions []revisionRow
 	authors   []authorRow
-	// merges is how many changes the entries merged.
+	// merges is how many changes the entries merged, and merged which, in
+	// the order merged — what a push decide routes each entry's merges by.
 	merges int
+	merged []string
 }
 
 // noWrites is a record's writes before its first entry.
@@ -409,6 +411,7 @@ func (b *changeBook) takeBack() {
 	}
 	w.touched, w.bodies = w.touched[:t.touched], w.bodies[:t.bodies]
 	w.revisions, w.authors, w.merges, b.next = w.revisions[:t.revisions], w.authors[:t.authors], t.merges, t.next
+	w.merged = w.merged[:t.merges]
 }
 
 // alone is the rows e — and the change it opens, where it carries one — would
@@ -528,6 +531,7 @@ func (b *changeBook) move(e PushEntry) {
 			row.state, row.mergedVia, row.mergeOID = ChangeStateMerged, MergedViaPush, c.New
 			row.mergedAt = sql.NullInt64{Int64: b.at, Valid: true}
 			b.writes.merges++
+			b.writes.merged = append(b.writes.merged, id)
 		}
 	}
 	for _, c := range commands {

@@ -202,7 +202,9 @@ func (r ChangeRefusal) Valid() bool { return slices.Contains(ChangeRefusals(), r
 // wrote it, from the proposal's asker, and an open's and a reopen's head, from
 // the snapshot it decided in — so a record says what it did with no lookup.
 //
-// Every field is in the base format, under the condition [OpChangeOpen] states.
+// Every field is in the base format, under the condition [OpChangeOpen] states —
+// Mentions and Routing among them, under the condition concerns.go states for
+// a routing.
 
 // ChangeOpen opens a change: its row, numbered by the apply from the
 // repository's next_change, its owner as its first author, and its first
@@ -233,6 +235,14 @@ type ChangeOpen struct {
 	// "" where there was none — a person's open has neither.
 	TurnID string `json:"turn_id,omitempty"`
 	RunID  string `json:"run_id,omitempty"`
+	// Mentions is the handles the change's title and body name, as its
+	// asker resolved them against the chart it acts in, at most
+	// [MaxMentions]; the committer holds them to its own chart, and each
+	// is told ([ReasonMention]).
+	Mentions []string `json:"mentions,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // ChangeEdit sets what a live change says of itself: its title, its body, the
@@ -251,6 +261,12 @@ type ChangeEdit struct {
 	// ClearWorkItem leaves it carrying none — never both.
 	WorkItem      *types.WorkItem `json:"work_item,omitempty"`
 	ClearWorkItem bool            `json:"clear_work_item,omitempty"`
+	// Mentions is the handles the title or the body it sets names, as
+	// [ChangeOpen.Mentions] is.
+	Mentions []string `json:"mentions,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // ChangeDraft makes a live change a draft, or a draft a change asking to be
@@ -262,6 +278,9 @@ type ChangeDraft struct {
 	By Principal `json:"by,omitzero"`
 	// Draft is the state it leaves the change in: draft, or open.
 	Draft bool `json:"draft"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // ChangeRetarget moves a live change's target to another live branch.
@@ -271,6 +290,9 @@ type ChangeRetarget struct {
 	// By is who wrote it, stamped as [ChangeEdit.By] is.
 	By        Principal `json:"by,omitzero"`
 	TargetRef string    `json:"target_ref"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // ChangeClose closes a live change without merging it.
@@ -281,6 +303,9 @@ type ChangeClose struct {
 	By Principal `json:"by,omitzero"`
 	// Reason is why, at most [MaxCloseReasonBytes]; "" for none.
 	Reason string `json:"reason,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // ChangeReopen opens a closed change again, asking to be merged — at the
@@ -294,6 +319,9 @@ type ChangeReopen struct {
 	// Head is the source branch's head as the deciding snapshot held it.
 	// STAMPED BY THE COMMITTER; an asker sends none.
 	Head string `json:"head,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // ChangeLanded records a live change MERGED because its target came to hold
@@ -319,6 +347,9 @@ type ChangeLanded struct {
 	// Node is the git node that found it: the repository's home as it took
 	// itself to be.
 	Node string `json:"node"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// COMMITTER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // OpenChangeID is the id of the change an open under opID opens: DERIVED from

@@ -266,6 +266,11 @@ type Mergeability struct {
 	ReadinessVersion int64 `json:"readiness_version,omitempty"`
 	Ready            bool  `json:"ready,omitempty"`
 	WaitsPerson      bool  `json:"waits_person,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]) — the change's
+	// authors where it TURNED the merge into a conflict, its owner where the
+	// stored answer goes from not ready to ready — STAMPED BY THE WRITER from
+	// the row it replaces; the home sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // validFields holds a mergeability to [ConversationWrite.Validate]'s rules: a
@@ -290,6 +295,9 @@ func (m *Mergeability) validFields() error {
 	if m.ChangeVersion != 0 || m.ReadinessVersion != 0 || m.Ready || m.WaitsPerson {
 		return badField("mergeability.ready", "the writer stamps the change's readiness and the versions it "+
 			"judged it at, from its own snapshot, and the home sends none of them")
+	}
+	if err := stampedRouting("mergeability", m.Routing); err != nil {
+		return err
 	}
 	if m.Refresh {
 		switch {
@@ -393,6 +401,10 @@ type mergeRow struct {
 	bytes            int64
 	changeVersion    int64
 	readinessVersion int64
+	// ready is the stored answer, which the record's own is announced
+	// against: from not ready to ready is the one transition that tells
+	// anybody ([ReasonReadyToMerge]).
+	ready bool
 }
 
 // mergeabilityIn reads changeID's mergeability, and false where it holds none.
@@ -402,7 +414,7 @@ func mergeabilityIn(ctx context.Context, tx *sql.Tx, changeID string) (mergeRow,
 		state string
 	)
 	err := tx.QueryRowContext(ctx, mergeabilitySQL, changeID).Scan(&m.revision, &m.targetRef, &m.targetOID,
-		&m.targetPosition, &state, &m.bytes, &m.changeVersion, &m.readinessVersion)
+		&m.targetPosition, &state, &m.bytes, &m.changeVersion, &m.readinessVersion, &m.ready)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return mergeRow{}, false, nil
@@ -480,6 +492,17 @@ func decideMergeability(ctx context.Context, tx *sql.Tx, w ConversationWrite, ro
 	readiness := ReadinessOf(rows[0].With(m), roster)
 	m.ChangeVersion, m.ReadinessVersion = row.version, d.readiness
 	m.Ready, m.WaitsPerson = readiness.Ready(), readiness.WaitsPerson()
+	// WHOM THE RECORD CONCERNS, by what it turns on the row it replaces: a
+	// merge that becomes a conflict tells the authors, once — not every
+	// recheck that finds it one still — and a stored answer that goes from
+	// not ready to ready tells the owner. THIS RECORD AND NO OTHER announces
+	// the change ready (concerns.go's head): it is the one whose decide holds
+	// the stored answer it replaces.
+	d.concern = concerning{conflicted: m.State == MergeConflict && !(held && prior.state == MergeConflict)}
+	d.concern.authors = d.concern.conflicted
+	if m.Ready && !(held && prior.ready) {
+		d.concern.readyFor = []Reviewer{{Handle: row.owner, Kind: row.ownerKind}}
+	}
 	d.payload = m
 	// THE MERGEABILITY'S ROW, and the conversation's own.
 	d.rows = 2
@@ -614,7 +637,7 @@ type MergePreviewAnswer struct {
 // (apply_mergeability.go).
 const (
 	mergeabilitySQL = `SELECT revision, target_ref, target_oid, target_position, state, bytes, change_version,
-			readiness_version
+			readiness_version, ready
 		FROM code_mergeability WHERE change_id = ?`
 	mergeabilityRowSQL = `SELECT revision, target_ref, target_oid, target_position, state, conflicts_omitted, node,
 			position, at, change_version, readiness_version, ready, waits_person, conflicts

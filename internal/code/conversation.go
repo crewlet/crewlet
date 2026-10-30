@@ -206,7 +206,9 @@ func (r ReviewerReason) Valid() bool { return slices.Contains(ReviewerReasons(),
 // it, from the write's asker; a reviewer's kind, from the chart; a comment's
 // id and the thread it is in — so a record says what it did with no lookup.
 //
-// Every field is in the base format, under the condition [KindChange] states.
+// Every field is in the base format, under the condition [KindChange] states —
+// Mentions and Routing among them, under the condition concerns.go states for
+// a routing.
 
 // Reviewer is one reviewer a request names: a seat by its handle, or a person
 // by the human seat they hold. Its Kind is STAMPED BY THE WRITER from the
@@ -231,6 +233,9 @@ type ReviewerRequest struct {
 	Withdraw []string `json:"withdraw,omitempty"`
 	// Note is what the ask says, at most [MaxReviewNoteBytes]; "" for none.
 	Note string `json:"note,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// WRITER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // CommentAnchor is where a comment points: a line of one file, in one
@@ -284,6 +289,14 @@ type Comment struct {
 	// TurnID is the turn that said it; "" for none — a person's comment has
 	// none.
 	TurnID string `json:"turn_id,omitempty"`
+	// Mentions is the handles its body names, as its asker resolved them
+	// against the chart it acts in, at most [MaxMentions]; the writer holds
+	// them to its own chart, and each is told ([ReasonMention]) and joins
+	// the change's participants.
+	Mentions []string `json:"mentions,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// WRITER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // ThreadResolve marks a thread of a change's comments resolved, or open
@@ -298,6 +311,9 @@ type ThreadResolve struct {
 	// By is who resolved it. STAMPED BY THE WRITER from the write's asker;
 	// an asker sends none.
 	By Principal `json:"by,omitzero"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// WRITER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // Verdict is what a review says of the revision it judges.
@@ -458,6 +474,12 @@ type Review struct {
 	// — a person's review has neither.
 	TurnID string `json:"turn_id,omitempty"`
 	Model  string `json:"model,omitempty"`
+	// Mentions is the handles its summary and its findings name, as
+	// [Comment.Mentions] is.
+	Mentions []string `json:"mentions,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// WRITER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // FindingResolution is one finding's answer.
@@ -481,6 +503,9 @@ type FindingResolve struct {
 	// asker sends none.
 	By       Principal           `json:"by,omitzero"`
 	Findings []FindingResolution `json:"findings"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// WRITER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // ReviewID is the id of the review a write under opID gives, DERIVED from the

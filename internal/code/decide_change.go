@@ -121,8 +121,9 @@ func (p ChangeProposal) Validate() error {
 }
 
 // measure validates p and answers its queued byte charge: its record's
-// payload as the committer stamps it — its asker as who wrote it, and a head
-// at an id's whole length — encoded, held under [EntryRoom].
+// payload as the committer stamps it — its asker as who wrote it, a head at an
+// id's whole length, and the room its routing keeps ([MaxRoutingBytes]) —
+// encoded, held under [EntryRoom].
 func (p ChangeProposal) measure() (int, error) {
 	if err := p.validFields(); err != nil {
 		return 0, err
@@ -132,11 +133,11 @@ func (p ChangeProposal) measure() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
-	if len(encoded) > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
-			ErrInvalidProposal, op, len(encoded), EntryRoom)
+	if bytes := len(encoded) + MaxRoutingBytes; bytes > EntryRoom {
+		return 0, fmt.Errorf("%w: %s: %d bytes with its routing's room, past the %d one proposal may take of "+
+			"its record", ErrInvalidProposal, op, bytes, EntryRoom)
 	}
-	return len(encoded), nil
+	return len(encoded) + MaxRoutingBytes, nil
 }
 
 // record is the op and the payload p carries, as its asker sent it — "" and
@@ -236,13 +237,28 @@ func (p ChangeProposal) ChangeID() string {
 	return ""
 }
 
-// judgesChart reports a proposal whose decide reads the deciding node's chart:
-// a SEAT'S write, whose grant the chart says. A person's and a token's consult
+// JudgesChart reports a proposal whose decide reads the deciding node's chart:
+// a SEAT'S write, whose grant the chart says, and a write that MENTIONS
+// somebody, whose mentions the chart holds the handles of and says which are
+// persons (concerns.go). A person's and a token's that mention nobody consult
 // none, and neither does a landing, which names no asker and judges no grant —
 // so a node behind the company's configuration, or holding no chart yet, still
-// decides a landing. ONE ANSWER, which the committer queues and decides by.
-func (p ChangeProposal) judgesChart() bool {
-	return p.Landed == nil && p.Asker.Kind.readsChart()
+// decides a landing. ONE ANSWER, which the committer queues and decides by and
+// the estate declares the operation's grant by, so the two never disagree
+// about which writes a node behind the company's configuration may decide.
+func (p ChangeProposal) JudgesChart() bool {
+	return p.Landed == nil && (p.Asker.Kind.readsChart() || len(p.mentions()) > 0)
+}
+
+// mentions is the handles p's record names, as its asker sent them.
+func (p ChangeProposal) mentions() []string {
+	switch {
+	case p.Open != nil:
+		return p.Open.Mentions
+	case p.Edit != nil:
+		return p.Edit.Mentions
+	}
+	return nil
 }
 
 // decidedRows is the most rows p's record makes its apply touch: an open's
@@ -324,21 +340,33 @@ func (p ChangeProposal) validFields() error {
 	case p.Edit != nil:
 		return p.Edit.validFields()
 	case p.Draft != nil:
+		if err := stampedRouting("draft", p.Draft.Routing); err != nil {
+			return err
+		}
 		return stampedBy("draft", p.Draft.By)
 	case p.Retarget != nil:
 		if why := branchProblem(p.Retarget.TargetRef); why != "" {
 			return badField("retarget.target_ref", "%s", why)
+		}
+		if err := stampedRouting("retarget", p.Retarget.Routing); err != nil {
+			return err
 		}
 		return stampedBy("retarget", p.Retarget.By)
 	case p.Close != nil:
 		if why := textProblem(p.Close.Reason, MaxCloseReasonBytes, "close's reason"); why != "" {
 			return badField("close.reason", "%s", why)
 		}
+		if err := stampedRouting("close", p.Close.Routing); err != nil {
+			return err
+		}
 		return stampedBy("close", p.Close.By)
 	}
 	if p.Reopen.Head != "" {
 		return badField("reopen.head", "the committer stamps a reopen's head from its snapshot, and an asker "+
 			"sends none")
+	}
+	if err := stampedRouting("reopen", p.Reopen.Routing); err != nil {
+		return err
 	}
 	return stampedBy("reopen", p.Reopen.By)
 }
@@ -379,6 +407,9 @@ func (p ChangeProposal) validOpen() error {
 			return badField(label.field, "%s", why)
 		}
 	}
+	if why := mentionsProblem(o.Mentions); why != "" {
+		return badField("open.mentions", "%s", why)
+	}
 	switch {
 	case o.Head != "":
 		return badField("open.head", "the committer stamps an open's head from its snapshot, and an asker sends none")
@@ -386,7 +417,7 @@ func (p ChangeProposal) validOpen() error {
 		return badField("open.owner", "the committer stamps the change's owner from the proposal's asker, and an "+
 			"asker sends none")
 	}
-	return nil
+	return stampedRouting("open", o.Routing)
 }
 
 // validFields holds a landing to [ChangeProposal.Validate]'s rules: a revision
@@ -409,7 +440,7 @@ func (l *ChangeLanded) validFields() error {
 	if !config.ValidNodeID(l.Node) {
 		return badField("landed.node", "%q is not a node id config admits", l.Node)
 	}
-	return nil
+	return stampedRouting("landed", l.Routing)
 }
 
 // validFields holds an edit to [ChangeProposal.Validate]'s rules.
@@ -434,6 +465,12 @@ func (e *ChangeEdit) validFields() error {
 		if why := workItemProblem(*e.WorkItem); why != "" {
 			return badField("edit.work_item", "%s", why)
 		}
+	}
+	if why := mentionsProblem(e.Mentions); why != "" {
+		return badField("edit.mentions", "%s", why)
+	}
+	if err := stampedRouting("edit", e.Routing); err != nil {
+		return err
 	}
 	return stampedBy("edit", e.By)
 }
@@ -523,6 +560,66 @@ type changeDecision struct {
 	version   int64
 }
 
+// routeChange stamps the routing of the record d forms ([routingFor]) for p, its
+// change row as the record leaves it: an open's and an edit's mentions, held
+// to the deciding chart; a draft's state's, a retarget's, a close's and a
+// reopen's watchers; a landing's authors, whom it merged the change for. A
+// decision that forms no record routes nothing.
+func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRepo, row changeRow,
+	seats SeatRules, d changeDecision) (changeDecision, error) {
+
+	if d.payload == nil || d.refusal != "" {
+		return d, nil
+	}
+	actor, _ := p.Asker.party()
+	c := concerning{repoName: repo.name, change: row, actor: actor, roster: seats.Roster}
+	switch {
+	case p.Open != nil:
+		c.mentions = p.Open.Mentions
+	case p.Edit != nil:
+		c.mentions = p.Edit.Mentions
+		if p.Edit.Title != nil {
+			c.change.title = *p.Edit.Title
+		}
+		switch {
+		case p.Edit.WorkItem != nil:
+			c.change.work = *p.Edit.WorkItem
+		case p.Edit.ClearWorkItem:
+			c.change.work = types.WorkItem{}
+		}
+	case p.Landed != nil:
+		c.authors, c.merged = true, true
+	default:
+		c.watchers = true
+	}
+	r, err := routingFor(ctx, tx, c)
+	if err != nil {
+		return changeDecision{}, err
+	}
+	d.payload = withRouting(d.payload, r)
+	return d, nil
+}
+
+// opened is the change row an open leaves, as its decide reads what it will
+// be: numbered the repository's next, owned by its asker, at its source's
+// head — the number the apply gives it, since the open is decided alone on
+// the repository's subject and nothing moves next_change between its snapshot
+// and its apply.
+func opened(ctx context.Context, tx *sql.Tx, p ChangeProposal) (changeRow, error) {
+	o := p.Open
+	var next int64
+	if err := tx.QueryRowContext(ctx, nextChangeSQL, p.RepoID()).Scan(&next); err != nil {
+		return changeRow{}, fmt.Errorf("code: read the next number of repository %s: %w", p.RepoID(), err)
+	}
+	owner, kind := p.Asker.party()
+	row := changeRow{id: o.ChangeID, repoID: p.RepoID(), number: next, title: o.Title, owner: owner,
+		ownerKind: kind}
+	if o.WorkItem != nil {
+		row.work = *o.WorkItem
+	}
+	return row, nil
+}
+
 // refuse is d refused under code with detail.
 func (d changeDecision) refuse(code ChangeRefusal, detail string) (changeDecision, error) {
 	d.refusal, d.detail = code, detail
@@ -555,7 +652,7 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 		return d.refuse(ChangeRefusalRepoArchived, fmt.Sprintf("repository %s is archived and read-only "+
 			"(code.repos archived: true): its changes are read, and written nothing", repo.name))
 	}
-	if p.judgesChart() && seats.Roster == nil {
+	if p.JudgesChart() && seats.Roster == nil {
 		// THE CALLER'S BUG: the committer hands a seat's write on to the
 		// repository's next committer before deciding it with no chart.
 		return changeDecision{}, fmt.Errorf("code: a seat's change to %s reached the decide with no chart to "+
@@ -563,7 +660,14 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	}
 	grant := GrantOf(p.Asker, repo.grantRef(repoID), seats.Roster)
 	if p.Open != nil {
-		return decideOpen(ctx, tx, p, repo, grant, d)
+		if d, err = decideOpen(ctx, tx, p, repo, grant, d); err != nil || d.payload == nil {
+			return d, err
+		}
+		var row changeRow
+		if row, err = opened(ctx, tx, p); err != nil {
+			return changeDecision{}, err
+		}
+		return routeChange(ctx, tx, p, repo, row, seats, d)
 	}
 	row, found, err := changeRowIn(ctx, tx, p.ChangeID())
 	if err != nil {
@@ -577,7 +681,10 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	if p.Landed != nil {
 		// THE HOME'S OWN, which names no asker: its rules are the rows its
 		// home read, never a grant.
-		return decideLanded(ctx, tx, p, repo, row, named, d)
+		if d, err = decideLanded(ctx, tx, p, repo, row, named, d); err != nil {
+			return d, err
+		}
+		return routeChange(ctx, tx, p, repo, row, seats, d)
 	}
 	if why := mayWrite(p.Asker, row, grant, named); why != "" {
 		return d.refuse(ChangeRefusalNotPermitted, why)
@@ -589,7 +696,10 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 	}
 	switch {
 	case p.Edit != nil:
-		return decideEdit(ctx, tx, p, row, named, d)
+		if d, err = decideEdit(ctx, tx, p, row, named, d); err != nil {
+			return d, err
+		}
+		return routeChange(ctx, tx, p, repo, row, seats, d)
 	case p.Draft != nil:
 		if why, code := notLive(row, named); code != "" {
 			return d.refuse(code, why)
@@ -599,7 +709,10 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 			return d, nil
 		}
 	case p.Retarget != nil:
-		return decideRetarget(ctx, tx, p, repo, row, named, d)
+		if d, err = decideRetarget(ctx, tx, p, repo, row, named, d); err != nil {
+			return d, err
+		}
+		return routeChange(ctx, tx, p, repo, row, seats, d)
 	case p.Close != nil:
 		switch row.state {
 		case ChangeStateMerged:
@@ -609,10 +722,13 @@ func decideChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, seats SeatR
 			return d, nil
 		}
 	default:
-		return decideReopen(ctx, tx, p, repo, row, named, d)
+		if d, err = decideReopen(ctx, tx, p, repo, row, named, d); err != nil {
+			return d, err
+		}
+		return routeChange(ctx, tx, p, repo, row, seats, d)
 	}
 	_, d.payload = p.stamped("")
-	return d, nil
+	return routeChange(ctx, tx, p, repo, row, seats, d)
 }
 
 // decideOpen is an open's rules 1–5 over the repository's row as repo holds it

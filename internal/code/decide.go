@@ -500,7 +500,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	})
 
 	if seats.Roster == nil && slices.ContainsFunc(open, func(i int) bool {
-		return batch[i].Principal.Kind.readsChart()
+		return batch[i].Principal.Kind.readsChart() || batch[i].Change != nil
 	}) {
 		return nil, nil, 0, 0, fmt.Errorf("code: a seat's push to %s reached the decide with no chart to judge "+
 			"it by — the committer hands such a push to the repository's next committer", repoID)
@@ -545,6 +545,9 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 	// changes' rows, as [withinRecord] counts it; carrying is set once a push
 	// is carried, which carries every push after it.
 	rows, carrying := 0, false
+	// room is what the record's entries leave of its bytes for the routings
+	// of the changes they merge and open ([routedEntry]).
+	room := routingRoom{batch: batch, open: open, repoID: repoID, repo: repo, roster: seats.Roster}
 	// THE REPOSITORY AS A GRANT READS IT, from the round's own row: its
 	// owner and its visibility, which a seat's relation is judged on.
 	ref := repo.grantRef(repoID)
@@ -581,6 +584,7 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// THE BOOK ITSELF and taken back where it does not fit ([bookTrial]):
 		// what an entry costs is what its own commands reach.
 		entry := p.entryWith(cmds, quota.day.Label)
+		merged := len(book.writes.merged)
 		book.try()
 		book.move(entry)
 		// AND THE CHANGE IT ASKS FOR, opened in its own entry where its rules
@@ -588,10 +592,11 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		// a branch heading a live change revises that one rather than opens
 		// another — and its rows counted with the record's.
 		var change *ChangeAnswer
+		var opened string
 		if p.Change != nil {
 			entry.Change, change = pushOpen(p, cmds, w, book, repo)
 			if entry.Change != nil {
-				book.open(entry)
+				opened, _ = book.open(entry)
 			}
 		}
 		own := entryRows(entry)
@@ -610,6 +615,25 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 			answers[i].carried, carrying = true, true
 			continue
 		}
+		// AND WHOM IT CONCERNS: the changes it merges and the one it opens,
+		// each routed in this snapshot — carried to lead the next record
+		// where the routings do not fit this one's bytes beside the entries
+		// already in it ([routingRoom]).
+		routings, routeErr := room.route(ctx, tx, book, entry, book.writes.merged[merged:], opened)
+		if routeErr != nil {
+			return nil, nil, 0, 0, routeErr
+		}
+		fits, rest, fitErr := room.fit(i, len(entries) == 0, routings)
+		if fitErr != nil {
+			return nil, nil, 0, 0, fitErr
+		}
+		if !fits {
+			book.takeBack()
+			answers[i].carried, carrying = true, true
+			continue
+		}
+		entry.Routing = room.kept
+		carrying = rest
 		book.keep()
 		rows += own
 		w.apply(p, cmds)

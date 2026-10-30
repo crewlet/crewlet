@@ -252,7 +252,38 @@ func applyReview(ctx context.Context, tx *sql.Tx, at applyContext, r Review) (in
 		return 0, conversationCounts{}, fmt.Errorf("code: add %s to change %s at %s: %w", by, r.ChangeID,
 			at.position, err)
 	}
-	return rows + 1, counts, nil
+	mentioned, err := addMentioned(ctx, tx, at, r.ChangeID, r.Routing)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return rows + 1 + mentioned, counts, nil
+}
+
+// addMentioned makes everybody a record's routing names as mentioned a
+// participant of its change — a watcher, told when the change closes, reopens
+// or moves (concerns.go) — each a person or a seat as the routing says, and
+// answers the rows it wrote. A participant already there stays as it was: a
+// mention moves nobody's standing verdict.
+func addMentioned(ctx context.Context, tx *sql.Tx, at applyContext, changeID string, r *ChangeRouting) (int,
+	error) {
+
+	if r == nil {
+		return 0, nil
+	}
+	rows := 0
+	for _, h := range r.Mentions {
+		kind := PartyAgent
+		if r.Person(h) {
+			kind = PartyPerson
+		}
+		res, err := tx.ExecContext(ctx, addParticipantSQL, changeID, h, string(kind), at.packed)
+		if err != nil {
+			return 0, fmt.Errorf("code: add %s, mentioned, to change %s at %s: %w", h, changeID, at.position, err)
+		}
+		n, _ := res.RowsAffected()
+		rows += int(n)
+	}
+	return rows, nil
 }
 
 // applyFindingResolve answers findings: each that still stands moves to the
@@ -337,8 +368,9 @@ func applyReviewers(ctx context.Context, tx *sql.Tx, at applyContext, p Reviewer
 	return max(rows, 1), nil
 }
 
-// applyComment writes a comment and its author as a participant, counting it
-// and what its body weighs on its conversation.
+// applyComment writes a comment, its author as a participant and everybody it
+// mentions as one too, counting it and what its body weighs on its
+// conversation.
 func applyComment(ctx context.Context, tx *sql.Tx, at applyContext, c Comment) (int, conversationCounts, error) {
 	by, kind := c.By.party()
 	if by == "" {
@@ -373,7 +405,11 @@ func applyComment(ctx context.Context, tx *sql.Tx, at applyContext, c Comment) (
 		return 0, conversationCounts{}, fmt.Errorf("code: add %s to change %s at %s: %w", by, c.ChangeID,
 			at.position, err)
 	}
-	return 2, conversationCounts{comments: 1, textBytes: int64(len(c.Body))}, nil
+	mentioned, err := addMentioned(ctx, tx, at, c.ChangeID, c.Routing)
+	if err != nil {
+		return 0, conversationCounts{}, err
+	}
+	return 2 + mentioned, conversationCounts{comments: 1, textBytes: int64(len(c.Body))}, nil
 }
 
 // applyThreadResolve marks a thread's root resolved or open again, naming who.

@@ -414,11 +414,14 @@ func (q *queued) alone() bool { return q.compaction != nil || q.expunge != nil |
 func (q *queued) judgedByChart() bool {
 	switch {
 	case q.change != nil:
-		return q.change.judgesChart()
+		return q.change.JudgesChart()
 	case q.alone():
 		return false
 	}
-	return q.p.Principal.Kind.readsChart()
+	// A SEAT'S PUSH, whose grant the chart says, and a push that asks for a
+	// change: its options' text is held to the chart for whom it mentions
+	// (concerns.go), as an open's mentions are.
+	return q.p.Principal.Kind.readsChart() || q.p.Change != nil
 }
 
 // behindFor is why this node may not decide q now, or "": a proposal whose
@@ -956,7 +959,7 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 					return false
 				}
 				q.answer <- answered{err: fmt.Errorf("%w: this node holds no chart yet to judge a seat's "+
-					"push by; the repository's next committer decides it", ErrNotServing)}
+					"push or a change's mentions by; the repository's next committer decides it", ErrNotServing)}
 				return true
 			})
 			if len(batch) == 0 {

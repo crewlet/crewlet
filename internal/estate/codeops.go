@@ -122,9 +122,11 @@ var opCodeExpunge = define("code.expunge", opIdempotentWrite, codeDomain, false,
 //
 // A SEAT'S WRITE JUDGES ITS GRANT from the deciding node's chart — whether it
 // may push the branch an open is from, whether it maintains the repository a
-// change it does not own is on — so a node behind the company's configuration
-// answers none of it ([op.judgesGrant]), even asked last; a person's consults
-// no chart. The committer holds the same line itself, as it does for a seat's
+// change it does not own is on — and a write that mentions somebody holds the
+// mentions to it, so a node behind the company's configuration answers none of
+// either ([op.judgesGrant], code.ChangeProposal.JudgesChart, the committer's
+// own rule), even asked last; a person's that mentions nobody consults no
+// chart. The committer holds the same line itself, as it does for a seat's
 // push (code.CommitterOptions.Current).
 var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
 	func(ctx context.Context, b Backend, _ *Actor, p code.ChangeProposal) (code.ChangeResult, error) {
@@ -134,7 +136,7 @@ var opCodeChange = define("code.change", opIdempotentWrite, codeDomain, false,
 		res, err := b.Code.ProposeChange(ctx, p)
 		return res, ranNothing(err)
 	}).keyedBy(code.ChangeProposal.RepoID).answeredOn(laneProposals).
-	judgesGrant(func(p code.ChangeProposal) bool { return p.Asker.Kind == code.PrincipalAgent })
+	judgesGrant(code.ChangeProposal.JudgesChart)
 
 // opCodeConversation is a write of a change's CONVERSATION — an ask for review,
 // a comment or a thread's resolution — asked of the repository's COMMITTING

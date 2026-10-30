@@ -30,8 +30,10 @@ func TestABatchNamesTheChangeItsEarlierPushOpened(t *testing.T) {
 	)
 	if err := e.db.Read(t.Context(), func(tx *sql.Tx) error {
 		var err error
+		// ON THE CHART: a push asking for a change holds its options' text
+		// to it for whom it mentions.
 		entries, answers, rows, _, err = decideBatch(t.Context(), tx, decideRepo, []Proposal{first, second},
-			DefaultLimits(), DefaultDeletedRetention, SeatRules{}, decideAt, &verdicts{})
+			DefaultLimits(), DefaultDeletedRetention, onTheChart, decideAt, &verdicts{})
 		return err
 	}); err != nil {
 		t.Fatalf("decide: %v", err)

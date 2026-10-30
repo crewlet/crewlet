@@ -889,6 +889,19 @@ type PushEntry struct {
 	// apply the push and open no change, and every data node of it would
 	// hold the repository short of the change its pusher was told it opened.
 	Change *ChangeOption `json:"change,omitempty"`
+	// Routing is whom the entry concerns ([ChangeRouting]): one routing for
+	// every change its commands MERGE, by setting a target to a change's
+	// head, in number order, and then the change it OPENS from its options,
+	// each naming the entry's pusher as its actor — STAMPED BY ITS DECIDE, and
+	// none where the entry merges and opens nothing, since a push that moves
+	// no change otherwise concerns nobody (concerns.go). Bounded with the
+	// record's bytes by its decide ([routedEntry]).
+	//
+	// BASE FORMAT, under the condition concerns.go states: once a build
+	// without it has run, it takes {Name: "PushEntry.Routing", Since: 2, Op:
+	// "push", Path: []string{"mutation", "pushes", "routing"}} in
+	// versionedFields, with the companions concerns.go names.
+	Routing []ChangeRouting `json:"routing,omitempty"`
 }
 
 // Principal is who acts on a repository: an operator credential and the

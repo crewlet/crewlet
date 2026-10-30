@@ -271,14 +271,17 @@ func (w ConversationWrite) ChangeID() string {
 // SEAT's — its grant on the repository — every ask of reviewers, whoever
 // asks, since each reviewer is judged by the chart; every revision's facts,
 // whose path owners the chart resolves to the seats they are asked of and
-// judges; and every change's mergeability, whose readiness the chart judges —
-// who may approve it, who maintains its repository ([ReadinessOf]). ONE
-// ANSWER, which the estate declares the operation's grant by and the writer
-// refuses a node that cannot judge one by, so the two never disagree about
-// which writes a node behind the company's configuration may decide.
+// judges; every change's mergeability, whose readiness the chart judges —
+// who may approve it, who maintains its repository ([ReadinessOf]); and every
+// comment and review that MENTIONS somebody, whose mentions the chart holds
+// the handles of and says which are persons (concerns.go). ONE ANSWER, which
+// the estate declares the operation's grant by and the writer refuses a node
+// that cannot judge one by, so the two never disagree about which writes a
+// node behind the company's configuration may decide.
 func (w ConversationWrite) JudgesChart() bool {
 	return w.Revise != nil || w.Mergeability != nil || w.Asker.Kind.readsChart() ||
-		(w.Reviewers != nil && len(w.Reviewers.Request) > 0)
+		(w.Reviewers != nil && len(w.Reviewers.Request) > 0) ||
+		(w.Comment != nil && len(w.Comment.Mentions) > 0) || (w.Review != nil && len(w.Review.Mentions) > 0)
 }
 
 // validFields is every rule of [ConversationWrite.Validate] but the record's
@@ -347,6 +350,9 @@ func (w ConversationWrite) validFields() error {
 	if err := bareUUIDv7("thread_resolve.thread_id", w.ThreadResolve.ThreadID); err != nil {
 		return err
 	}
+	if err := stampedRouting("thread_resolve", w.ThreadResolve.Routing); err != nil {
+		return err
+	}
 	return stampedBy("thread_resolve", w.ThreadResolve.By)
 }
 
@@ -399,6 +405,12 @@ func (r *Review) validFields() error {
 			return badField(label.field, "%s", why)
 		}
 	}
+	if why := mentionsProblem(r.Mentions); why != "" {
+		return badField("review.mentions", "%s", why)
+	}
+	if err := stampedRouting("review", r.Routing); err != nil {
+		return err
+	}
 	return stampedBy("review", r.By)
 }
 
@@ -434,6 +446,9 @@ func (r *FindingResolve) validFields() error {
 			return badField(field+".note", "%s", why)
 		}
 		named[f.FindingID] = true
+	}
+	if err := stampedRouting("finding_resolve", r.Routing); err != nil {
+		return err
 	}
 	return stampedBy("finding_resolve", r.By)
 }
@@ -478,6 +493,9 @@ func (r *ReviewerRequest) validFields() error {
 	if why := textProblem(r.Note, MaxReviewNoteBytes, "request's note"); why != "" {
 		return badField("reviewers.note", "%s", why)
 	}
+	if err := stampedRouting("reviewers", r.Routing); err != nil {
+		return err
+	}
 	return stampedBy("reviewers", r.By)
 }
 
@@ -518,6 +536,12 @@ func (c *Comment) validFields() error {
 	if why := labelProblem(c.TurnID); why != "" {
 		return badField("comment.turn_id", "%s", why)
 	}
+	if why := mentionsProblem(c.Mentions); why != "" {
+		return badField("comment.mentions", "%s", why)
+	}
+	if err := stampedRouting("comment", c.Routing); err != nil {
+		return err
+	}
 	return stampedBy("comment", c.By)
 }
 
@@ -536,6 +560,35 @@ type conversationDecision struct {
 	version   int64
 	position  int64
 	readiness int64
+	// concern is what the record's own op says of whom it concerns, which
+	// [routeConversation] completes and stamps ([routingFor]).
+	concern concerning
+}
+
+// routeConversation stamps the routing of the record d forms ([routingFor]):
+// what its op's decide said of whom it concerns, completed with the change as
+// the snapshot holds it, who wrote it and the deciding chart. A decision that
+// forms no record routes nothing; a comment's or a review's mentions join the
+// change's participants with it, a row each ([ChangeRouting.Mentions]).
+func routeConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster Roster, repoName string,
+	row changeRow, d conversationDecision) (conversationDecision, error) {
+
+	if d.payload == nil || d.refusal != "" {
+		return d, nil
+	}
+	c := d.concern
+	c.repoName, c.change, c.roster = repoName, row, roster
+	c.actor, _ = w.Asker.party()
+	r, err := routingFor(ctx, tx, c)
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	switch {
+	case w.Comment != nil, w.Review != nil:
+		d.rows += len(r.Mentions)
+	}
+	d.payload = withRouting(d.payload, r)
+	return d, nil
 }
 
 // refuse is d refused under code with detail.
@@ -593,11 +646,17 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	case w.Revise != nil:
 		// THE HOME'S OWN, which names no asker: its rules are the facts'
 		// guard and the chart's judgment of the path owners.
-		return decideRevise(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d)
+		if d, err = decideRevise(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d); err != nil {
+			return d, err
+		}
+		return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)
 	case w.Mergeability != nil:
 		// THE HOME'S OWN too: its rules are the merge's guard, and the
 		// chart judges the readiness it stamps.
-		return decideMergeability(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d)
+		if d, err = decideMergeability(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, d); err != nil {
+			return d, err
+		}
+		return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)
 	}
 	asker, kind := w.Asker.party()
 	if kind == "" {
@@ -608,15 +667,20 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 	grant := GrantOf(w.Asker, repo.grantRef(repoID), seats.Roster)
 	switch {
 	case w.Reviewers != nil:
-		return decideReviewers(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, grant, d)
+		d, err = decideReviewers(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, grant, d)
 	case w.Comment != nil:
-		return decideComment(ctx, tx, w, row, named, grant, d)
+		d, err = decideComment(ctx, tx, w, row, named, grant, d)
 	case w.Review != nil:
-		return decideReview(ctx, tx, w, asker, kind, row, named, grant, d)
+		d, err = decideReview(ctx, tx, w, asker, kind, row, named, grant, d)
 	case w.FindingResolve != nil:
-		return decideFindingResolve(ctx, tx, w, asker, kind, row, named, grant, d)
+		d, err = decideFindingResolve(ctx, tx, w, asker, kind, row, named, grant, d)
+	default:
+		d, err = decideThreadResolve(ctx, tx, w, asker, kind, row, named, grant, d)
 	}
-	return decideThreadResolve(ctx, tx, w, asker, kind, row, named, grant, d)
+	if err != nil {
+		return d, err
+	}
+	return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)
 }
 
 // decideReview is a review's rules over row (rules D21 and D22): a LIVE change
@@ -683,6 +747,7 @@ func decideReview(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker st
 			MaxStandingFindings))
 	}
 	r.ReviewID, r.By = ReviewID(w.OpID), w.Asker
+	d.concern = concerning{authors: true, verdict: r.Verdict, mentions: r.Mentions}
 	r.Findings = slices.Clone(r.Findings)
 	for i := range r.Findings {
 		r.Findings[i].ID = FindingID(w.OpID, i)
@@ -734,6 +799,9 @@ func decideFindingResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, 
 		}
 		if f.state != a.Resolution {
 			moved++
+			// THE RAISER IS TOLD its finding was answered — once however
+			// many of theirs the answer moves.
+			d.concern.raisers = append(d.concern.raisers, Reviewer{Handle: f.raiser, Kind: f.raiserKind})
 		}
 	}
 	if moved == 0 {
@@ -898,6 +966,9 @@ func decideReviewers(ctx context.Context, tx *sql.Tx, w ConversationWrite, roste
 		if states[rv.Handle] != ReviewerRequested {
 			after++
 			moved++
+			// ASKED BY THIS RECORD, and so told: a reviewer the change asks
+			// already was told when it was asked.
+			d.concern.requested = append(d.concern.requested, rv)
 		}
 	}
 	for _, h := range r.Withdraw {
@@ -973,13 +1044,16 @@ func decideComment(ctx context.Context, tx *sql.Tx, w ConversationWrite, row cha
 				named, c.FindingID))
 		}
 		c.ThreadID = c.FindingID
+		d.concern.raisers = []Reviewer{{Handle: finding.raiser, Kind: finding.raiserKind}}
 	}
 	if c.Anchor != nil && c.Anchor.Revision > row.revision {
 		return d.refuse(ConversationRefusalUnknownRevision, fmt.Sprintf("%s is at revision %d, and the comment "+
 			"is anchored to revision %d: read the change again", named, row.revision, c.Anchor.Revision))
 	}
+	d.concern.thread, d.concern.mentions = c.ThreadID, c.Mentions
 	d.payload = c
-	// THE COMMENT, ITS AUTHOR AS A PARTICIPANT, and the conversation's row.
+	// THE COMMENT, ITS AUTHOR AS A PARTICIPANT, and the conversation's row —
+	// and a participant row each mention, counted as the routing names them.
 	d.rows = 3
 	return d, nil
 }

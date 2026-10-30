@@ -219,6 +219,9 @@ type Revise struct {
 	// STAMPED BY THE WRITER, for the wakes a record's routing derives.
 	ReReview     []Reviewer `json:"re_review,omitempty"`
 	LeadFallback *Reviewer  `json:"lead_fallback,omitempty"`
+	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
+	// WRITER from its snapshot and chart; an asker sends none.
+	Routing *ChangeRouting `json:"routing,omitempty"`
 }
 
 // MaxReReviewers is the most reviewers one revise asks to look again: the
@@ -434,7 +437,7 @@ func (r *Revise) validFields() error {
 		return badField("revise", "the writer stamps whom the facts ask, skip and wake from its snapshot and its "+
 			"chart, and the home sends none of them")
 	}
-	return nil
+	return stampedRouting("revise", r.Routing)
 }
 
 // touchedProblem refuses a revision's touched paths as a revise carries them:
@@ -580,6 +583,12 @@ func decideRevise(ctx context.Context, tx *sql.Tx, w ConversationWrite, roster R
 		return conversationDecision{}, err
 	}
 	r.Asked, r.SkippedOwners, r.ReReview, r.LeadFallback = j.asked, j.skipped, j.reReview, j.fallback
+	// WHOM THE FACTS CONCERN: the path owners they ask, the reviewers they
+	// ask to look again, and the lead a change nobody may review reaches.
+	d.concern = concerning{pathOwners: j.asked, reReview: j.reReview}
+	if j.fallback != nil {
+		d.concern.lead = *j.fallback
+	}
 	d.payload = r
 	// THE FACTS, A ROW EACH REVIEWER ASKED AND A PARTICIPANT ROW EACH, and
 	// the conversation's own.

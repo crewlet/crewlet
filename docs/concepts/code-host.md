@@ -4532,6 +4532,74 @@ then differ only in files one of them touches — it is the heads' whole diff.
 
 ---
 
+## Who a change wakes
+
+Every record about a change carries **whom it concerns**: who made it, and the
+people and seats each reason it routes under reaches, as the deciding node's
+rows and chart held them when it decided the record. The node that decides
+the record stamps it — the repository's committer for an open, an edit, a
+close, a landing and a push; the change's writer for the conversation and
+the home's facts and merges — through one function, so every writer answers
+the question alike, and whatever tells somebody about the record afterwards
+reads that snapshot and nothing else. The rows move on — a reviewer is
+withdrawn, an author pushes, a thread grows — and an audience derived from
+them minutes later on another node would tell different people about the same
+record.
+
+| Reason | Who hears it | On |
+|---|---|---|
+| `mention` | Every handle the text names that the chart holds — at most 32 a write | An open, an edit, a review, a comment; a push's options |
+| `review_requested` | A reviewer asked who was not asked already; a path owner a revision's facts ask | An ask for review; a revision's facts |
+| `changes_requested` | The change's authors | A review asking for changes |
+| `conflicted` | The change's authors | The merge that **turns** into a conflict — not every recheck that finds it one still |
+| `finding_replied` | The raiser of the finding a comment replies to, or an answer answers | A reply to a finding; an answer to findings |
+| `ready_to_merge` | The change's owner | The mergeability whose stored answer goes from not ready to ready |
+| `merged` | The change's authors | The push that sets the target to the change's head; the home's landing |
+| `review_submitted` | The change's authors | A review that approves or comments |
+| `re_review` | The reviewers whose standing verdict asks for changes on an earlier revision | A revision's first facts |
+| `thread` | Everybody who said something in the thread | A comment |
+| `watcher` | The change's participants: everybody asked, who reviewed, commented or was mentioned in its conversation | A close, a reopen, a retarget, a draft's state |
+| `lead_fallback` | The lead of the repository's owner, when nobody who may review the change is asked | A change's first facts |
+
+- **The order of the table is the precedence**: a handle a record names
+  under two reasons hears under the first — mentioned and watching is told
+  it was mentioned — and once a record, however many changes it names: a
+  push that merges one change and opens another tells somebody named in both
+  once, under the stronger reason. `mention`, `review_requested`,
+  `changes_requested`, `conflicted`, `finding_replied`, `ready_to_merge` and
+  `re_review` **ask** something of whoever hears them; the rest are news to
+  absorb.
+- **Nobody hears of a change they made.** A reviewer is not told of their own
+  review, nor a pusher of the merge their push made — whoever wrote it.
+- **A push that moves no change concerns nobody.** A head move, a close by a
+  deleted source branch and a push to a branch no change uses are what a
+  change's page shows, never what anybody is told; only a merge and an open
+  route.
+- **`ready_to_merge` is announced by one record.** Whether a change may merge
+  ([Merge readiness](#merge-readiness)) reads rows on two subjects — the draft
+  flag and the revisions on the repository's, the approvals and the answers
+  to blockers on the change's — and two records on the two, landing together,
+  are decided from two snapshots that each miss the other: an approval and an
+  undraft that complete the readiness between them would each find it
+  incomplete, and neither would tell anybody. So the change's
+  [mergeability](#mergeability) record — its home's merge, or the refresh
+  that follows any readiness input that moved — is the one that announces it,
+  where the answer it stores goes from not ready to ready.
+- **Each role is bounded**: at most 32 mentions, 32 reviewers asked, and 64
+  of the authors, the participants, a thread's participants or the raisers an
+  answer replies to, each read in its key's order — a change whose audience
+  is larger than that is read in its listings rather than woken.
+
+A mention is resolved against the chart where it is written, and held to the
+deciding node's chart again, which also says who is a person: a write that
+mentions anybody is decided only by a node that holds the company's current
+chart, as a seat's write is. Whoever a comment or a review mentions joins the
+change's participants, and hears what its watchers hear from then on; an
+open's or an edit's mentions are told and join nothing, since those records
+are the repository's and the participants are the change's own.
+
+---
+
 ## A push, end to end
 
 A person pushes with git's own smart HTTP protocol, presenting their own API

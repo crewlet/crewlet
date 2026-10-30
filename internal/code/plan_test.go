@@ -709,6 +709,16 @@ func registeredStatements() map[string]statement {
 			[]string{participantKey + " (change_id=?)"}},
 		"standing asks": {standingAsksSQL, []any{"repo-1-change-000001", MaxReviewersPerChange},
 			[]string{reviewerKey + " (change_id=?)"}},
+		// WHOM A RECORD CONCERNS (concerns.go): a change's authors and its
+		// participants, a range of each key in its order; and a thread's
+		// newest comments, its range of the thread index read back from its
+		// end.
+		"routing authors": {routingAuthorsSQL, []any{"repo-1-change-000001", MaxRoutedParticipants},
+			[]string{authorKey + " (change_id=?)"}},
+		"routing watchers": {routingWatchersSQL, []any{"repo-1-change-000001", MaxRoutedParticipants},
+			[]string{participantKey + " (change_id=?)"}},
+		"thread participants": {threadParticipantsSQL, []any{"repo-1-change-000001", "comment-1",
+			threadParticipantRows}, []string{"code_comments_thread_idx (change_id=? AND thread_id=?)"}},
 		"supersede findings": {supersedeFindingsSQL, []any{string(FindingSuperseded), "seat-0", "agent", 3000,
 			`["finding-1","finding-2"]`}, []string{"SCAN json_each AS j", findingKey + " (id=?)",
 			"INTEGER PRIMARY KEY (rowid=?)"}},
