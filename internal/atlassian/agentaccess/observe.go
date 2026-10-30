@@ -116,6 +116,19 @@ func ownTokens(tokens []atlassian.APIToken, handle string, now time.Time) []ownT
 	return out
 }
 
+// renewWithin is how long before its expiry a token is replaced. Atlassian
+// caps a token at a year and this engine mints for [atlassian.TokenLifetime],
+// so the window is always reached well before the cap.
+const renewWithin = 30 * 24 * time.Hour
+
+// renewDue reports a token that expires inside the renewal window. A token
+// whose expiry Atlassian did not say, or said in a shape this does not read,
+// is not renewed on a guess.
+func renewDue(t ownToken, now time.Time) bool {
+	expiry, err := time.Parse(time.RFC3339, t.Expiry)
+	return err == nil && expiry.Sub(now) < renewWithin
+}
+
 // appliedLanes is the lanes the last sync left on, for an account whose
 // token is gone: the seat was turned off, or somebody revoked the token. The
 // second is a credential to mint, not a lane somebody turned off.
@@ -180,6 +193,12 @@ func (s *session) observe(ctx context.Context, handle string, rec *seataccess.Re
 	if len(own) > 0 {
 		on = own[0].lanes
 	}
+	// GONE, OR ABOUT TO BE: the account holds no live token of this
+	// engine's (revoked, or past its expiry), or its newest lapses inside
+	// the renewal window [TokenLifetime] leaves room for. Whatever is sealed
+	// for the seat is then, or soon will be, refused, so the plan mints a
+	// replacement while a lane is on.
+	gone := len(own) == 0 || renewDue(own[0], s.now())
 	for _, lane := range []seataccess.Lane{seataccess.LaneJira, seataccess.LaneConfluence} {
 		observed := seataccess.Observed{
 			Exists: true, AccountID: account.ID, Account: accountName(account),
@@ -193,7 +212,8 @@ func (s *session) observe(ctx context.Context, handle string, rec *seataccess.Re
 		if rec != nil && rec.Account != nil {
 			observed.CreatedAt = rec.Account.CreatedAt
 		}
-		if len(own) > 0 && rec != nil && rec.Credential != nil {
+		observed.CredentialGone = gone
+		if !gone && rec != nil && rec.Credential != nil {
 			cred := *rec.Credential
 			observed.Credential = &cred
 		}

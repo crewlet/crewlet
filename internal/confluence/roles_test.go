@@ -6,11 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/atlassianhost"
 	"github.com/crewlet/crewlet/internal/confluence"
+	"github.com/crewlet/crewlet/internal/org"
 )
 
 // spaceSite is a fake Confluence Cloud answering by "METHOD /path?query".
@@ -249,5 +251,20 @@ func TestASetOfOperationsRoundTripsAsOneLevel(t *testing.T) {
 	}
 	if _, err := confluence.ParseOperationsLevel("read:space purge:space"); err == nil {
 		t.Fatal("an operation Confluence does not grant was accepted")
+	}
+}
+
+// A PERSONAL SPACE KEEPS ITS CASE in the company's space list too: Confluence
+// matches `~` keys case-sensitively, and an upper-cased one names no space.
+func TestTheCompanysSpacesKeepAPersonalKeysCase(t *testing.T) {
+	t.Parallel()
+	o := &org.Organization{Name: "Acme",
+		Units: []*org.Unit{{Name: "Eng", Space: "eng"}},
+		Roles: []*org.Role{{Name: "SRE", Space: "~alice"}}}
+	if got := confluence.SpacesOf(o); !slices.Equal(got, []string{"ENG", "~alice"}) {
+		t.Fatalf("SpacesOf = %v", got)
+	}
+	if got := confluence.NormalizeSpaceKey(" ~Bob "); got != "~Bob" {
+		t.Fatalf("NormalizeSpaceKey = %q", got)
 	}
 }
