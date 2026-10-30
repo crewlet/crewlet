@@ -34,7 +34,9 @@ func newFakeApp(t *testing.T) *fakeApp {
 	t.Helper()
 	f := &fakeApp{replies: map[string]fakeReply{}, bodies: map[string]map[string]any{}}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := r.Method + " " + r.URL.Path
+		// AN ENTERPRISE BASE IS SERVED UNDER /api/v3, which is what a
+		// company block naming this server's URL derives.
+		key := r.Method + " " + strings.TrimPrefix(r.URL.Path, "/api/v3")
 		if r.URL.RawQuery != "" {
 			key += "?" + r.URL.RawQuery
 		}
@@ -155,8 +157,8 @@ func TestInstallationRepositoriesWalkWithAMetadataTokenAndRevokeIt(t *testing.T)
 		}
 		return `{"total_count":101,"repositories":[` + strings.Join(repos, ",") + `]}`
 	}
-	gh.on("GET /installation/repositories?page=1&per_page=100", 200, page(0, 100))
-	gh.on("GET /installation/repositories?page=2&per_page=100", 200, page(100, 1))
+	gh.on("GET /installation/repositories?per_page=100&page=1", 200, page(0, 100))
+	gh.on("GET /installation/repositories?per_page=100&page=2", 200, page(100, 1))
 	gh.on("DELETE /installation/token", 204, ``)
 
 	repos, err := gh.client(t).InstallationRepositories(t.Context(), 7)
@@ -188,7 +190,7 @@ func TestAFailedListingStillRevokesAndAFailedRevokeIsSaid(t *testing.T) {
 	t.Parallel()
 	gh := newFakeApp(t)
 	gh.on("POST /app/installations/7/access_tokens", 201, `{"token":"ghs_listing"}`)
-	gh.on("GET /installation/repositories?page=1&per_page=100", 502, `{"message":"bad gateway"}`)
+	gh.on("GET /installation/repositories?per_page=100&page=1", 502, `{"message":"bad gateway"}`)
 	gh.on("DELETE /installation/token", 204, ``)
 	if _, err := gh.client(t).InstallationRepositories(t.Context(), 7); err == nil {
 		t.Fatal("a failed listing answered no error")
@@ -199,7 +201,7 @@ func TestAFailedListingStillRevokesAndAFailedRevokeIsSaid(t *testing.T) {
 
 	stuck := newFakeApp(t)
 	stuck.on("POST /app/installations/7/access_tokens", 201, `{"token":"ghs_listing"}`)
-	stuck.on("GET /installation/repositories?page=1&per_page=100", 200,
+	stuck.on("GET /installation/repositories?per_page=100&page=1", 200,
 		`{"total_count":1,"repositories":[{"full_name":"acme/backend"}]}`)
 	repos, err := stuck.client(t).InstallationRepositories(t.Context(), 7)
 	if err == nil || !strings.Contains(err.Error(), "could not be revoked") {

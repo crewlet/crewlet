@@ -435,7 +435,8 @@ func (s *session) applyCreate(ctx context.Context, in seataccess.ApplyInput, sea
 				"GitHub offers no API for it, so a person submits the prepared manifest",
 		}}, nil
 	}
-	obs, err := s.observe(ctx, seat, false)
+	// THE INSTALL IS A PERSON'S CLICK, so its check re-reads GitHub.
+	obs, err := s.observe(ctx, seat, in.Step.Index > 0)
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
@@ -458,7 +459,7 @@ func (s *session) applyLevel(ctx context.Context, in seataccess.ApplyInput, seat
 	if in.Step.By == seataccess.ByCrewlet {
 		return seataccess.StepResult{}, nil
 	}
-	obs, err := s.observe(ctx, seat, false)
+	obs, err := s.observe(ctx, seat, true)
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
@@ -500,7 +501,7 @@ func (s *session) applyRemove(ctx context.Context, in seataccess.ApplyInput, sea
 	// seat-app reconcile clears the record once GitHub reports the app
 	// gone.
 	if strings.TrimSpace(seat.Key) != "" {
-		if obs, err := s.observe(ctx, seat, false); err == nil && !obs.AppExists {
+		if obs, err := s.observe(ctx, seat, true); err == nil && !obs.AppExists {
 			return seataccess.StepResult{Gone: true}, nil
 		}
 	}

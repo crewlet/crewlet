@@ -142,13 +142,23 @@ func (vendor) Steps(
 // token is not refused: its seats are observed, and the steps that need the
 // token say so with the remedy.
 func (vendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
+	s, err := open(ctx, in, nil)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// open is [vendor.Open] through httpClient, nil for the default.
+func open(ctx context.Context, in seataccess.OpenInput, httpClient *http.Client) (*session, error) {
 	if in.Config == nil || in.Config.Integrations.Slack == nil {
 		return nil, fmt.Errorf("slack: %w", integration.ErrNotConfigured)
 	}
 	sessionIn := sessionInput{
-		admin: NewAdmin(nil),
+		admin: NewAdmin(httpClient),
 		base:  strings.TrimSpace(in.WebhookBase),
 		seats: map[string]seatDoc{},
+		http:  httpClient,
 	}
 	if in.Env != nil {
 		sessionIn.resolve = in.Env.Value
@@ -187,8 +197,11 @@ func openConfigToken(ctx context.Context, admin *Admin, in seataccess.OpenInput)
 		return "", errors.New("slack: the app-configuration token needs rotating, " +
 			"which a preview does not do")
 	}
+	// THE RESOLVED PAIR IS THE BOOTSTRAP: the sink answers the same store
+	// in the loop, and where it holds nothing yet (a pair sealed before the
+	// sink was given) the resolver's refresh token is still the live one.
 	return admin.ConfigToken(ctx, SinkConfigTokenStore{Sink: in.Sink, Var: ConfigTokenVar},
-		"", time.Now(), false)
+		held.RefreshToken, time.Now(), false)
 }
 
 // sessionInput is what a session is built from.
