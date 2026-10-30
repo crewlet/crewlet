@@ -211,3 +211,30 @@ func TestLanesOfEveryKind(t *testing.T) {
 		}
 	}
 }
+
+// TWO NODES READ ONE LEDGER: what the node running the sync records, the node
+// serving the access route reads, because both are on the fleet's store.
+func TestTwoNodesShareTheLedger(t *testing.T) {
+	t.Parallel()
+	fleet := memory.NewFleet()
+	syncing, err := seataccess.NewCoordLedger(fleet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serving, err := seataccess.NewCoordLedger(fleet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := seataccess.Record{Kind: integration.KindGitLab, Handle: "sre",
+		Account: &seataccess.Account{ID: "u-7", State: seataccess.AccountActive, CreatedAt: at}}
+	if err := syncing.Put(t.Context(), rec); err != nil {
+		t.Fatal(err)
+	}
+	got, err := serving.Records(t.Context(), integration.KindGitLab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["sre"].Account == nil || got["sre"].Account.ID != "u-7" {
+		t.Fatalf("the serving node read %+v, want the row the syncing node wrote", got["sre"])
+	}
+}

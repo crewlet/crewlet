@@ -334,3 +334,125 @@ func TestSyncAnswersNotConfigured(t *testing.T) {
 		t.Fatalf("Sync = %v, want ErrNotConfigured", err)
 	}
 }
+
+// AN ACCOUNT FROM BEFORE THE LEDGER IS ADOPTED, NEVER DUPLICATED: the seat is
+// on, the vendor shows its account under the engine's naming, and the sync
+// records it and moves it to the document's setting.
+func TestSyncAdoptsAnAccountItHasNoRecordOf(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	before := h.v.Seed("sre", "b", nil, dd)
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	for _, step := range h.v.Applied {
+		if strings.Contains(step, "/create/") {
+			t.Fatalf("applied %v: an existing account was created again", h.v.Applied)
+		}
+	}
+	rec := h.record(t)
+	if rec.Account == nil || !rec.Account.Adopted || rec.Account.ID != before.ID {
+		t.Fatalf("account = %+v, want %s adopted", rec.Account, before.ID)
+	}
+	if got := h.v.Account("sre").Level[dd]; got != "a" {
+		t.Fatalf("level = %q, want the document's a", got)
+	}
+}
+
+// NOTHING IS TAKEN AWAY FROM AN ACCOUNT THE LEDGER DOES NOT RECORD: it may not
+// be this engine's. A seat that is off, or asked to be removed, leaves it be.
+func TestSyncTakesNothingAwayWithoutALedgerRow(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.v.Seed("sre", "a", nil, dd)
+	off := company(&config.RoleDatadog{Enabled: no(), Role: "a"})
+	h.sync(t, off, nil)
+	h.sync(t, off, map[string]seataccess.Ask{"sre": {Remove: true}})
+	if len(h.v.Applied) != 0 {
+		t.Fatalf("applied %v to an account the ledger never recorded", h.v.Applied)
+	}
+	if acct := h.v.Account("sre"); acct == nil || !acct.Enabled[dd] {
+		t.Fatalf("account = %+v, want it untouched", acct)
+	}
+}
+
+// AN UNMIGRATED INTEGRATION IS LEFT ALONE: its document reads every seat as
+// off, so a sync makes no vendor call at all, not even opening a session, and
+// says why.
+func TestAnUnmigratedIntegrationGetsNoVendorCall(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.v.Seed("sre", "a", nil, dd)
+	report, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: h.v, Open: seataccess.OpenInput{Config: company(nil)}, Ledger: h.ledger, Sink: h.sink,
+		Unmigrated: true,
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	if h.v.Opened != 0 || len(h.v.Applied) != 0 {
+		t.Fatalf("opened %d sessions and applied %v, want none", h.v.Opened, h.v.Applied)
+	}
+	if len(report.Findings) != 1 || !strings.Contains(report.Findings[0].Detail, "migration") {
+		t.Fatalf("findings = %+v, want one saying the migration has not finished", report.Findings)
+	}
+}
+
+// A CREDENTIAL SEALED OUTSIDE THE SYNC is the account's: it is recorded and
+// never minted over.
+func TestSyncAdoptsACredentialSealedOutsideIt(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	acct := h.v.Seed("sre", "a", nil, dd)
+	acct.Sealed = &seataccess.Credential{Variable: "DATADOG_APP_KEY_SRE", MintedAt: at}
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	for _, step := range h.v.Applied {
+		if strings.Contains(step, "/mint/") {
+			t.Fatalf("applied %v: a sealed credential was minted over", h.v.Applied)
+		}
+	}
+	if rec := h.record(t); rec.Credential == nil || rec.Credential.Variable != "DATADOG_APP_KEY_SRE" {
+		t.Fatalf("credential = %+v, want the sealed one recorded", rec.Credential)
+	}
+}
+
+// A STEP THAT SEALED ONLY AN ACCOUNT'S OTHER VALUES records no credential: the
+// seat has nothing it can use until the credential itself is sealed.
+func TestSyncRecordsACredentialOnlyWhenTheCredentialItselfIsSealed(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.v = seataccesstest.NewVendor(integration.KindSlack, "BOT_TOKEN", "SIGNING_SECRET")
+	h.v.Levels = map[seataccess.Lane][]seataccess.Level{}
+	h.v.MintOnly = []string{"SIGNING_SECRET"}
+	c := &config.Company{Name: "Acme", Roles: []config.Role{{Name: "SRE", Handle: "sre",
+		Integrations: config.RoleIntegrations{Slack: &config.RoleSlack{Enabled: yes()}}}}}
+	report, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: h.v, Open: seataccess.OpenInput{Config: c}, Ledger: h.ledger, Sink: h.sink,
+	})
+	if err != nil {
+		t.Fatalf("Sync: %v (findings %+v)", err, report.Findings)
+	}
+	rec, _ := h.ledger.Record(integration.KindSlack, "sre")
+	if rec.Credential != nil {
+		t.Fatalf("credential = %+v, want none until the bot token is sealed", rec.Credential)
+	}
+	if _, ok := h.sink.Held("SLACK_SIGNING_SECRET_SRE"); !ok {
+		t.Fatal("the signing secret the step minted was not sealed")
+	}
+}
+
+// AN OP'S LATER STEP IS HANDED WHAT ITS EARLIER STEPS DID, and the outcome
+// carries the vendor's sentence for what each step actually did.
+func TestAStepIsHandedItsOpsEarlierResults(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	h.v.StepsPerOp = map[seataccess.Op]int{seataccess.OpCreate: 2}
+	h.v.Did = map[seataccess.Op]string{seataccess.OpCreate: "Created crewlet-sre with Datadog Read Only Role"}
+	h.sync(t, company(&config.RoleDatadog{Enabled: yes(), Role: "a"}), nil)
+	if !slices.Equal(h.v.Priors, []int{0, 1}) {
+		t.Fatalf("priors = %v, want the second step handed the first's result", h.v.Priors)
+	}
+	for _, step := range h.record(t).Lanes[dd].Sync.Steps {
+		if step.Text != "Created crewlet-sre with Datadog Read Only Role" {
+			t.Errorf("step text = %q, want the vendor's sentence", step.Text)
+		}
+	}
+}
