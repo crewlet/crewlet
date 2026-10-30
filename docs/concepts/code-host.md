@@ -2076,8 +2076,8 @@ box's lifetime, and reads the attempt's row:
 | What happens | How the attempt ends |
 |---|---|
 | The command exits 0 | `passed`, its summary alone |
-| The command exits non-zero | `failed`, with the last 16 KiB of its output |
-| The command runs past its timeout — the file's `timeout_seconds`, held to `code.checks.max_timeout_seconds`, from the command's start | `failed` `timed_out`, its box closed: the timeout is the check's own, so running past it measured the commit |
+| The command exits non-zero | `failed`, with the failures its reports name, the last 16 KiB of its output and its kept log |
+| The command runs past its timeout — the file's `timeout_seconds`, held to `code.checks.max_timeout_seconds`, from the command's start | `failed` `timed_out`, with its tail and its log, its box closed: the timeout is the check's own, so running past it measured the commit |
 | The box could not be made, or stopped answering for four polls in a row | `errored` `box_failed` |
 | A setup step failed — the git floor, the checkout — or a named secret resolved to nothing | `errored` `setup_failed` |
 | The file names a cell the company does not allow, or a secret it does not declare | `errored` `defs_invalid`, with no box |

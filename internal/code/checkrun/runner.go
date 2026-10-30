@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -51,6 +53,15 @@ type Boxes interface {
 // valid for timeout and code.CheckBoxGrace more; "" is none minted.
 type Tokens interface {
 	Mint(attempt code.CheckKey, repo string, timeout time.Duration) string
+}
+
+// Uploader stores a failed run's kept log as one object — the fleet's object
+// store (objstore.Store) satisfies it: at most limit bytes of r under a key
+// minted for it, answered with what the attempt's code_check_logs row names it
+// by, and objstore.ErrFull where the store has no room, which the ending then
+// goes without.
+type Uploader interface {
+	Put(ctx context.Context, r io.Reader, limit int64, m objstore.PutMeta) (objstore.Object, error)
 }
 
 // Nudges is the code log's watch as a runner hears of new check records — the
@@ -132,8 +143,8 @@ func Production() Timing {
 	return Timing{Poll: CheckPoll, Stagger: ClaimStagger, Walk: WalkGap, Backstop: WalkBackstop}
 }
 
-// Options build a [Runner]. Every field but Nudges, Faults, Metrics, Logger
-// and Now is required, and New refuses a missing one by name.
+// Options build a [Runner]. Every field but Logs, Nudges, Faults, Metrics,
+// Logger and Now is required, and New refuses a missing one by name.
 type Options struct {
 	// NodeID is this node: the runner every claim names, and the node a
 	// repository's git order is searched for.
@@ -156,6 +167,9 @@ type Options struct {
 	// Slots is how many checks this node runs at once in container cells:
 	// git.max_checks as config.Git.MaxChecksFor resolved it, 0 none.
 	Slots int
+	// Logs stores a failed run's log; nil keeps none, and a failed run's
+	// ending carries its tail and its failures alone.
+	Logs Uploader
 	// Timing is the runner's cadences; the zero value is [Production].
 	Timing Timing
 	// Nudges is the code log's watch, nil for none — the backstop walks.

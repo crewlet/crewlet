@@ -54,12 +54,19 @@ func (e *Engine) buildChecks(nodeID string, boot *config.Bootstrap, home *codeho
 			"the fleet's other git nodes run them, and code_checks_backlog names a fleet where none does")
 		return nil, nil
 	}
-	return checkrun.New(checkrun.Options{
+	o := checkrun.Options{
 		NodeID: nodeID, Estate: seam, Order: e.router, Boxes: e.checkBoxes, Company: e.checkCompany,
 		Tokens: checkTokens{tokens: e.checkTokens}, GitBase: e.boxGitURL,
 		Slots: boot.Git.MaxChecksFor(runtime.GOMAXPROCS(0)), Timing: checkrun.Production(),
 		Nudges: checkNudges{nudges: codeNudges{log: codeLog.log, runner: codeLog.runner}}, Metrics: e.metrics,
-	})
+	}
+	// A FAILED RUN'S LOG goes to the fleet's object store, which the code
+	// host's own build has already required (store.objects): one object a
+	// failed run, named by its attempt's code_check_logs row.
+	if objects := e.Objects(); objects != nil {
+		o.Logs = objects
+	}
+	return checkrun.New(o)
 }
 
 // checkBoxes is this node's CURRENT sandbox catalogue, read at every walk and

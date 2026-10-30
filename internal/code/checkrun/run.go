@@ -1,18 +1,20 @@
 package checkrun
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -37,10 +39,26 @@ const LostPolls = 4
 // home's sweep ends it runner_lost; SweepPolls counts this patience in.
 const FinishPolls = 2
 
-// checkDir is the directory under a box's home the run's output and exit
-// status are written to — never inside the checkout, which the check's own
-// command may clean.
-const checkDir = "/.crewlet-check"
+// The files of a run, in a directory of the box's home — never inside the
+// checkout, which the check's own command may clean: its output, its exit
+// status, the summary its command may write ($CREWLET_CHECK_SUMMARY), and the
+// copies of its reports the command's wrapper takes once it ends.
+//
+// AT sandbox.DefaultHome, NEVER A BOX'S OWN Home: the summary's path is in the
+// box's environment, which is fixed before the box exists, and the two cells
+// a check runs in — a container and an e2b box — both keep their home there.
+const (
+	checkHome   = sandbox.DefaultHome + "/.crewlet-check"
+	outputFile  = checkHome + "/output"
+	exitFile    = checkHome + "/exit"
+	summaryFile = checkHome + "/summary"
+	junitFile   = checkHome + "/junit.xml"
+	sarifFile   = checkHome + "/report.sarif"
+)
+
+// logContentType is a kept log's media type: a run's output as its command
+// wrote it, read as text.
+const logContentType = "text/plain; charset=utf-8"
 
 // run is one claimed attempt, from its box to its ending: on the runner's own
 // goroutine, under its life. It records an ending on every path but two: the
@@ -209,8 +227,8 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *cod
 
 // checkEnv is what the box is told of its check (config.ReservedCheckEnv):
 // the repository's name, the commit, the base its diff is read from where it
-// has one, the check's name and attempt, and where it reads its commit
-// without a clone.
+// has one, the check's name and attempt, where it reads its commit without a
+// clone, and the file its command may write its summary to.
 func (a *attempt) checkEnv() map[string]string {
 	env := map[string]string{
 		"CREWLET_CHECK_REPO":    a.c.Repo,
@@ -218,6 +236,7 @@ func (a *attempt) checkEnv() map[string]string {
 		"CREWLET_CHECK_NAME":    a.c.Name,
 		"CREWLET_CHECK_ATTEMPT": strconv.Itoa(a.c.Attempt),
 		"CREWLET_CHECK_API":     a.r.apiBase + "/" + a.c.Repo,
+		"CREWLET_CHECK_SUMMARY": summaryFile,
 	}
 	if a.c.Base != "" {
 		env["CREWLET_CHECK_BASE"] = a.c.Base
@@ -248,26 +267,31 @@ func (a *attempt) nameBox(ctx context.Context, box string) bool {
 	return false
 }
 
-// paths are where the box's command writes its output and its exit status.
-func paths(box sandbox.Sandbox) (output, exit string) {
-	dir := box.Home() + checkDir
-	return dir + "/output", dir + "/exit"
-}
-
 // wrapped is the check's command as the box runs it, detached: in its
-// checkout where it has one, its output to one file and its exit status to
-// another, the status written whole by a rename so a poll never reads half of
-// one.
-func (a *attempt) wrapped(box sandbox.Sandbox) string {
-	output, exit := paths(box)
-	dir := box.Home() + checkDir
-	run := "sh -c " + sandbox.ShellQuote(a.c.Def.Run)
-	if !a.c.Def.Checkout.None {
-		run = "cd " + sandbox.ShellQuote(a.c.Repo) + " && " + run
-	}
+// checkout where it has one, its output to one file; and once it ends, the
+// reports its definition names copied beside the output — read where the
+// command left them, relative to its checkout — and its exit status written
+// whole by a rename, LAST, so a poll that finds the status finds every report
+// copied. What a previous run of the box left is removed first, so nothing
+// read is another attempt's.
+func (a *attempt) wrapped() string {
 	q := sandbox.ShellQuote
-	return "mkdir -p " + q(dir) + " && { { " + run + "; } > " + q(output) + " 2>&1 < /dev/null; echo \"$?\" > " +
-		q(exit+".part") + " && mv " + q(exit+".part") + " " + q(exit) + "; }"
+	run := "sh -c " + q(a.c.Def.Run)
+	if !a.c.Def.Checkout.None {
+		run = "cd " + q(a.c.Repo) + " && " + run
+	}
+	var copies strings.Builder
+	for _, report := range []struct{ from, to string }{
+		{a.c.Def.Report.JUnit, junitFile}, {a.c.Def.Report.SARIF, sarifFile},
+	} {
+		if report.from != "" {
+			copies.WriteString("cp -f -- " + q(report.from) + " " + q(report.to) + " 2>/dev/null; ")
+		}
+	}
+	return "mkdir -p " + q(checkHome) + " && rm -f " + q(outputFile) + " " + q(exitFile) + " " + q(summaryFile) +
+		" " + q(junitFile) + " " + q(sarifFile) + " && { { " + run + "; } > " + q(outputFile) +
+		" 2>&1 < /dev/null; s=$?; " + copies.String() + "echo \"$s\" > " + q(exitFile+".part") + " && mv " +
+		q(exitFile+".part") + " " + q(exitFile) + "; }"
 }
 
 // command starts the check's command and polls it to its end: its exit, its
@@ -275,7 +299,7 @@ func (a *attempt) wrapped(box sandbox.Sandbox) string {
 func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*code.CheckFinished, string) {
 	r := a.r
 	opID := statelog.NewOpID(r.now(), "code_check_end")
-	job, err := box.StartBackground(ctx, a.wrapped(box), sandbox.ExecOptions{})
+	job, err := box.StartBackground(ctx, a.wrapped(), sandbox.ExecOptions{})
 	if err != nil {
 		return a.ended(code.CheckStateErrored, code.CheckReasonBoxFailed, nil,
 			"its command could not be started in its box: "+err.Error()), opID
@@ -316,11 +340,11 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*code.Check
 		}
 		lost = 0
 		if !now.Before(deadline) {
-			// PAST ITS OWN TIMEOUT: a measurement of the commit, failed.
-			tail := a.tail(ctx, box)
+			// PAST ITS OWN TIMEOUT: a measurement of the commit, failed —
+			// read, its log kept, before its box is closed.
 			f := a.ended(code.CheckStateFailed, code.CheckReasonTimedOut, nil,
 				fmt.Sprintf("ran past its %s timeout and was stopped", a.timeout))
-			f.Tail = tail
+			a.failed(ctx, box, f, nil)
 			return f, opID
 		}
 		// THE KEEPALIVE: the box's TTL held at the check's own end and the
@@ -332,11 +356,13 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*code.Check
 	}
 }
 
-// exited is the ending of a command that has ended: passed for status 0,
-// failed with its output's tail for any other — and errored box_failed where
-// it left no status, which only the box's own end leaves.
+// exited is the ending of a command that has ended — passed for status 0,
+// failed for any other, and errored box_failed where it left no status, which
+// only the box's own end leaves — with its SUMMARY: the one its command wrote
+// to $CREWLET_CHECK_SUMMARY, else what its reports say, else its exit and how
+// long it ran. A failed run carries besides the failures its reports name,
+// the last of its output and its kept log; a passed one its summary alone.
 func (a *attempt) exited(ctx context.Context, box sandbox.Sandbox, began time.Time) *code.CheckFinished {
-	_, exitFile := paths(box)
 	raw, err := box.ReadFile(ctx, exitFile)
 	status, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
 	if err != nil || convErr != nil {
@@ -346,46 +372,162 @@ func (a *attempt) exited(ctx context.Context, box sandbox.Sandbox, began time.Ti
 		}
 		return a.ended(code.CheckStateErrored, code.CheckReasonBoxFailed, nil, why)
 	}
-	took := a.r.now().Sub(began).Round(time.Second)
+	fs, unread := a.reports(ctx, box)
+	summary := a.summary(ctx, box, status, a.r.now().Sub(began).Round(time.Second), fs, unread)
 	if status == 0 {
-		return a.ended(code.CheckStatePassed, code.CheckReasonExit, &status,
-			fmt.Sprintf("exited 0 after %s", took))
+		return a.ended(code.CheckStatePassed, code.CheckReasonExit, &status, summary)
 	}
-	f := a.ended(code.CheckStateFailed, code.CheckReasonExit, &status,
-		fmt.Sprintf("exited %d after %s", status, took))
-	f.Tail = a.tail(ctx, box)
+	f := a.ended(code.CheckStateFailed, code.CheckReasonExit, &status, summary)
+	a.failed(ctx, box, f, fs)
 	return f
+}
+
+// failed fills a failed run's ending with what it carries beyond its summary:
+// the failures its reports named (fs, nil where none were read), the last
+// CheckTailBytes of its output, and its log — the output's last
+// MaxCheckLogBytes, stored as one object the attempt's code_check_logs row
+// names. A log that could not be stored — the object store full, or failing —
+// is said in the summary, and the ending recorded without it.
+func (a *attempt) failed(ctx context.Context, box sandbox.Sandbox, f *code.CheckFinished, fs *failures) {
+	if fs != nil {
+		f.Failures, f.FailuresOmitted = fs.kept, fs.omitted
+	}
+	f.Tail = a.tail(ctx, box)
+	log, why := a.keepLog(ctx, box)
+	if why != "" {
+		f.Summary = summaryOf(f.Summary + " (" + why + ")")
+	}
+	f.Log = log
+}
+
+// reports reads the copies of the run's JUnit and SARIF reports, each at most
+// sandbox.MaxFileBytes, into one list of failures — nil where the check names
+// neither, or neither was written — and says, for each one named and not
+// read, why.
+func (a *attempt) reports(ctx context.Context, box sandbox.Sandbox) (*failures, []string) {
+	def := a.c.Def
+	if def.Report.JUnit == "" && def.Report.SARIF == "" {
+		return nil, nil
+	}
+	fs := newFailures()
+	var unread []string
+	read := func(named, file, kind string, parse func([]byte) error) {
+		if named == "" {
+			return
+		}
+		raw, err := box.ReadFile(ctx, file)
+		switch {
+		case err != nil:
+			unread = append(unread, fmt.Sprintf("its %s report %s could not be read: %v", kind, named, err))
+		case len(raw) == 0:
+			unread = append(unread, fmt.Sprintf("it wrote no %s report at %s", kind, named))
+		default:
+			if err := parse(raw); err != nil {
+				unread = append(unread, fmt.Sprintf("its %s report %s: %v", kind, named, err))
+			}
+		}
+	}
+	read(def.Report.JUnit, junitFile, "JUnit", func(raw []byte) error { return readJUnit(bytes.NewReader(raw), fs) })
+	read(def.Report.SARIF, sarifFile, "SARIF", func(raw []byte) error {
+		return readSARIF(bytes.NewReader(raw), a.c.Repo, fs)
+	})
+	return fs, unread
+}
+
+// summary is the ending's summary: the file the command wrote to
+// $CREWLET_CHECK_SUMMARY where it wrote one — the check's own words, which
+// say what it measured better than anything the runner reads off it — else
+// what its reports say, else its exit and how long it ran; with, after it,
+// what of its reports could not be read.
+func (a *attempt) summary(ctx context.Context, box sandbox.Sandbox, status int, took time.Duration, fs *failures,
+	unread []string) string {
+
+	var s string
+	if raw, err := box.ReadFile(ctx, summaryFile); err == nil {
+		s = strings.TrimSpace(string(raw))
+	}
+	if s == "" && fs != nil {
+		var said []string
+		if fs.tests >= 0 {
+			said = append(said, fmt.Sprintf("%d of %d tests failed", fs.failed, fs.tests))
+		}
+		if fs.results >= 0 {
+			said = append(said, fmt.Sprintf("%d findings at error or warning", fs.results))
+		}
+		if len(said) > 0 {
+			s = strings.Join(said, "; ") + fmt.Sprintf(" (exited %d after %s)", status, took)
+		}
+	}
+	if s == "" {
+		s = fmt.Sprintf("exited %d after %s", status, took)
+	}
+	if len(unread) > 0 {
+		s += " — " + strings.Join(unread, "; ")
+	}
+	return summaryOf(s)
 }
 
 // tail is the last CheckTailBytes of the command's output, valid UTF-8 — the
 // bytes no character is whole in dropped — "" where it cannot be read.
 func (a *attempt) tail(ctx context.Context, box sandbox.Sandbox) string {
-	output, _ := paths(box)
-	t, err := box.ReadTail(ctx, output, code.CheckTailBytes)
+	t, err := box.ReadTail(ctx, outputFile, code.CheckTailBytes)
 	if err != nil {
 		return ""
 	}
 	return strings.ToValidUTF8(string(t.Data), "")
 }
 
+// keepLog stores the last MaxCheckLogBytes of the run's output as one object
+// through the runner's Logs, answering what the ending names it by — nil and
+// "" for a run with no output or a runner with no store, nil and why for one
+// that could not be stored. STREAMED from the box, its earlier bytes read and
+// dropped, so a run's output of any size costs the runner a buffer's memory,
+// never the output's.
+func (a *attempt) keepLog(ctx context.Context, box sandbox.Sandbox) (*code.CheckLog, string) {
+	r := a.r
+	if r.o.Logs == nil {
+		return nil, ""
+	}
+	end, err := box.ReadTail(ctx, outputFile, 0)
+	if err != nil {
+		return nil, "its log could not be read: " + err.Error()
+	}
+	if end.Size == 0 {
+		return nil, ""
+	}
+	rc, err := box.OpenFile(ctx, outputFile)
+	if err != nil {
+		return nil, "its log could not be read: " + err.Error()
+	}
+	defer func() { _ = rc.Close() }()
+	if skip := end.Size - code.MaxCheckLogBytes; skip > 0 {
+		if _, err := io.CopyN(io.Discard, rc, skip); err != nil {
+			return nil, "its log could not be read: " + err.Error()
+		}
+	}
+	o, err := r.o.Logs.Put(ctx, io.LimitReader(rc, code.MaxCheckLogBytes), code.MaxCheckLogBytes,
+		objstore.PutMeta{ContentType: logContentType})
+	switch {
+	case errors.Is(err, objstore.ErrFull):
+		return nil, "its log was not kept: the object store is full"
+	case err != nil:
+		r.log.WarnContext(ctx, "code_check_log_unkept", "repo_id", a.c.RepoID, "check", a.c.Name,
+			"attempt", a.c.Attempt, "error", err.Error())
+		return nil, "its log could not be stored"
+	}
+	return &code.CheckLog{Object: o.Key, Hash: o.Hash, Size: o.Size}, ""
+}
+
 // summaryOf is s cut to CheckSummaryBytes at a character's boundary, its
 // invalid bytes dropped.
 func summaryOf(s string) string {
-	s = strings.ToValidUTF8(s, "")
-	if len(s) <= code.CheckSummaryBytes {
-		return s
-	}
-	cut := code.CheckSummaryBytes
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut]
+	return cut(strings.ToValidUTF8(s, ""), code.CheckSummaryBytes)
 }
 
 // finish records ending f under opID, asked again while the checks writer or
-// the log decided nothing — busy, unavailable, an error — a quarter poll
-// apart for at most FinishPolls polls: past it the attempt stays as the rows hold it, for the
-// home's sweep.
+// the log decided nothing — busy, unavailable, an error — a quarter poll apart
+// for at most FinishPolls polls: past it the attempt stays as the rows hold
+// it, for the home's sweep.
 func (r *Runner) finish(ctx context.Context, f code.CheckFinished, opID string) {
 	give := time.Now().Add(FinishPolls * r.timing.Poll)
 	for {

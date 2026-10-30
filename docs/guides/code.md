@@ -412,6 +412,50 @@ catalogue ([Who runs a check](../concepts/code-host.md#who-runs-a-check)), but
 nothing queues one yet in this release: the file is defined and validated
 ([What it does not do yet](../concepts/code-host.md#what-it-does-not-do-yet)).
 
+## Reading a failed check
+
+A check that fails says why in four places, each on its attempt — read whole
+with `code.read`'s `check` ([Reading a repository's
+checks](../concepts/code-host.md#reading-a-repositorys-checks)):
+
+1. **Its summary**, the line you read first. Write it yourself: a check's
+   command is told a file in `$CREWLET_CHECK_SUMMARY`, and whatever it writes
+   there — up to 4 KiB, a paragraph — is the summary, over anything the engine
+   could say. Otherwise the summary is what the check's reports count (`12 of
+   340 tests failed`, `5 findings at error or warning`), and failing that its
+   exit status and how long it ran (`exited 2 after 3m12s`). A report that was
+   named and not read is said after it.
+
+   ```bash
+   # in the check's command
+   go test ./... 2>&1 | tee out/test.log
+   echo "$(grep -c '^--- FAIL' out/test.log) tests failed" > "$CREWLET_CHECK_SUMMARY"
+   ```
+
+2. **Its failures**: what the reports its file names (`report: {junit: …,
+   sarif: …}`, paths in its checkout) say failed, read once its command ends —
+   each a test id, a file and a line, and a message of up to 2 KiB: a JUnit
+   case's `<failure>` or `<error>` with its classname and name, and a SARIF
+   result at level `error` or `warning` with its rule. At most **200** of them,
+   in the reports' own order, within 64 KiB together; the rest are counted, not
+   listed. A report is read up to 32 MiB.
+
+3. **Its tail**: the last 16 KiB of its output, which is where a build that
+   failed before any test ran says why.
+
+4. **Its log**: the last 64 MiB of its output, kept as one object in the
+   fleet's object store and read a page at a time — never in a row. A passed
+   check keeps its summary alone, so nothing of a green run is stored. Where
+   the object store has no room, the check ends without its log and its
+   summary says so; its failures and its tail are kept either way.
+
+A check that ran past its `timeout_seconds` is **failed** `timed_out` — the
+time is the check's own, so it measured the commit — with its tail and its
+log. One that ended **errored** measured nothing: its box or its setup failed
+(`box_failed`, `setup_failed`), or its runner was lost (`runner_lost`), and
+the engine queues it again, up to its third attempt; a file naming a cell or a
+secret the company does not allow is `defs_invalid`, and is not queued again.
+
 ## What your seats read
 
 Nothing to set up: once the company hosts code, every seat reads the
