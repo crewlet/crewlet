@@ -138,7 +138,8 @@ type PriorRevision func() (*Company, error)
 // renamed or ambiguous, or no prior at all — is left standing, and the
 // validation that follows names its field.
 func LoadCompany(path string, prior PriorRevision) (*Company, error) {
-	return loadCompanyFile(path, prior, (*Company).Validate)
+	file, err := loadCompanyFile(path, prior, (*Company).Validate, false)
+	return file.Company, err
 }
 
 // LoadCompanyToRun reads Tier B from a YAML file that is RUN or acted on
@@ -165,18 +166,87 @@ func LoadCompany(path string, prior PriorRevision) (*Company, error) {
 // redacted one its API serves — pass nil, and a mask in the file is refused
 // by name.
 func LoadCompanyToRun(path string, prior PriorRevision) (*Company, error) {
-	return loadCompanyFile(path, prior, (*Company).ValidateRunnable)
+	file, err := loadCompanyFile(path, prior, (*Company).ValidateRunnable, false)
+	return file.Company, err
+}
+
+// CompanyFile is a Tier B file as `crewlet run` seeds from it
+// ([LoadCompanySeed]): the company it describes, and the refusal the keys
+// this build retired earn it.
+type CompanyFile struct {
+	// Company is the file's company, held to the runnable rules.
+	Company *Company
+
+	// Retired is the refusal [LoadCompanyToRun] gives the same file, and nil
+	// for a file that carries no retired key. Where it is set, the retired
+	// keys ([ErrRemovedField]) were the only thing wrong with how the file
+	// is written, and Company is the file read WITHOUT them and held to
+	// every other rule. Such a company is never written as a revision: the
+	// caller keeps this refusal until it knows whether the file is written
+	// at all, and returns it, unchanged, where it would be.
+	Retired error
+}
+
+// LoadCompanySeed is [LoadCompanyToRun] for `crewlet run`'s -company seed,
+// which may be a file written before this build retired a key it carries.
+//
+// # Refused only where it would be written
+//
+// Most boots write nothing from the file: a company the store already holds
+// outranks it, and the node starts on that company. A deployment upgraded to
+// a build that retired a key still carries the key in its company.yaml, and
+// refusing the file there refused the boot of every such deployment, while
+// the stored company it would start on reads without the key and is migrated
+// by the engine it starts. So a file whose ONLY problem is retired keys loads,
+// read without them, and comes back with the refusal it earned set aside
+// ([CompanyFile.Retired]). Any other problem in the file still fails it,
+// whether the parser found it beside a retired key or a rule found it in the
+// file read without one.
+func LoadCompanySeed(path string, prior PriorRevision) (CompanyFile, error) {
+	return loadCompanyFile(path, prior, (*Company).ValidateRunnable, true)
 }
 
 // loadCompanyFile reads and parses a Tier B file, restores what a redacted
 // read masked from prior, then holds it to validate, naming the file in every
 // failure.
-func loadCompanyFile(path string, prior PriorRevision, validate func(*Company) error) (*Company, error) {
+//
+// setAside is whether a file whose only parse failures are retired keys is
+// read without them, its refusal handed back beside the company rather than
+// returned ([LoadCompanySeed]).
+func loadCompanyFile(path string, prior PriorRevision, validate func(*Company) error,
+	setAside bool) (CompanyFile, error) {
+
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("company config %s: %w", path, err)
+		return CompanyFile{}, fmt.Errorf("company config %s: %w", path, err)
 	}
-	cfg, err := ParseCompanyDocument(data)
+	file, err := readCompanyFile(data, prior, validate, setAside)
+	if err != nil {
+		return CompanyFile{}, fmt.Errorf("company config %s: %w", path, err)
+	}
+	if file.Retired != nil {
+		file.Retired = fmt.Errorf("company config %s: %w", path, file.Retired)
+	}
+	return file, nil
+}
+
+// readCompanyFile is [loadCompanyFile] over the file's bytes.
+func readCompanyFile(data []byte, prior PriorRevision, validate func(*Company) error,
+	setAside bool) (CompanyFile, error) {
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return CompanyFile{}, syntaxFault(err)
+	}
+	cfg, err := ParseCompanyNode(&doc)
+	// THE RETIRED KEYS ARE SET ASIDE ONLY WHEN THEY ARE ALL THE PARSE
+	// REFUSED, and the file is parsed again without them, so every rule
+	// below judges what is left of it as it judges any file.
+	var retired error
+	if err != nil && setAside && setAsideRemoved(&doc, err) {
+		retired = err
+		cfg, err = ParseCompanyNode(&doc)
+	}
 	if err == nil && prior != nil && len(cfg.UnresolvedMasks()) > 0 {
 		// RESTORED BEFORE THE RULES, as the config surface restores a
 		// document sent back to it: a masked credential is judged as the
@@ -193,9 +263,15 @@ func loadCompanyFile(path string, prior PriorRevision, validate func(*Company) e
 		err = validate(cfg)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("company config %s: %w", path, err)
+		// A FILE THAT FAILS IS REFUSED WHOLE: the retired keys set aside
+		// above are named beside what failed once they were, so one edit
+		// can correct both.
+		if retired != nil {
+			err = errors.Join(retired, err)
+		}
+		return CompanyFile{}, err
 	}
-	return cfg, nil
+	return CompanyFile{Company: cfg, Retired: retired}, nil
 }
 
 // ParseCompany decodes and validates Tier B from bytes.

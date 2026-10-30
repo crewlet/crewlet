@@ -149,7 +149,7 @@ func (idx *bufferIndex) typeFault(line string) *Fault {
 		// A REMOVED KEY GETS ITS OWN MESSAGE, naming what replaced it,
 		// rather than a spelling check no spelling passes.
 		if replacement, removed := removedKeys[removedKey(m[3], m[2])]; removed {
-			return &Fault{Kind: ErrUnknownField, pos: pos, Detail: replacement}
+			return &Fault{Kind: ErrRemovedField, pos: pos, Detail: replacement}
 		}
 		return &Fault{Kind: ErrUnknownField, pos: pos, Detail: fmt.Sprintf(
 			"%q isn't a setting. Check the spelling and the block it's under", name)}

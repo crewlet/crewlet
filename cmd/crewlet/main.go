@@ -433,6 +433,14 @@ type tierBSeed struct {
 	// (`api.auth.company_writers`, ADR-0030): Path names the file, which
 	// was never read, and Company is nil. See [managedSeed].
 	Managed bool
+
+	// Retired is the refusal a -company file earns for the keys this build
+	// retired, nil where it carries none ([config.CompanyFile.Retired]):
+	// Company is then the file read without them. A STALE FILE, refused
+	// only where it would be written ([importSeed]); where a company that
+	// exists outranks it, the node starts on that company and says so
+	// ([seedOutranked]).
+	Retired error
 }
 
 // loadForRun reads Tier A, and Tier B as the seed `run` will reconcile.
@@ -529,6 +537,12 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
 	// THE RUNNABLE RULES ONLY. Most boots import nothing from this file: see
 	// [config.LoadCompanyToRun]. Where the file IS imported, seedCompany
 	// holds it to the admission rules first.
+	//
+	// -import-company is ALWAYS imported, so a key this build retired is
+	// refused here, as it always was. A -company file is imported only where
+	// no company exists, so one whose only fault is a retired key is carried
+	// with that refusal set aside ([config.LoadCompanySeed]) for the
+	// decision that knows whether anything outranks it.
 	if named != "" {
 		company, err := config.LoadCompanyToRun(named, prior)
 		if err != nil {
@@ -538,9 +552,9 @@ func (c configFlags) resolveSeed(set *flag.FlagSet, importPath string,
 	}
 
 	path := *c.company
-	company, err := config.LoadCompanyToRun(path, prior)
+	file, err := config.LoadCompanySeed(path, prior)
 	if err == nil {
-		return tierBSeed{Path: path, Company: company}, nil
+		return tierBSeed{Path: path, Company: file.Company, Retired: file.Retired}, nil
 	}
 	// AN ABSENT DEFAULT IS NOT AN ERROR, but an absent NAMED file is.
 	//
