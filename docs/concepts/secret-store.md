@@ -172,7 +172,7 @@ moves those too (see
 [Rotating the keyring](#rotating-the-keyring-with-nothing-in-flight-lost)); the
 store reached directly, with the engine stopped, holds no identity estate, so
 neither is counted or moved there, and the rekey says so. Through a running
-node it counts the Dashboard Assistant's sealed conversations per key as well
+node it counts Ask Crewlet's sealed conversations per key as well
 (`assistant_values`, each file a conversation keeps counted by the key its
 content is sealed under in the object store), which no rekey moves. A dry run counts whatever it
 reached still under an old key, so an operator is never told "nothing to move"
@@ -272,7 +272,7 @@ That makes the rotation a runbook with no window in it:
      keys — but not the identity estate, which only the engine holding it can
      re-seal; it says so, and the rekey is run again through a running node
      for those values. Its dry run counts no person's values and no
-     invitation either, for the same reason. The **Dashboard Assistant's
+     invitation either, for the same reason. **Ask Crewlet's
      conversations** are counted, through a running node, and left too: each
      value leaves with its conversation, once it is untouched for
      `assistant.retention_days` or its owner clears it, so the rekey says how
@@ -306,8 +306,8 @@ That makes the rotation a runbook with no window in it:
    under it, the absolute session lifetime (`api.auth.session.absolute`) has
    elapsed since step 3, *and* `crewlet secrets rekey -dry-run`, through a
    running node, reports no outstanding invitation under it — each is redeemed
-   or lapses within a week of being issued. It must also report no Dashboard
-   Assistant value under it: dropped while a conversation is still sealed under
+   or lapses within a week of being issued. It must also report no
+   Ask Crewlet value under it: dropped while a conversation is still sealed under
    it, that conversation no longer opens for its owner for the rest of its
    retention. And no answer to a parked coding run recorded before step 3 may
    still be waiting on its resume — one is resumed within minutes unless its

@@ -50,7 +50,7 @@ func modelProblemOf(err error, admin bool) (modelProblem, bool) {
 	key := failure.Key
 	switch {
 	case failure.Kind == llm.KindAuth:
-		hint := "Ask an administrator to sign the assistant's model in again."
+		hint := "Ask an administrator to sign Ask Crewlet's model in again."
 		if admin {
 			hint = "Sign it in again on the engine's host with " + loginCommand(key) +
 				", then ask again."
@@ -60,7 +60,7 @@ func modelProblemOf(err error, admin bool) (modelProblem, bool) {
 	case failure.Kind == llm.KindRateLimit:
 		hint := "It is tried again once the limit resets."
 		if admin {
-			hint += " To keep the assistant answering through a limit, add another model to assistant.llm."
+			hint += " To keep Ask Crewlet answering through a limit, add another model to assistant.llm."
 		}
 		return modelProblem{Code: wire.ErrorModelBusy,
 			Message: wire.ErrorModelBusy.Sentence(), Hint: hint,
@@ -74,13 +74,13 @@ func modelProblemOf(err error, admin bool) (modelProblem, bool) {
 			Message: wire.ErrorModelTimeout.Sentence(), Hint: hint,
 			Retryable: true}, true
 	case errors.Is(failure, llm.ErrNotRunnable):
-		hint := "Ask an administrator to check the assistant's model."
+		hint := "Ask an administrator to check Ask Crewlet's model."
 		if admin {
 			hint = "Install its command line tool on the engine's host, then check it with " +
 				doctorCommand(key) + "."
 		}
 		return modelProblem{Code: wire.ErrorModelUnavailable,
-			Message: "The assistant's model cannot be started on this node.", Hint: hint}, true
+			Message: "Ask Crewlet's model cannot be started on this node.", Hint: hint}, true
 	}
 	var hint string
 	if admin {

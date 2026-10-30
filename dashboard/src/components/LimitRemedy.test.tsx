@@ -89,7 +89,7 @@ async function settle() {
 // address the router resolves to that screen: a link that resolved elsewhere
 // would send the person to change a setting that does not refuse them.
 test.each([
-  [{ setting: "assistant_token_budget" }, "Open assistant budget", "assistant"],
+  [{ setting: "assistant_token_budget" }, "Open Ask Crewlet budget", "assistant"],
   [{ setting: "company_token_budget" }, "Open company budget", "company"],
   [{ setting: "seat_token_budget", seat: "devrel" }, "Open seat budget", "seat:devrel"],
 ] as const)(

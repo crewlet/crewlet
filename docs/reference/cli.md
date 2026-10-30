@@ -17,7 +17,7 @@ subcommand below is served by it.
 | `crewlet retention status [config]` | Every `retention` command that talks to a node takes `admin`, the reads included. What each domain's log is holding, what the trim concluded and which of the six terms is stopping it, every data node's position, and what this node costs to replace. **Exits non-zero when any alarm is active**, printing each one's measurement and remedy on stderr — the hook for your own cron |
 | `crewlet retention snapshots [config]` | The per-node snapshot inventory: what each machine holds, per domain, how old and how large — or why it holds none. The question you ask when a join fails |
 | `crewlet retention ack -stream NAME -position N` | Publish an operator backup floor, for `backup_floor: operator`. It exists because the engine cannot see a copy that has left the host |
-| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, the Dashboard Assistant's and chat's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
+| `crewlet retention evict <node> -confirm <node> [-op-id ID] [-force]` | Stop a node's records applying on every log the trim counts nodes on — the tracker's, the knowledge base's, the identity estate's, the artifacts log's, the artifact datastore's, Ask Crewlet's and chat's — so the trim can pass a floor an absent machine is pinning. Refused, with nothing written, while the node still holds a live presence lease, or while its lease cannot be read (`-force` overrides both). Prints one line per log with its outcome and the watermark before and after; **exits non-zero when not every log holds the record**, printing under each unfinished log what finishes it — the command with `-op-id` where running it again can, and what to do instead where it cannot |
 | `crewlet retention readmit <node> -confirm <node> [-op-id ID]` | The inverse commit, on the same logs. Refused while the node has not applied every record up to the one just before the higher of the trim floor and the first surviving sequence of any one of those logs, and the refusal prints the numbers. Nothing is written to any log on a refusal; a partial readmission is finished like an eviction |
 | `crewlet retention set-capacity <stream> <bytes> -confirm <bytes>` | Change a log's byte ceiling, up or down. Runs inside a fleet-wide maintenance window and costs three restarts, because a log's Tier A ceiling is only the value its stream is created with. A raise the broker has no room for is refused **before** the window opens, and one it refuses at the apply is reported as a refusal rather than as an unknown outcome |
 | `crewlet retention maintenance status\|abandon\|exclude -stream NAME` | Where that window stands, who has not acknowledged, and the two gestures that act on it |
@@ -56,7 +56,7 @@ subcommand below is served by it.
 | `crewlet secrets get <NAME> -reveal` | Print one stored value to stdout — break-glass, audited, CLI-only. Takes `admin` through a node, and a person present: a machine token is refused it whatever it carries, so the token this command reads is a Tier A one |
 | `crewlet secrets rekey [-dry-run]` | Re-encrypt stored secrets under the active keyring key. Takes `admin` through a node |
 | `crewlet search eval [-store PATH]` | Measure the two-stage semantic search against the exact scan, on the vectors a store file actually holds. Ground truth is the exact scan's own top-K, so nobody authors a judgement; exits non-zero below the floor for that corpus size |
-| `crewlet assistant eval -suite DIR` | Run a directory of evaluation cases through the Dashboard Assistant's orchestrator and catalogue in process: each case's own scripted rounds by default (deterministic, no model called), or a candidate `providers.llm` entry with `-model KEY`, so a model is measured before the assistant is switched to it. Exits non-zero when any case fails |
+| `crewlet assistant eval -suite DIR` | Run a directory of evaluation cases through Ask Crewlet's orchestrator and catalogue in process: each case's own scripted rounds by default (deterministic, no model called), or a candidate `providers.llm` entry with `-model KEY`, so a model is measured before Ask Crewlet is switched to it. Exits non-zero when any case fails |
 | `crewlet llm list` | Every `providers.llm` entry the company declares, with its CLI, model and how it is signed in |
 | `crewlet llm doctor [KEY]` | Verify `providers.llm` entries end to end — the CLI is installed, something signs it in, a real run calls a tool over the seat's tool route, the CLI's own shell is refused and its web tool reaches the network (`-no-smoke` stops before every real completion), and, for an entry a seat's executor launches on, whether its CLI has an in-box runner and which tool bridge its box dials. Exits non-zero when any entry has a problem |
 | `crewlet llm login <KEY>` | Establish the vendor's own login for a provider: brokered interactively, `-from-host` to adopt one this machine already has, `-capture-token` to mint a headless token into the [secret store](../concepts/secret-store.md) (add `-print-token` to send it to stdout and store nothing), `-token-stdin` for one you already hold |
@@ -1086,7 +1086,7 @@ Prints one decrypted value to stdout, with no trailing newline so it can be pipe
 crewlet secrets rekey [-dry-run] [-config PATH] [-api URL]
 ```
 
-Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved (and the engine's own key with them, which it **counts** rather than names). **Through a running node it also re-seals every person's values in the identity estate**: the rows are derived from the identity log, so the node publishes one record per person still under an old key, and prints how many values of how many people it moved (every running node holds the identity estate from boot, company or none). **With the engine stopped** it re-seals every row of the fleet's store (your names and the engine's own `iam/` keys) but not the identity estate's personal values, which only the engine holding the estate re-seals, through its own log: the command says so, and is run again through a running node for those. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey): run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's key and the identity estate that would be the blind-index key and every person's name and address at once. An **outstanding invitation**'s address is not re-sealed (only a re-issue could carry it again), so a run through a running node says how many are still under another key: keep that key on the ring until each is redeemed or expires, at most a week after it was issued. The **Dashboard Assistant's conversations** are not re-sealed either, since each value leaves with its conversation, so a run through a running node says how many values are still under another key: keep that key on the ring until none is left, which happens once each conversation started before the flip is untouched for `assistant.retention_days` or cleared by its owner. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the key id off each envelope instead, and counts the engine's key and, through a running node, the identity estate's values and the assistant's, still under another key beside your names.
+Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved (and the engine's own key with them, which it **counts** rather than names). **Through a running node it also re-seals every person's values in the identity estate**: the rows are derived from the identity log, so the node publishes one record per person still under an old key, and prints how many values of how many people it moved (every running node holds the identity estate from boot, company or none). **With the engine stopped** it re-seals every row of the fleet's store (your names and the engine's own `iam/` keys) but not the identity estate's personal values, which only the engine holding the estate re-seals, through its own log: the command says so, and is run again through a running node for those. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey): run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's key and the identity estate that would be the blind-index key and every person's name and address at once. An **outstanding invitation**'s address is not re-sealed (only a re-issue could carry it again), so a run through a running node says how many are still under another key: keep that key on the ring until each is redeemed or expires, at most a week after it was issued. **Ask Crewlet's conversations** are not re-sealed either, since each value leaves with its conversation, so a run through a running node says how many values are still under another key: keep that key on the ring until none is left, which happens once each conversation started before the flip is untouched for `assistant.retention_days` or cleared by its owner. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the key id off each envelope instead, and counts the engine's key and, through a running node, the identity estate's values and Ask Crewlet's, still under another key beside your names.
 
 The store is shared, so this is run **once for the fleet**, not once per node. A run through a node's API sends the key id it expects — `-config`'s `secrets.active_key_id`, the one `-dry-run` judges the rows against too, which is why a rekey needs the Tier A file even through `-api` — and is **refused with a 409** if that node seals under a different `active_key_id` — a silent success there would report a rotation the fleet did not make. It aborts rather than half-completing if any record cannot be opened with the keyring in hand, because retiring the old key on the strength of a partial pass is what makes a secret unreadable for ever. And it never undoes a write that lands while it runs: each record is re-sealed only at the version it read, so a record somebody rotated meanwhile is judged again on what it holds now, and a record that was deleted stays deleted rather than coming back as the value the pass read before it went. A person whose re-seal nobody could confirm fails the run with what did move; running it again moves only what is still under an old key.
 
@@ -2009,8 +2009,8 @@ generation (`GEN`), and a position from a generation the log has left prints
 with nothing the log holds now; a node that reported its log diverged at its
 checkpoint is marked `LOG DIVERGED`. `RESERVE` is the top of the ceiling every
 identity-claiming log — the tracker's, the knowledge base's, the identity
-estate's, the artifacts log's, the artifact datastore's, the Dashboard
-Assistant's and chat's — keeps for
+estate's, the artifacts log's, the artifact datastore's,
+Ask Crewlet's and chat's — keeps for
 gate records ([the gate reserve](../guides/retention.md#the-gate-reserve)), `-`
 on the vector changelog and the usage log, which keep none; `HEADROOM` is what
 is left of the rest, the ceiling ordinary writes are refused at — so a log at
@@ -2018,7 +2018,7 @@ is left of the rest, the ceiling ordinary writes are refused at — so a log at
 
 A term that does not apply to a domain prints `n/a` rather than `0`: the
 vector log, the identity estate's, the artifacts log's, the artifact
-datastore's, the Dashboard Assistant's and the usage log have no wake feed, and an
+datastore's, Ask Crewlet's and the usage log have no wake feed, and an
 absent term is a different fact from one that permits nothing. Where a log does
 have one, its `feed_ack_floor` is that log's own feed — never another domain's.
 `PER DAY` prints `-` for the same reason where nothing was measured — a
@@ -2082,7 +2082,7 @@ coming back; eviction is the gesture for one that is not.
 `-confirm` repeats the node id, the same shape the other destructive gestures
 use. The trim counts nodes per log, so the eviction is a record on every log it
 counts nodes on — the tracker's, the knowledge base's, the identity estate's,
-the artifacts log's, the artifact datastore's, the Dashboard Assistant's and
+the artifacts log's, the artifact datastore's, Ask Crewlet's and
 chat's — and each answers on
 its own line with its
 [three-valued outcome](../guides/replication.md#a-write-has-three-outcomes), or
@@ -2202,7 +2202,7 @@ crewlet: the node answered 409: readmission_refused
 The comparison is the one the node's own write fence makes: its **last
 published position** in each log that claims identity — the tracker's, the
 knowledge base's, the identity estate's, the artifacts log's, the artifact
-datastore's, the Dashboard Assistant's and chat's — against the **higher of
+datastore's, Ask Crewlet's and chat's — against the **higher of
 the published floor and the log's first
 surviving sequence**, and the node must have applied every record up to the
 one just before it. A node that has never published a position is judged as
@@ -2295,8 +2295,8 @@ them; on the vector changelog and the usage log, which hold no gate, it is the
 whole target. A target under the floor Tier A holds the log's own field to is
 refused too, naming the field — a gibibyte on the tracker's, the knowledge
 base's, the vector changelog's, the artifacts log's, the artifact datastore's
-and chat's, 64 MiB on the identity estate's, the usage log's and the Dashboard
-Assistant's. A target under the
+and chat's, 64 MiB on the identity estate's, the usage log's and
+Ask Crewlet's. A target under the
 current ceiling and above the usage is accepted, and is how a log gives a
 reservation back. A raise the broker cannot
 reserve is refused before the window opens too, naming what it reserves and
@@ -2432,7 +2432,7 @@ the domain's applier resumes on the node with no restart.
 
 For every log that keeps a generation record — the tracker's, the knowledge
 base's, the identity estate's, the artifacts log's, the artifact datastore's,
-the Dashboard Assistant's and chat's — it refuses while any peer
+Ask Crewlet's and chat's — it refuses while any peer
 has already re-anchored the stream, **naming the peer** — that peer's rows are the fleet's
 history in the new generation, and this node adopts its snapshot instead. A
 peer that is gone for good is released by evicting it first
@@ -2697,8 +2697,8 @@ first stage, which ships in the same release that moves the model default.
 crewlet assistant eval -suite DIR [-model KEY -paid] [-trials N] [-company PATH] [-config PATH] [-api URL]
 ```
 
-Runs a directory of evaluation cases through the
-[Dashboard Assistant](../concepts/assistant.md)'s own orchestrator and tool
+Runs a directory of evaluation cases through
+[Ask Crewlet](../concepts/assistant.md)'s own orchestrator and tool
 catalogue, in this process, and reports which cases pass. No case is asked of a
 running node: each case describes the company it is asked in, as the answers
 its requests receive.
@@ -2712,8 +2712,8 @@ that `providers.llm` entry of the company at `-company`, through its CLI,
 exactly as a turn would run on it. That calls a paid model once per round of
 every trial, so `-model` without `-paid` is refused before anything is read,
 and the run says on stderr which model it is asking. That is how a model is measured before
-`assistant.llm` is switched to it ([Running the Dashboard Assistant](../guides/assistant.md#choosing-the-model)).
-The entry must satisfy the assistant's rules (no tool of its own beside the
+`assistant.llm` is switched to it ([Running Ask Crewlet](../guides/assistant.md#choosing-the-model)).
+The entry must satisfy Ask Crewlet's rules (no tool of its own beside the
 engine's, no shell, web tools denied); `crewlet llm doctor KEY` proves one first. The entry's own `${VAR}`
 references, and nothing else of the company's, resolve as `crewlet llm`
 resolves them: through the store `-config` names or the node `-api` names, the
@@ -2721,7 +2721,7 @@ environment behind it (see
 [where a command reads the company's values](#where-a-command-reads-the-companys-values)).
 
 **What it does not measure.** The cases run against seeded answers, not the
-engine's API, so they say nothing about permissions: that a person's assistant
+engine's API, so they say nothing about permissions: that Ask Crewlet
 reads and is refused exactly what the person is, and writes nothing they did
 not approve, is held by the engine's own test suites on every change. An
 evaluation measures what a model does with the tools it is offered: which it
@@ -2750,7 +2750,7 @@ It **exits non-zero** when any case fails any trial.
 | `-model KEY` | none: each case's script | The `providers.llm` entry to ask instead of the scripts |
 | `-paid` | off | Confirms that `-model` calls a paid model; required with it, refused without it |
 | `-trials N` | `1` | How many times each case is run. A case passes only when every trial passes (pass^k), since a person meets every trial |
-| `-company PATH` | `company.yaml` | Tier B, read with `-model` for the entry to ask, which must satisfy the assistant's rules |
+| `-company PATH` | `company.yaml` | Tier B, read with `-model` for the entry to ask, which must satisfy Ask Crewlet's rules |
 | `-config PATH` | `crewlet.yaml` | Tier A, read with `-model` to resolve the entry's `${VAR}` references as every command does |
 
 ### The case format
@@ -2768,7 +2768,7 @@ page:                             # optional: the page chip, as the dashboard se
   source_revision: spend@1
 question: Who spent the most tokens this week?
 mode: ask                         # ask (default) or brief, which needs the page
-answers:                          # what each request the assistant sends answers
+answers:                          # what each request Ask Crewlet sends answers
   - route: GET /tokens/breakdown  # a route pattern, {name} matching one segment
     status: 200                   # default 200
     body: {rows: [{seat: ada, tokens: 51200}, {seat: grace, tokens: 1200}]}

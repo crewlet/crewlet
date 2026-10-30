@@ -92,7 +92,7 @@ test("each place is named in words, a backup said apart, and no handle or path i
     .map((li) => li.textContent ?? "");
   expect(rows[0]).toContain("Backend Engineer, coding");
   expect(rows[1]).toContain("QA, reviewing (backup)");
-  expect(rows[2]).toContain("The Dashboard Assistant's chat");
+  expect(rows[2]).toContain("Ask Crewlet's chat");
   expect(list.textContent).not.toMatch(/backend-engineer|llm_review|roles\[/);
   // The first ask carried no repoints: the engine's refusal drew the list.
   expect(removeModel.mock.calls[0]![1]).toEqual({ repoint: [], assistantOff: false });
@@ -138,7 +138,7 @@ test("with no other model that denies web tools, the assistant's chat turns the 
   const removal = removeModel.mock.calls.at(-1)![1];
   expect(removal.assistantOff).toBe(true);
   expect(removal.repoint[2]).toEqual({ at: { assistant: "chat" }, to: null });
-  expect(screen.getByText(/turns the Dashboard Assistant off/)).toBeDefined();
+  expect(screen.getByText(/turns Ask Crewlet off/)).toBeDefined();
 });
 
 test("the removal waits for the typed name, then states the revision it read and a summary", async () => {

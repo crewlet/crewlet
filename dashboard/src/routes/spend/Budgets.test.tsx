@@ -639,13 +639,13 @@ test("each person's assistant ceiling is a merge patch of the one window, record
   });
   mount(answer());
   await settle();
-  await edit(/Change each person's assistant daily token ceiling/, "500k");
+  await edit(/Change Ask Crewlet's per-person daily token ceiling/, "500k");
   const save = calls.at(-1)!;
   expect(save.method).toBe("PATCH");
   expect(save.url).not.toContain("dry_run");
   expect(save.body).toEqual({
     assistant: { token_budget: { day: 500_000 } },
-    _summary: "Raise each person's assistant daily token ceiling from 200k to 500k",
+    _summary: "Raise Ask Crewlet's per-person daily token ceiling from 200k to 500k",
   });
 });
 
@@ -654,18 +654,18 @@ test("each person's assistant ceiling is a merge patch of the one window, record
 test("the assistant's row draws the viewer's own spend only where it is counted", async () => {
   mount(answer());
   await settle();
-  const card = screen.getByRole("region", { name: "Each person’s assistant" });
+  const card = screen.getByRole("region", { name: "Ask Crewlet, per person" });
   expect(within(card).getByText("180k")).toBeDefined();
   expect(within(card).getAllByRole("meter").length).toBe(1);
   cleanup();
 
   mount(answer({ assistant: { counted: false, windows: [win("day", { limit: 200_000 })] } }));
   await settle();
-  const uncounted = screen.getByRole("region", { name: "Each person’s assistant" });
+  const uncounted = screen.getByRole("region", { name: "Ask Crewlet, per person" });
   expect(within(uncounted).queryByText(/^0$/)).toBeNull();
   expect(within(uncounted).queryByRole("meter")).toBeNull();
   expect(
-    within(uncounted).getByRole("button", { name: /each person's assistant daily token ceiling/ }),
+    within(uncounted).getByRole("button", { name: /Ask Crewlet's per-person daily token ceiling/ }),
   ).toBeDefined();
 });
 
@@ -681,7 +681,7 @@ describe("arriving at a ceiling", () => {
   test("the assistant's ceiling is marked and focused", async () => {
     mount(answer(), OPERATOR, "#/company/budgets?section=assistant");
     await settle();
-    const assistant = card("Each person’s assistant");
+    const assistant = card("Ask Crewlet, per person");
     expect(assistant.classList.contains("is-selected")).toBe(true);
     expect(card("The company").classList.contains("is-selected")).toBe(false);
     expect(document.activeElement).toBe(assistant.parentElement);

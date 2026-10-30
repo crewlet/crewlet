@@ -77,7 +77,7 @@ export function remedyDestination(remedy: Remedy): RemedyDestination {
       return {
         path: BUDGETS_PATH,
         query: { [SECTION_PARAM]: ASSISTANT_SECTION },
-        label: "Open assistant budget",
+        label: "Open Ask Crewlet budget",
         target: "company",
       };
     case "seat_token_budget": {

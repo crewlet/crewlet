@@ -194,7 +194,7 @@ export function assistantModelNotice(
   return (
     viewer.model ?? {
       code: "model_unavailable",
-      message: "The assistant's model cannot answer right now.",
+      message: "Ask Crewlet's model cannot answer right now.",
     }
   );
 }

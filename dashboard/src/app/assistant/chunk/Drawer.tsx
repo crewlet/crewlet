@@ -415,7 +415,7 @@ export function Drawer({
   return (
     <>
       <SidePanel
-        title="Crewlet Assistant"
+        title="Ask Crewlet"
         icon={<ProductMark product="assistant" size="md" />}
         // THE THREAD IS THE ONE SCROLLER and insets its own items, so the
         // panel's body gives up its inset rather than doubling it. A flush
@@ -424,7 +424,7 @@ export function Drawer({
         // in a short window.
         flush={!offline}
         onClose={onClose}
-        labels={{ close: () => "Close the assistant" }}
+        labels={{ close: () => "Close Ask Crewlet" }}
         initialFocus={initialFocus === "composer" && !offline ? composer : "heading"}
         actions={
           <>
@@ -513,7 +513,7 @@ export function Drawer({
                   ref={composer}
                   box={draft}
                   id={ASSISTANT_COMPOSER_ID}
-                  label="Ask the assistant"
+                  label="Ask Crewlet"
                   onSubmit={(text) => {
                     if (!attachments.uploading) ask(text);
                   }}
@@ -534,7 +534,7 @@ export function Drawer({
                             size="sm"
                             appearance="outline"
                             leadingIcon={<LayoutDashboardGlyph size="xs" />}
-                            title="The assistant can see this page"
+                            title="Ask Crewlet can see this page"
                             onRemove={removePage}
                             removeAriaLabel={`Remove ${crumb} from this question`}
                           >
@@ -601,7 +601,7 @@ export function Drawer({
                 />
               </FileDrop>
               <Text as="p" variant="caption" tone="tertiary" className="assistant-disclaimer">
-                The assistant can be wrong. Check before you approve.
+                Ask Crewlet can be wrong. Check before you approve.
               </Text>
             </div>
           )

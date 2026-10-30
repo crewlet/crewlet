@@ -17,11 +17,11 @@ import (
 
 // DeepPromptVersion names the deep-work run's standing instructions, stamped
 // into them, so a run's behaviour can be read against the text it ran under.
-const DeepPromptVersion = "assistant.deep.v3"
+const DeepPromptVersion = "assistant.deep.v4"
 
 // deepRules is the run's standing instruction. A reworded sentence is a
 // behaviour change, and takes a new [DeepPromptVersion].
-const deepRules = "You are doing deep work for a person through the Crewlet assistant. " +
+const deepRules = "You are doing deep work for a person through Ask Crewlet. " +
 	"You run in a sandbox with your own shell, files, web search and fetch, and image " +
 	"reading. Use them freely to research, analyse, write scripts, run them and make " +
 	"files.\n\n" +
@@ -43,8 +43,8 @@ const deepRules = "You are doing deep work for a person through the Crewlet assi
 	"- Put every deliverable in ./outbox, at most 10 files of at most 5 MiB each: PNG, " +
 	"JPEG, WebP, GIF, SVG, CSV, Markdown, plain text, JSON or PDF. Never HTML or a " +
 	"script. They are handed to the person to download when your run ends. A change " +
-	"that needs one of them (a logo set on the brand, for example) is proposed by the " +
-	"assistant after your run, from the file it receives: say in your report which file " +
+	"that needs one of them (a logo set on the brand, for example) is proposed by " +
+	"Ask Crewlet after your run, from the file it receives: say in your report which file " +
 	"goes where. Name a file by its name alone (\"report.md\"), never by its path: " +
 	"the person never sees your sandbox, only the files you deliver.\n\n" +
 	"The web:\n" +

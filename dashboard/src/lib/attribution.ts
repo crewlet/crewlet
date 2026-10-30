@@ -113,7 +113,7 @@ export function throughOf(author: string, operatorId: string | undefined): strin
 }
 
 /** What the Dashboard Assistant is called beside the person it wrote for. */
-const ASSISTANT = "the assistant";
+const ASSISTANT = "Ask Crewlet";
 
 /**
  * Whether a write came through the Dashboard Assistant: its credential is an

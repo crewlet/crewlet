@@ -1604,25 +1604,25 @@ var codes = map[Code]string{
 
 	// --- the Dashboard Assistant ---
 	CodeAssistantProtocolMismatch: "This dashboard speaks another version of the " +
-		"assistant's protocol than this engine. Reload the page.",
-	CodeAssistantNotAvailable: "The assistant is not available to you here.",
-	CodeAssistantTurnRunning: "The assistant is still working on this conversation. " +
+		"Ask Crewlet's protocol than this engine. Reload the page.",
+	CodeAssistantNotAvailable: "Ask Crewlet is not available to you here.",
+	CodeAssistantTurnRunning: "Ask Crewlet is still working on this conversation. " +
 		"Wait for it to finish, or stop it, then ask again.",
-	CodeAssistantBusy: "You have asked the assistant too much at once. Wait the moment " +
+	CodeAssistantBusy: "You have sent Ask Crewlet too much at once. Wait the moment " +
 		"Retry-After names, then ask again.",
-	CodeAssistantUnavailable:   "The assistant can't answer here, and waiting won't change that.",
-	CodeAssistantModelNotReady: "The assistant's model cannot answer right now.",
+	CodeAssistantUnavailable:   "Ask Crewlet can't answer here, and waiting won't change that.",
+	CodeAssistantModelNotReady: "Ask Crewlet's model cannot answer right now.",
 	CodeAssistantFileRefused: "This file cannot be attached. Attach a PNG, JPEG, WebP " +
 		"or GIF image.",
 	CodeAssistantFileLimit: "This conversation holds as many attachments as it can. " +
 		"Start a new conversation to attach more.",
 	CodeProposalAlreadyDecided: "This change was already decided, so nothing more was done.",
-	CodeProposalExpired: "This proposed change expired before it was approved. Ask the " +
-		"assistant to propose it again.",
+	CodeProposalExpired: "This proposed change expired before it was approved. " +
+		"Ask Crewlet to propose it again.",
 	CodeProposalDigestMismatch: "This approval does not match the change that was " +
 		"proposed, so nothing was sent. Reload the conversation and review it again.",
 	CodeProposalStale: "What this change would edit has moved since it was proposed, so " +
-		"nothing was sent. Ask the assistant to propose it again.",
+		"nothing was sent. Ask Crewlet to propose it again.",
 	CodeActionAlreadyClaimed: "Another tab is already applying this change.",
 	CodeCredentialRejected: "This credential did not sign the model in, so nothing was " +
 		"stored. The model still uses its current credential.",

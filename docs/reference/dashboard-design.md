@@ -1992,7 +1992,7 @@ copy of it is how the two drift. What `dashboard/src/app/` owns:
 | `sidebar/UserBlock` | who is signed in, at the sidebar's foot, called by their OWN name and never their seat's (`readerName`: their directory row's name as `GET /auth/session` answers it, else their login): bound (that name, the login where it is not the name, and the seat — its name off the chart, or `@handle` where the chart is unread — the seat's kind never captioned, since every binding is to a human seat), a credential acting as a seat (a Tier A token or a service account bound to a human seat: the seat's name, "via API token" under it with the token's name in the row's title and under the access in the menu, and the seat's initials with a key on the corner), unbound (the same name and login, and *No seat* — a Tier A token's session or a service account acting as itself, which is ordinary; never a person, who holds a human seat for as long as they are here ([ADR-0032](../../adr/0032-every-person-holds-a-human-seat.md))) or nobody (a **Sign in** button back to the screen they are on); a session read that FAILED says it could not tell who this is and still offers the Account and the sign-out. Pressing the name of anybody resolved opens the reader's own menu (the kit's `AccountRow` `menu`, named ", your menu", marked current on `#/account`, where it stands in for the row the Account does not have): their access as its header, then the reader's own [Account](#account-the-readers-own-page) (`place: "menu"` in `app/nav.ts`; never the seat, which holds none of what a person looks for there), where the password, the second factor and recovery codes, the sessions and the personal access tokens are, and both sign-outs, which need only `GET /auth/session` to answer — the frame's one read of it (`lib/frameSession.ts`), never one of the block's own: while the socket's `viewer` question has not (it never does for a person the socket refuses, or never dials for), a session is offered the two sign-outs under its own login. See [Signing in](#signing-in-is-a-screen-outside-the-frame) |
 | `header/PageHeader` + `Breadcrumb` | the page header: the kit's top bar with the trail (whose last crumb is the page's `h1`), who is working now (Home's bar only, `useWorkingNow`), the star, and last the screen's own controls (portalled in by `PageActions`); then the workspace's SECTION TABS, as links in a labelled `nav` with `aria-current` on the section the reader is on, drawn only on a section's own page; then the `StateBar`. Settings draws its sections as a grouped COLUMN beside the screen instead (`SectionColumn`, the kit's `SidebarNav` inside the kit's `SectionFrame`, which lays the column and the screen side by side and folds the column into a section picker below 1212px), with a lock naming what a section closed to the reader lacks (`sectionOpen`; drawn only once somebody has said what the reader holds), each row's hint as its title, and nothing that leads out of Settings. A screen whose design keeps the star in a menu rather than in the bar gets no star from the frame (`useOwnStar`): a Doclet page, whose More carries it, and Doclet's landing, whose pages are each starred from their own More |
 | `routes.ts` + `crumbs.ts` | the route table as a pure resolver, and the trail derived from it |
-| `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the widths the dashboard derives itself: where the peek becomes a column, where the assistant does, where Settings' column folds, and where Chat's columns fold |
+| `layout.ts` | the frame's breakpoints, READ from the kit's tokens (`breakpoint.shell`, `breakpoint.phone`), and the widths the dashboard derives itself: where the peek becomes a column, where Ask Crewlet does, where Settings' column folds, and where Chat's columns fold |
 | `StateBar` | the answer's own honesty in one place: degradation, `read_level`, `complete: false`, how far this node has applied. The two positions that last one compares (`applied_through` against `log_seq`) are PACKED on the wire — (generation × 2^40) + sequence, so they compare with a plain `<` across a re-anchor — and are printed unpacked (`positionWords` in `components/work.tsx`): the bare sequence in a log's first generation and `generation:sequence` past it. The stride is the engine's `statelog.GenerationStride`, and a gate in internal/api holds the dashboard's copy (`GENERATION_STRIDE`) to it |
 | `ObjectHeader` | an object's eyebrow, title (a level-two heading in every frame: on a page the last crumb is the `h1` and already names the object, and a peek sits inside a page that has one), state marks and up to six facts, in the same order wherever the object appears — though a peek whose body is a properties rail passes none, because a header and a rail stacked in one column are [one reading](#an-objects-own-facts). A fact may carry a `note` saying where its value came from, for the facts a reader can reasonably doubt, and only those. A fact that is one token (an id, a build) or a set of chips (a node's roles) takes two tracks, so it is never broken mid-token or stacked chip over chip. STATE lives here, never in the page bar: see [What a mark MEANS, and where a control belongs](#what-a-mark-means-and-where-a-control-belongs) |
 | `OwnPageHeader` | a screen that draws its own head in the frame's place: the frame draws the slot it is portalled into, with the state bar under it, instead of the page bar. ONE screen does, an open artifact, for the reason [An open artifact is the screen](#an-open-artifact-is-the-screen) gives; `FrameNavToggle` is the frame's navigation toggle for that head to place first |
@@ -2065,7 +2065,7 @@ resting 420 for every screen.
 **Chatlet's columns give way by the screen's width.** Chatlet draws its rail, a
 room's transcript and an open thread side by side. They fold by the width of
 the SCREEN (`@container page`), never the window's, because the sidebar, a
-peek and the assistant's column each take a share of the window that a media
+peek and Ask Crewlet's column each take a share of the window that a media
 query cannot see. The transcript keeps a 320 px floor (`TRANSCRIPT_FLOOR` in
 `app/layout.ts`, the width WCAG's Reflow criterion asks every page to read
 at). So the rail narrows from 260 px towards 200 px first, and below a 539 px
@@ -2074,7 +2074,7 @@ screen it stacks above the room. A thread stands beside the transcript from a
 under it below that, never in its place. The gaps are counted at the widest
 density, so the floor holds at every density.
 
-Beside the assistant's column at its resting width, a 1280 px window leaves
+Beside Ask Crewlet's column at its resting width, a 1280 px window leaves
 the screen 556 px at the normal density: the rail narrows to 220 px and an
 open thread goes under the room. At 1168 px, where the column first fits, the
 screen is 444 px and the rail stacks too. A column dragged wider leaves the
@@ -2129,7 +2129,7 @@ for the keys is the reader who does not know `?` yet.
 
 | Where it is live | Keys |
 |---|---|
-| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` the assistant (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
+| Anywhere | `Mod+K` search (the same chord closes it), `Mod+.` Ask Crewlet (pressed inside it, it closes it), `/` search this screen, `?` the legend, `g` then a letter a workspace, `g r` the running turn (Now running when several run), `g p` switch project (under Worklet's trail on its scope pages, centred everywhere else), `Mod+\` the navigation drawer on a narrow window |
 | In a list | `j` and `k` walk the rows — on a task opened from a list, they open the next and the previous task — `Enter` opens one |
 | With a peek open | `[` and `]` step through the list it was opened from, `Esc` closes it |
 | On a page with tabs | `1`–`9` go to that tab |
@@ -2137,11 +2137,11 @@ for the keys is the reader who does not know `?` yet.
 | In the artifacts gallery and its folders | `x` starts picking artifacts (and, pressed again, stops and clears the picks), `m` moves what is picked to a folder, `n` makes a new folder where the reader is, `u` goes up to the folder above. Bare letters, since a window chord compares no Shift and no Alt |
 | On a chart | `+`, `-` zoom and `0` fits, with focus in the chart (bound by the design system's canvas) |
 | In the org builder | `Mod+Z` undo, `Mod+Shift+Z` redo |
-| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox, a comment on a task, a message in a chat room or a thread. `Enter` alone is a new line, since what you say to somebody is often several lines. The assistant's question box is the one exception: a question is one line far more often than not, so `Enter` sends it there (below) |
+| Writing a reply or a message | `Mod+Enter` sends it: a reply in the Inbox, a comment on a task, a message in a chat room or a thread. `Enter` alone is a new line, since what you say to somebody is often several lines. Ask Crewlet's question box is the one exception: a question is one line far more often than not, so `Enter` sends it there (below) |
 | Writing the company's principles | `Mod+Enter` saves the part being written and `Esc` stops writing it, asking first when it has changes (bound by the design system's `InlineEditor`); in the standing policies `Enter` adds the policy typed, and `Alt+Up` and `Alt+Down` move the one you are in |
 | In search | `Tab` and `Shift+Tab` walk the scopes (bound by the design system's palette), `Mod+Enter` asks an agent, `Alt+A` assigns the task at hand, `Alt+C` creates a task, `Backspace` in an empty picker goes back |
-| In the assistant | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes the assistant and never a peek beside it; `Up` in an empty box brings back the last question |
-| In a dialog, a menu, the drawer or the assistant | `Esc` closes whatever is on top (bound by the design system's layer stack) |
+| In Ask Crewlet | `Enter` sends the question and `Shift+Enter` adds a line (bound by the design system's `Composer`); `Esc` stops a running answer first, then closes Ask Crewlet and never a peek beside it; `Up` in an empty box brings back the last question |
+| In a dialog, a menu, the drawer or Ask Crewlet | `Esc` closes whatever is on top (bound by the design system's layer stack) |
 
 `Mod` is Command on a Mac and Control elsewhere, and every hint is drawn in
 the platform's own notation with the kit's `Kbd`.
@@ -3113,10 +3113,10 @@ reader picks one, so the pane is never an empty box beside a list with
 something in it; stepping down the list, or `j` and `k`, replaces history, so
 four rows read through one pane are one place the reader has been. Under 640px
 of the SCREEN's width the list is the screen and an item opens in its place,
-with Back at the start of its byline: on a phone, and beside the assistant,
+with Back at the start of its byline: on a phone, and beside Ask Crewlet,
 whose column can leave a desktop window's screen a phone's width. Whether the
 page then scrolls as a whole is the window's: on a phone it does, and beside
-the assistant the screen still fills the window and the one pane scrolls
+Ask Crewlet the screen still fills the window and the one pane scrolls
 itself.
 
 **Three viewer states, three sentences.** A reader with no credential, a
@@ -3971,7 +3971,7 @@ Operator-facing words are full of things a reader has to stop and decode:
 `gophrase/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
 `~design-review` is a Mattermost channel, `#launch` is a chat room, `GP-66` is
 a task. Every surface `lib/markdown.ts` renders (a page, a description, a
-comment, the Inbox, an assistant's answer, a transcript) draws each with the
+comment, the Inbox, an Ask Crewlet answer, a transcript) draws each with the
 mark that says what it is, a little below the text's size and just before its
 words (`InlineRef` from `@crewlethq/ui`), and a seat's handle by its words
 alone:
@@ -4073,7 +4073,7 @@ leading zero, inside a word, a path or an entity, or in code is never one.
 Inbox row, an answer's option, a link's own label) a link would be invalid or
 steal the press, so those draw marks and swatches alone (`renderTokens`).
 Where the words were written by an agent or a model that may have read
-anything (the assistant's answers, the Inbox and a coding run's question,
+anything (Ask Crewlet's answers, the Inbox and a coding run's question,
 `links: "checked"`), a link
 is live only where the dashboard built it, from parts it checked, to a place
 that is the company's: a key's, a room's and a handle's routes, a reference
@@ -4095,7 +4095,7 @@ An outbound link a token makes opens a tab with `rel="noopener noreferrer"`
 and says so to a screen reader, as every outbound link in rendered Markdown
 does.
 
-**The caller reads first.** The Dashboard Assistant's record chips
+**The caller reads first.** Ask Crewlet's record chips
 (`RenderOptions.prose`) are drawn before any token is read, and tokens are
 read only in the words the chips left, so a record the turn read stays its
 chip; a search's highlight marks the words left after that.
@@ -4310,9 +4310,9 @@ restored history entry. `Mod+K` closes it from its own field. The step-up
 confirmation is deliberately not in that rule: it is holding a refused request
 open until the reader answers it, and a navigation answers nothing.
 
-## The assistant: a panel of the frame
+## Ask Crewlet: a panel of the frame
 
-The Dashboard Assistant answers questions about the company and prepares
+Ask Crewlet answers questions about the company and prepares
 changes for the person to approve, acting strictly as the signed-in person:
 it reads only what they can open, and nothing changes until they approve it.
 The engine's half is its own section of the docs; what the dashboard owns is
@@ -4320,7 +4320,7 @@ where the panel stands, what it is told about the page, and how a turn is
 drawn.
 
 **It is a panel of the frame, never of a screen.** The **Ask** button ends
-the page bar (above the panel it opens), carries the assistant's spark mark
+the page bar (above the panel it opens), carries Ask Crewlet's spark mark
 and the `Mod+.` hint, and stays inline at a phone's width as an icon button.
 An open artifact, which draws its own head, places the same button at the end
 of its bar.
@@ -4350,7 +4350,7 @@ records in view by kind and id, what is selected, a revision, and the draft
 the person has open with its values (below), which exists nowhere a tool
 could read it. A screen
 that knows more registers it with `useAssistantContext`, along with the page
-actions it takes from the assistant (each parsed, gated and applied by the
+actions it takes from Ask Crewlet (each parsed, gated and applied by the
 screen's own code). The page goes with a question as a chip in the composer,
 named by the last two crumbs; removing it sends the question with no page
 until the reader adds it back or opens another page. The drawer and a screen
@@ -4370,7 +4370,7 @@ action's result. An approved change shows its outcome on its card; a pure
 view change the screen declared needs no approval (D11) shows a receipt in
 the thread, with Undo while the page still shows what the change made of it.
 
-**The page behind the drawer reads every change the assistant applied.** Each
+**The page behind the drawer reads every change Ask Crewlet applied.** Each
 server write an approval lands is followed on the turn's stream by a
 `context.invalidate` action naming the domain and the position its record
 landed at, where the route answered one, and arriving all the same where it
@@ -4413,9 +4413,9 @@ actions together.
 **Every screen with a draft says what is open** (`app/assistant/draft.ts`).
 One hook, `useAssistantDraft`, takes the draft, its identity (`client` while
 the values live in the page, `server` where they are saved at an id and a
-revision), the step or section, the screen's help (what the assistant can and
+revision), the step or section, the screen's help (what Ask Crewlet can and
 cannot do there, said by the screen rather than the prompt), and its fields,
-each a `read` from the draft and, where the assistant may set it, a `write`
+each a `read` from the draft and, where Ask Crewlet may set it, a `write`
 that refuses a value in the sentence the field's own control would. The page
 context carries the snapshot redacted (a field marked `secret`, or whose path
 names a credential by the engine's rule, is sent empty) and bounded (forty
@@ -4432,7 +4432,7 @@ with several boxes open at once declares ONE draft whose fields are every box
 open on it (`app/assistant/boxes.ts`), each read from its box and set through
 the box's own setter, and the draft's step names the box written in last: the
 page context carries one draft, and a box that declared its own hid every
-other box from the assistant at its next keystroke. A chat room is such a page
+other box from Ask Crewlet at its next keystroke. A chat room is such a page
 (its message box, the reply box of a thread open beside it and each of the
 person's messages open for a rewrite), and so is a task's, with its title and
 its description open together. The brand
@@ -4443,9 +4443,9 @@ conversation (the engine checks it is theirs before the card is drawn). The
 card draws a proposed image through the owner's route in `LogoSlot`'s
 thumbnail, an `<img>`, never inlined (`app/assistant/chunk/DraftFile.tsx`);
 once approved, the screen fetches the bytes and keeps them as a picked file
-for its own save. The help tells the assistant it makes no images there and
-offers an SVG starting point only when asked. The palette offers "Ask the
-assistant" for a typed question, which the panel asks as its own box would.
+for its own save. The help tells Ask Crewlet it makes no images there and
+offers an SVG starting point only when asked. The palette offers
+"Ask Crewlet" for a typed question, which the panel asks as its own box would.
 
 **A turn is the engine's frames, reduced** (`app/assistant/chunk/turn.ts`):
 one pure reducer over every gesture and every frame, a frame at or below the
@@ -4464,14 +4464,14 @@ downloads from the stored snapshot, `EntityList`, `OpenInAppCard`,
 where the result's visibility changes, who will see it). A refusal of access
 is a `RefusalCard` (a value not accepted or a record not found is a warning
 `Callout`), and it names a missing permission, with a request to copy for an
-admin and the line that the assistant acts with your access only, only where
+admin and the line that Ask Crewlet acts with your access only, only where
 access is the way past it, which the refusal's `reason` decides
 (`lib/authorityRemedy.ts`, the table a screen's refusal asks too); any other
 says the engine's own sentence, with nothing to copy. A conversation an
 administrator read for compliance says so at its top, with each reader, when
 and the reason they gave.
 
-**Deep work is one card, redrawn in place.** When the assistant hands a large
+**Deep work is one card, redrawn in place.** When Ask Crewlet hands a large
 task to a deep-work run, its step carries the run's progress and the engine
 sends it again under the same step id as the run moves. The drawer draws it as
 a `DeepWorkCard`: the goal, its state, its time against its deadline, its
@@ -4493,7 +4493,7 @@ a file carries reaches the page as markup; any other file shows no preview.
 WebP or GIF images of at most 5 MiB each by Attach image, by dropping them on
 the composer, or by pasting (a screenshot). Each uploads at once
 (`POST /assistant/conversations/{id}/files`, under its own operation key and
-through the same request path as every other assistant write), stands in the
+through the same request path as every other Ask Crewlet write), stands in the
 composer as an `AttachmentChip` with its thumbnail, and its file id travels
 in the question's `attachments`. One the engine would refuse is refused above
 the composer in a sentence that says what to do, and Send waits while an
@@ -4501,7 +4501,7 @@ image is still uploading. A sent question shows its images as chips under its
 bubble.
 **A model's words are drawn inert**: a link is its label and the host it
 names, never an anchor; a picture is its alt text, never fetched
-(`ASSISTANT_WORDS` in `lib/markdown.ts`). The assistant moves the page only
+(`ASSISTANT_WORDS` in `lib/markdown.ts`). Ask Crewlet moves the page only
 through an engine-built Open in app card, whose address the drawer checks is
 one of this dashboard's own framed routes before it follows it, or through a
 page action the screen itself declared. There is no
@@ -4808,7 +4808,7 @@ trusted when it IS blank. Four distinctions the product makes everywhere:
   the verb needs, **Reload** for a request this engine's build has no rule
   for, and nothing where no reader can clear it from here (a verb only an
   agent's seat makes, a request that named no record, an agent acting for
-  somebody who could not take the verb, a request the Dashboard Assistant made
+  somebody who could not take the verb, a request Ask Crewlet made
   for a gesture it never takes or a change its person did not approve, which
   only its own panel meets). A stale proof's `grants` are what
   admitted the reader, and an artifact refusal's `admin` is the override beside
@@ -7402,7 +7402,7 @@ say where the company talks, as every service the company does not run is
   rebuilds it, in a new tab, a GitHub or GitLab address only under an owner
   that host's row names; any other, a link to the company's own dashboard
   among them, is drawn whole and inert with the host it names; and one whose
-  scheme the allowlist refuses is its words. The person's own assistant reads
+  scheme the allowlist refuses is its words. Ask Crewlet reads
   every box open on the room as one draft, the message, the reply in a thread
   open beside it and each message open for a rewrite, and proposes text into
   any of them; Send, Reply and Save stay the person's. A room that takes no messages from
@@ -7495,9 +7495,9 @@ say where the company talks, as every service the company does not run is
   `mark_chat_read`, the same audited act every other change is. A badge
   therefore clears when a flush lands, not on the scroll. A message counts as
   read only once it has been on screen while the room is in view: the tab in
-  front, and nothing over the page. The assistant as the whole window or over
+  front, and nothing over the page. Ask Crewlet as the whole window or over
   the page's end edge covers the room, and so does a dialog or the palette;
-  the assistant's column only narrows the page. What arrived while the room
+  Ask Crewlet's column only narrows the page. What arrived while the room
   was covered counts once it is in view again.
 - **A seat that moves is a new screen.** A write goes out as the seat the
   engine resolves when it arrives, so the whole screen is mounted under the
@@ -7512,7 +7512,7 @@ say where the company talks, as every service the company does not run is
   the frame's banner says the live channel is down, and it reads again on
   reconnect. Nothing is said while the socket is down; a message is never
   queued for later.
-- **On a narrow screen**, a phone's or one the assistant's column has
+- **On a narrow screen**, a phone's or one Ask Crewlet's column has
   narrowed, the rail stacks above the room and each takes its share. The
   screen still takes the window's height, because a transcript inside a page
   that also scrolls is two scrollers under one wheel. The widths are in
@@ -7945,9 +7945,9 @@ seat at once; **Agent seats** follow as one table with a column per window, so
 the one seat near its ceiling is found down a column. The company's row stands
 on the table's own columns (one track list handed to both), so each window
 sits over its column, and its first track says once what the windows are:
-every seat together, on the company clock, and when each turns over. **Each
-person's assistant** follows the company, on the same tracks: the ceiling every
-person's Dashboard Assistant questions are held to (`assistant.token_budget`),
+every seat together, on the company clock, and when each turns over.
+**Ask Crewlet, per person** follows the company, on the same tracks: the ceiling every
+person's Ask Crewlet questions are held to (`assistant.token_budget`),
 each person on their own. Its figures are the reader's own spend against it,
 drawn only where the engine counts one (`counted`: a person, under a company
 that caps a person's spend); elsewhere the row draws the ceilings and no figure,
@@ -7966,7 +7966,7 @@ warnings the change *introduces* are shown — a seat ceiling at or above the
 company's, which can never refuse a turn, is the one this screen exists to
 catch — with **Save anyway** to store it regardless. The company's ceilings are
 written as a merge patch of the windows that changed (`null` removes one), and
-each person's assistant's as the same patch one level down
+each person's Ask Crewlet ceiling as the same patch one level down
 (`{assistant: {token_budget: {...}}}`), which leaves the rest of the
 `assistant:` block as it was; a
 seat's by replacing that seat (`PUT /config/roles/{handle}`, its check the same
@@ -8008,7 +8008,7 @@ not draw for the reader (a seat it no longer lists) reveals nothing. The press
 is offered by the gate the editor there is drawn by (`useOrgWriteAccess`), so
 the link and the pencils it opens cannot disagree: a reader the gate refuses
 for who they are is told who can raise it, and never handed a link to a screen
-whose controls are all locked for them. It is drawn on the assistant's refusal
+whose controls are all locked for them. It is drawn on Ask Crewlet's refusal
 of a question and on a turn a budget stopped, on a refused act (the palette's
 knowledge answer among them), on the Inbox's company budget condition, and on
 Home's spent week.
@@ -8789,7 +8789,7 @@ from the engine's reading, and when it changes); how it signs in and the secret
 it reads; what it is used for, by category; when it last answered; and its
 menu. **By job** is every agent seat as a row with the model it runs for each
 category of work (*Coding*, *Reviewing and delegations*, *Routines and
-evaluations*), the Assistant's model above the grid, a cell's model's condition
+evaluations*), Ask Crewlet's model above the grid, a cell's model's condition
 in the cell, a split category said job by job, and a quiet note where a model
 under a fixed deadline is not a fast one; a pick opens that model's wizard on
 *Use it for* with the seat's category added.
@@ -8799,7 +8799,7 @@ by whom it was stored, its expiry, and on a CLI login each node's state with the
 command that makes it there), its sit-out with **Retry now** and **Clear
 sit-out** for every model on its plan, its last answer and failure, its usage
 over seven days, its limits and every place that runs on it, grouped by
-category with backups apart and the Assistant named. **Test** runs the CLI's
+category with backups apart and Ask Crewlet named. **Test** runs the CLI's
 own checks on the answering node and says each in words. A Codex model signs
 in with a device code: the page shows the address and the code and follows the
 session until it ends. **Remove** names every place that runs on the model in
@@ -9277,7 +9277,7 @@ sign-in screens drawn outside the frame, and one for each kind's create page
 (`routes/artifacts/new/`). The entry the shell loads holds
 the frame (the sidebar, the page header, the socket client) and nothing a
 screen draws, so a reader who came to read the Inbox parses the Inbox and not
-the org builder. The command palette and the assistant's panel are layers
+the org builder. The command palette and Ask Crewlet's panel are layers
 mounted only while open, each a large piece of the frame, so each is a chunk of
 its own, and they are the first two the idle prefetch fetches;
 `app/lazy.test.tsx` refuses a static path to either from `main.tsx`. A
@@ -9311,10 +9311,10 @@ and fails a build over any of four numbers:
 
 | What | Budget | Measured as | Why this number |
 |---|---|---|---|
-| The initial load: the entry, its static imports and the linked stylesheet | 358 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. The Dashboard Assistant took it to 336.4 KiB: the kit's assistant pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link |
+| The initial load: the entry, its static imports and the linked stylesheet | 358 KiB | gzip at the best level, which is what the engine serves | Under two seconds on a 1.5 Mbit/s link. It was 300 KiB until the rich editor: the first paint had reached 297 KiB, and the shell sends every design system stylesheet in one sheet by rule, so the editor's 1.8 KiB of rules ride it although its code is fetched only to edit, and the Markdown grammar the renderer and the editor share became a 2 KiB chunk of its own. The create pages took it to 314.5 KiB: their rules (3.1 KiB) moved into `create.css`, which arrives with them, and the command palette (about 10 KiB) became a chunk of its own, which left it at 300.2 KiB. The rail head's engine status (uilet 0.41) took it to 312.1 KiB, over the 312 the settings tables had asked for. The editing pieces of uilet 0.46 and 0.47 (their rules in the one sheet, and the character count FormField's limit brings into the entry) took it to 315.1 KiB. Artifact folders and the company brand (uilet 0.49 to 0.51) took it to 322.6 KiB: the brand scope's and the folder screens' rules ride the one sheet, and the folder and brand routes are the frame's. Ask Crewlet took it to 336.4 KiB: the kit's Ask Crewlet pieces ride the one sheet, and its button, page context and page actions are the frame's while its drawer is a chunk of its own; uilet 0.57.1 and 0.63.0 and its setup form took it to 340.3 KiB. One vocabulary for seat states, uilet 0.66.0 and choosing screen shapes by the screen's width took it to 345.6 KiB, under 346. uilet 0.67.0's product marks and 0.69.0's BriefCard, a read named in the answer rather than drawn as a card (ADR-0061) and a model's usage limit as one condition per entry (ADR-0064) took it to 351.0 KiB, under 352, and drawing what prose names with its mark, with the flattening moved out of the renderer, brought it back to 348.9 KiB. Steering a turn whose coding run is out measured 350.9 KiB, under 351, before it met that flattening and 348.8 KiB after, and a coding run's question asked as a decision took it to 349.0 KiB. Chatlet adds 6.0 KiB to it: its pushes and rooms in the socket client, routes and rail are the frame's, since a mention is told on whatever screen the reader is on. With it the load measured 355.0 KiB, 29 bytes past 355 KiB, so it moved to 356 KiB. Merged beside Settings › Models, whose frame measured 351.0 KiB, it measured 357.0 KiB, 28 bytes past 357 KiB, so it moved to 358 KiB: 1.96 seconds on that link |
 | Each chunk fetched later: a workspace, the org builder, a lazy stylesheet | 150 KiB | the same | Half the initial load when it was 300 KiB, for the first click into a screen the idle prefetch has not reached |
 | Every font face the build embeds | 90 KB | as served — woff2 is never recompressed | The four Geist faces (83,736 bytes) and room to re-cut them, never a fifth |
-| The whole of `static/dashboard`, which every binary and image carries | 4913 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. The Dashboard Assistant (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling the assistant what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB |
+| The whole of `static/dashboard`, which every binary and image carries | 4913 KiB | raw | Every binary carries it, opened or not. 3 MiB, then 3.5 MiB for the artifacts workspace, then 4 MiB for the rich editor, whose chunk is about 276 KB raw (ProseMirror 228 KB of it) plus 15 KB of its packages' notices: it measured 3.54 MiB after it. Then 4.25 MiB: artifact folders and the company brand took it from about 3.99 MiB to about 4.14 MiB. Ask Crewlet (its panel, page actions, deep work and files, and the kit's components and rules) took it to 4504.1 KiB. Telling Ask Crewlet what each page action takes and what the Inbox holds, its cards drawn in a person's terms, one vocabulary for seat states, uilet 0.66.0, a brand draft's own cards and which revision each node runs took it to 4553.1 KiB, under 4554 KiB. uilet 0.67.0 to 0.74.0, the answered inbox, the brief, a write's caveats in a person's words, a read named in the answer (ADR-0061), a limit's remedy and a model's usage limit (ADR-0064) took it to 4610.7 KiB, under 4611 KiB. Drawing what prose names with its mark (uilet 0.75.0 and 0.75.1's InlineRef) and linking only what the dashboard built took it to 4629.3 KiB, under 4630 KiB. A person's stop ending a seat's coding run and steering a turn whose coding run is out took it to 4631.8 KiB, the hardening of inline links and uilet 0.75.2's unclipped marks to 4632.7 KiB, and a coding run's question asked as a decision to 4637.3 KiB, under 4638 KiB. Settings › Models (the models API's pages and wizard, with uilet 0.76 and 0.77) took it to 4773.6 KiB. Chatlet took it to 4912.3 KiB, so it moved to 4913 KiB, past a doubled baseline: the 2.3 MiB measured when the budget was first set, doubled, is about 4710 KiB |
 
 The initial load is the shell's scripts and stylesheet and everything they reach
 through a static `import`, derived from the modules themselves rather than from

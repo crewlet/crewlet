@@ -51,7 +51,7 @@ func runAssistant(environ config.Source, args []string, stdout, stderr io.Writer
 
 const assistantUsage = `usage: crewlet assistant eval -suite DIR [-model KEY -paid] [-trials N] [-company PATH] [-config PATH] [-api URL]
 
-  eval   Run a directory of evaluation cases through the Dashboard Assistant's
+  eval   Run a directory of evaluation cases through Ask Crewlet's
          own orchestrator and tool catalogue, in this process. Each case plays
          its own scripted rounds (no model is called) unless -model names a
          providers.llm entry to ask instead, which calls a paid model once per
@@ -163,7 +163,7 @@ func assistantProvider(company *config.Company, keys []string, resolver *config.
 	key string) (*cliagent.Provider, error) {
 
 	if problem := company.AssistantEntryProblems(key); problem != nil {
-		return nil, fmt.Errorf("crewlet assistant eval: %s may not run the assistant: %w",
+		return nil, fmt.Errorf("crewlet assistant eval: %s may not run Ask Crewlet: %w",
 			key, problem)
 	}
 	providers, err := cliAgents(company, keys, resolver)

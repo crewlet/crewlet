@@ -1656,7 +1656,7 @@ test("a typed question can be asked of the assistant, where the reader may ask",
   const ask = vi.fn();
   const p = mount({ assistant: { open: false, unavailable: null, toggle: () => {}, ask } });
   await p.type("why did spend go up");
-  const row = p.row("Ask the assistant: “why did spend go up”");
+  const row = p.row("Ask Crewlet: “why did spend go up”");
   await act(async () => {
     fireEvent.click(row);
   });
@@ -1665,7 +1665,7 @@ test("a typed question can be asked of the assistant, where the reader may ask",
   cleanup();
   const q = mount();
   await q.type("why did spend go up");
-  expect(screen.queryByText("Ask the assistant: “why did spend go up”")).toBeNull();
+  expect(screen.queryByText("Ask Crewlet: “why did spend go up”")).toBeNull();
 });
 
 // THE LAST ANSWER, NEVER ENTER'S BY DEFAULT: the assistant's row closes the
@@ -1680,7 +1680,7 @@ test("the assistant's row is last, and the artifacts scope is not what Enter tak
     fireEvent.change(box, { target: { value: "why did spend go up" } });
   });
   const options = screen.getAllByRole("option");
-  expect(options.at(-1)?.textContent).toContain("Ask the assistant: “why did spend go up”");
+  expect(options.at(-1)?.textContent).toContain("Ask Crewlet: “why did spend go up”");
   const id = box.getAttribute("aria-activedescendant") ?? "";
   expect(document.getElementById(id)?.textContent ?? "").not.toContain("in artifacts");
 });

@@ -5,10 +5,10 @@
       "properties": {
         "deep_work": {
           "$ref": "#/$defs/AssistantDeepWork",
-          "description": "Deep work: the assistant hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own assistant tools. Absent: quick mode only."
+          "description": "Deep work: Ask Crewlet hands a large task to a coding CLI running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
         },
         "enabled": {
-          "description": "Run the Dashboard Assistant for this company. Absent or false: off.",
+          "description": "Run Ask Crewlet for this company. Absent or false: off.",
           "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
           "type": [
             "boolean",
@@ -38,10 +38,10 @@
               "type": "array"
             }
           ],
-          "description": "providers.llm keys the assistant runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."
+          "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose CLI's local tools are denied and, through overrides.web_tools, its web tools."
         },
         "max_steps": {
-          "description": "Most tool steps one assistant turn may take, 1..40. Absent: 30.",
+          "description": "Most tool steps one Ask Crewlet turn may take, 1..40. Absent: 30.",
           "maximum": 40,
           "minimum": 0,
           "type": [
@@ -59,7 +59,7 @@
           ]
         },
         "retention_days": {
-          "description": "How long a person's assistant conversations are kept, 1..365 days. Absent: 30.",
+          "description": "How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30.",
           "maximum": 365,
           "minimum": 0,
           "type": [
@@ -69,10 +69,10 @@
         },
         "token_budget": {
           "$ref": "#/$defs/TokenBudget",
-          "description": "Each person's assistant token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
+          "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
         },
         "turn_timeout_seconds": {
-          "description": "Longest one assistant turn may run, 30..1200 seconds. Absent: 900.",
+          "description": "Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900.",
           "maximum": 1200,
           "minimum": 0,
           "type": [

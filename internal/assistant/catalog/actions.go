@@ -108,7 +108,7 @@ const historyNote = "The previous version stays in the configuration history, so
 
 // noUndoNote is what a destructive change to a route that keeps no history
 // says: the assistant has no undo for it.
-const noUndoNote = "This cannot be undone from the assistant."
+const noUndoNote = "This cannot be undone from Ask Crewlet."
 
 // readsNote is what a POST that changes nothing says ([authz.EffectReads]):
 // the person approves a question, not a change.

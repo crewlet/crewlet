@@ -477,7 +477,7 @@ func TestAListingCountsWhatNoCommandNames(t *testing.T) {
 	}
 	var out strings.Builder
 	waitOut(&out, held, "k2")
-	if !strings.Contains(out.String(), "7 values in Dashboard Assistant conversations") ||
+	if !strings.Contains(out.String(), "7 values in Ask Crewlet conversations") ||
 		!strings.Contains(out.String(), "1 outstanding invitations") {
 		t.Errorf("the rotation's wait-out said %q, want the conversations and the "+
 			"invitation still under another key", out.String())

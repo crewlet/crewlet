@@ -74,7 +74,7 @@ const (
 	refusedTooLarge  = "It is larger than the engine accepts."
 	refusedBusy      = "The engine is busy. Try again in a moment."
 	refusedValue     = "One of its values was not accepted."
-	refusedUnsent    = "The assistant asked for it in a form the engine does not accept, " +
+	refusedUnsent    = "Ask Crewlet asked for it in a form the engine does not accept, " +
 		"so it was not sent."
 	refusedUnread  = "What this would change could not be read."
 	refusedDeep    = "Deep work is not available right now."
@@ -100,14 +100,14 @@ const (
 // Not "a change that can apply": a state refusal is cleared by whoever changes
 // the state (an archived project's lead, a trashed task's restore), which no
 // change the assistant could prepare does.
-const RefusalResumes = "The assistant has the details and will say what can be done."
+const RefusalResumes = "Ask Crewlet has the details and will say what can be done."
 
 // RefusalSettled is the hint in its place for a refusal no change mends, to
 // the same request or to the state it met — the turn has ended, has taken all
 // the notes it takes, or the question was answered; the artifact's purge has
 // begun; the write can no longer be undone: the assistant still has the
 // details, and says what can be done instead.
-const RefusalSettled = "The assistant has the details and will say what can still be done."
+const RefusalSettled = "Ask Crewlet has the details and will say what can still be done."
 
 // RefusalHint is the hint a failed proposal's card carries for a refusal of
 // code: [RefusalSettled] where no change mends it, else [RefusalResumes].

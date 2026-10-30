@@ -66,7 +66,7 @@ test("the card names seats by their names and says the Dashboard Assistant once"
   expect(links[0]!.getAttribute("href")).toContain("backend-engineer");
   expect(list.textContent).toContain("(reviewing only)");
   expect(list.textContent).toContain("Backup for PM.");
-  expect(list.textContent).toContain("The Dashboard Assistant runs on it.");
+  expect(list.textContent).toContain("Ask Crewlet runs on it.");
   expect(list.textContent).not.toMatch(/backend-engineer|llm_review/);
 });
 
@@ -75,7 +75,7 @@ test("a model no seat uses says so once, with the assistant beside it", () => {
   page({ key: "assistant", used_by: [{ assistant: "chat", position: 0 }] });
   expect(screen.queryByRole("table")).toBeNull();
   expect(screen.getByText(/No seat uses/).textContent).toBe("No seat uses assistant.");
-  expect(screen.getByText("The Dashboard Assistant runs on it.")).toBeDefined();
+  expect(screen.getByText("Ask Crewlet runs on it.")).toBeDefined();
 });
 
 test("a sitting-out model's Retry now opens the retry flow", () => {

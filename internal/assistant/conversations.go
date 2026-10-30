@@ -291,7 +291,7 @@ func conversationTitle(text string) string {
 
 // titleInstruction is the title call's whole instruction.
 const titleInstruction = "Write a title of at most eight words for this conversation " +
-	"between a person and their assistant. Answer with the title alone: no quotes, no " +
+	"between a person and Ask Crewlet. Answer with the title alone: no quotes, no " +
 	"full stop, no explanation."
 
 // traceOf is the trace a turn runs under, for its row and its done frame.

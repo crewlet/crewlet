@@ -17,7 +17,7 @@ const (
 	// PromptVersion names the system prompt's text, stamped on every turn
 	// row and audit record, so a change in behaviour can be read against a
 	// change in the prompt. A reworded section is a new version.
-	PromptVersion = "assistant.prompt.v5"
+	PromptVersion = "assistant.prompt.v6"
 
 	// ModelResultBytes is the most of one tool result the model reads:
 	// sixteen kibibytes, a quarter of what a call reads at most

@@ -32,7 +32,7 @@ test("draws no keycap, and keeps its shortcut as its own property and in its too
   expect(container.querySelector(".crewlet-kbd, kbd")).toBeNull();
   expect(button.getAttribute("aria-keyshortcuts")).toBe("Meta+. Control+.");
   const press = keyRow("assistant.open").presses[0]!;
-  expect(button.getAttribute("title")).toBe(`Ask the assistant (${pressText(press)})`);
+  expect(button.getAttribute("title")).toBe(`Ask Crewlet (${pressText(press)})`);
 });
 
 test("wears the dot on the mark's corner, with the reason in its name and its tooltip", () => {

@@ -183,9 +183,9 @@ export function RoomSettings({
       {note && <p className="t-caption muted">{note}</p>}
       <p className="t-caption muted">
         A room can&rsquo;t be renamed. Archiving it and how long it keeps messages aren&rsquo;t on
-        this form. Ask the assistant to archive it: the room&rsquo;s creator, its team&rsquo;s lead
-        or an admin approves the change it proposes. An admin can ask it to change how long the room
-        keeps messages, or send <InlineCode>PUT /chatlet/channels/{"{id}"}/retention</InlineCode>.
+        this form. Ask Crewlet to archive it: the room&rsquo;s creator, its team&rsquo;s lead or an
+        admin approves the change it proposes. An admin can ask it to change how long the room keeps
+        messages, or send <InlineCode>PUT /chatlet/channels/{"{id}"}/retention</InlineCode>.
       </p>
     </Modal>
   );

@@ -104,7 +104,7 @@ func (p Principal) Assisted() (uuid.UUID, bool) {
 func Assistable(p Principal) string {
 	switch {
 	case p.Kind != KindPerson:
-		return "only a person may use the assistant"
+		return "only a person may use Ask Crewlet"
 	case p.Stage != StageActive:
 		return "the person is not active"
 	case p.Seat == "":

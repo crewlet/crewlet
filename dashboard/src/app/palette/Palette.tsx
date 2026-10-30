@@ -583,7 +583,7 @@ export function CommandPalette({
           {
             id: "act-assistant",
             icon: <ProductMark product="assistant" size="sm" />,
-            label: `Ask the assistant: “${term}”`,
+            label: `Ask Crewlet: “${term}”`,
             hint: "answers in the panel, with this page attached",
             onSelect: () => assistant.ask(term),
           },
@@ -1066,7 +1066,7 @@ export function CommandPalette({
           },
         ]);
       }
-      push("assistant", "Assistant", assistantRows());
+      push("assistant", "Ask Crewlet", assistantRows());
     }
   } else if (scope === "tasks") {
     const rows = taskRows(TASK_HITS);
@@ -1120,7 +1120,7 @@ export function CommandPalette({
       ),
     );
     push("actions", "Actions", actionRows());
-    push("assistant", "Assistant", assistantRows());
+    push("assistant", "Ask Crewlet", assistantRows());
   }
 
   // ---- what the list says when it has no rows ------------------------------

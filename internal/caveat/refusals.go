@@ -132,7 +132,7 @@ func ArtifactTrashed() Refusal {
 // make the change themselves.
 func ValueInWrongForm() Refusal {
 	return Refusal{person: "The request sent a value in a form this change " +
-		"does not take, so nothing was changed. Ask the assistant to send it " +
+		"does not take, so nothing was changed. Ask Crewlet to send it " +
 		"again, or make the change yourself."}
 }
 
@@ -151,7 +151,7 @@ func TokenBudgetSpent(where Remedy) Refusal {
 	case SettingSeatTokenBudget:
 		whose = "@" + where.Seat + "'s token budget"
 	case SettingAssistantTokenBudget:
-		whose = "Your own assistant token budget"
+		whose = "Your own Ask Crewlet budget"
 	default:
 		whose = "The company's token budget"
 	}

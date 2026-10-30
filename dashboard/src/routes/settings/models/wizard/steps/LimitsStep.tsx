@@ -18,7 +18,7 @@ import type { Draft } from "../draft.ts";
 
 /** The web tools switch's helper, which Review repeats in the same words. */
 export const WEB_TOOLS_HELP =
-  "Web tools are allowed unless you turn this on. Turn it on for jobs that read what people write. The Dashboard Assistant runs only on models with web tools denied.";
+  "Web tools are allowed unless you turn this on. Turn it on for jobs that read what people write. Ask Crewlet runs only on models with web tools denied.";
 
 /** The web tools as Review says them, in the switch's words. */
 export const webToolsWords = (denied: boolean) => (denied ? "Denied" : "Allowed");
@@ -85,7 +85,7 @@ export function LimitsStep({
         label="Deny the CLI's web tools"
         description={
           held
-            ? `${WEB_TOOLS_HELP} The Dashboard Assistant runs on this model, so they stay denied.`
+            ? `${WEB_TOOLS_HELP} Ask Crewlet runs on this model, so they stay denied.`
             : WEB_TOOLS_HELP
         }
         checked={draft.webDenied}

@@ -12,7 +12,7 @@ import (
 )
 
 // errNoFiles is a draft change naming a file on an engine that keeps none.
-var errNoFiles = fmt.Errorf("%w: this engine keeps no assistant files, so a file cannot be "+
+var errNoFiles = fmt.Errorf("%w: this engine keeps no Ask Crewlet files, so a file cannot be "+
 	"proposed", catalog.ErrInvalidArguments)
 
 // draftChange holds a draft.set call to the draft the turn's page declared

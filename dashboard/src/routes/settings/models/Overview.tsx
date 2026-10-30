@@ -103,7 +103,7 @@ function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => s
   const said = lines
     .map((l) =>
       l.job === "assistant"
-        ? "the Dashboard Assistant"
+        ? "Ask Crewlet"
         : `${l.label}: ${l.seats.length > 0 ? listed(l.seats) : "no seat"}`,
     )
     .join("; ");
@@ -273,7 +273,7 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
               icon={<CpuGlyph size="xs" />}
               label="Models"
               value={models.length}
-              sub={unused ? `${unused} not used by any seat or the assistant` : "every one in use"}
+              sub={unused ? `${unused} not used by any seat or Ask Crewlet` : "every one in use"}
             />
             {/* A COUNT OF THE FEW, NOT "3 OF 4" (QA Minor 14): the tile names how
                 many answer and, under it, exactly how many do not. */}

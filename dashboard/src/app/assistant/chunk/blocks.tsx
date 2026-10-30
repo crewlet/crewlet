@@ -986,7 +986,7 @@ export function CardBlock({
           {why}
           {hint ? ` ${hint}` : ""}
           {/* A REFUSED READ IS NOT A CHANGE: the sentence fits a read and a write. */}
-          {access ? " The assistant acts with your access only, so it cannot do this for you." : ""}
+          {access ? " Ask Crewlet acts with your access only, so it cannot do this for you." : ""}
         </RefusalCard>
       );
     }

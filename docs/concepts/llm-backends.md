@@ -2087,7 +2087,7 @@ directory would close that too, and was measured and not adopted: codex then
 reads even the call's `AGENTS.md` through its bubblewrap helper, and on a host
 where no user namespace can be created every call failed. That residual is why
 `local_tools: denied` is a claim `crewlet llm doctor` **measures** rather than
-one you take on trust, and why the Dashboard Assistant, which needs a CLI left
+one you take on trust, and why Ask Crewlet, which needs a CLI left
 with no tool at all, refuses codex.
 
 **An allowlist is safe on its own where a stale name costs one tool.**
@@ -2142,10 +2142,10 @@ of an unrecorded read, accepted. A seat on a CLI with no web tool of its own
 reaches the web the way it reaches everything external, through the MCP servers
 you configure.
 
-**An entry can turn the web off, and the Dashboard Assistant requires it.**
+**An entry can turn the web off, and Ask Crewlet requires it.**
 Web stays on for every seat unless its entry says otherwise. An entry whose
-model must read nothing the engine's own guard did not hand it (the
-[Dashboard Assistant's](../getting-started/configuration.md#the-dashboard-assistant)) sets `overrides: {web_tools: denied}`, and the profile's `web_denial` says
+model must read nothing the engine's own guard did not hand it
+([Ask Crewlet's](../getting-started/configuration.md#ask-crewlet)) sets `overrides: {web_tools: denied}`, and the profile's `web_denial` says
 what that CLI runs with instead:
 
 | Profile | How web is turned off | Measured |
@@ -2156,28 +2156,28 @@ what that CLI runs with instead:
 | `pi` | nothing changes: `--no-tools` already sends no tools | measured on 0.85.1 (no web tool exists) |
 
 Every other profile has no `web_denial`, says why in `web_tools_note`, and
-refuses `web_tools: denied`, so it cannot serve the assistant until one is
+refuses `web_tools: denied`, so it cannot serve Ask Crewlet until one is
 measured and added (an operator may supply their own `web_denial` in
 `overrides`, and owns that claim). Whichever profile it is, `crewlet llm
 doctor` runs its web probe on a denied entry and reports a fetch that
 succeeded as a problem, exactly as it reports a shell that ran on a profile
-denying local tools; run it before the assistant goes live.
+denying local tools; run it before Ask Crewlet goes live.
 
-**The Dashboard Assistant needs more than a denial: no tool of its own, by
+**Ask Crewlet needs more than a denial: no tool of its own, by
 construction.** Its tools are the person's own requests, served to its CLI as
 the `crewlet` server like any phase's ([ADR-0049](https://github.com/crewlet/crewlet/blob/main/adr/0049-a-phases-tools-reach-its-cli-as-one-mcp-server.md)),
 and nothing else may be on offer. A deny list names the tools a release had;
 measured on Claude Code 2.1.310 with no login (so no model was reached), the
 seats' deny list still left thirteen tools on offer, Workflow, SendMessage and
-EnterWorktree among them. So a profile the assistant runs on declares
+EnterWorktree among them. So a profile Ask Crewlet runs on declares
 `tools_off`: the argument runs that leave the CLI with no built-in tool and no
 server but the ones its `mcp` block names, and the flags that would bring one
-back. The assistant's chain admits an entry only when the argv its calls run
+back. Ask Crewlet's chain admits an entry only when the argv its calls run
 (web denied) carries each run once and none of those flags, and its `mcp`
 allow list names the engine's tools alone, which an override cannot quietly
 undo:
 
-| Profile | No tool by construction | Assistant |
+| Profile | No tool by construction | Ask Crewlet |
 |---|---|---|
 | `claude-code` | `--tools ""` (an empty allow list) in the denied argv, `--strict-mcp-config` with no server but `crewlet`, and `mcp__crewlet__*` the only allowed tools | eligible, measured on 2.1.310 |
 | `pi` | `--no-tools` sends no tool, `--no-extensions` loads none | eligible, measured on 0.85.1 |
@@ -2290,8 +2290,8 @@ it makes no further request it would be billed for.
   takes over. A window the last round filled is a phase out of rounds, not one
   the budget refused.
 - **A call that ends or parks the phase runs alone** — a terminator
-  (`submit_work`, `submit_review`, …) or a detached call (a proposal the
-  Dashboard Assistant parks its turn on) — after every other call of its
+  (`submit_work`, `submit_review`, …) or a detached call (a proposal
+  Ask Crewlet parks its turn on) — after every other call of its
   response has run, so a delivery the model made beside its submission is
   recorded before the submission is judged. It waits only for
   calls the CLI could be making beside it (the profile's `concurrency`), and for
@@ -3841,7 +3841,7 @@ it runs on.
 | `local_tools_note` | Why a `vendor-default` stance is one. |
 | `web_tools` | The entry's stance on the CLI's own web tools: `allowed` (the default, and every seat's) or `denied`. `denied` runs the CLI through `web_denial`, and is refused on a profile that has none. |
 | `web_tools_note` | How the profile's web denial was measured, or why it has none. |
-| `tools_off` | `{args, refuses, note}`: how the CLI's run is left with no tool of its own, by construction. `args` are argument runs (`[["--tools", ""], ["--strict-mcp-config"]]`), each of which must appear adjacent and once in the argv; `refuses` are flags that bring a tool back in the call's own arguments; the `mcp` block's arguments are judged apart, and its `allow_args` may name only the engine's tools. Requires `local_tools: denied` and a `note` saying how it was measured. The Dashboard Assistant admits only an entry whose argv passes it. |
+| `tools_off` | `{args, refuses, note}`: how the CLI's run is left with no tool of its own, by construction. `args` are argument runs (`[["--tools", ""], ["--strict-mcp-config"]]`), each of which must appear adjacent and once in the argv; `refuses` are flags that bring a tool back in the call's own arguments; the `mcp` block's arguments are judged apart, and its `allow_args` may name only the engine's tools. Requires `local_tools: denied` and a `note` saying how it was measured. Ask Crewlet admits only an entry whose argv passes it. |
 | `web_denial` | `{complete_args, seed_files, mcp: {complete_args, seed}}`: what the run uses instead when `web_tools` is `denied`. Each field set replaces the profile field of that name whole; a field left unset keeps it. `mcp` does the same for a run with tools, whose `mcp` block runs an argv or writes settings of its own: a denial that replaces `complete_args` or `seed_files` must replace the mcp block's own counterpart too, or an entry that denies the web is refused, since that run would keep it. Overriding `complete_args` (or `seed_files`) beside `web_tools: denied` is refused where the denial replaces it: override `web_denial.complete_args` instead. |
 | `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, a system prompt file, a `config_env` or `work_config_env` directory, the call's `.git` project-root marker, or a directory above any of them. |
 | `key_seed_files` | `{path, content}`: settings files written into a seat's **key** home alone — where its calls run when they sign in with a key — after `seed_files`, each over a `seed_files` entry at the same path. For a CLI that picks its sign-in from settings before its environment, so no variable can tell it to use the key: Gemini CLI takes a `GOOGLE_GEMINI_BASE_URL` gateway as its gateway sign-in, and refuses it (exit 41), unless its settings name the key sign-in, which in a login home would send every subscription call to a key it does not have. The seat's home only. |
@@ -3865,7 +3865,7 @@ cancelled) as one more, attributed to whoever started it.
 **Two lenses and a page per model.** *Models* lists every model with its
 condition, how it signs in and what it is used for, under the model alarms;
 *By job* is every seat as a row, with the model it runs for each kind of work
-and the Assistant's model above it. A model's own page has its sign-in, its
+and Ask Crewlet's model above it. A model's own page has its sign-in, its
 sit-out, its last test, its usage over seven days and every place that runs on
 it. Every member opens the page; every change on it is an admin's.
 
@@ -3883,7 +3883,7 @@ covers:
 | Reviewing and delegations | `llm_review` and `llm_subagent` |
 | Routines and evaluations | `llm_auxiliary` and `llm_judge` |
 | Everything | the seat's `llm`, clearing the four satellites, so every job resolves to it |
-| Assistant | `assistant.llm`, company-wide, with no seats; the model must deny web tools |
+| Ask Crewlet | `assistant.llm`, company-wide, with no seats; the model must deny web tools |
 
 The two pairs are paired by the model each wants: reviewing and the delegated
 work take a strong model, and the routines and the onboarding judge, each under
@@ -3894,9 +3894,9 @@ a job removes it from the field, and a field left empty is deleted, so the job
 resolves as an unset one does (the review shows where it lands). Routines
 and evaluations, whose jobs have a fixed deadline
 ([Auxiliary work and latency](#auxiliary-work-and-latency)), notes when the
-model chosen is not a fast one, and never refuses it. A model the
-assistant already runs on keeps it until another model is chosen for the
-assistant.
+model chosen is not a fast one, and never refuses it. A model
+Ask Crewlet already runs on keeps it until another model is chosen for
+Ask Crewlet.
 
 **Status comes from every node's heartbeat.** Each node publishes, per model,
 how it signs in there, whether it sits out a vendor's limit and until when,
@@ -3946,7 +3946,7 @@ the login the approval made is sealed as the model's credential bundle and
 re-activated, so every node restores it.
 
 **Removing a model repoints what names it.** The remove flow lists every seat
-job and assistant target that runs on the model, asks where each moves (another
+job and Ask Crewlet target that runs on the model, asks where each moves (another
 model, or unset, which falls back as an unset job does), shows where a job that
 named nothing will land now, and removes the model and every repoint as one
 revision ([the route](../reference/api-endpoints.md#delete-configllm-providersid-remove-a-model-and-repoint-what-names-it)).
@@ -4043,7 +4043,7 @@ are each named as what they are. On a profile with no `mcp` block the smoke test
 fails naming `overrides.mcp`, after asking plainly whether the CLI is signed in.
 
 The `web` line leads with the entry's stance. On an entry with
-`overrides: {web_tools: denied}` (the one an assistant runs on) the probe's
+`overrides: {web_tools: denied}` (the one Ask Crewlet runs on) the probe's
 expectation is reversed: a refusal is the healthy answer, and a fetch is a
 problem naming the denial that did not take effect:
 

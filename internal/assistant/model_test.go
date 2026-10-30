@@ -42,7 +42,7 @@ func TestEveryModelFailureIsToldInItsOwnWords(t *testing.T) {
 	}{
 		"signed out": {err: modelFailure(llm.KindAuth, errors.New("OAuth token has expired"), time.Time{}),
 			code: wire.ErrorModelSignedOut, message: "signed out",
-			hint: "Ask an administrator to sign the assistant's model in again."},
+			hint: "Ask an administrator to sign Ask Crewlet's model in again."},
 		"signed out, to an administrator": {err: modelFailure(llm.KindAuth, errors.New("expired"), time.Time{}),
 			admin: true, code: wire.ErrorModelSignedOut, message: "signed out",
 			hint: "`crewlet llm login assistant`"},
@@ -60,7 +60,7 @@ func TestEveryModelFailureIsToldInItsOwnWords(t *testing.T) {
 			hint: "providers.llm.assistant.timeout_seconds", retryable: true},
 		"a CLI that cannot start": {err: modelFailure(llm.KindFatal, llm.ErrNotRunnable, time.Time{}),
 			code: wire.ErrorModelUnavailable, message: "cannot be started",
-			hint: "Ask an administrator to check the assistant's model."},
+			hint: "Ask an administrator to check Ask Crewlet's model."},
 		"a CLI that cannot start, to an administrator": {err: modelFailure(llm.KindFatal, llm.ErrNotRunnable, time.Time{}),
 			admin: true, code: wire.ErrorModelUnavailable, message: "cannot be started",
 			hint: "`crewlet llm doctor assistant`"},

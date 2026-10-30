@@ -1,14 +1,14 @@
-# Running the Dashboard Assistant
+# Running Ask Crewlet
 
-This guide is for the administrators and operators who turn the
-[Dashboard Assistant](../concepts/assistant.md) on, choose the model it runs
+This guide is for the administrators and operators who turn
+[Ask Crewlet](../concepts/assistant.md) on, choose the model it runs
 on, keep it within budget, and answer compliance requests about it. What people
 see when they use it is on the concept page; every configuration field is in
-the [Configuration Reference](../getting-started/configuration.md#the-dashboard-assistant).
+the [Configuration Reference](../getting-started/configuration.md#ask-crewlet).
 
 ## What you are turning on
 
-The assistant answers a person's questions and prepares changes for that person
+Ask Crewlet answers a person's questions and prepares changes for that person
 to approve, **as that person**. It holds no identity, permission or credential
 of its own, so turning it on grants nobody any access they did not already
 have:
@@ -19,11 +19,11 @@ have:
   own handler, so the guard, the authority table and every route's own checks
   decide it exactly as they decide that person's clicks
   ([ADR-0050](https://github.com/crewlet/crewlet/blob/main/adr/0050-the-assistant-acts-only-through-a-grant-derived-from-the-persons-session.md)).
-- A write is never sent by the assistant. It becomes a proposal the person
+- A write is never sent by Ask Crewlet. It becomes a proposal the person
   approves from their own session, against a server-rendered preview, under a
   single-use grant bound to that one request
   ([ADR-0051](https://github.com/crewlet/crewlet/blob/main/adr/0051-an-assistant-write-executes-only-from-its-owners-approval-of-a-server-rendered-preview.md)).
-- The assistant may do whatever its person may, as a read or as a change they
+- Ask Crewlet may do whatever its person may, as a read or as a change they
   approve, but for a short human-only list it never takes, whoever approves:
   signing in and the session and token ceremonies (minting or revoking a
   token, changing a second factor, issuing a password or invitation link,
@@ -47,7 +47,7 @@ refused, and the dashboard shows them the reason.
 ### What it can read and change
 
 Anything the person can reach through the engine's API. Beside its dedicated
-tools, the assistant looks a route up in this reference
+tools, Ask Crewlet looks a route up in this reference
 ([API Endpoints](../reference/api-endpoints.md), embedded in the engine),
 reads it with the person's own access, and proposes any change on it. The card
 says what the change does in plain words, read from the resource as it is now
@@ -79,13 +79,13 @@ reviews the rows, which are built from the same request. A change prepared again
 a resource that has moved since is refused rather than overwritten. Before any
 card is drawn, a route that can check a change without making it (every write
 of the company document, `?dry_run=true`) is asked to, as the person: a change
-the route would refuse goes back to the assistant to correct, and never reaches
+the route would refuse goes back to Ask Crewlet to correct, and never reaches
 the person to approve, and the warnings the change itself introduces are on
 the card (one the company already carried is left off). A write the
 history records carries a one-line summary of what it does, shown on the card
 and stored with the revision. A change that replaces a whole object (a unit, a
-seat, the charter) never removes a field by leaving it out: a field the
-assistant drops without saying so is refused before the card, and one the
+seat, the charter) never removes a field by leaving it out: a field
+Ask Crewlet drops without saying so is refused before the card, and one the
 person asked to remove leads the card ("This removes ..."). A task or a
 page that names no project or space
 is shown, and sent, with the one it will land in, or refused when the person's
@@ -105,13 +105,13 @@ offered only to a person who could make the same change on its screen:
 | Write a page, edit a page | People holding Doclet | Doclet's own write |
 | Share an artifact, withdraw a share | The artifact's owner | The artifact's sharing, with the audience named on the card; a share to the whole company asks the person to confirm it is them |
 | Pause or resume an agent, steer a running turn, answer a coding run | Whoever may do it on the seat's screen | The operator control the screen sends |
-| Post in a chat room, reply in a thread, send a direct message, edit or delete a message, change a room's topic, purpose or archive, change who is in a room, leave a room | People holding Chatlet | Chat's own write, as the person: the card names the room and who will read it, a membership change shows who joins and who leaves and takes out only the people the assistant names, deleting a message or taking somebody out of a room (yourself included) is marked destructive with what goes at the top, and a change made meanwhile to the room's settings or members, or to the message, makes the proposal stale (**Prepare it again**); a message said in the room does not |
+| Post in a chat room, reply in a thread, send a direct message, edit or delete a message, change a room's topic, purpose or archive, change who is in a room, leave a room | People holding Chatlet | Chat's own write, as the person: the card names the room and who will read it, a membership change shows who joins and who leaves and takes out only the people Ask Crewlet names, deleting a message or taking somebody out of a room (yourself included) is marked destructive with what goes at the top, and a change made meanwhile to the room's settings or members, or to the message, makes the proposal stale (**Prepare it again**); a message said in the room does not |
 | Change the company's mission, vision or standing policies | Administrators | `PUT /config/charter`, the route Company › Principles saves through: the card shows a word diff of the mission and vision and one row per policy, the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change made to the principles meanwhile makes the proposal stale (**Prepare it again**) |
 | Set or remove one token ceiling: a seat's or the company's, for a day, a week or a month | Administrators | The write Company › Budgets saves: the seat as read with only that window's ceiling changed (`PUT /config/roles/{handle}`), or a merge patch of the company's one window (`PATCH /config`). The card shows one row, the ceiling now and the new one, the history line and the route's warnings; the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change to the configuration meanwhile makes the proposal stale. A lead changing a seat they lead goes through the generic change or Budgets itself |
 
 A change to the screen the person has open (a filter, a range, a draft in an
 open editor) is applied by the page itself and saves nothing. Each screen tells
-the assistant what each of its changes takes (the keys a filter writes, the
+Ask Crewlet what each of its changes takes (the keys a filter writes, the
 seats and windows Budgets draws, the org builder's operations), and a change
 that does not match is refused before any card is drawn, so the person never
 approves a change the screen cannot apply. Such a change goes stale only when
@@ -120,19 +120,19 @@ does not.
 
 ## Turning it on
 
-1. **Add a dedicated `providers.llm` entry** for the assistant that meets the
-   assistant's rules: a CLI run with no tool of its own beside the engine's
+1. **Add a dedicated `providers.llm` entry** for Ask Crewlet that meets
+   Ask Crewlet's rules: a CLI run with no tool of its own beside the engine's
    `crewlet` server, and
    `overrides: { web_tools: denied }`. Which CLIs qualify, and why the others
    are refused, is stated once in the
-   [Configuration Reference](../getting-started/configuration.md#the-dashboard-assistant)
+   [Configuration Reference](../getting-started/configuration.md#ask-crewlet)
    and in [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host).
    A dedicated entry keeps its own `max_concurrent` slots, so a busy company's
    seats never queue people's questions and the reverse.
 2. **Prove the entry** with `crewlet llm doctor assistant` (the entry's key),
-   which runs the exact argv the assistant runs and reports a shell or a fetch
-   that succeeded as a problem. It is the operator's proof before turning the
-   assistant on.
+   which runs the exact argv Ask Crewlet runs and reports a shell or a fetch
+   that succeeded as a problem. It is the operator's proof before turning
+   Ask Crewlet on.
 3. **Set the `assistant:` block**: `enabled: true` and `llm:` naming the entry
    (a fallback chain, first key first). The defaults for steps, turn timeout,
    proposal lifetime and retention suit most companies. Every key, its range
@@ -145,8 +145,8 @@ does not.
 
 `crewlet validate` and every `/config` write refuse a chain that breaks the
 rules above, naming the member and the field to change. A stored revision that
-somehow carries one still applies, so every seat keeps running, and the
-assistant reports **No model** until the chain is fixed.
+somehow carries one still applies, so every seat keeps running, and
+Ask Crewlet reports **No model** until the chain is fixed.
 
 To turn it off, set `enabled: false` (or remove the block). Conversations are
 kept and purged on their normal retention; nothing is deleted by turning it off.
@@ -213,7 +213,7 @@ fixed shape rather than in prose. What a person sees is on the
 - **Its spend is its own.** Its rounds are recorded under the aux purpose
   `assistant_brief`, charged to the person's and the company's windows like
   any turn's, and its own cap below stops a brief that sets out to read the
-  company. Its turns are stamped with prompt version `assistant.brief.v4`.
+  company. Its turns are stamped with prompt version `assistant.brief.v5`.
 - **A card it cannot draw reads as a note.** A stored card in a shape this
   version's contract refuses (any brief written before prompt version
   `assistant.brief.v3`, or a newer node's card read by an older one during a
@@ -225,17 +225,17 @@ fixed shape rather than in prose. What a person sees is on the
 
 ## Budgets and limits
 
-The assistant's rounds are charged to the company's token budget windows like
+Ask Crewlet's rounds are charged to the company's token budget windows like
 any other spend, recorded under the operator stage and the asking person's
 seat, so the [spend views](budgets-and-spend.md) show who used how much.
 `assistant.token_budget` adds a per-person ceiling per day, week or month on
-top of the company's own, edited on Company › Budgets under **Each person's
-assistant**; a raised ceiling holds from the next question once the node has
+top of the company's own, edited on Company › Budgets under **Ask Crewlet, per
+person**; a raised ceiling holds from the next question once the node has
 applied the revision, with no restart. A question whose budget is spent is
 refused before its first round, and a turn whose budget runs out stops before
 its next one. Either way the drawer says whose ceiling it is (the person's own,
 or the company's), when its window resets, and that raising the ceiling clears
-it sooner; to a reader who may raise it, it offers **Open assistant budget** (or
+it sooner; to a reader who may raise it, it offers **Open Ask Crewlet budget** (or
 **Open company budget**), which opens that ceiling on Company › Budgets, and it
 tells anybody else who can. A refused question goes back in the box, ready to
 send again; only the person's own question limit (`assistant_busy`) also holds
@@ -259,7 +259,7 @@ These limits are fixed, not configured:
 
 ## Deep work
 
-Deep work lets the assistant hand a large task to a coding agent with its own
+Deep work lets Ask Crewlet hand a large task to a coding agent with its own
 tools (shell, files, web search and fetch, image reading) for up to twenty
 minutes at a time (ADR-0054). It is off unless `assistant.deep_work` names an
 entry:
@@ -293,7 +293,7 @@ the company's budgets like any turn's, and appear on the spend history as
 
 ### What a run can reach
 
-Its only way into Crewlet is the person's own assistant tools, served to it
+Its only way into Crewlet is the person's own Ask Crewlet tools, served to it
 over the engine's tool bridge, so every read is the person's request and every
 change a proposal they approve. No API token, grant or engine credential is
 placed in its box; it holds a bridge token valid for that run alone, which
@@ -314,7 +314,7 @@ A run goes to the first of these the company configures:
    store, the log file, the config files the node was started from, any
    providers.llm login, any seat's box, or the operator's home directory, and
    it writes only in its own box. A host that can enforce none of these runs
-   no deep work, and the assistant reports why. Install bubblewrap
+   no deep work, and Ask Crewlet reports why. Install bubblewrap
    (`apt install bubblewrap`) or run on a kernel with Landlock, or configure a
    cell above.
 
@@ -374,12 +374,12 @@ sealed under the same keyring with the conversation and the file bound in, so
 the bucket holds none of them in the clear; the replicated row naming each
 object is removed with the conversation, and the object store's collector
 deletes the object at its next pass. A node without an object store keeps no
-files: its assistant takes no attachment and offers no deep work.
+files: there Ask Crewlet takes no attachment and offers no deep work.
 Downloading a kept file is always a download, never a page: it is served as an
 attachment of the type its bytes were read as, with `nosniff`, a `sandbox`
 content security policy and `Cache-Control: private, no-store`.
 
-Tier A's `stream.assistant_log_max_bytes` bounds the assistant's state log (512 MiB unless set; see the
+Tier A's `stream.assistant_log_max_bytes` bounds Ask Crewlet's state log (512 MiB unless set; see the
 [Tier A reference](../getting-started/configuration.md#tier-a)). How long a
 conversation is kept is the company's `retention_days`, not that bound.
 
@@ -390,7 +390,7 @@ reason. It is a deliberate, recorded gesture, never a browse:
 
 - It is the verb `assistant.conversation.audit_read`: administrators only,
   with a recent identity proof (step-up), a person present, and never through
-  the assistant itself, so a machine token and an assistant grant are both
+  Ask Crewlet itself, so a machine token and an assistant grant are both
   refused.
 - It is an API call made from the administrator's own signed-in session:
   `POST /assistant/audit/conversations/{id}/read` with `{"reason": "..."}`.
@@ -409,7 +409,7 @@ The route reference is in [API Endpoints](../reference/api-endpoints.md).
 
 ## Audit and monitoring
 
-The assistant adds no hidden channel to the audit log. What it records:
+Ask Crewlet adds no hidden channel to the audit log. What it records:
 
 | Event | When | What it carries |
 |---|---|---|
@@ -418,7 +418,7 @@ The assistant adds no hidden channel to the audit log. What it records:
 | `assistant_conversation_read` | An administrator's compliance read | Reader, owner, conversation and reason |
 
 A brief turn is an `assistant_turn_completed` like any other, told apart by its
-prompt version (`assistant.brief.v4`), and its spend is recorded under the aux
+prompt version (`assistant.brief.v5`), and its spend is recorded under the aux
 purpose `assistant_brief`.
 
 The `crewlet.assistant.*` metrics (turn duration, time to first output, turns
@@ -431,7 +431,7 @@ model chain or a route failing.
 ## Evaluating a model
 
 `crewlet assistant eval -suite <dir>` runs a directory of evaluation cases
-through the assistant's real orchestrator and catalogue in process, against a
+through Ask Crewlet's real orchestrator and catalogue in process, against a
 company each case describes, and reports each case's pass rate. With no
 `-model` it plays each case's own scripted rounds, which is deterministic,
 calls no model, and is how the engine's own tests run the shipped suite. With
@@ -468,7 +468,7 @@ made to check: a spent plan until its reset, a login a call was refused on, a
 CLI with nothing that signs it in, or a CLI that could not start. A login
 written with `crewlet llm login`, or any call through the entry that answers,
 clears it at once; with no new evidence the node tries the model again after
-ten minutes, so a sign-in the engine cannot see never keeps the assistant away
+ten minutes, so a sign-in the engine cannot see never keeps Ask Crewlet away
 for longer. An administrator is shown the command that fixes it, and anybody
 else is told to ask an administrator. The codes are listed in the
 [API reference](../reference/api-endpoints.md#how-a-turn-fails-on-the-model).

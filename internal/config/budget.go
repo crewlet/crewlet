@@ -360,7 +360,7 @@ func (i IdleCeiling) Sentence(handle string) string {
 // reaches first for the same reason a seat's does.
 func (i IdleCeiling) AssistantSentence() string {
 	return i.sentence("assistant.token_budget", "a person's question",
-		"a person's assistant", "each person")
+		"Ask Crewlet", "each person")
 }
 
 // sentence is the one wording of an idle ceiling: key is the budget's key as

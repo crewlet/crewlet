@@ -505,17 +505,17 @@ func (c ErrorCode) Sentence() string { return errorSentences[c] }
 
 // errorSentences are [ErrorCode.Sentence]'s, one per code.
 var errorSentences = map[ErrorCode]string{
-	ErrorModelUnavailable: "The assistant's model did not answer.",
-	ErrorModelSignedOut:   "The assistant's model is signed out, so it cannot answer.",
-	ErrorModelBusy:        "The assistant's model has reached its usage limit for now.",
-	ErrorModelTimeout:     "The assistant's model took too long to answer.",
+	ErrorModelUnavailable: "Ask Crewlet's model did not answer.",
+	ErrorModelSignedOut:   "Ask Crewlet's model is signed out, so it cannot answer.",
+	ErrorModelBusy:        "Ask Crewlet's model has reached its usage limit for now.",
+	ErrorModelTimeout:     "Ask Crewlet's model took too long to answer.",
 	ErrorTurnTimeout:      "The turn took longer than it may. Ask again, or ask a narrower question.",
 	ErrorStepLimit:        "This question needed more steps than a turn may take. Ask a narrower one.",
 	ErrorBudgetExhausted:  "The company's token budget for this window is spent.",
 	ErrorTurnInterrupted:  "The node answering you restarted before the turn finished.",
-	ErrorGrantEnded:       "Your session ended, so the assistant stopped acting for you.",
+	ErrorGrantEnded:       "Your session ended, so Ask Crewlet stopped acting for you.",
 	ErrorInternal:         "Something went wrong inside the engine. The reason is in this node's log.",
-	ErrorAccessWithdrawn: "The assistant stopped: you no longer have access to something this " +
+	ErrorAccessWithdrawn: "Ask Crewlet stopped: you no longer have access to something this " +
 		"conversation read.",
 	ErrorBriefInvalid: "The brief could not be written. Ask for it again.",
 }

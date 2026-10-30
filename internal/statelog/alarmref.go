@@ -69,7 +69,7 @@ var alarmMeaning = map[Kind]string{
 		"leading with the one with the least room. A full log refuses writes " +
 		"rather than dropping records; on every log that claims identity " +
 		"(Worklet's, Doclet's, the identity estate's, the artifacts " +
-		"log's, the artifact datastore's, the Dashboard Assistant's and " +
+		"log's, the artifact datastore's, Ask Crewlet's and " +
 		"Chatlet's) an eviction still lands in the gate reserve above that " +
 		"ceiling.",
 	KindBackupAge: "No verified backup of a log has been recorded, or the " +
@@ -136,7 +136,7 @@ var alarmMeaning = map[Kind]string{
 		"at least one seat, plus what the object store's collector reads on " +
 		"its own schedule. That rate is 125 a day for the tracker, the " +
 		"knowledge base, the artifacts and their datastore, 120 for chat, and " +
-		"none for the identity estate and the Dashboard Assistant.",
+		"none for the identity estate and Ask Crewlet.",
 	KindLogCeilingShort: "At the rate this log took in over the last day, " +
 		"its byte ceiling holds less than the `min_age` window the trim " +
 		"keeps, so it will fill and refuse writes with every trim term " +
@@ -162,7 +162,7 @@ var alarmMeaning = map[Kind]string{
 		"It replaces `llm_credential_expiring` for that model.",
 	KindLLMSignInRefused: "A model cannot sign in: its latest refusal on any node is " +
 		"newer than its latest answer on any node, its credential's computed expiry has " +
-		"passed, or nothing signs it in while a seat or the assistant runs on it.",
+		"passed, or nothing signs it in while a seat or Ask Crewlet runs on it.",
 	KindLLMLimit: "A model sits out a plan limit on at least one node, and no seat has " +
 		"waited on it for fifteen minutes. Its seats fall back to the next entry in " +
 		"their chain meanwhile.",

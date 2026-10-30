@@ -143,7 +143,7 @@ export async function exportFile(path: string, signal?: AbortSignal): Promise<Bl
   if (!isAssistantPath(path)) {
     throw new RestError(0, {
       error: "invalid_body",
-      detail: "the export path is not the assistant's",
+      detail: "the export path is not Ask Crewlet's",
     });
   }
   return rest.blob(`/assistant/${path.slice(ASSISTANT_PREFIX.length)}`, signal);

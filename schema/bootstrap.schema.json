@@ -1150,7 +1150,7 @@
               "type": "string"
             }
           ],
-          "description": "Byte ceiling on the Dashboard Assistant's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."
+          "description": "Byte ceiling on Ask Crewlet's log; unset takes 512 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."
         },
         "chat_log_max_bytes": {
           "anyOf": [

@@ -70,6 +70,6 @@ export const REFUSAL_SENTENCES: Readonly<Record<string, string | null>> = {
   not_shared: "This isn’t shared with you.",
   role: "Your role on this doesn’t allow that. Its owner can share it with you at a higher one.",
   ceiling: "The person this agent is working for can’t do this, so the agent can’t either.",
-  assist_refused: "The assistant never does this, so it stays with you.",
-  assist_scope: "The assistant can do this only as a change you approve.",
+  assist_refused: "Ask Crewlet never does this, so it stays with you.",
+  assist_scope: "Ask Crewlet can do this only as a change you approve.",
 };

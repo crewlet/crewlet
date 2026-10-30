@@ -164,7 +164,7 @@ test("a question is sent with its page, streamed, and drawn with every card the 
     screen.getByRole("heading", { name: /^(Hello|Good (morning|afternoon|evening)), Ada$/ }),
   ).toBeDefined();
 
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: "Fix the flaky sign-in test" } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
@@ -202,7 +202,7 @@ test("a follow-up typed fast under a turn with cards keeps every keystroke and r
     query: {},
   });
   mount();
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Fix the flaky sign-in test" } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
@@ -248,7 +248,7 @@ test("a follow-up typed fast under a turn with cards keeps every keystroke and r
 test("a question past the length a turn takes is not sent", async () => {
   const sent = engine();
   mount();
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: "x".repeat(4001) } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
@@ -272,7 +272,7 @@ test("the page goes with a question until the reader removes it", async () => {
   expect(
     screen.getByRole("button", { name: "Add Worklet › Tasks to this question" }),
   ).toBeDefined();
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: "Who spent most?" } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
@@ -309,19 +309,19 @@ test("the panel's body is flush for the thread and scrolls for the offline notic
 
   mount({
     reason: "disabled",
-    short: "An admin turned the assistant off.",
-    title: "The assistant is off for Nimbus",
+    short: "An admin turned Ask Crewlet off.",
+    title: "Ask Crewlet is off for Nimbus",
     body: "An admin turned it off.",
   });
-  expect(screen.getByText("The assistant is off for Nimbus")).toBeDefined();
+  expect(screen.getByText("Ask Crewlet is off for Nimbus")).toBeDefined();
   expect(document.querySelector(".crewlet-side-panel__body--flush")).toBeNull();
 });
 
 const SIGNED_OUT: AssistantModelProblem = {
   code: "model_signed_out",
-  short: "The assistant's model is signed out",
-  title: "The assistant's model is signed out, so it cannot answer.",
-  body: "Ask an administrator to sign the assistant's model in again.",
+  short: "Ask Crewlet's model is signed out",
+  title: "Ask Crewlet's model is signed out, so it cannot answer.",
+  body: "Ask an administrator to sign Ask Crewlet's model in again.",
 };
 
 // A MODEL THE ENGINE KNOWS CANNOT ANSWER is said before the reader asks: the
@@ -339,7 +339,7 @@ test("a model that cannot answer is said above the composer, and Send stays off"
   ).toBeDefined();
   expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
 
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: "Who spent most?" } });
   const send = screen.getByRole("button", { name: /send/i });
   expect(send.getAttribute("aria-disabled")).toBe("true");
@@ -364,7 +364,7 @@ test("a ready model draws no notice", () => {
   engine();
   mount();
   expect(screen.queryByText(SIGNED_OUT.title)).toBeNull();
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: "Who spent most?" } });
   expect(screen.getByRole("button", { name: /send/i }).getAttribute("aria-disabled")).not.toBe(
     "true",
@@ -395,7 +395,7 @@ test("the history offers Clear only for a conversation with something in it", as
   await waitFor(() => expect(screen.queryByText("Your recent conversations")).toBeNull());
 
   // ONE WITH A QUESTION IN IT DOES.
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: "Fix the flaky sign-in test" } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
@@ -589,7 +589,7 @@ test("an answer that ended between the clock's ticks never reads as in the futur
   try {
     vi.setSystemTime(Date.parse("2026-10-24T09:40:58.9Z"));
     mount();
-    const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+    const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
     fireEvent.change(box, { target: { value: "Is the deploy done?" } });
     await act(async () => {
       fireEvent.keyDown(box, { key: "Enter" });
@@ -632,7 +632,7 @@ test("with a record open the row names it, and asks a brief of that record alone
     query: {},
   });
   mount();
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "half a question" } });
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: /^Brief me on this task/ }));
@@ -739,7 +739,7 @@ test.each([
       remedy: { setting: "assistant_token_budget" },
     },
     wait: "35160",
-    title: "Your own assistant budget for this window is spent.",
+    title: "Your own Ask Crewlet budget for this window is spent.",
     line: "It resets in 9h 46m, or as soon as the ceiling is raised.",
     held: false,
   },
@@ -760,7 +760,7 @@ test.each([
       }),
   );
   mount();
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Who spent most this week?" } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
@@ -781,7 +781,7 @@ test("a refused question is not put back over a new one, and the notice does not
   let answer: (r: Response) => void = () => {};
   engine(() => new Promise<Response>((r) => (answer = r)));
   mount();
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
   fireEvent.change(box, { target: { value: "Who spent most this week?" } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
@@ -812,8 +812,7 @@ test("a restored question the reader deleted stays deleted when the drawer opens
       ),
   );
   const first = mount();
-  const box = () =>
-    screen.getByRole("textbox", { name: "Ask the assistant" }) as HTMLTextAreaElement;
+  const box = () => screen.getByRole("textbox", { name: "Ask Crewlet" }) as HTMLTextAreaElement;
   fireEvent.change(box(), { target: { value: "Who spent most this week?" } });
   await act(async () => {
     fireEvent.keyDown(box(), { key: "Enter" });

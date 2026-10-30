@@ -213,7 +213,7 @@ test("the assistant's picker offers only a model that denies web tools, and open
   const data = company();
   data.models.find((m) => m.key === "haiku")!.webDenied = true;
   const onFlow = mount(data);
-  const trigger = screen.getByRole("combobox", { name: "Model the Dashboard Assistant runs on" });
+  const trigger = screen.getByRole("combobox", { name: "Model Ask Crewlet runs on" });
   expect(trigger.textContent).toContain("guarded");
   const offered = optionsOf(trigger).map((o) => o.textContent ?? "");
   expect(offered.map((t) => t.split(/\s|claude/)[0])).toEqual(["haiku", "guarded"]);

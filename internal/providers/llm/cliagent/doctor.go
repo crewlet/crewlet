@@ -922,8 +922,8 @@ func (p *Provider) fileProbe(ctx context.Context) (verdict, problem string) {
 			"the %q profile says local tools are denied, but the CLI read a file the doctor "+
 				"wrote on the engine host, outside its seat home: its file tools are not "+
 				"off on this build (%s), so it can read the engine's own data; check "+
-				"overrides against the installed version before running seats or the "+
-				"assistant on it", p.agent, orNone(p.profile.WrittenFor))
+				"overrides against the installed version before running seats or "+
+				"Ask Crewlet on it", p.agent, orNone(p.profile.WrittenFor))
 	}
 	return "probe: FILE READ", fmt.Sprintf(
 		"the %q CLI reads files on the engine host as the engine user (%s): it can read "+
@@ -969,7 +969,7 @@ func (p *Provider) webProbe(ctx context.Context) (verdict, problem, kind string)
 			"the entry denies the %q CLI its web tools, but the CLI fetched %s with "+
 				"its own web tool: the profile's web_denial is not taking effect on "+
 				"this build (%s); check overrides.web_denial against the installed "+
-				"version before an assistant runs on this entry",
+				"version before Ask Crewlet runs on this entry",
 			p.agent, webProbeURL, orNone(p.profile.WrittenFor)), CheckKindConfig
 	case fetched:
 		return "ok: fetched " + webProbeURL, "", ""

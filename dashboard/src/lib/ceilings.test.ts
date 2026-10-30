@@ -86,7 +86,7 @@ describe("what a change writes", () => {
 
   test("the history names each person's assistant as whose ceiling changed", () => {
     expect(ceilingSummary({ kind: "assistant" }, { day: 200_000 }, { day: 100_000 })).toBe(
-      "Raise each person's assistant daily token ceiling from 100k to 200k",
+      "Raise Ask Crewlet's per-person daily token ceiling from 100k to 200k",
     );
   });
 

@@ -266,7 +266,7 @@ const RUNTIME_ROW: Record<
   // READ: the steps' arguments and answers are the company's content and the
   // question is the person's own, so neither is in the audit.
   assistant_turn_completed: (row) => ({
-    kind: "assistant turn",
+    kind: "Ask Crewlet turn",
     subject: row.tags?.conversation_id ?? "",
     noSubject: "No conversation recorded",
   }),

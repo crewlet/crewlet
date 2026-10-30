@@ -317,7 +317,7 @@ Usage:
                               runs through
   crewlet search eval         Measure the semantic search against the exact scan,
                               on the vectors a store file actually holds
-  crewlet assistant eval      Run evaluation cases through the Dashboard Assistant,
+  crewlet assistant eval      Run evaluation cases through Ask Crewlet,
                               on their own scripts or against a candidate model
   crewlet mcp-relay SOCKET    Not for people: the MCP server a seat's coding CLI
                               starts, relaying its stdio to the engine's tools

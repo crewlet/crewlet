@@ -111,10 +111,10 @@ providers:
       model: "${LLM_MODEL}"
       env:
         OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}"
-    # The Dashboard Assistant's own entry, for the assistant block below.
+    # Ask Crewlet's own entry, for the assistant block below.
     # Its own slots keep a person in the drawer from queueing behind a
     # seat's long call, its timeout is sized for one interactive round, and
-    # it turns the CLI's web tools off, which the assistant requires (seats
+    # it turns the CLI's web tools off, which Ask Crewlet requires (seats
     # keep theirs).  Prove the denial with `crewlet llm doctor assistant`.
     # assistant:
     #   agent: claude-code
@@ -324,13 +324,13 @@ providers:
           projects your brief names: each project has exactly one owning
           seat.
 
-# The Dashboard Assistant: a drawer in the dashboard that answers questions
+# Ask Crewlet: a drawer in the dashboard that answers questions
 # and prepares changes for approval, acting only as the signed-in person.
 # Off unless enabled.  Every model in its chain must be an entry whose
 # CLI's local and web tools are denied (the `assistant` entry above);
 # anything else is refused.  The four bounds below are their defaults, and
 # token_budget caps each person on top of the company's own budget.  See
-# docs/getting-started/configuration.md#the-dashboard-assistant.
+# docs/getting-started/configuration.md#ask-crewlet.
 # assistant:
 #   enabled: true
 #   llm: [assistant]

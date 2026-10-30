@@ -2714,13 +2714,13 @@ surface that is not a step-up surface, so either would refuse every call that
 reached it. The build checks both, reading which verbs the tools ask off their
 code rather than off a list.
 
-### Every row says what the Dashboard Assistant may do with it
+### Every row says what Ask Crewlet may do with it
 
-The Dashboard Assistant acts as the person using it: a request it makes is
+Ask Crewlet acts as the person using it: a request it makes is
 decided exactly as that person's own click is, and the credential it came
 through is recorded beside them as `assist:<grant>`. So the table can only
 take away from what the person holds, never add to it, and every row states
-how far it lets the assistant reach (ADR-0052):
+how far it lets Ask Crewlet reach (ADR-0052):
 
 - **read**: a read grant takes the verb, so a turn reads what the person may
   read with nothing for them to approve;
@@ -2734,14 +2734,14 @@ document but for its principles, every identity directory verb but the org
 chart's seat read, every
 credential and session control, every purge, transfer, forced publish and
 export, a question answered by a model at the company's expense, the agents'
-own verbs, and the assistant's own verbs. A verb no assistant tool reaches is
+own verbs, and Ask Crewlet's own verbs. A verb no Ask Crewlet tool reaches is
 **never** too, even where reading it would be harmless, and moves only with the
-tool that exposes it. And a row that needs a person present is refused to the
-assistant whatever it says, because the assistant is not a person at a
+tool that exposes it. And a row that needs a person present is refused to
+Ask Crewlet whatever it says, because Ask Crewlet is not a person at a
 keyboard.
 
-**The company's principles are the one part of the company document the
-assistant reaches** (ADR-0052). Their mission, vision and standing policies are
+**The company's principles are the one part of the company document
+Ask Crewlet reaches** (ADR-0052). Their mission, vision and standing policies are
 read and written on verbs of their own, `config.principles.read` (**read**) and
 `config.principles.write` (**approve**), decided for a person exactly as
 `config.read` and `config.write` decide the whole document: an administrator's,
@@ -2750,12 +2750,12 @@ those three settings and nothing else, is sent through the same route Company â€
 Principles saves through, and runs only from a before-and-after its owner
 approved. Every other verb of the document stays **never**.
 
-A refusal through the assistant is `403 unauthorized` with `reason:
+A refusal through Ask Crewlet is `403 unauthorized` with `reason:
 assist_refused` (the person takes the gesture themselves) or `reason:
 assist_scope` (a write asked through a read grant: the remedy is a proposal
 the person approves), naming no permission, since none would change either.
 The identity domain refuses the record as well: an administrative identity
-record or a token mint whose request came through the assistant is refused
+record or a token mint whose request came through Ask Crewlet is refused
 `assist_refused`, as one through a machine token is.
 
 ### Route policy travels with the route

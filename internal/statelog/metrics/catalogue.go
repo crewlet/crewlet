@@ -442,7 +442,7 @@ func Catalogue() []Instrument {
 			Shows: "How much of the ceiling ordinary writes are held to is " +
 				"left on every log that claims identity (Worklet's, Doclet's, " +
 				"the identity estate's, the artifacts log's, the artifact " +
-				"datastore's, the Dashboard Assistant's and Chatlet's): the ceiling " +
+				"datastore's, Ask Crewlet's and Chatlet's): the ceiling " +
 				"less the gate reserve kept above it for evictions. At zero the log " +
 				"refuses every write AND every linearizable read, and the " +
 				"remedy is a fleet-wide maintenance cycle, so this is the one " +
@@ -766,16 +766,16 @@ func Catalogue() []Instrument {
 		{
 			Name: AssistantTurns, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
-			Shows: "Assistant turn segments this node ran, by how each ended " +
+			Shows: "Ask Crewlet turn segments this node ran, by how each ended " +
 				"(`completed`, `waiting_for_approval`, `stopped`, `failed`, " +
 				"`interrupted`, `budget_exhausted`). A climb in `failed` is a model " +
 				"chain or a tool route failing people; in `budget_exhausted`, the " +
-				"company's windows refusing the assistant.",
+				"company's windows refusing Ask Crewlet.",
 		},
 		{
 			Name: AssistantTurnDuration, Kind: KindHistogram, Unit: UnitMilliseconds,
 			Attributes: []string{"outcome"},
-			Shows: "How long an assistant turn segment runs from the question to its " +
+			Shows: "How long an Ask Crewlet turn segment runs from the question to its " +
 				"end, by outcome. A three-step read is held to 15 s at the median; a " +
 				"distribution reaching the turn's own timeout is a model or a CLI too " +
 				"slow for an interactive drawer.",
@@ -789,15 +789,15 @@ func Catalogue() []Instrument {
 		{
 			Name: AssistantSteps, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"state"},
-			Shows: "Assistant tool steps by how each ended (`done`, `failed`, " +
+			Shows: "Ask Crewlet tool steps by how each ended (`done`, `failed`, " +
 				"`refused`, `stopped`, `waiting`). A climb in `refused` is the model " +
 				"asking for what its people may not read; in `failed`, a route or the " +
-				"dispatcher breaking under the assistant.",
+				"dispatcher breaking under Ask Crewlet.",
 		},
 		{
 			Name: AssistantBriefs, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"outcome"},
-			Shows: "Brief answers the assistant's model wrote, by what the engine did with " +
+			Shows: "Brief answers Ask Crewlet's model wrote, by what the engine did with " +
 				"each (`written`, `refused`). A `refused` answer is written again once; a " +
 				"climb in it is a model that cannot keep to the brief's shape.",
 		},
@@ -829,7 +829,7 @@ func Catalogue() []Instrument {
 		{
 			Name: AssistantCardsShownAsNotice, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"type"},
-			Shows: "Stored assistant cards read back as a plain notice because this build's " +
+			Shows: "Stored Ask Crewlet cards read back as a plain notice because this build's " +
 				"contract refuses their shape, by card `type`. Expected for briefs recorded " +
 				"before the brief's current shape, and during a rolling upgrade when an older " +
 				"node reads a newer node's card. A climb outside both is a card written past " +
@@ -837,7 +837,7 @@ func Catalogue() []Instrument {
 		},
 		{
 			Name: AssistantStreamsActive, Kind: KindGauge, Unit: UnitCount,
-			Shows: "Assistant live streams this node is serving. Each holds a " +
+			Shows: "Ask Crewlet live streams this node is serving. Each holds a " +
 				"connection and a subscription to one turn's frame log; a count that " +
 				"never falls is streams whose clients went away without the " +
 				"connection closing.",

@@ -346,7 +346,10 @@ function Models() {
                 href={href(["settings", "models", entry.key])}
                 trailing={
                   entry.used_by.length === 0 && health.tone === "success" ? (
-                    <Tag variant="warning" title="No seat and no assistant runs on this model.">
+                    <Tag
+                      variant="warning"
+                      title="Neither a seat nor Ask Crewlet runs on this model."
+                    >
                       Unused
                     </Tag>
                   ) : (

@@ -120,8 +120,8 @@ var refusals = map[string]authority{
 	// person in its own words what they can do; one the table decided with
 	// nothing to add (a read grant sending a write) reaches the model in
 	// these words too.
-	"assist_refused": {said: "The assistant never does this, so it stays with you."},
-	"assist_scope":   {said: "The assistant can do this only as a change you approve."},
+	"assist_refused": {said: "Ask Crewlet never does this, so it stays with you."},
+	"assist_scope":   {said: "Ask Crewlet can do this only as a change you approve."},
 }
 
 // unauthorizedMessage is `unauthorized`'s sentence for the refusal detail

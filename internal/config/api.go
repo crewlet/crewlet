@@ -1082,7 +1082,7 @@ func (a *APIAuth) validateTokens(path Path, serving bool) error {
 			if strings.HasPrefix(t.Token, iam.AssistBearerPrefix) {
 				p.add(at(tp, "token"), ErrUnknownValue,
 					"a token can't start with %q, which the engine reserves "+
-						"for the Dashboard Assistant's grants. Generate one "+
+						"for Ask Crewlet's grants. Generate one "+
 						"with `crewlet secrets keygen`", iam.AssistBearerPrefix)
 			}
 		}

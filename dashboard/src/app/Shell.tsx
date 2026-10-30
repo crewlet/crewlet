@@ -844,7 +844,7 @@ function Frame({ children }: { children: ReactNode }) {
             asideModal={false}
             asideWidth={assistantDrawn}
             asideReserve={sheetFloor(frame, peekShape === "column")}
-            asideLabel="Crewlet Assistant"
+            asideLabel="Ask Crewlet"
             onAsideClose={() => showAssistant(false)}
             asideResize={{
               min: ASSISTANT_MIN,
@@ -852,7 +852,7 @@ function Frame({ children }: { children: ReactNode }) {
               defaultValue: ASSISTANT_WIDTH,
               onChange: assistantWidth.setWidth,
               onCommit: assistantWidth.commitWidth,
-              label: "Resize the assistant panel",
+              label: "Resize the Ask Crewlet panel",
             }}
             mainId={SCREEN_SCROLL_ID}
             fill={filling}

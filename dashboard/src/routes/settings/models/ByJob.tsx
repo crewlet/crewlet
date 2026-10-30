@@ -270,7 +270,7 @@ function AssistantLine({
                 className="models-byjob__select"
                 menuClassName="models-byjob__menu"
                 width="auto"
-                ariaLabel="Model the Dashboard Assistant runs on"
+                ariaLabel="Model Ask Crewlet runs on"
                 aria-describedby={describe}
                 size="sm"
                 value={key || undefined}

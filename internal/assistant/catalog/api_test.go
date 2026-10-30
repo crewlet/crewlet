@@ -431,7 +431,7 @@ func TestAPostIsNamedForWhatItsRouteDeclares(t *testing.T) {
 		map[string]any{"reason": "A key was pasted."})
 	if err != nil || p.Title != "Purge item ENG-1" || p.ApproveLabel != "Approve and purge" ||
 		p.Risk != wire.RiskDestructive || p.Summary != "This purges item ENG-1." ||
-		p.Note != "This cannot be undone from the assistant." {
+		p.Note != "This cannot be undone from Ask Crewlet." {
 		t.Errorf("a purge reads %q / %q at risk %q: %q %q (%v)", p.Title, p.ApproveLabel, p.Risk,
 			p.Summary, p.Note, err)
 	}
@@ -537,7 +537,7 @@ func TestAChatDestructionSaysWhatGoesAndFromWhichRoom(t *testing.T) {
 		}
 		return p
 	}
-	const undone = "This cannot be undone from the assistant."
+	const undone = "This cannot be undone from Ask Crewlet."
 
 	p := preview(general, "POST /chatlet/channels/{channel_id}/erase",
 		map[string]any{"confirm": "2"},

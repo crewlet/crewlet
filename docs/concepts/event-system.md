@@ -259,10 +259,10 @@ backup_requested           # a POST /backup that began copying: dir, whether
                            # it finished, and how many streams. Which node's
                            # disk holds it is the envelope's `node`
 assistant_conversation_read # an administrator's compliance read of a
-                           # person's Dashboard Assistant conversation (D06):
+                           # person's Ask Crewlet conversation (D06):
                            # the reader, conversation_id, owner_id and the
                            # reason they gave; the conversation stays sealed
-assistant_turn_completed   # one segment of a person's Dashboard Assistant
+assistant_turn_completed   # one segment of a person's Ask Crewlet
                            # turn ending: conversation_id, assistant_turn_id,
                            # state, error_code, prompt_version, model, and
                            # every step's tool, route pattern, outcome,

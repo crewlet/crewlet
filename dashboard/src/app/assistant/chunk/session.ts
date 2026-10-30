@@ -156,7 +156,7 @@ function refusalWords(err: RestError): string {
       // chain it can't build, a node shutting down) with no `Retry-After`. A
       // fixed "Try again in a moment" told the person the opposite of the
       // answer it was drawn over.
-      return err.sentence || "The assistant can't answer here.";
+      return err.sentence || "Ask Crewlet can't answer here.";
     case "assistant_model_not_ready":
       // THE ENGINE'S OWN SENTENCE for the model's state (signed out, its plan
       // spent), the one a failed answer would have carried.
@@ -165,7 +165,7 @@ function refusalWords(err: RestError): string {
       // WHOSE CEILING, by the remedy the engine named: a person's own is
       // theirs to have raised, and the company's binds everybody.
       return err.remedy?.setting === "assistant_token_budget"
-        ? "Your own assistant budget for this window is spent."
+        ? "Your own Ask Crewlet budget for this window is spent."
         : "The company's token budget for this window is spent.";
     default:
       if (err.unanswered)

@@ -333,7 +333,7 @@ node:
 
 | Role | What it does |
 |---|---|
-| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors, the identity directory, the usage days, the artifacts, their datastores and the Dashboard Assistant's conversations) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
+| `data` | Keeps the company's durable state on this node's disk: a full copy of the replicated estate (the tracker, the knowledge base, chat, the vectors, the identity directory, the usage days, the artifacts, their datastores and Ask Crewlet's conversations) and the event log. The company's files are not under it: they are in the [object store](../concepts/object-store.md), which on the default `nats` backend is a stream the broker's members keep. The one role that is a promise about the **disk** rather than about work — see [Nodes that hold no data](#nodes-that-hold-no-data). It says nothing about the broker, which is the node's [broker kind](#the-broker-members-and-leaves) |
 | `ingress` | Serves the HTTP API: webhooks from every integration, the dashboard, the REST endpoints, and the tool bridge (`/mcp/{token}`) every seat's executor reaches its tools through from its box, which relays each call to the node holding the run's seat — served where the node is given `CREWLET_MCP_BRIDGE_URL`, or, for its own `direct` boxes alone, where it runs `seats` too (see [What a fleet needs](#what-a-fleet-needs)). A node without it serves the network only its [probes](../reference/api-endpoints.md#probes-on-a-node-without-ingress) on `api.port` |
 | `seats` | Claims seat leases, spawns the agents, consumes their inboxes, runs turns. Answers its own seats' executor runs' tool calls — relayed to it over the broker by whichever `ingress` node a box's call reached, or, for a `direct` box, taken on its own listener on loopback, which a node without `ingress` serves on `api.port` to its own host alone — because a bridged session lives in the process holding the seat |
 | `workers` | The company-wide [singleton duties](../concepts/seat-ownership.md#singleton-duties): the scheduler tick, the maintenance sweep (retention, removed-seat mailbox retirement, and forgetting the chat read state of a human seat the company no longer has), the state-log trim, the embedding duty, the object store's collector, the identity sweep, the trash reaper, Chatlet's message horizon, the sandbox waiter, the integration reconcile loop, and the learning passes (skill clustering, curation, episode compaction, promotion) on one lease |
@@ -341,7 +341,7 @@ node:
 Roles decide what a node serves and which duties it holds, and of them only
 `data` decides **which state logs it applies**: a data node applies all nine —
 the tracker, the vectors, the knowledge base, the identity directory, the
-usage history, the artifacts, their datastores, the Dashboard Assistant's
+usage history, the artifacts, their datastores, Ask Crewlet's
 conversations and chat — whatever its other roles and whether or not a
 company has been published yet, and a node without `data` applies none. So
 every data node holds a copy of your people, the verifiers of their
@@ -834,7 +834,7 @@ tells the revision's fault from the node's.
 ## How a node that fell behind catches up
 
 Worklet, Doclet's pages and embeddings, the identity
-directory, the artifacts and their datastores, the Dashboard Assistant's
+directory, the artifacts and their datastores, Ask Crewlet's
 conversations, chat and the usage history are each derived on every data node
 from an ordered log the fleet shares. A node replays each log from wherever its own
 rows say it stopped — which works only while the log still **holds** those
