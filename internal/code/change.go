@@ -52,14 +52,25 @@ func (s ChangeState) Live() bool { return s == ChangeStateDraft || s == ChangeSt
 // MergedVia is how a change reached its target.
 type MergedVia string
 
-// MergedViaPush is a change whose target came to hold its head by a push:
-// one that set the target to exactly the change's head, which the push's own
-// apply records, or one that moved the target past it, which the repository's
-// home git node finds and records ([ChangeLanded]).
-const MergedViaPush MergedVia = "push"
+const (
+	// MergedViaPush is a change whose target came to hold its head by a
+	// push: one that set the target to exactly the change's head, which the
+	// push's own apply records, or one that moved the target past it, which
+	// the repository's home git node finds and records ([ChangeLanded]).
+	MergedViaPush MergedVia = "push"
+	// MergedViaDirect is a change a MERGE RECORD merged ([Merge]): its
+	// target moved onto the commit its merge built, by a record whose
+	// decide held the change to its target's merge gate — or recorded a
+	// person's override of it — from one snapshot (ADR-0066).
+	//
+	// BASE FORMAT, under the condition merge.go's head states: no build
+	// that carries the code domain has run without it, and a change row is
+	// read by the build that wrote it.
+	MergedViaDirect MergedVia = "direct"
+)
 
-// MergedVias is the closed set.
-func MergedVias() []MergedVia { return []MergedVia{MergedViaPush} }
+// MergedVias is the closed set, in the order the ways were added.
+func MergedVias() []MergedVia { return []MergedVia{MergedViaPush, MergedViaDirect} }
 
 // Valid reports a value this build knows.
 func (m MergedVia) Valid() bool { return slices.Contains(MergedVias(), m) }

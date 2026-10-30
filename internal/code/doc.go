@@ -271,6 +271,25 @@
 // a draft, a retarget and a landing dequeue it, and a push that moves its head
 // ejects it.
 //
+// A CHANGE MERGES BY ONE RECORD ITS GATE DECIDES (merge.go, ADR-0066): a merge
+// ([Merge]) built on the repository's home onto the tip it read of the target
+// is proposed to the repository's committer ([Committer.ProposeMerge]), whose
+// decide proves in ONE snapshot that the change is open at the head the merge
+// took, that the target is still at the tip the merge was built onto — read
+// from the snapshot, never from the proposal — and that the change's gate is
+// met with the record's principal as the merger, or records a PERSON'S
+// override of it; a branch whose gate requires a check merges through its
+// queue, and only a person's override merges into one directly. Its apply
+// marks the change merged FIRST (`merged_via direct`, who merged it, an
+// override's reason), so the push it then lands through the one apply every
+// push takes ([Applier.landPushes], `via merge`) — the target onto the merge's
+// commit, a seat's source branch deleted (Q4) — finds it merged rather than
+// merging or closing it again; and it writes the protected target's landing
+// row and, where its gate requires no check, its green row. A protected branch
+// so moves only by a merge whose preconditions one snapshot proved, or by a
+// person's own push under direct_push persons, which is that person's recorded
+// override; never by a seat's push, which every protection refuses.
+//
 // # A repository's checks are rows on their own subject
 //
 // What a repository's `.crewlet/checks.yaml` defines (checksfile.go:

@@ -310,7 +310,8 @@ func writeChanges(ctx context.Context, tx store.Execer, maxVariables int, w chan
 			return []any{r.id, r.repoID, r.number, r.title, r.bodyBytes, string(r.state), r.source, r.target,
 				r.head, r.revision, r.owner, string(r.ownerKind), r.operator, string(r.work.Backend), r.work.ID,
 				r.work.Key, r.work.Project, r.turn, r.run, r.openedAt, r.opened, r.closedAt, r.closeReason,
-				r.mergedAt, string(r.mergedVia), r.mergeOID, r.version, r.position}
+				r.mergedAt, string(r.mergedVia), r.mergeOID, r.mergedBy, string(r.mergedByKind), r.mergedOperator,
+				r.overrideReason, r.version, r.position}
 		})
 	return err
 }
@@ -482,8 +483,10 @@ func changeNotApplied(ctx context.Context, at applyContext, repoID, changeID, wh
 //     the state (the open and target indexes, partial on the live states, and
 //     the state, owner and repository-state listings), among them the one the
 //     head is in.
-//   - changeMerged, a landing and a push's merge: the state with a merge's
-//     columns, and the head and revision — those, and code_changes_merge_idx.
+//   - changeMerged, a landing, a push's merge and a merge record's: the state
+//     with a merge's columns — who merged it through its gate, and a person's
+//     override, among them, which no index holds — and the head and revision
+//     — those, and code_changes_merge_idx.
 //   - changeEdited, an edit of the title or the description: no index.
 //   - changeItemEdited, an edit that sets or clears the work item, beside the
 //     text: code_changes_work_idx alone.
@@ -507,6 +510,8 @@ const (
 		revision = excluded.revision, version = excluded.version, position = excluded.position`
 	changeMerged changeWrite = `ON CONFLICT (id) DO UPDATE SET state = excluded.state,
 		merged_at = excluded.merged_at, merged_via = excluded.merged_via, merge_oid = excluded.merge_oid,
+		merged_by = excluded.merged_by, merged_by_kind = excluded.merged_by_kind,
+		merged_operator_id = excluded.merged_operator_id, override_reason = excluded.override_reason,
 		head_oid = excluded.head_oid, revision = excluded.revision, version = excluded.version,
 		position = excluded.position`
 	changeEdited changeWrite = `ON CONFLICT (id) DO UPDATE SET title = excluded.title,
@@ -552,5 +557,5 @@ const (
 	// in its order — whole, since a NOT NULL column without a default is one
 	// even a row an upsert finds by its key must bind.
 	insertChangesSQL = `INSERT INTO code_changes (` + changeColumns + `) VALUES `
-	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	changeValuesSQL  = `(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )

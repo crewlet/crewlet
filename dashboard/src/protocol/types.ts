@@ -6603,8 +6603,11 @@ export interface CodePushRow {
   actor_kind: "agent" | "operator" | (string & {});
   /** The seat: the seat itself, or the human seat an operator's credential is bound to. */
   actor_seat?: string;
-  /** `git` for what a client's git sent, `engine` for a commit the engine built from a tool's call. */
-  via: "git" | "engine" | (string & {});
+  /**
+   * `git` for what a client's git sent, `engine` for a commit the engine built
+   * from a tool's call, `merge` for a branch a change's merge record moved.
+   */
+  via: "git" | "engine" | "merge" | (string & {});
   /** A seat's push: the turn, its work item and its model. */
   run?: CodePushRun;
   node?: string;

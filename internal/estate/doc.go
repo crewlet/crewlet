@@ -95,7 +95,11 @@
 // is derived, so no retry opens a second change; and so is a WRITE OF A
 // TARGET'S MERGE QUEUE (`code.queue`) — an enqueue, decided by the change's
 // merge gate, or a dequeue — under its asker's operation id, from which an
-// enqueue's entry id is derived, so no retry queues a change twice. A WRITE
+// enqueue's entry id is derived, so no retry queues a change twice; and so is
+// a change's MERGE (`code.merge`) — one record its merge gate decides from one
+// snapshot, which merges the change and moves its target (ADR-0066) — under
+// its builder's operation id, from which the merge's push id is derived, so
+// no retry lands a branch twice. A WRITE
 // OF A CHANGE'S CONVERSATION (`code.conversation`) — an ask for review, a
 // comment or a thread's resolution — is keyed by the same repository and
 // asked of the same node, whose change writer publishes it on the change's

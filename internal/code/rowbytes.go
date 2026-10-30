@@ -646,6 +646,18 @@ func (r ChangeRow) members() int {
 	if r.MergeOID != "" {
 		n += field("merge_oid", stringBytes(r.MergeOID), false)
 	}
+	if r.MergedBy != "" {
+		n += field("merged_by", stringBytes(r.MergedBy), false)
+	}
+	if r.MergedByKind != "" {
+		n += field("merged_by_kind", stringBytes(string(r.MergedByKind)), false)
+	}
+	if r.MergedOperatorID != "" {
+		n += field("merged_operator_id", stringBytes(r.MergedOperatorID), false)
+	}
+	if r.OverrideReason != "" {
+		n += field("override_reason", stringBytes(r.OverrideReason), false)
+	}
 	if r.BodyBytes != 0 {
 		n += field("body_bytes", intBytes(r.BodyBytes), false)
 	}

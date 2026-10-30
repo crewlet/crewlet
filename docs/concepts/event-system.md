@@ -432,6 +432,17 @@ code_check_finished        # one attempt of a check of a commit ENDED, as
                            # `replaces`: a correction of that ending, never
                            # the attempt's second. STORED AND NOT FED
                            # (code-host.md, "Who records a check")
+change_merged              # a change a MERGE RECORD merged into its
+                           # branch: repository by id and name, the change
+                           # and its number, the branch, the method and the
+                           # commit it moved to, who merged it (a seat's
+                           # handle or a person's human seat) and a person's
+                           # reason where they overrode its merge gate.
+                           # Published ONCE, by the data node whose
+                           # committer landed the record — never by an
+                           # applier, never for a retry its operation ledger
+                           # collapsed. STORED AND FED (code-host.md, "A
+                           # merge, end to end")
 budget_exhausted           # a charge the token budget refused ended a turn;
                            # names the scope and the refusing window —
                            # period, window label, resets_at — with its

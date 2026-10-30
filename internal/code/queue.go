@@ -246,14 +246,16 @@ type QueueResult struct {
 }
 
 // MergeRefusal is why a repository's committer decided nothing of a write
-// that moves a change towards its merge — an enqueue or a dequeue of its
-// target's queue ([QueueProposal]) — a code its asker reads as "<code>:
-// <sentence>". A named string, so a code this build does not know is a value
-// rather than a panic. NONE IS EVER RECORDED: a refused write appends nothing.
+// that moves a change towards its merge — the merge itself ([MergeProposal])
+// or an enqueue or a dequeue of its target's queue ([QueueProposal]) — a code
+// its asker reads as "<code>: <sentence>". A named string, so a code this
+// build does not know is a value rather than a panic. NONE IS EVER RECORDED: a
+// refused write appends nothing.
 type MergeRefusal string
 
-// The codes, in the order the decide's rules reach them, then the
-// committer's own.
+// The codes, in the order the decides' rules reach them — the ones every
+// write's decide shares, then a merge's, an enqueue's and a dequeue's own —
+// then the committer's own.
 const (
 	// MergeRefusalRepoDeleted is a write to a repository that is deleted,
 	// being purged, purged or not there at all.
@@ -273,6 +275,17 @@ const (
 	// MergeRefusalHeadMoved is a write formed against a head the change has
 	// moved from.
 	MergeRefusalHeadMoved MergeRefusal = "head_moved"
+	// MergeRefusalTargetMoved is a merge built onto a tip its target has
+	// moved from since: what it built merges a branch that is no longer
+	// there, and its builder builds it again onto the tip the target holds.
+	MergeRefusalTargetMoved MergeRefusal = "target_moved"
+	// MergeRefusalNotPerson is a merge past its target's gate asked by
+	// anybody but a person: only a person overrides a merge gate.
+	MergeRefusalNotPerson MergeRefusal = "not_person"
+	// MergeRefusalQueueTarget is a merge into a target whose merges land
+	// through its queue — its gate requires a check — asked directly rather
+	// than enqueued: only a person's override merges into one directly.
+	MergeRefusalQueueTarget MergeRefusal = "queue_target"
 	// MergeRefusalNoQueue is an enqueue onto a target that has no queue: its
 	// gate requires no check, so a change merges into it directly.
 	MergeRefusalNoQueue MergeRefusal = "no_queue"
@@ -286,8 +299,26 @@ const (
 	MergeRefusalQueueFull MergeRefusal = "queue_full"
 	// MergeRefusalGateUnmet is a change that does not meet its target's
 	// merge gate: the result names every precondition unmet
-	// ([QueueResult.Unmet]).
+	// ([QueueResult.Unmet], [MergeResult.Unmet]).
 	MergeRefusalGateUnmet MergeRefusal = "gate_unmet"
+	// MergeRefusalSourceRefused is a merge asked to delete its source
+	// branch where a push of that deletion would be refused — a protection
+	// that keeps the branch, or, for a source outside the seats' namespace,
+	// the merger's grant: the sentence names the push's refusal, and the
+	// merge lands keeping its source.
+	MergeRefusalSourceRefused MergeRefusal = "source_refused"
+	// MergeRefusalUploadExpired is a merge whose pack was uploaded longer
+	// ago than a record may still name it (objstore.RecordWithin), as a
+	// push's is ([RefusalUploadExpired]): its builder builds it again.
+	MergeRefusalUploadExpired MergeRefusal = "upload_expired"
+	// MergeRefusalRepoSize is a merge whose pack would take the repository
+	// past code.limits.repo_max_bytes, as a push's would ([RefusalRepoSize]).
+	MergeRefusalRepoSize MergeRefusal = "repo_size"
+	// MergeRefusalCompactionBehind is a merge carrying a pack into a
+	// repository holding MaxPacksPerRepo live packs, as a push carrying one
+	// is ([RefusalCompactionBehind]): nothing was decided, and it lands when
+	// asked again once a compaction has merged the packs.
+	MergeRefusalCompactionBehind MergeRefusal = "compaction_behind"
 	// MergeRefusalNotQueued is a dequeue of an entry no queue holds live.
 	MergeRefusalNotQueued MergeRefusal = "not_queued"
 	// MergeRefusalNotPermitted is a dequeue by a principal that is neither
@@ -304,12 +335,14 @@ const (
 	MergeRefusalUnavailable MergeRefusal = "unavailable"
 )
 
-// MergeRefusals is the closed set, in the order the decide reaches them.
+// MergeRefusals is the closed set, in the order the decides reach them.
 func MergeRefusals() []MergeRefusal {
 	return []MergeRefusal{MergeRefusalRepoDeleted, MergeRefusalRepoArchived, MergeRefusalChangeNotFound,
 		MergeRefusalChangeNotOpen, MergeRefusalChangeDraft, MergeRefusalStale, MergeRefusalHeadMoved,
-		MergeRefusalNoQueue, MergeRefusalNoAutoRevert, MergeRefusalAlreadyQueued, MergeRefusalQueueFull,
-		MergeRefusalGateUnmet, MergeRefusalNotQueued, MergeRefusalNotPermitted, MergeRefusalBusy,
+		MergeRefusalTargetMoved, MergeRefusalNotPerson, MergeRefusalQueueTarget, MergeRefusalNoQueue,
+		MergeRefusalNoAutoRevert, MergeRefusalAlreadyQueued, MergeRefusalQueueFull, MergeRefusalGateUnmet,
+		MergeRefusalSourceRefused, MergeRefusalUploadExpired, MergeRefusalRepoSize,
+		MergeRefusalCompactionBehind, MergeRefusalNotQueued, MergeRefusalNotPermitted, MergeRefusalBusy,
 		MergeRefusalNotApplied, MergeRefusalUnavailable}
 }
 

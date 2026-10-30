@@ -234,12 +234,12 @@ const EntryRoom = MaxRecordBytes - recordOverheadBytes
 // enough.
 func (p Proposal) ValidateCommands() error {
 	switch {
-	case !p.Via.Valid():
+	case !p.Via.proposed():
 		// THE ASKER'S OWN BUG, never the client's: a measure of an entry
 		// whose way is unstamped is short of the entry that will be
 		// proposed, by up to the longest way's spelling.
 		return fmt.Errorf("%w: via: %q is not one of %v — a push is measured as built", ErrInvalidProposal,
-			p.Via, PushVias())
+			p.Via, proposedVias())
 	case len(p.Commands) == 0:
 		return fmt.Errorf("%w: commands: a push updates at least one ref", ErrInvalidProposal)
 	case len(p.Commands) > MaxCommandsPerPush:
@@ -411,9 +411,13 @@ func (p Proposal) validFields() error {
 		// would answer a write the run never made.
 		return fmt.Errorf("%w: principal.run.run_id: a push the engine built is a tool call's, whose run "+
 			"is its turn: it names no coding run", ErrInvalidProposal)
-	case !p.Via.Valid():
-		return fmt.Errorf("%w: via: %q is not one of %v — a push names how its pack was built",
-			ErrInvalidProposal, p.Via, PushVias())
+	case !p.Via.proposed():
+		// A MERGE'S PUSH IS ITS RECORD'S, never a proposal's: a push naming
+		// via merge would move a branch as a merge does and judge it as a
+		// push, past the gate a merge is decided by (ADR-0066).
+		return fmt.Errorf("%w: via: %q is not one of %v — a push names how its pack was built, and a "+
+			"merge is decided through its gate, never proposed as a push", ErrInvalidProposal, p.Via,
+			proposedVias())
 	case strings.TrimSpace(p.Node) == "":
 		return fmt.Errorf("%w: node: a push names the node that received it", ErrInvalidProposal)
 	case p.ReceivedAt.IsZero():

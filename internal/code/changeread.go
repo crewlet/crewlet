@@ -662,8 +662,9 @@ func (r changeRow) wire() ChangeRow {
 		SourceRef: r.source, TargetRef: r.target, Head: r.head, Revision: r.revision, Owner: r.owner,
 		OwnerKind: r.ownerKind, OwnerOperatorID: r.operator, CreatedTurn: r.turn, CreatedRun: r.run,
 		OpenedAt: store.DecodeTime(r.openedAt), OpenedPosition: unpacked(r.opened), CloseReason: r.closeReason,
-		MergedVia: r.mergedVia, MergeOID: r.mergeOID, BodyBytes: r.bodyBytes, Version: r.version,
-		Position: unpacked(r.position)}
+		MergedVia: r.mergedVia, MergeOID: r.mergeOID, MergedBy: r.mergedBy, MergedByKind: r.mergedByKind,
+		MergedOperatorID: r.mergedOperator, OverrideReason: r.overrideReason, BodyBytes: r.bodyBytes,
+		Version: r.version, Position: unpacked(r.position)}
 	if r.work.ID != "" {
 		work := r.work
 		out.WorkItem = &work

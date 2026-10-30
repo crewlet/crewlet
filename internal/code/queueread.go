@@ -102,7 +102,7 @@ type LandingRow struct {
 	TargetRef  string            `json:"target_ref"`
 	Position   statelog.Position `json:"position"`
 	Ordinal    int               `json:"ordinal"`
-	Kind       string            `json:"kind"`
+	Kind       LandingKind       `json:"kind"`
 	ChangeID   string            `json:"change_id,omitempty"`
 	EntryID    string            `json:"entry_id,omitempty"`
 	BaseOID    string            `json:"base_oid"`

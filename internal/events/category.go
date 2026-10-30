@@ -326,6 +326,12 @@ var categories = map[string]placement{
 	// by the credentials and seats the company holds, bounded by the cells
 	// that run checks.
 	"code_check_finished": {"system", RateAuthenticated},
+	// A change a merge record merged into its branch, its gate held or a
+	// person's override recorded — PERSISTED and FED: a merge is what a
+	// person watching the company's work wants to see happen, one a change.
+	// AUTHENTICATED-rated: every one is a merge a seat's or a person's
+	// credential asked, its pace set by the changes they open.
+	"change_merged": {"system", RateAuthenticated},
 
 	// Learning: the reflection subsystem and the skill lifecycle, grouped
 	// so a dashboard's category filter can include or exclude all of that

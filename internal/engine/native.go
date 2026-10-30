@@ -440,6 +440,9 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 				// configuration decides no seat's push (Reconciler.Admits
 				// through SetAdmits, read per proposal).
 				Current: e.admits,
+				// AND THE NODE'S EVENT STREAM a merge this committer landed
+				// is announced on, once, from here.
+				Events:  e.codeEvents(),
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code committer: %w", err)
@@ -461,7 +464,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			// applied ending is announced on, once, from here.
 			if n.checksWriter, err = code.NewChecksWriter(code.ChecksWriterOptions{
 				Publisher: running.publisher, DB: sl.estate().Reader(), NodeID: nodeID,
-				Retention: e.codeDeletedRetention, Events: e.checkEvents(),
+				Retention: e.codeDeletedRetention, Events: e.codeEvents(),
 				Metrics: e.metrics, Logger: logging.Get("code"),
 			}); err != nil {
 				return fmt.Errorf("engine: code checks writer: %w", err)

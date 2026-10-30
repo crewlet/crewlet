@@ -1681,6 +1681,10 @@ func TestEveryOperationThatJudgesAGrantIsDeclared(t *testing.T) {
 		{opCodeQueue.spec, code.QueueProposal{Asker: person, Enqueue: &code.Enqueue{}}, true},
 		{opCodeQueue.spec, code.QueueProposal{Asker: seat, Dequeue: &code.Dequeue{}}, true},
 		{opCodeQueue.spec, code.QueueProposal{Asker: person, Dequeue: &code.Dequeue{}}, false},
+		// EVERY MERGE, whoever asks: its gate counts approvals, owners' lead
+		// chains and a seat's merge authority by the chart.
+		{opCodeMerge.spec, code.MergeProposal{Asker: seat}, true},
+		{opCodeMerge.spec, code.MergeProposal{Asker: person}, true},
 		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleHold, Actor: seat}, true},
 		{opCodeLifecycle.spec, code.LifecycleRequest{Kind: code.LifecycleCreate, Actor: person}, true},
 		// A WRITE OF A CHANGE'S CONVERSATION THE CHART JUDGES: a seat's, and an

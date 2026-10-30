@@ -764,6 +764,27 @@ func Catalogue() []Instrument {
 				"queue landing slower than it is fed.",
 		},
 		{
+			Name: CodeMergeOutcomes, Kind: KindCounter, Unit: UnitCount,
+			Attributes: []string{"outcome"},
+			Shows: "Merges of changes this node's committer was asked to decide " +
+				"— each one record that merges the change and moves its target, " +
+				"its merge gate proved from one snapshot or a person's override " +
+				"recorded — by what became of each, `outcome`: `applied`, its " +
+				"record landed and the change's row says so; `pending` and " +
+				"`unknown`, its record was appended and is not yet known here to " +
+				"have applied; a refusal's own code — `gate_unmet`, " +
+				"`target_moved`, `head_moved`, `stale`, `queue_target`, " +
+				"`not_person`, `source_refused`, `upload_expired`, `repo_size`, " +
+				"`compaction_behind`, `change_not_open`, `change_draft`, " +
+				"`change_not_found`, `repo_archived`, `repo_deleted`, `busy`, " +
+				"`not_applied`, `unavailable` — which decided nothing; " +
+				"`handed_on`, one this node decided nothing of for a reason " +
+				"about itself, which the estate asks the repository's runner-up; " +
+				"and `failed`, any other error. `target_moved` climbing is a " +
+				"branch moving faster than its merges are built onto it; " +
+				"`gate_unmet`, askers merging changes before their gate is met.",
+		},
+		{
 			Name: CodeChecksQueued, Kind: KindCounter, Unit: UnitCount,
 			Attributes: []string{"purpose"},
 			Shows: "Attempts of checks this node's checks writer queued — each a " +
@@ -858,8 +879,9 @@ func Catalogue() []Instrument {
 				"which they ask for again, or the begin or the commit its " +
 				"maintainer built, which it plans again at its next pass; " +
 				"`change`, a write of a change's lifecycle, which its asker " +
-				"sends again; and `merge_queue`, an enqueue or a dequeue of a " +
-				"target's merge queue, which its asker sends again. `reason` is " +
+				"sends again; `merge_queue`, an enqueue or a dequeue of a " +
+				"target's merge queue, which its asker sends again; and `merge`, " +
+				"a change's merge, which its builder asks again. `reason` is " +
 				"one of five causes, each pointing at " +
 				"a different remedy. Three are a BACKLOG, which raises " +
 				"`code_commit_busy` on the committer's node: `queue`, a " +

@@ -108,6 +108,7 @@ const pushesAfter = (a: CodePushesAnswer) => a.next ?? "";
 const VIA_WORDS: Readonly<Record<string, string>> = {
   git: "git push",
   engine: "built by the engine",
+  merge: "a change merged",
 };
 
 export function Pushes() {

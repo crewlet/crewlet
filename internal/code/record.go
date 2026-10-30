@@ -412,6 +412,18 @@ const (
 	// string(OpCheckDispatched)}, with the same companions. It is no gate.
 	OpCheckDispatched OpKind = "check_dispatched"
 
+	// OpMerge merges a change into its target ([Merge]), on the repository's
+	// own subject, decided by its committer alone through the change's merge
+	// gate from one snapshot ([Committer.ProposeMerge], ADR-0066): ONE
+	// RECORD merges the change, moves the target onto the merge's commit and
+	// lands that move as a push.
+	//
+	// BASE FORMAT, AS A STATED CONDITION, as [OpChangeOpen] states it; once
+	// a build without it has run, it takes {Name: "MutationRecord.Op merge",
+	// Since: 2, Path: []string{"op"}, Equals: string(OpMerge)}, with the same
+	// companions. It is no gate.
+	OpMerge OpKind = "merge"
+
 	// OpEnqueue puts a change in its target's merge queue ([Enqueue]), on the
 	// repository's own subject, decided by its committer alone through the
 	// change's merge gate ([Committer.ProposeQueue]).
@@ -433,14 +445,14 @@ const (
 	OpDequeue OpKind = "dequeue"
 )
 
-// OpKinds are the forty-one, in the order they are documented.
+// OpKinds are the forty-two, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPush, OpSettings, OpDelete, OpRestore, OpPurgePart, OpPurge,
 	OpActivate, OpEviction, OpGeneration, OpBarrier, OpTrimmed, OpCompact, OpRetireSweep,
 	OpExpungeRequest, OpExpungeBegin, OpExpungeCommit, OpRename, OpReleaseName, OpHold,
 	OpChangeOpen, OpChangeEdit, OpChangeDraft, OpChangeRetarget, OpChangeClose, OpChangeReopen, OpChangeLanded,
 	OpReviewers, OpComment, OpThreadResolve, OpReview, OpFindingResolve, OpRevise, OpMergeability,
-	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpEnqueue, OpDequeue,
+	OpCheckQueued, OpCheckStarted, OpCheckFinished, OpChecksSweep, OpCheckDispatched, OpMerge, OpEnqueue, OpDequeue,
 }
 
 // CheckOps are the ops of a repository's CHECKS, in [OpKinds]' order: every

@@ -1167,7 +1167,16 @@ type changeRow struct {
 	mergedAt    sql.NullInt64
 	mergedVia   MergedVia
 	mergeOID    string
-	version     int64
+	// mergedBy and mergedByKind are who merged it through its gate — a merge
+	// record's principal, a seat by its handle or a person by their human
+	// seat — and mergedOperator the credential a person merged with;
+	// overrideReason a person's reason for merging past the gate. All ""
+	// but on a change a merge record merged ([Merge]).
+	mergedBy       string
+	mergedByKind   PartyKind
+	mergedOperator string
+	overrideReason string
+	version        int64
 	// position is the packed position of the last record that wrote it.
 	position int64
 }
@@ -1175,13 +1184,14 @@ type changeRow struct {
 // scanChange reads one row [changeColumns] spells.
 func scanChange(scan func(...any) error) (changeRow, error) {
 	var r changeRow
-	var state, ownerKind, backend, via string
+	var state, ownerKind, backend, via, mergedByKind string
 	err := scan(&r.id, &r.repoID, &r.number, &r.title, &r.bodyBytes, &state, &r.source, &r.target, &r.head,
 		&r.revision, &r.owner, &ownerKind, &r.operator, &backend, &r.work.ID, &r.work.Key, &r.work.Project,
 		&r.turn, &r.run, &r.openedAt, &r.opened, &r.closedAt, &r.closeReason, &r.mergedAt, &via, &r.mergeOID,
-		&r.version, &r.position)
+		&r.mergedBy, &mergedByKind, &r.mergedOperator, &r.overrideReason, &r.version, &r.position)
 	r.state, r.ownerKind, r.work.Backend, r.mergedVia = ChangeState(state), PartyKind(ownerKind),
 		types.WorkBackend(backend), MergedVia(via)
+	r.mergedByKind = PartyKind(mergedByKind)
 	return r, err
 }
 
@@ -1235,7 +1245,7 @@ const (
 	changeColumns = `id, repo_id, number, title, body_bytes, state, source_ref, target_ref, head_oid, revision,
 		owner, owner_kind, owner_operator_id, work_backend, work_id, work_key, work_project, created_turn,
 		created_run, opened_at, opened_position, closed_at, close_reason, merged_at, merged_via, merge_oid,
-		version, position`
+		merged_by, merged_by_kind, merged_operator_id, override_reason, version, position`
 	changeRowSQL    = `SELECT ` + changeColumns + ` FROM code_changes WHERE id = ?`
 	liveChangeOnSQL = `SELECT number FROM code_changes WHERE repo_id = ? AND source_ref = ? AND ` +
 		liveChanges + ` LIMIT 1`

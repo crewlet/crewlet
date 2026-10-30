@@ -445,6 +445,15 @@ const (
 	// which replicated 0066 sizes the row by as it does by the title.
 	MaxCloseReasonBytes = 1 << 10
 
+	// MaxOverrideReasonBytes is the longest reason a person gives to merge a
+	// change past its target's merge gate ([Merge.Override]) — a sentence
+	// or two of why, audited: the merge's record carries it and the change's
+	// row keeps it. 1 KiB, the close reason's bound, because the row holds
+	// one or the other and never both — a merged change was never closed
+	// since it was last opened, a reopen clearing its close reason — so the
+	// row stays the width replicated 0066 sized it to.
+	MaxOverrideReasonBytes = MaxCloseReasonBytes
+
 	// MaxReviewersPerChange is the most reviewers a change asks at once: the
 	// tracker's own bound on the people one item mentions (its MaxMentions),
 	// because a request is a mention that waits for an answer — and the

@@ -192,6 +192,7 @@ var classified = map[string]struct {
 	"code.CommitterOptions.Current": {seamGate, "whether this node serves the company's configuration: " +
 		"a seat's push behind it is handed to the repository's next committer, decided nowhere here"},
 	"code.CommitterOptions.Now":     {seamNone, "the decide's clock"},
+	"code.CommitterOptions.Events":  {seamNone, "the node's event stream an applied merge is announced on"},
 	"code.CommitterOptions.Metrics": {seamNone, "the node's instruments"},
 	"code.CommitterOptions.Logger":  {seamNone, "where a failed batch is reported"},
 

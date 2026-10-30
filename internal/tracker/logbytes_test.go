@@ -292,6 +292,14 @@ var codeLogUnwritten = map[code.OpKind]struct {
 	// estate's code.queue — a record a change merged through a queue, and one
 	// more for each it leaves before landing, which those writers are the ones
 	// to price.
+	// A CHANGE'S MERGE, decided by its repository's committer since the
+	// committer's merge path landed, is appended by no node while nothing asks
+	// for it: code_merge_change, which merges a change into a target with no
+	// queue, is its first writer, through the estate's code.merge — a record a
+	// change merged, its push row and its pack's row among its rows, which
+	// that writer is the one to price.
+	code.OpMerge: {payload: reflect.TypeFor[code.Merge](), how: "a change is merged into its target by " +
+		"code_merge_change, through the estate's code.merge"},
 	code.OpEnqueue: {payload: reflect.TypeFor[code.Enqueue](), how: "a change is queued for its " +
 		"target's landing by code_merge_change, through the estate's code.queue"},
 	code.OpDequeue: {payload: reflect.TypeFor[code.Dequeue](), how: "an entry leaves its queue by " +
@@ -459,6 +467,9 @@ var codeLogPushVias = map[code.PushVia]string{
 		"alone in its record against a box's 1 555), and none of the reference company's 3 000 " +
 		"is one; and an import's batches (crewlet code import), up to code.MaxCommandsPerPush refs " +
 		"a record, once a repository when a person imports it",
+	code.ViaMerge: "the push a merge record lands, written by the merge's own apply and never a push " +
+		"record: its bytes are the merge record's (code.OpMerge), which no node appends while " +
+		"nothing asks for one (codeLogUnwritten)",
 }
 
 // codeLogManagers is everything that may manage a repository

@@ -295,8 +295,9 @@ const (
 	PackPush PackKind = "push"
 	// PackCompact is a compaction's output.
 	PackCompact PackKind = "compact"
-	// PackMerge is the pack of objects a change's merge record builds (M5):
-	// no record of this build writes one.
+	// PackMerge is the pack of objects a change's merge built — its merge or
+	// squashed commit and the trees and blobs the merge wrote — which its
+	// merge record adds ([Merge]).
 	PackMerge PackKind = "merge"
 	// PackCandidate is the pack a speculative queue's candidate is recorded
 	// with (M5): no record of this build writes one.
@@ -1588,6 +1589,8 @@ func DecodeMutation(rec MutationRecord) (any, error) {
 		return decodePayload[ChangeLanded](rec)
 	case kind == KindRepo && op == OpChangeReopen:
 		return decodePayload[ChangeReopen](rec)
+	case kind == KindRepo && op == OpMerge:
+		return decodePayload[Merge](rec)
 	case kind == KindRepo && op == OpEnqueue:
 		return decodePayload[Enqueue](rec)
 	case kind == KindRepo && op == OpDequeue:

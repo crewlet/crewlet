@@ -118,6 +118,21 @@ func (f *fakeNode) ProposeQueue(_ context.Context, p code.QueueProposal) (code.Q
 		Place: 1, Position: statelog.Position{Stream: codeStream, Generation: 1, Seq: f.codeSeq}}, nil
 }
 
+// ProposeMerge is a committer that lands every merge it is given at the next
+// position on the code log — or refuses every one with codeErr.
+func (f *fakeNode) ProposeMerge(_ context.Context, p code.MergeProposal) (code.MergeResult, error) {
+	f.note("code.merge")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.codeErr != nil {
+		return code.MergeResult{}, f.codeErr
+	}
+	f.codeSeq++
+	return code.MergeResult{Outcome: statelog.OutcomeApplied, MergeID: p.Merge.MergeID,
+		MergeOID: p.Merge.CommitOID, Position: statelog.Position{Stream: codeStream, Generation: 1,
+			Seq: f.codeSeq}}, nil
+}
+
 // Converse is a change writer that writes every write of a change's
 // conversation it is given at the next position on the code log — or refuses
 // every one with codeErr.
@@ -526,6 +541,7 @@ type codeAnswers struct {
 	expunged  code.ExpungeResult
 	changed   code.ChangeResult
 	queued    code.QueueResult
+	merged    code.MergeResult
 	lifecycle code.LifecycleResult
 	conversed code.ConversationResult
 	checked   code.ChecksResult
@@ -581,6 +597,11 @@ func (d *codeDesk) ProposeChange(_ context.Context, p code.ChangeProposal) (code
 func (d *codeDesk) ProposeQueue(_ context.Context, p code.QueueProposal) (code.QueueResult, error) {
 	held, err := d.took(p)
 	return held.queued, err
+}
+
+func (d *codeDesk) ProposeMerge(_ context.Context, p code.MergeProposal) (code.MergeResult, error) {
+	held, err := d.took(p)
+	return held.merged, err
 }
 
 func (d *codeDesk) Converse(_ context.Context, w code.ConversationWrite) (code.ConversationResult, error) {
@@ -988,6 +1009,34 @@ func TestEveryCodeOperationCrossesWhole(t *testing.T) {
 		if got := d.last(); !reflect.DeepEqual(got, p) {
 			t.Errorf("the committer was proposed %s %+v, want %+v", name, got, p)
 		}
+	}
+
+	// A CHANGE'S MERGE, every field of it — the principal, the source and
+	// what the snapshot held of the target, which the committer stamps,
+	// among them, crossing whole whoever set them — and every field of the
+	// answer, the preconditions a gate_unmet names among them.
+	merge := code.MergeProposal{OpID: "019a0c2e-0000-7000-8000-0000000000f0.code_merge_change", Asker: seat,
+		Seen: at, Merge: code.Merge{RepoID: ref.ID, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
+			ChangeID: item.ChangeID, Method: code.MergeMethodSquash, TargetRef: "refs/heads/main",
+			BaseOID: "6666666666666666666666666666666666666666", HeadOID: "7777777777777777777777777777777777777777",
+			CommitOID: "8888888888888888888888888888888888888888",
+			Pack: &code.PackRef{PackID: "019a0c2e-0000-7000-8000-0000000000f6", Object: objstore.KeyAt(created),
+				Hash: objstore.HashOf([]byte("f6")), Size: 1_300, IndexBytes: 1_100, ReverseBytes: 60,
+				GitChecksum: "9999999999999999999999999999999999999999", Objects: 2},
+			DeleteSource: true, SourceRef: "refs/heads/seats/dev/fix", Override: "the release cannot wait",
+			Node: "git-a", ReceivedAt: created, Principal: seat, Protected: true, Green: true}}
+	d.mu.Lock()
+	d.merged = code.MergeResult{Outcome: statelog.OutcomeApplied, MergeID: "019a0c2e-0000-7000-8000-0000000000f5",
+		MergeOID: "8888888888888888888888888888888888888888", Position: at, Refusal: code.MergeRefusalGateUnmet,
+		Detail: "app!42 does not meet refs/heads/main's merge gate: no approval counts",
+		Unmet: []code.Precondition{{Kind: code.PreconditionApproval, State: code.PreconditionUnmet,
+			WaitsOn: []code.Party{{Handle: "plat-lead", Kind: code.PartyAgent}}, Detail: "no approval counts"}}}
+	d.mu.Unlock()
+	if got, err := seam.Merge(ctx, merge); err != nil || !reflect.DeepEqual(got, d.merged) {
+		t.Errorf("merge = (%+v, %v), want %+v", got, err, d.merged)
+	}
+	if got := d.last(); !reflect.DeepEqual(got, merge) {
+		t.Errorf("the committer was proposed the merge %+v, want %+v", got, merge)
 	}
 
 	// A CHANGE'S CONVERSATION'S WRITES, every field of each — the fields the

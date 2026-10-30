@@ -120,6 +120,19 @@ import (
 // the rows they touch counted in the record's before any horizon takes what
 // is left ([countSeatDays]).
 func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch) (int, error) {
+	return a.landPushes(ctx, tx, at, p, 0)
+}
+
+// landPushes is the one apply of pushes ([Applier.applyPush]) — a push
+// record's batch, and the push a merge record lands ([Applier.applyMerge]) —
+// after spent rows the record's apply already wrote, which its horizons leave
+// to it: what it answers is the rows it wrote itself. ONE APPLY, so a merge's
+// move of its target is a push in every sense the history, the counters, the
+// tombstones and the changes it moves read — never a second spelling of what
+// a push does to a repository (ADR-0008).
+func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p PushBatch,
+	spent int) (int, error) {
+
 	ids := make([]string, 0, len(p.Pushes))
 	for _, e := range p.Pushes {
 		ids = append(ids, e.PushID)
@@ -150,6 +163,7 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		final       = map[string]string{}
 		pushRows    []PushEntry
 		packRows    []PackRef
+		packKinds   []PackKind
 		drops       []refDrop
 		dropped     = map[refDrop]bool{}
 		packBytes   int64
@@ -178,6 +192,7 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 		}
 		if e.Pack != nil {
 			packRows = append(packRows, *e.Pack)
+			packKinds = append(packKinds, e.packKind())
 			packBytes += e.Pack.Size
 			packObjects += e.Pack.Objects
 		}
@@ -217,14 +232,16 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	// THE PUSH HISTORY FIRST, before any ref is written: what it removes is
 	// rows of the record's budget the tombstones cannot have, and the
 	// tombstones' removal backstop is decided from that budget before the
-	// refs it changes are written.
-	expired, err := a.expirePushes(ctx, tx, at, p.RepoID, MaxRecordRows-rows)
+	// refs it changes are written. The budget is what the record's rows
+	// leave of MaxRecordRows: a merge record's own rows (spent) among them.
+	budget := MaxRecordRows - spent
+	expired, err := a.expirePushes(ctx, tx, at, p.RepoID, budget-rows)
 	if err != nil {
 		return 0, err
 	}
 	// THE MARK AND THE COUNTER ARE ONE ROW, written once the tombstones are
 	// swept: the budget's last.
-	sweep := MaxRecordRows - rows - expired - 1
+	sweep := budget - rows - expired - 1
 
 	held, err := tombstonesHeld(ctx, tx, p.RepoID)
 	if err != nil {
@@ -268,12 +285,13 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_packs (repo_id, pack_id, part, object, hash, size, index_bytes,
 			reverse_bytes, git_checksum, objects, kind, state, added_position, content_position) VALUES `,
-		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, 'push', 'live', ?, ?)`,
+		`(?, ?, 'pack', ?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?)`,
 		`ON CONFLICT (repo_id, pack_id, part) DO NOTHING`,
 		len(packRows), func(i int) []any {
 			k := packRows[i]
 			return []any{p.RepoID, k.PackID, k.Object.String(), string(k.Hash), k.Size,
-				k.IndexBytes, k.ReverseBytes, k.GitChecksum, k.Objects, at.packed, at.packed}
+				k.IndexBytes, k.ReverseBytes, k.GitChecksum, k.Objects, string(packKinds[i]), at.packed,
+				at.packed}
 		}); err != nil {
 		return 0, fmt.Errorf("code: write the packs at %s: %w", at.position, err)
 	}
@@ -348,11 +366,21 @@ func (a *Applier) applyPush(ctx context.Context, tx *sql.Tx, at applyContext, p 
 	}
 	// THE DROPS LAST, with what the tombstones left: their mark's row too,
 	// where they swept nothing.
-	forgotten, err := a.expireRefDrops(ctx, tx, at, p.RepoID, MaxRecordRows-rows-expired-swept)
+	forgotten, err := a.expireRefDrops(ctx, tx, at, p.RepoID, budget-rows-expired-swept)
 	if err != nil {
 		return 0, err
 	}
 	return rows + expired + swept + forgotten, nil
+}
+
+// packKind is what added e's pack, as its code_packs row names it: a merge
+// record's push its merge's pack ([PackMerge]), and every other push its own
+// ([PackPush]).
+func (e PushEntry) packKind() PackKind {
+	if e.Via == ViaMerge {
+		return PackMerge
+	}
+	return PackPush
 }
 
 // applyChangeMoves writes what the record's entries — pushes, in order, none

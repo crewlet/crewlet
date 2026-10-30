@@ -185,6 +185,8 @@ func mayWriteCheckLogs(env RecordEnvelope) bool {
 // dropping pack is a row of code_packs, naming its object as a live one does,
 // until its commit retires it — and removes its inputs'; its COMMIT writes a
 // row per rescue pack and removes its dropping packs'; a request writes none.
+// A MERGE writes a row for the pack its build wrote, as a push does, and a
+// fast-forward, which builds none, writes none.
 // Every entry and output is answered whether or not this node's applier would skip
 // it as already applied — a backup reads a superset of what a restore's rows
 // name, never a subset. A purge REMOVES rows the record does not list (a part
@@ -255,6 +257,12 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 	case ExpungeCommit:
 		out = append(out, written(p.RepoID, p.Add)...)
 		out = append(out, removed(p.RepoID, p.Retire)...)
+	case Merge:
+		// A MERGE'S PACK, the objects its build wrote, which its push lands
+		// as a push lands its own; a fast-forward builds none.
+		if p.Pack != nil {
+			out = append(out, written(p.RepoID, []PackRef{*p.Pack})...)
+		}
 	default:
 		return nil, fmt.Errorf("code: the %s on %s carries a %T", env.Op, env.Subject, payloadAny)
 	}
@@ -263,8 +271,9 @@ func packRecordReferences(payload []byte) ([]objstore.RecordReference, error) {
 
 // packOps are the ops whose records write or remove rows of code_packs that
 // a record names — a push's, a compaction's, an expunge's begin's and its
-// commit's; a purge removes rows its record does not list, and answers none.
-var packOps = []OpKind{OpPush, OpCompact, OpExpungeBegin, OpExpungeCommit}
+// commit's, and a merge's; a purge removes rows its record does not list, and
+// answers none.
+var packOps = []OpKind{OpPush, OpCompact, OpExpungeBegin, OpExpungeCommit, OpMerge}
 
 // written is the rows of code_packs refs write, each naming its object.
 func written(repoID string, refs []PackRef) []objstore.RecordReference {

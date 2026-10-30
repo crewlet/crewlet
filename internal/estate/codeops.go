@@ -32,6 +32,7 @@ type CodeServer interface {
 	ProposeExpunge(ctx context.Context, p code.ExpungeProposal) (code.ExpungeResult, error)
 	ProposeChange(ctx context.Context, p code.ChangeProposal) (code.ChangeResult, error)
 	ProposeQueue(ctx context.Context, p code.QueueProposal) (code.QueueResult, error)
+	ProposeMerge(ctx context.Context, p code.MergeProposal) (code.MergeResult, error)
 	Converse(ctx context.Context, w code.ConversationWrite) (code.ConversationResult, error)
 	PublishChecks(ctx context.Context, r code.ChecksRequest) (code.ChecksResult, error)
 	Resolve(ctx context.Context, q code.ResolveQuery) (code.RepoRef, error)
@@ -166,6 +167,33 @@ var opCodeQueue = define("code.queue", opIdempotentWrite, codeDomain, false,
 		return res, ranNothing(err)
 	}).keyedBy(code.QueueProposal.RepoID).answeredOn(laneProposals).
 	judgesGrant(code.QueueProposal.JudgesChart)
+
+// opCodeMerge is a change's MERGE — one record that merges the change and
+// moves its target onto the commit its merge built, decided by its merge gate
+// from one snapshot (ADR-0066) — asked of the repository's COMMITTER exactly
+// as a write of its queue is: an IDEMPOTENT write keyed by its operation id,
+// which its builder minted once and the domain's operation ledger collapses
+// (the merge's push id is derived from it, so no retry lands a branch twice),
+// so an unanswered one is asked of the repository's runner-up with the same
+// id. On the proposals lane, because it waits in the repository's one queue
+// beside its pushes. No actor: the asker travels inside the proposal, checked
+// by its Validate on the node that decides, which records it as who merged.
+//
+// A WRITE THE CHART JUDGES, whoever asks — its merge gate counts each approval
+// by who may approve the change, each owner's by the lead chain above it and a
+// seat's merge authority by its grant — so it is declared so
+// (code.MergeProposal.JudgesChart, the committer's own rule), and a node
+// behind the company's configuration answers none of it ([op.judgesGrant]),
+// even asked last.
+var opCodeMerge = define("code.merge", opIdempotentWrite, codeDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, p code.MergeProposal) (code.MergeResult, error) {
+		if b.Code == nil {
+			return code.MergeResult{}, errNoHalf
+		}
+		res, err := b.Code.ProposeMerge(ctx, p)
+		return res, ranNothing(err)
+	}).keyedBy(code.MergeProposal.RepoID).answeredOn(laneProposals).
+	judgesGrant(code.MergeProposal.JudgesChart)
 
 // opCodeConversation is a write of a change's CONVERSATION — an ask for review,
 // a comment or a thread's resolution — asked of the repository's COMMITTING

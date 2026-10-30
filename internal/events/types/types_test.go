@@ -62,7 +62,7 @@ func catalogue() []events.Payload {
 		// knowledge.go
 		KnowledgeRead{},
 		// code.go
-		CodeFetched{}, CodeCheckFinished{},
+		CodeFetched{}, CodeCheckFinished{}, ChangeMerged{},
 		// webhook.go
 		RawWebhook{}, InboundDelivery{},
 		// custody.go
@@ -107,6 +107,7 @@ var wireTypes = []string{
 	"backup_requested",
 	"budget_exhausted",
 	"budget_meters",
+	"change_merged",
 	"code_check_finished",
 	"code_fetched",
 	"compaction_completed",
@@ -362,6 +363,7 @@ var wireTags = map[string][]string{
 	"knowledge_read":                  {"agent_handle", "agent_id", "backend", "pages", "phase", "query", "role", "turn_id", "via", "work_key"},
 	"code_fetched":                    {"bytes", "kind", "principal", "principal_kind", "reads", "repo_id", "repo_name", "seat", "via"},
 	"code_check_finished":             {"attempt", "change_id", "duration_ms", "name", "oid", "placement", "purpose", "reason", "repo_id", "repo_name", "replaces", "required", "state", "target"},
+	"change_merged":                   {"change_id", "commit", "merged_by", "merged_by_kind", "method", "number", "override", "repo_id", "repo_name", "target"},
 	"prefetch_summary":                {"agent_handle", "agent_id", "counterparty_bytes", "counterparty_hit", "duration_ms", "episode_recall_bytes", "episode_recall_hit", "personal_memory_bytes", "personal_memory_hit", "relevant_knowledge_bytes", "relevant_knowledge_hit", "relevant_knowledge_selection_count", "role", "started_at", "synthesized_skills_bytes", "synthesized_skills_hit", "thread_context_bytes", "thread_context_hit", "thread_context_posts", "thread_context_read", "thread_context_stopped_short", "trigger_requires_recon", "turn_embedding", "turn_id", "work_key"},
 	"counterparty_profile_updated":    {"observer_handle", "role", "subject_external_id", "subject_handle", "subject_name", "subject_platform", "traits_patched", "turn_id", "work_key"},
 	"skill_synthesized":               {"agent_handle", "agent_id", "cluster_size", "role", "skill_id", "skill_name", "tool_count", "trigger", "turn_id", "work_key"},

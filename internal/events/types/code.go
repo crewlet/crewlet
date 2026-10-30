@@ -3,6 +3,7 @@ package types
 import (
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
 )
@@ -60,6 +61,7 @@ import (
 func init() {
 	events.Register[CodeFetched]()
 	events.Register[CodeCheckFinished]()
+	events.Register[ChangeMerged]()
 }
 
 // CodeFetchedVia is how a unit repository's contents were read.
@@ -277,6 +279,70 @@ func (e CodeCheckFinished) SummaryFor(actor string) string {
 	}
 	if e.Replaces != "" {
 		what += ", replacing its " + e.Replaces + " ending"
+	}
+	return lead(actor, what)
+}
+
+// ChangeMerged records that a change MERGED by a merge record (internal/code's
+// Merge): its target moved onto the commit its merge built, by a record whose
+// decide held the change to its target's merge gate from one snapshot — or
+// recorded a person's override of it (ADR-0066). Published ONCE, by the data
+// node whose committer landed the record, on that record's apply — never by an
+// applier, which every data node runs, and never for a retry its operation
+// ledger collapsed onto the record. A change a push merged — its target pushed
+// to its head, or past it — is that push's, and no merge record announces it.
+//
+// # Fed, and stored
+//
+// A merge is what a person watching the company's work wants to see happen,
+// and a company makes few of them beside its pushes and its checks — one a
+// change, bounded by the changes its seats and persons open — so it joins the
+// activity feed, in the `system` category beside the code host's other events.
+// What it carries is what a reader of the feed acts on: which change merged
+// into which branch, at which commit, by whom, and a person's reason where they
+// merged it past its gate, which an audit of the branch reads.
+type ChangeMerged struct {
+	// RepoID is the repository's id, which outlives its name; RepoName its
+	// name when the merge applied.
+	RepoID   string `json:"repo_id"`
+	RepoName string `json:"repo_name"`
+
+	// ChangeID is the change, Number its number on the repository — web!42's
+	// 42 — and Target the branch it merged into.
+	ChangeID string `json:"change_id"`
+	Number   int64  `json:"number"`
+	Target   string `json:"target"`
+
+	// Method is how it merged (internal/code's MergeMethod: merge, squash,
+	// fast_forward) and Commit the commit its target moved to.
+	Method string `json:"method"`
+	Commit string `json:"commit"`
+
+	// MergedBy is who merged it — a seat by its handle, or a person by the
+	// human seat they hold — and MergedByKind which (internal/code's
+	// PartyKind: agent, person).
+	MergedBy     string `json:"merged_by"`
+	MergedByKind string `json:"merged_by_kind"`
+
+	// Override is a person's reason for merging the change past its target's
+	// merge gate, "" for a merge its gate held.
+	Override string `json:"override,omitempty"`
+}
+
+// EventType is the "change_merged" wire type.
+func (ChangeMerged) EventType() string { return "change_merged" }
+
+// Actor is who merged it, overriding the envelope's source — the node that
+// landed the record, which merged nothing.
+func (e ChangeMerged) Actor() string { return e.MergedBy }
+
+// SummaryFor names the change by its reference (web!42), the branch it merged
+// into and how, and a person's override where there was one.
+func (e ChangeMerged) SummaryFor(actor string) string {
+	what := "merged " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " into " +
+		strings.TrimPrefix(e.Target, "refs/heads/") + " (" + e.Method + ")"
+	if e.Override != "" {
+		what += ", overriding its merge gate: " + e.Override
 	}
 	return lead(actor, what)
 }

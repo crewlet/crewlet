@@ -87,10 +87,12 @@ This is the product's current shape, not a configuration choice:
   rule decides what a push may do to a ref, and nothing else stands in front
   of one. So a rule's [merge gate](#merge-gates) is recorded and read,
   every change into its branch is judged under it ([The merge
-  gate](#the-merge-gate)), and a change into a branch whose gate requires a
+  gate](#the-merge-gate)), a change into a branch whose gate requires a
   check is queued for its landing by its gate ([The merge
-  queue](#the-merge-queue)) — and nothing merges by the gate yet, nor lands
-  from a queue.
+  queue](#the-merge-queue)), and a repository's committer decides a change's
+  merge as one record its gate proves ([A merge, end to
+  end](#a-merge-end-to-end)) — and nothing builds or asks for a merge in this
+  release, so nothing merges by the gate yet, nor lands from a queue.
 - **Nothing searches a repository's code yet.** Every repository names how it
   is to be searched — `search: indexed` or `grep`
   ([Declaring repositories](#declaring-repositories)) — and the mode is
@@ -5141,6 +5143,99 @@ checkout fetches the files a `sparse:oid` would have named, as it needs them.
 It is housekeeping, not a security boundary — a shallow clone also does without
 the bitmap and is served, held like every transfer to the node's transfer slots
 and their deadlines.
+
+---
+
+## A merge, end to end
+
+A change merges into its target by **one merge record**
+([ADR-0066](../../adr/0066-a-protected-branch-moves-only-by-a-merge-whose-preconditions-one-snapshot-proves.md)):
+the record that marks the change merged is the record that moves its target,
+decided by the repository's [committer](#the-committer) from one snapshot. A
+merge is built elsewhere — its commit and its pack written by the repository's
+[home git node](#the-home-git-node) onto the tip it read of the target — and
+proposed with what it was built from: the target's tip (its **base**), the
+change's head, the commit the target moves to and how it merged (`merge`, a
+merge commit; `squash`, one commit; `fast_forward`, the target moved to the
+head itself, building nothing). The proposal's operation id names the merge:
+its push id is derived from it, so a merge asked again — on the same node, or
+on the repository's runner-up after silence — is the same merge, collapsed by
+the log's ledger onto the record that landed.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as home git node
+  participant C as committer
+  participant L as code log
+  participant A as every data node
+  B->>C: merge: the change, its head, the base, the commit, the pack
+  C->>C: one snapshot — the change, the target's tip, the gate
+  C->>L: the merge record, arbitrated on the repository's subject
+  L->>A: apply: the change merged, then its push via merge
+  C-->>B: applied, from the change's row
+```
+
+**The decide proves every precondition in one snapshot**, in this order, and a
+merge it refuses appends nothing:
+
+| Refusal | Why |
+|---|---|
+| `repo_deleted`, `repo_archived` | The repository is gone, or read-only. |
+| `change_not_found`, `change_not_open`, `change_draft` | The repository holds no such change, or it is closed or merged, or a draft. |
+| `stale`, `head_moved` | The change targets another branch, or its head moved, since its merge was built: read it again. |
+| `target_moved` | The target is no longer at the base the merge was built onto — read off the snapshot's refs, never off the proposal: its builder builds it again onto the tip the branch holds. |
+| `not_person` | The merge overrides the gate and its asker is no person. |
+| `queue_target` | The target's gate requires a check, so a change merges through its [merge queue](#the-merge-queue): only a person's override merges into one directly. |
+| `gate_unmet` | The change does not meet its target's [merge gate](#the-merge-gate) with the asker as the merger — every precondition but `mergeable`, which the merge's own build proved against its base: the answer names every one not met and whom it waits on. |
+| `source_refused` | The merge deletes its source, and a push deleting it would be refused — a protection that keeps the branch, or, for a source outside the seats' namespace, the merger's grant. Asked keeping its source, it merges. |
+| `upload_expired`, `repo_size`, `compaction_behind` | The merge's pack, held to a push's rules: uploaded too long ago for a record to name, past `code.limits.repo_max_bytes`, or into a repository whose compaction has not caught up with its packs. |
+
+**A person may merge past the gate**: a merge carrying their **override** —
+their reason, at most 1 KiB — is decided without the gate, on a queue target
+too, and the reason is kept on the change's row and announced with the merge.
+A seat's override is refused `not_person`, and so is a token bound to
+nobody's, which merges nothing at all. **The chart judges every merge, whoever
+asks** — who may approve the change, the lead chains above the owners it
+touches, a seat's merge authority — so a node that holds no chart yet, or one
+[behind the company's configuration](#a-seats-push), decides no merge and
+hands it to the repository's next committer.
+
+**The record does everything a merge is, in one apply**, every row at its one
+position:
+
+1. **The change merged first** — `merged_via: direct`, `merge_oid` the commit,
+   `merged_by` who merged it (a seat by its handle, a person by their human
+   seat, with the credential they merged with), and a person's override
+   reason. First, so the push that follows finds it merged: a push that sets a
+   target to a live change's head merges that change, and one that deletes a
+   live change's source closes it — and this change is neither.
+2. **Its live queue entry ended**, where a person's override merged a queued
+   change directly: dequeued, `merged`.
+3. **The target's landing row**, where a rule protects it (`kind: direct`, the
+   base and the commit, who merged it) — and **its green row** moved to the
+   commit, where its gate requires no check, so the landing is green as it
+   lands.
+4. **The push**, through the one apply every push takes: the target moved from
+   its base onto the commit; the source branch deleted where the merge asks it
+   — a seat's own branch by default (`delete_source: seats`); the merge's pack
+   (`kind: merge`); and a push row **`via: merge`** naming who merged it and
+   the commit it introduced — none for a fast-forward, whose head the change's
+   own pushes brought — so [which push landed a
+   commit](#which-push-landed-a-commit) answers for a merge as for any push.
+
+The node whose committer landed the record announces it once: a
+`change_merged` event naming the change, the branch, the method, the commit,
+who merged it and any override — fed to the activity feed, and never sent for a
+retry the ledger collapsed. `crewlet.code.merge.outcomes` counts every merge a
+node's committer was asked to decide, by what became of it: `target_moved`
+climbing is a branch moving faster than its merges are built onto it.
+
+**A protected branch so moves only by a merge record whose preconditions one
+snapshot proved**, or by a person's own push under `direct_push: persons` —
+that person's recorded override, their push row naming them. No seat's push
+moves a protected branch: every [protection rule](#protection-rules) refuses
+it.
 
 ---
 

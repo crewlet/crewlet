@@ -475,13 +475,31 @@ const (
 	// a tool's call, rather than one git received — exactly one ref moved,
 	// never --atomic ([Proposal.Validate]).
 	ViaEngine PushVia = "engine"
+	// ViaMerge is the push a MERGE RECORD lands ([Merge]): its target moved
+	// onto the commit the merge built — and, where it deletes its source, the
+	// source branch deleted — written by the merge's own apply, so the push
+	// history names every move of a branch and who made it. No proposal of a
+	// push names it ([Proposal.Validate]): a merge is decided through its
+	// gate ([Committer.ProposeMerge]), never as a push.
+	//
+	// BASE FORMAT, under the condition merge.go's head states: no build that
+	// carries the code domain has run without it.
+	ViaMerge PushVia = "merge"
 )
 
 // PushVias is the closed set, in its documented order.
-func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine} }
+func PushVias() []PushVia { return []PushVia{ViaGit, ViaEngine, ViaMerge} }
 
 // Valid reports a way this build knows.
 func (v PushVia) Valid() bool { return slices.Contains(PushVias(), v) }
+
+// proposedVias is the ways a push PROPOSAL may name — git's and the engine's
+// — in [PushVias]' order: a merge's push is written by its record alone
+// ([ViaMerge]).
+func proposedVias() []PushVia { return []PushVia{ViaGit, ViaEngine} }
+
+// proposed reports a way a push proposal may name ([proposedVias]).
+func (v PushVia) proposed() bool { return slices.Contains(proposedVias(), v) }
 
 // PushedBy is the push that INTRODUCED a commit, as a git node's index of
 // which push introduced each commit holds it: which push, where it landed on
@@ -1786,6 +1804,16 @@ type ChangeRow struct {
 	MergedAt    time.Time `json:"merged_at,omitzero"`
 	MergedVia   MergedVia `json:"merged_via,omitempty"`
 	MergeOID    string    `json:"merge_oid,omitempty"`
+	// MergedBy is who merged it through its gate — a merge record's
+	// principal ([Merge]): a seat by its handle, or a person by the human
+	// seat they hold — and MergedByKind which; MergedOperatorID the
+	// credential a person merged with; and OverrideReason a person's reason
+	// for merging past the gate. Each "" but on a change a merge record
+	// merged: a push that merged a change names its pusher on its push row.
+	MergedBy         string    `json:"merged_by,omitempty"`
+	MergedByKind     PartyKind `json:"merged_by_kind,omitempty"`
+	MergedOperatorID string    `json:"merged_operator_id,omitempty"`
+	OverrideReason   string    `json:"override_reason,omitempty"`
 	// BodyBytes is how long its description is, 0 for none: a listing says a
 	// change has one without carrying it ([ChangeDetail.Body]).
 	BodyBytes int64 `json:"body_bytes,omitempty"`

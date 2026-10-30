@@ -571,6 +571,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 		payloadRepo = p.RepoID
 	case ChangeLanded:
 		payloadRepo = p.RepoID
+	case Merge:
+		payloadRepo = p.RepoID
 	case Enqueue:
 		payloadRepo = p.RepoID
 	case Dequeue:
@@ -625,6 +627,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	case ChangeEdit, ChangeDraft, ChangeRetarget, ChangeClose, ChangeReopen, ChangeLanded:
 		n, err := a.applyChangeWrite(ctx, tx, at, payload)
 		return a.noticed(ctx, tx, at, id, payload, n, err)
+	case Merge:
+		return a.applyMerge(ctx, tx, at, p)
 	case Enqueue:
 		return a.applyEnqueue(ctx, tx, at, p)
 	case Dequeue:

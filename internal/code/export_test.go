@@ -182,6 +182,10 @@ func RowBound(p Proposal) int { return rowBound(p) }
 // RecordRows is the row bound of a record whose entries bound rows rows.
 func RecordRows(rows int) int { return recordRows(rows) }
 
+// MergeRecordRows is the most rows one merge record makes its apply write
+// before its horizons.
+const MergeRecordRows = mergeRecordRows
+
 // EntryOf is the record entry p becomes with its commands as decided — a
 // seat's counted against day, as its committer stamps it.
 func EntryOf(p Proposal, day string) PushEntry { return p.entryWith(p.Commands, day) }

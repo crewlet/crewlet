@@ -165,11 +165,12 @@ func OperatorCode(e *Engine) (estate.CodeSeam, bool) {
 	return e.router.Code(), true
 }
 
-// checkEvents is the event stream this node's checks writer announces an
-// applied ending on — its queue's, the one every event of this node is
-// published to — and nil, never a typed nil, where it holds none: a node with
-// no queue records no event of any kind.
-func (e *Engine) checkEvents() code.EventPublisher {
+// codeEvents is the event stream this node's code host announces what its
+// records applied on — the checks writer an applied ending, the committer an
+// applied merge — its queue's, the one every event of this node is published
+// to; and nil, never a typed nil, where it holds none: a node with no queue
+// records no event of any kind.
+func (e *Engine) codeEvents() code.EventPublisher {
 	if e.backends == nil || e.backends.Queue == nil {
 		return nil
 	}

@@ -77,6 +77,7 @@ const (
 	CodeHostWrites                   = "crewlet.code.host.writes"
 	CodePublishBytes                 = "crewlet.code.publish.bytes"
 	CodeQueueProposals               = "crewlet.code.queue.proposals"
+	CodeMergeOutcomes                = "crewlet.code.merge.outcomes"
 	CodePublishDuration              = "crewlet.code.publish.duration"
 	CodePublishRefusals              = "crewlet.code.publish.refusals"
 	CodePublishRuns                  = "crewlet.code.publish.runs"
