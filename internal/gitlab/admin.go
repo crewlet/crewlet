@@ -211,41 +211,6 @@ func (c *Client) CreateInstanceServiceAccount(ctx context.Context, name, usernam
 	return out, err
 }
 
-// InstanceServiceAccounts lists the instance's service accounts.
-//
-// PAGED TO EXHAUSTION, because it is the enumeration a decommission decides
-// from: a truncated read makes an account look absent, and the next run
-// creates a second one under a username the instance has already taken.
-func (c *Client) InstanceServiceAccounts(ctx context.Context) ([]User, error) {
-	var out []User
-	for page := 1; ; page++ {
-		var batch []User
-		err := c.get(ctx, "/service_accounts", url.Values{
-			"per_page": {strconv.Itoa(userPageSize)},
-			"page":     {strconv.Itoa(page)},
-		}, &batch)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, batch...)
-		if len(batch) < userPageSize {
-			return out, nil
-		}
-		if len(out) >= userWalkCeiling {
-			// THE FIELD, NOT THE FLAG. This is reached by the engine's
-			// reconcile loop as well as by the provisioning command, and
-			// an operator reading it off a card has no command line to
-			// pass `-mode` on: the document is what they can change, and
-			// the flag is only that field's form on the CLI.
-			return nil, fmt.Errorf(
-				"gitlab: this instance has more than %d service accounts, "+
-					"which is not an instance Crewlet provisions into — set "+
-					"integrations.gitlab.provisioning.mode: group, or narrow "+
-					"provisioning.username_prefix", userWalkCeiling)
-		}
-	}
-}
-
 // DeleteInstanceServiceAccount removes an instance service account.
 //
 // The symmetric route to the create, not the instance-wide user delete: the
@@ -393,14 +358,14 @@ func (c *Client) GroupByPath(ctx context.Context, path string) (Group, bool, err
 
 // AddGroupMember adds an account to a group at an access level.
 //
-// A LAST RESORT RATHER THAN THE PASS'S FIRST MOVE. The reconcile reads
-// [Client.GroupMembers] before the seat loop and only calls this for an
-// account the group does not have — see [ensureGroupMember]. The 409 arm
-// below is what remains: two nodes reconciling one surface can both find the
-// membership absent, and the loser must not fail on what the winner did.
-func (c *Client) AddGroupMember(ctx context.Context, groupID, userID, accessLevel int) error {
+// A LAST RESORT RATHER THAN THE PASS'S FIRST MOVE. Per-seat access reads
+// [Client.GroupMembers] once per pass and only calls this for an account the
+// group does not have. The 409 arm below is what remains: two nodes
+// reconciling one surface can both find the membership absent, and the loser
+// must not fail on what the winner did.
+func (c *Client) AddGroupMember(ctx context.Context, groupID, userID int, access Access) error {
 	err := c.send(ctx, http.MethodPost, "/groups/"+strconv.Itoa(groupID)+"/members",
-		map[string]int{"user_id": userID, "access_level": accessLevel}, nil)
+		access.addBody(userID), nil)
 	if isConflict(err) {
 		// ALREADY A MEMBER is success. The run is a reconcile, and a
 		// second run must not fail on what the first one did.
@@ -413,10 +378,10 @@ func (c *Client) AddGroupMember(ctx context.Context, groupID, userID, accessLeve
 //
 // The same race guard as [Client.AddGroupMember], reached the same way: only
 // for an account [Client.ProjectMembers] did not report.
-func (c *Client) AddProjectMember(ctx context.Context, project string, userID, accessLevel int) error {
+func (c *Client) AddProjectMember(ctx context.Context, project string, userID int, access Access) error {
 	err := c.send(ctx, http.MethodPost,
 		"/projects/"+url.PathEscape(project)+"/members",
-		map[string]int{"user_id": userID, "access_level": accessLevel}, nil)
+		access.addBody(userID), nil)
 	if isConflict(err) {
 		return nil
 	}
@@ -428,30 +393,28 @@ func (c *Client) AddProjectMember(ctx context.Context, project string, userID, a
 // # The half of "reconcile the memberships" that was missing entirely
 //
 // GitLab answers a second POST to /members with a 409 and changes nothing,
-// and the add above treats that as success — so for as long as adding was the
-// only thing this client could do, editing provisioning.access_level or an
-// access_levels override had NO effect on a seat that already had a
-// membership. The company document said maintainer, the instance kept
-// developer, and every pass reported converged. The only way to notice was to
-// read the group's member list by hand.
+// and the add above treats that as success, so for as long as adding was the
+// only thing this client could do, changing a seat's role had NO effect on a
+// seat that already had a membership: the company document said maintainer,
+// the instance kept developer, and every pass reported converged.
 //
 // PUT rather than POST is the route GitLab serves for an edit, and it 404s
 // for a user with no DIRECT membership — which is why the caller decides from
 // the listing rather than trying this first and falling back.
-func (c *Client) SetGroupMember(ctx context.Context, groupID, userID, accessLevel int) error {
+func (c *Client) SetGroupMember(ctx context.Context, groupID, userID int, access Access) error {
 	return c.send(ctx, http.MethodPut,
 		"/groups/"+strconv.Itoa(groupID)+"/members/"+strconv.Itoa(userID),
-		map[string]int{"access_level": accessLevel}, nil)
+		access.editBody(), nil)
 }
 
 // SetProjectMember moves an existing project membership to an access level.
 //
 // The project counterpart of [Client.SetGroupMember], and it carried the same
 // silent drift for the same reason.
-func (c *Client) SetProjectMember(ctx context.Context, project string, userID, accessLevel int) error {
+func (c *Client) SetProjectMember(ctx context.Context, project string, userID int, access Access) error {
 	return c.send(ctx, http.MethodPut,
 		"/projects/"+url.PathEscape(project)+"/members/"+strconv.Itoa(userID),
-		map[string]int{"access_level": accessLevel}, nil)
+		access.editBody(), nil)
 }
 
 // ProjectExists reports whether a project path resolves on this instance.
@@ -576,13 +539,12 @@ func tokenPath(groupID, userID int) string {
 // an admin listing, and asking it as a group Owner answers 401. See
 // [tokenPath].
 //
-// PAGED TO EXHAUSTION, which is the same lesson [Client.members] and
-// [Client.InstanceServiceAccounts] already carry and this listing did not: it
-// took whatever one default page held, which is TWENTY rows. Both callers make
-// a destructive decision from it — [retirePrevious] revokes this tool's
-// earlier tokens and [Client.RevokeTokens] empties an account being
-// decommissioned — so a truncated read is not a slow report but a credential
-// left live while the run says it cleaned up.
+// PAGED TO EXHAUSTION, which is the same lesson [Client.members] already
+// carries and this listing did not: it took whatever one default page held,
+// which is TWENTY rows. Its callers make destructive decisions from it (the
+// vendor's retire and revoke steps revoke this engine's earlier tokens), so a
+// truncated read is not a slow report but a credential left live while the
+// run says it cleaned up.
 //
 // Measured: an account had accumulated 164 tokens, of which the oldest 20 were
 // already revoked. Every pass read exactly those 20, retired nothing, minted
@@ -680,32 +642,6 @@ func (c *Client) RevokeToken(ctx context.Context, groupID, userID, tokenID int) 
 	return err
 }
 
-// RevokeTokens removes every token on an account.
-//
-// THE ROLLBACK PATH FOR AN ACCOUNT THIS RUN CREATED, and only that: nothing
-// else has ever minted on it, so taking everything is taking exactly what
-// this run caused. On an account that already existed the rollback revokes
-// by id instead — sweeping it would take an administrator's own token with
-// no way to tell that it had.
-func (c *Client) RevokeTokens(ctx context.Context, groupID, userID int) error {
-	tokens, err := c.Tokens(ctx, groupID, userID)
-	if err != nil {
-		return err
-	}
-	var failures []string
-	for _, t := range tokens {
-		if err := c.RevokeToken(ctx, groupID, userID, t.ID); err != nil {
-			failures = append(failures, strconv.Itoa(t.ID))
-		}
-	}
-	if len(failures) > 0 {
-		return fmt.Errorf("gitlab: these tokens on user %d could not be revoked "+
-			"and are still live — remove them by hand: %s",
-			userID, strings.Join(failures, ", "))
-	}
-	return nil
-}
-
 // Member is an account's membership of a group or a project.
 //
 // # The access level is the field, and it is why this is not a [User]
@@ -718,19 +654,36 @@ func (c *Client) RevokeTokens(ctx context.Context, groupID, userID int) error {
 // every seat on every run for ever.
 type Member struct {
 	User
-	// AccessLevel is GitLab's numeric role — see [gitlabDeveloper] and
-	// [gitlabMaintainer]. Zero means the listing did not say, which no
-	// GitLab version does; it compares unequal to every configured level,
-	// so the safe direction is a write.
+	// AccessLevel is GitLab's numeric role (see [Roles]). Zero means the
+	// listing did not say, which no GitLab version does; it compares unequal
+	// to every configured level, so the safe direction is a write.
 	AccessLevel int `json:"access_level"`
+
+	// MemberRole is the custom role the membership holds on Ultimate, or
+	// nil for a default role. GitLab serves it as an object on the listing;
+	// only its id is compared.
+	MemberRole *MemberRoleRef `json:"member_role"`
+}
+
+// MemberRoleRef is the custom role a membership names.
+type MemberRoleRef struct {
+	ID int `json:"id"`
+}
+
+// Access is what a membership holds: GitLab's default role by level, or a
+// custom role (Ultimate) with the level it is based on.
+func (m Member) Access() Access {
+	access := Access{Level: m.AccessLevel}
+	if m.MemberRole != nil {
+		access.MemberRoleID = m.MemberRole.ID
+	}
+	return access
 }
 
 // GroupMembers lists a group's members.
 //
-// The enumeration decommission targets from: an account is "managed" only
-// if it is in the group this company provisions into, so a service account
-// somebody else made elsewhere on the instance is never a candidate. It is
-// ALSO what the seat loop compares against before it adds anybody.
+// It is what per-seat access compares against before it adds, moves or
+// removes anybody, read once per pass.
 //
 // DIRECT MEMBERS, not `/members/all`. What the pass writes is a direct
 // membership and what it can edit is a direct membership — GitLab refuses a
@@ -740,9 +693,9 @@ type Member struct {
 //
 // PAGED TO EXHAUSTION. It asked for one page of 100 and took whatever came
 // back, which is silent truncation on the one listing a destructive decision
-// is made from: on a group with more members than that, every managed
-// account past the first page was invisible to a decommission sweep and
-// stayed live for ever, with the run reporting success.
+// is made from: on a group with more members than that, every account past
+// the first page was invisible, and a membership the pass should have
+// removed stayed live with the run reporting success.
 func (c *Client) GroupMembers(ctx context.Context, groupID int) ([]Member, error) {
 	return c.members(ctx, "/groups/"+strconv.Itoa(groupID)+"/members",
 		fmt.Sprintf("group %d", groupID))
@@ -972,7 +925,7 @@ func (h Hook) Converged(name, target, digest string) bool {
 
 // GroupHooks lists a group's webhooks, PAGED TO EXHAUSTION.
 //
-// For the reason [Client.Tokens] and [Client.InstanceServiceAccounts] are: a
+// For the reason [Client.Tokens] is: a
 // truncated listing is not a slow report, it is a wrong DECISION. Every hook
 // choice this package makes is made out of this listing — [ours] selects this
 // deployment's hooks from it, [ensureGroupHook] decides converged-or-create

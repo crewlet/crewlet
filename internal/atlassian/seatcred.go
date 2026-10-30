@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/envref"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
 )
 
@@ -181,11 +182,69 @@ const (
 // A HUMAN SEAT HOLDS NONE. A person has their own Atlassian account, and
 // reading a credential for one would report an identity this engine neither
 // created nor manages.
+//
+// THE ENGINE-OWNED NAMES FIRST. A seat's account and token are the engine's
+// (D4): the token is sealed under [SinkToken] and the address Atlassian
+// assigned under [SinkEmail], and nothing a writer submits names either. A
+// seat whose sealed token resolves is answered from there; only a document
+// written before per-seat access, whose seats still carry the credential in
+// mcp_env, is read the old way.
 func CredentialOf(p Product, seat *org.Role, value func(string) string) Credential {
 	if seat == nil || seat.IsHuman() || value == nil {
 		return Credential{}
 	}
+	if cred := sealedCredential(seat.Handle(), value); cred.Held() {
+		return cred
+	}
 	return CredentialFor(p, seat.MCPEnv, value)
+}
+
+// The credential fields the engine seals per seat for Atlassian, which name
+// the variables through [envref.SealedName], the one naming function: the
+// API token, and the address its products authenticate it with.
+const (
+	FieldToken = "TOKEN"
+	FieldEmail = "EMAIL"
+)
+
+// SinkToken is the variable a seat's Atlassian API token is sealed under.
+func SinkToken(handle string) string {
+	return envref.SealedName(string(integration.KindAtlassian), FieldToken, handle)
+}
+
+// SinkEmail is the variable a seat's Atlassian account address is sealed
+// under.
+func SinkEmail(handle string) string {
+	return envref.SealedName(string(integration.KindAtlassian), FieldEmail, handle)
+}
+
+// SealedReads is every engine-owned variable one seat's credential is read
+// from, for a caller that must name what it reads before it reads it.
+func SealedReads(handle string) []string {
+	return []string{SinkToken(handle), SinkEmail(handle)}
+}
+
+// sealedCredential is the seat's credential as the engine sealed it, or the
+// zero credential where nothing is sealed.
+//
+// A REFERENCE THAT COMES BACK AS ITSELF IS NOT A CREDENTIAL. Some callers
+// read a document without resolving it (the setup surface reports where a
+// credential is configured, not its value), and their value function hands a
+// `${VAR}` back unchanged; reading that as a sealed token would report every
+// seat as holding one, and shadow the document's own answer.
+func sealedCredential(handle string, value func(string) string) Credential {
+	read := func(name string) string {
+		ref := "${" + name + "}"
+		if got := strings.TrimSpace(value(ref)); got != ref {
+			return got
+		}
+		return ""
+	}
+	token := read(SinkToken(handle))
+	if token == "" {
+		return Credential{}
+	}
+	return Credential{Token: token, Email: read(SinkEmail(handle))}
 }
 
 // CredentialFor is the same answer from a raw mcp_env.
