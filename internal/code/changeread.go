@@ -108,6 +108,19 @@ import (
 // snapshot. So a read of changes is judged by a chart whoever asks — an
 // approver's eligibility is the chart's — and a reader that holds none
 // refuses one about itself ([Reader.chartFor]).
+//
+// # A page kept shorter than it was served
+//
+// Every row a page serves names the cursor that resumes after it — a
+// revision, a reviewer, a comment, a review and a finding by its own
+// ([RevisionRow.Cursor] and its kin), a change of a listing by the walk the
+// listing takes ([ReadQuery.ChangesCursor]) — and a page's own cursor is its
+// last row's, read through the same function. So a caller whose answer is
+// smaller than the estate's reply — a code tool's, one tool answer, which a
+// page of four mebibytes is many of — keeps a page's first rows and resumes
+// after the last it kept, never re-deriving how a walk spells its cursor: a
+// listing's rows the page read past it and did not keep are read again by
+// the next page, and kept or left as they were.
 
 // changeOrder is the order a listing of changes walks in, which its cursor is
 // spelled in.
@@ -173,6 +186,35 @@ func walkOf(q ReadQuery, repoID string) changeWalk {
 		return changeWalk{index: changesNumberKey, keys: []any{repoID}, order: byNumber, owner: q.Owner != ""}
 	}
 	return changeWalk{index: changesStateKey, keys: []any{string(q.State)}, order: byOpening}
+}
+
+// ChangesCursor is the cursor that resumes q — a `changes` listing — after s,
+// a change a page of it served: what a caller that keeps fewer of a page's
+// changes than it was served hands back as the next page's cursor. It is
+// spelled by the walk q's filters choose ([walkOf]), as the page's own cursor
+// is — for a need of a fix, its owner's walk; for what waits on the asker,
+// the walk of the half the page was read from, the second half's behind
+// [fixHalf] — so a caller never learns how a walk spells one.
+func (q ReadQuery) ChangesCursor(s ChangeSummary) string {
+	prefix := ""
+	switch q.Needs {
+	case NeedMe:
+		half, fixes := q.halfOfMe()
+		if fixes {
+			prefix = fixHalf
+		}
+		q = half
+	case NeedFix:
+		q = q.fixing()
+	}
+	// THE REPOSITORY A LISTING NAMES is the one its every row is of, so the
+	// row's own id stands for it: the walk reads only whether one is named.
+	repoID := ""
+	if q.Repo != "" {
+		repoID = s.RepoID
+	}
+	row := changeRow{id: s.ID, number: s.Number, opened: s.OpenedPosition.Packed()}
+	return prefix + walkOf(q, repoID).cursor(row)
 }
 
 // cursor is where a page that read row last ends, in the walk's order.
@@ -557,12 +599,16 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		}
 		out.Revisions = append(out.Revisions, rev)
 		if pg.add(rev.encodedBytes()) {
-			out.Next = strconv.FormatInt(rev.N, 10)
+			out.Next = rev.Cursor()
 			break
 		}
 	}
 	return rows.Err()
 }
+
+// Cursor is the cursor that resumes a page of a change's revisions after r:
+// its number, below which the next page reads.
+func (r RevisionRow) Cursor() string { return strconv.FormatInt(r.N, 10) }
 
 // changeByNumberIn is the change number names on repository repoID in tx, and
 // false where it holds none — one seek of code_changes_number_idx.

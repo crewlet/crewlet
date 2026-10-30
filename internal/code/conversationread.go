@@ -214,12 +214,9 @@ func (q ReadQuery) fixing() ReadQuery {
 func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
 	out *ReadAnswer) error {
 
-	me := q.waitedOn()
-	half := q
-	inner, fixes := strings.CutPrefix(q.Cursor, fixHalf)
+	half, fixes := q.halfOfMe()
 	if fixes {
-		half.Needs, half.Cursor = NeedFix, inner
-		if err := r.listChanges(ctx, tx, half.fixing(), chart, out, me); err != nil {
+		if err := r.listChanges(ctx, tx, half, chart, out, q.waitedOn()); err != nil {
 			return err
 		}
 		if out.Next != "" {
@@ -227,7 +224,6 @@ func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery
 		}
 		return nil
 	}
-	half.Needs, half.Reviewer = NeedReview, me
 	if err := r.listChanges(ctx, tx, half, chart, out, ""); err != nil {
 		return err
 	}
@@ -235,6 +231,21 @@ func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery
 		out.Next = fixHalf
 	}
 	return nil
+}
+
+// halfOfMe is the half of q — a needs=me listing — a page of it reads, by its
+// cursor: the asker's own changes awaiting a fix, as needs=fix walks them,
+// after [fixHalf], with the cursor behind it and true; else the changes
+// asking the asker's review, as needs=review walks them. THE ONE READING of
+// which half a needs=me cursor is in: the reader's and [ReadQuery.ChangesCursor]'s.
+func (q ReadQuery) halfOfMe() (ReadQuery, bool) {
+	half := q
+	if inner, fixes := strings.CutPrefix(q.Cursor, fixHalf); fixes {
+		half.Needs, half.Cursor = NeedFix, inner
+		return half.fixing(), true
+	}
+	half.Needs, half.Reviewer = NeedReview, q.waitedOn()
+	return half, false
 }
 
 // readByID is one page of a walk of changes by their ids, newest first — the
@@ -417,12 +428,16 @@ func (r *Reader) changeReviewers(ctx context.Context, tx *sql.Tx, q ReadQuery, n
 		rv.RequestedByKind, rv.Position = PartyKind(byKind), unpacked(position)
 		out.Reviewers = append(out.Reviewers, rv)
 		if pg.add(rv.encodedBytes()) {
-			out.Next = rv.Reviewer
+			out.Next = rv.Cursor()
 			break
 		}
 	}
 	return rows.Err()
 }
+
+// Cursor is the cursor that resumes a page of a change's reviewers after r:
+// its handle, past which the next page reads.
+func (r ReviewerRow) Cursor() string { return r.Reviewer }
 
 // changeComments serves a page of change id's comments — named, its web!n —
 // in thread order, after the comment a cursor names: a [logCursor] of its
@@ -468,12 +483,17 @@ func (r *Reader) changeComments(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 		}
 		out.Comments = append(out.Comments, c)
 		if pg.add(c.encodedBytes()) {
-			out.Next = logCursor(position, c.ThreadID)
+			out.Next = c.Cursor()
 			break
 		}
 	}
 	return rows.Err()
 }
+
+// Cursor is the cursor that resumes a page of a change's comments after c: a
+// [logCursor] of the position its record landed at and its thread, past which
+// the next page reads in thread order.
+func (c CommentRow) Cursor() string { return logCursor(c.Position.Packed(), c.ThreadID) }
 
 // changeReviews serves a page of change id's reviews — named, its web!n — in
 // the order they were given, after the review a cursor names: the packed
@@ -510,12 +530,17 @@ func (r *Reader) changeReviews(ctx context.Context, tx *sql.Tx, q ReadQuery, nam
 		rv.Position, rv.At = unpacked(position), store.DecodeTime(at)
 		out.Reviews = append(out.Reviews, rv)
 		if pg.add(rv.encodedBytes()) {
-			out.Next = strconv.FormatInt(position, 10)
+			out.Next = rv.Cursor()
 			break
 		}
 	}
 	return rows.Err()
 }
+
+// Cursor is the cursor that resumes a page of a change's reviews after r: the
+// packed position of the record that gave it, a review's own, past which the
+// next page reads.
+func (r ReviewRow) Cursor() string { return strconv.FormatInt(r.Position.Packed(), 10) }
 
 // changeFindings serves a page of change id's findings — named, its web!n —
 // by id, after the finding a cursor names: the texts' key walked, which leads
@@ -561,12 +586,16 @@ func (r *Reader) changeFindings(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 		}
 		out.Findings = append(out.Findings, f)
 		if pg.add(f.encodedBytes()) {
-			out.Next = f.ID
+			out.Next = f.Cursor()
 			break
 		}
 	}
 	return rows.Err()
 }
+
+// Cursor is the cursor that resumes a page of a change's findings after f: its
+// id, past which the next page reads.
+func (f FindingRow) Cursor() string { return f.ID }
 
 // The keys of a change's conversation's indexes a read names — a GUARD as
 // planner.go says — held by plan_test.go to the seek each is written for.

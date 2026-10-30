@@ -1297,6 +1297,13 @@ push](#who-may-read-and-push)):
 - A seat reading for a colleague is held to both grants, as every code read in
   such a turn is ([Reads made for somebody else](#reads-made-for-somebody-else)).
 
+**Every row a read of changes serves names the cursor that resumes after
+it** — a listed change by the walk its listing takes, a revision, a reviewer,
+a comment, a review and a finding by its own — and a page's own cursor is its
+last row's. So a reader whose answer is smaller than a page — a code tool's,
+one tool answer, where a page may be four mebibytes — keeps a page's first
+rows, resumes after the last it kept, and reads every row after it once.
+
 ---
 
 ## Reviews and findings
