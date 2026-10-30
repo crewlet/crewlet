@@ -1668,6 +1668,35 @@ func TestARenamedRoleUpdatesTheBotsDisplayName(t *testing.T) {
 	}
 }
 
+// AND WITH NO SEAT TO PROVISION. Each agent's bot is the per-seat access
+// sync's now, so the loop hands this pass an empty plan, and a rename that
+// lived in the per-seat loop would never reach a bot again.
+func TestARenameReachesTheBotWithNoSeatToProvision(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	if _, err := reconcileChat(t, srv, newChatSink(), []*org.Role{
+		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+	}); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+	renamed := chatSeat("Chief Executive", "", "leadership")
+	renamed.DeclaredHandle = "ceo"
+	res, err := mattermost.Reconcile(context.Background(), mattermost.Options{
+		Client: chatClient(t, srv), Config: enabledChat(),
+		Org:  &org.Organization{Name: "Nimbus", Roles: []*org.Role{renamed}},
+		Plan: &provision.Plan{}, Sink: newChatSink(),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	srv.mu.Lock()
+	got := srv.names[srv.bots["agent-ceo"]]
+	srv.mu.Unlock()
+	if !strings.Contains(got, "Chief Executive") || len(res.Renamed) != 1 {
+		t.Errorf("display name = %q, renamed = %v; want the renamed role", got, res.Renamed)
+	}
+}
+
 // AND AN UNCHANGED NAME IS NOT REWRITTEN, or every re-run would report work
 // it did not do — the same silence-vs-noise rule Kept exists for.
 func TestAnUnchangedDisplayNameIsLeftAlone(t *testing.T) {
