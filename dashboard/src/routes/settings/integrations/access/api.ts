@@ -2,9 +2,9 @@
  * Per-seat integration access: the read the Agents tab draws from, and the
  * writes it makes (`internal/api/setupapi`, the access routes).
  *
- * A save states the revision it edited (If-Match), so a colleague's save in
- * between is refused `revision_advanced` and read again rather than
- * overwritten. A `step_up_required` never reaches here: the transport asks for
+ * A save states the revision it edited (If-Match, the answer's revision id
+ * as the entity tag the GET's ETag carries), so a colleague's save in between
+ * is refused `revision_advanced` and read again rather than overwritten. A `step_up_required` never reaches here: the transport asks for
  * a fresh proof of identity and replays the request (`app/StepUp.tsx`).
  *
  * A WRITE IS SENT WITHOUT A SIGNAL, so it runs to its answer whatever happens
@@ -17,6 +17,7 @@ import type {
   AccessAnswer,
   AccessDraft,
   AccessDraftRequest,
+  AccessInstallLink,
   AccessPlanAnswer,
   AccessSeatAction,
 } from "~/contract/access.ts";
@@ -40,21 +41,34 @@ export const accessApi = {
     (await rest.put(
       `/setup/integrations/${pathSegment(kind)}/access`,
       { seats } satisfies AccessDraftRequest,
-      { "If-Match": revision },
+      { "If-Match": `"${revision}"` },
     )) as AccessAnswer,
   act: async (kind: string, handle: string, lane: string, action: AccessSeatAction) =>
     (await rest.post(
       `/setup/integrations/${pathSegment(kind)}/access/seats/${pathSegment(handle)}/${pathSegment(lane)}/${pathSegment(action)}`,
       {},
     )) as AccessAnswer,
+  /** A fresh, single-use link to install a seat's app at the vendor (Slack's approval). */
+  install: async (kind: string, handle: string, lane: string) =>
+    (await rest.post(
+      `/setup/integrations/${pathSegment(kind)}/access/seats/${pathSegment(handle)}/${pathSegment(lane)}/install`,
+      {},
+    )) as AccessInstallLink,
+};
+
+/** The access routes' refusals, in the reader's words. */
+const REFUSALS: Record<string, string> = {
+  revision_advanced:
+    "Somebody changed these agents since you opened the tab. Read the latest settings and save again.",
+  pass_in_flight: "A sync is running. Try again when it finishes.",
+  seat_still_on: "Turn this agent off and save before removing its account.",
 };
 
 /** The words of a refusal, whatever shape it came in. */
 export function refusalWords(err: unknown): string {
   if (err instanceof RestError) {
-    if (err.code === "revision_advanced") {
-      return "Somebody changed these agents since you opened the tab. Read the latest settings and save again.";
-    }
+    const words = REFUSALS[err.code];
+    if (words) return words;
     return err.sentence || err.detail || err.message;
   }
   return err instanceof Error ? err.message : "Something went wrong.";

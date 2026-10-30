@@ -59,6 +59,12 @@ export interface AccessOptions {
   scope?: string[];
   /** Whether a scope entry outside `scope` may be typed. */
   scope_open?: boolean;
+  /**
+   * "external" where the engine does not provision this lane for the company:
+   * a seat's switch still binds its tool to the credential, and its access is
+   * managed outside Crewlet.
+   */
+  managed?: "external";
 }
 
 /** What the company document asks for one seat on one lane. */
@@ -75,8 +81,10 @@ interface AccessCredential {
   /** Further variables the same credential seals (an Atlassian account address, a Slack signing secret). */
   others?: string[];
   minted_at: string;
-  /** Who the pass that sealed it ran for; "external" for a credential provided from outside Crewlet. */
+  /** Who the pass that sealed it ran for, as the engine names actors. */
   by?: string;
+  /** Whether Crewlet minted it or it was provided from outside Crewlet. */
+  source?: "minted" | "external";
 }
 
 /** What the vendor showed on the last sync, read back from the engine's account ledger. */
@@ -209,3 +217,8 @@ export interface AccessPlanAnswer {
 
 /** `POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}`. */
 export type AccessSeatAction = "rotate" | "remove" | "keep" | "restore" | "retry" | "done";
+
+/** `POST .../access/seats/{handle}/{lane}/install`: a fresh, single-use install link. */
+export interface AccessInstallLink {
+  url: string;
+}

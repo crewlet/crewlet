@@ -36,6 +36,8 @@ export interface LaneWords {
   server: string;
   /** Whether Crewlet can mint a seat a new credential and revoke the old. */
   rotatable: boolean;
+  /** Where a person approves a seat's install at the vendor through a fresh link, its button label. */
+  install?: string;
 }
 
 const GENERIC: LaneWords = {
@@ -123,6 +125,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     tool: "Slack MCP server, one per agent",
     server: "slack",
     rotatable: false,
+    install: "Install in Slack",
   },
   mattermost: {
     name: "Mattermost",
