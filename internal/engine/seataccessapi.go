@@ -351,10 +351,10 @@ func seatInput(ref seataccess.SeatRef, want map[seataccess.Lane]seataccess.Desir
 // external, and offers no rotation.
 //
 // FAIL CLOSED, AND NEVER KEPT WHEN IT FAILED. Where the vendor does not
-// answer, a lane that grants by level is marked [seataccess.Options.Unread],
-// so a turn-on or a change of level on it is asked a step-up; and an offer any
-// part of which was not read is not cached, so the next read asks again rather
-// than judging by what failed. An empty revision (a document not yet stored)
+// answer, a lane that grants by level offers no levels, so none is vouched
+// for and a turn-on or a change of level on it asks a step-up
+// ([seataccess.NeedsStepUp]); and an offer any part of which was not read is
+// not cached, so the next read asks again rather than judging by what failed. An empty revision (a document not yet stored)
 // is read and never cached.
 func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 	company *config.Company, roster *org.Organization, revision string,
@@ -398,7 +398,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 		}
 		if session != nil {
 			if live, err := session.Options(openCtx, lane); err == nil {
-				live.Rotatable, live.Unread = o.Rotatable, false
+				live.Rotatable = o.Rotatable
 				o = live
 			} else {
 				whole = false
@@ -408,7 +408,7 @@ func (e *Engine) seatOffers(ctx context.Context, kind integration.Kind,
 		}
 		o.Lane = lane
 		if !provisioned {
-			o.Managed, o.Rotatable, o.Unread = seataccess.ManagedExternal, false, false
+			o.Managed, o.Rotatable = seataccess.ManagedExternal, false
 		}
 		out = append(out, o)
 	}
