@@ -93,3 +93,30 @@ func TestPriorCredentialID(t *testing.T) {
 		t.Errorf("an op's first step = %q, want none", got)
 	}
 }
+
+// WHO TURNED AN ACCOUNT OFF is the ledger's answer where it has a record, and
+// the vendor's marker only where it has none: a stale marker never makes
+// somebody's own disable read as this engine's.
+func TestDisabledByOf(t *testing.T) {
+	t.Parallel()
+	recorded := func(state seataccess.AccountState) seataccess.Record {
+		return seataccess.Record{Account: &seataccess.Account{ID: "u-1", State: state}}
+	}
+	for _, tc := range []struct {
+		name     string
+		marked   bool
+		rec      seataccess.Record
+		recorded bool
+		want     seataccess.DisabledBy
+	}{
+		{"ledger says off", false, recorded(seataccess.AccountDisabled), true, seataccess.DisabledByCrewlet},
+		{"ledger says active, stale marker", true, recorded(seataccess.AccountActive), true, seataccess.DisabledByHand},
+		{"no record, marker", true, seataccess.Record{}, false, seataccess.DisabledByCrewlet},
+		{"no record, no marker", false, seataccess.Record{}, false, seataccess.DisabledByHand},
+		{"record with no account, marker", true, seataccess.Record{Handle: "sre"}, true, seataccess.DisabledByCrewlet},
+	} {
+		if got := seataccess.DisabledByOf(tc.marked, tc.rec, tc.recorded); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
