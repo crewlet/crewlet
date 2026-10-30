@@ -62,6 +62,11 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
   live: false,
   multiple: true,
   levels: [
+    {
+      id: "",
+      name: "Product access only",
+      note: "The account has Confluence and no space role or permission of its own: the site's and each space's permissions decide what it sees.",
+    },
     { id: "read:space", name: "View" },
     { id: "create:page", name: "Add pages" },
     { id: "create:blogpost", name: "Add blog posts" },
@@ -76,6 +81,11 @@ const JIRA_OPTIONS: AccessOptions = {
   lane: "jira",
   live: true,
   levels: [
+    {
+      id: "",
+      name: "Product access only",
+      note: "The account has Jira and no project role: each project's permission scheme decides what it sees.",
+    },
     { id: "10002", name: "Viewer" },
     { id: "10003", name: "Member" },
     { id: "10004", name: "Administrator", administers: true },
@@ -204,7 +214,7 @@ export function mattermostAnswer(): AccessAnswer {
   };
 }
 
-/** Atlassian's Confluence lane of sets: PM on with View and Add pages, QA off with none. */
+/** Atlassian's Confluence lane of sets: PM on with View and Add pages, QA off with product access only. */
 export function confluenceAnswer(): AccessAnswer {
   const held = "create:page read:space";
   return {

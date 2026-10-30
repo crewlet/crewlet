@@ -379,12 +379,24 @@ test("Confluence's permissions by operation are a set, summarised in the vendor'
   expect(list.textContent).toContain("View, Add pages");
 });
 
-test("an agent turned on in Confluence with no permission is held at the review, with a hint", () => {
+test("an agent turned on in Confluence with nothing chosen holds product access only, with its note", () => {
   draw(confluenceAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Confluence" }));
   expect(
-    screen.getByText("No permissions yet, so it cannot see any space. Choose at least View."),
+    screen.getByText(
+      "The account has Confluence and no space role or permission of its own: the site's and each space's permissions decide what it sees.",
+    ),
   ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Review changes" }).getAttribute("aria-disabled"),
+  ).not.toBe("true");
+});
+
+test("product access only with a project list is held at the review, with the reason", () => {
+  const data = jiraAnswer();
+  data.seats[0]!.lanes.jira!.desired = { enabled: false, level: "", scope: ["ENG"] };
+  draw(data);
+  fireEvent.click(screen.getByRole("switch", { name: "PM on Jira" }));
   const review = screen.getByRole("button", { name: "Review changes" });
   expect(review.getAttribute("aria-disabled")).toBe("true");
   fireEvent.click(review);

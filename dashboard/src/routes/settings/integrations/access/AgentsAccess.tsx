@@ -39,7 +39,6 @@ import { ChevronDownGlyph, ChevronRightGlyph, KeyGlyph } from "@crewlethq/icons/
 import type {
   AccessAnswer,
   AccessDesired,
-  AccessDraft,
   AccessLaneKey,
   AccessSeat,
   AccessSeatAction,
@@ -50,7 +49,7 @@ import { useNow } from "~/lib/clock.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { handleLabel } from "~/lib/seats.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
-import { accessApi, refusalWords } from "./api.ts";
+import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
 import { PermissionsDialog, RemoveDialog, ReviewDialog } from "./Dialogs.tsx";
 import {
   accessWords,
@@ -64,10 +63,11 @@ import {
   MANAGED_OUTSIDE,
   levelsHeading,
   levelSummary,
-  noPermissionsHint,
   offSentence,
   permissionCount,
   permissionWords,
+  productOnly,
+  productOnlyNote,
   providedExternally,
   refusedLevel,
   sameDesired,
@@ -103,18 +103,18 @@ export interface AgentsAccessProps {
 }
 
 function levelOptions(lane: Lane): SelectOption[] {
-  // WHERE THE LIST COMES FROM is the menu's own heading.
+  // WHERE THE LIST COMES FROM is the menu's own heading; the empty level
+  // (product access only) carries the vendor's note on what it then sees. A
+  // multi-select has no empty row: choosing nothing is that level.
   const group = levelsHeading(lane);
-  const only = lane.multiple ? undefined : laneWords(lane.key).productOnly;
-  return [
-    // THE EMPTY LEVEL IS A CHOICE where the product can be held with no role.
-    ...(only ? [{ value: "", label: only.name, description: only.note, group }] : []),
-    ...lane.levels.map((l) => ({
+  return lane.levels
+    .filter((l) => !(lane.multiple && l.id === ""))
+    .map((l) => ({
       value: l.id,
       label: l.custom ? `${l.name} (custom)` : l.name,
+      ...(l.note ? { description: l.note } : {}),
       group,
-    })),
-  ];
+    }));
 }
 
 export function AgentsAccess({
@@ -280,7 +280,7 @@ export function AgentsAccess({
               const want = desiredOf(seat, lane.key);
               const drafted = !sameDesired(lane, want, saved.desired);
               const status = statusOf(lane, saved, drafted, data.syncing, seat.departed);
-              const hint = emptyScopeHint(lane, want) ?? noPermissionsHint(lane, want);
+              const hint = emptyScopeHint(lane, want) ?? productOnlyNote(lane, want);
               const key = `${seat.handle}:${lane.key}`;
               const expanded = open[key] ?? false;
               const off = !want.enabled;
@@ -349,12 +349,19 @@ export function AgentsAccess({
                           value={levelIds(want.level)}
                           options={levelOptions(lane)}
                           disabled={off || locked || seat.departed}
-                          placeholder="No permissions"
-                          onChange={(v) =>
-                            change(seat, lane, {
-                              level: joinLevels(lane, (Array.isArray(v) ? v : [v]).map(String)),
-                            })
-                          }
+                          placeholder={levelName(lane, "")}
+                          onChange={(v) => {
+                            const level = joinLevels(
+                              lane,
+                              (Array.isArray(v) ? v : [v]).map(String),
+                            );
+                            // PRODUCT ACCESS ONLY TAKES NO SCOPE, so choosing it clears one.
+                            change(
+                              seat,
+                              lane,
+                              productOnly(lane, level) ? { level, scope: [] } : { level },
+                            );
+                          }}
                           renderMultiLabel={(sel) =>
                             levelSummary(lane, sel.map((x) => String(x.value)).join(" "))
                           }
@@ -368,7 +375,14 @@ export function AgentsAccess({
                           value={want.level ?? ""}
                           options={levelOptions(lane)}
                           disabled={off || locked || seat.departed}
-                          onChange={(v) => change(seat, lane, { level: String(v) })}
+                          onChange={(v) => {
+                            const level = String(v);
+                            change(
+                              seat,
+                              lane,
+                              productOnly(lane, level) ? { level, scope: [] } : { level },
+                            );
+                          }}
                         />
                       ) : lane.permissions ? (
                         <Button
