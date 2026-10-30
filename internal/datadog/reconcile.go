@@ -464,7 +464,7 @@ func provisionSeat(
 		// it stopped a company on Action required until somebody noticed.
 		//
 		// ITS OWN KEYS, matched on the name every mint here writes. That
-		// is narrower than [revokeAppKeys], which takes every key on the
+		// is narrower than [Client.TurnOff], which takes every key on the
 		// account, and the difference is the goal rather than drift: a
 		// teardown must leave NO live credential on a decommissioned
 		// account, so a key it cannot attribute is exactly the hazard it

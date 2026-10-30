@@ -472,7 +472,7 @@ func TestASeatRefusalNamesWhereToActOnIt(t *testing.T) {
 // seat, indefinitely, with nothing retrying and nothing broken but this.
 //
 // The engine's own teardown already settles the question the refusal was
-// asking: revokeAppKeys takes EVERY key on an agent's account, because "the
+// asking: Client.TurnOff takes EVERY key on an agent's account, because "the
 // account exists solely because this engine created it". Both cannot be right.
 func TestAnUnreadableKeyIsReplacedRatherThanReported(t *testing.T) {
 	t.Parallel()
