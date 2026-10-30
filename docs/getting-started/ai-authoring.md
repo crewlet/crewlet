@@ -424,11 +424,9 @@ It writes config; it doesn't provision. Standing up the Mattermost server
 (or the Slack workspace), the Atlassian site, the GitLab group, the
 API keys, and the coding CLI your model runs through
 ([installed on the engine host](installation.md#a-coding-cli)) is still your job — [Choosing your stack](choosing-your-stack.md)
-lists what you must create by hand for each. Once those exist,
-[`crewlet mattermost provision`](../reference/cli.md#crewlet-mattermost-provision)
-and [`crewlet gitlab provision`](../reference/cli.md#crewlet-gitlab-provision)
-mint the per-seat accounts and tokens into the `${VAR}` references the
-config already declares; Atlassian and GitHub issue no credential on a
+lists what you must create by hand for each. Once those exist, each
+integration's Agents tab turns each agent on there, and the engine creates
+the per-seat accounts and seals their tokens itself; Atlassian and GitHub issue no credential on a
 provisioner's behalf, so their commands report which account each
 hand-created credential turned out to be.
 

@@ -464,8 +464,8 @@ func checkSeats(ctx context.Context, report *Report, opts DoctorOptions, dial Di
 				"no bot token resolved for this seat, so it can never open a "+
 					"socket and will never receive a message. Check that its "+
 					"mattermost.bot_token variable is set in this deployment's "+
-					"environment, and run `crewlet mattermost provision` if it "+
-					"has never been minted")
+					"environment, and that the agent is turned on in the "+
+					"Mattermost integration's Agents tab, which mints it")
 			continue
 		}
 		client := seat.client(opts.Client)
@@ -509,9 +509,8 @@ func checkSeats(ctx context.Context, report *Report, opts DoctorOptions, dial Di
 			// else — and its account looks perfectly healthy.
 			report.add(check, false,
 				"%s authenticates and opens a socket but has joined no channel, "+
-					"so it will only ever hear direct messages. Name channels "+
-					"under integrations.mattermost.provisioning or on the seat "+
-					"itself, and run `crewlet mattermost provision`", who.Username)
+					"so it will only ever hear direct messages. Give the agent "+
+					"its channels in the Mattermost integration's Agents tab", who.Username)
 		default:
 			report.add(check, true, "%s authenticates, opens a socket, and is in %d channel(s)",
 				who.Username, len(channels))
