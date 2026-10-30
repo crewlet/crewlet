@@ -502,7 +502,25 @@ func (s *session) account(ctx context.Context, handle string, rec *seataccess.Re
 			return s.client.UserByID(ctx, id)
 		}
 	}
-	return s.client.UserByUsername(ctx, Username(s.cfg.Provisioning, handle))
+	user, found, err := s.named(ctx, handle)
+	if err != nil || !found || !user.Bot {
+		// ONLY A MACHINE ACCOUNT IS THE SEAT'S: a person who happens to
+		// hold the derived username is never read as this engine's account,
+		// and the create step says so instead.
+		return User{}, false, err
+	}
+	return user, true, nil
+}
+
+// named reads the account holding the seat's derived username in full: the
+// listing finds it, and the single-user read is the one that says whether it
+// is a machine account ([User.Bot]).
+func (s *session) named(ctx context.Context, handle string) (User, bool, error) {
+	listed, found, err := s.client.UserByUsername(ctx, Username(s.cfg.Provisioning, handle))
+	if err != nil || !found {
+		return User{}, found, err
+	}
+	return s.client.UserByID(ctx, listed.ID)
 }
 
 // mustAccount is [session.account] for a step that cannot proceed without
@@ -537,9 +555,21 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 // naming finds already there.
 func (s *session) create(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	username := Username(s.cfg.Provisioning, in.Seat.Handle)
-	user, found, err := s.client.UserByUsername(ctx, username)
+	user, found, err := s.named(ctx, in.Seat.Handle)
 	if err != nil {
 		return seataccess.StepResult{}, refuse(s, err)
+	}
+	if found && !user.Bot {
+		// ADOPTED ONLY WHERE IT IS A MACHINE ACCOUNT. A person holding the
+		// username would otherwise be given this agent's memberships and
+		// token, and be blocked when the agent is turned off.
+		return seataccess.StepResult{}, &seataccess.Refusal{
+			Said: "the username " + username + " belongs to a GitLab account that is " +
+				"not a service account, so it is not this agent's",
+			Remedy: "Set integrations.gitlab.provisioning.username_prefix to a prefix no " +
+				"person's username starts with, or rename that account at GitLab.",
+			Actor: seataccess.ByYou, ActionURL: s.membersURL(),
+		}
 	}
 	if !found {
 		if s.mode.Or() == ModeInstance {
@@ -582,10 +612,41 @@ func (s *session) enable(ctx context.Context, in seataccess.ApplyInput) (seatacc
 		return seataccess.StepResult{Did: user.Username + " was not blocked at GitLab; " +
 			"its memberships are restored by the next step"}, nil
 	}
-	if err := s.client.UnblockUser(ctx, user.ID); err != nil {
-		return seataccess.StepResult{}, refuse(s, err)
+	// THE ROUTE FOLLOWS THE STATE: GitLab undoes each kind of off with its
+	// own administrator route, and refuses the others for it.
+	var (
+		turnOn func(context.Context, int) error
+		did    string
+	)
+	switch strings.ToLower(user.State) {
+	case "blocked":
+		turnOn, did = s.client.UnblockUser, "Unblocked "+user.Username+" at GitLab"
+	case "deactivated":
+		turnOn, did = s.client.ActivateUser, "Reactivated "+user.Username+" at GitLab"
+	case "banned":
+		turnOn, did = s.client.UnbanUser, "Lifted the ban on "+user.Username+" at GitLab"
+	default:
+		// LDAP-BLOCKED, or a state this build does not know: only the
+		// directory or a person at GitLab can lift it.
+		return seataccess.StepResult{}, &seataccess.Refusal{
+			Said: user.Username + " is " + user.State + " at GitLab, which no API route " +
+				"this engine holds can undo",
+			Remedy: "Lift the " + user.State + " state where it was set (for ldap_blocked, " +
+				"in the directory), then retry.",
+			Actor: seataccess.ByYou, ActionURL: s.membersURL(),
+		}
 	}
-	return seataccess.StepResult{Did: "Unblocked " + user.Username + " at GitLab"}, nil
+	if err := turnOn(ctx, user.ID); err != nil {
+		refused := refuse(s, err)
+		var refusal *seataccess.Refusal
+		if errors.As(refused, &refusal) && Status(err) == http.StatusForbidden {
+			refusal.Remedy = "Turning " + user.Username + " back on from " + user.State +
+				" needs an instance administrator's token; ask one to do it at GitLab, " +
+				"then retry."
+		}
+		return seataccess.StepResult{}, refused
+	}
+	return seataccess.StepResult{Did: did}, nil
 }
 
 // converge brings the seat's memberships to the document's role and scope:
@@ -732,7 +793,7 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput) (seatacc
 	// failing that, the newest, which is the same token on an instance whose
 	// ids only grow.
 	keep, _ := newestOwn(tokens, in.Seat.Handle)
-	if id, err := strconv.Atoi(priorMinted(in.Prior, FieldToken)); err == nil {
+	if id, err := strconv.Atoi(in.PriorCredentialID(FieldToken)); err == nil {
 		keep.ID = id
 	}
 	revoked := 0
@@ -747,19 +808,6 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput) (seatacc
 	}
 	return seataccess.StepResult{Did: fmt.Sprintf("Revoked %d earlier token(s) Crewlet minted on %s",
 		revoked, user.Username)}, nil
-}
-
-// priorMinted is the credential id an earlier step of this op minted for
-// field, or "" where none did.
-func priorMinted(prior []seataccess.StepResult, field string) string {
-	for i := len(prior) - 1; i >= 0; i-- {
-		for _, m := range prior[i].Minted {
-			if m.Field == field && m.CredentialID != "" {
-				return m.CredentialID
-			}
-		}
-	}
-	return ""
 }
 
 // disable turns the account off and keeps it (D1): blocked where this token
