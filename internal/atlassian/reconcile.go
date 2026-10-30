@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // Options is what one company-level pass needs.
@@ -18,12 +17,6 @@ type Options struct {
 	// OrgID and Key are the organization and its unscoped API key.
 	OrgID string
 	Key   string
-
-	// Plan and Sink are IGNORED. They are kept only so the engine's current
-	// call sites compile until they are retired: seats are per-seat access
-	// (internal/atlassian/agentaccess), and this pass seals nothing.
-	Plan *provision.Plan
-	Sink provision.TokenSink
 }
 
 // Result is what one pass found.
@@ -32,11 +25,6 @@ type Result struct {
 	// discovered rather than asked for.
 	Site Site
 }
-
-// Findings is what this pass reports beyond a failure, which is nothing: a
-// key that does not work or a site that cannot be found is the error
-// [Reconcile] returns. A seat's findings come from per-seat access.
-func (r *Result) Findings() []integration.Finding { return nil }
 
 // Reconcile is the organization's company-level pass: it proves the
 // organization key and discovers the site the agents work in.
