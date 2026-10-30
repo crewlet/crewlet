@@ -1317,6 +1317,11 @@ type Inbound struct {
 	// baked into every app this engine creates points at the webhook mux.
 	AppFlow webhooks.AppCompleter
 
+	// SlackInstalls finishes an install a seat's Slack install link began,
+	// on the landing every agent's Slack app redirects to. Nil answers
+	// such an arrival 503. See [webhooks.Options.SlackInstalls].
+	SlackInstalls webhooks.SlackInstaller
+
 	// Recheck asks the reconcile loop to look at GitHub immediately, when
 	// a person has just finished installing an agent's app there.
 	//
@@ -1339,6 +1344,8 @@ func (a *App) mountWebhooks(mux httpjson.Router, in Inbound, now func() time.Tim
 		Recheck:    in.Recheck,
 		Configured: a.Configured,
 		Now:        now,
+
+		SlackInstalls: in.SlackInstalls,
 	})
 	if err != nil {
 		return fmt.Errorf("api: %w", err)
