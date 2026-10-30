@@ -1193,35 +1193,30 @@ func (p *githubPass) run(ctx context.Context, in setup.PassInput) ([]integration
 	if err != nil {
 		return nil, fmt.Errorf("engine: github pass: %w", err)
 	}
-	findings := res.Findings()
-	// AND THE AGENTS WITH NO BLOCK AT ALL, which the seat list cannot hold:
-	// it is built from the seats carrying an `integrations.github` block,
-	// because that block is where an app's id, slug and key are recorded. So
-	// a seat that has never had one was absent from the pass's input, and a
-	// company with one agent and no app reported ready with an empty finding
-	// list. They go to the seat pass, which reports every agent with no app
-	// once, together. See [github.SeatAppOptions.Unrecorded].
-	unrecorded := p.seatsWithoutBlocks(company)
-	if len(seats) > 0 || len(unrecorded) > 0 {
+	// AND EACH AGENT'S APP KEPT IN STEP with GitHub: an installation a person
+	// made since the last pass is recorded, one GitHub no longer has is
+	// cleared, and a deleted app is forgotten, which is what the token issuer
+	// reads. Off seats are kept in step too, so a disconnect still finds
+	// their suspended installations by id. What each agent may do, and every
+	// finding about an agent, is the access sync's ([Engine.withSeatAccess]);
+	// an agent with no app is simply off (D9).
+	if len(seats) > 0 {
 		apiBase, webBase := cfg.Bases(env.LookupOK)
-		apps, appsErr := github.ReconcileSeatApps(ctx, github.SeatAppOptions{
-			APIBase:    apiBase,
-			WebBase:    webBase,
-			Org:        githubOrg(cfg),
-			Seats:      seats,
-			Unrecorded: unrecorded,
+		if err := github.AdoptSeatApps(ctx, github.SeatAppOptions{
+			APIBase: apiBase,
+			WebBase: webBase,
+			Org:     githubOrg(cfg),
+			Seats:   seats,
 			// A DRY RUN RECORDS NOTHING, which is what a check is: the
 			// sink is the loop's permission to write, and without it the
 			// pass reads and reports.
 			Record: p.recordInstallation(in),
 			Forget: p.forgetApp(in),
-		})
-		if appsErr != nil {
-			return nil, fmt.Errorf("engine: github pass: %w", appsErr)
+		}); err != nil {
+			return nil, fmt.Errorf("engine: github pass: %w", err)
 		}
-		findings = append(findings, apps.Findings...)
 	}
-	return findings, nil
+	return res.Findings(), nil
 }
 
 // seatApps reads every agent's own app out of the CURRENT company document.
@@ -1261,30 +1256,6 @@ func (p *githubPass) forgetApp(in setup.PassInput) func(context.Context, string)
 	return func(ctx context.Context, handle string) error {
 		return p.engine.ForgetGitHubApp(ctx, handle)
 	}
-}
-
-// seatsWithoutBlocks names this company's agents that carry no
-// `integrations.github` block at all.
-//
-// READ OFF THE COMPANY'S OWN ORG rather than off [Engine.githubSeatApps], which
-// answers the other question: which seats this pass has an app to RECONCILE.
-// A seat with no block is exactly the one that list cannot carry. A seat
-// whose block records no app IS in that list, and the seat pass gathers it
-// itself, so it is not named here as well.
-func (p *githubPass) seatsWithoutBlocks(company *Company) []string {
-	if company == nil {
-		return nil
-	}
-	var missing []string
-	for seat := range company.Org.AllRoles() {
-		// A HUMAN SEAT HAS ITS OWN GITHUB ACCOUNT. Creating an app for a
-		// person would be a second identity for somebody who already has
-		// one.
-		if seat.IsAgent() && seat.GitHub == nil {
-			missing = append(missing, seat.Handle())
-		}
-	}
-	return missing
 }
 
 // githubOrg is the organization these apps are installed on.
