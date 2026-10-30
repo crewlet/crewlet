@@ -188,11 +188,22 @@ func ManifestJSON(roleName, handle, base string) (string, error) {
 // operator provisioning seven agents would otherwise be pasting seven
 // indistinguishable codes.
 func AuthorizeURL(clientID, base, handle string) string {
+	return AuthorizeURLWithState(clientID, base, handle)
+}
+
+// AuthorizeURLWithState is [AuthorizeURL] carrying a state the caller made.
+//
+// The reconcile loop's install link carries a SEALED state rather than the
+// bare handle: its landing exchanges the code and seals a bot token into a
+// seat, so the state is what proves the redirect belongs to an install this
+// engine began, for that seat, recently. The CLI's landing only prints a
+// code, which is why the handle is enough there.
+func AuthorizeURLWithState(clientID, base, state string) string {
 	params := url.Values{
 		"client_id":    {clientID},
 		"scope":        {strings.Join(BotScopes, ",")},
 		"redirect_uri": {OAuthRedirectURL(base)},
-		"state":        {handle},
+		"state":        {state},
 	}
 	return "https://slack.com/oauth/v2/authorize?" + params.Encode()
 }

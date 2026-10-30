@@ -215,12 +215,7 @@ func SeatsWithNoApp(handles []string) *integration.Finding {
 // partial report is better served by them than by nil. The loop discards them
 // and retries, which is what a fault means there.
 func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult, error) {
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
+	build := opts.builder()
 	out := &SeatAppResult{Findings: []integration.Finding{}}
 	noApp := slices.Clone(opts.Unrecorded)
 	for _, seat := range opts.Seats {
@@ -290,7 +285,7 @@ func (r *SeatAppResult) reconcileSeat(
 		return nil
 	}
 
-	installation, adopted, err := r.installationFor(ctx, opts, seat, client)
+	installation, adopted, err := installationFor(ctx, opts, seat, client)
 
 	// GONE, NOT MERELY UNINSTALLED, and the two call for opposite things.
 	// Both answer 404 from the installation endpoints, so the app's own
@@ -491,7 +486,7 @@ func notFound(err error) bool {
 // a sentence that is false about the one fact this pass established, sending
 // an operator to redo a click nobody reversed while the real failure was
 // logged nowhere at all. [errNotRecorded] keeps it apart.
-func (r *SeatAppResult) installationFor(
+func installationFor(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp, client *AppClient,
 ) (*Installation, bool, error) {
 	if seat.InstallationID != 0 {
@@ -596,13 +591,7 @@ func TokenFor(
 			"github: %s has no installed app, so there is nothing to mint against",
 			seat.Handle)
 	}
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
-	client, err := build(seat.AppID, seat.Key, opts.APIBase)
+	client, err := opts.client(seat)
 	if err != nil {
 		return nil, err
 	}
@@ -616,13 +605,7 @@ func UninstallSeat(ctx context.Context, opts SeatAppOptions, seat SeatApp) error
 	if seat.AppID == 0 || seat.InstallationID == 0 {
 		return nil
 	}
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
-	client, err := build(seat.AppID, seat.Key, opts.APIBase)
+	client, err := opts.client(seat)
 	if err != nil {
 		return err
 	}
@@ -635,6 +618,21 @@ func UninstallSeat(ctx context.Context, opts SeatAppOptions, seat SeatApp) error
 		return nil
 	}
 	return err
+}
+
+// builder is [SeatAppOptions.Client], or the real constructor when it is nil.
+func (o SeatAppOptions) builder() func(int64, string, string) (*AppClient, error) {
+	if o.Client != nil {
+		return o.Client
+	}
+	return func(appID int64, pem, apiBase string) (*AppClient, error) {
+		return NewAppClient(appID, pem, apiBase, nil)
+	}
+}
+
+// client builds the app client one seat acts through.
+func (o SeatAppOptions) client(seat SeatApp) (*AppClient, error) {
+	return o.builder()(seat.AppID, seat.Key, o.APIBase)
 }
 
 // orgLabel names the account an app is installed on, for a sentence.

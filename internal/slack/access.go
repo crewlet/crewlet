@@ -137,16 +137,5 @@ func ManifestScopes(manifest map[string]any) []string {
 // missing is what this engine's manifest asks for and the app lacks, extra is
 // what the app holds and the manifest does not ask for. Both sorted.
 func ScopeDrift(held []string) (missing, extra []string) {
-	want := slices.Sorted(slices.Values(BotScopes))
-	for _, scope := range want {
-		if !slices.Contains(held, scope) {
-			missing = append(missing, scope)
-		}
-	}
-	for _, scope := range held {
-		if !slices.Contains(want, scope) {
-			extra = append(extra, scope)
-		}
-	}
-	return missing, extra
+	return scopeDiff(held, slices.Sorted(slices.Values(BotScopes)))
 }
