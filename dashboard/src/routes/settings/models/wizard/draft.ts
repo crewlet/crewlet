@@ -287,19 +287,30 @@ export const cloudVariable = (d: Pick<Draft, "key">, field: string) =>
   `${field}_${suffixOf(d.key)}`;
 
 /**
+ * Every whitespace and invisible formatting character, none of which a key or
+ * a token holds. A terminal that wraps `claude setup-token` output turns the
+ * break into spaces when it is copied, and Claude Code then ignores the whole
+ * token; a zero-width character comes along from chat and documents.
+ */
+const STRAY_IN_CREDENTIAL = /[\s\p{Cc}\p{Cf}]/gu;
+
+/** A pasted key or token without the characters a copy adds to it. */
+export const compactCredential = (value: string) => value.replace(STRAY_IN_CREDENTIAL, "");
+
+/**
  * The candidate values the draft's credential is: the pasted key or token
  * under its secret, or the cloud fields that are secrets. Empty when nothing
  * new was typed, which keeps what is stored.
  */
 export function credentialValues(d: Draft): Record<string, string> {
   if (pastesCredential(d)) {
-    const value = d.credential.trim();
+    const value = compactCredential(d.credential);
     return value && d.variable ? { [d.variable]: value } : {};
   }
   if (d.method !== "cloud") return {};
   const out: Record<string, string> = {};
   for (const field of CLOUD_FIELDS[d.cloud].fields) {
-    const value = d.cloudFields[field.name]?.trim();
+    const value = compactCredential(d.cloudFields[field.name] ?? "");
     if (field.secret && value) out[cloudVariable(d, field.name)] = value;
   }
   return out;
