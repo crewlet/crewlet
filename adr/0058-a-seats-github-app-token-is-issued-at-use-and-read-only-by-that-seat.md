@@ -2,7 +2,7 @@
 
 - **Status:** accepted
 - **Authority:** `internal/engine`
-- **Enforced-by:** `internal/engine.TestASeatsAppTokenIsAnsweredOnlyByItsOwnResolution`, `internal/engine.TestADisabledGitHubIssuesNoToken`, `internal/engine.TestAServerNamingAnUninstalledAppsTokenWaitsForTheInstall`, `internal/engine.TestALongRunsTokenFileIsKeptCurrent`, `internal/engine.TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile`, `internal/github.TestAnIssuedTokenIsScopedToTheTierAndRepositoriesItWasMintedFor`, `internal/github.TestAnIssuerHandsOutTheHeldTokenUntilItRunsShort`, `internal/github.TestARefusedMintIsHeldForItsWaitAndAskedAgainAfter`, `internal/engine.TestARefusedMintIsAskedOfGitHubOnceAWaitByEveryPoll`
+- **Enforced-by:** `internal/engine.TestASeatsAppTokenIsAnsweredOnlyByItsOwnResolution`, `internal/engine.TestADisabledGitHubIssuesNoToken`, `internal/engine.TestAServerNamingAnUninstalledAppsTokenWaitsForTheInstall`, `internal/engine.TestALongRunsTokenFileIsKeptCurrent`, `internal/engine.TestAJobCarriedOnInItsKeptBoxStartsOnACurrentTokenFile`, `internal/github.TestAnIssuedTokenIsScopedToThePermissionsAndRepositoriesItWasMintedFor`, `internal/github.TestAnIssuerHandsOutTheHeldTokenUntilItRunsShort`, `internal/github.TestARefusedMintIsHeldForItsWaitAndAskedAgainAfter`, `internal/engine.TestARefusedMintIsAskedOfGitHubOnceAWaitByEveryPoll`
 - **Cost-when-tried:** the agents' own apps were created, installed and scoped to a tier, and then used for one thing: reading who had commented on a thread. Every push, pull request and review an agent made went through a personal access token in `role.sandbox.env`, so a company needed one GitHub account per agent, the tiers bounded nothing an agent wrote, and two seats sharing one account were routed as one.
 - **Tag-status:** unreleased
 
@@ -14,7 +14,7 @@ a value naming it is read, and never sealed.** Configuration names it as
 credentials are read: its tool servers' `mcp_env`, its coding box's
 environment and setup files, and the servers rendered into that box. The
 process-wide `github.Issuer` mints it from the app's sealed key, narrowed to
-the seat's tier and repositories, and holds it in memory for as long as it has
+the seat's permissions and repositories, and holds it in memory for as long as it has
 life left for the reader asking. A mint GitHub refuses is held too, for the
 wait of the restart schedule the seat's tool servers retry it on, and every
 reader of that installation meets the held answer until the wait ends: a
