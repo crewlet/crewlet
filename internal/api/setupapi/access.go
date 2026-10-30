@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"net/http"
 	"slices"
@@ -222,6 +223,11 @@ func (s *Service) writeAccess(w http.ResponseWriter, r *http.Request, q AccessQu
 		s.accessFault(w, r, q.Kind, "setup_access_unread", err)
 		return
 	}
+	s.writeAnswer(w, answer)
+}
+
+// writeAnswer writes an access answer with its revision as the entity tag.
+func (s *Service) writeAnswer(w http.ResponseWriter, answer seataccess.Answer) {
 	if s.config.Managed() {
 		answer.ManagedBy = seataccess.ManagedByOperator
 	}
@@ -393,11 +399,46 @@ func (s *Service) accessSave(w http.ResponseWriter, r *http.Request) {
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
 	s.startSync(r, AccessSync{Kind: kind, Revision: applied.RevisionID, By: attributionOf(r),
 		Handles: changedHandles(changed), AfterSave: true})
-	after, ok := s.accessQuery(w, r, kind)
-	if !ok {
-		return
+	s.writeSaved(w, r, current, changed, applied.RevisionID)
+}
+
+// writeSaved answers a save that landed: the tab read again at the revision it
+// wrote, or, where that read fails, the tab as it was read before the save with
+// the saved settings in place, marked as syncing. NEVER A FAILURE: the revision
+// is the company's now, and an error here would have the person save again.
+func (s *Service) writeSaved(w http.ResponseWriter, r *http.Request,
+	before seataccess.Answer, changed []accessChange, revision string) {
+
+	fc, err := s.readCompany(r.Context())
+	if err == nil {
+		q := AccessQuery{Kind: before.Kind, Company: fc.company, Roster: fc.roster,
+			Revision: fc.revision}
+		answer, answerErr := s.access.Answer(r.Context(), q)
+		if answerErr == nil {
+			s.writeAnswer(w, answer)
+			return
+		}
+		err = answerErr
 	}
-	s.writeAccess(w, r, after)
+	log.WarnContext(r.Context(), "setup_access_reread_failed", "kind", before.Kind,
+		"revision", revision, "error", err.Error(),
+		"detail", "the save landed; the answer is the tab as read before it, with the saved settings")
+	saved := before
+	saved.Revision, saved.Syncing = revision, true
+	saved.Seats = slices.Clone(before.Seats)
+	for i, seat := range saved.Seats {
+		lanes := maps.Clone(seat.Lanes)
+		for _, c := range changed {
+			if c.handle != seat.Handle {
+				continue
+			}
+			la := lanes[c.lane]
+			la.Desired, la.Plan = c.after, []seataccess.Step{}
+			lanes[c.lane] = la
+		}
+		saved.Seats[i].Lanes = lanes
+	}
+	s.writeAnswer(w, saved)
 }
 
 // accessInstall serves
@@ -536,7 +577,7 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 	}
 	held := seat.Lanes[lane]
 	if action == seataccess.ActionKeep {
-		s.keepVendorSetting(w, r, q, seat, lane, held)
+		s.keepVendorSetting(w, r, q, current, seat, lane, held)
 		return
 	}
 	var ask seataccess.Ask
@@ -556,6 +597,9 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 		}
 		ask.Rotate = true
 	case seataccess.ActionRemove:
+		if refusedOutside(w, current, kind, lane, seat.Handle) {
+			return
+		}
 		// OFF FIRST (D1): remove is a separate, confirmed action, allowed
 		// only once the seat is off here. A seat that left the document is
 		// off by definition.
@@ -568,6 +612,9 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 		}
 		ask.Remove = true
 	case seataccess.ActionRestore:
+		if refusedOutside(w, current, kind, lane, seat.Handle) {
+			return
+		}
 		ask.Reenable = true
 	}
 	// A RETRY AND A RE-READ ASK NOTHING: they run the sync for the one seat.
@@ -609,9 +656,15 @@ func (s *Service) accessAct(w http.ResponseWriter, r *http.Request) {
 // after drift, D2; "Keep off" after an account was disabled at the vendor, D3),
 // so the next sync finds nothing to restore.
 func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q AccessQuery,
-	seat seataccess.SeatAnswer, lane seataccess.Lane, held seataccess.LaneAnswer) {
+	current seataccess.Answer, seat seataccess.SeatAnswer, lane seataccess.Lane,
+	held seataccess.LaneAnswer) {
 
-	if !s.mayWriteAccess(w, r) {
+	// THE SAVE'S OWN VERBS: keep writes the document as a save does, so it
+	// is asked setup.access.write, and the raise on top where what the
+	// vendor shows is an administration grant the document did not hold
+	// (D10). The route's own verb is the one-off asks', which write nothing.
+	if !authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessWrite}) ||
+		!s.mayWriteAccess(w, r) {
 		return
 	}
 	if seat.Departed || !held.Observed.Exists {
@@ -622,6 +675,10 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 		return
 	}
 	kept := held.Observed.Access()
+	if seataccess.AsksStepUp(offerOf(current, lane), held.Desired, kept) &&
+		!authz.Admit(w, r, s.guard, authz.Policy{Action: authz.ActionSetupAccessRaise}) {
+		return
+	}
 	expect := strings.TrimSpace(r.Header.Get("If-Match"))
 	if expect == "" {
 		expect = q.Revision
@@ -643,11 +700,18 @@ func (s *Service) keepVendorSetting(w http.ResponseWriter, r *http.Request, q Ac
 	log.InfoContext(r.Context(), "setup_access_kept",
 		"kind", q.Kind, "seat", seat.Handle, "lane", lane, "revision", applied.RevisionID,
 		"by", attributionOf(r).Name, "operator", attributionOf(r).OperatorID)
-	after, ok := s.accessQuery(w, r, q.Kind)
-	if !ok {
-		return
+	s.writeSaved(w, r, current, []accessChange{change}, applied.RevisionID)
+}
+
+// offerOf is what lane offers on an access answer: an offer nobody read where
+// the answer holds none, so a judgement on it fails closed.
+func offerOf(answer seataccess.Answer, lane seataccess.Lane) seataccess.Options {
+	for _, o := range answer.Options {
+		if o.Lane == lane {
+			return o
+		}
 	}
-	s.writeAccess(w, r, after)
+	return seataccess.UnreadOffers(answer.Kind, false)[lane]
 }
 
 // startSync asks the engine to sync after a save, and logs rather than refuses
@@ -830,14 +894,40 @@ func liveLevels(kind integration.Kind, lane seataccess.Lane) bool {
 	return ok && spec.LiveLevels
 }
 
-// external reports a lane whose credential was handed in from outside Crewlet:
-// one the engine does not provision for the company, or a credential the
-// ledger records as provided rather than minted.
-func external(current seataccess.Answer, lane seataccess.Lane, held seataccess.LaneAnswer) bool {
+// refusedOutside refuses a remove or a turn back on of an account managed
+// outside Crewlet, and reports whether it did. The outside removes it or turns
+// it back on: the engine opens no session there and records nothing, so an ask
+// would change nothing while the card said it had.
+func refusedOutside(w http.ResponseWriter, current seataccess.Answer, kind integration.Kind,
+	lane seataccess.Lane, handle string) bool {
+
+	if !managedOutside(current, lane) {
+		return false
+	}
+	httpjson.FailWith(w, http.StatusConflict, httpjson.CodeAccessExternal, map[string]string{
+		"detail": handle + "'s " + string(lane) + " account is managed outside Crewlet",
+		"hint":   "remove it or turn it back on at " + seataccess.KindName(kind) + " itself",
+	})
+	return true
+}
+
+// managedOutside reports a lane the engine does not provision for the company
+// ([seataccess.ManagedExternal]).
+func managedOutside(current seataccess.Answer, lane seataccess.Lane) bool {
 	for _, o := range current.Options {
 		if o.Lane == lane && o.Managed == seataccess.ManagedExternal {
 			return true
 		}
+	}
+	return false
+}
+
+// external reports a lane whose credential was handed in from outside Crewlet:
+// one the engine does not provision for the company, or a credential the
+// ledger records as provided rather than minted.
+func external(current seataccess.Answer, lane seataccess.Lane, held seataccess.LaneAnswer) bool {
+	if managedOutside(current, lane) {
+		return true
 	}
 	c := held.Observed.Credential
 	return c != nil && c.Source == seataccess.CredentialExternal
