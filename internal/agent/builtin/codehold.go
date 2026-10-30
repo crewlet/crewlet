@@ -116,7 +116,7 @@ func HoldRepo(ctx context.Context, turn *turnctx.Turn, holder CodeHolder, actor 
 		return errNoHolder
 	}
 	res, err := holder.Lifecycle(ctx, code.LifecycleRequest{
-		Kind: code.LifecycleHold, OpID: holdOpID(turn.RunID, repo.ID), Actor: seat,
+		Kind: code.LifecycleHold, OpID: holdOpID(turn, repo.ID), Actor: seat,
 		RepoID: repo.ID, TurnID: turn.RunID, Seen: repo.Position,
 	})
 	switch {
@@ -158,14 +158,27 @@ var errNoHolder = errors.New("builtin: this surface records no hold on a scratch
 // would be answered from the FIRST run's record by the ledger — `applied`, at
 // a position every pass begun since that record is past, so the re-run's hold
 // would be ordered against no pass in flight at its own Take, which is the
-// one thing a record is for. Minted at the run's own instant, which its id
-// carries (run ids are time-ordered), so the ledger judges it against the
-// run's start rather than against the work's, which may be older than its
-// watermark; and named after the repository, so two repositories one run
-// holds are two operations.
-func holdOpID(runID, repoID string) string {
-	at, _ := statelog.OpMintedAt(runID)
-	return statelog.DeriveOpID(at, "hold-"+repoID, holdOpNamespace, runID, repoID)
+// one thing a record is for. Named after the repository, so two repositories
+// one run holds are two operations.
+//
+// MINTED WHERE THE RUN'S OWN DERIVED IDS ARE ([runIdentity]): at the run's
+// start, which its id carries (run ids are time-ordered), so the ledger judges
+// it against the run's start rather than against the work's, which may be
+// older than its watermark — and on an attempt the engine REBASED
+// ([turnctx.Turn.RebasedTo]), at the rebase. A turn resumed longer after its
+// run began than the operation ledger remembers (statelog.OpsRetention, the
+// code log's too) finds every repository it holds idle past
+// [code.HoldRecordAfter], so it records its hold on each one it names again;
+// minted at the run's start, before what every node's ledger has swept, each
+// record is answered `unknown` on every node for good ([statelog.MintAt]'s
+// reason), and every call the resumed turn makes about the repository is
+// refused, the same call made again asking the same record. Minted at the
+// rebase, a rebased attempt's record is a second record of the run's hold,
+// which is what it must be: the first record's row is gone, and the passes it
+// orders against are the ones in flight at THIS attempt's Take.
+func holdOpID(turn *turnctx.Turn, repoID string) string {
+	run := runIdentity(turn)
+	return statelog.DeriveOpID(run.OperationSince(), "hold-"+repoID, holdOpNamespace, run.TurnID, repoID)
 }
 
 // holdOpNamespace keeps a hold record's operation from colliding with one any

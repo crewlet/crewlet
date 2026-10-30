@@ -601,7 +601,12 @@ disagree by two hours. Such a record is one a **turn**, not one a repository:
 a hold moves no clock, so a seat that keeps reading an experiment it no longer
 pushes to appends one small record to the code log in every turn that names
 it, from the repository's 22nd idle hour until a push moves its clock or the
-expiry takes it. **A hold that cannot be read expires nothing**: a run
+expiry takes it — and one more in a turn resumed so long after its work began
+that the engine mints the writes of its resumed half anew (past 29 days, a day
+inside the 30 the code log's operation ledger remembers), which records its
+holds at that instant too: recorded at the run's start, a hold would be one no
+node could confirm, and every call the turn makes about the repository
+refused. **A hold that cannot be read expires nothing**: a run
 store that cannot be listed, or a seat holder that does not answer, ends that
 pass's expiry, says so on its `code_retention_pass` line
 (`scratch_expiry_unread`) and logs `code_scratch_expiry_skipped` at warn; the

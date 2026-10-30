@@ -953,6 +953,70 @@ func TestAHoldOfAnIdleScratchRepositoryIsRecordedFirst(t *testing.T) {
 	}
 }
 
+// A HOLD IS RECORDED WHERE A LEDGER CAN VOUCH FOR IT: a turn resumed longer
+// after its run began than the operation ledger remembers is one the engine
+// rebased (turnctx.Turn.RebasedTo), and every repository it holds is idle by
+// then, so it records its hold on each again — under an id minted at its
+// rebase, as every id it derives is, never at the run's start: before what
+// every node's ledger has swept, the state log answers such a record
+// `unknown` on every node for good (statelog's Publisher.vouches), and every
+// call the resumed turn makes about the repository is refused. A turn resumed
+// inside the horizon, which the engine does not rebase, records at its run's
+// start, as it always has. The code host here answers as every node's ledger
+// does a month on: unknown for a record minted before the sweep's watermark,
+// applied for one after it.
+//
+// Mutation: mint the record at the run's start whatever the rebase → the
+// rebased turn's record is unknown and its write refused, red.
+func TestAHoldIsRecordedWhereALedgerCanVouchForIt(t *testing.T) {
+	t.Parallel()
+	now := time.Now().UTC()
+	// THE SWEEP'S WATERMARK, as statelog.OpsRetention leaves every ledger:
+	// whatever it applied before this is gone.
+	lostBefore := now.Add(-statelog.OpsRetention)
+	for _, c := range []struct {
+		name             string
+		began, rebasedTo time.Time
+	}{
+		{name: "rebased past the horizon", began: now.Add(-40 * 24 * time.Hour),
+			rebasedTo: now.Add(-time.Minute).Truncate(time.Millisecond)},
+		{name: "resumed inside it", began: now.Add(-7 * 24 * time.Hour).Truncate(time.Millisecond)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			writer := &codeWrites{life: func(r code.LifecycleRequest) (code.LifecycleResult, error) {
+				if minted, _ := statelog.OpMintedAt(r.OpID); minted.Before(lostBefore) {
+					return code.LifecycleResult{Outcome: statelog.OutcomeUnknown,
+						Detail: "minted before this node's operation ledger lost rows"}, nil
+				}
+				return code.LifecycleResult{Outcome: statelog.OutcomeApplied, Position: codeAt(14)}, nil
+			}}
+			turn := writerTurn(t)
+			turn.RunID, turn.WorkKey, turn.WorkSince = statelog.NewOpID(c.began, ""), "wk-parked", c.began
+			turn.RebasedTo = c.rebasedTo
+			got := callWrite(t, everyGrant(), codeRegistry(t, writeDeps(scratchHost(30*24*time.Hour), writer)),
+				turn, builtin.CodeCommitFilesTool, map[string]any{"repo": "agent-cto.lab", "branch": "fix",
+					"expected_head": mainOID, "message": "m",
+					"files": []any{map[string]any{"op": "delete", "path": "a"}}})
+			writes, lifecycles := writer.asked()
+			if len(lifecycles) != 1 || lifecycles[0].Kind != code.LifecycleHold {
+				t.Fatalf("hold records sent: %+v, want the one hold of an idle scratch repository", lifecycles)
+			}
+			want := c.rebasedTo
+			if want.IsZero() {
+				want = c.began
+			}
+			if minted, _ := statelog.OpMintedAt(lifecycles[0].OpID); !minted.Equal(want) {
+				t.Errorf("the hold record %s is minted at %s, want %s", lifecycles[0].OpID, minted, want)
+			}
+			if got.Failed || len(writes) != 1 {
+				t.Errorf("the write was sent %d time(s), answered %q: a hold no ledger vouches for refuses "+
+					"every call about the repository", len(writes), got.Output)
+			}
+		})
+	}
+}
+
 // ONLY THE SEAM RESOLVES A REPOSITORY FOR A TURN: in this package, a turn's
 // lookups keep a repository's resolution only inside CodeDeps.repoRead — the
 // one resolution of a tool's `repo`, which takes the turn's hold first — and a

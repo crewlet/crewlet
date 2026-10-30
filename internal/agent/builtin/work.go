@@ -674,6 +674,22 @@ func turnIdentity(turn *turnctx.Turn) Actor {
 		RebasedTo: turn.RebasedTo}
 }
 
+// runIdentity is the turn's RUN as the identity a derived id is seeded from —
+// never its unit of work, which [turnIdentity] prefers where there is one — for
+// an operation that has to be one per run whatever work the run serves: a hold
+// record ([holdOpID]). As an [Actor] for [turnIdentity]'s reason: its instant
+// is the one rule's for a run ([Actor.OperationSince]) — the instant the engine
+// rebased the attempt onto where it did ([turnctx.Turn.RebasedTo]), else the
+// run's own start, which its id carries — rather than a second spelling of that
+// choice, which a rebase taught to one copy and not the other left minting at
+// a start no node's ledger can vouch for.
+func runIdentity(turn *turnctx.Turn) Actor {
+	if turn == nil {
+		return Actor{}
+	}
+	return Actor{TurnID: turn.RunID, RebasedTo: turn.RebasedTo}
+}
+
 // notInATurn is the refusal every one of these tools gives outside a turn.
 //
 // [tools.RefusalForbidden]: nothing about the arguments is wrong — this caller,
