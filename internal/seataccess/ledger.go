@@ -94,6 +94,20 @@ type Record struct {
 
 	// Lanes are the kind's lanes the seat has a record on.
 	Lanes map[Lane]LaneRecord `json:"lanes,omitempty"`
+
+	// SharedCredential is a company credential this seat's own credential
+	// was kept in before per-seat access (the incident D12 repairs),
+	// recorded by the migration: the integration's Agents tab warns that
+	// the company credential may hold the seat's value until it is
+	// replaced. Nil for every seat that never shared one.
+	SharedCredential *SharedCredential `json:"shared_credential,omitempty"`
+}
+
+// SharedCredential is a company credential a seat once kept its own
+// credential in, by name, and when the migration found it.
+type SharedCredential struct {
+	Variable string    `json:"variable"`
+	RaisedAt time.Time `json:"raised_at"`
 }
 
 // Held reports a record whose account exists and has not been closed.
