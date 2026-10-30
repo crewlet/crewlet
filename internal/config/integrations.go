@@ -549,6 +549,12 @@ type Slack struct {
 
 	// StatusPhrases replaces the words the indicator shows.
 	StatusPhrases StatusPhrases `yaml:"status_phrases,omitempty" json:"status_phrases,omitzero"`
+
+	// AppConfigToken points at the sealed app-configuration token the
+	// engine creates and keeps every agent's Slack app with (D11). A whole
+	// ${VAR} and never a literal: Slack's refresh token works once, so each
+	// rotation is sealed back under the same name, which a literal has not.
+	AppConfigToken string `secret:"true" yaml:"app_config_token,omitempty" json:"app_config_token,omitempty" desc:"Reference to the sealed Slack app-configuration token the engine creates agents' apps with; a whole ${VAR}."`
 }
 
 // validate refuses a typing_status outside the closed set.
@@ -560,6 +566,13 @@ type Slack struct {
 func (s *Slack) validate(path Path) error {
 	var p problems
 	p.wrap(s.TypingStatus.validate(at(path, "typing_status")))
+	if token := strings.TrimSpace(s.AppConfigToken); token != "" {
+		if _, whole := envref.Whole(token); !whole {
+			p.add(at(path, "app_config_token"), ErrShape,
+				"must be one whole ${VAR}: Slack's refresh token works once, and the "+
+					"engine seals each new one back under the same name")
+		}
+	}
 	return p.err()
 }
 

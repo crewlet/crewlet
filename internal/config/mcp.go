@@ -96,6 +96,13 @@ type MCPServer struct {
 	URL     string            `yaml:"url,omitempty" json:"url,omitempty" desc:"Endpoint of the remote server (http)."`
 	Headers map[string]string `secret:"true" yaml:"headers,omitempty" json:"headers,omitempty" desc:"Headers sent with each request (http); ${VAR} supported."`
 
+	// SeatCredentials declares which integration's per-seat credential a
+	// per-seat server reads, and under which key, so the engine binds each
+	// seat's own sealed credential to it (D15). Absent, a server this build
+	// recognises by its command or address reads what [SeatToolBindings]
+	// says; see toolbinding.go.
+	SeatCredentials []SeatCredential `yaml:"seat_credentials,omitempty" json:"seat_credentials,omitempty" desc:"Per-seat credentials this server reads: integration, field, and the variable or header it reads each under. Absent for a server the engine recognises."`
+
 	// OptionalKeys names the keys whose value may resolve to nothing: of
 	// this server's env or headers, and of a seat's or unit's mcp_env block
 	// for it, which lands in the same environment or the same headers.
@@ -273,6 +280,8 @@ func (m *MCPServer) validate(path Path) error {
 				"env only applies to transport stdio; an http server takes headers instead")
 		}
 	}
+
+	m.validateSeatCredentials(&p, at(path, "seat_credentials"))
 
 	// NO NUMBER IN EITHER MESSAGE. The defaults are the MCP client's
 	// (mcp.DefaultStartupTimeout, mcp.DefaultRequestTimeout), applied where
