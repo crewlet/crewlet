@@ -204,6 +204,12 @@ func (*datadogPass) seatPlan(c *Company) (*provision.Plan, error) {
 	return datadog.PlanFor(c.Org, cfg)
 }
 
+// seatPlan is every agent that is on at Slack, whose bot token the access sync
+// seals once a person approves its app's install.
+func (p *slackPass) seatPlan(c *Company) (*provision.Plan, error) {
+	return p.engine.seatAccessPlan(c, integration.KindSlack)
+}
+
 // mintedFor is every variable a provisioning pass this build runs writes one
 // seat's credentials into under c — its token and, where the vendor assigns
 // one, its address — each with the integration that mints it.

@@ -97,25 +97,8 @@ func SeatToolBindingFor(lane string) (SeatToolBinding, bool) {
 // SeatAccessEnabled reports whether the seat is on at lane: its block is
 // there and says `enabled: true`.
 func (r *Role) SeatAccessEnabled(lane string) bool {
-	in := r.Integrations
-	switch lane {
-	case "datadog":
-		return in.Datadog != nil && SeatAccessOn(in.Datadog.Enabled)
-	case "gitlab":
-		return in.GitLab != nil && SeatAccessOn(in.GitLab.Enabled)
-	case "jira":
-		return in.Jira != nil && SeatAccessOn(in.Jira.Enabled)
-	case "confluence":
-		return in.Confluence != nil && SeatAccessOn(in.Confluence.Enabled)
-	case "github":
-		return in.GitHub != nil && SeatAccessOn(in.GitHub.Enabled)
-	case "slack":
-		return in.Slack != nil && SeatAccessOn(in.Slack.Enabled)
-	case "mattermost":
-		return in.Mattermost != nil && SeatAccessOn(in.Mattermost.Enabled)
-	default:
-		return false
-	}
+	on, _ := r.seatEnabled(lane)
+	return SeatAccessOn(on)
 }
 
 // PerSeatServer is the company's per-seat server named name, or nil where it
