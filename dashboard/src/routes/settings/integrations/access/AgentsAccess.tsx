@@ -368,7 +368,7 @@ export function AgentsAccess({
                 disabled={off || locked || seat.departed}
                 placeholder={levelName(lane, "")}
                 onChange={(v) => {
-                  const level = joinLevels((Array.isArray(v) ? v : [v]).map(String));
+                  const level = joinLevels(lane, (Array.isArray(v) ? v : [v]).map(String));
                   // PRODUCT ACCESS ONLY TAKES NO SCOPE, so choosing it clears one.
                   change(seat, lane, productOnly(lane, level) ? { level, scope: [] } : { level });
                 }}

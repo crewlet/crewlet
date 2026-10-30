@@ -61,6 +61,7 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
   lane: "confluence",
   live: false,
   multiple: true,
+  required_level: "read:space",
   levels: [
     {
       id: "",
