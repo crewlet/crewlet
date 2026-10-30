@@ -205,10 +205,14 @@ func (s Sources) backups(ctx context.Context, _ Params) (any, error) {
 			cmp.Compare(firstStream(a), firstStream(b)))
 	})
 
+	// AT THE ANSWER'S OWN INSTANT ([Sources.Now]), as the register is read:
+	// the history's retention floor is counted from it, so the two halves of
+	// one answer stand at one time, whatever clock the answer was asked on.
 	listing, coverage, err := s.Events.List(ctx, store.ListQuery{
 		Type:   types.BackupRequested{}.EventType(),
 		Source: types.OperatorSource,
 		Limit:  BackupHistoryPage,
+		At:     s.clock(),
 	})
 	if err != nil {
 		return nil, err
