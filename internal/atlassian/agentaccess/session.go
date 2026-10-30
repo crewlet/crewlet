@@ -7,7 +7,6 @@ import (
 	"maps"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
@@ -359,11 +358,14 @@ func (s *session) universe(lane seataccess.Lane, extra ...[]string) []string {
 	return normalKeys(all)
 }
 
-// normalKeys is a scope as keys: trimmed, upper-cased, deduplicated, sorted.
+// normalKeys is a scope as keys: trimmed, upper-cased (a Confluence personal
+// space's `~` key keeps its case, see [confluence.NormalizeSpaceKey]),
+// deduplicated, sorted. A Jira key never starts with `~`, so one rule serves
+// both products.
 func normalKeys(keys []string) []string {
 	seen := map[string]bool{}
 	for _, key := range keys {
-		if key = strings.ToUpper(strings.TrimSpace(key)); key != "" {
+		if key = confluence.NormalizeSpaceKey(key); key != "" {
 			seen[key] = true
 		}
 	}

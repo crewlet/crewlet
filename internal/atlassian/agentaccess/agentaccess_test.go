@@ -979,3 +979,84 @@ func TestConfluenceGivesWayToProductAccessOnly(t *testing.T) {
 		})
 	}
 }
+
+// A TOKEN REVOKED, EXPIRED OR INSIDE ITS RENEWAL WINDOW IS GONE: the vendor
+// says so over the ledger's sealed record, so the plan mints a replacement
+// while a lane is on, before an agent goes quiet.
+func TestATokenGoneOrDueForRenewalIsMintedAgainAtAtlassian(t *testing.T) {
+	t.Parallel()
+	clock := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	label := tokenLabel("sre", lanes{jira: true}) + "-1700000000"
+	for _, tc := range []struct {
+		name   string
+		tokens []*atlToken
+		gone   bool
+	}{
+		{"revoked", nil, true},
+		{"expired", []*atlToken{{APIToken: atlassian.APIToken{ID: "t1", Label: label,
+			Expiry: clock.Add(-time.Hour).Format(time.RFC3339)}}}, true},
+		{"expiring in a week", []*atlToken{{APIToken: atlassian.APIToken{ID: "t1", Label: label,
+			Expiry: clock.Add(7 * 24 * time.Hour).Format(time.RFC3339)}}}, true},
+		{"live for months", []*atlToken{{APIToken: atlassian.APIToken{ID: "t1", Label: label,
+			Expiry: clock.Add(200 * 24 * time.Hour).Format(time.RFC3339)}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := newAtlSite(t)
+			f.accounts["acc-9"] = &atlassian.ServiceAccount{ID: "acc-9", DisplayName: "SRE (crewlet:sre)"}
+			f.tokens["acc-9"] = tc.tokens
+			s := testSession(t, f, seatDoc{jira: onJira("10101", "GOP")}, []string{"GOP"}, nil)
+			s.now = func() time.Time { return clock }
+			want := seataccess.Desired{Enabled: true, Level: "10101", Scope: []string{"GOP"}}
+			rec := &seataccess.Record{
+				Account:    &seataccess.Account{ID: "acc-9", State: seataccess.AccountActive},
+				Credential: &seataccess.Credential{Variable: "ATLASSIAN_TOKEN_SRE"},
+				Lanes:      map[seataccess.Lane]seataccess.LaneRecord{seataccess.LaneJira: {Applied: &want}},
+			}
+			obs := observe(t, s, rec)
+			if j := obs[seataccess.LaneJira]; j.CredentialGone != tc.gone || (j.Credential == nil) != tc.gone {
+				t.Fatalf("observed gone %v, credential %+v; want gone %v", j.CredentialGone, j.Credential, tc.gone)
+			}
+			plan, err := seataccess.Plan(Vendor{}, seataccess.SeatInput{
+				Seat: sre, Record: rec,
+				Want: map[seataccess.Lane]seataccess.Desired{seataccess.LaneJira: want},
+				Have: obs,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			minted := slices.ContainsFunc(plan[seataccess.LaneJira], func(s seataccess.Step) bool {
+				return s.Op == seataccess.OpMint
+			})
+			if minted != tc.gone {
+				t.Fatalf("plan mints %v, want %v: %+v", minted, tc.gone, plan[seataccess.LaneJira])
+			}
+		})
+	}
+}
+
+// OFF SAYS WHAT HAPPENED WHEN THE PRODUCT IS NOT CONNECTED: no role could be
+// read or removed, and the token losing the product's scopes is the off.
+func TestOffSaysSoWhenTheProductIsNotConnected(t *testing.T) {
+	t.Parallel()
+	f := newAtlSite(t)
+	f.accounts["acc-9"] = &atlassian.ServiceAccount{ID: "acc-9", DisplayName: "SRE (crewlet:sre)"}
+	s := testSession(t, f, seatDoc{jira: &config.RoleJira{}}, []string{"GOP"}, nil)
+	s.jira, s.jiraMissing = nil, "jira: no instance url"
+	rec := &seataccess.Record{Account: &seataccess.Account{ID: "acc-9", State: seataccess.AccountActive}}
+	off := run(t, s, seataccess.LaneJira, seataccess.OpDisable, seataccess.Desired{},
+		seataccess.Observed{Exists: true, Enabled: true}, rec)
+	if !strings.HasPrefix(off[0].Did, "Jira is not connected") || strings.Contains(off[0].Did, "Removed") {
+		t.Fatalf("off said %q", off[0].Did)
+	}
+}
+
+// A PERSONAL SPACE'S KEY KEEPS ITS CASE, because Confluence matches `~` keys
+// case-sensitively; a global space's key is upper-cased.
+func TestAPersonalSpaceKeyKeepsItsCase(t *testing.T) {
+	t.Parallel()
+	got := normalKeys([]string{" ~alice ", "eng", "~557058:AbC"})
+	if !slices.Equal(got, []string{"ENG", "~557058:AbC", "~alice"}) {
+		t.Fatalf("normalKeys = %v", got)
+	}
+}

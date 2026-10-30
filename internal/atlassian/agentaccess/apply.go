@@ -356,19 +356,6 @@ func lanesName(l lanes) string {
 	return "no product"
 }
 
-// priorMinted is the credential id an earlier step of this op minted for
-// field, or "" where none did.
-func priorMinted(prior []seataccess.StepResult, field string) string {
-	for i := len(prior) - 1; i >= 0; i-- {
-		for _, m := range prior[i].Minted {
-			if m.Field == field && m.CredentialID != "" {
-				return m.CredentialID
-			}
-		}
-	}
-	return ""
-}
-
 // retire revokes every token this engine minted for the seat except the
 // newest, which is the one the sync has just sealed.
 func (s *session) retire(ctx context.Context, in seataccess.ApplyInput, _ product) (seataccess.StepResult, error) {
@@ -383,7 +370,7 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput, _ produc
 	// THE ONE THIS OP JUST SEALED is kept, by the id its mint reported;
 	// failing that, the newest by the time its label carries.
 	own := ownTokens(tokens, in.Seat.Handle, s.now())
-	keep := priorMinted(in.Prior, FieldToken)
+	keep := in.PriorCredentialID(FieldToken)
 	if keep == "" && len(own) > 0 {
 		keep = own[0].ID
 	}
@@ -409,22 +396,29 @@ func (s *session) disable(ctx context.Context, in seataccess.ApplyInput, p produ
 	if err != nil || !found {
 		return seataccess.StepResult{}, err
 	}
-	universe := s.universe(p.lane, in.Have.Scope, in.Want.Scope)
-	if s.connected(p.lane) {
-		if p.lane == seataccess.LaneJira {
-			err = s.convergeJira(ctx, account.ID, "", nil, universe)
-		} else {
-			err = s.convergeConfluence(ctx, account.ID, "", nil, universe)
-		}
-		if err != nil {
-			return seataccess.StepResult{}, err
-		}
-	}
 	remaining := s.doc(in.Seat.Handle).lanes().without(p.lane)
+	keeps := "; the account keeps its " + p.name + " product access, which Atlassian " +
+		"offers no route to remove per product"
+	if !s.connected(p.lane) {
+		// SAID AS IT HAPPENED: with the product's site credential absent
+		// there is nothing to read its roles with, so none were removed;
+		// the token losing the product's scopes is what turns it off.
+		return seataccess.StepResult{Disabled: !remaining.any(),
+			Did: p.name + " is not connected, so its " + p.roleWord() + " could not be " +
+				"read or removed; its token loses " + p.name + "'s scopes next" + keeps}, nil
+	}
+	universe := s.universe(p.lane, in.Have.Scope, in.Want.Scope)
+	if p.lane == seataccess.LaneJira {
+		err = s.convergeJira(ctx, account.ID, "", nil, universe)
+	} else {
+		err = s.convergeConfluence(ctx, account.ID, "", nil, universe)
+	}
+	if err != nil {
+		return seataccess.StepResult{}, err
+	}
 	return seataccess.StepResult{Disabled: !remaining.any(),
 		Did: "Removed its " + p.name + " " + p.roleWord() + " in every " + strings.TrimSuffix(p.where, "s") +
-			" the company or this agent names; the account keeps its " + p.name + " product access, " +
-			"which Atlassian offers no route to remove per product"}, nil
+			" the company or this agent names" + keeps}, nil
 }
 
 // narrow replaces the seat's token with one that leaves out the lane being
