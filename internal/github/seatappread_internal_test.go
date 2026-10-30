@@ -119,7 +119,7 @@ func TestAClientTimeoutIsNotReadAsATornDownPass(t *testing.T) {
 		APIBase: server.URL, WebBase: server.URL, Org: "acme",
 		Seats: []SeatApp{{
 			Handle: "eng-lead", AppID: 11, Slug: "acme-eng-lead",
-			Key: key, Tier: TierReadOnly,
+			Key: key, Permissions: tierPerms("read_only", false),
 		}},
 		Client: func(int64, string, string) (*AppClient, error) { return client, nil },
 	})
@@ -149,4 +149,14 @@ func TestAClientTimeoutIsNotReadAsATornDownPass(t *testing.T) {
 		t.Errorf("a seat whose installation could not be read was reported ready: %v",
 			res.Ready)
 	}
+}
+
+// tierPerms is a retired tier's permissions, for fixtures written against the
+// tiers.
+func tierPerms(tier string, workflows bool) Permissions {
+	perms, ok := TierPermissions(tier, workflows)
+	if !ok {
+		panic("tierPerms: unknown tier " + tier)
+	}
+	return perms
 }

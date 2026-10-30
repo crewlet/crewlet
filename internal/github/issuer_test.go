@@ -145,10 +145,10 @@ func TestAnIssuerHandsOutTheHeldTokenUntilItRunsShort(t *testing.T) {
 	}
 }
 
-// A TOKEN IS NEVER HANDED TO A SCOPE IT WAS NOT MINTED FOR. A seat's tier,
-// workflows opt-in or repositories changed by a revision must be issued a
-// token narrowed to the new scope, never the one the old scope was cut to.
-func TestAnIssuedTokenIsScopedToTheTierAndRepositoriesItWasMintedFor(t *testing.T) {
+// A TOKEN IS NEVER HANDED TO A SCOPE IT WAS NOT MINTED FOR. A seat's
+// permissions or repositories changed by a revision must be issued a token
+// narrowed to the new scope, never the one the old scope was cut to.
+func TestAnIssuedTokenIsScopedToThePermissionsAndRepositoriesItWasMintedFor(t *testing.T) {
 	t.Parallel()
 	c := &clock{at: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)}
 	srv := &tokenServer{now: c.now}
@@ -156,12 +156,12 @@ func TestAnIssuedTokenIsScopedToTheTierAndRepositoriesItWasMintedFor(t *testing.
 	issuer := &github.Issuer{Now: c.now}
 
 	seat := installedSeat(t, "qa", 9)
-	seat.Tier, seat.Repos = github.TierReview, []string{"gophrase/backend"}
+	seat.Permissions, seat.Repos = tierPerms("review", false), []string{"gophrase/backend"}
 	reviewer, err := issuer.Token(t.Context(), opts, seat, github.ToolTokenLife)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	seat.Tier = github.TierFullAccess
+	seat.Permissions = tierPerms("full_access", false)
 	writer, err := issuer.Token(t.Context(), opts, seat, github.ToolTokenLife)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
@@ -174,7 +174,7 @@ func TestAnIssuedTokenIsScopedToTheTierAndRepositoriesItWasMintedFor(t *testing.
 	if again, _ := issuer.Token(t.Context(), opts, seat, github.ToolTokenLife); again.Token != writer.Token {
 		t.Error("one repository spelt differently was minted a second token")
 	}
-	seat.Workflows = true
+	seat.Permissions = tierPerms("full_access", true)
 	workflows, err := issuer.Token(t.Context(), opts, seat, github.ToolTokenLife)
 	if err != nil {
 		t.Fatalf("issue: %v", err)
@@ -215,7 +215,7 @@ func TestAnAppThatIsNotInstalledIssuesNothing(t *testing.T) {
 
 	installed := installedSeat(t, "pm", 3)
 	for name, seat := range map[string]github.SeatApp{
-		"no app":        {Handle: "pm", Tier: github.TierReadOnly},
+		"no app":        {Handle: "pm", Permissions: tierPerms("read_only", false)},
 		"not installed": {Handle: "pm", AppID: 3, Slug: "pm", Key: installed.Key},
 		"no key":        {Handle: "pm", AppID: 3, Slug: "pm", InstallationID: 3},
 	} {
@@ -490,7 +490,7 @@ func TestAManifestGitHubCannotDeliverToHasNoWebhook(t *testing.T) {
 		DeliveryOff: true,
 		RedirectURL: "http://localhost:8200/webhooks/github-app",
 		SetupURL:    "http://localhost:8200/webhooks/github-app?installed=pm",
-		Access:      github.Access{Tier: github.TierReview},
+		Permissions:      tierPerms("review", false),
 	})
 	// GitHub refuses an unreachable hook, active or not, and events with
 	// no hook, so a local engine's app carries neither.
@@ -502,7 +502,7 @@ func TestAManifestGitHubCannotDeliverToHasNoWebhook(t *testing.T) {
 	}
 	on := github.BuildManifest(github.ManifestOptions{
 		Seat: "pm", DeliveryURL: "https://hooks.example.com/webhooks/github/pm",
-		Access: github.Access{Tier: github.TierReview},
+		Permissions: tierPerms("review", false),
 	})
 	if on.HookAttributes["active"] != true || on.HookAttributes["url"] == nil {
 		t.Errorf("hook = %v, want it active at its address", on.HookAttributes)

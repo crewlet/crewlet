@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -88,7 +89,7 @@ func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 		Seat: "sre-lead", Name: "Acme sre-lead",
 		DeliveryURL: "https://engine.example.com/webhooks/github/sre-lead",
 		RedirectURL: "https://engine.example.com/webhooks/github/app-callback",
-		Access:      github.Access{Tier: github.TierReview},
+		Permissions:      tierPerms("review", false),
 	})
 	if len(m.DefaultEvents) == 0 {
 		t.Fatal("the manifest subscribes to nothing")
@@ -116,23 +117,29 @@ func TestAManifestSubscribesToTheEventsTheRouterActsOn(t *testing.T) {
 	}
 }
 
-// AN OPTED-IN SEAT'S APP ASKS FOR WORKFLOWS AT CREATION, because creation is
-// the one moment its manifest is read: an app created without it gains it
-// only through its owner and its installation's approval.
-func TestAnOptedInSeatsAppAsksForWorkflowWrites(t *testing.T) {
+// AN APP IS REGISTERED AT EXACTLY ITS SEAT'S PERMISSIONS (D5), Metadata
+// added, because creation is the one moment its manifest is read: a
+// permission left out is gained only through its owner and the organization.
+func TestAnAppIsRegisteredAtItsSeatsPermissions(t *testing.T) {
 	t.Parallel()
-	opted := github.BuildManifest(github.ManifestOptions{
-		Seat: "s", Access: github.Access{Tier: github.TierFullAccess, Workflows: true},
+	manifest := github.BuildManifest(github.ManifestOptions{
+		Seat: "s", Permissions: github.Permissions{
+			github.PermissionContents: github.LevelWrite, github.PermissionWorkflows: github.LevelWrite,
+		},
 	})
-	if got := opted.DefaultPerms[github.PermissionWorkflows]; got != "write" {
-		t.Errorf("an opted-in full_access app asks for workflows=%q, want write", got)
+	want := map[string]string{"metadata": "read", "contents": "write", "workflows": "write"}
+	if !maps.Equal(manifest.DefaultPerms, want) {
+		t.Errorf("registered %v, want %v", manifest.DefaultPerms, want)
 	}
-	// AND ONLY AT FULL ACCESS, whatever the document says.
+	// NOTHING THE SEAT DOES NOT HOLD, whatever a tier once carried.
 	review := github.BuildManifest(github.ManifestOptions{
-		Seat: "s", Access: github.Access{Tier: github.TierReview, Workflows: true},
+		Seat: "s", Permissions: tierPerms("review", true),
 	})
 	if got, asks := review.DefaultPerms[github.PermissionWorkflows]; asks {
 		t.Errorf("a review app asks for workflows=%q", got)
+	}
+	if _, asks := review.DefaultPerms["deployments"]; asks {
+		t.Error("an app asks for a permission outside the catalogue")
 	}
 }
 
@@ -143,7 +150,7 @@ func TestAnOptedInSeatsAppAsksForWorkflowWrites(t *testing.T) {
 func TestAnAppGitHubCannotReachIsCreatedWithNoWebhook(t *testing.T) {
 	t.Parallel()
 	off := github.BuildManifest(github.ManifestOptions{
-		Seat: "s", Access: github.Access{Tier: github.TierReadOnly},
+		Seat: "s", Permissions: tierPerms("read_only", false),
 		DeliveryURL: "http://localhost:8200/webhooks/github/s", DeliveryOff: true,
 	})
 	if off.HookAttributes != nil {
@@ -157,7 +164,7 @@ func TestAnAppGitHubCannotReachIsCreatedWithNoWebhook(t *testing.T) {
 		t.Errorf("the manifest sent to GitHub still names a hook or events: %s", body)
 	}
 	on := github.BuildManifest(github.ManifestOptions{
-		Seat: "s", Access: github.Access{Tier: github.TierReadOnly}, DeliveryURL: "https://e.example.com/w",
+		Seat: "s", Permissions: tierPerms("read_only", false), DeliveryURL: "https://e.example.com/w",
 	})
 	if active, _ := on.HookAttributes["active"].(bool); !active {
 		t.Error("an app with a deliverable address was created inactive")
@@ -272,7 +279,7 @@ func TestATokenCarriesOnlyWhatTheTierAsksFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	token, err := client.MintToken(context.Background(), 11, github.Access{Tier: github.TierReadOnly}, []string{"acme/platform"})
+	token, err := client.MintToken(context.Background(), 11, tierPerms("read_only", false), []string{"acme/platform"})
 	if err != nil {
 		t.Fatal(err)
 	}

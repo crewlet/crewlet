@@ -178,6 +178,18 @@ func ParsePermissions(raw map[string]string) (Permissions, []string) {
 	return out, problems
 }
 
+// PermissionsOf reads permissions stored as strings, the way the org model
+// carries a seat's (org.GitHubApp.Permissions). An empty level is No access.
+func PermissionsOf(stored map[string]string) Permissions {
+	out := Permissions{}
+	for key, level := range stored {
+		if level = strings.TrimSpace(level); level != "" {
+			out[strings.TrimSpace(key)] = Level(level)
+		}
+	}
+	return out
+}
+
 // Strings is the permissions as the document and GitHub's API store them.
 func (p Permissions) Strings() map[string]string {
 	out := make(map[string]string, len(p))
@@ -201,6 +213,17 @@ func (p Permissions) Token() map[string]string {
 	out := p.Strings()
 	out[PermissionMetadata] = string(LevelRead)
 	return out
+}
+
+// key is the permissions as one canonical string, for a cache key: sorted
+// `key=level` pairs, so two maps that grant the same key alike.
+func (p Permissions) key() string {
+	held := p.Strings()
+	pairs := make([]string, 0, len(held))
+	for _, name := range slices.Sorted(maps.Keys(held)) {
+		pairs = append(pairs, name+"="+held[name])
+	}
+	return strings.Join(pairs, ",")
 }
 
 // Equal reports two permission sets that grant the same.

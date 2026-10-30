@@ -183,7 +183,7 @@ const refusalForgotten = time.Hour
 // set of repositories must never be handed to a caller asking for another.
 type issueKey struct {
 	app, installation int64
-	access            Access
+	perms             string
 	repos             string
 }
 
@@ -195,7 +195,7 @@ func keyOf(seat SeatApp) issueKey {
 	slices.Sort(repos)
 	return issueKey{
 		app: seat.AppID, installation: seat.InstallationID,
-		access: seat.Access(), repos: strings.Join(slices.Compact(repos), ","),
+		perms: seat.Permissions.key(), repos: strings.Join(slices.Compact(repos), ","),
 	}
 }
 
