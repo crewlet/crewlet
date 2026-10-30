@@ -371,14 +371,19 @@ func (s *RoleSandbox) validate(path Path) error {
 // the server that consumes them. Nothing in this block scopes knowledge
 // reads either; read scope is the org-wide knowledge block only.
 type RoleIntegrations struct {
-	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: how much it may do, and where."`
-	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: bot token and signing secret."`
-	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: one token covers everything."`
+	GitHub     *RoleGitHub     `yaml:"github,omitempty" json:"github,omitempty" desc:"This seat's own GitHub App: whether it is on, its permissions, and where."`
+	Slack      *RoleSlack      `yaml:"slack,omitempty" json:"slack,omitempty" desc:"This seat's own Slack app: whether it is on."`
+	Mattermost *RoleMattermost `yaml:"mattermost,omitempty" json:"mattermost,omitempty" desc:"This seat's Mattermost bot: whether it is on, its roles and its channels."`
+	Datadog    *RoleDatadog    `yaml:"datadog,omitempty" json:"datadog,omitempty" desc:"This seat's Datadog service account: whether it is on and its role."`
+	GitLab     *RoleGitLab     `yaml:"gitlab,omitempty" json:"gitlab,omitempty" desc:"This seat's GitLab service account: whether it is on, its role and its projects."`
+	Jira       *RoleJira       `yaml:"jira,omitempty" json:"jira,omitempty" desc:"This seat's Jira access: whether it is on, its project role and its projects."`
+	Confluence *RoleConfluence `yaml:"confluence,omitempty" json:"confluence,omitempty" desc:"This seat's Confluence access: whether it is on, its space role and its spaces."`
 }
 
 // IsZero lets an unset block drop out of a round trip.
 func (r RoleIntegrations) IsZero() bool {
-	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil
+	return r.GitHub == nil && r.Slack == nil && r.Mattermost == nil &&
+		r.Datadog == nil && r.GitLab == nil && r.Jira == nil && r.Confluence == nil
 }
 
 // RoleGitHub is a seat's own GitHub App.
@@ -396,6 +401,14 @@ func (r RoleIntegrations) IsZero() bool {
 // creation and the install. Everything here except the tier and the
 // repositories is therefore written by the engine, not by a person.
 type RoleGitHub struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own GitHub App. Off suspends the installation and keeps the app."`
+
+	// Permissions are the App's repository permissions in GitHub's own
+	// terms, each read or write; a permission left out is No access. The
+	// app is registered at these (least privilege, D5), so a raise past
+	// them waits for an owner to accept it at GitHub.
+	Permissions map[string]GitHubAccess `yaml:"permissions,omitempty" json:"permissions,omitempty" desc:"GitHub App permissions (contents, issues, pull_requests, checks, actions, workflows), each read or write; absent is No access."`
+
 	// Tier is how much of a repository this seat may do: read_only,
 	// review or full_access. Empty is read_only, which is the least this
 	// engine will hand out and the right answer for a seat nobody has
@@ -545,6 +558,8 @@ func (g *RoleGitHub) TierOrDefault() string {
 // team channel and which names one room per unit whatever chat backend the
 // company runs on.
 type RoleSlack struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has its own Slack app. Off revokes the bot token and keeps the app."`
+
 	BotToken      string `secret:"true" yaml:"bot_token,omitempty" json:"bot_token,omitempty" desc:"Bot token for outbound Web API calls."`
 	SigningSecret string `secret:"true" yaml:"signing_secret,omitempty" json:"signing_secret,omitempty" desc:"Verifies inbound webhooks for this seat's app."`
 }
@@ -585,6 +600,16 @@ func (s *RoleSlack) validate(path Path) error {
 // and the MCP tool server alike. There is no signing secret because there
 // is no inbound webhook to verify.
 type RoleMattermost struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Whether this agent has a Mattermost bot. Off revokes its tokens and deactivates it."`
+
+	// Roles are the bot account's Mattermost roles, by Mattermost's own
+	// names: one of [MattermostRoleSets].
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty" desc:"Mattermost roles: system_user, plus system_post_all_public or system_post_all, or system_admin."`
+
+	// Channels are the channels the bot is a member of, each within
+	// provisioning.channels where that list is set.
+	Channels []string `yaml:"channels,omitempty" json:"channels,omitempty" desc:"Channels this agent's bot is a member of."`
+
 	// BotToken is the bot account's personal access token. A whole-value
 	// ${VAR} is what makes the seat provisionable; a literal marks a
 	// manually managed bot, which the provisioner reports and leaves alone.
