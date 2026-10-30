@@ -250,6 +250,56 @@ func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult
 	return out, nil
 }
 
+// AdoptSeatApps keeps the document's record of each seat's app in step with
+// GitHub, and reports nothing: what a seat still owes is the access sync's to
+// say ([seataccess.Sync] through this package's vendor).
+//
+// THE DOCUMENT WRITES THE TOKEN ISSUER DEPENDS ON, and only those. An
+// installation a person made since the last pass is recorded on the seat, an
+// installation GitHub no longer has is cleared, and an app GitHub no longer
+// has is forgotten, so the issuer never mints against an id GitHub has
+// forgotten. Off seats are kept in step too: a disconnect uninstalls their
+// suspended installations by the recorded id.
+//
+// A DRY RUN (Record or Forget nil) writes nothing and does nothing. A read
+// GitHub could not answer leaves the seat as it was; a write the store
+// refused is returned, joined with the rest, after every seat is tried.
+func AdoptSeatApps(ctx context.Context, opts SeatAppOptions) error {
+	if opts.Record == nil || opts.Forget == nil {
+		return nil
+	}
+	var failures []error
+	for _, seat := range opts.Seats {
+		if err := interrupted(ctx); err != nil {
+			return err
+		}
+		if seat.AppID == 0 || strings.TrimSpace(seat.Key) == "" {
+			continue
+		}
+		client, err := opts.client(seat)
+		if err != nil {
+			// A KEY THIS ENGINE CANNOT READ is the access sync's to
+			// report; there is nothing here to keep in step.
+			continue
+		}
+		installation, _, err := installationFor(ctx, opts, seat, client)
+		var notRecorded *errNotRecorded
+		switch {
+		case errors.As(err, &notRecorded):
+			failures = append(failures, errors.New(notRecorded.detail(seat.Handle)))
+		case notFound(err) || (err == nil && installation == nil):
+			if exists, existsErr := client.Exists(ctx); existsErr == nil && !exists {
+				if forgetErr := opts.Forget(ctx, seat.Handle); forgetErr != nil {
+					failures = append(failures, fmt.Errorf(
+						"github: clear %s's record of an app GitHub no longer has: %w",
+						seat.Handle, forgetErr))
+				}
+			}
+		}
+	}
+	return errors.Join(failures...)
+}
+
 // reconcileSeat reports one seat, and returns an error only for a fault that
 // invalidates the whole pass rather than one seat's own state — which today
 // is exactly one thing: a context that is done. Everything a seat can be

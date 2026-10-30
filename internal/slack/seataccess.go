@@ -123,15 +123,22 @@ func CompleteSeatInstall(
 			"slack: %s has no app to install yet, or its client secret is not sealed",
 			seat.Handle)
 	}
+	// THE REDIRECT IS THE ONE THE APP REGISTERED: [Manifest] and the
+	// exchange both build it with [OAuthRedirectURL] from the same base,
+	// and Slack refuses an exchange whose redirect differs from the
+	// authorize request's.
 	installed, err := admin.Exchange(ctx, seat.ClientID, seat.ClientSecret,
 		strings.TrimSpace(code), base)
 	if err != nil {
 		return Install{}, err
 	}
-	if got := strings.TrimSpace(installed.AppID); got != "" && got != seat.AppID {
+	if got := strings.TrimSpace(installed.AppID); got != seat.AppID {
+		// AN ANSWER NAMING NO APP is refused too: the check is what keeps
+		// one agent's token out of another's seat, and an exchange that
+		// cannot say whose token it minted has not passed it.
 		return Install{}, errors.Join(fmt.Errorf(
-			"slack: that install belongs to app %s, not %s's app %s; nothing was "+
-				"recorded", got, seat.Handle, seat.AppID),
+			"%w: the install answered app %q, not %s's app %s; nothing was recorded",
+			errOtherApp, got, seat.Handle, seat.AppID),
 			revokeToken(ctx, httpClient, installed.BotToken))
 	}
 	tokenVar := SeatVar(seat.Handle, FieldBotToken)
@@ -142,6 +149,10 @@ func CompleteSeatInstall(
 	}
 	return installed, nil
 }
+
+// errOtherApp marks an install whose token belongs to an app other than the
+// seat's.
+var errOtherApp = errors.New("slack: the install belongs to another app")
 
 // Observed is what Slack shows for one seat's app now.
 type Observed struct {

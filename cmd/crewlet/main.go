@@ -2192,6 +2192,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 
+	// THE SLACK INSTALL LINKS, signed under the fleet keyring and spent on
+	// the fleet's claim registry, so the node a browser returns to finishes
+	// a link any node minted.
+	slackInstalls, err := e.SlackInstalls(boot.Secrets.TokenMaterial())
+	if err != nil {
+		return nil, err
+	}
+
 	// What only the engine can answer (in flight, seats, the posture and
 	// the applied epoch, the tool catalogue), read live on every probe
 	// through the reconciler that owns this node's config posture.
@@ -2560,6 +2568,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Claims:    e.Backends().Fleet,
 			AppFlow:   setupSurface.AppFlow(),
 			Recheck:   e,
+			// AND EACH AGENT'S SLACK INSTALL, finished here when Slack
+			// returns the person's browser: the same object the setup
+			// surface mints install links with.
+			SlackInstalls: slackInstalls,
 		},
 	}
 	// HOW A PERSON BECOMES A PRINCIPAL, the other end of the cookie it

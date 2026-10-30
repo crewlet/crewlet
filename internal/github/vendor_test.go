@@ -1,6 +1,7 @@
 package github_test
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -510,5 +511,46 @@ func TestAnOffSeatIsLeftToTheAccessSync(t *testing.T) {
 	}
 	if _, err := (&github.Issuer{}).Token(t.Context(), github.SeatAppOptions{}, seat, github.ToolTokenLife); !errors.Is(err, github.ErrSeatOff) {
 		t.Errorf("an off seat was issued %v", err)
+	}
+}
+
+// ADOPTION KEEPS THE DOCUMENT IN STEP AND REPORTS NOTHING: an installation a
+// person made is recorded, an app GitHub no longer has is forgotten, and a
+// dry run writes nothing.
+func TestAdoptSeatAppsKeepsTheRecordInStep(t *testing.T) {
+	t.Parallel()
+	_, pem := testKey(t)
+	gh := newFakeApp(t)
+	gh.on("GET /app/installations?per_page=100&page=1", 200, `[{"id":7,"account":{"login":"acme"}}]`)
+	recorded := map[string]int64{}
+	var forgotten []string
+	opts := github.SeatAppOptions{
+		APIBase: gh.URL, Org: "acme",
+		Seats: []github.SeatApp{
+			{Handle: "sre", AppID: 41, Key: pem},
+			{Handle: "off", AppID: 41, Key: pem, Off: true},
+		},
+		Record: func(_ context.Context, handle string, id int64) error { recorded[handle] = id; return nil },
+		Forget: func(_ context.Context, handle string) error { forgotten = append(forgotten, handle); return nil },
+	}
+	if err := github.AdoptSeatApps(t.Context(), opts); err != nil {
+		t.Fatal(err)
+	}
+	if recorded["sre"] != 7 || recorded["off"] != 7 || len(forgotten) != 0 {
+		t.Errorf("recorded %v, forgot %v", recorded, forgotten)
+	}
+
+	gone := newFakeApp(t)
+	gone.on("GET /app/installations?per_page=100&page=1", 200, `[]`)
+	opts.APIBase, opts.Seats = gone.URL, []github.SeatApp{{Handle: "sre", AppID: 41, Key: pem}}
+	if err := github.AdoptSeatApps(t.Context(), opts); err != nil || !slices.Equal(forgotten, []string{"sre"}) {
+		t.Errorf("a deleted app: forgot %v, %v", forgotten, err)
+	}
+
+	dry := opts
+	dry.Record, dry.Forget = nil, nil
+	before := len(gone.called())
+	if err := github.AdoptSeatApps(t.Context(), dry); err != nil || len(gone.called()) != before {
+		t.Errorf("a dry run called GitHub or failed: %v", err)
 	}
 }

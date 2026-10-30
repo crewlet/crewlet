@@ -763,21 +763,10 @@ func (r *Role) Seat() *org.Role {
 		Schedules:            append([]org.Schedule(nil), r.Schedules...),
 	}
 
-	if s := r.Integrations.Slack; s != nil && (SeatAccessOn(s.Enabled) || s.Enabled == nil && s.BotToken != "") {
-		// THE ENGINE'S NAMES, where the block names none (D4): the bot
-		// token a person's install sealed and the signing secret the app's
-		// creation sealed, under the names the Slack vendor seals them at.
-		// The transport, the webhook signature check and the seat's tool
-		// binding all read these, so they cannot hold different values.
-		//
-		// OFF IS NO IDENTITY: a seat whose block says `enabled: false`
-		// starts no Slack app, and its revoked token is not read. A block
-		// that predates `enabled` and names a token keeps the names it
-		// carries until the migration writes the setting; one that names
-		// nothing is off (D9).
+	if s := r.Integrations.Slack; s != nil {
 		seat.Slack = org.SlackIdentity{
-			BotToken:      sealedOr(s.BotToken, "slack", "BOT_TOKEN", seat.Handle()),
-			SigningSecret: sealedOr(s.SigningSecret, "slack", "SIGNING_SECRET", seat.Handle()),
+			BotToken:      s.BotToken,
+			SigningSecret: s.SigningSecret,
 		}
 	}
 	if m := r.Integrations.Mattermost; m != nil {
@@ -831,15 +820,6 @@ func (r *Role) Seat() *org.Role {
 		}
 	}
 	return seat
-}
-
-// sealedOr is ref where the document names one, and otherwise a reference to
-// the engine-owned name the vendor seals field under for handle.
-func sealedOr(ref, vendor, field, handle string) string {
-	if strings.TrimSpace(ref) != "" {
-		return ref
-	}
-	return "${" + envref.SealedName(vendor, field, handle) + "}"
 }
 
 // IdentityKey is the seat's address inside its list — its handle, which
