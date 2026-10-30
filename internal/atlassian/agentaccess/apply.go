@@ -26,7 +26,9 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 	if !ok {
 		return seataccess.StepResult{}, fmt.Errorf("atlassian: no lane %q", in.Lane)
 	}
-	drawn := actions(in.Seat, p, in.Step.Op, in.Want)
+	// REDRAWN WITHOUT OPTIONS: they change a step's words, never which step
+	// sits at an index.
+	drawn := actions(in.Seat, p, in.Step.Op, in.Want, in.Have.Access(), seataccess.Options{})
 	if in.Step.Index < 0 || in.Step.Index >= len(drawn) {
 		return seataccess.StepResult{}, fmt.Errorf("atlassian: %s has no step %d",
 			in.Step.Op, in.Step.Index)
@@ -383,19 +385,31 @@ func (s *session) disable(ctx context.Context, in seataccess.ApplyInput, p produ
 }
 
 // narrow replaces the seat's token with one that leaves out the lane being
-// turned off, or revokes every token this engine minted for it where no lane
-// is left on.
+// turned off, where the seat is still on the other product. Where it is on
+// neither, the token is left for [seataccess.OpRevoke], which the plan takes
+// once after the last lane's disable.
 func (s *session) narrow(ctx context.Context, in seataccess.ApplyInput, p product) (seataccess.StepResult, error) {
+	remaining := s.doc(in.Seat.Handle).lanes().without(p.lane)
+	if !remaining.any() {
+		return seataccess.StepResult{}, nil
+	}
+	account, err := s.mustAccount(ctx, in)
+	if err != nil {
+		return seataccess.StepResult{}, err
+	}
+	return s.mintFor(ctx, in, account, remaining)
+}
+
+// revokeAll revokes every token this engine minted for the seat, expired ones
+// included, and tells the sync the sealed token is dead. The address stays:
+// it grants nothing by itself, and the account is kept.
+func (s *session) revokeAll(ctx context.Context, in seataccess.ApplyInput, _ product) (seataccess.StepResult, error) {
 	account, found, err := s.account(ctx, in.Seat.Handle, in.Record)
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
 	if !found {
 		return seataccess.StepResult{Revoked: []string{FieldToken}}, nil
-	}
-	remaining := s.doc(in.Seat.Handle).lanes().without(p.lane)
-	if remaining.any() {
-		return s.mintFor(ctx, in, account, remaining)
 	}
 	tokens, err := s.org.ListTokens(ctx, s.key, account.ID)
 	if err != nil {
@@ -404,8 +418,8 @@ func (s *session) narrow(ctx context.Context, in seataccess.ApplyInput, p produc
 	// EXPIRED ONES TOO, which the zero clock admits: off leaves no token of
 	// this engine's on the account at all.
 	for _, t := range ownTokens(tokens, in.Seat.Handle, time.Time{}) {
-		if err := s.org.RevokeToken(ctx, s.key, account.ID, t.ID); err != nil {
-			return seataccess.StepResult{}, refuseOrg(s, err)
+		if revokeErr := s.org.RevokeToken(ctx, s.key, account.ID, t.ID); revokeErr != nil {
+			return seataccess.StepResult{}, refuseOrg(s, revokeErr)
 		}
 	}
 	return seataccess.StepResult{Revoked: []string{FieldToken}}, nil
@@ -413,11 +427,12 @@ func (s *session) narrow(ctx context.Context, in seataccess.ApplyInput, p produc
 
 // remove deletes the service account, which is allowed only when the seat is
 // off on both products: deleting it for one lane would take the other with
-// it.
-func (s *session) remove(ctx context.Context, in seataccess.ApplyInput, p product) (seataccess.StepResult, error) {
-	if other := s.doc(in.Seat.Handle).lanes().without(p.lane); other.any() {
+// it. The plan refuses it too ([seataccess.ErrStillOn]); this holds the
+// document as the session read it to the same rule.
+func (s *session) remove(ctx context.Context, in seataccess.ApplyInput, _ product) (seataccess.StepResult, error) {
+	if on := s.doc(in.Seat.Handle).lanes(); on.any() {
 		still := productJira.name
-		if !other.jira {
+		if !on.jira {
 			still = productConfluence.name
 		}
 		return seataccess.StepResult{}, &seataccess.Refusal{

@@ -401,7 +401,7 @@ func TestTheAtlassianVendorHasTwoLanesOverOneAccount(t *testing.T) {
 		t.Fatal("Atlassian is not registered")
 	}
 	cat := v.Catalog()
-	if !slices.Equal(cat.Credentials, []string{FieldToken, FieldEmail}) || cat.Tool != nil ||
+	if !slices.Equal(cat.Credentials, []string{FieldToken, FieldEmail}) ||
 		len(cat.Lanes) != 2 || cat.Lanes[0].Lane != seataccess.LaneJira || cat.Lanes[1].Lane != seataccess.LaneConfluence {
 		t.Fatalf("catalog = %+v", cat)
 	}
@@ -542,7 +542,7 @@ func TestASeatsWholeLifeAcrossJiraAndConfluence(t *testing.T) {
 	f.locked(func() {
 		live := f.tokens[account]
 		if !slices.Contains(f.grants[account], "confluence") || f.spaceRoles["1001"][account] != "r-collab" ||
-			len(live) != 1 || !slices.Equal(live[0].scopes, atlassian.AgentScopes) {
+			len(live) != 1 || !slices.Equal(live[0].scopes, atlassian.ScopesFor(true, true)) {
 			t.Fatalf("after Confluence on: grants %v, tokens %+v", f.grants[account], live)
 		}
 	})
@@ -572,8 +572,13 @@ func TestASeatsWholeLifeAcrossJiraAndConfluence(t *testing.T) {
 	doc.confluence = &config.RoleConfluence{Spaces: []string{"ENG"}}
 	s.seats["sre"] = doc
 	last := run(t, s, seataccess.LaneConfluence, seataccess.OpDisable, seataccess.Desired{}, obs[seataccess.LaneConfluence], rec)
-	if !last[0].Disabled || !slices.Equal(last[1].Revoked, []string{FieldToken}) {
-		t.Fatalf("last lane off = %+v", last)
+	if !last[0].Disabled || len(mintedOf(last)) != 0 {
+		t.Fatalf("last lane off = %+v, want the account disabled and no token minted", last)
+	}
+	// THE TOKEN IS REVOKED ONCE, after the last lane's disable.
+	revoked := run(t, s, seataccess.LaneConfluence, seataccess.OpRevoke, seataccess.Desired{}, obs[seataccess.LaneConfluence], rec)
+	if !slices.Equal(revoked[0].Revoked, []string{FieldToken}) {
+		t.Fatalf("revoke = %+v", revoked)
 	}
 	f.locked(func() {
 		if len(f.tokens[account]) != 0 || f.spaceRoles["1001"][account] != "" {
@@ -663,7 +668,7 @@ func TestSpacePermissionsAreGrantedViewFirstAndRemovedViewLast(t *testing.T) {
 		t.Fatalf("adds = %v, want View first", adds)
 	}
 	rec := &seataccess.Record{Account: &seataccess.Account{ID: account, State: seataccess.AccountActive}}
-	if c := observe(t, s, rec)[seataccess.LaneConfluence]; c.Level != "read:space create:page" {
+	if c := observe(t, s, rec)[seataccess.LaneConfluence]; c.Level != "create:page read:space" {
 		t.Fatalf("observed level = %q", c.Level)
 	}
 	doc.confluence.Enabled = new(bool)
@@ -751,4 +756,63 @@ func TestARotationKeepsAHandMadeToken(t *testing.T) {
 			t.Fatalf("after rotation: %v", labels)
 		}
 	})
+}
+
+// ONE ACCOUNT, PLANNED ONCE: a new seat on both products is created on the
+// Jira lane, and the Confluence lane grants its product on the same account
+// rather than creating a second one.
+func TestThePlanCreatesOneAccountForBothProducts(t *testing.T) {
+	t.Parallel()
+	want := seataccess.Desired{Enabled: true, Level: "10101"}
+	plan, err := seataccess.Plan(Vendor{}, seataccess.SeatInput{
+		Seat: sre,
+		Want: map[seataccess.Lane]seataccess.Desired{
+			seataccess.LaneJira: want, seataccess.LaneConfluence: {Enabled: true, Level: "r-viewer"},
+		},
+		Have: map[seataccess.Lane]seataccess.Observed{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := func(lane seataccess.Lane) seataccess.Op {
+		if len(plan[lane]) == 0 {
+			return ""
+		}
+		return plan[lane][0].Op
+	}
+	if first(seataccess.LaneJira) != seataccess.OpCreate || first(seataccess.LaneConfluence) != seataccess.OpEnable {
+		t.Fatalf("plan = jira %v, confluence %v", plan[seataccess.LaneJira], plan[seataccess.LaneConfluence])
+	}
+	for _, step := range plan[seataccess.LaneConfluence] {
+		if step.Verb == seataccess.VerbCreate {
+			t.Fatalf("the Confluence lane creates a second account: %+v", step)
+		}
+	}
+}
+
+// A STEP NAMES THE ACCESS AS THE PRODUCT NAMES IT: a project role from the
+// lane's Options, Confluence's permissions by their own names, and a role the
+// site does not have by its id marked as missing.
+func TestStepsNameTheAccessAsTheProductDoes(t *testing.T) {
+	t.Parallel()
+	v := Vendor{}
+	jira := seataccess.StepsInput{Seat: sre, Lane: seataccess.LaneJira, Op: seataccess.OpLevel,
+		Want: seataccess.Desired{Enabled: true, Level: "10101", Scope: []string{"GOP"}},
+		Have: seataccess.Observed{Exists: true, Enabled: true, Level: "10102"},
+		Options: seataccess.Options{Levels: []seataccess.Level{
+			{ID: "10101", Name: "Developers"}, {ID: "10102", Name: "Viewers"},
+		}},
+	}
+	if got := v.StepsFor(jira)[0].Text; got != "Change it from the Viewers project role to the Developers project role in GOP" {
+		t.Fatalf("named = %q", got)
+	}
+	jira.Options = seataccess.Options{}
+	if got := v.StepsFor(jira)[0].Text; !strings.Contains(got, "the project role 10101 (not found at Jira)") {
+		t.Fatalf("unresolved = %q", got)
+	}
+	perms := seataccess.StepsInput{Seat: sre, Lane: seataccess.LaneConfluence, Op: seataccess.OpScope,
+		Want: seataccess.Desired{Enabled: true, Level: "create:page read:space", Scope: []string{"ENG"}}}
+	if got := v.StepsFor(perms)[0].Text; got != "Give it the space permissions View, Add pages in ENG and nowhere else" {
+		t.Fatalf("permissions = %q", got)
+	}
 }

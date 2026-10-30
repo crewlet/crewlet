@@ -79,8 +79,8 @@ func TestScopesAreTheUnionOfTheLanesASeatIsOn(t *testing.T) {
 		t.Errorf("no lane = %v", got)
 	}
 	both := atlassian.ScopesFor(true, true)
-	if !slices.Equal(both, atlassian.AgentScopes) || len(both) != len(atlassian.JiraScopes)+len(atlassian.ConfluenceScopes) {
-		t.Errorf("both lanes = %v, want the union %v", both, atlassian.AgentScopes)
+	if !slices.Equal(both, slices.Concat(atlassian.JiraScopes, atlassian.ConfluenceScopes)) {
+		t.Errorf("both lanes = %v, want the union", both)
 	}
 }
 
@@ -91,8 +91,9 @@ func TestAGrantNamesEachProductItIsFor(t *testing.T) {
 		rules[0].Role != "ari:cloud:confluence::role/product/member" {
 		t.Fatalf("rules = %+v", rules)
 	}
-	if got := atlassian.GrantsFor("cloud-1"); len(got) != len(atlassian.Products) {
-		t.Fatalf("GrantsFor = %+v", got)
+	if got := atlassian.GrantsOf("cloud-1", atlassian.GrantJira, atlassian.GrantConfluence); len(got) != 2 ||
+		got[0].Resource != "ari:cloud:jira-software::site/cloud-1" {
+		t.Fatalf("GrantsOf both = %+v", got)
 	}
 }
 
@@ -141,9 +142,6 @@ func TestTokensAreListedAndRevokedByID(t *testing.T) {
 	tokens, err := c.ListTokens(ctx, "key", "acc-1")
 	if err != nil || len(tokens) != 2 || tokens[0].Label != "crewlet-sre-1" {
 		t.Fatalf("tokens = %+v, %v", tokens, err)
-	}
-	if n, err := c.CountTokens(ctx, "key", "acc-1"); err != nil || n != 2 {
-		t.Fatalf("CountTokens = %d, %v", n, err)
 	}
 	if err := c.RevokeToken(ctx, "key", "acc-1", "tok-1"); err != nil {
 		t.Fatal(err)

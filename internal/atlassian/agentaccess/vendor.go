@@ -29,6 +29,7 @@ package agentaccess
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -104,6 +105,40 @@ func productOf(lane seataccess.Lane) (product, bool) {
 	return product{}, false
 }
 
+// access names a stored level as the product names it: a role from the
+// lane's Options, Confluence's space permissions by their own names, and an id
+// the product no longer has marked as missing.
+func (p product) access(level string, opts seataccess.Options) string {
+	level = strings.TrimSpace(level)
+	if level == "" {
+		return "no " + p.name + " access"
+	}
+	if strings.Contains(level, ":") {
+		// IN CONFLUENCE'S OWN ORDER, View first, as its screen lists them.
+		ids := strings.Fields(level)
+		var names []string
+		for _, op := range confluence.Operations {
+			if slices.Contains(ids, op.ID()) {
+				names = append(names, op.Name)
+			}
+		}
+		for _, id := range ids {
+			if _, ok := confluence.OperationByID(id); !ok {
+				names = append(names, id+" (not found at "+p.name+")")
+			}
+		}
+		return "the space permissions " + strings.Join(names, ", ")
+	}
+	kind := "project role"
+	if p.lane == seataccess.LaneConfluence {
+		kind = "space role"
+	}
+	if named, _, ok := opts.Level(level); ok {
+		return "the " + named.Name + " " + kind
+	}
+	return "the " + kind + " " + level + " (not found at " + p.name + ")"
+}
+
 // action is one step of one op: how it is drawn and how it is taken. The
 // same list backs [Vendor.Steps] and [session.Apply], so the step a preview
 // shows and the step a sync takes at the same index cannot differ.
@@ -114,12 +149,16 @@ type action struct {
 	apply func(s *session, ctx context.Context, in seataccess.ApplyInput, p product) (seataccess.StepResult, error)
 }
 
-// actions is the steps one op takes for one seat's lane, in order. PURE.
-func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want seataccess.Desired) []action {
+// actions is the steps one op takes for one seat's lane, in order. PURE: the
+// lane's Options change the words, never which steps there are.
+func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want, have seataccess.Desired,
+	opts seataccess.Options,
+) []action {
 	where := "every one of the company's " + p.where
 	if len(want.Scope) > 0 {
 		where = strings.Join(want.Scope, ", ")
 	}
+	access := p.access(want.Level, opts)
 	grant := action{
 		verb:  seataccess.VerbGrant,
 		text:  "Grant it " + p.name + " access",
@@ -128,12 +167,12 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want seatacce
 	}
 	roles := action{
 		verb:  seataccess.VerbGrant,
-		text:  "Give it its " + p.name + " role in " + where,
+		text:  "Give it " + access + " in " + where,
 		apply: (*session).converge,
 	}
 	mint := action{
 		verb:  seataccess.VerbMint,
-		text:  "Mint its API token with the scopes of the products it is on",
+		text:  "Mint its API token with the scopes of the products it is on, where its token lacks " + p.name + "'s",
 		apply: (*session).mintIfShort,
 	}
 	retire := action{
@@ -152,10 +191,12 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want seatacce
 	case seataccess.OpEnable:
 		return []action{grant, roles, mint, retire}
 	case seataccess.OpLevel:
-		roles.verb, roles.text = seataccess.VerbRerole, "Change its "+p.name+" role in "+where
+		roles.verb = seataccess.VerbRerole
+		roles.text = "Change it from " + p.access(have.Level, opts) + " to " + access + " in " + where
 		return []action{roles}
 	case seataccess.OpScope:
-		roles.verb, roles.text = seataccess.VerbScope, "Hold its "+p.name+" role in "+where+" and nowhere else"
+		roles.verb = seataccess.VerbScope
+		roles.text = "Give it " + access + " in " + where + " and nowhere else"
 		return []action{roles}
 	case seataccess.OpMint:
 		mint.apply = (*session).mintAlways
@@ -175,14 +216,21 @@ func actions(seat seataccess.SeatRef, p product, op seataccess.Op, want seatacce
 			verb: seataccess.VerbDisable,
 			text: "Remove its " + p.name + " roles",
 			note: "Atlassian offers no route to remove one product's access from a " +
-				"service account, so the account keeps its product grant and loses " +
-				"its roles and its token's " + p.name + " scopes.",
+				"service account, so the account keeps its " + p.name + " product " +
+				"access and loses its roles and its token's " + p.name + " scopes.",
 			apply: (*session).disable,
 		}, {
-			verb:  seataccess.VerbRevoke,
-			text:  "Replace its API token with one without " + p.name + ", or revoke it if it is on no product",
+			verb:  seataccess.VerbMint,
+			text:  "Replace its API token with one without " + p.name + "'s scopes, where it is still on the other product",
 			apply: (*session).narrow,
 		}, retire}
+	case seataccess.OpRevoke:
+		return []action{{
+			verb:  seataccess.VerbRevoke,
+			text:  "Revoke its API token, now that it is on neither Jira nor Confluence",
+			note:  "The account keeps its product access and is kept; remove it to delete it.",
+			apply: (*session).revokeAll,
+		}}
 	case seataccess.OpRemove:
 		return []action{{
 			verb:  seataccess.VerbRemove,
@@ -201,16 +249,24 @@ func seatName(seat seataccess.SeatRef) string {
 	return seat.Handle
 }
 
-// Steps implements [seataccess.Vendor].
-func (Vendor) Steps(
+// Steps implements [seataccess.Vendor], naming what it can without the
+// lane's Options. See [Vendor.StepsFor].
+func (v Vendor) Steps(
 	seat seataccess.SeatRef, lane seataccess.Lane, op seataccess.Op,
-	want seataccess.Desired, _ seataccess.Observed,
+	want seataccess.Desired, have seataccess.Observed,
 ) []seataccess.Step {
-	p, ok := productOf(lane)
+	return v.StepsFor(seataccess.StepsInput{Seat: seat, Lane: lane, Op: op, Want: want, Have: have})
+}
+
+// StepsFor implements [seataccess.NamedSteps]: the steps, with every role and
+// permission named as the product names it.
+func (Vendor) StepsFor(in seataccess.StepsInput) []seataccess.Step {
+	p, ok := productOf(in.Lane)
 	if !ok {
 		return nil
 	}
-	drawn := actions(seat, p, op, want)
+	op := in.Op
+	drawn := actions(in.Seat, p, op, in.Want, in.Have.Access(), in.Options)
 	out := make([]seataccess.Step, 0, len(drawn))
 	for i, a := range drawn {
 		out = append(out, seataccess.Step{

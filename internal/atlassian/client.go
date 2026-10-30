@@ -175,20 +175,13 @@ func NewClient(opts ClientOptions) *Client {
 	}
 }
 
-// Products are what an agent's account is granted access to.
+// The product keys a grant names, one per lane a seat can be on. One
+// Atlassian account is one agent's identity across the site, granted each
+// product its seat is on.
 //
-// Both, because one Atlassian account is one agent's identity across the
-// site: an agent that reads a page and comments on the issue it came from is
-// doing one job with one identity.
-//
-// The ARIs name `jira-software` rather than `jira`. The plain jira ARI is
+// The Jira key is `jira-software` rather than `jira`. The plain jira ARI is
 // ACCEPTED when granting and silently grants nothing, which is the worst
 // shape a mistake can take: a 200, an account, and no access.
-//
-//nolint:gochecknoglobals // an immutable contract, not state
-var Products = []string{GrantJira, GrantConfluence}
-
-// The product keys a grant names, one per lane a seat can be on.
 const (
 	GrantJira       = "jira-software"
 	GrantConfluence = "confluence"
@@ -198,11 +191,6 @@ const (
 type PermissionRule struct {
 	Resource string `json:"resource"`
 	Role     string `json:"role"`
-}
-
-// GrantsFor is the product access one agent's account needs on a site.
-func GrantsFor(cloudID string) []PermissionRule {
-	return GrantsOf(cloudID, Products...)
 }
 
 // GrantsOf is the product access for the named products on a site, one
@@ -331,20 +319,6 @@ func (c *Client) CreateServiceAccount(
 	return account, nil
 }
 
-// AgentScopes are what an agent's token is minted holding.
-//
-// REQUIRED, and the refusal does not say so usefully: a mint with no scopes
-// answers 400 MISSING_SCOPES, which reads as a malformed request rather than
-// as a field nobody sent. Both products, because one Atlassian account is one
-// agent's identity across the site and the engine's tools reach for both.
-//
-// The user scopes are not decoration. Assigning work or @mentioning a
-// colleague means resolving an account id first, and reading a space's
-// permissions means resolving the groups they were granted to.
-//
-//nolint:gochecknoglobals // an immutable contract, not state
-var AgentScopes = ScopesFor(true, true)
-
 // JiraScopes are what a seat on the Jira lane needs: read and write work,
 // and resolve the people it assigns or mentions. What the account may do in
 // a project is bounded by the project's permission scheme and the seat's
@@ -415,32 +389,6 @@ func (c *Client) MintToken(
 		return nil, ErrTokenNotReturned
 	}
 	return token, nil
-}
-
-// CountTokens is how many API tokens an account currently holds.
-//
-// It answers the one question a held credential cannot answer about itself:
-// whether there is still a live token behind it. A disconnect that removes
-// accounts deletes them at Atlassian and leaves the minted token in the
-// sealed store, so a later reconnect creates a NEW account and finds a
-// credential already held for the seat — the value is then a token for an
-// account that is gone. An administrator revoking the token by hand leaves
-// the SAME account holding none, which reads identically here and is the
-// commoner of the two. Either way every call with the sealed value is refused
-// with a 401 that names nothing, so the pass mints a replacement; see
-// [orphaned], which is careful to claim only what this count establishes.
-//
-// A COUNT rather than a comparison, because Atlassian shows a token's value
-// once: nothing can check that the stored string is one of these. What it can
-// check is that the account has none at all, which no account this engine has
-// provisioned ever legitimately has, and which is exactly the state a
-// recreated account is in.
-func (c *Client) CountTokens(ctx context.Context, key, accountID string) (int, error) {
-	tokens, err := c.ListTokens(ctx, key, accountID)
-	if err != nil {
-		return 0, err
-	}
-	return len(tokens), nil
 }
 
 // APIToken is one token an account holds, as Atlassian lists it: never the

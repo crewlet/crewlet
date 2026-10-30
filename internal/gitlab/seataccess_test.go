@@ -87,6 +87,9 @@ var (
 	reGroupTokens  = regexp.MustCompile(`^/groups/9/service_accounts/(\d+)/personal_access_tokens$`)
 	reGroupToken   = regexp.MustCompile(`^/groups/9/service_accounts/(\d+)/personal_access_tokens/(\d+)$`)
 	reGroupAccount = regexp.MustCompile(`^/groups/9/service_accounts/(\d+)$`)
+	reUserTokens   = regexp.MustCompile(`^/users/(\d+)/personal_access_tokens$`)
+	reInstToken    = regexp.MustCompile(`^/personal_access_tokens/(\d+)$`)
+	reInstAccount  = regexp.MustCompile(`^/service_accounts/(\d+)$`)
 )
 
 func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
@@ -217,8 +220,16 @@ func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(g.roles))
 	case call == "GET /member_roles":
 		missing()
-	case reGroupTokens.MatchString(path):
-		owner := atoi(reGroupTokens.FindStringSubmatch(path)[1])
+	case call == "GET /personal_access_tokens" || reGroupTokens.MatchString(path) || reUserTokens.MatchString(path):
+		var owner int
+		switch {
+		case call == "GET /personal_access_tokens":
+			owner = atoi(r.URL.Query().Get("user_id"))
+		case reGroupTokens.MatchString(path):
+			owner = atoi(reGroupTokens.FindStringSubmatch(path)[1])
+		default:
+			owner = atoi(reUserTokens.FindStringSubmatch(path)[1])
+		}
 		if r.Method == http.MethodGet {
 			var out []map[string]any
 			for _, t := range g.tokens[owner] {
@@ -239,16 +250,31 @@ func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
 		g.nextTok++
 		g.tokens[owner] = append(g.tokens[owner], t)
 		reply(http.StatusCreated, map[string]any{"id": t.id, "name": t.name, "token": t.value, "scopes": scopes})
-	case reGroupToken.MatchString(path) && r.Method == http.MethodDelete:
-		m := reGroupToken.FindStringSubmatch(path)
-		for _, t := range g.tokens[atoi(m[1])] {
-			if t.id == atoi(m[2]) {
-				t.revoked = true
-				reply(http.StatusNoContent, nil)
-				return
+	case (reGroupToken.MatchString(path) || reInstToken.MatchString(path)) && r.Method == http.MethodDelete:
+		id := 0
+		if m := reGroupToken.FindStringSubmatch(path); m != nil {
+			id = atoi(m[2])
+		} else {
+			id = atoi(reInstToken.FindStringSubmatch(path)[1])
+		}
+		for _, list := range g.tokens {
+			for _, t := range list {
+				if t.id == id {
+					t.revoked = true
+					reply(http.StatusNoContent, nil)
+					return
+				}
 			}
 		}
 		missing()
+	case reInstAccount.MatchString(path) && r.Method == http.MethodDelete:
+		id := atoi(reInstAccount.FindStringSubmatch(path)[1])
+		if _, ok := g.users[id]; !ok {
+			missing()
+			return
+		}
+		delete(g.users, id)
+		reply(http.StatusNoContent, nil)
 	case reGroupAccount.MatchString(path) && r.Method == http.MethodDelete:
 		id := atoi(reGroupAccount.FindStringSubmatch(path)[1])
 		if _, ok := g.users[id]; !ok {
@@ -378,9 +404,6 @@ func TestTheGitLabVendorIsRegisteredWithOneTokenAndOneLane(t *testing.T) {
 		cat.Lanes[0].Lane != seataccess.LaneGitLab || !cat.Lanes[0].Rotatable {
 		t.Fatalf("catalog = %+v", cat)
 	}
-	if cat.Tool == nil || cat.Tool.Server != gitlab.SeatEnv || cat.Tool.Keys[0].Field != gitlab.FieldToken {
-		t.Fatalf("tool binding = %+v", cat.Tool)
-	}
 }
 
 func TestAStoredLevelRoundTripsAndRefusesWhatGitLabIsNotOffered(t *testing.T) {
@@ -442,8 +465,12 @@ func TestStepsAreDrawnInGitLabsWordsAndRemintOnlyWhenScopesChange(t *testing.T) 
 		t.Fatalf("Developer to Maintainer = %v", got)
 	}
 	off := v.Steps(sre, seataccess.LaneGitLab, seataccess.OpDisable, seataccess.Desired{}, seataccess.Observed{})
-	if got := verbs(off); !slices.Equal(got, []seataccess.StepVerb{seataccess.VerbDisable, seataccess.VerbRevoke}) {
+	if got := verbs(off); !slices.Equal(got, []seataccess.StepVerb{seataccess.VerbDisable}) {
 		t.Fatalf("disable = %v", got)
+	}
+	revoke := v.Steps(sre, seataccess.LaneGitLab, seataccess.OpRevoke, seataccess.Desired{}, seataccess.Observed{})
+	if got := verbs(revoke); !slices.Equal(got, []seataccess.StepVerb{seataccess.VerbRevoke}) {
+		t.Fatalf("revoke = %v", got)
 	}
 	if v.Steps(sre, seataccess.LaneJira, seataccess.OpCreate, seataccess.Desired{}, seataccess.Observed{}) != nil {
 		t.Fatal("GitLab drew steps for another vendor's lane")
@@ -568,6 +595,7 @@ func TestASeatsWholeLifeAtGitLab(t *testing.T) {
 	}
 
 	off := runOp(t, s, seataccess.OpDisable, seataccess.Desired{}, have, rec)
+	off = append(off, runOp(t, s, seataccess.OpRevoke, seataccess.Desired{}, have, rec)...)
 	if !off[0].Disabled || !slices.Equal(off[1].Revoked, []string{gitlab.FieldToken}) ||
 		g.userNamed("crewlet-sre").State != "blocked" || len(g.liveTokens(user.ID)) != 0 {
 		t.Fatalf("off = %+v, user %+v", off, g.userNamed("crewlet-sre"))
@@ -656,6 +684,7 @@ func TestOffWithAGroupOwnerTokenStripsMembershipsAndReadsBackAsOffByCrewlet(t *t
 	results := runOp(t, s, seataccess.OpCreate, want, seataccess.Observed{}, nil)
 	rec := &seataccess.Record{Account: &seataccess.Account{ID: results[0].AccountID, State: seataccess.AccountActive}}
 	runOp(t, s, seataccess.OpDisable, seataccess.Desired{}, seataccess.Observed{Scope: want.Scope}, rec)
+	runOp(t, s, seataccess.OpRevoke, seataccess.Desired{}, seataccess.Observed{Scope: want.Scope}, rec)
 	id := atoi(results[0].AccountID)
 	if g.userNamed("crewlet-sre").State != "active" || g.projectSize("acme/api") != 0 || len(g.liveTokens(id)) != 0 {
 		t.Fatal("off with a group Owner token did not strip the memberships and tokens")
@@ -844,5 +873,123 @@ func TestARotationRevokesOnlyTheEarlierTokenCrewletMinted(t *testing.T) {
 	if len(minted(rotated)) != 1 || len(live) != 2 || !slices.Contains(names, "hand-made") ||
 		live[len(live)-1].value != minted(rotated)[0].Value {
 		t.Fatalf("after rotation live = %v", names)
+	}
+}
+
+// THE SHARED PLAN DRAWS GITLAB'S OFF AS ITS OWN STEPS: the account is turned
+// off, then the credential is revoked once, and a person sees both.
+func TestThePlanTurnsASeatOffThenRevokesItsToken(t *testing.T) {
+	t.Parallel()
+	plan, err := seataccess.Plan(gitlab.Vendor{}, seataccess.SeatInput{
+		Seat: sre,
+		Want: map[seataccess.Lane]seataccess.Desired{seataccess.LaneGitLab: {}},
+		Have: map[seataccess.Lane]seataccess.Observed{seataccess.LaneGitLab: {
+			Exists: true, Enabled: true, Level: "30",
+			Credential: &seataccess.Credential{Variable: "GITLAB_TOKEN_SRE"},
+		}},
+		Record: &seataccess.Record{Credential: &seataccess.Credential{Variable: "GITLAB_TOKEN_SRE"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ops []seataccess.Op
+	for _, step := range plan[seataccess.LaneGitLab] {
+		ops = append(ops, step.Op)
+	}
+	if !slices.Equal(ops, []seataccess.Op{seataccess.OpDisable, seataccess.OpRevoke}) {
+		t.Fatalf("plan = %v", ops)
+	}
+}
+
+// AN INSTANCE-OWNED ACCOUNT A GROUP OWNER CANNOT CREATE NAMES THE CREDENTIAL
+// THE MODE NEEDS, because the same 403 means a different remedy in each mode.
+func TestACreateRefusalNamesTheCredentialTheModeNeeds(t *testing.T) {
+	t.Parallel()
+	g := newGLSite(t)
+	g.refuse["POST /service_accounts"] = glRefusal{http.StatusForbidden, "403 Forbidden"}
+	cfg := glCompany(g.server.URL, nil, &config.RoleGitLab{Enabled: on(), AccessLevel: 30})
+	cfg.Integrations.GitLab.Provisioning.Mode = config.GitLabModeInstance
+	s, err := gitlab.Vendor{}.Open(context.Background(), seataccess.OpenInput{Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runOpUntil(t, s, seataccess.OpCreate, seataccess.Desired{Enabled: true, Level: "30"}, 0)
+	var refusal *seataccess.Refusal
+	if !errors.As(err, &refusal) || !strings.Contains(refusal.Remedy, "instance administrator") ||
+		!strings.Contains(refusal.Remedy, "provisioning.mode: group") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A STEP NAMES THE ROLE AS GITLAB NAMES IT: a custom role by the name the
+// lane's Options read live, and one GitLab does not have by its id marked as
+// missing, never a bare id.
+func TestStepsNameACustomRoleAsGitLabDoes(t *testing.T) {
+	t.Parallel()
+	want := seataccess.Desired{Enabled: true, Level: "member_role:7", Scope: []string{"acme/api"}}
+	in := seataccess.StepsInput{Seat: sre, Lane: seataccess.LaneGitLab, Op: seataccess.OpCreate, Want: want,
+		Options: seataccess.Options{Levels: []seataccess.Level{{ID: "member_role:7", Name: "Incident responder", Custom: true}}}}
+	named := gitlab.Vendor{}.StepsFor(in)
+	if !strings.Contains(named[1].Text, "acme/api as Incident responder") {
+		t.Fatalf("named = %q", named[1].Text)
+	}
+	in.Options = seataccess.Options{}
+	missing := gitlab.Vendor{}.StepsFor(in)
+	if !strings.Contains(missing[1].Text, "member_role:7 (not found at GitLab)") {
+		t.Fatalf("unresolved = %q", missing[1].Text)
+	}
+	if len(named) != len(missing) {
+		t.Fatal("Options changed which steps there are, not only their words")
+	}
+}
+
+// TURNED BACK ON AT THE DOCUMENT'S ROLE, with a token only where the seat
+// holds none.
+func TestBackOnMintsOnlyWhereTheSeatHoldsNoToken(t *testing.T) {
+	t.Parallel()
+	v := gitlab.Vendor{}
+	want := seataccess.Desired{Enabled: true, Level: "30"}
+	without := v.Steps(sre, seataccess.LaneGitLab, seataccess.OpEnable, want, seataccess.Observed{Exists: true})
+	with := v.Steps(sre, seataccess.LaneGitLab, seataccess.OpEnable, want, seataccess.Observed{
+		Exists: true, Credential: &seataccess.Credential{Variable: "GITLAB_TOKEN_SRE"},
+	})
+	if len(without) != 4 || without[2].Verb != seataccess.VerbMint || len(with) != 2 ||
+		with[1].Verb != seataccess.VerbGrant {
+		t.Fatalf("without a token %d steps, with one %d", len(without), len(with))
+	}
+}
+
+// THE DOCUMENT'S MODE DECIDES THE ROUTE, for every operation on an account:
+// an instance-owned account is created, minted on and removed through the
+// instance's own routes. The group delete answers 404 as success for an
+// account the group does not own, so a removal sent down the wrong route
+// would report the account gone while it stays live.
+func TestAnInstanceOwnedAccountIsWorkedOnThroughTheInstanceRoutes(t *testing.T) {
+	t.Parallel()
+	g := newGLSite(t)
+	g.admin = true
+	cfg := glCompany(g.server.URL, nil, &config.RoleGitLab{Enabled: on(), AccessLevel: 30})
+	cfg.Integrations.GitLab.Provisioning.Mode = config.GitLabModeInstance
+	s, err := gitlab.Vendor{}.Open(context.Background(), seataccess.OpenInput{Config: cfg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := seataccess.Desired{Enabled: true, Level: "30"}
+	results := runOp(t, s, seataccess.OpCreate, want, seataccess.Observed{}, nil)
+	id := results[0].AccountID
+	rec := &seataccess.Record{Account: &seataccess.Account{ID: id, State: seataccess.AccountActive}}
+	runOp(t, s, seataccess.OpRemove, seataccess.Desired{}, seataccess.Observed{Exists: true}, rec)
+	for _, call := range []string{
+		"POST /service_accounts", "POST /users/" + id + "/personal_access_tokens",
+		"DELETE /service_accounts/" + id,
+	} {
+		if !g.called(call) {
+			t.Errorf("the instance route %q was not used", call)
+		}
+	}
+	for _, call := range []string{"POST /groups/9/service_accounts", "DELETE /groups/9/service_accounts/" + id} {
+		if g.called(call) {
+			t.Errorf("an instance-owned account was sent down the group route %q", call)
+		}
 	}
 }

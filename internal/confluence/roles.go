@@ -269,17 +269,17 @@ func OperationByID(id string) (Operation, bool) {
 	return Operation{}, false
 }
 
-// OperationsLevel is a set of operations as one stored level: each id, in
-// the catalogue's order, separated by a space. The catalogue's order rather
-// than the alphabet's, so View reads first wherever the set is shown.
+// OperationsLevel is a set of operations as one stored level: each id,
+// sorted and separated by a space, which is how the company document's
+// `operations` list is compared (seataccess.DesiredOf), so a set read back
+// from the site and the same set written in another order compare equal.
 func OperationsLevel(ops []Operation) string {
 	var ids []string
-	for _, op := range Operations {
-		if slices.Contains(ops, op.Operation) {
-			ids = append(ids, op.ID())
-		}
+	for _, op := range ops {
+		ids = append(ids, op.ID())
 	}
-	return strings.Join(ids, " ")
+	slices.Sort(ids)
+	return strings.Join(slices.Compact(ids), " ")
 }
 
 // ParseOperationsLevel reads a stored level back into its operations,

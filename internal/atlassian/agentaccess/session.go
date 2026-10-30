@@ -177,8 +177,9 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 		if !mode.Roles() {
 			// SPACE PERMISSIONS BY OPERATION, under Confluence's names,
 			// on a site without role-based access (D8). A level is then a
-			// set of these ([confluence.OperationsLevel]).
-			out.Live = false
+			// set of these ([confluence.OperationsLevel]), chosen with a
+			// multi-select.
+			out.Live, out.Multiple = false, true
 			for _, op := range confluence.Operations {
 				out.Levels = append(out.Levels, seataccess.Level{
 					ID: op.ID(), Name: op.Name,
