@@ -395,7 +395,7 @@ func newSweepRig(t *testing.T) *sweepRig {
 	op.Steer.Runs = &runRecords{}
 	op.Runs.Desk = &deskFake{runs: map[string]sandbox.PendingRun{"turn-1": {TurnID: "turn-1",
 		Status: sandbox.StatusAwaiting, AgentHandle: "agent-cto", AgentID: ctoSeat(t).String(),
-		Requester: "founder", Audience: "founder", Question: words}}}
+		Requester: "founder", Audience: "founder", Question: words, LaunchID: "launch-turn-1"}}}
 	operator := tools.NewRegistry()
 	for _, tool := range builtin.OperatorTools(op) {
 		if err := operator.RegisterWith(tool, tools.OriginBuiltin,
@@ -444,7 +444,7 @@ func sweepArgs(artifact string) map[string]map[string]any {
 	return map[string]map[string]any{
 		builtin.A2AAskTool:               {"target": "agent-ceo", "brief": "a plain brief"},
 		builtin.AnswerKnowledgeTool:      {"q": "how do we deploy"},
-		builtin.AnswerRunTool:            {"turn_id": "turn-1", "answer": "yes"},
+		builtin.AnswerRunTool:            {"turn_id": "turn-1", "launch_id": "launch-turn-1", "answer": "yes"},
 		builtin.ArtifactFormatTool:       {"kind": "doc"},
 		builtin.CreateArtifactTool:       {"kind": "html", "title": "Plain title", "content": "<p>plain</p>"},
 		builtin.CreateArtifactFolderTool: {"parent": "Marketing", "name": "Plain folder"},

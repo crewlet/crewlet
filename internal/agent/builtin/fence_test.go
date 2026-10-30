@@ -601,7 +601,7 @@ func TestEveryUntrustedReadIsFenced(t *testing.T) {
 		run := parked(t, "t1", sandbox.StatusAwaiting)
 		run.Question = attack(forged, "run-question")
 		got, err := answerRunTool(t, &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}).
-			Call(t.Context(), map[string]any{"turn_id": "t1", "answer": "use main"})
+			Call(t.Context(), map[string]any{"turn_id": "t1", "launch_id": run.LaunchID, "answer": "use main"})
 		if err != nil || got.Failed {
 			t.Fatalf("answer_run = %+v, %v", got, err)
 		}

@@ -43,7 +43,7 @@ func TestACodingRunsAskIsReadAtOneTrustThroughEveryDoor(t *testing.T) {
 		"question": run.Question, "question_context": run.QuestionContext, "decision": ask}
 
 	got, err := answerRunTool(t, &deskFake{runs: map[string]sandbox.PendingRun{"t1": run}}).
-		Call(t.Context(), map[string]any{"turn_id": "t1", "answer": "Postgres"})
+		Call(t.Context(), map[string]any{"turn_id": "t1", "launch_id": run.LaunchID, "answer": "Postgres"})
 	if err != nil || got.Failed {
 		t.Fatalf("answer_run = %+v, %v", got, err)
 	}
