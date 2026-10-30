@@ -257,14 +257,28 @@ test("an agent with an account and no tool server is said once, above the table"
   expect(screen.getByText("No Datadog tool for its agents")).toBeTruthy();
 });
 
-test("where the operator manages access, the tab is values only with one line saying why", () => {
-  draw(datadogAnswer(), { held: "Managed by the operator.", readOnly: OPERATOR_MANAGED });
+test("where the operator writes the document, only what writes a revision is hidden", () => {
+  const base = datadogAnswer().seats[2]!.lanes.datadog!;
+  draw(
+    datadogAnswer({
+      observed: { ...base.observed, level: "r-ro" },
+      sync: {
+        at: new Date().toISOString(),
+        outcome: "failed",
+        steps: [],
+        error: { step: "rerole", said: "Datadog refused.", remedy: "Retry.", actor: "crewlet" },
+      },
+    }),
+    { readOnly: OPERATOR_MANAGED },
+  );
   expect(screen.getByText(OPERATOR_MANAGED)).toBeTruthy();
   expect(screen.queryByRole("switch")).toBeNull();
   expect(screen.queryByRole("combobox")).toBeNull();
-  expect(screen.getAllByText("Datadog Admin Role").length).toBeGreaterThan(0);
+  // ACTIONS AT THE VENDOR write no revision, so they stay; Keep would write one.
+  expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Keep / })).toBeNull();
   details("SRE");
-  expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Rotate credential" })).toBeTruthy();
 });
 
 test("a credential provided externally says so, by its variable, and offers no rotation", () => {

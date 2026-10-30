@@ -32,7 +32,7 @@ import {
 } from "./parts.tsx";
 import { useAccess, useOperatorManaged } from "./access/api.ts";
 import { AgentsAccess } from "./access/AgentsAccess.tsx";
-import { lanesOf, needsAttention, statusOf } from "./access/logic.ts";
+import { accessHold, lanesOf, needsAttention, statusOf } from "./access/logic.ts";
 
 /** The tool's one primary action, worded for what it opens. */
 function PrimaryAction({
@@ -93,7 +93,7 @@ export function AppPane({
   const [checking, setChecking] = useState(false);
   const access = useAccess(tool.configured ? tool.entry.key : null);
   const data = access.data;
-  const readOnly = useOperatorManaged();
+  const readOnly = useOperatorManaged(data);
 
   // WHAT THE AGENTS TAB SAYS, counted once for the header and the tab's marker.
   const counts = useMemo(() => {
@@ -191,7 +191,12 @@ export function AppPane({
   const kinds = tool.entry.surfaces
     .filter((s) => tool.sections.some((x) => x.tool.key === s.key))
     .map((s) => s.key);
-  const held = model.managed ?? (model.admin ? undefined : "Admins change an agent's access.");
+  const held = accessHold(model.managed, model.admin, readOnly);
+  // THE SHARED-KEY NOTICE IS SAID ONCE: the access answer's, with its repair,
+  // rather than again as the loop's finding.
+  const issues = data?.notice
+    ? tool.issues.filter((i) => i.kind !== "credential_shared")
+    : tool.issues;
   const steps = new Map(
     tool.seats.filter((r) => r.seat?.step && r.toolKey).map((r) => [r.handle, r]),
   );
@@ -242,9 +247,9 @@ export function AppPane({
       />
       {tab === "agents" && (
         <div className="int-tab">
-          {tool.issues.length > 0 && (
+          {issues.length > 0 && (
             <div className="int-issues">
-              {tool.issues.map((issue) => (
+              {issues.map((issue) => (
                 <IssueRow key={issue.key} tool={tool} issue={issue} onFix={setOpen} />
               ))}
             </div>

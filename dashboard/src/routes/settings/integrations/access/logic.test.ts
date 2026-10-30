@@ -14,6 +14,7 @@ import {
   onLane,
 } from "./fixtures.ts";
 import {
+  accessHold,
   accessWords,
   availableActions,
   emptyScopeHint,
@@ -158,4 +159,14 @@ test("an empty Mattermost channel list is literal: no channels, and a hint while
   expect(emptyScopeHint(MATTERMOST_LANE, { enabled: false })).toBeNull();
   expect(emptyScopeHint(MATTERMOST_LANE, { enabled: true, scope: ["incidents"] })).toBeNull();
   expect(emptyScopeHint(GITHUB_LANE, { enabled: true })).toBeNull();
+});
+
+test("an operator-written document holds only a reader who is not an admin; any other managed one holds all", () => {
+  const line = "Access settings are managed by the operator through each agent's Seat object.";
+  expect(accessHold("Managed by the operator.", true, line)).toBeUndefined();
+  expect(accessHold("Managed by the operator.", false, line)).toBe(
+    "Admins change an agent's access.",
+  );
+  expect(accessHold("Managed by GitOps.", true, undefined)).toBe("Managed by GitOps.");
+  expect(accessHold(null, true, undefined)).toBeUndefined();
 });

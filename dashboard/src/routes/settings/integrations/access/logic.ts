@@ -225,3 +225,18 @@ export function emptyScopeHint(lane: Lane, want: AccessDesired): string | null {
     ? hint
     : null;
 }
+
+/**
+ * Why a reader may not act on agents' access here, or undefined. A document
+ * the operator writes holds only what writes a revision, which the tab hides
+ * on its own (`readOnly`), so its actions at the vendor stay with an admin; a
+ * document managed any other way holds everything.
+ */
+export function accessHold(
+  managed: string | null,
+  admin: boolean,
+  operator: string | undefined,
+): string | undefined {
+  const notAdmin = admin ? undefined : "Admins change an agent's access.";
+  return operator ? notAdmin : (managed ?? notAdmin);
+}

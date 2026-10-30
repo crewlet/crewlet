@@ -11,12 +11,13 @@ import { QueryState } from "~/components/common.tsx";
 import { href } from "~/app/router.tsx";
 import { useAccess, useOperatorManaged } from "~/routes/settings/integrations/access/api.ts";
 import { AgentsAccess } from "~/routes/settings/integrations/access/AgentsAccess.tsx";
+import { accessHold } from "~/routes/settings/integrations/access/logic.ts";
 import { useIntegrations, type Model, type Tool } from "~/routes/settings/integrations/model.ts";
 
 function IntegrationAccess({ tool, model, handle }: { tool: Tool; model: Model; handle: string }) {
   const access = useAccess(tool.entry.key);
-  const readOnly = useOperatorManaged();
-  const held = model.managed ?? (model.admin ? undefined : "Admins change an agent's access.");
+  const readOnly = useOperatorManaged(access.data);
+  const held = accessHold(model.managed, model.admin, readOnly);
   return (
     <Section
       title={

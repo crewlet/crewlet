@@ -159,6 +159,8 @@ export type Owner = "you" | "crewlet" | "vendor";
 /** One thing wrong with a tool, and the one control that answers it. */
 export interface Issue {
   key: string;
+  /** The engine's finding kind, where the issue is one of the loop's findings. */
+  kind?: string;
   tone: "danger" | "warning";
   /** What is wrong, as a sentence. */
   problem: string;
@@ -288,6 +290,7 @@ const KIND_WORDS: Record<string, string> = {
   identity_failed: "An agent's account could not be made",
   grant_pending: "A permission is waiting on approval",
   grant_short: "An agent has less access than it needs",
+  credential_shared: "Agents share one key",
 };
 
 /**
@@ -325,6 +328,7 @@ function issuesOf(
         fix = { label: "Open setup", intent: "agents" };
       out.push({
         key: `${p.surface.key}:${f.kind}:${f.subject ?? ""}`,
+        kind: f.kind,
         tone: f.phase === "unconfigured" || f.kind === "credential_rejected" ? "danger" : "warning",
         problem: asSentence(
           f.detail ||

@@ -23,6 +23,7 @@ import type {
 } from "~/contract/access.ts";
 import { pathSegment, rest, RestError } from "~/protocol/rest.ts";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
+import { asSentence } from "~/lib/format.ts";
 import { managedBlock } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { OPERATOR_MANAGED } from "./words.ts";
@@ -62,6 +63,9 @@ const REFUSALS: Record<string, string> = {
     "Somebody changed these agents since you opened the tab. Read the latest settings and save again.",
   pass_in_flight: "A sync is running. Try again when it finishes.",
   seat_still_on: "Turn this agent off and save before removing its account.",
+  credential_external:
+    "This credential was provided outside Crewlet. Rotate it where it was issued.",
+  config_managed: OPERATOR_MANAGED,
 };
 
 /** The words of a refusal, whatever shape it came in. */
@@ -69,7 +73,9 @@ export function refusalWords(err: unknown): string {
   if (err instanceof RestError) {
     const words = REFUSALS[err.code];
     if (words) return words;
-    return err.sentence || err.detail || err.message;
+    // THE VENDOR'S REASON, THEN ITS REMEDY, where the engine sends both.
+    const said = asSentence(err.sentence || err.detail || err.message);
+    return err.hint ? `${said} ${asSentence(err.hint)}` : said;
   }
   return err instanceof Error ? err.message : "Something went wrong.";
 }
@@ -92,13 +98,16 @@ export function useAccess(kind: string | null): RestResult<AccessAnswer> {
 }
 
 /**
- * The line an Agents tab is read-only with when the Kubernetes operator
- * manages the company document, or undefined. Access then lives on each
- * agent's Seat object, so the tab draws no switch, picker or action at all.
+ * The line an Agents tab shows when the Kubernetes operator writes the company
+ * document, or undefined: said by the access answer, or by the viewer's own
+ * reading of the document. Access settings then live on each agent's Seat
+ * object, so nothing that writes a revision is drawn; actions at the vendor,
+ * which write none, still run.
  */
-export function useOperatorManaged(): string | undefined {
+export function useOperatorManaged(answer: AccessAnswer | null | undefined): string | undefined {
   const viewer = useViewer();
-  return managedBlock(viewer) !== null && viewer.configManagedBy.includes("operator")
-    ? OPERATOR_MANAGED
-    : undefined;
+  const operator =
+    answer?.managed_by === "operator" ||
+    (managedBlock(viewer) !== null && viewer.configManagedBy.includes("operator"));
+  return operator ? OPERATOR_MANAGED : undefined;
 }
