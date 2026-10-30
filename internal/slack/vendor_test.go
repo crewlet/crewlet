@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
 )
 
@@ -497,4 +498,34 @@ func lastToken(ws *workspace) string {
 		return ""
 	}
 	return ws.tokens[len(ws.tokens)-1]
+}
+
+// THE CONNECT FORM ASKS FOR THE APP-CONFIGURATION TOKEN and seals it under the
+// one name the engine rotates it under; the vendor reads whatever name the
+// company block points at.
+func TestTheConnectFormSealsTheConfigurationToken(t *testing.T) {
+	t.Parallel()
+	reqs := slack.CompanyRequirements(&config.Slack{AppConfigToken: "${SLACK_APP_CONFIG_TOKEN}"},
+		func(name string) (string, bool) { return "xoxe-1-refresh", name == slack.ConfigTokenVar })
+	var token *setup.Requirement
+	for i := range reqs {
+		if reqs[i].Field == "app_config_token" {
+			token = &reqs[i]
+		}
+	}
+	if token == nil || token.Kind != setup.KindSecret || token.SecretName != slack.ConfigTokenVar ||
+		token.ConfigPath != "integrations.slack.app_config_token" || !token.Present || !token.Connect {
+		t.Fatalf("requirement = %+v", token)
+	}
+
+	w := newSlackWorld(t)
+	pair := w.sealed[slack.ConfigTokenVar]
+	delete(w.sealed, slack.ConfigTokenVar)
+	w.sealed["ACME_SLACK_CONFIG"] = pair
+	w.cfg.Integrations.Slack.AppConfigToken = "${ACME_SLACK_CONFIG}"
+	if _, err := slack.OpenThrough(t.Context(), seataccess.OpenInput{
+		Config: w.cfg, Env: config.NewResolver(w.sealed), Sink: w.sink, WebhookBase: w.base,
+	}, rewriting(t, w.ws)); err != nil {
+		t.Errorf("a token sealed under the block's own name was not found: %v", err)
+	}
 }
