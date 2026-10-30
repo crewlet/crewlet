@@ -214,6 +214,8 @@ export interface CheckLine {
   detail: string;
   kind?: string;
   remedy?: string;
+  /** On an auth failure: the vendor refused the credential, or the CLI never used it. */
+  meaning?: "refused" | "unread";
 }
 
 /** What a test call found on the node that ran it. */
