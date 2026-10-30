@@ -379,8 +379,9 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 
 // SeatCredentialReads is every variable the reconcile's identity scan reads
 // ([atlassian.CredentialOf] for Jira over [agentSeats]), each name once,
-// sorted: the Jira spellings of each seat's token in the blocks Jira reads,
-// and the addresses beside them.
+// sorted: each seat's engine-owned token and address, then, for a document
+// written before per-seat access, the Jira spellings of each seat's token in
+// the blocks Jira reads and the addresses beside them.
 //
 // For `crewlet jira provision`, which asks a running node for exactly these,
 // each a reveal logged by name: a seat's Confluence-only credential is not
@@ -388,6 +389,7 @@ func reconcile(ctx context.Context, opts Options) (*Result, error) {
 func SeatCredentialReads(o *org.Organization) []string {
 	var names []string
 	for _, seat := range agentSeats(o) {
+		names = append(names, atlassian.SealedReads(seat.Handle())...)
 		names = append(names, atlassian.CredentialReads(atlassian.ProductJira, seat.MCPEnv)...)
 	}
 	slices.Sort(names)

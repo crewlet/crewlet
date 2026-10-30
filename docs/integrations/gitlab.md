@@ -52,17 +52,13 @@ integrations:
     webhook_name: crewlet                       # which hooks on the instance are this deployment's
     provisioning:                # read by the engine's reconcile loop AND by `crewlet gitlab provision`
       group: nimbus-hq           # top-level group the agent service accounts join
-      access_level: developer    # default group membership (developer | maintainer)
-      access_levels:             # per-handle overrides
-        tech-lead: maintainer
       username_prefix: ""        # crewlet when empty; the username is <prefix>-<handle>
-      projects: []               # extra projects to add each account to (+ hooks only when group_webhook: false / falls back)
+      projects: []               # the projects an agent may be scoped to (+ hooks only when group_webhook: false / falls back); empty: any project in the group
       group_webhook: auto        # auto (group hook, else per-project) | true (group only) | false (per-project only)
       mode: group                # where accounts are OWNED: group (default) | instance (self-managed only)
-      token_scopes: [api]        # scopes minted on each service-account PAT
 ```
 
-`access_levels` is keyed by seat **handle**, which never changes for a seat: a seat given a different handle is a new seat. A key no seat answers to is not refused: the engine logs it on every node, once per applied epoch, as an `org_dangling_reference` warning with `ref=gitlab_access_level` (see [Dangling references](../concepts/organization-model.md#dangling-references)). Remove the key when you remove the seat, or it grants its level to whichever seat is next added under that handle.
+Each agent's role and projects are set per seat, not here: see [Per-agent access](#per-agent-access).
 
 Four fields differ from the [hosted code host's](github.md) block beside it:
 
@@ -77,9 +73,55 @@ The `provisioning:` sub-block drives the reconcile described under [Provisioning
 
 ---
 
+## Per-agent access
+
+Every agent seat carries its own GitLab block, and the Agents tab on the
+integration edits it. The block stores GitLab's own terms, never a Crewlet
+word:
+
+```yaml
+roles:
+  - name: SRE
+    integrations:
+      gitlab:
+        enabled: true            # off until turned on; off blocks the account and keeps it
+        access_level: 20         # GitLab's integer: 10 Guest, 15 Planner, 20 Reporter, 30 Developer, 40 Maintainer, 50 Owner
+        member_role_id: 1007     # or a custom role on GitLab Ultimate, instead of access_level
+        projects: [nimbus-hq/infra]   # empty: a member of the whole group
+```
+
+| What the seat holds | How the engine applies it |
+|---|---|
+| The role | A direct membership at that `access_level` (or custom role) in each listed project, or in the group where `projects` is empty. Security Manager and Minimal Access are not offered: the first is a beta disabled by default outside GitLab.com, and the second grants an agent nothing by itself. |
+| The token | One personal access token, named `crewlet-<handle>`, whose scopes follow the role: `read_api` and `read_repository` below Developer, `api` from Developer up. A role change that changes the scopes mints a new token, seals it, and only then revokes the old one. |
+| Off | The account is blocked where the provisioning token is an instance administrator's; with a group Owner token (every GitLab.com deployment) its memberships are removed instead. Either way every token the engine minted on it is revoked, and the account and its history are kept. |
+| Back on | Unblocked (only an account the engine blocked; one somebody else blocked waits for a person to choose Turn back on), memberships restored, a new token minted. |
+| Remove | A separate, confirmed action, allowed only while the seat is off. The service account is deleted through the route that matches its owner; GitLab keeps its contributions under the Ghost User. |
+| Rotate | A new token is minted and sealed, then the previous one is revoked. A token an administrator made by hand on the account is never touched. |
+
+The token is sealed under the name the engine derives for the seat,
+`GITLAB_TOKEN_<HANDLE>` (for example `GITLAB_TOKEN_SRE`), and no document
+names it. The engine binds it to the seat's GitLab tool server under
+`GITLAB_TOKEN` (the variable `glab mcp serve` reads) or the `Private-Token`
+header (a shared HTTP server in remote-authorization mode).
+
+Every pass reads each account back: its state, its memberships in the group
+and in every project the company or a seat names, and the tokens the engine
+minted on it. A role or project changed by hand at GitLab is restored to the
+document's setting and reported; the Agents tab offers Keep the vendor's
+setting, which writes GitLab's value into the document instead. Maintainer and
+Owner are administration roles: a raise to either carries a warning and asks
+for a fresh step-up.
+
+Custom roles are read live: from the group on GitLab.com, from the instance on
+a self-managed GitLab, and only on Ultimate. A custom role GitLab no longer has
+is reported on the seat, never replaced by a default role.
+
+---
+
 ## Per-role wiring
 
-Declare the GitLab **MCP tool server** once in `mcp_servers` as a `shared: false` server. Each agent supplies its own service-account PAT in `role.mcp_env.gitlab`; a seat whose executor run pushes code also declares the same PAT in `role.sandbox.env`, for the git-auth recipe its box runs:
+Declare the GitLab **MCP tool server** once in `mcp_servers` as a `shared: false` server. Each agent that is on for GitLab gets its own service-account token from the engine, bound to the server under the key it reads; a seat whose executor run pushes code also names the same engine-owned variable in `role.sandbox.env`, for the git-auth recipe its box runs:
 
 ```yaml
 mcp_servers:
@@ -94,18 +136,21 @@ mcp_servers:
 
 roles:
   - name: Agent SWE
+    integrations:
+      gitlab:
+        enabled: true
+        access_level: 30                         # Developer
     mcp_env:
       gitlab:
-        GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"    # per-agent service-account PAT (glab reads it)
-        GITLAB_HOST: gitlab.com
+        GITLAB_HOST: gitlab.com                  # config only; the engine binds the seat's own token
     sandbox:
       env:
-        GITLAB_TOKEN: "${GITLAB_TOKEN_SWE}"     # same PAT for the git-auth recipe
+        GITLAB_TOKEN: "${GITLAB_TOKEN_AGENT_SWE}"  # the engine-owned name, for the git-auth recipe
 ```
 
-Provisioning mints into the `${VAR}` referenced by the block's **credential** key — `GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, or `Authorization: Bearer …`, the same keys boot-time identity resolution reads. Everything else in the block (`GITLAB_HOST`, an API url) is config and is left alone, so two seats may point at one shared `${GITLAB_HOST}` without it being mistaken for a credential they both claim.
+`mcp_env.gitlab` no longer carries the credential: a seat's token is the engine's (see [Per-agent access](#per-agent-access)), and a credential key there (`GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, `Private-Token`, `Authorization`) is refused. Everything else in the block (`GITLAB_HOST`, an API url) is config and is forwarded to the seat's instance as before.
 
-The default is the official **`glab` CLI stdio MCP server** (`glab mcp serve`): the engine's MCP bridge spawns one `glab` process per role with that role's `mcp_env.gitlab` env, so the per-agent PAT (`GITLAB_TOKEN`) IS the per-agent identity — no separate server to run. Boot-time identity resolution reads the token from whichever key is present (`GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, a `Private-Token` header, or `Authorization: Bearer <pat>`), so the http alternative below works too. The engine names **no tool-specific variable** — the whole `mcp_env.gitlab` block is forwarded verbatim to the role's MCP instance — and `GITLAB_TOKEN` is declared in `role.sandbox.env` by the founder exactly as `GITHUB_TOKEN` is (see [Code Sandbox](../concepts/code-sandbox.md)). A role with no `mcp_env.gitlab` gets no GitLab tools.
+The default is the official **`glab` CLI stdio MCP server** (`glab mcp serve`): the engine's MCP bridge spawns one `glab` process per role with that role's `mcp_env.gitlab` env, so the per-agent PAT (`GITLAB_TOKEN`) IS the per-agent identity, no separate server to run. Boot-time identity resolution reads the token from whichever key is present (`GITLAB_TOKEN`, `GITLAB_PERSONAL_ACCESS_TOKEN`, a `Private-Token` header, or `Authorization: Bearer <pat>`), so the http alternative below works too. The engine adds the seat's own token to the role's MCP instance under `GITLAB_TOKEN` and forwards the rest of the `mcp_env.gitlab` block verbatim, and `GITLAB_TOKEN` is declared in `role.sandbox.env` by the founder exactly as `GITHUB_TOKEN` is (see [Code Sandbox](../concepts/code-sandbox.md)). A seat that is off for GitLab gets no GitLab tools.
 
 The entry's own `env` is not tuning: it keeps what `glab` prints on its own out of the tool results an agent reads, and stops a usage report to the instance on every call. [MCP tool server](#mcp-tool-server) says what each switch stops, and why the switches go in the entry rather than in the engine host's environment.
 

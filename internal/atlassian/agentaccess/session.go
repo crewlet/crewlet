@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/confluence"
@@ -34,6 +35,9 @@ type session struct {
 	confIn []string
 
 	cache *cache
+
+	// now stamps a mint and judges a token's expiry.
+	now func() time.Time
 }
 
 // cache is what one pass reads once and keeps in step with its own writes.

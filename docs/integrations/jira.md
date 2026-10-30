@@ -225,11 +225,51 @@ That an addressed wake may not end in silence, and that a decline names the righ
 
 ---
 
+## Per-agent access
+
+Each agent seat that works in Jira or Confluence gets one Atlassian service
+account in the organization, created by the engine with the organization's
+unscoped API key (`integrations.atlassian`). Jira and Confluence are two lanes
+over that one account, each set on the seat and edited on the integration's
+Agents tab:
+
+```yaml
+roles:
+  - name: SRE
+    integrations:
+      jira:
+        enabled: true          # off until turned on
+        project_role: "10101"  # a project role id from the site (GET /rest/api/3/role)
+        projects: [GOP]        # empty: every project the company names
+```
+
+| What the seat holds | How the engine applies it |
+|---|---|
+| Product access | One grant per product, the same for every agent: Jira's product member role on the site. What an agent may do comes from the role below and each project's permission scheme. |
+| The project role | The seat's account is an actor of that role in each listed project, and of no other role in any project the company or a seat names. The roles offered are the site's own, read live, under their own names. Administrators is an administration role: a raise to it carries a warning and asks for a fresh step-up. |
+| The token | One API token for the account, with the scopes of the products the seat is on: Jira's `read:jira-work`, `write:jira-work` and `read:jira-user`, and Confluence's when that lane is on too. Its label, `crewlet-<handle>-<lanes>-<time>`, records which products it reaches, because Atlassian lists a token's label and not its scopes. |
+| Off | The seat's project roles are removed and its token is replaced with one without Jira's scopes, or revoked when the seat is off on Confluence too. Atlassian offers no route that removes one product's access from a service account, so the account keeps its product grant and the Agents tab says so. |
+| Remove | A separate, confirmed action, allowed only while the seat is off on both Jira and Confluence: one account serves both. The service account is deleted. |
+| Rotate | A new token with the same scopes is minted and sealed, then the previous one is revoked. A token made by hand on the account is never touched. |
+
+The token is sealed under `ATLASSIAN_TOKEN_<HANDLE>` and the address Atlassian
+assigned the account under `ATLASSIAN_EMAIL_<HANDLE>`; no document names
+either. The project roles are managed with the site credential in
+`integrations.jira`, whose account needs Administer Projects on the company's
+projects (or Jira administration).
+
+Every pass reads each account back: whether it exists, which products its live
+token reaches, and which role it holds in each project. A role changed by hand
+is restored to the document's setting and reported; the Agents tab offers Keep
+the vendor's setting instead.
+
+---
+
 ## Seat identity
 
 A Jira webhook names people by account id, and nothing in the org chart declares which account a seat holds. Without that mapping every event names a stranger, every routing target is dropped, and the integration is silently inert.
 
-So the engine **asks**: at boot and on every config apply it calls `/myself` with each seat's OWN credential and registers whatever account answers. The credential is read from `mcp_env.atlassian` or `mcp_env.jira` — [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian), the community server these pages run, covers both products, so the documented entry is named `atlassian`; a Jira-only server is named `jira`. Write it as that server reads it: `JIRA_USERNAME` and `JIRA_API_TOKEN` on Cloud, or `JIRA_PERSONAL_TOKEN` alone on Data Center. `mcp-atlassian` reads no other spelling, and given a token without its username it starts with no Jira tool at all. The engine names no variable of its own — it reads the ones the seat's tools use — so for a server that spells them differently it also takes the token under `JIRA_TOKEN`, `ATLASSIAN_API_TOKEN` or `Authorization`, and the address under `JIRA_EMAIL` or `ATLASSIAN_EMAIL`. Declaring the account id beside the token would be cheaper and is the wrong shape: a declaration that disagrees with the credential is a misroute nothing can detect.
+So the engine **asks**: at boot and on every config apply it calls `/myself` with each seat's OWN credential and registers whatever account answers. The credential is the one the engine sealed for the seat (`ATLASSIAN_TOKEN_<HANDLE>` with `ATLASSIAN_EMAIL_<HANDLE>`, see [Per-agent access](#per-agent-access)); for a document written before per-seat access it is read from `mcp_env.atlassian` or `mcp_env.jira`. [`mcp-atlassian`](https://github.com/sooperset/mcp-atlassian), the community server these pages run, covers both products, so the documented entry is named `atlassian`; a Jira-only server is named `jira`. Write it as that server reads it: `JIRA_USERNAME` and `JIRA_API_TOKEN` on Cloud, or `JIRA_PERSONAL_TOKEN` alone on Data Center. `mcp-atlassian` reads no other spelling, and given a token without its username it starts with no Jira tool at all. The engine names no variable of its own in such a document: it reads the ones the seat's tools use, so for a server that spells them differently it also takes the token under `JIRA_TOKEN`, `ATLASSIAN_API_TOKEN` or `Authorization`, and the address under `JIRA_EMAIL` or `ATLASSIAN_EMAIL`. Declaring the account id beside the token would be cheaper and is the wrong shape: a declaration that disagrees with the credential is a misroute nothing can detect.
 
 Lookups are cached on the credential, so a config apply that changed something else costs nothing; a rotated token is a cache miss and costs exactly one request. A seat whose lookup fails is left unresolved rather than failing the boot, and logs `jira_seat_identity_unresolved` — it receives no Jira events until the next apply re-resolves it. A company where no seat resolved logs `jira_has_no_seat_identities`.
 

@@ -175,7 +175,7 @@ func (s *session) observe(ctx context.Context, handle string, rec *seataccess.Re
 	if err != nil {
 		return nil, refuseOrg(s, err)
 	}
-	own := ownTokens(tokens, handle, now())
+	own := ownTokens(tokens, handle, s.now())
 	on := appliedLanes(rec)
 	if len(own) > 0 {
 		on = own[0].lanes

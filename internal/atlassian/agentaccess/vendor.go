@@ -30,6 +30,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
@@ -41,17 +42,13 @@ import (
 
 func init() { seataccess.Register(Vendor{}) }
 
-// adminBaseURL is where the organization's admin APIs are reached; empty is
-// api.atlassian.com. A variable only so this package's tests can point it at
-// a stand-in.
-var adminBaseURL string
-
 // The credentials sealed per seat: the API token, and the address Atlassian
 // assigned the account, without which its products refuse the token (they
-// authenticate base64(address:token)).
+// authenticate base64(address:token)). Declared beside the reads that use
+// them ([atlassian.CredentialOf]).
 const (
-	FieldToken = "TOKEN"
-	FieldEmail = "EMAIL"
+	FieldToken = atlassian.FieldToken
+	FieldEmail = atlassian.FieldEmail
 )
 
 // Vendor implements [seataccess.Vendor] for Atlassian.
@@ -240,7 +237,7 @@ func (Vendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Sessi
 		return nil, fmt.Errorf("atlassian: the company does not provision Atlassian accounts: %w",
 			integration.ErrNotConfigured)
 	}
-	value := func(v string) string { return strings.TrimSpace(v) }
+	value := strings.TrimSpace
 	if in.Env != nil {
 		value = func(v string) string { return strings.TrimSpace(in.Env.Value(v)) }
 	}
@@ -253,10 +250,11 @@ func (Vendor) Open(_ context.Context, in seataccess.OpenInput) (seataccess.Sessi
 			"did not both resolve: %w", integration.ErrNotConfigured)
 	}
 	s := &session{
-		org: atlassian.NewClient(atlassian.ClientOptions{BaseURL: adminBaseURL}), key: key, orgID: orgID,
+		org: atlassian.NewClient(atlassian.ClientOptions{}), key: key, orgID: orgID,
 		seats:  seatBlocks(in.Config),
 		jiraIn: jira.ProjectsOf(in.Org), confIn: confluence.SpacesOf(in.Org),
 		cache: newCache(),
+		now:   func() time.Time { return time.Now().UTC() },
 	}
 	declared := cfg.Declared()
 	if j := in.Config.Integrations.Jira; j != nil {

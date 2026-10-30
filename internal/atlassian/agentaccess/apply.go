@@ -20,9 +20,6 @@ import (
 // accounts by hand.
 const adminConsoleURL = "https://admin.atlassian.com"
 
-// now is the clock a mint is stamped with. A variable so a test can pin it.
-var now = func() time.Time { return time.Now().UTC() }
-
 // Apply implements [seataccess.Session].
 func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	p, ok := productOf(in.Lane)
@@ -170,9 +167,9 @@ func (s *session) convergeConfluence(ctx context.Context, accountID, level strin
 	}
 	var want []confluence.Operation
 	if level != "" && mode.Roles() {
-		roles, err := s.spaceRoles(ctx)
-		if err != nil {
-			return err
+		roles, rolesErr := s.spaceRoles(ctx)
+		if rolesErr != nil {
+			return rolesErr
 		}
 		if _, known := confluence.SpaceRoleByID(roles, level); !known {
 			return &seataccess.Refusal{
@@ -296,7 +293,7 @@ func (s *session) mintIfShort(ctx context.Context, in seataccess.ApplyInput, p p
 	if err != nil {
 		return seataccess.StepResult{}, refuseOrg(s, err)
 	}
-	if own := ownTokens(tokens, in.Seat.Handle, now()); len(own) > 0 && own[0].lanes == want {
+	if own := ownTokens(tokens, in.Seat.Handle, s.now()); len(own) > 0 && own[0].lanes == want {
 		return seataccess.StepResult{}, nil
 	}
 	return s.mintFor(ctx, in, account, want)
@@ -325,7 +322,7 @@ func (s *session) mintFor(ctx context.Context, in seataccess.ApplyInput, account
 		}
 	}
 	token, err := s.org.MintToken(ctx, s.key, account.ID, tokenLabel(in.Seat.Handle, on),
-		atlassian.ScopesFor(on.jira, on.confluence), now())
+		atlassian.ScopesFor(on.jira, on.confluence), s.now())
 	if err != nil {
 		return seataccess.StepResult{}, refuseOrg(s, err)
 	}
@@ -353,7 +350,7 @@ func (s *session) retire(ctx context.Context, in seataccess.ApplyInput, _ produc
 	if err != nil {
 		return seataccess.StepResult{}, refuseOrg(s, err)
 	}
-	own := ownTokens(tokens, in.Seat.Handle, now())
+	own := ownTokens(tokens, in.Seat.Handle, s.now())
 	for _, t := range own[min(1, len(own)):] {
 		if err := s.org.RevokeToken(ctx, s.key, account.ID, t.ID); err != nil {
 			return seataccess.StepResult{}, refuseOrg(s, err)
