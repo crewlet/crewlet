@@ -54,14 +54,14 @@ type Config struct {
 
 // SeatConfig is one agent's bot, as configured.
 //
-// NO CHANNEL, deliberately. The seat's `integrations.mattermost.channel` is a
-// PROVISIONING input — [joinChannels] adds the bot to it, on the reconcile's
-// own cadence and off the live org — and this transport has never aimed a
-// message anywhere: an agent speaks through the Mattermost MCP server on this
-// same token. Carried here it was read by nothing except the engine's rebuild
-// fingerprint, so renaming a channel dropped and re-opened every seat's
-// websocket, and each one replayed its backfill window, to rebuild a transport
-// that could not tell the difference.
+// NO CHANNELS, deliberately. The seat's `integrations.mattermost.channels` are
+// its access scope, which the per-seat access sync applies on its own cadence,
+// and this transport has never aimed a message anywhere: an agent speaks
+// through the Mattermost MCP server on this same token. Carried here they
+// would be read by nothing except the engine's rebuild fingerprint, so
+// changing a seat's channels would drop and re-open every seat's websocket,
+// and each one would replay its backfill window, to rebuild a transport that
+// could not tell the difference.
 type SeatConfig struct {
 	Handle string
 	Token  string

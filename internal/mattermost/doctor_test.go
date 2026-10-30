@@ -116,7 +116,7 @@ func TestASiteURLOnAnotherAddressPasses(t *testing.T) {
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Dial = d.dial
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
 		}}
 		o.SeatToken = func(*org.Role) (string, bool) { return "tok-swe", true }
 		srv.issue("user-swe", "tok-swe")
@@ -209,7 +209,7 @@ func TestASiteURLNoBrowserCanMatchIsReported(t *testing.T) {
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Dial = d.dial
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
 		}}
 		o.SeatToken = func(*org.Role) (string, bool) { return "tok-swe", true }
 		srv.issue("user-swe", "tok-swe")
@@ -440,7 +440,7 @@ func TestTheSeatProbesCarryNoOrigin(t *testing.T) {
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Dial = d.dial
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
 		}}
 		o.SeatToken = func(*org.Role) (string, bool) { return "tok-swe", true }
 		srv.issue("user-swe", "tok-swe")
@@ -470,8 +470,8 @@ func TestEachSeatIsDialledWithItsOwnToken(t *testing.T) {
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Dial = d.dial
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
-			chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
+			chatSeat("CEO", "${MM_TOKEN_CEO}"),
 		}}
 		o.SeatToken = func(seat *org.Role) (string, bool) {
 			return "tok-" + seat.Handle(), true
@@ -508,7 +508,7 @@ func TestASeatWithNoTokenIsReportedRatherThanSkipped(t *testing.T) {
 	srv := newChatServer()
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
 		}}
 		o.SeatToken = func(*org.Role) (string, bool) { return "", false }
 	})
@@ -529,8 +529,8 @@ func TestOneSeatsRefusedSocketDoesNotHideTheOthers(t *testing.T) {
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Dial = (&dials{refuseToken: "tok-swe"}).dial
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
-			chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
+			chatSeat("CEO", "${MM_TOKEN_CEO}"),
 		}}
 		o.SeatToken = func(seat *org.Role) (string, bool) {
 			return "tok-" + seat.Handle(), true
@@ -621,19 +621,19 @@ func TestSeatTokensHonoursALiteralAndResolvesAReference(t *testing.T) {
 	env := config.NewResolver(config.MapSource{"MM_TOKEN_SWE": "resolved-token"})
 	resolve := mattermost.SeatTokens(env)
 
-	literal := chatSeat("PM", "written-out-by-hand", "")
+	literal := chatSeat("PM", "written-out-by-hand")
 	if got, ok := resolve(literal); !ok || got != "written-out-by-hand" {
 		t.Errorf("a literal resolved to %q/%v", got, ok)
 	}
-	reference := chatSeat("SWE", "${MM_TOKEN_SWE}", "eng")
+	reference := chatSeat("SWE", "${MM_TOKEN_SWE}")
 	if got, ok := resolve(reference); !ok || got != "resolved-token" {
 		t.Errorf("a reference resolved to %q/%v", got, ok)
 	}
-	unset := chatSeat("QA", "${MM_TOKEN_QA}", "")
+	unset := chatSeat("QA", "${MM_TOKEN_QA}")
 	if got, ok := resolve(unset); ok {
 		t.Errorf("an unset reference resolved to %q", got)
 	}
-	none := chatSeat("CTO", "", "")
+	none := chatSeat("CTO", "")
 	if _, ok := resolve(none); ok {
 		t.Error("a seat with no bot token resolved")
 	}
@@ -658,7 +658,7 @@ func TestTheDoctorResolvesATokenAsTheTransportDoes(t *testing.T) {
 		"tok-${MM_TOKEN}",
 		"${MM_TOKEN}${MM_TOKEN}",
 	} {
-		o := &org.Organization{Name: "nimbus", Roles: []*org.Role{chatSeat("SWE", raw, "")}}
+		o := &org.Organization{Name: "nimbus", Roles: []*org.Role{chatSeat("SWE", raw)}}
 		var engine string
 		if seats := mattermost.SeatsFrom(o, env.LookupOK); len(seats) == 1 {
 			engine = seats[0].Token
@@ -704,7 +704,7 @@ func TestTheChecksRunOnASeatTokenWhenNoOperatorOneIsGiven(t *testing.T) {
 	report, err := mattermost.Doctor(context.Background(), mattermost.DoctorOptions{
 		Client: client, Config: cfg, Dial: (&dials{}).dial,
 		Org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
 		}},
 		SeatToken: func(*org.Role) (string, bool) { return "tok-swe", true },
 	})
@@ -757,7 +757,7 @@ func TestASeatInNoChannelIsReported(t *testing.T) {
 	// never joined anything is the bot this check exists to find.
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
 		}}
 		o.SeatToken = func(*org.Role) (string, bool) { return "tok-swe", true }
 		srv.issue("user-swe", "tok-swe")
@@ -781,7 +781,7 @@ func TestASeatWhoseCredentialIsRefusedIsNotAlsoReportedAsDeaf(t *testing.T) {
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Dial = d.dial
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
 		}}
 		o.SeatToken = func(*org.Role) (string, bool) { return "never-issued", true }
 	})
@@ -807,7 +807,7 @@ func TestSeatsAreStillCheckedWhenTheTeamDoesNotResolve(t *testing.T) {
 	report := doctorAgainst(t, srv, func(o *mattermost.DoctorOptions) {
 		o.Config.Team = "no-such-team"
 		o.Org = &org.Organization{Name: "Nimbus", Roles: []*org.Role{
-			chatSeat("SWE", "${MM_TOKEN_SWE}", "eng"),
+			chatSeat("SWE", "${MM_TOKEN_SWE}"),
 		}}
 		o.SeatToken = func(*org.Role) (string, bool) { return "tok-swe", true }
 	})

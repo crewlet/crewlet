@@ -162,7 +162,12 @@ func (e *Engine) withSeatAccess(
 	ctx context.Context, kind integration.Kind, in setup.PassInput,
 	company func(context.Context, setup.PassInput) ([]integration.Finding, error),
 ) ([]integration.Finding, error) {
-	findings, err := company(ctx, in)
+	// ONE WRITER PER SEAT CREDENTIAL: the company half writes through a sink
+	// that refuses every seat's own sealed name, so only the sync below can
+	// seal, rotate or forget one ([seatCredentialGuard]).
+	half := in
+	half.Sink = e.seatCredentialGuard(kind, in.Sink)
+	findings, err := company(ctx, half)
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +188,70 @@ func (e *Engine) withSeatAccess(
 	}
 	findings = append(findings, report.Findings...)
 	return append(findings, shared...), nil
+}
+
+// errSeatCredentialOwned is a pass's company half writing a seat's own
+// credential, which only the access sync writes.
+var errSeatCredentialOwned = errors.New("only the access sync writes an agent's own credential")
+
+// seatCredentialGuard is the sink a pass's company half writes through: sink
+// itself, except that a Record or Forget naming any agent seat's own sealed
+// name at kind is refused with [errSeatCredentialOwned].
+//
+// THE INCIDENT IT CLOSES is two writers of one credential: a vendor's company
+// pass still handed a seat plan and the sink minted and revoked the same key
+// the access sync sealed, so either could undo the other on any pass. With the
+// guard, a company half that reaches for a seat's credential fails its pass
+// loudly instead of racing the sync. A nil sink stays nil: a dry run is a nil
+// sink, and a guard around nothing would read as permission to write.
+func (e *Engine) seatCredentialGuard(kind integration.Kind, sink provision.TokenSink) provision.TokenSink {
+	vendor, ok := seataccess.Lookup(kind)
+	company := e.Company()
+	if sink == nil || !ok || company == nil {
+		return sink
+	}
+	owned := map[string]string{}
+	for _, seat := range seataccess.SeatsOf(company.Config) {
+		for _, name := range seataccess.SinkNames(vendor.Catalog(), seat.Handle) {
+			owned[name] = seat.Handle
+		}
+	}
+	return &guardedSink{TokenSink: sink, kind: kind, owned: owned}
+}
+
+// guardedSink is [Engine.seatCredentialGuard]'s sink.
+type guardedSink struct {
+	provision.TokenSink
+	kind  integration.Kind
+	owned map[string]string
+}
+
+// Record implements [provision.TokenSink].
+func (s *guardedSink) Record(ctx context.Context, name, value string) error {
+	if err := s.refuse(name); err != nil {
+		return err
+	}
+	return s.TokenSink.Record(ctx, name, value)
+}
+
+// Forget implements [provision.TokenSink].
+func (s *guardedSink) Forget(ctx context.Context, names ...string) error {
+	for _, name := range names {
+		if err := s.refuse(name); err != nil {
+			return err
+		}
+	}
+	return s.TokenSink.Forget(ctx, names...)
+}
+
+// refuse is the error for writing name, or nil where name is no seat's.
+func (s *guardedSink) refuse(name string) error {
+	handle, owned := s.owned[name]
+	if !owned {
+		return nil
+	}
+	return fmt.Errorf("engine: the %s pass wrote ${%s}, agent %s's own credential: %w",
+		s.kind, name, handle, errSeatCredentialOwned)
 }
 
 // tearDownSeatAccess is a disconnect's seat half: every seat of kind turned
