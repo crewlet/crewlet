@@ -1980,6 +1980,10 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 		// activation goes unanswered names it as the one node holding the
 		// revision it stored, the way /health and the fleet answer name it.
 		Node: e.Node().ID(),
+		// AND WHICH AGENT SEATS A WRITE RAISES to an administration role at
+		// a vendor (D10), from the vendors' own offers, so every authored
+		// write asks a person's fresh step-up for one.
+		Raises: e.SeatAccessRaises,
 	})
 }
 

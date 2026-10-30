@@ -278,6 +278,12 @@ type Options struct {
 	// Live is whether Levels were read from the vendor just now.
 	Live bool `json:"live"`
 
+	// Unread is a lane that grants by level whose offer the vendor did not
+	// answer for just now, so its levels are unknown: which of them
+	// administers cannot be told, and a turn-on or a change of level is
+	// asked a step-up as a raise would be ([AsksStepUp]).
+	Unread bool `json:"unread,omitempty"`
+
 	// Permissions is GitHub's permission set.
 	Permissions []PermissionSpec `json:"permissions,omitempty"`
 
