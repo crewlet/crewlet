@@ -164,6 +164,11 @@ type Engine struct {
 	// reads it from its own goroutine while the API installs it.
 	configWriter atomic.Pointer[ConfigWriter]
 
+	// seatAccessPending is why the migration onto per-seat access left each
+	// integration unmigrated on its last attempt here, by integration.Kind,
+	// for the access pass's finding ([Engine.MigrateSeatAccess]).
+	seatAccessPending sync.Map
+
 	// setupRunner is the provisioning runner this node serves, built once.
 	//
 	// ONE INSTANCE, and that is the whole reason it is held here rather

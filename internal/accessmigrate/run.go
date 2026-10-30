@@ -239,8 +239,8 @@ func Read(ctx context.Context, root map[string]any,
 		}
 		cancel()
 		if err != nil {
-			facts.Unavailable[kind] = fmt.Errorf("accessmigrate: read the accounts at %s: %w",
-				vendorName(kind), err)
+			facts.Unavailable[kind] = fmt.Errorf("%s did not answer when its agents' accounts "+
+				"were read: %w", vendorName(kind), err)
 		}
 	}
 	facts.Levels = func(lane seataccess.Lane, name string) (string, bool, error) {
@@ -444,24 +444,8 @@ func sameMoves(a, b []Move) bool {
 	return true
 }
 
-// vendorName is a kind as its vendor names itself, for a notice.
-func vendorName(kind integration.Kind) string {
-	switch kind {
-	case integration.KindDatadog:
-		return "Datadog"
-	case integration.KindGitHub:
-		return "GitHub"
-	case integration.KindGitLab:
-		return "GitLab"
-	case integration.KindAtlassian:
-		return "Atlassian"
-	case integration.KindSlack:
-		return "Slack"
-	case integration.KindMattermost:
-		return "Mattermost"
-	}
-	return string(kind)
-}
+// vendorName is a kind as its vendor names itself ([seataccess.KindName]).
+func vendorName(kind integration.Kind) string { return seataccess.KindName(kind) }
 
 // companyOf decodes a stored document tree into this build's company.
 func companyOf(root map[string]any) (*config.Company, error) {

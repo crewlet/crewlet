@@ -49,6 +49,10 @@ type SyncInput struct {
 	// to record, so the sync makes no vendor call at all and reports it.
 	Unmigrated bool
 
+	// UnmigratedReason is why the migration has not finished, where it
+	// said ([UnmigratedFinding]); empty where it did not.
+	UnmigratedReason string
+
 	// Now is the clock; nil is the wall clock in UTC.
 	Now func() time.Time
 
@@ -82,8 +86,10 @@ type SyncReport struct {
 // An error is a fault the whole kind shares (the vendor could not be opened
 // or read, the ledger could not be read or written); a failure confined to one
 // seat is that seat's finding and its lane's sync result, and the next seat is
-// synced regardless. An error wrapping [integration.ErrNotConfigured] is a
-// company that does not provision this vendor.
+// synced regardless. A vendor refusing the company itself at Open (a
+// [*Refusal]) is one finding on the integration, not an error. An error
+// wrapping [integration.ErrNotConfigured] is a company that does not provision
+// this vendor.
 func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 	if in.Vendor == nil || in.Ledger == nil {
 		return SyncReport{}, errors.New("seataccess: a sync needs its vendor and the ledger")
@@ -96,13 +102,9 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 	if in.Unmigrated {
 		// NOT EVEN OPENED: a session may write a company value of its own
 		// on the way in (Slack's configuration token).
-		return SyncReport{Findings: []integration.Finding{{
-			Kind: integration.FindingIdentityMissing,
-			Detail: "the migration onto per-seat access has not finished for this " +
-				"integration, so its agents' accounts are left exactly as they are",
-			Remedy: "It is retried every minute; the log's seat_access_migration_pending " +
-				"line says what it is waiting on, usually the vendor not answering",
-		}}}, nil
+		return SyncReport{Findings: []integration.Finding{
+			UnmigratedFinding(in.Vendor.Kind(), in.UnmigratedReason),
+		}}, nil
 	}
 	now := in.Now
 	if now == nil {
@@ -113,6 +115,18 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 		return SyncReport{}, fmt.Errorf("seataccess: %s: %w", kind, err)
 	}
 	sess, err := in.Vendor.Open(ctx, in.Open)
+	if r, ok := errors.AsType[*Refusal](err); ok {
+		// THE VENDOR REFUSES THE COMPANY AS CONFIGURED (a Mattermost team
+		// that does not exist, say), which stops every seat alike and only
+		// a person can fix: one finding on the integration with the
+		// vendor's reason and remedy, no seat observed and nothing changed.
+		// Reported, not raised, because the pass ran and found exactly
+		// that; a fault (the vendor not answering) still fails the pass.
+		return SyncReport{Findings: []integration.Finding{{
+			Kind: integration.FindingIdentityFailed, Detail: r.Said, Remedy: r.Remedy,
+			ActionURL: r.ActionURL,
+		}}}, nil
+	}
 	if err != nil {
 		return SyncReport{}, fmt.Errorf("seataccess: open %s: %w", kind, err)
 	}

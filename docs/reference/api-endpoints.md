@@ -3464,7 +3464,6 @@ entry answers instead is what is still outstanding for that agent:
   "handle": "builder",
   "name": "Builder",
   "requirements": [],
-  "tier": "full_access",
   "step": "install_app",
   "action_url": "https://github.com/apps/acme-builder/installations/new",
   "present": true,
@@ -3474,10 +3473,10 @@ entry answers instead is what is still outstanding for that agent:
 ```
 
 `step` and `action_url` are the two clicks, described under
-[One agent's own GitHub App](#one-agents-own-github-app). `tier` is the seat's
-access tier, answered before the app exists because it is what the manifest
-asks for, and defaulting to `read_only` on a seat whose configuration is
-silent.
+[One agent's own GitHub App](#one-agents-own-github-app). What the seat may do
+at GitHub is its own permissions, read and changed through
+`GET /setup/integrations/{kind}/access` (with `github` as the kind) and `PUT`
+on the same path, and not part of this roster.
 
 **`present`** is whether the seat has an app at all, and **`satisfied`** needs
 that app installed *and* its sealed key readable by this node. A `${VAR}`
@@ -3532,7 +3531,7 @@ curl -X POST https://engine.example.com/setup/integrations/github/app \
 ```json
 {
   "seat": "senior-engineer",
-  "tier": "review",
+  "permissions": {"contents": "read", "issues": "write", "pull_requests": "write"},
   "action_url": "https://github.com/organizations/acme/settings/apps/new",
   "manifest": {"name": "Acme Senior Engineer", "public": false, "...": "..."},
   "state": "<sealed token naming the seat and who began the creation>",
@@ -3779,8 +3778,13 @@ company credential must be replaced until it is.
 The document lists the integrations it has moved in `seat_access_migrated`,
 and the access sync for an integration acts on no agent until it is listed. An
 integration whose vendor does not answer stays unlisted, with its seats exactly
-as they were, and the engine tries again every minute
-(`seat_access_migration_pending` in the log names the reason). Reverting to a
+as they were, and the engine tries again every minute. Its access pass reports
+an `identity_missing` finding that names the integration, says its access
+migration has not finished, and gives the reason the last attempt gave (for
+example, that the lookup of Datadog's role failed); the log's
+`seat_access_migration_pending` line carries the same reason. An integration
+the company does not connect is not waiting on the migration and reports
+nothing. Reverting to a
 revision written before the migration closes the gate again, and the next
 attempt migrates that document.
 
