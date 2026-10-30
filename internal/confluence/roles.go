@@ -84,8 +84,8 @@ type SpaceRole struct {
 	Description string `json:"description"`
 	// Type is SYSTEM for Confluence's own roles and CUSTOM for the site's.
 	Type string `json:"type"`
-	// SpacePermissions are the operations the role grants, as ids such as
-	// "read/space" or "administer/space".
+	// SpacePermissions are the operations the role grants, in the v2
+	// surface's spelling: "read/space", "administer/space".
 	SpacePermissions []string `json:"spacePermissions"`
 }
 
@@ -93,7 +93,7 @@ type SpaceRole struct {
 // which is Confluence's Admin and any custom role that carries the same
 // permission. A raise to one needs a fresh step-up (D10).
 func (r SpaceRole) Administration() bool {
-	return slices.Contains(r.SpacePermissions, OperationAdminister.ID())
+	return slices.Contains(r.SpacePermissions, OperationAdminister.v2ID())
 }
 
 // SpaceRoles lists the site's space roles, live.
@@ -202,8 +202,12 @@ type Operation struct {
 	Target string `json:"target"`
 }
 
-// ID is the operation as Confluence's v2 surface spells it: "read/space".
-func (o Operation) ID() string { return o.Key + "/" + o.Target }
+// ID is the operation as the company document stores it: "read:space".
+func (o Operation) ID() string { return o.Key + ":" + o.Target }
+
+// v2ID is the operation as Confluence's v2 surface spells it inside a space
+// role: "read/space".
+func (o Operation) v2ID() string { return o.Key + "/" + o.Target }
 
 // Name is Confluence's own name for the operation, as its space permissions
 // screen shows it.
@@ -255,14 +259,43 @@ var Operations = []NamedOperation{
 	{OperationAdminister, "Admin"},
 }
 
-// OperationByID finds an offered operation by its "key/target" id.
+// OperationByID finds an offered operation by its "key:target" id.
 func OperationByID(id string) (Operation, bool) {
 	for _, op := range Operations {
-		if op.ID() == id {
+		if op.ID() == strings.TrimSpace(id) {
 			return op.Operation, true
 		}
 	}
 	return Operation{}, false
+}
+
+// OperationsLevel is a set of operations as one stored level: each id, in
+// the catalogue's order, separated by a space. The catalogue's order rather
+// than the alphabet's, so View reads first wherever the set is shown.
+func OperationsLevel(ops []Operation) string {
+	var ids []string
+	for _, op := range Operations {
+		if slices.Contains(ops, op.Operation) {
+			ids = append(ids, op.ID())
+		}
+	}
+	return strings.Join(ids, " ")
+}
+
+// ParseOperationsLevel reads a stored level back into its operations,
+// refusing one Confluence does not grant to an account.
+func ParseOperationsLevel(level string) ([]Operation, error) {
+	var out []Operation
+	for _, id := range strings.Fields(level) {
+		op, ok := OperationByID(id)
+		if !ok {
+			return nil, fmt.Errorf("confluence: %q is not a space permission this build grants", id)
+		}
+		if !slices.Contains(out, op) {
+			out = append(out, op)
+		}
+	}
+	return out, nil
 }
 
 // SpacePermission is one permission an account holds in a space.
@@ -275,7 +308,18 @@ type SpacePermission struct {
 // SpacePermissionsOf lists the permissions an account holds directly in a
 // space.
 func (c *Client) SpacePermissionsOf(ctx context.Context, spaceID, accountID string) ([]SpacePermission, error) {
-	var out []SpacePermission
+	all, err := c.SpacePermissions(ctx, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	return all[accountID], nil
+}
+
+// SpacePermissions lists every permission accounts hold directly in a space,
+// by account id. Groups' grants are left out: a seat's access is always its
+// own.
+func (c *Client) SpacePermissions(ctx context.Context, spaceID string) (map[string][]SpacePermission, error) {
+	out := map[string][]SpacePermission{}
 	err := c.walkV2(ctx, "/spaces/"+url.PathEscape(spaceID)+"/permissions", url.Values{},
 		func(raw []byte) error {
 			var page []struct {
@@ -293,10 +337,10 @@ func (c *Client) SpacePermissionsOf(ctx context.Context, spaceID, accountID stri
 				return err
 			}
 			for _, row := range page {
-				if row.Principal.Type != "user" || row.Principal.ID != accountID {
+				if row.Principal.Type != "user" || row.Principal.ID == "" {
 					continue
 				}
-				out = append(out, SpacePermission{
+				out[row.Principal.ID] = append(out[row.Principal.ID], SpacePermission{
 					ID:        row.ID,
 					Operation: Operation{Key: row.Operation.Key, Target: row.Operation.TargetType},
 				})
