@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
@@ -101,7 +102,9 @@ func TestTheCORSListsAreTheHeadersTheRoutesReadAndSet(t *testing.T) {
 // origin is NOT offered, each with why.
 var withheldRequest = map[string]string{
 	ReaderHeader: "same-origin only: the dashboard's alone, see corsHeaders",
-	"Origin":     "a forbidden header name: the browser sets it and no page can",
+	httpjson.EngineHeader: "never a request's: httpjson.Marked reads it off an " +
+		"answer, the engine's own clients telling its answers from a proxy's",
+	"Origin": "a forbidden header name: the browser sets it and no page can",
 	"Access-Control-Request-Method": "the preflight's own, which the browser " +
 		"sends and no page can",
 	"Upgrade": "a forbidden header name, read on the socket's handshake, which " +

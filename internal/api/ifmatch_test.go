@@ -66,6 +66,14 @@ func TestEveryIfMatchReaderIsAReviewedPrecondition(t *testing.T) {
 		"artifactsapi/publish.go:ifMatch": "412 version_moved, carrying the live " +
 			"entry; TestAPublishBasedOnAMovedHeadCarriesTheLiveEntry and " +
 			"TestEveryArtifactRefusalIsOneClassOnBothSurfaces",
+		"llmapi/credential.go:credential": "the revision the re-activation after " +
+			"the seal is held to (configapi.Service.Reload): the value is sealed " +
+			"first, so a moved revision is no refusal but the answer's `reload` " +
+			"saying it was not re-activated (ADR-0070); " +
+			"TestACredentialThatSignsInIsSealedAndReactivated",
+		"refusallog.go:logRefusals": "read to log the base revision a refused " +
+			"write named (`base_revision`), never to decide anything; " +
+			"TestAStaleCompanyWriteLogsOneLineThroughTheApp",
 	}
 	var found []string
 	walked := 0
