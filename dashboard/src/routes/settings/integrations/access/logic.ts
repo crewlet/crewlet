@@ -87,7 +87,7 @@ export function levelIds(level: string | undefined): string[] {
  * the rest (Confluence's View), so choosing any adds it.
  */
 export function joinLevels(lane: Lane, ids: string[]): string {
-  const set = new Set(ids);
+  const set = new Set(ids.filter((id) => id !== ""));
   const base = REQUIRED_LEVEL[lane.key];
   if (base && set.size > 0) set.add(base);
   return [...set].sort().join(" ");
@@ -116,6 +116,8 @@ export function sameDesired(lane: Lane, a: AccessDesired, b: AccessDesired): boo
  * in the vendor's order ("View, Add pages"), or "No permissions".
  */
 export function levelName(lane: Lane, id: string | undefined): string {
+  const only = productOnly(lane, id);
+  if (only) return only;
   if (lane.multiple) {
     const ids = new Set(levelIds(id));
     if (ids.size === 0) return "No permissions";
@@ -124,6 +126,30 @@ export function levelName(lane: Lane, id: string | undefined): string {
     return [...known.map((l) => l.name), ...unknown].join(", ");
   }
   return lane.levels.find((l) => l.id === id)?.name ?? id ?? "None";
+}
+
+/** The empty level, where the vendor offers one: the product with no role (Jira, Confluence). */
+export function emptyLevel(lane: Lane) {
+  return lane.levels.find((l) => l.id === "");
+}
+
+/**
+ * The empty level's name ("Product access only") where a seat holds it, or
+ * null. On a lane of sets it is the empty set.
+ */
+export function productOnly(lane: Lane, id: string | undefined): string | null {
+  const empty = emptyLevel(lane);
+  return empty && levelIds(id).length === 0 ? empty.name : null;
+}
+
+/**
+ * Whether a seat's scope is offered: never on a lane managed outside Crewlet,
+ * and not with product access only, unless a list is already held there
+ * (which the document refuses), so it can be cleared.
+ */
+export function scopeApplies(lane: Lane, want: AccessDesired): boolean {
+  if (lane.scope === undefined || managedOutside(lane)) return false;
+  return productOnly(lane, want.level) === null || (want.scope ?? []).length > 0;
 }
 
 /** A set of levels for a table cell: two names in the vendor's order, then a count. */
@@ -135,19 +161,27 @@ export function levelSummary(lane: Lane, level: string | undefined): string {
 }
 
 /**
- * Why a seat's draft on a lane of sets cannot be saved (on, with no
- * permission at all), or null.
+ * Why a seat's draft cannot be saved, or null: product access only together
+ * with a project or space list, which needs a role; or, where the vendor has
+ * no empty level, a lane of sets turned on with nothing chosen.
  */
 export function refusedLevel(lane: Lane, want: AccessDesired): string | null {
-  const words = laneWords(lane.key).noPermissions;
-  if (!lane.multiple || !want.enabled || levelIds(want.level).length > 0) return null;
-  return words?.refused ?? "Choose at least one permission for every agent that is on.";
+  if (!want.enabled) return null;
+  const noun = laneWords(lane.key).scope?.noun.toLowerCase() ?? "scope";
+  if (productOnly(lane, want.level) && (want.scope ?? []).length > 0)
+    return `Product access only on ${lane.name} takes no ${noun}. Choose a role, or clear its ${noun}.`;
+  if (lane.multiple && !emptyLevel(lane) && levelIds(want.level).length === 0)
+    return `Choose at least one ${lane.name} permission for every agent that is on.`;
+  return null;
 }
 
-/** The quiet hint under a seat on a lane of sets that is on with no permission, or null. */
-export function noPermissionsHint(lane: Lane, want: AccessDesired): string | null {
-  if (refusedLevel(lane, want) === null) return null;
-  return laneWords(lane.key).noPermissions?.hint ?? null;
+/**
+ * The empty level's note under a seat on a lane of sets that holds it, where
+ * the multi-select has no menu row to carry it, or null.
+ */
+export function productOnlyNote(lane: Lane, want: AccessDesired): string | null {
+  if (!lane.multiple || !want.enabled || !productOnly(lane, want.level)) return null;
+  return emptyLevel(lane)?.note ?? null;
 }
 
 /** "Contents: Read and write, Issues: Read-only", for the permissions held, in GitHub's words. */

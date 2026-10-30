@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest";
 import {
   CONFLUENCE_LANE,
   DATADOG_LANE,
+  JIRA_LANE,
   GITHUB_LANE,
   MATTERMOST_LANE,
   datadogAnswer,
@@ -21,7 +22,9 @@ import {
   emptyScopeHint,
   joinLevels,
   levelName,
+  productOnly,
   refusedLevel,
+  scopeApplies,
   offSentence,
   sameDesired,
   scopeWords,
@@ -184,9 +187,9 @@ describe("a lane of sets (Confluence by operation)", () => {
     expect(joinLevels(CONFLUENCE_LANE, [])).toBe("");
   });
 
-  test("names the set in the vendor's order, or No permissions", () => {
+  test("names the set in the vendor's order, and the empty set as product access only", () => {
     expect(levelName(CONFLUENCE_LANE, "create:page read:space")).toBe("View, Add pages");
-    expect(levelName(CONFLUENCE_LANE, "")).toBe("No permissions");
+    expect(levelName(CONFLUENCE_LANE, "")).toBe("Product access only");
   });
 
   test("the same set in another order is no change", () => {
@@ -199,10 +202,26 @@ describe("a lane of sets (Confluence by operation)", () => {
     ).toBe(true);
   });
 
-  test("an agent that is on with no permission cannot be saved", () => {
-    expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "" })).toMatch(/at least View/);
+  test("product access only is valid, and refused only together with a space list", () => {
+    expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "" })).toBeNull();
+    expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "", scope: ["ENG"] })).toMatch(
+      /takes no spaces/,
+    );
     expect(refusedLevel(CONFLUENCE_LANE, { enabled: false })).toBeNull();
     expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "read:space" })).toBeNull();
     expect(refusedLevel(DATADOG_LANE, { enabled: true })).toBeNull();
   });
+});
+
+test("Jira's empty level is product access only, which has no scope", () => {
+  expect(productOnly(JIRA_LANE, "")).toBe("Product access only");
+  expect(productOnly(JIRA_LANE, undefined)).toBe("Product access only");
+  expect(productOnly(JIRA_LANE, "10003")).toBeNull();
+  expect(productOnly(DATADOG_LANE, "")).toBeNull();
+  expect(productOnly(CONFLUENCE_LANE, "")).toBe("Product access only");
+  expect(levelName(JIRA_LANE, "")).toBe("Product access only");
+  expect(scopeApplies(JIRA_LANE, { enabled: true, level: "" })).toBe(false);
+  expect(scopeApplies(JIRA_LANE, { enabled: true, level: "10003" })).toBe(true);
+  // A LIST HELD WITH IT is offered, so it can be cleared.
+  expect(scopeApplies(JIRA_LANE, { enabled: true, level: "", scope: ["ENG"] })).toBe(true);
 });

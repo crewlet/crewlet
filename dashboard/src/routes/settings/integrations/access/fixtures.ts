@@ -62,6 +62,11 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
   live: false,
   multiple: true,
   levels: [
+    {
+      id: "",
+      name: "Product access only",
+      note: "The account has Confluence and no space role or permission of its own: the site's and each space's permissions decide what it sees.",
+    },
     { id: "read:space", name: "View" },
     { id: "create:page", name: "Add pages" },
     { id: "create:blogpost", name: "Add blog posts" },
@@ -71,7 +76,25 @@ const CONFLUENCE_OPTIONS: AccessOptions = {
   scope: ["ENG", "OPS"],
 };
 
+/** Jira's project roles, read live; a seat may also hold Jira with no role. */
+const JIRA_OPTIONS: AccessOptions = {
+  lane: "jira",
+  live: true,
+  levels: [
+    {
+      id: "",
+      name: "Product access only",
+      note: "The account has Jira and no project role: each project's permission scheme decides what it sees.",
+    },
+    { id: "10002", name: "Viewer" },
+    { id: "10003", name: "Member" },
+    { id: "10004", name: "Administrator", administers: true },
+  ],
+  scope: ["ENG", "OPS"],
+};
+
 export const DATADOG_LANE = laneOf(DATADOG_OPTIONS);
+export const JIRA_LANE = laneOf(JIRA_OPTIONS);
 export const CONFLUENCE_LANE = laneOf(CONFLUENCE_OPTIONS);
 export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
 export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
@@ -191,7 +214,7 @@ export function mattermostAnswer(): AccessAnswer {
   };
 }
 
-/** Atlassian's Confluence lane of sets: PM on with View and Add pages, QA off with none. */
+/** Atlassian's Confluence lane of sets: PM on with View and Add pages, QA off with product access only. */
 export function confluenceAnswer(): AccessAnswer {
   const held = "create:page read:space";
   return {
@@ -214,6 +237,27 @@ export function confluenceAnswer(): AccessAnswer {
         }),
       }),
       seat("qa", "QA", { confluence: offLane() }),
+    ],
+  };
+}
+
+/** Atlassian's Jira lane: PM on with product access only, QA a Member on ENG. */
+export function jiraAnswer(): AccessAnswer {
+  return {
+    kind: "atlassian",
+    revision: "rev-7",
+    syncing: false,
+    options: [JIRA_OPTIONS],
+    seats: [
+      seat("pm", "PM", {
+        jira: onLane({ variable: "ATLASSIAN_TOKEN_PM", desired: { enabled: true, level: "" } }),
+      }),
+      seat("qa", "QA", {
+        jira: onLane({
+          variable: "ATLASSIAN_TOKEN_QA",
+          desired: { enabled: true, level: "10003", scope: ["ENG"] },
+        }),
+      }),
     ],
   };
 }
