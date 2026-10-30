@@ -570,19 +570,6 @@ func seatByHandle(roster *org.Organization, handle string) *org.Role {
 	return nil
 }
 
-// seatTier is the access tier this seat runs at, as written down.
-//
-// THE RAW VALUE, unparsed. Every caller passes it to [github.ParseTier], which
-// already answers the default for an empty string and for a typo and is the
-// package that owns the closed set — so a second "or default" here would be a
-// place for the two to disagree about what an unrecognised tier runs at.
-func seatTier(seat *org.Role) string {
-	if seat == nil || seat.GitHub == nil {
-		return ""
-	}
-	return seat.GitHub.Tier
-}
-
 // seatPermissions is the GitHub App permissions this seat is set to, as
 // written down: what its app is registered with and its tokens carry.
 func seatPermissions(seat *org.Role) github.Permissions {

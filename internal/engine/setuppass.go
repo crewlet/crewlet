@@ -485,7 +485,7 @@ func (p *datadogPass) run(ctx context.Context, in setup.PassInput) ([]integratio
 		return nil, fmt.Errorf("engine: datadog pass: %w", err)
 	}
 	res, err := datadog.Reconcile(ctx, datadog.Options{
-		Client: client, Config: cfg, Plan: &provision.Plan{}, Creds: creds, Sink: in.Sink,
+		Client: client, Config: cfg, Creds: creds, ReadOnly: in.Sink == nil,
 		// THE AGENTS' ACCOUNTS, which the orphan advisory spares: the
 		// ledger's, and the address every document seat's would have.
 		Managed: managed,
@@ -518,18 +518,22 @@ func (p *datadogPass) Teardown(ctx context.Context, in setup.TeardownInput) (pro
 	// THE WEBHOOK ONLY: every agent's account is turned off, or removed
 	// when asked, by the disconnect's access sync before this runs
 	// ([Engine.tearDownSeatAccess]).
-	return datadog.Teardown(ctx, datadog.TeardownOptions{
-		Client: client, Config: cfg, Plan: &provision.Plan{},
+	err = datadog.Teardown(ctx, datadog.TeardownOptions{
+		Client: client, Config: cfg,
 		Creds: datadog.Credentials{
 			APIKey: strings.TrimSpace(env.Value(cfg.Provisioning.APIKey)),
 			AppKey: strings.TrimSpace(env.Value(cfg.Provisioning.AppKey)),
 		},
 		// WHAT PROVES THE DEFINITION IS THIS DEPLOYMENT'S. A Datadog
 		// webhook is addressed by name, and the teardown refuses to
-		// delete one pointing anywhere but here — the same expression
+		// delete one pointing anywhere but here, the same expression
 		// gitlabPass.Teardown passes for the same reason.
 		WebhookBase: p.engine.webhookBase,
 	})
+	if err != nil {
+		return provision.Removed{}, fmt.Errorf("engine: datadog teardown: %w", err)
+	}
+	return provision.Removed{}, nil
 }
 
 // datadogManaged is every Datadog account the access sync manages, which the
@@ -1073,12 +1077,12 @@ func (p *mattermostPass) run(ctx context.Context, in setup.PassInput) ([]integra
 	// is the transport's answer rather than this pass's own ask.
 	people := p.engine.Mattermost().PeopleFindings()
 	env := p.engine.resolver()
-	admin := mattermostAdminToken(cfg, env, in.Operator)
+	admin := mattermost.AdminToken(cfg, env, in.Operator)
 	if admin == "" {
 		return append([]integration.Finding{{
 			Kind: integration.FindingCredentialMissing,
 			Detail: "no administrator token resolved, and the bots' own tokens " +
-				"are what this pass mints, so it cannot bootstrap itself from them",
+				"are what the access sync mints, so it cannot bootstrap itself from them",
 		}}, people...), nil
 	}
 	// ONLY A COMPANY THAT PROVISIONS ITS BOTS: an administrator token handed
@@ -1096,13 +1100,12 @@ func (p *mattermostPass) run(ctx context.Context, in setup.PassInput) ([]integra
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
 	}
-	// NO WEBHOOK BASE IS PASSED because there is nowhere to pass it: this
-	// third-party app holds an outbound socket per seat and registers nothing. And
-	// no rotation and no decommissioning, for the reasons GitLab's pass
-	// gives: both take working agents down and both stay deliberate
-	// command-line gestures.
+	// THE COMPANY'S HALF: whether the instance will let this engine
+	// provision, and each bot's display name. No webhook base is passed
+	// because there is nowhere to pass it: this third-party app holds an
+	// outbound socket per seat and registers nothing.
 	res, err := mattermost.Reconcile(ctx, mattermost.Options{
-		Client: client, Config: cfg, Org: company.Org, Plan: &provision.Plan{}, Sink: in.Sink,
+		Client: client, Config: cfg, Org: company.Org, ReadOnly: in.Sink == nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: mattermost pass: %w", err)
@@ -1259,18 +1262,6 @@ var (
 // with it before the document carries it, and every other run needs no
 // credential in hand at all.
 func gitlabAdminToken(cfg *config.GitLab, env *config.Resolver, override string) string {
-	if v := strings.TrimSpace(override); v != "" {
-		return v
-	}
-	if cfg == nil || cfg.Provisioning == nil {
-		return ""
-	}
-	return strings.TrimSpace(env.Value(cfg.Provisioning.AdminToken))
-}
-
-// mattermostAdminToken resolves the system-administrator credential, in the
-// same order and for the same reason.
-func mattermostAdminToken(cfg *config.Mattermost, env *config.Resolver, override string) string {
 	if v := strings.TrimSpace(override); v != "" {
 		return v
 	}

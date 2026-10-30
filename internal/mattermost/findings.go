@@ -4,26 +4,11 @@ import "github.com/crewlet/crewlet/internal/integration"
 
 // Findings reads this run as the integration-neutral vocabulary.
 //
-// SHORT, and that is the third-party app rather than an omission. Mattermost holds one
-// outbound websocket per seat and verifies no inbound delivery, so there is no
-// ingress to judge and no webhook to be missing: every finding this host can
-// produce is about a seat's own identity or about the instance refusing to let
-// this engine create one.
-//
-// A seat this run KEPT is not a finding, for the reason every other third-party app's
-// mapping states: keeping is the successful outcome of a re-run, and reporting
-// it would make a converged company look like it had work outstanding.
-//
-// NOR IS A SEAT THIS RUN DECOMMISSIONED. That branch existed and reported
-// every disabled bot as [integration.FindingIdentityMissing] — a kind whose
-// verdict is PhaseProvisioning / ActorEngine, which renders as "the engine is
-// creating agent identities". [Result.Decommissioned] is exactly the seats the
-// company document NO LONGER HAS: an operator passed -decommission and the run
-// disabled their accounts, deliberately and successfully. So a destructive run
-// that did precisely what was asked reported itself as outstanding work the
-// engine was mid-way through, for handles that will never be created, on a row
-// nothing ever clears. GitLab's mapping carried the same branch and lost it
-// for the same reason.
+// SHORT, and that is the third-party app rather than an omission. Mattermost
+// holds one outbound websocket per seat and verifies no inbound delivery, so
+// there is no ingress to judge and no webhook to be missing, and each agent's
+// own bot is reported by the per-seat access sync. What is left is whether
+// the instance will let this engine provision at all.
 func (r *Result) Findings() []integration.Finding {
 	if r == nil {
 		return nil
@@ -49,28 +34,6 @@ func (r *Result) Findings() []integration.Finding {
 			Kind:    integration.FindingCredentialRejected,
 			Subject: "integrations.mattermost.provisioning.admin_token",
 			Detail:  r.NotAdmin,
-		})
-	}
-
-	// AND AN AGENT SOMEBODY DEACTIVATED AT MATTERMOST.
-	//
-	// identity_failed, owed to an ADMIN: the bot exists, it cannot sign in,
-	// and nothing this engine does will change that — re-enabling it is
-	// exactly the gesture it must not reverse, because a person made it on
-	// purpose. Said once per seat, because each is its own decision.
-	//
-	// It used to be reversed instead, silently and on every tick. See
-	// [Client.DisconnectedDescription] for the marker that tells this from
-	// a bot this engine's own disconnect turned off, which IS re-enabled.
-	for _, handle := range r.Deactivated {
-		out = append(out, integration.Finding{
-			Kind:    integration.FindingIdentityFailed,
-			Subject: handle,
-			Detail: handle + "'s Mattermost bot is deactivated and was not " +
-				"deactivated by this engine, so it reads and posts nothing. " +
-				"Re-activate it at Mattermost if that was not deliberate — " +
-				"this engine will not, because reversing it would undo the " +
-				"decision on every pass",
 		})
 	}
 
