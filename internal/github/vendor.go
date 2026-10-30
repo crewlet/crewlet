@@ -97,26 +97,30 @@ func (vendor) Steps(
 			Note: "Which repositories it covers is chosen at GitHub during the install.",
 		})
 	case seataccess.OpEnable:
+		// ON AT THE DOCUMENT'S SETTING, as a create is: the plan adds no
+		// level or scope after an enable, so whatever the installation
+		// must still grant or cover is waited on here.
 		add(seataccess.Step{
 			Verb: seataccess.VerbEnable, By: seataccess.ByCrewlet,
 			Text: "Turn " + name + "'s installation back on",
 			Note: "A suspended installation is unsuspended; one that is not installed waits for a person to install it.",
 		})
+		raiseSteps(want, have, add)
+		scopeWait(want, have, add)
 	case seataccess.OpLevel:
-		levelSteps(want, have, add)
+		add(seataccess.Step{
+			Verb: seataccess.VerbRerole, By: seataccess.ByCrewlet,
+			Text: "Set " + name + "'s tokens to " + Permissions(want.Permissions).Describe(),
+			Note: "Applies to the next token; nothing changes at GitHub.",
+		})
+		raiseSteps(want, have, add)
 	case seataccess.OpScope:
 		add(seataccess.Step{
 			Verb: seataccess.VerbScope, By: seataccess.ByCrewlet,
 			Text: "Narrow " + name + "'s tokens to " + scopeText(want.Scope),
 			Note: "Applies to the next token; nothing changes at GitHub.",
 		})
-		if missing := uncovered(want.Scope, have.Scope); len(missing) > 0 {
-			add(seataccess.Step{
-				Verb: seataccess.VerbApprove, By: seataccess.ByYou,
-				Text: "Add " + strings.Join(missing, ", ") + " to the installation's repositories",
-				Note: "GitHub refuses a token naming a repository the installation does not cover.",
-			})
-		}
+		scopeWait(want, have, add)
 	case seataccess.OpMint:
 		if have.Credential != nil {
 			// SEALED WHEN THE APP WAS CREATED, outside any sync: there
@@ -153,16 +157,12 @@ func (vendor) Steps(
 	return steps
 }
 
-// levelSteps draws a permission change: a narrowing applies at the next mint,
-// and a raise waits for the app's owner (past the registration) and then the
-// organization (past the installation), in that order (D5).
-func levelSteps(want seataccess.Desired, have seataccess.Observed, add func(seataccess.Step)) {
+// raiseSteps draws what a raise waits for at GitHub: the app's owner where
+// the registration lacks a permission, then the organization accepting it on
+// the installation, in that order (D5). A narrowing draws nothing: every token
+// is minted at the seat's permissions.
+func raiseSteps(want seataccess.Desired, have seataccess.Observed, add func(seataccess.Step)) {
 	wanted := Permissions(want.Permissions)
-	add(seataccess.Step{
-		Verb: seataccess.VerbRerole, By: seataccess.ByCrewlet,
-		Text: "Set the seat's tokens to " + wanted.Describe(),
-		Note: "Applies to the next token; nothing changes at GitHub.",
-	})
 	raised := Permissions(have.Permissions).Raises(wanted)
 	if len(raised) == 0 {
 		return
@@ -181,6 +181,18 @@ func levelSteps(want seataccess.Desired, have seataccess.Observed, add func(seat
 		Text: "Accept " + Names(raised) + " on the installation",
 		Note: "GitHub asks an organization owner to accept an app's new permissions.",
 	})
+}
+
+// scopeWait draws the repositories a person must add to the installation
+// before a token naming them can be minted.
+func scopeWait(want seataccess.Desired, have seataccess.Observed, add func(seataccess.Step)) {
+	if missing := uncovered(want.Scope, have.Scope); len(missing) > 0 {
+		add(seataccess.Step{
+			Verb: seataccess.VerbScope, By: seataccess.ByYou,
+			Text: "Add " + strings.Join(missing, ", ") + " to the installation's repositories",
+			Note: "GitHub refuses a token naming a repository the installation does not cover.",
+		})
+	}
 }
 
 // Open implements [seataccess.Vendor].
@@ -376,7 +388,14 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 	switch in.Step.Op {
 	case seataccess.OpCreate:
 		return s.applyCreate(ctx, in, seat)
-	case seataccess.OpEnable:
+	case seataccess.OpEnable, seataccess.OpLevel, seataccess.OpScope:
+		if in.Step.By == seataccess.ByYou {
+			return s.awaitPerson(ctx, in, seat)
+		}
+		if in.Step.Op != seataccess.OpEnable {
+			// THE TOKEN IS THE CHANGE: the next mint carries it.
+			return seataccess.StepResult{}, nil
+		}
 		// READ AGAIN: back on is decided by the installation as it is now,
 		// and this pass may have suspended it since it was observed.
 		obs, err := s.observe(ctx, seat, true)
@@ -395,25 +414,6 @@ func (s *session) Apply(ctx context.Context, in seataccess.ApplyInput) (seatacce
 			}
 		}
 		return res, nil
-	case seataccess.OpLevel:
-		return s.applyLevel(ctx, in, seat)
-	case seataccess.OpScope:
-		if in.Step.By == seataccess.ByCrewlet {
-			return seataccess.StepResult{}, nil
-		}
-		seat.Repos = in.Want.Scope
-		obs, err := s.observe(ctx, seat, true)
-		if err != nil {
-			return seataccess.StepResult{}, err
-		}
-		if missing := obs.UncoveredRepositories(seat); len(missing) > 0 {
-			return seataccess.StepResult{Waiting: &seataccess.Waiting{
-				ActionURL: s.installationURL(seat, obs),
-				Detail: "Add " + strings.Join(missing, ", ") + " to " + handle +
-					"'s installation, or narrow the seat to repositories it covers",
-			}}, nil
-		}
-		return seataccess.StepResult{}, nil
 	case seataccess.OpMint:
 		if strings.TrimSpace(seat.Key) != "" {
 			return s.adopted(seat, in.Record), nil
@@ -471,23 +471,30 @@ func (s *session) applyCreate(ctx context.Context, in seataccess.ApplyInput, sea
 	return created, nil
 }
 
-// applyLevel takes a permission change. The first step needs nothing at
-// GitHub; each approval re-reads GitHub, so "Done, check again" is a read.
-func (s *session) applyLevel(ctx context.Context, in seataccess.ApplyInput, seat SeatApp) (seataccess.StepResult, error) {
-	if in.Step.By == seataccess.ByCrewlet {
-		return seataccess.StepResult{}, nil
-	}
+// awaitPerson checks a step only a person at GitHub can take, reading GitHub
+// again, so "Done, check again" is a read: a raise waits on the app's owner
+// (grant) and then the organization (approve), and a scope on the
+// repositories the installation must cover.
+func (s *session) awaitPerson(ctx context.Context, in seataccess.ApplyInput, seat SeatApp) (seataccess.StepResult, error) {
+	seat.Repos = in.Want.Scope
 	obs, err := s.observe(ctx, seat, true)
 	if err != nil {
 		return seataccess.StepResult{}, err
 	}
-	wait := RaiseWait(s.opts.WebBase, s.opts.Org, seat, Permissions(in.Want.Permissions), obs)
-	if wait == nil {
+	if in.Step.Verb == seataccess.VerbScope {
+		if missing := obs.UncoveredRepositories(seat); len(missing) > 0 {
+			return seataccess.StepResult{Waiting: &seataccess.Waiting{
+				ActionURL: s.installationURL(seat, obs),
+				Detail: "Add " + strings.Join(missing, ", ") + " to " + seat.Handle +
+					"'s installation, or narrow the seat to repositories it covers",
+			}}, nil
+		}
 		return seataccess.StepResult{}, nil
 	}
+	wait := RaiseWait(s.opts.WebBase, s.opts.Org, seat, Permissions(in.Want.Permissions), obs)
 	// THE OWNER'S STEP IS DONE once the registration holds the ask, even
 	// while the organization's acceptance is still outstanding.
-	if !wait.Owner && in.Step.Verb == seataccess.VerbGrant {
+	if wait == nil || (!wait.Owner && in.Step.Verb == seataccess.VerbGrant) {
 		return seataccess.StepResult{}, nil
 	}
 	return seataccess.StepResult{Waiting: &seataccess.Waiting{ActionURL: wait.URL, Detail: wait.Detail}}, nil

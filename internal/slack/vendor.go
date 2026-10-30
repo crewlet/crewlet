@@ -138,13 +138,16 @@ func (vendor) Steps(
 
 // Open implements [seataccess.Vendor].
 //
-// THE CONFIGURATION TOKEN IS MADE USABLE HERE, before any step: a held token
-// with life left is used as it is, and an expiring one is rotated and sealed
-// through [seataccess.OpenInput.Sink] before use ([Admin.ConfigToken]). A
-// preview has no sink and rotates nothing, so it reads with a token that is
-// still good or observes without the manifest. A company that has sealed no
-// token is not refused: its seats are observed, and the steps that need the
-// token say so with the remedy.
+// NOT CONFIGURED WITHOUT A CONFIGURATION TOKEN (D11): the loop creates and
+// keeps the apps with it, so a company that has sealed none has not handed
+// this engine its Slack apps, and the access sync leaves them alone.
+//
+// THE TOKEN IS MADE USABLE HERE, before any step: a held token with life left
+// is used as it is, and an expiring one is rotated and sealed through
+// [seataccess.OpenInput.Sink] before use ([Admin.ConfigToken]). A preview has
+// no sink and rotates nothing, so it reads with a token that is still good or
+// observes without the manifest; a rotation Slack refuses is the reason the
+// steps needing the token report, with the remedy.
 func (vendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
 	s, err := open(ctx, in, nil)
 	if err != nil {
@@ -155,7 +158,7 @@ func (vendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Ses
 
 // open is [vendor.Open] through httpClient, nil for the default.
 func open(ctx context.Context, in seataccess.OpenInput, httpClient *http.Client) (*session, error) {
-	if in.Config == nil || in.Config.Integrations.Slack == nil {
+	if in.Config == nil || in.Config.Integrations.Slack == nil || !configTokenSealed(in) {
 		return nil, fmt.Errorf("slack: %w", integration.ErrNotConfigured)
 	}
 	sessionIn := sessionInput{
@@ -179,6 +182,16 @@ func open(ctx context.Context, in seataccess.OpenInput, httpClient *http.Client)
 		return nil, err
 	}
 	return newSession(sessionIn), nil
+}
+
+// configTokenSealed reports a company that has sealed an app-configuration
+// token, whatever its state.
+func configTokenSealed(in seataccess.OpenInput) bool {
+	if in.Env == nil {
+		return false
+	}
+	raw, ok := in.Env.LookupOK(ConfigTokenVar)
+	return ok && strings.TrimSpace(raw) != ""
 }
 
 // openConfigToken is the usable configuration token for a session, or why

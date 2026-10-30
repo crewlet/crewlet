@@ -21,11 +21,14 @@ bot token and signing secret. Paste the two values Slack shows on the app's own
 page and the engine seals them, gives the seat a `${VAR}` pointing at each, and
 activates. Each seat's own delivery address is shown beside its fields.
 
-**It does not create the apps.** Creating one goes through Slack's app-manifest
-API, which authenticates with an app configuration token Slack issues only by
-hand from its own pages, and which your organisation may not permit at all.
-Where those tokens are available, [`crewlet slack provision`](#automated-setup-crewlet-slack-provision)
-below remains the automated path and does the whole thing. Where they are not,
+**Without an app-configuration token it does not create the apps.** Creating
+one goes through Slack's app-manifest API, which authenticates with an app
+configuration token Slack issues only by hand from its own pages, and which
+your organisation may not permit at all. Where one is sealed, the engine
+creates and keeps every agent's app itself ([Per-agent access from the Agents
+tab](#per-agent-access-from-the-agents-tab)), and
+[`crewlet slack provision`](#automated-setup-crewlet-slack-provision) remains
+the command-line path. Where they are not,
 connect Slack from the dashboard's Company › Integrations: every agent gets its
 own block there carrying the manifest its app is created from, so building each
 app is a copy, a paste into Slack's **From an app manifest** flow, an install,
@@ -41,12 +44,20 @@ read-only, and it reads and posts wherever it is invited. Nothing else is set
 per agent.
 
 **The engine creates the apps** once an app-configuration token is sealed for
-the company. Enter its refresh token once; the engine seals the token pair as
-one value, `SLACK_APP_CONFIG_TOKEN`, and rotates it before it expires, saving
-each new pair before using it, because Slack's refresh token works once. The
-install stays a person's click: the tab shows a waiting step with **Install**,
-which sends you to Slack's approval page, and the engine seals the bot token
-when Slack sends you back.
+the company. Create one at [api.slack.com/apps](https://api.slack.com/apps) and
+seal its refresh token once as `SLACK_APP_CONFIG_TOKEN`
+(`crewlet secrets set SLACK_APP_CONFIG_TOKEN`). From then on the engine keeps
+the token pair in that one sealed value and rotates it before it expires,
+saving each new pair before using it, because Slack's refresh token works once.
+Without one, the engine does not manage the company's Slack apps, and they are
+set up as described below.
+
+The install stays a person's click: the tab shows a waiting step with
+**Install**, which mints a link valid for fifteen minutes and once, and sends
+you to Slack's approval page. When Slack sends you back to
+`/webhooks/slack-oauth`, the engine checks the link, confirms the approval
+belongs to that agent's app, and seals the bot token. A link used twice,
+expired or edited is refused, and the page says what to do instead.
 
 | Action | What happens at Slack |
 |---|---|
@@ -54,7 +65,7 @@ when Slack sends you back.
 | Turn off | The engine revokes the bot token (`auth.revoke`). The app and its OAuth client are kept. |
 | Turn back on | A person approves the install again; Slack issues a bot token only to an install. |
 | Rotate | The engine revokes the bot token, and a person approves a reinstall, which issues a new one. |
-| Remove (only when off) | The engine deletes the app (`apps.manifest.delete`) and clears every value sealed for it. Without a configuration token, the tab links to the app's page to delete it by hand. |
+| Remove (only when off) | The engine deletes the app (`apps.manifest.delete`) and clears every value sealed for it once Slack confirms. Where Slack refuses the configuration token, the tab links to the app's page to delete it by hand. |
 
 A scope or setting changed in Slack's console is restored from the engine's
 manifest on the next pass and reported; a scope added back reaches the bot

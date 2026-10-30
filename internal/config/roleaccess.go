@@ -61,6 +61,7 @@ const (
 	GitHubPermPullRequests = "pull_requests"
 	GitHubPermChecks       = "checks"
 	GitHubPermActions      = "actions"
+	GitHubPermDeployments  = "deployments"
 	GitHubPermWorkflows    = "workflows"
 )
 
@@ -68,7 +69,7 @@ const (
 func GitHubPermissionKeys() []string {
 	return []string{
 		GitHubPermContents, GitHubPermIssues, GitHubPermPullRequests,
-		GitHubPermChecks, GitHubPermActions, GitHubPermWorkflows,
+		GitHubPermChecks, GitHubPermActions, GitHubPermDeployments, GitHubPermWorkflows,
 	}
 }
 
