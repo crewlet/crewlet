@@ -774,22 +774,32 @@ func TestAPurgedRepositorysConversationIsGated(t *testing.T) {
 		t.Fatalf("the deletion marker counts %d records dropped, want the one comment", got)
 	}
 
-	body, err := code.Encode(code.MutationRecord{RecordEnvelope: code.RecordEnvelope{OpID: "op-late",
-		Subject: code.ChangeSubject(change), Op: code.OpComment, Scope: code.Scope{code.ChangePath(change)}},
-		Mutation: []byte(`{"repo_id":"` + repo + `"}`)})
-	if err != nil {
-		t.Fatal(err)
+	// THE GATE READER JUDGES A CHANGE'S RECORD BY ITS SCOPE, never its payload:
+	// a body whose mutation names no repository at all is dropped by the
+	// marker of the repository its scope names, and one whose scope names
+	// none is not, whatever its payload says.
+	encoded := func(scope code.Scope, mutation string) []byte {
+		body, err := code.Encode(code.MutationRecord{RecordEnvelope: code.RecordEnvelope{OpID: "op-late",
+			Subject: code.ChangeSubject(change), Op: code.OpComment, Scope: scope}, Mutation: []byte(mutation)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return body
 	}
 	gates := code.NewGates(n.db.Reader())
 	subject := statelog.Subject{Kind: string(code.KindChange), ID: change}
 	at := statelog.Position{Stream: code.Domain{}.Stream().Name, Seq: n.end() + 1}
-	if reason, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, body); err != nil || !gated ||
+	scoped := encoded(code.Scope{code.RepoPath(repo), code.ChangePath(change)}, `{}`)
+	if reason, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, scoped); err != nil || !gated ||
 		reason != statelog.ReasonDeleted {
 		t.Fatalf("the gate reader judged the record's body %q, %v, %v; want deleted", reason, gated, err)
 	}
-	if _, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, nil); err != nil || gated {
-		t.Fatalf("the gate reader judged a change's record with no body gated (%v, %v): its subject names no "+
-			"repository", gated, err)
+	unscoped := encoded(code.Scope{code.ChangePath(change)}, `{"repo_id":"`+repo+`"}`)
+	for name, body := range map[string][]byte{"no body": nil, "a scope naming no repository": unscoped} {
+		if _, gated, err := gates.GatedAt(t.Context(), subject, "", "op-late", at, body); err != nil || gated {
+			t.Fatalf("the gate reader judged a change's record with %s gated (%v, %v): it names no repository "+
+				"the gate reads", name, gated, err)
+		}
 	}
 
 	before := n.end()

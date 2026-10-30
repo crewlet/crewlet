@@ -395,6 +395,19 @@ func TestTheCodeGateReaderKeepsTheSharedRule(t *testing.T) {
 				return gateSuiteRecord(code.EvictionSubject(node), code.OpEviction, writer, opID,
 					gateSuiteEviction(node, true), code.Scope{code.DomainPath()})
 			},
+			// A COMMENT ON ONE OF THE REPOSITORY'S CHANGES, on the change's
+			// own subject, which names the change and never the repository:
+			// both the applier and the reader take the repository off the
+			// record's scope, so a reader handed no body cannot keep the
+			// rule for it.
+			About: func(id, writer, opID string) (statelog.Subject, []byte, error) {
+				change := "change-of-" + id
+				body, err := gateSuiteRecord(code.ChangeSubject(change), code.OpComment, writer, opID,
+					code.Comment{RepoID: id, ChangeID: change, CommentID: opID, ThreadID: opID,
+						By: code.Principal{Kind: code.PrincipalAgent, Seat: "suite-seat"}, Body: "About it."},
+					code.Scope{code.RepoPath(id), code.ChangePath(change)})
+				return statelog.Subject{Kind: string(code.KindChange), ID: change}, body, err
+			},
 		}
 	})
 }

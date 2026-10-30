@@ -93,10 +93,11 @@ func (a *Applier) Committed(context.Context) {
 //     rows an operator's configuration removed. Its hit is counted on the
 //     marker, an operator surface: a repository still catching records
 //     months after its purge is a writer nobody stopped. A record on a
-//     CHANGE's subject is about the repository its payload names, read off
-//     the record's body, and one on a repository's CHECKS subject about the
-//     repository its subject names ([gatedRepo]) — so a check that ends
-//     after its repository's purge writes nothing.
+//     CHANGE's subject is about the repository its scope names — read off
+//     the envelope the framework decoded, never the payload, which the
+//     apply then holds to it — and one on a repository's CHECKS subject
+//     about the repository its subject names ([gatedRepo]) — so a check that
+//     ends after its repository's purge writes nothing.
 //
 // The eviction window first, the knowledge base's order: a record both gates
 // drop is dropped either way, so the order decides only which gate COUNTS it.
@@ -114,7 +115,7 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (s
 			}
 		}
 	}
-	repoID, ok := gatedRepo(rec.Subject, rec.Payload)
+	repoID, ok := gatedRepo(rec.Subject, rec.Scope)
 	if !ok {
 		return "", false, nil
 	}

@@ -16,10 +16,11 @@ import (
 //
 // THE SUBJECT GUARD: a record on one change's subject may write only that
 // change's conversation — its payload names the subject's change — and the
-// change is the repository's its payload names, or the record is one no
-// correct writer forms, an error rather than a skip: a record about one
-// repository's change that named another would escape that repository's
-// deletion gate, which [Applier.Gated] reads off the payload.
+// change is the repository's its payload names, which is the one its scope
+// names, or the record is one no correct writer forms, an error rather than a
+// skip: a record about one repository's change that named another would
+// escape that repository's deletion gate, which [Applier.Gated] reads off the
+// scope.
 //
 // EVERY OTHER GUARD IS A SKIP, never a refusal that would stop the log on every
 // node: a record whose change has no row — a repository's purge removed it, and
@@ -66,6 +67,11 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 		return 0, fmt.Errorf("code: the record at %s arbitrated change.%s and its payload names change %s — a "+
 			"record on one change's subject may write only that change's conversation", at.position,
 			at.record.Subject.ID, changeID)
+	}
+	if scoped, _ := scopedRepo(at.record.Scope.Set()); scoped != repoID {
+		return 0, fmt.Errorf("code: the record at %s names repository %s in its payload and %q in its scope — "+
+			"a record no writer forms, which the deletion gate judges by the repository its scope names",
+			at.position, repoID, scoped)
 	}
 	var held string
 	err = tx.QueryRowContext(ctx, changeRepoSQL, changeID).Scan(&held)
@@ -440,28 +446,6 @@ func conversationNotApplied(ctx context.Context, at applyContext, repoID, change
 	applyLog.WarnContext(ctx, "code_conversation_not_applied", "repo", repoID, "change", changeID,
 		"op", string(at.record.Op), "op_id", at.record.OpID, "position", at.position.String(), "why", why)
 	return 0, nil
-}
-
-// changeRepoOf is the repository a change-subject record's payload names, read
-// off the record's body — what the deletion gate drops it by ([gatedRepo]). A
-// body this build cannot decode, or one naming no repository, answers false:
-// such a record is DEFERRED rather than applied, and the deferral is
-// reprocessed by a build that reads it, whose gate then runs properly.
-func changeRepoOf(body []byte) (string, bool) {
-	record, err := Decode(body)
-	if err != nil || len(record.Mutation) == 0 {
-		return "", false
-	}
-	// EVERY PAYLOAD ON A CHANGE'S SUBJECT NAMES ITS REPOSITORY under one key,
-	// so the gate reads that key alone rather than knowing every op: an op a
-	// later record adds is gated by its repository the day it lands.
-	var named struct {
-		RepoID string `json:"repo_id"`
-	}
-	if err := json.Unmarshal(record.Mutation, &named); err != nil || named.RepoID == "" {
-		return "", false
-	}
-	return named.RepoID, true
 }
 
 // The conversation's writes, and the reads that find the rows they write: the

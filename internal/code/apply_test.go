@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -992,6 +993,52 @@ func TestAPurgeLeavesOnlyItsMarker(t *testing.T) {
 	e.apply(purge)
 	if n := e.num(`SELECT COUNT(*) FROM code_deletions`); n != 1 {
 		t.Fatalf("%d markers after the purge applied again", n)
+	}
+}
+
+// A CHANGE'S RECORD IS GATED BY THE REPOSITORY ITS SCOPE NAMES: the deletion
+// gate reads the repository off the envelope the framework decoded — the
+// record's scope — and never decodes the payload, so a record whose payload
+// is no record at all is still dropped by the marker of the repository its
+// scope names; and the apply holds the payload's repository to the scope's,
+// refusing a record no writer forms whose two disagree — the gate judged it by
+// a repository it is not about.
+//
+// Mutation: read the gated repository off the payload again, and the record
+// whose payload decodes to nothing escapes the marker; drop the apply's
+// check, and the record naming two repositories applies.
+func TestAChangeRecordIsGatedByTheRepositoryItsScopeNames(t *testing.T) {
+	t.Parallel()
+	e := openApplyEstate(t)
+	e.exec(`INSERT INTO code_deletions (repo_id, at, version) VALUES ('repo-gone', 1, 1)`)
+	const change = "019a0c2e-0000-7000-8000-00000000c0de"
+	comment := Comment{RepoID: "repo-gone", ChangeID: change, CommentID: change, ThreadID: change,
+		By: Principal{Kind: PrincipalAgent, Seat: "dev"}, Body: "After the purge."}
+	gone := rec(t, ChangeSubject(change), OpComment, Scope{RepoPath("repo-gone"), ChangePath(change)}, comment)
+	env, err := Domain{}.Envelope(gone.payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := statelog.Record{Envelope: env, Payload: []byte("no record a build decodes"),
+		Position: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: 1}, StoredAt: applyClock}
+	err = e.db.Tx(t.Context(), func(tx *sql.Tx) error {
+		reason, gated, err := NewApplier().Gated(t.Context(), tx, r)
+		if err == nil && (!gated || reason != statelog.ReasonDeleted) {
+			return fmt.Errorf("gated %v, %q; want dropped by the deletion marker", gated, reason)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatalf("a change's record whose scope names a purged repository: %v", err)
+	}
+
+	e.apply(create(t, "repo-a", "a"))
+	comment.RepoID = "repo-a"
+	elsewhere := rec(t, ChangeSubject(change), OpComment, Scope{RepoPath("repo-b"), ChangePath(change)}, comment)
+	if err := e.applyErr(elsewhere); err == nil || !strings.Contains(err.Error(),
+		"names repository repo-a in its payload and \"repo-b\" in its scope") {
+		t.Fatalf("a record naming one repository in its payload and another in its scope applied with %v, "+
+			"want refused as one no writer forms", err)
 	}
 }
 

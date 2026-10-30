@@ -203,7 +203,8 @@
 // asked again of the repository's runner-up is the write that landed. Every
 // record names the repository's path and the change's in its scope, since its
 // decide reads the repository's rows; the deletion gate reads the repository
-// off its payload ([gatedRepo]); its apply is pure over the record — a
+// off that scope ([gatedRepo]), which the apply holds the payload's to; its
+// apply is pure over the record — a
 // reviewer's kind, stamped from the chart by the writer, rides it
 // (apply_conversation.go) — and keeps the conversation's counters (its
 // comments, reviews, open findings, standing blockers and requests for

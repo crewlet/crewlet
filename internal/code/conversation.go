@@ -35,7 +35,7 @@ import (
 // head revision merges into its target (code_mergeability, [Mergeability]).
 // Only a repository's purge removes them,
 // behind the deletion gate that drops every record about a purged repository
-// ([Applier.Gated] reads a change record's repository off its payload).
+// ([Applier.Gated] reads a change record's repository off its scope).
 //
 // # Who clears a blocker (S40)
 //
