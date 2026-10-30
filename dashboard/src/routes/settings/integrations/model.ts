@@ -20,7 +20,7 @@ import { indexOrg } from "~/lib/seats.ts";
 import { useManagedConfig } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { SERVICE_NAMES, useBackends, type OrgServices } from "~/lib/services.ts";
-import { asSentence, plural } from "~/lib/format.ts";
+import { asSentence } from "~/lib/format.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { pathSegment, rest, RestError } from "~/protocol/index.ts";
 import type { IntegrationRow, IntegrationTool, ReconcileFinding } from "~/contract/integrations.ts";
@@ -130,13 +130,6 @@ export const BUCKET_WORDS: Record<Bucket, { label: string; tone: Tone }> = {
 
 /** One agent on one tool, as a person reads it. */
 export type SeatStatus = "ready" | "pending" | "action" | "missing";
-
-export const SEAT_WORDS: Record<SeatStatus, { label: string; tone: Tone }> = {
-  ready: { label: "Ready", tone: "success" },
-  pending: { label: "Setting up", tone: "info" },
-  action: { label: "Needs you", tone: "warning" },
-  missing: { label: "No account", tone: "neutral" },
-};
 
 export interface SeatRow {
   handle: string;
@@ -667,24 +660,6 @@ export function useIntegrations(): Model {
     dropFor,
     watch,
   };
-}
-
-/**
- * The line a working tool's overview says: "Working.", then what it counts,
- * as one sentence of its own.
- */
-export function workingLine(tool: Pick<Tool, "seats" | "delivered">): string {
-  const parts: string[] = [];
-  const ready = tool.seats.filter((s) => s.status === "ready").length;
-  if (tool.seats.length > 0) parts.push(`${ready} of ${plural(tool.seats.length, "agent")} ready`);
-  if (tool.delivered !== null)
-    parts.push(
-      tool.delivered === 0
-        ? "nothing delivered yet"
-        : plural(tool.delivered, "delivery", "deliveries"),
-    );
-  if (parts.length === 0) return "Working.";
-  return `Working. ${asSentence(parts.join(", "))}`;
 }
 
 /** The tool a route segment names: its own key, or any surface it covers. */

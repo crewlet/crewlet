@@ -172,6 +172,20 @@ function mount(
       if (path === "/setup/integrations") {
         return new Response(JSON.stringify(setup.body), { status: setup.status });
       }
+      // AN APP'S AGENTS, as the access route answers them: nobody on it yet.
+      const access = /^\/setup\/integrations\/([^/]+)\/access$/.exec(path);
+      if (access && method === "GET") {
+        return new Response(
+          JSON.stringify({
+            kind: access[1],
+            revision_id: "rev-1",
+            syncing: false,
+            lanes: [],
+            seats: [],
+          }),
+          { status: 200 },
+        );
+      }
       return new Response(JSON.stringify({}), { status: 200 });
     }),
   );
@@ -366,7 +380,7 @@ test("coming back to an app through the list does not reopen the arrival's form"
   expect(await screen.findByRole("heading", { level: 2, name: "GitHub" })).toBeTruthy();
   location.hash = (await line(/GitLab/)).getAttribute("href")!;
   expect(await screen.findByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
-  expect(screen.getByRole("tab", { name: /Overview/ })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: /Agents/ })).toBeTruthy();
   expect(screen.queryByRole("form", { name: "Replace the GitLab key" })).toBeNull();
 });
 
@@ -383,28 +397,24 @@ test("a company with nothing in use is told to pick from the list", async () => 
 test("an app's page offers Replace key, which opens its form in the pane", async () => {
   mount(ADMIN, "gitlab");
   expect(await screen.findByRole("heading", { level: 2, name: "GitLab" })).toBeTruthy();
-  expect(screen.getByRole("tab", { name: /Overview/ })).toBeTruthy();
+  expect(screen.getByRole("tab", { name: /Agents/, selected: true })).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "Replace key GitLab" }));
   expect(await screen.findByRole("form", { name: "Replace the GitLab key" })).toBeTruthy();
-  expect(screen.queryByRole("tab", { name: /Overview/ })).toBeNull();
+  expect(screen.queryByRole("tab", { name: /Agents/ })).toBeNull();
   expect(await line(/GitLab/)).toBeTruthy();
 });
 
-// CHECK NOW ASKS THE LOOP TO LOOK, on the surfaces that run a pass, and is
-// not offered where the listing says none does (as on Slack, whose apps are
-// made by hand): the route would only refuse. Here Datadog's listing names no
-// pass. Mutation: drop the `can_provision` gate and the second case finds the
-// control.
-test("Check now asks the loop to look where a pass runs, and only there", async () => {
+// CHECK NOW SITS AT THE FAR END OF THE TAB ROW, beside the tabs and never
+// among them, on every tab of a connected app, and asks the loop to look.
+test("Check now sits beside the tabs on every tab, and asks the loop to look", async () => {
   const { fetched } = mount(ADMIN, "gitlab");
-  fireEvent.click(await screen.findByRole("tab", { name: /Agents/ }));
-  fireEvent.click(await screen.findByRole("button", { name: "Check now" }));
+  const tabs = await screen.findByRole("tablist", { name: "GitLab sections" });
+  const check = await screen.findByRole("button", { name: "Check now" });
+  expect(tabs.contains(check)).toBe(false);
+  fireEvent.click(screen.getByRole("tab", { name: /Activity/ }));
+  expect(screen.getByRole("button", { name: "Check now" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Check now" }));
   await waitFor(() => expect(fetched).toContain("POST /setup/integrations/gitlab/check"));
-  cleanup();
-
-  mount(ADMIN, "datadog");
-  fireEvent.click(await screen.findByRole("tab", { name: /Agents/ }));
-  expect(screen.queryByRole("button", { name: "Check now" })).toBeNull();
 });
 
 // THE ADDRESS APPS DELIVER TO, said once at the foot of the home rather than
