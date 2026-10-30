@@ -193,6 +193,18 @@ func (c *Client) BlockUser(ctx context.Context, userID int) error {
 	return c.send(ctx, http.MethodPost, "/users/"+strconv.Itoa(userID)+"/block", nil, nil)
 }
 
+// ActivateUser reactivates a deactivated account. Administrator only, like
+// [Client.BlockUser]; GitLab refuses it for an account an administrator
+// blocked rather than deactivated.
+func (c *Client) ActivateUser(ctx context.Context, userID int) error {
+	return c.send(ctx, http.MethodPost, "/users/"+strconv.Itoa(userID)+"/activate", nil, nil)
+}
+
+// UnbanUser lifts a ban. Administrator only.
+func (c *Client) UnbanUser(ctx context.Context, userID int) error {
+	return c.send(ctx, http.MethodPost, "/users/"+strconv.Itoa(userID)+"/unban", nil, nil)
+}
+
 // UnblockUser lets a blocked account sign in again. Administrator only, like
 // [Client.BlockUser], and only ever called for an account the ledger records
 // this engine as having blocked (D3).
