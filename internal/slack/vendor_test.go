@@ -235,18 +235,21 @@ func TestACreateThatCannotFinishLeavesNoApp(t *testing.T) {
 	}
 }
 
-// NO CONFIGURATION TOKEN IS A STEP FOR A PERSON, said on the step.
-func TestNoConfigurationTokenIsSaidOnTheStep(t *testing.T) {
+// NO CONFIGURATION TOKEN, NO SLACK APPS IN THE LOOP (D11): a company that
+// has sealed none is not configured for the access sync, which leaves its
+// Slack seats alone.
+func TestNoConfigurationTokenIsNotConfigured(t *testing.T) {
 	t.Parallel()
 	w := newSlackWorld(t)
 	delete(w.sealed, slack.ConfigTokenVar)
-	_, err := slackApply(t, w.open(t), seataccess.OpCreate, 0, nil)
-	var refusal *seataccess.Refusal
-	if !errors.As(err, &refusal) || refusal.Actor != seataccess.ByYou || refusal.ActionURL != "https://api.slack.com/apps" {
-		t.Errorf("no token answered %v", err)
+	_, err := slack.OpenThrough(t.Context(), seataccess.OpenInput{
+		Config: w.cfg, Env: config.NewResolver(w.sealed), Sink: w.sink, WebhookBase: w.base,
+	}, rewriting(t, w.ws))
+	if !errors.Is(err, integration.ErrNotConfigured) {
+		t.Errorf("open answered %v", err)
 	}
-	if w.ws.called("apps.manifest.create") != 0 {
-		t.Error("a create was attempted with no token")
+	if w.ws.called("tooling.tokens.rotate") != 0 {
+		t.Error("a rotation was attempted with nothing to rotate")
 	}
 }
 
@@ -352,12 +355,6 @@ func TestRemoveDeletesTheApp(t *testing.T) {
 		t.Errorf("remove with a refused token: %+v, %v", res, err)
 	}
 
-	noToken := newSlackWorld(t).installed()
-	delete(noToken.sealed, slack.ConfigTokenVar)
-	res, err = slackApply(t, noToken.open(t), seataccess.OpRemove, 0, appRecord(seataccess.AccountDisabled))
-	if err != nil || res.Waiting == nil || res.Waiting.ActionURL != "https://api.slack.com/apps/A0SWE" || res.Gone {
-		t.Errorf("remove with no token: %+v, %v", res, err)
-	}
 }
 
 // OBSERVE: the app, its manifest and its token, read back every pass.

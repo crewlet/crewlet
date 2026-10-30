@@ -83,6 +83,7 @@ const (
 	PermissionPullRequests = "pull_requests"
 	PermissionChecks       = "checks"
 	PermissionActions      = "actions"
+	PermissionDeployments  = "deployments"
 
 	// PermissionWorkflows is the permission a push needs to change a file
 	// under `.github/workflows`. GitHub offers it only as Read and write.
@@ -103,6 +104,10 @@ var SeatPermissions = []Permission{
 	{Key: PermissionPullRequests, Name: "Pull requests", Levels: []Level{LevelRead, LevelWrite}},
 	{Key: PermissionChecks, Name: "Checks", Levels: []Level{LevelRead, LevelWrite}},
 	{Key: PermissionActions, Name: "Actions", Levels: []Level{LevelRead, LevelWrite}},
+	// OFFERED SO NOTHING IS LOST IN THE MIGRATION: every tier carried
+	// Deployments (Read-only), which is how an agent reads a deployment's
+	// status, and a migrated seat keeps it.
+	{Key: PermissionDeployments, Name: "Deployments", Levels: []Level{LevelRead, LevelWrite}},
 	// WRITE ONLY, which is GitHub's rule rather than this engine's: the
 	// permission exists to let a push change a workflow file, so there is
 	// nothing for a read to mean.
@@ -321,11 +326,12 @@ func Names(keys []string) string {
 // TierPermissions is what a seat stored under the retired tiers holds in
 // GitHub's terms: the migration source, and nothing else reads it.
 //
-// The tier's own list, narrowed to the catalogue. Metadata is granted to every
-// token anyway, and Deployments (Read-only), which every tier carried, is not
-// a permission the Agents tab offers, so a migrated seat's tokens stop asking
-// for it. The installation still holds it, so nothing an organization
-// approved has to be approved again.
+// Every permission the tier carried, in the catalogue's keys, so a migrated
+// seat's tokens carry exactly what they did: Contents, Issues, Pull requests,
+// Checks, Actions and Deployments at the tier's levels, and Workflows where the
+// seat opted in at full access. Metadata is granted to every token anyway. A
+// tier permission the catalogue did not offer would be dropped silently, which
+// a test holds never to happen.
 //
 // The second result reports a tier this package knew, exactly as
 // [ParseTier]'s does, so the migration can report a typo rather than

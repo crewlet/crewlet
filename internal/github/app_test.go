@@ -131,15 +131,15 @@ func TestAnAppIsRegisteredAtItsSeatsPermissions(t *testing.T) {
 	if !maps.Equal(manifest.DefaultPerms, want) {
 		t.Errorf("registered %v, want %v", manifest.DefaultPerms, want)
 	}
-	// NOTHING THE SEAT DOES NOT HOLD, whatever a tier once carried.
+	// NOTHING THE SEAT DOES NOT HOLD, and everything a tier carried.
 	review := github.BuildManifest(github.ManifestOptions{
 		Seat: "s", Permissions: tierPerms("review", true),
 	})
 	if got, asks := review.DefaultPerms[github.PermissionWorkflows]; asks {
 		t.Errorf("a review app asks for workflows=%q", got)
 	}
-	if _, asks := review.DefaultPerms["deployments"]; asks {
-		t.Error("an app asks for a permission outside the catalogue")
+	if review.DefaultPerms["deployments"] != "read" {
+		t.Errorf("a migrated review seat's app does not keep Deployments read: %v", review.DefaultPerms)
 	}
 }
 

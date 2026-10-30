@@ -352,6 +352,7 @@ Agents tab offers, under GitHub's names:
 | Pull requests (`pull_requests`) | Read-only, Read and write | Reading, opening and reviewing pull requests |
 | Checks (`checks`) | Read-only, Read and write | Reading check runs; Read and write reports them |
 | Actions (`actions`) | Read-only, Read and write | Reading workflow runs and job logs; Read and write re-runs, cancels and dispatches them |
+| Deployments (`deployments`) | Read-only, Read and write | Reading deployments and their statuses; Read and write creates them |
 | Workflows (`workflows`) | Read and write | Pushing a change to a file under `.github/workflows` |
 
 - **A permission left out is No access.** `metadata: read` is added to every
@@ -377,12 +378,11 @@ Agents tab offers, under GitHub's names:
   run a workflow it rewrote with the secrets the repository hands its runs, so
   pair it with branch protection on the default and release branches and keep
   deployment credentials in environment-scoped secrets.
-- **Seats migrated from tiers** keep what their tier granted, permission by
-  permission: `read_only` holds Contents, Issues, Pull requests, Checks and
-  Actions at Read-only; `review` raises Issues and Pull requests to Read and
-  write; `full_access` raises Contents and Checks too, plus Workflows where the
-  seat had opted in. Deployments (Read-only), which every tier carried, is not
-  offered and is no longer asked for.
+- **Seats migrated from tiers** keep exactly what their tier granted,
+  permission by permission: `read_only` holds Contents, Issues, Pull requests,
+  Checks, Actions and Deployments at Read-only; `review` raises Issues and Pull
+  requests to Read and write; `full_access` raises Contents and Checks too, plus
+  Workflows where the seat had opted in.
 
 ### On, off and remove
 
@@ -393,7 +393,7 @@ on (D9).
 |---|---|
 | Turn on, first time | A person creates the app from the prepared manifest and installs it. The engine seals the app's key and webhook secret when GitHub returns them. |
 | Turn off | The engine suspends the seat's installation as the app. The app, its key and the installation are kept, and every token is refused from that moment. |
-| Turn back on | The engine lifts the suspension. Nobody has to act at GitHub. |
+| Turn back on | The engine lifts the suspension, at the seat's current permissions and repositories: anything the installation must still grant or cover waits for a person, as a raise does. |
 | Remove (only when off) | The engine uninstalls the app. A person deletes the app registration from its settings (GitHub has no API for it), and once GitHub reports it deleted the engine clears the sealed key and webhook secret. |
 | Rotate | Not offered: tokens last an hour and are never stored. |
 

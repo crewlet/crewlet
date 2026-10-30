@@ -51,8 +51,8 @@ func TestPermissionsAcceptOnlyWhatGitHubOffersAnAgent(t *testing.T) {
 			refuses: "never granted to an agent",
 		},
 		"a permission outside the catalogue": {
-			raw:     map[string]string{"deployments": "read"},
-			refuses: "the choices are Contents, Issues, Pull requests, Checks, Actions, Workflows",
+			raw:     map[string]string{"pages": "read"},
+			refuses: "the choices are Contents, Issues, Pull requests, Checks, Actions, Deployments, Workflows",
 		},
 		"an unknown level": {
 			raw:     map[string]string{"issues": "admin"},
@@ -143,20 +143,20 @@ func TestTiersMigrateToGitHubsPermissions(t *testing.T) {
 	}{
 		"read_only": {want: github.Permissions{
 			"contents": "read", "issues": "read", "pull_requests": "read",
-			"checks": "read", "actions": "read",
+			"checks": "read", "actions": "read", "deployments": "read",
 		}},
 		"review": {want: github.Permissions{
 			"contents": "read", "issues": "write", "pull_requests": "write",
-			"checks": "read", "actions": "read",
+			"checks": "read", "actions": "read", "deployments": "read",
 		}},
 		"full_access": {workflows: true, want: github.Permissions{
 			"contents": "write", "issues": "write", "pull_requests": "write",
-			"checks": "write", "actions": "read", "workflows": "write",
+			"checks": "write", "actions": "read", "deployments": "read", "workflows": "write",
 		}},
 		// The opt-in only ever rode on full access.
 		"": {workflows: true, want: github.Permissions{
 			"contents": "read", "issues": "read", "pull_requests": "read",
-			"checks": "read", "actions": "read",
+			"checks": "read", "actions": "read", "deployments": "read",
 		}},
 	} {
 		got, ok := github.TierPermissions(tier, tc.workflows)
@@ -169,6 +169,28 @@ func TestTiersMigrateToGitHubsPermissions(t *testing.T) {
 	}
 	if _, ok := github.TierPermissions("administrator", false); ok {
 		t.Error("an unknown tier migrated as if it were known")
+	}
+}
+
+// THE MIGRATION DROPS NOTHING: every permission a tier's tokens carried is
+// one the catalogue offers, at the same level, so a migrated seat's tokens
+// carry exactly what they did (Metadata rides on every token anyway).
+func TestNoTierPermissionIsDroppedByTheMigration(t *testing.T) {
+	t.Parallel()
+	for _, tier := range github.Tiers {
+		for _, workflows := range []bool{false, true} {
+			held := github.Access{Tier: tier, Workflows: workflows}.Permissions()
+			got, _ := github.TierPermissions(string(tier), workflows)
+			for key, level := range held {
+				if key == "metadata" {
+					continue
+				}
+				if string(got[key]) != level {
+					t.Errorf("%s (workflows %v) carried %s=%s and migrates to %q",
+						tier, workflows, key, level, got[key])
+				}
+			}
+		}
 	}
 }
 

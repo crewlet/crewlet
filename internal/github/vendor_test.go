@@ -99,7 +99,12 @@ func TestStepsPerOp(t *testing.T) {
 		"an uncovered repository waits on the organization": {op: seataccess.OpScope,
 			want: seataccess.Desired{Scope: []string{"acme/backend", "acme/infra"}},
 			have: seataccess.Observed{Scope: []string{"acme/backend"}},
-			out:  []drawn{{seataccess.VerbScope, crewlet}, {seataccess.VerbApprove, you}}},
+			out:  []drawn{{seataccess.VerbScope, crewlet}, {seataccess.VerbScope, you}}},
+		"back on at the document's setting": {op: seataccess.OpEnable,
+			want: seataccess.Desired{Permissions: perms("contents", "write"), Scope: []string{"acme/infra"}},
+			have: seataccess.Observed{Permissions: perms("contents", "read"), Ceiling: perms("contents", "read")},
+			out: []drawn{{seataccess.VerbEnable, crewlet}, {seataccess.VerbGrant, you},
+				{seataccess.VerbApprove, you}, {seataccess.VerbScope, you}}},
 		"a lost key means a new app": {op: seataccess.OpMint, out: []drawn{{seataccess.VerbCreate, you}}},
 		"a sealed key mints nothing": {op: seataccess.OpMint,
 			have: seataccess.Observed{Credential: &seataccess.Credential{Variable: "GITHUB_APP_KEY_SRE"}}},
@@ -392,7 +397,7 @@ func TestAnUncoveredRepositoryWaitsOnTheInstallation(t *testing.T) {
 	want := seataccess.Desired{Enabled: true, Scope: []string{"acme/backend", "acme/infra"}}
 	res, err := w.open(t).Apply(t.Context(), seataccess.ApplyInput{
 		Seat: sre, Lane: seataccess.LaneGitHub, Want: want,
-		Step: seataccess.Step{Op: seataccess.OpScope, Verb: seataccess.VerbApprove, By: seataccess.ByYou, Index: 1},
+		Step: seataccess.Step{Op: seataccess.OpScope, Verb: seataccess.VerbScope, By: seataccess.ByYou, Index: 1},
 	})
 	if err != nil || res.Waiting == nil || !strings.Contains(res.Waiting.Detail, "acme/infra") {
 		t.Fatalf("waiting = %+v, %v", res.Waiting, err)
