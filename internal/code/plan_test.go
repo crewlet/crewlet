@@ -1104,7 +1104,7 @@ func claimedReads() map[string]statement {
 			WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`,
 			[]any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
-		// A PERSON'S CODE INBOX (replicated 0079), newest first: the
+		// A PERSON'S CODE INBOX (replicated 0081), newest first: the
 		// composed inbox's code half reads it.
 		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications
 			WHERE recipient = ? ORDER BY log_seq DESC LIMIT ?`, []any{"founder", 50},

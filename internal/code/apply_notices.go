@@ -15,7 +15,7 @@ import (
 // every record about a change carries ([ChangeRouting], concerns.go) down as
 // ONE ROW PER (record, recipient) it reached — every handle its routing's
 // precedence keeps ([Concerns]) but the record's own actor — in
-// code_notifications (replicated 0079), as the tracker writes
+// code_notifications (replicated 0081), as the tracker writes
 // tracker_notifications from its records. A person's code inbox is read from
 // these rows, a change's "whom did this wake" is answered from them, and each
 // committed batch announces whose inbox its rows moved ([inbox.Movement],
