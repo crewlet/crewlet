@@ -112,13 +112,6 @@ type invocation struct {
 	// credential ([nodeTokenOrEmpty]), and where a provisioning command
 	// reads the operator's own ([operatorCredential]).
 	environ config.Source
-
-	// slack is the client `crewlet slack provision` reaches Slack's Web API
-	// through, nil for the default one. Slack is the one vendor no document
-	// addresses — every other vendor command reaches the instance its
-	// company file names — so this is the only way a run reaches anything
-	// but slack.com.
-	slack *http.Client
 }
 
 // runIn is [run] against an invocation it is HANDED: the environment every
@@ -2176,7 +2169,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Secrets: fleetStore,
 		// WHAT EACH AGENT MAY DO AT EACH VENDOR: the Agents tab's answer,
 		// plan and sync, over the engine's own plan, ledger and lease.
-		Access: e.SeatAccessAPI(configSurface.FleetCompany, fleetStore).
+		Access: e.SeatAccessAPI(configSurface.FleetCompany, fleetStore, configSurface.Managed).
 			UseSlackInstalls(slackInstallLink(slackInstalls), slack.AwaitsInstall),
 		// THIS NODE'S resolution chain, so a requirement can say whether
 		// a ${VAR} actually resolved rather than only whether somebody

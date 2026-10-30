@@ -59,7 +59,8 @@ roles:
     llm: zulu
     integrations:
       mattermost:
-        bot_token: tok-ceo
+        enabled: false
+        bot_token: "${MATTERMOST_BOT_TOKEN_CEO}"
   - name: Founder
     kind: human
     contact:
@@ -122,14 +123,17 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 	chat := ghostServer(t)
 	company := ghostCompany(t, chat.URL)
 	// A FLEET STORE, which every engine [New] builds has: the pass reads the
-	// seat access ledger once the Mattermost vendor has opened.
-	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
+	// seat access ledger once the Mattermost vendor has opened. And the CEO's
+	// bot token, sealed under its own name as the engine seals it for a
+	// company that provisions its bots.
+	sealed := config.MapSource{"MATTERMOST_BOT_TOKEN_CEO": "tok-ceo"}
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}, environ: sealed}
 	e.epoch.current.Store(company)
 
 	tr, err := mattermost.NewTransport(mattermost.TransportOptions{
 		Config: mattermost.Config{
 			URL: chat.URL, Team: "eng",
-			Seats:  mattermost.SeatsFrom(company.Org, nil),
+			Seats:  mattermost.SeatsFrom(company.Org, sealed.Lookup),
 			People: mattermost.PeopleFrom(company.Org, nil),
 		},
 		Publisher: nopPublisher{},
@@ -159,22 +163,27 @@ func TestTheMattermostPassReportsAPersonNobodyHolds(t *testing.T) {
 		name string
 		in   setup.PassInput
 		// want is every kind the pass reports, in order: the return's own,
-		// then the person's.
+		// then the person's, then the access sync's. The company has not
+		// been migrated onto per-seat access, so the sync says it left the
+		// agents' accounts as they are.
 		want []integration.FindingKind
 	}{{
 		name: "no administrator token",
 		want: []integration.FindingKind{
 			integration.FindingCredentialMissing, integration.FindingContactUnknown,
+			integration.FindingIdentityMissing,
 		},
 	}, {
 		// AN ADMINISTRATOR TOKEN AND A SINK, so the pass reaches the
-		// reconcile and returns what it found. The CEO's bot token is
-		// written by hand, so there is nothing to mint and the reconcile
-		// answers with no finding of its own: the person is the whole of
-		// what that return reports.
+		// reconcile and returns what it found. The company's half mints
+		// nothing (every bot is the access sync's) and answers with no
+		// finding of its own: the person is the whole of what that return
+		// reports.
 		name: "the reconcile's return",
 		in:   setup.PassInput{Operator: "admin-token", Sink: sink},
-		want: []integration.FindingKind{integration.FindingContactUnknown},
+		want: []integration.FindingKind{
+			integration.FindingContactUnknown, integration.FindingIdentityMissing,
+		},
 	}} {
 		t.Run(tc.name, func(t *testing.T) {
 			findings, err := (&mattermostPass{engine: e}).Run(t.Context(), tc.in)
@@ -231,7 +240,12 @@ func TestAPeopleChangeBringsTheMattermostStatusForward(t *testing.T) {
 	chat := ghostServer(t)
 	company := ghostCompany(t, chat.URL)
 	fleet := memory.NewFleet()
-	e := &Engine{backends: &Backends{Queue: queuememory.New(), Fleet: fleet}}
+	// THE CEO'S BOT TOKEN, sealed under its own name as the engine seals it
+	// for a company that provisions its bots.
+	e := &Engine{
+		backends: &Backends{Queue: queuememory.New(), Fleet: fleet},
+		environ:  config.MapSource{"MATTERMOST_BOT_TOKEN_CEO": "tok-ceo"},
+	}
 	e.epoch.current.Store(company)
 	e.notify.registry = notify.NewRegistry(company.Org, nil)
 
@@ -348,6 +362,7 @@ roles:
     llm: zulu
     integrations:
       mattermost:
+        enabled: false
         bot_token: tok-ceo
   - name: Founder
     kind: human

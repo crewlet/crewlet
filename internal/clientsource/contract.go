@@ -558,6 +558,32 @@ var contract = []Entry{
 	{"CAVEAT_ACTIONS", ReadLiteral, "internal/caveat.TestTheDashboardReadsWhatACaveatAsks"},
 	{"LIMIT_SETTINGS", ReadLiteral, "internal/caveat.TestTheDashboardKnowsEverySettingARemedyNames"},
 	{"Remedy", ReadInterface, "internal/caveat.TestTheDashboardReadsARemedyAsTheEngineWritesIt"},
+
+	// access.ts
+	{"AccessAnswer", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessNotice", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessOptions", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessLevel", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessPermission", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessSeat", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessSeatLane", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessDesired", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessObserved", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessCredential", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessStep", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessStepOutcome", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessFailure", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessSync", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessDraftRequest", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessPlanAnswer", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessSeatPlan", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessInstallLink", ReadInterface, "internal/seataccess.TestTheDashboardReadsAccessAsTheEngineWritesIt"},
+	{"AccessLaneKey", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+	{"GitHubAccess", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+	{"AccessSeatAction", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+	{"AccessToolState", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+	{"AccessOp", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
+	{"AccessVerb", ReadUnion, "internal/seataccess.TestTheDashboardKnowsExactlyTheAccessValues"},
 }
 
 // Contract is every declaration the engine's gates read out of the

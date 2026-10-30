@@ -20,22 +20,22 @@ func getLanding(t *testing.T, e *edge, query string) *httptest.ResponseRecorder 
 	return res
 }
 
-func TestTheOAuthLandingShowsTheCodeToPaste(t *testing.T) {
+func TestALinkFromTheRetiredCommandSaysWhereInstallsAreMadeNow(t *testing.T) {
 	t.Parallel()
-	// This page is the whole hand-off in `crewlet slack provision`: the
-	// operator clicks Allow, Slack redirects here, and the code shown is
-	// what the waiting CLI prompt is asking for.
+	// `crewlet slack provision` put the bare handle in the state and showed
+	// the code for its prompt; nothing waits on it now, so the code is not
+	// shown and the page says where installs are made.
 	e := newEdge(t)
 	res := getLanding(t, e, "code=abc123&state=ceo")
-	if res.Code != http.StatusOK {
+	if res.Code != http.StatusGone {
 		t.Fatalf("got %d", res.Code)
 	}
 	page := res.Body.String()
-	if !strings.Contains(page, "abc123") {
-		t.Error("the page does not show the code, so the install cannot be completed")
+	if strings.Contains(page, "abc123") {
+		t.Error("the page shows a code nothing is waiting to use")
 	}
-	if !strings.Contains(page, "@ceo") {
-		t.Error("the page does not say which agent was installed")
+	if !strings.Contains(page, "Agents tab") {
+		t.Error("the page does not say where installs are made now")
 	}
 }
 
@@ -58,8 +58,8 @@ func TestTheOAuthLandingReachedDirectlyExplainsItself(t *testing.T) {
 	if res.Code != http.StatusBadRequest {
 		t.Fatalf("got %d, want 400", res.Code)
 	}
-	if !strings.Contains(res.Body.String(), "crewlet slack provision") {
-		t.Error("the page does not say where the authorize URL comes from")
+	if !strings.Contains(res.Body.String(), "Agents tab") {
+		t.Error("the page does not say where an install begins")
 	}
 }
 

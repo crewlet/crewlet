@@ -21,8 +21,9 @@
 //   - The company role copied into each enabled seat's access, in the vendor's
 //     own terms: a Datadog role id looked up live by the old role's name (D7),
 //     a GitLab access level, GitHub permissions from the tier's own table,
-//     and a Mattermost bot's channels written out, since an empty list now
-//     means none.
+//     a Mattermost bot's channels written out, since an empty list now means
+//     none, and Jira and Confluence as "Product access only" (the empty
+//     level), which is all the old engine granted: no role is invented.
 //   - Where the engine provisions the integration, each seat's credential
 //     re-sealed under the name the engine derives for it
 //     ([seataccess.SinkName]). Where the old variable is also named by a
@@ -115,6 +116,10 @@ type Facts struct {
 	// Unavailable is each integration whose vendor could not be read, with
 	// why.
 	Unavailable map[integration.Kind]error
+
+	// Managed is a deployment whose company document only named systems
+	// write ([config.Company.SeatCredentialMode]).
+	Managed bool
 }
 
 // ResolveLevel turns a level the old document named into the vendor's
@@ -222,7 +227,8 @@ func Plan(root map[string]any, facts Facts) (Migration, error) {
 			m.Pending[kind] = err
 			continue
 		}
-		provisioned := company.SeatCredentialMode(string(kind)) == config.SeatCredentialEngine
+		provisioned := company.SeatCredentialMode(string(kind), facts.Managed) ==
+			config.SeatCredentialEngine
 		lanes := map[string]map[seataccess.Lane]seataccess.Desired{}
 		var laneErr error
 		for _, row := range seats {
@@ -528,15 +534,14 @@ func gitlabLevel(old string) int {
 	return config.GitLabRoleDeveloper
 }
 
-// githubPermissions is a GitHub tier as the permissions it granted, from the
-// tier's own table, kept to the permissions a seat's app may hold.
+// githubPermissions is a GitHub tier as the permissions it granted
+// ([github.TierPermissions], the tier's own table, kept to what a seat's app
+// may hold).
 func githubPermissions(tier string, workflows bool) seataccess.Permissions {
-	parsed, _ := github.ParseTier(tier)
+	held, _ := github.TierPermissions(tier, workflows)
 	out := seataccess.Permissions{}
-	for key, grant := range (github.Access{Tier: parsed, Workflows: workflows}).Permissions() {
-		if slices.Contains(config.GitHubPermissionKeys(), key) {
-			out[key] = seataccess.Access(grant)
-		}
+	for key, level := range held {
+		out[key] = level
 	}
 	return out
 }

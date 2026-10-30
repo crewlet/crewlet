@@ -13,11 +13,16 @@ func TestASeatAccessBlockIsHeldToItsVendorsTerms(t *testing.T) {
 		name, doc, path string
 		kind            error
 	}{
-		{"a seat on at an integration nobody connected", `
+		{"a seat on at Mattermost with no server to post through", `
 name: Acme
 roles:
-  - {name: SRE, handle: sre, integrations: {gitlab: {enabled: true, access_level: 30}}}
-`, "roles[0].integrations.gitlab.enabled", ErrConflict},
+  - {name: SRE, handle: sre, integrations: {mattermost: {enabled: true, roles: [system_user]}}}
+`, "roles[0].integrations.mattermost.enabled", ErrConflict},
+		{"a seat on at Jira with no site", `
+name: Acme
+roles:
+  - {name: SRE, handle: sre, integrations: {jira: {enabled: true, project_role: "10101"}}}
+`, "roles[0].integrations.jira.enabled", ErrConflict},
 		{"a GitLab role GitLab does not have", `
 name: Acme
 roles:
@@ -90,11 +95,15 @@ roles:
 }
 
 // THE ENGINE BINDS A SEAT'S OWN CREDENTIAL TO ITS PER-SEAT SERVER (D15), under
-// the key the server reads, and only for a seat that is on.
+// the key the server reads, and only for a seat that is on. Both integrations
+// are ones the engine provisions, so the credential is the one it seals (D4b).
 func TestTheOrgModelBindsASeatsCredentialToItsTool(t *testing.T) {
 	t.Parallel()
 	c := parsedDoc(t, `
 name: Acme
+integrations:
+  datadog: {enabled: true, provisioning: {site: datadoghq.com}}
+  gitlab: {enabled: true, url: "https://gitlab.example.com", provisioning: {group: acme}}
 mcp_servers:
   - {name: datadog, transport: http, url: "https://mcp.datadoghq.com/v1/mcp", shared: false}
   - {name: gitlab, command: gitlab-mcp, shared: false}
@@ -178,4 +187,37 @@ func parsedDoc(t *testing.T, doc string) *Company {
 		t.Fatalf("parse: %v", err)
 	}
 	return c
+}
+
+// PRODUCT ACCESS ONLY: a Jira or Confluence seat that is on with no role and
+// no list is a setting of its own; a list without a role is refused, because
+// the list names where a role is held.
+func TestProductAccessOnlyIsASettingAndAListNeedsARole(t *testing.T) {
+	t.Parallel()
+	const connected = `
+name: Acme
+integrations:
+  atlassian: {org_id: org-1, api_key: "${ATLASSIAN_KEY}"}
+  jira: {url: "https://acme.atlassian.net", email: admin@acme.example, token: "${JIRA_TOKEN}", webhook_secret: "${JIRA_HOOK}"}
+  confluence: {url: "https://acme.atlassian.net/wiki", email: admin@acme.example, token: "${CONF_TOKEN}"}
+units:
+  - name: Ops
+    id: ops
+    project: OPS
+    space: ENG
+    roles:
+`
+	if _, err := ParseCompany([]byte(connected +
+		"      - {name: SRE, handle: sre, integrations: {jira: {enabled: true}, confluence: {enabled: true}}}\n")); err != nil {
+		t.Fatalf("product access only was refused: %v", err)
+	}
+	for _, tc := range []struct{ seat, path string }{
+		{"{jira: {enabled: true, projects: [OPS]}}", "units[0].roles[0].integrations.jira.project_role"},
+		{"{confluence: {enabled: true, spaces: [ENG]}}", "units[0].roles[0].integrations.confluence.space_role"},
+	} {
+		err := rejects(t, connected+"      - {name: SRE, handle: sre, integrations: "+tc.seat+"}\n", tc.path)
+		if !errors.Is(err, ErrMissing) {
+			t.Fatalf("%s: want ErrMissing, got %v", tc.path, err)
+		}
+	}
 }

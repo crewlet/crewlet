@@ -69,7 +69,7 @@ func TestAnOrdinaryDisconnectNamesTheCredentialsItLeaves(t *testing.T) {
 	// ADDRESS beside it because its products authenticate
 	// base64(address:token) — so a disconnect orphans two values per agent
 	// and named neither.
-	for _, want := range []string{"SRE_ATLASSIAN", "SRE_EMAIL"} {
+	for _, want := range []string{"ATLASSIAN_TOKEN_SRE_LEAD", "ATLASSIAN_EMAIL_SRE_LEAD"} {
 		if !orphans[want] {
 			t.Errorf("orphaned_secrets = %v, want the seat's %s named", orphans, want)
 		}
@@ -106,7 +106,7 @@ func TestASingleAtlassianProductLeavesTheSharedCredentialUnnamed(t *testing.T) {
 	}
 	orphans, _ := decode(t, out)["orphaned_secrets"].([]any)
 
-	for _, shared := range []string{"SRE_ATLASSIAN", "SRE_EMAIL"} {
+	for _, shared := range []string{"ATLASSIAN_TOKEN_SRE_LEAD", "ATLASSIAN_EMAIL_SRE_LEAD"} {
 		if slices.Contains(orphans, any(shared)) {
 			t.Errorf("orphaned_secrets = %v names %s, which Confluence still "+
 				"resolves: an operator who unsets it takes the product that "+
@@ -165,8 +165,8 @@ func TestASeatWhoseCredentialWentWithItsAccountIsNotSatisfied(t *testing.T) {
 	s.seedDocument(t, identityDoc)
 	// A provisioned seat: the pass sealed both slots.
 	for name, value := range map[string]string{
-		"SRE_ATLASSIAN": "atlassian-token",
-		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
+		"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
+		"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
@@ -178,7 +178,7 @@ func TestASeatWhoseCredentialWentWithItsAccountIsNotSatisfied(t *testing.T) {
 
 	// WHAT THE TEARDOWN NOW DOES: the accounts went, so their credentials
 	// went with them.
-	s.vault.forget("SRE_ATLASSIAN", "SRE_EMAIL")
+	s.vault.forget("ATLASSIAN_TOKEN_SRE_LEAD", "ATLASSIAN_EMAIL_SRE_LEAD")
 
 	seat := seatRow(t, s, "jira", "sre-lead")
 	if seat["satisfied"] == true {
@@ -220,8 +220,8 @@ func TestASeatIsNotSatisfiedOnASurfaceTheCompanyDoesNotDeclare(t *testing.T) {
 	s := newSurface(t)
 	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
-		"SRE_ATLASSIAN": "atlassian-token",
-		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
+		"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
+		"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
@@ -267,8 +267,8 @@ func TestASeatTheLoopFoundBrokenIsNotSatisfied(t *testing.T) {
 	status, _ := s.withPass(t, &recordingPass{})
 	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
-		"SRE_ATLASSIAN": "atlassian-token",
-		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
+		"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
+		"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
@@ -308,8 +308,8 @@ func TestAnAdvisoryFindingLeavesASeatSatisfied(t *testing.T) {
 	status, _ := s.withPass(t, &recordingPass{})
 	s.seedDocument(t, identityDoc)
 	for name, value := range map[string]string{
-		"SRE_ATLASSIAN": "atlassian-token",
-		"SRE_EMAIL":     "crewlet-sre-lead@acme.invalid",
+		"ATLASSIAN_TOKEN_SRE_LEAD": "atlassian-token",
+		"ATLASSIAN_EMAIL_SRE_LEAD": "crewlet-sre-lead@acme.invalid",
 	} {
 		if err := s.vault.Set(t.Context(), name, value, testAuthor, secrets.SourceAPI, pinned); err != nil {
 			t.Fatalf("seal %s: %v", name, err)
@@ -374,7 +374,7 @@ func TestAGitHubDisconnectNamesEachAgentsAppCredentials(t *testing.T) {
 	}
 	orphans, _ := decode(t, out)["orphaned_secrets"].([]any)
 
-	for _, want := range []string{"REVIEWER_GITHUB_APP_KEY", "STRAY_GITHUB_APP_KEY"} {
+	for _, want := range []string{"GITHUB_APP_KEY_REVIEWER", "GITHUB_APP_KEY_STRAY"} {
 		if !slices.Contains(orphans, any(want)) {
 			t.Errorf("orphaned_secrets = %v, want %s named: it stays sealed "+
 				"after this disconnect and nothing else ever mentions it",

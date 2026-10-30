@@ -421,7 +421,7 @@ that header must keep `X-Crewlet-Engine` in it.
 | `GET` | `/dashboard` | Dashboard shell (`/` redirects here; `/static/{path}` serves its assets) |
 | `POST` | `/webhooks/jira` | Receive Jira Data Center webhooks (Cloud arrives via `/webhooks/forge`) |
 | `POST` | `/webhooks/slack/{handle}` | Receive Slack Events API deliveries for one seat's app |
-| `GET` | `/webhooks/slack-oauth` | OAuth install landing page for `crewlet slack provision` |
+| `GET` | `/webhooks/slack-oauth` | OAuth install landing: finishes an install the Agents tab began |
 | `POST` | `/webhooks/github` | Receive GitHub webhooks — HMAC-SHA256 over the raw body |
 | `POST` | `/webhooks/github/{handle}` | The same route addressed to one seat, which is where that seat's own [GitHub App](../integrations/github.md#one-github-app-per-agent) delivers |
 | `GET` | `/webhooks/github-app` | Landing page for the per-agent GitHub App flow: converts the one-time creation code, or reports an install (see [below](#get-webhooksgithub-app)) |
@@ -1760,7 +1760,7 @@ Every write that stores a revision (`PUT`, `PATCH`, a per-entity `PUT`, a reload
 ```
 
 - **`warnings`** is what the engine will run but a person should know about. Always a list, empty when there is nothing to say. Each has the same locators as a [problem](#refusals-carry-located-problems) (`path`, `segments`, and the `seat` handle or `unit` key it is about, empty when neither), plus `from` and `to` as display text. Three kinds:
-  - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key), `manages` (one `manages` entry — a seat handle or a unit key — at the index it was written) or `gitlab_access_level` (a key under `integrations.gitlab.provisioning.access_levels` naming no seat).
+  - `dangling_reference`: a reference that resolves to nothing. `ref` says what carries it: `lead` (a unit's lead, a seat handle), `unit` (a root seat's `unit:`, a unit key) or `manages` (one `manages` entry, a seat handle or a unit key, at the index it was written).
   - `admission`: an [admission rule](../concepts/configuration.md#what-a-stored-revision-is-held-to) the stored company breaks, with `ref`, `from` and `to` empty. A write that keeps one is refused, so only a reload or a revert of a company a newer peer admitted under other rules answers with one, one beside each entity the violation names.
   - `advisory`: something valid and worth knowing — a human seat with no contact identity, which nobody can @-mention on a chat surface; a token ceiling another ceiling makes unable to refuse a turn; a `${VAR}` nothing supplies. Every node also logs each one when it applies the revision, as a [`config_advisory`](../concepts/configuration.md#what-an-applied-company-is-worth-knowing) line, so the answer is not the only place it is said.
 - **`derived`** is the hierarchy the engine derives from the document, in full: every seat in the engine's own order with its effective unit, primary manager, managers, reports, automatic reports and onboarding chain, and every unit with its effective type, lead and channel (and whether each was inherited). Each seat and unit carries its authored `path`. The fields are the ones [`GET /org`](#get-org) carries without paths; a client draws the hierarchy from this rather than deriving it again.
@@ -3433,12 +3433,12 @@ renders a form from, so leaving out a seat with no app yet would leave an
 operator no way to give it one. Human seats are excluded, because a person's
 Slack account is not something this engine holds a token for.
 
-**It does not create the apps.** That goes through Slack's app-manifest API,
-which authenticates with a configuration token Slack issues only by hand and
-which an organisation may decline to allow at all, so
-[`crewlet slack provision`](cli.md) remains the automated path where those
-tokens are available. What this surface does is make a hand-created app usable
-without one: it takes the two values Slack shows on the app's own page and
+**Without an app configuration token it does not create the apps.** That goes
+through Slack's app-manifest API, which authenticates with a configuration
+token Slack issues only by hand and which an organisation may decline to allow
+at all. With one (the `app_config_token` field), the reconcile loop creates
+and keeps every agent's app. Without one, this surface makes a hand-created
+app usable: it takes the two values Slack shows on the app's own page and
 seals them.
 
 #### GitHub: the app the engine writes
@@ -3650,9 +3650,13 @@ answers the name and when it was minted, never the value.
 the same value quoted. Each entry of `options` also says whether a person can
 ask for a credential on that lane to be rotated (`rotatable`), and carries
 `"managed": "external"` where the engine does not provision the integration
-for the company: Datadog, GitLab or Mattermost without a `provisioning` block,
-Jira and Confluence on Data Center or without the Atlassian organization key,
-GitHub without `provisioning`. On such a lane a seat's switch still binds its
+for the company, which is wherever it does not hold the authority that creates
+an agent's account: Datadog, GitLab or Mattermost without a `provisioning`
+block, Jira and Confluence on Data Center or without the Atlassian organization
+key, GitHub without `provisioning` or on a document only the operator writes
+(the engine records each agent's app in the document), and Slack without
+`integrations.slack.app_config_token`, the token the engine creates agents'
+apps with. On such a lane a seat's switch still binds its
 tool to the credential handed in from outside Crewlet, its access is managed
 where that credential was issued, and its `observed.credential` names the
 variable the seat holds with `"source": "external"`. A credential Crewlet
@@ -3754,8 +3758,9 @@ said what it could do once for the whole company (`provisioning.role`,
 document, one integration at a time, in one revision attributed to
 `seat access migration`: each agent seat states `enabled` per integration, the
 company's role is copied into each seat in the vendor's own terms (a Datadog
-role is looked up at Datadog by name), a Mattermost bot's channels are written
-out, each credential the engine minted is re-sealed under the agent's own name,
+role is looked up at Datadog by name), a Jira or Confluence agent keeps
+product access only (no project or space role, which is all the earlier engine
+granted), a Mattermost bot's channels are written out, each credential the engine minted is re-sealed under the agent's own name,
 every account the engine made is recorded, and the retired fields are removed.
 A credential that named a variable a company setting also uses is never moved:
 the agent gets a new one from its next sync, and the Agents tab warns that the
@@ -9633,7 +9638,7 @@ Receives Slack Events API payloads for a specific agent (identified by handle). 
 
 ### `GET /webhooks/slack-oauth`
 
-The OAuth install landing page for [`crewlet slack provision`](../integrations/slack.md). Every provisioned Slack app has this as its OAuth redirect URL. After the operator approves an install, Slack redirects here with a temporary `code` (and `state` carrying the agent handle); the page displays the code for pasting back into the waiting CLI prompt. Unauthenticated by design: the code expires after 10 minutes and is useless without the app's client secret, which only the provisioning CLI holds. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
+The OAuth install landing every agent's Slack app redirects to. An install begun with **Install** on the Slack integration's Agents tab carries a `state` the engine signed (the seat, its app, a single-use nonce and a 15-minute expiry): the page verifies and spends it, exchanges the `code` for the bot token, refuses a token that belongs to another agent's app, and seals it under the seat's own name. A link used twice, edited or expired is refused with what to do instead, and neither the code nor the token is ever shown. An install made from the app's own settings page carries no state, and the page says where to copy the bot token. A link from the retired `crewlet slack provision` is answered `410` with where installs are made now. Unauthenticated by design, since a browser redirect carries no engine credential. Every value on the page comes from the query string, so it is served under a policy that allows its one inline style by hash and no script at all (see [Security headers on every response](#security-headers-on-every-response)).
 
 ### `/webhooks/github`
 

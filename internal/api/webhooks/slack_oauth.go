@@ -37,9 +37,8 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
     <h1>Slack app install {{.Heading}}</h1>
     {{if .Error}}
       <p>Slack reported an error: <code>{{.Error}}</code></p>
-      <p>Close this tab and start the install again: with Install on the
-      agent's row in Slack's Agents tab, or from
-      <code>crewlet slack provision</code>.</p>
+      <p>Close this tab and start the install again with Install on the
+      agent's row in Slack's Agents tab, under Company › Integrations.</p>
     {{else if .Done}}
       <p>Approved for agent <strong>@{{.Handle}}</strong>. Crewlet has sealed
       its bot token, and the agent starts answering in Slack shortly.</p>
@@ -47,14 +46,6 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
     {{else if .Reason}}
       <p>{{.Reason}}.</p>
       <p>{{.Remedy}}.</p>
-    {{else if and .Code .Handle}}
-      <p>Approved for agent <strong>@{{.Handle}}</strong>.
-      Paste this code into the waiting
-      <code>crewlet slack provision</code> prompt:</p>
-      <p><code>{{.Code}}</code></p>
-      <p class="muted">This page is served by the Crewlet API for
-      <code>crewlet slack provision</code>. The code expires after 10
-      minutes and is useless without the app's client secret.</p>
     {{else if .Code}}
       <p>Approved. The app is installed in your workspace, and there is
       nothing to do here.</p>
@@ -62,13 +53,13 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
       copy the <strong>Bot User OAuth Token</strong>, and paste it into this
       agent's section of Slack's settings, under Company › Integrations.</p>
       <p class="muted">You reached this page because you installed the app
-      from its own settings rather than from
-      <code>crewlet slack provision</code>, which is the ordinary way to do it
-      by hand. You can close this tab.</p>
+      from its own settings rather than with Install on the agent's row in
+      Slack's Agents tab, which finishes the install on its own. You can
+      close this tab.</p>
     {{else}}
       <p>No <code>code</code> query parameter. Open this page by installing
-      a Crewlet agent's Slack app, or through the authorize URL printed by
-      <code>crewlet slack provision</code>.</p>
+      a Crewlet agent's Slack app with Install on the agent's row in Slack's
+      Agents tab, under Company › Integrations.</p>
     {{end}}
   </body>
 </html>
@@ -110,14 +101,14 @@ type SlackInstaller interface {
 //     ([slack.Installs.Link]). The engine finishes it here: the state is
 //     verified and spent, the code exchanged, the app checked, and the bot
 //     token sealed under the seat's own name. Nothing Slack sent is shown.
-//   - A BARE HANDLE is `crewlet slack provision`'s authorize URL, with a
-//     prompt waiting on the code: the page shows it to paste, and the command
-//     finishes the install through the same completion.
+//   - ANY OTHER STATE is a link this engine no longer issues: the retired
+//     `crewlet slack provision` put the bare handle there. It is answered with
+//     where installs are made now, and the code is not shown, since nothing
+//     is waiting to use it.
 //   - NO STATE is somebody who pressed Install to Workspace on the app's own
 //     settings page, who needs the bot token on the page they just left.
 //
-// The code alone grants nothing without the app's client secret, which only
-// the engine and the provisioning command hold.
+// The code alone grants nothing without the app's client secret.
 func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {
 	q := req.URL.Query()
 	view := slackOAuthView{Error: q.Get("error"), Code: q.Get("code"), Handle: q.Get("state")}
@@ -127,16 +118,17 @@ func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {
 		view.Heading, status = "failed", http.StatusBadRequest
 	case slack.IsInstallState(view.Handle):
 		status = r.completeSlackInstall(req.Context(), w.Header(), &view)
+	case view.Handle != "":
+		view.Code, view.Handle = "", ""
+		view.Heading, status = "failed", http.StatusGone
+		view.Reason = "this install link came from crewlet slack provision, which is retired"
+		view.Remedy = "Start the install again with Install on the agent's row in Slack's " +
+			"Agents tab, under Company › Integrations"
 	case view.Code == "":
 		status = http.StatusBadRequest
 	default:
 		view.Heading = "approved"
-		// NAMED, because the two arrivals are operationally different: one
-		// has a CLI waiting on the code and the other is a person who has
-		// to go back for a token. An operator reading the log after being
-		// asked "did my install work" needs to see which happened.
-		log.Info("slack_oauth_code_displayed", "handle", view.Handle,
-			"flow", map[bool]string{true: "cli", false: "manual"}[view.Handle != ""])
+		log.Info("slack_oauth_manual_install")
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	pagepolicy.Set(w.Header(), slackOAuthPolicy)

@@ -75,6 +75,7 @@ roles:
       notion: {NOTION_TOKEN: per-seat-literal}
     integrations:
       mattermost:
+        enabled: false
         bot_token: mm-literal-bot-token
 `
 
@@ -536,8 +537,6 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 		"MaxInputTokens": true, "MaxBatchTokens": true,
 		// A deep-work run's cap on what it may spend, counted in tokens.
 		"MaxTokens": true,
-		// Scope NAMES minted onto a token, not the token.
-		"TokenScopes": true,
 	}
 	usedNames := map[string]bool{}
 
@@ -553,6 +552,9 @@ func TestEveryCredentialFieldIsTagged(t *testing.T) {
 			"material at it",
 		"APIAuth.MinPasswordLength": "the floor a person's password is held " +
 			"to, a number of characters, never a password",
+		"MCPServer.SeatCredentials": "which seat credential a server reads and " +
+			"under which key: integration, field and key names, never a value; " +
+			"the engine binds the sealed value itself",
 	}
 	usedFields := map[string]bool{}
 

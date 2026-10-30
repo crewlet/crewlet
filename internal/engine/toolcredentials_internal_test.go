@@ -33,14 +33,16 @@ import (
 // credential is there.
 
 // mixedDoc is a company that provisions its agents' Atlassian accounts, whose
-// per-role servers point at binaries that do not exist, and whose seats' blocks
-// mix what the pass mints with what nothing does: the CEO's site address is a
-// variable nobody sets, and the CTO names one token under two keys. Its
+// per-role servers point at binaries that do not exist, and whose seats'
+// servers mix what the pass mints with what nothing does: the Atlassian
+// server's site address is a variable nobody sets, and the CTO names one
+// token under two keys. Its
 // servers' own env passes a host setting through by name that no host here
 // sets, the guide's own example of a reference that may resolve to nothing,
 // and declares it optional as the guide does.
 const mixedDoc = `
 name: Acme
+seat_access_migrated: [atlassian]
 providers:
   sandbox: {fake: true}
   llm:
@@ -50,12 +52,16 @@ integrations:
   atlassian:
     org_id: "${ATLASSIAN_ORG_ID}"
     api_key: "${ATLASSIAN_ORG_KEY}"
+  jira:
+    url: https://acme.atlassian.net
+    token: "${JIRA_ORG_TOKEN}"
 mcp_servers:
   - name: atlassian
     shared: false
     command: "/nonexistent/definitely-not-an-atlassian-server"
     env:
       NPM_CONFIG_REGISTRY: "${HOST_SETTING_NOBODY_SETS}"
+      JIRA_URL: "${JIRA_SITE}"
     optional_keys: [NPM_CONFIG_REGISTRY]
   - name: notes
     shared: true
@@ -70,18 +76,21 @@ roles:
   - name: CEO
     handle: ceo
     llm: zulu
+    integrations:
+      jira: {enabled: true, project_role: "10101"}
     mcp_env:
       atlassian:
-        JIRA_USERNAME: "${CEO_ATLASSIAN_EMAIL}"
-        JIRA_API_TOKEN: "${CEO_ATLASSIAN_TOKEN}"
-        JIRA_URL: "${CEO_JIRA_SITE}"
+        JIRA_USERNAME: "${ATLASSIAN_EMAIL_CEO}"
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_CEO}"
   - name: CTO
     handle: cto
     llm: zulu
+    integrations:
+      jira: {enabled: true, project_role: "10101"}
     mcp_env:
       atlassian:
-        JIRA_USERNAME: "${CTO_ATLASSIAN_EMAIL}"
-        JIRA_API_TOKEN: "${CTO_ATLASSIAN_TOKEN}"
+        JIRA_USERNAME: "${ATLASSIAN_EMAIL_CTO}"
+        JIRA_API_TOKEN: "${ATLASSIAN_TOKEN_CTO}"
       tracker:
         SEAT_TOKEN: "${CTO_TRACKER_TOKEN}"
         OTHER_TOKEN: "${CTO_TRACKER_TOKEN}"
@@ -113,8 +122,8 @@ func missingFor(t *testing.T, c *Company, handle, server string, env *config.Res
 // A BLOCK ONE OF WHOSE VARIABLES A PASS MINTS AND ANOTHER NOTHING DOES IS A
 // FAILURE, and its sentence promises no start.
 //
-// The pass mints the CEO's Atlassian address and token, and nothing mints the
-// site address beside them: waiting for the pass would wait for ever, since
+// The access sync mints the CEO's Atlassian address and token, and nothing
+// mints the site address beside them: waiting for the pass would wait for ever, since
 // the pass never mints the other, behind a screen that says nothing is wrong.
 func TestABlockMixingAMintedAndAnUnsetVariableIsAFailureNotAWait(t *testing.T) {
 	t.Parallel()
@@ -124,14 +133,14 @@ func TestABlockMixingAMintedAndAnUnsetVariableIsAFailureNotAWait(t *testing.T) {
 		t.Fatal("nothing reported missing")
 	}
 	if missing.waiting() {
-		t.Errorf("a block with ${CEO_JIRA_SITE} unset reads as waiting: %s", missing.Error())
+		t.Errorf("a block with ${JIRA_SITE} unset reads as waiting: %s", missing.Error())
 	}
 	sentence := missing.Error()
 	if strings.Contains(sentence, "starts once") {
 		t.Errorf("a failure's sentence promises a start: %s", sentence)
 	}
-	for _, said := range []string{"${CEO_JIRA_SITE} is not set", "nothing this engine runs mints it",
-		"waiting for the atlassian integration to mint ${CEO_ATLASSIAN_EMAIL} and ${CEO_ATLASSIAN_TOKEN}"} {
+	for _, said := range []string{"${JIRA_SITE} is not set", "nothing this engine runs mints it",
+		"waiting for the atlassian integration to mint ${ATLASSIAN_EMAIL_CEO} and ${ATLASSIAN_TOKEN_CEO}"} {
 		if !strings.Contains(sentence, said) {
 			t.Errorf("the sentence %q does not say %q", sentence, said)
 		}
@@ -190,8 +199,8 @@ func TestADeclaredOptionalKeyThatDoesNotResolveIsLeftOutWhole(t *testing.T) {
 	t.Parallel()
 	c := specCompany(t, mixedDoc)
 	env := config.NewResolver(config.MapSource{
-		"CEO_ATLASSIAN_EMAIL": "agent-ceo@example.com", "CEO_ATLASSIAN_TOKEN": "ceo-minted",
-		"CEO_JIRA_SITE": "https://acme.example.com",
+		"ATLASSIAN_EMAIL_CEO": "agent-ceo@example.com", "ATLASSIAN_TOKEN_CEO": "ceo-minted",
+		"JIRA_SITE": "https://acme.example.com",
 	})
 	specs, outcomes := seatSpecs(c, c.Org.AgentSeatByHandle("ceo"), env, nil)
 	if len(specs) != 1 || len(outcomes) != 0 {
@@ -377,14 +386,14 @@ func TestTheRemedyOffersEachVariableWhatCanSupplyItOrLeaveItOut(t *testing.T) {
 	server := &config.MCPServer{Name: "atlassian", Command: "mcp-atlassian",
 		Env: map[string]string{"JIRA_URL": "${JIRA_URL}"}}
 	nothing := config.NewResolver(config.MapSource{})
-	block := map[string]string{"JIRA_API_TOKEN": "${CEO_ATLASSIAN_TOKEN}"}
+	block := map[string]string{"JIRA_API_TOKEN": "${ATLASSIAN_TOKEN_CEO}"}
 
 	_, both := resolveServer(server, "ceo", "atlassian::CEO", block, nothing, nil)
 	if both == nil {
 		t.Fatal("nothing held back")
 	}
 	for _, said := range []string{
-		"seal them (crewlet secrets set, or for ${CEO_ATLASSIAN_TOKEN} the integration's provision command)",
+		"seal them (crewlet secrets set, or for ${ATLASSIAN_TOKEN_CEO} the integration's provision command)",
 		"list JIRA_URL under mcp_servers.atlassian.optional_keys",
 	} {
 		if !strings.Contains(both.Error(), said) {
@@ -471,14 +480,14 @@ func TestAHeldBackServersSentenceReachesTheScreenWhole(t *testing.T) {
 		}, "list NPM_CONFIG_REGISTRY under mcp_servers.tavily.optional_keys"},
 		{"a template's setting beside a seat's token being minted", func() *credentialMissing {
 			_, m := resolveServer(template, "ceo", "atlassian::CEO", map[string]string{
-				"JIRA_USERNAME":  "${CEO_ATLASSIAN_EMAIL}",
-				"JIRA_API_TOKEN": "${CEO_ATLASSIAN_TOKEN}",
+				"JIRA_USERNAME":  "${ATLASSIAN_EMAIL_CEO}",
+				"JIRA_API_TOKEN": "${ATLASSIAN_TOKEN_CEO}",
 			}, config.NewResolver(config.MapSource{}), &seatMint{kinds: map[string]integration.Kind{
-				"CEO_ATLASSIAN_EMAIL": integration.KindAtlassian,
-				"CEO_ATLASSIAN_TOKEN": integration.KindAtlassian,
+				"ATLASSIAN_EMAIL_CEO": integration.KindAtlassian,
+				"ATLASSIAN_TOKEN_CEO": integration.KindAtlassian,
 			}})
 			return m
-		}, "waiting for the atlassian integration to mint ${CEO_ATLASSIAN_EMAIL} and ${CEO_ATLASSIAN_TOKEN}"},
+		}, "waiting for the atlassian integration to mint ${ATLASSIAN_EMAIL_CEO} and ${ATLASSIAN_TOKEN_CEO}"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -707,7 +716,7 @@ func TestASealThatRefreshesThisNodeStartsTheChildItHeldBackWithNoApply(t *testin
 		t.Fatalf("sink: %v", err)
 	}
 	for name, value := range map[string]string{
-		"CEO_ATLASSIAN_EMAIL": "agent-ceo@example.com", "CEO_ATLASSIAN_TOKEN": "ceo-minted",
+		"ATLASSIAN_EMAIL_CEO": "agent-ceo@example.com", "ATLASSIAN_TOKEN_CEO": "ceo-minted",
 	} {
 		if err := sink.Record(t.Context(), name, value); err != nil {
 			t.Fatalf("record %s: %v", name, err)
@@ -764,7 +773,7 @@ func TestASealDuringTheClaimsWaitingDecisionStartsTheChild(t *testing.T) {
 	<-gate.entered
 	e.secretsMu.Lock()
 	e.installSecrets(map[string]string{
-		"CEO_ATLASSIAN_EMAIL": "agent-ceo@example.com", "CEO_ATLASSIAN_TOKEN": "ceo-minted",
+		"ATLASSIAN_EMAIL_CEO": "agent-ceo@example.com", "ATLASSIAN_TOKEN_CEO": "ceo-minted",
 	})
 	e.secretsMu.Unlock()
 	if ceo.ask(true) {
@@ -794,7 +803,7 @@ func TestTheReportedWaitIsTheFirstBySeatID(t *testing.T) {
 	cto := heldSeatChildren(t, e, "cto", always)
 	// Only what the pass mints left missing on atlassian, for both.
 	e.secretsMu.Lock()
-	e.installSecrets(map[string]string{"CEO_JIRA_SITE": "https://acme.example.com"})
+	e.installSecrets(map[string]string{"JIRA_SITE": "https://acme.example.com"})
 	e.secretsMu.Unlock()
 	e.convergeSeat(t.Context(), ceo, true)
 	e.convergeSeat(t.Context(), cto, true)
@@ -809,7 +818,7 @@ func TestTheReportedWaitIsTheFirstBySeatID(t *testing.T) {
 			continue
 		}
 		if row.Waiting != 2 || row.WaitSeat != first ||
-			!strings.Contains(row.Wait, "${"+firstHandle+"_ATLASSIAN_TOKEN}") {
+			!strings.Contains(row.Wait, "${ATLASSIAN_TOKEN_"+firstHandle+"}") {
 			t.Errorf("atlassian row = %+v: want 2 waiting, reported as the first seat id %s's", row, first)
 		}
 		return

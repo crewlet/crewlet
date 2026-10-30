@@ -86,11 +86,6 @@ func addSinkFlags(fs *flag.FlagSet) sinkFlags {
 	}
 }
 
-// recordsInStore reports whether the run records into the secret store, whose
-// sink reads a seat's token back through the run's route — so the names it
-// reads back go into the batch the run reads up front.
-func (s sinkFlags) recordsInStore() bool { return *s.secretStore }
-
 // open builds the chosen sink, refusing an ambiguous or absent choice.
 // -secret-store records into the run's own store ([companyStore.recordInto]),
 // which companySecrets owns and closes.
@@ -464,18 +459,6 @@ func (s sinkStore) Unset(ctx context.Context, name string) (bool, error) {
 	return gone, nil
 }
 
-// seatTokenVars is the variable each planned seat's token is recorded under,
-// for the seats a run provisions — every one, or those only names.
-func seatTokenVars(plan *provision.Plan, only []string) []string {
-	var names []string
-	for _, seat := range plan.Seats {
-		if len(only) == 0 || slices.Contains(only, seat.Handle) {
-			names = append(names, seat.TokenVar)
-		}
-	}
-	return unionReads(names)
-}
-
 // fieldReads is every variable these fields reference, each once, sorted:
 // what a command reads behind the fields of the document it resolves.
 func fieldReads(fields ...string) []string {
@@ -652,22 +635,6 @@ func runGitLabProvision(inv invocation, args []string, stdout, stderr io.Writer)
 	return nil
 }
 
-// printPlan renders what a run intends to do.
-// The `what` names the credential a seat would have to reference, because
-// an empty plan is almost always a config that names none — and "nothing to
-// do" without saying what was looked for sends an operator to the third-party app.
-func printPlan(w io.Writer, plan *provision.Plan, what string) {
-	if plan.Empty() {
-		fmt.Fprintf(w, "No seat references %s, so there is nothing to provision.\n", what)
-	} else {
-		fmt.Fprintf(w, "%d seat(s) to provision:\n", len(plan.Seats))
-		for _, seat := range plan.Seats {
-			fmt.Fprintf(w, "  %-16s %s → %s\n", seat.Handle, seat.Role, seat.TokenVar)
-		}
-	}
-	printNotes(w, plan.Notes)
-}
-
 // printResult renders what a run did.
 //
 // THE REPORT ENDS WITH THE NOTES, because they are the part an operator has
@@ -708,31 +675,6 @@ func printNextStep(w io.Writer, recorded int, sink provision.TokenSink) {
 		return
 	}
 	fmt.Fprintf(w, "Next: %s\n", sink.NextStep())
-}
-
-// printKept reports the seats a run deliberately did not touch, naming fresh,
-// the command's own flag for minting their credentials anyway.
-//
-// SAID OUT LOUD, because it is the successful outcome of a re-run: a report
-// that mentioned only what changed would read as a run that did nothing,
-// and the operator's next move would be to reach for that flag — which is
-// exactly the outage this behaviour exists to prevent.
-//
-// THE FLAG IS THE CALLER'S, because the commands sharing this line do not
-// share one: GitLab and Mattermost mint afresh with -rotate, Slack with
-// -reinstall, and a line naming -rotate to a Slack operator named a flag
-// that command refuses. And the step after it is the sink's, said on that
-// run's own Next: line ([printNextStep]): a restart is what -env-file and
-// -print need, while -secret-store needs a reload of a running node.
-func printKept(w io.Writer, kept []string, fresh string) {
-	if len(kept) == 0 {
-		return
-	}
-	fmt.Fprintf(w, "Left %d seat(s) alone — their credential still works, "+
-		"and rotating it would revoke what the running engine is using: %s\n"+
-		"  (pass %s to mint fresh ones; that run's Next: line says what the "+
-		"engine then needs)\n",
-		len(kept), strings.Join(kept, ", "), fresh)
 }
 
 func printNotes(w io.Writer, notes []string) {
@@ -779,9 +721,10 @@ var vendorCommands = map[string][]vendorCommand{
 	"jira": {
 		{"provision", "<company.yaml>", runJiraProvision},
 	},
-	"slack": {
-		{"provision", "<company.yaml>", runSlackProvision},
-	},
+	// EVERY SLACK COMMAND IS RETIRED ([retiredCommands]); the vendor stays
+	// routed so a command line copied from an older guide says where its
+	// work went.
+	"slack": {},
 	"confluence": {
 		{"provision", "<company.yaml>", runConfluenceProvision},
 		{"import", "<company.yaml> <directory>", runConfluenceImport},
@@ -799,6 +742,16 @@ var vendorCommands = map[string][]vendorCommand{
 //
 //nolint:gochecknoglobals // a fixed table, not state
 var retiredCommands = map[string]map[string]string{
+	"slack": {
+		"provision": "each agent's Slack app is now created and kept by the reconcile loop " +
+			"with the app configuration token entered on Slack's connect form, and " +
+			"installed with Install on the Slack integration's Agents tab. An app the " +
+			"command made is adopted by its bot token. To let it be installed again, " +
+			"store its OAuth client from slack-apps.json with `crewlet secrets set " +
+			"SLACK_CLIENT_ID_<HANDLE>` and `crewlet secrets set SLACK_CLIENT_SECRET_<HANDLE>`, " +
+			"each value piped on stdin rather than passed with -value, then delete " +
+			"slack-apps.json; the Slack guide's upgrade notes show the commands",
+	},
 	"mattermost": {
 		"provision": "each agent's Mattermost bot, its roles, its channels and its token " +
 			"are now managed from the Mattermost integration's Agents tab and applied " +
@@ -818,7 +771,7 @@ var errUnknownSub = errors.New("unknown command")
 func runIntegration(inv invocation, vendor string, args []string, stdout, stderr io.Writer) error {
 	sub, rest := splitSubject(args)
 	commands := vendorCommands[vendor]
-	if len(commands) == 0 {
+	if len(commands) == 0 && len(retiredCommands[vendor]) == 0 {
 		// Unreachable through run(), whose case list and this table are
 		// asserted equal. Answered rather than panicked because a caller
 		// inside the process is not an operator to be crashed at.

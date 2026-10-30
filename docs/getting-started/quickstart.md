@@ -914,12 +914,10 @@ each), then wire them in:
   If your company already runs on [Slack](../integrations/slack.md), use it —
   the agents land where the conversations already happen, under the
   workspace admin and compliance setup you already have. It needs a public
-  URL for its Events API and one OAuth **Allow** click per agent:
-  ```bash
-  export CREWLET_API_TOKEN="$CREWLET_API_TOKEN_FOUNDER"
-  crewlet slack provision company.yaml -secret-store -public-url https://your-server.com
-  crewlet config import company.yaml        # the block, with what was just minted
-  ```
+  URL for its Events API, an app configuration token entered once on Slack's
+  connect form under Company › Integrations, and one **Allow** click per agent
+  from the Slack integration's Agents tab: the engine creates each agent's app
+  and seals its bot token when the click comes back.
   To try chat on this machine first,
   [Mattermost](../integrations/mattermost.md) ships in this repo's
   `docker-compose.yml` and needs no account, no inbound URL and no clicks.

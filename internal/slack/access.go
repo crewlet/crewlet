@@ -139,3 +139,26 @@ func ManifestScopes(manifest map[string]any) []string {
 func ScopeDrift(held []string) (missing, extra []string) {
 	return scopeDiff(held, slices.Sorted(slices.Values(BotScopes)))
 }
+
+// appGone reports a Slack error meaning the recorded app is not there any
+// more — deleted in the console, or moved to a workspace this credential
+// cannot see.
+//
+// # Why it is a set of codes rather than a status
+//
+// Every Web API answer is a 200 carrying `"ok": false`, so the only signal is
+// the code string. These three are what the app-management methods answer for
+// an id that does not resolve, and they are not interchangeable with a
+// permission refusal: an app this operator may not touch still EXISTS, and
+// replacing it would leave two.
+func appGone(err error) bool {
+	var api *APIError
+	if !errors.As(err, &api) {
+		return false
+	}
+	switch api.Code {
+	case "app_not_found", "invalid_app_id", "invalid_app":
+		return true
+	}
+	return false
+}

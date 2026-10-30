@@ -76,19 +76,112 @@ export function samePermissions(
   return (lane.permissions ?? []).every((p) => (a?.[p.key] ?? "none") === (b?.[p.key] ?? "none"));
 }
 
+/** The ids a level holds: one, or for a lane of sets, each chosen one. */
+export function levelIds(level: string | undefined): string[] {
+  return (level ?? "").split(" ").filter((id) => id !== "");
+}
+
+/**
+ * The level a lane of sets stores for the ids chosen, sorted and
+ * space-separated. Every permission needs the one the vendor requires for
+ * the rest (Confluence's View), so choosing any adds it.
+ */
+export function joinLevels(lane: Lane, ids: string[]): string {
+  const set = new Set(ids.filter((id) => id !== ""));
+  const base = REQUIRED_LEVEL[lane.key];
+  if (base && set.size > 0) set.add(base);
+  return [...set].sort().join(" ");
+}
+
+/** The level every other level of a lane of sets needs, by lane. */
+const REQUIRED_LEVEL: Partial<Record<AccessLaneKey, string>> = { confluence: "read:space" };
+
+const sameLevel = (lane: Lane, a: string | undefined, b: string | undefined) =>
+  lane.multiple
+    ? [...levelIds(a)].sort().join(" ") === [...levelIds(b)].sort().join(" ")
+    : (a ?? "") === (b ?? "");
+
 /** Whether two desired states ask for the same thing. */
 export function sameDesired(lane: Lane, a: AccessDesired, b: AccessDesired): boolean {
   return (
     a.enabled === b.enabled &&
-    (a.level ?? "") === (b.level ?? "") &&
+    sameLevel(lane, a.level, b.level) &&
     samePermissions(lane, a.permissions, b.permissions) &&
     sameScope(a.scope, b.scope)
   );
 }
 
-/** The vendor's exact name for a level. */
+/**
+ * The vendor's exact name for a level; for a lane of sets, the names chosen
+ * in the vendor's order ("View, Add pages"), or "No permissions".
+ */
 export function levelName(lane: Lane, id: string | undefined): string {
+  const only = productOnly(lane, id);
+  if (only) return only;
+  if (lane.multiple) {
+    const ids = new Set(levelIds(id));
+    if (ids.size === 0) return "No permissions";
+    const known = lane.levels.filter((l) => ids.has(l.id));
+    const unknown = [...ids].filter((x) => !lane.levels.some((l) => l.id === x));
+    return [...known.map((l) => l.name), ...unknown].join(", ");
+  }
   return lane.levels.find((l) => l.id === id)?.name ?? id ?? "None";
+}
+
+/** The empty level, where the vendor offers one: the product with no role (Jira, Confluence). */
+export function emptyLevel(lane: Lane) {
+  return lane.levels.find((l) => l.id === "");
+}
+
+/**
+ * The empty level's name ("Product access only") where a seat holds it, or
+ * null. On a lane of sets it is the empty set.
+ */
+export function productOnly(lane: Lane, id: string | undefined): string | null {
+  const empty = emptyLevel(lane);
+  return empty && levelIds(id).length === 0 ? empty.name : null;
+}
+
+/**
+ * Whether a seat's scope is offered: never on a lane managed outside Crewlet,
+ * and not with product access only, unless a list is already held there
+ * (which the document refuses), so it can be cleared.
+ */
+export function scopeApplies(lane: Lane, want: AccessDesired): boolean {
+  if (lane.scope === undefined || managedOutside(lane)) return false;
+  return productOnly(lane, want.level) === null || (want.scope ?? []).length > 0;
+}
+
+/** A set of levels for a table cell: two names in the vendor's order, then a count. */
+export function levelSummary(lane: Lane, level: string | undefined): string {
+  const names = levelName(lane, level).split(", ");
+  return names.length <= 2
+    ? names.join(", ")
+    : `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`;
+}
+
+/**
+ * Why a seat's draft cannot be saved, or null: product access only together
+ * with a project or space list, which needs a role; or, where the vendor has
+ * no empty level, a lane of sets turned on with nothing chosen.
+ */
+export function refusedLevel(lane: Lane, want: AccessDesired): string | null {
+  if (!want.enabled) return null;
+  const noun = laneWords(lane.key).scope?.noun.toLowerCase() ?? "scope";
+  if (productOnly(lane, want.level) && (want.scope ?? []).length > 0)
+    return `Product access only on ${lane.name} takes no ${noun}. Choose a role, or clear its ${noun}.`;
+  if (lane.multiple && !emptyLevel(lane) && levelIds(want.level).length === 0)
+    return `Choose at least one ${lane.name} permission for every agent that is on.`;
+  return null;
+}
+
+/**
+ * The empty level's note under a seat on a lane of sets that holds it, where
+ * the multi-select has no menu row to carry it, or null.
+ */
+export function productOnlyNote(lane: Lane, want: AccessDesired): string | null {
+  if (!lane.multiple || !want.enabled || !productOnly(lane, want.level)) return null;
+  return emptyLevel(lane)?.note ?? null;
 }
 
 /** "Contents: Read and write, Issues: Read-only", for the permissions held, in GitHub's words. */
