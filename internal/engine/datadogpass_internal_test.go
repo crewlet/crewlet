@@ -3,6 +3,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/coord/memory"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -19,7 +20,9 @@ func TestADatadogBlockWithNoProvisioningIsReportedAsItsMissingKeys(t *testing.T)
 	t.Parallel()
 	company := specCompany(t, provisioningDoc(true))
 	company.Config.Integrations.Datadog.Provisioning = nil
-	e := &Engine{}
+	// A FLEET STORE, which every engine [New] builds has: the pass's access
+	// sync reads the seat access ledger kept there.
+	e := &Engine{backends: &Backends{Fleet: memory.NewFleet()}}
 	e.epoch.current.Store(company)
 
 	findings, err := (&datadogPass{engine: e}).Run(t.Context(), setup.PassInput{})

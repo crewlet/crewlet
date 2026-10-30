@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"slices"
 	"strings"
 
@@ -16,22 +17,31 @@ import (
 // on upgrade over a rule its author never saw. The access sync holds the same
 // line again at the vendor, as defence in depth (internal/seataccess).
 //
-// Three things are refused:
+// Four things are refused:
 //
-//   - a block on a human seat, or one that turns a seat on at an integration
-//     the company has not connected;
+//   - a block that does not say `enabled`, one on a human seat, or one that
+//     turns a seat on at an integration the company has not connected;
 //   - access the vendor does not offer, where the vendor's set is fixed (a
 //     GitLab role, Mattermost roles, a GitHub permission); a live-listed id (a
 //     Datadog role, a Jira project role, a Confluence space role, a GitLab
 //     custom role) is checked by the integration's sync against the vendor,
 //     and one that no longer exists is a finding there;
 //   - a scope wider than the company's reach, so a seat cannot widen it;
+//   - a seat credential written where the engine owns it, shared with a
+//     company block or another seat, or reading another seat's
+//     (seatcredentialrules.go).
 
 // seatAccessOnHuman is the refusal of a per-seat access block on a human seat.
 const seatAccessOnHuman = "a human seat holds no account the engine manages"
 
 // validateSeatAccess is the per-seat access rules, run together.
-func (c *Company) validateSeatAccess() error { return c.validateSeatBlocks() }
+func (c *Company) validateSeatAccess() error {
+	refs, err := c.References()
+	if err != nil {
+		return err
+	}
+	return errors.Join(c.validateSeatBlocks(), c.validateSeatCredentials(refs))
+}
 
 // validateSeatBlocks checks every seat's per-integration blocks.
 func (c *Company) validateSeatBlocks() error {
@@ -69,11 +79,18 @@ func (c *Company) validateSeatBlocks() error {
 				}
 				continue
 			}
-			if SeatAccessOn(b.enabled) && !c.connected(b.lane) {
+			if b.enabled == nil {
+				p.add(at(here, "enabled"), ErrMissing,
+					"required: say whether this agent is on at %s. An agent is off "+
+						"until turned on, and the document states it rather than "+
+						"leaving it to be inferred", b.lane)
+				continue
+			}
+			if *b.enabled && !c.connected(b.lane) {
 				p.add(at(here, "enabled"), ErrConflict,
 					"this agent is turned on at %s, which the company has not "+
 						"connected: add integrations.%s first, or turn the agent off",
-					b.lane, connection(b.lane))
+					b.lane, b.lane)
 			}
 		}
 		if role.Kind == org.KindHuman {
@@ -89,33 +106,28 @@ func (c *Company) validateSeatBlocks() error {
 	return p.err()
 }
 
-// connection is the company block a lane's accounts are made through.
-func connection(lane string) string {
-	if lane == "jira" || lane == "confluence" {
-		return "atlassian"
-	}
-	return lane
-}
-
-// connected reports whether the company has connected the integration a
-// lane's accounts are made through.
+// connected reports whether the company holds the connection a lane cannot
+// work without, where there is one: Mattermost's server and team, which the
+// agent's bot posts through, and Jira's and Confluence's sites, which the
+// engine's own tools read (a Data Center site included, whose seats'
+// credentials are external, D4b).
+//
+// THE OTHER LANES NEED NONE OF THEIR OWN. Where the engine provisions Slack,
+// GitHub, GitLab or Datadog the company block is there by definition
+// ([Company.SeatCredentialMode]); where it does not, an agent's app or token
+// was made outside Crewlet and is bound to its tool from the seat alone, so
+// `enabled` there needs no company block.
 func (c *Company) connected(lane string) bool {
 	in := c.Integrations
-	switch connection(lane) {
-	case "datadog":
-		return in.Datadog != nil && in.Datadog.Enabled
-	case "gitlab":
-		return in.GitLab != nil && in.GitLab.Enabled
-	case "atlassian":
-		return in.Atlassian != nil
-	case "github":
-		return in.GitHub != nil && in.GitHub.Enabled
-	case "slack":
-		return in.Slack != nil
+	switch lane {
 	case "mattermost":
 		return in.Mattermost != nil && in.Mattermost.Enabled
+	case "jira":
+		return in.Jira != nil
+	case "confluence":
+		return in.Confluence != nil
 	default:
-		return false
+		return true
 	}
 }
 
@@ -198,10 +210,14 @@ func (c *Company) checkJira(p *problems, path Path, b *RoleJira, projects []stri
 	if b == nil {
 		return
 	}
-	if SeatAccessOn(b.Enabled) && strings.TrimSpace(b.ProjectRole) == "" {
+	// NO ROLE IS PRODUCT ACCESS ONLY: the account has Jira and the site's
+	// permission schemes decide what it sees. A project list names where a
+	// role is held, so it needs one.
+	if SeatAccessOn(b.Enabled) && strings.TrimSpace(b.ProjectRole) == "" && len(b.Projects) > 0 {
 		p.add(at(path, "project_role"), ErrMissing,
-			"required while this agent is on: the Jira project role id it holds, "+
-				"as the site's GET /rest/api/3/role lists it")
+			"required with a projects list: the Jira project role id it holds in "+
+				"them, as the site's GET /rest/api/3/role lists it. Leave both out "+
+				"for product access only")
 	}
 	withinReach(p, at(path, "projects"), b.Projects, projects, "project",
 		"a unit's or a root seat's `project`")
@@ -217,10 +233,14 @@ func (c *Company) checkConfluence(p *problems, path Path, b *RoleConfluence, spa
 			"a Confluence seat holds a space role or space permissions, not both: "+
 				"remove space_role or operations")
 	}
-	if SeatAccessOn(b.Enabled) && role == "" && len(ops) == 0 {
+	// NEITHER IS PRODUCT ACCESS ONLY: the account has Confluence and the
+	// site's and each space's permissions decide what it sees. A space list
+	// names where access is held, so it needs one.
+	if SeatAccessOn(b.Enabled) && role == "" && len(ops) == 0 && len(b.Spaces) > 0 {
 		p.add(at(path, "space_role"), ErrMissing,
-			"required while this agent is on: its Confluence space role, or its "+
-				"space permissions where the site has no space roles")
+			"required with a spaces list: its Confluence space role in them, or "+
+				"its space permissions where the site has no space roles. Leave "+
+				"all three out for product access only")
 	}
 	for i, op := range ops {
 		operation, target, ok := strings.Cut(strings.TrimSpace(op), ":")

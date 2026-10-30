@@ -24,13 +24,13 @@ const githubAppsDoc = `{
   "roles": [
     {"name": "SRE Lead", "handle": "sre-lead", "llm": "zulu"},
     {"name": "Builder", "handle": "builder", "llm": "zulu",
-     "integrations": {"github": {"tier": "full_access", "app_id": 41, "app_slug": "acme-builder"}}},
+     "integrations": {"github": {"enabled": false, "tier": "full_access", "app_id": 41, "app_slug": "acme-builder"}}},
     {"name": "Reviewer", "handle": "reviewer", "llm": "zulu",
-     "integrations": {"github": {"tier": "review", "app_id": 42, "app_slug": "acme-reviewer",
-       "installation_id": 7, "private_key": "${REVIEWER_GITHUB_APP_KEY}"}}},
+     "integrations": {"github": {"enabled": false, "tier": "review", "app_id": 42, "app_slug": "acme-reviewer",
+       "installation_id": 7, "private_key": "${GITHUB_APP_KEY_REVIEWER}"}}},
     {"name": "Stray", "handle": "stray", "llm": "zulu",
-     "integrations": {"github": {"app_id": 43, "app_slug": "acme-stray",
-       "installation_id": 8, "private_key": "${STRAY_GITHUB_APP_KEY}"}}},
+     "integrations": {"github": {"enabled": false, "app_id": 43, "app_slug": "acme-stray",
+       "installation_id": 8, "private_key": "${GITHUB_APP_KEY_STRAY}"}}},
     {"name": "Jane Founder", "handle": "founder", "kind": "human",
      "contact": {"github_login": "jane"}}
   ]
@@ -40,7 +40,7 @@ const githubAppsDoc = `{
 func (s *surface) seedGitHubApps(t *testing.T) {
 	t.Helper()
 	s.seedDocument(t, githubAppsDoc)
-	if err := s.vault.Set(t.Context(), "REVIEWER_GITHUB_APP_KEY",
+	if err := s.vault.Set(t.Context(), "GITHUB_APP_KEY_REVIEWER",
 		"-----BEGIN RSA PRIVATE KEY-----\nnot-a-real-key\n-----END RSA PRIVATE KEY-----",
 		testAuthor, secrets.SourceAPI, pinned); err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestASeatWhoseAppKeyDoesNotResolveIsNotSatisfied(t *testing.T) {
 			"which is the one state that looks configured while nothing works")
 	}
 	detail, _ := stray["detail"].(string)
-	if !strings.Contains(detail, "${STRAY_GITHUB_APP_KEY}") {
+	if !strings.Contains(detail, "${GITHUB_APP_KEY_STRAY}") {
 		t.Errorf("detail = %q, and it does not name the variable to set", detail)
 	}
 	// AND THE ONE THAT DID RESOLVE SAYS SO WITHOUT CARRYING THE KEY.
@@ -494,7 +494,7 @@ func TestASeatEnrolledInGitHubWithNoAppHoldsTheCardOpen(t *testing.T) {
 	    "github": {"enabled": true, "webhook_secret": "org", "provisioning": {"org": "acme"}}},
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu",
-	     "integrations": {"github": {"tier": "review"}}},
+	     "integrations": {"github": {"enabled": true, "tier": "review"}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
 	}`)

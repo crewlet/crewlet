@@ -1372,8 +1372,17 @@ const (
 	// through one rule; rgb channels and trailing slashes read in linear
 	// time; and uilet 0.77.0, its compact cards and CheckGrid in place of the
 	// seat grid) took it to 4773.5 KiB. 4774 KiB, which still refuses a
-	// doubled baseline.
-	treeBudget = 4<<20 + 678<<10
+	// doubled baseline. Per-seat integration access (each integration's
+	// Agents tab and an agent's Access tab: the table in the vendor's own
+	// terms, the review of the engine's plan, the permissions and removal
+	// dialogs, their readings and copy, and their stylesheet), with uilet
+	// 0.78.0's tab-row actions and uniform description lists, took it to
+	// 4807.1 KiB (+33.7 KiB), each module once, in one chunk the
+	// integrations screen and the agent page share and the first load does
+	// not fetch. Its styles and the integrations screen's left the entry
+	// stylesheet for that chunk, so the first load stayed within its budget.
+	// 4808 KiB, which still refuses a doubled baseline.
+	treeBudget = 4<<20 + 712<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

@@ -33,6 +33,7 @@ roles:
     llm: zulu
     integrations:
       slack:
+        enabled: false
         bot_token: "${SLACK_BOT_TOKEN_CEO}"
         signing_secret: "${SLACK_SIGNING_SECRET_CEO}"
 units:
@@ -43,6 +44,7 @@ units:
         llm: zulu
         integrations:
           slack:
+            enabled: false
             bot_token: "${SLACK_BOT_TOKEN_SRE_LEAD}"
             signing_secret: "xoxb-written-by-hand"
       - name: SWE

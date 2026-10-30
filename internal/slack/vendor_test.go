@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/seataccess"
+	"github.com/crewlet/crewlet/internal/setup"
 	"github.com/crewlet/crewlet/internal/slack"
 )
 
@@ -497,4 +498,55 @@ func lastToken(ws *workspace) string {
 		return ""
 	}
 	return ws.tokens[len(ws.tokens)-1]
+}
+
+// THE CONNECT FORM ASKS FOR THE APP-CONFIGURATION TOKEN and seals it under the
+// one name the engine rotates it under; the vendor reads whatever name the
+// company block points at.
+func TestTheConnectFormSealsTheConfigurationToken(t *testing.T) {
+	t.Parallel()
+	reqs := slack.CompanyRequirements(&config.Slack{AppConfigToken: "${SLACK_APP_CONFIG_TOKEN}"},
+		func(name string) (string, bool) { return "xoxe-1-refresh", name == slack.ConfigTokenVar })
+	var token *setup.Requirement
+	for i := range reqs {
+		if reqs[i].Field == "app_config_token" {
+			token = &reqs[i]
+		}
+	}
+	if token == nil || token.Kind != setup.KindSecret || token.SecretName != slack.ConfigTokenVar ||
+		token.ConfigPath != "integrations.slack.app_config_token" || !token.Present || !token.Connect {
+		t.Fatalf("requirement = %+v", token)
+	}
+
+	w := newSlackWorld(t)
+	pair := w.sealed[slack.ConfigTokenVar]
+	delete(w.sealed, slack.ConfigTokenVar)
+	w.sealed["ACME_SLACK_CONFIG"] = pair
+	w.cfg.Integrations.Slack.AppConfigToken = "${ACME_SLACK_CONFIG}"
+	if _, err := slack.OpenThrough(t.Context(), seataccess.OpenInput{
+		Config: w.cfg, Env: config.NewResolver(w.sealed), Sink: w.sink, WebhookBase: w.base,
+	}, rewriting(t, w.ws)); err != nil {
+		t.Errorf("a token sealed under the block's own name was not found: %v", err)
+	}
+}
+
+// AN APP MADE BEFORE THE LOOP MANAGED SLACK IS ADOPTED: the ledger names no
+// app, the seat's sealed token works, and Slack says which app it belongs to,
+// so the plan adopts it rather than creating a second app for the seat.
+func TestAnAppTheLedgerDoesNotNameIsFoundFromItsToken(t *testing.T) {
+	t.Parallel()
+	w := newSlackWorld(t).installed()
+	w.ws.replies["auth.test"] = `{"ok":true,"user_id":"U0SWE","user":"swe","bot_id":"B0SWE"}`
+	w.ws.replies["bots.info"] = `{"ok":true,"bot":{"app_id":"A0OLD"}}`
+	obs, err := w.open(t).Observe(t.Context(), seataccess.ObserveInput{Seats: []seataccess.SeatRef{swe}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := obs["swe"][seataccess.LaneSlack]
+	if !got.Exists || !got.Enabled || got.AccountID != "A0OLD" {
+		t.Errorf("an app found from its token observed %+v", got)
+	}
+	if w.ws.called("apps.manifest.create") != 0 {
+		t.Error("observing created an app")
+	}
 }

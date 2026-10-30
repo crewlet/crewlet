@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 
 	"github.com/google/uuid"
 
@@ -129,7 +128,11 @@ func (e *Engine) syncSeatAccess(
 		// THE MIGRATION'S GATE: until the document marks the integration
 		// migrated onto per-seat access, its seats say nothing per seat,
 		// and read as off they would have every account turned off.
-		Unmigrated: !company.Config.SeatAccessMigratedFor(string(kind)),
+		//
+		// A DISCONNECT IS NOT GATED: it turns every seat off by request, and
+		// acts only on accounts the ledger records, never on a document's
+		// unmigrated seats.
+		Unmigrated: !in.disconnect && !company.Config.SeatAccessMigratedFor(string(kind)),
 	})
 	if in.sink != nil {
 		// FLUSHED WHATEVER THE SYNC CONCLUDED: every value it recorded is
@@ -189,32 +192,57 @@ func (e *Engine) tearDownSeatAccess(
 		// disconnect turns off.
 		return nil
 	}
+	ledger, err := e.SeatAccessLedger()
+	if err != nil {
+		return fmt.Errorf("engine: %s teardown: %w", kind, err)
+	}
+	records, err := ledger.Records(ctx, kind)
+	if err != nil {
+		return fmt.Errorf("engine: %s teardown: %w", kind, err)
+	}
+	var held int
+	asks := make(map[string]seataccess.Ask, len(records))
+	for handle, rec := range records {
+		if rec.Held() {
+			held++
+		}
+		if remove {
+			asks[handle] = seataccess.Ask{Remove: true}
+		}
+	}
 	sink, err := e.SetupSink(by)
 	if err != nil {
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
 	}
-	var asks map[string]seataccess.Ask
-	if remove {
-		ledger, lerr := e.SeatAccessLedger()
-		if lerr != nil {
-			return lerr
-		}
-		records, rerr := ledger.Records(ctx, kind)
-		if rerr != nil {
-			return fmt.Errorf("engine: %s teardown: %w", kind, rerr)
-		}
-		asks = make(map[string]seataccess.Ask, len(records))
-		for handle := range maps.Keys(records) {
-			asks[handle] = seataccess.Ask{Remove: true}
-		}
-	}
 	_, err = e.syncSeatAccess(ctx, kind, seatSync{
 		sink: sink, by: by, asks: asks, disconnect: true, webhookBase: e.webhookBase,
 	})
-	if err != nil && !errors.Is(err, integration.ErrNotConfigured) {
+	switch {
+	case err == nil:
+		return nil
+	case !errors.Is(err, integration.ErrNotConfigured):
 		return fmt.Errorf("engine: %s teardown: %w", kind, err)
+	case remove && held > 0:
+		// REMOVAL WAS ASKED FOR AND CANNOT BE DONE. Answering nil here lets
+		// the block, and with it the only credential that reaches these
+		// accounts, be dropped while every one stays live at the vendor and
+		// the operator is told remove_seats succeeded.
+		return fmt.Errorf("engine: %s teardown: the ledger records %d agent "+
+			"account(s) to remove and the vendor cannot be reached to remove them: %w; "+
+			"fix the connection, or disconnect without removing accounts and remove "+
+			"them at the vendor by hand", kind, held, err)
+	default:
+		// KEPT AS THEY ARE: a disconnect that removes nothing needs no
+		// vendor, and the ledger keeps every account for a reconnect to
+		// reach.
+		if held > 0 {
+			log.WarnContext(ctx, "seat_access_teardown_unreachable",
+				"integration", kind.String(), "accounts", held, "error", err,
+				"detail", "the agents' accounts stay as they are at the vendor; "+
+					"the ledger keeps them for a reconnect")
+		}
+		return nil
 	}
-	return nil
 }
 
 // seatAccessPlan is the provisioning plan a seat's tool waits on for kind:
@@ -229,6 +257,15 @@ func (e *Engine) seatAccessPlan(c *Company, kind integration.Kind) (*provision.P
 	}
 	cat := vendor.Catalog()
 	plan := &provision.Plan{}
+	// NOTHING IS ON ITS WAY where the access sync seals nothing: an
+	// integration whose credentials are handed in from outside (D4b), or one
+	// the document has not migrated onto per-seat access, whose sync changes
+	// nothing. A seat's child naming one of its sealed names there waits on
+	// no pass and is reported as the missing secret it is.
+	if c.Config.SeatCredentialMode(string(kind), e.companyManaged) != config.SeatCredentialEngine ||
+		!c.Config.SeatAccessMigratedFor(string(kind)) {
+		return plan, nil
+	}
 	for _, seat := range seataccess.SeatsOf(c.Config) {
 		on := false
 		for _, lane := range seataccess.LanesOf(kind) {

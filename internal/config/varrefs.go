@@ -61,7 +61,10 @@ func (c *Company) References() (VariableReferences, error) {
 		Seats:           map[string]map[string]int{},
 	}
 	for role := range c.EachRole() {
-		if role.Handle == "" {
+		// BY THE DERIVED HANDLE, the org model's key, which every reader
+		// of these counts holds a seat by.
+		handle := role.IdentityKey()
+		if handle == "" {
 			continue
 		}
 		env, envErr := countRefs(role.MCPEnv)
@@ -70,8 +73,8 @@ func (c *Company) References() (VariableReferences, error) {
 		if joined := errors.Join(envErr, blocksErr, wholeErr); joined != nil {
 			return VariableReferences{}, joined
 		}
-		refs.SeatCredentials[role.Handle] = sumRefs(refs.SeatCredentials[role.Handle], sumRefs(env, blocks))
-		refs.Seats[role.Handle] = sumRefs(refs.Seats[role.Handle], whole)
+		refs.SeatCredentials[handle] = sumRefs(refs.SeatCredentials[handle], sumRefs(env, blocks))
+		refs.Seats[handle] = sumRefs(refs.Seats[handle], whole)
 	}
 	return refs, nil
 }

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -96,6 +98,11 @@ var ErrNotAwaitingInstall = errors.New("setupapi: this agent's app is not waitin
 type AccessRefusal struct {
 	Status         int
 	Reason, Remedy string
+
+	// RetryAfter is how long to wait where the refusal is transient (a
+	// store the vendor's step needs could not be read): answered as a 503
+	// with a Retry-After, and never set otherwise.
+	RetryAfter time.Duration
 }
 
 func (r *AccessRefusal) Error() string { return r.Reason + " (" + r.Remedy + ")" }
@@ -185,11 +192,7 @@ func accessKind(w http.ResponseWriter, r *http.Request) (integration.Kind, bool)
 	if slices.Contains(seataccess.Kinds(), kind) {
 		return kind, true
 	}
-	names := make([]string, 0, len(seataccess.Kinds()))
-	for _, k := range seataccess.Kinds() {
-		names = append(names, string(k))
-	}
-	detail := map[string]string{"hint": "one of " + strings.Join(names, ", ")}
+	detail := map[string]string{"hint": accessElsewhere}
 	if kind == integration.KindJira || kind == integration.KindConfluence {
 		detail["detail"] = "Jira and Confluence are set per agent on atlassian, " +
 			"whose one account per agent both products grant"
@@ -442,6 +445,11 @@ func (s *Service) accessInstall(w http.ResponseWriter, r *http.Request) {
 				"waits for a person to approve the install",
 		})
 		return
+	case errors.As(err, &refusal) && refusal.RetryAfter > 0:
+		httpjson.UnavailableWith(w, httpjson.CodeUnavailable,
+			int(math.Ceil(refusal.RetryAfter.Seconds())),
+			httpjson.Detail{"detail": refusal.Reason, "hint": refusal.Remedy})
+		return
 	case errors.As(err, &refusal):
 		httpjson.FailWith(w, refusal.Status, httpjson.CodeInvalidInput, map[string]string{
 			"detail": refusal.Reason, "hint": refusal.Remedy,
@@ -461,9 +469,22 @@ func (s *Service) accessInstall(w http.ResponseWriter, r *http.Request) {
 
 // accessSavePolicy is the save route's policy, declared once so the mount and
 // the handler's own check read one value.
+//
+// IT NEVER CREATES WHAT ITS ADDRESS NAMES: the address is an integration, and
+// an integration is connected through its own setup, never by saving its
+// agents. A kind that manages no account per agent is refused with
+// [accessElsewhere], the sentence a preview that finds nothing there is told.
 func accessSavePolicy() authz.Policy {
-	return authz.Policy{Action: authz.ActionSetupAccessWrite}.Checked()
+	return authz.Policy{Action: authz.ActionSetupAccessWrite}.Checked().
+		WhenAbsent(authz.AddedElsewhere(accessElsewhere))
 }
+
+// accessElsewhere is where an integration's agents are reached from when the
+// address names no integration that manages an account per agent: what the
+// route refuses such a kind with, and what it declares ([authz.Absent]).
+const accessElsewhere = "an agent's access is set on an integration that manages one " +
+	"account per agent (slack, mattermost, atlassian for Jira and Confluence, github, " +
+	"gitlab, datadog); connect one with POST /setup/integrations/{kind}/inputs first"
 
 // accessAct serves POST /setup/integrations/{kind}/access/seats/{handle}/{lane}/{action}.
 //
@@ -756,7 +777,9 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 	want seataccess.Desired) httpjson.Detail {
 
 	if want.Level != "" && len(o.Levels) > 0 && (o.Live || !liveLevels(kind, lane)) {
-		if _, _, listed := o.Level(want.Level); !listed {
+		// A SET OF LEVELS where the lane takes one (Confluence's space
+		// permissions by operation): every one of them must be offered.
+		if _, listed := o.LevelsOf(want.Level); !listed {
 			offered := make([]string, 0, len(o.Levels))
 			for _, level := range o.Levels {
 				offered = append(offered, level.ID+" ("+level.Name+")")

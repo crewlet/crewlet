@@ -217,11 +217,6 @@ func TestCompanyValidatorRejections(t *testing.T) {
 			"name: Acme\nintegrations:\n  mattermost:\n    enabled: true\n    url: https://chat.example.com\n",
 			"integrations.mattermost.team", ErrMissing,
 		},
-		{
-			"an unknown gitlab access level",
-			"name: Acme\nintegrations:\n  gitlab:\n    enabled: true\n    url: https://gitlab.com\n    signing_secret: s\n    provisioning:\n      access_level: owner\n",
-			"integrations.gitlab.provisioning.access_level", ErrUnknownValue,
-		},
 
 		// seats
 		{
@@ -916,4 +911,15 @@ func TestASlackBlockNeedsNoCredentials(t *testing.T) {
 	}
 	rejects(t, "name: Acme\nintegrations:\n  slack: {}\nroles:\n  - name: CEO\n    integrations:\n      slack:\n        enabled: true\n        bot_token: \"xoxb-${REST}\"\n",
 		"roles[0].integrations.slack.bot_token")
+}
+
+// THE APP-CONFIGURATION TOKEN IS A WHOLE ${VAR}: its refresh token works once,
+// and each rotation is sealed back under the name it points at.
+func TestTheSlackConfigurationTokenIsAReference(t *testing.T) {
+	t.Parallel()
+	rejects(t, "name: Acme\nintegrations:\n  slack: {app_config_token: xoxe-1-literal}\n",
+		"integrations.slack.app_config_token")
+	if _, err := ParseCompany([]byte("name: Acme\nintegrations:\n  slack: {app_config_token: \"${SLACK_APP_CONFIG_TOKEN}\"}\n")); err != nil {
+		t.Errorf("a reference was refused: %v", err)
+	}
 }

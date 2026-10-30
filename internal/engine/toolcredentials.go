@@ -7,12 +7,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/crewlet/crewlet/internal/atlassian"
 	"github.com/crewlet/crewlet/internal/config"
-	"github.com/crewlet/crewlet/internal/datadog"
-	"github.com/crewlet/crewlet/internal/gitlab"
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/setup"
 )
@@ -141,12 +137,14 @@ import (
 // creates an account per agent at its vendor and seals each one's credential
 // under the variable the seat's configuration points at.
 //
-// THE PLAN IS THE DECLARATION, and seatPlan is the only place it is made. The
-// pass's own Run mints by it, the engine reads what a child waits for off it
+// THE PLAN IS THE DECLARATION, and seatPlan is the only place it is made. Every
+// one is [Engine.seatAccessPlan]: the seats that are on at the integration,
+// under the engine-owned names the access sync seals into
+// ([seataccess.SinkName]). The engine reads what a child waits for off it
 // ([Engine.mintedFor]), and so does anything else that asks which seats this
 // engine provisions at the vendor ([Engine.atlassianCredentialSealed]) — so a
-// variable a pass would mint and the variable a child waits for cannot be two
-// spellings of one fact. Two tests hold that: every pass this build runs
+// variable the sync would seal and the variable a child waits for cannot be
+// two spellings of one fact. Two tests hold that: every pass this build runs
 // declares this or is listed as minting no seat credential
 // (TestEveryPassThatMintsASeatsCredentialDeclaresItsPlan), and no code in this
 // package reads a vendor's plan anywhere but in a seatPlan or a teardown
@@ -165,43 +163,25 @@ type seatMinter interface {
 	seatPlan(c *Company) (*provision.Plan, error)
 }
 
-// seatPlan is every agent's Atlassian account. The block exists for nothing
-// else: the organization key in it is what creates them.
-func (*atlassianPass) seatPlan(c *Company) (*provision.Plan, error) {
-	if c.Config.Integrations.Atlassian == nil {
-		return nil, integration.ErrNotConfigured
-	}
-	return atlassian.PlanFor(c.Org)
+// seatPlan is every agent that is on at Jira or Confluence, whose Atlassian
+// account the access sync creates.
+func (p *atlassianPass) seatPlan(c *Company) (*provision.Plan, error) {
+	return p.engine.seatAccessPlan(c, integration.KindAtlassian)
 }
 
-// seatPlan is every agent's GitLab service account. gitlab.PlanFor itself
-// refuses a block that is off or names no provisioning.
-func (*gitlabPass) seatPlan(c *Company) (*provision.Plan, error) {
-	return gitlab.PlanFor(c.Org, c.Config.Integrations.GitLab)
+// seatPlan is every agent that is on at GitLab.
+func (p *gitlabPass) seatPlan(c *Company) (*provision.Plan, error) {
+	return p.engine.seatAccessPlan(c, integration.KindGitLab)
 }
 
-// seatPlan is every agent's Mattermost bot, where the company provisions
-// them. ONLY THERE: mattermost.PlanFor plans for any enabled block, and a
-// company whose bots were made by hand holds no provisioning block and no
-// administrator token, so this engine's pass mints none of their tokens. A
-// person may still run `crewlet mattermost provision` for it, which is their
-// own gesture and seals into the store like `crewlet secrets set`.
-func (*mattermostPass) seatPlan(c *Company) (*provision.Plan, error) {
-	cfg := c.Config.Integrations.Mattermost
-	if cfg == nil || !cfg.Enabled || cfg.Provisioning == nil {
-		return nil, integration.ErrNotConfigured
-	}
-	return mattermost.PlanFor(c.Org, cfg)
+// seatPlan is every agent that is on at Mattermost.
+func (p *mattermostPass) seatPlan(c *Company) (*provision.Plan, error) {
+	return p.engine.seatAccessPlan(c, integration.KindMattermost)
 }
 
-// seatPlan is every agent's Datadog service account. The pass converges
-// nothing for a block that is off, which datadog.PlanFor does not check.
-func (*datadogPass) seatPlan(c *Company) (*provision.Plan, error) {
-	cfg := c.Config.Integrations.Datadog
-	if cfg == nil || !cfg.Enabled {
-		return nil, integration.ErrNotConfigured
-	}
-	return datadog.PlanFor(c.Org, cfg)
+// seatPlan is every agent that is on at Datadog.
+func (p *datadogPass) seatPlan(c *Company) (*provision.Plan, error) {
+	return p.engine.seatAccessPlan(c, integration.KindDatadog)
 }
 
 // seatPlan is every agent that is on at Slack, whose bot token the access sync

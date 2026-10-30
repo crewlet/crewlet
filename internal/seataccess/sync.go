@@ -151,7 +151,27 @@ func Sync(ctx context.Context, in SyncInput) (SyncReport, error) {
 			return s.report, err
 		}
 	}
+	s.report.Findings = append(s.report.Findings, unboundTools(in.Open.Config, kind)...)
 	return s.report, nil
+}
+
+// unboundTools is the finding for each per-seat server named after kind that
+// reads no seat's credential: it declares no `seat_credentials` and is not a
+// server this build recognises, so every agent's instance of it starts and
+// acts as nobody (D15).
+func unboundTools(c *config.Company, kind integration.Kind) []integration.Finding {
+	var out []integration.Finding
+	for _, name := range c.UnboundSeatServers(string(kind)) {
+		out = append(out, integration.Finding{
+			Kind:    integration.FindingCredentialMissing,
+			Subject: "mcp_servers." + name,
+			Detail: "tool declared but no credential binding: the per-seat server " + name +
+				" reads no agent's credential, so every agent's instance acts as nobody",
+			Remedy: "Declare the variable or header it reads under seat_credentials on " +
+				"the mcp_servers entry, or run a server this engine recognises",
+		})
+	}
+	return out
 }
 
 // syncHandles is every seat a sync visits: the document's agents and every
@@ -327,6 +347,11 @@ func (s *syncer) adopt(rec *Record, want map[Lane]Desired, have map[Lane]Observe
 			if cred.Variable == "" {
 				cred.Variable = SinkName(s.kind, s.cat.Credentials[0], rec.Handle)
 			}
+			if cred.Source == "" {
+				// SEALED OUTSIDE THE SYNC, BY THE ENGINE all the same (a
+				// manifest route, an install landing): minted, not handed in.
+				cred.Source = CredentialMinted
+			}
 			rec.Credential = &cred
 		}
 	}
@@ -357,18 +382,31 @@ func (s *syncer) offered(ctx context.Context, lane Lane, d Desired) (*Failure, e
 		s.options[lane] = opts
 	}
 	if spec.Levels {
-		if d.Level == "" {
+		_, offered := opts.LevelsOf(d.Level)
+		switch {
+		case d.Level == "" && !offered:
+			// AN EMPTY LEVEL IS UNSET, except where the vendor offers it as
+			// a level of its own (product access only).
 			return &Failure{
 				Step: VerbGrant, Actor: ByYou,
 				Said:   fmt.Sprintf("no %s access is set for this agent", LaneName(lane)),
 				Remedy: "Choose its access on the integration's Agents tab",
 			}, nil
-		}
-		if _, ok := opts.LevelsOf(d.Level); !ok {
+		case !offered:
 			return &Failure{
 				Step: VerbGrant, Actor: ByYou,
 				Said:   fmt.Sprintf("%s does not offer the access %q any more", LaneName(lane), d.Level),
 				Remedy: "Choose one it offers on the integration's Agents tab",
+			}, nil
+		case d.Level == "" && len(d.Scope) > 0:
+			// PRODUCT ACCESS ONLY HOLDS NOTHING IN A PROJECT OR SPACE, so a
+			// list beside it has nothing to apply; the document's rules
+			// refuse it on submit and this holds a stored one to the same.
+			return &Failure{
+				Step: VerbScope, Actor: ByYou,
+				Said: fmt.Sprintf("%s's product access only holds no role, so the list %s "+
+					"has nothing to apply", LaneName(lane), strings.Join(d.Scope, ", ")),
+				Remedy: "Choose a role for that list on the integration's Agents tab, or clear the list",
 			}, nil
 		}
 	}
@@ -545,7 +583,9 @@ func (s *syncer) seal(ctx context.Context, handle string, minted []Minted) (*Cre
 		return nil, nil
 	}
 	sinks := SinkNames(s.cat, handle)
-	cred := &Credential{Variable: sinks[s.cat.Credentials[0]], MintedAt: s.now, By: s.in.By}
+	cred := &Credential{
+		Variable: sinks[s.cat.Credentials[0]], MintedAt: s.now, By: s.in.By, Source: CredentialMinted,
+	}
 	for _, field := range s.cat.Credentials[1:] {
 		cred.Others = append(cred.Others, sinks[field])
 	}

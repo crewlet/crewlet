@@ -333,8 +333,14 @@ func levelWords(offer seataccess.Options, id string) string {
 	if id == "" {
 		return ""
 	}
-	if level, _, ok := offer.Level(id); ok {
-		return level.Name
+	// A SET OF LEVELS (Confluence's space permissions by operation) is
+	// named level by level, as the picker draws it.
+	if levels, ok := offer.LevelsOf(id); ok {
+		names := make([]string, 0, len(levels))
+		for _, level := range levels {
+			names = append(names, level.Name)
+		}
+		return strings.Join(names, ", ")
 	}
 	return id
 }

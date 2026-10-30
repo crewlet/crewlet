@@ -2494,12 +2494,12 @@ func firstRunes(s string, n int) string {
 	return s[:n]
 }
 
-// A SEAT OPTS IN BY NAMING A VARIABLE, and the roster says which side of that
+// A SEAT OPTS IN BY BEING TURNED ON, and the roster says which side of that
 // each seat is on.
 //
-// The plan a provisioning pass runs is built from the seats whose mcp_env
-// block holds a whole `${VAR}`: that is where the minted credential goes, and
-// a seat with nowhere to put one is left alone. So the two states are not
+// The plan a provisioning pass runs is built from the seats whose
+// `integrations.<lane>` block says `enabled: true` (D9), and the engine seals
+// each one's credential under the seat's own name. So the two states are not
 // "has an account" and "does not": they are "no sync will look at this seat"
 // and "the next one will".
 //
@@ -2519,9 +2519,10 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	  "integrations": {"gitlab": {"enabled": true, "url": "https://gitlab.com",
 	    "signing_secret": "whsec_YS1maXh0dXJlLXNpZ25pbmcta2V5LW9mLTMyYnl0ZXM=",
 	    "provisioning": {"group": "acme", "admin_token": "glpat-x"}}},
+	  "mcp_servers": [{"name": "gitlab", "command": "glab", "args": ["mcp", "serve"], "shared": false}],
 	  "roles": [
 	    {"name": "Coder", "handle": "coder", "llm": "zulu",
-	     "mcp_env": {"gitlab": {"GITLAB_TOKEN": "${CODER_GITLAB_TOKEN}"}}},
+	     "integrations": {"gitlab": {"enabled": true, "access_level": 30}}},
 	    {"name": "Writer", "handle": "writer", "llm": "zulu"}
 	  ]
 	}`)
@@ -2537,8 +2538,8 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 		seats[seat["handle"].(string)] = seat
 	}
 
-	// OPTED IN AND WAITING. The variable is named and nothing is behind it
-	// yet, which is exactly what puts this seat in the plan.
+	// OPTED IN AND WAITING. The seat is on, and nothing is sealed under its
+	// own name yet, which is exactly what puts it in the plan.
 	opted, _ := seats["coder"]["detail"].(string)
 	if !strings.Contains(opted, "waiting for the next sync") {
 		t.Errorf("a seat that opted in reads %q", opted)
@@ -2550,7 +2551,7 @@ func TestAProvisionedSeatSaysWhichSideOfOptingInItIsOn(t *testing.T) {
 	// NOT OPTED IN, and no sync will look at it. Promised an account, the
 	// card read Connected over an agent that was never going to get one.
 	out, _ := seats["writer"]["detail"].(string)
-	if !strings.Contains(out, "mcp_env.gitlab") {
+	if !strings.Contains(out, "Agents tab") {
 		t.Errorf("a seat nobody opted in reads %q, and it does not say how to", out)
 	}
 	if strings.Contains(out, "created on the next sync") {

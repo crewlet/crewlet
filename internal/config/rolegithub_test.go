@@ -79,7 +79,7 @@ func TestASeatIsHeldOnlyWithAnAppAnInstallationAndAKey(t *testing.T) {
 func TestWorkflowWritesAreRefusedBelowFullAccess(t *testing.T) {
 	t.Parallel()
 	seat := func(github string) string {
-		return "name: Acme\nroles:\n  - name: Dev\n    integrations:\n      github:\n" + github
+		return "name: Acme\nroles:\n  - name: Dev\n    integrations:\n      github:\n        enabled: false\n" + github
 	}
 	for name, block := range map[string]string{
 		"silent tier": "        workflows: true\n",

@@ -127,7 +127,7 @@ roles:
       labels: {zone: eu}
     project: ENGP
     integrations:
-      mattermost: {bot_token: "${MM_SWE}", username: swe-bot, channel: eng}
+      mattermost: {enabled: false, bot_token: "${MM_SWE}", username: swe-bot, channel: eng}
     sandbox:
       max_turns: 40
       pause_ttl_seconds: 0
@@ -196,6 +196,7 @@ roles:
     space: ENGSPACE
     integrations:
       slack:
+        enabled: false
         bot_token: "${SLACK_SWE}"
         signing_secret: "${SIGN_SWE}"
 `)
@@ -313,14 +314,13 @@ func TestDanglingReferencesAreReportedNotRejected(t *testing.T) {
 	}
 }
 
-// TestAGitLabAccessLevelForNoSeatIsReported: an override keyed by a handle no
-// seat holds is a grant waiting for whichever seat next derives that handle,
-// typically a seat re-added after a delete. The org model cannot see the
-// integrations block, so the check lives here, after the org's own
-// references, against the handles of the same normalized organization.
-func TestAGitLabAccessLevelForNoSeatIsReported(t *testing.T) {
+// THE COMPANY-WIDE GITLAB ACCESS LEVELS ARE REFUSED BY NAME: each agent's
+// GitLab role is on its own seat now, so a file that still carries one is told
+// where the setting went rather than that it misspelled a key.
+func TestTheCompanyGitLabAccessLevelsAreRefusedByName(t *testing.T) {
 	t.Parallel()
-	cfg := mustCompany(t, `
+	for _, key := range []string{"access_level: developer", "access_levels: {sre: maintainer}", "token_scopes: [api]"} {
+		_, err := ParseCompany([]byte(`
 name: Acme
 integrations:
   gitlab:
@@ -329,44 +329,13 @@ integrations:
     signing_secret: "${GITLAB_SIGNING_SECRET}"
     provisioning:
       group: acme
-      access_levels:
-        tech-lead: maintainer
-        sre: maintainer
-        founder: developer
-        former-engineer: maintainer
+      ` + key + `
 roles:
-  - name: Founder
-    kind: human
-    manages: [ceo, ghost]
-    contact: {gitlab_username: founder}
-  - name: CEO
-units:
-  - name: Platform
-    id: platform
-    lead: tech-lead
-    roles:
-      - name: Tech Lead
-      - name: Site Reliability
-        handle: sre
-`)
-	want := []org.DanglingRef{
-		{Kind: org.RefManages, From: "Founder", To: "ghost"},
-		{Kind: org.RefGitLabAccessLevel, From: "integrations.gitlab.provisioning.access_levels", To: "former-engineer"},
-	}
-	// Compared by what they name: the seat pointer belongs to an
-	// organization this test never sees, since each call builds its own.
-	got := cfg.DanglingRefs()
-	for i := range got {
-		got[i].Seat, got[i].Unit = nil, nil
-	}
-	if !slices.Equal(got, want) {
-		t.Errorf("DanglingRefs() = %v, want %v", got, want)
-	}
-
-	// A company without provisioning overrides has nothing to report here.
-	plain := mustCompany(t, "name: Acme\nroles:\n  - {name: CEO}\n")
-	if got := plain.DanglingRefs(); len(got) != 0 {
-		t.Errorf("DanglingRefs() = %v, want none", got)
+  - {name: SRE, handle: sre}
+`))
+		if err == nil || !strings.Contains(err.Error(), "was removed") {
+			t.Errorf("%s: ParseCompany = %v, want it refused by name", key, err)
+		}
 	}
 }
 
@@ -381,47 +350,6 @@ func TestToggleKeepsItsThirdState(t *testing.T) {
 	off := mustCompany(t, "name: Acme\nroles:\n  - {name: CEO, learning_enabled: false}\n").Roles[0]
 	if !off.LearningEnabled.IsSet() || off.LearningEnabled.Or(true) {
 		t.Fatal("an explicit false must be distinguishable from unset")
-	}
-}
-
-// A GITLAB ACCESS LEVEL NAMES A SEAT BY ITS HANDLE.
-//
-// The override follows the seat whose handle keys it, and a key naming no
-// seat is the one DanglingSettingsRefs reports, because it is the grant
-// waiting for whoever is next given that handle.
-func TestAnAccessLevelNamesTheSeatWhoseHandleKeysIt(t *testing.T) {
-	t.Parallel()
-	cfg := mustCompany(t, `
-name: Acme
-integrations:
-  gitlab:
-    enabled: true
-    url: https://gitlab.example.com
-    signing_secret: "${GITLAB_SIGNING_SECRET}"
-    provisioning:
-      group: acme
-      access_levels:
-        ghost: developer
-        head: maintainer
-roles:
-  - {name: Head, handle: head}
-  - {name: SWE, handle: swe}
-`)
-	o, err := cfg.Organization()
-	if err != nil {
-		t.Fatal(err)
-	}
-	provisioning := cfg.Integrations.GitLab.Provisioning
-	if level, found := provisioning.OverrideFor(o.Role("head")); !found || level != "maintainer" {
-		t.Errorf("head's override = %q, %v; want maintainer", level, found)
-	}
-	// THE CONTROL: a seat no key names has no override.
-	if level, found := provisioning.OverrideFor(o.Role("swe")); found {
-		t.Errorf("swe's override = %q; no key names it", level)
-	}
-	dangling := cfg.DanglingSettingsRefs(o)
-	if len(dangling) != 1 || dangling[0].To != "ghost" || dangling[0].Kind != org.RefGitLabAccessLevel {
-		t.Errorf("DanglingSettingsRefs = %+v, want only the key naming nobody", dangling)
 	}
 }
 
