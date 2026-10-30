@@ -5,19 +5,31 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 )
 
 // DefaultBoxTimeout is a box's TTL and keepalive window.
 //
-// NOT a run-time limit: a coding job is never force-stopped on a timer, and
-// the waiter refreshes a running box's TTL to this value every tick so the
-// clock never kills it. It is effectively the ORPHAN-RECLAIM GRACE — how long
-// a box outlives an engine that stops heart-beating before the provider
-// reclaims it. 900s is 60 waiter ticks: ample slack for a node that pauses for
-// GC, a deploy, or a slow reconcile, and short enough that a crashed engine's
-// boxes do not linger for an operator to find.
+// NOT a run-time limit, and not a provisioning one: a coding job is never
+// force-stopped on a timer, and the waiter refreshes a running box's TTL to
+// this value every tick so the clock never kills it — as the launch refreshes
+// the box it is still provisioning ([keepProvisioning]), so no sum of setup
+// and clone steps is raced against it either. It is effectively the
+// ORPHAN-RECLAIM GRACE — how long a box outlives an engine that stops
+// heart-beating before the provider reclaims it. 900s is 60 waiter ticks:
+// ample slack for a node that pauses for GC, a deploy, or a slow reconcile,
+// and short enough that a crashed engine's boxes do not linger for an
+// operator to find.
 const DefaultBoxTimeout = 900 * time.Second
+
+// provisionRefresh is how often a box the launch is still provisioning has its
+// timer refreshed ([keepProvisioning]): the waiter's own cadence
+// ([DefaultPollInterval]), so a box being provisioned is kept alive exactly as
+// a running one is — sixty refreshes inside [DefaultBoxTimeout], each one
+// control-plane call, as a running box's tick costs — and a refresh that fails
+// leaves fifty-nine more before the timer can run out.
+const provisionRefresh = DefaultPollInterval
 
 // DefaultPauseTTL bounds a box PAUSED on a clarification.
 //
@@ -392,6 +404,11 @@ func (m *Manager) BuildSpec(in SpecInput) Spec {
 // promises the full environment. Teardown uses a context of its own, because
 // the failure that got us here is often the caller's context expiring — and a
 // close that skips because the context is already dead leaks the box.
+//
+// THE BOX IS KEPT ALIVE from its creation until it is handed back or torn
+// down ([keepProvisioning]): the install and the steps run one after another,
+// each to its own timeout, and their sum is bounded by nothing the box's
+// timer knows of.
 func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, Runner, error) {
 	runner, err := m.RunnerFor(spec.CodingAgent)
 	if err != nil {
@@ -460,7 +477,9 @@ func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) 
 // installed where there is a runner, and setup applied, run WITH the spec's
 // environment so a recipe can read the engine's identity facts and its own
 // configured tokens at provisioning time. A failure of either tears the box
-// down before it is answered ([Manager.discard]). Mounts the cell cannot take
+// down before it is answered ([Manager.discard]), and the box is kept alive
+// from its creation until both are done ([keepProvisioning]), for a check's
+// box as for a coding run's. Mounts the cell cannot take
 // are refused before any box exists ([mountsFit]): the remote backend reads
 // none, so its cell is held here, where every box is made.
 func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, runner Runner) (Sandbox, error) {
@@ -479,20 +498,28 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 	if err != nil {
 		return nil, err
 	}
+	// STOPPED BEFORE THE BOX IS TORN DOWN, on every path below: a refresh
+	// racing the teardown would ask a provider to keep a box it is killing,
+	// and on the local backend would write the keepalive stamp back into a
+	// box directory the teardown had just removed.
+	stopKeepalive := keepProvisioning(ctx, box, m.timeout)
 	if runner != nil {
 		if err := runner.Install(ctx, box); err != nil {
+			stopKeepalive()
 			log.ErrorContext(ctx, "sandbox_install_failed", "sandbox_id", box.ID(), "error", err.Error())
 			m.discard(ctx, box)
 			return nil, err
 		}
 	}
 	if err := ApplySetup(ctx, box, setup, spec.Env); err != nil {
+		stopKeepalive()
 		// Logged distinctly from an install failure so the operator debugs
 		// the right subsystem: this one is their config, or the box's git.
 		log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "error", err.Error())
 		m.discard(ctx, box)
 		return nil, err
 	}
+	stopKeepalive()
 	names := make([]string, 0, len(setup))
 	for _, step := range setup {
 		names = append(names, step.Name)
@@ -501,6 +528,73 @@ func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, r
 		"sandbox_id", box.ID(), "placement", string(placement),
 		"coding_agent", spec.CodingAgent, "setup_steps", names, "mounts", len(spec.Mounts))
 	return box, nil
+}
+
+// keepProvisioning keeps box's timer from running out while the engine
+// provisions it, and returns what stops it: [Sandbox.SetTimeout] to ttl at once
+// and every [provisionRefresh] after, until the stop — which waits for a
+// refresh in flight, so nothing of it touches the box once the stop returns.
+// The caller stops it when its provisioning ends, whichever way it ends, and
+// before anything tears the box down.
+//
+// THE WAITER'S KEEPALIVE DOES NOT REACH A BOX BEING PROVISIONED: it refreshes
+// the boxes of RUNNING rows that name one, and a launch's row is LAUNCHING
+// with no box on it until the box is ready. Everything provisioning runs — the
+// coding agent's install, the operator's setup, the box's git check and a
+// clone for each repository ([MaxRunRepos]), one after another, each up to its
+// own timeout ([DefaultSetupTimeout]) — ran inside the timer the box was
+// created or reconnected with alone, and a sum past it had the provider reap
+// the box mid-step: on E2B a launch failed on the transport's error under the
+// step's name, nothing naming the timer, and a reused box lost the work an
+// earlier job left in it; in the local backend's `direct` cell another
+// launch's orphan sweep deleted a box that had no job yet to show it was in
+// use. Refreshed while the engine works on the box, the timer stays what
+// [DefaultBoxTimeout] says it is, the grace a box outlives an engine that
+// stopped working on it, and only a step's own timeout ends a slow step.
+//
+// PROVISIONING ONLY: what the launch does after it — writing the box on the
+// row, starting the job, writing its command — is a few control-plane calls
+// each bounded in seconds, made inside the timer the last refresh set, and
+// the waiter's keepalive takes the box over once its run's row runs.
+//
+// THE FIRST REFRESH IS MADE BEFORE THIS RETURNS: a reused box's timer is
+// whatever its reconnect left — in the `direct` cell a keepalive stamp as old
+// as the last tick of the job before — and the step about to run must not
+// begin on a box an orphan sweep may take. A refresh that fails is logged and
+// left to the next, as the waiter's is: a box its provider has reclaimed fails
+// the step that runs on it, naming itself.
+func keepProvisioning(ctx context.Context, box Sandbox, ttl time.Duration) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	refresh := func() {
+		if err := box.SetTimeout(ctx, ttl.Seconds()); err != nil && ctx.Err() == nil {
+			log.DebugContext(ctx, "sandbox_provision_keepalive_failed",
+				"sandbox_id", box.ID(), "error", err.Error())
+		}
+	}
+	refresh()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(provisionRefresh)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// A tick that lands with the stop is the stop's: once asked
+				// to stop, the box is not asked to stay.
+				if ctx.Err() != nil {
+					return
+				}
+				refresh()
+			}
+		}
+	}()
+	return sync.OnceFunc(func() {
+		cancel()
+		<-done
+	})
 }
 
 // discardGrace bounds a cleanup that has to outlive the context that asked for

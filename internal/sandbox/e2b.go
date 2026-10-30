@@ -211,8 +211,10 @@ func (p *E2BProvider) Attach(ctx context.Context, sandboxID string) (Sandbox, er
 //
 // It matches the config layer's own default box TTL. The value is repeated
 // rather than imported because this package does not import config — and the
-// waiter refreshes the real TTL on its next tick regardless, so this only has
-// to be long enough to survive the gap between resume and that tick.
+// box's timer is the engine's again at once, so this only has to be long
+// enough to survive the gap until then: a launch reusing the box refreshes it
+// before its clone steps run ([keepProvisioning]), and the waiter on its next
+// tick once the job runs.
 const defaultSandboxTTLSeconds = 900
 
 // Kill implements [Provider].

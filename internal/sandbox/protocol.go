@@ -189,9 +189,10 @@ type Spec struct {
 	CodingAgent string
 
 	// TimeoutSec is NOT a run deadline: it is the box's initial TTL, which
-	// the waiter refreshes every tick, so a running job is never killed by
-	// the clock. It is the ORPHAN-RECLAIM GRACE — how long a box outlives
-	// an engine that has stopped heart-beating.
+	// the launch refreshes while it provisions the box and the waiter every
+	// tick once the job runs, so neither a long provisioning nor a running
+	// job is ever killed by the clock. It is the ORPHAN-RECLAIM GRACE — how
+	// long a box outlives an engine that has stopped heart-beating.
 	TimeoutSec float64
 
 	// PauseTTLSec bounds a PAUSED box: how long its snapshot is held before
@@ -375,9 +376,24 @@ func mountsFit(placement Placement, mounts []Mount) error {
 }
 
 // MaxRunRepos is the most repositories one coding run is given: each costs a
-// clone before the coding agent starts, inside the setup budget
-// ([DefaultSetupTimeout] a step), and a run that needs more is a task that
-// should be split.
+// clone before the coding agent starts, and a run that needs more is a task
+// that should be split.
+//
+// THE CLONES ADD UP. They run one after another, after the operator's steps
+// and the box's git check, each to its own budget ([DefaultSetupTimeout]), so
+// eight are up to eighty minutes on top of the rest of the box's provisioning
+// — five times the box's TTL ([DefaultBoxTimeout]), which is why the launch
+// keeps the box's timer refreshed for as long as it provisions it
+// ([keepProvisioning]) rather than leaving the sum to the timer the box was
+// made with. What a run waits for before its coding agent starts is that sum.
+//
+// ONE AFTER ANOTHER, never at once, which would cut that wait to the slowest
+// clone's: a clone's index-pack keeps an entry for every commit and tree it
+// receives while it writes their index — 1.37 million of them for a gigabyte
+// of history (internal/code/host's BenchmarkBoxClone) — and eight at once
+// would share a box its template sized for one coding agent. In turn, the
+// clones cost a run with many repositories time; at once, they would cost
+// its box memory.
 const MaxRunRepos = 8
 
 // MaxConePaths is the most directories one repository's cone names
@@ -801,8 +817,10 @@ type Sandbox interface {
 	// THE KEEPALIVE. A provider reclaims a box that many seconds after the
 	// TTL was last set, and the waiter calls this every poll tick — so a
 	// running box is bounded only by how long the engine can go WITHOUT a
-	// heartbeat, never by a fixed run deadline. A provider with no settable
-	// TTL no-ops.
+	// heartbeat, never by a fixed run deadline — as the launch does while it
+	// provisions the box, on another goroutine than the one running the
+	// box's setup steps, so a backend answers it beside a command in flight.
+	// A provider with no settable TTL no-ops.
 	SetTimeout(ctx context.Context, seconds float64) error
 
 	// Pause snapshots the box for a later resume, holding a run blocked on

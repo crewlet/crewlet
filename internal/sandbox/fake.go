@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"time"
 )
 
 // The in-process test doubles.
@@ -28,17 +29,17 @@ import (
 
 // FakeSandbox is an in-memory box.
 type FakeSandbox struct {
-	// TimeoutCalls counts SetTimeout calls — the waiter's keepalive.
-	// Exported so a test can assert the heartbeat actually happened.
-	mu           sync.Mutex
-	id           string
-	home         string
-	files        map[string][]byte
-	timeoutCalls int
-	paused       bool
-	closed       bool
-	commands     []string
-	background   []string
+	mu    sync.Mutex
+	id    string
+	home  string
+	files map[string][]byte
+	// timeouts is every refresh of the box's timer, with when it came: see
+	// [FakeSandbox.Timeouts].
+	timeouts   []FakeTimeout
+	paused     bool
+	closed     bool
+	commands   []string
+	background []string
 	// execs is every command the box was asked to run, foreground and
 	// detached, with the environment it was given: see [FakeSandbox.Execs].
 	execs []FakeExec
@@ -209,13 +210,29 @@ func (s *FakeSandbox) content(p string) ([]byte, error) {
 	return slices.Clone(s.files[path.Clean(p)]), nil
 }
 
-// SetTimeout is accepted and ignored: nothing in a fake box can outrun a
-// deadline.
+// SetTimeout records the refresh, and when it came, and ends nothing: a case
+// about a box its timer can end models the end itself, from
+// [FakeSandbox.Timeouts].
 func (s *FakeSandbox) SetTimeout(ctx context.Context, seconds float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.timeoutCalls++
+	s.timeouts = append(s.timeouts, FakeTimeout{At: time.Now(), Seconds: seconds})
 	return nil
+}
+
+// FakeTimeout is one refresh of a [FakeSandbox]'s timer: when it was asked for,
+// on the clock the case runs under, and the seconds it set the timer to.
+type FakeTimeout struct {
+	At      time.Time
+	Seconds float64
+}
+
+// Timeouts is every refresh of the box's timer, in order — the waiter's
+// keepalive and a launch's while it provisions the box alike.
+func (s *FakeSandbox) Timeouts() []FakeTimeout {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.timeouts)
 }
 
 // Pause marks the box snapshotted; [FakeSandbox.Paused] reports it.
@@ -234,11 +251,12 @@ func (s *FakeSandbox) Close(ctx context.Context) error {
 	return nil
 }
 
-// Keepalives is how many times the waiter refreshed this box's TTL.
+// Keepalives is how many times this box's TTL was refreshed: by the waiter's
+// keepalive, and by a launch while it provisioned the box.
 func (s *FakeSandbox) Keepalives() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.timeoutCalls
+	return len(s.timeouts)
 }
 
 // Paused reports whether the box is currently snapshotted.

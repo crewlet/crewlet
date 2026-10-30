@@ -423,9 +423,10 @@ func (b *directBox) ReadTail(ctx context.Context, path string, n int) (FileTail,
 // This DOES have a counterpart here, and missing it was the bug: the orphan
 // reaper reclaims local boxes on a clock, so a running box that never says it
 // is alive is one the next Create on this host deletes. The waiter calls this
-// once per poll for exactly the boxes it is keeping alive, which is the same
-// contract a remote TTL refresh has. The argument is unused: a local box has
-// no provider-side deadline to extend, only a last-seen time to move forward.
+// once per poll for exactly the boxes it is keeping alive, and a launch for
+// the box it is provisioning, which is the same contract a remote TTL refresh
+// has. The argument is unused: a local box has no provider-side deadline to
+// extend, only a last-seen time to move forward.
 func (b *directBox) SetTimeout(ctx context.Context, seconds float64) error {
 	touchAlive(b.layout)
 	return nil

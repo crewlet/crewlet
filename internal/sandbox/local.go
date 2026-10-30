@@ -133,7 +133,9 @@ func (l boxLayout) pidFile() string { return filepath.Join(l.records(), "box.pid
 // subdirectories, so the box root's own timestamp is frozen at creation for
 // the box's entire life. Anything reading it as "recently used" is reading a
 // constant. This file is touched on every SetTimeout, which the waiter calls
-// once per poll for exactly the box it is keeping alive.
+// once per poll for exactly the box it is keeping alive, and a launch for the
+// box it is provisioning — a box with no job yet, which only the stamp keeps
+// from the orphan sweep of another launch on the host.
 func (l boxLayout) aliveFile() string { return filepath.Join(l.records(), "alive") }
 
 // credentialsFile records the logins this box was seeded with

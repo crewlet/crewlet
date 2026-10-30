@@ -385,9 +385,14 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 	// the clone steps run on it alone, each skipping a repository already
 	// checked out. One that fails is this launch's failure, as a failed step
 	// on a fresh box is: a brief promising a checkout the box does not hold
-	// must never reach a run.
+	// must never reach a run. KEPT ALIVE while they run, as a fresh box is
+	// through its own provisioning ([keepProvisioning]): its reconnect left it
+	// one timer's worth, and the clones are as long as the repositories.
 	if reused && len(req.Clone) > 0 {
-		if err := ApplySetup(ctx, box, req.Clone, env); err != nil {
+		stopKeepalive := keepProvisioning(ctx, box, m.BoxTimeout())
+		err := ApplySetup(ctx, box, req.Clone, env)
+		stopKeepalive()
+		if err != nil {
 			log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "reused", true,
 				"error", err.Error())
 			c.abandon(ctx, m, req, fence, box.ID())

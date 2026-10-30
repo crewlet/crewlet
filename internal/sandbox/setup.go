@@ -16,9 +16,19 @@ import (
 // Anchored to what provisioning actually is: a cold dependency install
 // (apt-get install, npm ci, uv sync) over a network is typically one to five
 // minutes, and a large monorepo clone or an image pull can reach ten. Ten
-// minutes covers those while still failing well inside the box TTL
-// (DefaultBoxTimeout, 900s), so a wedged command surfaces as a named setup
-// failure rather than as a box the provider reaps out from under the run.
+// minutes covers those, and a wedged command surfaces as a named setup
+// failure at its own budget.
+//
+// ONE COMMAND'S BUDGET, NEVER THE PROVISIONING'S. A launch runs the coding
+// agent's install, the operator's steps, the box's git check and one clone
+// for each repository it is given ([MaxRunRepos]) one after another, each to
+// this budget unless its step sets its own — an hour and a half at worst for
+// the engine's own nine, the check and eight clones, before any of the
+// operator's — while the box's TTL ([DefaultBoxTimeout], 900s) is a sixth of
+// that. Nothing races the two: the launch keeps the box's timer refreshed for
+// as long as it provisions it ([keepProvisioning]), so the provider never
+// reaps a box out from under a step that is still within its budget, and
+// only that budget ends a slow step.
 //
 // It exists at all because provisioning is NOT a control-plane call: without
 // its own budget these commands inherited the backend's control timeout —
