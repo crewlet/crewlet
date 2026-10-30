@@ -190,7 +190,7 @@ func TestSpacePermissionsAreTheAccountsOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(held) != 2 || held[0].Operation != confluence.OperationRead || held[1].Operation.ID() != "create/page" {
+	if len(held) != 2 || held[0].Operation != confluence.OperationRead || held[1].Operation.ID() != "create:page" {
 		t.Fatalf("held = %+v", held)
 	}
 	if err := c.AddSpacePermission(ctx, "ENG", "acc-sre", confluence.Operation{Key: "create", Target: "page"}); err != nil {
@@ -215,15 +215,15 @@ func TestSpacePermissionsAreTheAccountsOwn(t *testing.T) {
 func TestOperationsCarryConfluencesNames(t *testing.T) {
 	t.Parallel()
 	for id, name := range map[string]string{
-		"read/space": "View", "create/page": "Add pages", "administer/space": "Admin",
-		"restrict_content/space": "Add or delete restrictions",
+		"read:space": "View", "create:page": "Add pages", "administer:space": "Admin",
+		"restrict_content:space": "Add or delete restrictions",
 	} {
 		op, ok := confluence.OperationByID(id)
 		if !ok || op.Name() != name {
 			t.Errorf("%s = %+v %q, want %q", id, op, op.Name(), name)
 		}
 	}
-	if _, ok := confluence.OperationByID("purge/space"); ok {
+	if _, ok := confluence.OperationByID("purge:space"); ok {
 		t.Error("an operation Confluence does not grant per account is offered")
 	}
 	seen := map[string]bool{}
@@ -232,5 +232,22 @@ func TestOperationsCarryConfluencesNames(t *testing.T) {
 			t.Errorf("%s is listed twice", op.ID())
 		}
 		seen[op.ID()] = true
+	}
+}
+
+// A SET OF OPERATIONS IS ONE STORED LEVEL, in the catalogue's order whatever
+// order it was written in, and an operation Confluence does not grant is
+// refused rather than dropped.
+func TestASetOfOperationsRoundTripsAsOneLevel(t *testing.T) {
+	t.Parallel()
+	ops, err := confluence.ParseOperationsLevel("create:page  read:space create:page")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := confluence.OperationsLevel(ops); got != "read:space create:page" {
+		t.Fatalf("level = %q", got)
+	}
+	if _, err := confluence.ParseOperationsLevel("read:space purge:space"); err == nil {
+		t.Fatal("an operation Confluence does not grant was accepted")
 	}
 }
