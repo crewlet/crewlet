@@ -16,6 +16,7 @@ import { LayerHost } from "@crewlethq/ui";
 import type { AccessAnswer } from "~/contract/access.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
 import {
+  confluenceAnswer,
   datadogAnswer,
   githubAnswer,
   mattermostAnswer,
@@ -236,7 +237,7 @@ test("a reader who may not change access gets the reading and no control", () =>
 
 test("GitHub's permissions are edited in GitHub's own words, in a dialog", async () => {
   draw(githubAnswer());
-  fireEvent.click(screen.getByRole("button", { name: "5 permissions" }));
+  fireEvent.click(screen.getByRole("button", { name: "6 permissions" }));
   const dialog = await screen.findByRole("dialog", { name: "QA's GitHub permissions" });
   const contents = within(dialog).getByRole("radiogroup", { name: "QA's Contents permission" });
   fireEvent.click(within(contents).getByRole("radio", { name: "Read and write" }));
@@ -367,4 +368,24 @@ test("Slack's waiting install opens a freshly minted link in a new tab", async (
   expect(tab.opener).toBeNull();
   expect(calls.install).toEqual([{ kind: "slack", handle: "pm", lane: "slack" }]);
   open.mockRestore();
+});
+
+test("Confluence's permissions by operation are a set, summarised in the vendor's names", () => {
+  draw(confluenceAnswer());
+  expect(screen.getByText("View, Add pages")).toBeTruthy();
+  details("PM", "Confluence");
+  const list = document.querySelector<HTMLElement>('dl[aria-label="PM on Confluence"]')!;
+  expect(list.textContent).toContain("View, Add pages");
+});
+
+test("an agent turned on in Confluence with no permission is held at the review, with a hint", () => {
+  draw(confluenceAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Confluence" }));
+  expect(
+    screen.getByText("No permissions yet, so it cannot see any space. Choose at least View."),
+  ).toBeTruthy();
+  const review = screen.getByRole("button", { name: "Review changes" });
+  expect(review.getAttribute("aria-disabled")).toBe("true");
+  fireEvent.click(review);
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

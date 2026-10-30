@@ -62,6 +62,12 @@ export interface AccessOptions {
   /** Whether a person can ask Crewlet to rotate a seat's credential on this lane. */
   rotatable?: boolean;
   /**
+   * The lane's access is a SET of levels rather than one (Confluence's space
+   * permissions by operation, on a site without space roles): a seat's level
+   * is the chosen ids, sorted and space-separated.
+   */
+  multiple?: boolean;
+  /**
    * "external" where the engine does not provision this lane for the company:
    * a seat's switch still binds its tool to the credential, and its access is
    * managed outside Crewlet.
