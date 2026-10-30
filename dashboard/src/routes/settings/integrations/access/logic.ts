@@ -45,13 +45,18 @@ export function lanesOf(answer: AccessAnswer): Lane[] {
   }));
 }
 
-/** Who sealed a credential provided from outside Crewlet, which Crewlet never rotates. */
-const EXTERNAL = "external";
-
-/** Whether a seat's credential was provided from outside Crewlet. */
-export function providedExternally(o: AccessObserved): boolean {
-  return o.credential?.by === EXTERNAL;
+/** Whether the engine leaves a lane's access to the company, outside Crewlet. */
+export function managedOutside(lane: Lane): boolean {
+  return lane.managed === "external";
 }
+
+/** Whether a seat's credential was provided from outside Crewlet, which Crewlet never rotates. */
+export function providedExternally(lane: Lane, o: AccessObserved): boolean {
+  return o.credential?.source === "external" || managedOutside(lane);
+}
+
+/** What the access cell and the details say for a lane managed outside Crewlet. */
+export const MANAGED_OUTSIDE = "Managed outside Crewlet";
 
 /** The menu heading over a lane's levels: where the list was read from. */
 export function levelsHeading(lane: Lane): string {
@@ -101,6 +106,7 @@ export function permissionCount(lane: Lane, p: Permissions | undefined): string 
 
 /** What the vendor holds for a seat, in the vendor's terms. */
 export function accessWords(lane: Lane, o: AccessObserved): string {
+  if (managedOutside(lane)) return MANAGED_OUTSIDE;
   if (lane.permissions) return permissionWords(lane, o.permissions);
   return laneWords(lane.key).fixed ?? levelName(lane, o.level);
 }
@@ -186,13 +192,16 @@ export function availableActions(
   if (held || syncing) return [];
   const out: SeatAction[] = [];
   const o = saved.observed;
-  if (laneWords(lane.key).rotatable && o.credential && !providedExternally(o)) out.push("rotate");
+  if (laneWords(lane.key).rotatable && o.credential && !providedExternally(lane, o))
+    out.push("rotate");
   if (!saved.desired.enabled && o.exists) out.push("remove");
   return out;
 }
 
 /** The one sentence a seat that is off reads as. */
 export function offSentence(lane: Lane, saved: AccessSeatLane): string {
+  if (managedOutside(lane))
+    return "Off. Turning it on gives it its tool with the credential provided outside Crewlet.";
   return saved.observed.exists
     ? "Off. Its account is disabled and kept, so turning it on again restores it."
     : `Off. ${laneWords(lane.key).turnOn}`;
@@ -213,5 +222,7 @@ export function widensPermissions(
  */
 export function emptyScopeHint(lane: Lane, want: AccessDesired): string | null {
   const hint = laneWords(lane.key).scope?.emptyOn;
-  return hint && want.enabled && (want.scope ?? []).length === 0 ? hint : null;
+  return hint && !managedOutside(lane) && want.enabled && (want.scope ?? []).length === 0
+    ? hint
+    : null;
 }

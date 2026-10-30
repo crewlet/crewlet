@@ -178,7 +178,7 @@ function mount(
         return new Response(
           JSON.stringify({
             kind: access[1],
-            revision: '"rev-1"',
+            revision: "rev-1",
             syncing: false,
             options: [],
             seats: [],

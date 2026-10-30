@@ -15,13 +15,21 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import type { AccessAnswer } from "~/contract/access.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
-import { datadogAnswer, githubAnswer, mattermostAnswer, offLane, seat } from "./fixtures.ts";
+import {
+  datadogAnswer,
+  githubAnswer,
+  mattermostAnswer,
+  offLane,
+  onLane,
+  seat,
+} from "./fixtures.ts";
 import { laneWords, OPERATOR_MANAGED } from "./words.ts";
 
 const calls = vi.hoisted(() => ({
   plan: [] as unknown[],
   save: [] as unknown[],
   act: [] as unknown[],
+  install: [] as unknown[],
   stepUp: false,
 }));
 
@@ -35,7 +43,7 @@ vi.mock("./api.ts", async (actual) => {
         calls.plan.push({ kind, seats });
         return {
           kind,
-          revision: '"rev-7"',
+          revision: "rev-7",
           ...(calls.stepUp ? { step_up: true } : {}),
           plans: [
             {
@@ -58,6 +66,10 @@ vi.mock("./api.ts", async (actual) => {
         calls.save.push({ kind, seats, ifMatch });
         return datadogAnswer();
       }),
+      install: vi.fn(async (kind: string, handle: string, lane: string) => {
+        calls.install.push({ kind, handle, lane });
+        return { url: "https://slack.com/oauth/v2/authorize?state=one-use" };
+      }),
       act: vi.fn(async (kind: string, handle: string, lane: string, action: string) => {
         calls.act.push({ kind, handle, lane, action });
         return datadogAnswer();
@@ -70,6 +82,7 @@ beforeEach(() => {
   calls.plan = [];
   calls.save = [];
   calls.act = [];
+  calls.install = [];
   calls.stepUp = false;
 });
 afterEach(cleanup);
@@ -139,7 +152,7 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   ]);
   fireEvent.click(screen.getByRole("button", { name: "Save and sync" }));
   await waitFor(() => expect(calls.save).toHaveLength(1));
-  expect(calls.save[0]).toMatchObject({ ifMatch: '"rev-7"' });
+  expect(calls.save[0]).toMatchObject({ ifMatch: "rev-7" });
   await waitFor(() => expect(reload).toHaveBeenCalled());
 });
 
@@ -263,7 +276,7 @@ test("a credential provided externally says so, by its variable, and offers no r
         credential: {
           variable: "DATADOG_APP_KEY_SRE",
           minted_at: new Date().toISOString(),
-          by: "external",
+          source: "external",
         },
       },
     }),
@@ -298,4 +311,46 @@ test("a Mattermost bot that is on in no channel says it cannot read or post anyw
   expect(
     screen.getByText("In no channel yet, so it cannot read or post anywhere. Choose its channels."),
   ).toBeTruthy();
+});
+
+test("a lane managed outside Crewlet keeps its switch and says so in place of a level", () => {
+  const data = datadogAnswer();
+  data.options = [{ ...data.options[0]!, managed: "external" }];
+  data.seats[2]!.lanes.datadog!.observed.credential = undefined;
+  draw(data);
+  expect(screen.getAllByText("Managed outside Crewlet").length).toBe(3);
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.getByRole("switch", { name: "QA on Datadog" })).toBeTruthy();
+  details("SRE");
+  const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Datadog"]')!;
+  expect(within(list).getByText("Provided externally")).toBeTruthy();
+});
+
+test("Slack's waiting install opens a freshly minted link in a new tab", async () => {
+  const tab = { opener: {} as unknown, location: { href: "" }, close: vi.fn() };
+  const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
+  draw({
+    kind: "slack",
+    revision: "rev-7",
+    syncing: false,
+    options: [{ lane: "slack", live: false }],
+    seats: [
+      seat("pm", "PM", {
+        slack: {
+          ...onLane({ variable: "SLACK_BOT_TOKEN_PM" }),
+          sync: { at: new Date().toISOString(), outcome: "waiting", steps: [] },
+          plan: [
+            { op: "create", verb: "approve", by: "you", text: "Approve the install in Slack" },
+          ],
+        },
+      }),
+    ],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Install in Slack" }));
+  await waitFor(() =>
+    expect(tab.location.href).toBe("https://slack.com/oauth/v2/authorize?state=one-use"),
+  );
+  expect(tab.opener).toBeNull();
+  expect(calls.install).toEqual([{ kind: "slack", handle: "pm", lane: "slack" }]);
+  open.mockRestore();
 });

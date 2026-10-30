@@ -56,6 +56,8 @@ import {
   emptyScopeHint,
   lanesOf,
   levelName,
+  managedOutside,
+  MANAGED_OUTSIDE,
   levelsHeading,
   offSentence,
   permissionCount,
@@ -151,6 +153,26 @@ export function AgentsAccess({
       if (Object.keys(lanesDraft).length === 0) delete out[seat.handle];
       return out;
     });
+  };
+
+  // THE TAB OPENS IN THE CLICK, so a popup blocker lets it through, and goes
+  // to the link once the engine has minted it: single-use, so never stored.
+  const install = async (seat: AccessSeat, lane: Lane) => {
+    const tab = window.open("", "_blank");
+    try {
+      const { url } = await accessApi.install(kind, seat.handle, lane.key);
+      if (new URL(url).protocol !== "https:") throw new Error("The install link was not secure.");
+      if (tab) {
+        tab.opener = null;
+        tab.location.href = url;
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      setSaid("");
+    } catch (err) {
+      tab?.close();
+      setSaid(refusalWords(err));
+    }
   };
 
   const act = async (seat: AccessSeat, lane: Lane, action: AccessSeatAction) => {
@@ -291,7 +313,9 @@ export function AgentsAccess({
                       )}
                     </span>
                     <span role="cell" className="agent-access-level">
-                      {readOnly ? (
+                      {managedOutside(lane) ? (
+                        <span className="agent-access-quiet">{MANAGED_OUTSIDE}</span>
+                      ) : readOnly ? (
                         <span className="agent-access-quiet">
                           {lane.permissions
                             ? permissionCount(lane, want.permissions)
@@ -324,7 +348,9 @@ export function AgentsAccess({
                     </span>
                     {scoped && (
                       <span role="cell" className="agent-access-scope">
-                        {lane.scope !== undefined && words.scope && readOnly ? (
+                        {managedOutside(lane) ? null : lane.scope !== undefined &&
+                          words.scope &&
+                          readOnly ? (
                           <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
                         ) : lane.scope !== undefined && words.scope ? (
                           <Select
@@ -395,6 +421,7 @@ export function AgentsAccess({
                       held={fixed}
                       step={readOnly ? null : stepFor?.(seat.handle)}
                       onAct={(a) => void act(seat, lane, a)}
+                      onInstall={() => void install(seat, lane)}
                       onRemove={() => setRemoving({ seat, lane })}
                     />
                   )}
@@ -497,6 +524,7 @@ function LaneMessage({
   held,
   step,
   onAct,
+  onInstall,
   onRemove,
 }: {
   lane: Lane;
@@ -507,6 +535,7 @@ function LaneMessage({
   held: string | undefined;
   step: ReactNode;
   onAct: (action: "retry" | "keep" | "restore" | "done") => void;
+  onInstall: () => void;
   onRemove: () => void;
 }) {
   if (syncing && saved.plan.length > 0) return null;
@@ -622,7 +651,13 @@ function LaneMessage({
         title="Waiting on a person"
         action={
           <span className="agent-access-actions">
-            {step ?? at(waiting.action_url)}
+            {step ??
+              at(waiting.action_url) ??
+              (!busy && laneWords(lane.key).install ? (
+                <Button size="small" variant="secondary" onClick={onInstall}>
+                  {laneWords(lane.key).install}
+                </Button>
+              ) : null)}
             {!busy && !step && (
               <Button size="small" variant="ghost" onClick={() => onAct("done")}>
                 Done, check again
@@ -689,16 +724,21 @@ function Details({
             aria-label={`${seat.name} on ${lane.name}`}
             items={[
               ["Account", o.exists ? (o.account ?? "Created") : "Not created yet"],
-              [laneWords(lane.key).access, o.exists ? accessWords(lane, o) : "Not granted yet"],
+              [
+                laneWords(lane.key).access,
+                o.exists || managedOutside(lane) ? accessWords(lane, o) : "Not granted yet",
+              ],
               [
                 "Credential",
                 o.credential ? (
                   <span key="credential">
                     <span className="mono">{o.credential.variable}</span>
-                    {providedExternally(o)
+                    {providedExternally(lane, o)
                       ? ", provided externally"
                       : `, minted ${relTime(o.credential.minted_at, now)}`}
                   </span>
+                ) : providedExternally(lane, o) ? (
+                  "Provided externally"
                 ) : (
                   "Not minted yet"
                 ),

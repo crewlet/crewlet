@@ -95,7 +95,7 @@ export const seat = (handle: string, name: string, lanes: AccessSeat["lanes"]): 
 export function datadogAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
   return {
     kind: "datadog",
-    revision: '"rev-7"',
+    revision: "rev-7",
     syncing: false,
     last_sync_at: ago(4 * MIN),
     options: [DATADOG_OPTIONS],
@@ -131,7 +131,7 @@ const REVIEW = {
 export function githubAnswer(): AccessAnswer {
   return {
     kind: "github",
-    revision: '"rev-7"',
+    revision: "rev-7",
     syncing: false,
     options: [GITHUB_OPTIONS],
     seats: [
@@ -158,7 +158,7 @@ export function githubAnswer(): AccessAnswer {
 export function mattermostAnswer(): AccessAnswer {
   return {
     kind: "mattermost",
-    revision: '"rev-7"',
+    revision: "rev-7",
     syncing: false,
     options: [MATTERMOST_OPTIONS],
     seats: [

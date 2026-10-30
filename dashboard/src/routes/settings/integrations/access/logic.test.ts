@@ -138,7 +138,7 @@ test("a credential provided externally is never rotated by Crewlet", () => {
   external.observed.credential = {
     variable: "V",
     minted_at: new Date().toISOString(),
-    by: "external",
+    source: "external",
   };
   expect(availableActions(DATADOG_LANE, external, false, false)).toEqual([]);
 });
