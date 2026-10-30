@@ -86,9 +86,44 @@ const (
 	// proposals' lesson again, a slot held through a wait is one every
 	// other request of its registration waits behind, so a burst of writes
 	// on the reads' lane would hold the slots every seat's read of every
-	// repository on the node is answered through.
+	// repository on the node is answered through. It HOLDS at most
+	// [gitWritesHeld] writes at once, and answers the next at once.
 	laneGitWrites lane = "git-writes"
 )
+
+// gitWritesHeld is how many engine writes a git node HOLDS at once for its
+// peers on its writes' lane ([laneGitWrites]), each through every wait it
+// makes, up to [GitWriteAttempt]; a write a peer asks past them is answered AT
+// ONCE, before its arguments are decoded or its git half asked: `behind`, at
+// its share (code.UnreadyShare), which its walk moves on from without demoting
+// the node — the next git node holding a copy builds it, or the walk ends
+// unserved, saying why ([Router.routeGit]).
+//
+// SIXTY-FOUR, queue.ConcurrentAnswers, the lane's width before it answered at
+// once: what a held write waits on is mostly no git at all — its upload, its
+// proposal, its push's row — while its build takes a unit of the node's seat
+// git-work share (code.SeatWorkWrite) and gives it back before it lands, so
+// the share, never this bound, bounds the git a node's writes run, and this
+// bounds what they hold ([lane.answers] states the figure, measured).
+//
+// ANSWERED AT ONCE, NEVER LEFT TO WAIT FOR A SLOT, because a request a
+// registration has no slot for waits in its broker client's buffer, and the
+// broker client drops one past that buffer's bound, unheard by its asker
+// ([queue.EventQueue.Serve]): nats.go holds a subscription's pending messages
+// to 64 MiB (its DefaultSubPendingBytesLimit) and drops the rest as a slow
+// consumer, which the node logs naming no subject. A write is up to a
+// mebibyte as the wire spells it (code.MaxCommitPayloadBytes), so some
+// sixty-four waiting behind a full lane — 128 large writes in flight against
+// one git node — overflowed it, and the asker of a dropped one heard
+// nothing for its whole attempt, then took the healthy node for a gone one:
+// asked it last for every operation for [suspectFor], so every repository it
+// is home to sent its reads and writes to a runner-up that downloaded a copy
+// of each. Answered at once, the asker hears the node is busy within the
+// milliseconds an admission takes.
+//
+// This node's own seats' writes are asked in process and hold none of these:
+// they are bounded by their turns, and hold nothing a peer's request does.
+const gitWritesHeld = queue.ConcurrentAnswers
 
 // lanes is every registration EVERY serving node makes, the shared one first.
 var lanes = []lane{laneShared, laneProposals}
@@ -116,26 +151,44 @@ func (l lane) subject(node string) string {
 
 // answers is how many of this lane's requests a node answers at once.
 //
-// The git lane is as wide as the shared one, queue.ConcurrentAnswers: the lane
-// SEPARATES git reads from the slots the node answers its replicated reads and
-// pushes' resolves through, and what bounds the git work RUNNING is the node's
-// seat git-work share (code.GitShare, half its read lane), which holds this
-// node's own seats' in-process reads too — a lane bound would hold only the
-// remote askers, and a narrower one would only leave reads waiting unseen in
-// the broker's buffer where the share answers them `share` at once.
+// The git reads' lane is as wide as the shared one, queue.ConcurrentAnswers:
+// the lane SEPARATES git reads from the slots the node answers its replicated
+// reads and pushes' resolves through, and what bounds the git work RUNNING is
+// the node's seat git-work share (code.GitShare, half its read lane), which
+// holds this node's own seats' in-process reads too — a lane bound would hold
+// only the remote askers, and a narrower one would only leave reads waiting
+// unseen in the broker's buffer where the share answers them `share` at once.
 //
-// The git writes' lane is as wide, for the same reason and one more: what a
-// write holds its slot through is mostly a WAIT — its upload, its proposal,
-// its push's row — that runs no git process at all, while its build takes a
-// unit of that same share (code.SeatWorkWrite) and gives it back before it
-// lands. So the share, never the lane, bounds the git a node's writes run,
-// and a full lane holds what its writes carry: a payload of at most
-// code.MaxCommitPayloadBytes each, sixty-four mebibytes in all, and a staged
-// pack of at most code.MaxWritePackBytes each on the cache's volume. This
-// node's own seats' writes are asked in process, bounded by their turns.
+// The git writes' lane answers the [gitWritesHeld] writes it holds and
+// queue.ConcurrentAnswers more, which it answers AT ONCE: a write past the
+// held ones, refused `share` before its arguments are decoded — work done
+// now, as wide as every registration answering work done now — so a burst
+// past the held writes is answered rather than left waiting in the broker
+// client's buffer.
+//
+// What a full writes' lane holds is MEASURED (TestWhatAHeldGitWriteHolds,
+// TestAnEngineWriteTheRuleAdmitsCrossesTheWireAtItsBound): a held write's
+// slot holds its request as the broker delivered it — the payload, at most
+// code.MaxCommitPayloadBytes as JSON spells it, and some 7 KiB beside it at
+// the longest the engine stamps the rest — the request as admitted, its
+// arguments copied out of it, and the write decoded, which the git half holds
+// to its end: about 3 MiB a slot at the bound, three payloads and what is
+// beside them (2.96 and 3.09 payloads measured), so about 200 MiB for the
+// sixty-four; an at-once answer holds the first two, some 2 MiB, for the
+// milliseconds its admission takes — 31 ms measured, under -race on two
+// cores; and a held write's staged pack, at most code.MaxWritePackBytes, is
+// on the cache's volume rather than in memory. Past both, a request waits in
+// the broker client's buffer only behind the at-once answers ahead of it,
+// each a few milliseconds' work, so the buffer fills only under some
+// sixty-four more mebibyte writes inside those milliseconds — some 192 at one
+// git node at once, where 128 in flight overflowed it before — and past that
+// a write is still dropped unheard ([queue.EventQueue.Serve]).
 func (l lane) answers() int {
-	if l == laneProposals {
+	switch l {
+	case laneProposals:
 		return proposalAnswers
+	case laneGitWrites:
+		return gitWritesHeld + queue.ConcurrentAnswers
 	}
 	return queue.ConcurrentAnswers
 }

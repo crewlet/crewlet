@@ -5058,8 +5058,9 @@ asked through
   that it ran nothing: the write is asked of the next git node at once, and the
   node that refused is asked last for thirty seconds. One that cannot build it
   in time for a reason of its own — its copy still syncing, its seats' share of
-  the read lane full, or behind the company's configuration, for a seat's
-  write — is passed over the same way, and asked first again next time.
+  the read lane full, already holding every write its writes' lane holds, or
+  behind the company's configuration, for a seat's write — is passed over the
+  same way, and asked first again next time.
 - **One that goes silent is passed over with the same write.** The write's push
   is its caller's operation's ([A retry is the same
   push](#a-retry-is-the-same-push)), so the next git node builds the same push
@@ -5079,6 +5080,16 @@ asked through
   row, so on the reads' lane a burst of writes would hold the slots every read
   of the node's repositories is answered through. What bounds the git a node's
   writes run is its [seat git-work share](#server-side-reads), never the lane.
+- **A git node holds at most 64 writes for other nodes at once, and answers
+  the next at once** that it is busy, without building it, so its walk moves on
+  to the next git node that holds a copy of the repository — or ends, saying
+  the node is busy — within milliseconds. Left to wait for a slot, a write
+  waited in the node's broker client, which drops what it holds past 64 MiB:
+  the asker of a dropped write heard nothing for 82 seconds and then took the
+  busy node for a gone one, sending every repository it is home to elsewhere
+  for thirty seconds. A held write takes about 3 MiB of the node's memory at
+  the largest a write may be, so the 64 take about 200 MiB. A node's own
+  seats' writes are built in its process and count against none of the 64.
 - **A write no git node would take is refused before any is asked** — a branch
   git refuses, a path a checkout cannot make, a seat's write that names no
   turn — naming what is wrong.

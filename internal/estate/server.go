@@ -90,7 +90,8 @@ func Serve(ctx context.Context, q Server, opts ServerOptions) (queue.Unsubscribe
 	// the node has taken whichever lane it arrived on: a replay sent to
 	// another lane's subject is the same replay.
 	srv := server{self: opts.Self, local: opts.Local, git: opts.Git, seams: opts.Seams,
-		env: opts.Envelopes, now: now, seen: signedask.NewGuard()}
+		env: opts.Envelopes, now: now, seen: signedask.NewGuard(),
+		writes: make(chan struct{}, gitWritesHeld)}
 	registered := lanes
 	if opts.Git != nil {
 		registered = slices.Concat(lanes, gitLanes)
@@ -131,6 +132,11 @@ type server struct {
 	env   *Envelopes
 	now   func() time.Time
 	seen  *signedask.Guard
+
+	// writes is the [gitWritesHeld] engine writes this node holds for its
+	// peers: a slot taken by every write it decodes and runs, until it is
+	// answered, and none left the next is answered at once ([server.answerGit]).
+	writes chan struct{}
 }
 
 // answer runs one request that arrived on lane l and ALWAYS answers: a node

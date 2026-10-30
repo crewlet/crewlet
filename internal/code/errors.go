@@ -236,8 +236,10 @@ const (
 	// UnreadyShare: the node's git capacity for seats' reads is spent — its
 	// seat git-work share ([GitShare]) held past [GitShareWait], its read
 	// lane busy past gitproc.SlotWait, or the read's waits for either, or its
-	// git, running past the instant its answer fell due ([AnswerDue]). The
-	// node holds its copy, synced, and is only busy.
+	// git, running past the instant its answer fell due ([AnswerDue]) — or,
+	// for an engine write a peer asked, it already holds every write its
+	// writes' lane holds at once (internal/estate's gitWritesHeld). The node
+	// holds its copy, synced, and is only busy.
 	UnreadyShare UnreadyReason = "share"
 	// UnreadyNoChart: the read is a seat's, and the node holds no chart to
 	// judge a seat's grant by (no epoch installed yet: at boot, or before a

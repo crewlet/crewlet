@@ -282,9 +282,11 @@
 // hosts code) — on lanes of their own, the reads' and the writes'
 // ([laneGitReads], [laneGitWrites]), which a git node registers from boot. The
 // home is a preference, never ownership: no lease, no epoch. A git node that
-// cannot answer inside its budget — its copy still syncing, its share full —
-// answers `behind`, its reason beside it ([reply.Unready]), and is not
-// demoted, so its askers come back once it is warm; and ONE node a walk FILLS
+// cannot answer inside its budget — its copy still syncing, its share full, or
+// every engine write its writes' lane holds already held, the next answered at
+// once ([gitWritesHeld]) — answers `behind`, its reason beside it
+// ([reply.Unready]), and is not demoted, so its askers come back once it is
+// warm; and ONE node a walk FILLS
 // a copy at a time: the walk stamps its effective home's attempt
 // (code.GitQuery.Home, code.EngineWrite.Home), and every other git node holding
 // no copy answers at once that it holds none, so a repository nobody holds

@@ -114,10 +114,12 @@ func TestAQueuedPushHoldsNoSlotAReadIsAnsweredThrough(t *testing.T) {
 // committer's own bounds — busy at once past its count, its bytes or the
 // node's — never the registration's, past which a push waits unseen in the
 // broker's buffer for a slot. A node serving git registers the git reads' lane
-// and the git writes' lane too, each as wide as the shared one (the node's
-// seat git-work share, not a lane, bounds the git work running, and a write
-// holds its slot mostly through waits that run no git), and a node serving
-// none registers neither.
+// and the git writes' lane too: the reads' as wide as the shared one (the
+// node's seat git-work share, not a lane, bounds the git work running), and
+// the writes' as wide as the writes it holds and the shared lane's width
+// beside them, for the answers it gives at once to a write past the held
+// ones — so no such write waits unseen in the broker's buffer either. A node
+// serving none registers neither.
 func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 	t.Parallel()
 	shared := map[string]int{
@@ -126,7 +128,7 @@ func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 	}
 	withGit := maps.Clone(shared)
 	withGit[laneGitReads.subject("data.a")] = queue.ConcurrentAnswers
-	withGit[laneGitWrites.subject("data.a")] = queue.ConcurrentAnswers
+	withGit[laneGitWrites.subject("data.a")] = gitWritesHeld + queue.ConcurrentAnswers
 	for _, tc := range []struct {
 		name string
 		git  LocalGit

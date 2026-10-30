@@ -769,6 +769,12 @@ func (r *Router) runLocalGit(ctx context.Context, spec *opSpec, x exchange, g Gi
 // busy node for a gone one: asked it last for every operation for suspectFor,
 // told both placements, and sent every repository it is home to to a
 // runner-up that downloaded a copy of each.
+//
+// AN ENGINE WRITE PAST THE ONES THE NODE HOLDS ([gitWritesHeld]) IS ANSWERED
+// AT ONCE, `behind` at its share, before its arguments are decoded or the git
+// half is asked: the node holds its copies and is only busy, so the walk moves
+// on without demoting it, and the asker hears so now — never left waiting for
+// a slot in the broker client's buffer, which drops a request past its bytes.
 func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out reply) []byte {
 	ctx, cancel := code.AnswerBy(ctx, req.Deadline)
 	defer cancel()
@@ -780,6 +786,17 @@ func (s server) answerGit(ctx context.Context, spec *opSpec, req request, out re
 	if !ok || g == nil {
 		out.Unserved, out.Detail = unservedNoBackend, fmt.Sprintf("%s runs no code host", s.self)
 		return s.encodeReply(out)
+	}
+	if spec.lane == laneGitWrites {
+		select {
+		case s.writes <- struct{}{}:
+			defer func() { <-s.writes }()
+		default:
+			out.Unserved, out.Unready = unservedBehind, code.UnreadyShare
+			out.Detail = fmt.Sprintf("%s holds %d engine writes for its peers, every one its writes' lane holds "+
+				"at once (gitWritesHeld): it builds another when one of them ends", s.self, gitWritesHeld)
+			return s.encodeReply(out)
+		}
 	}
 	result, err := spec.serve(ctx, Backend{Git: g, ServerSeams: s.seams}, req.Actor, req.Args)
 	switch {
