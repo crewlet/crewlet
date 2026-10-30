@@ -218,7 +218,7 @@ func Resolve(value string, lookup func(name string) (string, bool)) string {
 //
 // Every character the grammar refuses becomes an underscore rather than being
 // dropped, which is what keeps two different seats on two different names: a
-// handle of `nova.1` and one of `nova-1` are different seats, and trimming the
+// handle of `nova-1` and one of `nova1` are different seats, and dropping the
 // separator would seal one seat's credential under the other's name. The
 // grammar's leading-digit rule needs no guard: a derived name always begins
 // with the vendor's own kind, which is letters.

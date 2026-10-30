@@ -28,6 +28,48 @@ package config
 // on).
 func SeatAccessOn(enabled *bool) bool { return enabled != nil && *enabled }
 
+// SeatAccessLanes is every per-seat block, by its key under
+// `roles[].integrations`.
+func SeatAccessLanes() []string {
+	return []string{"slack", "mattermost", "jira", "confluence", "github", "gitlab", "datadog"}
+}
+
+// seatEnabled is a seat's `enabled` for lane, and whether the block is there.
+func (r *Role) seatEnabled(lane string) (*bool, bool) {
+	in := r.Integrations
+	switch lane {
+	case "datadog":
+		if in.Datadog != nil {
+			return in.Datadog.Enabled, true
+		}
+	case "gitlab":
+		if in.GitLab != nil {
+			return in.GitLab.Enabled, true
+		}
+	case "jira":
+		if in.Jira != nil {
+			return in.Jira.Enabled, true
+		}
+	case "confluence":
+		if in.Confluence != nil {
+			return in.Confluence.Enabled, true
+		}
+	case "github":
+		if in.GitHub != nil {
+			return in.GitHub.Enabled, true
+		}
+	case "slack":
+		if in.Slack != nil {
+			return in.Slack.Enabled, true
+		}
+	case "mattermost":
+		if in.Mattermost != nil {
+			return in.Mattermost.Enabled, true
+		}
+	}
+	return nil, false
+}
+
 // GitHubAccess is GitHub's grant on one App permission: read or write. Absent
 // is GitHub's "No access".
 type GitHubAccess string
