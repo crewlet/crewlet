@@ -1787,6 +1787,10 @@ func (q ReadQuery) validateIntroduced() error {
 			"checks it reads")
 	case q.ExpungeTips != nil:
 		return refused("expunge_tips", "only an expunge_tips read names a repository's ref drops")
+	case q.Target != "":
+		return refused("target", "only a queue, a landings or a green read names a branch's queue")
+	case q.QueueDue != nil:
+		return refused("queue_due", "only a queue_due read names the repository its home owes queue work in")
 	case q.Reviewer != "":
 		return refused("reviewer", "only a listing of changes or of a reviewer's reviews names a reviewer")
 	case q.Needs != "":
