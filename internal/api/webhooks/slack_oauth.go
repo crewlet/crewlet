@@ -5,6 +5,8 @@ import (
 	"errors"
 	"html/template"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -124,7 +126,7 @@ func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {
 	case view.Error != "":
 		view.Heading, status = "failed", http.StatusBadRequest
 	case slack.IsInstallState(view.Handle):
-		status = r.completeSlackInstall(req.Context(), &view)
+		status = r.completeSlackInstall(req.Context(), w.Header(), &view)
 	case view.Code == "":
 		status = http.StatusBadRequest
 	default:
@@ -149,14 +151,16 @@ func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {
 
 // completeSlackInstall finishes an install a seat's link began, and fills the
 // view with what happened. The code is cleared before anything renders.
-func (r *Receiver) completeSlackInstall(ctx context.Context, view *slackOAuthView) int {
+func (r *Receiver) completeSlackInstall(ctx context.Context, header http.Header, view *slackOAuthView) int {
 	state, code := view.Handle, view.Code
 	view.Code, view.Handle = "", ""
 	if r.slackInstalls == nil {
+		// NOT IMPLEMENTED HERE, rather than unavailable: this node does not
+		// finish installs at all, and waiting would not change that.
 		view.Heading = "failed"
 		view.Reason = "this engine does not finish Slack installs"
 		view.Remedy = "Start the install again from the Agents tab of an engine serving the dashboard"
-		return http.StatusServiceUnavailable
+		return http.StatusNotImplemented
 	}
 	handle, err := r.slackInstalls.Complete(ctx, state, code)
 	if err == nil {
@@ -174,6 +178,11 @@ func (r *Receiver) completeSlackInstall(ctx context.Context, view *slackOAuthVie
 		}
 	}
 	view.Reason, view.Remedy = refusal.Reason, refusal.Remedy
+	// A REFUSAL THAT CLEARS ON ITS OWN SAYS WHEN, as every refusal of the
+	// kind does on this engine.
+	if refusal.RetryAfter > 0 {
+		header.Set("Retry-After", strconv.Itoa(int(refusal.RetryAfter/time.Second)))
+	}
 	// THE ERROR IS LOGGED, never rendered: it may name Slack's refusal
 	// code, which is fine to log and pointless to show, and it never
 	// carries the code or a token ([slack.CompleteSeatInstall]).

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/webhooks"
 	"github.com/crewlet/crewlet/internal/slack"
@@ -149,7 +150,21 @@ func TestTheLandingNamesWhyAnInstallWasRefused(t *testing.T) {
 	}
 
 	unwired := newEdge(t)
-	if res := getLanding(t, unwired, "code=x&state="+signedState); res.Code != http.StatusServiceUnavailable {
+	if res := getLanding(t, unwired, "code=x&state="+signedState); res.Code != http.StatusNotImplemented {
 		t.Errorf("an engine with no installer answered %d", res.Code)
+	}
+}
+
+// A REFUSAL THAT CLEARS ON ITS OWN SAYS WHEN.
+func TestARetryableInstallRefusalSaysWhen(t *testing.T) {
+	t.Parallel()
+	installer := &stubInstaller{err: &slack.InstallRefusal{
+		Status: http.StatusServiceUnavailable, Reason: "this engine could not confirm the install link was unused",
+		Remedy: "Try again in a moment", RetryAfter: 30 * time.Second,
+	}}
+	e := newEdge(t, func(o *webhooks.Options) { o.SlackInstalls = installer })
+	res := getLanding(t, e, "code=x&state="+signedState)
+	if res.Header().Get("Retry-After") != "30" {
+		t.Errorf("Retry-After = %q", res.Header().Get("Retry-After"))
 	}
 }
