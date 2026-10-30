@@ -25,6 +25,24 @@ export type GitHubAccess = "read" | "write";
 export type AccessLaneKey =
   "datadog" | "github" | "gitlab" | "jira" | "confluence" | "slack" | "mattermost";
 
+/** "external" on a lane the engine does not provision for the company. */
+type AccessManaged = "external";
+
+/** Who wrote the company document instead of the dashboard: the Kubernetes operator. */
+type AccessManagedBy = "operator";
+
+/** Whether Crewlet minted a seat's credential or it was provided from outside Crewlet. */
+type AccessCredentialSource = "minted" | "external";
+
+/** Who turned an account off: this engine, or somebody at the vendor by hand. */
+type AccessDisabledBy = "crewlet" | "hand";
+
+/** Who takes a step or a remedy: Crewlet, or a person. */
+type AccessActor = "crewlet" | "you";
+
+/** How a sync ended for one lane. */
+type AccessOutcome = "ok" | "failed" | "waiting";
+
 /** One level a lane offers, as the vendor defines it. */
 interface AccessLevel {
   /** The identifier the vendor's API takes, which the document stores. */
@@ -81,7 +99,7 @@ export interface AccessOptions {
    * a seat's switch still binds its tool to the credential, and its access is
    * managed outside Crewlet.
    */
-  managed?: "external";
+  managed?: AccessManaged;
 }
 
 /** What the company document asks for one seat on one lane. */
@@ -101,7 +119,7 @@ interface AccessCredential {
   /** Who the pass that sealed it ran for, as the engine names actors. */
   by?: string;
   /** Whether Crewlet minted it or it was provided from outside Crewlet. */
-  source?: "minted" | "external";
+  source?: AccessCredentialSource;
 }
 
 /** What the vendor showed on the last sync, read back from the engine's account ledger. */
@@ -109,7 +127,7 @@ export interface AccessObserved {
   exists: boolean;
   enabled: boolean;
   /** Who turned the account off: this engine, or somebody at the vendor. */
-  disabled_by?: "crewlet" | "hand";
+  disabled_by?: AccessDisabledBy;
   /** The account as the vendor names it. */
   account?: string;
   account_id?: string;
@@ -150,7 +168,7 @@ export interface AccessStep {
   /** The step, as one sentence with no closing full stop. */
   text: string;
   note?: string;
-  by: "crewlet" | "you";
+  by: AccessActor;
   /** Where a person takes the step, at the vendor. */
   action_url?: string;
   /** The step restores a change somebody made at the vendor by hand. */
@@ -167,13 +185,13 @@ interface AccessFailure {
   step: AccessVerb;
   said: string;
   remedy: string;
-  actor: "crewlet" | "you";
+  actor: AccessActor;
   action_url?: string;
 }
 
 interface AccessSync {
   at: string;
-  outcome: "ok" | "failed" | "waiting";
+  outcome: AccessOutcome;
   /** The steps the sync set out to take, and whether each was taken. */
   steps: AccessStepOutcome[];
   error?: AccessFailure;
@@ -223,7 +241,7 @@ export interface AccessAnswer {
    * "operator" where the Kubernetes operator writes the company document:
    * saves and Keep are refused, and actions at the vendor still run.
    */
-  managed_by?: "operator";
+  managed_by?: AccessManagedBy;
   /** What each lane offers now, for the pickers. */
   options: AccessOptions[];
   seats: AccessSeat[];

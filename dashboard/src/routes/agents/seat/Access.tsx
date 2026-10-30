@@ -12,6 +12,7 @@ import { href } from "~/app/router.tsx";
 import { useAccess, useOperatorManaged } from "~/routes/settings/integrations/access/api.ts";
 import { AgentsAccess } from "~/routes/settings/integrations/access/AgentsAccess.tsx";
 import { accessHold } from "~/routes/settings/integrations/access/logic.ts";
+import { seatStepFor } from "~/routes/settings/integrations/catalogue.tsx";
 import { useIntegrations, type Model, type Tool } from "~/routes/settings/integrations/model.ts";
 
 function IntegrationAccess({ tool, model, handle }: { tool: Tool; model: Model; handle: string }) {
@@ -42,6 +43,8 @@ function IntegrationAccess({ tool, model, handle }: { tool: Tool; model: Model; 
             reload={() => void access.reload({ quiet: true })}
             held={held}
             readOnly={readOnly}
+            onAnswer={access.adopt}
+            stepFor={seatStepFor(tool, model)}
             avatarOf={model.avatarOf}
             only={handle}
           />
