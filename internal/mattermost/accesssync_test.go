@@ -193,3 +193,26 @@ func TestAMattermostSeatCannotWidenTheCompanysReach(t *testing.T) {
 		t.Errorf("writes = %q, want none", writes)
 	}
 }
+
+// A TOKEN REVOKED AT MATTERMOST IS REPLACED. The ledger still records the
+// sealed token, and the bot holds none of this engine's, so every socket the
+// sealed value opens is refused: the next sync mints and seals a fresh one.
+func TestAMattermostTokenRevokedAtMattermostIsReMinted(t *testing.T) {
+	t.Parallel()
+	w := newAccessWorld(t, []string{"system_user"}, "general")
+	w.sync()
+	rec := w.record()
+	before, _ := w.sink.Held("MATTERMOST_BOT_TOKEN_SRE")
+	w.chat.mu.Lock()
+	w.chat.tokens[rec.Account.ID] = nil
+	w.chat.mu.Unlock()
+
+	if report := w.sync(); len(report.Findings) != 0 {
+		t.Fatalf("findings = %+v", report.Findings)
+	}
+	after, ok := w.sink.Held("MATTERMOST_BOT_TOKEN_SRE")
+	if !ok || after == before || len(w.chat.tokenIDs(rec.Account.ID)) != 1 {
+		t.Errorf("sealed=%v changed=%v tokens=%q, want a fresh token sealed",
+			ok, after != before, w.chat.tokenIDs(rec.Account.ID))
+	}
+}

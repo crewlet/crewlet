@@ -445,11 +445,12 @@ func TestDatadogObserveReadsEveryAccountBack(t *testing.T) {
 	}
 	lane := func(handle string) seataccess.Observed { return obs[handle][seataccess.LaneDatadog] }
 	if got := lane("sre"); !got.Exists || !got.Enabled || got.Level != adminRole ||
-		got.AccountID != recorded.id {
+		got.AccountID != recorded.id || got.CredentialGone {
 		t.Errorf("sre = %+v", got)
 	}
-	if got := lane("oncall"); got.AccountID != adopted.id || got.Level != roRole+" "+stdRole {
-		t.Errorf("oncall = %+v, want adopted, holding both roles", got)
+	if got := lane("oncall"); got.AccountID != adopted.id || got.Level != roRole+" "+stdRole ||
+		!got.CredentialGone {
+		t.Errorf("oncall = %+v, want adopted, holding both roles, no key", got)
 	}
 	if got := lane("dba"); got.Enabled || got.DisabledBy != seataccess.DisabledByHand {
 		t.Errorf("dba = %+v, want disabled by hand", got)
@@ -607,13 +608,15 @@ func TestDatadogOffAndBackOn(t *testing.T) {
 		t.Errorf("keys left live on an account turned off: %q", keys)
 	}
 
-	in.Want.Enabled = true
+	// BACK ON AT THE DOCUMENT'S ROLE, which changed while it was off.
+	in.Want = seataccess.Desired{Enabled: true, Level: stdRole}
 	in.Step = step(t, seataccess.OpEnable, seataccess.VerbEnable)
 	if _, err := apply(t, session, in); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
-	if got := org.user(account.id); got.disabled || got.title != "" {
-		t.Errorf("account = %+v, want enabled with the marker cleared", got)
+	if got := org.user(account.id); got.disabled || got.title != "" ||
+		!slices.Equal(got.roles, []string{stdRole}) {
+		t.Errorf("account = %+v, want enabled at the seat's role with the marker cleared", got)
 	}
 	in.Step = step(t, seataccess.OpEnable, seataccess.VerbMint)
 	minted, err := apply(t, session, in)

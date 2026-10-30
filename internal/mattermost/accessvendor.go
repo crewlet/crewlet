@@ -73,24 +73,25 @@ func (accessVendor) Steps(
 		}
 		out = append(out, mint)
 	case seataccess.OpEnable:
-		out = []seataccess.Step{step(seataccess.VerbEnable, "Reactivate its Mattermost bot"), mint}
+		// BACK ON AT THE DOCUMENT'S ROLES AND CHANNELS, as a create is, and
+		// with a fresh token only where none is held: off revoked it.
+		out = []seataccess.Step{step(seataccess.VerbEnable,
+			"Reactivate its Mattermost bot as "+RolesLabel(levelRoles(want.Level)))}
+		if join, leave := scopeChange(want.Scope, have.Scope); len(join)+len(leave) > 0 {
+			out = append(out, step(seataccess.VerbScope, scopeText(join, leave)))
+		}
+		if have.Credential == nil || have.CredentialGone {
+			out = append(out, mint)
+		}
 	case seataccess.OpLevel:
 		out = []seataccess.Step{step(seataccess.VerbRerole,
 			"Set its roles to "+RolesLabel(levelRoles(want.Level)))}
 	case seataccess.OpScope:
 		join, leave := scopeChange(want.Scope, have.Scope)
-		var parts []string
-		if len(join) > 0 {
-			parts = append(parts, "add it to "+channelList(join))
-		}
-		if len(leave) > 0 {
-			parts = append(parts, "remove it from "+channelList(leave))
-		}
-		if len(parts) == 0 {
+		if len(join)+len(leave) == 0 {
 			return nil
 		}
-		text := strings.Join(parts, " and ")
-		out = []seataccess.Step{step(seataccess.VerbScope, strings.ToUpper(text[:1])+text[1:])}
+		out = []seataccess.Step{step(seataccess.VerbScope, scopeText(join, leave))}
 	case seataccess.OpMint:
 		out = []seataccess.Step{mint}
 	case seataccess.OpDisable:
@@ -133,6 +134,19 @@ func channelList(names []string) string {
 		out = append(out, "~"+name)
 	}
 	return strings.Join(out, ", ")
+}
+
+// scopeText is a scope change as one sentence.
+func scopeText(join, leave []string) string {
+	var parts []string
+	if len(join) > 0 {
+		parts = append(parts, "add it to "+channelList(join))
+	}
+	if len(leave) > 0 {
+		parts = append(parts, "remove it from "+channelList(leave))
+	}
+	text := strings.Join(parts, " and ")
+	return strings.ToUpper(text[:1]) + text[1:]
 }
 
 // scopeChange is the channels a move from have to want joins and leaves.
@@ -355,6 +369,11 @@ func (s *accessSession) observedOf(
 	if recorded && rec.Account != nil {
 		out.CreatedAt = rec.Account.CreatedAt
 	}
+	// A TOKEN REVOKED AT MATTERMOST leaves whatever is sealed for the seat
+	// refused on every socket it opens. The bot's own token list is the
+	// proof: this engine mints every token under one description, so a bot
+	// holding none of them holds nothing the seat can authenticate with.
+	out.CredentialGone = len(bot.MintedTokens(handle)) == 0
 	return out
 }
 
@@ -424,10 +443,18 @@ func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (se
 				return s.mint(ctx, in, bot, false)
 			}
 		case seataccess.OpEnable:
-			if in.Step.Verb == seataccess.VerbEnable {
-				return seataccess.StepResult{}, s.refused(in, s.client.TurnOn(ctx, bot))
+			switch in.Step.Verb {
+			case seataccess.VerbEnable:
+				if err := s.client.TurnOn(ctx, bot); err != nil {
+					return seataccess.StepResult{}, s.refused(in, err)
+				}
+				_, err := s.client.SetRoles(ctx, bot, levelRoles(in.Want.Level))
+				return seataccess.StepResult{}, s.refused(in, err)
+			case seataccess.VerbScope:
+				return seataccess.StepResult{}, s.scope(ctx, in, teamID, bot)
+			default:
+				return s.mint(ctx, in, bot, true)
 			}
-			return s.mint(ctx, in, bot, false)
 		case seataccess.OpMint:
 			return s.mint(ctx, in, bot, true)
 		case seataccess.OpLevel:
