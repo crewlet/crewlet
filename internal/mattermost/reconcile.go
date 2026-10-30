@@ -164,6 +164,23 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// print none of them, which is the worst outcome available.
 		return nil, provision.ErrNoSink
 	}
+	// NO SEAT TO PROVISION IS STILL A COMPANY TO CHECK. Each agent's bot is
+	// the per-seat access sync's now, so the loop hands this pass an empty
+	// plan on every tick, and returning before the preflight would stop
+	// reporting a provisioning token that lost system_admin, or bot
+	// accounts switched off at the instance, for good: the access sync's
+	// writes would fail with a 403 naming an endpoint rather than the
+	// setting an administrator has to change. READS ONLY, and no team
+	// lookup: nothing here places a bot.
+	if opts.Plan == nil || opts.Plan.Empty() {
+		pre := checkPreflight(ctx, opts)
+		res := &Result{Joined: map[string][]string{}}
+		listBots(ctx, opts, res)
+		res.Notes = slices.Concat(notesOf(opts.Plan), pre.notes(), res.Notes)
+		res.NotAdmin, res.Disabled = pre.notAdmin, pre.disabled
+		return res, nil
+	}
+
 	team, found, err := opts.Client.TeamByName(ctx, opts.Config.Team)
 	if err != nil {
 		// No separate auth probe here either, so this first call carries
@@ -190,36 +207,8 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// struct it hands back is what carries this to BOTH readers — the notes
 	// the command line prints and the findings the reconcile loop reads.
 	pre := checkPreflight(ctx, opts)
-
-	// ONE bot listing per run, shared by the rename sweep and the
-	// decommission pass. The display name lives on the BOT record and not
-	// on its user, so without this the comparison has nothing true to read
-	// — and per-seat fetches would be a call each for a value one list
-	// already carries.
 	res := &Result{Joined: map[string][]string{}}
-	managed := map[string]Bot{}
-	if bots, err := opts.Client.Bots(ctx); err != nil {
-		res.Notes = append(res.Notes, fmt.Sprintf(
-			"could not list bots, so display names are not checked this run: %v", err))
-	} else {
-		for _, bot := range bots {
-			managed[strings.ToLower(bot.Username)] = bot
-		}
-		renameBots(ctx, opts, managed, res)
-	}
-
-	// NO SEAT TO PROVISION IS STILL A COMPANY TO CHECK. Each agent's bot is
-	// the per-seat access sync's now, so the loop hands this pass an empty
-	// plan on every tick, and returning before the preflight would stop
-	// reporting a provisioning token that lost system_admin, or bot
-	// accounts switched off at the instance, for good: the access sync's
-	// writes would fail with a 403 naming an endpoint rather than the
-	// setting an administrator has to change.
-	if opts.Plan == nil || opts.Plan.Empty() {
-		res.Notes = slices.Concat(notesOf(opts.Plan), pre.notes(), res.Notes)
-		res.NotAdmin, res.Disabled = pre.notAdmin, pre.disabled
-		return res, nil
-	}
+	managed := listBots(ctx, opts, res)
 
 	// THE NOTES ARE COLLECTED AT THE END, not copied here: the run adds
 	// its own — a channel that does not exist, a bot that joined nothing
@@ -449,6 +438,27 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// vocabulary or it is reported ready. See [preflight].
 	res.NotAdmin, res.Disabled = pre.notAdmin, pre.disabled
 	return res, nil
+}
+
+// listBots reads the instance's bots once per run, for the rename sweep and
+// the decommission pass, and sweeps the renames. The display name lives on
+// the BOT record and not on its user, so without this the comparison has
+// nothing true to read, and per-seat fetches would be a call each for a value
+// one list already carries. A listing that fails is a note and an empty map,
+// and no name is compared against it.
+func listBots(ctx context.Context, opts Options, res *Result) map[string]Bot {
+	managed := map[string]Bot{}
+	bots, err := opts.Client.Bots(ctx)
+	if err != nil {
+		res.Notes = append(res.Notes, fmt.Sprintf(
+			"could not list bots, so display names are not checked this run: %v", err))
+		return managed
+	}
+	for _, bot := range bots {
+		managed[strings.ToLower(bot.Username)] = bot
+	}
+	renameBots(ctx, opts, managed, res)
+	return managed
 }
 
 // renameBots brings every agent seat's bot display name in line with the
