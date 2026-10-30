@@ -552,9 +552,11 @@
 //   - ONE READER: the barrier alone 0.96 / 3.6 ms solo (0.21 ms with the
 //     fsync declined) and 8.4–11.9 / 42–62 ms at three replicas, from the
 //     leader and from a follower; the whole read 1.4 / 5.3 ms solo, 595 a
-//     second, and 6.2–10.0 / 63–71 ms at three, 64–96 a second. What the
-//     whole read adds to its barrier is the decode that reaches it, not the
-//     commit of its checkpoint.
+//     second, and at three the barrier's own median within the run's noise
+//     — its arm measured 6.2–10.0 / 63–71 ms, a median below the barrier
+//     arm's, which a read that is its barrier's append and then a decode
+//     cannot be — 64–96 a second. What the whole read adds to its barrier
+//     is the decode that reaches it, not the commit of its checkpoint.
 //   - SIXTEEN READERS AT ONCE on one node SHARE their barriers
 //     ([ReadIndex.Read]): 0.12 appends a read, for the barrier alone and for
 //     whole reads alike, since a whole read's wait no longer spreads the

@@ -265,15 +265,20 @@ waits that one out and joins the next, which serves every read that arrived in
 the meantime. So a lone read costs one append, and a read on a busy node waits
 for at most two and appends none of its own.
 
-Measured by `make bench`'s read arms, 2,000 reads an arm, on two cores of a
-laptop shared with other work (E-cores of an Intel Core Ultra 7 265U) holding
-all three members, with `stream.sync: always`; where the three-replica column
-gives a range, its ends are the stream's leader and a follower:
+Measured by `make bench`'s read arms, 2,000 reads an arm and one run of each,
+on two cores of a laptop shared with other work (E-cores of an Intel Core
+Ultra 7 265U) holding all three members, with `stream.sync: always`; where the
+three-replica column gives a range, its ends are the stream's leader and a
+follower. A whole read is its barrier's append and then the decode that
+reaches it, so it is never faster than its barrier: at three replicas the two
+rows came from separate arms of the one run, and the whole read's lower median
+is that run's noise on two shared cores, inside which the two are the same
+figure:
 
 | | solo | three replicas |
 |---|---|---|
 | the barrier append alone (median) | 0.96 ms (0.21 ms with the fsync declined) | 8.4–11.9 ms (2.4–2.6 ms declined) |
-| one reader: the whole read, median / p99 | 1.4 / 5.3 ms | 6.2–10.0 / 63–71 ms |
+| one reader: the whole read, median / p99 | 1.4 / 5.3 ms | the barrier's within that noise (6.2–10.0 measured) / 63–71 ms |
 | one reader: reads a second | 595 | 64–96 |
 | sixteen readers at once: barriers appended per read | 0.12 | 0.12 |
 | sixteen readers at once: reads a second, together | 5,500 | 490–1,560 |
