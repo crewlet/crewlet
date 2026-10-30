@@ -264,7 +264,4 @@ func TestTheCompanysSpacesKeepAPersonalKeysCase(t *testing.T) {
 	if got := confluence.SpacesOf(o); !slices.Equal(got, []string{"ENG", "~alice"}) {
 		t.Fatalf("SpacesOf = %v", got)
 	}
-	if got := confluence.NormalizeSpaceKey(" ~Bob "); got != "~Bob" {
-		t.Fatalf("NormalizeSpaceKey = %q", got)
-	}
 }

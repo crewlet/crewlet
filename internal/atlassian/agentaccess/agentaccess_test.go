@@ -482,6 +482,14 @@ func TestOptionsAreTheSitesOwnRolesAndPermissions(t *testing.T) {
 	if view.Name != "View" || !admin.Administers || !perms.ScopeOpen {
 		t.Fatalf("Confluence permission options = %+v", perms)
 	}
+	// VIEW IS REQUIRED for every other permission, as Confluence requires it.
+	if required, missing := perms.MissingRequired("create:page"); perms.RequiredLevel != "read:space" ||
+		!missing || required.Name != "View" {
+		t.Fatalf("Confluence permissions require %q (%+v, %v), want View", perms.RequiredLevel, required, missing)
+	}
+	if jiraOpts.RequiredLevel != "" {
+		t.Fatalf("Jira requires %q, want nothing", jiraOpts.RequiredLevel)
+	}
 	f.locked(func() { f.rolesMode = "ROLES" })
 	s = testSession(t, f, seatDoc{}, nil, []string{"ENG"})
 	roles, err := s.Options(ctx, seataccess.LaneConfluence)
@@ -490,8 +498,47 @@ func TestOptionsAreTheSitesOwnRolesAndPermissions(t *testing.T) {
 	}
 	adminRole, _, _ := roles.Level("r-admin")
 	collab, _, _ := roles.Level("r-collab")
-	if len(roles.Levels) != 4 || !adminRole.Administers || collab.Administers || collab.Name != "Collaborator" {
+	if len(roles.Levels) != 4 || !adminRole.Administers || collab.Administers || collab.Name != "Collaborator" ||
+		roles.RequiredLevel != "" {
 		t.Fatalf("Confluence role options = %+v", roles)
+	}
+}
+
+// A LOWER-CASE KEY IS THE PRODUCT'S KEY: within the company's reach, granted
+// in the project Jira spells upper-case, and read back as no change to make.
+func TestALowerCaseKeyIsTheProductsKey(t *testing.T) {
+	t.Parallel()
+	f := newAtlSite(t)
+	s := testSession(t, f, seatDoc{jira: onJira("10101", "gop")}, []string{"GOP"}, nil)
+	opts, err := s.Options(context.Background(), seataccess.LaneJira)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.Reaches("gop") {
+		t.Fatalf("gop is outside a reach of %v", opts.Scope)
+	}
+	want := seataccess.Desired{Enabled: true, Level: "10101", Scope: []string{"gop"}}
+	account := run(t, s, seataccess.LaneJira, seataccess.OpCreate, want, seataccess.Observed{}, nil)[0].AccountID
+	f.locked(func() {
+		if !f.actors["GOP/10101"][account] {
+			t.Fatalf("not granted in GOP: %v", f.actors)
+		}
+	})
+	rec := &seataccess.Record{
+		Account: &seataccess.Account{ID: account, State: seataccess.AccountActive},
+		Lanes:   map[seataccess.Lane]seataccess.LaneRecord{seataccess.LaneJira: {Applied: &want}},
+	}
+	plan, err := seataccess.Plan(Vendor{}, seataccess.SeatInput{
+		Seat: sre, Want: map[seataccess.Lane]seataccess.Desired{seataccess.LaneJira: want},
+		Have: observe(t, s, rec), Record: rec,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range plan[seataccess.LaneJira] {
+		if step.Op == seataccess.OpScope || step.Op == seataccess.OpLevel {
+			t.Fatalf("a key's case alone was planned as a change: %+v", step)
+		}
 	}
 }
 
@@ -1052,11 +1099,15 @@ func TestOffSaysSoWhenTheProductIsNotConnected(t *testing.T) {
 }
 
 // A PERSONAL SPACE'S KEY KEEPS ITS CASE, because Confluence matches `~` keys
-// case-sensitively; a global space's key is upper-cased.
+// case-sensitively; a global space's key and a Jira project key are
+// upper-cased.
 func TestAPersonalSpaceKeyKeepsItsCase(t *testing.T) {
 	t.Parallel()
-	got := normalKeys([]string{" ~alice ", "eng", "~557058:AbC"})
+	got := normalKeys(seataccess.LaneConfluence, []string{" ~alice ", "eng", "~557058:AbC"})
 	if !slices.Equal(got, []string{"ENG", "~557058:AbC", "~alice"}) {
+		t.Fatalf("normalKeys = %v", got)
+	}
+	if got := normalKeys(seataccess.LaneJira, []string{"ops", " OPS "}); !slices.Equal(got, []string{"OPS"}) {
 		t.Fatalf("normalKeys = %v", got)
 	}
 }

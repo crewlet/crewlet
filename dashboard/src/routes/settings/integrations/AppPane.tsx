@@ -20,7 +20,7 @@ import { QueryState } from "~/components/common.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { asSentence } from "~/lib/format.ts";
 import { SetupForm } from "../SetupForm.tsx";
-import { SeatStep, SetupPasses, SurfaceDeliveries, integrationFacts } from "./catalogue.tsx";
+import { SetupPasses, SurfaceDeliveries, integrationFacts, seatStepFor } from "./catalogue.tsx";
 import type { Intent, Model, Tool } from "./model.ts";
 import {
   actionName,
@@ -91,6 +91,7 @@ export function AppPane({
   );
   const [tab, setTab] = useState("agents");
   const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState("");
   const access = useAccess(tool.configured ? tool.entry.key : null);
   const data = access.data;
   const readOnly = useOperatorManaged(data);
@@ -197,9 +198,9 @@ export function AppPane({
   const issues = data?.notice
     ? tool.issues.filter((i) => i.kind !== "credential_shared")
     : tool.issues;
-  const steps = new Map(
-    tool.seats.filter((r) => r.seat?.step && r.toolKey).map((r) => [r.handle, r]),
-  );
+  // ONLY WHERE A PASS RUNS: a tool whose accounts are made by hand has no
+  // loop to ask, so the control would only ever be refused.
+  const provisioned = tool.sections.some((s) => s.tool.can_provision);
   return (
     <>
       {header}
@@ -221,8 +222,7 @@ export function AppPane({
           { value: "settings", label: "Settings" },
         ]}
         actions={
-          // ONLY WHERE A PASS RUNS: a guarded reader has no loop to ask.
-          model.guarded ? undefined : (
+          model.guarded || !provisioned ? undefined : (
             <Button
               size="small"
               variant="ghost"
@@ -233,7 +233,9 @@ export function AppPane({
                 if (model.managed) return;
                 setChecking(true);
                 try {
-                  await model.check(tool);
+                  // THE LOOP'S ANSWER IS SAID: a refusal in its own words, or
+                  // that it is looking.
+                  setChecked((await model.check(tool)) || "Crewlet is looking now.");
                 } finally {
                   void access.reload({ quiet: true });
                   setChecking(false);
@@ -245,6 +247,11 @@ export function AppPane({
           )
         }
       />
+      {checked && (
+        <p className="t-caption" role="status">
+          {checked}
+        </p>
+      )}
       {tab === "agents" && (
         <div className="int-tab">
           {issues.length > 0 && (
@@ -282,18 +289,9 @@ export function AppPane({
                 held={held}
                 readOnly={readOnly}
                 avatarOf={model.avatarOf}
+                onAnswer={access.adopt}
                 onReplaceKey={() => setOpen("rotate")}
-                stepFor={(handle) => {
-                  const row = steps.get(handle);
-                  return row?.seat && row.toolKey && !model.guarded ? (
-                    <SeatStep
-                      app={tool.entry.name}
-                      toolKey={row.toolKey}
-                      seat={row.seat}
-                      managed={model.managed}
-                    />
-                  ) : null;
-                }}
+                stepFor={seatStepFor(tool, model)}
               />
             )}
           </QueryState>

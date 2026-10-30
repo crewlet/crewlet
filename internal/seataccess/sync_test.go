@@ -491,3 +491,65 @@ func TestAStepIsHandedItsOpsEarlierResults(t *testing.T) {
 		}
 	}
 }
+
+// faultingVendor reads every seat but one, which it names as a seat fault.
+type faultingVendor struct {
+	*seataccesstest.Vendor
+	fault string
+}
+
+func (v faultingVendor) Open(ctx context.Context, in seataccess.OpenInput) (seataccess.Session, error) {
+	s, err := v.Vendor.Open(ctx, in)
+	return faultingSession{Session: s, fault: v.fault}, err
+}
+
+type faultingSession struct {
+	seataccess.Session
+	fault string
+}
+
+func (s faultingSession) Observe(ctx context.Context, in seataccess.ObserveInput) (seataccess.Observation, error) {
+	obs, err := s.Session.Observe(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	delete(obs, s.fault)
+	return obs, seataccess.SeatFaults{s.fault: errors.New("the vendor timed out reading this account")}
+}
+
+// ONE SEAT THE VENDOR COULD NOT READ IS THAT SEAT'S FAULT: it is recorded on
+// its lanes and planned nothing, and every other seat is synced as usual.
+func TestASeatTheVendorCouldNotReadFaultsAlone(t *testing.T) {
+	t.Parallel()
+	h := newHarness()
+	c := company(&config.RoleDatadog{Enabled: yes(), Role: "a"})
+	c.Roles = append(c.Roles, config.Role{Name: "Ops", Handle: "ops",
+		Integrations: config.RoleIntegrations{Datadog: &config.RoleDatadog{Enabled: yes(), Role: "a"}}})
+	report, err := seataccess.Sync(t.Context(), seataccess.SyncInput{
+		Vendor: faultingVendor{Vendor: h.v, fault: "ops"}, Open: seataccess.OpenInput{Config: c},
+		Ledger: h.ledger, Sink: h.sink, Pass: "pass-1", By: "reconcile loop",
+		Now: func() time.Time { return at },
+	})
+	if err != nil {
+		t.Fatalf("one unreadable seat failed the kind: %v", err)
+	}
+	if rec := h.record(t); !rec.Held() {
+		t.Errorf("the readable seat was not synced: %+v", rec)
+	}
+	if h.v.Account("ops") != nil {
+		t.Error("the unreadable seat was acted on from no answer")
+	}
+	ops, ok := h.ledger.Record(integration.KindDatadog, "ops")
+	if !ok {
+		t.Fatal("the unreadable seat's fault was not recorded")
+	}
+	for lane, lr := range ops.Lanes {
+		if lr.Sync == nil || lr.Sync.Outcome != seataccess.OutcomeFailed || lr.Sync.Error == nil ||
+			lr.Sync.Error.Step != seataccess.VerbObserve || lr.Sync.Error.Actor != seataccess.ByCrewlet {
+			t.Errorf("%s: %+v", lane, lr.Sync)
+		}
+	}
+	if len(report.Findings) != 1 || report.Findings[0].Subject != "ops" {
+		t.Errorf("findings = %+v, want the one unreadable seat", report.Findings)
+	}
+}

@@ -861,6 +861,11 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 				"lists", want.Level), "offered": offered}
 		}
 	}
+	if required, missing := o.MissingRequired(want.Level); missing {
+		return httpjson.Detail{"detail": fmt.Sprintf("%s grants nothing else without %s "+
+			"(%s); add it to the set", seataccess.LaneName(lane), required.Name, required.ID),
+			"required": required.ID}
+	}
 	for key, grant := range want.Permissions {
 		i := slices.IndexFunc(o.Permissions, func(p seataccess.PermissionSpec) bool {
 			return p.Key == key
@@ -881,12 +886,10 @@ func notOffered(kind integration.Kind, lane seataccess.Lane, o seataccess.Option
 				"or not at all", o.Permissions[i].Name)}
 		}
 	}
-	if !o.ScopeOpen && len(want.Scope) > 0 {
-		for _, entry := range want.Scope {
-			if !slices.Contains(o.Scope, strings.TrimSpace(entry)) {
-				return httpjson.Detail{"detail": fmt.Sprintf("%q is outside what the "+
-					"company's connection reaches", entry), "offered": o.Scope}
-			}
+	for _, entry := range want.Scope {
+		if !o.Reaches(entry) {
+			return httpjson.Detail{"detail": fmt.Sprintf("%q is outside what the "+
+				"company's connection reaches", entry), "offered": o.Scope}
 		}
 	}
 	if o.ScopeOpen && under != "" {

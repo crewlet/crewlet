@@ -180,6 +180,7 @@ func (s *session) Options(ctx context.Context, lane seataccess.Lane) (seataccess
 			// set of these ([confluence.OperationsLevel]), chosen with a
 			// multi-select.
 			out.Live, out.Multiple = false, true
+			out.RequiredLevel = confluence.OperationRead.ID()
 			out.Levels = append(out.Levels, productOnly(productConfluence))
 			for _, op := range confluence.Operations {
 				out.Levels = append(out.Levels, seataccess.Level{
@@ -355,17 +356,16 @@ func (s *session) universe(lane seataccess.Lane, extra ...[]string) []string {
 	for _, list := range extra {
 		all = append(all, list...)
 	}
-	return normalKeys(all)
+	return normalKeys(lane, all)
 }
 
-// normalKeys is a scope as keys: trimmed, upper-cased (a Confluence personal
-// space's `~` key keeps its case, see [confluence.NormalizeSpaceKey]),
-// deduplicated, sorted. A Jira key never starts with `~`, so one rule serves
-// both products.
-func normalKeys(keys []string) []string {
+// normalKeys is a lane's scope as keys: each spelled as the product matches it
+// ([seataccess.ScopeKey]: a Confluence personal space's `~` key keeps its
+// case, every other key is upper-cased), deduplicated and sorted.
+func normalKeys(lane seataccess.Lane, keys []string) []string {
 	seen := map[string]bool{}
 	for _, key := range keys {
-		if key = confluence.NormalizeSpaceKey(key); key != "" {
+		if key = seataccess.ScopeKey(lane, key); key != "" {
 			seen[key] = true
 		}
 	}
