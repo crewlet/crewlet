@@ -14,9 +14,11 @@
  * size (option A): the account, the access it holds, its key, its tool and its
  * last sync, with only the actions the seat can take now.
  *
- * READ-ONLY WHERE THE OPERATOR MANAGES ACCESS: access then lives on each
- * agent's Seat object, so the tab says so in one line and draws values only,
- * with no switch, picker or action.
+ * WHERE THE OPERATOR WRITES THE DOCUMENT, access settings live on each
+ * agent's Seat object, so the tab says so in one line and draws nothing that
+ * writes a revision (no switch, picker, scope, Keep or save). Actions at the
+ * vendor write none and still run: rotate, remove, restore, retry, check
+ * again and install.
  */
 
 import { useState, type ReactNode } from "react";
@@ -128,8 +130,8 @@ export function AgentsAccess({
   const seats = only ? data.seats.filter((s) => s.handle === only) : data.seats;
   const scoped = lanes.some((l) => l.scope !== undefined);
   // A HELD TAB says why on each control; a read-only one draws no control at all.
-  const fixed = held ?? readOnly;
-  const locked = fixed !== undefined || data.syncing;
+  // A HOLD stops everything; a read-only document stops only what writes it.
+  const locked = held !== undefined || readOnly !== undefined || data.syncing;
 
   const desiredOf = (seat: AccessSeat, lane: AccessLaneKey): AccessDesired =>
     draft[seat.handle]?.[lane] ?? seat.lanes[lane]!.desired;
@@ -208,7 +210,7 @@ export function AgentsAccess({
           variant={data.notice.tone}
           title={data.notice.title}
           action={
-            data.notice.replace_key && onReplaceKey && !readOnly ? (
+            data.notice.replace_key && onReplaceKey ? (
               <Button
                 size="small"
                 variant="primary"
@@ -418,8 +420,9 @@ export function AgentsAccess({
                       saved={saved}
                       syncing={data.syncing}
                       now={now}
-                      held={fixed}
-                      step={readOnly ? null : stepFor?.(seat.handle)}
+                      held={held}
+                      readOnly={readOnly !== undefined}
+                      step={stepFor?.(seat.handle)}
                       onAct={(a) => void act(seat, lane, a)}
                       onInstall={() => void install(seat, lane)}
                       onRemove={() => setRemoving({ seat, lane })}
@@ -432,7 +435,7 @@ export function AgentsAccess({
                       seat={seat}
                       saved={saved}
                       now={now}
-                      actions={availableActions(lane, saved, fixed !== undefined, data.syncing)}
+                      actions={availableActions(lane, saved, held !== undefined, data.syncing)}
                       onAction={(a) =>
                         a === "rotate"
                           ? void act(seat, lane, "rotate")
@@ -522,6 +525,7 @@ function LaneMessage({
   syncing,
   now,
   held,
+  readOnly,
   step,
   onAct,
   onInstall,
@@ -533,6 +537,8 @@ function LaneMessage({
   syncing: boolean;
   now: number;
   held: string | undefined;
+  /** The operator writes the document: Keep, which would write it, is not offered. */
+  readOnly: boolean;
   step: ReactNode;
   onAct: (action: "retry" | "keep" | "restore" | "done") => void;
   onInstall: () => void;
@@ -540,6 +546,7 @@ function LaneMessage({
 }) {
   if (syncing && saved.plan.length > 0) return null;
   const busy = held !== undefined;
+  const keep = !busy && !readOnly;
   // WHERE A PERSON ACTS AT THE VENDOR is the engine's to say, step by step.
   const at = (url: string | undefined) =>
     url ? (
@@ -579,7 +586,7 @@ function LaneMessage({
               </Button>
             )}
             {at(saved.sync.error.action_url)}
-            {!busy && saved.desired.level !== saved.observed.level && saved.observed.level && (
+            {keep && saved.desired.level !== saved.observed.level && saved.observed.level && (
               <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
                 Keep {levelName(lane, saved.observed.level)}
               </Button>
@@ -606,15 +613,17 @@ function LaneMessage({
               <Button size="small" variant="secondary" onClick={() => onAct("restore")}>
                 Turn back on
               </Button>
-              <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
-                Keep off
-              </Button>
+              {keep && (
+                <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
+                  Keep off
+                </Button>
+              )}
             </span>
           )
         }
       >
-        Crewlet leaves {seat.name} off until you decide, in case that was deliberate. Keep off turns
-        it off here too.
+        Crewlet leaves {seat.name} off until you decide, in case that was deliberate.
+        {keep && " Keep off turns it off here too."}
       </Callout>
     ) : (
       <Callout
@@ -626,9 +635,11 @@ function LaneMessage({
               <Button size="small" variant="secondary" onClick={() => onAct("restore")}>
                 Restore now
               </Button>
-              <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
-                Keep {lane.name}&apos;s setting
-              </Button>
+              {keep && (
+                <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
+                  Keep {lane.name}&apos;s setting
+                </Button>
+              )}
             </span>
           )
         }
@@ -637,7 +648,9 @@ function LaneMessage({
         {levelMoved ? accessWords(lane, saved.observed) : scopeWords(lane, saved.observed.scope)},
         and Crewlet&apos;s setting is{" "}
         {levelMoved ? levelName(lane, saved.desired.level) : scopeWords(lane, saved.desired.scope)}.
-        The next sync restores Crewlet&apos;s setting unless you keep {lane.name}&apos;s.
+        {keep
+          ? ` The next sync restores Crewlet's setting unless you keep ${lane.name}'s.`
+          : " The next sync restores Crewlet's setting."}
       </Callout>
     );
   } else if (saved.sync?.outcome === "waiting" || saved.plan.some((s) => s.by === "you")) {

@@ -139,7 +139,7 @@ export const LANE_WORDS: Record<string, LaneWords> = {
 
 /** The line a read-only Agents tab shows when the Kubernetes operator manages access. */
 export const OPERATOR_MANAGED =
-  "Access is managed by the operator through each agent's Seat object, so it is shown here read-only.";
+  "Access settings are managed by the operator through each agent's Seat object.";
 
 export function laneWords(lane: string): LaneWords {
   return LANE_WORDS[lane] ?? GENERIC;

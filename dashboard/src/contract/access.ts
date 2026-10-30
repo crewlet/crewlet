@@ -196,6 +196,11 @@ export interface AccessAnswer {
   started_at?: string;
   last_sync_at?: string;
   notice?: AccessNotice;
+  /**
+   * "operator" where the Kubernetes operator writes the company document:
+   * saves and Keep are refused, and actions at the vendor still run.
+   */
+  managed_by?: "operator";
   /** What each lane offers now, for the pickers. */
   options: AccessOptions[];
   seats: AccessSeat[];

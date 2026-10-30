@@ -53,10 +53,23 @@ test("each refusal the access routes answer reads in the reader's words", async 
     ["revision_advanced", /Somebody changed these agents/],
     ["pass_in_flight", /A sync is running/],
     ["seat_still_on", /Turn this agent off and save/],
+    ["credential_external", /Rotate it where it was issued/],
+    ["config_managed", /managed by the operator through each agent's Seat object/],
   ] as const) {
     stub(409, { error: code, message: "refused" });
     const err = await accessApi.act("datadog", "sre", "datadog", "remove").catch((e: unknown) => e);
     expect(err).toBeInstanceOf(RestError);
     expect(refusalWords(err)).toMatch(words);
   }
+});
+
+test("a refusal says the vendor's reason, then its remedy", async () => {
+  stub(409, {
+    error: "install_refused",
+    message: "Slack refused the install",
+    detail: "Slack refused the install",
+    hint: "approve the app in Slack's admin settings",
+  });
+  const err = await accessApi.install("slack", "pm", "slack").catch((e: unknown) => e);
+  expect(refusalWords(err)).toMatch(/\. Approve the app in Slack's admin settings\.$/);
 });
