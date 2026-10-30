@@ -81,9 +81,15 @@ export function levelIds(level: string | undefined): string[] {
   return (level ?? "").split(" ").filter((id) => id !== "");
 }
 
-/** The level a lane of sets stores for the ids chosen: sorted and space-separated. */
-export function joinLevels(ids: string[]): string {
-  return [...new Set(ids.filter((id) => id !== ""))].sort().join(" ");
+/**
+ * The level a lane of sets stores for the ids chosen: sorted and
+ * space-separated, and holding the level the engine says every other one
+ * needs (`required_level`, Confluence's View) whenever it holds any.
+ */
+export function joinLevels(lane: Lane, ids: string[]): string {
+  const set = new Set(ids.filter((id) => id !== ""));
+  if (lane.required_level && set.size > 0) set.add(lane.required_level);
+  return [...set].sort().join(" ");
 }
 
 const sameLevel = (lane: Lane, a: string | undefined, b: string | undefined) =>
@@ -151,12 +157,18 @@ export function levelSummary(lane: Lane, level: string | undefined): string {
 }
 
 /**
- * Why a seat's draft cannot be saved, or null: product access only together
- * with a project or space list, which needs a role; or, where the vendor has
- * no empty level, a seat turned on with no role or permission chosen.
+ * Why a seat's draft cannot be saved, or null, as the engine would refuse it:
+ * a set without the level the engine requires of it (Confluence's View);
+ * product access only together with a project or space list, which needs a
+ * role; or, where the vendor has no empty level, a seat turned on with no
+ * role or permission chosen.
  */
 export function refusedLevel(lane: Lane, want: AccessDesired): string | null {
   if (!want.enabled) return null;
+  const ids = levelIds(want.level);
+  const required = lane.multiple ? lane.required_level : undefined;
+  if (required && ids.length > 0 && !ids.includes(required))
+    return `${lane.name} grants nothing else without ${levelName(lane, required)}. Add it to the set.`;
   const noun = laneWords(lane.key).scope?.noun.toLowerCase() ?? "scope";
   if (productOnly(lane, want.level) && (want.scope ?? []).length > 0)
     return `Product access only on ${lane.name} takes no ${noun}. Choose a role, or clear its ${noun}.`;
