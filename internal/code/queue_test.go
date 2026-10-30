@@ -48,22 +48,24 @@ func ready(t *testing.T, n *node, w *code.ChangeWriter, repo, change string) {
 	t.Helper()
 	converse(t, w, n.revising(repo, change, 1, oidOf("B"), mainRef, nil))
 	converse(t, w, reviewing(repo, change, platLead, 1, code.VerdictApprove, nil))
-	n.passed(repo, oidOf("B"), "unit")
+	n.passed(repo, oidOf("B"), mainRef, "unit")
 }
 
-// passed writes check name passed on commit oid of repoID straight into n's
-// estate — the ending no runner of this build reports yet.
-func (n *node) passed(repoID, oid, name string) {
+// passed writes check name passed on commit oid of repoID, checked for the
+// branch target, straight into n's estate — the ending no runner of this build
+// reports yet. Every column is written, overdue_at its queued instant plus its
+// timeout, as the applier writes it.
+func (n *node) passed(repoID, oid, target, name string) {
 	n.t.Helper()
 	at := store.EncodeTime(harnessAt)
-	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, name, attempt, state, purpose, change_id,
-		revision, candidate_id, entry_id, target_ref, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
+	n.exec(`INSERT INTO code_checks (repo_id, commit_oid, target_ref, name, attempt, state, purpose, change_id,
+		revision, candidate_id, entry_id, base_oid, defs_oid, required, run_in, timeout_seconds, reason,
 		runner_node, placement, box_handle, borrowed, reporter, queued_at, started_at, finished_at,
-		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, url,
-		summary, def, failures, tail)
-		VALUES (?, ?, ?, 1, 'passed', 'head', '', 0, '', '', 'refs/heads/main', '', '', 1, '', 600, 'exit',
-			'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, '', 'ok', '', '', '')`,
-		repoID, oid, name, at, at, at)
+		duration_ms, exit_code, failures_omitted, queued_position, finished_position, row_bytes, overdue_at,
+		url, summary, def, failures, tail)
+		VALUES (?, ?, ?, ?, 1, 'passed', 'head', '', 0, '', '', '', '', 1, '', 600, 'exit',
+			'node-a', 'container', '', 0, '', ?, ?, ?, 1000, 0, 0, 1, 2, 4, ?, '', 'ok', '', '', '')`,
+		repoID, oid, target, name, at, at, at, store.EncodeTime(harnessAt.Add(600*time.Second)))
 }
 
 // enqueueing is asker's enqueue of change, at head and on main, under an
@@ -133,12 +135,18 @@ func (n *node) entryState(repo, entry string) (code.QueueState, string) {
 // enqueue formed against another target is refused stale, and one of a
 // change into a branch whose gate requires no check no_queue. The enqueuer
 // is a person, whose enqueue the chart judges all the same: it is what says
-// the seat plat-lead's approval counts.
+// the seat plat-lead's approval counts. And an attempt of the required check
+// that passed on the change's head CHECKED FOR ANOTHER BRANCH counts for
+// nothing: it ran that branch's checks file, and the gate reads the attempts
+// of the change's own target alone.
 //
 // Mutations: decide an enqueue without its gate — the first enqueue applies,
 // red; judge the chart for a seat's enqueue alone (QueueProposal.JudgesChart)
 // — the person's enqueue is decided with no chart, plat-lead's approval
-// counts for nothing, and the second is refused gate_unmet, red.
+// counts for nothing, and the second is refused gate_unmet, red; read the
+// gate's attempts by (repository, commit, check), whatever their target — the
+// first refusal names no check, since release's passed unit is read for main,
+// red.
 func TestAnEnqueueIsDecidedByTheGate(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -146,6 +154,7 @@ func TestAnEnqueueIsDecidedByTheGate(t *testing.T) {
 	c, _ := committerOn(t, n, n.pub)
 	w, _ := writerOn(t, n, n.pub)
 	repo, change := queueRepo(t, n, c, "web")
+	n.passed(repo, oidOf("B"), releaseRef, "unit")
 
 	before := n.end()
 	res, err := c.ProposeQueue(t.Context(), enqueueing(repo, change, ada, oidOf("B")))

@@ -350,9 +350,9 @@ func LoadGateFacts(ctx context.Context, tx *sql.Tx, repoID, changeID string) (Ga
 // match, driven from the list of (change, head revision) pairs whose gate
 // judges paths or path owners; the path owner rows of every repository one of
 // whose changes' gates makes them gating, in one statement; and every attempt
-// of a required check on a head commit, driven from the list of (repository,
-// commit, check) triples, of which the latest is kept. The answer is
-// subjects' order.
+// of a required check on a head commit checked for the change's target, driven
+// from the list of (repository, commit, target, check) keys, of which the
+// latest is kept. The answer is subjects' order.
 func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) ([]GateFacts, error) {
 	rows, err := readinessRowsIn(ctx, tx, subjects)
 	if err != nil {
@@ -367,14 +367,14 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 		return nil, err
 	}
 	var (
-		heads   [][2]any
-		owned   []string
-		triples [][3]any
+		heads  [][2]any
+		owned  []string
+		checks [][4]any
 	)
 	at := make(map[string]int, len(subjects))
-	asked := map[[3]string]bool{}
+	asked := map[[4]string]bool{}
 	required := make([][]string, len(subjects))
-	byCommit := map[[2]string][]int{}
+	byHead := map[[3]string][]int{}
 	for i, s := range subjects {
 		out[i] = GateFacts{Rows: rows[i], Rules: rules[s.repo.ID]}
 		at[s.row.id] = i
@@ -391,17 +391,21 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 		if !gate.judgesChecks() {
 			continue
 		}
-		// EACH (REPOSITORY, COMMIT, CHECK) ASKED ONCE, whichever changes
-		// share the commit — and each change keeps the checks its OWN target
-		// requires, which two changes of one head into two branches differ in.
+		// EACH (REPOSITORY, COMMIT, TARGET, CHECK) ASKED ONCE, whichever
+		// changes into that target share the commit. An attempt checks a
+		// commit FOR A BRANCH, under that branch's checks file, and is keyed
+		// by it (CheckKey.Target): two changes of one head into two branches
+		// are judged by two sets of attempts, each its own target's, never
+		// by the attempts another branch's file defined — and each keeps the
+		// checks its OWN target requires.
 		required[i] = gate.Checks
-		key := [2]string{s.repo.ID, s.row.head}
-		byCommit[key] = append(byCommit[key], i)
+		head := [3]string{s.repo.ID, s.row.head, s.row.target}
+		byHead[head] = append(byHead[head], i)
 		for _, name := range gate.Checks {
-			triple := [3]string{s.repo.ID, s.row.head, name}
-			if !asked[triple] {
-				asked[triple] = true
-				triples = append(triples, [3]any{s.repo.ID, s.row.head, name})
+			key := [4]string{s.repo.ID, s.row.head, s.row.target, name}
+			if !asked[key] {
+				asked[key] = true
+				checks = append(checks, [4]any{s.repo.ID, s.row.head, s.row.target, name})
 			}
 		}
 	}
@@ -411,7 +415,7 @@ func gateFactsIn(ctx context.Context, tx *sql.Tx, subjects []readinessSubject) (
 	if err := ownerDigestsIn(ctx, tx, owned, subjects, out); err != nil {
 		return nil, err
 	}
-	if err := gateChecksIn(ctx, tx, triples, byCommit, required, out); err != nil {
+	if err := gateChecksIn(ctx, tx, checks, byHead, required, out); err != nil {
 		return nil, err
 	}
 	// EACH CHANGE'S LIVE QUEUE ENTRY, of every change at once, and the place
@@ -568,19 +572,20 @@ func ownerDigestsIn(ctx context.Context, tx *sql.Tx, owned []string, subjects []
 	return nil
 }
 
-// gateChecksIn reads every attempt of each (repository, commit, check) triple
-// of triples, keeping each check's LATEST attempt on every change byCommit
-// names for its repository and head commit whose target requires it — at most
-// MaxCheckAttempts rows a triple, one seek of the checks' key each.
-func gateChecksIn(ctx context.Context, tx *sql.Tx, triples [][3]any, byCommit map[[2]string][]int,
+// gateChecksIn reads every attempt of each (repository, commit, target,
+// check) key of keys, keeping each check's LATEST attempt on every change
+// byHead names for its repository, head commit and target whose target
+// requires it — at most MaxCheckAttempts rows a key, one seek of the checks'
+// key each.
+func gateChecksIn(ctx context.Context, tx *sql.Tx, keys [][4]any, byHead map[[3]string][]int,
 	required [][]string, out []GateFacts) error {
 
-	if len(triples) == 0 {
+	if len(keys) == 0 {
 		return nil
 	}
-	encoded, err := json.Marshal(triples)
+	encoded, err := json.Marshal(keys)
 	if err != nil {
-		return fmt.Errorf("code: encode %d checks' keys: %w", len(triples), err)
+		return fmt.Errorf("code: encode %d checks' keys: %w", len(keys), err)
 	}
 	rows, err := tx.QueryContext(ctx, gateChecksSQL, string(encoded))
 	if err != nil {
@@ -589,15 +594,16 @@ func gateChecksIn(ctx context.Context, tx *sql.Tx, triples [][3]any, byCommit ma
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var (
-			repoID, commit           string
+			repoID, commit, target   string
 			c                        GateCheck
 			state, reason, placement string
 		)
-		if err := rows.Scan(&repoID, &commit, &c.Name, &c.Attempt, &state, &reason, &placement); err != nil {
+		if err := rows.Scan(&repoID, &commit, &target, &c.Name, &c.Attempt, &state, &reason,
+			&placement); err != nil {
 			return fmt.Errorf("code: read the checks a merge gate judges: %w", err)
 		}
 		c.State, c.Reason, c.Placement = CheckState(state), CheckReason(reason), CheckPlacement(placement)
-		for _, i := range byCommit[[2]string{repoID, commit}] {
+		for _, i := range byHead[[3]string{repoID, commit, target}] {
 			if !slices.Contains(required[i], c.Name) {
 				continue
 			}
@@ -1098,17 +1104,19 @@ func appendOnce[T comparable](list []T, v T) []T {
 // readiness rows and the repositories' rules, read by their own statements:
 // the head revisions' facts the gate reaches, driven from the list of
 // (change, revision) pairs, one seek of their key a pair; and every attempt of
-// a required check on a head commit, driven from the list of (repository,
-// commit, check) triples, one seek of the checks' key a triple — the key
-// NAMED, since code_checks_finished_idx leads with the repository too and the
-// planner takes it for the repository alone (planner.go).
+// a required check on a head commit checked for the change's target, driven
+// from the list of (repository, commit, target, check) keys, one seek of the
+// checks' key a key — the key NAMED, since code_checks_finished_idx leads with
+// the repository too and the planner takes it for the repository alone
+// (planner.go).
 const (
 	gateHeadsSQL = `SELECT f.change_id, f.target_ref, f.touches_all, f.touched, f.classes, f.owners, f.skipped,
 			f.owners_digest
 		FROM json_each(?) AS j CROSS JOIN code_revision_facts AS f
 		WHERE f.change_id = CAST(j.value ->> 0 AS TEXT) AND f.n = CAST(j.value ->> 1 AS INTEGER)`
-	gateChecksSQL = `SELECT c.repo_id, c.commit_oid, c.name, c.attempt, c.state, c.reason, c.placement
+	gateChecksSQL = `SELECT c.repo_id, c.commit_oid, c.target_ref, c.name, c.attempt, c.state, c.reason,
+			c.placement
 		FROM json_each(?) AS j CROSS JOIN code_checks AS c INDEXED BY ` + checksKey + `
 		WHERE c.repo_id = CAST(j.value ->> 0 AS TEXT) AND c.commit_oid = CAST(j.value ->> 1 AS TEXT)
-			AND c.name = CAST(j.value ->> 2 AS TEXT)`
+			AND c.target_ref = CAST(j.value ->> 2 AS TEXT) AND c.name = CAST(j.value ->> 3 AS TEXT)`
 )
