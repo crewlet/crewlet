@@ -39,7 +39,15 @@ import type {
  * WORK IS ON BOTH: a person has tasks assigned to them and questions put to
  * them, which is the whole of what this product asks a person to do.
  */
-export const AGENT_TABS = ["overview", "work", "turns", "memory", "schedules", "settings"] as const;
+export const AGENT_TABS = [
+  "overview",
+  "work",
+  "turns",
+  "memory",
+  "schedules",
+  "access",
+  "settings",
+] as const;
 export const HUMAN_TABS = ["overview", "work", "settings"] as const;
 export type SeatTab = (typeof AGENT_TABS)[number];
 
@@ -60,6 +68,7 @@ export const TAB_LABELS: Readonly<Record<SeatTab, string>> = {
   turns: "Turns",
   memory: "Memory",
   schedules: "Schedules",
+  access: "Access",
   settings: "Settings",
 };
 

@@ -9,25 +9,19 @@ import (
 	"github.com/crewlet/crewlet/internal/provision"
 )
 
-// The GitLab half of provisioning: which seats need an account, and which
-// variable each one's token goes into.
+// Naming shared by the provisioning and the engine's reads.
 //
-// # The engine names no variable of its own
-//
-// A seat's code-host credential lives in its `mcp_env.gitlab` block, under
-// whichever key that seat's tool stack reads — the glab CLI wants
-// GITLAB_TOKEN, an HTTP MCP server wants a Private-Token header. So the scan
-// looks for a `${VAR}` reference under any of those keys and mints into the
-// variable the CONFIG already points at. Inventing `CREWLET_GITLAB_TOKEN_<seat>`
-// would be a variable the seat's own tools never read.
+// A provisioned seat's token is the engine's: it is sealed under the name
+// the engine derives for the seat (GITLAB_TOKEN_<HANDLE>) by per-seat access
+// ([Vendor]), and no document names it. A company that does not provision
+// GitLab (D4b) still gives each seat its own token, an external credential,
+// under one of [CredentialKeys] in its `mcp_env.gitlab` block, and the engine
+// reads it from there for the seat's tools and its identity.
 
-// CredentialKeys are the spellings a seat's token arrives under, in the
-// order they are tried.
-//
-// The engine has the same list, and it must: this is the one place a config
-// says where a seat's code-host credential lives, and a provisioner writing
-// to a key the engine does not read would mint tokens nothing authenticates
-// with. Exported so the engine's own lookup and this scan cannot drift.
+// CredentialKeys are the spellings an external seat token arrives under in
+// `mcp_env.gitlab`, in the order they are tried: the glab CLI reads
+// GITLAB_TOKEN, an HTTP MCP server a Private-Token header. Exported so every
+// reader tries the same list.
 var CredentialKeys = []string{
 	"GITLAB_TOKEN",
 	"GITLAB_PERSONAL_ACCESS_TOKEN",
@@ -40,7 +34,11 @@ var CredentialKeys = []string{
 // FROM THE ORG MODEL'S OWN TABLE: see [org.EngineReadMCPEnv].
 const SeatEnv = org.MCPEnvGitLab
 
-// PlanFor walks the org for seats that need a GitLab account.
+// PlanFor is the plan the engine's current call sites read a seat's
+// mcp_env.gitlab variable from: the tool-credential declaration and the
+// setup pass, which hands it to [Reconcile] and [Teardown], both of which
+// ignore it now that seats are per-seat access. It goes when those call sites
+// are retired; nothing in this package provisions from it.
 //
 // # A literal is a note, not a failure
 //
@@ -144,8 +142,8 @@ func stripScheme(value string) string {
 // `403 Your primary email address is not confirmed`. Measured: a seat's token
 // was minted, sealed, refused on the next pass's check, and minted again —
 // 144 live tokens with `api` scope over one connect, and 164 in total. That
-// loop is fixed at three points (see [Client.Tokens] and the mint in
-// [Reconcile]); THIS is the point at which it stops starting.
+// loop is fixed at three points (see [Client.Tokens] and the fresh-token probe
+// in the vendor's mint); THIS is the point at which it stops starting.
 //
 // A GENERATED ADDRESS IS STILL A ROBOT'S. GitLab's own is
 // `service_account_group_…@noreply.<instance>`, which is the same promise the

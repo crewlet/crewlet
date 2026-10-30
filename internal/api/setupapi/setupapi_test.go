@@ -158,6 +158,10 @@ type surface struct {
 	// caller replaces the Tier A token [surface.as] attaches, for a case
 	// about who a write is recorded as.
 	caller *iam.Principal
+
+	// access is the engine's per-seat access the Agents tab's routes answer
+	// from, a fake a case scripts.
+	access *fakeAccess
 }
 
 func newSurface(t *testing.T) *surface {
@@ -311,6 +315,9 @@ func newService(t *testing.T, opts setupapi.Options) *setupapi.Service {
 	if opts.WebhookBaseKey == "" {
 		opts.WebhookBaseKey = oneListener
 	}
+	if opts.Access == nil {
+		opts.Access = &fakeAccess{}
+	}
 	svc, err := setupapi.New(opts)
 	if err != nil {
 		t.Fatalf("setupapi.New: %v", err)
@@ -342,6 +349,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 			StateCipher:    testCipher(t),
 			StateClaims:    coordmemory.NewFleet(),
 			WebhookBaseKey: oneListener,
+			Access:         &fakeAccess{},
 		}
 	}
 	if _, err := setupapi.New(complete()); err != nil {
@@ -359,6 +367,7 @@ func TestNewRefusesEveryMissingDependencyByName(t *testing.T) {
 		"StateCipher":    func(o *setupapi.Options) { o.StateCipher = nil },
 		"StateClaims":    func(o *setupapi.Options) { o.StateClaims = nil },
 		"WebhookBaseKey": func(o *setupapi.Options) { o.WebhookBaseKey = "" },
+		"Access":         func(o *setupapi.Options) { o.Access = nil },
 	} {
 		opts := complete()
 		strip(&opts)
@@ -404,9 +413,10 @@ func buildSurface(t *testing.T, apps map[string]string, webhookBase, webhookBase
 		mux: http.NewServeMux(), config: cfg, vault: v, configs: fixture.db.Configs(),
 		cipher: fixture.cipher, plane: fixture.plane, gate: fixture.gate,
 		status: &statusStore{}, webhookBase: webhookBase, webhookBaseKey: webhookBaseKey,
+		access: &fakeAccess{},
 	}
 	s.setup = newService(t, setupapi.Options{
-		Config: cfg, Secrets: v,
+		Config: cfg, Secrets: v, Access: s.access,
 		// The resolution chain: what the vault holds is what resolved.
 		Resolve:        v.get,
 		Status:         s.status,

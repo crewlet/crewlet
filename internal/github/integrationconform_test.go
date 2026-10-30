@@ -338,11 +338,11 @@ func bearerOf(r *http.Request) string {
 func convergedSeatApps(pem string) []github.SeatApp {
 	return github.SeatsFrom([]github.SeatApp{
 		{
-			Handle: "eng-lead", Name: "Engineering Lead", Tier: github.TierFullAccess,
+			Handle: "eng-lead", Name: "Engineering Lead", Permissions: tierPerms("full_access", false),
 			AppID: 11, Slug: "acme-eng-lead", InstallationID: 101, Key: pem,
 		},
 		{
-			Handle: "sre-lead", Name: "SRE Lead", Tier: github.TierReview,
+			Handle: "sre-lead", Name: "SRE Lead", Permissions: tierPerms("review", false),
 			AppID: 12, Slug: "acme-sre-lead", InstallationID: 102, Key: pem,
 		},
 	})
@@ -434,7 +434,7 @@ func newConvergedWorld(
 		// and anything in github.Denied is an Excess one. Built from
 		// Tier.Permissions so a tier that gains a permission does not
 		// leave this fixture quietly reporting a shortfall for ever.
-		perms, permErr := json.Marshal(seat.Access().Permissions())
+		perms, permErr := json.Marshal(seat.Permissions.Token())
 		if permErr != nil {
 			tb.Fatalf("marshalling %s's tier permissions: %v", seat.Handle, permErr)
 		}
@@ -700,12 +700,12 @@ func (w *outstandingWorld) serve(rw http.ResponseWriter, r *http.Request) {
 func outstandingSeatApps(pem string) []github.SeatApp {
 	return github.SeatsFrom([]github.SeatApp{
 		{
-			Handle: "eng-lead", Name: "Engineering Lead", Tier: github.TierReview,
+			Handle: "eng-lead", Name: "Engineering Lead", Permissions: tierPerms("review", false),
 			AppID: 11, Slug: "acme-eng-lead", Key: pem,
 		},
-		{Handle: "ops-lead", Name: "Ops Lead", Tier: github.TierReadOnly},
+		{Handle: "ops-lead", Name: "Ops Lead", Permissions: tierPerms("read_only", false)},
 		{
-			Handle: "qa-lead", Name: "QA Lead", Tier: github.TierReadOnly,
+			Handle: "qa-lead", Name: "QA Lead", Permissions: tierPerms("read_only", false),
 			AppID: 13, Slug: "acme-qa-lead", InstallationID: 103, Key: pem,
 		},
 	})
@@ -720,8 +720,8 @@ func outstandingSeatApps(pem string) []github.SeatApp {
 // short (a finding nobody put there) or accidentally complete — and a
 // complete one makes this world converged, which is the exact vacuity the
 // suite's anti-vacuity clause exists to catch.
-func shortOfTheTier(access github.Access) (held map[string]string, missing string) {
-	held = maps.Clone(access.Permissions())
+func shortOfTheTier(perms github.Permissions) (held map[string]string, missing string) {
+	held = perms.Token()
 	names := slices.Sorted(maps.Keys(held))
 	missing = names[0]
 	delete(held, missing)
@@ -735,7 +735,7 @@ func newOutstandingWorld(
 	tb.Helper()
 
 	seats := outstandingSeatApps(pem)
-	held, _ := shortOfTheTier(seats[0].Access())
+	held, _ := shortOfTheTier(seats[0].Permissions)
 	perms, err := json.Marshal(held)
 	if err != nil {
 		tb.Fatalf("marshalling the outstanding installation's permissions: %v", err)
@@ -1402,7 +1402,7 @@ func TestACancellationBetweenSeatsStopsTheWalk(t *testing.T) {
 		APIBase: server.URL, WebBase: server.URL, Org: convergedOrgName,
 		Seats: []github.SeatApp{
 			{Handle: "a-gone", AppID: 11, Slug: "acme-a", InstallationID: 101,
-				Key: pem, Tier: github.TierReadOnly},
+				Key: pem, Permissions: tierPerms("read_only", false)},
 			// NO APP: this seat concludes without a request, which is
 			// what the loop-top check exists for.
 			{Handle: "z-no-app"},
@@ -1480,7 +1480,7 @@ func TestASeatCancelledAfterItsInstallationWasReadIsNotReportedReady(t *testing.
 		APIBase: server.URL, WebBase: server.URL, Org: convergedOrgName,
 		Seats: []github.SeatApp{{
 			Handle: "eng-lead", AppID: 11, Slug: "acme-eng-lead",
-			Key: pem, Tier: github.TierReadOnly,
+			Key: pem, Permissions: tierPerms("read_only", false),
 		}},
 		Record: func(context.Context, string, int64) error {
 			// THE LEASE EXPIRING with the answer already in hand.
@@ -1528,7 +1528,7 @@ func TestAReadGitHubRefusedIsStillNotAFinding(t *testing.T) {
 		APIBase: server.URL, WebBase: server.URL, Org: convergedOrgName,
 		Seats: []github.SeatApp{{
 			Handle: "sre-lead", AppID: 12, Slug: "acme-sre-lead",
-			InstallationID: 102, Key: pem, Tier: github.TierReview,
+			InstallationID: 102, Key: pem, Permissions: tierPerms("review", false),
 		}},
 	})
 	if err != nil {
