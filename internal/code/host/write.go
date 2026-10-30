@@ -10,6 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/codefault"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/queue/topics"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -35,7 +36,10 @@ import (
 // repository's status, the grant, a protection, a stale head — is judged
 // again once at the log's head (a linearizable re-sync) before it is answered,
 // so a seat's session floor, which holds its own writes and not a protection a
-// person just removed, refuses nothing a current copy would let through.
+// person just removed, refuses nothing a current copy would let through —
+// while the seat's re-syncs on this node last (code.NewResyncs): past them a
+// seat's refusal is answered from its session, saying so, rather than paying
+// the code log a barrier the census never gave it.
 
 // Signer names an engine-built commit's author and committer from the serving
 // node's epoch (the engine's codeSigner): the author is the acting principal —
@@ -135,7 +139,11 @@ var errWritesStopping = errors.New("host: the code host is stopping")
 //     write's own push (Estate.PushOutcome): FOUND, the write already landed
 //     and is answered from its row, nothing built.
 //  6. Every refusal of 3–5 — and an object the copy lacks — is judged again
-//     once at the log's head (a linearizable re-sync) before it is answered.
+//     once at the log's head (a linearizable re-sync) before it is answered:
+//     a SEAT'S re-sync drawn from its seat's bucket on this node
+//     (Options.Resyncs, its turn the principal — code.NewResyncs), and past
+//     it the refusal is answered from the seat's session, saying it was not
+//     judged again and when the seat's re-syncs come back.
 //  7. The build (build.go), in the write's scratch (cache.NewScratch, named
 //     the push id), under ONE unit of the node's seat git-work share, given
 //     back before the landing, within ONE budget of git run time,
@@ -478,16 +486,35 @@ func (wr *writing) judge(ctx context.Context) (judgement, code.EngineWriteResult
 				return judgement{}, res, true, err
 			}
 		}
+		note := ""
 		if !wr.linear {
-			fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
-			continue
+			spent := wr.resync()
+			if spent == nil {
+				fresh = statelog.Freshness{Level: statelog.ReadLinearizable}
+				continue
+			}
+			// THE SEAT'S RE-SYNCS ARE SPENT: the refusal is answered from
+			// its session, saying it was not judged again.
+			note = " " + code.NotRejudged(spent, "this turn's", "this seat's", s.now())
 		}
 		if j.absent != "" && v.reason == "" {
-			return judgement{}, code.EngineWriteResult{}, true, fmt.Errorf("%w: repository %s holds no object %s",
-				code.ErrObjectNotFound, wr.repoName(), j.absent)
+			return judgement{}, code.EngineWriteResult{}, true, fmt.Errorf("%w: repository %s holds no object %s%s",
+				code.ErrObjectNotFound, wr.repoName(), j.absent, note)
 		}
-		return judgement{}, wr.refused(v.reason, v.detail), true, nil
+		return judgement{}, wr.refused(v.reason, v.detail+note), true, nil
 	}
+}
+
+// resync draws the write's one re-judgement at linearizable from its seat's
+// bucket on this node (Options.Resyncs, the query server's own): a SEAT'S
+// write, its turn the principal, nil where it is taken; a person's is never
+// charged — its floor is the log's head, which it reads by right.
+func (wr *writing) resync() *costlimit.Refusal {
+	p := wr.w.Principal
+	if p.Kind != code.PrincipalAgent {
+		return nil
+	}
+	return wr.s.o.Resyncs.Take(p.Seat, p.Run.TurnID, 1)
 }
 
 // rules judges the write's one command on the synced row, before any git

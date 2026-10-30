@@ -2234,7 +2234,12 @@ barrier in its signed frame (about 87 000 a day at the 1 GiB floor and the
 default seven days). A seat's own reads of the code log — a ref resolved for
 it, and a read of a repository's content by object id that looks once at the
 log's head for an object its home's copy lacks — are counted in its 125 a day,
-as every log's are, and are no part of that term.
+as every log's are, and are no part of that term; nor are its coding boxes',
+which read at their run's floor. The ones a seat's work can repeat at will —
+a box's read past its run's floor, a tool's look at the head, an engine
+write's second judgement there — are held to that 125 on each git node, 16 at
+once and one every 11.5 minutes after, and answered at the seat's floor past
+it ([a box's re-syncs](../concepts/code-host.md#a-boxs-re-syncs-and-requests-in-flight)).
 That term belongs to the log rather than to the company's current
 configuration, so it is counted whether or not `code.native` is set: the log
 keeps its ceiling either way, and the rate it is held against is every node's

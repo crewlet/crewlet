@@ -11,6 +11,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/gitref"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -44,6 +45,9 @@ import (
 //     which the API's box routes on a node serving no code host run too. A
 //     check's token goes on to admitCheck; a run's to admitRun, whose steps
 //     follow.
+//     2a. IN FLIGHT — at most MaxRunRequests of the run's requests at once
+//     on this node, the token's launch counted before anything is read for
+//     it; past them 503, reason run_busy (boxlimit.go).
 //  3. RUN — the row its token names ([Runs.Run]), THREE-VALUED: a store that
 //     cannot be read is 503 and never 401 (the credential was good, and
 //     nothing about it is known to be wrong); an unknown run, a launch the row
@@ -71,7 +75,10 @@ import (
 //     LINEARIZABLE where that answer would refuse — not found, a status that
 //     refuses op, or ANOTHER repository under the name: admit's rule that a
 //     refusal is never decided on a stale read, reached now only for a name
-//     the run was GIVEN. A name a rename left redirecting is answered for the
+//     the run was GIVEN — and only while the run's re-syncs last
+//     (boxlimit.go): spent, the session's answer stands — a name not found
+//     there, or naming another repository, refused saying it was not judged
+//     again. A name a rename left redirecting is answered for the
 //     repository it redirects to, under its current name, A PUSH INCLUDED,
 //     where admit refuses a person's push to tell them the new name: the
 //     grant is the repository's id, and the box's remote is the name its
@@ -89,7 +96,9 @@ import (
 //     advertisement and its receive, as a person's are.
 //  8. FRESHNESS — every read of the request's refs is at the run's SESSION:
 //     its floor, which every ref answer the box is shown and every push it
-//     lands raises (raiseFloor). A ZERO floor reads LINEARIZABLE.
+//     lands raises (raiseFloor). A ZERO floor reads LINEARIZABLE, a re-sync
+//     the run's bucket pays for, and as this node's copy stands once it is
+//     spent.
 //
 // # Logged by who could have caused it
 //
@@ -171,6 +180,12 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 
 	b := boxRefusal{s: s, w: w, r: r, ref: ref, name: name}
 
+	// 2a ITS PLACE IN FLIGHT, before anything is read for it (boxlimit.go).
+	if !s.holdRun(ctx, ref.LaunchID) {
+		b.unavailable("run_busy", runBusySentence)
+		return admission{}, false
+	}
+
 	// 3 THE RUN.
 	run, found, err := s.o.Boxes.Runs.Run(ctx, ref.TurnID)
 	switch {
@@ -220,26 +235,45 @@ func (s *Server) admitRun(ctx context.Context, w http.ResponseWriter, r *http.Re
 	}
 
 	// 8 THE FRESHNESS, which step 6 reads at.
+	// A RUN WHOSE ROW NAMES NO FLOOR reads its refs at the log's head, a
+	// re-sync its bucket pays for like any other (boxlimit.go): spent, it
+	// reads them as this node's copy holds them — the floor it has, which is
+	// none.
 	adm := admission{name: name, box: &run, spool: boxSpool, fresh: runSession(run.Floor)}
+	var spent *costlimit.Refusal
+	if adm.fresh.Level == statelog.ReadLinearizable {
+		if spent = s.boxResync(adm); spent != nil {
+			adm.fresh = statelog.Freshness{Level: statelog.ReadStale}
+		}
+	}
+	adm.linearizable = adm.fresh.Level == statelog.ReadLinearizable
 
-	// 6 THE REPOSITORY, given.
+	// 6 THE REPOSITORY, given — judged again at the log's head where the
+	// session's answer would refuse, while the run's re-syncs last.
 	repo, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name, Fresh: adm.fresh})
-	if errors.Is(err, code.ErrRepoNotFound) ||
-		(err == nil && (refuses(repo.Status, op) || repo.ID != g.RepoID)) {
-		adm.linearizable = true
-		repo, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
-			Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+	if !adm.linearizable && spent == nil && (errors.Is(err, code.ErrRepoNotFound) ||
+		(err == nil && (refuses(repo.Status, op) || repo.ID != g.RepoID))) {
+		if spent = s.boxResync(adm); spent == nil {
+			adm.linearizable = true
+			repo, err = s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: name,
+				Fresh: statelog.Freshness{Level: statelog.ReadLinearizable}})
+		}
+	}
+	// ANSWERED AT THE RUN'S FLOOR once its re-syncs are spent, saying so.
+	floorNote := ""
+	if spent != nil {
+		floorNote = " " + s.notRejudged(spent)
 	}
 	switch {
 	case errors.Is(err, code.ErrRepoNotFound):
-		auth.GitText(w, http.StatusNotFound, notFoundSentence(name))
+		auth.GitText(w, http.StatusNotFound, notFoundSentence(name)+floorNote)
 		return admission{}, false
 	case err != nil:
 		s.unavailable(w, r, name, err)
 		return admission{}, false
 	case repo.ID != g.RepoID:
 		b.refuse("not_granted", fmt.Sprintf("%s is no longer the repository this run was given (renamed "+
-			"since the launch); call run_sandbox again", strconv.Quote(name)))
+			"since the launch); call run_sandbox again%s", strconv.Quote(name), floorNote))
 		return admission{}, false
 	}
 	// ANSWERED UNDER ITS CURRENT NAME, as admit answers a fetch it lets

@@ -486,6 +486,76 @@ func TestAnOidTheCacheLacksIsLookedForOnceAtTheHead(t *testing.T) {
 	}
 }
 
+// A SEAT'S SECOND LOOK IS ITS TURN'S TO PAY: a seat's read of an id nobody
+// pushed looks once at the log's head, until its turn's sixteen on the node
+// are spent; then it is answered from the copy at its floor, with no sync at
+// the head, saying it was not judged again and when the turn's re-syncs come
+// back. Another turn of the seat finds the SEAT's bucket spent (the scope,
+// M3-decisions U36); a person's read is charged to nobody; and once the refill
+// has earned one, the turn looks at the head once more.
+//
+// Mutation: no bucket (resync answering nil) — the seventeenth read syncs at
+// the log's head — red.
+func TestASeatPastItsResyncsIsAnsweredAtItsFloor(t *testing.T) {
+	t.Parallel()
+	x := newFixture(t, codetest.SoloOptions{}, codetest.Settings())
+	x.commit(map[string]string{"f": "1\n"}, "one")
+	repo := x.repo(codetest.RepoName)
+	counting := &countingCache{Cache: x.f.Nodes()[0].Cache()}
+	var mu sync.Mutex
+	at := time.Now()
+	clock := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return at
+	}
+	s := x.server(0, query.Options{Cache: counting, Roster: company, Resyncs: code.NewResyncs(clock)})
+	missing := strings.Repeat("cd", 20)
+	// read is who's read of missing in turn: whether it synced at the log's
+	// head, and its refusal.
+	read := func(who code.Principal, turn string) (bool, error) {
+		t.Helper()
+		counting.take()
+		q := treeQ(repo, code.TreeQuery{Rev: missing})
+		q.Asker, q.Turn = who, turn
+		_, err := s.Read(t.Context(), q)
+		if !errors.Is(err, code.ErrObjectNotFound) || !strings.Contains(err.Error(), missing) {
+			t.Fatalf("%+v's read of %s, which nobody pushed = %v, want ErrObjectNotFound naming it", who, missing,
+				err)
+		}
+		return slices.Contains(counting.take(), statelog.ReadLinearizable), err
+	}
+
+	for i := range code.ResyncBurst {
+		if head, _ := read(seat("eng-dev"), "turn-a"); !head {
+			t.Fatalf("read %d of the turn's %d did not look at the log's head", i+1, code.ResyncBurst)
+		}
+	}
+	if head, err := read(seat("eng-dev"), "turn-a"); head ||
+		!strings.Contains(err.Error(), "at the position this turn has read") ||
+		!strings.Contains(err.Error(), "(not re-judged at linearizable: this turn's re-syncs are spent until ") {
+		t.Errorf("past its re-syncs the turn's read = %v, looking at the head: %v; want it answered at its floor, "+
+			"saying so", err, head)
+	}
+	if head, err := read(seat("eng-dev"), "turn-b"); head ||
+		!strings.Contains(err.Error(), "this seat's re-syncs are spent until ") {
+		t.Errorf("another turn of the seat = %v, looking at the head: %v; want its seat's bucket spent", err, head)
+	}
+	if head, _ := read(person, ""); !head {
+		t.Error("a person's read past the seat's re-syncs did not look at the log's head")
+	}
+
+	mu.Lock()
+	at = at.Add(24 * time.Hour / 125)
+	mu.Unlock()
+	if head, _ := read(seat("eng-dev"), "turn-a"); !head {
+		t.Error("once the refill had earned one, the turn's read did not look at the log's head")
+	}
+	if head, _ := read(seat("eng-dev"), "turn-a"); head {
+		t.Error("the refill's one re-sync was taken twice")
+	}
+}
+
 // gatedObjects is an object store whose reads wait while its gate is shut,
 // counting every read.
 type gatedObjects struct {

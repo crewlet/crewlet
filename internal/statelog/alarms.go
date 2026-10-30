@@ -282,7 +282,15 @@ type Census struct {
 	// a day, which one CI polling ten repositories a minute exceeds tenfold.
 	// A seat's own reads of that log — a ref resolved for it, a read by
 	// object id's one re-sync at the head — are the seats' term, which every
-	// log is given whole, and are no part of this one.
+	// log is given whole, and are no part of this one. So are its coding
+	// boxes': a box reads at its run's floor and pays no barrier but where
+	// what it asks for is not there. And the re-syncs a seat's work may
+	// append at will are HELD to the seats' term, not merely counted in it: a
+	// box's, a turn's code tools' second look and an engine write's
+	// re-judgement each draw on a bucket of its run or its turn and its seat
+	// on the git node that answers — LinearizableReadsPerSeatDay a day, after
+	// a burst of code.ResyncBurst (internal/code's NewResyncs) — and past it
+	// are answered at the seat's floor with no barrier.
 	Clients int
 }
 

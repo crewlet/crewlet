@@ -39,7 +39,8 @@ type historyNode struct {
 func (n historyNode) host(t *testing.T) builtin.CodeReader {
 	t.Helper()
 	s, err := query.New(query.Options{NodeID: "git-node", Cache: historyCopy{}, Git: n,
-		Share: code.NewGitShare("git-node", 4, nil), Roster: func() code.Roster { return nil },
+		Share: code.NewGitShare("git-node", 4, nil), Resyncs: code.NewResyncs(nil),
+		Roster:  func() code.Roster { return nil },
 		Fetched: func(context.Context, types.CodeFetched) {}})
 	if err != nil {
 		t.Fatal(err)

@@ -3339,12 +3339,13 @@ run row.
 | Step | Refused | Answer |
 |---|---|---|
 | The credential | none presented (git's first request never carries one), a user name other than `run` — or `check`, which a [check's box](#check-boxes) presents and is admitted by its own steps — a token this fleet did not sign for the user name presenting it — forged, expired, under a key this node's `secrets.keys` does not hold, or a check's token presented as `run` | `401`, a challenge whose sentence names the box's token, never an API token |
+| Its requests in flight | sixteen of the run's requests already in flight on this node — twice the eight repositories a run is given | `503 run_busy` with `Retry-After`, before the run's row is read: a box's own burst waits on itself (below) |
 | The run | its row cannot be read | `503` with `Retry-After`: the credential was good, and nothing about it is known to be wrong |
 | | no such run, a launch the row has replaced, a run whose job has left its box | `403` |
 | The run's grant, by the name it was given | a repository the run was not given | `403 not_granted` — before anything of the code log is read, so a box guessing names costs the log nothing |
 | | a push of a repository it was given to read | `403 read_only` |
 | The stop, for a push | a seat a person stopped (below) | `403`, naming who stopped it; `503` on a node that has not yet read the pauses |
-| The repository | not found, deleted or purging, or archived for a push, as a person's request is — decided through the code log's barrier, never on the box's own read. A name a rename left redirecting is not refused: the box is served the repository under its new name, a push included, since the box's remote is the name its launch gave it | as a person's |
+| The repository | not found, deleted or purging, or archived for a push, as a person's request is — decided through the code log's barrier, never on the box's own read, while the run's [re-syncs](#a-boxs-re-syncs-and-requests-in-flight) last; past them, on its run's floor, a not-found saying so. A name a rename left redirecting is not refused: the box is served the repository under its new name, a push included, since the box's remote is the name its launch gave it | as a person's |
 | | a name renamed away from the repository the run was given and since taken by another | `403 not_granted` — call `run_sandbox` again |
 | The seat's grant | this node holds no chart yet, or is confirmed behind the company's configuration | `503` (`no_chart`, `behind_config`): the configuration it failed to apply may be the one that revoked the seat; the box retries, and `/ready` already drains this node |
 | | a fetch of a repository the seat reads nothing of — a `visibility: unit` one outside its unit | `403 not_permitted` |
@@ -3400,7 +3401,8 @@ box never sees a branch go back between two nodes, and a box reads its own push
 through any node at once. A v2 clone takes at most one raise, a push at most
 two; a raise the run store refuses answers `503`, and the box retries. A
 fetch whose wants the node's copy lacks, and one past its repository's
-request bound, each read through the barrier once — rare, as a person's do.
+request bound, each read through the barrier once — rare, as a person's do,
+and paid from the run's re-syncs (below).
 
 **Its transfers are its run's.** Every box's git is charged to the `run` class
 of the [fair share](#fair-share), keyed by its launch, and boxes together hold
@@ -3477,6 +3479,60 @@ the run its box was admitted as, whatever its commits say, and that record is
 the provenance. A trailer is a note in git for where the record does not reach
 — a mirror of the repository elsewhere, and a commit older than the push
 history ([Code Sandbox → Commit trailers](code-sandbox.md#commit-trailers)).
+
+### A box's re-syncs and requests in flight
+
+A box runs code nobody vouches for, so what it can take of a node and of the
+code log is bounded by its run, never left to the box to keep small.
+
+**Its re-syncs at the log's head.** Every read of a box's request that goes
+through the code log's barrier — a fetch whose want the node's copy lacks, a
+request past the bound its admitted row set, a repository its run was given
+that its floor would refuse, and every read of a run whose row names no floor
+— appends a barrier to the code log, which the log's census sizes at 125 a
+day for each agent seat. Each is paid from the run's **bucket** on the node:
+**16** at once, one more every **11.5 minutes** (the census's 125 a seat-day),
+and paid as well from its **seat's** bucket on that node, of the same size, so
+a seat with several coding runs live on one node shares its census term
+there. A barrier a fetch takes raises the run's floor to it, so the box's next
+request, on any node, pays none for the same objects. Past either bucket, the request is answered at the run's floor — what it has
+been shown, which holds everything it pushed — with no barrier: a want the
+floor lacks is answered as upload-pack answers one it cannot serve, which git
+prints as
+
+```text
+fatal: remote error: <oid> is not in <repo> at the position this run has been shown; it has not been pushed yet, or ask code_resolve (not re-judged at linearizable: this run's re-syncs are spent until <instant>)
+```
+
+— `this seat's` where the seat's bucket refused it — a request past its bound
+is held to the bound its admitted row set, and a repository the floor does
+not hold is refused saying it was not judged again. Persons are never
+charged: their reads of refs go through the barrier by right, and the code
+log's census counts them as its clients. The buckets are each node's own, in
+memory, so a box whose requests spread over several git nodes has a burst on
+each, and the log's barriers from boxes are bounded by the fleet's git nodes.
+`crewlet.code.box.resyncs{outcome}` counts them, `taken` or `spent`, and every
+`spent` answer is logged `code_box_resyncs_spent` with the bucket's scope (the
+seat), its principal (the run's launch) and the object.
+
+A seat's code tools are bounded the same way on the git node that answers
+them: a [server-side read](#server-side-reads)'s one second look at the log's
+head, and an [engine write](#repositories-made-by-tools)'s one re-judgement of
+a refusal there, are paid from its **turn's** bucket and its seat's — the git
+node's one set for both, 16 and 11.5 minutes as a box's — and past them the
+read is answered from the copy at the seat's floor, and the write's refusal
+from its session, each ending `(not re-judged at linearizable: this turn's
+re-syncs are spent until <instant>)`.
+
+**Its requests in flight.** At most **16** of one run's requests — twice the
+eight repositories a run is given — are in flight on one node at once; past
+them a request is answered `503 run_busy` with `Retry-After` before anything
+is read for it, and logged `code_box_unavailable`. A place is taken when the
+run's token verifies and given back when the request ends, its client hangs
+up or the node stops. The transfer lane's run class orders which box is
+granted a slot next, and the spool's one box credential bounds what boxes
+hold of it together; this is what stops one run holding a node's every
+admission at once. `crewlet.code.box.inflight_refused` counts the refusals.
 
 ---
 
@@ -5846,6 +5902,8 @@ words, since git does not read the header.
 | A blob over the limit | `(blob_too_large: blob <id> (<path>) is <size>, past code.limits.max_blob_bytes …)` | Remove it from the history you push. |
 | A push that would store more than one push may — the pack it sends completed against the repository, with its index | `(pack_too_large: the push stores <size>, past the <size> one push may store; push fewer commits at once, or without thin packs (git push --no-thin))` | Push fewer commits at once, or with `git push --no-thin`. Nothing was uploaded. |
 | A [coding box](#coding-boxes)'s push whose pack holds a commit committed as the engine — `engine@<code.identity_domain>`, in any case — that the repository does not already hold, whether or not an update that lands reaches it | `(forged_committer: <id> is committed as the code host's engine (engine@<domain>), which only the host's own writes are: cherry-pick it, which rewrites the committer, or make the change with a code_* tool)`; or, for a pack holding more than 1 000 such commits, `(forged_committer: this push carries more than 1000 commits committed as the code host's engine (engine@<domain>), more than one push is checked for: push the history in parts, each landing before the next)` | Commit the change as the box: a cherry-pick, an amend or a rebase writes the box's own identity as the committer. Or make the change through a `code_*` tool, which the engine commits itself. Nothing of the push was stored: drop the commit from every ref the push sends, a refused one included. A history of the engine's commits the repository already holds — a branch deleted since the box checked it out — lands, up to 1 000 of them a push: push a longer one in parts. A person's push is never refused for its committers. |
+| A [coding box](#coding-boxes)'s run has sixteen requests in flight on the node | `this run has 16 requests in flight on this node; retry in 10 s` (503, `run_busy`) | Retry: the box's own requests end and make room. A box that meets it often sends requests faster than they are served — a loop, not a checkout ([a box's re-syncs and requests in flight](#a-boxs-re-syncs-and-requests-in-flight)). |
+| A coding box's fetch wants an object its run's floor does not hold, its run's re-syncs at the log's head spent | `fatal: remote error: <oid> is not in <repo> at the position this run has been shown; it has not been pushed yet, or ask code_resolve (not re-judged at linearizable: this run's re-syncs are spent until <instant>)`, `this seat's` where the seat's are | Fetch what was pushed: resolve the branch again (`code_resolve`) and fetch its tip. After the instant named the box's next fetch looks at the log's head again. |
 | A new ref past the most live refs a repository holds | `(repo_refs: <repo> holds <n> live refs, the most one repository may)`; for a seat outside the owning unit, past the half it may fill ([A seat's push](#a-seats-push)), `(repo_refs: <repo> holds <n> live refs, and a seat outside unit <owner>, which owns it, creates refs there only while <repo> holds fewer than 50000: half of the 100000 one repository may, the other half kept for its owners)` — or `a seat other than <owner>, which owns it,` for a repository a seat owns | Delete the refs nobody needs, in the same push as the new ones or before it: a deletion stops counting at once, even against the push that makes it, and the refs a repository deleted never refuse a push. A seat outside the owning unit deletes its own branches it no longer needs; the other half of the refs is the owners'. |
 | A new ref beside a live ref of the directory it would make — `feature/x` beside the branch `feature`, or `feature` beside `feature/x` ([a ref and a directory of refs](#a-ref-and-a-directory-of-refs)) | `(ref_conflict: refs/heads/feature is in the way: a ref is never also a directory of refs, so a clone holding one could not fetch the other; delete it first, or choose another name)` | Delete the ref in the way in the same push (`git push origin :feature HEAD:feature/x`), or choose another name. A clone holding the old ref fetches the change with `git fetch --prune`. |
 | A pack that would take the repository past its size | `(repo_size: <repo> would hold <size> of packs, past <limit> (code.limits.repo_max_bytes))`; for a seat outside the owning unit, past the half it may fill ([A seat's push](#a-seats-push)), `(repo_size: <repo> would hold <size> of packs, past <half>: a seat outside unit <owner>, which owns it, fills at most half of code.limits.repo_max_bytes (<limit>), the other half kept for its owners)` | Raise `code.limits.repo_max_bytes`, or push less. What a repository holds is its packs as they were pushed ([Limits](#limits)). Nothing landed. A seat outside the owning unit is held to half of the limit whatever it is raised to: the other half is the owners'. |
@@ -5935,8 +5993,9 @@ line says and push the branch's next commit with `-o change`.
 | `code_retention_duty_declined`, `code_retention_duty_resumed` | `WARN` or `DEBUG`, `INFO` or `DEBUG` | This node does not take the duty, and gives it back if it holds it (`code_retention_duty_given_back`). It logs a `_declined` line each time the reason it declines for changes, at that reason's level — so a decline that keeps its reason is one line however many ticks it lasts — and one `_resumed` line when it stops declining, `INFO` if any reason of that decline warned and `DEBUG` otherwise. `WARN` where the reason is a fault: its copy of the code log is out of service (`domain`), or it does not serve the revision the fleet is on (`reason`: `behind`, with this node's `applied_epoch` and the `fleet_epoch`, once the lag is confirmed — its apply of the revision failed, or it has been behind for longer than the 45 seconds of propagation; or `unknown`, with the `error` that kept it from telling, as when the activation pointer could not be read). `DEBUG`, and asked again a reconcile interval (15 seconds) later rather than a tick, while it is no fault: `reason` `propagating` (with the `fleet_epoch`, and the `applied_epoch` once its reconciler has read the pointer) on a node still applying the fleet's revision or still starting — every restart's first turn runs before its reconciler is built — and `not_activated` while the fleet has activated no revision yet, which a fresh deployment meets for the seconds before its first activation. A node that fails one activation and then applies the fleet's next logs four lines: `propagating` at `DEBUG` while it applies the first, `behind` at `WARN` once its failure confirms the lag, `propagating` at `DEBUG` when the next activation arrives, and `_resumed` at `INFO` once it serves that one. |
 | `code_push` | `INFO` | One push this node received, whatever became of it: the repository, the push's id, the credential it came through (`operator_id`) and the human seat its principal holds (`seat`, empty for a credential bound to none) — for a [coding box](#coding-boxes)'s, no credential, the seat whose run it is, and the run's `turn_id` and `launch_id` — the `outcome` (`applied`, `pending`, `unknown`, `refused`, `failed`) and any `refusal`, how many commands and how many went through, the bundle's bytes, the position its record landed at and how long it took. |
 | `code_box_challenged` | `DEBUG` | A [coding box](#coding-boxes)'s request presented no credential this fleet signed — none (`reason`: `none`), a user name other than `run` (`user`), or a token that does not verify (`token`) — and was challenged `401`, with its `path`: by the code host's admission, or, under the component `api`, by a node serving none of the code host now, which tells a box why only past this challenge. Debug, because the route is public and anybody who reaches it can produce one. |
-| `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`, `holds_full`), or answered `503` because this node could not judge it or hold what its push names (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `floor_unraised`, `holds_unwritten`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
-| `code_box_floor_unraised` | `WARN` | A coding box's push applied, and its run's floor could not be raised to the push's row in the run store: the push was answered `ok` all the same, and what the box may read behind is its own push, whose objects it holds. |
+| `code_box_refused`, `code_box_unavailable` | `INFO`, `WARN` | A coding box's signed token was refused `403` (`reason`: `run_unknown`, `run_superseded`, `run_ended`, `not_granted`, `read_only`, `seat_stopped`, `not_permitted`, `holds_full`), or answered `503` because this node could not judge it or hold what its push names (`run_unread`, `pauses_unread`, `no_chart`, `behind_config`, `floor_unraised`, `holds_unwritten`) or its run had sixteen requests in flight here (`run_busy`, before the run's row is read, so with no `seat`): with the run's `turn_id` and `launch_id`, the `seat` and the `repo`, never the token. |
+| `code_box_resyncs_spent` | `INFO` | A coding box's fetch wanted an object its run's floor does not hold, and its run's — or its seat's — re-syncs at the log's head on this node were spent, so it was answered at its floor with no barrier: the `repo`, the bucket's `scope` (the seat) and `principal` (the run's launch), the `oid` and the bucket's `retry_after` ([a box's re-syncs](#a-boxs-re-syncs-and-requests-in-flight)). |
+| `code_box_floor_unraised` | `WARN` | A coding box's push applied, and its run's floor could not be raised to the push's row in the run store: the push was answered `ok` all the same, and what the box may read behind is its own push, whose objects it holds. Or a box's fetch took a barrier for a want its floor lacked, and its floor could not be raised to it: the fetch was served all the same, and the box's next fetch of those objects on another node may take a barrier again. |
 | `code_box_floor_unreadable` | `WARN` | Under the component `engine`: a coding run's row names a code-log floor this build cannot read, or one on another log, so its box reads through the barrier until its next answer raises the row to a readable one. |
 | `code_write` | `INFO` | One [engine-built commit](#engine-built-commits) this node was asked for, whatever became of it: the repository, the write's `kind`, who wrote it (`principal_kind`; the `seat` it is the commit's author for — a person's human seat, or the agent's own — with the credential a person came through, `operator_id`, or the turn behind a seat's, `turn_id`), the `push_id` it lands under, the `outcome` (`applied`, `pending`, `unknown` from its push's row; `refused`; `unready`, this node could not answer and another git node is asked; `failed`), any `refusal` of the change or of its push, and how long it spent in `sync_ms`, `build_ms`, `land_ms` and `total_ms`. No `operator_acted` is recorded for it: a person's tool call is one already, and a seat's write is its push row. |
 | `code_write_outcome_unread` | `WARN` | An engine write found its branch at another head and could not learn, from the code log, whether that head is its own push landed by an earlier ask; it was answered `busy` — make the same call again — rather than `stale`. |

@@ -69,6 +69,17 @@ func ChangeAnswerLines() []string {
 	return lines
 }
 
+// SetBoxResyncClock gives s's boxes' re-sync buckets a clock of the case's,
+// so it can pass a refill without waiting it out: new buckets, every one full.
+func SetBoxResyncClock(s *Server, now func() time.Time) { s.boxResyncs = code.NewResyncs(now) }
+
+// RunRequests is how many of run's requests are in flight on s.
+func RunRequests(s *Server, run string) int {
+	s.runsMu.Lock()
+	defer s.runsMu.Unlock()
+	return s.runRequests[run]
+}
+
 // IdxOIDs is idxOIDs.
 func IdxOIDs(path string) (int64, io.ReadCloser, error) { return idxOIDs(path) }
 

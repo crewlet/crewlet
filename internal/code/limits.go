@@ -133,7 +133,13 @@ const GitReadsShare = 10
 // the read of what its coding run pushed when the engine collects the run
 // (code.read's run_pushes, one a collected run given a repository to push
 // to, its later pages at session) — are the seats' term instead, which the
-// census gives every log whole, so this term does not count them. At the 1 GiB
+// census gives every log whole, so this term does not count them; and so are
+// its coding boxes', none of which is a git client's here. Those a seat's
+// work can repeat at will — a box's read past its run's floor, a tool's
+// second look at the head, an engine write's re-judgement — are HELD to the
+// seats' term on each git node by a bucket of the run or the turn and its
+// seat ([NewResyncs]), so no seat can push its own barriers into this term's
+// allowance. At the 1 GiB
 // floor and the default seven days it is 87 154 a day — about 60 a minute
 // fleet-wide: that CI, thirty developers fetching every three minutes and
 // 3 000 pushes a day, three times over.

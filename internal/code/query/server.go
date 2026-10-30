@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/code/cache"
 	"github.com/crewlet/crewlet/internal/code/gitproc"
+	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/queue/topics"
@@ -72,6 +73,13 @@ type Options struct {
 	// pool's read lane), ONE a node: whatever else of a seat's git work the
 	// node runs draws on the same.
 	Share *code.GitShare
+	// Resyncs is the node's buckets for its seats' tools' re-syncs at the
+	// log's head (code.NewResyncs), ONE a node — the code host's engine
+	// writes draw on the same (host.Options.Resyncs): a SEAT'S read whose
+	// refusal would be judged again at linearizable (step 7) pays its turn's
+	// bucket on its seat, and past it is answered from the copy at the seat's
+	// floor, saying so.
+	Resyncs *costlimit.Limiter
 	// Roster is the chart a seat's grant is judged by: the serving node's
 	// CURRENT epoch's, read per read. A nil answer is a node with no chart
 	// yet, which judges no seat (code.UnreadyNoChart).
@@ -184,6 +192,8 @@ func New(o Options) (*Server, error) {
 		missing = "Git"
 	case o.Share == nil:
 		missing = "Share"
+	case o.Resyncs == nil:
+		missing = "Resyncs"
 	case o.Roster == nil:
 		missing = "Roster"
 	case o.Fetched == nil:
@@ -254,7 +264,9 @@ func New(o Options) (*Server, error) {
 //     lacks is code.ErrObjectNotFound, while an anchor's path its revision
 //     lacks is an answer — the anchor is gone. No refusal of steps 5 and 7 is
 //     concluded from a copy not read at the log's head: it is synced there
-//     once, and judged again. Each of those short processes runs to its own
+//     once, and judged again — for a SEAT, while its re-syncs on this node
+//     last (Options.Resyncs; past them it is answered from the copy at its
+//     floor, saying so). Each of those short processes runs to its own
 //     bound, gitproc.ReadDeadline: one that runs all of it, a few ids' check
 //     no healthy node takes a second over, is the node's own failure
 //     (node_failed).
@@ -723,27 +735,62 @@ func (r *read) grant() error {
 // the log's head syncs there once, judges the grant again on the row it
 // brings, and only then answers — a refused read costs one barrier, and a
 // served one none.
+//
+// A SEAT'S SECOND LOOK IS ITS TURN'S TO PAY, from its seat's bucket on this
+// node (Options.Resyncs, code.NewResyncs): past it the refusal is answered
+// from the copy at the seat's floor — which holds what the turn has read and
+// this node's own pushes — saying it was not judged again and when the
+// seat's re-syncs come back. A person's and the engine's own are never
+// charged.
 func (r *read) objects(ctx context.Context) (found, error) {
 	for {
 		err := r.grant()
+		var (
+			objs   found
+			absent string
+		)
 		if err == nil {
-			objs, absent, ferr := r.find(ctx)
+			var ferr error
+			objs, absent, ferr = r.find(ctx)
 			switch {
 			case ferr != nil:
 				return found{}, ferr
 			case absent == "":
 				return objs, nil
-			case r.linear:
-				return found{}, fmt.Errorf("%w: repository %s holds no object %s", code.ErrObjectNotFound,
-					r.synced.Repo.Name, absent)
 			}
-		} else if r.linear {
-			return found{}, err
 		}
-		if err := r.sync(ctx, statelog.Freshness{Level: statelog.ReadLinearizable}); err != nil {
-			return found{}, err
+		note := ""
+		if !r.linear {
+			spent := r.resync()
+			if spent == nil {
+				if err := r.sync(ctx, statelog.Freshness{Level: statelog.ReadLinearizable}); err != nil {
+					return found{}, err
+				}
+				continue
+			}
+			note = " " + code.NotRejudged(spent, "this turn's", "this seat's", time.Now())
 		}
+		if err != nil {
+			return found{}, fmt.Errorf("%w%s", err, note)
+		}
+		if note != "" {
+			return found{}, fmt.Errorf("%w: repository %s holds no object %s at the position this turn has "+
+				"read; it has not been pushed yet, or ask code_resolve %s", code.ErrObjectNotFound,
+				r.synced.Repo.Name, absent, note[1:])
+		}
+		return found{}, fmt.Errorf("%w: repository %s holds no object %s", code.ErrObjectNotFound,
+			r.synced.Repo.Name, absent)
 	}
+}
+
+// resync draws the read's one second look at the log's head from its seat's
+// bucket on this node, its turn the principal: nil where it is taken, or for
+// a read that is not a seat's.
+func (r *read) resync() *costlimit.Refusal {
+	if r.q.Asker.Kind != code.PrincipalAgent {
+		return nil
+	}
+	return r.s.o.Resyncs.Take(r.q.Asker.Seat, r.q.Turn, 1)
 }
 
 // answer runs the kind's own git over objs (step 8), memoizing every page it

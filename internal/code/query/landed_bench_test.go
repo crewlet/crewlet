@@ -219,7 +219,7 @@ func (r *landedRig) coldIndexed(b *testing.B) *query.Server {
 	}
 	r.checks = &checkTimes{Pool: n.Pool()}
 	s, err := query.New(query.Options{NodeID: n.ID(), Cache: c, Git: r.checks,
-		Share:  code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil),
+		Share: code.NewGitShare(n.ID(), n.Pool().Slots(gitproc.ClassRead), nil), Resyncs: code.NewResyncs(nil),
 		Roster: func() code.Roster { return nil }, Fetched: noFetched})
 	if err != nil {
 		b.Fatal(err)

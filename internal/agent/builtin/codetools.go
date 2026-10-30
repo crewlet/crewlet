@@ -937,7 +937,7 @@ func furthestOnLog(a, b statelog.Position) statelog.Position {
 }
 
 // gitRead asks q of repo's home git node as c — THE ONE GitQuery a call sends,
-// stamped here with its caller and its ceiling, so no tool can name its asker
+// stamped here with its caller, its ceiling and a seat's turn, so no tool can name its asker
 // and forget whom it reads for — refused here first where the query is one no
 // git node would take, so a malformed argument costs no round trip and is
 // told in the domain's own words. A git node that answers the repository gone
@@ -946,6 +946,13 @@ func (d CodeDeps) gitRead(ctx context.Context, turn *turnctx.Turn, tool string, 
 	q code.GitQuery) (code.GitAnswer, *tools.Result) {
 
 	q.Asker, q.CeilingSeat = c.asker, c.ceiling
+	// A SEAT'S READ NAMES ITS TURN, whose bucket on the answering git node
+	// pays the read's one second look at the log's head (code.NewResyncs):
+	// so one turn naming what its floor lacks in a loop spends its own
+	// re-syncs and, past its seat's, the seat's — never the code log's.
+	if turn != nil && c.asker.Kind == code.PrincipalAgent {
+		q.Turn = turn.RunID
+	}
 	if err := q.Validate(); err != nil {
 		r := codeFailure(ctx, tool, repo.Name, err)
 		return code.GitAnswer{}, &r

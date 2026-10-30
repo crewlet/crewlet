@@ -1234,7 +1234,7 @@ func TestNothingAfterAdmissionAsksWhichAdmitterRan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	accessors := []string{"admitBox", "principal", "share", "refs", "boxFloor", "holdRefs"}
+	accessors := []string{"admitBox", "principal", "share", "refs", "boxFloor", "holdRefs", "resyncKey"}
 	fset := token.NewFileSet()
 	for _, name := range files {
 		if strings.HasSuffix(name, "_test.go") {

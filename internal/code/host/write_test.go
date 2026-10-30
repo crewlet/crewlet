@@ -328,6 +328,54 @@ func TestAWriteRefusalIsJudgedAtLinearizable(t *testing.T) {
 	}
 }
 
+// A SEAT'S WRITE REFUSAL IS JUDGED AGAIN ONLY WHILE ITS RE-SYNCS LAST: a seat
+// writing onto a head the branch is not at, over a copy read as it stands, is
+// judged again at the log's head — one barrier a write — until its turn's
+// sixteen on the node are spent; then the refusal is answered from its
+// session, through no barrier, saying it was not judged again and when its
+// re-syncs come back. A person's write, charged to nobody, is still judged
+// again.
+//
+// Mutation: the re-judgement taken without the bucket (resync answering nil)
+// — the seventeenth write reads through the barrier — red.
+func TestASeatsWriteRefusalIsJudgedAgainWhileItsResyncsLast(t *testing.T) {
+	t.Parallel()
+	e := &recording{}
+	c := newWriteCase(t, codetest.SoloOptions{Shape: codetest.Shape{WrapEstate: e.wrap}},
+		map[string]string{"README.md": "one\n"})
+	open := codetest.Settings()
+	open.Protections = nil
+	c.Fleet.Declare(t, code.Declared{Name: codetest.RepoName, Settings: open})
+	stale := randomOID()
+	write := func(who code.Principal) (code.Command, int) {
+		t.Helper()
+		before := e.linearizable()
+		w := files(c.repo, who, "refs/heads/main", stale, "", text("a.md", "a\n"))
+		w.Fresh = statelog.Freshness{Level: statelog.ReadStale}
+		res, err := c.write(w)
+		if err != nil {
+			t.Fatalf("a write onto %s: %v", stale, err)
+		}
+		return res.Command, e.linearizable() - before
+	}
+	seat := alice()
+	for i := range code.ResyncBurst {
+		if cmd, n := write(seat); n == 0 || cmd.Reason != code.RefusalStale {
+			t.Fatalf("write %d of the turn's %d was refused %s through %d barriers, want stale through one", i+1,
+				code.ResyncBurst, cmd.Reason, n)
+		}
+	}
+	cmd, n := write(seat)
+	if n != 0 || cmd.Reason != code.RefusalStale ||
+		!strings.Contains(cmd.Detail, "(not re-judged at linearizable: this turn's re-syncs are spent until ") {
+		t.Errorf("past its re-syncs the seat's write was refused %s %q through %d barriers, want stale from its "+
+			"session, through none, saying so", cmd.Reason, cmd.Detail, n)
+	}
+	if cmd, n := write(pat()); n == 0 || cmd.Reason != code.RefusalStale {
+		t.Errorf("a person's write was refused %s through %d barriers, want stale through one", cmd.Reason, n)
+	}
+}
+
 // A RETRIED WRITE THAT LANDED IS ANSWERED FROM ITS ROW: its branch moved on by
 // a later push, the write asked again finds a head that is not the one it
 // read, asks its own push's outcome before calling it stale, and answers

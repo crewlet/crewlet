@@ -21,8 +21,8 @@ import (
 // request's first step. A PERSON is admitted by admit, here; a CODING BOX by
 // admitBox (boxadmit.go), and a CHECK'S BOX by admitBox too, its token telling
 // it to admitCheck (checkadmit.go). Nothing after admission asks which of the
-// three ran but through the admission's own fields and its five accessors —
-// principal, share, refs, boxFloor and engineCommitter — and a box's nil check
+// three ran but through the admission's own fields and its six accessors —
+// principal, share, refs, boxFloor, resyncKey and engineCommitter — and a box's nil check
 // where its pushes raise the run's floor and are left out of the operator
 // audit (TestNothingAfterAdmissionAsksWhichAdmitterRan).
 
@@ -332,6 +332,18 @@ func (a admission) holdRefs(ctx context.Context, runs Runs, cmds []parsedCommand
 		a.box.Holds[key] = true
 	}
 	return nil
+}
+
+// resyncKey is whose re-syncs at the log's head the request's linearizable
+// reads draw on (boxlimit.go), as the node's boxes' buckets key them: a
+// CODING BOX's run, by its launch, on its seat — and false for a person's
+// request, whose reads of refs are linearizable by right and whose barriers
+// are the census's clients' term.
+func (a admission) resyncKey() (scope, principal string, ok bool) {
+	if a.box == nil {
+		return "", "", false
+	}
+	return a.box.Seat, a.box.Ref.LaunchID, true
 }
 
 // engineCommitter is the address a commit in this request's pack may be

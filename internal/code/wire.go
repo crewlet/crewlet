@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -2423,6 +2424,16 @@ type GitQuery struct {
 	// grant the git node judges beside the asker's, from the same chart and
 	// the row its copy holds, as [ReadQuery.CeilingSeat] says.
 	CeilingSeat string `json:"ceiling_seat,omitempty"`
+	// Turn is the turn a SEAT'S read is made in (turnctx.Turn.RunID): the
+	// principal its one second look at the log's head is charged to, on its
+	// seat's bucket of the answering git node ([NewResyncs]) — "" for a read
+	// outside a turn, which the seat's bucket alone bounds then. Set only
+	// beside a seat's asker, and never trusted for anything but whose bucket
+	// pays: the asker is judged by who it is, never by what it is doing. An
+	// estate request's field and no record's, so it takes no versionedFields
+	// row: a git node of a build that predates it charges nothing, as that
+	// build did.
+	Turn string `json:"turn,omitempty"`
 	// Fresh is the asker's floor on the code log, where it holds one: the
 	// answering node's copy is brought to at least it before anything is
 	// read. With no floor the copy is read as it stands — an object id
@@ -2797,7 +2808,8 @@ func WirePath(p string) (text, b64 string) {
 
 // Validate refuses a read the git node cannot answer as asked ([ErrInvalid],
 // naming the field): a kind this build does not know, a repository id that is
-// not canonical, an asker no principal is, a sub-query other than its kind's
+// not canonical, an asker no principal is, a turn beside an asker that is no
+// seat or past a turn id's bounds, a sub-query other than its kind's
 // or none, a revision [ValidRev] refuses, a path [GitPath] refuses — or none
 // where a blame names its file — a line range that runs backwards or past a
 // blame's MaxBlameLines, a diff naming both a file and paths, a log whose
@@ -2837,6 +2849,9 @@ func (q GitQuery) Validate() error {
 		if why := ceilingInvalid(q.Asker, q.CeilingSeat); why != "" {
 			return fmt.Errorf("%w: %s", ErrInvalid, why)
 		}
+	}
+	if why := turnInvalid(q.Asker, q.Turn); why != "" {
+		return fmt.Errorf("%w: turn: %s", ErrInvalid, why)
 	}
 	if len(q.Cursor) > maxGitCursorBytes {
 		return fmt.Errorf("%w: cursor: %d bytes is no cursor a git read issues", ErrBadCursor, len(q.Cursor))
@@ -2929,6 +2944,28 @@ func ceilingInvalid(asker Principal, seat string) string {
 			"read is its own, which no ceiling bounds"
 	case !org.ValidHandle(seat):
 		return fmt.Sprintf("ceiling_seat: %q is not a seat's handle", seat)
+	}
+	return ""
+}
+
+// turnInvalid is why turn is no turn asker's read may name, or "": a turn on
+// any asker but a seat's — a person's or a token's read is charged to no
+// turn — or one past MaxProvenanceBytes, not UTF-8, or holding a control
+// character, the bounds a push's turn is held to.
+func turnInvalid(asker Principal, turn string) string {
+	switch {
+	case turn == "":
+		return ""
+	case asker.Kind != PrincipalAgent:
+		return "only a seat's read is made in a turn whose re-syncs it pays for — a person's or a token's is " +
+			"its own"
+	case len(turn) > MaxProvenanceBytes:
+		return fmt.Sprintf("%d bytes, past the %d a turn id may hold (MaxProvenanceBytes)", len(turn),
+			MaxProvenanceBytes)
+	case !utf8.ValidString(turn):
+		return "not valid UTF-8"
+	case strings.ContainsFunc(turn, unicode.IsControl):
+		return "holds a control character"
 	}
 	return ""
 }

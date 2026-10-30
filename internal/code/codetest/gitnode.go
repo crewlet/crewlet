@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/code/host"
 	"github.com/crewlet/crewlet/internal/code/query"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/costlimit"
 	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
@@ -270,6 +271,7 @@ type gitIncarnation struct {
 	metrics *metrics.Recorder
 	host    *host.Server
 	share   *code.GitShare
+	resyncs *costlimit.Limiter
 	query   *query.Server
 	// previews answers the node's merge previews, built beside the query
 	// server over the same cache, pool and share, as the engine builds them.
@@ -401,11 +403,13 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 	// ONE share of the pool's read lane, as the engine builds one: the query
 	// server's reads and the host's engine writes draw on it alike.
 	n.share = code.NewGitShare(n.id, n.pool.Slots(gitproc.ClassRead), n.metrics)
+	// And ONE set of the seats' tools' re-sync buckets, which both draw on.
+	n.resyncs = code.NewResyncs(time.Now)
 	if n.host, err = host.New(host.Options{
 		Cache: n.cache, Git: n.pool, Estate: g.o.Estate, Objects: objects,
 		Audit: audit, Fetched: fetched, Limits: limits,
 		DeletedRetention: func() time.Duration { return deletedRetention },
-		Roster:           roster, Signer: signer, Share: n.share, Current: g.o.Current,
+		Roster:           roster, Signer: signer, Share: n.share, Resyncs: n.resyncs, Current: g.o.Current,
 		Boxes:  host.Boxes{Tokens: g.o.BoxTokens, Runs: g.o.Runs, Checks: g.o.CheckTokens},
 		NodeID: n.id, Timing: g.o.Timing, Faults: g.o.Faults, Metrics: n.metrics, Logger: g.o.Logger,
 	}); err != nil {
@@ -421,7 +425,8 @@ func (g *GitNode) start(t testing.TB) *gitIncarnation {
 		reads = g.o.QueryPool(reads)
 	}
 	if n.query, err = query.New(query.Options{NodeID: n.id, Cache: n.cache, Git: reads, Share: n.share,
-		Roster: roster, Current: g.o.Current, Fetched: fetched}); err != nil {
+		Resyncs: n.resyncs,
+		Roster:  roster, Current: g.o.Current, Fetched: fetched}); err != nil {
 		t.Fatalf("codetest: build %s's query server: %v", n.id, err)
 	}
 	// THE MERGE PREVIEWS, as the engine builds them beside the query server:

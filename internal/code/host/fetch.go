@@ -26,7 +26,8 @@ import (
 // every node, so it takes whatever the cache holds — unless the cache lacks a
 // want, which means the client's refs came from a node further ahead, and
 // then ONE linearizable sync runs before it is served — a coding box's too,
-// a rare barrier the box's floor cannot spare. An `ls-refs` names refs and is
+// a rare barrier the box's floor cannot spare, paid from its run's re-syncs
+// and answered at its floor once they are spent (boxlimit.go). An `ls-refs` names refs and is
 // read at the request's refs level, as every answer naming a ref is
 // (admission.refs): linearizable for a person, the run's session for a box,
 // whose floor it raises before its first byte (raiseFloor) — and a check's
@@ -105,6 +106,12 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 			return
 		}
 		if missing != "" {
+			// A BOX'S RE-SYNC IS ITS RUN'S TO PAY (boxlimit.go): spent, the
+			// want is answered at the run's floor, which lacks it.
+			if spent := s.boxResync(adm); spent != nil {
+				s.wantNotAtFloor(w, r, adm, missing, spent, n.recorded(), start)
+				return
+			}
 			// ONCE: upload-pack answers `not our ref` for whatever is
 			// still absent past one sync at the log's head. Into a
 			// variable of its own: a failed sync answers the zero Synced,
@@ -116,6 +123,14 @@ func (s *Server) uploadPack(w http.ResponseWriter, r *http.Request, admit admitt
 			}
 			synced.Release()
 			synced = head
+			// A BARRIER A BOX TOOK RAISES ITS RUN'S FLOOR to it, so its next
+			// request, on any node, syncs past what it is served here and
+			// pays no barrier for the same objects again. Best effort: a
+			// fetch by id is served whatever the floor says, so a raise the
+			// run store refuses is logged and the fetch goes on.
+			if rerr := s.raiseFloor(ctx, adm, head.Position); rerr != nil {
+				s.log.Warn("code_box_floor_unraised", "repo", adm.name, "path", r.URL.Path, "error", rerr)
+			}
 		}
 	}
 
@@ -259,10 +274,12 @@ func decodedBody(w http.ResponseWriter, r *http.Request, s *Server) (io.Reader, 
 // boundOf is a fetch request's bound for adm's repository: RequestBound of its
 // row as admitted, and — asked fresher — of its row read through the barrier,
 // so a request past a bound read from a stale row is judged against the
-// current one before it is refused.
+// current one before it is refused. A BOX'S read through the barrier is a
+// re-sync its run pays for (boxlimit.go): spent, the admitted row's bound is
+// the one it is held to.
 func (s *Server) boundOf(adm admission) func(context.Context, bool) (int64, error) {
 	return func(ctx context.Context, fresher bool) (int64, error) {
-		if !fresher || adm.linearizable {
+		if !fresher || adm.linearizable || s.boxResync(adm) != nil {
 			return RequestBound(adm.repo), nil
 		}
 		ref, err := s.o.Estate.Resolve(ctx, code.ResolveQuery{Name: adm.name,

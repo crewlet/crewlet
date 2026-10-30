@@ -319,9 +319,15 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 	// epoch's chart and refusing one while this node is behind the company's
 	// configuration — both read per read, never captured. It holds no
 	// goroutine of its own, so nothing stops it but the cache's stop.
+	// THE SEATS' TOOLS' RE-SYNCS beside the share, ONE a node for the same
+	// reason: a seat's git read's second look at the log's head and an
+	// engine write's re-judgement there each pay its turn's bucket on its
+	// seat (code.NewResyncs), so a turn cannot spend the code log's census
+	// through one server while the other's buckets stay full.
 	share := code.NewGitShare(nodeID, pool.Slots(gitproc.ClassRead), e.metrics)
+	resyncs := code.NewResyncs(time.Now)
 	reads, err := query.New(query.Options{
-		NodeID: nodeID, Cache: c, Git: pool, Share: share,
+		NodeID: nodeID, Cache: c, Git: pool, Share: share, Resyncs: resyncs,
 		Roster: e.codeRoster, Current: e.admits, Fetched: e.recordCodeRead,
 	})
 	if err != nil {
@@ -363,7 +369,7 @@ func (e *Engine) buildCodeHost(ctx context.Context, nodeID string, boot *config.
 		Cache: c, Git: pool, Estate: seam, Objects: objects,
 		Audit: e.auditGit, Fetched: e.recordCodeRead,
 		Limits: e.codeLimits, DeletedRetention: e.codeDeletedRetention,
-		Roster: e.codeRoster, Signer: codeSigner{e: e}, Share: share, Current: e.admits,
+		Roster: e.codeRoster, Signer: codeSigner{e: e}, Share: share, Resyncs: resyncs, Current: e.admits,
 		Boxes:  host.Boxes{Tokens: e.boxTokens, Checks: e.checkTokens, Runs: e.codeBoxRuns(log)},
 		NodeID: nodeID, Timing: host.Production, Metrics: e.metrics,
 	})
