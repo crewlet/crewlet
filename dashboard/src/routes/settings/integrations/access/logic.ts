@@ -1,17 +1,20 @@
 /**
  * The Agents tab's readings, apart from anything drawn: what a seat's row
  * says (its status word, what it holds at the vendor, its tool, its last
- * sync), which actions it can take now, whether a draft differs from what is
- * saved, and whether a save raises a seat to an administration level (D10).
+ * sync), which actions it can take now, and whether a draft differs from what
+ * is saved. Whether a save raises a seat to administration access (D10) is
+ * the engine's to say, on the plan (`step_up`).
  *
  * Pure functions of the engine's answer, so each reading is held by a unit
  * test rather than by a screen.
  */
 
 import type {
+  AccessAnswer,
   AccessDesired,
-  AccessLane,
+  AccessLaneKey,
   AccessObserved,
+  AccessOptions,
   AccessSeatLane,
   GitHubAccess,
 } from "~/contract/access.ts";
@@ -22,13 +25,46 @@ type Tone = "success" | "neutral" | "warning" | "danger" | "info";
 
 export type Permissions = Record<string, GitHubAccess>;
 
+/**
+ * One lane as the tab draws it: what the engine offers on it, keyed and named
+ * in the reader's words, with its levels always a list.
+ */
+export interface Lane extends AccessOptions {
+  key: AccessLaneKey;
+  name: string;
+  levels: NonNullable<AccessOptions["levels"]>;
+}
+
+/** The lanes an answer offers, in the engine's order. */
+export function lanesOf(answer: AccessAnswer): Lane[] {
+  return answer.options.map((o) => ({
+    ...o,
+    key: o.lane,
+    name: laneWords(o.lane).name,
+    levels: o.levels ?? [],
+  }));
+}
+
+/** Who sealed a credential provided from outside Crewlet, which Crewlet never rotates. */
+const EXTERNAL = "external";
+
+/** Whether a seat's credential was provided from outside Crewlet. */
+export function providedExternally(o: AccessObserved): boolean {
+  return o.credential?.by === EXTERNAL;
+}
+
+/** The menu heading over a lane's levels: where the list was read from. */
+export function levelsHeading(lane: Lane): string {
+  return lane.live ? `Read from ${lane.name} now` : `${lane.name}'s own roles`;
+}
+
 const sameScope = (a: string[] | undefined, b: string[] | undefined) =>
   [...(a ?? [])].sort().join("\n") === [...(b ?? [])].sort().join("\n");
 
 const order = (a: GitHubAccess | undefined) => (a === "write" ? 2 : a === "read" ? 1 : 0);
 
 export function samePermissions(
-  lane: AccessLane,
+  lane: Lane,
   a: Permissions | undefined,
   b: Permissions | undefined,
 ): boolean {
@@ -36,7 +72,7 @@ export function samePermissions(
 }
 
 /** Whether two desired states ask for the same thing. */
-export function sameDesired(lane: AccessLane, a: AccessDesired, b: AccessDesired): boolean {
+export function sameDesired(lane: Lane, a: AccessDesired, b: AccessDesired): boolean {
   return (
     a.enabled === b.enabled &&
     (a.level ?? "") === (b.level ?? "") &&
@@ -46,32 +82,31 @@ export function sameDesired(lane: AccessLane, a: AccessDesired, b: AccessDesired
 }
 
 /** The vendor's exact name for a level. */
-export function levelName(lane: AccessLane, id: string | undefined): string {
+export function levelName(lane: Lane, id: string | undefined): string {
   return lane.levels.find((l) => l.id === id)?.name ?? id ?? "None";
 }
 
 /** "Contents: Read and write, Issues: Read-only", for the permissions held, in GitHub's words. */
-export function permissionWords(lane: AccessLane, p: Permissions | undefined): string {
+export function permissionWords(lane: Lane, p: Permissions | undefined): string {
   const held = (lane.permissions ?? []).filter((x) => p?.[x.key]);
   if (held.length === 0) return "No permissions";
   return held.map((x) => `${x.name}: ${GITHUB_ACCESS_NAMES[p?.[x.key] ?? "none"]}`).join(", ");
 }
 
 /** "5 permissions", for a table cell. */
-export function permissionCount(lane: AccessLane, p: Permissions | undefined): string {
+export function permissionCount(lane: Lane, p: Permissions | undefined): string {
   const n = (lane.permissions ?? []).filter((x) => p?.[x.key]).length;
   return n === 0 ? "No permissions" : plural(n, "permission");
 }
 
 /** What the vendor holds for a seat, in the vendor's terms. */
-export function accessWords(lane: AccessLane, o: AccessObserved): string {
+export function accessWords(lane: Lane, o: AccessObserved): string {
   if (lane.permissions) return permissionWords(lane, o.permissions);
-  if (lane.scopes) return plural(lane.scopes.length, "bot token scope");
-  return levelName(lane, o.level);
+  return laneWords(lane.key).fixed ?? levelName(lane, o.level);
 }
 
 /** A seat's scope as a sentence fragment: "gophrase/backend and gophrase/web", or the lane's empty words. */
-export function scopeWords(lane: AccessLane, scope: string[] | undefined): string {
+export function scopeWords(lane: Lane, scope: string[] | undefined): string {
   const words = laneWords(lane.key).scope;
   if (!scope || scope.length === 0) return words?.empty ?? "None";
   if (scope.length === 1) return scope[0]!;
@@ -87,11 +122,13 @@ export interface Status {
 
 /** One lane's word, from what is saved, what is drafted and what the last sync found. */
 export function statusOf(
-  lane: AccessLane,
+  lane: Lane,
   saved: AccessSeatLane,
   drafted: boolean,
   syncing: boolean,
+  departed = false,
 ): Status {
+  if (departed) return { label: "Agent left", tone: "warning" };
   if (drafted) return { label: "Not saved", tone: "info", outline: true };
   const pending = saved.plan.length > 0;
   if (syncing && pending) return { label: "Syncing", tone: "info", busy: true };
@@ -112,7 +149,7 @@ export function needsAttention(status: Status): boolean {
 }
 
 /** The tool, as one value: whether it works, and what it works through. */
-export function toolWords(lane: AccessLane, saved: AccessSeatLane): string {
+export function toolWords(lane: Lane, saved: AccessSeatLane): string {
   const through = laneWords(lane.key).tool;
   switch (saved.tool) {
     case "live":
@@ -122,7 +159,7 @@ export function toolWords(lane: AccessLane, saved: AccessSeatLane): string {
     case "waiting":
       return `Waiting for the credential, ${through}`;
     case "no_server":
-      return `Not set up: no ${lane.tool_server ?? lane.key} tool server is declared`;
+      return `Not set up: no ${laneWords(lane.key).server} tool server is declared`;
     case "off":
       return "None while off";
   }
@@ -141,47 +178,40 @@ export type SeatAction = "rotate" | "remove";
 
 /** The actions a seat can take now. One that is not available is not drawn at all. */
 export function availableActions(
-  lane: AccessLane,
+  lane: Lane,
   saved: AccessSeatLane,
   held: boolean,
   syncing: boolean,
 ): SeatAction[] {
   if (held || syncing) return [];
   const out: SeatAction[] = [];
-  if (lane.rotatable && saved.observed.credential) out.push("rotate");
-  if (!saved.desired.enabled && saved.observed.exists) out.push("remove");
+  const o = saved.observed;
+  if (laneWords(lane.key).rotatable && o.credential && !providedExternally(o)) out.push("rotate");
+  if (!saved.desired.enabled && o.exists) out.push("remove");
   return out;
 }
 
 /** The one sentence a seat that is off reads as. */
-export function offSentence(lane: AccessLane, saved: AccessSeatLane): string {
+export function offSentence(lane: Lane, saved: AccessSeatLane): string {
   return saved.observed.exists
     ? "Off. Its account is disabled and kept, so turning it on again restores it."
     : `Off. ${laneWords(lane.key).turnOn}`;
 }
 
-/**
- * Whether a change raises a seat to an administration level, which a save asks
- * a fresh step-up for (D10): an `admin` level it did not hold, or Read and
- * write on a GitHub permission marked `admin_write` that it did not have.
- */
-export function raisesToAdmin(lane: AccessLane, from: AccessDesired, to: AccessDesired): boolean {
-  if (!to.enabled) return false;
-  const level = lane.levels.find((l) => l.id === to.level);
-  if (level?.admin && (to.level !== from.level || !from.enabled)) return true;
-  return (lane.permissions ?? []).some(
-    (p) =>
-      p.admin_write &&
-      to.permissions?.[p.key] === "write" &&
-      (!from.enabled || from.permissions?.[p.key] !== "write"),
-  );
-}
-
 /** Whether `to` holds any permission wider than `from`, GitHub's order. */
 export function widensPermissions(
-  lane: AccessLane,
+  lane: Lane,
   from: Permissions | undefined,
   to: Permissions | undefined,
 ): boolean {
   return (lane.permissions ?? []).some((p) => order(to?.[p.key]) > order(from?.[p.key]));
+}
+
+/**
+ * The quiet hint under a seat that is on with an empty scope, where an empty
+ * scope is literal (Mattermost: no channels), or null.
+ */
+export function emptyScopeHint(lane: Lane, want: AccessDesired): string | null {
+  const hint = laneWords(lane.key).scope?.emptyOn;
+  return hint && want.enabled && (want.scope ?? []).length === 0 ? hint : null;
 }

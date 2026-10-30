@@ -5,8 +5,9 @@
  * the engine's plan and saves against the revision it read; a row's details
  * are five pairs at one size with only the actions the seat can take; a seat
  * that is off reads as one sentence; a refusal and a change made by hand each
- * offer their one choice; and a reader who may not change access is shown
- * the reading alone.
+ * offer their one choice; a reader who may not change access is shown the
+ * reading alone; and where the operator manages access, the tab is values
+ * only, with one line saying why.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -14,12 +15,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import type { AccessAnswer } from "~/contract/access.ts";
 import { AgentsAccess } from "./AgentsAccess.tsx";
-import { datadogAnswer, githubAnswer } from "./fixtures.ts";
+import { datadogAnswer, githubAnswer, mattermostAnswer, offLane, seat } from "./fixtures.ts";
+import { laneWords, OPERATOR_MANAGED } from "./words.ts";
 
 const calls = vi.hoisted(() => ({
   plan: [] as unknown[],
   save: [] as unknown[],
   act: [] as unknown[],
+  stepUp: false,
 }));
 
 vi.mock("./api.ts", async (actual) => {
@@ -32,13 +35,16 @@ vi.mock("./api.ts", async (actual) => {
         calls.plan.push({ kind, seats });
         return {
           kind,
-          revision_id: "rev-7",
+          revision: '"rev-7"',
+          ...(calls.stepUp ? { step_up: true } : {}),
           plans: [
             {
               handle: "qa",
               lane: "datadog",
+              ...(calls.stepUp ? { step_up: true } : {}),
               steps: [
                 {
+                  op: "create",
                   verb: "create",
                   by: "crewlet",
                   text: "Create the service account crewlet-qa@agents.crewlet.invalid",
@@ -64,19 +70,21 @@ beforeEach(() => {
   calls.plan = [];
   calls.save = [];
   calls.act = [];
+  calls.stepUp = false;
 });
 afterEach(cleanup);
 
-function draw(data: AccessAnswer, over: { held?: string; only?: string } = {}) {
+function draw(data: AccessAnswer, over: { held?: string; readOnly?: string; only?: string } = {}) {
   const reload = vi.fn();
   render(
     <LayerHost>
       <AgentsAccess
         kind={data.kind}
-        name={data.lanes[0]!.name}
+        name={laneWords(data.options[0]!.lane).name}
         data={data}
         reload={reload}
         held={over.held}
+        readOnly={over.readOnly}
         only={over.only}
         avatarOf={() => null}
       />
@@ -131,7 +139,7 @@ test("a change is a draft, and the review shows the engine's plan and saves agai
   ]);
   fireEvent.click(screen.getByRole("button", { name: "Save and sync" }));
   await waitFor(() => expect(calls.save).toHaveLength(1));
-  expect(calls.save[0]).toMatchObject({ ifMatch: "rev-7" });
+  expect(calls.save[0]).toMatchObject({ ifMatch: '"rev-7"' });
   await waitFor(() => expect(reload).toHaveBeenCalled());
 });
 
@@ -148,9 +156,21 @@ test("a raise to an administration role warns that saving asks to confirm who yo
   draw(datadogAnswer());
   fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
   fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
-  // QA turns on at its default role, which is not an administration role.
-  await screen.findByRole("dialog");
+  // QA turns on at its default role, which the plan does not mark.
+  await screen.findByText("Create the service account crewlet-qa@agents.crewlet.invalid.");
   expect(screen.queryByText(/Saving asks you to confirm it is you/)).toBeNull();
+});
+
+test("where the engine's plan asks for a step-up, the review names who gets administration access", async () => {
+  calls.stepUp = true;
+  draw(datadogAnswer());
+  fireEvent.click(screen.getByRole("switch", { name: "QA on Datadog" }));
+  fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  expect(
+    await screen.findByText(
+      "QA gets administration access at Datadog. Saving asks you to confirm it is you.",
+    ),
+  ).toBeTruthy();
 });
 
 test("a vendor's refusal is said under the row with a retry", () => {
@@ -164,12 +184,17 @@ test("a vendor's refusal is said under the row with a retry", () => {
           said: "Datadog refused the role change with 403 Forbidden.",
           remedy: "Give that user User Access Manage at Datadog, then retry.",
           actor: "you",
+          step: "rerole",
+          action_url: "https://app.datadoghq.com/organization-settings/users",
         },
       },
     }),
   );
   expect(screen.getByText("Refused")).toBeTruthy();
   expect(screen.getByText("Datadog refused the role change with 403 Forbidden.")).toBeTruthy();
+  expect(screen.getByRole("link", { name: /Open Datadog/ }).getAttribute("href")).toBe(
+    "https://app.datadoghq.com/organization-settings/users",
+  );
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(calls.act).toEqual([{ kind: "datadog", handle: "sre", lane: "datadog", action: "retry" }]);
 });
@@ -179,7 +204,7 @@ test("a role changed by hand offers restore or keep", () => {
   draw(
     datadogAnswer({
       observed: { ...base.observed, level: "r-ro", changed_by_hand_at: new Date().toISOString() },
-      plan: [{ verb: "restore", by: "crewlet", text: "Change the role" }],
+      plan: [{ op: "level", verb: "restore", by: "crewlet", text: "Change the role", drift: true }],
     }),
   );
   expect(screen.getByText(/Datadog shows Datadog Read Only Role/)).toBeTruthy();
@@ -217,4 +242,60 @@ test("an agent with an account and no tool server is said once, above the table"
   const base = datadogAnswer().seats[2]!.lanes.datadog!;
   draw(datadogAnswer({ tool: "no_server", observed: base.observed }));
   expect(screen.getByText("No Datadog tool for its agents")).toBeTruthy();
+});
+
+test("where the operator manages access, the tab is values only with one line saying why", () => {
+  draw(datadogAnswer(), { held: "Managed by the operator.", readOnly: OPERATOR_MANAGED });
+  expect(screen.getByText(OPERATOR_MANAGED)).toBeTruthy();
+  expect(screen.queryByRole("switch")).toBeNull();
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.getAllByText("Datadog Admin Role").length).toBeGreaterThan(0);
+  details("SRE");
+  expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
+});
+
+test("a credential provided externally says so, by its variable, and offers no rotation", () => {
+  const base = datadogAnswer().seats[2]!.lanes.datadog!;
+  draw(
+    datadogAnswer({
+      observed: {
+        ...base.observed,
+        credential: {
+          variable: "DATADOG_APP_KEY_SRE",
+          minted_at: new Date().toISOString(),
+          by: "external",
+        },
+      },
+    }),
+  );
+  details("SRE");
+  const list = document.querySelector<HTMLElement>('dl[aria-label="SRE on Datadog"]')!;
+  expect(within(list).getByText("Credential")).toBeTruthy();
+  expect(list.textContent).toContain("DATADOG_APP_KEY_SRE, provided externally");
+  expect(screen.queryByRole("button", { name: "Rotate credential" })).toBeNull();
+});
+
+test("an agent that left the company offers to remove its account", () => {
+  const data = datadogAnswer();
+  data.seats.push({
+    ...seat("ops", "Ops", {
+      datadog: { ...offLane("r-ro"), observed: { exists: true, enabled: false } },
+    }),
+    departed: true,
+  });
+  draw(data);
+  expect(screen.getByText("Agent left")).toBeTruthy();
+  expect(screen.getByText("Ops left the company")).toBeTruthy();
+  expect(
+    (screen.getByRole("switch", { name: "Ops on Datadog" }) as HTMLInputElement).disabled,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Remove account" }));
+  expect(screen.getByRole("alertdialog", { name: "Remove Ops's Datadog account?" })).toBeTruthy();
+});
+
+test("a Mattermost bot that is on in no channel says it cannot read or post anywhere", () => {
+  draw(mattermostAnswer());
+  expect(
+    screen.getByText("In no channel yet, so it cannot read or post anywhere. Choose its channels."),
+  ).toBeTruthy();
 });

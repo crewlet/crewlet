@@ -1,17 +1,25 @@
 /**
  * The Agents tab's readings, held one by one: a row's status word, which
- * actions a seat can take, the sentence an off seat reads as, and which saves
- * ask for a fresh step-up (D10).
+ * actions a seat can take, the sentence an off seat reads as, and the
+ * vendor's words for what a seat holds.
  */
 
 import { describe, expect, test } from "vitest";
-import { DATADOG_LANE, GITHUB_LANE, datadogAnswer, offLane, onLane } from "./fixtures.ts";
+import {
+  DATADOG_LANE,
+  GITHUB_LANE,
+  MATTERMOST_LANE,
+  datadogAnswer,
+  offLane,
+  onLane,
+} from "./fixtures.ts";
 import {
   accessWords,
   availableActions,
+  emptyScopeHint,
   offSentence,
-  raisesToAdmin,
   sameDesired,
+  scopeWords,
   statusOf,
   toolWords,
 } from "./logic.ts";
@@ -28,7 +36,7 @@ describe("a row's status", () => {
       label: "In sync",
       tone: "success",
     });
-    expect(statusOf(DATADOG_LANE, offLane("V"), false, false).label).toBe("Off");
+    expect(statusOf(DATADOG_LANE, offLane(), false, false).label).toBe("Off");
   });
 
   test("a refusal, a person's step and a change made by hand each say so", () => {
@@ -36,13 +44,17 @@ describe("a row's status", () => {
     expect(statusOf(DATADOG_LANE, failed, false, false).label).toBe("Refused");
     const waiting = {
       ...sre(),
-      plan: [{ verb: "approve" as const, text: "Accept", by: "you" as const }],
+      plan: [
+        { op: "create" as const, verb: "approve" as const, text: "Accept", by: "you" as const },
+      ],
     };
     expect(statusOf(DATADOG_LANE, waiting, false, false).label).toBe("Needs you");
     const drift = {
       ...sre(),
       observed: { ...sre().observed, changed_by_hand_at: "2026-10-29T10:00:00Z" },
-      plan: [{ verb: "restore" as const, text: "Restore", by: "crewlet" as const }],
+      plan: [
+        { op: "level" as const, verb: "restore" as const, text: "Restore", by: "crewlet" as const },
+      ],
     };
     expect(statusOf(DATADOG_LANE, drift, false, false).label).toBe("Changed at Datadog");
   });
@@ -50,7 +62,9 @@ describe("a row's status", () => {
   test("a pending plan reads Syncing while a sync runs", () => {
     const pending = {
       ...sre(),
-      plan: [{ verb: "rerole" as const, text: "Change", by: "crewlet" as const }],
+      plan: [
+        { op: "level" as const, verb: "rerole" as const, text: "Change", by: "crewlet" as const },
+      ],
     };
     expect(statusOf(DATADOG_LANE, pending, false, true)).toMatchObject({
       label: "Syncing",
@@ -65,7 +79,7 @@ describe("the actions a seat can take", () => {
   });
 
   test("an off seat whose account is kept can be removed", () => {
-    const kept = { ...offLane("V"), observed: { exists: true, enabled: false } };
+    const kept = { ...offLane(), observed: { exists: true, enabled: false } };
     expect(availableActions(DATADOG_LANE, kept, false, false)).toEqual(["remove"]);
   });
 
@@ -81,10 +95,10 @@ describe("the actions a seat can take", () => {
 });
 
 test("an off seat reads as one sentence about what turning it on does", () => {
-  expect(offSentence(DATADOG_LANE, offLane("V"))).toBe(
+  expect(offSentence(DATADOG_LANE, offLane())).toBe(
     "Off. Turning it on creates a Datadog service account with the chosen role and its own key.",
   );
-  const kept = { ...offLane("V"), observed: { exists: true, enabled: false } };
+  const kept = { ...offLane(), observed: { exists: true, enabled: false } };
   expect(offSentence(DATADOG_LANE, kept)).toMatch(/^Off\. Its account is disabled and kept/);
 });
 
@@ -106,41 +120,6 @@ test("what the vendor holds is said in the vendor's words", () => {
   ).toBe("Contents: Read and write, Issues: Read-only");
 });
 
-describe("a raise to administration asks for a step-up", () => {
-  test("to an admin level, and only when it is a change", () => {
-    const from = { enabled: true, level: "r-std" };
-    expect(raisesToAdmin(DATADOG_LANE, from, { enabled: true, level: "r-admin" })).toBe(true);
-    expect(
-      raisesToAdmin(
-        DATADOG_LANE,
-        { enabled: true, level: "r-admin" },
-        { enabled: true, level: "r-admin" },
-      ),
-    ).toBe(false);
-    expect(
-      raisesToAdmin(
-        DATADOG_LANE,
-        { enabled: false, level: "r-admin" },
-        { enabled: true, level: "r-admin" },
-      ),
-    ).toBe(true);
-    expect(raisesToAdmin(DATADOG_LANE, from, { enabled: false, level: "r-admin" })).toBe(false);
-  });
-
-  test("to Read and write on GitHub Contents or Workflows", () => {
-    const from = { enabled: true, permissions: { contents: "read" as const } };
-    expect(
-      raisesToAdmin(GITHUB_LANE, from, { enabled: true, permissions: { contents: "write" } }),
-    ).toBe(true);
-    expect(
-      raisesToAdmin(GITHUB_LANE, from, {
-        enabled: true,
-        permissions: { contents: "read", issues: "write" },
-      }),
-    ).toBe(false);
-  });
-});
-
 test("two desired states are the same whatever order their scope is in", () => {
   expect(
     sameDesired(
@@ -152,4 +131,31 @@ test("two desired states are the same whatever order their scope is in", () => {
   expect(
     sameDesired(GITHUB_LANE, { enabled: true, permissions: { issues: "read" } }, { enabled: true }),
   ).toBe(false);
+});
+
+test("a credential provided externally is never rotated by Crewlet", () => {
+  const external = sre();
+  external.observed.credential = {
+    variable: "V",
+    minted_at: new Date().toISOString(),
+    by: "external",
+  };
+  expect(availableActions(DATADOG_LANE, external, false, false)).toEqual([]);
+});
+
+test("an agent that left the company reads as such, whatever its sync", () => {
+  expect(statusOf(DATADOG_LANE, sre(), false, false, true)).toMatchObject({
+    label: "Agent left",
+    tone: "warning",
+  });
+});
+
+test("an empty Mattermost channel list is literal: no channels, and a hint while on", () => {
+  expect(scopeWords(MATTERMOST_LANE, [])).toBe("No channels");
+  expect(emptyScopeHint(MATTERMOST_LANE, { enabled: true, scope: [] })).toMatch(
+    /cannot read or post anywhere/,
+  );
+  expect(emptyScopeHint(MATTERMOST_LANE, { enabled: false })).toBeNull();
+  expect(emptyScopeHint(MATTERMOST_LANE, { enabled: true, scope: ["incidents"] })).toBeNull();
+  expect(emptyScopeHint(GITHUB_LANE, { enabled: true })).toBeNull();
 });

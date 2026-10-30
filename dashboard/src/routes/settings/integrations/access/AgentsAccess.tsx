@@ -13,6 +13,10 @@
  * hand, each with the one choice it offers. Its details are one list at one
  * size (option A): the account, the access it holds, its key, its tool and its
  * last sync, with only the actions the seat can take now.
+ *
+ * READ-ONLY WHERE THE OPERATOR MANAGES ACCESS: access then lives on each
+ * agent's Seat object, so the tab says so in one line and draws values only,
+ * with no switch, picker or action.
  */
 
 import { useState, type ReactNode } from "react";
@@ -26,7 +30,6 @@ import {
   Spinner,
   Switch,
   Tag,
-  Tooltip,
   VisuallyHidden,
   type SelectOption,
 } from "@crewlethq/ui";
@@ -35,7 +38,7 @@ import type {
   AccessAnswer,
   AccessDesired,
   AccessDraft,
-  AccessLane,
+  AccessLaneKey,
   AccessSeat,
   AccessSeatAction,
   AccessSeatLane,
@@ -50,15 +53,20 @@ import { PermissionsDialog, RemoveDialog, ReviewDialog } from "./Dialogs.tsx";
 import {
   accessWords,
   availableActions,
+  emptyScopeHint,
+  lanesOf,
   levelName,
+  levelsHeading,
   offSentence,
   permissionCount,
   permissionWords,
+  providedExternally,
   sameDesired,
   scopeWords,
   statusOf,
   syncValue,
   toolWords,
+  type Lane,
   type SeatAction,
 } from "./logic.ts";
 import { laneWords } from "./words.ts";
@@ -73,6 +81,8 @@ export interface AgentsAccessProps {
   reload: () => void;
   /** Why nothing here may be changed (a managed document, a reader who is not an admin), or undefined. */
   held: string | undefined;
+  /** The one line a read-only tab shows (the operator manages access), or undefined. */
+  readOnly?: string | undefined;
   avatarOf: (handle: string) => AgentAvatar | null;
   /** Draw this agent alone, as its own page does. */
   only?: string | undefined;
@@ -82,13 +92,13 @@ export interface AgentsAccessProps {
   stepFor?: ((handle: string) => ReactNode) | undefined;
 }
 
-function levelOptions(lane: AccessLane): SelectOption[] {
+function levelOptions(lane: Lane): SelectOption[] {
   // WHERE THE LIST COMES FROM is the menu's own heading.
+  const group = levelsHeading(lane);
   return lane.levels.map((l) => ({
     value: l.id,
     label: l.custom ? `${l.name} (custom)` : l.name,
-    description: l.hint,
-    ...(lane.levels_source ? { group: lane.levels_source.text } : {}),
+    group,
   }));
 }
 
@@ -98,6 +108,7 @@ export function AgentsAccess({
   data,
   reload,
   held,
+  readOnly,
   avatarOf,
   only,
   onReplaceKey,
@@ -107,25 +118,29 @@ export function AgentsAccess({
   const [draft, setDraft] = useState<AccessDraft>({});
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [review, setReview] = useState(false);
-  const [removing, setRemoving] = useState<{ seat: AccessSeat; lane: AccessLane } | null>(null);
-  const [editing, setEditing] = useState<{ seat: AccessSeat; lane: AccessLane } | null>(null);
+  const [removing, setRemoving] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
+  const [editing, setEditing] = useState<{ seat: AccessSeat; lane: Lane } | null>(null);
   const [said, setSaid] = useState("");
 
-  const lanes = data.lanes;
+  const lanes = lanesOf(data);
   const seats = only ? data.seats.filter((s) => s.handle === only) : data.seats;
-  const scoped = lanes.some((l) => l.scope_options);
-  const locked = held !== undefined || data.syncing;
+  const scoped = lanes.some((l) => l.scope !== undefined);
+  // A HELD TAB says why on each control; a read-only one draws no control at all.
+  const fixed = held ?? readOnly;
+  const locked = fixed !== undefined || data.syncing;
 
-  const laneOf = (key: string) => lanes.find((l) => l.key === key)!;
-  const desiredOf = (seat: AccessSeat, lane: string): AccessDesired =>
+  const desiredOf = (seat: AccessSeat, lane: AccessLaneKey): AccessDesired =>
     draft[seat.handle]?.[lane] ?? seat.lanes[lane]!.desired;
 
   let changes = 0;
   for (const seat of data.seats)
-    for (const [lane, d] of Object.entries(draft[seat.handle] ?? {}))
-      if (seat.lanes[lane] && !sameDesired(laneOf(lane), d, seat.lanes[lane]!.desired)) changes++;
+    for (const lane of lanes) {
+      const d = draft[seat.handle]?.[lane.key];
+      const saved = seat.lanes[lane.key];
+      if (d && saved && !sameDesired(lane, d, saved.desired)) changes++;
+    }
 
-  const change = (seat: AccessSeat, lane: AccessLane, next: Partial<AccessDesired>) => {
+  const change = (seat: AccessSeat, lane: Lane, next: Partial<AccessDesired>) => {
     setSaid("");
     setDraft((d) => {
       const merged = { ...desiredOf(seat, lane.key), ...next };
@@ -138,7 +153,7 @@ export function AgentsAccess({
     });
   };
 
-  const act = async (seat: AccessSeat, lane: AccessLane, action: AccessSeatAction) => {
+  const act = async (seat: AccessSeat, lane: Lane, action: AccessSeatAction) => {
     try {
       await accessApi.act(kind, seat.handle, lane.key, action);
       setSaid("");
@@ -165,12 +180,13 @@ export function AgentsAccess({
 
   return (
     <div className="agent-access">
+      {readOnly && <p className="t-caption">{readOnly}</p>}
       {data.notice && !only && (
         <Callout
           variant={data.notice.tone}
           title={data.notice.title}
           action={
-            data.notice.replace_key && onReplaceKey ? (
+            data.notice.replace_key && onReplaceKey && !readOnly ? (
               <Button
                 size="small"
                 variant="primary"
@@ -190,7 +206,7 @@ export function AgentsAccess({
           variant="warning"
           title={`No ${name} tool for ${only ? "this agent" : "its agents"}`}
         >
-          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: the company declares no ${lanes.find((l) => l.tool_server)?.tool_server ?? kind} tool server. Add it under Settings › MCP Tools as one instance per agent, and each agent's own credential is sent with it.`}
+          {`${withoutTool.map((s) => s.name).join(", ")} ${withoutTool.length === 1 ? "has" : "have"} an account at ${name} and nothing to use it with: the company declares no ${laneWords(lanes[0]!.key).server} tool server. Add it under Settings › MCP Tools as one instance per agent, and each agent's own credential is sent with it.`}
         </Callout>
       )}
 
@@ -208,7 +224,7 @@ export function AgentsAccess({
           <span role="columnheader">Access</span>
           {scoped && (
             <span role="columnheader">
-              {laneWords(lanes.find((l) => l.scope_options)!.key).scope?.noun ?? "Scope"}
+              {laneWords(lanes.find((l) => l.scope !== undefined)!.key).scope?.noun ?? "Scope"}
             </span>
           )}
           <span role="columnheader">Status</span>
@@ -223,7 +239,8 @@ export function AgentsAccess({
               if (!saved) return null;
               const want = desiredOf(seat, lane.key);
               const drafted = !sameDesired(lane, want, saved.desired);
-              const status = statusOf(lane, saved, drafted, data.syncing);
+              const status = statusOf(lane, saved, drafted, data.syncing, seat.departed);
+              const hint = emptyScopeHint(lane, want);
               const key = `${seat.handle}:${lane.key}`;
               const expanded = open[key] ?? false;
               const off = !want.enabled;
@@ -261,16 +278,26 @@ export function AgentsAccess({
                       </span>
                     )}
                     <span role="cell">
-                      <Switch
-                        label={<VisuallyHidden>{`${seat.name} on ${lane.name}`}</VisuallyHidden>}
-                        checked={want.enabled}
-                        disabled={locked}
-                        title={held}
-                        onCheckedChange={(checked) => change(seat, lane, { enabled: checked })}
-                      />
+                      {readOnly ? (
+                        <span className="agent-access-quiet">{want.enabled ? "On" : "Off"}</span>
+                      ) : (
+                        <Switch
+                          label={<VisuallyHidden>{`${seat.name} on ${lane.name}`}</VisuallyHidden>}
+                          checked={want.enabled}
+                          disabled={locked || seat.departed}
+                          title={held}
+                          onCheckedChange={(checked) => change(seat, lane, { enabled: checked })}
+                        />
+                      )}
                     </span>
                     <span role="cell" className="agent-access-level">
-                      {lane.levels.length > 0 ? (
+                      {readOnly ? (
+                        <span className="agent-access-quiet">
+                          {lane.permissions
+                            ? permissionCount(lane, want.permissions)
+                            : (laneWords(lane.key).fixed ?? levelName(lane, want.level))}
+                        </span>
+                      ) : lane.levels.length > 0 ? (
                         <Select
                           size="sm"
                           width="full"
@@ -278,30 +305,28 @@ export function AgentsAccess({
                           ariaLabel={`${seat.name}'s ${lane.name} access`}
                           value={want.level}
                           options={levelOptions(lane)}
-                          disabled={off || locked}
+                          disabled={off || locked || seat.departed}
                           onChange={(v) => change(seat, lane, { level: String(v) })}
                         />
                       ) : lane.permissions ? (
                         <Button
                           size="small"
                           variant="ghost"
-                          disabled={off || locked}
+                          disabled={off || locked || seat.departed}
                           title={permissionWords(lane, want.permissions)}
                           onClick={() => setEditing({ seat, lane })}
                         >
                           {permissionCount(lane, want.permissions)}
                         </Button>
-                      ) : lane.scopes ? (
-                        <Tooltip content={lane.scopes.join(", ")}>
-                          <span className="agent-access-quiet" tabIndex={0}>
-                            {plural(lane.scopes.length, "bot token scope")}
-                          </span>
-                        </Tooltip>
+                      ) : laneWords(lane.key).fixed ? (
+                        <span className="agent-access-quiet">{laneWords(lane.key).fixed}</span>
                       ) : null}
                     </span>
                     {scoped && (
                       <span role="cell" className="agent-access-scope">
-                        {lane.scope_options && words.scope ? (
+                        {lane.scope !== undefined && words.scope && readOnly ? (
+                          <span className="agent-access-quiet">{scopeWords(lane, want.scope)}</span>
+                        ) : lane.scope !== undefined && words.scope ? (
                           <Select
                             size="sm"
                             width="full"
@@ -310,8 +335,8 @@ export function AgentsAccess({
                             searchable
                             ariaLabel={`${seat.name}'s ${lane.name} ${words.scope.noun.toLowerCase()}`}
                             value={want.scope ?? []}
-                            options={lane.scope_options.map((o) => ({ value: o, label: o }))}
-                            disabled={off || locked}
+                            options={lane.scope.map((o) => ({ value: o, label: o }))}
+                            disabled={off || locked || seat.departed}
                             placeholder={words.scope.empty}
                             onChange={(v) =>
                               change(seat, lane, {
@@ -367,18 +392,20 @@ export function AgentsAccess({
                       saved={saved}
                       syncing={data.syncing}
                       now={now}
-                      held={held}
-                      step={stepFor?.(seat.handle)}
+                      held={fixed}
+                      step={readOnly ? null : stepFor?.(seat.handle)}
                       onAct={(a) => void act(seat, lane, a)}
+                      onRemove={() => setRemoving({ seat, lane })}
                     />
                   )}
+                  {hint && <p className="agent-access-hint t-caption">{hint}</p>}
                   {expanded && (
                     <Details
                       lane={lane}
                       seat={seat}
                       saved={saved}
                       now={now}
-                      actions={availableActions(lane, saved, held !== undefined, data.syncing)}
+                      actions={availableActions(lane, saved, fixed !== undefined, data.syncing)}
                       onAction={(a) =>
                         a === "rotate"
                           ? void act(seat, lane, "rotate")
@@ -399,7 +426,7 @@ export function AgentsAccess({
         </Callout>
       )}
 
-      {changes > 0 && (
+      {changes > 0 && !readOnly && (
         <div className="agent-access-bar" role="region" aria-label="Unsaved changes">
           <span className="t-label">
             {changes === 1 ? "One change" : `${changes} changes`} not saved
@@ -470,8 +497,9 @@ function LaneMessage({
   held,
   step,
   onAct,
+  onRemove,
 }: {
-  lane: AccessLane;
+  lane: Lane;
   seat: AccessSeat;
   saved: AccessSeatLane;
   syncing: boolean;
@@ -479,16 +507,37 @@ function LaneMessage({
   held: string | undefined;
   step: ReactNode;
   onAct: (action: "retry" | "keep" | "restore" | "done") => void;
+  onRemove: () => void;
 }) {
   if (syncing && saved.plan.length > 0) return null;
   const busy = held !== undefined;
-  const console_ = lane.console_url ? (
-    <ButtonLink size="small" variant="ghost" href={lane.console_url} external>
-      Open {lane.name}
-    </ButtonLink>
-  ) : null;
+  // WHERE A PERSON ACTS AT THE VENDOR is the engine's to say, step by step.
+  const at = (url: string | undefined) =>
+    url ? (
+      <ButtonLink size="small" variant="ghost" href={url} external>
+        Open {lane.name}
+      </ButtonLink>
+    ) : null;
   let body: ReactNode = null;
-  if (saved.sync?.outcome === "failed" && saved.sync.error) {
+  if (seat.departed) {
+    body = (
+      <Callout
+        variant="warning"
+        title={`${seat.name} left the company`}
+        action={
+          busy || !saved.observed.exists ? undefined : (
+            <Button size="small" variant="secondary" onClick={onRemove}>
+              Remove account
+            </Button>
+          )
+        }
+      >
+        {saved.observed.exists
+          ? `Its account at ${lane.name} is kept until you remove it.`
+          : `It has no account at ${lane.name}.`}
+      </Callout>
+    );
+  } else if (saved.sync?.outcome === "failed" && saved.sync.error) {
     body = (
       <Callout
         variant="danger"
@@ -500,7 +549,7 @@ function LaneMessage({
                 Retry
               </Button>
             )}
-            {console_}
+            {at(saved.sync.error.action_url)}
             {!busy && saved.desired.level !== saved.observed.level && saved.observed.level && (
               <Button size="small" variant="ghost" onClick={() => onAct("keep")}>
                 Keep {levelName(lane, saved.observed.level)}
@@ -573,7 +622,7 @@ function LaneMessage({
         title="Waiting on a person"
         action={
           <span className="agent-access-actions">
-            {step ?? console_}
+            {step ?? at(waiting.action_url)}
             {!busy && !step && (
               <Button size="small" variant="ghost" onClick={() => onAct("done")}>
                 Done, check again
@@ -608,7 +657,7 @@ function Details({
   actions,
   onAction,
 }: {
-  lane: AccessLane;
+  lane: Lane;
   seat: AccessSeat;
   saved: AccessSeatLane;
   now: number;
@@ -642,15 +691,17 @@ function Details({
               ["Account", o.exists ? (o.account ?? "Created") : "Not created yet"],
               [laneWords(lane.key).access, o.exists ? accessWords(lane, o) : "Not granted yet"],
               [
-                "Key",
-                <span key="key">
-                  <span className="mono">
-                    {o.credential?.variable ?? saved.credential_variable}
+                "Credential",
+                o.credential ? (
+                  <span key="credential">
+                    <span className="mono">{o.credential.variable}</span>
+                    {providedExternally(o)
+                      ? ", provided externally"
+                      : `, minted ${relTime(o.credential.minted_at, now)}`}
                   </span>
-                  {o.credential
-                    ? `, minted ${relTime(o.credential.minted_at, now)}`
-                    : ", not minted yet"}
-                </span>,
+                ) : (
+                  "Not minted yet"
+                ),
               ],
               ["Tool", toolWords(lane, saved)],
               ["Last sync", syncValue(saved, now)],

@@ -8,46 +8,55 @@
  * the same on every run.
  */
 
-import type { AccessAnswer, AccessLane, AccessSeat, AccessSeatLane } from "~/contract/access.ts";
+import type { AccessAnswer, AccessOptions, AccessSeat, AccessSeatLane } from "~/contract/access.ts";
+import { lanesOf, type Lane } from "./logic.ts";
 
 const MIN = 60_000;
 const DAY = 24 * 60 * MIN;
 
 export const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
-export const DATADOG_LANE: AccessLane = {
-  key: "datadog",
-  name: "Datadog",
+const DATADOG_OPTIONS: AccessOptions = {
+  lane: "datadog",
+  live: true,
   levels: [
-    { id: "r-ro", name: "Datadog Read Only Role", hint: "Reads monitors, dashboards and logs" },
-    { id: "r-std", name: "Datadog Standard Role", hint: "Also writes monitors and dashboards" },
-    { id: "r-admin", name: "Datadog Admin Role", hint: "Everything, including users", admin: true },
+    { id: "r-ro", name: "Datadog Read Only Role" },
+    { id: "r-std", name: "Datadog Standard Role" },
+    { id: "r-admin", name: "Datadog Admin Role", administers: true },
     { id: "r-sre", name: "SRE Responder", custom: true },
   ],
-  levels_source: { live: true, text: "Live from your Datadog organization, custom roles included" },
-  rotatable: true,
-  tool_server: "datadog",
-  console_url: "https://app.datadoghq.com/organization-settings/users",
 };
 
-export const GITHUB_LANE: AccessLane = {
-  key: "github",
-  name: "GitHub",
-  levels: [],
-  levels_source: { live: false, text: "GitHub's permissions for a GitHub App" },
+const GITHUB_OPTIONS: AccessOptions = {
+  lane: "github",
+  live: false,
   permissions: [
-    { key: "contents", name: "Contents", admin_write: true },
+    { key: "contents", name: "Contents", administers_on_write: true },
     { key: "issues", name: "Issues" },
     { key: "pull_requests", name: "Pull requests" },
     { key: "checks", name: "Checks" },
     { key: "actions", name: "Actions" },
-    { key: "workflows", name: "Workflows", write_only: true, admin_write: true },
+    { key: "workflows", name: "Workflows", write_only: true, administers_on_write: true },
   ],
-  scope_options: ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
-  rotatable: false,
-  tool_server: "github",
-  console_url: "https://github.com/organizations/gophrase/settings/apps",
+  scope: ["gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"],
 };
+
+const MATTERMOST_OPTIONS: AccessOptions = {
+  lane: "mattermost",
+  live: false,
+  levels: [
+    { id: "system_user", name: "Member" },
+    { id: "system_user system_post_all_public", name: "Member who posts in any public channel" },
+  ],
+  scope: ["town-square", "incidents", "releases"],
+};
+
+const laneOf = (options: AccessOptions): Lane =>
+  lanesOf({ kind: options.lane, revision: "", syncing: false, options: [options], seats: [] })[0]!;
+
+export const DATADOG_LANE = laneOf(DATADOG_OPTIONS);
+export const GITHUB_LANE = laneOf(GITHUB_OPTIONS);
+export const MATTERMOST_LANE = laneOf(MATTERMOST_OPTIONS);
 
 /** A lane that is on and in sync, holding what `over` says. */
 export function onLane(over: Partial<AccessSeatLane> & { variable: string }): AccessSeatLane {
@@ -63,23 +72,21 @@ export function onLane(over: Partial<AccessSeatLane> & { variable: string }): Ac
     sync: { at: ago(DAY), outcome: "ok", steps: [] },
     plan: [],
     tool: "live",
-    credential_variable: variable,
     ...rest,
   };
 }
 
 /** A lane that is off and has no account. */
-export function offLane(variable: string, level?: string): AccessSeatLane {
+export function offLane(level?: string): AccessSeatLane {
   return {
-    desired: { enabled: false, level },
+    desired: { enabled: false, ...(level ? { level } : {}) },
     observed: { exists: false, enabled: false },
     plan: [],
     tool: "off",
-    credential_variable: variable,
   };
 }
 
-const seat = (handle: string, name: string, lanes: AccessSeat["lanes"]): AccessSeat => ({
+export const seat = (handle: string, name: string, lanes: AccessSeat["lanes"]): AccessSeat => ({
   handle,
   name,
   lanes,
@@ -88,13 +95,13 @@ const seat = (handle: string, name: string, lanes: AccessSeat["lanes"]): AccessS
 export function datadogAnswer(sre?: Partial<AccessSeatLane>): AccessAnswer {
   return {
     kind: "datadog",
-    revision_id: "rev-7",
+    revision: '"rev-7"',
     syncing: false,
     last_sync_at: ago(4 * MIN),
-    lanes: [DATADOG_LANE],
+    options: [DATADOG_OPTIONS],
     seats: [
-      seat("pm", "PM", { datadog: offLane("DATADOG_APP_KEY_PM", "r-ro") }),
-      seat("qa", "QA", { datadog: offLane("DATADOG_APP_KEY_QA", "r-ro") }),
+      seat("pm", "PM", { datadog: offLane("r-ro") }),
+      seat("qa", "QA", { datadog: offLane("r-ro") }),
       seat("sre", "SRE", {
         datadog: onLane({
           variable: "DATADOG_APP_KEY_SRE",
@@ -124,9 +131,9 @@ const REVIEW = {
 export function githubAnswer(): AccessAnswer {
   return {
     kind: "github",
-    revision_id: "rev-7",
+    revision: '"rev-7"',
     syncing: false,
-    lanes: [GITHUB_LANE],
+    options: [GITHUB_OPTIONS],
     seats: [
       seat("qa", "QA", {
         github: onLane({
@@ -141,6 +148,24 @@ export function githubAnswer(): AccessAnswer {
             scope: ["gophrase/backend"],
             credential: { variable: "GITHUB_APP_KEY_QA", minted_at: ago(12 * DAY) },
           },
+        }),
+      }),
+    ],
+  };
+}
+
+/** Mattermost with one bot on and in no channel yet. */
+export function mattermostAnswer(): AccessAnswer {
+  return {
+    kind: "mattermost",
+    revision: '"rev-7"',
+    syncing: false,
+    options: [MATTERMOST_OPTIONS],
+    seats: [
+      seat("pm", "PM", {
+        mattermost: onLane({
+          variable: "MATTERMOST_TOKEN_PM",
+          desired: { enabled: true, level: "system_user", scope: [] },
         }),
       }),
     ],

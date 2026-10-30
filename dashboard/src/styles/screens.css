@@ -4400,6 +4400,10 @@ a.int-feed-what:hover {
 .agent-access-message {
   margin: 0 0 var(--spacing-3) calc(13rem + var(--spacing-3));
 }
+/* A seat that is on with nothing to work in, said quietly under its row. */
+.agent-access-hint {
+  margin: 0 0 var(--spacing-3) calc(13rem + var(--spacing-3));
+}
 .agent-access-actions {
   display: flex;
   flex-wrap: wrap;
@@ -4494,7 +4498,8 @@ a.int-feed-what:hover {
   .agent-access-row--head {
     display: none;
   }
-  .agent-access-message {
+  .agent-access-message,
+  .agent-access-hint {
     margin-left: 0;
   }
   .agent-access-details-cell {
