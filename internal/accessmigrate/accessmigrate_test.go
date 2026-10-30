@@ -147,7 +147,7 @@ func TestTheGoPhraseDocumentMigrates(t *testing.T) {
 		"pm": {
 			seataccess.LaneGitHub: {Enabled: true, Permissions: seataccess.Permissions{
 				"contents": "read", "issues": "read", "pull_requests": "read",
-				"checks": "read", "actions": "read"},
+				"checks": "read", "actions": "read", "deployments": "read"},
 				Scope: []string{"gophrase/backend", "gophrase/frontend", "gophrase/mobile-app"}},
 			seataccess.LaneGitLab:  {},
 			seataccess.LaneDatadog: {},
@@ -155,7 +155,7 @@ func TestTheGoPhraseDocumentMigrates(t *testing.T) {
 		"backend-engineer": {
 			seataccess.LaneGitHub: {Enabled: true, Permissions: seataccess.Permissions{
 				"contents": "write", "issues": "write", "pull_requests": "write",
-				"checks": "write", "actions": "read", "workflows": "write"},
+				"checks": "write", "actions": "read", "deployments": "read", "workflows": "write"},
 				Scope: []string{"gophrase/backend"}},
 			seataccess.LaneGitLab:  {Enabled: true, Level: "30"},
 			seataccess.LaneDatadog: {},
@@ -163,7 +163,7 @@ func TestTheGoPhraseDocumentMigrates(t *testing.T) {
 		"qa": {
 			seataccess.LaneGitHub: {Enabled: true, Permissions: seataccess.Permissions{
 				"contents": "read", "issues": "write", "pull_requests": "write",
-				"checks": "read", "actions": "read"},
+				"checks": "read", "actions": "read", "deployments": "read"},
 				Scope: []string{"gophrase/backend", "gophrase/frontend"}},
 			seataccess.LaneGitLab:  {Enabled: true, Level: "40"},
 			seataccess.LaneDatadog: {},
