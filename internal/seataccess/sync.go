@@ -38,6 +38,11 @@ type SyncInput struct {
 	// Handles limits the sync to these seats; empty is every seat.
 	Handles []string
 
+	// Disconnect is a sync for an integration being disconnected: every
+	// seat is off whatever the document says, so each account is disabled
+	// and its credential revoked, and removed where Asks says so.
+	Disconnect bool
+
 	// Now is the clock; nil is the wall clock in UTC.
 	Now func() time.Time
 
@@ -177,7 +182,7 @@ func (s *syncer) seat(
 	ref := SeatRef{Handle: h, Name: rec.Name}
 	lanes := LanesOf(s.kind)
 	want := map[Lane]Desired{}
-	if inDoc {
+	if inDoc && !s.in.Disconnect {
 		for _, lane := range lanes {
 			want[lane], _ = DesiredOf(seat.Role, lane)
 		}

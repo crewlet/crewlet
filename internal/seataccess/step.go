@@ -22,9 +22,11 @@ const (
 	// its credential: a seat that is on with no account.
 	OpCreate Op = "create"
 
-	// OpEnable turns an account back on: one this engine disabled, or one
-	// somebody disabled at the vendor that a person asked to turn back on.
-	// It mints a fresh credential, since off revoked the old one.
+	// OpEnable turns an account back on, at the document's level and scope:
+	// one this engine disabled, one somebody disabled at the vendor that a
+	// person asked to turn back on, or a second lane of an account an earlier
+	// lane created. It mints a fresh credential where none is sealed, since
+	// off revoked the old one.
 	OpEnable Op = "enable"
 
 	// OpLevel moves the account to the document's level or permissions: an

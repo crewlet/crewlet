@@ -196,6 +196,11 @@ var categories = map[string]placement{
 	// taken and a pause refused as already taken read differently.
 	"seat_paused":  {"lifecycle", RateAuthenticated},
 	"seat_resumed": {"lifecycle", RateAuthenticated},
+	// An access sync putting back a seat's level or scope that somebody
+	// changed at a vendor. The ENGINE authors it, once per restore, on the
+	// integration loop's own cadence: a person at the vendor can cause one,
+	// and cannot make more of them than there are syncs.
+	"seat_access_drift_restored": {"lifecycle", RateEngine},
 
 	// Task: work reaching a seat — including a detached sandbox run, which
 	// is the execution of one, and a schedule firing, which creates one.
