@@ -157,8 +157,10 @@ func TestSyncLeavesAHandDisabledAccountOff(t *testing.T) {
 	if h.v.Account("sre").Enabled[dd] {
 		t.Fatal("the sync turned a hand-disabled account back on")
 	}
-	if len(report.Findings) != 1 || report.Findings[0].Subject != "sre" {
-		t.Fatalf("findings = %+v, want one for sre", report.Findings)
+	// THE WAIT IS THE AGENT'S: its record carries it and its row says it,
+	// so the finding is marked as the seat's own.
+	if len(report.Findings) != 1 || report.Findings[0].Subject != "sre" || !report.Findings[0].Seat {
+		t.Fatalf("findings = %+v, want one for sre, marked as its seat's", report.Findings)
 	}
 	if got := h.record(t).Lanes[dd].Sync.Outcome; got != seataccess.OutcomeWaiting {
 		t.Fatalf("outcome = %q, want waiting on a person", got)

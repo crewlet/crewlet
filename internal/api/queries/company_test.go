@@ -1219,7 +1219,8 @@ func TestTheIntegrationsRoomReadsWhatThisAnswerSends(t *testing.T) {
 					ActionURL: "https://gitlab.example.com/api-gateway/-/settings",
 				},
 				Findings: []integration.Finding{{
-					Kind: integration.FindingGrantShort, Subject: "ceo",
+					// An agent's own, so `seat` is sent.
+					Kind: integration.FindingGrantShort, Subject: "ceo", Seat: true,
 					Detail:    "2 seats need maintainer on api-gateway",
 					Remedy:    "grant maintainer on api-gateway",
 					ActionURL: "https://gitlab.example.com/api-gateway/-/project_members",
