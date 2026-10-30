@@ -273,3 +273,31 @@ units:
 		t.Fatalf("a project outside reach: want ErrConflict, got %v", err)
 	}
 }
+
+// A SEAT MANAGED OUTSIDE CREWLET NAMES NO LEVEL (D4b): where the engine does
+// not provision the kind, an agent that is on holds whatever access its
+// account was given there, so `enabled: true` alone is a whole block. Where the
+// engine provisions it, the level is required, because it is what the engine
+// grants. Mutation: require the level whatever the mode, and the migrated
+// company with external seats fails its own admission again.
+func TestALevelIsRequiredOnlyWhereTheEngineGrantsIt(t *testing.T) {
+	t.Parallel()
+	external := `
+name: Acme
+roles:
+  - {name: SRE, handle: sre, integrations: {datadog: {enabled: true}, gitlab: {enabled: true}}}
+`
+	if _, err := ParseCompany([]byte(external)); err != nil {
+		t.Fatalf("an external seat that is on with no level was refused: %v", err)
+	}
+	engine := `
+name: Acme
+integrations:
+  datadog: {enabled: true, provisioning: {site: datadoghq.com}}
+roles:
+  - {name: SRE, handle: sre, integrations: {datadog: {enabled: true}}}
+`
+	if err := rejects(t, engine, "roles[0].integrations.datadog.role"); !errors.Is(err, ErrMissing) {
+		t.Fatalf("an engine-provisioned seat with no role: want ErrMissing, got %v", err)
+	}
+}
