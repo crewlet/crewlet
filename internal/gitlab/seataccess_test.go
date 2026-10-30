@@ -251,7 +251,7 @@ func (g *glSite) serve(w http.ResponseWriter, r *http.Request) {
 		g.tokens[owner] = append(g.tokens[owner], t)
 		reply(http.StatusCreated, map[string]any{"id": t.id, "name": t.name, "token": t.value, "scopes": scopes})
 	case (reGroupToken.MatchString(path) || reInstToken.MatchString(path)) && r.Method == http.MethodDelete:
-		id := 0
+		var id int
 		if m := reGroupToken.FindStringSubmatch(path); m != nil {
 			id = atoi(m[2])
 		} else {

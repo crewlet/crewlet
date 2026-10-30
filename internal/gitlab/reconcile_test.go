@@ -337,16 +337,6 @@ func (f *adminInstance) writeHook(rows []hookRow, id int, body map[string]any) [
 	return rows
 }
 
-// join seeds an account that is ALREADY IN THE GROUP.
-//
-// The instance's account list and the group's roster are different things —
-// an account can exist and be a member of nothing — so a fixture that seeded
-// only `users` was asking a scan to find something the group does not hold.
-func (f *adminInstance) join(username string, id, level int) {
-	f.users[username] = id
-	f.groupMembers[id] = level
-}
-
 func (f *adminInstance) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -968,20 +958,6 @@ func (f *adminInstance) usernameOf(id string) string {
 	return ""
 }
 
-func (f *adminInstance) liveTokens() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	n := 0
-	for _, tokens := range f.tokens {
-		for _, t := range tokens {
-			if !t.Revoked {
-				n++
-			}
-		}
-	}
-	return n
-}
-
 // forget clears the counters, so a test can measure ONE run.
 // pageOf serves one page of a listing, the way GitLab does: `per_page` is
 // clamped at 100 and `page` is 1-based.
@@ -999,31 +975,6 @@ func pageOf(rows []map[string]any, q url.Values) []map[string]any {
 		return []map[string]any{}
 	}
 	return rows[start:min(start+size, len(rows))]
-}
-
-// called reports whether the instance saw this request.
-func (f *adminInstance) called(want string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Contains(f.calls, want)
-}
-
-// hasUser reports whether an account still exists.
-func (f *adminInstance) hasUser(username string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	_, ok := f.users[username]
-	return ok
-}
-
-// addPerson seeds a group member who is NOT a service account — a real
-// human, the thing a decommission sweep must never propose.
-func (f *adminInstance) addPerson(username string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.nextID++
-	f.join(username, f.nextID, gitlabDeveloperLevel)
-	f.people[username] = true
 }
 
 // mutations counts the requests this instance received that CHANGE it.
@@ -1089,24 +1040,11 @@ func mutatingRoute(call string) bool {
 	return true
 }
 
-// The access levels GitLab takes as integers, mirrored here because a
-// fixture asserting a level has to say which one it means.
-const (
-	gitlabDeveloperLevel  = 30
-	gitlabMaintainerLevel = 40
-)
-
 func (f *adminInstance) forget() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.revokes, f.mintBodies, f.calls = 0, nil, nil
 	f.updatedHooks, f.deletedHooks, f.hookBodies = nil, nil, nil
-}
-
-func (f *adminInstance) revoked() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.revokes
 }
 
 // refusal is one response the fake is told to give instead of succeeding.
@@ -1247,16 +1185,6 @@ func (s *recordingSink) value(name string) string {
 }
 func (s *recordingSink) Describe() string { return "a test sink" }
 func (s *recordingSink) NextStep() string { return "a test next step" }
-
-func (s *recordingSink) recorded() map[string]string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := map[string]string{}
-	for k, v := range s.values {
-		out[k] = v
-	}
-	return out
-}
 
 func reconcileAgainst(t *testing.T, f *adminInstance, sink provision.TokenSink) (*gitlab.Result, error) {
 	t.Helper()
@@ -1518,40 +1446,6 @@ func TestAReconcileNeedsAClientAndASink(t *testing.T) {
 		t.Errorf("err = %v, want ErrNoSink", err)
 	}
 }
-
-// cancellingSink cancels the run's context from inside Record, which is the
-// window a real interrupt lands in.
-type cancellingSink struct {
-	cancel    context.CancelFunc
-	discarded bool
-}
-
-func (s *cancellingSink) Value(context.Context, string) (string, bool, error) {
-	return "", false, nil
-}
-
-func (s *cancellingSink) Record(context.Context, string, string) error {
-	s.cancel()
-	return context.Canceled
-}
-
-// Forget implements [provision.TokenSink].
-func (s *cancellingSink) Forget(context.Context, ...string) error { return nil }
-
-func (s *cancellingSink) Discard(ctx context.Context) error {
-	// A rollback that inherited the cancelled context would fail here
-	// rather than clean up; asserting on ctx.Err() is what makes the
-	// detachment visible rather than incidental.
-	if ctx.Err() != nil {
-		return fmt.Errorf("the rollback inherited a cancelled context")
-	}
-	s.discarded = true
-	return nil
-}
-
-func (s *cancellingSink) Flush(context.Context) error { return nil }
-func (s *cancellingSink) Describe() string            { return "a cancelling sink" }
-func (s *cancellingSink) NextStep() string            { return "a test next step" }
 
 // sortByUsername gives the fake a deterministic order, with the DECOY first
 // — a caller taking element zero has to be wrong.
@@ -2499,63 +2393,6 @@ func TestACancelledPassWithNothingToDoIsStillAFault(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("the fault does not name the cancellation: %v", err)
 	}
-}
-
-// userID is an account's id, failed loudly rather than returned as zero:
-// every caller below uses it to address tokens, and zero addresses nobody.
-func (f *adminInstance) userID(t *testing.T, username string) int {
-	t.Helper()
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	id, ok := f.users[username]
-	if !ok {
-		t.Fatalf("no account %q was created", username)
-	}
-	return id
-}
-
-// setUnusable makes every token this account holds be refused, however new,
-// which is how GitLab answers for an account whose address was never
-// confirmed.
-func (f *adminInstance) setUnusable(userID int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.unusable[userID] = true
-}
-
-// liveTokensOf counts what ONE account could still authenticate with,
-// where [adminInstance.liveTokens] counts the whole instance's.
-func (f *adminInstance) liveTokensOf(userID int) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	live := 0
-	for _, token := range f.tokens[userID] {
-		if !token.Revoked && (token.ExpiresAt.IsZero() || token.ExpiresAt.After(f.now)) {
-			live++
-		}
-	}
-	return live
-}
-
-// pileTokens seeds n live tokens under one name, which is the state a run
-// that minted without retiring leaves behind.
-func (f *adminInstance) pileTokens(userID int, name string, n int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for range n {
-		f.nextToken++
-		f.tokens[userID] = append(f.tokens[userID], &gitlab.Token{
-			ID: f.nextToken, Name: name,
-			Value: fmt.Sprintf("glpat-piled-%d", f.nextToken),
-		})
-	}
-}
-
-// creates are the service-account creation payloads this instance received.
-func (f *adminInstance) creates() []map[string]any {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.createBodies)
 }
 
 // A HOOK THIS ENGINE LEFT AT AN ADDRESS IT NO LONGER USES IS REMOVED.
