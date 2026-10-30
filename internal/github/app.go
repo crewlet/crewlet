@@ -151,11 +151,11 @@ type ManifestOptions struct {
 	// which is a separate act from creating the app.
 	SetupURL string
 
-	// Access is how much this seat may do, which decides the permissions
-	// the app is created with. An app cannot be widened later without its
-	// installation approving the change, so this is the one field worth
-	// getting right at creation.
-	Access Access
+	// Permissions are what this seat may do, which the app is registered
+	// with (D5: least privilege for a leaked key). Widening it later needs
+	// the app's owner and then the organization, so this is the one field
+	// worth getting right at creation.
+	Permissions Permissions
 
 	// Homepage is the `url` field, which GitHub requires. It is the only
 	// required field in the whole manifest.
@@ -248,7 +248,7 @@ func BuildManifest(opts ManifestOptions) Manifest {
 		SetupOnUpdate:  true,
 		HookAttributes: hook,
 		DefaultEvents:  eventsFor(hook),
-		DefaultPerms:   opts.Access.Permissions(),
+		DefaultPerms:   opts.Permissions.Token(),
 	}
 }
 
@@ -529,7 +529,24 @@ type Installation struct {
 	} `json:"account"`
 	RepositorySelection string `json:"repository_selection"`
 	SuspendedAt         string `json:"suspended_at"`
+
+	// SuspendedBy is who suspended it, as GitHub records it, or nil. Read
+	// for the sentence an operator sees; whether THIS ENGINE suspended it
+	// is the account ledger's to say, never inferred from a login.
+	SuspendedBy *struct {
+		Login string `json:"login"`
+		Type  string `json:"type"`
+	} `json:"suspended_by"`
+
+	// HTMLURL is the installation's settings page at GitHub, where an
+	// organization owner reviews a permission request and changes which
+	// repositories it covers.
+	HTMLURL string `json:"html_url"`
 }
+
+// RepositorySelectionAll is GitHub's value for an installation that covers
+// every repository the account holds, now and later.
+const RepositorySelectionAll = "all"
 
 // Suspended reports an installation the account has switched off. Its tokens
 // are refused, and the fix is a person's, so it is worth telling apart from
@@ -662,35 +679,43 @@ func (c *AppClient) Exists(ctx context.Context) (bool, error) {
 // Installation reads one installation back.
 func (c *AppClient) Installation(ctx context.Context, id int64) (*Installation, error) {
 	out := new(Installation)
-	path := "/app/installations/" + strconv.FormatInt(id, 10)
+	path := installationPath(id)
 	if err := c.call(ctx, http.MethodGet, path, nil, out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-// MintToken issues a token for one installation, scoped to the access.
+// MintToken issues a token for one installation, scoped to perms.
 //
-// SCOPED DOWN AT MINT TIME, which is where the tier becomes real. The app may
-// hold more than the access asks for, because a person installed it and a
-// person can widen it; the token carries only what the access lists, so a
+// SCOPED DOWN AT MINT TIME, which is where a seat's permissions become real.
+// The app may hold more than the seat asks for, because a person installed it
+// and a person can widen it; the token carries only what perms lists, so a
 // read-only seat cannot write even on an installation that could. The other
 // direction is GitHub's to refuse: a request naming a permission the
 // installation does not hold mints nothing, which the seat-app pass reports
-// as the seat's shortfall ([Shortfall]).
+// as the seat's shortfall ([Permissions.Short]).
 //
 // Repositories narrow it further where the seat names any. Empty means every
 // repository the installation covers, which is what the operator chose when
 // they installed it.
 func (c *AppClient) MintToken(
-	ctx context.Context, installationID int64, access Access, repos []string,
+	ctx context.Context, installationID int64, perms Permissions, repos []string,
 ) (*InstallationToken, error) {
-	body := map[string]any{"permissions": access.Permissions()}
+	return c.mint(ctx, installationID, perms.Token(), repos)
+}
+
+// mint issues one installation token carrying exactly perms, narrowed to
+// repos where any are named.
+func (c *AppClient) mint(
+	ctx context.Context, installationID int64, perms map[string]string, repos []string,
+) (*InstallationToken, error) {
+	body := map[string]any{"permissions": perms}
 	if names := repoNames(repos); len(names) > 0 {
 		body["repositories"] = names
 	}
 	out := new(InstallationToken)
-	path := "/app/installations/" + strconv.FormatInt(installationID, 10) + "/access_tokens"
+	path := installationPath(installationID) + "/access_tokens"
 	if err := c.call(ctx, http.MethodPost, path, body, out); err != nil {
 		return nil, err
 	}
@@ -704,8 +729,12 @@ func (c *AppClient) MintToken(
 // its access. Deleting the record here and leaving the installation would
 // leave an app able to act with nothing watching it.
 func (c *AppClient) Uninstall(ctx context.Context, installationID int64) error {
-	path := "/app/installations/" + strconv.FormatInt(installationID, 10)
-	return c.call(ctx, http.MethodDelete, path, nil, nil)
+	return c.call(ctx, http.MethodDelete, installationPath(installationID), nil, nil)
+}
+
+// installationPath is one installation's address on the app endpoints.
+func installationPath(id int64) string {
+	return "/app/installations/" + strconv.FormatInt(id, 10)
 }
 
 // repoNames takes the bare repository names GitHub's token endpoint wants.
@@ -740,6 +769,15 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 	if err != nil {
 		return err
 	}
+	return c.send(ctx, assertion, method, path, body, out)
+}
+
+// send performs one request with bearer as its credential: the app's
+// assertion for the app endpoints ([AppClient.call]), or an installation
+// token for the few reads GitHub serves only to an installation
+// ([AppClient.InstallationRepositories]).
+func (c *AppClient) send(ctx context.Context, bearer, method, path string, body, out any) error {
+	var err error
 	var reader *strings.Reader
 	if body != nil {
 		encoded, encodeErr := json.Marshal(body)
@@ -757,7 +795,7 @@ func (c *AppClient) call(ctx context.Context, method, path string, body, out any
 	if err != nil {
 		return fmt.Errorf("github: build %s %s: %w", method, path, err)
 	}
-	req.Header.Set("Authorization", "Bearer "+assertion)
+	req.Header.Set("Authorization", "Bearer "+bearer)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", APIVersion)
 	if body != nil {

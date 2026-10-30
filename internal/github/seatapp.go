@@ -53,12 +53,18 @@ import (
 type SeatApp struct {
 	Handle string
 	Name   string
-	Tier   Tier
-	Repos  []string
 
-	// Workflows is the seat's opt-in to `workflows: write`, which only full
-	// access carries ([Access]).
-	Workflows bool
+	// Permissions are what this seat's tokens carry, in GitHub's terms
+	// ([Permissions.Token] adds Metadata). The app is registered at these
+	// (D5), so a raise past them waits for its owner.
+	Permissions Permissions
+	Repos       []string
+
+	// Off is a seat switched off on GitHub (D1): its installation is
+	// suspended by the access sync, it is issued no token, and the seat-app
+	// reconcile leaves it alone, since a suspension this engine made is not
+	// a finding. A teardown still reaches it.
+	Off bool
 
 	// AppID and Slug are the app GitHub created. Zero means the operator
 	// has not created one yet, which is a step rather than a fault.
@@ -72,11 +78,6 @@ type SeatApp struct {
 	// names a variable nothing answers, which is a different fault from
 	// naming none.
 	Key string
-}
-
-// Access is what this seat's tokens may do.
-func (s SeatApp) Access() Access {
-	return Access{Tier: s.Tier, Workflows: s.Workflows}
 }
 
 // SeatAppOptions is what one pass over the seats needs.
@@ -215,12 +216,7 @@ func SeatsWithNoApp(handles []string) *integration.Finding {
 // partial report is better served by them than by nil. The loop discards them
 // and retries, which is what a fault means there.
 func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult, error) {
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
+	build := opts.builder()
 	out := &SeatAppResult{Findings: []integration.Finding{}}
 	noApp := slices.Clone(opts.Unrecorded)
 	for _, seat := range opts.Seats {
@@ -236,6 +232,9 @@ func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult
 		// anything wrong, there is a click outstanding. Gathered rather than
 		// reported here, because it is the same act for every such agent and
 		// [SeatsWithNoApp] says it once for all of them.
+		if seat.Off {
+			continue
+		}
 		if seat.AppID == 0 {
 			noApp = append(noApp, seat.Handle)
 			continue
@@ -249,6 +248,56 @@ func ReconcileSeatApps(ctx context.Context, opts SeatAppOptions) (*SeatAppResult
 		out.Findings = append(out.Findings, *missing)
 	}
 	return out, nil
+}
+
+// AdoptSeatApps keeps the document's record of each seat's app in step with
+// GitHub, and reports nothing: what a seat still owes is the access sync's to
+// say ([seataccess.Sync] through this package's vendor).
+//
+// THE DOCUMENT WRITES THE TOKEN ISSUER DEPENDS ON, and only those. An
+// installation a person made since the last pass is recorded on the seat, an
+// installation GitHub no longer has is cleared, and an app GitHub no longer
+// has is forgotten, so the issuer never mints against an id GitHub has
+// forgotten. Off seats are kept in step too: a disconnect uninstalls their
+// suspended installations by the recorded id.
+//
+// A DRY RUN (Record or Forget nil) writes nothing and does nothing. A read
+// GitHub could not answer leaves the seat as it was; a write the store
+// refused is returned, joined with the rest, after every seat is tried.
+func AdoptSeatApps(ctx context.Context, opts SeatAppOptions) error {
+	if opts.Record == nil || opts.Forget == nil {
+		return nil
+	}
+	var failures []error
+	for _, seat := range opts.Seats {
+		if err := interrupted(ctx); err != nil {
+			return err
+		}
+		if seat.AppID == 0 || strings.TrimSpace(seat.Key) == "" {
+			continue
+		}
+		client, err := opts.client(seat)
+		if err != nil {
+			// A KEY THIS ENGINE CANNOT READ is the access sync's to
+			// report; there is nothing here to keep in step.
+			continue
+		}
+		installation, _, err := installationFor(ctx, opts, seat, client)
+		var notRecorded *errNotRecorded
+		switch {
+		case errors.As(err, &notRecorded):
+			failures = append(failures, errors.New(notRecorded.detail(seat.Handle)))
+		case notFound(err) || (err == nil && installation == nil):
+			if exists, existsErr := client.Exists(ctx); existsErr == nil && !exists {
+				if forgetErr := opts.Forget(ctx, seat.Handle); forgetErr != nil {
+					failures = append(failures, fmt.Errorf(
+						"github: clear %s's record of an app GitHub no longer has: %w",
+						seat.Handle, forgetErr))
+				}
+			}
+		}
+	}
+	return errors.Join(failures...)
 }
 
 // reconcileSeat reports one seat, and returns an error only for a fault that
@@ -290,7 +339,7 @@ func (r *SeatAppResult) reconcileSeat(
 		return nil
 	}
 
-	installation, adopted, err := r.installationFor(ctx, opts, seat, client)
+	installation, adopted, err := installationFor(ctx, opts, seat, client)
 
 	// GONE, NOT MERELY UNINSTALLED, and the two call for opposite things.
 	// Both answer 404 from the installation endpoints, so the app's own
@@ -396,7 +445,7 @@ func (r *SeatAppResult) reconcileSeat(
 				"still worth removing at GitHub",
 		})
 	}
-	if short := Shortfall(seat.Access(), installation.Permissions); len(short) > 0 {
+	if short := seat.Permissions.Short(installation.Permissions); len(short) > 0 {
 		r.Findings = append(r.Findings, grantShort(opts, seat, short))
 		return nil
 	}
@@ -405,36 +454,29 @@ func (r *SeatAppResult) reconcileSeat(
 }
 
 // grantShort is the finding for a seat whose installation holds less than its
-// access asks for.
+// permissions ask for.
 //
 // EVERY TOKEN IS REFUSED, not only the calls needing what is missing: GitHub
 // refuses a token request that names a permission the installation does not
 // hold, so the seat acts on GitHub not at all until the grant is widened.
 //
-// THE WORKFLOWS OPT-IN IS TOLD APART, because it is the one shortfall a
-// company causes on its own: it is set on a seat whose app already exists, and
-// a manifest is read only at creation. Widening it starts on the app's
-// permissions page rather than on its installation, and takes two people's
-// steps, so the finding names both.
+// TWO PEOPLE, and the link goes to the first one still owed: a permission the
+// app's registration lacks is its owner's to add on the permissions page,
+// and GitHub then asks the organization to accept it on the installation
+// ([RaiseWait] reads the registration to tell the two apart; this finding,
+// made without it, sends the owner first, since a raise past the
+// registration is the usual cause).
 func grantShort(opts SeatAppOptions, seat SeatApp, short []string) integration.Finding {
-	finding := integration.Finding{
+	return integration.Finding{
 		Kind:      integration.FindingGrantShort,
 		Subject:   seat.Handle,
-		ActionURL: InstallURL(opts.WebBase, opts.Org, seat.Slug),
-		Detail: seat.Handle + " is set to " + seat.Tier.Label() + " and its app " +
-			"lacks " + strings.Join(short, ", ") + ", so GitHub refuses every " +
-			"token this seat asks for until the installation holds them",
+		ActionURL: PermissionsURL(opts.WebBase, opts.Org, seat.Slug),
+		Detail: seat.Handle + " is set to " + seat.Permissions.Describe() + " and its " +
+			"app's installation lacks " + Names(short) + ", so GitHub refuses every " +
+			"token this seat asks for. The app's owner adds them on the app's " +
+			"permissions page, and the organization then approves the request on " +
+			"the installation",
 	}
-	if slices.Equal(short, []string{PermissionWorkflows}) {
-		finding.ActionURL = PermissionsURL(opts.WebBase, opts.Org, seat.Slug)
-		finding.Detail = seat.Handle + " opts in to workflow writes and its app's " +
-			"installation does not hold workflows, so GitHub refuses every token " +
-			"this seat asks for until it does. An app created before the opt-in " +
-			"gains it only when its owner adds Workflows (read and write) on the " +
-			"app's permissions page and the organization then approves the " +
-			"request on the installation"
-	}
-	return finding
 }
 
 // forget reports an app GitHub no longer has, and clears the record naming it.
@@ -491,7 +533,7 @@ func notFound(err error) bool {
 // a sentence that is false about the one fact this pass established, sending
 // an operator to redo a click nobody reversed while the real failure was
 // logged nowhere at all. [errNotRecorded] keeps it apart.
-func (r *SeatAppResult) installationFor(
+func installationFor(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp, client *AppClient,
 ) (*Installation, bool, error) {
 	if seat.InstallationID != 0 {
@@ -585,9 +627,9 @@ func (e *errNotRecorded) detail(handle string) string {
 
 // TokenFor mints the credential one seat acts with.
 //
-// SCOPED TO THE TIER at mint time, which is where the tier stops being a word
-// in a document: the app may hold more than the tier asks for, and the token
-// carries only what the tier lists.
+// SCOPED TO THE SEAT'S PERMISSIONS at mint time, which is where they stop
+// being words in a document: the app may hold more than the seat asks for,
+// and the token carries only what the seat lists.
 func TokenFor(
 	ctx context.Context, opts SeatAppOptions, seat SeatApp,
 ) (*InstallationToken, error) {
@@ -596,17 +638,11 @@ func TokenFor(
 			"github: %s has no installed app, so there is nothing to mint against",
 			seat.Handle)
 	}
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
-	client, err := build(seat.AppID, seat.Key, opts.APIBase)
+	client, err := opts.client(seat)
 	if err != nil {
 		return nil, err
 	}
-	return client.MintToken(ctx, seat.InstallationID, seat.Access(), seat.Repos)
+	return client.MintToken(ctx, seat.InstallationID, seat.Permissions, seat.Repos)
 }
 
 // UninstallSeat removes one agent's installation, which is what actually
@@ -616,13 +652,7 @@ func UninstallSeat(ctx context.Context, opts SeatAppOptions, seat SeatApp) error
 	if seat.AppID == 0 || seat.InstallationID == 0 {
 		return nil
 	}
-	build := opts.Client
-	if build == nil {
-		build = func(appID int64, pem, apiBase string) (*AppClient, error) {
-			return NewAppClient(appID, pem, apiBase, nil)
-		}
-	}
-	client, err := build(seat.AppID, seat.Key, opts.APIBase)
+	client, err := opts.client(seat)
 	if err != nil {
 		return err
 	}
@@ -635,6 +665,21 @@ func UninstallSeat(ctx context.Context, opts SeatAppOptions, seat SeatApp) error
 		return nil
 	}
 	return err
+}
+
+// builder is [SeatAppOptions.Client], or the real constructor when it is nil.
+func (o SeatAppOptions) builder() func(int64, string, string) (*AppClient, error) {
+	if o.Client != nil {
+		return o.Client
+	}
+	return func(appID int64, pem, apiBase string) (*AppClient, error) {
+		return NewAppClient(appID, pem, apiBase, nil)
+	}
+}
+
+// client builds the app client one seat acts through.
+func (o SeatAppOptions) client(seat SeatApp) (*AppClient, error) {
+	return o.builder()(seat.AppID, seat.Key, o.APIBase)
 }
 
 // orgLabel names the account an app is installed on, for a sentence.

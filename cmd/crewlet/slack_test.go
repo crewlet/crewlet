@@ -74,7 +74,7 @@ func TestASlackReportLeavesAloneOnlyASeatTheRunDidNotTouch(t *testing.T) {
 					Admin: slack.NewAdmin(api),
 					Seats: []slack.SeatPlan{{
 						Handle: "swe", RoleName: "Engineer",
-						TokenVar: "SWE_SLACK_TOKEN", SigningVar: "SWE_SLACK_SIGNING",
+						TokenVar: "SLACK_BOT_TOKEN_SWE", SigningVar: "SLACK_SIGNING_SECRET_SWE",
 					}},
 					Ledger: ledger, LedgerPath: ledgerPath, Sink: sink,
 					BaseURL: "https://engine.example.com", ConfigRefreshToken: "xoxe-1-refresh",

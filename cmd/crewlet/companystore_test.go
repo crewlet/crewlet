@@ -281,8 +281,6 @@ func readersOfTheCompany() []readerRun {
 		vendorRun("confluence provision", sink, public, "-recreate-webhooks"),
 		vendorRun("confluence import"),
 		vendorRun("confluence resync"),
-		vendorRun("mattermost provision", sink, "-admin-token=mm-admin"),
-		vendorRun("mattermost provision", sink, "-admin-token=mm-admin", "-rotate"),
 		vendorRun("mattermost doctor", "-admin-token=mm-admin"),
 		// WITH AN APP-CONFIGURATION TOKEN, so a run the refusal let through
 		// goes on to Slack, which no case's run reaches: its first request
@@ -381,8 +379,6 @@ func TestARunThatReadsNoStoredValueDecidesNoRoute(t *testing.T) {
 		vendor)
 	ledger := filepath.Join(t.TempDir(), "ledger.json")
 	for _, args := range [][]string{
-		{"mattermost", "provision", company, "-dry-run"},
-		{"mattermost", "provision", empty, "-print", "-admin-token=mm-admin"},
 		{"confluence", "import", company, t.TempDir(), "-dry-run"},
 		{"confluence", "import", empty, t.TempDir()},
 		{"slack", "provision", empty, "-print", "-ledger", ledger},
@@ -665,7 +661,6 @@ func TestAProvisioningRunsChoiceOfSinkIsAnsweredBeforeAnyRoute(t *testing.T) {
 		{"github", "provision", public},
 		{"jira", "provision", public},
 		{"confluence", "provision", public},
-		{"mattermost", "provision", "-admin-token=mm-admin"},
 		{"slack", "provision", public, "-config-token=xoxe-refresh"},
 	} {
 		for _, tc := range []struct {
@@ -999,7 +994,7 @@ func TestASecretStoreSinkReadsBackThroughTheRunsRoute(t *testing.T) {
 // records installed, which is the only one an install can spare, so a run
 // whose app nobody has installed asks for none either, whatever the store
 // holds. Each run here stops after the reads, before it reaches the vendor:
-// GitLab and Mattermost at the administrator token they were not given — the
+// GitLab and Mattermost at the provisioning token they were not given — the
 // invocation's environment holds none, whatever the process exports
 // ([operatorCredential]) — Slack at the deployment address no Tier A and no
 // -public-url gives it.
@@ -1012,13 +1007,12 @@ func TestAProvisioningRunAsksForItsSeatsTokensInItsFirstBatch(t *testing.T) {
 		fresh string
 		stop  string
 	}{
+		// GITLAB READS NO SEAT TOKEN: an agent's token is per-seat access,
+		// minted by the engine, so the run asks for the signing secret alone.
 		{"gitlab provision", func(vendor string) []string {
 			return []string{"gitlab", "provision", companyAt(t, readerCompanyDoc, vendor),
 				"-public-url", "https://crewlet.example.com"}
-		}, []string{"GITLAB_SIGNING_SECRET", "GITLAB_TOKEN_CEO"}, "-rotate", "no administrator token"},
-		{"mattermost provision", func(vendor string) []string {
-			return []string{"mattermost", "provision", companyAt(t, readerCompanyDoc, vendor)}
-		}, []string{"MM_TOKEN_CEO"}, "-rotate", "no administrator token"},
+		}, []string{"GITLAB_SIGNING_SECRET"}, "-rotate", "no provisioning token"},
 		{"slack provision", func(vendor string) []string {
 			return []string{"slack", "provision",
 				installedSlackApps(t, companyAt(t, readerCompanyDoc, vendor), "ceo")}

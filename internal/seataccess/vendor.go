@@ -2,6 +2,7 @@ package seataccess
 
 import (
 	"context"
+	"strings"
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
@@ -286,6 +287,12 @@ type Options struct {
 	// no project list), where any entry the vendor accepts is within it.
 	Scope     []string `json:"scope,omitempty"`
 	ScopeOpen bool     `json:"scope_open,omitempty"`
+
+	// Multiple is a lane whose access is a SET of Levels rather than one:
+	// Confluence's space permissions by operation, on a site without space
+	// roles. Its Desired.Level is the chosen ids, sorted and space-separated,
+	// and the picker offers a multi-select.
+	Multiple bool `json:"multiple,omitempty"`
 }
 
 // Level returns the level with id, or false.
@@ -296,6 +303,58 @@ func (o Options) Level(id string) (Level, int, bool) {
 		}
 	}
 	return Level{}, -1, false
+}
+
+// LevelsOf is the levels a stored level names: the one it is, or each of a
+// [Options.Multiple] set. ok is false where any of them is not offered.
+func (o Options) LevelsOf(level string) (out []Level, ok bool) {
+	ids := []string{level}
+	if o.Multiple {
+		ids = strings.Fields(level)
+	}
+	if len(ids) == 0 {
+		return nil, false
+	}
+	for _, id := range ids {
+		l, _, found := o.Level(id)
+		if !found {
+			return nil, false
+		}
+		out = append(out, l)
+	}
+	return out, true
+}
+
+// StepsInput is what a vendor draws one op's steps from.
+type StepsInput struct {
+	Seat SeatRef
+	Lane Lane
+	Op   Op
+	Want Desired
+	Have Observed
+
+	// Options is what the lane offers now, so a step names a level by the
+	// vendor's own name rather than by its id. Zero where the caller read
+	// none, and a vendor then names what it can without it.
+	Options Options
+}
+
+// NamedSteps is a vendor whose steps name its levels by the vendor's own
+// names, which only the lane's Options can tell it (a Jira project role, a
+// Confluence space role, a GitLab custom role). [Plan] prefers it to
+// [Vendor.Steps]. It draws the same steps in the same order as Steps does:
+// only the words differ, so an Apply that redraws without Options takes the
+// same step at the same index.
+type NamedSteps interface {
+	StepsFor(in StepsInput) []Step
+}
+
+// drawSteps is a vendor's steps for one op, named where the vendor can.
+func drawSteps(v Vendor, in StepsInput) []Step {
+	if named, ok := v.(NamedSteps); ok {
+		return named.StepsFor(in)
+	}
+	return v.Steps(in.Seat, in.Lane, in.Op, in.Want, in.Have)
 }
 
 // Level is one level a vendor offers, as the vendor defines it.

@@ -211,6 +211,10 @@ providers:
   llm:
     primary: {model: claude-sonnet-5}
   sandbox: {fake: true}
+integrations:
+  github:
+    enabled: true
+    webhook_secret: "${GH_SECRET}"
 roles:
   - name: SRE Lead
     handle: sre-lead
@@ -232,7 +236,8 @@ roles:
         Authorization: "Bearer ${GITHUB_APP_TOKEN_BACKEND_ENGINEER}"
     integrations:
       github:
-        tier: full_access
+        enabled: true
+        permissions: {contents: write}
 `
 	var lookups atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
