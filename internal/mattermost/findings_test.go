@@ -8,32 +8,30 @@ import (
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
-	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // theOnlySeat is the company every case here runs.
 func theOnlySeat() []*org.Role {
-	return []*org.Role{chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership")}
+	return []*org.Role{chatSeat("CEO", "", "leadership")}
 }
 
 // THE PREFLIGHT REACHES THE LOOP AND NOT ONLY THE TERMINAL.
 //
-// `crewlet mattermost provision` prints [mattermost.Result.Notes] to whoever
-// ran it; the reconcile loop reads [mattermost.Result.Findings] and nothing
-// else — engine.mattermostPass returns res.Findings() and drops the notes. So
-// a preflight that spoke only in notes told the person at the terminal that
-// this credential cannot write and told the loop that Mattermost was READY.
+// The reconcile loop reads [mattermost.Result.Findings] and nothing else:
+// engine.mattermostPass returns res.Findings() and drops the notes. So a
+// preflight that spoke only in notes would tell the loop that Mattermost was
+// READY over a credential that cannot write.
 //
 // A CONVERGED COMPANY IS WHERE THIS BITES. Nothing is written on a pass that
 // needs nothing, so the refusal never surfaces as an error: the company
-// reports ready for ever, and the first anybody hears of it is the day a
-// tenth seat is added and every pass from then on fails.
+// reports ready for ever, and the first anybody hears of it is the day an
+// agent is turned on and the access sync's writes fail.
 func TestAnUnderPrivilegedAdminTokenIsReportedToTheLoop(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
 	srv.adminRoles = "system_user"
 
-	res, err := reconcileChat(t, srv, newChatSink(), theOnlySeat())
+	res, err := reconcileChat(t, srv, theOnlySeat())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -77,7 +75,7 @@ func TestADisabledInstanceSettingIsReportedToTheLoop(t *testing.T) {
 			srv := newChatServer()
 			srv.settings[tc.key] = "false"
 
-			res, err := reconcileChat(t, srv, newChatSink(), theOnlySeat())
+			res, err := reconcileChat(t, srv, theOnlySeat())
 			if err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}
@@ -117,7 +115,7 @@ func TestAnUnreadableProvisioningAccountIsNotReportedAsRefused(t *testing.T) {
 	srv := newChatServer()
 	srv.refuseIdentity = true
 
-	res, err := reconcileChat(t, srv, newChatSink(), theOnlySeat())
+	res, err := reconcileChat(t, srv, theOnlySeat())
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -136,11 +134,10 @@ func TestAnUnreadableProvisioningAccountIsNotReportedAsRefused(t *testing.T) {
 func TestAConvergedCompanyReportsNoFinding(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
-	if _, err := reconcileChat(t, srv, newChatSink(), theOnlySeat()); err != nil {
+	if _, err := reconcileChat(t, srv, theOnlySeat()); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	sink := newChatSink()
-	first, err := reconcileChat(t, srv, sink, theOnlySeat())
+	first, err := reconcileChat(t, srv, theOnlySeat())
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -149,52 +146,17 @@ func TestAConvergedCompanyReportsNoFinding(t *testing.T) {
 	}
 }
 
-// A SUCCESSFUL DECOMMISSION IS NOT OUTSTANDING WORK.
-//
-// [mattermost.Result.Decommissioned] is exactly the seats the company
-// document NO LONGER HAS: somebody passed -decommission and the run disabled
-// their bots, deliberately and successfully. Reported as identity_missing —
-// which is PhaseProvisioning / ActorEngine, rendering as "the engine is
-// creating agent identities" — a destructive run that did precisely what was
-// asked classified as work in flight, for handles that will never be created,
-// on a row nothing ever clears.
-func TestASuccessfulDecommissionIsNotReportedAsOutstandingWork(t *testing.T) {
-	t.Parallel()
-	srv := newChatServer()
-	if _, err := reconcileChat(t, srv, newChatSink(), []*org.Role{
-		chatSeat("CEO", "${MM_TOKEN_CEO}", "leadership"),
-		chatSeat("CTO", "${MM_TOKEN_CTO}", "eng"),
-	}); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-	res, err := reconcileChatWith(t, srv, newChatSink(), theOnlySeat(),
-		func(o *mattermost.Options) { o.Decommission = true })
-	if err != nil {
-		t.Fatalf("decommission: %v", err)
-	}
-	if len(res.Decommissioned) != 1 {
-		t.Fatalf("Decommissioned = %v, want the departed seat", res.Decommissioned)
-	}
-	if findings := res.Findings(); len(findings) != 0 {
-		t.Fatalf("the sweep that did what was asked reported %+v", findings)
-	}
-	// AND THE REPORT AN OPERATOR READS SAYS SO: ready, not provisioning.
-	if report := integration.Classify(res.Findings()); report.Phase != integration.PhaseReady {
-		t.Errorf("phase = %q, want ready", report.Phase)
-	}
-}
-
-// THE PREFLIGHT RUNS WITH NO SEAT TO PROVISION. Each agent's bot is the
-// per-seat access sync's now, so the loop hands this pass an empty plan on
-// every tick, and a pass that returned before its preflight stopped reporting
-// a provisioning token that lost system_admin for good.
-func TestAnEmptyPlanStillReportsTheAdminToken(t *testing.T) {
+// THE PREFLIGHT RUNS WITH NO AGENT SEAT AT ALL. Each agent's bot is the
+// per-seat access sync's, so this pass provisions nothing, and a pass that
+// returned before its preflight when it had nothing to provision stopped
+// reporting a provisioning token that lost system_admin for good.
+func TestAPassWithNoSeatStillReportsTheAdminToken(t *testing.T) {
 	t.Parallel()
 	srv := newChatServer()
 	srv.adminRoles = "system_user"
 	res, err := mattermost.Reconcile(context.Background(), mattermost.Options{
 		Client: chatClient(t, srv), Config: enabledChat(),
-		Org: &org.Organization{Name: "Nimbus"}, Plan: &provision.Plan{}, Sink: newChatSink(),
+		Org: &org.Organization{Name: "Nimbus"},
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -202,5 +164,29 @@ func TestAnEmptyPlanStillReportsTheAdminToken(t *testing.T) {
 	findings := res.Findings()
 	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialRejected {
 		t.Errorf("findings = %+v, want the refused administrator token", findings)
+	}
+}
+
+// THE COMPANY'S PASS NEVER ACTS ON AN AGENT'S CREDENTIAL. Each seat's token is
+// the access sync's alone: it mints, seals, rotates and revokes it. Over an
+// instance whose agents' bots hold tokens, this pass mints none, revokes none
+// and turns no bot on or off; with every name already right it writes nothing.
+func TestTheCompanyPassNeverTouchesAnAgentsToken(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	id := seedBot(srv, "ceo", mattermost.BotDisplayName(enabledChat().Provisioning, "CEO"))
+	srv.issue(id, "fake-live-token")
+	before := srv.mutations()
+	if _, err := reconcileChat(t, srv, []*org.Role{chatSeat("CEO", "", "leadership")}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := srv.mutations() - before; got != 0 {
+		t.Errorf("the company's pass made %d write(s) over agents it does not own", got)
+	}
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.tokens[id]) != 1 || srv.off[id] {
+		t.Errorf("tokens = %+v, off = %v: the company's pass touched the agent's bot",
+			srv.tokens[id], srv.off[id])
 	}
 }
