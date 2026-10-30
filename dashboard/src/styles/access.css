@@ -96,15 +96,26 @@
 .agent-access-review-seat h3 {
   margin: 0;
 }
-/* A step in the review: who takes it, then its label over its note. The
- * Crewlet mark is drawn at 1em, so the mark's box sets its size. */
+/* A step in the review: who takes it, in a column of its own, then its label
+ * over its note. The mark's box is one line tall, so it sits on the label's
+ * first line whether or not a note follows. */
+.agent-access-step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  column-gap: var(--spacing-2);
+}
 .agent-access-actor {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  /* The label's own register (uilet's body Text), so 1lh is its line. */
+  font-size: var(--font-size-sm);
+  line-height: var(--font-line-height-normal);
+  block-size: 1lh;
   color: var(--color-text-secondary);
-  font-size: var(--font-size-md);
 }
-.agent-access-step {
+.agent-access-step-words {
   display: flex;
   flex-direction: column;
   min-width: 0;

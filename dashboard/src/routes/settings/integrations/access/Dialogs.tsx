@@ -31,7 +31,7 @@ import {
   type ChangeListRow,
 } from "@crewlethq/ui";
 import { CrewletIcon } from "@crewlethq/icons";
-import { UserGlyph } from "@crewlethq/icons/glyphs";
+import { GLYPH_SIZES, UserGlyph } from "@crewlethq/icons/glyphs";
 import type {
   AccessAnswer,
   AccessDesired,
@@ -104,32 +104,41 @@ function rows(lane: Lane, from: AccessDesired, to: AccessDesired): ChangeListRow
 /** Who takes a step, in words: what the mark beside it says to a screen reader. */
 const ACTOR_WORDS = { crewlet: "Crewlet", you: "A person" } as const;
 
+/** The one box both marks are drawn in, so a step's words start in one column. */
+const ACTOR_SIZE = GLYPH_SIZES.md;
+
 /**
  * The steps a sync takes, in order: each a short label with its note beneath
  * at a quieter step, and the mark of who takes it, Crewlet's own or a person.
  * The mark is said before the label, since a glyph is not a word.
+ *
+ * THE MARK SITS ON THE LABEL'S FIRST LINE, in a column of its own: both marks
+ * are drawn in one box, a line tall, beside the words rather than in the row's
+ * leading slot, which centres on the whole row and so set a step with a note
+ * lower than one without.
  */
 export function Steps({ steps, label }: { steps: AccessStep[]; label: string }) {
   return (
     <List variant="numbered" density="compact" aria-label={label}>
       {steps.map((s, i) => (
-        <List.Item
-          key={i}
-          leading={
-            <span className="agent-access-actor">
-              {s.by === "you" ? <UserGlyph size="sm" aria-hidden /> : <CrewletIcon aria-hidden />}
-              {/* The row puts its own space after the mark. */}
-              <VisuallyHidden>{`${ACTOR_WORDS[s.by]}:`}</VisuallyHidden>
-            </span>
-          }
-        >
+        <List.Item key={i}>
           <span className="agent-access-step">
-            <Text>{s.text}</Text>
-            {s.note && (
-              <Text variant="caption" tone="secondary">
-                {s.note}
-              </Text>
-            )}
+            <span className="agent-access-actor">
+              {s.by === "you" ? (
+                <UserGlyph size={ACTOR_SIZE} aria-hidden />
+              ) : (
+                <CrewletIcon width={ACTOR_SIZE} height={ACTOR_SIZE} aria-hidden />
+              )}
+              <VisuallyHidden>{`${ACTOR_WORDS[s.by]}: `}</VisuallyHidden>
+            </span>
+            <span className="agent-access-step-words">
+              <Text>{s.text}</Text>
+              {s.note && (
+                <Text variant="caption" tone="secondary">
+                  {s.note}
+                </Text>
+              )}
+            </span>
           </span>
         </List.Item>
       ))}
