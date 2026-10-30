@@ -15,7 +15,6 @@
 import { useEffect, useState } from "react";
 import type {
   AccessAnswer,
-  AccessDraft,
   AccessDraftRequest,
   AccessInstallLink,
   AccessPlanAnswer,
@@ -27,6 +26,9 @@ import { asSentence } from "~/lib/format.ts";
 import { managedBlock } from "~/lib/useWriteAccess.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { OPERATOR_MANAGED } from "./words.ts";
+
+/** A draft: the desired state per seat and lane, only for what changed. */
+export type AccessDraft = AccessDraftRequest["seats"];
 
 /** How often the tab reads again while a sync runs. */
 export const SYNC_POLL_MS = 1_500;

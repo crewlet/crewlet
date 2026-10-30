@@ -31,17 +31,6 @@ export interface LaneWords {
    * none.
    */
   scope?: { noun: string; singular: string; empty: string; emptyOn?: string };
-  /**
-   * Where a seat's access is a set of permissions: the hint under a seat that
-   * is on with none, and why a draft like that cannot be saved.
-   */
-  noPermissions?: { hint: string; refused: string };
-  /**
-   * Where a seat may hold the product with no role at all (the empty level),
-   * what the access menu calls that choice and the note under it. A seat on
-   * it has no scope to choose.
-   */
-  productOnly?: { name: string; note: string };
   /** The tool a seat uses its credential through, in a few words. */
   tool: string;
   /** The `mcp_servers` entry a seat's tool is started from, as the warning names it. */
@@ -105,10 +94,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: { noun: "Projects", singular: "project", empty: "No project" },
     tool: "Crewlet's own Jira tools",
     server: "jira",
-    productOnly: {
-      name: "Product access only",
-      note: "Jira access with no project role, so it sees only what Jira grants every user on the site.",
-    },
   },
   confluence: {
     name: "Confluence",
@@ -121,14 +106,6 @@ export const LANE_WORDS: Record<string, LaneWords> = {
     scope: { noun: "Spaces", singular: "space", empty: "No space" },
     tool: "Crewlet's own Confluence tools",
     server: "confluence",
-    productOnly: {
-      name: "Product access only",
-      note: "Confluence access with no space role, so it sees only what Confluence grants every user on the site.",
-    },
-    noPermissions: {
-      hint: "No permissions yet, so it cannot see any space. Choose at least View.",
-      refused: "Confluence needs at least View for every agent that is on.",
-    },
   },
   slack: {
     name: "Slack",

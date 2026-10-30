@@ -29,13 +29,12 @@ import {
 import type {
   AccessAnswer,
   AccessDesired,
-  AccessDraft,
   AccessPlanAnswer,
   AccessSeat,
   AccessStep,
   GitHubAccess,
 } from "~/contract/access.ts";
-import { accessApi, refusalWords } from "./api.ts";
+import { accessApi, refusalWords, type AccessDraft } from "./api.ts";
 import { lanesOf, levelName, levelsHeading, scopeApplies, scopeWords, type Lane } from "./logic.ts";
 import { GITHUB_ACCESS_NAMES, laneWords } from "./words.ts";
 
