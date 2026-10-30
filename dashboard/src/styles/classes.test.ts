@@ -953,7 +953,11 @@ describe("every class the dashboard names", () => {
 // the create pages', `charter.css`, the Principles editor's, `brand.css`, the
 // brand's (Company › Brand, a kit's view and its gallery cover), and
 // `folders.css`, the folders' (their tiles, dialogs, row and fact), and
-// `models.css`, Settings › Models' (its list, model page, wizard and By job). Each is
+// `models.css`, Settings › Models' (its list, model page, wizard and By job),
+// `integrations.css`, Company › Integrations' (the directory's detail, an
+// app's tabs, its setup form and disconnect dialog), and `access.css`, the
+// agents' access table an integration's Agents tab and an agent's Access tab
+// share. Each is
 // appended after the entry's sheets, so each of its rules must select a class
 // of the screen it arrives with, or a tie it wins would change other screens
 // from the moment a reader first opened that one.
@@ -973,6 +977,14 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "models.css": {
     importer: "routes/settings/models/Models.tsx",
     owns: /\.models-[a-z_-]+\b/,
+  },
+  "integrations.css": {
+    importer: "routes/settings/integrations/parts.tsx",
+    owns: /\.int-[a-z0-9-]+\b/,
+  },
+  "access.css": {
+    importer: "routes/settings/integrations/access/AgentsAccess.tsx",
+    owns: /\.agent-access(?:-[a-z-]+)?\b/,
   },
   "folders.css": {
     importer: "routes/artifacts/MoveDialog.tsx",

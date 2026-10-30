@@ -596,8 +596,8 @@ type SeatState struct {
 	// created from, ready to paste, for an app whose seats a person has to
 	// build by hand.
 	//
-	// THE ENGINE'S OWN, byte for byte the one `crewlet slack provision`
-	// pushes: the scopes, the events and this seat's request URL are what
+	// THE ENGINE'S OWN, byte for byte the one the reconcile loop creates
+	// apps from: the scopes, the events and this seat's request URL are what
 	// make an app the engine can actually use, and every one of them is a
 	// decision that lives in Go. Told to build the app themselves, an
 	// operator was being asked to reproduce seventeen scopes and five event

@@ -20,15 +20,14 @@ import (
 // secret, live on the seat rather than on the company. The company-wide block
 // carries only the working-indicator settings.
 //
-// # This surface collects them; it does not create the apps
+// # Where the apps come from
 //
-// Creating an app goes through Slack's app-manifest API, which authenticates
-// with an app-configuration token Slack issues only by hand from its own
-// pages, and which an organisation may decline to allow at all. So the engine
-// does not pretend it can: `crewlet slack provision` remains the automated
-// path where the tokens are available, and this surface is what makes a
-// hand-created app usable without one, by taking the two values Slack shows on
-// the app's own page and sealing them.
+// With an app-configuration token on the company block, the reconcile loop
+// creates and keeps every agent's app itself (D11), and a person only
+// approves each install from the Agents tab. Without one, a company creates
+// each app by hand from the manifest this surface shows, and these fields take
+// the two values Slack shows on the app's own page, as credentials handed in
+// from outside (D4b).
 //
 // The webhook URL is not a field for the same reason it is not one anywhere
 // else: it is `<webhook base>/webhooks/slack/<handle>`, built on the Tier A
@@ -201,10 +200,10 @@ func statusChoices() []setup.Choice {
 
 // ManageURL is one agent's app at Slack, where a person deletes it.
 //
-// DELETING AN APP IS NOT AN API CALL for this engine: apps.manifest.delete
-// authenticates with an app-configuration token Slack issues by hand, which
-// is the same credential the whole surface exists because an operator may not
-// have. So a disconnect hands over a link.
+// It is where a person deletes an app the engine cannot: one created by hand
+// in a company with no app-configuration token, or one whose token Slack
+// refused. With a usable token the engine deletes the app itself
+// (apps.manifest.delete).
 //
 // The APP ID, because it is the only thing that identifies one agent's app:
 // two agents may carry the same display name, and nothing else on the seat
@@ -224,17 +223,11 @@ func ManageURL(appID string) string {
 // page named nothing like "delete".
 func ManagePath() string { return "Settings > Basic Information > Delete App" }
 
-// Summary is the sentence the connect form opens with.
-//
-// WHAT THE READER HAS TO DO FIRST. It said the apps are created from the
-// command line, which is true of `crewlet slack provision` and useless to
-// somebody looking at this form: that command needs an app-configuration
-// token Slack issues by hand and an organisation may decline to allow at
-// all, so the person reading this is usually the person about to create the
-// apps themselves.
+// Summary is the sentence the connect form opens with: what the reader has to
+// do first, which depends on whether they hold an app-configuration token.
 func Summary() string {
-	return "Each agent talks in Slack as its own app. Every agent below carries " +
-		"the manifest its app is created from, which sets the scopes, the events " +
-		"and that agent's own delivery address; install it, and its two values " +
-		"are on the app's own pages."
+	return "Each agent talks in Slack as its own app. With an app configuration " +
+		"token, Crewlet creates every agent's app and you approve each install from " +
+		"the Agents tab. Without one, every agent below carries the manifest its app " +
+		"is created from; install it, and its two values are on the app's own pages."
 }
