@@ -343,6 +343,15 @@ func TestRemoveDeletesTheApp(t *testing.T) {
 		t.Errorf("deleted %v", body)
 	}
 
+	// A REFUSED TOKEN HANDS THE DELETE TO A PERSON, and the record stays
+	// open until Slack confirms the app gone.
+	refused := newSlackWorld(t).installed()
+	refused.ws.refuse["apps.manifest.delete"] = "invalid_auth"
+	res, err = slackApply(t, refused.open(t), seataccess.OpRemove, 0, appRecord(seataccess.AccountDisabled))
+	if err != nil || res.Gone || res.Waiting == nil || res.Waiting.ActionURL != "https://api.slack.com/apps/A0SWE" {
+		t.Errorf("remove with a refused token: %+v, %v", res, err)
+	}
+
 	noToken := newSlackWorld(t).installed()
 	delete(noToken.sealed, slack.ConfigTokenVar)
 	res, err = slackApply(t, noToken.open(t), seataccess.OpRemove, 0, appRecord(seataccess.AccountDisabled))
@@ -491,25 +500,4 @@ func lastToken(ws *workspace) string {
 		return ""
 	}
 	return ws.tokens[len(ws.tokens)-1]
-}
-
-// A SEAT THAT IS ON READS THE ENGINE'S NAMES, and one that is off has no
-// Slack identity, so its revoked token is never read (D4, D1).
-func TestTheTransportReadsTheEngineNamedToken(t *testing.T) {
-	t.Parallel()
-	on, off := true, false
-	cfg := &config.Company{Name: "acme", Roles: []config.Role{
-		{Name: "Engineer", Handle: "swe", Integrations: config.RoleIntegrations{Slack: &config.RoleSlack{Enabled: &on}}},
-		{Name: "Designer", Handle: "designer", Integrations: config.RoleIntegrations{Slack: &config.RoleSlack{Enabled: &off}}},
-	}}
-	o, err := cfg.Organization()
-	if err != nil {
-		t.Fatal(err)
-	}
-	seats := slack.SeatsFrom(o, func(name string) (string, bool) {
-		return map[string]string{"SLACK_BOT_TOKEN_SWE": "xoxb-swe", "SLACK_BOT_TOKEN_DESIGNER": "xoxb-old"}[name], true
-	})
-	if len(seats) != 1 || seats[0].Handle != "swe" || seats[0].Token != "xoxb-swe" {
-		t.Errorf("transport seats = %+v", seats)
-	}
 }

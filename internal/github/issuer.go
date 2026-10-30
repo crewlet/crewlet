@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // An agent acts on GitHub as its OWN app, with a token issued at use.
@@ -62,14 +62,13 @@ const (
 //
 // ONE NAMING, for the values the app's creation seals and for the token the
 // engine issues, so the three cannot drift into two grammars. It is
-// [setup.SecretNameFor]'s, which puts the vendor first: a handle beginning
+// [seataccess.SinkName]'s, the name the access sync seals under, which puts
+// the vendor first: a handle beginning
 // with a digit (`7th-engineer`, which the org model accepts) would
 // otherwise make a name no `${VAR}` can reference (see that function).
 // `senior-engineer`'s token is GITHUB_APP_TOKEN_SENIOR_ENGINEER.
 func SeatVar(handle, field string) string {
-	return setup.SecretNameFor(integration.KindGitHub, setup.Requirement{
-		Field: field, Seat: handle,
-	})
+	return seataccess.SinkName(integration.KindGitHub, field, handle)
 }
 
 // Token lifetimes a caller asks the [Issuer] for.

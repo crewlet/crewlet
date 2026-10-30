@@ -66,22 +66,31 @@ func PlanFor(o *org.Organization) []SeatPlan {
 			continue
 		}
 		plan := SeatPlan{Handle: role.Handle(), RoleName: role.Name}
-		plan.TokenVar, _ = provision.SoleVar(role.Slack.BotToken)
-		plan.SigningVar, _ = provision.SoleVar(role.Slack.SigningSecret)
-		if plan.TokenVar == "" {
-			plan.Notes = append(plan.Notes,
-				"integrations.slack.bot_token is not a whole ${VAR} reference, "+
-					"so the install has nowhere to put the token Slack mints")
-		}
-		if plan.SigningVar == "" {
-			plan.Notes = append(plan.Notes,
-				"integrations.slack.signing_secret is not a whole ${VAR} "+
-					"reference, so the secret Slack serves once at app creation "+
-					"has nowhere to go — and it cannot be read back")
-		}
+		plan.TokenVar = engineVar(&plan, role.Slack.BotToken, FieldBotToken, "bot_token")
+		plan.SigningVar = engineVar(&plan, role.Slack.SigningSecret, FieldSigningSecret, "signing_secret")
 		out = append(out, plan)
 	}
 	return out
+}
+
+// engineVar is the variable a seat's Slack value is sealed under, or "" with a
+// note where the seat's block names any other.
+//
+// THE ENGINE NAMES IT (D4): every Slack value is sealed under
+// [SeatVar], the name the transport, the webhook check and the seat's tool
+// all read, and [CompleteSeatInstall], which this command finishes an install
+// through, seals nowhere else. A block that still names its own `${VAR}` or a
+// literal is one the migration has not reached; it is reported and left
+// alone, never sealed into a name the engine does not read.
+func engineVar(plan *SeatPlan, ref, field, key string) string {
+	want := SeatVar(plan.Handle, field)
+	if name, _ := provision.SoleVar(ref); name == want {
+		return want
+	}
+	plan.Notes = append(plan.Notes, fmt.Sprintf(
+		"integrations.slack.%s does not name ${%s}, the variable the engine seals "+
+			"this seat's Slack value under, so this run leaves the seat alone", key, want))
+	return ""
 }
 
 // Installer asks the operator to approve one app and returns the code Slack
@@ -508,25 +517,22 @@ func (o Options) install(ctx context.Context, seat SeatPlan, record AppRecord, r
 		res.Pending[seat.Handle] = authorize
 		return false, nil
 	}
-	installed, err := o.Admin.Exchange(ctx, record.ClientID, record.ClientSecret,
-		strings.TrimSpace(code), o.BaseURL)
+	// THE ONE COMPLETION, which the engine's landing finishes its own
+	// installs through as well: it checks the code belongs to this seat's
+	// app (one authorize URL is printed per seat and they look alike), seals
+	// the bot token under the seat's own name, and revokes a token it could
+	// not seal.
+	installed, err := CompleteSeatInstall(ctx, o.Admin, o.Sink, o.Admin.http, SeatApp{
+		Handle: seat.Handle, AppID: record.AppID,
+		ClientID: record.ClientID, ClientSecret: record.ClientSecret,
+	}, code, o.BaseURL)
+	if errors.Is(err, errOtherApp) {
+		return false, fmt.Errorf(
+			"slack: %s: %w. The click used another agent's authorize URL: re-run "+
+				"and use the URL printed for %s", seat.Handle, err, seat.Handle)
+	}
 	if err != nil {
 		return false, fmt.Errorf("slack: %s: %w", seat.Handle, err)
-	}
-	// THE CODE HAS TO BELONG TO THIS SEAT'S APP. One authorize URL is
-	// printed per seat and they look alike; pasting the wrong one mints
-	// another app's bot token into this seat's ${VAR}, and the seat then
-	// posts as a colleague with nothing anywhere reporting it. The whole
-	// point of an app per seat is that identities do not cross.
-	if got := strings.TrimSpace(installed.AppID); got != "" && got != record.AppID {
-		return false, fmt.Errorf(
-			"slack: %s: that approve code belongs to app %s, not this seat's "+
-				"%s — the click used another agent's authorize URL. Re-run "+
-				"and use the URL printed for %s. Nothing was recorded",
-			seat.Handle, got, record.AppID, seat.Handle)
-	}
-	if err := o.Sink.Record(ctx, seat.TokenVar, installed.BotToken); err != nil {
-		return false, fmt.Errorf("slack: %s: record %s: %w", seat.Handle, seat.TokenVar, err)
 	}
 	res.Recorded++
 	record.BotUserID = installed.BotUserID

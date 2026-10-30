@@ -2,7 +2,7 @@ package slack
 
 import (
 	"github.com/crewlet/crewlet/internal/integration"
-	"github.com/crewlet/crewlet/internal/setup"
+	"github.com/crewlet/crewlet/internal/seataccess"
 )
 
 // The variables a seat's Slack app is sealed under, named by the engine.
@@ -11,9 +11,9 @@ import (
 // `bot_token: ${VAR}` pointed, so a document edit could point it at a company
 // credential and the next install would overwrite that credential with the
 // seat's token (the class of the Datadog incident). The names are derived
-// here, from the handle, with [setup.SecretNameFor], which is the grammar the
-// connect form and the operator already use, so every reader agrees on them
-// by construction (design 3).
+// here, from the handle, with [seataccess.SinkName], the one naming function
+// the access sync seals under and every reader derives from, so they agree by
+// construction (design 3).
 //
 // ONE TOKEN, TWO READERS. The bot token sealed under [FieldBotToken] is what
 // the transport authenticates with and what the seat's Slack tool server is
@@ -36,9 +36,7 @@ const (
 // SeatVar is the variable one seat's app value lives under:
 // `SLACK_BOT_TOKEN_SENIOR_ENGINEER` for `senior-engineer`'s bot token.
 func SeatVar(handle, field string) string {
-	return setup.SecretNameFor(integration.KindSlack, setup.Requirement{
-		Field: field, Seat: handle,
-	})
+	return seataccess.SinkName(integration.KindSlack, field, handle)
 }
 
 // SeatVars is every variable one seat's app is sealed under, for a removal

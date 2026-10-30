@@ -410,7 +410,9 @@ func (s *session) awaitInstall(ctx context.Context, seat SeatApp) (seataccess.St
 }
 
 // applyRemove deletes the app, or hands over its page where no configuration
-// token can. Every sealed value is dead once the app is gone.
+// token can: none is sealed, or Slack refused it. The record closes (Gone)
+// only once Slack has confirmed the app deleted, and every sealed value is
+// dead from then on.
 func (s *session) applyRemove(ctx context.Context, seat SeatApp) (seataccess.StepResult, error) {
 	gone := seataccess.StepResult{
 		Gone:    true,
@@ -419,17 +421,27 @@ func (s *session) applyRemove(ctx context.Context, seat SeatApp) (seataccess.Ste
 	if seat.AppID == "" {
 		return gone, nil
 	}
-	if err := s.needs(false); err != nil {
+	byHand := func(why string) seataccess.StepResult {
 		return seataccess.StepResult{Waiting: &seataccess.Waiting{
 			ActionURL: ManageURL(seat.AppID),
-			Detail: "Delete " + seat.Handle + "'s app at Slack: " + ManagePath() +
-				". No app-configuration token is sealed, so this engine cannot",
-		}}, nil
+			Detail: "Delete " + seat.Handle + "'s app at Slack: " + ManagePath() + ". " + why +
+				". The record closes once Slack confirms the app is gone, which " +
+				"this engine asks with an app-configuration token",
+		}}
 	}
-	if err := s.admin.DeleteApp(ctx, s.configToken, seat.AppID); err != nil {
+	if err := s.needs(false); err != nil {
+		return byHand("No app-configuration token is sealed, so this engine cannot"), nil
+	}
+	err := s.admin.DeleteApp(ctx, s.configToken, seat.AppID)
+	var api *APIError
+	switch {
+	case err == nil:
+		return gone, nil
+	case errors.As(err, &api) && configTokenRefused(api.Code):
+		return byHand("Slack refused the app-configuration token (" + api.Code + ")"), nil
+	default:
 		return seataccess.StepResult{}, s.refusal(err, seat, seataccess.VerbRemove)
 	}
-	return gone, nil
 }
 
 // needs refuses a step that has nothing to act with: no configuration token,

@@ -1,10 +1,13 @@
 package webhooks
 
 import (
+	"context"
+	"errors"
 	"html/template"
 	"net/http"
 
 	"github.com/crewlet/crewlet/internal/api/pagepolicy"
+	"github.com/crewlet/crewlet/internal/slack"
 )
 
 // slackOAuthPage is the install landing page every provisioned Slack app
@@ -32,7 +35,16 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
     <h1>Slack app install {{.Heading}}</h1>
     {{if .Error}}
       <p>Slack reported an error: <code>{{.Error}}</code></p>
-      <p>Close this tab and re-run the install from the CLI.</p>
+      <p>Close this tab and start the install again: with Install on the
+      agent's row in Slack's Agents tab, or from
+      <code>crewlet slack provision</code>.</p>
+    {{else if .Done}}
+      <p>Approved for agent <strong>@{{.Handle}}</strong>. Crewlet has sealed
+      its bot token, and the agent starts answering in Slack shortly.</p>
+      <p class="muted">You can close this tab.</p>
+    {{else if .Reason}}
+      <p>{{.Reason}}.</p>
+      <p>{{.Remedy}}.</p>
     {{else if and .Code .Handle}}
       <p>Approved for agent <strong>@{{.Handle}}</strong>.
       Paste this code into the waiting
@@ -69,37 +81,50 @@ var slackOAuthPage = template.Must(template.New("slack-oauth").Parse(`<!doctype 
 // the escaping is ever wrong.
 var slackOAuthPolicy = pagepolicy.MustForTemplate(slackOAuthPage, slackOAuthView{})
 
-type slackOAuthView struct{ Heading, Error, Code, Handle string }
+type slackOAuthView struct {
+	Heading, Error, Code, Handle string
+
+	// Done is an install this engine finished; Reason and Remedy say why
+	// one could not be, and never quote the code or a token.
+	Done           bool
+	Reason, Remedy string
+}
+
+// SlackInstaller finishes an install a seat's install link began
+// ([slack.Installs]).
+type SlackInstaller interface {
+	Complete(ctx context.Context, state, code string) (string, error)
+}
 
 // slackOAuthLanding serves GET /webhooks/slack-oauth.
 //
-// Every provisioned Slack app names this as its OAuth redirect. After the
-// operator clicks Allow, Slack redirects here with a temporary code and, when
-// the install began at an authorize URL the CLI printed, the agent handle in
-// state.
+// Every Slack app this engine creates names this as its OAuth redirect. After
+// the operator clicks Allow, Slack redirects here with a temporary code and
+// the state the install link carried.
 //
-// TWO ARRIVALS, and the page has to tell them apart. `state` is set only by
-// the CLI's own authorize URL, so a code WITHOUT one is somebody who pressed
-// Install to Workspace on the app's settings page: the manual path the setup
-// dialog walks an operator through, where there is no waiting prompt to paste
-// a code into and the thing they actually need is the bot token, two clicks
-// away on the page they just left. Told to paste into a CLI they are not
-// running, an operator reasonably concludes the install did not work.
+// THREE ARRIVALS, told apart by the state:
 //
-// No engine, no queue, no auth — and no secret either: the code alone grants
-// nothing without the app's client secret, which only the provisioning CLI
-// holds. It is a function rather than a method for exactly that reason.
-func slackOAuthLanding(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	view := slackOAuthView{
-		Error:  q.Get("error"),
-		Code:   q.Get("code"),
-		Handle: q.Get("state"),
-	}
+//   - A SIGNED STATE is an install link the Agents tab minted
+//     ([slack.Installs.Link]). The engine finishes it here: the state is
+//     verified and spent, the code exchanged, the app checked, and the bot
+//     token sealed under the seat's own name. Nothing Slack sent is shown.
+//   - A BARE HANDLE is `crewlet slack provision`'s authorize URL, with a
+//     prompt waiting on the code: the page shows it to paste, and the command
+//     finishes the install through the same completion.
+//   - NO STATE is somebody who pressed Install to Workspace on the app's own
+//     settings page, who needs the bot token on the page they just left.
+//
+// The code alone grants nothing without the app's client secret, which only
+// the engine and the provisioning command hold.
+func (r *Receiver) slackOAuthLanding(w http.ResponseWriter, req *http.Request) {
+	q := req.URL.Query()
+	view := slackOAuthView{Error: q.Get("error"), Code: q.Get("code"), Handle: q.Get("state")}
 	status := http.StatusOK
 	switch {
 	case view.Error != "":
 		view.Heading, status = "failed", http.StatusBadRequest
+	case slack.IsInstallState(view.Handle):
+		status = r.completeSlackInstall(req.Context(), &view)
 	case view.Code == "":
 		status = http.StatusBadRequest
 	default:
@@ -120,4 +145,38 @@ func slackOAuthLanding(w http.ResponseWriter, r *http.Request) {
 	if err := slackOAuthPage.Execute(w, view); err != nil {
 		log.Warn("slack_oauth_page_failed", "error", err)
 	}
+}
+
+// completeSlackInstall finishes an install a seat's link began, and fills the
+// view with what happened. The code is cleared before anything renders.
+func (r *Receiver) completeSlackInstall(ctx context.Context, view *slackOAuthView) int {
+	state, code := view.Handle, view.Code
+	view.Code, view.Handle = "", ""
+	if r.slackInstalls == nil {
+		view.Heading = "failed"
+		view.Reason = "this engine does not finish Slack installs"
+		view.Remedy = "Start the install again from the Agents tab of an engine serving the dashboard"
+		return http.StatusServiceUnavailable
+	}
+	handle, err := r.slackInstalls.Complete(ctx, state, code)
+	if err == nil {
+		view.Heading, view.Done, view.Handle = "approved", true, handle
+		log.InfoContext(ctx, "slack_install_completed", "handle", handle)
+		return http.StatusOK
+	}
+	view.Heading = "failed"
+	var refusal *slack.InstallRefusal
+	if !errors.As(err, &refusal) {
+		refusal = &slack.InstallRefusal{
+			Status: http.StatusInternalServerError,
+			Reason: "the install could not be finished",
+			Remedy: "Start the install again with Install on the agent's row in Slack's Agents tab",
+		}
+	}
+	view.Reason, view.Remedy = refusal.Reason, refusal.Remedy
+	// THE ERROR IS LOGGED, never rendered: it may name Slack's refusal
+	// code, which is fine to log and pointless to show, and it never
+	// carries the code or a token ([slack.CompleteSeatInstall]).
+	log.WarnContext(ctx, "slack_install_refused", "handle", handle, "error", err.Error())
+	return refusal.Status
 }
