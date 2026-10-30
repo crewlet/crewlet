@@ -62,7 +62,7 @@ subcommand below is served by it.
 | `crewlet confluence resync <company.yaml>` | Re-run the engine's own tool-skill walk of the Confluence skills space against a throwaway registry and print what loads — a read-only diagnostic, not a way to change a running engine |
 | `crewlet slack provision <company.yaml>` | Create, update and install one [Slack](../integrations/slack.md) app per agent seat from the canonical manifest, minting each seat's bot token and signing secret into the `${VAR}`s its config points at. The install itself is an OAuth grant, so the run hands the operator one authorize URL per seat and takes the code back |
 | `crewlet jira provision <company.yaml>` | Report a [Jira](../integrations/jira.md) instance against the config: which account each seat's own credential authenticates as, whether every project the org chart names exists and agrees about its lead, and — on Data Center — register the inbound webhook with a minted secret. Jira issues no credentials on a provisioner's behalf, so this run reports far more than it changes |
-| `crewlet gitlab provision <company.yaml>` | Reconcile the config into GitLab: one service account per agent seat, membership, per-agent PATs minted into the config's own `${VAR}` references, and the group webhook. A re-run leaves a working token alone; `-dry-run` reports without touching anything, and a run that cannot record what it minted revokes it. |
+| `crewlet gitlab provision <company.yaml>` | Reconcile the company-level half of GitLab: the group check, the provisioning token's expiry warning, and the webhook with its signing secret. Each agent's account, role and token are per-agent access, applied by the engine. `-dry-run` reports without touching anything. |
 | `crewlet github provision <company.yaml>` | Report a [GitHub](../integrations/github.md) deployment against the config — which account each seat's own credential authenticates as — and register the inbound webhooks with a minted secret: one on the organization where the credential may, otherwise one per named repository. GitHub issues no credentials on a provisioner's behalf, so this run reports more than it changes |
 | `crewlet mattermost provision <company.yaml>` | Create/update one Mattermost bot account per Mattermost-enabled agent, add it to the team + channels, mint its access token into an env file or the [secret store](../concepts/secret-store.md). Keeps each bot's display name in step with the company document. A re-run leaves a working token alone; `-rotate` mints fresh ones, `-handles a,b` narrows the run, `-decommission` disables departed seats' bots. Runs a preflight first: system-admin role, `EnableBotAccountCreation`, `EnableUserAccessTokens`. |
 | `crewlet mattermost doctor <company.yaml>` | Check a [Mattermost](../integrations/mattermost.md) install end to end: reachability, the Site URL every browser inherits (against the address people browse, given `-browser-url`), a browser-shaped websocket upgrade, and one real authenticated socket per agent seat |
@@ -2903,52 +2903,27 @@ Read-only. Exits non-zero when any check fails, so it drops into a deploy script
 ```
 crewlet gitlab provision <company.yaml> [-admin-token TOKEN]
                                         [-secret-store | -env-file PATH | -print]
-                                        [-public-url URL] [-mode group|instance]
-                                        [-rotate] [-decommission]
-                                        [-token-expiry-days N] [-dry-run]
+                                        [-public-url URL] [-rotate] [-dry-run]
                                         [-config PATH] [-api URL]
 ```
 
-Idempotent reconcile from company config to GitLab state. For each **agent** seat that declares a GitLab credential under `mcp_env.gitlab` as a whole `${VAR}` reference, it ensures a [service account](../integrations/gitlab.md#provisioning) exists (username `<username_prefix><handle>`), adds group and project membership, mints a personal access token into that variable, and — with `-public-url` — registers the group webhook at `<url>/webhooks/gitlab`. The positional argument is the Tier B company YAML; its `integrations.gitlab.provisioning` block supplies the group, access levels, and token scopes. Human seats are resolved, never created.
+Idempotent reconcile of the company-level half of GitLab: it checks `provisioning.group`, warns when the provisioning token is about to expire, and registers the [webhook](../integrations/gitlab.md#webhooks) with its signing secret. It mints nothing but a signing secret. Each agent's service account, role and token are [per-agent access](../integrations/gitlab.md#per-agent-access), set on the integration's Agents tab and applied by the engine.
 
-**A dry run says what it would do to the signing secret.** It is the most
-consequential thing a run can do — replacing the key a working hook signs with
-fails every delivery in flight until the new value reaches the engine — so the
-plan states which of *untouched* / *reused* / *minted* / *rotated* will happen,
-and into which `${VAR}` — and, where `-rotate` meets a literal
-`signing_secret`, that the literal is reused rather than rotated, with the
-two ways to replace it that the run's own note gives. That decision is made by
-the same function the real run uses, so the two cannot disagree — and it is
-made on the stored value, so a dry run reads the company's values as a real
-run does, by the same route.
+**A dry run says what it would do to the signing secret.** Replacing the key a working hook signs with fails every delivery in flight until the new value reaches the engine, so the plan states which of *untouched* / *reused* / *minted* / *rotated* will happen, and into which `${VAR}`. That decision is made by the same function the real run uses, on the stored value, so the two cannot disagree.
 
-**A run that recorded something says what is left to do.** Where the values
-went and what still has to happen are different questions, and only one of the
-three sinks answers "source a file": `-env-file` needs sourcing and a restart,
-`-print` needs the values moved before the terminal closes, and `-secret-store`
-needs the current revision re-activated on a running node (`POST /config/reload`)
-so the engine rebuilds its secret snapshot — an engine that starts afterwards
-reads it on its own — and it needs no file, which is exactly why a report that stopped at "recorded in the encrypted secret store"
-read as finished. A run that changed nothing prints no follow-up.
-
-**A plain re-run does not rotate a working token.** GitLab returns a personal access token's value once, so a provisioner cannot verify that what it recorded last time still matches — and minting every run is an outage, because the engine is running with the *old* value: an operator adding a tenth seat would revoke the nine credentials the other agents are authenticating with. A seat is left alone when the variable holding its token still has a value **and** the account still has a usable token under this tool's name (`crewlet-<handle>`), and both halves are checked because either alone is wrong — a recorded value whose token was revoked leaves an agent 401ing for ever, and a live token nobody wrote down cannot be deployed. `-rotate` mints for every seat regardless, retiring the previous one **after** recording the new: never before, or a failed record leaves the seat with nothing.
+**A run that recorded something says what is left to do**, on a `Next:` line: `-env-file` needs sourcing and a restart, `-print` needs the value moved before the terminal closes, and `-secret-store` needs the current revision re-activated on a running node (`POST /config/reload`). A run that changed nothing prints no follow-up.
 
 | Flag | Description |
 |------|-------------|
-| `-admin-token` | Operator credential — a top-level group **Owner** PAT with `api` scope on GitLab.com, or an admin PAT self-managed. Falls back to `$GITLAB_ADMIN_TOKEN`. The seats' own tokens are what this run mints, so it cannot bootstrap itself from them. |
-| `-secret-store` / `-env-file PATH` / `-print` | Where minted credentials go — exactly one, and there is no default: a run with nowhere to put what it mints creates live credentials at the third-party app and prints none of them. See [the secret store](../concepts/secret-store.md). With `-env-file` or `-print` a real run is refused before it reaches GitLab where the company's store holds a planned seat's token variable, or the signing secret's `${VAR}` the run would mint or rotate, which the engine reads over anything the run records there ([A sink the store outranks](#a-sink-the-store-outranks)). |
-| `-public-url` | This deployment's public base URL; the group webhook is registered at `<url>/webhooks/gitlab`. **Overrides the Tier A webhook address (`api.public.external_url` when the file sets a [public listener](../guides/deployment.md#exposing-webhooks-without-the-admin-api), `api.external_url` otherwise) for this run**, and registration is skipped only when both are empty — a hook pointing at the wrong host is worse than none, because the instance then reports a healthy integration. |
-| `-rotate` | Mint a fresh token for every seat, including seats whose current one still works — and, wherever the hook is registered, a fresh webhook signing secret into the variable `signing_secret` names (one a literal holds is left alone, with a note). Then do what the run's `Next:` line says. It reads no seat's token back, but the URL and the signing secret all the same, by the run's one route. |
-| `-decommission` | Delete service accounts whose seats have left the config. Scoped **twice**: the username must start with `provisioning.username_prefix` (never empty — it defaults to `crewlet-`) *and* the account must be a member of this company's group, because either alone is too broad. That group scan is used in **both** modes and it is deliberate: every seat is made a member of `provisioning.group` whatever created it, so a managed account of this company is always in the group — while the instance's own service-account listing also holds every *other* company's accounts on the box, which a shared prefix would then sweep. Only the DELETE route differs by mode; sending one down the wrong route answers "no such account" for one that is still live. An account the instance refuses to delete because it is not a service account is reported rather than aborting — that refusal is GitLab catching what the scan should not have proposed, so it is a signal about the prefix. |
-| `-mode group\|instance` | Where service accounts are **owned**, for this run only; it defaults to `integrations.gitlab.provisioning.mode`, which is what the engine's own reconcile reads. `group` (the default, and all GitLab.com offers) creates them under `provisioning.group`; `instance` creates them on the instance itself, which needs an **instance-administrator** PAT and buys an account that is a member of nothing until this run adds it — so one company's seats can span several top-level groups, and an account survives its group being deleted. Everything downstream is identical: memberships are added the same way, and the token API is user-scoped on both. An unknown value is refused before the config is loaded. |
-| `-token-expiry-days` | Lifetime minted onto each token. Omitted, no `expires_at` is sent and the instance's own policy applies — GitLab.com caps personal access tokens at a year regardless, which is the instance enforcing its policy rather than this tool choosing one. Nothing in Crewlet renews a credential on a schedule, so a lifetime nobody renews is an outage with a date on it. |
-| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses. It reads the company's values as a real run does, by the same route. |
-| `-config PATH` | Tier A config naming this node's store and keyring (default `./crewlet.yaml`): where the run reads the company's values, and where `-secret-store` records ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
-| `-api URL` | The node to read the company's values through and record into — a node that holds data, named from a `seats` node, a member of a cluster whose engine is stopped, or a machine that is not a node. Default: this node's engine when it runs, and the fleet's store itself when it is stopped ([Where a command reads the company's values](#where-a-command-reads-the-companys-values)). |
+| `-admin-token` | The provisioning credential: a top-level group **Owner** PAT with `api` scope on GitLab.com, or an administrator's PAT on a self-managed instance. Falls back to `$GITLAB_ADMIN_TOKEN` |
+| `-secret-store` / `-env-file PATH` / `-print` | Where a minted signing secret goes: exactly one, and there is no default |
+| `-public-url` | This deployment's public base URL; the webhook is registered at `<url>/webhooks/gitlab`. Overrides the Tier A webhook address. Omitted with no Tier A address, no hook is registered and the run says so |
+| `-rotate` | Mint a fresh webhook signing secret into the variable `signing_secret` names, wherever the hook is registered. A seat's token is rotated from the Agents tab |
+| `-dry-run` | Print the plan and touch nothing. It is the **same** plan the run uses |
+| `-config PATH` | Tier A config naming this node's store and keyring (default `./crewlet.yaml`) |
+| `-api URL` | The node to read the company's values through and record into |
 
-An account this run created is rolled back by revoking every token on it — nothing else has ever minted there. On an account that already existed, only the token this run minted is revoked: sweeping it would take an administrator's own token with no way to tell that it had. Both go through a detached context, because the failure is often the cancellation itself.
-
-See [GitLab Integration — Provisioning](../integrations/gitlab.md#provisioning) for the permission matrix and the full walkthrough.
+See [GitLab Integration: Provisioning](../integrations/gitlab.md#provisioning) for the permission matrix and the full walkthrough.
 
 ## `crewlet jira provision`
 
