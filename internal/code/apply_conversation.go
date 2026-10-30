@@ -113,7 +113,7 @@ func (a *Applier) applyChange(ctx context.Context, tx *sql.Tx, at applyContext) 
 	if err := touchConversation(ctx, tx, at, repoID, changeID, counts); err != nil {
 		return 0, err
 	}
-	return rows + 1, nil
+	return a.noticed(ctx, tx, at, repoID, payload, rows+1, nil)
 }
 
 // movesReadiness reports a record whose apply moves what the change's

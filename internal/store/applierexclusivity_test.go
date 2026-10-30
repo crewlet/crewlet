@@ -585,7 +585,8 @@ var allowedReplicatedWriter = []allowance{
 			"and findings — on the change's own subject, the compaction that " +
 			"retires a repository's packs for the outputs that replace them " +
 			"and the publication that replaces the top of its published layer " +
-			"chain, and the sweep of its retired packs past their grace.",
+			"chain, the sweep of its retired packs past their grace, and the " +
+			"notices a change record writes per recipient and a purge removes.",
 	},
 	{
 		Prefix: "internal/search/apply", Kind: mechanism,
@@ -658,8 +659,8 @@ var allowedReplicatedWriter = []allowance{
 	},
 
 	// -----------------------------------------------------------------
-	// THE EXCEPTIONS. Two writes that are not a record, each because no
-	// record could own what it touches. Read these before adding a third.
+	// THE EXCEPTIONS. Three writes that are not a record, each because no
+	// record could own what it touches. Read these before adding a fourth.
 	// -----------------------------------------------------------------
 	{
 		Prefix: "internal/tracker/duty.go", Kind: exception,
@@ -675,6 +676,15 @@ var allowedReplicatedWriter = []allowance{
 			"the identity claim, because what it holds depends on the " +
 			"epoch's own horizon. Two nodes legitimately hold different " +
 			"rows, so deleting on this node's own authority diverges nothing.",
+	},
+	{
+		Prefix: "internal/code/noticesweep.go", Kind: exception,
+		Why: "NoticeJobs range-deletes `code_notifications` past each " +
+			"recipient kind's horizon, and the table is statelog.Divergent " +
+			"for tracker_notifications' reason: whether a record writes a " +
+			"notice depends on the batch's instant and the epoch's inbox " +
+			"horizon, so two nodes legitimately hold different rows and " +
+			"deleting on this node's own authority diverges nothing.",
 	},
 }
 

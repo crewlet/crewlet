@@ -122,10 +122,14 @@ func (Domain) Evicts(payload []byte) (bool, error) {
 // scrub list, the identity claim and the local sweep are all derived from it,
 // so it is built from the exported inventories rather than typed a third time.
 //
-// ONE DIVERGENT TABLE, the operation ledger: it travels with the rows it
-// describes ([statelog.Domain.OpsTable]). The knowledge base has a second
-// (its skill flag, a build's parser's answer); nothing this domain writes is a
-// build's opinion.
+// TWO DIVERGENT TABLES. The operation ledger travels with the rows it
+// describes ([statelog.Domain.OpsTable]). And a change record's notices
+// (code_notifications, apply_notices.go) travel inside a snapshot but are
+// outside the identity claim: whether a record writes one depends on the
+// batch's instant and the inbox horizon its epoch states, which two nodes
+// applying one record need not share — the tracker's tracker_notifications'
+// reason. Nothing this domain writes is a build's opinion, as the knowledge
+// base's skill flag is.
 func (Domain) Tables() map[string]statelog.TableClass {
 	out := make(map[string]statelog.TableClass, len(ReproducibleTables)+len(MachineryTables))
 	for _, table := range ReproducibleTables {
@@ -137,6 +141,7 @@ func (Domain) Tables() map[string]statelog.TableClass {
 	// THE LEDGER TRAVELS — see [statelog.Domain.OpsTable] and
 	// [MachineryTables].
 	out[Domain{}.OpsTable()] = statelog.Divergent
+	out[NoticesTable] = statelog.Divergent
 	return out
 }
 

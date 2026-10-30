@@ -558,6 +558,9 @@ type changeDecision struct {
 	unchanged *changeRow
 	payload   any
 	version   int64
+	// notices is how many handles the record tells: the notice rows its
+	// apply writes beside the change's ([withinChange]).
+	notices int
 }
 
 // routeChange stamps the routing of the record d forms ([routingFor]) for p, its
@@ -596,7 +599,7 @@ func routeChange(ctx context.Context, tx *sql.Tx, p ChangeProposal, repo pushRep
 	if err != nil {
 		return changeDecision{}, err
 	}
-	d.payload = withRouting(d.payload, r)
+	d.payload, d.notices = withRouting(d.payload, r), heardCount(r)
 	return d, nil
 }
 
@@ -953,8 +956,8 @@ func fastForward(ref string) Command {
 // withinChange refuses a decision past a record's bytes or rows, which
 // [ChangeProposal.Validate]'s bounds keep from ever forming — the check makes
 // the invariant the record's own, as [withinRecord] does a push batch's.
-func withinChange(d statelog.Decision, p ChangeProposal) error {
-	switch rows := p.decidedRows(); {
+func withinChange(d statelog.Decision, p ChangeProposal, notices int) error {
+	switch rows := p.decidedRows() + notices; {
 	case len(d.Payload) > MaxRecordBytes:
 		return fmt.Errorf("%w: %d bytes, past MaxRecordBytes (%d)", ErrRecordCap, len(d.Payload), MaxRecordBytes)
 	case rows > MaxRecordRows:
@@ -1012,7 +1015,7 @@ func (c *Committer) change(repoID string, q *queued) {
 			if err != nil {
 				return statelog.Decision{}, err
 			}
-			if err := withinChange(decision, p); err != nil {
+			if err := withinChange(decision, p, d.notices); err != nil {
 				return statelog.Decision{}, err
 			}
 			decision.Version = d.version

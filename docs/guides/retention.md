@@ -2098,6 +2098,24 @@ told about in 2024" is still a `work_activity` question at any age. A month is
 the floor because below it an inbox stops being one — somebody away for four
 weeks would come back to nothing.
 
+A change's **notices** — one row per recipient of every record about a
+[change](../concepts/code-host.md#who-a-change-wakes): a review asked of
+somebody, a change of theirs merged or ready, a mention — keep two horizons.
+A person's are that inbox's, `inbox.retention_days`. A seat's are kept **30
+days**, the horizon of a turn's own detail in the event log: a seat is woken
+through the code log, never from its row, so past the turn the wake started
+the row names a delivery nothing can show any more — and seats are most of a
+change's audience, so a year of their rows would be most of the table for
+nothing. Each node sweeps its own rows of each kind in the ordinary
+maintenance tick (`code_notifications`, `code_notifications_agents`): what a
+node holds is its own applier's — the rows a record writes depend on when the
+node applied it and the horizon its company stated — so no two nodes need to
+agree, and none is deleted by another. The applier writes no notice older
+than its recipient's horizon when it applies the record, so a node that
+replays the code log from far back rebuilds none the sweep would delete; and
+a repository's [purge](#a-repository) removes its changes' notices with its
+changes.
+
 ## The storage forecast
 
 For the reference company (100 000 tasks a year, 300 000 comments, 1 000 edits

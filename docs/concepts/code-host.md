@@ -4585,6 +4585,13 @@ record.
   [mergeability](#mergeability) record — its home's merge, or the refresh
   that follows any readiness input that moved — is the one that announces it,
   where the answer it stores goes from not ready to ready.
+- **Every recipient is a row**: the record's applier writes one notice a
+  handle it tells, on every data node — a person's inbox reads them, a
+  change's page says whom its records reached, and each committed batch tells
+  the dashboards watching an inbox that it moved. A person's notice is kept
+  the company's `inbox.retention_days`, a seat's 30 days
+  ([Retention](../guides/retention.md#old-data-is-not-cold-data)); a seat is
+  woken from the record itself, never from its row.
 - **Each role is bounded**: at most 32 mentions, 32 reviewers asked, and 64
   of the authors, the participants, a thread's participants or the raisers an
   answer replies to, each read in its key's order — a change whose audience

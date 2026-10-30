@@ -66,6 +66,10 @@ func TestTheEngineSweepsEveryShortHorizonTable(t *testing.T) {
 		// applier, the trash through the trash reaper) rather than a local
 		// delete.
 		"artifacts_ops",
+		// THE CODE LOG'S NOTICES, a person's and a seat's, each kind its
+		// own horizon: per node, because the table is divergent.
+		"code_notifications",
+		"code_notifications_agents",
 		// THE CODE LOG'S, a per-node job for the reason pages_ops gives
 		// below.
 		"code_ops",

@@ -344,6 +344,19 @@ func Concerns(routings []*ChangeRouting) []Concern {
 // code reason is news to its own actor.
 func (c Concern) Hears() bool { return c.Candidate.Hears(c.Change.Actor, nil) }
 
+// heardCount is how many handles routings tell — the notice rows their
+// record's apply may write ([Applier.writeNotices]), which every decide
+// counts with the record's rows.
+func heardCount(routings ...*ChangeRouting) int {
+	n := 0
+	for _, c := range Concerns(routings) {
+		if c.Hears() {
+			n++
+		}
+	}
+	return n
+}
+
 // Candidates is every handle rec concerns ([Concerns] over its routings) — none
 // for a record of no change.
 func Candidates(rec MutationRecord) ([]Concern, error) {

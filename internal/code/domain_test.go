@@ -362,10 +362,12 @@ func TestOnlyTheGateKindsStopTheApplier(t *testing.T) {
 	}
 }
 
-// EVERY TABLE THE APPLIER WRITES IS CLASSIFIED, with exactly ONE divergent
-// table — the operation ledger, whose applied_at is each node's own clock —
-// because nothing this domain writes is a build's opinion: every other table
-// is inside the identity claim or the claim means nothing.
+// EVERY TABLE THE APPLIER WRITES IS CLASSIFIED, with exactly TWO divergent
+// tables — the operation ledger, whose applied_at is each node's own clock, and
+// a change record's notices, whose rows depend on the batch's instant and the
+// epoch's inbox horizon — because nothing this domain writes is a build's
+// opinion: every other table is inside the identity claim or the claim means
+// nothing.
 func TestEveryTableTheApplierWritesIsClassified(t *testing.T) {
 	t.Parallel()
 	d := code.Domain{}
@@ -382,16 +384,16 @@ func TestEveryTableTheApplierWritesIsClassified(t *testing.T) {
 		}
 	}
 	slices.Sort(divergent)
-	if len(divergent) != 1 || divergent[0] != d.OpsTable() {
-		t.Fatalf("the divergent tables are %v, want the operation ledger alone", divergent)
+	if want := []string{code.NoticesTable, d.OpsTable()}; !slices.Equal(divergent, want) {
+		t.Fatalf("the divergent tables are %v, want the notices and the operation ledger, %v", divergent, want)
 	}
 	for _, name := range []string{d.DeferredTable(), d.ScopeIndex(), d.OpsTable()} {
 		if _, held := tables[name]; !held {
 			t.Errorf("%s is named by the domain and is not in its own table map", name)
 		}
 	}
-	if len(tables) != len(code.ReproducibleTables)+len(code.MachineryTables) {
-		t.Errorf("the domain classifies %d tables and its inventories name %d", len(tables),
+	if len(tables) != len(code.ReproducibleTables)+len(code.MachineryTables)+1 {
+		t.Errorf("the domain classifies %d tables and its inventories name %d and its notices", len(tables),
 			len(code.ReproducibleTables)+len(code.MachineryTables))
 	}
 }

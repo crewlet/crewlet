@@ -586,8 +586,14 @@ func register() []registration {
 			// protections, refs, packs and pushes as rows only its applier
 			// writes, a pack's bytes one object a push in the object store.
 			Domain: code.Domain{},
-			NewApplier: func(*stateLog) (statelog.Applier, error) {
-				return code.NewApplier(), nil
+			// A CHANGE'S NEWS IS A PERSON'S TOO: a review asked of them, a
+			// change of theirs merged or ready. The applier writes a notice
+			// per recipient (code_notifications) and says, after each
+			// committed batch, whose inbox it moved — the tracker's reason
+			// for the mark, one source of the relay's each.
+			Inbox: true,
+			NewApplier: func(s *stateLog) (statelog.Applier, error) {
+				return code.NewApplier(s.inboxFor(code.Domain{})), nil
 			},
 			NewSeams: func(s *stateLog, spec statelog.StreamSpec, appendTo *jetstream.DomainLog,
 				runner *statelog.Runner) (writeSeams, error) {

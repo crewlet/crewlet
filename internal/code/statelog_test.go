@@ -28,7 +28,7 @@ func TestTheCodeDomainPassesTheStateLogSuite(t *testing.T) {
 	statelogtest.Run(t, func(t *testing.T) statelogtest.Candidate {
 		return statelogtest.Candidate{
 			Domain:  code.Domain{},
-			Applier: code.NewApplier(),
+			Applier: code.NewApplier(nil),
 			// Migrate is nil: the tables ship in the replicated estate's
 			// own migration, so the suite proves the schema that ships.
 			Encode: encodeSuiteRecord,
@@ -285,7 +285,7 @@ func TestTheCodeGateReaderKeepsTheSharedRule(t *testing.T) {
 		return statelogtest.GateCandidate{
 			Candidate: statelogtest.Candidate{
 				Domain:  code.Domain{},
-				Applier: code.NewApplier(),
+				Applier: code.NewApplier(nil),
 				Encode:  encodeSuiteRecord,
 				Kinds:   suiteKinds(),
 			},

@@ -511,7 +511,7 @@ func BenchmarkApplyAPushRecord(b *testing.B) {
 		removal := shape.name == "removal"
 		b.Run(shape.name, func(b *testing.B) {
 			e := openApplyEstate(b)
-			a := NewApplier()
+			a := NewApplier(nil)
 			b.ReportAllocs()
 			b.ResetTimer()
 			b.StopTimer()
@@ -661,7 +661,7 @@ func BenchmarkApplyAPurgePart(b *testing.B) {
 	} {
 		b.Run(shape.name, func(b *testing.B) {
 			e := openApplyEstate(b)
-			a := NewApplier()
+			a := NewApplier(nil)
 			b.ReportAllocs()
 			b.ResetTimer()
 			b.StopTimer()
@@ -705,7 +705,7 @@ func BenchmarkApplyARetireSweep(b *testing.B) {
 	for _, rows := range []int{8, RetireSweepRows} {
 		b.Run(fmt.Sprint("rows=", rows), func(b *testing.B) {
 			e := openApplyEstate(b)
-			a := NewApplier()
+			a := NewApplier(nil)
 			b.ReportAllocs()
 			b.ResetTimer()
 			b.StopTimer()
@@ -864,7 +864,7 @@ func BenchmarkApplyACheckRecord(b *testing.B) {
 	} {
 		b.Run(arm.name, func(b *testing.B) {
 			e := openApplyEstate(b)
-			a := NewApplier()
+			a := NewApplier(nil)
 			b.ReportAllocs()
 			b.ResetTimer()
 			b.StopTimer()
@@ -957,7 +957,7 @@ func BenchmarkApplyACompaction(b *testing.B) {
 		outputs := min(arm.inputs, MaxCompactOutputs)
 		b.Run(arm.name, func(b *testing.B) {
 			e := openApplyEstate(b)
-			a := NewApplier()
+			a := NewApplier(nil)
 			b.ReportAllocs()
 			b.ResetTimer()
 			b.StopTimer()
@@ -1004,7 +1004,7 @@ func BenchmarkApplyACompaction(b *testing.B) {
 	}
 	b.Run("expunge/begin", func(b *testing.B) {
 		e := openApplyEstate(b)
-		a := NewApplier()
+		a := NewApplier(nil)
 		b.ReportAllocs()
 		b.ResetTimer()
 		b.StopTimer()
@@ -1026,7 +1026,7 @@ func BenchmarkApplyACompaction(b *testing.B) {
 	})
 	b.Run("expunge/commit", func(b *testing.B) {
 		e := openApplyEstate(b)
-		a := NewApplier()
+		a := NewApplier(nil)
 		b.ReportAllocs()
 		b.ResetTimer()
 		b.StopTimer()

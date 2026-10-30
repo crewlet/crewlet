@@ -117,7 +117,7 @@ func (e *estate) applyRows(b built) (int, error) {
 		Position: statelog.Position{Stream: topics.CodeLogStream, Generation: 1, Seq: e.next},
 	}
 	e.next++
-	a := NewApplier()
+	a := NewApplier(nil)
 	var rows int
 	err = e.db.Tx(ctx, func(tx *sql.Tx) error {
 		if _, gated, err := a.Gated(ctx, tx, r); err != nil || gated {
@@ -164,7 +164,7 @@ func (e *estate) gated(b built) statelog.Reason {
 	if err := e.db.Tx(ctx, func(tx *sql.Tx) error {
 		var gated bool
 		var err error
-		reason, gated, err = NewApplier().Gated(ctx, tx, r)
+		reason, gated, err = NewApplier(nil).Gated(ctx, tx, r)
 		if !gated {
 			reason = ""
 		}

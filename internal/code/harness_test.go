@@ -232,7 +232,7 @@ func nodeOn(t testing.TB, log *js.DomainLog, id string) *node {
 		t.Fatalf("build the read authority: %v", err)
 	}
 	n := &node{
-		t: t, id: id, db: db, log: log, records: records, applier: code.NewApplier(), pub: pub,
+		t: t, id: id, db: db, log: log, records: records, applier: code.NewApplier(nil), pub: pub,
 		waiter: waiter, authority: authority, scratch: code.ScratchOf(config.Code{}),
 	}
 	// THE LIFECYCLE STORE, deciding a tool's request by this node's chart,

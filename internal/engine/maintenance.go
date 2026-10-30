@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/a2a"
 	"github.com/crewlet/crewlet/internal/agent/ledger/ledgerstore"
+	"github.com/crewlet/crewlet/internal/code"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/learning"
 	"github.com/crewlet/crewlet/internal/maintenance"
@@ -195,6 +196,14 @@ func (e *Engine) maintenanceJobs() []maintenance.Job {
 			// singleton, because each node owns its own copy — see
 			// [maintenance.StatelogJobs].
 			jobs = append(jobs, maintenance.StatelogJobs(core.log.opsLedgers())...)
+			// AND THE CODE LOG'S NOTICES, the core's too: every data node
+			// applies the code log whatever the company runs, and its
+			// applier writes a notice per recipient of every routed record
+			// into a DIVERGENT table — each node's own rows, so each node
+			// sweeps them, a person's at the company's inbox horizon asked
+			// at every sweep as the tracker's is, a seat's at the
+			// turn-detail horizon (code.NoticeJobs).
+			jobs = append(jobs, code.NoticeJobs(e.backends.Store.Replicated(), e.inboxRetention)...)
 			// THE KNOWLEDGE BASE HAS NO SWEEP ANY MORE, and its absence
 			// is a consequence rather than an omission. Its three passes
 			// were a change retention, a revision prune and an orphan

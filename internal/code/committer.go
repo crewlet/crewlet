@@ -1045,13 +1045,14 @@ func (c *Committer) commit(repoID string, batch []*queued) []*queued {
 // withinRecord refuses a decision past a record's bytes or rows, which the
 // batching and the decide's admission of each entry keep from ever forming —
 // the check makes the invariant the record's own rather than the batcher's.
-// Rows are counted as the decide admitted them: each entry's [entryRows], and
+// Rows are counted as the decide admitted them: each entry's [entryRows] and
+// the notices its routings make the apply write ([noticeRows]), and
 // changeRows, what its apply writes about the live changes the entries move
 // ([changeBook]).
 func withinRecord(d statelog.Decision, entries []PushEntry, changeRows int) error {
 	rows := changeRows
 	for _, e := range entries {
-		rows += entryRows(e)
+		rows += entryRows(e) + noticeRows(e.Routing)
 	}
 	switch {
 	case len(d.Payload) > MaxRecordBytes:

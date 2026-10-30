@@ -100,13 +100,13 @@ type wideCut struct {
 // it keeps. A part whose push rows reached the bound takes no change; it
 // advanced by those.
 func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
-	weighed int64) (int, int64, error) {
+	weighed int64) (int, int64, []string, error) {
 	if weighed >= PurgePartBytes {
-		return 0, weighed, nil
+		return 0, weighed, nil, nil
 	}
 	rows, err := tx.QueryContext(ctx, purgeChangeWalkSQL, repoID, budget)
 	if err != nil {
-		return 0, 0, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+		return 0, 0, nil, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
 	}
 	var whole []string
 	left := budget
@@ -118,7 +118,7 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 			&c.participants, &c.findings, &c.comments, &c.findingTexts, &c.reviews, &c.facts, &c.body,
 			&c.mergeability, &c.conversation); err != nil {
 			_ = rows.Close()
-			return 0, 0, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+			return 0, 0, nil, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
 		}
 		switch {
 		case c.rows() > left:
@@ -139,7 +139,7 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
-		return 0, 0, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
+		return 0, 0, nil, fmt.Errorf("code: read %s's changes to purge: %w", repoID, err)
 	}
 	_ = rows.Close()
 
@@ -147,7 +147,7 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 	if len(whole) > 0 {
 		list, err := jsonList(whole)
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 		for _, stmt := range []string{purgeChangeRevisionsSQL, purgeChangeAuthorsSQL, purgeChangeReviewersSQL,
 			purgeChangeParticipantsSQL, purgeChangeFindingsSQL, purgeChangeCommentsSQL, purgeChangeFindingTextsSQL,
@@ -155,14 +155,14 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 			purgeChangeConversationsSQL, purgeChangeRowsSQL} {
 			res, err := tx.ExecContext(ctx, stmt, list)
 			if err != nil {
-				return 0, 0, fmt.Errorf("code: purge %s's changes: %w", repoID, err)
+				return 0, 0, nil, fmt.Errorf("code: purge %s's changes: %w", repoID, err)
 			}
 			n, _ := res.RowsAffected()
 			deleted += int(n)
 		}
 	}
 	if cut.id == "" {
-		return deleted, weighed, nil
+		return deleted, weighed, whole, nil
 	}
 	// THE CUT CHANGE needs more than is left — of the rows, or of the bytes
 	// its conversation's text needs — so its body, its mergeability and its
@@ -175,7 +175,7 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 			}
 			res, err := tx.ExecContext(ctx, stmt, cut.id, left)
 			if err != nil {
-				return 0, 0, fmt.Errorf("code: purge change %s of %s: %w", cut.id, repoID, err)
+				return 0, 0, nil, fmt.Errorf("code: purge change %s of %s: %w", cut.id, repoID, err)
 			}
 			n, _ := res.RowsAffected()
 			deleted += int(n)
@@ -189,27 +189,27 @@ func purgeChanges(ctx context.Context, tx *sql.Tx, repoID string, budget int,
 	wide := wideCut{left: left, weighed: weighed}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutCommentWidthsSQL, purgeCutCommentsSQL, cut.id,
 		wide); err != nil {
-		return 0, 0, fmt.Errorf("code: purge change %s's comments of %s: %w", cut.id, repoID, err)
+		return 0, 0, nil, fmt.Errorf("code: purge change %s's comments of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutFindingTextWidthsSQL, purgeCutFindingTextsSQL, cut.id,
 		wide); err != nil {
-		return 0, 0, fmt.Errorf("code: purge change %s's findings' texts of %s: %w", cut.id, repoID, err)
+		return 0, 0, nil, fmt.Errorf("code: purge change %s's findings' texts of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutReviewWidthsSQL, purgeCutReviewsSQL, cut.id,
 		wide); err != nil {
-		return 0, 0, fmt.Errorf("code: purge change %s's reviews of %s: %w", cut.id, repoID, err)
+		return 0, 0, nil, fmt.Errorf("code: purge change %s's reviews of %s: %w", cut.id, repoID, err)
 	}
 	if wide, err = purgeCutWide(ctx, tx, purgeCutFactWidthsSQL, purgeCutFactsSQL, cut.id, wide); err != nil {
-		return 0, 0, fmt.Errorf("code: purge change %s's revisions' facts of %s: %w", cut.id, repoID, err)
+		return 0, 0, nil, fmt.Errorf("code: purge change %s's revisions' facts of %s: %w", cut.id, repoID, err)
 	}
 	deleted += wide.deleted
 	if wide.freed > 0 {
 		if _, err := tx.ExecContext(ctx, unweighConversationSQL, wide.freed, cut.id); err != nil {
-			return 0, 0, fmt.Errorf("code: weigh change %s's conversation again: %w", cut.id, err)
+			return 0, 0, nil, fmt.Errorf("code: weigh change %s's conversation again: %w", cut.id, err)
 		}
 		deleted++
 	}
-	return deleted, wide.weighed, nil
+	return deleted, wide.weighed, whole, nil
 }
 
 // purgeCutWide deletes a cut change's rows of one wide table — widthsSQL its

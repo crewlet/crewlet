@@ -623,7 +623,8 @@ func decideBatch(ctx context.Context, tx *sql.Tx, repoID string, batch []Proposa
 		if routeErr != nil {
 			return nil, nil, 0, 0, routeErr
 		}
-		fits, rest, fitErr := room.fit(i, len(entries) == 0, routings)
+		fits, rest, fitErr := room.fit(i, len(entries) == 0, routings,
+			MaxRecordRows-recordRows(rows+own+book.rowCount()))
 		if fitErr != nil {
 			return nil, nil, 0, 0, fitErr
 		}

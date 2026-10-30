@@ -47,8 +47,9 @@ type routingRoom struct {
 	// that routes nothing measures nothing.
 	bounds   int
 	measured bool
-	// used is the bytes the routings of the entries admitted so far take.
-	used int
+	// used is the bytes the routings of the entries admitted so far take,
+	// and notices the notice rows they make the record's apply write.
+	used, notices int
 
 	// next is the repository's next change number, read the first time an
 	// entry opens one; numbers the number each change an admitted entry
@@ -122,13 +123,17 @@ func (r *routingRoom) route(ctx context.Context, tx *sql.Tx, b *changeBook, e Pu
 // fit admits the routings of the round's i-th proposal's entry, first where it
 // leads its record, and answers whether it may be kept, and whether every
 // entry after it must be carried — this file's head: kept where the routings
-// fit beside every proposal the round decides; carried where they do not and
-// another entry leads the record; and, leading it, kept with the routings that
-// fit beside its own bytes, every later entry carried.
-func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting) (fits, rest bool, err error) {
+// fit beside every proposal the round decides, and their notices within
+// rowsLeft — the rows the record's entries and changes leave of its bound;
+// carried where they do not and another entry leads the record; and, leading
+// it, kept with the routings that fit beside its own bytes and within
+// rowsLeft, every later entry carried.
+func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting, rowsLeft int) (fits, rest bool,
+	err error) {
+
 	r.kept = routings
 	if len(routings) == 0 {
-		r.admit(0)
+		r.admit(0, 0)
 		return true, false, nil
 	}
 	whole := MaxRecordBytes - recordOverheadBytes
@@ -146,8 +151,9 @@ func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting) (fits, re
 	if err != nil {
 		return false, false, err
 	}
-	if r.bounds+r.used+size <= whole {
-		r.admit(size)
+	notices := noticeRows(routings)
+	if r.bounds+r.used+size <= whole && r.notices+notices <= rowsLeft {
+		r.admit(size, notices)
 		return true, false, nil
 	}
 	if !first {
@@ -157,21 +163,33 @@ func (r *routingRoom) fit(i int, first bool, routings []ChangeRouting) (fits, re
 	if err != nil {
 		return false, false, fmt.Errorf("code: measure push %s's entry: %w", r.batch[i].PushID, err)
 	}
-	for len(routings) > 0 && bound+size > whole {
+	for len(routings) > 0 && (bound+size > whole || r.notices+notices > rowsLeft) {
 		routings = routings[:len(routings)-1]
 		if size, err = routingBytes(routings); err != nil {
 			return false, false, err
 		}
+		notices = noticeRows(routings)
 	}
 	r.kept = routings
-	r.admit(size)
+	r.admit(size, notices)
 	return true, true, nil
 }
 
-// admit counts an admitted entry's routings, size bytes, and the number of the
-// change it opened.
-func (r *routingRoom) admit(size int) {
+// noticeRows is the notice rows routings make an apply write: one a handle
+// they tell.
+func noticeRows(routings []ChangeRouting) int {
+	pointers := make([]*ChangeRouting, len(routings))
+	for i := range routings {
+		pointers[i] = &routings[i]
+	}
+	return heardCount(pointers...)
+}
+
+// admit counts an admitted entry's routings, size bytes and notices rows, and
+// the number of the change it opened.
+func (r *routingRoom) admit(size, notices int) {
 	r.used += size
+	r.notices += notices
 	if r.pending == "" {
 		return
 	}

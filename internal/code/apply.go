@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/inbox"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -44,15 +45,42 @@ import (
 // omission ([statelog.Applier]): an applier that could read which node it runs
 // on could write rows its peers do not. The eviction gate needs none — it
 // compares the record's own [statelog.Record.Writer] with the eviction rows.
-type Applier struct{}
+// What it does hold of its node is a LISTENER, told after a commit whose
+// notices moved somebody's inbox on this node (internal/inbox's movement.go),
+// and a listener writes no row.
+type Applier struct {
+	// moved is told, after a committed batch, whose inbox moved on this
+	// node. Nil is legal and means nobody is listening.
+	moved func([]inbox.Movement)
 
-// NewApplier builds the code host's applier.
-func NewApplier() *Applier { return &Applier{} }
+	// inboxed is the notices the batch wrote or removed, filled inside Apply
+	// and drained by Committed — see [inbox.Batch] for why it holds no lock.
+	inboxed inbox.Batch
+}
 
-// Committed is the post-commit half, and it has nothing to do: no record of
-// this domain wakes anybody and no cache is told to sync — a git node's cache
-// converges by reading the rows when it is asked for them.
-func (*Applier) Committed(context.Context) {}
+// NewApplier builds the code host's applier for one node.
+//
+// moved is called after a COMMITTED batch with every inbox that batch's
+// notices moved (apply_notices.go), each movement naming this domain as its
+// source. After the commit and never inside the transaction: the store re-runs
+// the body of an attempt that failed transiently, and a movement announced
+// from inside it would announce a notice no row holds.
+func NewApplier(moved func([]inbox.Movement)) *Applier { return &Applier{moved: moved} }
+
+// Committed is the post-commit half: telling THIS node's open dashboards whose
+// inbox the batch's notices moved — the one consequence of a code record no
+// other node needs. Every data node applies every record, and only a data node
+// serves dashboards, so each tells its own. A seat's wake is derived from the
+// code log's feed, never from here, and no cache is told to sync — a git
+// node's cache converges by reading the rows when it is asked for them.
+func (a *Applier) Committed(context.Context) {
+	// RESET BEFORE THE CALL, not after: the listener may take long enough
+	// for the next batch to be waiting behind it.
+	moved := a.inboxed.Drain(Domain{}.Name())
+	if len(moved) > 0 && a.moved != nil {
+		a.moved(moved)
+	}
+}
 
 // Gated reports a record that must produce no rows at all — read from this
 // same transaction, because the answer has to come from the state the record
@@ -131,6 +159,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		position:     rec.Position,
 		packed:       rec.Position.Packed(),
 		brokerAt:     opts.StoredAt,
+		now:          opts.Now,
+		epoch:        opts.Epoch,
 		maxVariables: opts.MaxVariables,
 	}
 	switch ObjectKind(rec.Subject.Kind) {
@@ -186,6 +216,13 @@ type applyContext struct {
 	// brokerAt is the broker's own instant for this record, and the ONLY
 	// instant this domain writes from a record's own apply.
 	brokerAt time.Time
+
+	// now is the batch's instant and epoch the company's settings the batch
+	// is applied under: what a notice's horizon is judged by — the one
+	// DIVERGENT table this domain's records write (apply_notices.go), and
+	// nothing else this applier writes reads either.
+	now   time.Time
+	epoch map[string]any
 
 	// maxVariables is the engine's probed bind-parameter limit, which sizes
 	// a multi-row INSERT and decides nothing about which rows land.
@@ -555,7 +592,8 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	}
 	switch p := payload.(type) {
 	case PushBatch:
-		return a.applyPush(ctx, tx, at, p)
+		n, err := a.applyPush(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case SettingsRecord:
 		return a.applySettings(ctx, tx, at, p, row)
 	case LifecycleRecord:
@@ -578,11 +616,30 @@ func (a *Applier) applyRepo(ctx context.Context, tx *sql.Tx, at applyContext) (i
 	case ExpungeCommit:
 		return a.applyExpungeCommit(ctx, tx, at, p)
 	case ChangeOpen:
-		return a.applyChangeOpen(ctx, tx, at, p)
+		n, err := a.applyChangeOpen(ctx, tx, at, p)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	case ChangeEdit, ChangeDraft, ChangeRetarget, ChangeClose, ChangeReopen, ChangeLanded:
-		return a.applyChangeWrite(ctx, tx, at, payload)
+		n, err := a.applyChangeWrite(ctx, tx, at, payload)
+		return a.noticed(ctx, tx, at, id, payload, n, err)
 	}
 	return 0, fmt.Errorf("code: the record at %s carries a %T", at.position, payload)
+}
+
+// noticed is a record about changes applied, n rows, with its notices written
+// beside them ([Applier.writeNotices]) — none where its apply wrote nothing: a
+// redelivery, or a guard's skip, whose notices the record's first apply wrote
+// or no change holds.
+func (a *Applier) noticed(ctx context.Context, tx *sql.Tx, at applyContext, repoID string, payload any, n int,
+	err error) (int, error) {
+
+	if err != nil || n == 0 {
+		return n, err
+	}
+	written, err := a.writeNotices(ctx, tx, at, repoID, payload)
+	if err != nil {
+		return 0, err
+	}
+	return n + written, nil
 }
 
 // versionRow is what the version guard reads of a repository.

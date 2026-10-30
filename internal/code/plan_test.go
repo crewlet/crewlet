@@ -719,6 +719,18 @@ func registeredStatements() map[string]statement {
 			[]string{participantKey + " (change_id=?)"}},
 		"thread participants": {threadParticipantsSQL, []any{"repo-1-change-000001", "comment-1",
 			threadParticipantRows}, []string{"code_comments_thread_idx (change_id=? AND thread_id=?)"}},
+		// WHOM A RECORD REACHED (apply_notices.go, noticesweep.go): the notices of a list
+		// of changes a purge removes, read and deleted by the change index
+		// one seek an element; a kind's sweep, a range of the swept index;
+		// and the changes a repository still holds, for its final purge.
+		"notices of changes": {noticesOfChangesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", "code_notifications_change_idx (change_id=?)"}},
+		"remove notices": {removeNoticesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
+			[]string{"SCAN json_each AS j", "code_notifications_change_idx (change_id=?)",
+				"INTEGER PRIMARY KEY (rowid=?)"}},
+		"sweep notices": {sweepNoticesSQL, []any{string(PartyAgent), 3000},
+			[]string{"code_notifications_swept_idx (recipient_kind=? AND created_at<?)"}},
+		"purged changes": {purgedChangesSQL, []any{"repo-1"}, []string{"code_changes_number_idx (repo_id=?)"}},
 		"supersede findings": {supersedeFindingsSQL, []any{string(FindingSuperseded), "seat-0", "agent", 3000,
 			`["finding-1","finding-2"]`}, []string{"SCAN json_each AS j", findingKey + " (id=?)",
 			"INTEGER PRIMARY KEY (rowid=?)"}},
@@ -1092,6 +1104,11 @@ func claimedReads() map[string]statement {
 			WHERE search = ? AND status IN ('active', 'archived') AND name > ? ORDER BY name LIMIT ?`,
 			[]any{string(SearchIndexed), "", MaxSnapshotItems},
 			[]string{"code_repos_search_idx (search=? AND name>?)"}},
+		// A PERSON'S CODE INBOX (replicated 0079), newest first: the
+		// composed inbox's code half reads it.
+		"code_notifications_inbox_idx": {`SELECT record_id FROM code_notifications
+			WHERE recipient = ? ORDER BY log_seq DESC LIMIT ?`, []any{"founder", 50},
+			[]string{"code_notifications_inbox_idx (recipient=?)"}},
 	}
 }
 

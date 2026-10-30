@@ -219,7 +219,7 @@ func (d *DataNode) start(t testing.TB, q *js.Queue) *dataIncarnation {
 	if err != nil {
 		t.Fatalf("codetest: %s: build the record verifier: %v", d.o.ID, err)
 	}
-	var applier statelog.Applier = code.NewApplier()
+	var applier statelog.Applier = code.NewApplier(nil)
 	if d.o.WrapApplier != nil {
 		applier = d.o.WrapApplier(applier)
 	}

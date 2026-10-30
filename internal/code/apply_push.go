@@ -959,13 +959,21 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 		budget -= int(n)
 	}
 	if budget > 0 {
-		n, w, err := purgeChanges(ctx, tx, p.RepoID, budget, weighed)
+		n, w, whole, err := purgeChanges(ctx, tx, p.RepoID, budget, weighed)
 		if err != nil {
 			return 0, err
 		}
 		deleted += n
 		budget -= n
 		weighed = w
+		// AND THEIR NOTICES, which no part counts: the table is divergent,
+		// and the part's count decides which replicated rows go
+		// (apply_notices.go).
+		removed, err := a.removeNotices(ctx, tx, whole)
+		if err != nil {
+			return 0, err
+		}
+		deleted += removed
 	}
 	if budget > 0 {
 		n, err := purgeChecks(ctx, tx, p.RepoID, budget, weighed)
@@ -1014,7 +1022,16 @@ func (a *Applier) applyPurgePart(ctx context.Context, tx *sql.Tx, at applyContex
 // whole. The collector takes the parts' objects at its first pass after this
 // record, since a derived row keeps its object only while it stands.
 func (a *Applier) applyPurge(ctx context.Context, tx *sql.Tx, at applyContext, p Purge) (int, error) {
-	deleted := 0
+	// THE NOTICES OF THE CHANGES THE PURGE STILL FINDS, before their rows
+	// go: the only way to them from the repository is its changes.
+	remaining, err := changesOf(ctx, tx, p.RepoID)
+	if err != nil {
+		return 0, fmt.Errorf("code: read %s's remaining changes at %s: %w", p.RepoID, at.position, err)
+	}
+	deleted, err := a.removeNotices(ctx, tx, remaining)
+	if err != nil {
+		return 0, err
+	}
 	for _, stmt := range []string{
 		purgeAllPushesSQL, purgeAllRefsSQL, purgeAllPacksSQL, purgeAllRetiredSQL, purgeAllDropsSQL,
 		purgeAllRevisionsSQL, purgeAllAuthorsSQL, purgeAllReviewersSQL, purgeAllParticipantsSQL,
