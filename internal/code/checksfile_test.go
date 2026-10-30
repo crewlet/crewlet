@@ -281,8 +281,9 @@ checks:
 // And the cells are the sandbox's own placements that need a backend, less
 // direct, BOTH WAYS, so a placement the sandbox adds is a decision here.
 //
-// Mutation: drop direct from refusedCells and it is refused as an unknown
-// value with no reason — red; add direct to CheckCells and it parses — red.
+// Mutation: drop direct from config.CodeCheckCellRefusal and it is refused as
+// an unknown value with no reason — red; add direct to config.CodeCheckCells
+// and it parses — red.
 func TestADirectCheckIsRefused(t *testing.T) {
 	t.Parallel()
 	for cell, why := range map[string]string{"direct": "engine host", "self": "executor box"} {

@@ -226,7 +226,7 @@ func (d CodeDeps) runRepo(ctx context.Context, turn *turnctx.Turn, c codeCaller,
 	}
 	out := sandbox.RunRepo{Repo: current.Name, RepoID: current.ID, Base: base, Branch: branch, Access: access,
 		Paths: paths}
-	if err := out.Validate(); err != nil {
+	if err := out.ValidateFor(sandbox.CloneCoding); err != nil {
 		r := failed(fmt.Sprintf("%s: repository %q cannot be given to a run as named: %v.", tool, repo.Name,
 			err))
 		return sandbox.RunRepo{}, statelog.Position{}, &r

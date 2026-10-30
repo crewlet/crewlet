@@ -89,6 +89,9 @@
     "Code": {
       "additionalProperties": false,
       "properties": {
+        "checks": {
+          "$ref": "#/$defs/CodeChecks"
+        },
         "deleted_retention_days": {
           "description": "How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7.",
           "maximum": 365,
@@ -150,6 +153,64 @@
         },
         "scratch": {
           "$ref": "#/$defs/CodeScratch"
+        }
+      },
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "CodeChecks": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_run_in": {
+          "description": "The cells a repository's checks file may name in a check's run_in, each once: container or e2b. Unset is the one run_in resolves to; set, it holds that one.",
+          "items": {
+            "enum": [
+              "container",
+              "e2b",
+              "",
+              null
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ],
+            "x-crewlet-secret": true
+          },
+          "description": "The secrets a check may be given: a check is given exactly the entries its checks file names in its env. Each key a variable name — a letter or an underscore, then letters, digits and underscores, at most 128 bytes — and none the engine sets in a box itself. ${VAR} supported, resolved when a check's box is made.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "max_timeout_seconds": {
+          "description": "How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — an e2b box on the smallest plan's one-hour session, with ten minutes of it for the box's setup.",
+          "maximum": 21600,
+          "minimum": 60,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "run_in": {
+          "description": "The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct and self are refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host, and self is a seat's own executor box, which no check has.",
+          "enum": [
+            "container",
+            "e2b",
+            "",
+            null
+          ]
         }
       },
       "type": [
@@ -1880,7 +1941,7 @@
       "additionalProperties": false,
       "properties": {
         "image": {
-          "description": "Container image with the coding-agent CLI installed. Required for run_in: container.",
+          "description": "Container image: with the coding-agent CLI installed for a seat's box, and git 2.40 or newer and what its checks build with for a check's. Required where a seat or a check runs in a container.",
           "type": [
             "string",
             "number",

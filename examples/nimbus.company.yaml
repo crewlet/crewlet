@@ -598,6 +598,11 @@ knowledge:
 # ``scratch`` is left unset: a seat's own repositories, ``<handle>.<slug>``,
 # which only its tools make, are at most 50 a seat (``max_per_seat``) and
 # deleted once idle for 7 days (``idle_days``) unless a live turn holds one.
+# ``checks`` is left unset too, and so the checks a repository defines in its
+# ``.crewlet/checks.yaml`` run in no box here: a check runs a change's own
+# code, so never in this catalogue's ``direct`` cell, and only in a
+# ``container`` or an ``e2b`` box — ``checks.run_in`` names one once the
+# catalogue configures it (an image, or ``e2b:``).
 #
 # ``identity_domain`` is the domain a commit the engine builds through a tool
 # spells its addresses in: its committer, ``Crewlet <engine@example.com>``,

@@ -128,7 +128,7 @@ func TestTheContainerRunsAsWhoeverCanManageTheMount(t *testing.T) {
 				opts: LocalOptions{Placement: Container, Image: "img"},
 				cli:  containerCLI{path: fakeRuntime(t, tc.runtime, tc.format, tc.info, tc.exit)},
 			}
-			argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
+			argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b", nil)
 			at := slices.Index(argv, "--user")
 			if tc.wantUser {
 				if at < 0 || argv[at+1] != want {
@@ -156,7 +156,7 @@ func TestRunArgsComeAfterEverythingTheBackendChose(t *testing.T) {
 		},
 		cli: containerCLI{path: fakeRuntime(t, "docker", dockerRootlessFormat, `[name=seccomp]`, 0)},
 	}
-	argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b")
+	argv := l.runArgv(t.Context(), boxLayout{id: "b", root: t.TempDir()}, "crewlet-sbx-b", nil)
 
 	ours := slices.Index(argv, "--user")
 	theirs := slices.Index(argv[ours+1:], "--user")
@@ -359,6 +359,84 @@ func TestCreateAcceptsABoxWhoseMountIsShared(t *testing.T) {
 	}
 	if box.Home() != DefaultHome {
 		t.Fatalf("home = %q, want %q", box.Home(), DefaultHome)
+	}
+}
+
+// A LOCAL BOX IS GIVEN ONLY THE MOUNTS ITS CELL TAKES. A direct box refuses one
+// and leaves nothing behind. A container's host directory must be one before
+// the runtime is asked for anything — a runtime handed a path that does not
+// exist makes it, as root on a rootful one, and mounts it empty — and its
+// mounts follow the home on the runtime's command line, each `-v host:box`,
+// `:ro` where it is read-only, ahead of the operator's run_args.
+//
+// Mutations: drop the cell's rule from Create — a direct box is made, red;
+// drop the host directory's check — the missing directory's box is made, red;
+// drop `:ro` — red.
+func TestALocalBoxIsGivenOnlyTheMountsItsCellTakes(t *testing.T) {
+	t.Parallel()
+	host := t.TempDir()
+	mount := Mount{Host: host, Box: "/crewlet/borrowed/web/objects", ReadOnly: true}
+	noBoxes := func(t *testing.T, state string) {
+		t.Helper()
+		if entries, err := os.ReadDir(filepath.Join(state, "boxes")); err == nil && len(entries) != 0 {
+			t.Errorf("a refused box left %d directories behind", len(entries))
+		}
+	}
+
+	state := t.TempDir()
+	direct, err := NewLocal(LocalOptions{Placement: Direct, StateDir: state})
+	if err != nil {
+		t.Fatalf("NewLocal: %v", err)
+	}
+	if box, err := direct.Create(t.Context(), Spec{Mounts: []Mount{mount}}); err == nil {
+		_ = box.Close(context.WithoutCancel(t.Context()))
+		t.Error("a direct box was made with a mount")
+	} else if !strings.Contains(err.Error(), "the direct cell takes no mount") {
+		t.Errorf("a direct box with a mount: %v, want it refused naming the cell", err)
+	}
+	noBoxes(t, state)
+
+	state = t.TempDir()
+	l := &Local{
+		opts: LocalOptions{Placement: Container, Image: "img"},
+		root: state,
+		cli:  containerCLI{path: stubRuntime(t, state, true)},
+	}
+	file := filepath.Join(host, "a-file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, at := range map[string]string{"gone": filepath.Join(host, "gone"), "a file": file} {
+		missing := Mount{Host: at, Box: "/crewlet/objects", ReadOnly: true}
+		if box, err := l.Create(t.Context(), Spec{Mounts: []Mount{missing}}); err == nil {
+			_ = box.Close(context.WithoutCancel(t.Context()))
+			t.Errorf("a container was made with a mount of a host path that is %s", name)
+		} else if !strings.Contains(err.Error(), "cannot be mounted") {
+			t.Errorf("a mount of a host path that is %s: %v, want it refused", name, err)
+		}
+	}
+	noBoxes(t, state)
+	box, err := l.Create(t.Context(), Spec{Mounts: []Mount{mount}})
+	if err != nil {
+		t.Fatalf("a container with a mount of a directory: %v", err)
+	}
+	_ = box.Close(context.WithoutCancel(t.Context()))
+
+	scratch := t.TempDir()
+	argvOf := &Local{
+		opts: LocalOptions{Placement: Container, Image: "img", RunArgs: []string{"--cpus", "2"}},
+		cli:  containerCLI{path: fakeRuntime(t, "docker", dockerRootlessFormat, `[name=seccomp]`, 0)},
+	}
+	layout := boxLayout{id: "b", root: t.TempDir()}
+	argv := argvOf.runArgv(t.Context(), layout, "crewlet-sbx-b",
+		[]Mount{mount, {Host: scratch, Box: "/crewlet/scratch"}})
+	at := slices.Index(argv, layout.home()+":"+DefaultHome)
+	want := []string{"-v", host + ":/crewlet/borrowed/web/objects:ro", "-v", scratch + ":/crewlet/scratch"}
+	if at < 1 || argv[at-1] != "-v" || len(argv) < at+1+len(want) || !slices.Equal(argv[at+1:at+1+len(want)], want) {
+		t.Fatalf("argv = %q, want the home's mount followed by %q", argv, want)
+	}
+	if cpus := slices.Index(argv, "--cpus"); cpus < at+len(want) {
+		t.Errorf("argv = %q, want the operator's run_args after the mounts", argv)
 	}
 }
 

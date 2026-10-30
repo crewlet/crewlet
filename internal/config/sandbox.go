@@ -358,6 +358,17 @@ func (s *SandboxProvider) RunIn() Placement {
 	return ""
 }
 
+// runInAt is the path of what names [SandboxProvider.RunIn]: its
+// default_run_in where it is written, else the block itself — resolved from
+// the catalogue's own shape rather than written, so a message points at the
+// block, not at a field the operator will not find.
+func (s *SandboxProvider) runInAt() string {
+	if s != nil && s.DefaultRunIn != "" {
+		return "providers.sandbox.default_run_in"
+	}
+	return "providers.sandbox"
+}
+
 func (s *SandboxProvider) validate(path Path) error {
 	var p problems
 	switch {
@@ -488,10 +499,11 @@ var ContainerRuntimes = []ContainerRuntime{RuntimeAuto, RuntimeDocker, RuntimePo
 // engine's filesystem are different seats on the same machine. A block-level
 // mode could only ever answer for both.
 type LocalSandbox struct {
-	// Image is the container image, required for any seat that runs in a
-	// container, with deliberately no default: a box whose image lacks the
-	// coding-agent CLI fails only once an agent tries to use it.
-	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image with the coding-agent CLI installed. Required for run_in: container."`
+	// Image is the container image, required for any seat or check that
+	// runs in a container, with deliberately no default: a box whose image
+	// lacks the coding-agent CLI fails only once an agent tries to use it,
+	// and a check's box needs git and whatever its checks build with.
+	Image string `yaml:"image,omitempty" json:"image,omitempty" desc:"Container image: with the coding-agent CLI installed for a seat's box, and git 2.40 or newer and what its checks build with for a check's. Required where a seat or a check runs in a container."`
 
 	Runtime ContainerRuntime `yaml:"runtime,omitempty" json:"runtime,omitempty" js:"enum=auto|docker|podman" desc:"Container CLI to drive."`
 
@@ -726,21 +738,50 @@ func (s *SandboxSetupStep) validate(path Path) error {
 	return p.err()
 }
 
-// ReservedSandboxEnv is every variable the ENGINE sets in a coding run's
-// environment itself, and so the names no `role.sandbox.env` or setup step's
-// `env` may carry: the box's access to the engine's own code host — its run's
-// git credential and the base its clones and pushes reach — and the values the
-// coding clone's commit-trailer hook writes. A closed list, which the
-// validator reads here and the engine's test holds to the variables a launch
-// given repositories sets (internal/engine, TestABoxIsConfiguredByEnvironment).
+// ReservedSandboxEnv is every variable the ENGINE sets in a box's environment
+// itself — a coding run's or a check's — and so the names no env an operator
+// writes for a box may carry: the box's access to the engine's own code host —
+// its git credential and the base its clones and pushes reach, which a coding
+// run's box and a check's are both given — the values the coding clone's
+// commit-trailer hook writes, and what a check's box is told of its check
+// ([ReservedCheckEnv]). A closed list, which the validator reads here and the
+// engine's tests hold to the variables each launch sets: a coding run given
+// repositories sets every name but the check's own (internal/engine,
+// TestABoxIsConfiguredByEnvironment).
 func ReservedSandboxEnv() []string {
-	return []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL", "CREWLET_GIT_TRAILER_SEAT",
-		"CREWLET_GIT_TRAILER_RUN", "CREWLET_GIT_TRAILER_WORK_ITEM"}
+	return append([]string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL", "CREWLET_GIT_TRAILER_SEAT",
+		"CREWLET_GIT_TRAILER_RUN", "CREWLET_GIT_TRAILER_WORK_ITEM"}, ReservedCheckEnv()...)
+}
+
+// ReservedCheckEnv is every variable the engine sets in a CHECK'S box alone:
+// which check it runs — the repository, the commit it measures and the base
+// that commit is measured against, the check's name and its attempt — where
+// its box reads that commit without a clone, and where its command writes the
+// summary its result is reported with. Beside them a check's box is given the
+// code host's credential and base, as a coding run's is; every name of both is
+// in [ReservedSandboxEnv].
+func ReservedCheckEnv() []string {
+	return []string{"CREWLET_CHECK_REPO", "CREWLET_CHECK_SHA", "CREWLET_CHECK_BASE", "CREWLET_CHECK_NAME",
+		"CREWLET_CHECK_ATTEMPT", "CREWLET_CHECK_API", "CREWLET_CHECK_SUMMARY"}
 }
 
 // reservedSandboxEnvReasons is why each of [ReservedSandboxEnv] is the
 // engine's, as a refusal of an operator's value for it says.
 var reservedSandboxEnvReasons = map[string]string{
+	"CREWLET_CHECK_REPO": "it is the repository a check's box checks out, which the engine names for the " +
+		"check it runs, and a value here would tell the check's own command another",
+	"CREWLET_CHECK_SHA": "it is the commit a check measures, checked out in its box, and a value here would " +
+		"tell the check's own command another commit than the one it builds",
+	"CREWLET_CHECK_BASE": "it is the commit a check's commit is measured against, the base its diff is read " +
+		"from, and a value here would have the check compare against another",
+	"CREWLET_CHECK_NAME": "it is the name of the check a box runs, and a value here would tell its command it " +
+		"is another check",
+	"CREWLET_CHECK_ATTEMPT": "it is the attempt of its check a box runs, and a value here would tell its " +
+		"command another attempt than the one its result is recorded under",
+	"CREWLET_CHECK_API": "it is where a check's box reads its commit's files and diff without a clone, with " +
+		"its own credential, and a value here would send those reads, and that credential, elsewhere",
+	"CREWLET_CHECK_SUMMARY": "it is the file a check's command writes its summary to, read back when the " +
+		"check ends, and a value here would have the summary written where it is never read",
 	"CREWLET_GIT_TOKEN": "it is the run's own credential on this company's code host, minted for each " +
 		"launch of a run that names repositories, and a value here would break its clones and pushes",
 	"CREWLET_GIT_URL": "it is the base a run that names repositories clones and pushes them from " +
@@ -755,17 +796,20 @@ var reservedSandboxEnvReasons = map[string]string{
 }
 
 // validateReservedSandboxEnv refuses a [ReservedSandboxEnv] name as a key of
-// any env a coding run's environment is assembled from: a seat's
-// `sandbox.env`, a seat's setup steps' `env`, and `providers.sandbox.setup`'s.
+// any env a box's environment is assembled from: a seat's `sandbox.env`, a
+// seat's setup steps' `env`, `providers.sandbox.setup`'s, and
+// `code.checks.env` — the secrets a check's box is given beside what the
+// engine tells it of its check.
 //
 // AN ADMISSION RULE, for [Company.validateHumanSeatCode]'s reason: nothing
 // about running depends on it, since the engine's own value wins over every
-// other source of a run's environment for the names it sets (the launch's
-// environment, sandbox.LaunchRequest.RunEnv) — so a stored revision carrying
-// one runs as it did, a later build may relax the rule, and this build applies
-// whatever its newer peer admitted. What it refuses is a setting that READS as
-// working: one the engine overwrites on every run given repositories, and on
-// every other run a value nothing of the engine's reads.
+// other source of a box's environment for the names it sets (a coding launch's
+// environment, sandbox.LaunchRequest.RunEnv; a check's, which names its
+// secrets beside them) — so a stored revision carrying one runs as it did, a
+// later build may relax the rule, and this build applies whatever its newer
+// peer admitted. What it refuses is a setting that READS as working: one the
+// engine overwrites on every box it sets the name in, and on every other box a
+// value nothing of the engine's reads.
 func (c *Company) validateReservedSandboxEnv() error {
 	var p problems
 	check := func(path Path, env map[string]string) {
@@ -784,6 +828,7 @@ func (c *Company) validateReservedSandboxEnv() error {
 	if c.Providers.Sandbox != nil {
 		steps(field("providers.sandbox.setup"), c.Providers.Sandbox.Setup)
 	}
+	check(field("code.checks.env"), c.Code.Checks.Env)
 	for role, path := range c.EachRole() {
 		if gate := role.Sandbox; gate != nil {
 			check(at(path, "sandbox.env"), gate.Env)

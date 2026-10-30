@@ -1596,12 +1596,12 @@ defines none — and each check is a mapping of these keys and no other:
 |---|---|---|
 | `name` | yes | The check's name: a lower-case letter or digit, then up to 63 lower-case letters, digits, dots, underscores and hyphens — once in the file. It is the check's key in every row and on the token its box fetches with, so `unit` and `Unit` are never two checks |
 | `run` | yes | The command, handed to `sh -c` whole: a line, or a script a block scalar (`run: \|`) spells over several. At most 4 KiB — a longer script belongs in the repository, where it is reviewed as code |
-| `timeout_seconds` | yes | How long it may run: a whole number, 1 to 21 600 — six hours, GitHub Actions' per-job ceiling, so no job moved from a pipeline has to be cut. A company holds its checks to its own ceiling at or under that |
+| `timeout_seconds` | yes | How long it may run: a whole number, 1 to 21 600 — six hours, GitHub Actions' per-job ceiling, so no job moved from a pipeline has to be cut. A company holds its checks to its own ceiling at or under that (`code.checks.max_timeout_seconds`) |
 | `paths` | no | At most 32 path globs, in the grammar [path owners](#path-owners) use — `*` within a component, `**` for whole components, relative to the repository's root — of which a change must touch one for the check to run on it. None runs it on every change |
 | `report` | no | `junit` and `sarif`: the files the check writes its results to, each a path inside its checkout, read once the command ends. With neither, a check is judged by its exit code alone |
-| `run_in` | no | `container` — a container on a git node — or `e2b`, a remote box; unset is the company's choice. **`direct` and `self` are refused by name**: a check runs a change's own code, which `direct` would run as the engine's own user on the engine host, reading what the engine reads, and `self` is a seat's own executor box, which no check has |
+| `run_in` | no | `container` — a container on a git node — or `e2b`, a remote box, among the cells the company allows (`code.checks.allow_run_in`); unset is the company's choice (`code.checks.run_in`, see [Check boxes](code-sandbox.md#check-boxes)). **`direct` and `self` are refused by name**: a check runs a change's own code, which `direct` would run as the engine's own user on the engine host, reading what the engine reads, and `self` is a seat's own executor box, which no check has |
 | `checkout` | no | What of the tree the check's box checks out: all of it (unset), a **cone** — at most 64 directories, git's sparse checkout, each a clean directory inside the repository — or `none`, for a check that reads what it needs by object id through the API instead of a clone |
-| `env` | no | At most 32 variable names, each the key of an entry in the company's check secrets: the secrets this check is given. A check is given none it does not name |
+| `env` | no | At most 32 variable names, each the key of an entry in the company's check secrets (`code.checks.env`): the secrets this check is given. A check is given none it does not name |
 
 **It is read strictly**, as a config document is, because a check that quietly
 does something other than what its file says is worse than one that is
@@ -1773,7 +1773,9 @@ grant on the repository as every other read of it is:
 ### Check boxes
 
 A check runs in a **box** of its own — a container on a git node, or a remote
-box — which reaches the code host as a [coding box](#coding-boxes) does, at
+box, with no coding agent in it ([Code Sandbox → Check
+boxes](code-sandbox.md#check-boxes)) — which reaches the code host as a
+[coding box](#coding-boxes) does, at
 `/box/git/<name>.git` on a node whose roles name `git` (on the public listener
 where one is set), with a credential of its own and nobody's else: git's Basic
 user name `check` and, as the password, a token naming **one attempt** of one

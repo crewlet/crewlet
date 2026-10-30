@@ -397,39 +397,110 @@ func (m *Manager) Acquire(ctx context.Context, spec Spec, setup []SetupStep) (Sa
 	if err != nil {
 		return nil, nil, err
 	}
-	// THE CURRENT CATALOGUE ALONE: a retired cell reaches the boxes already
-	// on it and never a new one.
-	provider, err := m.configured(spec.Placement)
+	box, err := m.provision(ctx, spec, setup, runner)
 	if err != nil {
 		return nil, nil, err
+	}
+	return box, runner, nil
+}
+
+// AcquireBox provisions a box for spec with NO CODING AGENT — a check's box,
+// which runs a repository's own command and nothing of a seat's — and applies
+// setup to it: [Manager.Acquire] less the runner's install, torn down on a
+// setup failure the same way.
+//
+// WHAT A CODING BOX CARRIES AND THIS ONE DOES NOT, each refused rather than
+// dropped, since a caller that sets one meant a coding run:
+//
+//   - a CODING AGENT ([Spec.CodingAgent]): none is installed, and on a remote
+//     cell the agent's name picks the box's image;
+//   - a LOGIN ([Spec.CredentialFiles]): a check runs a change's own code, and
+//     a subscription login seeded beside it is a model's credential that code
+//     reads;
+//   - a RUN'S GRANTS ([Spec.Repos]): they ride a coding run's row, which no
+//     such box has; its repository is its clone step's ([CloneRecipe]);
+//   - the CATALOGUE'S DEFAULT CELL: an empty [Spec.Placement] is where a seat
+//     that names none runs (providers.sandbox.default_run_in), never this
+//     box's — the caller names its cell;
+//   - the DIRECT cell: a box given a repository's own command to run never
+//     runs it as the engine's own user on the engine host, where it reads
+//     what the engine reads — config refuses `direct` for a check by name
+//     (code.checks, U1 a), and this refuses it where a box is made.
+//
+// AND NONE OF THE OPERATOR'S SETUP: the steps applied are exactly setup,
+// never the catalogue's own ([Manager.DefaultSetup], providers.sandbox.setup),
+// which provisions coding boxes for their agents — their env and files are
+// often credentials, and a check runs a change's own code. A coding run's
+// launch hands those steps in itself; this box's caller hands in its git's
+// floor and its checkout ([GitVersionStep], [CloneRecipe]).
+func (m *Manager) AcquireBox(ctx context.Context, spec Spec, setup []SetupStep) (Sandbox, error) {
+	switch {
+	case spec.CodingAgent != "":
+		return nil, fmt.Errorf("sandbox: a box with no coding agent names none, and this one names %q",
+			spec.CodingAgent)
+	case len(spec.CredentialFiles) > 0:
+		return nil, fmt.Errorf("sandbox: a box with no coding agent is seeded no login, and this one is "+
+			"given %d credential files", len(spec.CredentialFiles))
+	case len(spec.Repos) > 0:
+		return nil, fmt.Errorf("sandbox: a box with no coding agent is no run, so it holds no run's grants, "+
+			"and this one is given %d repositories: its repository is its clone step's", len(spec.Repos))
+	case spec.Placement == "":
+		return nil, fmt.Errorf("sandbox: a box with no coding agent names its cell: the catalogue's default " +
+			"is where a seat that names none runs (providers.sandbox.default_run_in)")
+	case spec.Placement == Direct:
+		return nil, fmt.Errorf("sandbox: a box with no coding agent never runs %s: it runs a repository's own "+
+			"command, which there would run as the engine's own user on the engine host, reading what the "+
+			"engine reads", Direct)
+	}
+	return m.provision(ctx, spec, setup, nil)
+}
+
+// provision is a box for spec from the CURRENT CATALOGUE — a retired cell
+// reaches the boxes already on it and never a new one — with runner's agent
+// installed where there is a runner, and setup applied, run WITH the spec's
+// environment so a recipe can read the engine's identity facts and its own
+// configured tokens at provisioning time. A failure of either tears the box
+// down before it is answered ([Manager.discard]). Mounts the cell cannot take
+// are refused before any box exists ([mountsFit]): the remote backend reads
+// none, so its cell is held here, where every box is made.
+func (m *Manager) provision(ctx context.Context, spec Spec, setup []SetupStep, runner Runner) (Sandbox, error) {
+	placement := spec.Placement
+	if placement == "" {
+		placement = m.placement
+	}
+	provider, err := m.configured(placement)
+	if err != nil {
+		return nil, err
+	}
+	if err := mountsFit(placement, spec.Mounts); err != nil {
+		return nil, err
 	}
 	box, err := provider.Create(ctx, spec)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if err := runner.Install(ctx, box); err != nil {
-		log.ErrorContext(ctx, "sandbox_install_failed", "sandbox_id", box.ID(), "error", err.Error())
-		m.discard(ctx, box)
-		return nil, nil, err
+	if runner != nil {
+		if err := runner.Install(ctx, box); err != nil {
+			log.ErrorContext(ctx, "sandbox_install_failed", "sandbox_id", box.ID(), "error", err.Error())
+			m.discard(ctx, box)
+			return nil, err
+		}
 	}
-	// Setup commands run WITH the run env so recipes can reference the
-	// engine's identity facts and their own configured tokens at
-	// provisioning time.
 	if err := ApplySetup(ctx, box, setup, spec.Env); err != nil {
 		// Logged distinctly from an install failure so the operator debugs
-		// the right subsystem: this one is their config.
+		// the right subsystem: this one is their config, or the box's git.
 		log.ErrorContext(ctx, "sandbox_setup_failed", "sandbox_id", box.ID(), "error", err.Error())
 		m.discard(ctx, box)
-		return nil, nil, err
+		return nil, err
 	}
 	names := make([]string, 0, len(setup))
 	for _, step := range setup {
 		names = append(names, step.Name)
 	}
 	log.DebugContext(ctx, "sandbox_acquired",
-		"sandbox_id", box.ID(), "placement", string(spec.Placement),
-		"coding_agent", spec.CodingAgent, "setup_steps", names)
-	return box, runner, nil
+		"sandbox_id", box.ID(), "placement", string(placement),
+		"coding_agent", spec.CodingAgent, "setup_steps", names, "mounts", len(spec.Mounts))
+	return box, nil
 }
 
 // discardGrace bounds a cleanup that has to outlive the context that asked for

@@ -12,7 +12,8 @@ import (
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
 
-// The repositories the cases give a run, valid by [RunRepo.Validate].
+// The repositories the cases give a run, valid by [RunRepo.ValidateFor] a
+// coding run ([CloneCoding]).
 const (
 	webRepoID = "0190d8f0-0000-7000-8000-00000000000a"
 	apiRepoID = "0190d8f0-0000-7000-8000-00000000000b"

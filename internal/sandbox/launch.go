@@ -522,10 +522,11 @@ func acquire(ctx context.Context, m *Manager, req LaunchRequest) (Sandbox, Runne
 }
 
 // checkRepos refuses a launch whose repositories its row could not carry:
-// more than [MaxRunRepos], one that is not a [RunRepo] ([RunRepo.Validate]),
-// one named twice — by its name or by its id, since either would give one
-// repository two grants and one checkout directory two clones — or a floor
-// that does not go with them, set exactly when repositories are.
+// more than [MaxRunRepos], one that is not a coding run's [RunRepo]
+// ([RunRepo.ValidateFor] [CloneCoding]), one named twice — by its name or by
+// its id, since either would give one repository two grants and one checkout
+// directory two clones — or a floor that does not go with them, set exactly
+// when repositories are.
 func checkRepos(req LaunchRequest) error {
 	repos := req.Spec.Repos
 	if len(repos) > MaxRunRepos {
@@ -534,7 +535,7 @@ func checkRepos(req LaunchRequest) error {
 	names := make(map[string]bool, len(repos))
 	ids := make(map[string]bool, len(repos))
 	for _, r := range repos {
-		if err := r.Validate(); err != nil {
+		if err := r.ValidateFor(CloneCoding); err != nil {
 			return err
 		}
 		if names[r.Repo] || ids[r.RepoID] {

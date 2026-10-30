@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/code/gitproc"
@@ -26,6 +30,24 @@ func cloned() sandbox.RunRepo {
 		Branch: "seats/swe/ENG-7", Access: sandbox.RepoWrite, Paths: []string{"src", "docs"},
 	}
 }
+
+// checked is the repository a check's box is given: its one commit, on no
+// branch, to read.
+func checked() sandbox.RunRepo {
+	r := cloned()
+	r.Branch, r.Access = "", sandbox.RepoRead
+	return r
+}
+
+// borrowedAt is [checked] borrowing the objects mounted at objects in the box.
+func borrowedAt(objects string) sandbox.RunRepo {
+	r := checked()
+	r.Objects = objects
+	return r
+}
+
+// boxObjects is where the cases' borrowed checkouts read their objects.
+const boxObjects = "/crewlet/borrowed/web/objects"
 
 // THE BOX'S GIT IS HELD TO THE CLIENT FLOOR: sandbox spells the floor as text,
 // because it imports nothing of the code host, and this holds it to gitproc's.
@@ -67,7 +89,7 @@ func TestARunRepoIsHeldToItsGrammar(t *testing.T) {
 		}),
 		with(func(r *sandbox.RunRepo) { r.Paths = make([]string, sandbox.MaxConePaths); fill(r.Paths) }),
 	} {
-		if err := r.Validate(); err != nil {
+		if err := r.ValidateFor(sandbox.CloneCoding); err != nil {
 			t.Errorf("%+v: %v", r, err)
 		}
 	}
@@ -105,8 +127,66 @@ func TestARunRepoIsHeldToItsGrammar(t *testing.T) {
 		}),
 		"a cone past its bound": with(func(r *sandbox.RunRepo) { r.Paths = make([]string, sandbox.MaxConePaths+1); fill(r.Paths) }),
 	} {
-		if err := r.Validate(); err == nil {
+		if err := r.ValidateFor(sandbox.CloneCoding); err == nil {
 			t.Errorf("%s was taken: %+v", name, r)
+		}
+	}
+}
+
+// A RUN REPOSITORY IS HELD TO ITS PURPOSE: a coding run's works on a branch
+// and borrows nothing; a check's is one commit — a base, no branch, read
+// access, since its box's credential never pushes — and a borrowed checkout's
+// names where its objects are in the box, an absolute, clean path a mount
+// takes, outside the box's home; a single-commit checkout fetches its objects
+// and names none. A value a purpose does not read is refused, never ignored,
+// and so is a purpose this build does not know.
+//
+// Mutation: take a check's repository with a branch — "a check on a branch"
+// is taken, red.
+func TestARunRepoIsHeldToItsPurpose(t *testing.T) {
+	t.Parallel()
+	with := func(r sandbox.RunRepo, edit func(*sandbox.RunRepo)) sandbox.RunRepo {
+		edit(&r)
+		return r
+	}
+	for _, tc := range []struct {
+		r       sandbox.RunRepo
+		purpose sandbox.ClonePurpose
+	}{
+		{cloned(), sandbox.CloneCoding},
+		{checked(), sandbox.CloneSingleSHA},
+		{with(checked(), func(r *sandbox.RunRepo) { r.Paths = nil }), sandbox.CloneSingleSHA},
+		{borrowedAt(boxObjects), sandbox.CloneBorrowed},
+		{borrowedAt("/srv/it's/objects"), sandbox.CloneBorrowed},
+	} {
+		if err := tc.r.ValidateFor(tc.purpose); err != nil {
+			t.Errorf("%s: %+v: %v", tc.purpose, tc.r, err)
+		}
+	}
+	for name, tc := range map[string]struct {
+		r       sandbox.RunRepo
+		purpose sandbox.ClonePurpose
+	}{
+		"a coding run with no branch":         {with(cloned(), func(r *sandbox.RunRepo) { r.Branch = "" }), sandbox.CloneCoding},
+		"a coding run borrowing objects":      {with(cloned(), func(r *sandbox.RunRepo) { r.Objects = boxObjects }), sandbox.CloneCoding},
+		"a check with no commit":              {with(checked(), func(r *sandbox.RunRepo) { r.Base = "" }), sandbox.CloneSingleSHA},
+		"a check on a branch":                 {with(checked(), func(r *sandbox.RunRepo) { r.Branch = "main" }), sandbox.CloneSingleSHA},
+		"a check that may push":               {with(checked(), func(r *sandbox.RunRepo) { r.Access = sandbox.RepoWrite }), sandbox.CloneSingleSHA},
+		"a single commit given objects":       {borrowedAt(boxObjects), sandbox.CloneSingleSHA},
+		"a borrowed checkout naming none":     {checked(), sandbox.CloneBorrowed},
+		"a borrowed checkout on a branch":     {with(borrowedAt(boxObjects), func(r *sandbox.RunRepo) { r.Branch = "main" }), sandbox.CloneBorrowed},
+		"a borrowed checkout with no commit":  {with(borrowedAt(boxObjects), func(r *sandbox.RunRepo) { r.Base = "" }), sandbox.CloneBorrowed},
+		"objects at a relative path":          {borrowedAt("crewlet/objects"), sandbox.CloneBorrowed},
+		"objects at an unclean path":          {borrowedAt("/crewlet/../objects"), sandbox.CloneBorrowed},
+		"objects at the root":                 {borrowedAt("/"), sandbox.CloneBorrowed},
+		"objects in the box's home":           {borrowedAt(sandbox.DefaultHome + "/objects"), sandbox.CloneBorrowed},
+		"objects at the box's home":           {borrowedAt(sandbox.DefaultHome), sandbox.CloneBorrowed},
+		"objects at a path a -v splits":       {borrowedAt("/crewlet/a:b"), sandbox.CloneBorrowed},
+		"objects at a path holding a newline": {borrowedAt("/crewlet/a\nb"), sandbox.CloneBorrowed},
+		"a purpose this build does not know":  {checked(), sandbox.ClonePurpose("treeless")},
+	} {
+		if err := tc.r.ValidateFor(tc.purpose); err == nil {
+			t.Errorf("%s was taken for %s: %+v", name, tc.purpose, tc.r)
 		}
 	}
 }
@@ -153,6 +233,12 @@ fi`
   git -C 'web' sparse-checkout set --cone --skip-checks -- 'src' 'docs' &&
   git -C 'web' checkout --quiet --detach '` + cloneBase + `'
 fi`
+	borrowed := `if [ ! -e 'web'/.git ]; then
+  git init --quiet 'web' && git -C 'web' remote add origin "$CREWLET_GIT_URL"/'web.git' &&
+  printf '%s\n' '` + boxObjects + `' > 'web'/.git/objects/info/alternates &&
+  git -C 'web' sparse-checkout set --cone --skip-checks -- 'src' 'docs' &&
+  git -C 'web' checkout --quiet --detach '` + cloneBase + `'
+fi`
 	noCone := cloned()
 	noCone.Paths, noCone.Base = nil, ""
 	for _, tc := range []struct {
@@ -164,7 +250,8 @@ fi`
 	}{
 		{"coding", cloned(), sandbox.CloneCoding, "clone web", coding},
 		{"coding an empty repository", noCone, sandbox.CloneCoding, "clone web", empty},
-		{"single-sha", cloned(), sandbox.CloneSingleSHA, "checkout web", single},
+		{"single-sha", checked(), sandbox.CloneSingleSHA, "checkout web", single},
+		{"borrowed", borrowedAt(boxObjects), sandbox.CloneBorrowed, "checkout web", borrowed},
 	} {
 		step, err := sandbox.CloneRecipe(tc.r, tc.purpose)
 		if err != nil {
@@ -197,13 +284,16 @@ func syntax(t *testing.T, name, command string) {
 // characters and a leading '!', reach git as one argument each, and nothing in
 // them runs. The coding recipe writes the commit-trailer hook byte for byte
 // with mode 0755 — only where no hook of that name exists, a file or a
-// dangling link — and the single-sha recipe writes none. A box that already
-// holds the checkout runs nothing at all.
+// dangling link — and the two checks' recipes write none. The borrowed recipe
+// fetches nothing, and names objects whose path holds a quote and a command
+// substitution in its alternates file as the bytes they are. A box that
+// already holds the checkout runs nothing at all.
 //
 // Mutations: interpolate the branch unquoted — the stand-in's arguments and a
 // file named x, red; write the hook in the single-sha recipe — red; drop the
 // hook's existence guard — the box's own hook is replaced, red; drop the
-// checkout's guard — the second run clones again, red.
+// checkout's guard — the second run clones again, red; write the objects
+// unquoted — x is made and the alternates name another path, red.
 func TestACloneStepsValuesArriveAsLiteralArguments(t *testing.T) {
 	t.Parallel()
 	const url = "https://git.example.com/box/git"
@@ -211,7 +301,7 @@ func TestACloneStepsValuesArriveAsLiteralArguments(t *testing.T) {
 case "$1" in
 clone|init)
   for dir in "$@"; do :; done
-  mkdir -p "$dir/.git/hooks"
+  mkdir -p "$dir/.git/hooks" "$dir/.git/objects/info"
   case "$1:${STUB_HOOK-}" in
   clone:file) printf 'the box template' > "$dir/.git/hooks/prepare-commit-msg" ;;
   clone:link) ln -s nowhere "$dir/.git/hooks/prepare-commit-msg" ;;
@@ -319,9 +409,11 @@ exit 0`)
 			t.Errorf("the box's own hook link became %q (%v), want it left as it was", target, err)
 		}
 	})
+	check := r
+	check.Branch, check.Access = "", sandbox.RepoRead
 	t.Run("single-sha", func(t *testing.T) {
 		t.Parallel()
-		step, err := sandbox.CloneRecipe(r, sandbox.CloneSingleSHA)
+		step, err := sandbox.CloneRecipe(check, sandbox.CloneSingleSHA)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -336,6 +428,37 @@ exit 0`)
 		if _, err := os.Lstat(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); !errors.Is(err,
 			os.ErrNotExist) {
 			t.Errorf("a check's checkout has a commit hook (%v): a check box commits nothing", err)
+		}
+	})
+	// THE BORROWED CHECKOUT FETCHES NOTHING, and names its objects in its
+	// alternates file whatever their path holds: written by the shell, the
+	// path's quote and its command substitution arrive as the bytes named.
+	t.Run("borrowed", func(t *testing.T) {
+		t.Parallel()
+		borrowed := check
+		borrowed.Objects = `/crewlet/borrowed/it's $(touch${IFS}x)/objects`
+		step, err := sandbox.CloneRecipe(borrowed, sandbox.CloneBorrowed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		box := t.TempDir()
+		sameCalls(t, run(t, box, step, ""), [][]string{
+			{"init", "--quiet", "web"},
+			{"-C", "web", "remote", "add", "origin", url + "/web.git"},
+			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
+			{"-C", "web", "checkout", "--quiet", "--detach", cloneBase},
+		})
+		alternates, err := os.ReadFile(filepath.Join(box, "web", ".git", "objects", "info", "alternates"))
+		if err != nil || string(alternates) != borrowed.Objects+"\n" {
+			t.Errorf("the borrowed checkout's alternates are %q (%v), want its objects %q and a newline",
+				alternates, err, borrowed.Objects)
+		}
+		if _, err := os.Stat(filepath.Join(box, "x")); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("a value of the step ran as a command: x exists (%v)", err)
+		}
+		if _, err := os.Lstat(filepath.Join(box, "web", ".git", "hooks", "prepare-commit-msg")); !errors.Is(err,
+			os.ErrNotExist) {
+			t.Errorf("a borrowed checkout has a commit hook (%v): a check box commits nothing", err)
 		}
 	})
 }
@@ -441,8 +564,11 @@ func TestACloneStepsBriefSaysWhereTheCheckoutIs(t *testing.T) {
 			[]string{"git push"}},
 		{"empty", empty, sandbox.CloneCoding, []string{"no commits yet", "git push origin seats/swe/ENG-7"},
 			[]string{"sparse-checkout"}},
-		{"single-sha", cloned(), sandbox.CloneSingleSHA, []string{"`./web`", "at commit " + cloneBase[:12],
+		{"single-sha", checked(), sandbox.CloneSingleSHA, []string{"`./web`", "at commit " + cloneBase[:12],
 			"no history"}, []string{"git push", "branch"}},
+		{"borrowed", borrowedAt(boxObjects), sandbox.CloneBorrowed, []string{"`./web`",
+			"at commit " + cloneBase[:12], "this node's copy", "`" + boxObjects + "`", "read-only"},
+			[]string{"git push", "branch", "fetched"}},
 	} {
 		step, err := sandbox.CloneRecipe(tc.r, tc.purpose)
 		if err != nil {
@@ -461,9 +587,10 @@ func TestACloneStepsBriefSaysWhereTheCheckoutIs(t *testing.T) {
 	}
 }
 
-// A CLONE RECIPE IS REFUSED FOR WHAT IT CANNOT CLONE: a repository its grammar
-// refuses — the recipe interpolates nothing a RunRepo cannot carry — a purpose
-// this build does not know, and a check given no commit.
+// A CLONE RECIPE IS REFUSED FOR WHAT IT CANNOT CLONE: a repository its
+// purpose's grammar refuses — the recipe interpolates nothing a RunRepo cannot
+// carry — a purpose this build does not know, a check given no commit, and a
+// borrowed checkout given no objects.
 func TestCloneRecipeRefusesWhatItCannotClone(t *testing.T) {
 	t.Parallel()
 	with := func(edit func(*sandbox.RunRepo)) sandbox.RunRepo {
@@ -473,31 +600,42 @@ func TestCloneRecipeRefusesWhatItCannotClone(t *testing.T) {
 	}
 	many := make([]string, sandbox.MaxConePaths+1)
 	fill(many)
+	uncommitted := checked()
+	uncommitted.Base = ""
 	for name, tc := range map[string]struct {
 		r       sandbox.RunRepo
 		purpose sandbox.ClonePurpose
 	}{
-		"an invalid name":        {with(func(r *sandbox.RunRepo) { r.Repo = "../web" }), sandbox.CloneCoding},
-		"an invalid branch":      {with(func(r *sandbox.RunRepo) { r.Branch = "a b" }), sandbox.CloneCoding},
-		"an invalid base":        {with(func(r *sandbox.RunRepo) { r.Base = "main" }), sandbox.CloneCoding},
-		"a path out":             {with(func(r *sandbox.RunRepo) { r.Paths = []string{"../etc"} }), sandbox.CloneCoding},
-		"a cone past its bound":  {with(func(r *sandbox.RunRepo) { r.Paths = many }), sandbox.CloneCoding},
-		"a check with no commit": {with(func(r *sandbox.RunRepo) { r.Base = "" }), sandbox.CloneSingleSHA},
-		"a treeless clone":       {cloned(), sandbox.ClonePurpose("treeless")},
+		"an invalid name":                   {with(func(r *sandbox.RunRepo) { r.Repo = "../web" }), sandbox.CloneCoding},
+		"an invalid branch":                 {with(func(r *sandbox.RunRepo) { r.Branch = "a b" }), sandbox.CloneCoding},
+		"an invalid base":                   {with(func(r *sandbox.RunRepo) { r.Base = "main" }), sandbox.CloneCoding},
+		"a path out":                        {with(func(r *sandbox.RunRepo) { r.Paths = []string{"../etc"} }), sandbox.CloneCoding},
+		"a cone past its bound":             {with(func(r *sandbox.RunRepo) { r.Paths = many }), sandbox.CloneCoding},
+		"a check with no commit":            {uncommitted, sandbox.CloneSingleSHA},
+		"a check on a branch":               {with(func(r *sandbox.RunRepo) { r.Access = sandbox.RepoRead }), sandbox.CloneSingleSHA},
+		"a borrowed checkout of no objects": {checked(), sandbox.CloneBorrowed},
+		"a treeless clone":                  {cloned(), sandbox.ClonePurpose("treeless")},
 	} {
 		if step, err := sandbox.CloneRecipe(tc.r, tc.purpose); err == nil {
 			t.Errorf("%s: CloneRecipe wrote %q", name, step.Name)
 		}
 	}
-	if !sandbox.CloneCoding.Valid() || !sandbox.CloneSingleSHA.Valid() || sandbox.ClonePurpose("treeless").Valid() {
-		t.Error("ClonePurpose.Valid does not answer for exactly the two purposes")
+	for _, purpose := range sandbox.ClonePurposes() {
+		if !purpose.Valid() {
+			t.Errorf("ClonePurpose.Valid refuses %s, one of ClonePurposes", purpose)
+		}
+	}
+	if got := sandbox.ClonePurposes(); !slices.Equal(got, []sandbox.ClonePurpose{sandbox.CloneCoding,
+		sandbox.CloneSingleSHA, sandbox.CloneBorrowed}) || sandbox.ClonePurpose("treeless").Valid() {
+		t.Errorf("ClonePurposes() = %v: want the three purposes, and Valid to refuse any other", got)
 	}
 }
 
 // THE WORST CLONE STEP IS ONE SHELL ARGUMENT. A box runs a setup command as one
 // argument of its shell, and Linux refuses an argument past MAX_ARG_STRLEN —
 // 32 pages, 131 072 bytes with its NUL — before the shell starts. The longest
-// step a RunRepo can make — the longest name, a branch and MaxConePaths
+// step a RunRepo can make for each purpose — the longest name, a branch or a
+// borrowed checkout's objects at MaxMountPathBytes, and MaxConePaths
 // directories of MaxConePathBytes each, all of single quotes, which quoting
 // makes four times their length — fits, and a shell takes it.
 //
@@ -516,11 +654,12 @@ func TestTheWorstCloneStepIsOneShellArgument(t *testing.T) {
 		worst.Paths[i] = strings.Repeat("'", sandbox.MaxConePathBytes-3) + string(rune('a'+i/26)) +
 			string(rune('a'+i%26)) + "'"
 	}
-	if err := worst.Validate(); err != nil {
-		t.Fatalf("the worst repository is not a RunRepo: %v", err)
-	}
 	empty := worst
 	empty.Base = ""
+	check := worst
+	check.Branch, check.Access = "", sandbox.RepoRead
+	borrowed := check
+	borrowed.Objects = "/" + strings.Repeat("'", sandbox.MaxMountPathBytes-1)
 	for _, tc := range []struct {
 		name    string
 		r       sandbox.RunRepo
@@ -528,8 +667,12 @@ func TestTheWorstCloneStepIsOneShellArgument(t *testing.T) {
 	}{
 		{"coding", worst, sandbox.CloneCoding},
 		{"coding an empty repository", empty, sandbox.CloneCoding},
-		{"single-sha", worst, sandbox.CloneSingleSHA},
+		{"single-sha", check, sandbox.CloneSingleSHA},
+		{"borrowed", borrowed, sandbox.CloneBorrowed},
 	} {
+		if err := tc.r.ValidateFor(tc.purpose); err != nil {
+			t.Fatalf("%s: the worst repository is not one: %v", tc.name, err)
+		}
 		step, err := sandbox.CloneRecipe(tc.r, tc.purpose)
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
@@ -605,4 +748,115 @@ func TestTheVersionStepHoldsABoxsGitToTheClientFloor(t *testing.T) {
 			t.Errorf("the %s git fails the version step: exit %d, %q", g.name, code, stderr)
 		}
 	}
+}
+
+// THE BORROWED RECIPE FETCHES NOTHING. Run under a shell with a real git — the
+// pin and the client floor's own build — against a git node's copy of a
+// repository standing as the objects it borrows (packed, with a
+// commit-graph), it checks the commit out detached, the cone's directories
+// and the top level's files alone, with the copy's whole history read through
+// its alternates — while the code host, its remote, is asked for nothing: a
+// server standing in for it, which would answer, sees no request. And it
+// writes nothing into the copy it borrows.
+//
+// Mutation: drop the alternates line — the checkout finds no such commit, red.
+func TestTheBorrowedRecipeFetchesNothing(t *testing.T) {
+	t.Parallel()
+	eachGit(t, func(t *testing.T, g boxGit) {
+		client := gittest.NewClientWith(t, g.path)
+		node := client.Init(t)
+		client.Commit(t, node, map[string]string{"README": "hello\n", "src/a.txt": "a\n", "docs/d.txt": "d\n",
+			"other/o.txt": "o\n"}, "the first commit")
+		tip := client.Commit(t, node, map[string]string{"src/lib/b.txt": "b\n"}, "the second commit")
+		client.Run(t, node, "repack", "-a", "-d", "-q")
+		client.Run(t, node, "commit-graph", "write", "--reachable")
+		objects := filepath.Join(node, ".git", "objects")
+		before := treeOf(t, objects)
+
+		var asked atomic.Int64
+		host := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			asked.Add(1)
+			http.Error(w, "the code host is asked for nothing by a borrowed checkout", http.StatusServiceUnavailable)
+		}))
+		t.Cleanup(host.Close)
+
+		r := borrowedAt(objects)
+		r.Base, r.Paths = tip, []string{"src"}
+		step, err := sandbox.CloneRecipe(r, sandbox.CloneBorrowed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		box := t.TempDir()
+		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", step.Commands[0])
+		cmd.Dir = box
+		cmd.Env = append(client.Environ(),
+			"PATH="+filepath.Dir(g.path)+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"CREWLET_GIT_URL="+host.URL+"/box/git")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("the borrowed recipe: %v\n%s", err, out)
+		}
+
+		checkout := filepath.Join(box, "web")
+		if got := strings.TrimSpace(client.Run(t, checkout, "rev-parse", "HEAD")); got != tip {
+			t.Errorf("the borrowed checkout is at %s, want %s", got, tip)
+		}
+		if _, _, err := client.Try(t, checkout, nil, "symbolic-ref", "-q", "HEAD"); err == nil {
+			t.Error("the borrowed checkout is on a branch, want HEAD detached")
+		}
+		if got := strings.TrimSpace(client.Run(t, checkout, "rev-list", "--count", "HEAD")); got != "2" {
+			t.Errorf("the borrowed checkout reads %s commits of history, want the copy's 2", got)
+		}
+		if got, want := strings.TrimSpace(client.Run(t, checkout, "remote", "get-url", "origin")),
+			host.URL+"/box/git/web.git"; got != want {
+			t.Errorf("the borrowed checkout's remote is %q, want the code host's %q", got, want)
+		}
+		var files []string
+		if err := filepath.WalkDir(checkout, func(p string, d os.DirEntry, err error) error {
+			switch {
+			case err != nil:
+				return err
+			case d.IsDir() && d.Name() == ".git":
+				return filepath.SkipDir
+			case !d.IsDir():
+				rel, err := filepath.Rel(checkout, p)
+				files = append(files, filepath.ToSlash(rel))
+				return err
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		slices.Sort(files)
+		if want := []string{"README", "src/a.txt", "src/lib/b.txt"}; !slices.Equal(files, want) {
+			t.Errorf("the borrowed checkout holds %q, want the cone's and the top level's %q", files, want)
+		}
+		if n := asked.Load(); n != 0 {
+			t.Errorf("the borrowed recipe asked the code host %d times", n)
+		}
+		if after := treeOf(t, objects); !maps.Equal(after, before) {
+			t.Errorf("the borrowed recipe wrote into the copy it borrows:\nbefore %v\nafter  %v", before, after)
+		}
+	})
+}
+
+// treeOf is every entry under dir with its size, mode and modification time —
+// what a writer into it would move.
+func treeOf(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	if err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		out[rel] = fmt.Sprintf("%d %v %d", info.Size(), info.Mode(), info.ModTime().UnixNano())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

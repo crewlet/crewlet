@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"strings"
@@ -153,6 +154,36 @@ const (
 	// sentence — and a key in every check row and a component of the token a
 	// check's box fetches with, each of which carries it whole.
 	CodeMaxCheckNameBytes = 64
+
+	// CodeMaxCheckEnvNameBytes is the longest name a check's secret takes
+	// ([ValidCodeCheckEnvName]): 128 bytes, four times the longest a common
+	// tool reads (GOOGLE_APPLICATION_CREDENTIALS is 30), so a check's list of
+	// the secrets it is given — at most 32 names — stays a few KiB on every
+	// record that carries its definition.
+	CodeMaxCheckEnvNameBytes = 128
+
+	// CodeCheckTimeoutCeiling is the longest a check may run: six hours,
+	// GitHub Actions' own per-job ceiling — the bound the CI a company
+	// already runs holds its longest job to, so no pipeline moved here has to
+	// be cut. A repository's checks file is held to it, and so is what a
+	// company lets its checks run (code.checks.max_timeout_seconds).
+	CodeCheckTimeoutCeiling = 6 * time.Hour
+
+	// CodeDefaultCheckMaxTimeout is an unset code.checks.max_timeout_seconds:
+	// FIFTY MINUTES. A remote box on E2B's smallest plan lives an hour, and a
+	// check's box is given ten minutes past its timeout for its setup — its
+	// git's check and its checkout, each a setup step under the sandbox's ten
+	// minutes (internal/code's CheckBoxGrace, which a test there holds this
+	// sum to) — so a check at the default fits the shortest session a
+	// company's remote cell may have. A company on a larger plan, or running
+	// its checks in containers alone, raises it to what its longest job takes.
+	CodeDefaultCheckMaxTimeout = 50 * time.Minute
+
+	// CodeMinCheckMaxTimeout is the least code.checks.max_timeout_seconds
+	// takes: a MINUTE, under which no build of a repository finishes its own
+	// setup — so a smaller value is a typo, and a company that means to run
+	// no check requires none on its branches.
+	CodeMinCheckMaxTimeout = time.Minute
 
 	// CodeMaxDescriptionBytes bounds a repository description: one
 	// paragraph, which rides every settings record and every listing row.
@@ -318,6 +349,9 @@ type Code struct {
 	IdentityDomain       string      `yaml:"identity_domain,omitempty" json:"identity_domain,omitempty" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$;maxlen=189" desc:"The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own."`
 	Limits               CodeLimits  `yaml:"limits,omitempty" json:"limits,omitzero"`
 	Scratch              CodeScratch `yaml:"scratch,omitempty" json:"scratch,omitzero"`
+	// Checks is how the company runs the checks its repositories define:
+	// where, with which of its secrets, and for how long at most.
+	Checks CodeChecks `yaml:"checks,omitempty" json:"checks,omitzero"`
 	// MergeByFloor is the least authority a merge into ANY protected branch
 	// needs, whatever its rules say: a merge is held to the stricter of it
 	// and the merge_by of every rule matching its branch. The EPOCH'S, read at
@@ -382,6 +416,106 @@ func (s CodeScratch) validate(scratch Path) error {
 		p.add(at(scratch, "max_per_seat"), ErrOutOfRange,
 			"%d is outside 0..%d scratch repositories a seat, or unset for the default %d",
 			*n, CodeScratchMaxPerSeatCeiling, DefaultCodeScratchMaxPerSeat)
+	}
+	return p.err()
+}
+
+// CodeChecks is how the company runs the CHECKS its repositories define in
+// their `.crewlet/checks.yaml` (internal/code's ParseChecks): which cells a
+// check runs in, which of the company's secrets a check may name, and how
+// long the company lets one run. The file names; this block decides
+// (docs/concepts/code-host.md, "Checks"). Every field unset is a valid block.
+//
+// THE EPOCH'S, read where each is used — the cell and the timeout when a
+// check's box is made, the secrets when its environment is — so a revision
+// moving any of them holds from its activation, with no restart.
+type CodeChecks struct {
+	// RunIn is the cell a check whose file names none runs in: one of
+	// [CodeCheckCells]. Unset is providers.sandbox's own default where that is
+	// one of them, else no cell ([Company.CheckRunIn]).
+	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=container|e2b" desc:"The cell a check whose checks file names none runs in: container — a container on a git node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct and self are refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host, and self is a seat's own executor box, which no check has."`
+
+	// AllowRunIn are the cells a repository's checks file may name in a
+	// check's own run_in. Unset is the one RunIn resolves to; set, it holds
+	// that one, so a file naming the cell a check naming none runs in is
+	// never refused where the check would have run anyway.
+	AllowRunIn []Placement `yaml:"allow_run_in,omitempty" json:"allow_run_in,omitempty" js:"enum=container|e2b" desc:"The cells a repository's checks file may name in a check's run_in, each once: container or e2b. Unset is the one run_in resolves to; set, it holds that one."`
+
+	// Env are the secrets a check may be given, by variable name: a check
+	// is given exactly the entries its file's `env` names, and none it does
+	// not. A credential field, as role.sandbox.env is: what is declared here
+	// is a registry token, a cloud key, a test database's URL — resolved
+	// when a check's box is made, never stored resolved.
+	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"The secrets a check may be given: a check is given exactly the entries its checks file names in its env. Each key a variable name — a letter or an underscore, then letters, digits and underscores, at most 128 bytes — and none the engine sets in a box itself. ${VAR} supported, resolved when a check's box is made."`
+
+	// MaxTimeoutSeconds is how long the company lets a check run, whatever
+	// its file's timeout_seconds says: 0 is unset, the default
+	// ([CodeDefaultCheckMaxTimeout]); else [CodeMinCheckMaxTimeout] to
+	// [CodeCheckTimeoutCeiling], in seconds.
+	MaxTimeoutSeconds int `yaml:"max_timeout_seconds,omitempty" json:"max_timeout_seconds,omitempty" js:"min=60;max=21600" desc:"How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — an e2b box on the smallest plan's one-hour session, with ten minutes of it for the box's setup."`
+}
+
+// MaxTimeout is code.checks.max_timeout_seconds as a duration, its default
+// applied where it is unset — THE ONE PLACE the default is applied: a check's
+// box runs for the lesser of this and its own file's timeout.
+func (k CodeChecks) MaxTimeout() time.Duration {
+	if k.MaxTimeoutSeconds == 0 {
+		return CodeDefaultCheckMaxTimeout
+	}
+	return time.Duration(k.MaxTimeoutSeconds) * time.Second
+}
+
+// zero is a block that sets nothing.
+func (k CodeChecks) zero() bool {
+	return k.RunIn == "" && len(k.AllowRunIn) == 0 && len(k.Env) == 0 && k.MaxTimeoutSeconds == 0
+}
+
+// validate holds code.checks' own rules at path: each cell one a check runs in
+// ([CodeCheckCells]) — `direct` and `self` refused by name with why
+// ([CodeCheckCellRefusal]) — and each allowed once; each secret's key a name a
+// check can name ([ValidCodeCheckEnvName]); and the timeout inside its bounds.
+// Whether a cell it names is configured, and whether the cells it allows hold
+// the one a check naming none runs in, turn on providers.sandbox:
+// [Company.validateSandboxPlacement] holds those. A key the engine sets in a
+// box itself is an admission rule's ([Company.validateReservedSandboxEnv]).
+func (k CodeChecks) validate(path Path) error {
+	var p problems
+	cell := func(at Path, cell Placement) {
+		switch {
+		case slices.Contains(CodeCheckCells, cell):
+		case CodeCheckCellRefusal(cell) != "":
+			p.add(at, ErrUnknownValue, "a check never runs in %s: %s", cell, CodeCheckCellRefusal(cell))
+		default:
+			p.add(at, ErrUnknownValue, "%q (want %s)", cell, names(CodeCheckCells))
+		}
+	}
+	if k.RunIn != "" {
+		cell(at(path, "run_in"), k.RunIn)
+	}
+	first := make(map[Placement]int, len(k.AllowRunIn))
+	for i, allowed := range k.AllowRunIn {
+		where := idx(at(path, "allow_run_in"), i)
+		if j, twice := first[allowed]; twice {
+			p.add(where, ErrConflict, "%q is allow_run_in[%d] too", allowed, j)
+			continue
+		}
+		first[allowed] = i
+		cell(where, allowed)
+	}
+	for _, name := range slices.Sorted(maps.Keys(k.Env)) {
+		if !ValidCodeCheckEnvName(name) {
+			p.add(entry(at(path, "env"), name), ErrShape,
+				"%q is not a name a check can be given a secret under: a letter or an underscore, then letters, "+
+					"digits and underscores, at most %d bytes", name, CodeMaxCheckEnvNameBytes)
+		}
+	}
+	if s := k.MaxTimeoutSeconds; s != 0 &&
+		(s < int(CodeMinCheckMaxTimeout/time.Second) || s > int(CodeCheckTimeoutCeiling/time.Second)) {
+		p.add(at(path, "max_timeout_seconds"), ErrOutOfRange,
+			"%d is outside %d..%d seconds — a minute, under which no build finishes its own setup, to six "+
+				"hours, the longest any checks file may ask (GitHub Actions' per-job ceiling) — or unset for "+
+				"the default %d", s, int(CodeMinCheckMaxTimeout/time.Second), int(CodeCheckTimeoutCeiling/time.Second),
+			int(CodeDefaultCheckMaxTimeout/time.Second))
 	}
 	return p.err()
 }
@@ -483,6 +617,57 @@ func ValidCodeCheckName(name string) bool {
 		}
 	}
 	return true
+}
+
+// ValidCodeCheckEnvName reports a name a check's secret may have: a letter or
+// an underscore, then letters, digits and underscores — a variable any shell
+// exports — at most [CodeMaxCheckEnvNameBytes]. THE ONE RULE, for the same
+// reason as [ValidCodeCheckName]: a key of the company's code.checks.env here
+// and a name a repository's checks file lists in a check's `env` in the code
+// domain are held to it alike, so a file never names a secret the company
+// could not define, nor the company one no file could name.
+func ValidCodeCheckEnvName(name string) bool {
+	if name == "" || len(name) > CodeMaxCheckEnvNameBytes {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		switch c := name[i]; {
+		case c == '_', 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z':
+		case i > 0 && '0' <= c && c <= '9':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// CodeCheckCells are the cells a check runs in, in this order: TWO OF THE
+// SANDBOX'S FOUR PLACEMENTS ([Placements]) — a container on a git node, which
+// holds the repository's copy beside it, or a remote e2b box, which fetches
+// the one commit it checks. A check runs a change's own code — its build, its
+// tests, whatever its author put there — so it never runs where that code
+// reaches the engine ([CodeCheckCellRefusal]). THE ONE LIST, for the reason
+// [ValidCodeCheckName] is one rule: the company's code.checks here and a
+// repository's checks file in the code domain name their cells from it.
+var CodeCheckCells = []Placement{PlacementContainer, PlacementE2B}
+
+// CodeCheckCellRefusal is why a check never runs in p, "" for a cell of
+// [CodeCheckCells] and for a value no placement has — which its reader
+// refuses as unknown. BY NAME (M3 decision U1 a), each of the two placements
+// a check is refused with a sentence of its own: `direct` runs a box as the
+// engine's own user on the engine host, where a change's code would read what
+// the engine reads — the keyring that signs every run's token among it — and
+// `self` is a seat's own executor box, which no check, run by no seat, has.
+func CodeCheckCellRefusal(p Placement) string {
+	switch p {
+	case PlacementDirect:
+		return "direct runs a box as the engine's own user on the engine host, and a check runs a change's " +
+			"own code, which would read what the engine reads; run it in a container or on e2b"
+	case PlacementSelf:
+		return "self is a seat's own executor box, and a check is run by no seat; run it in a container or " +
+			"on e2b"
+	}
+	return ""
 }
 
 // CodeRepo is one repository code.repos declares.
@@ -989,6 +1174,11 @@ func (c Code) validate(path Path, o *org.Organization) error {
 				"code.scratch configures the native code host, and nothing hosts code on this "+
 					"company: set code.native: true, or remove code.scratch")
 		}
+		if !c.Checks.zero() {
+			p.add(at(path, "checks"), ErrConflict,
+				"nothing hosts code on this company, so no repository defines a check to run: set "+
+					"code.native, or remove code.checks")
+		}
 	}
 	switch {
 	case !c.MergeByFloor.Valid():
@@ -1012,6 +1202,7 @@ func (c Code) validate(path Path, o *org.Organization) error {
 	}
 	p.wrap(c.Limits.validate(at(path, "limits")))
 	p.wrap(c.Scratch.validate(at(path, "scratch")))
+	p.wrap(c.Checks.validate(at(path, "checks")))
 	p.wrap(validateCodeRepos(at(path, "repos"), c.Repos, o))
 	return p.err()
 }

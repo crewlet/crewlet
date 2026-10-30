@@ -104,12 +104,12 @@ const (
 	// that belongs in the repository, where it is reviewed as code.
 	MaxCheckRunBytes = 4 << 10
 
-	// CheckTimeoutCeiling is the longest a check may run: six hours, GitHub
-	// Actions' own per-job ceiling — the bound the CI a company already runs
-	// holds its longest job to, so no pipeline moved here has to be cut.
-	// What a company lets its checks run is its own, at or under this
-	// (code.checks.max_timeout_seconds); the file is held to the ceiling.
-	CheckTimeoutCeiling = 6 * time.Hour
+	// CheckTimeoutCeiling is config.CodeCheckTimeoutCeiling: the longest a
+	// check may run, six hours, GitHub Actions' own per-job ceiling. What a
+	// company lets its checks run is its own, at or under this
+	// (code.checks.max_timeout_seconds, which config holds to the same
+	// constant); the file is held to the ceiling.
+	CheckTimeoutCeiling = config.CodeCheckTimeoutCeiling
 
 	// MaxCheckPaths is how many path globs one check names: 32, past the
 	// directories any one check is about (a service, its shared libraries,
@@ -123,11 +123,10 @@ const (
 	// check names those it needs and nothing is handed to it by default.
 	MaxCheckEnv = 32
 
-	// MaxCheckEnvNameBytes is the longest variable name a check names: 128
-	// bytes, four times the longest a common tool reads
-	// (GOOGLE_APPLICATION_CREDENTIALS is 30), so with MaxCheckEnv a check's
-	// list is at most 4 KiB.
-	MaxCheckEnvNameBytes = 128
+	// MaxCheckEnvNameBytes is config.CodeMaxCheckEnvNameBytes: the longest
+	// variable name a check names ([config.ValidCodeCheckEnvName]), 128 bytes,
+	// so with MaxCheckEnv a check's list is at most 4 KiB.
+	MaxCheckEnvNameBytes = config.CodeMaxCheckEnvNameBytes
 
 	// MaxCheckNameBytes is config.CodeMaxCheckNameBytes: the longest check
 	// name ([config.ValidCodeCheckName]), 64 bytes, a CI job name's length. A
@@ -177,37 +176,34 @@ func (l checkList) over(n int) (string, bool) {
 
 // CheckCell is the kind of box a check runs in.
 //
-// TWO OF THE SANDBOX'S FOUR PLACEMENTS (config.Placements): a container on a
-// git node, or a remote E2B box. A check runs a change's own code — its build,
-// its tests, whatever its author put there — so it never runs where that code
-// reaches the engine: `direct` runs it as the engine's own user on the engine
-// host, reading what the engine reads, and `self` is a seat's own executor
-// box, which a check, run by no seat, does not have. Both are refused by name
-// (U1 a).
+// TWO OF THE SANDBOX'S FOUR PLACEMENTS: a container on a git node, or a remote
+// E2B box — config.CodeCheckCells, the one list the company's code.checks is
+// held to as well, so a file can name no cell the company could not allow and
+// the company allow none a file could not name. A check runs a change's own
+// code — its build, its tests, whatever its author put there — so it never
+// runs where that code reaches the engine: `direct` and `self` are refused by
+// name, each with config.CodeCheckCellRefusal's sentence (U1 a).
 type CheckCell string
 
 const (
 	// CellContainer is a container on a git node, which holds the
 	// repository's cache beside it.
-	CellContainer CheckCell = "container"
+	CellContainer = CheckCell(config.PlacementContainer)
 	// CellE2B is a remote E2B box, which clones the one commit it checks.
-	CellE2B CheckCell = "e2b"
+	CellE2B = CheckCell(config.PlacementE2B)
 )
 
-// CheckCells is the closed set, in this order.
-func CheckCells() []CheckCell { return []CheckCell{CellContainer, CellE2B} }
+// CheckCells is the closed set, in config.CodeCheckCells' order.
+func CheckCells() []CheckCell {
+	out := make([]CheckCell, len(config.CodeCheckCells))
+	for i, cell := range config.CodeCheckCells {
+		out[i] = CheckCell(cell)
+	}
+	return out
+}
 
 // Valid reports a cell this build runs a check in.
-func (c CheckCell) Valid() bool { return slices.Contains(CheckCells(), c) }
-
-// refusedCells are the sandbox placements a check never runs in, each with the
-// sentence a file naming it is refused with.
-var refusedCells = map[CheckCell]string{
-	"direct": "direct runs a box as the engine's own user on the engine host, and a check runs a " +
-		"change's own code, which would read what the engine reads; run it in a container or on e2b",
-	"self": "self is a seat's own executor box, and a check is run by no seat; run it in a container " +
-		"or on e2b",
-}
+func (c CheckCell) Valid() bool { return slices.Contains(config.CodeCheckCells, config.Placement(c)) }
 
 // CheckReport names the files a check writes its results to, each a path
 // inside its checkout that the runner reads once the command ends: a JUnit
@@ -272,24 +268,6 @@ func (d CheckDef) Validate() error {
 // file lists them, each name once.
 type ChecksFile struct {
 	Checks []CheckDef `json:"checks"`
-}
-
-// validEnvName reports a variable name a shell takes: a letter or an
-// underscore, then letters, digits and underscores, at most
-// MaxCheckEnvNameBytes.
-func validEnvName(name string) bool {
-	if name == "" || len(name) > MaxCheckEnvNameBytes {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		switch c := name[i]; {
-		case c == '_', c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z':
-		case i > 0 && c >= '0' && c <= '9':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // checksFileError is every fault [ParseChecks] found in a file, each a
@@ -868,7 +846,7 @@ func defFaults(d CheckDef) []defFault {
 			"read as one report", d.Report.SARIF)
 	}
 	if d.RunIn != "" && !d.RunIn.Valid() {
-		if why, refused := refusedCells[d.RunIn]; refused {
+		if why := config.CodeCheckCellRefusal(config.Placement(d.RunIn)); why != "" {
 			add(config.Path{"run_in"}, config.ErrUnknownValue, "a check never runs in %s: %s", d.RunIn, why)
 		} else {
 			add(config.Path{"run_in"}, config.ErrUnknownValue, "%q is not one of %v", d.RunIn, CheckCells())
@@ -896,7 +874,7 @@ func defFaults(d CheckDef) []defFault {
 	} else {
 		first := make(map[string]int, len(d.Env))
 		for i, name := range d.Env {
-			if !validEnvName(name) {
+			if !config.ValidCodeCheckEnvName(name) {
 				add(config.Path{"env", i}, config.ErrUnknownValue, "%q is not a variable name: a letter or "+
 					"an underscore, then letters, digits and underscores, at most %d bytes — the key of an "+
 					"entry in the company's code.checks.env", name, MaxCheckEnvNameBytes)

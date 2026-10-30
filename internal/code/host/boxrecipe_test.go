@@ -199,7 +199,7 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 
 	// THE CHECK'S CHECKOUT: one commit, detached, the cone alone.
 	check := repo
-	check.Paths = []string{"src"}
+	check.Branch, check.Access, check.Paths = "", sandbox.RepoRead, []string{"src"}
 	single, err := sandbox.CloneRecipe(check, sandbox.CloneSingleSHA)
 	if err != nil {
 		t.Fatal(err)

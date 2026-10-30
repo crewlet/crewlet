@@ -39,10 +39,23 @@ const (
 	// needs the tree at one commit and nothing of its history. A check box
 	// commits nothing, so no hook is written.
 	CloneSingleSHA ClonePurpose = "single-sha"
+	// CloneBorrowed is a check whose box BORROWS the objects of a git node's
+	// copy of the repository, mounted read-only into it ([Mount],
+	// [RunRepo.Objects]): its one commit checked out, with the cone, of
+	// objects read in place as git's alternates, and NOTHING FETCHED — the
+	// code host serves the check none of its bytes, since the node it runs
+	// on already holds every one. The checkout reads the copy's whole history
+	// through the alternates as it reads the commit, and writes nothing into
+	// it. Like a single-commit checkout it commits nothing, so no hook is
+	// written; and the code host is its remote, as there, so a check reads
+	// the same remote whichever of the two its cell gave it.
+	CloneBorrowed ClonePurpose = "borrowed"
 )
 
 // ClonePurposes is every [ClonePurpose] this build knows.
-func ClonePurposes() []ClonePurpose { return []ClonePurpose{CloneCoding, CloneSingleSHA} }
+func ClonePurposes() []ClonePurpose {
+	return []ClonePurpose{CloneCoding, CloneSingleSHA, CloneBorrowed}
+}
 
 // Valid reports whether p is one of [ClonePurposes].
 func (p ClonePurpose) Valid() bool { return slices.Contains(ClonePurposes(), p) }
@@ -138,10 +151,11 @@ END { exit !(seen && ok) }`
 
 // CloneRecipe is the ONE way a box is given a repository: the setup step that
 // checks r out for purpose, into `./<r.Repo>`, from
-// "$CREWLET_GIT_URL/<r.Repo>.git". Every value it interpolates is quoted
-// ([ShellQuote]); the base URL is the launch environment's, expanded by the
-// box's shell. Refused for an r [RunRepo.Validate] refuses, for a purpose this
-// build does not know, and for [CloneSingleSHA] with no base.
+// "$CREWLET_GIT_URL/<r.Repo>.git" — or, borrowed, from the objects r names
+// in the box. Every value it interpolates is quoted ([ShellQuote]); the base
+// URL is the launch environment's, expanded by the box's shell. Refused for
+// an r [RunRepo.ValidateFor] refuses for purpose, and so for a purpose this
+// build does not know.
 //
 // THE WHOLE STEP IS SKIPPED WHERE `./<r.Repo>/.git` EXISTS, so a reused box
 // keeps its checkout and the work in it, and a second launch in one turn is
@@ -150,13 +164,15 @@ END { exit !(seen && ok) }`
 // NEVER TREELESS (`--filter=tree:0`): a treeless clone carries every commit of
 // the history — millions at the rate agents push — and fetches each tree a
 // walk touches one request at a time. NEVER A BUNDLE URI: a client downloads a
-// whole bundle even for a filtered clone. No `--reference --dissociate`: a box
-// holds no cache to borrow from, and a remote one never can — and a copy
-// borrowed and dissociated costs the box a repack of the whole history, 47.8
-// s against the recipe's 13.0 at a gigabyte (internal/code/host's
-// BenchmarkBoxDissociate).
+// whole bundle even for a filtered clone. No `--reference --dissociate`: a
+// coding box holds no cache to borrow from, and a remote one never can — and a
+// copy borrowed and dissociated costs the box a repack of the whole history,
+// 47.8 s against the recipe's 13.0 at a gigabyte (internal/code/host's
+// BenchmarkBoxDissociate). A check's box on a git node, which holds such a
+// cache, is given that cache's objects to READ ([CloneBorrowed]), never to
+// copy.
 func CloneRecipe(r RunRepo, purpose ClonePurpose) (SetupStep, error) {
-	if err := r.Validate(); err != nil {
+	if err := r.ValidateFor(purpose); err != nil {
 		return SetupStep{}, err
 	}
 	var command string
@@ -164,12 +180,9 @@ func CloneRecipe(r RunRepo, purpose ClonePurpose) (SetupStep, error) {
 	case CloneCoding:
 		command = codingClone(r)
 	case CloneSingleSHA:
-		if r.Base == "" {
-			return SetupStep{}, fmt.Errorf("sandbox: repository %s: a check is given one commit, and names none", r.Repo)
-		}
 		command = singleSHAClone(r)
-	default:
-		return SetupStep{}, fmt.Errorf("sandbox: repository %s: %q is not a clone purpose", r.Repo, purpose)
+	case CloneBorrowed:
+		command = borrowedClone(r)
 	}
 	return SetupStep{
 		Name:     cloneStepName(r, purpose),
@@ -178,18 +191,21 @@ func CloneRecipe(r RunRepo, purpose ClonePurpose) (SetupStep, error) {
 	}, nil
 }
 
-// cloneStepName is the name a step's failure is reported under.
+// cloneStepName is the name a step's failure is reported under: a coding
+// run's clone, or a check's checkout of its one commit however its objects
+// arrive.
 func cloneStepName(r RunRepo, purpose ClonePurpose) string {
-	if purpose == CloneSingleSHA {
-		return "checkout " + r.Repo
+	if purpose == CloneCoding {
+		return "clone " + r.Repo
 	}
-	return "clone " + r.Repo
+	return "checkout " + r.Repo
 }
 
 // cloneWords are the quoted words every recipe writes: the directory, the
-// remote, the branch's name and ref, the base, and the cone.
+// remote, the branch's name and ref, the base, the cone, and the objects a
+// borrowed checkout reads.
 type cloneWords struct {
-	dir, url, branch, ref, base, cone string
+	dir, url, branch, ref, base, cone, objects string
 }
 
 // fetchBase is the command that fetches w's base BY ITS ID, at depth when depth
@@ -240,12 +256,13 @@ func wordsOf(r RunRepo) cloneWords {
 		cone[i] = ShellQuote(p)
 	}
 	return cloneWords{
-		dir:    ShellQuote(r.Repo),
-		url:    `"$` + GitURLVar + `"/` + ShellQuote(r.Repo+".git"),
-		branch: ShellQuote(r.Branch),
-		ref:    ShellQuote("refs/heads/" + r.Branch),
-		base:   ShellQuote(r.Base),
-		cone:   strings.Join(cone, " "),
+		dir:     ShellQuote(r.Repo),
+		url:     `"$` + GitURLVar + `"/` + ShellQuote(r.Repo+".git"),
+		branch:  ShellQuote(r.Branch),
+		ref:     ShellQuote("refs/heads/" + r.Branch),
+		base:    ShellQuote(r.Base),
+		cone:    strings.Join(cone, " "),
+		objects: ShellQuote(r.Objects),
 	}
 }
 
@@ -310,6 +327,40 @@ func singleSHAClone(r RunRepo) string {
 	return strings.Join(lines, "\n")
 }
 
+// borrowedClone is [CloneBorrowed]'s command: a repository initialised with the
+// code host as its remote — added, never fetched from — the borrowed objects
+// named as its one ALTERNATE, the cone, and the commit checked out detached.
+//
+// NO FETCH, AND NO PROMISOR: the remote is a plain one, so a checkout missing
+// an object FAILS, naming it, rather than fetching it lazily from the code
+// host. The copy the box borrows holds every object of the repository —
+// it is a git node's whole copy, held for the box's run — so a missing one is
+// a fault of that copy, which a quiet fetch per object would hide while
+// costing the code host the bytes the borrow exists to save.
+//
+// THE ALTERNATES FILE IS WRITTEN, never `GIT_ALTERNATE_OBJECT_DIRECTORIES`: the
+// check's own command runs git in the checkout after this step, in an
+// environment the engine does not compose, and must read the same objects;
+// `git init` makes the `objects/info` it is written into. Read-only: git
+// reads an alternate's packs, indexes and commit-graph in place and writes
+// nothing into an alternate's directory, which a read-only mount would refuse
+// anyway.
+func borrowedClone(r RunRepo) string {
+	w := wordsOf(r)
+	lines := []string{
+		"if [ ! -e " + w.dir + "/.git ]; then",
+		"  git init --quiet " + w.dir + " && git -C " + w.dir + " remote add origin " + w.url + " &&",
+		"  printf '%s\\n' " + w.objects + " > " + w.dir + "/.git/objects/info/alternates &&",
+	}
+	if cone := w.sparseCone(); cone != "" {
+		lines = append(lines, cone)
+	}
+	lines = append(lines,
+		"  git -C "+w.dir+" checkout --quiet --detach "+w.base,
+		"fi")
+	return strings.Join(lines, "\n")
+}
+
 // cloneBrief is what the coding agent is told the step made true: where the
 // repository is, at what, how much of it, and how it pushes — "Your
 // environment" is where a run learns it, so it never spends rounds
@@ -320,6 +371,10 @@ func cloneBrief(r RunRepo, purpose ClonePurpose) string {
 	case purpose == CloneSingleSHA:
 		fmt.Fprintf(&b, "Repository `%s` is checked out at `./%s` at commit %s, with no history "+
 			"(file contents are fetched as git needs them)", r.Repo, r.Repo, shortCommit(r.Base))
+	case purpose == CloneBorrowed:
+		fmt.Fprintf(&b, "Repository `%s` is checked out at `./%s` at commit %s, its history and file "+
+			"contents read from this node's copy of the repository at `%s`, which is read-only", r.Repo, r.Repo,
+			shortCommit(r.Base), r.Objects)
 	case r.Base == "":
 		fmt.Fprintf(&b, "Repository `%s` is at `./%s` on branch `%s`, which has no commits yet: the "+
 			"repository is empty", r.Repo, r.Repo, r.Branch)
@@ -336,7 +391,7 @@ func cloneBrief(r RunRepo, purpose ClonePurpose) string {
 	}
 	b.WriteString(".")
 	switch {
-	case purpose == CloneSingleSHA:
+	case purpose != CloneCoding:
 	case r.Access == RepoRead:
 		// NO PUSH INSTRUCTION for a repository given to read: the code host
 		// refuses its push, and telling the agent how to make one is telling

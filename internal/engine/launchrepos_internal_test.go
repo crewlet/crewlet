@@ -510,7 +510,8 @@ func (r *reposRig) startedEnv(t *testing.T, n int) map[string]string {
 // checkout's status was measured faster with (index version 4, the untracked
 // cache); and the commit hook's three values for THIS launch — a second
 // launch in the turn carries the second launch's id. The variables beyond
-// git's own are exactly the ones config reserves.
+// git's own are exactly the ones config reserves, but the check's own, which
+// only a check's box is told.
 //
 // Mutations: drop entry 1 (the helper reset) → the exact-entries assertion,
 // red; drop entry 7 (the untracked cache) → the same, red; take the launch id
@@ -588,7 +589,9 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 	}
 
 	// ONE LIST: what the engine sets beyond git's own variables is exactly
-	// what configuration reserves, so no operator's value can stand beside it.
+	// what configuration reserves — but the check's own, which a check's box
+	// is told and a coding run's is not — so no operator's value can stand
+	// beside it, and configuration reserves no name nothing sets.
 	rig := newReposRig(t, launchReposDoc, base)
 	env, err := rig.e.boxGitEnv(rig.c.Org.AgentSeatByHandle("swe"), base,
 		host.BoxRunRef{TurnID: statelog.NewOpID(time.Now(), ""), LaunchID: uuid.NewString()}, nil, nil)
@@ -602,9 +605,12 @@ func TestABoxIsConfiguredByEnvironment(t *testing.T) {
 		}
 	}
 	slices.Sort(set)
-	reserved := slices.Sorted(slices.Values(config.ReservedSandboxEnv()))
-	if !slices.Equal(set, reserved) {
-		t.Errorf("a launch sets %v beyond git's own variables, and configuration reserves %v", set, reserved)
+	coding := slices.DeleteFunc(slices.Sorted(slices.Values(config.ReservedSandboxEnv())), func(name string) bool {
+		return slices.Contains(config.ReservedCheckEnv(), name)
+	})
+	if !slices.Equal(set, coding) {
+		t.Errorf("a launch sets %v beyond git's own variables, and configuration reserves %v for a coding run",
+			set, coding)
 	}
 }
 

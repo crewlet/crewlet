@@ -7,14 +7,20 @@ import (
 	"testing"
 )
 
-// THE ENGINE'S GIT VARIABLES ARE RESERVED, in each of the three envs a coding
-// run's environment is assembled from — a seat's sandbox block, a seat's own
-// setup step and a provider-wide one — each refused at its own path, naming
-// the variable: an operator's value for one would break the run's clones
-// (the credential, the base) or make a box commit's trailers disagree with
-// its push's record (the three the commit hook reads). The table spells every
-// name literally, so a name dropped from ReservedSandboxEnv is a row that
-// passes.
+// The engine's git variables in a box: its code host credential and base, and
+// the three values the coding clone's commit hook reads.
+var gitVariables = []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL", "CREWLET_GIT_TRAILER_SEAT",
+	"CREWLET_GIT_TRAILER_RUN", "CREWLET_GIT_TRAILER_WORK_ITEM"}
+
+// THE ENGINE'S GIT VARIABLES ARE RESERVED, in each of the four envs a box's
+// environment is assembled from — a seat's sandbox block, a seat's own setup
+// step, a provider-wide one, and the company's check secrets, since a check's
+// box is given the code host's credential and base too — each refused at its
+// own path, naming the variable: an operator's value for one would break the
+// box's clones (the credential, the base) or make a box commit's trailers
+// disagree with its push's record (the three the commit hook reads). The table
+// spells every name literally, so a name dropped from ReservedSandboxEnv is a
+// row that passes.
 //
 // AN ADMISSION RULE: a stored revision carrying one is held to the runnable
 // rules alone, which take it — the engine's own value wins for the names it
@@ -24,11 +30,46 @@ import (
 // red; drop a name from ReservedSandboxEnv → its rows pass, red.
 func TestTheEnginesGitVariablesAreReserved(t *testing.T) {
 	t.Parallel()
-	names := []string{"CREWLET_GIT_TOKEN", "CREWLET_GIT_URL", "CREWLET_GIT_TRAILER_SEAT",
-		"CREWLET_GIT_TRAILER_RUN", "CREWLET_GIT_TRAILER_WORK_ITEM"}
-	if got := ReservedSandboxEnv(); !slices.Equal(got, names) {
-		t.Errorf("ReservedSandboxEnv() = %v, want %v", got, names)
+	if got := ReservedSandboxEnv(); !slices.Equal(got[:min(len(got), len(gitVariables))], gitVariables) {
+		t.Errorf("ReservedSandboxEnv() = %v, want it to open with %v", got, gitVariables)
 	}
+	reservedInEveryBoxEnv(t, gitVariables)
+}
+
+// A CHECK'S BOX VARIABLES ARE RESERVED as the git ones are, in the same four
+// envs: what a check's box is told of its check — its repository, its commit
+// and that commit's base, its name and attempt, where it reads its commit
+// without a clone and where it writes its summary — so an operator's value for
+// one would tell a check's command another check than the one it runs. They
+// are ReservedCheckEnv, spelled literally here, and ReservedSandboxEnv is the
+// git variables and them, no other: a refusal of each carries its reason.
+//
+// Mutations: drop a name from ReservedCheckEnv → its rows pass, red; drop its
+// reason → red.
+func TestACheckBoxsVariablesAreReserved(t *testing.T) {
+	t.Parallel()
+	check := []string{"CREWLET_CHECK_REPO", "CREWLET_CHECK_SHA", "CREWLET_CHECK_BASE", "CREWLET_CHECK_NAME",
+		"CREWLET_CHECK_ATTEMPT", "CREWLET_CHECK_API", "CREWLET_CHECK_SUMMARY"}
+	if got := ReservedCheckEnv(); !slices.Equal(got, check) {
+		t.Errorf("ReservedCheckEnv() = %v, want %v", got, check)
+	}
+	if got, want := ReservedSandboxEnv(), slices.Concat(gitVariables, check); !slices.Equal(got, want) {
+		t.Errorf("ReservedSandboxEnv() = %v, want the git variables and the check's: %v", got, want)
+	}
+	for _, name := range ReservedSandboxEnv() {
+		if reservedSandboxEnvReasons[name] == "" {
+			t.Errorf("%s is reserved with no reason a refusal can give", name)
+		}
+	}
+	reservedInEveryBoxEnv(t, check)
+}
+
+// reservedInEveryBoxEnv runs a case per name and per env a box's environment
+// is assembled from, each refusing the name at its own path as the engine's,
+// on the write and never on the runnable rules; and takes a name of the
+// operator's own beside them.
+func reservedInEveryBoxEnv(t *testing.T, names []string) {
+	t.Helper()
 	places := []struct{ name, doc, path string }{
 		{"a seat's sandbox env", `
 name: Acme
@@ -65,6 +106,16 @@ providers:
       - name: tools
         env: {%s: "x"}
 `, "providers.sandbox.setup[0].env.%s"},
+		{"the company's check secrets", `
+name: Acme
+providers:
+  sandbox:
+    fake: true
+code:
+  native: true
+  checks:
+    env: {%s: "x"}
+`, "code.checks.env.%s"},
 	}
 	for _, name := range names {
 		for _, place := range places {
@@ -98,6 +149,10 @@ roles:
     sandbox:
       enabled: true
       env: {GITLAB_TOKEN: "x", CREWLET_GIT_PROXY: "y", GIT_CONFIG_COUNT: "0"}
+code:
+  native: true
+  checks:
+    env: {NPM_TOKEN: "x", CREWLET_CHECKS_PROXY: "y"}
 `)
 }
 

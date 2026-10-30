@@ -643,7 +643,27 @@ func (l *Local) layout(id string) (boxLayout, error) {
 func (l *Local) containerName(id string) string { return ContainerPrefix + id }
 
 // Create mints a box and, in container mode, starts the container behind it.
+//
+// A SPEC'S MOUNTS ARE HELD HERE TOO, by the rule the manager holds every cell
+// to ([mountsFit]), before anything of the box exists: a direct box refuses
+// one, and a container's are each an existing directory of this host
+// ([Mount.Host]) — which the runtime, handed a path that is not one, would
+// make as root and mount empty.
 func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
+	if err := mountsFit(l.opts.Placement, spec.Mounts); err != nil {
+		return nil, localErrorf("%v", err)
+	}
+	for i, m := range spec.Mounts {
+		info, err := os.Stat(m.Host)
+		if err != nil || !info.IsDir() {
+			why := "is not a directory"
+			if err != nil {
+				why = err.Error()
+			}
+			return nil, localErrorf("container sandbox: mounts[%d]'s host directory %s cannot be mounted: %s",
+				i, m.Host, why)
+		}
+	}
 	id := uuid.NewString()
 	id = strings.ReplaceAll(id, "-", "")[:16]
 	layout, err := l.layout(id)
@@ -687,7 +707,7 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 	}
 
 	name := l.containerName(id)
-	result, err := runHost(ctx, l.cli.command(0, l.runArgv(ctx, layout, name)...))
+	result, err := runHost(ctx, l.cli.command(0, l.runArgv(ctx, layout, name, spec.Mounts)...))
 	if err != nil || result.ExitCode != 0 {
 		_ = os.RemoveAll(layout.root)
 		detail := strings.TrimSpace(result.Stderr)
@@ -727,19 +747,32 @@ func (l *Local) Create(ctx context.Context, spec Spec) (Sandbox, error) {
 // Separated from Create so the argument order is assertable without a running
 // daemon: what an operator's own run_args may override is a function of where
 // they are spliced, and nothing else says it.
-func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string) []string {
+//
+// THE SPEC'S MOUNTS FOLLOW THE HOME, each `-v host:box`, `:ro` where it is
+// read-only — the runtime's own grammar, which [Mount.Validate] keeps every
+// path of a mount whole in.
+func (l *Local) runArgv(ctx context.Context, layout boxLayout, name string, mounts []Mount) []string {
 	argv := []string{
 		"run", "-d",
 		"--name", name,
 		"-v", layout.home() + ":" + DefaultHome,
-		"-w", DefaultHome + "/" + WorkspaceSubdir,
-		"-e", "HOME=" + DefaultHome,
+	}
+	for _, m := range mounts {
+		volume := m.Host + ":" + m.Box
+		if m.ReadOnly {
+			volume += ":ro"
+		}
+		argv = append(argv, "-v", volume)
+	}
+	argv = append(argv,
+		"-w", DefaultHome+"/"+WorkspaceSubdir,
+		"-e", "HOME="+DefaultHome,
 		// A reaping PID 1. The detached coding job is backgrounded inside an
 		// `exec`, so without an init that reaps it, a finished job lingers as
 		// a zombie — which `kill -0` reports as ALIVE, hanging the runner's
 		// completion check on a job that already died.
 		"--init",
-	}
+	)
 	argv = append(argv, containerUserArgs(ctx, l.cli)...)
 	if l.opts.Network != "" {
 		argv = append(argv, "--network", l.opts.Network)

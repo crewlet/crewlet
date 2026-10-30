@@ -3797,7 +3797,8 @@ func testListRunsListsEveryStatus(t *testing.T, s sandbox.PendingStore, runs coo
 	}
 }
 
-// runRepo is a repository a run is given, valid by [sandbox.RunRepo.Validate].
+// runRepo is a repository a run is given, valid by [sandbox.RunRepo.ValidateFor]
+// a coding run ([sandbox.CloneCoding]).
 func runRepo(name, id string) sandbox.RunRepo {
 	return sandbox.RunRepo{
 		Repo: name, RepoID: id, Base: "0123456789abcdef0123456789abcdef01234567",

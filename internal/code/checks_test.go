@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/code"
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -422,5 +423,21 @@ func TestTheLargestCheckRecordsFitARecord(t *testing.T) {
 	if rows := 1 + 2 + 2*code.CheckHorizonRows; rows > code.MaxRecordRows {
 		t.Errorf("one check record's apply touches up to %d rows, past MaxRecordRows (%d)", rows,
 			code.MaxRecordRows)
+	}
+}
+
+// A CHECK AT THE COMPANY'S DEFAULT TIMEOUT FITS THE SHORTEST REMOTE SESSION: an
+// unset code.checks.max_timeout_seconds and the time a check's box is given
+// past its timeout for its setup (CheckBoxGrace) sum to the hour a box on
+// E2B's smallest plan lives — the one figure config's default is derived from,
+// which config cannot read here, since the grace is the sandbox's.
+//
+// Mutation: raise config.CodeDefaultCheckMaxTimeout to an hour — red.
+func TestTheDefaultCheckTimeoutFitsTheShortestRemoteSession(t *testing.T) {
+	t.Parallel()
+	const shortestSession = time.Hour
+	if got := config.CodeDefaultCheckMaxTimeout + code.CheckBoxGrace; got != shortestSession {
+		t.Errorf("a check at the default timeout holds its box %s with its setup, want %s: the hour a box "+
+			"on E2B's smallest plan lives", got, shortestSession)
 	}
 }
