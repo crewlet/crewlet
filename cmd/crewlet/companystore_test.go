@@ -281,8 +281,6 @@ func readersOfTheCompany() []readerRun {
 		vendorRun("confluence provision", sink, public, "-recreate-webhooks"),
 		vendorRun("confluence import"),
 		vendorRun("confluence resync"),
-		vendorRun("mattermost provision", sink, "-admin-token=mm-admin"),
-		vendorRun("mattermost provision", sink, "-admin-token=mm-admin", "-rotate"),
 		vendorRun("mattermost doctor", "-admin-token=mm-admin"),
 		// WITH AN APP-CONFIGURATION TOKEN, so a run the refusal let through
 		// goes on to Slack, which no case's run reaches: its first request
@@ -381,8 +379,6 @@ func TestARunThatReadsNoStoredValueDecidesNoRoute(t *testing.T) {
 		vendor)
 	ledger := filepath.Join(t.TempDir(), "ledger.json")
 	for _, args := range [][]string{
-		{"mattermost", "provision", company, "-dry-run"},
-		{"mattermost", "provision", empty, "-print", "-admin-token=mm-admin"},
 		{"confluence", "import", company, t.TempDir(), "-dry-run"},
 		{"confluence", "import", empty, t.TempDir()},
 		{"slack", "provision", empty, "-print", "-ledger", ledger},
@@ -665,7 +661,6 @@ func TestAProvisioningRunsChoiceOfSinkIsAnsweredBeforeAnyRoute(t *testing.T) {
 		{"github", "provision", public},
 		{"jira", "provision", public},
 		{"confluence", "provision", public},
-		{"mattermost", "provision", "-admin-token=mm-admin"},
 		{"slack", "provision", public, "-config-token=xoxe-refresh"},
 	} {
 		for _, tc := range []struct {
@@ -1016,9 +1011,6 @@ func TestAProvisioningRunAsksForItsSeatsTokensInItsFirstBatch(t *testing.T) {
 			return []string{"gitlab", "provision", companyAt(t, readerCompanyDoc, vendor),
 				"-public-url", "https://crewlet.example.com"}
 		}, []string{"GITLAB_SIGNING_SECRET", "GITLAB_TOKEN_CEO"}, "-rotate", "no administrator token"},
-		{"mattermost provision", func(vendor string) []string {
-			return []string{"mattermost", "provision", companyAt(t, readerCompanyDoc, vendor)}
-		}, []string{"MM_TOKEN_CEO"}, "-rotate", "no administrator token"},
 		{"slack provision", func(vendor string) []string {
 			return []string{"slack", "provision",
 				installedSlackApps(t, companyAt(t, readerCompanyDoc, vendor), "ceo")}

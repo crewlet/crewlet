@@ -696,7 +696,7 @@ func observedFor(lanes []Lane, got map[Lane]Observed, rec Record, now time.Time)
 				o.CreatedAt = rec.Account.CreatedAt
 			}
 		}
-		if o.Credential == nil {
+		if o.Credential == nil && !o.CredentialGone {
 			o.Credential = rec.Credential
 		}
 		prior := rec.Lanes[lane]

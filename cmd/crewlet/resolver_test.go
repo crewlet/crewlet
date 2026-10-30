@@ -661,10 +661,6 @@ func TestARunningEngineRevealsOnlyWhatTheCommandReads(t *testing.T) {
 			[]string{"JIRA_TOKEN_SWE"},
 		},
 		{
-			"crewlet mattermost provision", mattermostProvisionReads(integrations.Mattermost),
-			[]string{"MATTERMOST_URL"},
-		},
-		{
 			// A bot token at the root and two units down.
 			"crewlet mattermost doctor", mattermostDoctorReads(integrations.Mattermost, organization),
 			[]string{"MATTERMOST_BOT_CEO", "MATTERMOST_BOT_SWE", "MATTERMOST_URL"},
@@ -1192,7 +1188,7 @@ func TestEveryCommandThatReadsTheCompanyTakesAPI(t *testing.T) {
 	for _, command := range [][]string{
 		{"confluence", "import"}, {"confluence", "resync"}, {"confluence", "provision"},
 		{"github", "provision"}, {"jira", "provision"}, {"gitlab", "provision"},
-		{"mattermost", "provision"}, {"mattermost", "doctor"}, {"slack", "provision"},
+		{"mattermost", "doctor"}, {"slack", "provision"},
 		{"llm", "list"},
 	} {
 		var out, errs bytes.Buffer

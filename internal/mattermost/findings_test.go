@@ -1,12 +1,14 @@
 package mattermost_test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // theOnlySeat is the company every case here runs.
@@ -179,5 +181,26 @@ func TestASuccessfulDecommissionIsNotReportedAsOutstandingWork(t *testing.T) {
 	// AND THE REPORT AN OPERATOR READS SAYS SO: ready, not provisioning.
 	if report := integration.Classify(res.Findings()); report.Phase != integration.PhaseReady {
 		t.Errorf("phase = %q, want ready", report.Phase)
+	}
+}
+
+// THE PREFLIGHT RUNS WITH NO SEAT TO PROVISION. Each agent's bot is the
+// per-seat access sync's now, so the loop hands this pass an empty plan on
+// every tick, and a pass that returned before its preflight stopped reporting
+// a provisioning token that lost system_admin for good.
+func TestAnEmptyPlanStillReportsTheAdminToken(t *testing.T) {
+	t.Parallel()
+	srv := newChatServer()
+	srv.adminRoles = "system_user"
+	res, err := mattermost.Reconcile(context.Background(), mattermost.Options{
+		Client: chatClient(t, srv), Config: enabledChat(),
+		Org: &org.Organization{Name: "Nimbus"}, Plan: &provision.Plan{}, Sink: newChatSink(),
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	findings := res.Findings()
+	if len(findings) != 1 || findings[0].Kind != integration.FindingCredentialRejected {
+		t.Errorf("findings = %+v, want the refused administrator token", findings)
 	}
 }

@@ -716,7 +716,6 @@ func TestVendorCommandsReadACompanyFileWithADuplicateUnitKey(t *testing.T) {
 		{"jira", "provision", "-dry-run", "-config", noBootstrap, file},
 		{"github", "provision", "-dry-run", "-config", noBootstrap, file},
 		{"gitlab", "provision", "-dry-run", "-config", noBootstrap, file},
-		{"mattermost", "provision", "-dry-run", "-config", noBootstrap, file},
 		{"mattermost", "doctor", "-config", noBootstrap, file},
 		{"confluence", "provision", "-dry-run", "-config", noBootstrap, file},
 		{"confluence", "resync", "-config", noBootstrap, file},

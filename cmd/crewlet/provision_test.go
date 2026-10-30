@@ -21,7 +21,6 @@ import (
 
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/gitlab"
-	"github.com/crewlet/crewlet/internal/mattermost"
 	"github.com/crewlet/crewlet/internal/provision"
 	"github.com/crewlet/crewlet/internal/slack"
 )
@@ -186,9 +185,6 @@ func TestAChatRunReportsWhatIsLeftToDoOnlyWhenItRecordedSomething(t *testing.T) 
 		t.Fatalf("NewPrintSink: %v", err)
 	}
 	reports := map[string]func(w io.Writer, recorded int){
-		"mattermost": func(w io.Writer, recorded int) {
-			printChatResult(w, &mattermost.Result{Recorded: recorded}, sink)
-		},
 		"slack": func(w io.Writer, recorded int) {
 			printSlackResult(w, &slack.Result{Recorded: recorded}, "slack-apps.json", sink)
 		},
@@ -243,9 +239,6 @@ func TestTheKeptLineNamesTheCommandsOwnFlag(t *testing.T) {
 	}{
 		{"gitlab", "-rotate", "-reinstall", func(w io.Writer) {
 			printResult(w, &gitlab.Result{Kept: kept}, sink)
-		}},
-		{"mattermost", "-rotate", "-reinstall", func(w io.Writer) {
-			printChatResult(w, &mattermost.Result{Kept: kept}, sink)
 		}},
 		{"slack", "-reinstall", "-rotate", func(w io.Writer) {
 			printSlackResult(w, &slack.Result{Kept: kept}, "slack-apps.json", sink)
@@ -480,39 +473,27 @@ roles:
         channel: leadership
 `
 
-// THE MATTERMOST COMMAND SHARES THE SAME SAFETY RULES: a dry run reaches
-// nothing, and a real run with nowhere to put what it mints is refused
-// before it touches the instance.
-func TestTheMattermostCommandSharesTheProvisioningRules(t *testing.T) {
+// `crewlet mattermost provision` IS RETIRED, AND SAYS WHERE ITS WORK WENT.
+// Each agent's bot is per-seat access now, managed from the integration's
+// Agents tab and applied by the reconcile loop, so a command line copied from
+// an older guide is told that rather than that the command never existed.
+func TestTheRetiredMattermostProvisionSaysWhereItsWorkWent(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "company.yaml")
-	if err := os.WriteFile(path, []byte(chatCompanyDoc), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
+	var out, errs bytes.Buffer
+	err := run([]string{"mattermost", "provision", "company.yaml"}, &out, &errs)
+	if err == nil || errors.Is(err, errUnknownSub) ||
+		!strings.Contains(err.Error(), "Agents tab") ||
+		!strings.Contains(err.Error(), "crewlet mattermost doctor") {
+		t.Fatalf("err = %v, want the retirement and where the work went", err)
 	}
-	chat := func(args ...string) (string, error) {
-		var out, errs bytes.Buffer
-		err := run(append([]string{"mattermost", "provision"}, args...), &out, &errs)
-		return out.String(), err
+	out.Reset()
+	errs.Reset()
+	if err := run([]string{"mattermost"}, &out, &errs); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("usage: %v", err)
 	}
-
-	out, err := chat(path, "-dry-run")
-	if err != nil {
-		t.Fatalf("dry run: %v", err)
-	}
-	if !strings.Contains(out, "ceo") || !strings.Contains(out, "MM_TOKEN_CEO") {
-		t.Errorf("the plan does not name the seat:\n%s", out)
-	}
-	if !strings.Contains(out, "nothing was created") {
-		t.Errorf("the dry run does not say it did nothing:\n%s", out)
-	}
-
-	if _, err := chat(path, "-admin-token", "t"); err == nil {
-		t.Fatal("a run with no sink was accepted")
-	}
-	if _, err := chat(path, "-print"); err == nil {
-		t.Fatal("a run with no administrator token was accepted")
-	} else if !strings.Contains(err.Error(), "MATTERMOST_ADMIN_TOKEN") {
-		t.Errorf("the refusal does not name the variable: %v", err)
+	if usage := errs.String(); !strings.Contains(usage, "crewlet mattermost doctor") ||
+		!strings.Contains(usage, "retired: crewlet mattermost provision") {
+		t.Errorf("the usage does not list doctor and the retirement:\n%s", usage)
 	}
 }
 
@@ -707,8 +688,22 @@ func TestVendorUsageNamesOnlyRealCommands(t *testing.T) {
 			t.Errorf("%s: an unknown subcommand returned %v, want an unknown-command error",
 				vendor, err)
 		}
-		// Every subcommand spelled in the usage must be dispatchable.
+		// Every subcommand spelled in the usage must be dispatchable, and
+		// every one it lists as retired must answer with its retirement.
 		for line := range strings.SplitSeq(strings.TrimSpace(usage), "\n") {
+			if rest, retired := strings.CutPrefix(line, "retired: "); retired {
+				fields := strings.Fields(rest)
+				if len(fields) < 3 || retiredCommands[vendor][strings.TrimSuffix(fields[2], ":")] == "" {
+					t.Errorf("%s: usage lists %q as retired, which is not", vendor, line)
+					continue
+				}
+				err := runIntegration(invocation{environ: noEnviron}, vendor,
+					[]string{strings.TrimSuffix(fields[2], ":")}, io.Discard, io.Discard)
+				if err == nil || errors.Is(err, errUnknownSub) || errors.Is(err, flag.ErrHelp) {
+					t.Errorf("%s: retired %q answered %v, want its retirement", vendor, fields[2], err)
+				}
+				continue
+			}
 			// "usage: crewlet <vendor> <sub> …", and the continuation
 			// lines are the same without the lead — so the subcommand is
 			// found relative to "crewlet", not from the start of the line.
@@ -931,9 +926,6 @@ func TestASinkTheStoreOutranksIsRefusedBeforeTheVendor(t *testing.T) {
 		{"gitlab provision -rotate, the signing secret",
 			[]string{"gitlab", "provision", "-admin-token=glpat-admin", public, "-rotate"},
 			map[string]string{"GITLAB_SIGNING_SECRET": storedSigningSecret}, "GitLab"},
-		{"mattermost provision, a bot's token",
-			[]string{"mattermost", "provision", "-admin-token=mm-admin"},
-			map[string]string{"MM_TOKEN_CEO": "mm-ceo"}, "Mattermost"},
 		{"github provision -recreate-webhooks",
 			[]string{"github", "provision", public, "-recreate-webhooks"},
 			map[string]string{"GITHUB_WEBHOOK_SECRET": "a-stored-secret"}, "GitHub"},
