@@ -397,10 +397,11 @@ func TestMattermostStepsPerOp(t *testing.T) {
 	for op, verbs := range map[seataccess.Op][]seataccess.StepVerb{
 		seataccess.OpCreate: {seataccess.VerbCreate, seataccess.VerbGrant, seataccess.VerbScope,
 			seataccess.VerbMint},
-		seataccess.OpEnable:  {seataccess.VerbEnable, seataccess.VerbScope, seataccess.VerbMint},
+		seataccess.OpEnable: {seataccess.VerbEnable, seataccess.VerbScope, seataccess.VerbMint,
+			seataccess.VerbRevoke},
 		seataccess.OpLevel:   {seataccess.VerbRerole},
 		seataccess.OpScope:   {seataccess.VerbScope},
-		seataccess.OpMint:    {seataccess.VerbMint},
+		seataccess.OpMint:    {seataccess.VerbMint, seataccess.VerbRevoke},
 		seataccess.OpDisable: {seataccess.VerbDisable},
 		seataccess.OpRevoke:  {seataccess.VerbRevoke},
 		seataccess.OpRemove:  {seataccess.VerbRemove},
@@ -443,6 +444,10 @@ func TestMattermostObserve(t *testing.T) {
 	marked := chat.bot("analyst", member)
 	marked.deleteAt, marked.description = 1, mattermost.DisconnectedDescription
 	departed := chat.bot("old", member)
+	// THE LEDGER OVER THE MARKER: it records this bot live, so the marker
+	// on it is stale and somebody else deactivated it (D3).
+	lapsed := chat.bot("ops", member)
+	lapsed.deleteAt, lapsed.description = 1, mattermost.DisconnectedDescription
 	chat.mu.Lock()
 	chat.add("agent-person", member, false)
 	chat.mu.Unlock()
@@ -450,9 +455,11 @@ func TestMattermostObserve(t *testing.T) {
 	obs, err := chat.open(t, "general", "incidents").Observe(context.Background(),
 		seataccess.ObserveInput{
 			Seats: []seataccess.SeatRef{{Handle: "sre"}, {Handle: "oncall"}, {Handle: "dba"},
-				{Handle: "analyst"}, {Handle: "person"}},
+				{Handle: "analyst"}, {Handle: "ops"}, {Handle: "person"}},
 			Records: map[string]seataccess.Record{
 				"sre": *heldBot(recorded.id),
+				"ops": {Handle: "ops", Account: &seataccess.Account{ID: lapsed.id,
+					State: seataccess.AccountActive}},
 				"old": {Handle: "old", Account: &seataccess.Account{ID: departed.id}},
 			},
 		})
@@ -473,6 +480,9 @@ func TestMattermostObserve(t *testing.T) {
 	}
 	if got := lane("analyst"); got.DisabledBy != seataccess.DisabledByCrewlet {
 		t.Errorf("analyst = %+v", got)
+	}
+	if got := lane("ops"); got.Enabled || got.DisabledBy != seataccess.DisabledByHand {
+		t.Errorf("ops = %+v, want deactivated by hand: the ledger records it live", got)
 	}
 	if got := lane("old"); !got.Exists {
 		t.Errorf("the departed seat was not observed: %+v", got)
@@ -741,5 +751,24 @@ func TestMattermostOpenNotConfigured(t *testing.T) {
 		if !errors.Is(err, integration.ErrNotConfigured) {
 			t.Errorf("%s: err = %v, want not configured", name, err)
 		}
+	}
+}
+
+// A STALE MARKER ON A LIVE BOT COMES OFF on the next step that leaves the bot
+// on, so a deactivation by somebody else later reads as theirs (D3).
+func TestMattermostAStaleMarkerOnALiveBotIsCleared(t *testing.T) {
+	t.Parallel()
+	chat := newAccessChat(t)
+	bot := chat.bot("sre", "system_user system_admin")
+	bot.description = mattermost.DisconnectedDescription
+	_, err := mmApply(t, chat.open(t), seataccess.ApplyInput{
+		Step: mmStep(t, seataccess.OpLevel, seataccess.VerbRerole),
+		Want: seataccess.Desired{Enabled: true, Level: member}, Record: heldBot(bot.id),
+	})
+	if err != nil {
+		t.Fatalf("level: %v", err)
+	}
+	if got := chat.user(bot.id); got.deleteAt != 0 || got.description != "" {
+		t.Errorf("bot = %+v, want live with the marker taken off", got)
 	}
 }

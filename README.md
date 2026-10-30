@@ -244,16 +244,17 @@ backend is a new implementation rather than a rewrite of everything that searche
 Everything else composes: a company can run GitHub beside GitLab, or Slack beside
 Mattermost, which is what a migration and an open-source presence both look like.
 
-One command provisions the whole fleet — a bot or
-service account per seat, memberships, per-agent tokens minted into your config's own
-`${VAR}` references, and the webhooks:
+Each agent's own account at an integration (a bot, a service account or an
+app), its access and its token are the engine's: turn the agent on, with its
+access, on the integration's Agents tab, and the reconcile loop creates the
+account and seals the token under a name it derives for the seat. What is left
+for the command line is company-wide, such as the webhooks, and checks:
 
 ```bash
-crewlet mattermost provision company.yaml -env-file .env
 crewlet gitlab     provision company.yaml -public-url <url> -env-file .env
 crewlet jira       provision company.yaml -public-url <url> -env-file .env
-crewlet slack      provision company.yaml -public-url <url> -env-file .env
 crewlet github     provision company.yaml -public-url <url> -env-file .env
+crewlet mattermost doctor    company.yaml
 ```
 
 Each run records what it mints where you send it — an env file (`-env-file`),

@@ -25,6 +25,8 @@ type chatReconciler struct {
 	client *mattermost.Client
 	cfg    *config.Mattermost
 	org    *org.Organization
+	// managed is the bots the access sync's ledger records, by handle.
+	managed map[string]string
 }
 
 func (*chatReconciler) Kind() integration.Kind { return integration.KindMattermost }
@@ -42,7 +44,7 @@ func (r *chatReconciler) Reconcile(ctx context.Context) ([]integration.Finding, 
 // has tests of its own against the same instance.
 func (r *chatReconciler) pass(ctx context.Context) (*mattermost.Result, error) {
 	return mattermost.Reconcile(ctx, mattermost.Options{
-		Client: r.client, Config: r.cfg, Org: r.org,
+		Client: r.client, Config: r.cfg, Org: r.org, Managed: r.managed,
 	})
 }
 
@@ -103,6 +105,7 @@ func convergedChatOn(t *testing.T, tb integrationtest.TB, tune func(*chatServer)
 			org: &org.Organization{Name: "Nimbus", Roles: []*org.Role{
 				chatSeat("CEO", ""),
 			}},
+			managed: map[string]string{theSeat: id},
 		},
 		srv: srv,
 	}
