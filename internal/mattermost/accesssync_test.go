@@ -216,3 +216,39 @@ func TestAMattermostTokenRevokedAtMattermostIsReMinted(t *testing.T) {
 			ok, after != before, w.chat.tokenIDs(rec.Account.ID))
 	}
 }
+
+// A TEAM THE INSTANCE DOES NOT HAVE IS ONE REFUSAL, AT OPEN, AND NO SEAT STEP.
+// It stops every agent at once, so the session refuses once, naming the team
+// and the setting, and no seat is read back or written.
+func TestAMissingTeamIsOneRefusalAndNoSeatStep(t *testing.T) {
+	t.Parallel()
+	w := newAccessWorld(t, []string{"system_user"}, "general")
+	w.company.Integrations.Mattermost.Team = "elsewhere"
+	vendor, _ := seataccess.Lookup(integration.KindMattermost)
+	open := seataccess.OpenInput{
+		Config: w.company,
+		Env:    config.NewResolver(config.MapSource{"MM_ADMIN": "fake-admin"}),
+	}
+	_, err := vendor.Open(context.Background(), open)
+	var refused *seataccess.Refusal
+	if !errors.As(err, &refused) || !strings.Contains(refused.Said, `"elsewhere"`) ||
+		!strings.Contains(refused.Remedy, "integrations.mattermost.team") ||
+		refused.Actor != seataccess.ByYou {
+		t.Fatalf("open = %#v, want one refusal naming the team and the setting", err)
+	}
+	// AND THE SYNC SAYS SO, whichever way it carries a session that would
+	// not open: as its error or as a finding, it names the team.
+	report, err := seataccess.Sync(context.Background(), seataccess.SyncInput{
+		Vendor: vendor, Ledger: w.ledger, Sink: w.sink, Pass: "test", By: "test", Open: open,
+	})
+	named := err != nil && strings.Contains(err.Error(), `"elsewhere"`)
+	for _, f := range report.Findings {
+		named = named || strings.Contains(f.Detail, `"elsewhere"`)
+	}
+	if !named {
+		t.Errorf("the sync said nothing about the missing team: %v, %+v", err, report.Findings)
+	}
+	if writes := w.chat.wrote(); len(writes) != 0 {
+		t.Errorf("writes = %q, want none", writes)
+	}
+}
