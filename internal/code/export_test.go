@@ -138,13 +138,23 @@ func CommitterQueued(c *Committer, repoID string) int {
 
 // ChangeWriterHolders is how many writes of changeID hold or wait for its turn
 // on w.
-func ChangeWriterHolders(w *ChangeWriter, changeID string) int {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if t := w.turns[changeID]; t != nil {
-		return t.holders
-	}
-	return 0
+func ChangeWriterHolders(w *ChangeWriter, changeID string) int { return w.flights.holders(changeID) }
+
+// ChecksWriterHolders is how many writes of repoID's checks hold or wait for
+// its turn on w.
+func ChecksWriterHolders(w *ChecksWriter, repoID string) int { return w.flights.holders(repoID) }
+
+// SetChecksWriterBounds bounds w's writes waiting at perRepo of one
+// repository's and perNode in all, so a case reaches a bound with a handful of
+// writes rather than hundreds.
+func SetChecksWriterBounds(w *ChecksWriter, perRepo, perNode int) {
+	w.flights.perKey, w.flights.perNode = perRepo, perNode
+}
+
+// SetChangeWriterBounds bounds w's writes waiting at perChange of one change's
+// and perNode in all.
+func SetChangeWriterBounds(w *ChangeWriter, perChange, perNode int) {
+	w.flights.perKey, w.flights.perNode = perChange, perNode
 }
 
 // StandingStates is the list of states a raiser's standing findings are read

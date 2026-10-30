@@ -161,10 +161,17 @@ func TestEachLaneIsServedOnItsOwnSubjectWithItsOwnBound(t *testing.T) {
 			t.Errorf("the %s subject %q is not data.a's own", l, s)
 		}
 	}
-	if proposalAnswers < code.CommitterInbox+code.MaxPushesPerRecord {
-		t.Errorf("the proposal lane answers %d at once, under one repository's full queue and the "+
-			"batch ahead of it (%d): a burst would wait for a slot before the committer could "+
-			"answer it busy", proposalAnswers, code.CommitterInbox+code.MaxPushesPerRecord)
+	// THE LANE HOLDS EVERY WRITER THAT WAITS ON IT AT ITS BOUND: a push's
+	// whole queue and the batch ahead of it, and beside them the most writes
+	// the checks writer and the change writer hold waiting for their turns —
+	// each answering past its bound busy at once — so a burst of check writes
+	// takes no slot a push is waiting for.
+	waiting := code.CommitterInbox + code.MaxPushesPerRecord + code.ChecksWritesPerNode +
+		code.ConversationWritesPerNode
+	if proposalAnswers < waiting {
+		t.Errorf("the proposal lane answers %d at once, under one repository's full queue, the batch ahead "+
+			"of it and the checks and change writers' bounds (%d): a burst would wait for a slot before its "+
+			"writer could answer it busy", proposalAnswers, waiting)
 	}
 }
 

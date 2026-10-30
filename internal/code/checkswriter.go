@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"math"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -51,7 +50,11 @@ import (
 // A write waits for its turn while its asker's attempt leaves room for a
 // publish and its answer ([CommitBudget], [ReplyMargin]), and is refused busy,
 // undecided, the moment it does not — the change writer's rule, and for its
-// reason.
+// reason. And AT MOST SO MANY WAIT ([ChecksWritesPerRepo] of one repository,
+// [ChecksWritesPerNode] in all): each holds its answer slot on the estate's
+// proposals lane while it waits, so a write past either bound is answered busy
+// at once, undecided, rather than holding a slot a push is waiting for
+// (flights.go).
 //
 // # Its decide: attempt arithmetic and the claim
 //
@@ -139,6 +142,37 @@ type EventPublisher interface {
 // the attempt's row still holds.
 const checkEventBudget = 5 * time.Second
 
+const (
+	// ChecksWritesPerRepo is the most writes of ONE repository's checks this
+	// node's checks writer holds at once — the one in flight and those
+	// waiting their turn behind it: 128, twice MaxChecksPerFile. A
+	// repository's checks are written a head at a time — the home queues a
+	// head's checks, at most a file's sixty-four, and the git nodes running
+	// them claim, name a box for and end each — so the most a repository asks
+	// at once is a head's whole dispatch beside a whole round of claims of
+	// the head before it. A write holds its turn from its decide to its
+	// record's apply, milliseconds when the log is healthy, so a full bound
+	// drains in under a second; a write past it is answered busy at once,
+	// undecided, and its asker — a runner's claim walk, the home's next pass
+	// — sends it again.
+	ChecksWritesPerRepo = 2 * MaxChecksPerFile
+
+	// ChecksWritesPerNode is the most writes of repositories' checks this
+	// node's checks writer holds at once, every repository's together: 512,
+	// four repositories' ChecksWritesPerRepo — a node writes the checks of
+	// every repository rendezvous ranks it first for, and four bursts at once
+	// is CommitterNodeBytes' reach for pushes. Each holds an answer slot of
+	// the estate's proposals lane while it waits, which is sized to hold this
+	// beside the committer's whole queue (internal/estate's proposalAnswers),
+	// so check writes never take a slot a push is waiting for; past it a
+	// write is answered busy at once. A slot costs a goroutine and the write
+	// it carries: a claim or a box a few hundred bytes, an ending at most its
+	// summary, tail and failures (CheckSummaryBytes, CheckTailBytes,
+	// MaxCheckFailureBytes), some 86 KiB, so a full bound of the widest is
+	// some 43 MiB, under CommitterNodeBytes' 64 MiB.
+	ChecksWritesPerNode = 4 * ChecksWritesPerRepo
+)
+
 // ChecksWriter is this node's writer of repositories' checks — one write of a
 // repository's checks in flight at a time, and repositories side by side.
 type ChecksWriter struct {
@@ -160,22 +194,9 @@ type ChecksWriter struct {
 	life context.Context
 	end  context.CancelFunc
 
-	mu sync.Mutex
-	// turns is each repository with a write holding or waiting for its turn
-	// on this node; a repository leaves it with its last such write.
-	turns    map[string]*checksTurn
-	stopped  bool
-	stopping chan struct{}
-	wg       sync.WaitGroup
-}
-
-// checksTurn is one repository's single flight: the one write of its checks
-// in flight on this node holds token, and every other one waits to.
-type checksTurn struct {
-	token chan struct{}
-	// holders is the writes holding or waiting for token; changed only under
-	// the writer's mu.
-	holders int
+	// flights is each repository's single flight on this node, bounded at
+	// ChecksWritesPerRepo and ChecksWritesPerNode.
+	flights *flights
 }
 
 // NewChecksWriter builds a checks writer, refusing what it cannot work
@@ -197,8 +218,9 @@ func NewChecksWriter(o ChecksWriterOptions) (*ChecksWriter, error) {
 	}
 	w := &ChecksWriter{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, events: o.Events, now: o.Now,
-		metrics: o.Metrics, log: o.Logger, clock: time.Now, turns: map[string]*checksTurn{},
-		stopping: make(chan struct{}),
+		metrics: o.Metrics, log: o.Logger, clock: time.Now,
+		flights: newFlights("repository", ChecksWritesPerRepo, "code.ChecksWritesPerRepo", ChecksWritesPerNode,
+			"code.ChecksWritesPerNode"),
 	}
 	if w.now == nil {
 		w.now = func() time.Time { return time.Now().UTC() }
@@ -354,16 +376,20 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResu
 		}
 	}
 	repoID := r.RepoID()
-	turn, joined := w.join(repoID)
-	if !joined {
+	j := w.flights.join(repoID)
+	switch {
+	case j.stopped:
 		return ChecksResult{}, stoppingChecks, false
+	case j.busy != "":
+		return busyChecks(j.busy + "; " + checksAgain), nil, false
 	}
+	turn := j.flight
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case turn.token <- struct{}{}:
 	case <-timer.C:
-		w.leave(repoID, turn)
+		w.flights.leave(repoID, turn)
 		if hasDeadline {
 			return busyChecks(w.shortOfTime(deadline.Sub(w.clock()))), nil, false
 		}
@@ -371,24 +397,20 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResu
 			"this node, and a write waits at most %s for its turn; %s", w.clock().Sub(arrived).Round(
 			time.Millisecond), CommitBudget, checksAgain)), nil, false
 	case <-ctx.Done():
-		w.leave(repoID, turn)
+		w.flights.leave(repoID, turn)
 		return ChecksResult{}, ctx.Err(), false
-	case <-w.stopping:
-		w.leave(repoID, turn)
+	case <-w.flights.stopping:
+		w.flights.leave(repoID, turn)
 		return ChecksResult{}, stoppingChecks, false
 	}
 	release := func() {
 		<-turn.token
-		w.leave(repoID, turn)
+		w.flights.leave(repoID, turn)
 	}
-	w.mu.Lock()
-	if w.stopped {
-		w.mu.Unlock()
+	if !w.flights.launch() {
 		release()
 		return ChecksResult{}, stoppingChecks, false
 	}
-	w.wg.Add(1)
-	w.mu.Unlock()
 	type answer struct {
 		res ChecksResult
 		err error
@@ -396,7 +418,7 @@ func (w *ChecksWriter) publish(ctx context.Context, r ChecksRequest) (ChecksResu
 	done := make(chan answer, 1)
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the repository's next check write deciding beside a record still in flight.
 	go func() {
-		defer w.wg.Done()
+		defer w.flights.landed()
 		res, err, own := w.write(r)
 		// THE TURN IS RELEASED ONCE THE ANSWER IS KNOWN — the record applied
 		// here, or the wait for it gave up — and before the announcement,
@@ -436,58 +458,13 @@ func busyChecks(detail string) ChecksResult {
 	return ChecksResult{Refusal: CheckRefusalBusy, Detail: detail}
 }
 
-// join counts a write holding or waiting for repoID's turn, answering its
-// single flight — and false once the writer is stopping.
-func (w *ChecksWriter) join(repoID string) (*checksTurn, bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.stopped {
-		return nil, false
-	}
-	t := w.turns[repoID]
-	if t == nil {
-		t = &checksTurn{token: make(chan struct{}, 1)}
-		w.turns[repoID] = t
-	}
-	t.holders++
-	return t, true
-}
-
-// leave counts a write of repoID gone, forgetting the repository with its
-// last.
-func (w *ChecksWriter) leave(repoID string, t *checksTurn) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if t.holders--; t.holders == 0 {
-		delete(w.turns, repoID)
-	}
-}
-
 // Stop refuses every new write [ErrNotServing], and every one waiting for its
 // repository's turn — a node that decided nothing, so the router asks the
 // runner-up — and waits for the publishes in flight, which are FINISHED rather
 // than abandoned so their askers get their outcome. If ctx ends first, they
 // are cancelled and answered from what their publish returned. Safe to call
 // more than once.
-func (w *ChecksWriter) Stop(ctx context.Context) {
-	w.mu.Lock()
-	if !w.stopped {
-		w.stopped = true
-		close(w.stopping)
-	}
-	w.mu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		w.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
-	w.end()
-	<-done
-}
+func (w *ChecksWriter) Stop(ctx context.Context) { w.flights.stop(ctx, w.end) }
 
 // checksDecision is what one round of a write's decide concluded: a payload
 // to append, or none — refused, or unchanged — with the row it read.

@@ -67,8 +67,12 @@ const (
 	laneShared lane = ""
 
 	// laneProposals answers proposals alone — a push's, a compaction's, an
-	// expunge record's and a change's, and a write of a change's conversation,
-	// which waits its change's turn on the same node — on [ProposalSubject].
+	// expunge record's and a change's, a write of a change's conversation,
+	// which waits its change's turn on the same node, and a write of a
+	// repository's checks, which waits its repository's turn there — on
+	// [ProposalSubject]. Each kind that waits is bounded by its writer, which
+	// answers past its bound busy at once, and the lane is as wide as their
+	// bounds together ([proposalAnswers]).
 	laneProposals lane = "proposals"
 
 	// laneGitReads answers a repository's git reads alone ([GitCopy]) — on

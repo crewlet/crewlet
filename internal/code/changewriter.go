@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/config"
@@ -46,7 +45,11 @@ import (
 // repository's runner-up, which then contends with this node on the change's
 // subject. Two nodes writing one change — a runner-up asked while the committing
 // node answered slowly — still meet at the broker, where exactly one record
-// lands a round.
+// lands a round. And AT MOST SO MANY WAIT ([ConversationWritesPerChange] of
+// one change, [ConversationWritesPerNode] in all): each holds its answer slot
+// on the estate's proposals lane while it waits, so a write past either bound
+// is answered busy at once, undecided, rather than holding a slot a push is
+// waiting for (flights.go).
 //
 // # The publish is the writer's
 //
@@ -65,6 +68,33 @@ import (
 // holding no chart yet ([ChangeWriterOptions.SeatRules]), as the committer
 // refuses a seat's push there: the router asks the repository's runner-up under
 // the same operation id. A person's comment or resolution is decided as ever.
+
+const (
+	// ConversationWritesPerChange is the most writes of ONE change's
+	// conversation this node's change writer holds at once — the one in
+	// flight and those waiting their turn behind it: 64, a JUDGEMENT past
+	// every burst a conversation makes. A review is one write however many
+	// findings it carries, a person or a seat writes a comment at a time, and
+	// the home a record a revision or a refresh, each decided in
+	// milliseconds when the log is healthy; sixty-four waiting on one change
+	// is a loop writing to it, and a write past them is answered busy at once,
+	// undecided, its asker sending it again.
+	ConversationWritesPerChange = 64
+
+	// ConversationWritesPerNode is the most writes of changes' conversations
+	// this node's change writer holds at once, every change's together: 512,
+	// eight changes' whole bounds — the conversations of every change of
+	// every repository rendezvous ranks this node first for, which the
+	// changes' own pace keeps far below it. Each holds an answer slot of the
+	// estate's proposals lane while it waits, which is sized to hold this
+	// beside the committer's whole queue and the checks writer's bound
+	// (internal/estate's proposalAnswers), so a conversation never takes a
+	// slot a push is waiting for; past it a write is answered busy at once.
+	// A slot costs a goroutine and the write it carries, a comment at most
+	// MaxCommentBytes; before the bound the lane's whole width could hold
+	// conversation writes waiting.
+	ConversationWritesPerNode = 8 * ConversationWritesPerChange
+)
 
 // ChangeWriterOptions configure a change writer.
 type ChangeWriterOptions struct {
@@ -125,22 +155,9 @@ type ChangeWriter struct {
 	life context.Context
 	end  context.CancelFunc
 
-	mu sync.Mutex
-	// turns is each change with a write holding or waiting for its turn on
-	// this node; a change leaves it with its last such write.
-	turns    map[string]*changeTurn
-	stopped  bool
-	stopping chan struct{}
-	wg       sync.WaitGroup
-}
-
-// changeTurn is one change's single flight: the one write of it in flight on
-// this node holds token, and every other one waits to.
-type changeTurn struct {
-	token chan struct{}
-	// holders is the writes holding or waiting for token; changed only under
-	// the writer's mu.
-	holders int
+	// flights is each change's single flight on this node, bounded at
+	// ConversationWritesPerChange and ConversationWritesPerNode.
+	flights *flights
 }
 
 // NewChangeWriter builds a change writer, refusing what it cannot work without.
@@ -165,7 +182,8 @@ func NewChangeWriter(o ChangeWriterOptions) (*ChangeWriter, error) {
 	w := &ChangeWriter{
 		pub: o.Publisher, db: o.DB, nodeID: o.NodeID, retention: o.Retention, seatRules: o.SeatRules,
 		current: o.Current, now: o.Now, metrics: o.Metrics, log: o.Logger, clock: time.Now,
-		turns: map[string]*changeTurn{}, stopping: make(chan struct{}),
+		flights: newFlights("change", ConversationWritesPerChange, "code.ConversationWritesPerChange",
+			ConversationWritesPerNode, "code.ConversationWritesPerNode"),
 	}
 	if w.now == nil {
 		w.now = func() time.Time { return time.Now().UTC() }
@@ -223,16 +241,20 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite) (Conv
 		}
 	}
 	changeID := cw.ChangeID()
-	turn, joined := w.join(changeID)
-	if !joined {
+	j := w.flights.join(changeID)
+	switch {
+	case j.stopped:
 		return ConversationResult{}, stopping, false
+	case j.busy != "":
+		return busyConversation(j.busy + "; " + conversationAgain), nil, false
 	}
+	turn := j.flight
 	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case turn.token <- struct{}{}:
 	case <-timer.C:
-		w.leave(changeID, turn)
+		w.flights.leave(changeID, turn)
 		if hasDeadline {
 			return busyConversation(w.shortOfTime(deadline.Sub(w.clock()))), nil, false
 		}
@@ -240,17 +262,17 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite) (Conv
 			"node, and a write waits at most %s for its turn; %s", w.clock().Sub(arrived).Round(time.Millisecond),
 			CommitBudget, conversationAgain)), nil, false
 	case <-ctx.Done():
-		w.leave(changeID, turn)
+		w.flights.leave(changeID, turn)
 		return ConversationResult{}, ctx.Err(), false
-	case <-w.stopping:
-		w.leave(changeID, turn)
+	case <-w.flights.stopping:
+		w.flights.leave(changeID, turn)
 		return ConversationResult{}, stopping, false
 	}
 	// ITS TURN: judged again, since the revision this node failed to apply
 	// may be the one its wait spanned, and its chart read once.
 	release := func() {
 		<-turn.token
-		w.leave(changeID, turn)
+		w.flights.leave(changeID, turn)
 	}
 	if why := w.behindFor(cw); why != "" {
 		release()
@@ -265,14 +287,10 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite) (Conv
 				"the repository's next committing node decides it", ErrNotServing), false
 		}
 	}
-	w.mu.Lock()
-	if w.stopped {
-		w.mu.Unlock()
+	if !w.flights.launch() {
 		release()
 		return ConversationResult{}, stopping, false
 	}
-	w.wg.Add(1)
-	w.mu.Unlock()
 	type answer struct {
 		res ConversationResult
 		err error
@@ -280,7 +298,7 @@ func (w *ChangeWriter) converse(ctx context.Context, cw ConversationWrite) (Conv
 	done := make(chan answer, 1)
 	//nolint:contextcheck // The publish is the writer's, not this caller's: it runs under the writer's own lifetime, so an asker that hangs up mid-publish never leaves the change's next write deciding beside a record still in flight.
 	go func() {
-		defer w.wg.Done()
+		defer w.flights.landed()
 		defer release()
 		res, err := w.write(cw, seats)
 		w.count(cw, res, err)
@@ -324,57 +342,13 @@ func busyConversation(detail string) ConversationResult {
 	return ConversationResult{Refusal: ConversationRefusalBusy, Detail: detail}
 }
 
-// join counts a write holding or waiting for changeID's turn, answering its
-// single flight — and false once the writer is stopping.
-func (w *ChangeWriter) join(changeID string) (*changeTurn, bool) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.stopped {
-		return nil, false
-	}
-	t := w.turns[changeID]
-	if t == nil {
-		t = &changeTurn{token: make(chan struct{}, 1)}
-		w.turns[changeID] = t
-	}
-	t.holders++
-	return t, true
-}
-
-// leave counts a write of changeID gone, forgetting the change with its last.
-func (w *ChangeWriter) leave(changeID string, t *changeTurn) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	if t.holders--; t.holders == 0 {
-		delete(w.turns, changeID)
-	}
-}
-
 // Stop refuses every new write [ErrNotServing], and every one waiting for its
 // change's turn — a node that decided nothing, so the router asks the
 // runner-up — and waits for the publishes in flight, which are FINISHED rather
 // than abandoned so their askers get their outcome. If ctx ends first, they
 // are cancelled and answered from what their publish returned. Safe to call
 // more than once.
-func (w *ChangeWriter) Stop(ctx context.Context) {
-	w.mu.Lock()
-	if !w.stopped {
-		w.stopped = true
-		close(w.stopping)
-	}
-	w.mu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		w.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-	}
-	w.end()
-	<-done
-}
+func (w *ChangeWriter) Stop(ctx context.Context) { w.flights.stop(ctx, w.end) }
 
 // write publishes one write of a change's conversation and answers it — under
 // the writer's own lifetime and one CommitBudget.
