@@ -1,6 +1,7 @@
 package host_test
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"errors"
@@ -102,15 +103,25 @@ const historyDir = "d000"
 //     none of what an arm reports, and what a borrow saves a box is
 //     BenchmarkBoxDissociate's question;
 //   - cone=none|one-dir checks out the whole tree or the history's first
-//     directory.
+//     directory;
+//   - seats=0|1000|10000 is how many OTHER SEATS' BRANCHES the repository
+//     holds beside main, each boxSeatCommits commits off its tip — what a
+//     repository its company's seats work in holds — measured at 100MB on the
+//     pin by the coding recipe with no cone, after every other arm
+//     (boxSeatArms): clone=recipe is the recipe, which clones the default
+//     branch alone, and clone=every-branch the CONTROL, its clone as git makes
+//     one unless told otherwise, wanting every branch it is shown.
 //
 // Reported an operation: the wall time (s/op); sent-MB, what the node
-// answered the box; fetches, the fetch commands the box sent, of which
-// lazy-fetches came after the recipe's own clone or fetch — its checkout's
-// fetch of the blobs it writes — bringing lazy-MB; objects, what the box's
-// repository holds; and server-cpu-ms, the node's git. Those lazy fetches
-// are all a build reading every file the checkout holds needs: the checkout
-// fetched every blob it wrote, so such a build asks git for nothing more.
+// answered the box, of which listed-KB sent no objects — the advertisements
+// and the clone's listing of the repository's refs, which a clone asks for
+// whichever branches it wants; fetches, the fetch commands the box sent, of
+// which lazy-fetches came after the recipe's own clone or fetch — its
+// checkout's fetch of the blobs it writes — bringing lazy-MB; objects, what
+// the box's repository holds; and server-cpu-ms, the node's git. Those lazy
+// fetches are all a build reading every file the checkout holds needs: the
+// checkout fetched every blob it wrote, so such a build asks git for nothing
+// more.
 func BenchmarkBoxClone(b *testing.B) {
 	codetest.Quiet(b)
 	for _, size := range boxSizes {
@@ -119,7 +130,15 @@ func BenchmarkBoxClone(b *testing.B) {
 				gittest.Large(b, "a gigabyte's history pushed in 64 sessions")
 			}
 			f, p := benchFleet(b, memobj.New(), 1)
-			rows, tip := boxHistory(b, f, p, size.bytes)
+			rows, commits, src := boxSource(b, f, p, size.bytes)
+			tip := commits[len(commits)-1]
+			if size.large {
+				// The seats arms run at 100MB alone, and a gigabyte's source
+				// would hold its disk through every arm.
+				if err := os.RemoveAll(src); err != nil {
+					b.Fatal(err)
+				}
+			}
 			gits := []string{"pin", "client-floor"}
 			if size.large {
 				gits = gits[:1]
@@ -138,30 +157,173 @@ func BenchmarkBoxClone(b *testing.B) {
 						for _, cone := range []string{"none", "one-dir"} {
 							b.Run(fmt.Sprintf("recipe=%s/cone=%s", purpose, cone), func(b *testing.B) {
 								repo := boxRepoFor(rows, tip, boxCone(cone, historyDir), purpose)
-								boxClones(b, f, p, box, repo, purpose)
+								boxClones(b, f, p, box, repo, cloneStep(b, repo, purpose))
 							})
 						}
 					}
+				})
+			}
+			if !size.large {
+				boxSeatArms(b, f, p, src, commits)
+			}
+		})
+	}
+}
+
+// boxSeats are the counts of other seats' branches BenchmarkBoxClone's seats
+// arms clone beside: none; a push's most commands (code.MaxCommandsPerPush),
+// a hundred seats with ten work items each; and ten times that, a tenth of
+// the live refs a repository may hold (code.MaxRefsPerRepo).
+var boxSeats = []int{0, code.MaxCommandsPerPush, 10 * code.MaxCommandsPerPush}
+
+// boxSeatCommits is how many commits each seat's branch carries off main: a
+// work item's few, each a new root tree, a new tree of the directory it
+// changes and a blob, as a seat's commit is.
+const boxSeatCommits = 3
+
+// seatIdent is every seat commit's committer in the seats arms.
+const seatIdent = "Seat Work <seat@seats.invalid>"
+
+// boxSeatArms are BenchmarkBoxClone's seats arms over the history in src,
+// whose commits, oldest first, are commits: for each count of boxSeats in
+// turn, the seats' branches made up to it (pushSeatBranches) and the node
+// synced to them (syncedRows), then a fresh box on the pin cloning by the
+// coding recipe with no cone — clone=recipe — and, beside any seat's branch,
+// the same clone as git makes one unless told otherwise — clone=every-branch,
+// the control (everyBranch).
+func boxSeatArms(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, src string, commits []string) {
+	b.Helper()
+	made := 0
+	for _, n := range boxSeats {
+		b.Run(fmt.Sprintf("seats=%d", n), func(b *testing.B) {
+			pushSeatBranches(b, f, p, src, commits, made, n)
+			made = n
+			rows := syncedRows(b, f)
+			box := newBenchBox(b, f, rows, gittest.Require(b))
+			repo := boxRepo(rows, commits[len(commits)-1], nil)
+			recipe := cloneStep(b, repo, sandbox.CloneCoding)
+			b.Run("clone=recipe", func(b *testing.B) { boxClones(b, f, p, box, repo, recipe) })
+			if n > 0 {
+				b.Run("clone=every-branch", func(b *testing.B) {
+					boxClones(b, f, p, box, repo, everyBranch(b, recipe))
 				})
 			}
 		})
 	}
 }
 
-// boxClones is one BenchmarkBoxClone arm: a fresh box's clone of repo for
-// purpose an operation.
-func boxClones(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, box *benchBox, repo sandbox.RunRepo,
-	purpose sandbox.ClonePurpose) {
+// pushSeatBranches makes the seats' branches numbered from to to (excluded)
+// in src — each boxSeatCommits commits off the history's tip, every commit
+// adding a file to the history's first directory — and pushes them to f's
+// git node as p, code.MaxCommandsPerPush branches a push, so the node holds
+// a pack of their commits, trees and blobs a push, as seats' pushes leave it
+// packs until compaction merges them. Each refspec names its branch's tip by
+// its id, which git's push takes as it is rather than matching it against
+// every ref src holds.
+func pushSeatBranches(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, src string, commits []string,
+	from, to int) {
+	b.Helper()
+	tip := commits[len(commits)-1]
+	url := repoURL(f.Nodes()[0])
+	for lo := from; lo < to; lo += code.MaxCommandsPerPush {
+		hi := min(lo+code.MaxCommandsPerPush, to)
+		gittest.FastImport(b, p.Git(), src, func(w *bufio.Writer) error {
+			for i := lo; i < hi; i++ {
+				for c := range boxSeatCommits {
+					// Dated after the history and after every seat commit
+					// before it, so no walk of git's reads a skewed clock
+					// (gittest.After).
+					date := strings.TrimPrefix(gittest.After(commits, i*boxSeatCommits+c), "@")
+					msg := fmt.Sprintf("change %d of ENG-%d\n", c, i)
+					fmt.Fprintf(w, "commit %s\ncommitter %s %s\ndata %d\n%s", seatBranch(i), seatIdent, date,
+						len(msg), msg)
+					if c == 0 {
+						fmt.Fprintf(w, "from %s\n", tip)
+					}
+					body := fmt.Sprintf("work item ENG-%d, change %d\n", i, c)
+					fmt.Fprintf(w, "M 100644 inline %s/seat-%d-%d.txt\ndata %d\n%s", historyDir, i, c, len(body),
+						body)
+					if err := w.WriteByte('\n'); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		tips := map[string]string{}
+		for line := range strings.Lines(p.Git().Run(b, src, "for-each-ref", "--format=%(refname) %(objectname)",
+			"refs/heads/seats/")) {
+			ref, oid, _ := strings.Cut(strings.TrimSpace(line), " ")
+			tips[ref] = oid
+		}
+		refspecs := make([]string, 0, hi-lo)
+		for i := lo; i < hi; i++ {
+			refspecs = append(refspecs, tips[seatBranch(i)]+":"+seatBranch(i))
+		}
+		mustPush(b, p, src, url, refspecs...)
+	}
+}
+
+// syncedRows is the fleet's repository's rows once its git node holds every
+// pack they name — synced, and no more: the history's packs stay in the
+// node's bitmapped index as warmRows left them, and the seats' packs stand
+// beside it, as a repository's newest pushes do until code/cache's MidxPacks
+// of them have gathered and the node's maintainer indexes them all. Never
+// warm again: a few packs never make the maintainer run, so a wait for its
+// index would wait out warmBoxWait.
+func syncedRows(b *testing.B, f *codetest.SoloFleet) codetest.Rows {
+	b.Helper()
+	rows, err := f.Rows(b.Context(), codetest.RepoName, codetest.Linearizable)
+	if err != nil {
+		b.Fatal(err)
+	}
+	s, err := f.Nodes()[0].Cache().Sync(b.Context(), rows.Repo.ID, codetest.Linearizable)
+	if err != nil {
+		b.Fatal(err)
+	}
+	s.Release()
+	return rows
+}
+
+// seatBranch is the seats arms' branch i: seat i/10's branch for work item
+// ENG-i, ten work items a seat.
+func seatBranch(i int) string { return fmt.Sprintf("refs/heads/seats/seat%04d/ENG-%d", i/10, i) }
+
+// everyBranch is step's clone made as git makes one unless told otherwise —
+// wanting every branch and tag the host shows it, tracking each, under a
+// refspec of every branch — rather than of the default branch alone: the
+// coding recipe as it was before it named --single-branch, the seats arms'
+// control.
+func everyBranch(b *testing.B, step sandbox.SetupStep) sandbox.SetupStep {
+	b.Helper()
+	command := strings.Replace(step.Commands[0], " --single-branch ", " ", 1)
+	if command == step.Commands[0] {
+		b.Fatalf("the coding recipe's clone names no --single-branch to take back:\n%s", command)
+	}
+	step.Commands = []string{command}
+	return step
+}
+
+// cloneStep is sandbox.CloneRecipe's step giving a box repo for purpose.
+func cloneStep(b *testing.B, repo sandbox.RunRepo, purpose sandbox.ClonePurpose) sandbox.SetupStep {
 	b.Helper()
 	step, err := sandbox.CloneRecipe(repo, purpose)
 	if err != nil {
 		b.Fatal(err)
 	}
+	return step
+}
+
+// boxClones is one BenchmarkBoxClone arm: a fresh box's run of step, giving
+// it repo, an operation.
+func boxClones(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, box *benchBox, repo sandbox.RunRepo,
+	step sandbox.SetupStep) {
+	b.Helper()
 	node := f.Nodes()[0]
 	var (
-		sent, lazySent, objects int64
-		fetches, lazy           int
-		cpu                     float64
+		sent, listed, lazySent, objects int64
+		fetches, lazy                   int
+		cpu                             float64
 	)
 	for b.Loop() {
 		b.StopTimer()
@@ -178,6 +340,7 @@ func boxClones(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, box *ben
 		for _, a := range box.proxy.take() {
 			sent += a.bytes
 			if !a.fetch {
+				listed += a.bytes
 				continue
 			}
 			fetches++
@@ -196,6 +359,7 @@ func boxClones(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, box *ben
 	}
 	n := float64(b.N)
 	b.ReportMetric(float64(sent)/n/1e6, "sent-MB")
+	b.ReportMetric(float64(listed)/n/1e3, "listed-KB")
 	b.ReportMetric(float64(fetches)/n, "fetches")
 	b.ReportMetric(float64(lazy)/n, "lazy-fetches")
 	b.ReportMetric(float64(lazySent)/n/1e6, "lazy-MB")
@@ -858,12 +1022,23 @@ func boxRepoFor(rows codetest.Rows, tip string, cone []string, purpose sandbox.C
 // (warmBox): the repository's rows and its tip.
 func boxHistory(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, size int64) (codetest.Rows, string) {
 	b.Helper()
-	src, commits := gittest.History(b, p.Git(), size)
-	pushSessions(b, p, src, repoURL(f.Nodes()[0]), commits)
+	rows, commits, src := boxSource(b, f, p, size)
 	if err := os.RemoveAll(src); err != nil {
 		b.Fatal(err)
 	}
-	return warmRows(b, f), commits[len(commits)-1]
+	return rows, commits[len(commits)-1]
+}
+
+// boxSource is boxHistory keeping the repository the history was pushed from
+// and every commit of it, oldest first — what a fixture building on the
+// history makes its commits in (pushSeatBranches) — in b's temporary
+// directory, so it goes when b ends at the latest.
+func boxSource(b *testing.B, f *codetest.SoloFleet, p *codetest.Person, size int64) (codetest.Rows, []string,
+	string) {
+	b.Helper()
+	src, commits := gittest.History(b, p.Git(), size)
+	pushSessions(b, p, src, repoURL(f.Nodes()[0]), commits)
+	return warmRows(b, f), commits, src
 }
 
 // boxTree is a gittest.Tree of files files on f's git node, pushed by p a

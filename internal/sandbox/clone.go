@@ -29,10 +29,12 @@ import (
 type ClonePurpose string
 
 const (
-	// CloneCoding is a coding run: a blobless clone — every commit and tree,
-	// each file's contents fetched as git needs them — because the agent
-	// rebases, logs and blames; with an optional cone. The branch is created
-	// at the base and the commit-trailer hook written ([TrailerHook]).
+	// CloneCoding is a coding run: a blobless clone of the repository's
+	// default branch — every commit and tree of its history, each file's
+	// contents fetched as git needs them, because the agent rebases, logs
+	// and blames — and of the base, wherever it is; no other branch; with an
+	// optional cone. The branch is created at the base and the
+	// commit-trailer hook written ([TrailerHook]).
 	CloneCoding ClonePurpose = "coding"
 	// CloneSingleSHA is a check: depth one at one commit, blobless, with an
 	// optional cone, because a build that deletes its checkout afterwards
@@ -211,12 +213,13 @@ type cloneWords struct {
 // fetchBase is the command that fetches w's base BY ITS ID, at depth when depth
 // is set.
 //
-// ALWAYS, rather than only where the clone lacks it: a base no ref reaches —
-// a commit of a branch deleted since, which protocol v2 serves by id for any
-// object the host holds — is fetched with the clone's refs negotiated, so only
-// what is missing travels; a base the clone holds costs the one capability
-// request the transport opens with and nothing more, since git sends no fetch
-// for wants it already holds. Asking first whether the clone holds it does
+// ALWAYS, rather than only where the clone lacks it: a base off the default
+// branch — the tip of the seat's own branch a run continues, or a commit of a
+// branch deleted since, which protocol v2 serves by id for any object the host
+// holds — is fetched with the clone's refs negotiated, so only what the
+// default branch's history lacks travels; a base the clone holds costs the one
+// capability request the transport opens with and nothing more, since git
+// sends no fetch for wants it already holds. Asking first whether the clone holds it does
 // not save that: in a partial clone a lookup of a missing object (`cat-file
 // -e`) FETCHES it, with no negotiation at all — every commit and tree of the
 // base's history sent again — and the gits that can be told not to lazily
@@ -266,13 +269,46 @@ func wordsOf(r RunRepo) cloneWords {
 	}
 }
 
-// codingClone is [CloneCoding]'s command: a blobless clone with no checkout,
-// the cone, the base fetched by id ([cloneWords.fetchBase]), the branch made
-// at the base and checked out — only the cone's files, fetched as the
-// checkout needs them — the commit-trailer hook written, and git's
-// file-system monitor turned on where the box can keep it
-// ([cloneWords.monitor]). An EMPTY repository (no base) has its branch named
-// as the unborn HEAD instead.
+// codingClone is [CloneCoding]'s command: a blobless clone of the default
+// branch alone with no checkout, the cone, the base fetched by id
+// ([cloneWords.fetchBase]), the branch made at the base and checked out —
+// only the cone's files, fetched as the checkout needs them — the
+// commit-trailer hook written, and git's file-system monitor turned on where
+// the box can keep it ([cloneWords.monitor]). An EMPTY repository (no base)
+// has its branch named as the unborn HEAD instead.
+//
+// ONE BRANCH (--single-branch), BECAUSE A REPOSITORY'S BRANCHES ARE MOSTLY
+// OTHER SEATS' WORK. Every full_access seat that reads a repository pushes
+// its work there under refs/heads/seats/<its handle>/ (code.SeatNamespace),
+// a branch for each work item it is given, and the code host advertises
+// every ref it holds, up to code.MaxRefsPerRepo live ones. git's default
+// clone wants every branch and tag it is shown, so a box would be sent the
+// commits and trees of every seat's branch on top of its base's history,
+// keep each as a remote-tracking ref, and carry a fetch refspec that pulls
+// every other seat's next push into it on the agent's own `git fetch` or
+// `git pull`: the bytes a box clone moves, the host's walk over the tips it
+// is asked for and how long the clone holds a transfer slot of the runs'
+// share would all grow with the company's live seat branches rather than
+// with the run's base. --single-branch wants the one branch the host's HEAD
+// names — the tags that point into its history follow, as a clone's do — and
+// writes the refspec for that branch alone, so a later fetch moves the
+// default branch and nothing else. What it does not narrow is the LISTING:
+// git's clone still asks the host for every branch's and tag's name and id
+// (protocol v2's ls-refs, by the prefixes refs/heads/ and refs/tags/), about
+// eighty bytes a ref, once a clone — and no object of a branch it does not
+// want: beside ten thousand seats' branches the clone receives the objects
+// it receives beside none, and 0.8 MB more of listing (internal/code/host's
+// BenchmarkBoxClone, its seats arms). A repository whose HEAD names a branch nobody has pushed yet —
+// one that holds only seats' branches — gives the clone no branch at all,
+// and the base, a seat's tip, arrives by its id like any base off the
+// default branch.
+//
+// A CLONE, rather than `git init` and a fetch of the base by id, which would
+// list no ref at all: the agent is given the default branch as a branch of its
+// own and as origin/<default>, under a remote whose HEAD it knows, to diff,
+// log and rebase against — what a person's clone gives them, and what an
+// agent reaches for first — where a fetch by id leaves a repository holding
+// one commit's history and no name for anything in it but the run's branch.
 //
 // The hook is written only where no entry of its name exists — a box's git
 // whose template directory put a prepare-commit-msg there keeps its own —
@@ -283,7 +319,7 @@ func codingClone(r RunRepo) string {
 	hook := w.dir + "/.git/hooks/prepare-commit-msg"
 	lines := []string{
 		"if [ ! -e " + w.dir + "/.git ]; then",
-		"  git clone --quiet --filter=blob:none --no-checkout -- " + w.url + " " + w.dir + " &&",
+		"  git clone --quiet --single-branch --filter=blob:none --no-checkout -- " + w.url + " " + w.dir + " &&",
 	}
 	if cone := w.sparseCone(); cone != "" {
 		lines = append(lines, cone)
@@ -379,8 +415,15 @@ func cloneBrief(r RunRepo, purpose ClonePurpose) string {
 		fmt.Fprintf(&b, "Repository `%s` is at `./%s` on branch `%s`, which has no commits yet: the "+
 			"repository is empty", r.Repo, r.Repo, r.Branch)
 	default:
+		// THE DEFAULT BRANCH ALONE IS SAID, because it is all `git branch -r`
+		// shows: an agent asked to work against another branch is told how
+		// to reach it rather than left to conclude the host does not have it
+		// — and where the fetch leaves it, since the clone's refspec names
+		// no remote-tracking branch for it.
 		fmt.Fprintf(&b, "Repository `%s` is checked out at `./%s` on branch `%s`, from %s (a blobless "+
-			"clone: file contents are fetched as git needs them)", r.Repo, r.Repo, r.Branch, shortCommit(r.Base))
+			"clone of the default branch alone: file contents are fetched as git needs them, and another "+
+			"branch with `git fetch origin <branch>`, which leaves it at `FETCH_HEAD`)", r.Repo, r.Repo,
+			r.Branch, shortCommit(r.Base))
 	}
 	if len(r.Paths) > 0 {
 		cone := make([]string, len(r.Paths))

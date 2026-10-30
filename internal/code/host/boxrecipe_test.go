@@ -2,6 +2,7 @@ package host_test
 
 import (
 	"bytes"
+	"context"
 	"io/fs"
 	"maps"
 	"os"
@@ -47,17 +48,28 @@ func TestTheBoxRecipesCloneFromTheCodeHost(t *testing.T) {
 //     the commit-trailer hook in place; a commit made there pushes as the
 //     run, lands a push row naming the run, and the commit the host holds
 //     carries the seat's identity and the run's three trailers.
-//   - A base no ref reaches any more (a deleted branch's commit) is fetched
-//     by id.
+//   - The coding clone holds the default branch and nothing of the other
+//     seats' branches already on the host — not one of their commits, no
+//     remote-tracking ref but origin/main — and its fetch refspec names main
+//     alone, so the agent's own later `git fetch` brings nothing of another
+//     seat's next push either, and another branch it fetches by name, as its
+//     brief says, lands in FETCH_HEAD untracked.
+//   - A base off the default branch is fetched by id: the tip of the seat's
+//     own branch a run continues, held with the other seats' work still not;
+//     the same in a repository of seats' branches alone, whose HEAD names a
+//     branch nobody pushed, where the clone wants no branch at all; and a
+//     base no ref reaches any more (a deleted branch's commit).
 //   - The single-commit checkout leaves HEAD detached at the commit, one
 //     commit of history, the cone's files alone, and no commit hook.
 //
 // Mutations: drop the hook command from the coding recipe — the pushed commit
 // carries no trailer, red; check the coding clone out at what its clone's
-// HEAD names rather than its base — the deleted branch's base case, red; drop
-// --skip-checks — the cone naming [odd] and !bang is refused, red; drop the
-// engine's reset of the helper list — the person's helper answers the box
-// route and every request is refused, red.
+// HEAD names rather than its base — the base cases off the default branch,
+// red; drop --skip-checks — the cone naming [odd] and !bang is refused, red;
+// drop --single-branch — the clone holds every seat's work, tracks every
+// branch and fetches another seat's next push, red; drop the engine's reset
+// of the helper list — the person's helper answers the box route and every
+// request is refused, red.
 func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	t.Helper()
 	ctx := t.Context()
@@ -76,13 +88,38 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 	if res := person.Push(ctx, work, url, "main"); res.Err != nil {
 		t.Fatalf("git push main: %s", res)
 	}
+	// THE OTHER SEATS' WORK, on the host before the run launches, as it is
+	// on any repository its seats work in: a branch a commit off main under
+	// each of three seats' namespaces, Alice's own branch for another item
+	// among them.
+	ownRef := "refs/heads/seats/" + codetest.FixtureAlice + "/ENG-8"
+	seatWork := map[string]string{}
+	for _, ref := range []string{"refs/heads/seats/" + codetest.FixtureBob + "/ENG-1",
+		"refs/heads/seats/" + codetest.FixtureLead + "/ENG-2", ownRef} {
+		seatWork[ref] = pushOffMain(ctx, t, person, work, url, tip, ref)
+	}
+	// A REPOSITORY OF SEATS' BRANCHES ALONE, its default branch never
+	// pushed: two seats' work, Alice's among it.
+	const lone = "lone"
+	f.Declare(t, code.Declared{Name: lone, Settings: codetest.Settings()})
+	loneOwn := "refs/heads/seats/" + codetest.FixtureAlice + "/ENG-9"
+	loneOther := "refs/heads/seats/" + codetest.FixtureBob + "/ENG-4"
+	loneWork := map[string]string{}
+	for _, ref := range []string{loneOwn, loneOther} {
+		loneWork[ref] = pushOffMain(ctx, t, person, work, base+"/"+lone, tip, ref)
+	}
+	loneRows, err := f.Rows(ctx, lone, codetest.Linearizable)
+	if err != nil {
+		t.Fatalf("%s's rows: %v", lone, err)
+	}
 	rows, err := f.Rows(ctx, codetest.RepoName, codetest.Linearizable)
 	if err != nil {
 		t.Fatalf("the repository's rows: %v", err)
 	}
 	const branch = "seats/" + codetest.FixtureAlice + "/ENG-7"
 	run := f.Runs().Launch(codetest.FixtureAlice, rows.Position, host.BoxGrant{RepoID: rows.Repo.ID,
-		Name: codetest.RepoName, Access: code.AccessWrite, Branch: "refs/heads/" + branch})
+		Name: codetest.RepoName, Access: code.AccessWrite, Branch: "refs/heads/" + branch},
+		host.BoxGrant{RepoID: loneRows.Repo.ID, Name: lone, Access: code.AccessWrite, Branch: loneOwn})
 	trailers, err := sandbox.TrailerEnv(codetest.FixtureAlice, run.LaunchID,
 		&types.WorkItem{Backend: types.WorkNative, ID: "task-7", Key: "ENG-7"})
 	if err != nil {
@@ -112,8 +149,25 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		t.Errorf("the coding clone is at %s, want the base %s", got, tip)
 	}
 	sameFiles(t, "the coding clone", clone, "README", "src/a.txt", "src/lib/b.txt", "[odd]/o.txt", "!bang/n.txt")
-	if held := heldObjects(t, client, clone); held[outside] {
+	held := heldObjects(t, client, clone)
+	if held[outside] {
 		t.Errorf("the coding clone holds %s, docs/guide.md's blob, outside its cone", outside)
+	}
+	// THE DEFAULT BRANCH, AND NONE OF THE OTHER SEATS' WORK: not a commit of
+	// theirs is in the box, origin/main is the one branch it tracks, and its
+	// refspec names main alone, so the agent's own `git fetch` or `git pull`
+	// brings no other seat's next push either.
+	for ref, commit := range seatWork {
+		if held[commit] {
+			t.Errorf("the coding clone holds %s, %s's commit: another branch's work, sent to every box", commit, ref)
+		}
+	}
+	if got := trackedBranches(t, client, clone); !slices.Equal(got, []string{"refs/remotes/origin/main"}) {
+		t.Errorf("the coding clone tracks %q, want origin/main alone", got)
+	}
+	if got := strings.Fields(client.Run(t, clone, "config", "--get-all", "remote.origin.fetch")); !slices.Equal(got,
+		[]string{"+refs/heads/main:refs/remotes/origin/main"}) {
+		t.Errorf("the coding clone's fetch refspec is %q, want main's alone", got)
 	}
 	hook := filepath.Join(clone, ".git", "hooks", "prepare-commit-msg")
 	if body, err := os.ReadFile(hook); err != nil || string(body) != sandbox.TrailerHook {
@@ -175,6 +229,65 @@ func boxRecipes(t *testing.T, opts codetest.SoloOptions, git string) {
 		"Crewlet-Work-Item: native ENG-7"}
 	if !slices.Equal(got, want) {
 		t.Errorf("the pushed commit carries %q, want %q", got, want)
+	}
+
+	// THE AGENT'S OWN FETCHES: a plain `git fetch` in the box brings nothing
+	// of another seat's push since the clone, and another branch is fetched
+	// by its name, as the brief tells the agent — into FETCH_HEAD, through
+	// the box's own credential, never tracked.
+	late := pushOffMain(ctx, t, person, work, url, tip, "refs/heads/seats/"+codetest.FixtureLead+"/ENG-3")
+	runGit(t, clone, box, "fetch", "-q")
+	if heldObjects(t, client, clone)[late] {
+		t.Errorf("the box's own `git fetch` brought %s, another seat's push since its clone", late)
+	}
+	other := "seats/" + codetest.FixtureBob + "/ENG-1"
+	runGit(t, clone, box, "fetch", "-q", "origin", other)
+	if got := strings.TrimSpace(client.Run(t, clone, "rev-parse", "FETCH_HEAD")); got != seatWork["refs/heads/"+other] {
+		t.Errorf("`git fetch origin %s` in the box left FETCH_HEAD at %s, want the branch's %s", other, got,
+			seatWork["refs/heads/"+other])
+	}
+	if got := trackedBranches(t, client, clone); !slices.Equal(got, []string{"refs/remotes/origin/main"}) {
+		t.Errorf("after fetching %s the coding clone tracks %q, want origin/main alone", other, got)
+	}
+
+	// A RUN CONTINUING THE SEAT'S OWN BRANCH starts at its tip, off the
+	// default branch: fetched by its id, and the other seats' work still not.
+	own := repo
+	own.Base, own.Branch = seatWork[ownRef], strings.TrimPrefix(ownRef, "refs/heads/")
+	continued, err := sandbox.CloneRecipe(own, sandbox.CloneCoding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir = t.TempDir()
+	runStep(t, dir, box, continued)
+	if got := strings.TrimSpace(client.Run(t, filepath.Join(dir, codetest.RepoName), "rev-parse", "HEAD")); got !=
+		own.Base {
+		t.Errorf("a clone continuing %s is at %s, want its tip %s", ownRef, got, own.Base)
+	}
+	held = heldObjects(t, client, filepath.Join(dir, codetest.RepoName))
+	for ref, commit := range seatWork {
+		if ref != ownRef && held[commit] {
+			t.Errorf("a clone continuing %s holds %s, %s's commit", ownRef, commit, ref)
+		}
+	}
+
+	// A REPOSITORY OF SEATS' BRANCHES ALONE: its HEAD names a branch nobody
+	// has pushed, so the clone wants no branch at all, and a run continuing
+	// the seat's own branch there starts at its tip, fetched by its id,
+	// holding nothing of the other seat's work.
+	unborn := sandbox.RunRepo{Repo: lone, RepoID: loneRows.Repo.ID, Base: loneWork[loneOwn],
+		Branch: strings.TrimPrefix(loneOwn, "refs/heads/"), Access: sandbox.RepoWrite}
+	alone, err := sandbox.CloneRecipe(unborn, sandbox.CloneCoding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir = t.TempDir()
+	runStep(t, dir, box, alone)
+	if got := strings.TrimSpace(client.Run(t, filepath.Join(dir, lone), "rev-parse", "HEAD")); got != unborn.Base {
+		t.Errorf("a clone of %s continuing %s is at %s, want its tip %s", lone, loneOwn, got, unborn.Base)
+	}
+	if heldObjects(t, client, filepath.Join(dir, lone))[loneWork[loneOther]] {
+		t.Errorf("a clone of %s continuing %s holds %s, %s's commit", lone, loneOwn, loneWork[loneOther], loneOther)
 	}
 
 	// A BASE NO REF REACHES is fetched by its id.
@@ -358,6 +471,34 @@ func sameFiles(t *testing.T, what, dir string, want ...string) {
 	if !slices.Equal(got, want) {
 		t.Errorf("%s checked out %q, want %q", what, got, want)
 	}
+}
+
+// pushOffMain pushes ref from p's work tree work as one commit on top of base,
+// a file of its own in a directory of its own — a new tree as well as a new
+// commit — leaves work on main again, and answers the commit.
+func pushOffMain(ctx context.Context, t *testing.T, p *codetest.Person, work, url, base, ref string) string {
+	t.Helper()
+	p.Git().Run(t, work, "checkout", "-q", "-B", "seat-work", base)
+	commit := p.Commit(work, map[string]string{"work/" + strings.ReplaceAll(ref, "/", "-") + ".txt": ref + "\n"},
+		"work on "+ref)
+	if res := p.Push(ctx, work, url, "HEAD:"+ref); res.Err != nil {
+		t.Fatalf("git push %s: %s", ref, res)
+	}
+	p.Git().Run(t, work, "checkout", "-q", "main")
+	return commit
+}
+
+// trackedBranches is every remote-tracking branch of the repository at dir,
+// the symbolic origin/HEAD left out.
+func trackedBranches(t *testing.T, client *gittest.Client, dir string) []string {
+	t.Helper()
+	var out []string
+	for _, ref := range strings.Fields(client.Run(t, dir, "for-each-ref", "--format=%(refname)", "refs/remotes/")) {
+		if ref != "refs/remotes/origin/HEAD" {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 // heldObjects is every object the repository at dir holds itself — a

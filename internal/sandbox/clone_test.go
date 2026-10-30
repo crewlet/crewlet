@@ -210,7 +210,7 @@ END { exit !(seen && ok) }`) + ` &&
     [ "$(find 'web' -type d | wc -l)" -le "$(cat /proc/sys/fs/inotify/max_user_watches 2>/dev/null || echo 0)" ] &&
     git -C 'web' config core.fsmonitor true || :; }`
 	coding := `if [ ! -e 'web'/.git ]; then
-  git clone --quiet --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
+  git clone --quiet --single-branch --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
   git -C 'web' sparse-checkout set --cone --skip-checks -- 'src' 'docs' &&
   git -C 'web' fetch --quiet --no-tags --filter=blob:none origin '` + cloneBase + `' &&
   git -C 'web' checkout --quiet -B 'seats/swe/ENG-7' '` + cloneBase + `' &&
@@ -220,7 +220,7 @@ END { exit !(seen && ok) }`) + ` &&
 ` + monitor + `
 fi`
 	empty := `if [ ! -e 'web'/.git ]; then
-  git clone --quiet --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
+  git clone --quiet --single-branch --filter=blob:none --no-checkout -- "$CREWLET_GIT_URL"/'web.git' 'web' &&
   git -C 'web' symbolic-ref HEAD 'refs/heads/seats/swe/ENG-7' &&
   { [ -e 'web'/.git/hooks/prepare-commit-msg ] || [ -L 'web'/.git/hooks/prepare-commit-msg ] ||
     { mkdir -p 'web'/.git/hooks && printf '%s' ` + hook + ` > 'web'/.git/hooks/prepare-commit-msg &&
@@ -348,7 +348,7 @@ exit 0`)
 		box := t.TempDir()
 		calls := run(t, box, step, "")
 		want := [][]string{
-			{"clone", "--quiet", "--filter=blob:none", "--no-checkout", "--", url + "/web.git", "web"},
+			{"clone", "--quiet", "--single-branch", "--filter=blob:none", "--no-checkout", "--", url + "/web.git", "web"},
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
 			{"-C", "web", "fetch", "--quiet", "--no-tags", "--filter=blob:none", "origin", cloneBase},
 			{"-C", "web", "checkout", "--quiet", "-B", r.Branch, cloneBase},
@@ -380,7 +380,7 @@ exit 0`)
 		}
 		box := t.TempDir()
 		sameCalls(t, run(t, box, step, ""), [][]string{
-			{"clone", "--quiet", "--filter=blob:none", "--no-checkout", "--", url + "/web.git", "web"},
+			{"clone", "--quiet", "--single-branch", "--filter=blob:none", "--no-checkout", "--", url + "/web.git", "web"},
 			append([]string{"-C", "web", "sparse-checkout", "set", "--cone", "--skip-checks", "--"}, cone...),
 			{"-C", "web", "symbolic-ref", "HEAD", "refs/heads/" + r.Branch},
 			{"-C", "web", "config", "core.fsmonitor", "true"},
@@ -543,8 +543,9 @@ exit 0`)
 }
 
 // A STEP'S BRIEF TELLS THE AGENT WHAT THE STEP MADE TRUE: where the checkout
-// is, on which branch from which commit, its cone, and how it pushes — or that
-// a push is refused, for a repository given to read.
+// is, on which branch from which commit, that the clone holds the default
+// branch alone and how another is fetched, its cone, and how it pushes — or
+// that a push is refused, for a repository given to read.
 func TestACloneStepsBriefSaysWhereTheCheckoutIs(t *testing.T) {
 	t.Parallel()
 	read := cloned()
@@ -559,9 +560,10 @@ func TestACloneStepsBriefSaysWhereTheCheckoutIs(t *testing.T) {
 		not     []string
 	}{
 		{"write", cloned(), sandbox.CloneCoding, []string{"`./web`", "branch `seats/swe/ENG-7`", cloneBase[:12],
+			"the default branch alone", "`git fetch origin <branch>`, which leaves it at `FETCH_HEAD`",
 			"`src`, `docs`", "git push origin seats/swe/ENG-7"}, []string{"refused"}},
-		{"read", read, sandbox.CloneCoding, []string{"`./web`", "to read: a push to it is refused"},
-			[]string{"git push"}},
+		{"read", read, sandbox.CloneCoding, []string{"`./web`", "the default branch alone",
+			"to read: a push to it is refused"}, []string{"git push"}},
 		{"empty", empty, sandbox.CloneCoding, []string{"no commits yet", "git push origin seats/swe/ENG-7"},
 			[]string{"sparse-checkout"}},
 		{"single-sha", checked(), sandbox.CloneSingleSHA, []string{"`./web`", "at commit " + cloneBase[:12],
