@@ -20,7 +20,7 @@ func verbatim(v string) string { return v }
 // authenticate as it. "Does this seat have an Atlassian credential" was
 // answered in three packages by three key lists that had drifted, and the
 // reported failure is the exact shape that produces:
-// `mcp_env.atlassian.JIRA_API_TOKEN` — the spelling [PlanFor]'s own note tells
+// `mcp_env.atlassian.JIRA_API_TOKEN`, the spelling the old provisioning note told
 // operators to write — read as ready to Jira and as no credential at all to
 // Confluence, on the same seat, in the same block, for ever.
 func TestBothProductsReadOneSharedAtlassianCredential(t *testing.T) {

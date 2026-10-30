@@ -421,22 +421,3 @@ func seatEmail(env map[string]map[string]string) (where, value string) {
 	}
 	return "", ""
 }
-
-// seatCredential finds a seat's Atlassian credential slot, and says where.
-//
-// UNRESOLVED, because the provisioner needs the `${VAR}` reference itself:
-// what it plans is where a minted token will be WRITTEN.
-func seatCredential(env map[string]map[string]string) (where, value string) {
-	for _, server := range ProductAny.servers() {
-		block := env[server]
-		if len(block) == 0 {
-			continue
-		}
-		for _, key := range ProductAny.tokenKeys(server == sharedServer) {
-			if v := strings.TrimSpace(block[key]); v != "" {
-				return fmt.Sprintf("%s.%s", server, key), v
-			}
-		}
-	}
-	return "", ""
-}

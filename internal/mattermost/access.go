@@ -203,7 +203,7 @@ func (c *Client) UserByID(ctx context.Context, userID string) (User, bool, error
 	var out User
 	_, err := c.request(ctx, http.MethodGet, "/users/"+url.PathEscape(userID), nil, &out, false)
 	switch {
-	case isStatus(err, http.StatusNotFound):
+	case isNotFound(err):
 		return User{}, false, nil
 	case err != nil:
 		return User{}, false, err
@@ -244,7 +244,7 @@ func (c *Client) RemoveChannelMember(ctx context.Context, channelID, userID stri
 	}
 	_, err := c.request(ctx, http.MethodDelete, "/channels/"+url.PathEscape(channelID)+
 		"/members/"+url.PathEscape(userID), nil, nil, true)
-	if isStatus(err, http.StatusNotFound) {
+	if isNotFound(err) {
 		return nil
 	}
 	return err

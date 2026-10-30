@@ -76,8 +76,8 @@ roles:
 	return company
 }
 
-// ghostServer is a Mattermost server where the CEO's bot is the only account
-// and nobody holds a person's name.
+// ghostServer is a Mattermost server where the CEO's bot is the only account,
+// the company's team exists, and nobody holds a person's name.
 func ghostServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	chat := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +96,11 @@ func ghostServer(t *testing.T) *httptest.Server {
 			w.Write([]byte(`[]`))
 		case strings.HasSuffix(r.URL.Path, "/config/client"):
 			w.Write([]byte(`{}`))
+		case strings.HasSuffix(r.URL.Path, "/teams/name/eng"):
+			// THE TEAM THE COMPANY NAMES EXISTS, so the access sync reads
+			// its agents back rather than stopping at a setting the
+			// operator got wrong.
+			w.Write([]byte(`{"id":"team-eng","name":"eng"}`))
 		default:
 			// The websocket among them: the seat keeps reconnecting in
 			// the background, which is no part of what is asserted.

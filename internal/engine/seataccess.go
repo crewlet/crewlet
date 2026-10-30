@@ -134,7 +134,12 @@ func (e *Engine) syncSeatAccess(
 		// A DISCONNECT IS NOT GATED: it turns every seat off by request, and
 		// acts only on accounts the ledger records, never on a document's
 		// unmigrated seats.
-		Unmigrated: !in.disconnect && !company.Config.SeatAccessMigratedFor(string(kind)),
+		//
+		// ONLY A CONNECTED INTEGRATION WAITS: one the company does not
+		// connect is not configured, which the session's open answers as
+		// it always has, and reports nothing to wait for.
+		Unmigrated:       !in.disconnect && company.Config.SeatAccessPending(string(kind)),
+		UnmigratedReason: e.seatAccessPendingReason(kind),
 	})
 	if in.sink != nil {
 		// FLUSHED WHATEVER THE SYNC CONCLUDED: every value it recorded is

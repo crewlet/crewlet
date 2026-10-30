@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/seataccess"
 )
@@ -217,8 +218,16 @@ func (s *session) observe(ctx context.Context, r *roster, handle string, rec *se
 	if err != nil {
 		return seataccess.Observed{}, fmt.Errorf("list tokens: %w", err)
 	}
-	_, live := newestOwn(tokens, handle)
-	if live && rec != nil && rec.Credential != nil {
+	newest, live := newestOwn(tokens, handle)
+	switch {
+	case !live || renewDue(newest.ExpiresAt.Time, time.Now()):
+		// GONE, OR ABOUT TO BE: the account holds no token of this
+		// engine's (revoked, or expired, which GitLab reports inactive), or
+		// its token lapses inside the renewal window. Either way whatever
+		// is sealed for the seat is, or soon will be, refused, so the plan
+		// mints a replacement while the seat is on.
+		out.CredentialGone = true
+	case rec != nil && rec.Credential != nil:
 		cred := *rec.Credential
 		out.Credential = &cred
 	}
@@ -240,6 +249,16 @@ func (s *session) observe(ctx context.Context, r *roster, handle string, rec *se
 		out.Enabled = true
 	}
 	return out, nil
+}
+
+// renewWithin is how long before its expiry a token is replaced, so an agent
+// never goes quiet on the day GitLab lapses it.
+const renewWithin = 30 * 24 * time.Hour
+
+// renewDue reports a token that expires inside the renewal window. A token
+// with no expiry never is.
+func renewDue(expires, now time.Time) bool {
+	return !expires.IsZero() && expires.Sub(now) < renewWithin
 }
 
 // held is every membership the account holds that this pass reads, the

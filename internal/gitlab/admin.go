@@ -134,6 +134,11 @@ type User struct {
 	// this engine can mint into from one it must only report on: see
 	// [User.Blocked].
 	State string `json:"state"`
+
+	// Bot is GitLab's mark of an account no person signs in to: a service
+	// account, a project or group bot. GitLab serves it on the single-user
+	// read ([Client.UserByID]); a listing omits it and decodes it as false.
+	Bot bool `json:"bot"`
 }
 
 // Blocked reports an account GitLab will not let sign in.
