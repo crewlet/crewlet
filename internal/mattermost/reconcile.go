@@ -164,10 +164,6 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 		// print none of them, which is the worst outcome available.
 		return nil, provision.ErrNoSink
 	}
-	if opts.Plan == nil || opts.Plan.Empty() {
-		return &Result{Notes: notesOf(opts.Plan)}, nil
-	}
-
 	team, found, err := opts.Client.TeamByName(ctx, opts.Config.Team)
 	if err != nil {
 		// No separate auth probe here either, so this first call carries
@@ -194,6 +190,20 @@ func Reconcile(ctx context.Context, opts Options) (*Result, error) {
 	// struct it hands back is what carries this to BOTH readers — the notes
 	// the command line prints and the findings the reconcile loop reads.
 	pre := checkPreflight(ctx, opts)
+
+	// NO SEAT TO PROVISION IS STILL A COMPANY TO CHECK. Each agent's bot is
+	// the per-seat access sync's now, so the loop hands this pass an empty
+	// plan on every tick, and returning before the preflight would stop
+	// reporting a provisioning token that lost system_admin, or bot
+	// accounts switched off at the instance, for good: the access sync's
+	// writes would fail with a 403 naming an endpoint rather than the
+	// setting an administrator has to change.
+	if opts.Plan == nil || opts.Plan.Empty() {
+		return &Result{
+			Notes:    slices.Concat(notesOf(opts.Plan), pre.notes()),
+			NotAdmin: pre.notAdmin, Disabled: pre.disabled,
+		}, nil
+	}
 
 	// THE NOTES ARE COLLECTED AT THE END, not copied here: the run adds
 	// its own — a channel that does not exist, a bot that joined nothing

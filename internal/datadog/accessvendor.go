@@ -319,13 +319,6 @@ func observedOf(account Account, rec seataccess.Record, recorded bool) seatacces
 	return out
 }
 
-func emailDomain(p *config.DatadogProvisioning) string {
-	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
-		return strings.TrimSpace(p.EmailDomain)
-	}
-	return DefaultEmailDomain
-}
-
 // Apply takes one step at Datadog, chosen by its op and verb.
 func (s *accessSession) Apply(ctx context.Context, in seataccess.ApplyInput) (seataccess.StepResult, error) {
 	switch in.Step.Op {

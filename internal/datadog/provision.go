@@ -123,10 +123,7 @@ func firstCredential(block map[string]string) (string, string) {
 // FROM THE HANDLE, which is immutable (ADR-0013), so the address is stable for
 // the life of the seat: Datadog will not change an account's address at all.
 func AccountEmail(p *config.DatadogProvisioning, handle string) string {
-	domain := DefaultEmailDomain
-	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
-		domain = strings.TrimSpace(p.EmailDomain)
-	}
+	domain := emailDomain(p)
 	// `crewlet-`, the same prefix GitLab's service accounts carry, so a
 	// person reading a user list at either app can see at a glance which
 	// accounts this engine made. NOT `agent-`: that string is a queue
@@ -155,4 +152,15 @@ func RoleName(p *config.DatadogProvisioning) string {
 		return strings.TrimSpace(p.Role)
 	}
 	return DefaultRole
+}
+
+// emailDomain is the domain every agent account's address is built under:
+// the company's, or [DefaultEmailDomain]. One function, so the address a
+// pass creates an account under, the listing that finds it again and the
+// orphan check that judges it cannot disagree about a stray space.
+func emailDomain(p *config.DatadogProvisioning) string {
+	if p != nil && strings.TrimSpace(p.EmailDomain) != "" {
+		return strings.TrimSpace(p.EmailDomain)
+	}
+	return DefaultEmailDomain
 }
