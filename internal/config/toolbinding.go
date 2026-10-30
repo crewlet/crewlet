@@ -351,7 +351,9 @@ func (c *Company) UnboundSeatServers(kind string) []string {
 //     Mattermost bot token), and otherwise the value the seat already names
 //     for the server, which the engine does not touch.
 func (c *Company) boundRef(in *RoleIntegrations, handle string, k BoundSeatKey) (string, bool) {
-	if k.Kind == "github" || c.SeatCredentialMode(k.Kind) == SeatCredentialEngine {
+	// NOT MANAGED: whether only an operator writes the document changes the
+	// mode for GitHub alone, which is bound the same way in either.
+	if k.Kind == "github" || c.SeatCredentialMode(k.Kind, false) == SeatCredentialEngine {
 		return "${" + envref.SealedName(k.Kind, k.Field, handle) + "}", true
 	}
 	var external string
