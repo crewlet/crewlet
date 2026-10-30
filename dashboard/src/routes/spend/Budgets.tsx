@@ -321,8 +321,8 @@ function companyLine(answer: BudgetsAnswer): string {
 /** What the assistant row's first track says: whose spend each ceiling holds, and whose is drawn. */
 function assistantLine(answer: BudgetsAnswer): string {
   return answer.assistant.counted
-    ? "Every person's questions to the assistant, each person on their own. The figures are yours."
-    : "Every person's questions to the assistant, each person on their own.";
+    ? "Every person's questions to Ask Crewlet, each person on their own. The figures are yours."
+    : "Every person's questions to Ask Crewlet, each person on their own.";
 }
 
 /** "the company's" as a sentence starts it. */
@@ -480,7 +480,7 @@ export function Budgets() {
             <div ref={assistant.ref} tabIndex={-1}>
               <Card as="section" padding="none" selected={assistant.arrived}>
                 <Card.Header icon={<ProductMark product="assistant" size="sm" />}>
-                  <Card.Title>Each person&rsquo;s assistant</Card.Title>
+                  <Card.Title>Ask Crewlet, per person</Card.Title>
                 </Card.Header>
                 <div className="budget-row" style={{ "--budget-tracks": TRACKS } as CSSProperties}>
                   <p className="budget-row-scope t-caption muted">{assistantLine(answer)}</p>

@@ -400,7 +400,7 @@ export function parseDraftChange<D>(
     const field = spec.fields.find((f) => f.path === path);
     if (!field) return refused(`The draft has no field “${path}”.`);
     if (!settable(field))
-      return refused(`${field.label} is not something the assistant can set here.`);
+      return refused(`${field.label} is not something Ask Crewlet can set here.`);
     const out = written(field, next, spec.value, value);
     if (typeof out === "string") return refused(out);
     next = out.next;

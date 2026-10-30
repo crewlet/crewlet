@@ -86,7 +86,7 @@ import { UseItFor } from "./steps/UseItFor.tsx";
 import { WhereItRuns } from "./steps/WhereItRuns.tsx";
 
 const LEADS: Record<WizardStep, string> = {
-  cli: "Name the model and choose the coding CLI it runs. Seats and the assistant name it, so keep it short.",
+  cli: "Name the model and choose the coding CLI it runs. Seats and Ask Crewlet name it, so keep it short.",
   signin: "How this model proves who it is to the vendor.",
   model: "The model the CLI runs, in its own naming.",
   runs: "Where a seat's coding run happens when it starts on this model.",
@@ -533,7 +533,7 @@ export function ModelWizard({
         : draft.intent === "none" || draft.intent === "custom"
           ? ""
           : draft.intent === "assistant"
-            ? "the Dashboard Assistant"
+            ? "Ask Crewlet"
             : CATEGORY_WORDS[draft.intent].label.toLowerCase();
     if (!what) return verb;
     return `${verb} for ${what}${seats > 0 ? ` (${seats} ${seats === 1 ? "seat" : "seats"})` : ""}`;

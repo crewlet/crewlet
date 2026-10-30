@@ -27,7 +27,7 @@ function seatsFor(draft: Draft, seats: readonly string[]): string {
     const on = seats.filter((s) => categoryState(draft.uses, s, c) !== "none");
     return on.length > 0 ? [`${CATEGORY_WORDS[c].label}: ${listed(on)}`] : [];
   });
-  if (draft.uses.assistant) lines.push("The Dashboard Assistant");
+  if (draft.uses.assistant) lines.push("Ask Crewlet");
   return lines.length > 0 ? lines.join("\n") : "Nothing yet";
 }
 

@@ -95,8 +95,8 @@ describe("whether the reader may ask", () => {
 
   test("each of the engine's reasons is its own sentence, and off names the company", () => {
     const off = assistantUnavailableFor({ ...ready, assistant: "disabled" }, "Nimbus");
-    expect(off).toMatchObject({ reason: "disabled", short: "An admin turned the assistant off." });
-    expect(off?.title).toBe("The assistant is off for Nimbus");
+    expect(off).toMatchObject({ reason: "disabled", short: "An admin turned Ask Crewlet off." });
+    expect(off?.title).toBe("Ask Crewlet is off for Nimbus");
     for (const reason of ["no_model", "not_a_person", "no_permission"] as const) {
       const words = assistantUnavailableFor({ ...ready, assistant: reason }, "Nimbus");
       expect(words?.reason).toBe(reason);
@@ -141,7 +141,7 @@ describe("the assistant's model", () => {
     const problem = assistantModelFor({ assistantModel: signedOut.model });
     expect(problem).toEqual({
       code: "model_signed_out",
-      short: "The assistant's model is signed out",
+      short: "Ask Crewlet's model is signed out",
       title: signedOut.model.message,
       body: signedOut.model.hint,
     });
@@ -157,7 +157,7 @@ describe("the assistant's model", () => {
         retry_at: "2026-10-25T14:05:00Z",
       },
     });
-    expect(busy?.short).toBe("The assistant's model is at its usage limit");
+    expect(busy?.short).toBe("Ask Crewlet's model is at its usage limit");
     expect(busy?.body).toMatch(
       /^It is tried again once the limit resets\. You can ask again from .+\.$/,
     );

@@ -135,17 +135,17 @@ export function categoryTip(category: JobCategory): string {
 
 /** The Dashboard Assistant as a use of a model: company-wide, one field, no seats. */
 export const ASSISTANT_USE = {
-  label: "Assistant",
-  hint: "Answers you in the dashboard's assistant.",
-  tip: "Sets assistant.llm. The assistant is the company's, so no seats are picked.",
-  rule: "The assistant runs only on a model that denies the CLI's web tools, so a page it reads cannot send what it read anywhere.",
+  label: "Ask Crewlet",
+  hint: "Answers you in the dashboard.",
+  tip: "Sets assistant.llm. Ask Crewlet is the company's, so no seats are picked.",
+  rule: "Ask Crewlet runs only on a model that denies the CLI's web tools, so a page it reads cannot send what it read anywhere.",
 } as const;
 
 /** Every seat job at once. */
 export const EVERYTHING = {
   label: "Everything",
   hint: "Use this model for every seat job: coding, reviewing and delegations, and routines and evaluations.",
-  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. The Assistant is separate: choose it on its own.",
+  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. Ask Crewlet is separate: choose it on its own.",
 } as const;
 
 /**

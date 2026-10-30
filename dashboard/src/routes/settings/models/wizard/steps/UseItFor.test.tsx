@@ -209,7 +209,7 @@ test("the fast-model note shows only where a category carries one, and only for 
 
 test("the assistant asks for web tools denied, and one click denies them", () => {
   render(<Harness start={{ key: "chat" }} />);
-  fireEvent.click(screen.getByRole("radio", { name: /Assistant/ }));
+  fireEvent.click(screen.getByRole("radio", { name: /Ask Crewlet/ }));
   expect(latest.uses.assistant).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Deny web tools for this model" }));
   expect(latest.webDenied).toBe(true);
@@ -217,7 +217,7 @@ test("the assistant asks for web tools denied, and one click denies them", () =>
 });
 
 test("Everything on a model that allows web tools says the assistant cannot use it", () => {
-  const warning = "The Dashboard Assistant can't use this model while web tools are allowed.";
+  const warning = "Ask Crewlet can't use this model while web tools are allowed.";
   render(<Harness start={{}} />);
   fireEvent.click(screen.getByRole("radio", { name: /Everything/ }));
   expect(screen.getByText(warning)).toBeTruthy();

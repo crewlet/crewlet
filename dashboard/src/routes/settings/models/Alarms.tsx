@@ -159,7 +159,7 @@ function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[]
         : whoLine([...handles].map(name).sort());
     out.push(`${categoryWords(category)} for ${who}`);
   }
-  if (models.some((m) => m.uses.assistant)) out.push("the Dashboard Assistant");
+  if (models.some((m) => m.uses.assistant)) out.push("Ask Crewlet");
   return out;
 }
 

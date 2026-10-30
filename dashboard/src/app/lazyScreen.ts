@@ -241,7 +241,7 @@ const CHUNK_LABELS: Readonly<
   org: "Edit org",
   signin: "sign-in",
   palette: "Search",
-  assistant: "The assistant",
+  assistant: "Ask Crewlet",
 };
 
 /** What a chunk is called in a sentence a reader sees. */

@@ -53,7 +53,7 @@ export function CliStep({
         helper={
           editing
             ? "The name is this model's identity: seats name it. To use another name, add a new model."
-            : "Lowercase letters, digits and hyphens. Seats and the assistant name the model by it."
+            : "Lowercase letters, digits and hyphens. Seats and Ask Crewlet name the model by it."
         }
         error={error}
         {...(editing ? {} : { limit: { length: draft.key.length, max: KEY_MAX } })}

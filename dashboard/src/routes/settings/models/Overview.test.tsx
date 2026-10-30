@@ -127,8 +127,8 @@ test("the Dashboard Assistant is a use, for an admin and a member alike", () => 
   for (const admin of [true, false]) {
     mount(company({ admin }));
     const uses = row("assistant").querySelector(".models-uses");
-    expect(uses?.querySelector(".models-uses__label")?.textContent).toBe("Assistant");
-    expect(tile("Models")).toContain("1 not used by any seat or the assistant");
+    expect(uses?.querySelector(".models-uses__label")?.textContent).toBe("Ask Crewlet");
+    expect(tile("Models")).toContain("1 not used by any seat or Ask Crewlet");
     cleanup();
   }
 });

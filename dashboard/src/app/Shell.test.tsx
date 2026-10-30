@@ -1524,9 +1524,7 @@ describe("the assistant", () => {
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: ".", ctrlKey: true }));
     });
-    await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Crewlet Assistant" })).toBeDefined(),
-    );
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Ask Crewlet" })).toBeDefined());
     const app = document.querySelector<HTMLElement>(".app")!;
     return { win, app };
   }
@@ -1559,7 +1557,7 @@ describe("the assistant", () => {
     const { win, app } = await open(1600, "#/worklet?peek=seat:ceo");
     try {
       expect(app.getAttribute("data-peek")).toBe("column");
-      const heading = screen.getByRole("heading", { name: "Crewlet Assistant" });
+      const heading = screen.getByRole("heading", { name: "Ask Crewlet" });
       act(() => heading.focus());
       fireEvent.keyDown(heading, { key: "Escape" });
       await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
@@ -1575,8 +1573,8 @@ describe("the assistant", () => {
     try {
       // THE DEFAULT VIEWER ANSWER CARRIES NO `assistant` MEMBER: an engine
       // that does not serve it, read as off.
-      expect(screen.getByText("The assistant is off for this company")).toBeDefined();
-      expect(screen.queryByRole("textbox", { name: "Ask the assistant" })).toBeNull();
+      expect(screen.getByText("Ask Crewlet is off for this company")).toBeDefined();
+      expect(screen.queryByRole("textbox", { name: "Ask Crewlet" })).toBeNull();
     } finally {
       win.restore();
     }
@@ -1594,7 +1592,7 @@ describe("the assistant", () => {
     });
     try {
       await waitFor(() =>
-        expect(screen.getByRole("textbox", { name: "Ask the assistant" })).toBeDefined(),
+        expect(screen.getByRole("textbox", { name: "Ask Crewlet" })).toBeDefined(),
       );
       expect(
         screen.getByRole("group", { name: "Attached to this question" }).textContent,
@@ -1623,7 +1621,7 @@ describe("the assistant", () => {
     });
     try {
       expect(app.getAttribute("data-aside")).toBe(shape);
-      const box = await screen.findByRole("textbox", { name: "Ask the assistant" });
+      const box = await screen.findByRole("textbox", { name: "Ask Crewlet" });
       act(() => box.focus());
       fireEvent.keyDown(box, { key: ".", ctrlKey: true });
       await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));
@@ -1732,15 +1730,13 @@ describe("what a chat room in the frame counts as read", () => {
     act(() => {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: ".", ctrlKey: true }));
     });
-    await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Crewlet Assistant" })).toBeDefined(),
-    );
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Ask Crewlet" })).toBeDefined());
     return document.querySelector<HTMLElement>(".app")!;
   }
 
   /** Escape from inside the panel closes it, whatever its shape. */
   async function closeAssistant(app: HTMLElement): Promise<void> {
-    const heading = screen.getByRole("heading", { name: "Crewlet Assistant" });
+    const heading = screen.getByRole("heading", { name: "Ask Crewlet" });
     act(() => heading.focus());
     fireEvent.keyDown(heading, { key: "Escape" });
     await waitFor(() => expect(app.hasAttribute("data-aside")).toBe(false));

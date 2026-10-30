@@ -182,7 +182,7 @@ test("a refusal access would clear names the access, and offers a request for it
     grants: ["admin"],
   });
   expect(screen.getByText("You do not have permission to read the fleet.")).toBeTruthy();
-  expect(screen.getByText(/^You need Admin access for this\. The assistant acts/)).toBeTruthy();
+  expect(screen.getByText(/^You need Admin access for this\. Ask Crewlet acts/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Copy a request to an admin" }));
   await waitFor(() => expect(written).toBe("Please give me Admin access to read the fleet."));
 });

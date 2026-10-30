@@ -94,7 +94,7 @@ export function optionsFor(
       ? [{ value: UNSET, label: "Leave it unset" }]
       : []),
     ...(ref.at.assistant === "chat" && assistantOn && targets.length === 0
-      ? [{ value: OFF, label: "Turn the assistant off" }]
+      ? [{ value: OFF, label: "Turn Ask Crewlet off" }]
       : []),
   ];
 }
@@ -152,7 +152,7 @@ export function summaryOf(key: string, removal: Removal, mood: "says" | "audit" 
     `${verb("remove")} the model ${key}`,
     ...[...moves].map(([to, n]) => `${verb("move")} ${plural(n, "use")} to ${to}`),
     ...(unset ? [`${verb("leave")} ${unset} unset`] : []),
-    ...(removal.assistantOff ? [`${verb("turn")} the Dashboard Assistant off`] : []),
+    ...(removal.assistantOff ? [`${verb("turn")} Ask Crewlet off`] : []),
   ];
   const sentence = listed(parts);
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}${mood === "says" ? "." : ""}`;
@@ -427,8 +427,7 @@ export function RemoveDialog({
                         </span>
                         {ref.at.assistant ? (
                           <Text as="span" variant="caption" tone="tertiary">
-                            Only models that deny the CLI's web tools can run the Dashboard
-                            Assistant.
+                            Only models that deny the CLI's web tools can run Ask Crewlet.
                           </Text>
                         ) : null}
                       </span>

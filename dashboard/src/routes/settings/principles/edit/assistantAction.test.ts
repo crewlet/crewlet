@@ -61,7 +61,7 @@ describe("the principles draft", () => {
   test("refuses a part the person has not opened, rather than opening it", () => {
     expect(parseDraftChange(spec(), { values: { mission: "x" } })).toEqual({
       ok: false,
-      reason: expect.stringMatching(/not something the assistant can set/),
+      reason: expect.stringMatching(/not something Ask Crewlet can set/),
     });
   });
 

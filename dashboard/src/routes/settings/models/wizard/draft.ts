@@ -617,7 +617,7 @@ export function fieldOf(p: Pick<ConfigProblem, "segments">, key: string): string
     };
     return words[String(s[3])] ?? STEP_LABELS[stepOf(p, key)];
   }
-  if (s[0] === "assistant") return "Dashboard Assistant";
+  if (s[0] === "assistant") return "Ask Crewlet";
   return STEP_LABELS[stepOf(p, key)];
 }
 
@@ -674,7 +674,7 @@ export function draftProblems(
   const at = (field: string, message: string, kind?: string) =>
     problem(["providers", "llm", d.key, ...field.split(".")], message, kind);
   if (!d.key) {
-    out.push(problem(["key"], "Name the model. Seats and the assistant name it.", "missing"));
+    out.push(problem(["key"], "Name the model. Seats and Ask Crewlet name it.", "missing"));
   } else if (!KEY_PATTERN.test(d.key)) {
     out.push(
       problem(

@@ -160,7 +160,7 @@ export function AsideBoundary({ onClose, children }: { onClose: () => void; chil
         <Callout
           variant="neutral"
           role="alert"
-          title={error instanceof ChunkLoadError ? error.title : "The assistant could not be drawn"}
+          title={error instanceof ChunkLoadError ? error.title : "Ask Crewlet could not be drawn"}
           action={
             <span className="boundary-actions">
               {error instanceof ChunkLoadError ? (
@@ -178,7 +178,7 @@ export function AsideBoundary({ onClose, children }: { onClose: () => void; chil
         </Callout>
       )}
     >
-      <Suspense fallback={<Skeleton variant="text" rows={3} label="Loading the assistant" />}>
+      <Suspense fallback={<Skeleton variant="text" rows={3} label="Loading Ask Crewlet" />}>
         {children}
       </Suspense>
     </ErrorBoundary>

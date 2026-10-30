@@ -135,7 +135,7 @@ export function seatChangesOf(
   }
   if (next.assistant && !was.assistant) {
     const today = data.assistant.enabled ? data.assistant.key : null;
-    lines.push(`The Dashboard Assistant: ${today && today !== key ? today : "no model"} → ${name}`);
+    lines.push(`Ask Crewlet: ${today && today !== key ? today : "no model"} → ${name}`);
   }
   return lines;
 }
@@ -201,7 +201,7 @@ export function summaryOf(data: Pick<ModelsData, "models" | "seats" | "assistant
       );
     }
   }
-  if (draft.uses.assistant) lines.push(`The Dashboard Assistant will answer with ${key}.`);
+  if (draft.uses.assistant) lines.push(`Ask Crewlet will answer with ${key}.`);
   if (lines.length === 0)
     return [`No seat uses ${key} yet. Every seat stays on the model it has now.`];
   return lines;
@@ -256,7 +256,7 @@ export function UseItFor({
     </Button>
   );
   const webRule = (
-    <Callout variant="warning" title="The assistant needs web tools denied">
+    <Callout variant="warning" title="Ask Crewlet needs web tools denied">
       <span className="models-stack">
         <span>{ASSISTANT_USE.rule}</span>
         <span>{denyWeb}</span>
@@ -289,7 +289,7 @@ export function UseItFor({
         ...(!assistantOn
           ? {
               disabled: true,
-              disabledReason: "The assistant is off. Turn it on in Settings, Assistant first.",
+              disabledReason: "Ask Crewlet is off. Turn it on in Settings, Ask Crewlet first.",
             }
           : {}),
       };
@@ -310,7 +310,7 @@ export function UseItFor({
           ? {
               panel: (
                 <Text as="p" variant="caption" tone="secondary">
-                  The Dashboard Assistant can't use this model while web tools are allowed.
+                  Ask Crewlet can't use this model while web tools are allowed.
                 </Text>
               ),
             }
@@ -376,7 +376,7 @@ export function UseItFor({
 
       {assistantBeside ? (
         <Text as="p" variant="caption" tone="secondary">
-          It also answers in the Dashboard Assistant
+          It also answers in Ask Crewlet
           {holdsAssistant ? ", until another model is chosen for it" : ""}.
         </Text>
       ) : null}
@@ -442,10 +442,10 @@ export function UseItFor({
         />
         {assistantOn ? (
           <Switch
-            label="Also answer in the Dashboard Assistant"
+            label="Also answer in Ask Crewlet"
             description={
               holdsAssistant
-                ? "The assistant runs on this model. Choose another model for it to move it."
+                ? "Ask Crewlet runs on this model. Choose another model for it to move it."
                 : ASSISTANT_USE.tip
             }
             checked={draft.uses.assistant}

@@ -167,10 +167,10 @@ function SeatChip({ seats, on }: { seats: readonly Seat[]; on: SeatOnCategory })
 
 function assistantLine(use: AssistantUse, deepWork: AssistantUse): string[] {
   return [
-    ...(use === "runs" ? ["The Dashboard Assistant runs on it."] : []),
-    ...(use === "backup" ? ["The Dashboard Assistant falls back to it."] : []),
-    ...(deepWork === "runs" ? ["The Dashboard Assistant's deep work runs on it."] : []),
-    ...(deepWork === "backup" ? ["The Dashboard Assistant's deep work falls back to it."] : []),
+    ...(use === "runs" ? ["Ask Crewlet runs on it."] : []),
+    ...(use === "backup" ? ["Ask Crewlet falls back to it."] : []),
+    ...(deepWork === "runs" ? ["Ask Crewlet's deep work runs on it."] : []),
+    ...(deepWork === "backup" ? ["Ask Crewlet's deep work falls back to it."] : []),
   ];
 }
 

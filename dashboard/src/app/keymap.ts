@@ -73,10 +73,10 @@ export const KEY_SCOPES: readonly { scope: KeyScope; title: string }[] = [
   { scope: "create", title: "Making a new artifact" },
   { scope: "charter", title: "Writing the company's principles" },
   { scope: "search", title: "In search" },
-  { scope: "assistant", title: "In the assistant" },
+  { scope: "assistant", title: "In Ask Crewlet" },
   {
     scope: "layer",
-    title: "In a dialog, a menu, the navigation drawer, an artifact's panel or the assistant",
+    title: "In a dialog, a menu, the navigation drawer, an artifact's panel or Ask Crewlet",
   },
 ];
 
@@ -193,7 +193,7 @@ const FRAME: KeyRow[] = [
     id: "assistant.open",
     scope: "frame",
     presses: [{ key: ".", mod: true }],
-    does: "Open the assistant, or close it",
+    does: "Open Ask Crewlet, or close it",
     by: "dashboard",
     whileTyping: true,
   },
@@ -535,7 +535,7 @@ const LAYER: KeyRow[] = [
     id: "layer.close",
     scope: "layer",
     presses: [{ key: "escape" }],
-    does: "Close what is on top; in the assistant, stop a running answer first",
+    does: "Close what is on top; in Ask Crewlet, stop a running answer first",
     by: "kit",
     whileTyping: true,
   },

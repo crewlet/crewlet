@@ -61,7 +61,7 @@ export function AssistantTrigger() {
   );
   // NO KEYCAP ON THE BUTTON: the shortcut is the button's own property
   // (`aria-keyshortcuts`) and its tooltip's words, for a reader with keys.
-  const ask = keyHints ? `Ask the assistant (${pressText(press)})` : "Ask the assistant";
+  const ask = keyHints ? `Ask Crewlet (${pressText(press)})` : "Ask Crewlet";
   const tooltip = shown ? `${ask}. ${ACTIVITY_WORDS[shown]}.` : ask;
   const common = {
     id: ASSISTANT_TRIGGER_ID,
@@ -77,7 +77,7 @@ export function AssistantTrigger() {
         variant="secondary"
         pressed={open}
         icon={mark}
-        label={shown ? `Ask the assistant, ${ACTIVITY_WORDS[shown]}` : "Ask the assistant"}
+        label={shown ? `Ask Crewlet, ${ACTIVITY_WORDS[shown]}` : "Ask Crewlet"}
       />
     );
   }

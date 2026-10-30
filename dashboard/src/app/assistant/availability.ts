@@ -46,26 +46,26 @@ function words(
   switch (reason) {
     case "disabled":
       return {
-        short: "An admin turned the assistant off.",
-        title: `The assistant is off for ${company}`,
+        short: "An admin turned Ask Crewlet off.",
+        title: `Ask Crewlet is off for ${company}`,
         body: "An admin turned it off. Everything else in Crewlet works as usual. Ask an admin if you need it.",
       };
     case "no_model":
       return {
-        short: "The assistant has no model it can use right now.",
-        title: "The assistant cannot answer right now",
-        body: "None of the models it is set up with can be reached from here. Everything else in Crewlet works as usual. Ask an admin to check the assistant's models.",
+        short: "Ask Crewlet has no model it can use right now.",
+        title: "Ask Crewlet cannot answer right now",
+        body: "None of the models it is set up with can be reached from here. Everything else in Crewlet works as usual. Ask an admin to check Ask Crewlet's models.",
       };
     case "not_a_person":
       return {
-        short: "The assistant answers people signed in with their own account.",
-        title: "The assistant is for people",
+        short: "Ask Crewlet answers people signed in with their own account.",
+        title: "Ask Crewlet is for people",
         body: "This session belongs to an API token or a service account. Sign in with your own account to ask.",
       };
     case "no_permission":
       return {
-        short: "Your access does not include the assistant.",
-        title: "The assistant is not part of your access",
+        short: "Your access does not include Ask Crewlet.",
+        title: "Ask Crewlet is not part of your access",
         body: "Everything else you can open in Crewlet works as usual. Ask an admin if you need it.",
       };
   }
@@ -92,7 +92,7 @@ export function assistantUnavailableFor(
       reason: "anonymous",
       short: "Sign in to ask.",
       title: "Sign in to ask",
-      body: "The assistant answers as the person signed in, with their access.",
+      body: "Ask Crewlet answers as the person signed in, with their access.",
     };
   }
   if (viewer.assistant === null) return null;
@@ -115,11 +115,11 @@ export interface AssistantModelProblem {
 function shortFor(code: AssistantErrorCode): string {
   switch (code) {
     case "model_signed_out":
-      return "The assistant's model is signed out";
+      return "Ask Crewlet's model is signed out";
     case "model_busy":
-      return "The assistant's model is at its usage limit";
+      return "Ask Crewlet's model is at its usage limit";
     default:
-      return "The assistant's model cannot answer right now";
+      return "Ask Crewlet's model cannot answer right now";
   }
 }
 

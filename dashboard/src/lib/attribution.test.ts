@@ -240,11 +240,11 @@ describe("a write through the assistant", () => {
           }) as never,
       ),
     ]) {
-      expect(words).toContain("the assistant");
+      expect(words).toContain("Ask Crewlet");
       expect(words).not.toContain("assist:");
       expect(words).not.toContain("0b6f5a4e");
     }
-    expect(authorWords("Miles", GRANT)).toBe("Miles, with the assistant");
+    expect(authorWords("Miles", GRANT)).toBe("Miles, with Ask Crewlet");
   });
 
   test("a plain session write reads as before", () => {

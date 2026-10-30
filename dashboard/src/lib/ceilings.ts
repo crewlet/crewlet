@@ -61,7 +61,7 @@ export function whoseCeiling(scope: CeilingScope): string {
     case "company":
       return "the company's";
     case "assistant":
-      return "each person's assistant";
+      return "Ask Crewlet's per-person";
     case "seat":
       return `${scope.name}'s`;
   }
@@ -73,7 +73,7 @@ export function scopeName(scope: CeilingScope): string {
     case "company":
       return "The company";
     case "assistant":
-      return "Each person's assistant";
+      return "Ask Crewlet, per person";
     case "seat":
       return scope.name;
   }

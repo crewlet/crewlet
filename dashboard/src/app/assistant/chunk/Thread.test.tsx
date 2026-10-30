@@ -196,7 +196,7 @@ test("a model that took too long offers Try again, held off while Send is", () =
     "true",
   );
   unmount();
-  draw(timeout, "The assistant's model is signed out");
+  draw(timeout, "Ask Crewlet's model is signed out");
   expect(screen.getByRole("button", { name: /Try again/ }).getAttribute("aria-disabled")).toBe(
     "true",
   );

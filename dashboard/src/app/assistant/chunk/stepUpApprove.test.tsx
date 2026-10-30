@@ -224,7 +224,7 @@ function mount() {
 }
 
 async function ask(text: string) {
-  const box = screen.getByRole("textbox", { name: "Ask the assistant" });
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: text } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
