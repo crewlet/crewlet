@@ -2,9 +2,9 @@ package coord
 
 import "context"
 
-// THE SEAT ACCESS LEDGER is the fleet's record of every account the engine
-// created at a vendor for an agent seat, and of each seat's last access sync
-// (internal/seataccess).
+// SeatAccess is the seat access ledger: the fleet's record of every account
+// the engine created at a vendor for an agent seat, and of each seat's last
+// access sync (internal/seataccess).
 //
 // # Who has to agree on it
 //

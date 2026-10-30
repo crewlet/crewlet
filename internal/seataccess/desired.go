@@ -174,14 +174,18 @@ func SetDesired(role *config.Role, lane Lane, d Desired) error {
 	return nil
 }
 
-// gitlabLevel is a GitLab block's level: its custom role where it names one,
-// its access level otherwise.
-func gitlabLevel(b *config.RoleGitLab) string {
+// gitlabLevel is a GitLab block's level.
+func gitlabLevel(b *config.RoleGitLab) string { return GitLabLevelID(b.AccessLevel, b.MemberRoleID) }
+
+// GitLabLevelID is a GitLab level as one identifier: the custom role where
+// memberRoleID names one (`member_role:<id>`), the access level otherwise
+// (`30`), empty for neither. [GitLabLevel] reads it back.
+func GitLabLevelID(accessLevel int, memberRoleID int64) string {
 	switch {
-	case b.MemberRoleID != 0:
-		return memberRolePrefix + strconv.FormatInt(b.MemberRoleID, 10)
-	case b.AccessLevel != 0:
-		return strconv.Itoa(b.AccessLevel)
+	case memberRoleID != 0:
+		return memberRolePrefix + strconv.FormatInt(memberRoleID, 10)
+	case accessLevel != 0:
+		return strconv.Itoa(accessLevel)
 	default:
 		return ""
 	}

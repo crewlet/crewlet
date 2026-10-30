@@ -7,6 +7,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/org"
+	"github.com/crewlet/crewlet/internal/provision"
 )
 
 // Vendor is one integration's half of per-seat access: what it offers, the
@@ -51,6 +52,19 @@ type OpenInput struct {
 	// ([setup.PassInput.Operator]), empty where the vendor needs none or the
 	// run is the loop's.
 	Operator string
+
+	// Sink seals a COMPANY value the session itself must keep current
+	// before it can act: Slack's app-configuration token, whose refresh
+	// token is single use, so a rotation is sealed before it is used. A
+	// seat's credentials never go through it (the sync seals [Minted]).
+	// Nil on a preview, where the session rotates nothing.
+	Sink provision.TokenSink
+
+	// WebhookBase is the public address vendors reach this deployment at
+	// ([setup.PassInput.WebhookBase]), which Slack builds each app's
+	// request and redirect URLs from. Empty on a preview, where the
+	// session creates and restores nothing.
+	WebhookBase string
 }
 
 // Session is one pass's connection to the vendor.
@@ -109,6 +123,11 @@ type ApplyInput struct {
 	// seat's current credential (to revoke it) resolves it through its
 	// session's resolver.
 	Sinks map[string]string
+
+	// Prior is what this op's earlier steps did, in order: a create's
+	// account id for the mint after it, a mint's credential id for the
+	// retire after it ([Minted.CredentialID]). Empty for an op's first step.
+	Prior []StepResult
 }
 
 // StepResult is what one step did.
@@ -139,6 +158,12 @@ type StepResult struct {
 	// record is closed and the next pass creates a fresh one if the seat is
 	// on.
 	Gone bool
+
+	// Did is the vendor's sentence for what the step actually did, where
+	// the drawn step covered more than one case ("Removed its memberships,
+	// since this GitLab token cannot block accounts"). The sync records it
+	// as the step outcome's text; empty keeps the drawn text.
+	Did string
 }
 
 // Minted is one credential a step created.
@@ -149,6 +174,11 @@ type Minted struct {
 
 	// Value is the credential. Never logged, never marshalled.
 	Value string `json:"-"`
+
+	// CredentialID is the vendor's identifier for the minted credential (a
+	// key id, a token id), never the value, so a later step can tell it from
+	// the credentials it replaces.
+	CredentialID string
 
 	// Revoke undoes the mint at the vendor. Nil only for a value that grants
 	// nothing by itself (an Atlassian account's address). The sync calls it
@@ -216,9 +246,10 @@ type LaneSpec struct {
 	CreatedBy StepActor
 	EnabledBy StepActor
 
-	// Rotatable is whether a person can ask to rotate the credential; GitHub
-	// issues hourly tokens and Slack issues one only on an install, so
-	// neither has anything to rotate.
+	// Rotatable is whether a person can ask to rotate the credential.
+	// GitHub issues hourly tokens, so it has nothing to rotate; Slack's
+	// rotate revokes the bot token and waits for a person to approve the
+	// reinstall.
 	Rotatable bool
 }
 
