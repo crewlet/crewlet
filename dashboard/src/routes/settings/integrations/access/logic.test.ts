@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "vitest";
 import {
+  CONFLUENCE_LANE,
   DATADOG_LANE,
   GITHUB_LANE,
   MATTERMOST_LANE,
@@ -18,6 +19,9 @@ import {
   accessWords,
   availableActions,
   emptyScopeHint,
+  joinLevels,
+  levelName,
+  refusedLevel,
   offSentence,
   sameDesired,
   scopeWords,
@@ -169,4 +173,36 @@ test("an operator-written document holds only a reader who is not an admin; any 
   );
   expect(accessHold("Managed by GitOps.", true, undefined)).toBe("Managed by GitOps.");
   expect(accessHold(null, true, undefined)).toBeUndefined();
+});
+
+describe("a lane of sets (Confluence by operation)", () => {
+  test("stores the chosen ids sorted, and any choice brings View with it", () => {
+    expect(joinLevels(CONFLUENCE_LANE, ["create:page"])).toBe("create:page read:space");
+    expect(joinLevels(CONFLUENCE_LANE, ["read:space", "administer:space"])).toBe(
+      "administer:space read:space",
+    );
+    expect(joinLevels(CONFLUENCE_LANE, [])).toBe("");
+  });
+
+  test("names the set in the vendor's order, or No permissions", () => {
+    expect(levelName(CONFLUENCE_LANE, "create:page read:space")).toBe("View, Add pages");
+    expect(levelName(CONFLUENCE_LANE, "")).toBe("No permissions");
+  });
+
+  test("the same set in another order is no change", () => {
+    expect(
+      sameDesired(
+        CONFLUENCE_LANE,
+        { enabled: true, level: "read:space create:page" },
+        { enabled: true, level: "create:page read:space" },
+      ),
+    ).toBe(true);
+  });
+
+  test("an agent that is on with no permission cannot be saved", () => {
+    expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "" })).toMatch(/at least View/);
+    expect(refusedLevel(CONFLUENCE_LANE, { enabled: false })).toBeNull();
+    expect(refusedLevel(CONFLUENCE_LANE, { enabled: true, level: "read:space" })).toBeNull();
+    expect(refusedLevel(DATADOG_LANE, { enabled: true })).toBeNull();
+  });
 });

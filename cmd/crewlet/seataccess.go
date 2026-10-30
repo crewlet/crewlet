@@ -130,7 +130,7 @@ func slackInstallLink(installs *slack.Installs) func(context.Context, string, st
 		switch {
 		case errors.As(err, &refusal):
 			return "", &setupapi.AccessRefusal{Status: refusal.Status, Reason: refusal.Reason,
-				Remedy: refusal.Remedy}
+				Remedy: refusal.Remedy, RetryAfter: refusal.RetryAfter}
 		case errors.Is(err, slack.ErrNoBaseURL):
 			return "", &setupapi.AccessRefusal{Status: http.StatusConflict, Reason: err.Error(),
 				Remedy: "set the address a vendor reaches this deployment on, and restart"}
