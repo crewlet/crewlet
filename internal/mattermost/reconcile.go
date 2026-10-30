@@ -614,41 +614,22 @@ func decommission(ctx context.Context, opts Options, managed map[string]Bot) ([]
 		if !strings.HasPrefix(username, prefix) || keep[username] {
 			continue
 		}
-		// ITS CREDENTIAL FIRST, for the reason [Teardown] gives: a
-		// disabled account keeps its username and its tokens, so a
-		// departed seat whose token was left live is an agent that
-		// starts working again the moment anybody re-enables the bot.
-		// Keyed on the HANDLE inside the username, because that is what
-		// the token was minted under and the plan no longer names this
-		// seat at all: this name was built by a previous pass of this same
-		// function, so what is left after the prefix is exactly what it
-		// derived the account from.
+		// THE SAME RULE AS OFF AND AS A DISCONNECT, in [Client.TurnOff]:
+		// its tokens first, then the marker, then the deactivation, so a
+		// departed seat is never left disabled holding a live credential
+		// or with no provenance. Keyed on the HANDLE inside the username,
+		// because that is what the token was minted under and the plan no
+		// longer names this seat at all: this name was built by a previous
+		// pass of this same function, so what is left after the prefix is
+		// exactly what it derived the account from.
 		handle := strings.TrimPrefix(username, prefix)
-		if _, err := opts.Client.RevokeMinted(ctx, bot.UserID,
-			TokenDescription(handle), ""); err != nil {
+		if err := opts.Client.TurnOff(ctx, BotAccount{
+			ID: bot.UserID, Username: bot.Username,
+		}, handle); err != nil {
 			notes = append(notes, fmt.Sprintf(
-				"%s matches the managed prefix and its tokens could not be "+
-					"revoked, so it was left enabled rather than disabled "+
-					"holding a live credential: %v", bot.Username, err))
-			continue
-		}
-		// MARKED BEFORE IT IS DISABLED, the same rule the teardown
-		// follows and for the same reason: "disabled" is an ambiguous bit,
-		// and a bot this engine turned off with nothing recording that is
-		// one it can never bring back. Written first, so a run interrupted
-		// between the two leaves a marked, live bot.
-		if err := opts.Client.MarkDisconnected(ctx, bot.UserID); err != nil {
-			notes = append(notes, fmt.Sprintf(
-				"%s matches the managed prefix and this engine could not "+
-					"record that it is decommissioning it, so it was left "+
-					"enabled rather than disabled with no provenance: %v",
-				bot.Username, err))
-			continue
-		}
-		if err := opts.Client.DisableBot(ctx, bot.UserID); err != nil {
-			notes = append(notes, fmt.Sprintf(
-				"%s matches the managed prefix and could not be disabled: %v",
-				bot.Username, err))
+				"%s matches the managed prefix and could not be turned off, so it "+
+					"was left as it was rather than disabled holding a live "+
+					"credential or with no provenance: %v", bot.Username, err))
 			continue
 		}
 		disabled = append(disabled, bot.Username)

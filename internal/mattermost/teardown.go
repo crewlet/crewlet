@@ -99,34 +99,17 @@ func Teardown(ctx context.Context, opts TeardownOptions) (provision.Removed, err
 		// do nothing, and a live token on a disabled bot is a credential
 		// that works again the moment anybody re-enables the account.
 		// The first is the safer thing to be interrupted at.
-		if _, err := opts.Client.RevokeMinted(ctx, bot.ID,
-			TokenDescription(seat.Handle), ""); err != nil {
-			failures = append(failures, fmt.Errorf(
-				"mattermost: revoke %s's tokens before disabling it: %w",
-				username, err))
-			// AND THE BOT STAYS ENABLED, so the state is the one the
-			// operator can see: an agent still listed at the instance
-			// with a credential nobody could withdraw, rather than a
-			// disabled account quietly holding a working token. The
-			// disconnect fails, and repeating it resumes here.
-			continue
-		}
-		// MARKED BEFORE IT IS DISABLED, and marked whatever state it is
-		// already in. See [Client.DisconnectedDescription]: "disabled" is
-		// an ambiguous bit, and a teardown that met a bot somebody had
-		// already deactivated would otherwise write no provenance and
-		// still report the seat removed — leaving an account this engine
-		// decommissioned that it can never prove it decommissioned, and
-		// so can never bring back.
-		if err := opts.Client.MarkDisconnected(ctx, bot.ID); err != nil {
-			failures = append(failures, fmt.Errorf(
-				"mattermost: record that this engine is disabling %s: %w",
-				username, err))
-			continue
-		}
-		if err := opts.Client.DisableBot(ctx, bot.ID); err != nil {
-			failures = append(failures, fmt.Errorf(
-				"mattermost: disable %s: %w", username, err))
+		// ONE RULE FOR OFF AND FOR A DISCONNECT, in [Client.TurnOff]: the
+		// tokens first, then the marker, then the deactivation, and marked
+		// whatever state the bot is already in. A step that fails leaves
+		// the bot as the operator can see it, still listed with a
+		// credential nobody could withdraw rather than a disabled account
+		// quietly holding a working token; the disconnect fails, and
+		// repeating it resumes here.
+		if err := opts.Client.TurnOff(ctx, BotAccount{
+			ID: bot.ID, Username: username, Deactivated: bot.DeleteAt != 0,
+		}, seat.Handle); err != nil {
+			failures = append(failures, fmt.Errorf("mattermost: turn %s off: %w", username, err))
 			continue
 		}
 		// BOTH HALVES DONE: the token is revoked and the bot is disabled,
